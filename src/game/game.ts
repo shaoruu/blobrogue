@@ -125,6 +125,12 @@ const SPITTER_CD = 1.8;
 const SPITTER_SPREAD_FLOOR = 4; // 3-glob spread from this floor on
 const GLOB_SPREAD = 0.18;       // radians between spread globs
 
+// Ghost solidify. Within range it ramps from translucent (harmless) to solid (lethal)
+// over 0.4s; the opacity IS the tell, so staying mobile keeps it phased and harmless.
+const GHOST_SOLID_RANGE = 120;
+const GHOST_SOLID_TIME = 0.4;
+const GHOST_SOLID_AT = 0.98;    // windup at/above which the ghost is fully solid + lethal
+
 const BOSS_SLAM_RADIUS = 90;   // shockwave radius (also the ground-marker size)
 const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
 // Reused dashed/solid line patterns so the aim line never allocates per frame.
@@ -563,7 +569,7 @@ export class Game {
   // Contact damage is kind-aware: a ghost only bites while fully solid; the boss is
   // harmless while airborne mid hop-slam (its landing shockwave is the real threat).
   private canTouchDamage(e: Enemy): boolean {
-    if (e.kind === "ghost") return e.attack.windup >= 0.98;
+    if (e.kind === "ghost") return e.attack.windup >= GHOST_SOLID_AT;
     if (e.kind === "boss" && e.attack.move === "hopslam" && e.attack.phase === "active") return false;
     return true;
   }
@@ -580,6 +586,7 @@ export class Game {
     switch (e.kind) {
       case "spitter": return this.updateSpitter(e, dt, remotes);
       case "skeleton": return this.updateSkeleton(e, dt, remotes);
+      case "ghost": return this.updateGhost(e, dt, remotes);
       case "boss": return this.updateBoss(e, dt, remotes);
       default: return this.updateChaser(e, dt, remotes);
     }
@@ -631,6 +638,24 @@ export class Game {
     if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
     let angle = Math.atan2(this.targetY - e.y, this.targetX - e.x);
     if (arch.movement === "zigzag") { e.zig += dt * 5; angle += Math.sin(e.zig) * 0.9; }
+    const step = e.speed * dt;
+    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    return angle;
+  }
+
+  // GHOST: phases through walls and only bites while fully solid. It stays translucent
+  // (and harmless) until the player lingers within range, then materializes over 0.4s —
+  // the opacity ramp is the whole tell. Always damageable by player fire (no alpha gate).
+  private updateGhost(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    const a = e.attack;
+    const has = this.findTarget(e.x, e.y, remotes);
+    const angle = has ? Math.atan2(this.targetY - e.y, this.targetX - e.x) : e.zig;
+    const near = has && (this.targetX - e.x) ** 2 + (this.targetY - e.y) ** 2 <= GHOST_SOLID_RANGE * GHOST_SOLID_RANGE;
+    const rate = dt / GHOST_SOLID_TIME;
+    const prev = a.windup;
+    a.windup = near ? Math.min(1, a.windup + rate) : Math.max(0, a.windup - rate);
+    // Soft materialize cue the instant it turns lethal.
+    if (prev < GHOST_SOLID_AT && a.windup >= GHOST_SOLID_AT) this.sfxAt("enemyWindup", e.x, e.y, { gain: 0.4, rate: 1.5 });
     const step = e.speed * dt;
     this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
     return angle;
