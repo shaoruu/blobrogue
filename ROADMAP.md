@@ -35,3 +35,15 @@ Live: https://blobrogue-shaoruuu.vercel.app/
 - **Do NOT:** nerf enemies (balance is fine), touch twin-stick controls (tight). On red assets base≥dark.
 - **Monetization:** premium Steam $9.99-12.99; web = free demo/viral funnel; do a Steam "Coming Soon" page early for wishlists; no ads/gacha.
 - Ranked: 1) juice (in flight, expanded) 2) enemy attacks+telegraphs (promoted) 3) in-run item synergies + meta unlocks, then co-op revive/scaling (scaffolding exists).
+
+## Open-world / "not just stages" direction (game designer call, DECIDED)
+Verdict: YES to the feeling, NO to a pivot. Deliver Minecraft/Terraria's sense of PLACE + persistence WITHOUT terrain-building (that's a multi-year, wrong-engine trap; Convex is wrong for per-tile sync; sandbox dilutes the combat).
+- Keep the queue EXACTLY: juice → combat → items/meta. Unchanged.
+- Then TIER 0 (the "open world feeling" for ~20% work, reuses Amber meta):
+  1. Blob Camp becomes a walkable HUB/town you spawn into & return to (Hades House vibe).
+  2. Contiguous BIOMES (forest→caves→depths, seamless) replace "FLOOR N" title cards — reskin of existing floor loop.
+  3. Hub visibly GROWS as you spend Amber (forge/range/armory/NPCs appear) = base-building dopamine w/o terrain editing.
+- Guardrail: hub is OPT-IN texture; Quick Play stays one-click-to-combat. Protect the "one more run" loop.
+- TIER 2 (v2 north star, only if v1 lands): traversable overworld + light gatherable resources → base upgrades.
+- TIER 3 (never/sequel): full destructible terrain + freeform + persistent shared world. Not blobrogue.
+Ordering: Tier-0 hub spec comes AFTER items/meta ship (needs Amber to exist). GD writes it build-ready then.
