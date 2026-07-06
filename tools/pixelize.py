@@ -10,10 +10,13 @@ OUTLINE=(5,3,11)
 # Dungeon-tile darks that leak in via the birefnet cutout picking up floor pixels.
 # Inside a sprite silhouette these should be snapped to the sprite's own family-dark.
 TILE_DARKS={(42,33,64),(23,18,39),(14,11,26),(70,53,107)}  # 2a2140,171227,0e0b1a,46356b
+DUNGEON_RAMP=[(5,3,11),(14,11,26),(23,18,39),(42,33,64),(70,53,107)]  # 05030b 0e0b1a 171227 2a2140 46356b
 def nearest(c):
     r,g,b=c
     return min(PAL,key=lambda p:(p[0]-r)**2+(p[1]-g)**2+(p[2]-b)**2)
-def run(inp,out,grid,export,family_dark=None):
+def run(inp,out,grid,export,family_dark=None,tile=False):
+    if tile:
+        return run_tile(inp,out,grid,export)
     im=Image.open(inp).convert("RGBA");px=im.load();w,h=im.size
     for y in range(h):
         for x in range(w):
@@ -58,6 +61,24 @@ def run(inp,out,grid,export,family_dark=None):
         for x in range(grid):
             if fin[x,y][3]==255: colors.add(fin[x,y][:3])
     print(f"wrote {out} — {len(colors)} colors, grid {grid}")
+def run_tile(inp,out,grid,export):
+    """Floor/wall tile enforce: dungeon-ramp palette only, NO outline, opaque, seamless edge-wrap."""
+    im=Image.open(inp).convert("RGB").resize((grid,grid),Image.LANCZOS);sp=im.load()
+    def nearest_ramp(c):
+        r,g,b=c
+        return min(DUNGEON_RAMP,key=lambda p:(p[0]-r)**2+(p[1]-g)**2+(p[2]-b)**2)
+    for y in range(grid):
+        for x in range(grid):
+            sp[x,y]=nearest_ramp(sp[x,y])
+    # seamless: average-blend opposite edges so tiles repeat without a seam (copy left col->right, top row->bottom)
+    for y in range(grid):
+        sp[grid-1,y]=sp[0,y]
+    for x in range(grid):
+        sp[x,grid-1]=sp[x,0]
+    im.resize((export,export),Image.NEAREST).save(out)
+    colors=len({sp[x,y] for y in range(grid) for x in range(grid)})
+    print(f"wrote {out} (tile) — {colors} colors, grid {grid}, seamless edges")
+
 if __name__=="__main__":
-    ap=argparse.ArgumentParser();ap.add_argument("inp");ap.add_argument("out");ap.add_argument("--grid",type=int,default=32);ap.add_argument("--export",type=int,default=64);ap.add_argument("--family-dark",default=None)
-    a=ap.parse_args();run(a.inp,a.out,a.grid,a.export,a.family_dark)
+    ap=argparse.ArgumentParser();ap.add_argument("inp");ap.add_argument("out");ap.add_argument("--grid",type=int,default=32);ap.add_argument("--export",type=int,default=64);ap.add_argument("--family-dark",default=None);ap.add_argument("--tile",action="store_true")
+    a=ap.parse_args();run(a.inp,a.out,a.grid,a.export,a.family_dark,a.tile)
