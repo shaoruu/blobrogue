@@ -233,6 +233,7 @@ export class Game {
     this.playerLean = 0;
     this.runStart = performance.now();
     this.loadFloor();
+    this.hud.setVisible(true);
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
     this.isRunning = true;
     this.last = performance.now();
@@ -830,6 +831,7 @@ export class Game {
     sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();
+    this.hud.setVisible(false);
     this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
   }
 

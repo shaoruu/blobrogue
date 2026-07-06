@@ -28,3 +28,34 @@ Live: https://blobrogue-shaoruuu.vercel.app/
 - Keep it fun first. One shipped, verified improvement per evolution run.
 - Never leave the repo un-building or undeployed.
 - Solo must always work with zero Convex config — never let a missing `VITE_CONVEX_URL` break the deployed game.
+
+## Studio direction (game designer playtest, code-level)
+- **Depth gap found:** combat is 100% contact-damage, ZERO enemy projectiles. Fix = telegraphed enemy attacks + real boss moveset (priority #2, after juice). This creates the dodge "dance".
+- **Folded into juice pass:** enemy knockback on hit, hurt vignette, instant-restart (Enter/R), dash afterimage + i-frames 0.2→0.35s.
+- **Do NOT:** nerf enemies (balance is fine), touch twin-stick controls (tight). On red assets base≥dark.
+- **Monetization:** premium Steam $9.99-12.99; web = free demo/viral funnel; do a Steam "Coming Soon" page early for wishlists; no ads/gacha.
+- Ranked: 1) juice (in flight, expanded) 2) enemy attacks+telegraphs (promoted) 3) in-run item synergies + meta unlocks, then co-op revive/scaling (scaffolding exists).
+
+## Open-world / "not just stages" direction (game designer call, DECIDED)
+Verdict: YES to the feeling, NO to a pivot. Deliver Minecraft/Terraria's sense of PLACE + persistence WITHOUT terrain-building (that's a multi-year, wrong-engine trap; Convex is wrong for per-tile sync; sandbox dilutes the combat).
+- Keep the queue EXACTLY: juice → combat → items/meta. Unchanged.
+- Then TIER 0 (the "open world feeling" for ~20% work, reuses Amber meta):
+  1. Blob Camp becomes a walkable HUB/town you spawn into & return to (Hades House vibe).
+  2. Contiguous BIOMES (forest→caves→depths, seamless) replace "FLOOR N" title cards — reskin of existing floor loop.
+  3. Hub visibly GROWS as you spend Amber (forge/range/armory/NPCs appear) = base-building dopamine w/o terrain editing.
+- Guardrail: hub is OPT-IN texture; Quick Play stays one-click-to-combat. Protect the "one more run" loop.
+- TIER 2 (v2 north star, only if v1 lands): traversable overworld + light gatherable resources → base upgrades.
+- TIER 3 (never/sequel): full destructible terrain + freeform + persistent shared world. Not blobrogue.
+Ordering: Tier-0 hub spec comes AFTER items/meta ship (needs Amber to exist). GD writes it build-ready then.
+
+## Systems-depth vision (game designer, DECIDED) — "persistent base, ephemeral expeditions"
+One game shape: top-down survival-crafting-combat where our roguelike combat IS the expedition layer. Craft/gear at a persistent growing HOME BASE (Convex doc state, co-op shared) → launch instanced procedural EXPEDITIONS (the combat) → beat biome boss → unlock next tier + resources → craft better → deeper. Comps: Core Keeper, Valheim, Deep Rock.
+KEY ARCHITECTURE: persist the BASE not the WORLD (Convex's strength; avoids per-tile terrain sync). Expeditions instanced/ephemeral; Quick Play still works.
+Two item layers: persistent EQUIPMENT (craft/keep/bring in) vs in-run ITEMS (ephemeral build variety, lost on death) — resolves the roguelike-vs-survival tension, no rework to items spec.
+QUEUE UNCHANGED: juice → combat → items/meta (all substrate the systems extend; loadouts = persistent mods, hub = Amber rendered physical).
+v1 (deep+open feeling, ~20% effort, all reskins/extensions): 1) tiered biome progression (boss gates tier) 2) contiguous biomes replace floor cards 3) persistent growing hub (Amber→buildings/NPCs) 4) multi-slot equipment loadouts.
+v2 (after v1 ships): gathering + SHALLOW crafting (hub stations functional) · persistent shared co-op base · base-defense wave mode (reuses combat).
+v3 (if metrics justify): constrained base building (NOT freeform voxel) · day/night+hazards · deeper crafting/biomes.
+HARD CUTS (refuse — the multi-year traps): freeform destructible terrain (never), persistent shared overworld (use base+instanced instead), hunger/thirst/temp meters (tedium), Minecraft-scale crafting trees (keep shallow).
+DISCIPLINE: every phase independently shippable+fun; ship v1 to players BEFORE layering systems.
+RELEASE MODEL PIVOT: Early Access + public roadmap (fits systems-deep games grown in public — Valheim/Core Keeper/Terraria did exactly this; turns "not fully built" into the pitch; strong wishlist+retention driver). Web demo + instant co-op = top of funnel.
