@@ -296,9 +296,9 @@ export class Menu {
     // Co-op: the party already ended, so restarting to a lone solo run would silently
     // yank the player out of co-op — instead offer a clear "back to menu" as primary.
     if (wasCoop) {
-      const menuBtn = el("button", "", "back to menu \u25b8");
+      const menuBtn = el("button", "", "back to menu \u21b5");
       menuBtn.addEventListener("click", () => void this.showTitle());
-      const soloAgain = el("button", "secondary", "play solo \u21b5");
+      const soloAgain = el("button", "secondary", "play solo");
       soloAgain.addEventListener("click", () => this.doSolo());
       row.append(menuBtn, soloAgain);
       wrap.appendChild(row);
