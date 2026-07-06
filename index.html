@@ -12,8 +12,16 @@
       canvas { image-rendering: pixelated; background: #14101f; touch-action: none; }
       #minimap { position: fixed; top: 12px; right: 12px; z-index: 5; border-radius: 8px; }
 
-      #overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; background: rgba(14,11,26,0.86); text-align: center; }
+      #overlay, .pause-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; background: rgba(14,11,26,0.86); text-align: center; }
       .hidden { display: none !important; }
+
+      .settings { display: flex; flex-direction: column; gap: 10px; align-items: center; margin-top: 4px; }
+      .settings-shake { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #cbb6d6; }
+      .settings-label { text-transform: uppercase; letter-spacing: 1px; color: #8579a0; }
+      .settings-val { color: #ffd27a; font-variant-numeric: tabular-nums; }
+      input[type="range"] { -webkit-appearance: none; appearance: none; width: 160px; height: 6px; padding: 0; border: none; border-radius: 4px; background: rgba(255,180,59,0.22); cursor: pointer; }
+      input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%; background: #ffb43b; cursor: pointer; }
+      input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border: none; border-radius: 50%; background: #ffb43b; cursor: pointer; }
 
       .menu { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; max-width: 480px; }
       .menu h1 { font-size: 34px; color: #ffb43b; letter-spacing: 3px; }

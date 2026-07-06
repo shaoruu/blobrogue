@@ -28,7 +28,12 @@ async function onGameOver(result: RunResult) {
   menu.showGameOver(result, saved ?? session.profile, wasCoop, isNewBest);
 }
 
-const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result));
+function onExit() {
+  if (activeCoop) { activeCoop.leave(); activeCoop = null; }
+  void menu.showTitle();
+}
+
+const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result), onExit);
 
 const menu = new Menu(overlay, session, client, {
   startSolo(profile: ProfileDoc | null) {

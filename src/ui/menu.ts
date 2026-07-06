@@ -4,6 +4,7 @@ import type { ProfileDoc } from "../net/api.js";
 import { Multiplayer } from "../net/multiplayer.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor } from "../game/assets.js";
+import { createSettingsControls } from "./settings.js";
 
 export interface MenuHost {
   startSolo(profile: ProfileDoc | null): void;
@@ -85,6 +86,7 @@ export class Menu {
     }
 
     wrap.appendChild(el("p", "hint", CONTROLS));
+    wrap.appendChild(createSettingsControls());
     this.show(wrap);
   }
 
