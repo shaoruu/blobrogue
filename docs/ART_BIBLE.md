@@ -44,3 +44,13 @@ Palette: 05030b(outline) 0e0b1a 171227 2a2140 46356b | 7a3d12 c77320 ffb43b ffd1
 
 ## Redo order
 Cast: hero✓ slime✓ bat✓ skeleton(pending) ghost(pending) → coin/heart/gun/boss. THEN environment: floor tileset → walls → props.
+
+## Props: torch + exit portal (AD, hand-authored, in public/tiles/props/)
+TORCH (torch_f0/f1/f2 = 3 flicker frames 48px + torch_glow.png separate glow):
+- Bracket: leather-brown ramp (#301c0e/#6b401e/#9c6633). Flame: amber #ffb43b body / #ffd166 inner / #ffe9b0 core.
+- FLICKER: cycle f0>f1>f2>f1 at ~8fps (f0 upright, f1 lean-left+taller, f2 lean-right+shorter). Subtle, not a bonfire.
+- GLOW: torch_glow.png = separate radial amber semi-alpha ~96px, ENGINE-drawn UNDER/around torch (NOT baked). The ONE place amber touches floor (light pool). Additive if supported else alpha-composite. Tint with depth-tint. Sits UNDER cast so sprites stay readable.
+EXIT PORTAL (portal_f0/f1 = 2 pulse frames 48px):
+- Amber ring #ffb43b + #7a3d12/#c77320 swirl core + #ffe9b0 rim + amber specks. PULSE: cycle f0>f1 ~2fps (f1 = ring 1px bigger + specks rotated), breathes.
+- DESIGN INTENT: portal is THE brightest object on screen (amber=goal/interactive), out-brights even the cast BY DESIGN — do NOT tone down. Give it its own subtle amber glow so it reads as "the way out" across a room.
+- Both actor-tier: #05030b outline + #261a14 shadow, on-palette. Batch into env render pass; final gate = in-engine dungeon shot WITH a wall-torch + portal in view (AD checks glow-pool warmth vs sprite readability, flicker alive-not-jittery, portal pulls eye without garish).

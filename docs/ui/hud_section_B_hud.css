@@ -1,0 +1,28 @@
+/* SECTION B: HUD CSS + markup (ui designer, verbatim). Deps: --f-num,--f-ui,--f-logo,--dun-0..4,--cream,--amber,--amber-hi,--amber-lo,--ink,--red,--blu,--grn. */
+#hud{ position:fixed; inset:0; pointer-events:none; font-family:var(--f-num); }
+.hud-corner{ position:absolute; display:flex; flex-direction:column; gap:8px; }
+.hud-corner.tl{ top:16px; left:16px; }
+.hud-corner.tr{ top:16px; right:16px; align-items:flex-end; }
+.hud-corner.br{ bottom:16px; right:16px; align-items:flex-end; }
+.hud-corner.bl{ bottom:16px; left:16px; }
+.statpanel{ background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:9px 11px; display:flex; flex-direction:column; gap:7px; }
+.hearts{ display:flex; gap:3px; } .hearts canvas{ image-rendering:pixelated; }
+.statrow{ display:flex; gap:6px; align-items:center; }
+.chip{ display:inline-flex; align-items:center; gap:6px; background:var(--dun-1); box-shadow:inset 0 0 0 2px var(--dun-3); padding:3px 9px; }
+.chip .ic{ width:16px; height:16px; }
+.chip .v{ font-family:var(--f-num); font-size:19px; line-height:1; margin-top:2px; color:var(--cream); }
+.chip .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+.chip.floor .v{ color:var(--amber); } .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
+.minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
+.minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; }
+.mm-room{ position:absolute; background:var(--dun-3); box-shadow:inset 0 0 0 1px var(--dun-4); }
+.mm-cur{ position:absolute; width:8px; height:8px; background:var(--amber); box-shadow:0 0 6px var(--amber); }
+.mm-boss{ position:absolute; width:7px; height:7px; background:var(--red); }
+.weapon{ display:flex; align-items:center; gap:11px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:8px 13px; }
+.weapon .wname{ font-family:var(--f-ui); font-size:11px; color:var(--cream); letter-spacing:1px; }
+.weapon .wammo{ font-family:var(--f-num); font-size:20px; color:var(--amber-hi); margin-top:2px; }
+.dash{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
+.dash .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); }
+.dash .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
+.dash .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--dash-fill,1)); background:var(--blu); box-shadow:0 0 6px var(--blu); transition:width .1s linear; }
+.dash.ready .bar i{ background:var(--grn); box-shadow:0 0 6px var(--grn); }
