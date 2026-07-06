@@ -21,6 +21,10 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 7 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 9 },
+  "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 8 },
+  "ghost.walk": { src: "/sprites/ghost_walk.png", fps: 6 },
+  "boss.walk": { src: "/sprites/boss_walk.png", fps: 4 },
+  "boss.idle": { src: "/sprites/boss_walk.png", fps: 4 },
 };
 
 const SOURCES: Record<SpriteName, string> = {
