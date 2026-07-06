@@ -9,13 +9,20 @@ export interface Entity {
   dead: boolean;
 }
 
+export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "boss";
+
 export interface Enemy extends Entity {
-  kind: "slime";
+  kind: EnemyKind;
   speed: number;
   touchDamage: number;
   hitFlash: number;
   wobble: number;
+  // Per-behavior scratch state.
+  zig: number;         // heading offset used by the bat's erratic drift
+  spawnTimer: number;  // boss: countdown until it spits out a minion
 }
+
+export type WeaponId = "pistol" | "shotgun" | "rapid";
 
 export interface Bullet {
   x: number; y: number;
@@ -24,6 +31,17 @@ export interface Bullet {
   life: number;
   friendly: boolean;
   damage: number;
+  color: string;
+}
+
+export type PickupKind = "heart" | "coin" | "weapon";
+
+export interface Pickup {
+  kind: PickupKind;
+  x: number; y: number;
+  radius: number;
+  bob: number;
+  weapon: WeaponId | null; // set only when kind === "weapon"
 }
 
 export interface Particle {
@@ -32,6 +50,22 @@ export interface Particle {
   life: number; maxLife: number;
   color: string;
   size: number;
+}
+
+// A teammate as the local client sees them (mapped from Convex presence rows).
+export interface RemotePlayer {
+  playerId: string;
+  name: string;
+  x: number; y: number;
+  facing: number;
+  hp: number; maxHp: number;
+  weapon: WeaponId;
+  floor: number;
+  isDown: boolean;
+  aimAngle: number;
+  shotSeq: number;    // increments each time they fire, so we can flash a tracer
+  colorIndex: number; // stable palette slot for this player
+  updatedAt: number;
 }
 
 export const TILE = 48;
