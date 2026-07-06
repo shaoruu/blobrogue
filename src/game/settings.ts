@@ -5,6 +5,9 @@
 
 const MUTE_KEY = "blobrogue.muted";
 const SHAKE_KEY = "blobrogue.shake";
+const MASTER_KEY = "blobrogue.vol.master";
+const MUSIC_KEY = "blobrogue.vol.music";
+const SFX_KEY = "blobrogue.vol.sfx";
 
 function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
@@ -35,11 +38,17 @@ type Listener = () => void;
 class Settings {
   private muted: boolean;
   private shake: number; // 0..1, scales screen-shake magnitude
+  private master: number; // 0..1 master volume (limiter catches peaks)
+  private music: number;  // 0..1 music bus
+  private sfx: number;    // 0..1 sfx bus
   private listeners = new Set<Listener>();
 
   constructor() {
     this.muted = readBool(MUTE_KEY, false);
     this.shake = clamp01(readNumber(SHAKE_KEY, 1));
+    this.master = clamp01(readNumber(MASTER_KEY, 0.7));
+    this.music = clamp01(readNumber(MUSIC_KEY, 0.5));
+    this.sfx = clamp01(readNumber(SFX_KEY, 0.9));
   }
 
   get isMuted(): boolean {
@@ -77,6 +86,14 @@ class Settings {
     }
     this.emit();
   }
+
+  get masterVol(): number { return this.master; }
+  get musicVol(): number { return this.music; }
+  get sfxVol(): number { return this.sfx; }
+
+  setMasterVol(v: number): void { v = clamp01(v); if (this.master === v) return; this.master = v; try { localStorage.setItem(MASTER_KEY, String(v)); } catch {} this.emit(); }
+  setMusicVol(v: number): void { v = clamp01(v); if (this.music === v) return; this.music = v; try { localStorage.setItem(MUSIC_KEY, String(v)); } catch {} this.emit(); }
+  setSfxVol(v: number): void { v = clamp01(v); if (this.sfx === v) return; this.sfx = v; try { localStorage.setItem(SFX_KEY, String(v)); } catch {} this.emit(); }
 
   onChange(cb: Listener): () => void {
     this.listeners.add(cb);
