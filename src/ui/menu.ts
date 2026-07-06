@@ -34,6 +34,7 @@ export class Menu {
   private host: MenuHost;
   private unsub: (() => void) | null = null;
   private countupRaf = 0;
+  private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -56,6 +57,7 @@ export class Menu {
   private teardownLobby() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
     if (this.countupRaf) { cancelAnimationFrame(this.countupRaf); this.countupRaf = 0; }
+    if (this.gameOverKeys) { window.removeEventListener("keydown", this.gameOverKeys); this.gameOverKeys = null; }
   }
 
   async showTitle() {
@@ -286,15 +288,25 @@ export class Menu {
     }
 
     const row = el("div", "btnrow");
-    const again = el("button", "", "descend again \u25be");
+    const again = el("button", "", "play again \u21b5");
     again.addEventListener("click", () => this.doSolo());
     const back = el("button", "secondary", "back to menu \u25b8");
     back.addEventListener("click", () => void this.showTitle());
     row.append(again, back);
     wrap.appendChild(row);
+    wrap.appendChild(el("p", "hint", "press ENTER or R to play again"));
 
     this.show(wrap);
     this.runCountups(counts);
+
+    // The "one more run" loop must be a single keypress — the #1 retention lever.
+    // In co-op the session already ended on game over, so this restarts a fresh solo run.
+    const onKey = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (k === "enter" || k === "r") { e.preventDefault(); this.doSolo(); }
+    };
+    this.gameOverKeys = onKey;
+    window.addEventListener("keydown", onKey);
   }
 
   private runCountups(items: Array<{ node: HTMLElement; to: number; fmt: (v: number) => string }>, durationMs = 700) {
