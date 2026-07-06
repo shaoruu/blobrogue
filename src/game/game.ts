@@ -1,7 +1,7 @@
 import { generateDungeon } from "./dungeon.js";
 import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove } from "./types.js";
+import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
 import { Sprites, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip } from "./assets.js";
@@ -18,7 +18,7 @@ import {
 } from "./anim.js";
 import type { Anim, Xform } from "./anim.js";
 import { audio, sfx } from "./audio.js";
-import type { SfxName } from "./audio.js";
+import type { SfxName, SfxOptions } from "./audio.js";
 import { settings } from "./settings.js";
 import { PauseOverlay } from "../ui/pause.js";
 
@@ -104,6 +104,17 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   radial: "#c98bff",  // boss burst: violet
   roar: "#ffb43b",    // boss phase change: gold
 };
+// Spitter caster (ranged glass cannon). Aim locks at 0.45s of the 0.7s windup, so the
+// last 0.25s is a pure dodge window; walls break the shot via updateBullets.
+const SPITTER_FLEE = 160;      // closer than this: back away
+const SPITTER_APPROACH = 420;  // farther than this: close in; the band between = fire
+const SPITTER_WINDUP = 0.7;
+const SPITTER_LOCK = 0.45;
+const SPITTER_RECOVER = 0.3;
+const SPITTER_CD = 1.8;
+const SPITTER_SPREAD_FLOOR = 4; // 3-glob spread from this floor on
+const GLOB_SPREAD = 0.18;       // radians between spread globs
+
 const BOSS_SLAM_RADIUS = 90;   // shockwave radius (also the ground-marker size)
 const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
 // Reused dashed/solid line patterns so the aim line never allocates per frame.
@@ -162,6 +173,10 @@ export class Game {
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
   private cam = { x: 0, y: 0 };
+  // Scratch slot for the nearest living player, written by findTarget each query so
+  // enemy AI never allocates a result object in the per-frame hot path.
+  private targetX = 0;
+  private targetY = 0;
 
   private isRunning = false;
   private last = 0;
@@ -499,14 +514,24 @@ export class Game {
   }
 
   private updateEnemies(dt: number) {
+    // One presence snapshot per frame (not per enemy) — enemy AI targets the nearest
+    // living player, which in co-op splits aggro instead of dogpiling one client.
+    const remotes = this.coop ? this.coop.remotePlayers() : null;
     for (const e of this.enemies) {
-      const angle = this.moveEnemy(e, dt);
-      stepAnim(e.anim, dt, true, Math.cos(angle));
+      if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
+      if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
 
-      if (e.kind === "boss") this.updateBoss(e, dt);
+      const angle = this.updateEnemyAI(e, dt, remotes);
+      this.applyKnockbackDecay(e, dt);
 
-      if (this.invuln === 0 && !this.isDown && Math.hypot(this.px - e.x, this.py - e.y) < this.pr + e.radius) {
+      // A charging / recovering enemy holds still; a lunging skeleton is moving fast.
+      const isMoving = e.attack.phase === "none" || (e.attack.phase === "active" && e.attack.move === "lunge");
+      stepAnim(e.anim, dt, isMoving, Math.cos(angle));
+
+      if (this.invuln === 0 && !this.isDown && this.hp > 0
+        && Math.hypot(this.px - e.x, this.py - e.y) < this.pr + e.radius && this.canTouchDamage(e)) {
         this.damagePlayer(e.touchDamage);
+        if (e.kind === "skeleton" && e.attack.phase === "active") this.lungeImpact(e);
         if (this.hp <= 0 && !this.coop) return;
       }
 
@@ -525,17 +550,178 @@ export class Game {
     this.enemies = this.enemies.filter((e) => !e.dead);
   }
 
-  private moveEnemy(e: Enemy, dt: number): number {
-    const arch = ENEMY_ARCHETYPES[e.kind];
-    const toPlayer = Math.atan2(this.py - e.y, this.px - e.x);
-    let angle = toPlayer;
-    if (arch.movement === "zigzag") {
-      e.zig += dt * 5;
-      angle = toPlayer + Math.sin(e.zig) * 0.9;
+  // Contact damage is kind-aware: a ghost only bites while fully solid; the boss is
+  // harmless while airborne mid hop-slam (its landing shockwave is the real threat).
+  private canTouchDamage(e: Enemy): boolean {
+    if (e.kind === "ghost") return e.attack.windup >= 0.98;
+    if (e.kind === "boss" && e.attack.move === "hopslam" && e.attack.phase === "active") return false;
+    return true;
+  }
+
+  // A connecting skeleton lunge shoves the player along the lunge line and kicks harder.
+  private lungeImpact(e: Enemy) {
+    const push = 26, ang = e.attack.lockedAngle;
+    [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, Math.cos(ang) * push, 0);
+    [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, Math.sin(ang) * push);
+    this.addTrauma(0.16);
+  }
+
+  private updateEnemyAI(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    switch (e.kind) {
+      case "spitter": return this.updateSpitter(e, dt, remotes);
+      case "boss": return this.updateBoss(e, dt, remotes);
+      default: return this.updateChaser(e, dt, remotes);
     }
+  }
+
+  // Slime (chase), bat (zigzag), and — until they grow their own moves — skeleton/ghost.
+  private updateChaser(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    const arch = ENEMY_ARCHETYPES[e.kind];
+    if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
+    let angle = Math.atan2(this.targetY - e.y, this.targetX - e.x);
+    if (arch.movement === "zigzag") { e.zig += dt * 5; angle += Math.sin(e.zig) * 0.9; }
     const step = e.speed * dt;
-    const dx = Math.cos(angle) * step, dy = Math.sin(angle) * step;
-    if (arch.isPhasing) {
+    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    return angle;
+  }
+
+  // SPITTER: a glass-cannon kiter. Backs off if crowded, closes if too far, and in the
+  // mid band charges a telegraphed glob with a clear line of sight. See COMBAT_SPEC.md.
+  private updateSpitter(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    const a = e.attack;
+    if (a.phase === "windup") {
+      if (this.stepWindupTimer(e, dt, SPITTER_WINDUP, SPITTER_LOCK, remotes, false)) {
+        this.spitterFire(e);
+        this.enterRecover(e);
+      }
+      return a.lockedAngle;
+    }
+    if (a.phase === "recover") {
+      a.time += dt;
+      if (a.time >= SPITTER_RECOVER) this.enterIdle(e);
+      return a.lockedAngle;
+    }
+    if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
+    const dx = this.targetX - e.x, dy = this.targetY - e.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const toTarget = Math.atan2(dy, dx);
+    if (dist >= SPITTER_FLEE && dist <= SPITTER_APPROACH && a.cooldown === 0 && e.spawnTimer === 0
+      && this.hasLineOfSight(e.x, e.y, this.targetX, this.targetY)) {
+      this.beginWindup(e, "spit");
+      this.sfxAt("spitCharge", e.x, e.y);
+      return toTarget;
+    }
+    let dir = 0;
+    if (dist < SPITTER_FLEE) dir = -1;        // too close: kite away
+    else if (dist > SPITTER_APPROACH) dir = 1; // too far: close in
+    if (dir !== 0) {
+      const step = e.speed * dt * dir;
+      this.moveEnemyBy(e, Math.cos(toTarget) * step, Math.sin(toTarget) * step);
+    }
+    return toTarget;
+  }
+
+  private spitterFire(e: Enemy) {
+    const a = e.attack;
+    const n = this.floor >= SPITTER_SPREAD_FLOOR ? 3 : 1;
+    const mx = e.x + Math.cos(a.lockedAngle) * (e.radius + 4);
+    const my = e.y + Math.sin(a.lockedAngle) * (e.radius + 4);
+    for (let i = 0; i < n; i++) {
+      const off = n === 1 ? 0 : (i - 1) * GLOB_SPREAD;
+      this.spawnEnemyBullet(mx, my, a.lockedAngle + off, 300, 7, 1, "#ff5a7a", 2.5);
+    }
+    a.cooldown = SPITTER_CD;
+    this.sfxAt("spitFire", e.x, e.y);
+    this.spawnPuff(mx, my, 6, "#ff5a7a");
+  }
+
+  private updateBoss(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    const boss = e.boss;
+    if (!boss) return e.zig;
+    boss.minionTimer -= dt;
+    if (boss.minionTimer <= 0 && this.enemies.length < BOSS_MINION_CAP) {
+      boss.minionTimer = 3.4;
+      this.spawnBossMinion(e);
+    }
+    if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
+    const angle = Math.atan2(this.targetY - e.y, this.targetX - e.x);
+    const step = e.speed * dt;
+    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    return angle;
+  }
+
+  private spawnBossMinion(e: Enemy) {
+    triggerRecoil(e.anim); // pop on the spawn beat
+    const a = Math.random() * Math.PI * 2;
+    const mx = e.x + Math.cos(a) * (e.radius + 20);
+    const my = e.y + Math.sin(a) * (e.radius + 20);
+    if (this.isWall(mx, my)) return;
+    this.enemies.push(createEnemy("slime", mx, my, this.floor));
+    this.spawnParticles(mx, my, 8, "#a855f7");
+    if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
+  }
+
+  // ---- shared attack helpers ----
+
+  // Writes the nearest living player into targetX/targetY; false when none are up.
+  private findTarget(x: number, y: number, remotes: RemotePlayer[] | null): boolean {
+    let bestD = Infinity, found = false;
+    if (!this.isDown && this.hp > 0) {
+      const dx = this.px - x, dy = this.py - y;
+      bestD = dx * dx + dy * dy;
+      this.targetX = this.px; this.targetY = this.py; found = true;
+    }
+    if (remotes) {
+      for (const r of remotes) {
+        if (r.isDown) continue;
+        const dx = r.x - x, dy = r.y - y, d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; this.targetX = r.x; this.targetY = r.y; found = true; }
+      }
+    }
+    return found;
+  }
+
+  // Tile raycast: false if any wall sits between the two points. Ducking behind
+  // geometry breaks a ranged attacker's shot — the core fairness affordance.
+  private hasLineOfSight(x0: number, y0: number, x1: number, y1: number): boolean {
+    const dx = x1 - x0, dy = y1 - y0;
+    const steps = Math.ceil(Math.hypot(dx, dy) / (TILE * 0.5));
+    if (steps <= 1) return !this.isWall(x1, y1);
+    const sx = dx / steps, sy = dy / steps;
+    let x = x0 + sx, y = y0 + sy;
+    for (let i = 1; i < steps; i++) {
+      if (this.isWall(x, y)) return false;
+      x += sx; y += sy;
+    }
+    return true;
+  }
+
+  // Advances a windup timer: ramps windup 0..1, tracks aim toward the target until the
+  // lock time, then freezes lockedAngle (and the AoE mark). Returns true at release.
+  private stepWindupTimer(e: Enemy, dt: number, dur: number, lockAt: number, remotes: RemotePlayer[] | null, isAoe: boolean): boolean {
+    const a = e.attack;
+    a.time += dt;
+    a.windup = a.time < dur ? a.time / dur : 1;
+    if (!a.isAimLocked) {
+      if (this.findTarget(e.x, e.y, remotes)) {
+        a.lockedAngle = Math.atan2(this.targetY - e.y, this.targetX - e.x);
+        if (isAoe) { a.markX = this.targetX; a.markY = this.targetY; }
+      }
+      if (a.time >= lockAt) a.isAimLocked = true;
+    }
+    return a.time >= dur;
+  }
+
+  private beginWindup(e: Enemy, move: AttackMove) {
+    const a = e.attack;
+    a.phase = "windup"; a.time = 0; a.move = move; a.windup = 0; a.isAimLocked = false;
+  }
+
+  private enterRecover(e: Enemy) { const a = e.attack; a.phase = "recover"; a.time = 0; a.windup = 0; }
+  private enterIdle(e: Enemy) { const a = e.attack; a.phase = "none"; a.time = 0; a.move = "none"; a.windup = 0; }
+
+  private moveEnemyBy(e: Enemy, dx: number, dy: number) {
+    if (ENEMY_ARCHETYPES[e.kind].isPhasing) {
       // ghosts ignore geometry but stay inside the map bounds
       e.x = Math.max(TILE, Math.min((this.dungeon.w - 1) * TILE, e.x + dx));
       e.y = Math.max(TILE, Math.min((this.dungeon.h - 1) * TILE, e.y + dy));
@@ -543,39 +729,33 @@ export class Game {
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, dx, 0);
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, dy);
     }
-
-    // Knockback impulse (vx/vy) on top of AI movement, decaying to zero.
-    if (e.vx !== 0 || e.vy !== 0) {
-      const kdx = e.vx * dt, kdy = e.vy * dt;
-      if (arch.isPhasing) {
-        e.x = Math.max(TILE, Math.min((this.dungeon.w - 1) * TILE, e.x + kdx));
-        e.y = Math.max(TILE, Math.min((this.dungeon.h - 1) * TILE, e.y + kdy));
-      } else {
-        [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, kdx, 0);
-        [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, kdy);
-      }
-      const d = Math.min(1, dt * KB_LAMBDA);
-      e.vx -= e.vx * d; e.vy -= e.vy * d;
-      if (e.vx < 1 && e.vx > -1) e.vx = 0;
-      if (e.vy < 1 && e.vy > -1) e.vy = 0;
-    }
-    return angle;
   }
 
-  private updateBoss(e: Enemy, dt: number) {
-    e.spawnTimer -= dt;
-    if (e.spawnTimer <= 0 && this.enemies.length < BOSS_MINION_CAP) {
-      e.spawnTimer = 3.4;
-      triggerRecoil(e.anim); // pop on the spawn beat
-      const a = Math.random() * Math.PI * 2;
-      const mx = e.x + Math.cos(a) * (e.radius + 20);
-      const my = e.y + Math.sin(a) * (e.radius + 20);
-      if (!this.isWall(mx, my)) {
-        this.enemies.push(createEnemy("slime", mx, my, this.floor));
-        this.spawnParticles(mx, my, 8, "#a855f7");
-        if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
-      }
-    }
+  // Knockback impulse (vx/vy) decaying to zero, applied on top of AI movement. Runs
+  // during windups too, so a well-timed shot can still shove a charging enemy.
+  private applyKnockbackDecay(e: Enemy, dt: number) {
+    if (e.vx === 0 && e.vy === 0) return;
+    this.moveEnemyBy(e, e.vx * dt, e.vy * dt);
+    const d = Math.min(1, dt * KB_LAMBDA);
+    e.vx -= e.vx * d; e.vy -= e.vy * d;
+    if (e.vx < 1 && e.vx > -1) e.vx = 0;
+    if (e.vy < 1 && e.vy > -1) e.vy = 0;
+  }
+
+  // Enemy fire: the shared bullet struct with friendly:false. Walls expire it (in
+  // updateBullets), so line of sight is real counterplay.
+  private spawnEnemyBullet(x: number, y: number, angle: number, speed: number, radius: number, damage: number, color: string, life: number) {
+    this.bullets.push({
+      x, y,
+      vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      radius, life, friendly: false, damage, color,
+    });
+  }
+
+  // Plays a positional sfx only when the source is on/near the local screen, so a
+  // teammate's distant fight never spams the local mix.
+  private sfxAt(name: SfxName, x: number, y: number, opts?: SfxOptions) {
+    if (this.isNearCamera(x, y)) sfx(name, opts);
   }
 
   private killEnemy(e: Enemy) {
