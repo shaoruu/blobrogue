@@ -12,15 +12,17 @@ Live: https://blobrogue-shaoruuu.vercel.app/
 - **Enemy variety + boss** — bats (fast, erratic), skeletons (tanky melee), ghosts (phase through walls, semi-transparent), and a slime-king boss every 5th floor (2× size, contact damage, spawns minions, gates the exit). Deterministic seeded spawns; gentler early floors.
 - **Weapons & pickups** — pistol / shotgun / rapid with distinct feel, gun pickups that swap your weapon, heart (heal) + coin (currency) drops. Current weapon in the HUD.
 - **Minimap + stats HUD** — top-right minimap (rooms/corridors, player, exit, enemy & teammate dots), a clean hearts/floor/kills/coins/weapon bar, and a hold-Tab run/all-time stats panel. Dark-navy + amber aesthetic, layout-shift-free.
+- **Juice / procedural animation** — every character and pickup is animated: idle bob + squash-and-stretch, moving hop + lean, shoot recoil + muzzle flash, hit flash, death pop/squash/fade, spinning coins, boss breathing + spawn telegraph. Plus optional drop-in frame spritesheets (horizontal strips) with procedural fallback. See `ART.md`.
 
 ## Next up (rough priority)
 1. **Server-authoritative enemies in co-op** — currently enemies are simulated per-client from the shared seed (identical at spawn, diverge on interaction). Make the host authoritative and sync enemy state so teammates fight the *same* mobs. (Seam is ready via `CoopBridge`.)
 2. Sound & music — shooting, hits, death, ambient dungeon loop (WebAudio).
 3. Better dungeon generation — distinct room types, treasure rooms, locked doors.
-4. Juice & polish — screen shake, hit-stop, damage numbers, muzzle flash, death anims.
-5. More weapons + character/unlock meta (the `players.unlocks` field is already there).
-6. Mobile / touch controls (virtual sticks) so it's playable on phones.
-7. Meta: score/leaderboard (Convex), harden accounts (swap to Convex Auth if needed).
+4. More juice — screen shake, hit-stop, damage numbers (procedural anim + muzzle flash + death anims now done).
+5. Real frame animation — drop fal-generated `*_walk.png` / `*_idle.png` strips into `public/sprites` and register them (see `ART.md`).
+6. More weapons + character/unlock meta (the `players.unlocks` field is already there).
+7. Mobile / touch controls (virtual sticks) so it's playable on phones.
+8. Meta: score/leaderboard (Convex), harden accounts (swap to Convex Auth if needed).
 
 ## Notes
 - Keep it fun first. One shipped, verified improvement per evolution run.

@@ -16,6 +16,9 @@ with friends. Inspired by Soul Knight.
 Clear a floor of enemies, then step into the glowing exit to descend. See how deep you can get.
 
 ## Features
+- **Juicy, animated everything** — procedural squash-and-stretch, bob/hop, lean, shoot
+  recoil, muzzle flash, hit flash, and death pops on every character and pickup (no extra
+  art needed). Optional drop-in frame spritesheets are supported too — see [ART.md](ART.md).
 - **Enemy variety** — slimes (chase), bats (fast zigzag), skeletons (tanky), ghosts (drift
   through walls), and a **slime-king boss every 5th floor** that spawns minions.
 - **Weapons & pickups** — pistol, shotgun (spread), and rapid-fire; hearts heal, coins are
