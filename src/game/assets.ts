@@ -19,6 +19,8 @@ export interface SheetDef { src: string; fps: number; }
 //   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
 export const SHEETS: Partial<Record<string, SheetDef>> = {
   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
+  "slime.walk": { src: "/sprites/slime_walk.png", fps: 7 },
+  "bat.walk": { src: "/sprites/bat_walk.png", fps: 9 },
 };
 
 const SOURCES: Record<SpriteName, string> = {
