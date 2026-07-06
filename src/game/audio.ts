@@ -38,9 +38,6 @@ export interface SfxOptions {
   rate?: number; // pitch/speed multiplier; defaults to a small per-play random jitter
 }
 
-const MASTER_VOL = 0.4; // modest by default
-const MUSIC_VOL = 0.5; // relative to master, so music sits well under the sfx
-
 interface MusicTrack {
   bpm: number;
   root: number; // bass root frequency (Hz)
@@ -93,6 +90,8 @@ class AudioEngine {
   private musicStep = 0;
   private nextNoteTime = 0;
   private musicTimer = 0;
+  private sfxActive = new Map<SfxName, number>();
+  private sfxLastAt = new Map<SfxName, number>();
 
   constructor() {
     const onGesture = () => this.unlock();
@@ -101,7 +100,7 @@ class AudioEngine {
     window.addEventListener("pointerdown", onGesture, { passive: true });
     window.addEventListener("keydown", onGesture, { passive: true });
     window.addEventListener("touchstart", onGesture, { passive: true });
-    settings.onChange(() => this.syncMuted());
+    settings.onChange(() => this.applyVolumes());
   }
 
   // Create + resume the context. Safe to call repeatedly (it is wired to every gesture
@@ -123,21 +122,33 @@ class AudioEngine {
     const t = ctx.currentTime;
     const gain = opts?.gain ?? 1;
     if (gain <= 0.001) return;
+    const lastAt = this.sfxLastAt.get(name) ?? 0;
+    if (t - lastAt < 0.015) return;
+    const active = this.sfxActive.get(name) ?? 0;
+    if (active >= 6) return;
+    this.sfxLastAt.set(name, t);
+    this.sfxActive.set(name, active + 1);
+    window.setTimeout(() => {
+      const c = this.sfxActive.get(name) ?? 1;
+      this.sfxActive.set(name, Math.max(0, c - 1));
+    }, this.sfxMaxDur(name) * 1000 + 20);
     const rate = opts?.rate ?? this.rand(0.94, 1.06);
     switch (name) {
       case "shootPistol":
         this.blip(t, "square", 720 * rate, 190 * rate, 0.002, 0.09, 0.5 * gain);
-        this.noise(t, "highpass", 1400, 700, 0.04, 0.14 * gain);
+        this.noise(t, "highpass", 1400, 700, 0.04, 0.14 * gain, 0.9, rate);
         break;
       case "shootShotgun":
-        this.noise(t, "lowpass", 1900, 300, 0.22, 0.6 * gain, 1);
+        this.noise(t, "lowpass", 1900, 300, 0.22, 0.6 * gain, 1, rate);
         this.blip(t, "sawtooth", 190 * rate, 60 * rate, 0.003, 0.18, 0.42 * gain);
         break;
-      case "shootRapid":
-        this.blip(t, "sawtooth", 900 * rate, 380 * rate, 0.001, 0.06, 0.3 * gain);
+      case "shootRapid": {
+        const rapidRate = opts?.rate ?? this.rand(0.90, 1.10);
+        this.blip(t, "sawtooth", 900 * rapidRate, 380 * rapidRate, 0.001, 0.06, 0.3 * gain);
         break;
+      }
       case "enemyHit":
-        this.noise(t, "bandpass", 2200 * rate, 1400 * rate, 0.05, 0.24 * gain, 1.6);
+        this.noise(t, "bandpass", 2200, 1400, 0.05, 0.24 * gain, 1.6, rate);
         break;
       case "enemyDeath":
         this.noise(t, "lowpass", 2600, 200, 0.16, 0.5 * gain, 1);
@@ -145,7 +156,9 @@ class AudioEngine {
         break;
       case "playerHurt":
         this.blip(t, "sawtooth", 300 * rate, 70 * rate, 0.002, 0.28, 0.5 * gain);
-        this.noise(t, "lowpass", 900, 200, 0.12, 0.3 * gain);
+        this.blip(t, "sawtooth", 318 * rate, 70 * rate, 0.002, 0.28, 0.5 * gain);
+        this.noise(t, "lowpass", 1800, 400, 0.12, 0.3 * gain);
+        if (this.musicBus) this.duck(this.musicBus, settings.musicVol * 0.5, 0.12, 0.5);
         break;
       case "dash":
         this.noise(t, "bandpass", 500, 2600, 0.22, 0.3 * gain, 0.7);
@@ -177,6 +190,7 @@ class AudioEngine {
         this.blip(t, "sawtooth", 90 * rate, 58 * rate, 0.02, 0.9, 0.4 * gain);
         this.blip(t, "square", 95 * rate, 62 * rate, 0.02, 0.9, 0.2 * gain); // slight detune -> ominous beating
         this.noise(t, "lowpass", 600, 120, 0.7, 0.24 * gain);
+        if (this.musicBus) this.duck(this.musicBus, settings.musicVol * 0.3, 0.2, 0.8);
         break;
       case "gameOver": {
         const notes = [440, 392, 330, 262];
@@ -245,13 +259,30 @@ class AudioEngine {
     return Math.pow(2, n / 12);
   }
 
-  private syncMuted(): void {
+  private applyVolumes(): void {
     const ctx = this.ctx;
+    const now = ctx?.currentTime ?? 0;
     if (ctx && this.master) {
-      this.master.gain.setTargetAtTime(settings.isMuted ? 0 : MASTER_VOL, ctx.currentTime, 0.02);
+      this.master.gain.setTargetAtTime(settings.isMuted ? 0 : settings.masterVol, now, 0.02);
+    }
+    if (ctx && this.sfxBus) {
+      this.sfxBus.gain.setTargetAtTime(settings.sfxVol, now, 0.02);
+    }
+    if (ctx && this.musicBus) {
+      this.musicBus.gain.setTargetAtTime(settings.musicVol, now, 0.02);
     }
     if (settings.isMuted) this.stopMusicLoop();
     else this.applyMusic();
+  }
+
+  private duck(bus: GainNode, toGain: number, holdSec: number, recoverSec: number): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const baseGain = bus === this.musicBus ? settings.musicVol : settings.sfxVol;
+    bus.gain.cancelScheduledValues(now);
+    bus.gain.setTargetAtTime(toGain, now, 0.02);
+    bus.gain.setTargetAtTime(baseGain, now + holdSec, recoverSec / 3);
   }
 
   private ensureContext(): void {
@@ -262,15 +293,22 @@ class AudioEngine {
     const ctx = new Ctor();
     this.ctx = ctx;
     const master = ctx.createGain();
-    master.gain.value = settings.isMuted ? 0 : MASTER_VOL;
-    master.connect(ctx.destination);
+    master.gain.value = settings.isMuted ? 0 : settings.masterVol;
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -6;
+    comp.ratio.value = 12;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.25;
+    comp.knee.value = 6;
+    master.connect(comp);
+    comp.connect(ctx.destination);
     this.master = master;
     const sfxBus = ctx.createGain();
-    sfxBus.gain.value = 1;
+    sfxBus.gain.value = settings.sfxVol;
     sfxBus.connect(master);
     this.sfxBus = sfxBus;
     const musicBus = ctx.createGain();
-    musicBus.gain.value = MUSIC_VOL;
+    musicBus.gain.value = settings.musicVol;
     musicBus.connect(master);
     this.musicBus = musicBus;
     this.noiseBuffer = this.makeNoise(ctx);
@@ -307,7 +345,7 @@ class AudioEngine {
   }
 
   // A filtered white-noise burst with a filter-frequency sweep — our "crunch" primitive.
-  private noise(t0: number, filterType: BiquadFilterType, f0: number, f1: number, decay: number, vol: number, q = 0.9): void {
+  private noise(t0: number, filterType: BiquadFilterType, f0: number, f1: number, decay: number, vol: number, q = 0.9, rate = 1): void {
     const ctx = this.ctx;
     const bus = this.sfxBus;
     if (!ctx || !bus || !this.noiseBuffer) return;
@@ -315,8 +353,8 @@ class AudioEngine {
     src.buffer = this.noiseBuffer;
     const filter = ctx.createBiquadFilter();
     filter.type = filterType;
-    filter.frequency.setValueAtTime(Math.max(1, f0), t0);
-    if (f1 !== f0) filter.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + decay);
+    filter.frequency.setValueAtTime(Math.max(1, f0 * rate), t0);
+    if (f1 !== f0) filter.frequency.exponentialRampToValueAtTime(Math.max(1, f1 * rate), t0 + decay);
     filter.Q.value = q;
     const g = ctx.createGain();
     g.gain.setValueAtTime(Math.max(0.0001, vol), t0);
@@ -324,6 +362,26 @@ class AudioEngine {
     src.connect(filter).connect(g).connect(bus);
     src.start(t0);
     src.stop(t0 + decay + 0.02);
+  }
+
+  private sfxMaxDur(name: SfxName): number {
+    switch (name) {
+      case "shootPistol": return 0.12;
+      case "shootShotgun": return 0.25;
+      case "shootRapid": return 0.08;
+      case "enemyHit": return 0.08;
+      case "enemyDeath": return 0.2;
+      case "playerHurt": return 0.32;
+      case "dash": return 0.26;
+      case "coin": return 0.2;
+      case "heart": return 0.4;
+      case "weapon": return 0.2;
+      case "descend": return 0.35;
+      case "bossSpawn": return 0.95;
+      case "gameOver": return 0.75;
+      case "revive": return 0.45;
+      case "uiClick": return 0.07;
+    }
   }
 
   private musicVoice(freq: number, t0: number, dur: number, type: OscillatorType, vol: number): void {
