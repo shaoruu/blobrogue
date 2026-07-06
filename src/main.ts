@@ -21,11 +21,19 @@ let activeCoop: Multiplayer | null = null;
 async function onGameOver(result: RunResult) {
   const wasCoop = activeCoop !== null;
   if (activeCoop) { activeCoop.leave(); activeCoop = null; }
+  // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
+  const prevBest = session.profile?.deepestFloor ?? 0;
   const saved = await session.recordRun(result);
-  menu.showGameOver(result, saved ?? session.profile, wasCoop);
+  const isNewBest = saved !== null && result.floor > prevBest;
+  menu.showGameOver(result, saved ?? session.profile, wasCoop, isNewBest);
 }
 
-const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result));
+function onExit() {
+  if (activeCoop) { activeCoop.leave(); activeCoop = null; }
+  void menu.showTitle();
+}
+
+const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result), onExit);
 
 const menu = new Menu(overlay, session, client, {
   startSolo(profile: ProfileDoc | null) {

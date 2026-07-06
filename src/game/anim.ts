@@ -30,7 +30,7 @@ export function stepAnim(a: Anim, dt: number, isMoving: boolean, leanTarget: num
   a.flash -= dt * 7; if (a.flash < 0) a.flash = 0;
 }
 
-export function triggerRecoil(a: Anim): void { a.recoil = 1; }
+export function triggerRecoil(a: Anim, strength = 1): void { a.recoil = strength; }
 export function triggerFlash(a: Anim): void { a.flash = 1; }
 
 export interface XformStyle {

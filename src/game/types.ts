@@ -45,12 +45,19 @@ export interface Pickup {
   anim: Anim;
 }
 
+export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell";
+
 export interface Particle {
   x: number; y: number;
   vx: number; vy: number;
   life: number; maxLife: number;
   color: string;
   size: number;
+  kind: ParticleKind;
+  rot: number;     // current rotation (rad) — only spun kinds (gib/shell) render rotated
+  vr: number;      // angular velocity (rad/s)
+  gravity: number; // downward acceleration (px/s²)
+  drag: number;    // per-frame velocity multiplier (0.92 == the classic dot puff)
 }
 
 // A teammate as the local client sees them (mapped from Convex presence rows).
