@@ -17,7 +17,9 @@ export interface SheetDef { src: string; fps: number; }
 // strip (64px per frame) into public/sprites and add an entry to light it up.
 // See ART.md for the format. Example:
 //   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
-export const SHEETS: Partial<Record<string, SheetDef>> = {};
+export const SHEETS: Partial<Record<string, SheetDef>> = {
+  "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
+};
 
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
