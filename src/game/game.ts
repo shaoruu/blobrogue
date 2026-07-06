@@ -64,6 +64,12 @@ const FREEZE_MAX = 0.08;
 const TRAUMA_DECAY = 1.6;
 const SHAKE_MAX_PX = 26;
 const FIRE_TRAUMA: Record<WeaponId, number> = { pistol: 0.12, shotgun: 0.5, rapid: 0.06 };
+// Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
+// and knockback (px the shotgun shoves the player). Shotgun is the beefy end.
+const FIRE_RECOIL: Record<WeaponId, number> = { pistol: 1, shotgun: 1.4, rapid: 0.6 };
+const FIRE_KICK: Record<WeaponId, number> = { pistol: 3, shotgun: 8, rapid: 1.2 };
+const FIRE_KNOCKBACK: Record<WeaponId, number> = { pistol: 0, shotgun: 22, rapid: 0 };
+const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
 const TRAUMA_KILL = 0.16;
 const TRAUMA_BOSS_KILL = 0.7;
@@ -126,6 +132,7 @@ export class Game {
   private runStart = 0;
   private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
   private trauma = 0; // screen-shake trauma, 0..1
+  private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
@@ -185,6 +192,7 @@ export class Game {
     this.reviveHold.clear();
     this.freeze = 0;
     this.trauma = 0;
+    this.kickX = 0; this.kickY = 0;
     audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
@@ -305,6 +313,8 @@ export class Game {
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
+    const ke = Math.min(1, dt * KICK_DECAY);
+    this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
 
     this.cam.x = this.px - this.canvas.width / 2;
     this.cam.y = this.py - this.canvas.height / 2;
@@ -357,12 +367,20 @@ export class Game {
       for (const b of fire(w, muzzleX, muzzleY, this.aimAngle)) this.bullets.push(b);
       this.fireCd = w.fireCd;
       this.shotSeq++;
-      triggerRecoil(this.playerAnim);
+      triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
       this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
       if (this.weapon !== "rapid") this.spawnShell(this.px, this.py - 6, this.aimAngle);
       sfx(SHOOT_SFX[this.weapon]);
       this.addTrauma(FIRE_TRAUMA[this.weapon]);
+      const kick = FIRE_KICK[this.weapon];
+      this.kickX += -Math.cos(this.aimAngle) * kick;
+      this.kickY += -Math.sin(this.aimAngle) * kick;
+      const kb = FIRE_KNOCKBACK[this.weapon];
+      if (kb !== 0) {
+        [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, -Math.cos(this.aimAngle) * kb, 0);
+        [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, -Math.sin(this.aimAngle) * kb);
+      }
     }
   }
 
@@ -793,7 +811,7 @@ export class Game {
     const shakeX = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
     const shakeY = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
     ctx.save();
-    ctx.translate(shakeX, shakeY);
+    ctx.translate(shakeX + this.kickX, shakeY + this.kickY);
     this.renderTiles();
     this.renderDecals();
     this.renderExit();
