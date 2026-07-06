@@ -32,6 +32,10 @@ export interface StartOptions {
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// Floor stains + drop pulses that linger for a beat after the action moves on.
+interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
+
+const MAX_DECALS = 48;
 
 const REVIVE_RADIUS = 46;
 const REVIVE_HOLD = 1.1;
@@ -100,6 +104,7 @@ export class Game {
   private particles: Particle[] = [];
   private pickups: Pickup[] = [];
   private corpses: Corpse[] = [];
+  private decals: Decal[] = [];
   private remoteTracers: RemoteTracer[] = [];
   private remoteShotSeen = new Map<string, number>();
   private remoteDownSeen = new Map<string, boolean>();
@@ -109,7 +114,7 @@ export class Game {
   private playerAnim = createAnim();
   private isPlayerMoving = false;
   private playerLean = 0;
-  private muzzle = { t: 0, x: 0, y: 0, angle: 0 };
+  private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2 };
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -209,6 +214,7 @@ export class Game {
     this.particles = [];
     this.remoteTracers = [];
     this.corpses = [];
+    this.decals = [];
     this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
     this.pickups = this.placeWeaponPickups(d);
@@ -294,6 +300,7 @@ export class Game {
     this.updateParticles(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
+    this.updateDecals(dt);
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
@@ -351,8 +358,9 @@ export class Game {
       this.fireCd = w.fireCd;
       this.shotSeq++;
       triggerRecoil(this.playerAnim);
-      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle;
+      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
+      if (this.weapon !== "rapid") this.spawnShell(this.px, this.py - 6, this.aimAngle);
       sfx(SHOOT_SFX[this.weapon]);
       this.addTrauma(FIRE_TRAUMA[this.weapon]);
     }
@@ -361,7 +369,7 @@ export class Game {
   private updateBullets(dt: number) {
     for (const b of this.bullets) {
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnParticles(b.x, b.y, 3, "#fff"); }
+      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); }
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
   }
@@ -382,7 +390,7 @@ export class Game {
         if (!b.friendly) continue;
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
           e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
-          this.spawnParticles(b.x, b.y, 5, "#c98bff");
+          this.spawnPuff(b.x, b.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
           if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
           else sfx("enemyHit", { gain: 0.65 });
@@ -434,7 +442,9 @@ export class Game {
     this.kills++;
     const arch = ENEMY_ARCHETYPES[e.kind];
     const big = e.kind === "boss";
-    this.spawnParticles(e.x, e.y, big ? 40 : 16, big ? "#ffb43b" : "#a855f7");
+    this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
+    this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
+    this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
     this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
     sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
     this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
@@ -453,6 +463,10 @@ export class Game {
   }
 
   private makePickup(kind: "heart" | "coin", x: number, y: number): Pickup {
+    // A little drop pulse so freshly-dropped loot announces itself.
+    const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
+    this.addDecal(x, y, color, 15, "ring");
+    this.spawnPuff(x, y, 5, color);
     return { kind, x, y, radius: 13, weapon: null, anim: createAnim() };
   }
 
@@ -473,8 +487,19 @@ export class Game {
   }
 
   private updateParticles(dt: number) {
-    for (const p of this.particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; }
+    for (const p of this.particles) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.gravity !== 0) p.vy += p.gravity * dt;
+      p.vx *= p.drag; p.vy *= p.drag;
+      if (p.vr !== 0) p.rot += p.vr * dt;
+      p.life -= dt;
+    }
     this.particles = this.particles.filter((p) => p.life > 0);
+  }
+
+  private updateDecals(dt: number) {
+    for (const d of this.decals) d.t += dt;
+    this.decals = this.decals.filter((d) => d.t < d.life);
   }
 
   private updateTracers(dt: number) {
@@ -696,8 +721,64 @@ export class Game {
   private spawnParticles(x: number, y: number, n: number, color: string) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.28, s = 40 + Math.random() * 140;
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3 });
+      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.92 });
     }
+  }
+
+  // Chunky bits of the dead thing: fly out fast, tumble, fall, and fade a touch slower.
+  private spawnGibs(x: number, y: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.28, s = 90 + Math.random() * 210;
+      const life = 0.45 + Math.random() * 0.5;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60,
+        life, maxLife: life, color, size: 3 + Math.random() * 4, kind: "gib",
+        rot: Math.random() * 6.28, vr: (Math.random() * 2 - 1) * 14, gravity: 560, drag: 0.9,
+      });
+    }
+  }
+
+  // Bright, short sparks that shoot back off a surface (wall impacts).
+  private spawnSparks(x: number, y: number, n: number, angle: number) {
+    for (let i = 0; i < n; i++) {
+      const a = angle + (Math.random() * 2 - 1) * 0.9, s = 160 + Math.random() * 220;
+      const life = 0.12 + Math.random() * 0.16;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life, maxLife: life, color: Math.random() < 0.5 ? "#fff3c4" : "#ffb43b",
+        size: 1 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 120, drag: 0.86,
+      });
+    }
+  }
+
+  // Soft colored haze — a bullet biting into flesh.
+  private spawnPuff(x: number, y: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.28, s = 20 + Math.random() * 80;
+      const life = 0.2 + Math.random() * 0.3;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life, maxLife: life, color, size: 3 + Math.random() * 4, kind: "puff", rot: 0, vr: 0, gravity: -30, drag: 0.9,
+      });
+    }
+  }
+
+  // A single brass casing ejected sideways from the gun; tumbles and settles.
+  private spawnShell(x: number, y: number, aim: number) {
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const perp = aim + side * (Math.PI / 2) + (Math.random() * 2 - 1) * 0.3;
+    const s = 70 + Math.random() * 70;
+    const life = 0.5 + Math.random() * 0.3;
+    this.particles.push({
+      x, y, vx: Math.cos(perp) * s, vy: Math.sin(perp) * s - 50,
+      life, maxLife: life, color: "#d9a441", size: 3.5, kind: "shell",
+      rot: Math.random() * 6.28, vr: (Math.random() * 2 - 1) * 18, gravity: 560, drag: 0.99,
+    });
+  }
+
+  private addDecal(x: number, y: number, color: string, r: number, kind: "splat" | "ring") {
+    this.decals.push({ x, y, color, r, t: 0, life: kind === "ring" ? 0.4 : 3.2, kind });
+    if (this.decals.length > MAX_DECALS) this.decals.shift();
   }
 
   // ---- rendering ----
@@ -714,6 +795,7 @@ export class Game {
     ctx.save();
     ctx.translate(shakeX, shakeY);
     this.renderTiles();
+    this.renderDecals();
     this.renderExit();
     this.renderPickups();
     this.renderParticles();
@@ -855,25 +937,80 @@ export class Game {
   private renderMuzzle() {
     if (this.muzzle.t <= 0) return;
     const { ctx, cam } = this;
-    const k = this.muzzle.t / MUZZLE_DUR;
+    const k = this.muzzle.t / MUZZLE_DUR; // 1..0
     const mx = this.muzzle.x - cam.x, my = this.muzzle.y - cam.y;
+    const sz = this.muzzle.size;
     ctx.save();
-    ctx.globalAlpha = k;
-    const g = ctx.createRadialGradient(mx, my, 1, mx, my, 22);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(mx, my);
+    ctx.rotate(this.muzzle.angle);
+    // Round core glow.
+    const core = 6 + sz * 1.3;
+    const g = ctx.createRadialGradient(0, 0, 1, 0, 0, core + k * 10);
     g.addColorStop(0, "#fff3c4");
     g.addColorStop(0.5, "#ffb43b");
     g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.globalAlpha = k;
     ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(mx, my, 8 + k * 10, 0, 6.28); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, core + k * 10, 0, 6.28); ctx.fill();
+    // Directional flash pointing down the barrel — bigger for beefier weapons.
+    const len = (16 + sz * 4) * (0.5 + k * 0.5);
+    const wdt = (3 + sz) * (0.4 + k * 0.6);
+    ctx.fillStyle = "#fff3c4";
+    ctx.beginPath();
+    ctx.moveTo(0, -wdt);
+    ctx.lineTo(len, 0);
+    ctx.lineTo(0, wdt);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
   private renderParticles() {
     const { ctx, cam } = this;
     for (const p of this.particles) {
-      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - cam.x - p.size / 2, p.y - cam.y - p.size / 2, p.size, p.size);
+      const a = p.life / p.maxLife;
+      if (a <= 0) continue;
+      if (p.kind === "gib" || p.kind === "shell") {
+        ctx.save();
+        ctx.globalAlpha = a > 1 ? 1 : a;
+        ctx.translate(p.x - cam.x, p.y - cam.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size * 0.35, p.size, p.size * 0.7);
+        ctx.restore();
+      } else {
+        ctx.globalAlpha = p.kind === "puff" ? Math.min(1, a) * 0.55 : Math.min(1, a);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - cam.x - p.size / 2, p.y - cam.y - p.size / 2, p.size, p.size);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  private renderDecals() {
+    const { ctx, cam } = this;
+    for (const d of this.decals) {
+      const k = d.t / d.life; // 0..1
+      const sx = d.x - cam.x, sy = d.y - cam.y;
+      ctx.save();
+      if (d.kind === "ring") {
+        // A quick expanding halo when loot drops.
+        ctx.globalAlpha = (1 - k) * 0.7;
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4 + k * d.r, 0, 6.28);
+        ctx.stroke();
+      } else {
+        // A splat that soaks in and fades over a few seconds.
+        ctx.globalAlpha = (1 - k) * 0.4;
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.arc(sx, sy, d.r * (0.7 + k * 0.3), 0, 6.28);
+        ctx.fill();
+      }
+      ctx.restore();
     }
     ctx.globalAlpha = 1;
   }
