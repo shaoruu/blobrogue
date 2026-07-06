@@ -1,7 +1,7 @@
 import { generateDungeon } from "./dungeon.js";
 import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Particle, Pickup, WeaponId } from "./types.js";
+import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
 import { Sprites, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip } from "./assets.js";
@@ -46,7 +46,6 @@ const REVIVE_HOLD = 1.1;
 const BOSS_MINION_CAP = 14;
 const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
-const BOSS_WINDUP = 0.6; // seconds before a boss spawn that it telegraphs
 
 const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
@@ -92,6 +91,24 @@ const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launc
 
 // Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
 const HURT_FLASH_DECAY = 3.2;
+
+// ---- combat depth: telegraph rendering ----
+// A per-enemy windup (0..1) drives a pulsing colored aura + aim line; the boss adds a
+// ground shadow ring for its slam. Colors read the threat by attack type. The actual
+// attack timing/tuning lives with each enemy's AI (see docs/COMBAT_SPEC.md).
+const TELEGRAPH_COLOR: Record<AttackMove, string> = {
+  none: "#ffffff",
+  lunge: "#ff5a5a",   // skeleton: red coil
+  spit: "#ff5a7a",    // spitter: rose caster
+  hopslam: "#ffd27a", // boss slam: amber
+  radial: "#c98bff",  // boss burst: violet
+  roar: "#ffb43b",    // boss phase change: gold
+};
+const BOSS_SLAM_RADIUS = 90;   // shockwave radius (also the ground-marker size)
+const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
+// Reused dashed/solid line patterns so the aim line never allocates per frame.
+const AIM_DASH: number[] = [7, 6];
+const AIM_SOLID: number[] = [];
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -1170,21 +1187,115 @@ export class Game {
     const { ctx, cam } = this;
     for (const e of this.enemies) {
       const arch = ENEMY_ARCHETYPES[e.kind];
+      const a = e.attack;
       const sx = e.x - cam.x, sy = e.y - cam.y;
       const facing = this.px >= e.x ? 1 : -1;
-      let extra = 1;
-      if (e.kind === "boss" && e.spawnTimer < BOSS_WINDUP) {
-        extra = 1 + (1 - e.spawnTimer / BOSS_WINDUP) * 0.14; // telegraph wind-up
-      }
+      const isWindup = a.phase === "windup";
+      const isHopSlam = e.kind === "boss" && a.move === "hopslam";
+
+      // Ground danger marker for the boss hop-slam (drawn under everything).
+      if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
+
+      // Ghost solidify reads as an opacity ramp; everyone else uses the archetype alpha.
+      const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup : arch.alpha;
+
       const clip: SheetClip = e.anim.move > 0.5 ? "walk" : "idle";
       const xf = characterXform(e.anim, e.kind === "boss" ? BOSS_STYLE : CHARACTER_STYLE);
-      this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, arch.alpha, e.anim.flash, e.anim.clock);
+      let extra = 1;
+      // Skeleton coils down (squash) as its lunge charges.
+      if (e.kind === "skeleton" && isWindup) { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
+      // Boss inflates for radial/roar telegraphs and lifts off the ground mid-slam.
+      if (e.kind === "boss") {
+        if (isWindup && (a.move === "radial" || a.move === "roar")) extra = 1 + a.windup * 0.16;
+        if (isHopSlam && a.phase === "windup") xf.sy -= 0.18 * a.windup; // crouch before the leap
+        if (isHopSlam && a.phase === "active") { xf.oy -= Math.sin(a.windup * Math.PI) * BOSS_JUMP_HEIGHT; extra = 1.08; }
+      }
+      // A white pulse on the sprite intensifies as the windup nears release.
+      const pulse = 0.55 + 0.45 * Math.sin(e.anim.clock * 13);
+      const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
+      this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, alpha, Math.max(e.anim.flash, telegraphFlash), e.anim.clock);
+
+      // Shimmer flecks while a ghost is materializing.
+      if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
+      // Aura + aim line for a charging attack.
+      if (isWindup) this.renderTelegraph(e, sx, sy);
+
       const barW = e.kind === "boss" ? 64 : 32;
       const barY = sy - arch.drawSize / 2 - 8;
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
       ctx.fillStyle = e.kind === "boss" ? "#ffb43b" : "#ff5a5a";
       ctx.fillRect(sx - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), 4);
     }
+  }
+
+  // Pulsing colored aura + an aim line for a charging attack. The line tracks the
+  // target while dashed, then goes solid + bright once the aim locks — that visual
+  // "click" is the cue that the dodge window has opened.
+  private renderTelegraph(e: Enemy, sx: number, sy: number) {
+    const { ctx } = this;
+    const a = e.attack;
+    const arch = ENEMY_ARCHETYPES[e.kind];
+    const color = TELEGRAPH_COLOR[a.move];
+    const pulse = 0.5 + 0.5 * Math.sin(e.anim.clock * 13);
+    const r = arch.drawSize * (0.5 + 0.28 * a.windup);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.globalAlpha = (0.14 + 0.38 * a.windup) * (0.6 + 0.4 * pulse);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+    ctx.restore();
+
+    if (a.move === "lunge" || a.move === "spit") {
+      const len = a.move === "lunge" ? 150 : 300;
+      ctx.save();
+      ctx.globalAlpha = (a.isAimLocked ? 0.9 : 0.4) * (0.55 + 0.45 * a.windup);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = a.isAimLocked ? 3 : 1.5;
+      ctx.setLineDash(a.isAimLocked ? AIM_SOLID : AIM_DASH);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.cos(a.lockedAngle) * len, sy + Math.sin(a.lockedAngle) * len);
+      ctx.stroke();
+      ctx.setLineDash(AIM_SOLID);
+      ctx.restore();
+    }
+  }
+
+  // The boss hop-slam's growing footprint: a filled danger disc + bright rim. It tracks
+  // the target while charging, then freezes at aim-lock so you can simply walk off it.
+  private renderSlamMarker(e: Enemy) {
+    const { ctx, cam } = this;
+    const a = e.attack;
+    const sx = a.markX - cam.x, sy = a.markY - cam.y;
+    const grow = a.phase === "windup" ? a.windup : 1;
+    const r = BOSS_SLAM_RADIUS * grow;
+    if (r < 1) return;
+    ctx.save();
+    ctx.globalAlpha = 0.16 + 0.14 * grow;
+    ctx.fillStyle = "#ff5a5a";
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+    ctx.globalAlpha = 0.5 + 0.3 * grow;
+    ctx.strokeStyle = "#ffd27a";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  private renderGhostShimmer(e: Enemy, sx: number, sy: number) {
+    const { ctx } = this;
+    const n = 4;
+    ctx.save();
+    ctx.fillStyle = "#e8faff";
+    for (let i = 0; i < n; i++) {
+      const ang = e.anim.clock * 2 + (i / n) * 6.28;
+      const rad = 10 + (i % 2) * 8;
+      ctx.globalAlpha = 0.5 * e.attack.windup * (0.5 + 0.5 * Math.sin(e.anim.clock * 9 + i));
+      ctx.fillRect(sx + Math.cos(ang) * rad - 1, sy + Math.sin(ang) * rad - 1, 2, 2);
+    }
+    ctx.restore();
   }
 
   private renderBullets() {
