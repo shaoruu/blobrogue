@@ -28,3 +28,10 @@ Live: https://blobrogue-shaoruuu.vercel.app/
 - Keep it fun first. One shipped, verified improvement per evolution run.
 - Never leave the repo un-building or undeployed.
 - Solo must always work with zero Convex config — never let a missing `VITE_CONVEX_URL` break the deployed game.
+
+## Studio direction (game designer playtest, code-level)
+- **Depth gap found:** combat is 100% contact-damage, ZERO enemy projectiles. Fix = telegraphed enemy attacks + real boss moveset (priority #2, after juice). This creates the dodge "dance".
+- **Folded into juice pass:** enemy knockback on hit, hurt vignette, instant-restart (Enter/R), dash afterimage + i-frames 0.2→0.35s.
+- **Do NOT:** nerf enemies (balance is fine), touch twin-stick controls (tight). On red assets base≥dark.
+- **Monetization:** premium Steam $9.99-12.99; web = free demo/viral funnel; do a Steam "Coming Soon" page early for wishlists; no ads/gacha.
+- Ranked: 1) juice (in flight, expanded) 2) enemy attacks+telegraphs (promoted) 3) in-run item synergies + meta unlocks, then co-op revive/scaling (scaffolding exists).
