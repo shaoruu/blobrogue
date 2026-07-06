@@ -47,3 +47,15 @@ Verdict: YES to the feeling, NO to a pivot. Deliver Minecraft/Terraria's sense o
 - TIER 2 (v2 north star, only if v1 lands): traversable overworld + light gatherable resources → base upgrades.
 - TIER 3 (never/sequel): full destructible terrain + freeform + persistent shared world. Not blobrogue.
 Ordering: Tier-0 hub spec comes AFTER items/meta ship (needs Amber to exist). GD writes it build-ready then.
+
+## Systems-depth vision (game designer, DECIDED) — "persistent base, ephemeral expeditions"
+One game shape: top-down survival-crafting-combat where our roguelike combat IS the expedition layer. Craft/gear at a persistent growing HOME BASE (Convex doc state, co-op shared) → launch instanced procedural EXPEDITIONS (the combat) → beat biome boss → unlock next tier + resources → craft better → deeper. Comps: Core Keeper, Valheim, Deep Rock.
+KEY ARCHITECTURE: persist the BASE not the WORLD (Convex's strength; avoids per-tile terrain sync). Expeditions instanced/ephemeral; Quick Play still works.
+Two item layers: persistent EQUIPMENT (craft/keep/bring in) vs in-run ITEMS (ephemeral build variety, lost on death) — resolves the roguelike-vs-survival tension, no rework to items spec.
+QUEUE UNCHANGED: juice → combat → items/meta (all substrate the systems extend; loadouts = persistent mods, hub = Amber rendered physical).
+v1 (deep+open feeling, ~20% effort, all reskins/extensions): 1) tiered biome progression (boss gates tier) 2) contiguous biomes replace floor cards 3) persistent growing hub (Amber→buildings/NPCs) 4) multi-slot equipment loadouts.
+v2 (after v1 ships): gathering + SHALLOW crafting (hub stations functional) · persistent shared co-op base · base-defense wave mode (reuses combat).
+v3 (if metrics justify): constrained base building (NOT freeform voxel) · day/night+hazards · deeper crafting/biomes.
+HARD CUTS (refuse — the multi-year traps): freeform destructible terrain (never), persistent shared overworld (use base+instanced instead), hunger/thirst/temp meters (tedium), Minecraft-scale crafting trees (keep shallow).
+DISCIPLINE: every phase independently shippable+fun; ship v1 to players BEFORE layering systems.
+RELEASE MODEL PIVOT: Early Access + public roadmap (fits systems-deep games grown in public — Valheim/Core Keeper/Terraria did exactly this; turns "not fully built" into the pitch; strong wishlist+retention driver). Web demo + instant co-op = top of funnel.
