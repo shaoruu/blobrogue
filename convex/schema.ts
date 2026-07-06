@@ -30,9 +30,12 @@ export default defineSchema({
     seed: v.number(),
     floor: v.number(),
     status: v.union(v.literal("lobby"), v.literal("playing"), v.literal("ended")),
+    isPublic: v.optional(v.boolean()),
     createdAt: v.number(),
     lastActivity: v.number(),
-  }).index("by_code", ["code"]),
+  })
+    .index("by_code", ["code"])
+    .index("by_public_status", ["isPublic", "status", "lastActivity"]),
 
   // Live per-player state inside a room, synced ~10x/sec by the client.
   presence: defineTable({
