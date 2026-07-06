@@ -27,13 +27,20 @@ def run(inp,out,grid,export,family_dark=None):
             r,g,b,a=sp[x,y]
             if a>0:
                 nc=nearest((r,g,b));sp[x,y]=(nc[0],nc[1],nc[2],255)
-    if family_dark is not None:
-        fd=tuple(int(family_dark[i:i+2],16) for i in (0,2,4))
-        for y in range(grid):
-            for x in range(grid):
-                r,g,b,a=sp[x,y]
-                if a==255 and (r,g,b) in TILE_DARKS:
-                    sp[x,y]=(fd[0],fd[1],fd[2],255)
+    # Tile-dark clamp ALWAYS runs (AD rule): a leaked dungeon-floor dark can never survive.
+    # If a family-dark is given, snap to it; else snap each leak to the nearest palette color
+    # that ISN'T itself a tile-dark (so gray/metal/prop objects still get cleaned).
+    _fd = tuple(int(family_dark[i:i+2],16) for i in (0,2,4)) if family_dark else None
+    _nontile = [c for c in PAL if c not in TILE_DARKS and c != OUTLINE]
+    for y in range(grid):
+        for x in range(grid):
+            r,g,b,a=sp[x,y]
+            if a==255 and (r,g,b) in TILE_DARKS:
+                if _fd is not None:
+                    sp[x,y]=(_fd[0],_fd[1],_fd[2],255)
+                else:
+                    nc=min(_nontile,key=lambda pc:(pc[0]-r)**2+(pc[1]-g)**2+(pc[2]-b)**2)
+                    sp[x,y]=(nc[0],nc[1],nc[2],255)
     ring=set()
     for y in range(grid):
         for x in range(grid):
