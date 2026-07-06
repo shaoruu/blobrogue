@@ -13,16 +13,16 @@ Live: https://blobrogue-shaoruuu.vercel.app/
 - **Weapons & pickups** — pistol / shotgun / rapid with distinct feel, gun pickups that swap your weapon, heart (heal) + coin (currency) drops. Current weapon in the HUD.
 - **Minimap + stats HUD** — top-right minimap (rooms/corridors, player, exit, enemy & teammate dots), a clean hearts/floor/kills/coins/weapon bar, and a hold-Tab run/all-time stats panel. Dark-navy + amber aesthetic, layout-shift-free.
 - **Juice / procedural animation** — every character and pickup is animated: idle bob + squash-and-stretch, moving hop + lean, shoot recoil + muzzle flash, hit flash, death pop/squash/fade, spinning coins, boss breathing + spawn telegraph. Plus optional drop-in frame spritesheets (horizontal strips) with procedural fallback. See `ART.md`.
+- **Game-feel & sound pass** — a procedural WebAudio engine (`src/game/audio.ts`, zero audio files): per-weapon shots, enemy hit/death, hurt, dash, pickups, descend, boss, game-over, plus a subtle looping dungeon/boss score; **hit-stop** on kills/heavy hits; **trauma-based screen shake** (per-event, intensity slider); **death gibs + impact particles** (wall sparks vs enemy puffs), floor decals, directional muzzle flash, shell casings; per-weapon feel (recoil + camera kick + shake + shotgun knockback); a run-summary screen with count-up numbers; and a mute + shake settings affordance (menu + Esc pause), persisted. Solo-safe and co-op-gated (far-off events don't spam audio/juice).
 
 ## Next up (rough priority)
 1. **Server-authoritative enemies in co-op** — currently enemies are simulated per-client from the shared seed (identical at spawn, diverge on interaction). Make the host authoritative and sync enemy state so teammates fight the *same* mobs. (Seam is ready via `CoopBridge`.)
-2. Sound & music — shooting, hits, death, ambient dungeon loop (WebAudio).
-3. Better dungeon generation — distinct room types, treasure rooms, locked doors.
-4. More juice — screen shake, hit-stop, damage numbers (procedural anim + muzzle flash + death anims now done).
-5. Real frame animation — drop fal-generated `*_walk.png` / `*_idle.png` strips into `public/sprites` and register them (see `ART.md`).
-6. More weapons + character/unlock meta (the `players.unlocks` field is already there).
-7. Mobile / touch controls (virtual sticks) so it's playable on phones.
-8. Meta: score/leaderboard (Convex), harden accounts (swap to Convex Auth if needed).
+2. Better dungeon generation — distinct room types, treasure rooms, locked doors.
+3. Damage numbers + more juice on top of the feel pass (screen shake, hit-stop, gibs, and audio are now done).
+4. Real frame animation — drop fal-generated `*_walk.png` / `*_idle.png` strips into `public/sprites` and register them (see `ART.md`).
+5. More weapons + character/unlock meta (the `players.unlocks` field is already there).
+6. Mobile / touch controls (virtual sticks) so it's playable on phones.
+7. Meta: score/leaderboard (Convex), harden accounts (swap to Convex Auth if needed).
 
 ## Notes
 - Keep it fun first. One shipped, verified improvement per evolution run.
