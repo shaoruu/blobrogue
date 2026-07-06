@@ -164,7 +164,7 @@ export class Menu {
     wrap.appendChild(el("p", "", "Enter the 4-letter code your host shared."));
     const input = el("input", "code-input");
     input.type = "text";
-    input.maxLength = 5;
+    input.maxLength = 4;
     input.placeholder = "CODE";
     input.autocapitalize = "characters";
     input.addEventListener("input", () => (input.value = input.value.toUpperCase()));
