@@ -174,6 +174,7 @@ export class Game {
   private invuln = 0;
   private dashCd = 0; private dashTime = 0; private dashDx = 0; private dashDy = 0;
   private fireCd = 0;
+  private isAutoFiring = false; // autofire mode only: click toggles continuous fire (settings.isAutofire)
   private facing = 1;
   private weapon: WeaponId = DEFAULT_WEAPON;
   private aimAngle = 0;
@@ -262,7 +263,11 @@ export class Game {
       this.mouse.x = e.clientX - r.left;
       this.mouse.y = e.clientY - r.top;
     });
-    this.canvas.addEventListener("mousedown", () => (this.mouse.isDown = true));
+    this.canvas.addEventListener("mousedown", (e) => {
+      this.mouse.isDown = true;
+      // Autofire: a left-click toggles continuous fire instead of requiring a hold.
+      if (settings.isAutofire && !this.isDown && e.button === 0) this.isAutoFiring = !this.isAutoFiring;
+    });
     window.addEventListener("mouseup", () => (this.mouse.isDown = false));
   }
 
@@ -276,6 +281,7 @@ export class Game {
     this.hp = this.maxHp;
     this.weapon = DEFAULT_WEAPON;
     this.isDown = false;
+    this.isAutoFiring = false;
     this.remoteShotSeen.clear();
     this.remoteDownSeen.clear();
     this.remoteAnims.clear();
@@ -501,7 +507,10 @@ export class Game {
 
   private updateShooting(dt: number) {
     this.fireCd = Math.max(0, this.fireCd - dt);
-    if (this.mouse.isDown && this.fireCd === 0) {
+    // Hold-to-fire owns firing when autofire is off; drop any stale toggle state.
+    if (!settings.isAutofire) this.isAutoFiring = false;
+    const isFiring = settings.isAutofire ? this.isAutoFiring : this.mouse.isDown;
+    if (isFiring && this.fireCd === 0) {
       const w = WEAPONS[this.weapon];
       const muzzleX = this.px + Math.cos(this.aimAngle) * 18;
       const muzzleY = this.py + Math.sin(this.aimAngle) * 18;
@@ -1236,6 +1245,7 @@ export class Game {
   private gameOver() {
     if (!this.isRunning) return;
     this.isRunning = false;
+    this.isAutoFiring = false;
     cancelAnimationFrame(this.raf);
     audio.setMusic(null);
     sfx("gameOver");
