@@ -1,7 +1,7 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
 export type SpriteName =
-  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "boss"
+  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
   | "heart" | "coin" | "gun";
 
 // Animation clip an entity can request. When a matching sheet is registered below
@@ -25,6 +25,9 @@ const SOURCES: Record<SpriteName, string> = {
   bat: "/sprites/bat.png",
   skeleton: "/sprites/skeleton.png",
   ghost: "/sprites/ghost.png",
+  // TODO(art): placeholder — reusing beetle.png until the dedicated Spitter caster
+  // sprite lands (art director in progress). A rose charge-glow sells the caster read.
+  spitter: "/sprites/beetle.png",
   boss: "/sprites/boss.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
