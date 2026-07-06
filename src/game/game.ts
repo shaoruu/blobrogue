@@ -148,6 +148,7 @@ export class Game {
   private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
   private trauma = 0; // screen-shake trauma, 0..1
   private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
+  private hurtFlash = 0; // red hurt-vignette intensity, 0..1
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
@@ -216,6 +217,7 @@ export class Game {
     this.freeze = 0;
     this.trauma = 0;
     this.kickX = 0; this.kickY = 0;
+    this.hurtFlash = 0;
     this.isPaused = false;
     this.pause.hide();
     audio.unlock();
@@ -380,6 +382,7 @@ export class Game {
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
+    if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * HURT_FLASH_DECAY);
 
     this.cam.x = this.px - this.canvas.width / 2;
     this.cam.y = this.py - this.canvas.height / 2;
@@ -663,6 +666,7 @@ export class Game {
     sfx("playerHurt");
     this.addFreeze(FREEZE_HURT);
     this.addTrauma(TRAUMA_HURT);
+    this.hurtFlash = 1;
     if (this.hp <= 0) {
       this.hp = 0;
       if (this.coop && this.hasLivingTeammate()) {
@@ -907,8 +911,24 @@ export class Game {
     this.renderPlayer();
     this.renderMuzzle();
     ctx.restore();
+    this.renderHurtVignette();
     this.renderReticle();
     this.renderMinimap();
+  }
+
+  // Unmissable "you got hit" read: a red glow that hugs the screen edge and fades fast.
+  // Drawn in screen space (outside the shake translate) so it frames the whole viewport.
+  private renderHurtVignette() {
+    if (this.hurtFlash <= 0) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const inner = Math.min(cx, cy) * 0.55;
+    const outer = Math.hypot(cx, cy);
+    const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+    g.addColorStop(0, "rgba(255,40,40,0)");
+    g.addColorStop(1, `rgba(255,30,30,${0.55 * this.hurtFlash})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   private renderTiles() {
