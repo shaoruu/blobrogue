@@ -29,7 +29,14 @@ export type SfxName =
   | "bossSpawn"
   | "gameOver"
   | "revive"
-  | "uiClick";
+  | "uiClick"
+  // Telegraphed-attack cues (combat-depth pass).
+  | "enemyWindup"  // generic melee coil/tell (skeleton)
+  | "enemyLunge"   // the dash whoosh on release
+  | "spitCharge"   // spitter mouth charge-glow rising tone
+  | "spitFire"     // wet projectile launch (spitter + boss globs)
+  | "bossSlam"     // hop-slam landing shockwave
+  | "bossRoar";    // phase-transition roar
 
 export type MusicKind = "dungeon" | "boss" | null;
 
@@ -191,6 +198,34 @@ class AudioEngine {
         break;
       case "uiClick":
         this.blip(t, "square", 600, 900, 0.002, 0.05, 0.2 * gain);
+        break;
+      case "enemyWindup":
+        // A tense rising coil — reads as "something's about to happen".
+        this.blip(t, "triangle", 150 * rate, 330 * rate, 0.02, 0.42, 0.2 * gain);
+        this.noise(t, "bandpass", 700 * rate, 1500 * rate, 0.4, 0.1 * gain, 1.4);
+        break;
+      case "enemyLunge":
+        this.noise(t, "bandpass", 700, 2500, 0.16, 0.32 * gain, 0.8);
+        this.blip(t, "sawtooth", 240 * rate, 90 * rate, 0.002, 0.14, 0.32 * gain);
+        break;
+      case "spitCharge":
+        // Wet upward suck as the caster gathers a glob.
+        this.blip(t, "sawtooth", 220 * rate, 560 * rate, 0.02, 0.5, 0.16 * gain);
+        this.noise(t, "bandpass", 500 * rate, 1900 * rate, 0.5, 0.12 * gain, 1.2);
+        break;
+      case "spitFire":
+        this.blip(t, "triangle", 540 * rate, 170 * rate, 0.002, 0.12, 0.32 * gain);
+        this.noise(t, "bandpass", 1600 * rate, 600 * rate, 0.08, 0.2 * gain, 1.2);
+        break;
+      case "bossSlam":
+        // Heavy ground impact: sub-thump under a lowpassed crunch.
+        this.blip(t, "sawtooth", 130 * rate, 40 * rate, 0.004, 0.42, 0.55 * gain);
+        this.noise(t, "lowpass", 900, 70, 0.3, 0.6 * gain, 1);
+        break;
+      case "bossRoar":
+        this.blip(t, "sawtooth", 120 * rate, 74 * rate, 0.03, 0.85, 0.5 * gain);
+        this.blip(t, "square", 126 * rate, 80 * rate, 0.03, 0.85, 0.22 * gain); // detune -> menace
+        this.noise(t, "lowpass", 700, 130, 0.8, 0.3 * gain);
         break;
     }
   }
