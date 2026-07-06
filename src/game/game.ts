@@ -17,6 +17,8 @@ import {
   characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
 import type { Anim, Xform } from "./anim.js";
+import { audio, sfx } from "./audio.js";
+import type { SfxName } from "./audio.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; }
 
@@ -36,6 +38,12 @@ const BOSS_MINION_CAP = 14;
 const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
 const BOSS_WINDUP = 0.6; // seconds before a boss spawn that it telegraphs
+
+const SHOOT_SFX: Record<WeaponId, SfxName> = {
+  pistol: "shootPistol",
+  shotgun: "shootShotgun",
+  rapid: "shootRapid",
+};
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -71,6 +79,7 @@ export class Game {
   private corpses: Corpse[] = [];
   private remoteTracers: RemoteTracer[] = [];
   private remoteShotSeen = new Map<string, number>();
+  private remoteDownSeen = new Map<string, boolean>();
   private remoteAnims = new Map<string, RemoteAnimEntry>();
   private reviveHold = new Map<string, number>();
 
@@ -141,8 +150,10 @@ export class Game {
     this.weapon = DEFAULT_WEAPON;
     this.isDown = false;
     this.remoteShotSeen.clear();
+    this.remoteDownSeen.clear();
     this.remoteAnims.clear();
     this.reviveHold.clear();
+    audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
     resetAnim(this.playerAnim);
@@ -174,6 +185,9 @@ export class Game {
     this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
     this.pickups = this.placeWeaponPickups(d);
+    const isBoss = isBossFloor(this.floor);
+    audio.setMusic(isBoss ? "boss" : "dungeon");
+    if (isBoss) sfx("bossSpawn");
   }
 
   private placeWeaponPickups(d: Dungeon): Pickup[] {
@@ -267,6 +281,7 @@ export class Game {
     if (this.keys.has("shift") && this.dashCd === 0 && (ix || iy)) {
       this.dashTime = 0.16; this.dashCd = 0.7; this.dashDx = ix; this.dashDy = iy;
       this.invuln = Math.max(this.invuln, 0.2);
+      sfx("dash");
     }
     let mvx: number, mvy: number;
     if (this.dashTime > 0) {
@@ -295,6 +310,7 @@ export class Game {
       triggerRecoil(this.playerAnim);
       this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
+      sfx(SHOOT_SFX[this.weapon]);
     }
   }
 
@@ -324,6 +340,7 @@ export class Game {
           e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
           this.spawnParticles(b.x, b.y, 5, "#c98bff");
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
+          else sfx("enemyHit", { gain: 0.65 });
         }
       }
     }
@@ -362,6 +379,7 @@ export class Game {
       if (!this.isWall(mx, my)) {
         this.enemies.push(createEnemy("slime", mx, my, this.floor));
         this.spawnParticles(mx, my, 8, "#a855f7");
+        if (this.isNearCamera(mx, my)) sfx("enemyHit", { gain: 0.5, rate: 0.6 });
       }
     }
   }
@@ -373,6 +391,7 @@ export class Game {
     const big = e.kind === "boss";
     this.spawnParticles(e.x, e.y, big ? 40 : 16, big ? "#ffb43b" : "#a855f7");
     this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
+    sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
     this.dropLoot(e);
   }
 
@@ -395,11 +414,11 @@ export class Game {
     for (const p of this.pickups) {
       stepAnim(p.anim, dt, false, 0);
       if (!this.isDown && Math.hypot(this.px - p.x, this.py - p.y) < this.pr + p.radius) {
-        if (p.kind === "coin") { this.coins++; this.spawnParticles(p.x, p.y, 6, "#ffd27a"); continue; }
+        if (p.kind === "coin") { this.coins++; this.spawnParticles(p.x, p.y, 6, "#ffd27a"); sfx("coin"); continue; }
         if (p.kind === "heart") {
-          if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); continue; }
+          if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); sfx("heart"); continue; }
         }
-        if (p.kind === "weapon" && p.weapon) { this.weapon = p.weapon; this.fireCd = 0; this.spawnParticles(p.x, p.y, 12, "#ffb43b"); continue; }
+        if (p.kind === "weapon" && p.weapon) { this.weapon = p.weapon; this.fireCd = 0; this.spawnParticles(p.x, p.y, 12, "#ffb43b"); sfx("weapon"); continue; }
       }
       remaining.push(p);
     }
@@ -458,6 +477,7 @@ export class Game {
     this.pendingDescend = 0;
     this.isDown = false; // a fresh floor brings downed teammates back up
     this.hp = Math.min(this.maxHp, this.hp + 2);
+    sfx("descend");
     this.loadFloor();
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
   }
@@ -467,6 +487,7 @@ export class Game {
     this.invuln = 0.9;
     triggerFlash(this.playerAnim);
     this.spawnParticles(this.px, this.py, 10, "#ff5a5a");
+    sfx("playerHurt");
     if (this.hp <= 0) {
       this.hp = 0;
       if (this.coop && this.hasLivingTeammate()) {
@@ -497,12 +518,14 @@ export class Game {
       this.hp = revived;
       this.invuln = 1.2;
       this.spawnParticles(this.px, this.py, 20, "#8affc0");
+      sfx("revive");
     }
 
     // If we're down and the last living teammate is gone, the run is over.
     if (this.isDown && !this.hasLivingTeammate()) { this.gameOver(); return; }
 
     this.handleRemoteShots();
+    this.handleRemoteState();
     this.handleReviving(dt);
   }
 
@@ -515,9 +538,26 @@ export class Game {
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
         const entry = this.remoteAnims.get(r.playerId);
         if (entry) triggerRecoil(entry.anim);
+        if (this.isNearCamera(r.x, r.y)) sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
       }
       this.remoteShotSeen.set(r.playerId, r.shotSeq);
     }
+  }
+
+  // A teammate going down nearby gets a hurt cue + red burst locally (gated to screen).
+  private handleRemoteState() {
+    if (!this.coop) return;
+    const live = new Set<string>();
+    for (const r of this.coop.remotePlayers()) {
+      live.add(r.playerId);
+      const wasDown = this.remoteDownSeen.get(r.playerId) ?? false;
+      if (r.isDown && !wasDown && this.isNearCamera(r.x, r.y)) {
+        sfx("playerHurt", { gain: 0.6 });
+        this.spawnParticles(r.x, r.y, 10, "#ff5a5a");
+      }
+      this.remoteDownSeen.set(r.playerId, r.isDown);
+    }
+    for (const id of [...this.remoteDownSeen.keys()]) if (!live.has(id)) this.remoteDownSeen.delete(id);
   }
 
   private handleReviving(dt: number) {
@@ -588,9 +628,18 @@ export class Game {
     if (!this.isRunning) return;
     this.isRunning = false;
     cancelAnimationFrame(this.raf);
+    audio.setMusic(null);
+    sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();
     this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins });
+  }
+
+  // True when a world point is on (or near) the visible screen — used to gate audio
+  // and juice for far-off co-op events so a teammate across the map never spams us.
+  private isNearCamera(x: number, y: number, margin = 160): boolean {
+    return x >= this.cam.x - margin && x <= this.cam.x + this.canvas.width + margin
+      && y >= this.cam.y - margin && y <= this.cam.y + this.canvas.height + margin;
   }
 
   private spawnParticles(x: number, y: number, n: number, color: string) {
