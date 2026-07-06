@@ -104,6 +104,16 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   radial: "#c98bff",  // boss burst: violet
   roar: "#ffb43b",    // boss phase change: gold
 };
+// Skeleton lunge. Aim locks at 0.35s of the 0.55s windup; the 0.5s recovery after the
+// 0.28s dash is a free-damage window. Reaches ~145px, so walking sideways clears it.
+const SKELETON_TRIGGER = 200;
+const SKELETON_WINDUP = 0.55;
+const SKELETON_LOCK = 0.35;
+const SKELETON_LUNGE_DUR = 0.28;
+const SKELETON_LUNGE_SPEED = 520;
+const SKELETON_RECOVER = 0.5;
+const SKELETON_CD = 2.0;
+
 // Spitter caster (ranged glass cannon). Aim locks at 0.45s of the 0.7s windup, so the
 // last 0.25s is a pure dodge window; walls break the shot via updateBullets.
 const SPITTER_FLEE = 160;      // closer than this: back away
@@ -569,9 +579,50 @@ export class Game {
   private updateEnemyAI(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
     switch (e.kind) {
       case "spitter": return this.updateSpitter(e, dt, remotes);
+      case "skeleton": return this.updateSkeleton(e, dt, remotes);
       case "boss": return this.updateBoss(e, dt, remotes);
       default: return this.updateChaser(e, dt, remotes);
     }
+  }
+
+  // SKELETON: chases, then commits a telegraphed lunge — coil, dash, then a punishable
+  // dizzy recovery. Trigger needs proximity, a clear line, cooldown, and spawn grace.
+  private updateSkeleton(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    const a = e.attack;
+    if (a.phase === "windup") {
+      if (this.stepWindupTimer(e, dt, SKELETON_WINDUP, SKELETON_LOCK, remotes, false)) {
+        a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = SKELETON_CD;
+        this.sfxAt("enemyLunge", e.x, e.y);
+        if (this.isNearCamera(e.x, e.y)) this.addTrauma(0.12);
+      }
+      return a.lockedAngle;
+    }
+    if (a.phase === "active") {
+      a.time += dt;
+      const step = SKELETON_LUNGE_SPEED * dt;
+      this.moveEnemyBy(e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+      this.spawnPuff(e.x, e.y, 1, ENEMY_ARCHETYPES.skeleton.tint); // lunge trail
+      if (a.time >= SKELETON_LUNGE_DUR) this.enterRecover(e);
+      return a.lockedAngle;
+    }
+    if (a.phase === "recover") {
+      a.time += dt;
+      if (a.time >= SKELETON_RECOVER) this.enterIdle(e);
+      return a.lockedAngle;
+    }
+    if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
+    const dx = this.targetX - e.x, dy = this.targetY - e.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const angle = Math.atan2(dy, dx);
+    if (dist <= SKELETON_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+      && this.hasLineOfSight(e.x, e.y, this.targetX, this.targetY)) {
+      this.beginWindup(e, "lunge");
+      this.sfxAt("enemyWindup", e.x, e.y);
+      return angle;
+    }
+    const step = e.speed * dt;
+    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    return angle;
   }
 
   // Slime (chase), bat (zigzag), and — until they grow their own moves — skeleton/ghost.
