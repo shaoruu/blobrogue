@@ -17,6 +17,9 @@ def run(path):
             for dy in range(1,1+t):
                 yy=sy+dy
                 if yy<32 and p[x,yy][3]==0: p[x,yy]=(38,26,20,255)
+    placed=sum(1 for yy in range(32) for xx in range(32) if p[xx,yy][:3]==(38,26,20) and p[xx,yy][3]==255)
+    if placed==0:
+        raise SystemExit(f"ERROR: no grounding shadow placed on {path} (sprite may be edge-clipped at bottom)")
     im.resize((64,64),Image.NEAREST).save(path)
-    print("shadowed",path)
+    print(f"shadowed {path} ({placed}px)")
 if __name__=="__main__": run(sys.argv[1])
