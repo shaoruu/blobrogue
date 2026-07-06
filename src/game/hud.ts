@@ -64,6 +64,7 @@ export class Hud {
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
   private banner: HTMLElement;
+  private bar: HTMLElement;
   private bannerTimer = 0;
 
   constructor(root: HTMLElement) {
@@ -91,6 +92,8 @@ export class Hud {
     this.coopChip = el("div", "font-size:11px;color:#5ad1ff;min-height:14px;letter-spacing:0.5px;");
     bar.appendChild(this.coopChip);
 
+    bar.style.display = "none"; // hidden until a run starts
+    this.bar = bar;
     root.appendChild(bar);
 
     // Hold-Tab stats panel.
@@ -116,6 +119,10 @@ export class Hud {
     root.appendChild(this.banner);
 
     this.syncHeartCells(6);
+  }
+
+  setVisible(v: boolean) {
+    this.bar.style.display = v ? "flex" : "none";
   }
 
   private syncHeartCells(maxHp: number) {
