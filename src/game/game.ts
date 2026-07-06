@@ -3,8 +3,8 @@ import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Particle, Pickup, WeaponId } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
-import { Sprites, playerColor } from "./assets.js";
-import type { SpriteName } from "./assets.js";
+import { Sprites, playerColor, FRAME } from "./assets.js";
+import type { SpriteName, SheetClip } from "./assets.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import { Minimap } from "./minimap.js";
@@ -12,6 +12,11 @@ import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
 import type { ProfileStats } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
+import {
+  createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash,
+  characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
+} from "./anim.js";
+import type { Anim, Xform } from "./anim.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; }
 
@@ -22,10 +27,15 @@ export interface StartOptions {
 }
 
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; }
+interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; }
+interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
 
 const REVIVE_RADIUS = 46;
 const REVIVE_HOLD = 1.1;
 const BOSS_MINION_CAP = 14;
+const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
+const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
+const BOSS_WINDUP = 0.6; // seconds before a boss spawn that it telegraphs
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -58,9 +68,16 @@ export class Game {
   private bullets: Bullet[] = [];
   private particles: Particle[] = [];
   private pickups: Pickup[] = [];
+  private corpses: Corpse[] = [];
   private remoteTracers: RemoteTracer[] = [];
   private remoteShotSeen = new Map<string, number>();
+  private remoteAnims = new Map<string, RemoteAnimEntry>();
   private reviveHold = new Map<string, number>();
+
+  private playerAnim = createAnim();
+  private isPlayerMoving = false;
+  private playerLean = 0;
+  private muzzle = { t: 0, x: 0, y: 0, angle: 0 };
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -124,7 +141,13 @@ export class Game {
     this.weapon = DEFAULT_WEAPON;
     this.isDown = false;
     this.remoteShotSeen.clear();
+    this.remoteAnims.clear();
     this.reviveHold.clear();
+    this.corpses = [];
+    this.muzzle.t = 0;
+    resetAnim(this.playerAnim);
+    this.isPlayerMoving = false;
+    this.playerLean = 0;
     this.runStart = performance.now();
     this.loadFloor();
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
@@ -147,6 +170,8 @@ export class Game {
     this.bullets = [];
     this.particles = [];
     this.remoteTracers = [];
+    this.corpses = [];
+    this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
     this.pickups = this.placeWeaponPickups(d);
   }
@@ -164,8 +189,8 @@ export class Game {
         x: (room.cx + 0.5) * TILE,
         y: (room.cy + 0.5) * TILE,
         radius: 16,
-        bob: rng.range(0, Math.PI * 2),
         weapon,
+        anim: createAnim(),
       });
     }
     return drops;
@@ -203,12 +228,18 @@ export class Game {
     if (!this.isDown) {
       this.updatePlayer(dt);
       this.updateShooting(dt);
+    } else {
+      this.isPlayerMoving = false;
     }
+    stepAnim(this.playerAnim, dt, this.isPlayerMoving, this.playerLean);
     this.updateBullets(dt);
     this.updateEnemies(dt);
-    this.updatePickups();
+    this.updatePickups(dt);
     this.updateParticles(dt);
     this.updateTracers(dt);
+    this.updateCorpses(dt);
+    if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
+    if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
 
     this.cam.x = this.px - this.canvas.width / 2;
@@ -248,6 +279,8 @@ export class Game {
     [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, mvx, 0);
     [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, mvy);
     this.invuln = Math.max(0, this.invuln - dt);
+    this.isPlayerMoving = ix !== 0 || iy !== 0;
+    this.playerLean = ix;
   }
 
   private updateShooting(dt: number) {
@@ -259,6 +292,8 @@ export class Game {
       for (const b of fire(w, muzzleX, muzzleY, this.aimAngle)) this.bullets.push(b);
       this.fireCd = w.fireCd;
       this.shotSeq++;
+      triggerRecoil(this.playerAnim);
+      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
     }
   }
@@ -273,9 +308,8 @@ export class Game {
 
   private updateEnemies(dt: number) {
     for (const e of this.enemies) {
-      e.wobble += dt * 6;
-      e.hitFlash = Math.max(0, e.hitFlash - dt);
-      this.moveEnemy(e, dt);
+      const angle = this.moveEnemy(e, dt);
+      stepAnim(e.anim, dt, true, Math.cos(angle));
 
       if (e.kind === "boss") this.updateBoss(e, dt);
 
@@ -287,7 +321,7 @@ export class Game {
       for (const b of this.bullets) {
         if (!b.friendly) continue;
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-          e.hp -= b.damage; b.life = 0; e.hitFlash = 0.12;
+          e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
           this.spawnParticles(b.x, b.y, 5, "#c98bff");
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
         }
@@ -296,7 +330,7 @@ export class Game {
     this.enemies = this.enemies.filter((e) => !e.dead);
   }
 
-  private moveEnemy(e: Enemy, dt: number) {
+  private moveEnemy(e: Enemy, dt: number): number {
     const arch = ENEMY_ARCHETYPES[e.kind];
     const toPlayer = Math.atan2(this.py - e.y, this.px - e.x);
     let angle = toPlayer;
@@ -314,12 +348,14 @@ export class Game {
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, dx, 0);
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, dy);
     }
+    return angle;
   }
 
   private updateBoss(e: Enemy, dt: number) {
     e.spawnTimer -= dt;
     if (e.spawnTimer <= 0 && this.enemies.length < BOSS_MINION_CAP) {
       e.spawnTimer = 3.4;
+      triggerRecoil(e.anim); // pop on the spawn beat
       const a = Math.random() * Math.PI * 2;
       const mx = e.x + Math.cos(a) * (e.radius + 20);
       const my = e.y + Math.sin(a) * (e.radius + 20);
@@ -333,8 +369,10 @@ export class Game {
   private killEnemy(e: Enemy) {
     e.dead = true;
     this.kills++;
+    const arch = ENEMY_ARCHETYPES[e.kind];
     const big = e.kind === "boss";
     this.spawnParticles(e.x, e.y, big ? 40 : 16, big ? "#ffb43b" : "#a855f7");
+    this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
     this.dropLoot(e);
   }
 
@@ -349,13 +387,13 @@ export class Game {
   }
 
   private makePickup(kind: "heart" | "coin", x: number, y: number): Pickup {
-    return { kind, x, y, radius: 13, bob: Math.random() * Math.PI * 2, weapon: null };
+    return { kind, x, y, radius: 13, weapon: null, anim: createAnim() };
   }
 
-  private updatePickups() {
+  private updatePickups(dt: number) {
     const remaining: Pickup[] = [];
     for (const p of this.pickups) {
-      p.bob += 0.05;
+      stepAnim(p.anim, dt, false, 0);
       if (!this.isDown && Math.hypot(this.px - p.x, this.py - p.y) < this.pr + p.radius) {
         if (p.kind === "coin") { this.coins++; this.spawnParticles(p.x, p.y, 6, "#ffd27a"); continue; }
         if (p.kind === "heart") {
@@ -376,6 +414,29 @@ export class Game {
   private updateTracers(dt: number) {
     for (const tr of this.remoteTracers) tr.life -= dt;
     this.remoteTracers = this.remoteTracers.filter((tr) => tr.life > 0);
+  }
+
+  private updateCorpses(dt: number) {
+    for (const c of this.corpses) c.t += dt / DEATH_DUR;
+    this.corpses = this.corpses.filter((c) => c.t < 1);
+  }
+
+  private updateRemoteAnims(dt: number) {
+    if (!this.coop) return;
+    const remotes = this.coop.remotePlayers();
+    for (const r of remotes) {
+      let entry = this.remoteAnims.get(r.playerId);
+      if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y }; this.remoteAnims.set(r.playerId, entry); }
+      const moving = Math.hypot(r.x - entry.lastX, r.y - entry.lastY) > 0.35;
+      const lean = r.x - entry.lastX;
+      stepAnim(entry.anim, dt, moving, lean < 0 ? -1 : lean > 0 ? 1 : 0);
+      entry.lastX = r.x; entry.lastY = r.y;
+    }
+    if (this.remoteAnims.size > remotes.length) {
+      const live = new Set<string>();
+      for (const r of remotes) live.add(r.playerId);
+      for (const id of this.remoteAnims.keys()) if (!live.has(id)) this.remoteAnims.delete(id);
+    }
   }
 
   private updateExit() {
@@ -404,6 +465,7 @@ export class Game {
   private damagePlayer(amount: number) {
     this.hp -= amount;
     this.invuln = 0.9;
+    triggerFlash(this.playerAnim);
     this.spawnParticles(this.px, this.py, 10, "#ff5a5a");
     if (this.hp <= 0) {
       this.hp = 0;
@@ -451,6 +513,8 @@ export class Game {
       if (r.shotSeq > seen) {
         this.remoteTracers.push({ x: r.x, y: r.y, angle: r.aimAngle, life: 0.12, color: playerColor(r.colorIndex) });
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
+        const entry = this.remoteAnims.get(r.playerId);
+        if (entry) triggerRecoil(entry.anim);
       }
       this.remoteShotSeen.set(r.playerId, r.shotSeq);
     }
@@ -546,11 +610,13 @@ export class Game {
     this.renderExit();
     this.renderPickups();
     this.renderParticles();
+    this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
     this.renderTracers();
     this.renderRemotePlayers();
     this.renderPlayer();
+    this.renderMuzzle();
     this.renderReticle();
     this.renderMinimap();
   }
@@ -594,36 +660,103 @@ export class Game {
     ctx.restore();
   }
 
-  private drawSprite(name: SpriteName, cx: number, cy: number, size: number, alpha = 1, facing = 1) {
+  // Draws a character sprite with its animation transform, an optional frame from a
+  // spritesheet (falling back to the static PNG), and an optional white hit-flash.
+  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number) {
     const { ctx } = this;
-    if (!this.sprites.ready(name)) return false;
+    const sheet = this.sprites.sheet(name, clip);
+    if (!sheet && !this.sprites.ready(name)) {
+      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = "#a855f7";
+      ctx.beginPath(); ctx.arc(cx, cy, size * 0.34, 0, 6.28); ctx.fill(); ctx.restore();
+      return;
+    }
+    const half = size / 2;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.translate(cx, cy);
-    if (facing < 0) ctx.scale(-1, 1);
-    ctx.drawImage(this.sprites.get(name), -size / 2, -size / 2, size, size);
+    ctx.translate(cx + xf.ox, cy + xf.oy);
+    ctx.rotate(xf.rot);
+    ctx.scale(facing * xf.sx * extra, xf.sy * extra);
+    if (sheet) {
+      const fw = sheet.img.naturalHeight || FRAME;
+      const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
+      const i = frameIndex(count, sheet.fps, frameClock);
+      ctx.drawImage(sheet.img, i * fw, 0, fw, fw, -half, -half, size, size);
+    } else {
+      ctx.drawImage(this.sprites.get(name), -half, -half, size, size);
+    }
+    if (flash > 0) {
+      const f = this.sprites.flashSprite(name);
+      if (f) { ctx.globalAlpha = alpha * Math.min(1, flash) * 0.9; ctx.drawImage(f, -half, -half, size, size); }
+    }
     ctx.restore();
-    return true;
   }
 
   private renderPickups() {
     const { ctx, cam } = this;
     for (const p of this.pickups) {
-      const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(p.bob) * 3;
+      const clock = p.anim.clock;
+      const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
       const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
       ctx.save();
-      ctx.globalAlpha = 0.35;
+      ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
       const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
       g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" ? "#ffd27a" : "#ffb43b");
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      if (!this.drawSprite(name, sx, sy, 30)) {
+      // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
+      const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;
+      const pulse = p.kind === "coin" ? 1 : 1 + Math.sin(clock * 4) * 0.08;
+      if (this.sprites.ready(name)) {
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.scale(spin * pulse, pulse);
+        ctx.drawImage(this.sprites.get(name), -15, -15, 30, 30);
+        ctx.restore();
+      } else {
         ctx.fillStyle = p.kind === "heart" ? "#ff6a6a" : "#ffd27a";
         ctx.beginPath(); ctx.arc(sx, sy, 10, 0, 6.28); ctx.fill();
       }
     }
+  }
+
+  private renderCorpses() {
+    const { ctx, cam } = this;
+    for (const c of this.corpses) {
+      const p = c.t; // 0..1
+      const grow = p < 0.2 ? 1 + (p / 0.2) * 0.4 : 1.4 - ((p - 0.2) / 0.8) * 1.4;
+      const s = Math.max(0, grow);
+      const sx = c.x - cam.x, sy = c.y - cam.y - p * 8;
+      if (this.sprites.ready(c.sprite)) {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, 1 - p * p);
+        ctx.translate(sx, sy);
+        ctx.scale(c.facing * s, s * (1 - p * 0.4));
+        ctx.drawImage(this.sprites.get(c.sprite), -c.size / 2, -c.size / 2, c.size, c.size);
+        if (p < 0.3) {
+          const f = this.sprites.flashSprite(c.sprite);
+          if (f) { ctx.globalAlpha = (1 - p / 0.3) * 0.8; ctx.drawImage(f, -c.size / 2, -c.size / 2, c.size, c.size); }
+        }
+        ctx.restore();
+      }
+    }
+  }
+
+  private renderMuzzle() {
+    if (this.muzzle.t <= 0) return;
+    const { ctx, cam } = this;
+    const k = this.muzzle.t / MUZZLE_DUR;
+    const mx = this.muzzle.x - cam.x, my = this.muzzle.y - cam.y;
+    ctx.save();
+    ctx.globalAlpha = k;
+    const g = ctx.createRadialGradient(mx, my, 1, mx, my, 22);
+    g.addColorStop(0, "#fff3c4");
+    g.addColorStop(0.5, "#ffb43b");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(mx, my, 8 + k * 10, 0, 6.28); ctx.fill();
+    ctx.restore();
   }
 
   private renderParticles() {
@@ -640,11 +773,15 @@ export class Game {
     const { ctx, cam } = this;
     for (const e of this.enemies) {
       const arch = ENEMY_ARCHETYPES[e.kind];
-      const sx = e.x - cam.x, sy = e.y - cam.y + Math.sin(e.wobble) * 2;
-      const alpha = e.hitFlash > 0 ? 0.85 : arch.alpha;
-      if (!this.drawSprite(arch.sprite, sx, sy, arch.drawSize, alpha)) {
-        ctx.fillStyle = "#a855f7"; ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+      const sx = e.x - cam.x, sy = e.y - cam.y;
+      const facing = this.px >= e.x ? 1 : -1;
+      let extra = 1;
+      if (e.kind === "boss" && e.spawnTimer < BOSS_WINDUP) {
+        extra = 1 + (1 - e.spawnTimer / BOSS_WINDUP) * 0.14; // telegraph wind-up
       }
+      const clip: SheetClip = e.anim.move > 0.5 ? "walk" : "idle";
+      const xf = characterXform(e.anim, e.kind === "boss" ? BOSS_STYLE : CHARACTER_STYLE);
+      this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, arch.alpha, e.anim.flash, e.anim.clock);
       const barW = e.kind === "boss" ? 64 : 32;
       const barY = sy - arch.drawSize / 2 - 8;
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
@@ -683,15 +820,18 @@ export class Game {
       const sx = r.x - cam.x, sy = r.y - cam.y;
       const color = playerColor(r.colorIndex);
       const tinted = this.sprites.tintedHero(color);
+      const entry = this.remoteAnims.get(r.playerId);
+      const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
       ctx.globalAlpha = r.isDown ? 0.4 : 1;
+      ctx.translate(sx + xf.ox, sy + xf.oy);
+      ctx.rotate(xf.rot);
+      ctx.scale(r.facing * xf.sx, xf.sy);
       if (tinted) {
-        ctx.translate(sx, sy);
-        if (r.facing < 0) ctx.scale(-1, 1);
-        ctx.drawImage(tinted, -26, -30, 52, 52);
+        ctx.drawImage(tinted, -26, -26, 52, 52);
       } else {
         ctx.fillStyle = color;
-        ctx.beginPath(); ctx.arc(sx, sy, this.pr, 0, 6.28); ctx.fill();
+        ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill();
       }
       ctx.restore();
 
@@ -706,17 +846,16 @@ export class Game {
   private renderPlayer() {
     const { ctx, cam } = this;
     const psx = this.px - cam.x, psy = this.py - cam.y;
-    ctx.save();
-    if (this.isDown) ctx.globalAlpha = 0.4;
-    else if (this.invuln > 0 && Math.floor(this.invuln * 20) % 2 === 0) ctx.globalAlpha = 0.4;
-    if (this.sprites.ready("hero")) {
-      ctx.translate(psx, psy);
-      ctx.scale(this.facing, 1);
-      ctx.drawImage(this.sprites.get("hero"), -26, -30, 52, 52);
-    } else {
-      ctx.fillStyle = "#ffb43b"; ctx.beginPath(); ctx.arc(psx, psy, this.pr, 0, 6.28); ctx.fill();
-    }
-    ctx.restore();
+    let alpha = 1;
+    if (this.isDown) alpha = 0.4;
+    else if (this.invuln > 0 && Math.floor(this.invuln * 20) % 2 === 0) alpha = 0.4;
+    const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
+    const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
+    // Directional recoil: nudge the blob back against its aim as it fires.
+    const rec = this.playerAnim.recoil;
+    xf.ox += -Math.cos(this.aimAngle) * rec * 4;
+    xf.oy += -Math.sin(this.aimAngle) * rec * 4;
+    this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock);
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
       ctx.font = "12px ui-monospace, Menlo, monospace";

@@ -3,6 +3,7 @@ import type { SpriteName } from "./assets.js";
 import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
+import { createAnim } from "./anim.js";
 
 export type Movement = "chase" | "zigzag" | "drift" | "boss";
 
@@ -63,10 +64,9 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     hp, maxHp: hp, dead: false,
     speed: a.baseSpeed + a.speedPerFloor * (floor - 1),
     touchDamage: a.touchDamage,
-    hitFlash: 0,
-    wobble: Math.random() * Math.PI * 2,
     zig: Math.random() * Math.PI * 2,
     spawnTimer: 3,
+    anim: createAnim(),
   };
 }
 

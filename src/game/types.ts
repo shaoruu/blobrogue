@@ -1,3 +1,5 @@
+import type { Anim } from "./anim.js";
+
 export interface Vec2 { x: number; y: number; }
 
 export interface Entity {
@@ -15,11 +17,10 @@ export interface Enemy extends Entity {
   kind: EnemyKind;
   speed: number;
   touchDamage: number;
-  hitFlash: number;
-  wobble: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   spawnTimer: number;  // boss: countdown until it spits out a minion
+  anim: Anim;
 }
 
 export type WeaponId = "pistol" | "shotgun" | "rapid";
@@ -40,8 +41,8 @@ export interface Pickup {
   kind: PickupKind;
   x: number; y: number;
   radius: number;
-  bob: number;
   weapon: WeaponId | null; // set only when kind === "weapon"
+  anim: Anim;
 }
 
 export interface Particle {
