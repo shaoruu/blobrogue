@@ -1,0 +1,36 @@
+/* FIT-ONE-VIEWPORT MENU LAYOUT (ui designer, tested 1280x800 + 1280x720). Deps: :root tokens. */
+#overlay{
+  position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+  padding:24px; overflow:hidden;
+  background:
+    repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 2px,transparent 2px 4px),
+    radial-gradient(130% 100% at 50% -10%,var(--dun-3) 0%,var(--dun-1) 55%,var(--dun-0) 100%);
+}
+.menu-frame{
+  position:relative; background:var(--dun-1);
+  width:min(440px,92vw); max-height:calc(100vh - 48px);
+  padding:clamp(18px,3.4vh,30px) 34px;
+  display:flex; flex-direction:column; align-items:center;
+  gap:clamp(10px,2.2vh,20px); overflow:hidden;
+  box-shadow:0 0 0 3px var(--dun-0),0 0 0 6px var(--dun-4),0 0 0 9px var(--dun-0),inset 0 0 0 2px var(--dun-2),0 12px 0 rgba(0,0,0,.4);
+}
+.logo{ font-family:var(--f-logo); font-size:clamp(30px,6.2vh,46px); line-height:1; letter-spacing:1px; text-align:center; color:var(--amber);
+  text-shadow:0 3px 0 var(--amber-lo),0 5px 0 var(--lea-1),0 7px 0 var(--lea-0),4px 6px 0 var(--dun-0),-4px 6px 0 var(--dun-0),0 9px 0 var(--dun-0);
+  -webkit-text-stroke:3px var(--dun-0); paint-order:stroke fill; }
+.logo .r{ color:var(--cream); }
+.tagline{ font-family:var(--f-ui); font-size:11px; line-height:1.6; letter-spacing:.5px; color:var(--lea-2); text-align:center; max-width:340px; }
+.field{ width:100%; display:flex; flex-direction:column; gap:5px; }
+.field label{ font-family:var(--f-ui); font-size:10px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
+.menu-col{ width:100%; display:flex; flex-direction:column; gap:clamp(8px,1.4vh,12px); }
+.menu-row{ display:flex; gap:11px; } .menu-row .btn{ flex:1; min-width:0; }
+.foot{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); text-align:center; line-height:1.5; }
+.gear{ position:absolute; top:10px; right:10px; width:34px; height:34px; min-width:0; padding:0; font-size:15px; }
+/* NOTE: logo can stay as our <img> custom wordmark instead of this CSS-text .logo — designer's .logo is the fallback.
+   RULES: no per-element margins/min-heights (frame gap only); .profile:empty{display:none}; settings behind .gear (reused in pause); NO full-width light HUD-preview on menu. */
+
+/* --- Section A addendum (ui designer): recessed input + code badge for menu/join screens --- */
+.inp{ font-family:var(--f-num); font-size:22px; color:var(--cream); background:var(--dun-0); border:0; padding:8px 14px; width:100%; outline:0; box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 4px 8px rgba(0,0,0,.6); }
+.inp:focus{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 4px 8px rgba(0,0,0,.6); }
+.inp::placeholder{ color:var(--dun-4); }
+.code-badge{ font-family:var(--f-logo); font-size:30px; letter-spacing:5px; color:var(--amber); background:var(--dun-0); padding:14px 20px; display:inline-block; box-shadow:inset 0 0 0 2px var(--amber-lo),0 0 0 3px var(--dun-0),0 0 18px rgba(255,180,59,.15); }
+/* code-input (join): Press Start 2P at ~22px letter-spacing:5px so 4 chars fit comfortably (avoid overflow). */
