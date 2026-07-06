@@ -1,0 +1,16 @@
+/* CANONICAL :root tokens (ui designer, verbatim — ALL ui CSS resolves against these). Paste as-is into index.html <style>. */
+:root{
+  --dun-0:#05030b; --dun-1:#0e0b1a; --dun-2:#171227; --dun-3:#2a2140; --dun-4:#46356b;
+  --amber:#ffb43b; --amber-hi:#ffd166; --amber-lo:#b06e12; --cream:#ffe9b0;
+  --lea-0:#301c0e; --lea-1:#6b401e; --lea-2:#9c6633;
+  --grn:#7fdd5a; --red:#ff5a5a; --bone:#e8e0c8; --blu:#5ab6ff; --pur:#b06bff;
+  --ink:#120a24;
+  --f-logo:'Press Start 2P',monospace;
+  --f-ui:'Silkscreen','Press Start 2P',monospace;
+  --f-num:'VT323',monospace;
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+}
+/* NOTE: --grn=#7fdd5a (bright lime, dash "ready"), --blu=#5ab6ff, --lea-0/1 power logo extrude + gun icon,
+   --bone=#e8e0c8 skull, --ink=#120a24 universal outline (all icons+buttons). Use VT323 for HUD nums (--f-num).
+   After adding: ideally swap step-1 raw button/logo hex -> vars for one source of truth (not blocking). */
+/* HUD perf: renderHearts on hp/maxHp CHANGE only; mountIcons ONCE after HUD DOM built (hook in combat's HUD-call edits). */
