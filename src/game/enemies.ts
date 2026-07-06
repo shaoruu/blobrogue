@@ -15,6 +15,8 @@ export interface EnemyArchetype {
   radius: number;
   drawSize: number;     // sprite draw size in px
   alpha: number;        // render opacity (ghost is semi-transparent)
+  tint: string;         // gib / impact-puff color for this enemy
+  kbResist: number;     // knockback divisor — heavier things budge less (boss ~unmovable)
   baseHp: number;
   hpPerFloor: number;
   baseSpeed: number;
@@ -25,27 +27,27 @@ export interface EnemyArchetype {
 export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   slime: {
     kind: "slime", sprite: "slime", movement: "chase", isPhasing: false,
-    radius: 16, drawSize: 44, alpha: 1,
+    radius: 16, drawSize: 44, alpha: 1, tint: "#a855f7", kbResist: 1,
     baseHp: 3, hpPerFloor: 0.6, baseSpeed: 42, speedPerFloor: 3, touchDamage: 1,
   },
   bat: {
     kind: "bat", sprite: "bat", movement: "zigzag", isPhasing: false,
-    radius: 13, drawSize: 40, alpha: 1,
+    radius: 13, drawSize: 40, alpha: 1, tint: "#9aa4bf", kbResist: 0.7,
     baseHp: 2, hpPerFloor: 0.3, baseSpeed: 96, speedPerFloor: 4, touchDamage: 1,
   },
   skeleton: {
     kind: "skeleton", sprite: "skeleton", movement: "chase", isPhasing: false,
-    radius: 15, drawSize: 46, alpha: 1,
+    radius: 15, drawSize: 46, alpha: 1, tint: "#e8e0cf", kbResist: 1.6,
     baseHp: 6, hpPerFloor: 0.9, baseSpeed: 62, speedPerFloor: 3, touchDamage: 1,
   },
   ghost: {
     kind: "ghost", sprite: "ghost", movement: "drift", isPhasing: true,
-    radius: 15, drawSize: 46, alpha: 0.62,
+    radius: 15, drawSize: 46, alpha: 0.62, tint: "#bfe9ff", kbResist: 1.1,
     baseHp: 4, hpPerFloor: 0.6, baseSpeed: 56, speedPerFloor: 3, touchDamage: 1,
   },
   boss: {
     kind: "boss", sprite: "boss", movement: "boss", isPhasing: false,
-    radius: 34, drawSize: 100, alpha: 1,
+    radius: 34, drawSize: 100, alpha: 1, tint: "#ffb43b", kbResist: 6,
     baseHp: 42, hpPerFloor: 7, baseSpeed: 34, speedPerFloor: 1.5, touchDamage: 2,
   },
 };

@@ -17,8 +17,12 @@ import {
   characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
 import type { Anim, Xform } from "./anim.js";
+import { audio, sfx } from "./audio.js";
+import type { SfxName } from "./audio.js";
+import { settings } from "./settings.js";
+import { PauseOverlay } from "../ui/pause.js";
 
-export interface RunResult { floor: number; kills: number; coins: number; }
+export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
 export interface StartOptions {
   mode: "solo" | "coop";
@@ -29,6 +33,13 @@ export interface StartOptions {
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// Floor stains + drop pulses that linger for a beat after the action moves on.
+interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
+// A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
+interface Afterimage { x: number; y: number; facing: number; t: number; }
+
+const MAX_DECALS = 48;
+const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
 
 const REVIVE_RADIUS = 46;
 const REVIVE_HOLD = 1.1;
@@ -37,6 +48,51 @@ const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
 const BOSS_WINDUP = 0.6; // seconds before a boss spawn that it telegraphs
 
+const SHOOT_SFX: Record<WeaponId, SfxName> = {
+  pistol: "shootPistol",
+  shotgun: "shootShotgun",
+  rapid: "shootRapid",
+};
+
+// Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
+// taken as a max, never summed, and capped so a busy frame can't grind to a halt.
+const FREEZE_KILL = 0.04;     // a normal enemy dies
+const FREEZE_HEAVY = 0.06;    // boss death / heavy impact
+const FREEZE_HURT = 0.05;     // the player takes damage
+const FREEZE_SHOTGUN = 0.035; // a point-blank shotgun pellet connects
+const FREEZE_MAX = 0.08;
+
+// Trauma-based screen shake. Events add trauma (clamped 0..1); it decays each second
+// and the camera offset scales with trauma² so small hits barely register while big
+// ones kick hard. The player's intensity setting (0..1) scales the whole thing.
+const TRAUMA_DECAY = 1.6;
+const SHAKE_MAX_PX = 26;
+const FIRE_TRAUMA: Record<WeaponId, number> = { pistol: 0.12, shotgun: 0.5, rapid: 0.06 };
+// Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
+// and knockback (px the shotgun shoves the player). Shotgun is the beefy end.
+const FIRE_RECOIL: Record<WeaponId, number> = { pistol: 1, shotgun: 1.4, rapid: 0.6 };
+const FIRE_KICK: Record<WeaponId, number> = { pistol: 3, shotgun: 8, rapid: 1.2 };
+const FIRE_KNOCKBACK: Record<WeaponId, number> = { pistol: 0, shotgun: 22, rapid: 0 };
+const KICK_DECAY = 20; // how fast the camera kick eases back to center
+const TRAUMA_HURT = 0.4;
+const TRAUMA_KILL = 0.16;
+const TRAUMA_BOSS_KILL = 0.7;
+const TRAUMA_BOSS_SLAM = 0.4;
+const TRAUMA_DESCEND = 0.22;
+const TRAUMA_BOSS_FLOOR = 0.5;
+const TRAUMA_REMOTE_DOWN = 0.3;
+
+// Enemy knockback: a bullet adds a short velocity impulse along its travel direction
+// that decays every frame (never a teleport). WEAPON_KB is the ~total px shove on a
+// baseline slime; heavier enemies divide it by their kbResist. The impulse is stored
+// in each enemy's otherwise-unused vx/vy.
+const WEAPON_KB: Record<WeaponId, number> = { pistol: 4, shotgun: 8, rapid: 2 };
+const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
+const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
+
+// Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
+const HURT_FLASH_DECAY = 3.2;
+
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private canvas: HTMLCanvasElement;
@@ -44,6 +100,9 @@ export class Game {
   private minimap: Minimap;
   private hud: Hud;
   private onGameOver: (result: RunResult) => void;
+  private onExit: () => void;
+  private pause: PauseOverlay;
+  private isPaused = false;
 
   private dungeon!: Dungeon;
   private floor = 1;
@@ -69,15 +128,19 @@ export class Game {
   private particles: Particle[] = [];
   private pickups: Pickup[] = [];
   private corpses: Corpse[] = [];
+  private decals: Decal[] = [];
+  private afterimages: Afterimage[] = [];
+  private dashImgCd = 0; // spacing timer for dropping dash afterimages
   private remoteTracers: RemoteTracer[] = [];
   private remoteShotSeen = new Map<string, number>();
+  private remoteDownSeen = new Map<string, boolean>();
   private remoteAnims = new Map<string, RemoteAnimEntry>();
   private reviveHold = new Map<string, number>();
 
   private playerAnim = createAnim();
   private isPlayerMoving = false;
   private playerLean = 0;
-  private muzzle = { t: 0, x: 0, y: 0, angle: 0 };
+  private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2 };
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -87,18 +150,24 @@ export class Game {
   private last = 0;
   private raf = 0;
   private runStart = 0;
+  private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
+  private trauma = 0; // screen-shake trauma, 0..1
+  private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
+  private hurtFlash = 0; // red hurt-vignette intensity, 0..1
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
   private isStatsHeld = false;
   private pendingDescend = 0;
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: () => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
     this.onGameOver = onGameOver;
+    this.onExit = onExit;
+    this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.bindInput();
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -112,6 +181,12 @@ export class Game {
   private bindInput() {
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
+      if (k === "escape") {
+        e.preventDefault();
+        if (!this.keys.has("escape")) this.togglePause(); // ignore key auto-repeat
+        this.keys.add(k);
+        return;
+      }
       this.keys.add(k);
       if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
       if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
@@ -141,8 +216,16 @@ export class Game {
     this.weapon = DEFAULT_WEAPON;
     this.isDown = false;
     this.remoteShotSeen.clear();
+    this.remoteDownSeen.clear();
     this.remoteAnims.clear();
     this.reviveHold.clear();
+    this.freeze = 0;
+    this.trauma = 0;
+    this.kickX = 0; this.kickY = 0;
+    this.hurtFlash = 0;
+    this.isPaused = false;
+    this.pause.hide();
+    audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
     resetAnim(this.playerAnim);
@@ -172,9 +255,14 @@ export class Game {
     this.particles = [];
     this.remoteTracers = [];
     this.corpses = [];
+    this.decals = [];
+    this.afterimages = [];
     this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
     this.pickups = this.placeWeaponPickups(d);
+    const isBoss = isBossFloor(this.floor);
+    audio.setMusic(isBoss ? "boss" : "dungeon");
+    if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
   }
 
   private placeWeaponPickups(d: Dungeon): Pickup[] {
@@ -214,11 +302,66 @@ export class Game {
     if (!this.isRunning) return;
     const dt = Math.min((t - this.last) / 1000, 0.05);
     this.last = t;
-    this.update(dt);
+    // Paused: keep drawing the frozen frame under the pause overlay, run no sim.
+    if (this.isPaused) {
+      this.render();
+      this.raf = requestAnimationFrame(this.loop);
+      return;
+    }
+    // Hit-stop: hold the frame (and any peak screen-shake) for a beat, but keep
+    // rendering so the pause reads as impact rather than a stutter.
+    if (this.freeze > 0) {
+      this.freeze = Math.max(0, this.freeze - dt);
+    } else {
+      this.update(dt);
+    }
     this.render();
     this.hud.tick(dt);
     this.raf = requestAnimationFrame(this.loop);
   };
+
+  private togglePause() {
+    if (!this.isRunning) return;
+    this.setPaused(!this.isPaused);
+  }
+
+  private setPaused(paused: boolean) {
+    this.isPaused = paused;
+    if (paused) {
+      this.mouse.isDown = false; // don't let a held click fire on resume
+      this.pause.show();
+    } else {
+      this.pause.hide();
+      this.last = performance.now(); // avoid a huge catch-up dt after the pause
+    }
+  }
+
+  private quitToMenu() {
+    this.setPaused(false);
+    this.stop();
+    audio.setMusic(null);
+    this.hud.hideStats();
+    this.hud.clear();
+    this.onExit();
+  }
+
+  private addFreeze(seconds: number) {
+    this.freeze = Math.min(FREEZE_MAX, Math.max(this.freeze, seconds));
+  }
+
+  private addTrauma(amount: number) {
+    const t = this.trauma + amount;
+    this.trauma = t > 1 ? 1 : t;
+  }
+
+  private applyKnockback(e: Enemy, b: Bullet) {
+    const sp = Math.hypot(b.vx, b.vy) || 1;
+    const v = (WEAPON_KB[this.weapon] * KB_LAMBDA) / ENEMY_ARCHETYPES[e.kind].kbResist;
+    e.vx += (b.vx / sp) * v;
+    e.vy += (b.vy / sp) * v;
+    const mag = Math.hypot(e.vx, e.vy);
+    if (mag > KB_MAX_SPEED) { const s = KB_MAX_SPEED / mag; e.vx *= s; e.vy *= s; }
+  }
 
   private update(dt: number) {
     if (this.coop) this.syncCoop(dt);
@@ -239,9 +382,15 @@ export class Game {
     this.updateParticles(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
+    this.updateDecals(dt);
+    this.updateAfterimages(dt);
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
+    if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
+    const ke = Math.min(1, dt * KICK_DECAY);
+    this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
+    if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * HURT_FLASH_DECAY);
 
     this.cam.x = this.px - this.canvas.width / 2;
     this.cam.y = this.py - this.canvas.height / 2;
@@ -267,13 +416,18 @@ export class Game {
     this.dashCd = Math.max(0, this.dashCd - dt);
     if (this.keys.has("shift") && this.dashCd === 0 && (ix || iy)) {
       this.dashTime = 0.16; this.dashCd = 0.7; this.dashDx = ix; this.dashDy = iy;
-      this.invuln = Math.max(this.invuln, 0.2);
+      this.invuln = Math.max(this.invuln, 0.35); // real "get out of jail" dodge window
+      this.dashImgCd = 0;
+      this.spawnParticles(this.px, this.py, 10, "#ffd27a"); // takeoff puff
+      sfx("dash");
     }
     let mvx: number, mvy: number;
     if (this.dashTime > 0) {
       this.dashTime -= dt;
       mvx = this.dashDx * 620 * dt; mvy = this.dashDy * 620 * dt;
       this.spawnParticles(this.px, this.py, 1, "#ffd27a");
+      this.dashImgCd -= dt;
+      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0 }); this.dashImgCd = 0.04; }
     } else {
       mvx = ix * speed * dt; mvy = iy * speed * dt;
     }
@@ -293,16 +447,27 @@ export class Game {
       for (const b of fire(w, muzzleX, muzzleY, this.aimAngle)) this.bullets.push(b);
       this.fireCd = w.fireCd;
       this.shotSeq++;
-      triggerRecoil(this.playerAnim);
-      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle;
+      triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
+      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
+      if (this.weapon !== "rapid") this.spawnShell(this.px, this.py - 6, this.aimAngle);
+      sfx(SHOOT_SFX[this.weapon]);
+      this.addTrauma(FIRE_TRAUMA[this.weapon]);
+      const kick = FIRE_KICK[this.weapon];
+      this.kickX += -Math.cos(this.aimAngle) * kick;
+      this.kickY += -Math.sin(this.aimAngle) * kick;
+      const kb = FIRE_KNOCKBACK[this.weapon];
+      if (kb !== 0) {
+        [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, -Math.cos(this.aimAngle) * kb, 0);
+        [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, -Math.sin(this.aimAngle) * kb);
+      }
     }
   }
 
   private updateBullets(dt: number) {
     for (const b of this.bullets) {
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnParticles(b.x, b.y, 3, "#fff"); }
+      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); }
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
   }
@@ -323,8 +488,11 @@ export class Game {
         if (!b.friendly) continue;
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
           e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
-          this.spawnParticles(b.x, b.y, 5, "#c98bff");
+          this.spawnPuff(b.x, b.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
+          this.applyKnockback(e, b);
+          if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
+          else sfx("enemyHit", { gain: 0.65 });
         }
       }
     }
@@ -349,6 +517,22 @@ export class Game {
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, dx, 0);
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, dy);
     }
+
+    // Knockback impulse (vx/vy) on top of AI movement, decaying to zero.
+    if (e.vx !== 0 || e.vy !== 0) {
+      const kdx = e.vx * dt, kdy = e.vy * dt;
+      if (arch.isPhasing) {
+        e.x = Math.max(TILE, Math.min((this.dungeon.w - 1) * TILE, e.x + kdx));
+        e.y = Math.max(TILE, Math.min((this.dungeon.h - 1) * TILE, e.y + kdy));
+      } else {
+        [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, kdx, 0);
+        [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, kdy);
+      }
+      const d = Math.min(1, dt * KB_LAMBDA);
+      e.vx -= e.vx * d; e.vy -= e.vy * d;
+      if (e.vx < 1 && e.vx > -1) e.vx = 0;
+      if (e.vy < 1 && e.vy > -1) e.vy = 0;
+    }
     return angle;
   }
 
@@ -363,6 +547,7 @@ export class Game {
       if (!this.isWall(mx, my)) {
         this.enemies.push(createEnemy("slime", mx, my, this.floor));
         this.spawnParticles(mx, my, 8, "#a855f7");
+        if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
       }
     }
   }
@@ -372,8 +557,13 @@ export class Game {
     this.kills++;
     const arch = ENEMY_ARCHETYPES[e.kind];
     const big = e.kind === "boss";
-    this.spawnParticles(e.x, e.y, big ? 40 : 16, big ? "#ffb43b" : "#a855f7");
+    this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
+    this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
+    this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
     this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
+    sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
+    this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
+    this.addTrauma(big ? TRAUMA_BOSS_KILL : TRAUMA_KILL);
     this.dropLoot(e);
   }
 
@@ -388,6 +578,10 @@ export class Game {
   }
 
   private makePickup(kind: "heart" | "coin", x: number, y: number): Pickup {
+    // A little drop pulse so freshly-dropped loot announces itself.
+    const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
+    this.addDecal(x, y, color, 15, "ring");
+    this.spawnPuff(x, y, 5, color);
     return { kind, x, y, radius: 13, weapon: null, anim: createAnim() };
   }
 
@@ -396,11 +590,11 @@ export class Game {
     for (const p of this.pickups) {
       stepAnim(p.anim, dt, false, 0);
       if (!this.isDown && Math.hypot(this.px - p.x, this.py - p.y) < this.pr + p.radius) {
-        if (p.kind === "coin") { this.coins++; this.spawnParticles(p.x, p.y, 6, "#ffd27a"); continue; }
+        if (p.kind === "coin") { this.coins++; this.spawnParticles(p.x, p.y, 6, "#ffd27a"); sfx("coin"); continue; }
         if (p.kind === "heart") {
-          if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); continue; }
+          if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); sfx("heart"); continue; }
         }
-        if (p.kind === "weapon" && p.weapon) { this.weapon = p.weapon; this.fireCd = 0; this.spawnParticles(p.x, p.y, 12, "#ffb43b"); continue; }
+        if (p.kind === "weapon" && p.weapon) { this.weapon = p.weapon; this.fireCd = 0; this.spawnParticles(p.x, p.y, 12, "#ffb43b"); sfx("weapon"); continue; }
       }
       remaining.push(p);
     }
@@ -408,8 +602,25 @@ export class Game {
   }
 
   private updateParticles(dt: number) {
-    for (const p of this.particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.92; p.vy *= 0.92; p.life -= dt; }
+    for (const p of this.particles) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      if (p.gravity !== 0) p.vy += p.gravity * dt;
+      p.vx *= p.drag; p.vy *= p.drag;
+      if (p.vr !== 0) p.rot += p.vr * dt;
+      p.life -= dt;
+    }
     this.particles = this.particles.filter((p) => p.life > 0);
+  }
+
+  private updateDecals(dt: number) {
+    for (const d of this.decals) d.t += dt;
+    this.decals = this.decals.filter((d) => d.t < d.life);
+  }
+
+  private updateAfterimages(dt: number) {
+    if (this.afterimages.length === 0) return;
+    for (const a of this.afterimages) a.t += dt / AFTERIMAGE_DUR;
+    this.afterimages = this.afterimages.filter((a) => a.t < 1);
   }
 
   private updateTracers(dt: number) {
@@ -459,6 +670,8 @@ export class Game {
     this.pendingDescend = 0;
     this.isDown = false; // a fresh floor brings downed teammates back up
     this.hp = Math.min(this.maxHp, this.hp + 2);
+    sfx("descend");
+    this.addTrauma(TRAUMA_DESCEND);
     this.loadFloor();
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
   }
@@ -468,6 +681,10 @@ export class Game {
     this.invuln = 0.9;
     triggerFlash(this.playerAnim);
     this.spawnParticles(this.px, this.py, 10, "#ff5a5a");
+    sfx("playerHurt");
+    this.addFreeze(FREEZE_HURT);
+    this.addTrauma(TRAUMA_HURT);
+    this.hurtFlash = 1;
     if (this.hp <= 0) {
       this.hp = 0;
       if (this.coop && this.hasLivingTeammate()) {
@@ -498,12 +715,14 @@ export class Game {
       this.hp = revived;
       this.invuln = 1.2;
       this.spawnParticles(this.px, this.py, 20, "#8affc0");
+      sfx("revive");
     }
 
     // If we're down and the last living teammate is gone, the run is over.
     if (this.isDown && !this.hasLivingTeammate()) { this.gameOver(); return; }
 
     this.handleRemoteShots();
+    this.handleRemoteState();
     this.handleReviving(dt);
   }
 
@@ -516,9 +735,27 @@ export class Game {
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
         const entry = this.remoteAnims.get(r.playerId);
         if (entry) triggerRecoil(entry.anim);
+        if (this.isNearCamera(r.x, r.y)) sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
       }
       this.remoteShotSeen.set(r.playerId, r.shotSeq);
     }
+  }
+
+  // A teammate going down nearby gets a hurt cue + red burst locally (gated to screen).
+  private handleRemoteState() {
+    if (!this.coop) return;
+    const live = new Set<string>();
+    for (const r of this.coop.remotePlayers()) {
+      live.add(r.playerId);
+      const wasDown = this.remoteDownSeen.get(r.playerId) ?? false;
+      if (r.isDown && !wasDown && this.isNearCamera(r.x, r.y)) {
+        sfx("playerHurt", { gain: 0.6 });
+        this.spawnParticles(r.x, r.y, 10, "#ff5a5a");
+        this.addTrauma(TRAUMA_REMOTE_DOWN);
+      }
+      this.remoteDownSeen.set(r.playerId, r.isDown);
+    }
+    for (const id of [...this.remoteDownSeen.keys()]) if (!live.has(id)) this.remoteDownSeen.delete(id);
   }
 
   private handleReviving(dt: number) {
@@ -589,17 +826,82 @@ export class Game {
     if (!this.isRunning) return;
     this.isRunning = false;
     cancelAnimationFrame(this.raf);
+    audio.setMusic(null);
+    sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins });
+    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
+  }
+
+  // True when a world point is on (or near) the visible screen — used to gate audio
+  // and juice for far-off co-op events so a teammate across the map never spams us.
+  private isNearCamera(x: number, y: number, margin = 160): boolean {
+    return x >= this.cam.x - margin && x <= this.cam.x + this.canvas.width + margin
+      && y >= this.cam.y - margin && y <= this.cam.y + this.canvas.height + margin;
   }
 
   private spawnParticles(x: number, y: number, n: number, color: string) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.28, s = 40 + Math.random() * 140;
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3 });
+      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.92 });
     }
+  }
+
+  // Chunky bits of the dead thing: fly out fast, tumble, fall, and fade a touch slower.
+  private spawnGibs(x: number, y: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.28, s = 90 + Math.random() * 210;
+      const life = 0.45 + Math.random() * 0.5;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60,
+        life, maxLife: life, color, size: 3 + Math.random() * 4, kind: "gib",
+        rot: Math.random() * 6.28, vr: (Math.random() * 2 - 1) * 14, gravity: 560, drag: 0.9,
+      });
+    }
+  }
+
+  // Bright, short sparks that shoot back off a surface (wall impacts).
+  private spawnSparks(x: number, y: number, n: number, angle: number) {
+    for (let i = 0; i < n; i++) {
+      const a = angle + (Math.random() * 2 - 1) * 0.9, s = 160 + Math.random() * 220;
+      const life = 0.12 + Math.random() * 0.16;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life, maxLife: life, color: Math.random() < 0.5 ? "#fff3c4" : "#ffb43b",
+        size: 1 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 120, drag: 0.86,
+      });
+    }
+  }
+
+  // Soft colored haze — a bullet biting into flesh.
+  private spawnPuff(x: number, y: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * 6.28, s = 20 + Math.random() * 80;
+      const life = 0.2 + Math.random() * 0.3;
+      this.particles.push({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life, maxLife: life, color, size: 3 + Math.random() * 4, kind: "puff", rot: 0, vr: 0, gravity: -30, drag: 0.9,
+      });
+    }
+  }
+
+  // A single brass casing ejected sideways from the gun; tumbles and settles.
+  private spawnShell(x: number, y: number, aim: number) {
+    const side = Math.random() < 0.5 ? 1 : -1;
+    const perp = aim + side * (Math.PI / 2) + (Math.random() * 2 - 1) * 0.3;
+    const s = 70 + Math.random() * 70;
+    const life = 0.5 + Math.random() * 0.3;
+    this.particles.push({
+      x, y, vx: Math.cos(perp) * s, vy: Math.sin(perp) * s - 50,
+      life, maxLife: life, color: "#d9a441", size: 3.5, kind: "shell",
+      rot: Math.random() * 6.28, vr: (Math.random() * 2 - 1) * 18, gravity: 560, drag: 0.99,
+    });
+  }
+
+  private addDecal(x: number, y: number, color: string, r: number, kind: "splat" | "ring") {
+    this.decals.push({ x, y, color, r, t: 0, life: kind === "ring" ? 0.4 : 3.2, kind });
+    if (this.decals.length > MAX_DECALS) this.decals.shift();
   }
 
   // ---- rendering ----
@@ -608,7 +910,15 @@ export class Game {
     const { ctx, canvas } = this;
     ctx.fillStyle = "#0e0b1a";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // trauma² shake, scaled by the player's intensity setting. New random offset per
+    // frame; the background fill above stays put so edges never flash the void.
+    const mag = this.trauma * this.trauma * SHAKE_MAX_PX * settings.shakeIntensity;
+    const shakeX = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
+    const shakeY = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
+    ctx.save();
+    ctx.translate(shakeX + this.kickX, shakeY + this.kickY);
     this.renderTiles();
+    this.renderDecals();
     this.renderExit();
     this.renderPickups();
     this.renderParticles();
@@ -617,19 +927,38 @@ export class Game {
     this.renderBullets();
     this.renderTracers();
     this.renderRemotePlayers();
+    this.renderAfterimages();
     this.renderPlayer();
     this.renderMuzzle();
+    ctx.restore();
+    this.renderHurtVignette();
     this.renderReticle();
     this.renderMinimap();
+  }
+
+  // Unmissable "you got hit" read: a red glow that hugs the screen edge and fades fast.
+  // Drawn in screen space (outside the shake translate) so it frames the whole viewport.
+  private renderHurtVignette() {
+    if (this.hurtFlash <= 0) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2, cy = canvas.height / 2;
+    const inner = Math.min(cx, cy) * 0.55;
+    const outer = Math.hypot(cx, cy);
+    const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+    g.addColorStop(0, "rgba(255,40,40,0)");
+    g.addColorStop(1, `rgba(255,30,30,${0.55 * this.hurtFlash})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
   private renderTiles() {
     const { ctx, canvas, cam } = this;
     const d = this.dungeon;
-    const x0 = Math.max(0, Math.floor(cam.x / TILE));
-    const y0 = Math.max(0, Math.floor(cam.y / TILE));
-    const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE));
-    const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE));
+    // +1 tile of margin on each edge so the screen-shake translate never exposes bg.
+    const x0 = Math.max(0, Math.floor(cam.x / TILE) - 1);
+    const y0 = Math.max(0, Math.floor(cam.y / TILE) - 1);
+    const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE) + 1);
+    const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE) + 1);
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
         const wall = d.tiles[ty * d.w + tx] === 1;
@@ -748,25 +1077,80 @@ export class Game {
   private renderMuzzle() {
     if (this.muzzle.t <= 0) return;
     const { ctx, cam } = this;
-    const k = this.muzzle.t / MUZZLE_DUR;
+    const k = this.muzzle.t / MUZZLE_DUR; // 1..0
     const mx = this.muzzle.x - cam.x, my = this.muzzle.y - cam.y;
+    const sz = this.muzzle.size;
     ctx.save();
-    ctx.globalAlpha = k;
-    const g = ctx.createRadialGradient(mx, my, 1, mx, my, 22);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(mx, my);
+    ctx.rotate(this.muzzle.angle);
+    // Round core glow.
+    const core = 6 + sz * 1.3;
+    const g = ctx.createRadialGradient(0, 0, 1, 0, 0, core + k * 10);
     g.addColorStop(0, "#fff3c4");
     g.addColorStop(0.5, "#ffb43b");
     g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.globalAlpha = k;
     ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(mx, my, 8 + k * 10, 0, 6.28); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, 0, core + k * 10, 0, 6.28); ctx.fill();
+    // Directional flash pointing down the barrel — bigger for beefier weapons.
+    const len = (16 + sz * 4) * (0.5 + k * 0.5);
+    const wdt = (3 + sz) * (0.4 + k * 0.6);
+    ctx.fillStyle = "#fff3c4";
+    ctx.beginPath();
+    ctx.moveTo(0, -wdt);
+    ctx.lineTo(len, 0);
+    ctx.lineTo(0, wdt);
+    ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
   private renderParticles() {
     const { ctx, cam } = this;
     for (const p of this.particles) {
-      ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x - cam.x - p.size / 2, p.y - cam.y - p.size / 2, p.size, p.size);
+      const a = p.life / p.maxLife;
+      if (a <= 0) continue;
+      if (p.kind === "gib" || p.kind === "shell") {
+        ctx.save();
+        ctx.globalAlpha = a > 1 ? 1 : a;
+        ctx.translate(p.x - cam.x, p.y - cam.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size / 2, -p.size * 0.35, p.size, p.size * 0.7);
+        ctx.restore();
+      } else {
+        ctx.globalAlpha = p.kind === "puff" ? Math.min(1, a) * 0.55 : Math.min(1, a);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - cam.x - p.size / 2, p.y - cam.y - p.size / 2, p.size, p.size);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  private renderDecals() {
+    const { ctx, cam } = this;
+    for (const d of this.decals) {
+      const k = d.t / d.life; // 0..1
+      const sx = d.x - cam.x, sy = d.y - cam.y;
+      ctx.save();
+      if (d.kind === "ring") {
+        // A quick expanding halo when loot drops.
+        ctx.globalAlpha = (1 - k) * 0.7;
+        ctx.strokeStyle = d.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 4 + k * d.r, 0, 6.28);
+        ctx.stroke();
+      } else {
+        // A splat that soaks in and fades over a few seconds.
+        ctx.globalAlpha = (1 - k) * 0.4;
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.arc(sx, sy, d.r * (0.7 + k * 0.3), 0, 6.28);
+        ctx.fill();
+      }
+      ctx.restore();
     }
     ctx.globalAlpha = 1;
   }
@@ -865,6 +1249,23 @@ export class Game {
       ctx.fillText("DOWN \u2014 wait for a teammate", psx, psy - 34);
       ctx.textAlign = "left";
     }
+  }
+
+  private renderAfterimages() {
+    if (this.afterimages.length === 0) return;
+    const { ctx, cam } = this;
+    const isReady = this.sprites.ready("hero");
+    for (const a of this.afterimages) {
+      const k = 1 - a.t; // 1..0
+      ctx.save();
+      ctx.globalAlpha = k * 0.4;
+      ctx.translate(a.x - cam.x, a.y - cam.y);
+      ctx.scale(a.facing, 1);
+      if (isReady) ctx.drawImage(this.sprites.get("hero"), -26, -26, 52, 52);
+      else { ctx.fillStyle = "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
   }
 
   private renderReticle() {
