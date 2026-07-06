@@ -19,6 +19,11 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?
 
 const CONTROLS = "WASD move \u00b7 Mouse aim \u00b7 Click shoot \u00b7 Shift dash \u00b7 hold TAB for stats";
 
+function fmtClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
 // Drives everything shown in #overlay: the title/menu, the co-op lobby, and the
 // game-over screen. It is the only place that knows whether multiplayer exists.
 export class Menu {
@@ -27,6 +32,7 @@ export class Menu {
   private client: ConvexClient | null;
   private host: MenuHost;
   private unsub: (() => void) | null = null;
+  private countupRaf = 0;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -48,6 +54,7 @@ export class Menu {
 
   private teardownLobby() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
+    if (this.countupRaf) { cancelAnimationFrame(this.countupRaf); this.countupRaf = 0; }
   }
 
   async showTitle() {
@@ -241,17 +248,64 @@ export class Menu {
     render();
   }
 
-  showGameOver(result: RunResult, profile: ProfileDoc | null, wasCoop: boolean) {
+  showGameOver(result: RunResult, profile: ProfileDoc | null, wasCoop: boolean, isNewBest: boolean) {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "died", "YOU DIED"));
-    wrap.appendChild(el("p", "", `You reached floor ${result.floor}, downed ${result.kills} critters, and grabbed ${result.coins} coins.${wasCoop ? " The party fights on without you." : ""}`));
+    wrap.appendChild(el("p", "", wasCoop ? "The party fights on without you." : "The depths claim another blob."));
+
+    // A run summary that counts its numbers up. Each cell reserves width so the
+    // count-up never nudges the layout (tabular-nums keeps digits fixed-width too).
+    const grid = el("div", "profile-grid");
+    const counts: Array<{ node: HTMLElement; to: number; fmt: (v: number) => string }> = [];
+    const asInt = (v: number) => String(Math.round(v));
+    const stat = (label: string, to: number, fmt: (v: number) => string) => {
+      const cell = el("div", "stat");
+      cell.style.minWidth = "72px";
+      const value = el("span", "stat-value", fmt(0));
+      cell.append(value, el("span", "stat-label", label));
+      grid.appendChild(cell);
+      counts.push({ node: value, to, fmt });
+    };
+    stat("floor", result.floor, asInt);
+    stat("kills", result.kills, asInt);
+    stat("coins", result.coins, asInt);
+    stat("time", result.durationMs / 1000, fmtClock);
+    wrap.appendChild(grid);
+
+    if (isNewBest) {
+      const best = el("p", "", "\u2605 NEW BEST \u2014 your deepest run yet");
+      best.style.color = "#ffb43b";
+      best.style.fontWeight = "700";
+      best.style.letterSpacing = "1px";
+      wrap.appendChild(best);
+    }
     if (profile) {
       wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins \u00b7 ${profile.gamesPlayed} runs`));
     }
-    const btn = el("button", "", "back to menu \u25b8");
-    btn.addEventListener("click", () => void this.showTitle());
-    wrap.appendChild(btn);
+
+    const row = el("div", "btnrow");
+    const again = el("button", "", "descend again \u25be");
+    again.addEventListener("click", () => this.doSolo());
+    const back = el("button", "secondary", "back to menu \u25b8");
+    back.addEventListener("click", () => void this.showTitle());
+    row.append(again, back);
+    wrap.appendChild(row);
+
     this.show(wrap);
+    this.runCountups(counts);
+  }
+
+  private runCountups(items: Array<{ node: HTMLElement; to: number; fmt: (v: number) => string }>, durationMs = 700) {
+    cancelAnimationFrame(this.countupRaf);
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic — quick then settles
+      for (const it of items) it.node.textContent = it.fmt(eased * it.to);
+      if (t < 1) this.countupRaf = requestAnimationFrame(tick);
+      else this.countupRaf = 0;
+    };
+    this.countupRaf = requestAnimationFrame(tick);
   }
 
   private busy(text: string): HTMLElement {

@@ -21,7 +21,7 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName } from "./audio.js";
 import { settings } from "./settings.js";
 
-export interface RunResult { floor: number; kills: number; coins: number; }
+export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
 export interface StartOptions {
   mode: "solo" | "coop";
@@ -726,7 +726,7 @@ export class Game {
     sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins });
+    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
   }
 
   // True when a world point is on (or near) the visible screen — used to gate audio
