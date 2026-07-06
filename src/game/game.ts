@@ -467,7 +467,16 @@ export class Game {
   private updateBullets(dt: number) {
     for (const b of this.bullets) {
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); }
+      // Walls kill any bullet — for enemy fire that IS the line-of-sight counterplay.
+      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); continue; }
+      // Enemy projectiles vs. the local player. invuln re-checked per bullet so a
+      // radial burst can't multi-hit through one set of i-frames.
+      if (!b.friendly && this.invuln === 0 && !this.isDown && this.hp > 0
+        && Math.hypot(this.px - b.x, this.py - b.y) < this.pr + b.radius) {
+        b.life = 0;
+        this.spawnPuff(b.x, b.y, 6, b.color);
+        this.damagePlayer(b.damage);
+      }
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
   }
@@ -564,6 +573,8 @@ export class Game {
     sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
     this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
     this.addTrauma(big ? TRAUMA_BOSS_KILL : TRAUMA_KILL);
+    // A boss dying clears its danger off the board so the victory beat isn't a death.
+    if (big) this.bullets = this.bullets.filter((b) => b.friendly);
     this.dropLoot(e);
   }
 
@@ -1179,9 +1190,23 @@ export class Game {
   private renderBullets() {
     const { ctx, cam } = this;
     for (const b of this.bullets) {
-      ctx.fillStyle = b.friendly ? b.color : "#ff6a6a";
-      ctx.beginPath(); ctx.arc(b.x - cam.x, b.y - cam.y, b.radius, 0, 6.28); ctx.fill();
+      const bx = b.x - cam.x, by = b.y - cam.y;
+      if (b.friendly) {
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(bx, by, b.radius, 0, 6.28); ctx.fill();
+      } else {
+        // Enemy fire: a soft danger halo behind a bright hot core, in its own hue.
+        ctx.globalAlpha = 0.32;
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(bx, by, b.radius * 1.9, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(bx, by, b.radius, 0, 6.28); ctx.fill();
+        ctx.fillStyle = "#fff6f0";
+        ctx.beginPath(); ctx.arc(bx, by, b.radius * 0.42, 0, 6.28); ctx.fill();
+      }
     }
+    ctx.globalAlpha = 1;
   }
 
   private renderTracers() {
