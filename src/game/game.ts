@@ -79,6 +79,17 @@ const TRAUMA_DESCEND = 0.22;
 const TRAUMA_BOSS_FLOOR = 0.5;
 const TRAUMA_REMOTE_DOWN = 0.3;
 
+// Enemy knockback: a bullet adds a short velocity impulse along its travel direction
+// that decays every frame (never a teleport). WEAPON_KB is the ~total px shove on a
+// baseline slime; heavier enemies divide it by their kbResist. The impulse is stored
+// in each enemy's otherwise-unused vx/vy.
+const WEAPON_KB: Record<WeaponId, number> = { pistol: 4, shotgun: 8, rapid: 2 };
+const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
+const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
+
+// Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
+const HURT_FLASH_DECAY = 3.2;
+
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private canvas: HTMLCanvasElement;
@@ -334,6 +345,15 @@ export class Game {
     this.trauma = t > 1 ? 1 : t;
   }
 
+  private applyKnockback(e: Enemy, b: Bullet) {
+    const sp = Math.hypot(b.vx, b.vy) || 1;
+    const v = (WEAPON_KB[this.weapon] * KB_LAMBDA) / ENEMY_ARCHETYPES[e.kind].kbResist;
+    e.vx += (b.vx / sp) * v;
+    e.vy += (b.vy / sp) * v;
+    const mag = Math.hypot(e.vx, e.vy);
+    if (mag > KB_MAX_SPEED) { const s = KB_MAX_SPEED / mag; e.vx *= s; e.vy *= s; }
+  }
+
   private update(dt: number) {
     if (this.coop) this.syncCoop(dt);
 
@@ -454,6 +474,7 @@ export class Game {
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
           e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
           this.spawnPuff(b.x, b.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
+          this.applyKnockback(e, b);
           if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
           else sfx("enemyHit", { gain: 0.65 });
@@ -480,6 +501,22 @@ export class Game {
     } else {
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, dx, 0);
       [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, dy);
+    }
+
+    // Knockback impulse (vx/vy) on top of AI movement, decaying to zero.
+    if (e.vx !== 0 || e.vy !== 0) {
+      const kdx = e.vx * dt, kdy = e.vy * dt;
+      if (arch.isPhasing) {
+        e.x = Math.max(TILE, Math.min((this.dungeon.w - 1) * TILE, e.x + kdx));
+        e.y = Math.max(TILE, Math.min((this.dungeon.h - 1) * TILE, e.y + kdy));
+      } else {
+        [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, kdx, 0);
+        [e.x, e.y] = this.moveCircle(e.x, e.y, e.radius, 0, kdy);
+      }
+      const d = Math.min(1, dt * KB_LAMBDA);
+      e.vx -= e.vx * d; e.vy -= e.vy * d;
+      if (e.vx < 1 && e.vx > -1) e.vx = 0;
+      if (e.vy < 1 && e.vy > -1) e.vy = 0;
     }
     return angle;
   }
