@@ -19,6 +19,7 @@ import {
 import type { Anim, Xform } from "./anim.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName } from "./audio.js";
+import { settings } from "./settings.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; }
 
@@ -52,6 +53,20 @@ const FREEZE_HEAVY = 0.06;    // boss death / heavy impact
 const FREEZE_HURT = 0.05;     // the player takes damage
 const FREEZE_SHOTGUN = 0.035; // a point-blank shotgun pellet connects
 const FREEZE_MAX = 0.08;
+
+// Trauma-based screen shake. Events add trauma (clamped 0..1); it decays each second
+// and the camera offset scales with trauma² so small hits barely register while big
+// ones kick hard. The player's intensity setting (0..1) scales the whole thing.
+const TRAUMA_DECAY = 1.6;
+const SHAKE_MAX_PX = 26;
+const FIRE_TRAUMA: Record<WeaponId, number> = { pistol: 0.12, shotgun: 0.5, rapid: 0.06 };
+const TRAUMA_HURT = 0.4;
+const TRAUMA_KILL = 0.16;
+const TRAUMA_BOSS_KILL = 0.7;
+const TRAUMA_BOSS_SLAM = 0.4;
+const TRAUMA_DESCEND = 0.22;
+const TRAUMA_BOSS_FLOOR = 0.5;
+const TRAUMA_REMOTE_DOWN = 0.3;
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -105,6 +120,7 @@ export class Game {
   private raf = 0;
   private runStart = 0;
   private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
+  private trauma = 0; // screen-shake trauma, 0..1
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
@@ -163,6 +179,7 @@ export class Game {
     this.remoteAnims.clear();
     this.reviveHold.clear();
     this.freeze = 0;
+    this.trauma = 0;
     audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
@@ -197,7 +214,7 @@ export class Game {
     this.pickups = this.placeWeaponPickups(d);
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
-    if (isBoss) sfx("bossSpawn");
+    if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
   }
 
   private placeWeaponPickups(d: Dungeon): Pickup[] {
@@ -253,6 +270,11 @@ export class Game {
     this.freeze = Math.min(FREEZE_MAX, Math.max(this.freeze, seconds));
   }
 
+  private addTrauma(amount: number) {
+    const t = this.trauma + amount;
+    this.trauma = t > 1 ? 1 : t;
+  }
+
   private update(dt: number) {
     if (this.coop) this.syncCoop(dt);
 
@@ -275,6 +297,7 @@ export class Game {
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
+    if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
 
     this.cam.x = this.px - this.canvas.width / 2;
     this.cam.y = this.py - this.canvas.height / 2;
@@ -331,6 +354,7 @@ export class Game {
       this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
       sfx(SHOOT_SFX[this.weapon]);
+      this.addTrauma(FIRE_TRAUMA[this.weapon]);
     }
   }
 
@@ -400,7 +424,7 @@ export class Game {
       if (!this.isWall(mx, my)) {
         this.enemies.push(createEnemy("slime", mx, my, this.floor));
         this.spawnParticles(mx, my, 8, "#a855f7");
-        if (this.isNearCamera(mx, my)) sfx("enemyHit", { gain: 0.5, rate: 0.6 });
+        if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
       }
     }
   }
@@ -414,6 +438,7 @@ export class Game {
     this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
     sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
     this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
+    this.addTrauma(big ? TRAUMA_BOSS_KILL : TRAUMA_KILL);
     this.dropLoot(e);
   }
 
@@ -500,6 +525,7 @@ export class Game {
     this.isDown = false; // a fresh floor brings downed teammates back up
     this.hp = Math.min(this.maxHp, this.hp + 2);
     sfx("descend");
+    this.addTrauma(TRAUMA_DESCEND);
     this.loadFloor();
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
   }
@@ -511,6 +537,7 @@ export class Game {
     this.spawnParticles(this.px, this.py, 10, "#ff5a5a");
     sfx("playerHurt");
     this.addFreeze(FREEZE_HURT);
+    this.addTrauma(TRAUMA_HURT);
     if (this.hp <= 0) {
       this.hp = 0;
       if (this.coop && this.hasLivingTeammate()) {
@@ -577,6 +604,7 @@ export class Game {
       if (r.isDown && !wasDown && this.isNearCamera(r.x, r.y)) {
         sfx("playerHurt", { gain: 0.6 });
         this.spawnParticles(r.x, r.y, 10, "#ff5a5a");
+        this.addTrauma(TRAUMA_REMOTE_DOWN);
       }
       this.remoteDownSeen.set(r.playerId, r.isDown);
     }
@@ -678,6 +706,13 @@ export class Game {
     const { ctx, canvas } = this;
     ctx.fillStyle = "#0e0b1a";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // trauma² shake, scaled by the player's intensity setting. New random offset per
+    // frame; the background fill above stays put so edges never flash the void.
+    const mag = this.trauma * this.trauma * SHAKE_MAX_PX * settings.shakeIntensity;
+    const shakeX = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
+    const shakeY = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
     this.renderTiles();
     this.renderExit();
     this.renderPickups();
@@ -689,6 +724,7 @@ export class Game {
     this.renderRemotePlayers();
     this.renderPlayer();
     this.renderMuzzle();
+    ctx.restore();
     this.renderReticle();
     this.renderMinimap();
   }
@@ -696,10 +732,11 @@ export class Game {
   private renderTiles() {
     const { ctx, canvas, cam } = this;
     const d = this.dungeon;
-    const x0 = Math.max(0, Math.floor(cam.x / TILE));
-    const y0 = Math.max(0, Math.floor(cam.y / TILE));
-    const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE));
-    const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE));
+    // +1 tile of margin on each edge so the screen-shake translate never exposes bg.
+    const x0 = Math.max(0, Math.floor(cam.x / TILE) - 1);
+    const y0 = Math.max(0, Math.floor(cam.y / TILE) - 1);
+    const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE) + 1);
+    const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE) + 1);
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
         const wall = d.tiles[ty * d.w + tx] === 1;
