@@ -3,29 +3,54 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>blobrogue — a cowboy-blob roguelike</title>
     <style>
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { height: 100%; background: #0e0b1a; overflow: hidden; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
       #app { display: flex; align-items: center; justify-content: center; height: 100%; }
       canvas { image-rendering: pixelated; background: #14101f; touch-action: none; }
-      #hud { position: fixed; top: 10px; left: 0; right: 0; text-align: center; color: #ffd27a; font-size: 14px; pointer-events: none; text-shadow: 0 2px 0 #000; }
-      #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; color: #ffe6b0; background: rgba(14,11,26,0.82); text-align: center; }
-      #overlay h1 { font-size: 34px; color: #ffb43b; letter-spacing: 2px; }
-      #overlay p { font-size: 13px; color: #cbb; max-width: 420px; line-height: 1.6; }
-      #overlay button { font: inherit; font-size: 15px; padding: 10px 22px; background: #ffb43b; color: #201436; border: none; border-radius: 6px; cursor: pointer; }
-      #overlay button:hover { background: #ffca6a; }
+      #minimap { position: fixed; top: 12px; right: 12px; z-index: 5; border-radius: 8px; }
+
+      #overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; background: rgba(14,11,26,0.86); text-align: center; }
       .hidden { display: none !important; }
+
+      .menu { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 24px; max-width: 480px; }
+      .menu h1 { font-size: 34px; color: #ffb43b; letter-spacing: 3px; }
+      .menu h1.died { color: #ff6a6a; }
+      .menu p { font-size: 13px; color: #cbb6d6; line-height: 1.6; }
+      .menu p.muted { font-size: 12px; color: #8579a0; }
+      .menu p.hint { font-size: 11px; color: #6f6689; margin-top: 4px; }
+
+      .btnrow { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+      button { font: inherit; font-size: 15px; padding: 10px 22px; background: #ffb43b; color: #201436; border: none; border-radius: 8px; cursor: pointer; transition: background 0.12s ease; }
+      button:hover { background: #ffca6a; }
+      button.secondary { background: rgba(255,180,59,0.14); color: #ffd27a; }
+      button.secondary:hover { background: rgba(255,180,59,0.26); }
+
+      .namerow { display: flex; align-items: center; gap: 10px; }
+      .namerow label { font-size: 12px; color: #8579a0; text-transform: uppercase; letter-spacing: 1px; }
+      input { font: inherit; font-size: 15px; padding: 9px 14px; background: #120e20; color: #ffe6b0; border: 1px solid rgba(255,180,59,0.35); border-radius: 8px; text-align: center; }
+      input:focus { outline: none; border-color: #ffb43b; }
+      .code-input { font-size: 26px; letter-spacing: 8px; width: 200px; }
+
+      .profile { min-height: 88px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+      .profile-title { font-size: 12px; color: #ffb43b; letter-spacing: 1px; text-transform: uppercase; }
+      .profile-grid { display: flex; gap: 18px; }
+      .stat { display: flex; flex-direction: column; align-items: center; }
+      .stat-value { font-size: 20px; color: #ffe6b0; font-variant-numeric: tabular-nums; }
+      .stat-label { font-size: 11px; color: #8579a0; }
+
+      .code-badge { font-size: 40px; letter-spacing: 10px; color: #ffb43b; background: #120e20; border: 1px solid rgba(255,180,59,0.4); border-radius: 12px; padding: 10px 22px; }
+      .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+      .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+      .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
     </style>
   </head>
   <body>
     <div id="app"><canvas id="game"></canvas></div>
-    <div id="hud"></div>
-    <div id="overlay">
-      <h1>BLOBROGUE</h1>
-      <p>You're a little amber cowboy-blob lost in the depths. Blast your way down as far as you can.<br/><br/><b>WASD</b> to move · <b>Mouse</b> to aim · <b>Click/Hold</b> to shoot · <b>Shift</b> to dash</p>
-      <button id="startBtn">descend ▾</button>
-    </div>
+    <canvas id="minimap" width="176" height="132"></canvas>
+    <div id="overlay"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
