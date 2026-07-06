@@ -20,6 +20,7 @@ import type { Anim, Xform } from "./anim.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName } from "./audio.js";
 import { settings } from "./settings.js";
+import { PauseOverlay } from "../ui/pause.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
@@ -85,6 +86,9 @@ export class Game {
   private minimap: Minimap;
   private hud: Hud;
   private onGameOver: (result: RunResult) => void;
+  private onExit: () => void;
+  private pause: PauseOverlay;
+  private isPaused = false;
 
   private dungeon!: Dungeon;
   private floor = 1;
@@ -139,12 +143,14 @@ export class Game {
   private isStatsHeld = false;
   private pendingDescend = 0;
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: () => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
     this.onGameOver = onGameOver;
+    this.onExit = onExit;
+    this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.bindInput();
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -158,6 +164,12 @@ export class Game {
   private bindInput() {
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
+      if (k === "escape") {
+        e.preventDefault();
+        if (!this.keys.has("escape")) this.togglePause(); // ignore key auto-repeat
+        this.keys.add(k);
+        return;
+      }
       this.keys.add(k);
       if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
       if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
@@ -193,6 +205,8 @@ export class Game {
     this.freeze = 0;
     this.trauma = 0;
     this.kickX = 0; this.kickY = 0;
+    this.isPaused = false;
+    this.pause.hide();
     audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
@@ -268,6 +282,12 @@ export class Game {
     if (!this.isRunning) return;
     const dt = Math.min((t - this.last) / 1000, 0.05);
     this.last = t;
+    // Paused: keep drawing the frozen frame under the pause overlay, run no sim.
+    if (this.isPaused) {
+      this.render();
+      this.raf = requestAnimationFrame(this.loop);
+      return;
+    }
     // Hit-stop: hold the frame (and any peak screen-shake) for a beat, but keep
     // rendering so the pause reads as impact rather than a stutter.
     if (this.freeze > 0) {
@@ -279,6 +299,31 @@ export class Game {
     this.hud.tick(dt);
     this.raf = requestAnimationFrame(this.loop);
   };
+
+  private togglePause() {
+    if (!this.isRunning) return;
+    this.setPaused(!this.isPaused);
+  }
+
+  private setPaused(paused: boolean) {
+    this.isPaused = paused;
+    if (paused) {
+      this.mouse.isDown = false; // don't let a held click fire on resume
+      this.pause.show();
+    } else {
+      this.pause.hide();
+      this.last = performance.now(); // avoid a huge catch-up dt after the pause
+    }
+  }
+
+  private quitToMenu() {
+    this.setPaused(false);
+    this.stop();
+    audio.setMusic(null);
+    this.hud.hideStats();
+    this.hud.clear();
+    this.onExit();
+  }
 
   private addFreeze(seconds: number) {
     this.freeze = Math.min(FREEZE_MAX, Math.max(this.freeze, seconds));
