@@ -97,13 +97,11 @@ function floorRoster(floor: number): Array<{ kind: EnemyKind; weight: number }> 
   if (floor >= 2) {
     roster.push({ kind: "bat", weight: 3 });
     roster.push({ kind: "skeleton", weight: 2 });
-    // Ranged threat arrives on floor 2 but stays rare so it eases the player in.
-    roster.push({ kind: "spitter", weight: 1 });
+    // Ranged threat: rare on floor 2 (a gentle intro) and a bit more common from floor 3
+    // once the player has learned to dodge the melee lunge.
+    roster.push({ kind: "spitter", weight: floor >= 3 ? 2 : 1 });
   }
-  if (floor >= 3) {
-    roster.push({ kind: "ghost", weight: 2 });
-    roster.push({ kind: "spitter", weight: 1 }); // a touch more common once dodging is learned
-  }
+  if (floor >= 3) roster.push({ kind: "ghost", weight: 2 });
   return roster;
 }
 
@@ -145,7 +143,9 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number)
   }
 
   const roster = floorRoster(floor);
-  const count = Math.min(3 + floor, 12);
+  // Pace keeps ramping into deeper floors (early floors unchanged); the real
+  // difficulty now comes from telegraphed attacks rather than raw enemy count.
+  const count = Math.min(3 + floor, 14);
   for (let i = 0; i < count; i++) {
     const roomIndex = 1 + rng.int(0, roomCount - 2);
     const p = pointInRoom(rng, dungeon, roomIndex);
