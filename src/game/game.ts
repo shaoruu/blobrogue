@@ -133,6 +133,19 @@ const GHOST_SOLID_AT = 0.98;    // windup at/above which the ghost is fully soli
 
 const BOSS_SLAM_RADIUS = 90;   // shockwave radius (also the ground-marker size)
 const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
+// Slime King moveset. Hop-slam locks its target tile at 0.3s of the 0.6s windup (walk
+// off the ring), leaps for 0.5s, then a 0.7s recovery. Radial burst (phase 2+) has no
+// aim — it's an 8-glob ring you weave out of. Attack cadence tightens each HP phase.
+const BOSS_ROAR_DUR = 0.8;
+const BOSS_HOPSLAM_WINDUP = 0.6;
+const BOSS_HOPSLAM_LOCK = 0.3;
+const BOSS_HOPSLAM_AIR = 0.5;
+const BOSS_HOPSLAM_RECOVER = 0.7;
+const BOSS_RADIAL_WINDUP = 0.8;
+const BOSS_RADIAL_RECOVER = 0.6;
+const BOSS_RADIAL_COUNT = 8;
+const BOSS_ATTACK_CD = [0, 3.5, 2.8, 2.2]; // seconds between attacks, indexed by phase 1..3
+const BOSS_MINION_CD = 3.4;                // periodic slime drip
 // Reused dashed/solid line patterns so the aim line never allocates per frame.
 const AIM_DASH: number[] = [7, 6];
 const AIM_SOLID: number[] = [];
@@ -711,22 +724,136 @@ export class Game {
     this.spawnPuff(mx, my, 6, "#ff5a7a");
   }
 
+  // BOSS Slime King: a 3-HP-phase fight. It drips slimes throughout, hop-slams in every
+  // phase, adds a radial glob burst at 66% HP, and frenzies (faster, +globs, +slimes)
+  // under 33%. HP-threshold crossings interrupt into a non-invuln roar. See COMBAT_SPEC.
   private updateBoss(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
     const boss = e.boss;
     if (!boss) return e.zig;
+    const a = e.attack;
+
     boss.minionTimer -= dt;
-    if (boss.minionTimer <= 0 && this.enemies.length < BOSS_MINION_CAP) {
-      boss.minionTimer = 3.4;
+    if (boss.minionTimer <= 0) { boss.minionTimer = BOSS_MINION_CD; this.spawnBossMinion(e); }
+
+    if (a.phase === "windup") return this.bossWindup(e, dt, remotes);
+    if (a.phase === "active") return this.bossActive(e, dt);
+    if (a.phase === "recover") {
+      a.time += dt;
+      const recDur = a.move === "hopslam" ? BOSS_HOPSLAM_RECOVER : BOSS_RADIAL_RECOVER;
+      if (a.time >= recDur) this.enterIdle(e);
+      return a.lockedAngle; // stationary, punishable
+    }
+
+    // Idle: roar into a new phase the moment HP crosses, else attack, else chase.
+    const desired = this.bossPhaseFor(e);
+    if (desired > boss.phase) {
+      boss.phase = desired;
+      this.beginWindup(e, "roar");
+      triggerFlash(e.anim);
+      this.sfxAt("bossRoar", e.x, e.y);
+      this.addTrauma(TRAUMA_BOSS_FLOOR);
+      return a.lockedAngle;
+    }
+    if (a.cooldown === 0 && e.spawnTimer === 0) { this.bossBeginAttack(e, boss); return a.lockedAngle; }
+    return this.bossChase(e, dt, remotes);
+  }
+
+  private bossPhaseFor(e: Enemy): number {
+    const r = e.hp / e.maxHp;
+    return r > 0.66 ? 1 : r > 0.33 ? 2 : 3;
+  }
+
+  private bossBeginAttack(e: Enemy, boss: NonNullable<Enemy["boss"]>) {
+    const useRadial = boss.phase >= 2 && boss.isNextRadial;
+    if (boss.phase >= 2) boss.isNextRadial = !boss.isNextRadial;
+    e.attack.cooldown = BOSS_ATTACK_CD[boss.phase];
+    this.beginWindup(e, useRadial ? "radial" : "hopslam");
+    this.sfxAt("enemyWindup", e.x, e.y, { rate: useRadial ? 0.7 : 0.55 });
+  }
+
+  private bossWindup(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
+    const a = e.attack;
+    if (a.move === "roar") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / BOSS_ROAR_DUR);
+      if (a.time >= BOSS_ROAR_DUR) this.enterIdle(e);
+      return a.lockedAngle;
+    }
+    if (a.move === "radial") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / BOSS_RADIAL_WINDUP);
+      if (a.time >= BOSS_RADIAL_WINDUP) { this.bossRadialFire(e); this.enterRecover(e); }
+      return a.lockedAngle;
+    }
+    // hop-slam: track + lock the target tile, then take off.
+    if (this.stepWindupTimer(e, dt, BOSS_HOPSLAM_WINDUP, BOSS_HOPSLAM_LOCK, remotes, true)) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      this.sfxAt("enemyLunge", e.x, e.y, { rate: 0.6 });
+    }
+    return a.lockedAngle;
+  }
+
+  // Airborne arc: travels to the locked landing tile (ignoring geometry, it's in the
+  // air) while windup doubles as 0..1 air progress for the render lift.
+  private bossActive(e: Enemy, dt: number): number {
+    const a = e.attack;
+    a.time += dt;
+    const prev = a.windup;
+    a.windup = Math.min(1, a.time / BOSS_HOPSLAM_AIR);
+    const rem = 1 - prev;
+    if (rem > 0.0001) {
+      const f = Math.min(1, (a.windup - prev) / rem);
+      e.x += (a.markX - e.x) * f;
+      e.y += (a.markY - e.y) * f;
+    }
+    if (a.time >= BOSS_HOPSLAM_AIR) { this.bossLand(e); this.enterRecover(e); }
+    return a.lockedAngle;
+  }
+
+  private bossLand(e: Enemy) {
+    const a = e.attack, boss = e.boss;
+    const x = a.markX, y = a.markY;
+    if (this.invuln === 0 && !this.isDown && this.hp > 0 && Math.hypot(this.px - x, this.py - y) < BOSS_SLAM_RADIUS) {
+      this.damagePlayer(2);
+    }
+    this.addFreeze(FREEZE_HEAVY);
+    this.addTrauma(TRAUMA_BOSS_SLAM);
+    this.sfxAt("bossSlam", x, y);
+    this.spawnParticles(x, y, 22, "#ffd27a");
+    this.spawnSparks(x, y, 12, 0);
+    this.addDecal(x, y, "#ffb43b", BOSS_SLAM_RADIUS * 0.5, "splat");
+    // Phase 3 frenzy: the landing also erupts globs and spits an extra pair of slimes.
+    if (boss && boss.phase >= 3) {
+      for (let i = 0; i < 4; i++) this.spawnEnemyBullet(x, y, (i / 4) * 6.28, 220, 7, 1, "#a24bff", 2.5);
+      this.spawnBossMinion(e);
       this.spawnBossMinion(e);
     }
+  }
+
+  private bossRadialFire(e: Enemy) {
+    const boss = e.boss;
+    const parity = boss ? boss.burstParity : 0;
+    if (boss) boss.burstParity = parity ^ 1;
+    const base = parity ? Math.PI / BOSS_RADIAL_COUNT : 0; // alternate bursts offset +22.5°
+    for (let i = 0; i < BOSS_RADIAL_COUNT; i++) {
+      this.spawnEnemyBullet(e.x, e.y, base + (i / BOSS_RADIAL_COUNT) * 6.28, 260, 7, 1, "#a24bff", 2.6);
+    }
+    this.sfxAt("spitFire", e.x, e.y, { rate: 0.7 });
+    this.addTrauma(0.2);
+    this.spawnParticles(e.x, e.y, 12, "#c98bff");
+  }
+
+  private bossChase(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
     if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
     const angle = Math.atan2(this.targetY - e.y, this.targetX - e.x);
-    const step = e.speed * dt;
+    const mult = e.boss && e.boss.phase >= 3 ? 1.2 : 1; // phase 3: +20% speed
+    const step = e.speed * mult * dt;
     this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
     return angle;
   }
 
   private spawnBossMinion(e: Enemy) {
+    if (this.enemies.length >= BOSS_MINION_CAP) return;
     triggerRecoil(e.anim); // pop on the spawn beat
     const a = Math.random() * Math.PI * 2;
     const mx = e.x + Math.cos(a) * (e.radius + 20);
