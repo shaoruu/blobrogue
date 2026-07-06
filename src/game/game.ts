@@ -35,8 +35,11 @@ interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facin
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
+// A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
+interface Afterimage { x: number; y: number; facing: number; t: number; }
 
 const MAX_DECALS = 48;
+const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
 
 const REVIVE_RADIUS = 46;
 const REVIVE_HOLD = 1.1;
@@ -126,6 +129,8 @@ export class Game {
   private pickups: Pickup[] = [];
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
+  private afterimages: Afterimage[] = [];
+  private dashImgCd = 0; // spacing timer for dropping dash afterimages
   private remoteTracers: RemoteTracer[] = [];
   private remoteShotSeen = new Map<string, number>();
   private remoteDownSeen = new Map<string, boolean>();
@@ -250,6 +255,7 @@ export class Game {
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
+    this.afterimages = [];
     this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
     this.pickups = this.placeWeaponPickups(d);
@@ -376,6 +382,7 @@ export class Game {
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
+    this.updateAfterimages(dt);
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
@@ -408,7 +415,9 @@ export class Game {
     this.dashCd = Math.max(0, this.dashCd - dt);
     if (this.keys.has("shift") && this.dashCd === 0 && (ix || iy)) {
       this.dashTime = 0.16; this.dashCd = 0.7; this.dashDx = ix; this.dashDy = iy;
-      this.invuln = Math.max(this.invuln, 0.2);
+      this.invuln = Math.max(this.invuln, 0.35); // real "get out of jail" dodge window
+      this.dashImgCd = 0;
+      this.spawnParticles(this.px, this.py, 10, "#ffd27a"); // takeoff puff
       sfx("dash");
     }
     let mvx: number, mvy: number;
@@ -416,6 +425,8 @@ export class Game {
       this.dashTime -= dt;
       mvx = this.dashDx * 620 * dt; mvy = this.dashDy * 620 * dt;
       this.spawnParticles(this.px, this.py, 1, "#ffd27a");
+      this.dashImgCd -= dt;
+      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0 }); this.dashImgCd = 0.04; }
     } else {
       mvx = ix * speed * dt; mvy = iy * speed * dt;
     }
@@ -603,6 +614,12 @@ export class Game {
   private updateDecals(dt: number) {
     for (const d of this.decals) d.t += dt;
     this.decals = this.decals.filter((d) => d.t < d.life);
+  }
+
+  private updateAfterimages(dt: number) {
+    if (this.afterimages.length === 0) return;
+    for (const a of this.afterimages) a.t += dt / AFTERIMAGE_DUR;
+    this.afterimages = this.afterimages.filter((a) => a.t < 1);
   }
 
   private updateTracers(dt: number) {
@@ -908,6 +925,7 @@ export class Game {
     this.renderBullets();
     this.renderTracers();
     this.renderRemotePlayers();
+    this.renderAfterimages();
     this.renderPlayer();
     this.renderMuzzle();
     ctx.restore();
@@ -1229,6 +1247,23 @@ export class Game {
       ctx.fillText("DOWN \u2014 wait for a teammate", psx, psy - 34);
       ctx.textAlign = "left";
     }
+  }
+
+  private renderAfterimages() {
+    if (this.afterimages.length === 0) return;
+    const { ctx, cam } = this;
+    const isReady = this.sprites.ready("hero");
+    for (const a of this.afterimages) {
+      const k = 1 - a.t; // 1..0
+      ctx.save();
+      ctx.globalAlpha = k * 0.4;
+      ctx.translate(a.x - cam.x, a.y - cam.y);
+      ctx.scale(a.facing, 1);
+      if (isReady) ctx.drawImage(this.sprites.get("hero"), -26, -26, 52, 52);
+      else { ctx.fillStyle = "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
   }
 
   private renderReticle() {
