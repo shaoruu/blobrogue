@@ -45,6 +45,14 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   rapid: "shootRapid",
 };
 
+// Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
+// taken as a max, never summed, and capped so a busy frame can't grind to a halt.
+const FREEZE_KILL = 0.04;     // a normal enemy dies
+const FREEZE_HEAVY = 0.06;    // boss death / heavy impact
+const FREEZE_HURT = 0.05;     // the player takes damage
+const FREEZE_SHOTGUN = 0.035; // a point-blank shotgun pellet connects
+const FREEZE_MAX = 0.08;
+
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private canvas: HTMLCanvasElement;
@@ -96,6 +104,7 @@ export class Game {
   private last = 0;
   private raf = 0;
   private runStart = 0;
+  private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
 
   private coop: CoopBridge | null = null;
   private profile: ProfileStats | null = null;
@@ -153,6 +162,7 @@ export class Game {
     this.remoteDownSeen.clear();
     this.remoteAnims.clear();
     this.reviveHold.clear();
+    this.freeze = 0;
     audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
@@ -227,11 +237,21 @@ export class Game {
     if (!this.isRunning) return;
     const dt = Math.min((t - this.last) / 1000, 0.05);
     this.last = t;
-    this.update(dt);
+    // Hit-stop: hold the frame (and any peak screen-shake) for a beat, but keep
+    // rendering so the pause reads as impact rather than a stutter.
+    if (this.freeze > 0) {
+      this.freeze = Math.max(0, this.freeze - dt);
+    } else {
+      this.update(dt);
+    }
     this.render();
     this.hud.tick(dt);
     this.raf = requestAnimationFrame(this.loop);
   };
+
+  private addFreeze(seconds: number) {
+    this.freeze = Math.min(FREEZE_MAX, Math.max(this.freeze, seconds));
+  }
 
   private update(dt: number) {
     if (this.coop) this.syncCoop(dt);
@@ -339,6 +359,7 @@ export class Game {
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
           e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
           this.spawnParticles(b.x, b.y, 5, "#c98bff");
+          if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
           else sfx("enemyHit", { gain: 0.65 });
         }
@@ -392,6 +413,7 @@ export class Game {
     this.spawnParticles(e.x, e.y, big ? 40 : 16, big ? "#ffb43b" : "#a855f7");
     this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
     sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
+    this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
     this.dropLoot(e);
   }
 
@@ -488,6 +510,7 @@ export class Game {
     triggerFlash(this.playerAnim);
     this.spawnParticles(this.px, this.py, 10, "#ff5a5a");
     sfx("playerHurt");
+    this.addFreeze(FREEZE_HURT);
     if (this.hp <= 0) {
       this.hp = 0;
       if (this.coop && this.hasLivingTeammate()) {
