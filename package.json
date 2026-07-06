@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "@fal-ai/serverless-client": "^0.15.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1"
   }
