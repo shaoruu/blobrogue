@@ -59,6 +59,18 @@ export class Multiplayer implements CoopBridge {
     this.subscribe();
   }
 
+  async quickPlay(): Promise<void> {
+    const playerId = this.requirePlayerId();
+    const res = await this.client.mutation(api.rooms.quickPlay, { playerId });
+    this.roomId = res.roomId;
+    this.code = res.code;
+    this.seed = res.seed;
+    this.floor = res.floor;
+    this.status = res.status;
+    this.hostPlayerId = res.joined ? this.hostPlayerId : playerId;
+    this.subscribe();
+  }
+
   async join(code: string): Promise<void> {
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.join, { code: code.trim().toUpperCase(), playerId });

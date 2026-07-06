@@ -5,6 +5,8 @@ import type { Id } from "./_generated/dataModel";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous O/0/I/1
 const CODE_LEN = 4;
+const MAX_PLAYERS = 4;                 // co-op party cap
+const QUICKPLAY_STALE_MS = 45_000;     // ignore rooms with no activity for this long
 
 function randomCode(): string {
   let out = "";
@@ -66,7 +68,7 @@ export const create = mutation({
     const now = Date.now();
     const roomId = await ctx.db.insert("rooms", {
       code, hostPlayerId: playerId, seed, floor: 1,
-      status: "lobby", createdAt: now, lastActivity: now,
+      status: "lobby", isPublic: false, createdAt: now, lastActivity: now,
     });
     await ensurePresence(ctx, roomId, playerId, player.name, 1, 0);
     return { roomId, code, seed, floor: 1 };
@@ -89,6 +91,50 @@ export const join = mutation({
     await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
     await ctx.db.patch(room._id, { lastActivity: Date.now() });
     return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status };
+  },
+});
+
+
+// Quick Play: drop straight into an open PUBLIC game with room to spare, or spin up
+// a fresh public room for the next person. No codes, no hosting.
+export const quickPlay = mutation({
+  args: { playerId: v.id("players") },
+  handler: async (ctx, { playerId }) => {
+    const player = await ctx.db.get(playerId);
+    if (!player) throw new Error("unknown player");
+    const now = Date.now();
+
+    // Look for public rooms still going (lobby or playing), freshest first.
+    const candidates = await ctx.db
+      .query("rooms")
+      .withIndex("by_public_status", (q) => q.eq("isPublic", true))
+      .order("desc")
+      .take(40);
+
+    for (const room of candidates) {
+      if (room.status === "ended") continue;
+      if (now - room.lastActivity > QUICKPLAY_STALE_MS) continue;
+      const players = await ctx.db
+        .query("presence")
+        .withIndex("by_room", (q) => q.eq("roomId", room._id))
+        .collect();
+      if (players.length >= MAX_PLAYERS) continue;
+      // Join this one.
+      const color = await smallestFreeColor(ctx, room._id);
+      await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
+      await ctx.db.patch(room._id, { lastActivity: now });
+      return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status, joined: true };
+    }
+
+    // None available — create a fresh public room and wait for others to drop in.
+    const code = await uniqueCode(ctx);
+    const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
+    const roomId = await ctx.db.insert("rooms", {
+      code, hostPlayerId: playerId, seed, floor: 1,
+      status: "lobby", isPublic: true, createdAt: now, lastActivity: now,
+    });
+    await ensurePresence(ctx, roomId, playerId, player.name, 1, 0);
+    return { roomId, code, seed, floor: 1, status: "lobby" as const, joined: false };
   },
 });
 

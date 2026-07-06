@@ -62,9 +62,13 @@ export class Menu {
       const profileBox = el("div", "profile");
       wrap.appendChild(this.nameRow());
       wrap.appendChild(profileBox);
+      const quickBtn = el("button", "primary", "▶ quick play (co-op)");
+      quickBtn.addEventListener("click", () => void this.doQuickPlay());
+      wrap.appendChild(quickBtn);
+      wrap.appendChild(el("p", "muted", "jump straight into an open game — no code needed"));
       const row = el("div", "btnrow");
       row.appendChild(this.soloButton("play solo"));
-      const hostBtn = el("button", "", "host co-op");
+      const hostBtn = el("button", "secondary", "private room");
       hostBtn.addEventListener("click", () => void this.doHost());
       const joinBtn = el("button", "secondary", "join with code");
       joinBtn.addEventListener("click", () => void this.showJoin());
@@ -124,6 +128,19 @@ export class Menu {
     // upsert in the background and start immediately with whatever profile we have.
     if (this.client) void this.session.login(this.session.name || "blob");
     this.host.startSolo(this.session.profile);
+  }
+
+  private async doQuickPlay() {
+    if (!this.client) return;
+    const status = this.busy("finding a game\u2026");
+    try {
+      const profile = await this.session.login(this.session.name || "blob");
+      const mp = new Multiplayer(this.client, this.session);
+      await mp.quickPlay();
+      this.showLobby(mp, profile);
+    } catch (err) {
+      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not find a game");
+    }
   }
 
   private async doHost() {

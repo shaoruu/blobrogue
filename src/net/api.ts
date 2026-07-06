@@ -67,6 +67,7 @@ export const api = {
   },
   rooms: {
     create: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
+    quickPlay: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),
     join: makeFunctionReference<"mutation", { code: string; playerId: string }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
