@@ -1,0 +1,47 @@
+# blobrogue art & animation
+
+## Sprites
+Every sprite is a **64×64 transparent PNG** in `public/sprites/`
+(`hero`, `slime`, `bat`, `skeleton`, `ghost`, `boss`, `heart`, `coin`, `gun`).
+They are registered in `src/game/assets.ts` (`SOURCES`).
+
+## Everything is animated (procedural, no extra art)
+There are no static sprites in motion. Each character and pickup carries a tiny
+`anim` state (`src/game/anim.ts`) that drives a squash/stretch + bob + lean transform
+applied around the sprite at draw time:
+
+- **Idle** — gentle vertical bob + subtle squash-and-stretch (blobs breathe).
+- **Moving** — faster cadence, an upward hop, and a lean toward the movement direction.
+- **Shoot** — a recoil scale-punch (the hero also nudges back against its aim) + a muzzle flash.
+- **Hit** — a white flash overlay (cached silhouette) on the player and every enemy.
+- **Death** — a quick scale-pop → squash + fade "corpse" plus the existing particle burst.
+- **Pickups** — coins spin, hearts/guns shimmer-pulse, all float with a soft glow.
+- **Boss** — heavier/slower breathing and a wind-up telegraph right before it spawns adds.
+
+This is allocation-free in the hot path: `stepAnim` avoids closures and `characterXform`
+writes into a shared scratch object.
+
+## Optional frame-based spritesheets (drop-in, for later)
+The draw path can play real frame animation from a **horizontal strip** spritesheet, and
+falls back to the procedural animation above whenever a sheet is absent (the current case).
+
+**Format**
+- One PNG, a single horizontal row of **N square frames**, **64×64 per frame**
+  (so a 4-frame sheet is `256×64`). Frame count is inferred as `width / height`.
+- Suggested naming: `public/sprites/<name>_<clip>.png`, e.g. `hero_walk.png`.
+- Clips are `idle` and `walk`. `walk` plays while the entity is moving; `idle` while still.
+  If a clip's sheet is missing, that state falls back to the static PNG + procedural juice.
+
+**Enable a sheet** (two steps, no other code changes):
+1. Drop the strip into `public/sprites/`, e.g. `hero_walk.png`.
+2. Add one line to `SHEETS` in `src/game/assets.ts`:
+   ```ts
+   export const SHEETS: Partial<Record<string, SheetDef>> = {
+     "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
+   };
+   ```
+
+`SHEETS` is empty by default, so nothing extra is fetched (no 404s) until you opt in.
+
+Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
+for sheet-animated characters the flash is an approximation of the current frame.

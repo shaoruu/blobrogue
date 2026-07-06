@@ -1,4 +1,5 @@
 import type { TileKind } from "./types.js";
+import { Rng } from "./rng.js";
 
 export interface Dungeon {
   w: number;
@@ -11,32 +12,22 @@ export interface Dungeon {
 
 export interface Room { x: number; y: number; w: number; h: number; cx: number; cy: number; }
 
-function mulberry32(seed: number) {
-  return function () {
-    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-// Simple room-and-corridor generator (Soul-Knight-ish: several rooms joined by halls).
 export function generateDungeon(seed: number, floor: number): Dungeon {
-  const rand = mulberry32(seed + floor * 1013904223);
+  const rand = new Rng(seed + floor * 1013904223);
   const w = 40 + Math.min(floor * 2, 20);
   const h = 30 + Math.min(floor * 2, 16);
   const tiles: TileKind[] = new Array(w * h).fill(1);
   const idx = (x: number, y: number) => y * w + x;
 
   const rooms: Room[] = [];
-  const roomCount = 6 + Math.floor(rand() * 4) + Math.min(floor, 4);
+  const roomCount = 6 + rand.int(0, 3) + Math.min(floor, 4);
   let attempts = 0;
   while (rooms.length < roomCount && attempts < 300) {
     attempts++;
-    const rw = 5 + Math.floor(rand() * 7);
-    const rh = 5 + Math.floor(rand() * 6);
-    const rx = 1 + Math.floor(rand() * (w - rw - 2));
-    const ry = 1 + Math.floor(rand() * (h - rh - 2));
+    const rw = 5 + rand.int(0, 6);
+    const rh = 5 + rand.int(0, 5);
+    const rx = 1 + rand.int(0, w - rw - 3);
+    const ry = 1 + rand.int(0, h - rh - 3);
     const overlaps = rooms.some(
       (r) => rx < r.x + r.w + 1 && rx + rw + 1 > r.x && ry < r.y + r.h + 1 && ry + rh + 1 > r.y
     );
@@ -55,7 +46,7 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   };
   for (let i = 1; i < rooms.length; i++) {
     const a = rooms[i - 1], b = rooms[i];
-    if (rand() < 0.5) { carveH(a.cx, b.cx, a.cy); carveV(a.cy, b.cy, b.cx); }
+    if (rand.chance(0.5)) { carveH(a.cx, b.cx, a.cy); carveV(a.cy, b.cy, b.cx); }
     else { carveV(a.cy, b.cy, a.cx); carveH(a.cx, b.cx, b.cy); }
   }
 

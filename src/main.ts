@@ -1,22 +1,43 @@
+import { ConvexClient } from "convex/browser";
 import { Game } from "./game/game.js";
+import type { RunResult } from "./game/game.js";
+import type { ProfileDoc } from "./net/api.js";
+import { CONVEX_URL } from "./net/config.js";
+import { Session } from "./net/session.js";
+import { Menu } from "./ui/menu.js";
+import type { Multiplayer } from "./net/multiplayer.js";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
-const hud = document.getElementById("hud") as HTMLElement;
+const minimap = document.getElementById("minimap") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLElement;
-const startBtn = document.getElementById("startBtn") as HTMLButtonElement;
 
-const game = new Game(canvas, hud, (floor, kills) => {
-  overlay.classList.remove("hidden");
-  overlay.innerHTML = `
-    <h1 style="color:#ff6a6a">YOU DIED</h1>
-    <p>You reached <b>floor ${floor}</b> and downed <b>${kills}</b> critters.<br/>The depths claim another cowboy-blob.</p>
-    <button id="againBtn">descend again ▾</button>`;
-  document.getElementById("againBtn")!.addEventListener("click", run);
-});
+// The single online entry point. With no VITE_CONVEX_URL this stays null and the
+// entire multiplayer/identity layer is inert — solo play is unaffected.
+const client = CONVEX_URL ? new ConvexClient(CONVEX_URL, { unsavedChangesWarning: false }) : null;
+const session = new Session(client);
 
-function run() {
-  overlay.classList.add("hidden");
-  game.start();
+let activeCoop: Multiplayer | null = null;
+
+async function onGameOver(result: RunResult) {
+  const wasCoop = activeCoop !== null;
+  if (activeCoop) { activeCoop.leave(); activeCoop = null; }
+  const saved = await session.recordRun(result);
+  menu.showGameOver(result, saved ?? session.profile, wasCoop);
 }
 
-startBtn.addEventListener("click", run);
+const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result));
+
+const menu = new Menu(overlay, session, client, {
+  startSolo(profile: ProfileDoc | null) {
+    activeCoop = null;
+    menu.hide();
+    game.start({ mode: "solo", coop: null, profile });
+  },
+  startCoop(mp: Multiplayer, profile: ProfileDoc | null) {
+    activeCoop = mp;
+    menu.hide();
+    game.start({ mode: "coop", coop: mp, profile });
+  },
+});
+
+void menu.showTitle();
