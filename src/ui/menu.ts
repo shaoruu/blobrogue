@@ -292,22 +292,35 @@ export class Menu {
     }
 
     const row = el("div", "btnrow");
-    const again = el("button", "", "play again \u21b5");
-    again.addEventListener("click", () => this.doSolo());
-    const back = el("button", "secondary", "back to menu \u25b8");
-    back.addEventListener("click", () => void this.showTitle());
-    row.append(again, back);
-    wrap.appendChild(row);
-    wrap.appendChild(el("p", "hint", "press ENTER or R to play again"));
+    // Solo: "play again" restarts a fresh solo run (the one-key retention loop).
+    // Co-op: the party already ended, so restarting to a lone solo run would silently
+    // yank the player out of co-op — instead offer a clear "back to menu" as primary.
+    if (wasCoop) {
+      const menuBtn = el("button", "", "back to menu \u25b8");
+      menuBtn.addEventListener("click", () => void this.showTitle());
+      const soloAgain = el("button", "secondary", "play solo \u21b5");
+      soloAgain.addEventListener("click", () => this.doSolo());
+      row.append(menuBtn, soloAgain);
+      wrap.appendChild(row);
+      wrap.appendChild(el("p", "hint", "press ENTER for menu"));
+    } else {
+      const again = el("button", "", "play again \u21b5");
+      again.addEventListener("click", () => this.doSolo());
+      const back = el("button", "secondary", "back to menu \u25b8");
+      back.addEventListener("click", () => void this.showTitle());
+      row.append(again, back);
+      wrap.appendChild(row);
+      wrap.appendChild(el("p", "hint", "press ENTER or R to play again"));
+    }
 
     this.show(wrap);
     this.runCountups(counts);
 
-    // The "one more run" loop must be a single keypress — the #1 retention lever.
-    // In co-op the session already ended on game over, so this restarts a fresh solo run.
+    // One-key retention loop. Solo → restart run; co-op → back to menu (don't force solo).
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (k === "enter" || k === "r") { e.preventDefault(); this.doSolo(); }
+      if (wasCoop) { if (k === "enter") { e.preventDefault(); void this.showTitle(); } }
+      else if (k === "enter" || k === "r") { e.preventDefault(); this.doSolo(); }
     };
     this.gameOverKeys = onKey;
     window.addEventListener("keydown", onKey);
