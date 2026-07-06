@@ -5,7 +5,6 @@ import { createSettingsControls } from "./settings.js";
 // resume / quit-to-menu actions. The game decides when it appears.
 export class PauseOverlay {
   private root: HTMLElement;
-  private shown = false;
 
   constructor(onResume: () => void, onQuit: () => void) {
     const root = document.createElement("div");
@@ -35,17 +34,11 @@ export class PauseOverlay {
     this.root = root;
   }
 
-  get isShown(): boolean {
-    return this.shown;
-  }
-
   show(): void {
-    this.shown = true;
     this.root.classList.remove("hidden");
   }
 
   hide(): void {
-    this.shown = false;
     this.root.classList.add("hidden");
   }
 }
