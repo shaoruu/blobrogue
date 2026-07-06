@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>blobrogue — a cowboy-blob roguelike</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { height: 100%; background: #0e0b1a; overflow: hidden; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+      #app { display: flex; align-items: center; justify-content: center; height: 100%; }
+      canvas { image-rendering: pixelated; background: #14101f; touch-action: none; }
+      #hud { position: fixed; top: 10px; left: 0; right: 0; text-align: center; color: #ffd27a; font-size: 14px; pointer-events: none; text-shadow: 0 2px 0 #000; }
+      #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; color: #ffe6b0; background: rgba(14,11,26,0.82); text-align: center; }
+      #overlay h1 { font-size: 34px; color: #ffb43b; letter-spacing: 2px; }
+      #overlay p { font-size: 13px; color: #cbb; max-width: 420px; line-height: 1.6; }
+      #overlay button { font: inherit; font-size: 15px; padding: 10px 22px; background: #ffb43b; color: #201436; border: none; border-radius: 6px; cursor: pointer; }
+      #overlay button:hover { background: #ffca6a; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div id="app"><canvas id="game"></canvas></div>
+    <div id="hud"></div>
+    <div id="overlay">
+      <h1>BLOBROGUE</h1>
+      <p>You're a little amber cowboy-blob lost in the depths. Blast your way down as far as you can.<br/><br/><b>WASD</b> to move · <b>Mouse</b> to aim · <b>Click/Hold</b> to shoot · <b>Shift</b> to dash</p>
+      <button id="startBtn">descend ▾</button>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
