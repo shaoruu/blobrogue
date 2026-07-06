@@ -104,13 +104,15 @@ class AudioEngine {
     settings.onChange(() => this.syncMuted());
   }
 
-  // Create + resume the context. Safe to call repeatedly; must originate (transitively)
-  // from a user gesture the first time or the browser keeps it suspended.
+  // Create + resume the context. Safe to call repeatedly (it is wired to every gesture
+  // incl. movement keys); must originate from a user gesture the first time or the
+  // browser keeps it suspended. resume() is async, so we (re)apply music once it lands.
   unlock(): void {
     this.ensureContext();
     const ctx = this.ctx;
-    if (ctx && ctx.state === "suspended") void ctx.resume();
-    this.applyMusic();
+    if (!ctx) return;
+    if (ctx.state === "suspended") void ctx.resume().then(() => this.applyMusic());
+    else this.applyMusic();
   }
 
   sfx(name: SfxName, opts?: SfxOptions): void {
@@ -200,13 +202,15 @@ class AudioEngine {
   }
 
   private applyMusic(): void {
-    this.stopMusicLoop();
     const kind = this.currentKind;
-    if (!kind || settings.isMuted) return;
+    if (!kind || settings.isMuted) { this.stopMusicLoop(); return; }
     this.ensureContext();
     const ctx = this.ctx;
-    if (!ctx || ctx.state !== "running") return; // resume() will re-apply via unlock()
-    this.currentTrack = kind === "boss" ? BOSS : DUNGEON;
+    if (!ctx || ctx.state !== "running") return; // resume() re-applies once it resolves
+    const track = kind === "boss" ? BOSS : DUNGEON;
+    if (this.musicTimer && this.currentTrack === track) return; // already looping this one — don't restart
+    this.stopMusicLoop();
+    this.currentTrack = track;
     this.musicStep = 0;
     this.nextNoteTime = ctx.currentTime + 0.12;
     this.musicTick();
