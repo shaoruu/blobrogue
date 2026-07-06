@@ -1,22 +1,29 @@
 import { settings } from "../game/settings.js";
 import { audio } from "../game/audio.js";
 
-// The shared mute + screen-shake controls, wired straight to the persisted `settings`
-// singleton. Reused on the title screen and in the in-game pause overlay so both stay
-// in sync automatically (they read/write the same source of truth).
+// The shared settings controls: independent music + sound-fx toggles (audio engine,
+// persisted to blobrogue.audio) and the screen-shake slider (persisted to blobrogue.shake).
+// Reused on the title screen and in the in-game pause overlay.
 export function createSettingsControls(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "settings";
 
-  const mute = document.createElement("button");
-  mute.className = "secondary settings-mute";
-  const syncMute = () => { mute.textContent = settings.isMuted ? "sound: off" : "sound: on"; };
-  syncMute();
-  mute.addEventListener("click", () => {
-    settings.toggleMuted();
-    audio.unlock(); // this click is a gesture — resume the context so unmuting is instant
-    syncMute();
-  });
+  const toggles = document.createElement("div");
+  toggles.className = "btnrow";
+
+  const music = document.createElement("button");
+  music.className = "secondary settings-toggle";
+  const syncMusic = () => { music.textContent = audio.isMusicOn ? "music: on" : "music: off"; };
+  syncMusic();
+  music.addEventListener("click", () => { audio.toggleMusic(); audio.unlock(); syncMusic(); });
+
+  const fx = document.createElement("button");
+  fx.className = "secondary settings-toggle";
+  const syncFx = () => { fx.textContent = audio.isSfxOn ? "sound fx: on" : "sound fx: off"; };
+  syncFx();
+  fx.addEventListener("click", () => { audio.toggleSfx(); audio.unlock(); syncFx(); });
+
+  toggles.append(music, fx);
 
   const shake = document.createElement("label");
   shake.className = "settings-shake";
@@ -37,6 +44,6 @@ export function createSettingsControls(): HTMLElement {
   });
   shake.append(label, range);
 
-  wrap.append(mute, shake);
+  wrap.append(toggles, shake);
   return wrap;
 }

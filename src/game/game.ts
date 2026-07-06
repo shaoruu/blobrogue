@@ -326,6 +326,7 @@ export class Game {
 
   private setPaused(paused: boolean) {
     this.isPaused = paused;
+    audio.setMusicPaused(paused);
     if (paused) {
       this.mouse.isDown = false; // don't let a held click fire on resume
       this.pause.show();
