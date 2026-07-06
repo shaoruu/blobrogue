@@ -52,7 +52,9 @@ export class Menu {
 
   async showTitle() {
     const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", "BLOBROGUE"));
+    const logo = el("h1", "");
+    logo.innerHTML = "BLOB<span class=\"r\">ROGUE</span>";
+    wrap.appendChild(logo);
     wrap.appendChild(el("p", "", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
 
     if (!this.client) {
