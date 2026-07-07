@@ -76,7 +76,10 @@ const HUD_MARKUP = `
   <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
   <div class="combo" data-combo>
-    <div class="combo-mult" data-combo-mult>x1</div>
+    <div class="combo-badge">
+      <div class="combo-burst" data-combo-burst></div>
+      <div class="combo-mult" data-combo-mult>x1</div>
+    </div>
     <div class="combo-row"><span class="combo-n" data-combo-n>0</span><span class="combo-k">COMBO</span></div>
     <div class="combo-bar"><i data-combo-fill></i></div>
   </div>
@@ -96,6 +99,8 @@ export class Hud {
   private comboMultEl: HTMLElement;
   private comboNEl: HTMLElement;
   private comboFillEl: HTMLElement;
+  private comboBurstEl: HTMLElement;
+  private prevMult = 1;
   private prevCombo = -1;
   private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
   private buildPanel: HTMLElement;
@@ -134,6 +139,7 @@ export class Hud {
     this.comboMultEl = hud.querySelector("[data-combo-mult]")!;
     this.comboNEl = hud.querySelector("[data-combo-n]")!;
     this.comboFillEl = hud.querySelector("[data-combo-fill]")!;
+    this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
     this.buildPanel = hud.querySelector("[data-build]")!;
     this.buildGrid = hud.querySelector("[data-build-grid]")!;
     this.buildN = hud.querySelector("[data-build-n]")!;
@@ -242,6 +248,17 @@ export class Hud {
       if (s.combo > this.prevCombo && this.prevCombo > 0) this.comboPop = 1; // ticked up mid-chain
       this.comboNEl.textContent = String(s.combo);
       this.comboMultEl.textContent = "x" + (Number.isInteger(s.comboMult) ? s.comboMult : s.comboMult.toFixed(1));
+      // One-shot tier-up flare: retrigger the CSS burst animation when the multiplier
+      // climbs into a higher tier (not on every kill — only a tier jump earns the flair).
+      if (s.comboMult > this.prevMult) {
+        this.comboBurstEl.style.animation = "none";
+        void this.comboBurstEl.offsetWidth; // reflow so the animation restarts
+        this.comboBurstEl.style.animation = "";
+        this.comboBurstEl.classList.add("fire");
+      } else if (s.comboMult < this.prevMult) {
+        this.comboBurstEl.classList.remove("fire");
+      }
+      this.prevMult = s.comboMult;
       this.prevCombo = s.combo;
     }
     this.comboEl.style.setProperty("--combo-c", s.comboColor);
@@ -345,7 +362,9 @@ export class Hud {
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;
+    this.prevMult = 1;
     this.comboPop = 0;
+    this.comboBurstEl.classList.remove("fire");
     this.buildGrid.replaceChildren();
     this.buildPanel.classList.remove("show");
     this.prevItemsCount = -1;
