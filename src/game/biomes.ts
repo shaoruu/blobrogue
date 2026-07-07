@@ -25,7 +25,7 @@ export const BIOMES: readonly Biome[] = [
     wallSideRgb: "24,36,28",
     wallCorner: "rgba(8,14,10,0.5)",
     tint: "#3d6b50",
-    tintAlpha: 0.16,
+    tintAlpha: 0.24,
     accent: "#5fbf7a",
   },
   {
@@ -38,7 +38,7 @@ export const BIOMES: readonly Biome[] = [
     wallSideRgb: "22,28,40",
     wallCorner: "rgba(8,10,16,0.5)",
     tint: "#4a6080",
-    tintAlpha: 0.16,
+    tintAlpha: 0.24,
     accent: "#7aa8c8",
   },
   {
@@ -51,7 +51,7 @@ export const BIOMES: readonly Biome[] = [
     wallSideRgb: "27,21,48",
     wallCorner: "rgba(9,6,18,0.5)",
     tint: "#3d2a5c",
-    tintAlpha: 0.12,
+    tintAlpha: 0.10,
     accent: "#a24bff",
   },
   {
@@ -64,7 +64,7 @@ export const BIOMES: readonly Biome[] = [
     wallSideRgb: "40,24,18",
     wallCorner: "rgba(14,8,6,0.5)",
     tint: "#8b3a20",
-    tintAlpha: 0.16,
+    tintAlpha: 0.24,
     accent: "#ffb43b",
   },
 ];

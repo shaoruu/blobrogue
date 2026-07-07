@@ -2474,11 +2474,18 @@ export class Game {
       }
     }
 
+    // Two-pass wash so the biome reads at a glance over the purple-baked wall sprites:
+    // a "color" pass to shift hue, then a lighter "overlay" pass to push saturation/warmth
+    // through while preserving the tile shading. Alphas kept tasteful (cohesion, not neon).
+    const wx = x0 * TILE - cam.x, wy = y0 * TILE - cam.y, ww = (x1 - x0) * TILE, wh = (y1 - y0) * TILE;
     ctx.save();
     ctx.globalCompositeOperation = "color";
     ctx.globalAlpha = biome.tintAlpha;
     ctx.fillStyle = biome.tint;
-    ctx.fillRect(x0 * TILE - cam.x, y0 * TILE - cam.y, (x1 - x0) * TILE, (y1 - y0) * TILE);
+    ctx.fillRect(wx, wy, ww, wh);
+    ctx.globalCompositeOperation = "overlay";
+    ctx.globalAlpha = biome.tintAlpha * 0.85;
+    ctx.fillRect(wx, wy, ww, wh);
     ctx.restore();
   }
 
