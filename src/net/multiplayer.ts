@@ -4,11 +4,14 @@ import type { PresenceDoc, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
 import type { CoopBridge, LocalPlayerState } from "../game/coop.js";
 import type { RemotePlayer, WeaponId } from "../game/types.js";
+import { WEAPONS } from "../game/weapons.js";
 
 const PUBLISH_INTERVAL_MS = 90; // ~11 syncs/sec
 
+// Validate the networked weapon string against the real weapon table so any new
+// weapon a teammate carries keeps its own shot SFX; unknown values fall back to pistol.
 function asWeapon(s: string): WeaponId {
-  return s === "shotgun" || s === "rapid" ? s : "pistol";
+  return Object.hasOwn(WEAPONS, s) ? (s as WeaponId) : "pistol";
 }
 
 // One co-op session, backed by Convex realtime subscriptions. Implements CoopBridge
