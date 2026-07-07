@@ -2,10 +2,10 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer } from "./types.js";
+import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
-import type { SpriteName, SheetClip, TileName, FxName } from "./assets.js";
+import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
@@ -20,7 +20,7 @@ import {
   createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash,
   characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
-import type { Anim, Xform } from "./anim.js";
+import type { Anim, Xform, XformStyle } from "./anim.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { settings } from "./settings.js";
@@ -203,6 +203,39 @@ const AIM_SOLID: number[] = [];
 const TORCH_FRAMES: TileName[] = ["torch_f0", "torch_f1", "torch_f2"];
 const PORTAL_FRAMES: TileName[] = ["portal_f0", "portal_f1"];
 
+// ---- destructible props + treasure chests ----
+// Placement is seeded per floor (co-op layout agreement); destruction resolves on the
+// shared floor state via bullets/explosions, exactly like enemies. Reward rolls use the
+// local RNG, matching enemy dropLoot (world pickups are first-come).
+const PROP_RADIUS = 15;
+const PROP_DRAW = 48;            // px the 64px prop sprite is drawn at (tile-sized)
+const PROP_BREAK_DUR = 0.25;     // seconds the 2-frame break clip plays before removal
+const CHEST_OPEN_DUR = 0.4;      // seconds the 3-frame chest-open clip plays, then holds
+const BARREL_EXPLOSION_RADIUS = 70;
+const BARREL_EXPLOSION_DAMAGE = 6;
+const BARREL_EXPLOSION_SELF_DMG = 2; // damage dealt to a player caught in the blast
+
+const PROP_HP: Record<PropKind, number> = {
+  crate: 4, pot: 1, barrel: 3, barrel_explosive: 3, brazier: 0,
+};
+// Intact render source per kind: crate/pot/barrel show frame 0 of their break sheet;
+// the explosive barrel + brazier are their own 64px statics.
+const PROP_INTACT_IMG: Record<PropKind, PropSpriteName> = {
+  crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
+  barrel_explosive: "barrel_explosive", brazier: "brazier",
+};
+// Break sheet per destructible kind (frames 1-2 = breaking). Brazier never breaks.
+const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
+  crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
+  barrel_explosive: "barrel_explosive_break", brazier: null,
+};
+const PROP_TINT: Record<PropKind, string> = {
+  crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
+};
+// Subtle idle bob/flash for props + chests — a fraction of the character juice so a crate
+// reads as a solid object, not a jelly.
+const PROP_STYLE: XformStyle = { freq: 2.1, bob: 0.7, squash: 0.03, hop: 0, lean: 0 };
+
 // Stable per-tile hash -> 0..1. Salted so different features (variant vs. detail) draw
 // from independent streams, and identical every frame so tiles never shimmer.
 function tileHash(x: number, y: number, salt: number): number {
@@ -296,6 +329,8 @@ export class Game {
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
   private torches: { tx: number; ty: number }[] = []; // wall-mounted torch cells, per floor
+  private props: Prop[] = [];   // destructible/atmosphere props, seeded per floor
+  private chests: Chest[] = []; // touch-to-open treasure, seeded per floor
   private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
   private trauma = 0; // screen-shake trauma, 0..1
   private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
@@ -422,6 +457,8 @@ export class Game {
     this.flowKeyTy = -1;
     this.pickups = this.placeWeaponPickups(d);
     this.torches = this.placeTorches(d);
+    this.props = this.placeProps(d);
+    this.chests = this.placeChests(d);
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
     if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
@@ -459,6 +496,55 @@ export class Game {
       const isWall = d.tiles[ty * d.w + tx] === 1;
       const isFloorBelow = d.tiles[(ty + 1) * d.w + tx] === 0;
       if (isWall && isFloorBelow) list.push({ tx, ty });
+    }
+    return list;
+  }
+
+  // Scatter ~2-5 props across each room on a deterministic seed (same salt+prime pattern
+  // as placeWeaponPickups/placeTorches) so every co-op client agrees on the layout. The
+  // spawn point and the exit tile (plus their immediate neighbors) are kept clear.
+  private placeProps(d: Dungeon): Prop[] {
+    const rng = new Rng((this.seed ^ 0x2f6a35c1) + this.floor * 26417);
+    const list: Prop[] = [];
+    const occupied = new Set<number>();
+    for (const room of d.rooms) {
+      const target = rng.int(2, 5);
+      for (let i = 0; i < target; i++) {
+        const tx = room.x + rng.int(0, room.w - 1);
+        const ty = room.y + rng.int(0, room.h - 1);
+        const idx = ty * d.w + tx;
+        if (occupied.has(idx) || d.tiles[idx] !== 0) continue;
+        if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
+        if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
+        occupied.add(idx);
+        const kind = this.rollPropKind(rng);
+        list.push({ kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: PROP_RADIUS, hp: PROP_HP[kind], dead: false, anim: createAnim() });
+      }
+    }
+    return list;
+  }
+
+  private rollPropKind(rng: Rng): PropKind {
+    const r = rng.next();
+    if (r < 0.34) return "pot";              // one-shot tactile juice
+    if (r < 0.62) return "crate";            // sturdiest, best loot
+    if (r < 0.84) return "barrel";
+    if (r < 0.94) return "barrel_explosive"; // the environmental weapon
+    return "brazier";                        // atmosphere + light source
+  }
+
+  // Wood chests in 1-2 non-spawn / non-exit rooms (mirrors placeWeaponPickups' seeded room
+  // pick). The boss chest is spawned on boss death instead (see dropLoot).
+  private placeChests(d: Dungeon): Chest[] {
+    if (d.rooms.length <= 2) return [];
+    const rng = new Rng((this.seed ^ 0x1b3c9e77) + this.floor * 55697);
+    const list: Chest[] = [];
+    const count = rng.chance(0.5) ? 2 : 1;
+    for (let i = 0; i < count; i++) {
+      const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
+      const tx = room.cx, ty = room.cy;
+      if (tx === d.exit.x && ty === d.exit.y) continue;
+      list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false, anim: createAnim() });
     }
     return list;
   }
@@ -558,6 +644,8 @@ export class Game {
     stepAnim(this.playerAnim, dt, this.isPlayerMoving, this.playerLean);
     this.updateBullets(dt);
     this.updateEnemies(dt);
+    this.updateProps(dt);
+    this.updateChests(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
     this.updateTracers(dt);
@@ -613,6 +701,9 @@ export class Game {
     }
     [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, mvx, 0);
     [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, mvy);
+    // A dash smashes through any prop it passes over. The 0.35s dash i-frames mean an
+    // explosive barrel popped this way won't hurt the dasher — a clean risk/reward beat.
+    if (this.dashTime > 0 && this.props.length > 0) this.dashBreakProps();
     this.invuln = Math.max(0, this.invuln - dt);
     this.isPlayerMoving = ix !== 0 || iy !== 0;
     this.playerLean = ix;
@@ -1383,8 +1474,9 @@ export class Game {
 
   private dropLoot(e: Enemy) {
     if (e.kind === "boss") {
-      this.pickups.push(this.makePickup("heart", e.x - 18, e.y));
-      for (let i = 0; i < 5; i++) this.pickups.push(this.makePickup("coin", e.x + (i - 2) * 16, e.y + 18));
+      // The heart + coin cache now comes bundled inside a guaranteed boss chest, which
+      // also grants a blessing when the player walks over to claim the kill.
+      this.chests.push({ kind: "boss", x: e.x, y: e.y, radius: 18, opened: false, anim: createAnim() });
       return;
     }
     if (Math.random() < 0.5) this.pickups.push(this.makePickup("coin", e.x, e.y));
@@ -1422,6 +1514,159 @@ export class Game {
       remaining.push(p);
     }
     this.pickups = remaining;
+  }
+
+  // Prop lifecycle: advance the idle/break anim, run friendly-bullet collisions (mirrors
+  // the enemy hit loop — same shared-floor destruction model), and compact only on the
+  // frame a break clip finishes (no per-frame allocation on the steady-state path).
+  private updateProps(dt: number) {
+    if (this.props.length === 0) return;
+    let didBreakFinish = false;
+    for (const p of this.props) {
+      stepAnim(p.anim, dt, false, 0);
+      if (p.breakT !== undefined) {
+        p.breakT += dt;
+        if (p.breakT >= PROP_BREAK_DUR) didBreakFinish = true;
+        continue;
+      }
+      if (p.kind === "brazier") continue; // non-destructible atmosphere
+      for (const b of this.bullets) {
+        if (!b.friendly || b.life <= 0) continue;
+        if (Math.hypot(b.x - p.x, b.y - p.y) >= b.radius + p.radius) continue;
+        p.hp -= b.damage;
+        triggerFlash(p.anim);
+        this.spawnPuff(b.x, b.y, 5, PROP_TINT[p.kind]);
+        if (b.pierce <= 0) b.life = 0; // piercing rounds punch through, others are spent
+        if (p.hp <= 0) { this.destroyProp(p); break; }
+      }
+    }
+    if (didBreakFinish) {
+      this.props = this.props.filter((p) => p.breakT === undefined || p.breakT < PROP_BREAK_DUR);
+    }
+  }
+
+  // Smash every destructible prop the dashing player currently overlaps.
+  private dashBreakProps() {
+    for (const p of this.props) {
+      if (p.breakT !== undefined || p.kind === "brazier") continue;
+      if (Math.hypot(this.px - p.x, this.py - p.y) < this.pr + p.radius) this.destroyProp(p);
+    }
+  }
+
+  // Start a prop's break clip and resolve its payoff. Marking breakT first makes the
+  // explosive chain (which recurses through destroyProp) terminate cleanly.
+  private destroyProp(p: Prop) {
+    if (p.breakT !== undefined || p.kind === "brazier") return;
+    p.dead = true;
+    p.breakT = 0;
+    switch (p.kind) {
+      case "crate":
+        this.spawnGibs(p.x, p.y, 10, "#b07a3c");
+        this.spawnPuff(p.x, p.y, 6, "#c9a06a");
+        this.sfxAt("barrel", p.x, p.y, { rate: 1.4, gain: 0.6 }); // light crate crack
+        if (Math.random() < 0.6) this.pickups.push(this.makePickup("coin", p.x, p.y));
+        if (Math.random() < 0.15) this.pickups.push(this.makePickup("heart", p.x + 12, p.y));
+        break;
+      case "pot":
+        this.spawnPuff(p.x, p.y, 10, "#8fb8d6");
+        this.spawnGibs(p.x, p.y, 5, "#9c6b4a");
+        this.sfxAt("barrel", p.x, p.y, { rate: 1.8, gain: 0.45 }); // high, brittle shatter
+        if (Math.random() < 0.35) this.pickups.push(this.makePickup("coin", p.x, p.y));
+        break;
+      case "barrel":
+        this.spawnGibs(p.x, p.y, 10, "#8a5a2c");
+        this.spawnPuff(p.x, p.y, 6, "#b07a3c");
+        this.sfxAt("barrel", p.x, p.y, { rate: 1.1, gain: 0.7 });
+        if (Math.random() < 0.45) this.pickups.push(this.makePickup("coin", p.x, p.y));
+        break;
+      case "barrel_explosive":
+        this.explodeBarrel(p);
+        break;
+    }
+  }
+
+  // Reuses the boss shockwave/AoE shape: flat damage to every enemy AND prop in radius —
+  // so explosive barrels chain-detonate each other — plus heavy trauma/freeze, an orange
+  // gib+spark burst, and self-damage if the player is caught (respecting i-frames).
+  private explodeBarrel(source: Prop) {
+    const r = BARREL_EXPLOSION_RADIUS;
+    this.sfxAt("barrel", source.x, source.y, { rate: 0.7 }); // heavy detonation
+    this.addFreeze(FREEZE_HEAVY);
+    this.addTrauma(0.6);
+    this.spawnGibs(source.x, source.y, 18, "#ff8a3b");
+    this.spawnSparks(source.x, source.y, 16, Math.random() * 6.28);
+    this.spawnParticles(source.x, source.y, 20, "#ffb43b");
+    this.addDecal(source.x, source.y, "#ff7a2a", r * 0.6, "splat");
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
+      e.hp -= BARREL_EXPLOSION_DAMAGE;
+      triggerFlash(e.anim);
+      this.spawnPuff(e.x, e.y, 6, ENEMY_ARCHETYPES[e.kind].tint);
+      if (e.hp <= 0 && !e.dead) this.killEnemy(e);
+    }
+    if (this.invuln === 0 && !this.isDown && this.hp > 0
+      && Math.hypot(this.px - source.x, this.py - source.y) <= r) {
+      this.damagePlayer(BARREL_EXPLOSION_SELF_DMG);
+    }
+    // Chain: nearby destructibles go up too; other explosive barrels recurse into their
+    // own blast (breakT was set before we got here, so the recursion terminates).
+    for (const other of this.props) {
+      if (other === source || other.breakT !== undefined || other.kind === "brazier") continue;
+      if (Math.hypot(other.x - source.x, other.y - source.y) <= r + other.radius) this.destroyProp(other);
+    }
+  }
+
+  // Touch-to-open chests, mirroring the coin/heart pickup model (no new input). The open
+  // clip plays once and holds on its final frame; the reward is rolled exactly once.
+  private updateChests(dt: number) {
+    if (this.chests.length === 0) return;
+    for (const c of this.chests) {
+      stepAnim(c.anim, dt, false, 0);
+      if (c.opened) {
+        if (c.openT !== undefined && c.openT < CHEST_OPEN_DUR) c.openT += dt;
+        continue;
+      }
+      if (!this.isDown && this.hp > 0 && Math.hypot(this.px - c.x, this.py - c.y) < this.pr + c.radius) {
+        this.openChest(c);
+      }
+    }
+  }
+
+  private openChest(c: Chest) {
+    c.opened = true;
+    c.openT = 0;
+    sfx("chest");
+    this.spawnParticles(c.x, c.y, 22, c.kind === "boss" ? "#ffb43b" : "#ffd27a");
+    this.addDecal(c.x, c.y, "#ffd27a", 20, "ring");
+    this.addTrauma(0.18);
+    if (c.kind === "boss") this.grantBossChest(c);
+    else this.rollWoodChest(c);
+  }
+
+  // Wood-chest table: mostly coins, then a heart, a blessing pick (the "chest -> power-up"
+  // moment), and rarely a weapon. Coins/hearts/weapons ride the existing pickup collect loop.
+  private rollWoodChest(c: Chest) {
+    const r = Math.random();
+    if (r < 0.55) {
+      const n = 3 + Math.floor(Math.random() * 4); // 3-6 coins
+      for (let i = 0; i < n; i++) this.pickups.push(this.makePickup("coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12));
+    } else if (r < 0.75) {
+      this.pickups.push(this.makePickup("heart", c.x, c.y));
+    } else if (r < 0.93) {
+      this.offerBlessing();
+    } else {
+      const weapon = PICKUP_WEAPONS[Math.floor(Math.random() * PICKUP_WEAPONS.length)];
+      this.pickups.push({ kind: "weapon", x: c.x, y: c.y, radius: 16, weapon, anim: createAnim() });
+    }
+  }
+
+  // Boss chest (spawned where the boss dies): a guaranteed blessing plus the heart + coin
+  // cache the old boss drop gave, so the victory beat both heals and empowers.
+  private grantBossChest(c: Chest) {
+    this.pickups.push(this.makePickup("heart", c.x - 18, c.y));
+    for (let i = 0; i < 5; i++) this.pickups.push(this.makePickup("coin", c.x + (i - 2) * 16, c.y + 18));
+    this.offerBlessing();
   }
 
   private updateParticles(dt: number) {
@@ -1761,6 +2006,8 @@ export class Game {
     this.renderProps();
     this.renderDecals();
     this.renderExit();
+    this.renderPropEntities();
+    this.renderChests();
     this.renderPickups();
     this.renderParticles();
     this.renderCorpses();
@@ -1902,6 +2149,95 @@ export class Game {
       ctx.fillText("\u25be GO DOWN", ex, ey - TILE * 0.7);
       ctx.restore();
     }
+  }
+
+  private renderPropEntities() {
+    if (this.props.length === 0) return;
+    for (const p of this.props) {
+      if (!this.isNearCamera(p.x, p.y, TILE)) continue;
+      const sx = p.x - this.cam.x, sy = p.y - this.cam.y;
+      const xf = characterXform(p.anim, PROP_STYLE);
+      if (p.kind === "brazier") { this.renderBrazier(p, sx, sy, xf); continue; }
+      if (p.breakT === undefined) {
+        this.drawPropImage(PROP_INTACT_IMG[p.kind], 0, sx, sy, PROP_DRAW, xf, p.anim.flash);
+      } else {
+        const sheet = PROP_BREAK_SHEET[p.kind];
+        if (!sheet) continue;
+        // Frames 1-2 over the break duration (frame 0 is the intact state).
+        const frame = 1 + Math.min(1, Math.floor((p.breakT / PROP_BREAK_DUR) * 2));
+        this.drawPropImage(sheet, frame, sx, sy, PROP_DRAW, xf, 0);
+      }
+    }
+  }
+
+  // Brazier: the static base with the animated torch flame layered on top and the shared
+  // torch glow composited additively — a mood + light-source prop, no new art.
+  private renderBrazier(p: Prop, sx: number, sy: number, xf: Xform) {
+    const { ctx, tiles } = this;
+    this.drawPropImage("brazier", 0, sx, sy, PROP_DRAW, xf, 0);
+    const clock = this.animClock;
+    if (tiles.ready("torch_glow")) {
+      const flick = 0.75 + 0.25 * Math.sin(clock * 11 + p.x * 0.03 + p.y * 0.02);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 0.5 * flick;
+      ctx.drawImage(tiles.get("torch_glow"), sx - 48, sy - 52, 96, 96);
+      ctx.restore();
+    }
+    const flame = TORCH_FRAMES[frameIndex(TORCH_FRAMES.length, 8, clock)];
+    if (tiles.ready(flame)) ctx.drawImage(tiles.get(flame), sx - TILE / 2, sy - TILE / 2 - 14, TILE, TILE);
+  }
+
+  private renderChests() {
+    if (this.chests.length === 0) return;
+    const { ctx, cam } = this;
+    for (const c of this.chests) {
+      if (!this.isNearCamera(c.x, c.y, TILE)) continue;
+      const sx = c.x - cam.x, sy = c.y - cam.y;
+      // A closed chest pulses a soft glow so touch-to-open reads as interactive.
+      if (!c.opened) {
+        const pulse = 0.35 + 0.2 * Math.abs(Math.sin(c.anim.clock * 3));
+        ctx.save();
+        ctx.globalAlpha = pulse;
+        const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 24);
+        g.addColorStop(0, c.kind === "boss" ? "#ffb43b" : "#ffd27a");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(sx, sy, 24, 0, 6.28); ctx.fill();
+        ctx.restore();
+      }
+      const t = c.openT ?? 0;
+      const frame = c.opened ? Math.min(2, Math.floor((t / CHEST_OPEN_DUR) * 3)) : 0;
+      const xf = characterXform(c.anim, PROP_STYLE);
+      this.drawPropImage("chest_open", frame, sx, sy, PROP_DRAW, xf, 0);
+    }
+  }
+
+  // Draws one frame of a prop/chest image (break sheet or 64px static) with the prop's
+  // idle transform and an optional white hit-flash. Falls back to a small box until the
+  // sprite streams in. Frame width is the sheet height (square frames), so frame 0 also
+  // covers the single-frame statics.
+  private drawPropImage(name: PropSpriteName, frame: number, sx: number, sy: number, size: number, xf: Xform, flashAmt: number) {
+    const { ctx } = this;
+    const img = this.sprites.prop(name);
+    const half = size / 2;
+    if (!img) {
+      ctx.save();
+      ctx.fillStyle = "#6b5330";
+      ctx.fillRect(sx - half * 0.55, sy - half * 0.55, size * 0.55, size * 0.55);
+      ctx.restore();
+      return;
+    }
+    const fw = img.naturalHeight || FRAME;
+    ctx.save();
+    ctx.translate(sx + xf.ox, sy + xf.oy);
+    ctx.scale(xf.sx, xf.sy);
+    ctx.drawImage(img, frame * fw, 0, fw, fw, -half, -half, size, size);
+    if (flashAmt > 0) {
+      const f = this.sprites.propFlash(name);
+      if (f) { ctx.globalAlpha = Math.min(1, flashAmt) * 0.9; ctx.drawImage(f, frame * fw, 0, fw, fw, -half, -half, size, size); }
+    }
+    ctx.restore();
   }
 
   // Draws a character sprite with its animation transform, an optional frame from a

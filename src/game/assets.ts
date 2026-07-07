@@ -55,6 +55,24 @@ const FX_SOURCES: Record<FxName, string> = {
   smoke_puff: "/sprites/fx/smoke_puff.png",
 };
 
+// World props (destructibles + atmosphere) and the treasure chest, all in /public/sprites.
+// The break/chest sheets are 3-frame 192x64 horizontal strips (frame 0 = intact/closed);
+// barrel_explosive + brazier are 64x64 statics. The renderer slices frames itself, so no
+// SpriteName/SheetClip unions are polluted and nothing extra is fetched if unused.
+export type PropSpriteName =
+  | "crate_break" | "pot_break" | "barrel_break" | "barrel_explosive_break"
+  | "barrel_explosive" | "brazier" | "chest_open";
+
+const PROP_SOURCES: Record<PropSpriteName, string> = {
+  crate_break: "/sprites/crate_break.png",
+  pot_break: "/sprites/pot_break.png",
+  barrel_break: "/sprites/barrel_break.png",
+  barrel_explosive_break: "/sprites/barrel_explosive_break.png",
+  barrel_explosive: "/sprites/barrel_explosive.png",
+  brazier: "/sprites/brazier.png",
+  chest_open: "/sprites/chest_open.png",
+};
+
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
   slime: "/sprites/slime.png",
@@ -89,6 +107,8 @@ export class Sprites {
   private heldImages = new Map<WeaponId, HTMLImageElement>();
   private fxImages = new Map<FxName, HTMLImageElement>();
   private fxTintCache = new Map<string, HTMLCanvasElement>();
+  private propImages = new Map<PropSpriteName, HTMLImageElement>();
+  private propFlashCache = new Map<PropSpriteName, HTMLCanvasElement>();
 
   constructor() {
     for (const name of Object.keys(SOURCES) as SpriteName[]) {
@@ -115,6 +135,38 @@ export class Sprites {
       img.src = FX_SOURCES[name];
       this.fxImages.set(name, img);
     }
+    for (const name of Object.keys(PROP_SOURCES) as PropSpriteName[]) {
+      const img = new Image();
+      img.src = PROP_SOURCES[name];
+      this.propImages.set(name, img);
+    }
+  }
+
+  // A loaded prop/chest image (break sheet or static), or null while it streams in so the
+  // renderer can fall back to a plain box.
+  prop(name: PropSpriteName): HTMLImageElement | null {
+    const img = this.propImages.get(name);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  // A cached fully-white silhouette of a prop image, used to flash it white on a hit.
+  // Drawing a sub-rect of this yields the white silhouette of that sheet frame.
+  propFlash(name: PropSpriteName): HTMLCanvasElement | null {
+    const cached = this.propFlashCache.get(name);
+    if (cached) return cached;
+    const img = this.propImages.get(name);
+    if (!img || !img.complete || img.naturalWidth === 0) return null;
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.drawImage(img, 0, 0);
+    g.globalCompositeOperation = "source-atop";
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, c.width, c.height);
+    this.propFlashCache.set(name, c);
+    return c;
   }
 
   fxTinted(name: FxName, color: string): HTMLCanvasElement | null {
