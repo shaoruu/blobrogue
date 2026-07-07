@@ -17,7 +17,7 @@ Define `effective capability` as practical room-clear / survival output, includi
 - Before first boss (floor 5): **2.25–3.0×**.
 - Floor 8–10: **3.5–4.5×**.
 - Mature/high-roll build (10–12 meaningful picks): **4–6×**, with rare 7× spectacle windows only during a full Resonance/synergy payoff.
-- RAW stat caps inside a run: damageMult ≤2.25× from blessings (excluding conditional crit/Resonance), fire rate ≤1.8×, move ≤1.35×, max HP bonus ≤+4 hearts, pierce ≤3, status chance per element ≤50%. The rest of the 4–6× comes from mechanics: more targets hit, crit timing, freeze/shock amps, Fracture bank/snap, positioning, and signature technique.
+- RAW stat caps inside a run: damageMult ≤2.25× from blessings (excluding conditional crit/Resonance), fire rate ≤1.8×, move ≤1.35×, max HP bonus ≤+4 hearts, blessing-added pierce ≤3 (weapon-native pierce resolves under each weapon’s cap), status chance per element ≤50%. The rest of the 4–6× comes from mechanics: more targets hit, crit timing, freeze/shock amps, Fracture bank/snap, positioning, and signature technique.
 This prevents "numbers soup" while still letting a build feel outrageous.
 
 ## Pick cadence (floor mode)
@@ -150,7 +150,7 @@ No mastery XP bar. Complete technique challenges (tracked as unlock flags): e.g.
 This is the theorycrafting endgame without combinatorial system soup.
 
 ## Difficulty growth
-Boss/enemy difficulty scales through new techniques, phase combinations, speed/read pressure, elite movement variants — NOT HP sponges. Guideline: later boss effective health ≤~1.5× earlier boss after accounting for expected player power; extra challenge comes from pattern complexity.
+Boss/enemy difficulty scales through new techniques, phase combinations, speed/read pressure, elite movement variants — NOT HP sponges. Guideline: later boss effective health ≤~1.5× earlier boss after accounting for expected player power; extra challenge comes from pattern complexity. Slime King calibration target: median35–50s, legal high-roll20–25s, absolute minimum20s; derive HP from measured median/P95 DPS and forced transition time rather than freezing a permanent value.
 
 ===============================================================
 # 7. COHERENCE BUDGET (hard limits)
@@ -198,3 +198,73 @@ Static code tables parallel to ITEMS/WEAPONS: `GEAR`, `CAMP_NODES`, `BOSS_UNLOCK
 
 ## Bottom line
 The progression fantasy is not "level 1→100." It's: **learn a style during a run, keep an expressive loadout between adventures, defeat bosses to widen the world, and master/fuse families at endgame.** Temporary builds reach 4–6× through synergy spectacle; permanent stats stop at 20–30%; everything else is horizontal. Two currencies, one universal Resonance meter, four statuses (burn/chill/shock/Fracture), four gear slots. Deep enough to theorycraft, coherent enough to explain in one screen.
+
+===============================================================
+# 10. PLAYTEST-LOCKED FLOOR PURPOSE / ECONOMY / DISCOVERY CONTRACTS
+===============================================================
+These override older ambiguous pickup/duplicate language.
+
+## Floor-purpose UX (normal vs boss) — always visible, never hidden in stats
+Add one compact objective line under/near the main HUD:
+- **Normal floor, enemies alive:** `CLEAR THE FLOOR · N ENEMIES LEFT` (N updates immediately on authoritative death).
+- **Normal floor, N=0:** `FLOOR CLEAR — EXIT OPEN` (hold ≥1.2s, then may settle to a smaller persistent objective).
+- **Boss floor, boss alive:** `DEFEAT THE BOSS` + the shipped boss HP bar (no generic enemy-count objective; adds are subordinate).
+- **Boss dead:** `BOSS DEFEATED — EXIT OPEN`.
+Exit presentation state is canonical data: `exitLocked = enemies.length>0` on normal floors; `exitLocked = bossAlive` on boss floors.
+- Minimap: locked exit = dim/desaturated stair marker; open exit = bright amber/green stair marker with a 0.8s pulse. Use a stair silhouette, not a generic dot.
+- World stairs: locked stairs remain visible but dark/inert (players understand where the objective leads); unlocked stairs animate between stairs_f0/f1 and show `▾ GO DOWN` only within interaction range. Walking over locked stairs does nothing.
+- Objective transitions emit one semantic event (`floorClear` / `bossDefeated`) for banner+sfx+minimap pulse; server owns cleared state later. No separate quest system.
+
+## Coins = temporary run currency; Amber = persistent
+- Coins reset at run start/death in floor mode and are spent ONLY at Dealer rooms / run services. They never buy permanent stats.
+- Dealer room guaranteed every 3 floors (3,6,9...), replacing one normal room; inventory: 3 pedestals + heart + reroll.
+- Prices: heart6, reroll5; Common blessing8, Uncommon15, Rare28; weapon Common12 / specialized18 / signature24. Infinite reserve ammo remains universal — never sell ammo or add ammo currency. Weapon rhythm comes from fire cadence, charge, cylinder/reload, heat, etc.
+- Open-world expedition coins clear on death/Camp return; Amber banks under §4 rules. One temporary currency + one persistent currency, preserving coherence budget.
+
+## Blessing duplicates = explicit LV2/LV3 upgrades, then leave the pool
+Replace `ownedItems: ItemDef[]` with `itemLevels: Map<ItemId,1|2|3>` (HUD/summary reads id+level). ItemDef gains `levels:[LevelEffect,LevelEffect,LevelEffect]` or `apply(m, levelDelta)`.
+- Choice generator weights NEW items 3× an eligible upgrade, but may offer upgrades; card must display `NAME · LV2` / `LV3` + exact next-level delta. Never show a max-level item. Distinct choices by id.
+- On pick: increment exactly one level; recompute PlayerMods from scratch over all itemLevels (avoids irreversible incremental math and makes respec/testing deterministic).
+- Hard max Lv3; after Lv3 remove id from pool. Existing run caps (§2) still clamp totals.
+
+### Exact level effects (cumulative result at Lv1 / Lv2 / Lv3)
+- Glass Cannon: damage +60%/-2HP · +90%/-3HP · +110%/-3HP.
+- Hair Trigger: fire rate +35% · +55% · +70%.
+- Split Shot: +1 pellet/+0.10 spread · +2/+0.18 · +3/+0.24.
+- Scattergun: +2 pellets/+0.22 spread/-10%dmg · +3/+0.30/-10% · +4/+0.36/-10%.
+- Full Metal: pierce +1 · +2 · +3.
+- Swift Boots: move +20% · +30% · +35%.
+- Big Iron: bullet size +80%/dmg+50%/speed-22%/rate-12% · size+115%/dmg+75%/speed-30%/rate-16% · size+140%/dmg+90%/speed-35%/rate-20%.
+- Vampire Fang: lifesteal **8% · 13% · 17%** (canonical sustain-reset exception; shared 1.25s proc cooldown + summon exclusions).
+- Adrenaline: low-HP rate scaler +0.6 · +0.9 · +1.1.
+- Berserk: low-HP damage scaler +0.6 · +0.9 · +1.1.
+- Second Wind: dash cooldown ×0.65 · ×0.55 · ×0.50. Canonical dash iframe = **0.18s**, cannot refresh/overlap; Lv3 max theoretical uptime 0.18/0.35=51.4% (<55% gate).
+- Thorns: 2 · 4 · 6 reflected damage.
+- Coin Magnet: **Lv1 radius90, pull240px/s; Lv2 radius240, pull480px/s; Lv3 radius900, pull900px/s** (aggressive near-global pull across most visible combat space, still finite). Add `coinMagnetPull` to PlayerMods; current single COIN_MAGNET_PULL constant becomes this mod value.
+- Greed: coin value ×2 · ×2.5 · ×3.
+- Deadeye: crit25%/mult2.5 · crit40%/mult2.75 · crit50%/mult3.0.
+- Vitality: maxHP +2 · +3 · +4 (new hearts filled when level gained).
+- Incendiary / Cryo / Static: respective chance25% · 40% · 50%.
+- Elementalist: all three +15% · +25% · +30%.
+These levels are the duplicate policy; do not also allow raw duplicate copies.
+
+## Weapon ownership / duplicate pickups
+Current code calls `pickUpWeapon()` and consumes every pickup. Locked behavior:
+- Before collection, if `ownedWeapons.includes(p.weapon)`, DO NOTHING: no pickup, no switch/equip, no sfx/particles; keep the weapon object on the floor. Optional client label on proximity: `OWNED`.
+- If new: add to inventory, equip it, consume pickup as today.
+- Dealer pedestals follow the same rule: owned weapon remains unpurchasable/marked OWNED; dealer rolls a replacement when stock is generated if possible.
+No duplicate weapon→coins conversion; the physical choice remains available to teammates in co-op.
+
+## Melee discovery guarantee
+Persist `unlocks[]` flag `discover:melee` on first melee pickup (sword/longsword/spear).
+- New account with no flag: floor 2 gets one deterministic guaranteed melee pickup in a reachable non-exit room. If not collected, floor 3 guarantees it again. Once collected, set flag and normal weighted drops resume.
+- Dealer rule: until `discover:melee`, one of its 3 weapon/blessing pedestals is guaranteed melee (rotate Cutlass/Claymore/Pike deterministically); after discovery, normal stock.
+- Floor 1 remains ranged-only onboarding; floor 2–3 guarantees players learn melee exists without a tutorial modal.
+
+## Thunderbolt benchmark + charge-weapon direction
+Thunderbolt is the feel benchmark for heavy ranged weapons. Lock it as a line-breaker:
+- Base stats remain damage9/fireCd0.72/radius11/speed520.
+- Add **innate basePierce=2** (hits up to 3 enemies baseline). Resolve `pierce=min(4, basePierce + mods.pierce)` for Thunderbolt specifically: Full Metal can extend the line to 5 total hits, never infinite-room clear.
+- Raise/lock hard enemy knockback target to **18px total shove before kbResist** (current table14); player recoil/kick stays heavy. Every connect should visibly punch a line through the pack.
+- This becomes the benchmark: one input → one unmistakable projectile → line pierce + hard shove + long recovery.
+Charge weapons are desired and retain infinite reserve: hold→release controls local rhythm; no ammo pool. Charge state belongs to the weapon/player, server-authoritative later; tap shot stays useful, full charge changes size/damage/behavior. Do not couple charge to another currency/meter.
