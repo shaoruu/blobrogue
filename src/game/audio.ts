@@ -82,7 +82,7 @@ const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
   playerHurt: { id: "playerHurt", variants: 1, mix: 0.9 },
   dash: { id: "dash", variants: 1, mix: 0.35 },
   coin: { id: "coin", variants: 1, mix: 0.5 },
-  chest: { id: "chest", variants: 1, mix: 0.8 },
+  chest: { id: "chest", variants: 1, mix: 1.0 },
   barrel: { id: "barrel", variants: 1, mix: 0.9 },
   heart: { id: "heart", variants: 1, mix: 0.7 },
   weapon: { id: "weaponPickup", variants: 1, mix: 0.75 },
