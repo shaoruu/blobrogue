@@ -52,6 +52,25 @@ export const ICONS: Record<string, IconDef> = {
   gun: { map: ["................", "...XXXXXXXX.....", "..XLLLLLLLLX....", ".XLhhhhhhhLX....", "XXXXXXXXXXLX....", "XLLLLLLLLXLX....", "XLbbbbbbLXXX....", "XXXXXXXXXX.X....", "...XLLX...XX....", "...XLLXXXXX.....", "...XXXX........."], pal: { X: INK, L: "#6b401e", h: "#9c6633", b: "#301c0e" }, s: 2.4 },
 };
 
+// An item's real icon sprite (/sprites/item_<id>.png) with a graceful fallback to its
+// single-char glyph. If the sprite isn't present the <img> quietly swaps itself for a
+// tinted glyph span, so the UI never shows a broken image — mirroring the sprite
+// ready()/fallback pattern used on the canvas. Returns the <img> to append; the caller's
+// container (.ichip / .bc-icon) supplies the frame and the --t tint.
+export function itemIconEl(id: string, glyph: string): HTMLImageElement {
+  const img = document.createElement("img");
+  img.alt = glyph;
+  img.decoding = "async";
+  img.addEventListener("error", () => {
+    const span = document.createElement("span");
+    span.className = "glyphfb";
+    span.textContent = glyph;
+    img.replaceWith(span);
+  }, { once: true });
+  img.src = `/sprites/item_${id}.png`;
+  return img;
+}
+
 export function mountIcons(root: ParentNode = document): void {
   root.querySelectorAll<HTMLElement>("[data-ic]").forEach((el) => {
     if (el.dataset.mounted) return;

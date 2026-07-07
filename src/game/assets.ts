@@ -1,5 +1,7 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
+import type { WeaponId } from "./types.js";
+
 export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
   | "heart" | "coin" | "gun" | "spit";
@@ -43,11 +45,22 @@ const SOURCES: Record<SpriteName, string> = {
 
 export interface LoadedSheet { img: HTMLImageElement; fps: number; }
 
+// Held-weapon overlay sprites drawn over the hero, rotating to aim. Each is authored
+// 48px pointing right (0 rad) with the hand-grip at pixel (12, 24). Opt-in registry
+// like SHEETS: only weapons with real art are listed, so nothing else is fetched (no
+// 404s). Weapons absent here fall back at draw time (see game.ts renderHeldWeapon).
+const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
+  pistol: "/sprites/held_pistol.png",
+  shotgun: "/sprites/held_shotgun.png",
+  rapid: "/sprites/held_rapid.png",
+};
+
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private tintCache = new Map<string, HTMLCanvasElement>();
   private flashCache = new Map<SpriteName, HTMLCanvasElement>();
   private sheets = new Map<string, LoadedSheet>();
+  private heldImages = new Map<WeaponId, HTMLImageElement>();
 
   constructor() {
     for (const name of Object.keys(SOURCES) as SpriteName[]) {
@@ -62,6 +75,19 @@ export class Sprites {
       img.src = def.src;
       this.sheets.set(key, { img, fps: def.fps });
     }
+    for (const id of Object.keys(HELD_SOURCES) as WeaponId[]) {
+      const src = HELD_SOURCES[id];
+      if (!src) continue;
+      const img = new Image();
+      img.src = src;
+      this.heldImages.set(id, img);
+    }
+  }
+
+  // A loaded held-weapon overlay for this weapon, or null to skip / fall back.
+  heldWeapon(id: WeaponId): HTMLImageElement | null {
+    const img = this.heldImages.get(id);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
   }
 
   get(name: SpriteName): HTMLImageElement {
