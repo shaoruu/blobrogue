@@ -7,7 +7,7 @@
 
 import "./harness/domShim.js";
 import { domCanvas, domMinimap, domOverlay } from "./harness/domShim.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -146,6 +146,19 @@ function diffFx(a: string[][], b: string[][]): string | null {
   return null;
 }
 
+export function captureCurrent(): void {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const dir = join(here, "golden");
+  for (const scenario of SCENARIOS) {
+    const run = runRefactor(scenario);
+    const state = run.state.map((x) => JSON.stringify(x)).join("\n") + "\n";
+    const fx = run.fx.map((x) => JSON.stringify(x)).join("\n") + "\n";
+    writeFileSync(join(dir, `${scenario.name}.jsonl`), state);
+    writeFileSync(join(dir, `${scenario.name}.fx.jsonl`), fx);
+    process.stdout.write(`captured current ${scenario.name}: ${run.state.length} ticks\n`);
+  }
+}
+
 function main(): void {
   let failed = 0;
   for (const s of SCENARIOS) {
@@ -179,4 +192,4 @@ function main(): void {
   process.stdout.write(`\nAll ${SCENARIOS.length} golden-master scenarios pass (state + events tick-for-tick, deterministic)\n`);
 }
 
-main();
+if (process.argv.includes("--capture-current")) captureCurrent(); else main();
