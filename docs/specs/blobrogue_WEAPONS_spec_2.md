@@ -67,3 +67,25 @@ Great skill-expression weapon; the "hold→release" Ian floated. If overnight ti
 - **Duplicate weapon floor pickup:** if `ownedWeapons.includes(id)`, do not collect, switch, equip, play sfx, or remove pickup; leave it physically on floor for teammate. Optional proximity label `OWNED`.
 - **Melee discovery:** accounts without `discover:melee` get deterministic melee pickup on floor2, repeated floor3 if missed; Dealer guarantees a melee stock slot until first pickup sets the flag.
 Canonical economy/levels/reset details live in `blobrogue_PROGRESSION_spec.md` §10.
+
+---
+## WISP + THUNDERBOLT — LOCKED BENCHMARK WEAPONS (blind-identifiable)
+Both are infinite-reserve and define the quality bar: behavior must be identifiable with sprite, HUD label, and audio hidden. Distinction comes from movement/constraint/impact, never ammo scarcity.
+
+### WISP benchmark — seeking / forgiving / curved pressure
+Keep shipped base: fireCd0.16, speed420, life1.4, damage1.6, spread0.25, radius5, homing turn6rad/s.
+- Constraint: acquires nearest living enemy only within260px; turn-rate capped6rad/s, speed constant, cannot U-turn instantly. If target dies/leaves range, continue current trajectory until another valid target enters acquisition; no snap teleport.
+- Signature read: wide initial release then visible curved convergence. Cold light radius55 + short comet trail; slight orbit/steer motion before impact. Impact is modest (WEAPON_KB2), emphasizing guidance, not force.
+- Strength: consistency/crowd cleanup and status delivery. Tradeoff: low DPS/slow projectile, weak vs isolated high-HP target and walls.
+- Blessings interact through normal pellets/status/crit; extra pellets form a seeking fan, not one stacked bullet.
+- Blind test: muted/simple-white projectile still identifiable by curved path/acquisition within1s.
+
+### Thunderbolt benchmark — line breaker / commitment / force
+Canonical stats/override: damage9, CD0.72, speed520, life1.3, radius11; `basePierce=2`, total pierce `min(4,base+mods)`; WEAPON_KB18 before resistance; heavy player kick/recoil remains. Infinite reserve.
+- Constraint: slow cadence and long recovery; one clear slug, no homing/bounce/chain. Missing is costly in time, not ammo.
+- Signature read: straight thick hot trail, sequential penetration, every enemy hard-shoved along travel direction. Warm impact flash; no generic explosion.
+- Strength: opens a line through packs / creates breathing room. Tradeoff: poor correction/area coverage and lower sustained single-target output when aim misses.
+- Blind test: muted/simple-white projectile identifiable by straight fat slug + line penetration + synchronized hard knockback within one shot.
+
+### Universal weapon constraint
+No universal ammo reserve/reload layer. Per-weapon local rhythms may include cooldown, charge, cylinder/reload, heat, HP cost, positioning, or recovery. Infinite reserve remains the foundation; never balance Wisp/Thunderbolt through ammo scarcity.

@@ -272,3 +272,7 @@ Charge weapons are desired and retain infinite reserve: hold→release controls 
 ---
 ## POST-SERVER PHYSICAL CAMP / MODE GATES (canonical pointer)
 Menu-on-launch is replaced AFTER authoritative Stage C by the shared walkable Amber Camp in `blobrogue_POST_SERVER_WORLD_UX_spec.md`. The Amber tree/stations in this spec become physical NPCs/buildings; unlocked characters live in Camp; floor-run/open-world selection and party formation happen at authoritative physical gates. This changes presentation, not progression math/caps. Rare Arena floors use the same currencies/rewards and add no new progression layer.
+
+---
+## WEAPON BENCHMARK POINTER
+Wisp and Thunderbolt are locked blind-identifiable benchmarks in `blobrogue_WEAPONS_spec_2.md`. Infinite reserve is universal; weapon identity comes from per-weapon movement/commitment/charge/cylinder/heat constraints, never a shared ammo scarcity layer.
