@@ -114,18 +114,28 @@ bindings.
 the saved profile. Stats (`recordRun`) key off `clientId`, so they **persist across
 sessions** and show on the title screen and the hold-**Tab** stats panel.
 
-**Why not `@convex-dev/auth`?** It is React-first (`ConvexAuthProvider`,
-`@convex-dev/auth/react`) and wants extra HTTP-route / `auth.config.ts` wiring. In a
-vanilla-TS canvas game that's heavy and fragile. The task explicitly allows the
-lightweight route when full auth is heavy, and the key requirement is *persistent
-identity + saved stats*, which this delivers robustly and testably.
+**Optional accounts via `@convex-dev/auth` (Google).** The guest path above is still
+the default and needs zero config. On top of it, players can *optionally* sign in with
+Google (Convex-native auth). When signed in, their stats row keys off the authenticated
+`userId` instead of the browser `clientId`, and on first sign-in the current browser's
+unowned guest row is migrated onto the account (non-destructive — nothing is deleted and
+rows owned by others are never touched). Signing out returns to guest play.
 
-**Trade-off (documented on purpose):** a client-minted id is not a security boundary —
-someone could copy another player's `clientId` and assume their stats. That's acceptable
-for a co-op shooter with cosmetic all-time stats (no competitive leaderboard / anti-cheat
-here). If you later want hardened accounts, swap `Session` to Convex Auth and have
-`players.clientId` become the authenticated subject; nothing else in the game needs to
-change because everything goes through `Session`.
+`@convex-dev/auth` ships only React bindings, so the vanilla client reimplements its
+small, framework-agnostic protocol directly against the Convex auth actions +
+HTTP routes (see [`src/net/auth.ts`](src/net/auth.ts)): `signIn("google")` → OAuth
+redirect → code exchange → JWT attached to the live `ConvexClient` via `setAuth`. The
+backend is the standard setup: [`convex/auth.ts`](convex/auth.ts),
+[`convex/auth.config.ts`](convex/auth.config.ts), [`convex/http.ts`](convex/http.ts),
+and `authTables` spread into the schema. **The operator finishes setup — see
+[`AUTH_SETUP.md`](AUTH_SETUP.md).** Until then the sign-in button is present-but-inert
+and the game is unaffected.
+
+**Trade-off for guests (documented on purpose):** a client-minted id is not a security
+boundary — someone could copy another player's `clientId` and assume their stats. That's
+acceptable for a co-op shooter with cosmetic all-time stats (no competitive leaderboard /
+anti-cheat here). Signing in with Google gives a real, hardened identity for players who
+want one.
 
 ---
 
@@ -160,19 +170,24 @@ The seam for adding it later is clean: make the host authoritative and add an
 
 ```
 convex/
-  schema.ts        players / rooms / presence tables
-  players.ts       ensurePlayer, getProfile, recordRun
+  schema.ts        players / rooms / presence tables (+ authTables, players.userId)
+  players.ts       ensurePlayer, getProfile, currentUser, recordRun (auth-aware)
   rooms.ts         create, join, get, start, descend, leave
   presence.ts      update, list, revive
+  auth.ts          Convex Auth config (Google provider)
+  auth.config.ts   trusted JWT issuer (CONVEX_SITE_URL)
+  http.ts          mounts Convex Auth's OAuth HTTP routes
   tsconfig.json    standard Convex tsconfig
   .gitignore       ignores _generated
 src/net/
   config.ts        VITE_CONVEX_URL gate
   api.ts           typed function references (no _generated needed)
   session.ts       identity + saved stats
+  auth.ts          vanilla Convex Auth client (Google sign-in, token storage)
   multiplayer.ts   CoopBridge implementation over ConvexClient
-src/ui/menu.ts     title / lobby / game-over
+src/ui/menu.ts     title / lobby / game-over / sign-in
 src/game/coop.ts   CoopBridge contract (game ↔ net seam)
+AUTH_SETUP.md      operator steps to enable Google sign-in
 ```
 
 ## 6. Sanity checklist after you provision
