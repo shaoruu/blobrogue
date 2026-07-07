@@ -649,9 +649,21 @@ export class Game {
 
   private moveCircle(x: number, y: number, r: number, dx: number, dy: number): [number, number] {
     const nx = x + dx, ny = y + dy;
-    if (!this.isWall(nx + Math.sign(dx) * r, y)) x = nx;
-    if (!this.isWall(x, ny + Math.sign(dy) * r)) y = ny;
+    if (!this.isWall(nx + Math.sign(dx) * r, y) && !this.blockedByProp(nx, y, r)) x = nx;
+    if (!this.isWall(x, ny + Math.sign(dy) * r) && !this.blockedByProp(x, ny, r)) y = ny;
     return [x, y];
+  }
+
+  // Solid props (crates/barrels/pots/brazier) block movement — you bump into them and
+  // can use them as cover, instead of walking through. Circle-vs-circle overlap test.
+  private blockedByProp(x: number, y: number, r: number): boolean {
+    for (const p of this.props) {
+      if (p.dead) continue;
+      const rr = r + p.radius * 0.8; // 0.8 so you can brush past edges, not a hard square
+      const ddx = x - p.x, ddy = y - p.y;
+      if (ddx * ddx + ddy * ddy < rr * rr) return true;
+    }
+    return false;
   }
 
   private loop = (t: number) => {
@@ -2103,6 +2115,7 @@ export class Game {
     this.renderProps();
     this.renderDecals();
     this.renderExit();
+    this.renderShadows();
     this.renderPropEntities();
     this.renderChests();
     this.renderPickups();
@@ -2180,6 +2193,18 @@ export class Game {
         const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
         const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
         const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
+        // AD autotile faces v2 (bold dark extrude): cap + the face piece for this
+        // neighbour config; skips the code-gradient fallback below when the art is loaded.
+        const auto: TileName | null = belowFloor && rightFloor ? "wall_a_SE"
+          : belowFloor && leftFloor ? "wall_a_SW"
+          : belowFloor ? "wall_a_S"
+          : rightFloor ? "wall_a_E"
+          : leftFloor ? "wall_a_W" : null;
+        if (auto && tiles.ready(auto)) {
+          if (tiles.ready("wall_top")) ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
+          ctx.drawImage(tiles.get(auto), sx, sy, TILE, TILE);
+          continue;
+        }
         if (tiles.ready("wall_top")) {
           ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
         } else {
@@ -2282,6 +2307,44 @@ export class Game {
       ctx.fillText("\u25be GO DOWN", ex, ey - TILE * 0.7);
       ctx.restore();
     }
+  }
+
+  // Soft drop-shadow ellipses under everything so entities sit ON the floor, not float.
+  // One cheap pass on the floor layer (before sprites) — dark, low-alpha, no per-entity cost.
+  private shadow(cx: number, cy: number, w: number) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = "#05030b";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, w * 0.42, w * 0.18, 0, 0, 6.28);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private renderShadows() {
+    const { cam } = this;
+    // props + chests
+    for (const p of this.props) {
+      if (p.dead || p.kind === "brazier") continue;
+      if (this.isNearCamera(p.x, p.y, TILE)) this.shadow(p.x - cam.x, p.y - cam.y + PROP_DRAW * 0.34, PROP_DRAW * 0.7);
+    }
+    for (const c of this.chests) {
+      if (this.isNearCamera(c.x, c.y, TILE)) this.shadow(c.x - cam.x, c.y - cam.y + 16, 40);
+    }
+    // enemies
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const arch = ENEMY_ARCHETYPES[e.kind];
+      if (arch.isPhasing) continue; // ghosts float — no ground shadow
+      if (this.isNearCamera(e.x, e.y, TILE)) this.shadow(e.x - cam.x, e.y - cam.y + arch.drawSize * 0.3, arch.drawSize * 0.62);
+    }
+    // remote players (co-op)
+    if (this.coop) for (const r of this.coop.remotePlayers()) {
+      if (!r.isDown) this.shadow(r.x - cam.x, r.y - cam.y + 15, 34);
+    }
+    // local player
+    if (this.isRunning && !this.isDown) this.shadow(this.px - cam.x, this.py - cam.y + 16, 36);
   }
 
   private renderPropEntities() {
