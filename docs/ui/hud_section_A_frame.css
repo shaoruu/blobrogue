@@ -1,0 +1,29 @@
+/* SECTION A: overlay + frame/panel (ui designer, verbatim). Depends on :root tokens: --dun-0..4, --cream, --amber, --amber-lo, --f-num, --f-logo. */
+#overlay{
+  position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
+  justify-content:center; gap:16px; text-align:center;
+  background:
+    repeating-linear-gradient(0deg,rgba(0,0,0,.16) 0 2px,transparent 2px 4px),
+    radial-gradient(130% 100% at 50% -10%,var(--dun-3) 0%,var(--dun-1) 55%,var(--dun-0) 100%);
+  box-shadow:inset 0 0 0 3px var(--dun-0),inset 0 0 0 6px var(--dun-3),inset 0 0 120px rgba(0,0,0,.6);
+}
+.frame{
+  position:relative; background:var(--dun-1); padding:24px 32px;
+  box-shadow:
+    0 0 0 3px var(--dun-0), 0 0 0 6px var(--dun-4), 0 0 0 9px var(--dun-0),
+    inset 0 0 0 2px var(--dun-2), 0 12px 0 rgba(0,0,0,.4);
+}
+.inp{
+  font-family:var(--f-num); font-size:24px; color:var(--cream); background:var(--dun-0);
+  border:0; padding:8px 14px; width:100%; outline:0;
+  box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 4px 8px rgba(0,0,0,.6);
+}
+.inp:focus{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 4px 8px rgba(0,0,0,.6); }
+.inp::placeholder{ color:var(--dun-4); }
+.code-badge{
+  font-family:var(--f-logo); font-size:30px; letter-spacing:5px; color:var(--amber);
+  background:var(--dun-0); padding:14px 20px; display:inline-block;
+  box-shadow:inset 0 0 0 2px var(--amber-lo),0 0 0 3px var(--dun-0),0 0 18px rgba(255,180,59,.15);
+}
+/* NOTE: requires the step-1 :root token block (--dun-*/--cream/--amber/--amber-lo/--f-num/--f-logo).
+   Current index.html uses raw hex, not these vars — must add the token block OR translate vars->hex when wiring. */

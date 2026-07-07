@@ -2,7 +2,7 @@
 
 export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
-  | "heart" | "coin" | "gun";
+  | "heart" | "coin" | "gun" | "spit";
 
 // Animation clip an entity can request. When a matching sheet is registered below
 // it plays frame-by-frame; otherwise the draw path falls back to procedural juice.
@@ -17,7 +17,15 @@ export interface SheetDef { src: string; fps: number; }
 // strip (64px per frame) into public/sprites and add an entry to light it up.
 // See ART.md for the format. Example:
 //   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
-export const SHEETS: Partial<Record<string, SheetDef>> = {};
+export const SHEETS: Partial<Record<string, SheetDef>> = {
+  "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
+  "slime.walk": { src: "/sprites/slime_walk.png", fps: 7 },
+  "bat.walk": { src: "/sprites/bat_walk.png", fps: 9 },
+  "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 8 },
+  "ghost.walk": { src: "/sprites/ghost_walk.png", fps: 6 },
+  "boss.walk": { src: "/sprites/boss_walk.png", fps: 4 },
+  "boss.idle": { src: "/sprites/boss_walk.png", fps: 4 },
+};
 
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
@@ -25,13 +33,12 @@ const SOURCES: Record<SpriteName, string> = {
   bat: "/sprites/bat.png",
   skeleton: "/sprites/skeleton.png",
   ghost: "/sprites/ghost.png",
-  // TODO(art): placeholder — reusing beetle.png until the dedicated Spitter caster
-  // sprite lands (art director in progress). A rose charge-glow sells the caster read.
-  spitter: "/sprites/beetle.png",
+  spitter: "/sprites/spitter.png",
   boss: "/sprites/boss.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",
+  spit: "/sprites/spit.png",
 };
 
 export interface LoadedSheet { img: HTMLImageElement; fps: number; }
