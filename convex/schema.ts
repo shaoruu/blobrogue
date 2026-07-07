@@ -1,17 +1,30 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { authTables } from "@convex-dev/auth/server";
 
 // blobrogue multiplayer schema.
 //
-// Identity is intentionally lightweight: each browser mints a random `clientId`
-// (stored in localStorage) that maps to one `players` row. This gives persistent,
-// cross-session saved stats without the weight of a full auth provider. See
-// MULTIPLAYER.md for the rationale and the trade-offs.
+// Identity has two, non-exclusive layers:
+//   1. Guest (default): each browser mints a random `clientId` (localStorage) that
+//      maps to one `players` row. Zero-config, persistent, cross-session stats.
+//   2. Account (optional): an authenticated Convex Auth user (Google). When signed
+//      in, the player's stats row is keyed off `userId` instead of `clientId`.
+// Signing in migrates the current browser's unowned guest row to the account, so a
+// guest who later signs in keeps their all-time stats. Guests are never touched.
+// See AUTH_SETUP.md + MULTIPLAYER.md for the rationale and the trade-offs.
 
 export default defineSchema({
+  // Convex Auth tables (users / authSessions / authAccounts / ...). The auth library
+  // owns these; the app only reads `users` (for the display name + avatar).
+  ...authTables,
+
   // Persistent per-player identity + all-time stats.
   players: defineTable({
-    clientId: v.string(),
+    // Guest identity. Optional so account rows created without a prior guest row
+    // don't have to invent one (which would collide on the unique `by_clientId`).
+    clientId: v.optional(v.string()),
+    // Account identity. Set once the row is linked to a signed-in Convex Auth user.
+    userId: v.optional(v.id("users")),
     name: v.string(),
     totalKills: v.number(),
     deepestFloor: v.number(),
@@ -20,7 +33,9 @@ export default defineSchema({
     unlocks: v.array(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
-  }).index("by_clientId", ["clientId"]),
+  })
+    .index("by_clientId", ["clientId"])
+    .index("by_userId", ["userId"]),
 
   // A co-op lobby / running game. The (seed, floor) pair is the shared source of
   // truth that makes every player generate the same dungeon and descend together.
