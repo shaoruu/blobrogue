@@ -31,9 +31,26 @@ function btn(label: string, onClick: () => void, cls = ""): HTMLButtonElement {
   return b;
 }
 
+// A collapsible section. The header toggles a body wrapper; callers append their controls
+// to the returned element and they land in the body (an appendChild override keeps every
+// existing `sec.appendChild(...)` call site working unchanged). Starts expanded.
 function section(title: string): HTMLDivElement {
   const sec = h("div", "dev-sec");
-  sec.appendChild(h("div", "dev-h", title));
+  const header = h("button", "dev-h", title) as HTMLButtonElement;
+  header.type = "button";
+  const caret = h("span", "dev-caret", "\u25be"); // ▾
+  header.appendChild(caret);
+  const body = h("div", "dev-body");
+  sec.appendChild(header);
+  sec.appendChild(body);
+  header.addEventListener("click", () => {
+    const collapsed = sec.classList.toggle("collapsed");
+    caret.textContent = collapsed ? "\u25b8" : "\u25be"; // ▸ / ▾
+    header.blur();
+  });
+  // Route callers' appendChild into the body so section content is collapsible without
+  // touching any of the buildPanel call sites.
+  (sec as unknown as { appendChild: (n: Node) => Node }).appendChild = (node: Node) => body.appendChild(node);
   return sec;
 }
 

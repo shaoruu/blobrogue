@@ -24,10 +24,18 @@ const DEV_CSS = `
   }
   .dev-title .sub { display: block; margin-top: 4px; font-family: var(--f-num); font-size: 14px; color: var(--dun-4); letter-spacing: 0; }
   .dev-sec { display: flex; flex-direction: column; gap: 6px; }
+  /* Section header doubles as a collapse toggle: full-width button, caret on the right. */
   .dev-h {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--f-ui), monospace; font-weight: 700;
     font-size: 9px; letter-spacing: 2px; color: var(--amber-hi); text-transform: uppercase;
-    padding-bottom: 3px; box-shadow: inset 0 -2px 0 var(--dun-2);
+    padding: 4px 2px; box-shadow: inset 0 -2px 0 var(--dun-2);
+    background: transparent; border: 0; width: 100%; text-align: left; cursor: pointer;
   }
+  .dev-h:hover { color: var(--cream); }
+  .dev-caret { font-size: 8px; color: var(--dun-4); }
+  .dev-body { display: flex; flex-direction: column; gap: 6px; }
+  .dev-sec.collapsed .dev-body { display: none; }
   .dev-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
   .dev-lbl { flex: 1 1 60px; font-size: 9px; letter-spacing: 1px; color: var(--dun-4); text-transform: uppercase; }
   .dev-btn {
