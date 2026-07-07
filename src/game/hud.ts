@@ -18,6 +18,7 @@ export interface HudState {
   isBossActive: boolean;
   coopLabel: string | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
+  items: { glyph: string; tint: string }[]; // collected blessings, drawn as a glyph strip
 }
 
 export interface ProfileStats {
@@ -38,6 +39,7 @@ export interface StatsPanelData {
   weaponName: string;
   profile: ProfileStats | null;
   roster: RosterEntry[] | null;
+  items: { name: string; glyph: string; tint: string }[];
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css: string, text?: string): HTMLElementTagNameMap[K] {
@@ -63,7 +65,7 @@ const HUD_MARKUP = `
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
-  </div><div class="coopstrip" data-coop></div></div>
+  </div><div class="coopstrip" data-coop></div><div class="itemstrip" data-items></div></div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
@@ -79,6 +81,8 @@ export class Hud {
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
+  private itemsEl: HTMLElement;
+  private prevItemsCount = -1;
 
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
@@ -105,6 +109,7 @@ export class Hud {
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
+    this.itemsEl = hud.querySelector("[data-items]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
     const minimap = document.getElementById("minimap");
@@ -159,6 +164,19 @@ export class Hud {
 
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
+
+    // Rebuild the blessing glyph strip only when a new item is picked up.
+    if (s.items.length !== this.prevItemsCount) {
+      this.prevItemsCount = s.items.length;
+      this.itemsEl.replaceChildren();
+      for (const it of s.items) {
+        const chip = el("span", "", it.glyph);
+        chip.className = "itemchip";
+        chip.style.setProperty("--t", it.tint);
+        this.itemsEl.appendChild(chip);
+      }
+      this.itemsEl.style.display = s.items.length ? "flex" : "none";
+    }
   }
 
   showStats(d: StatsPanelData) {
@@ -176,6 +194,17 @@ export class Hud {
       line("weapon", d.weaponName),
       line("run time", fmtTime(d.runTime)),
     );
+    if (d.items.length) {
+      this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
+      this.statsBody.appendChild(el("div", "color:var(--amber);font-size:12px;letter-spacing:1px;", `BLESSINGS \u00b7 ${d.items.length}`));
+      for (const it of d.items) {
+        const row = el("div", "display:flex;align-items:center;gap:8px;");
+        const icon = el("span", "font-size:14px;", it.glyph);
+        icon.style.color = it.tint;
+        row.append(icon, el("span", "color:#ffe6b0;", it.name));
+        this.statsBody.appendChild(row);
+      }
+    }
     if (d.roster && d.roster.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
       this.statsBody.appendChild(el("div", "color:#5ad1ff;font-size:12px;letter-spacing:1px;", "PARTY"));
@@ -220,5 +249,8 @@ export class Hud {
   clear() {
     this.coopEl.textContent = "";
     this.coopEl.style.display = "none";
+    this.itemsEl.replaceChildren();
+    this.itemsEl.style.display = "none";
+    this.prevItemsCount = -1;
   }
 }
