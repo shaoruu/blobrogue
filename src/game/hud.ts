@@ -16,6 +16,7 @@ export interface HudState {
   isCleared: boolean;
   enemiesLeft: number;
   isBossActive: boolean;
+  bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
   coopLabel: string | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
@@ -72,6 +73,10 @@ const HUD_MARKUP = `
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
   </div><div class="coopstrip" data-coop></div><div class="build" data-build><div class="build-title">YOUR BUILD <span class="n" data-build-n>0</span></div><div class="build-grid" data-build-grid></div></div></div>
+  <div class="bossbar" data-bossbar>
+    <div class="bossbar-label">BOSS</div>
+    <div class="bossbar-track"><i data-bossfill></i></div>
+  </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
@@ -100,6 +105,8 @@ export class Hud {
   private comboNEl: HTMLElement;
   private comboFillEl: HTMLElement;
   private comboBurstEl: HTMLElement;
+  private bossbarEl!: HTMLElement;
+  private bossFillEl!: HTMLElement;
   private prevMult = 1;
   private prevCombo = -1;
   private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
@@ -140,6 +147,8 @@ export class Hud {
     this.comboNEl = hud.querySelector("[data-combo-n]")!;
     this.comboFillEl = hud.querySelector("[data-combo-fill]")!;
     this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
+    this.bossbarEl = hud.querySelector("[data-bossbar]")!;
+    this.bossFillEl = hud.querySelector("[data-bossfill]")!;
     this.buildPanel = hud.querySelector("[data-build]")!;
     this.buildGrid = hud.querySelector("[data-build-grid]")!;
     this.buildN = hud.querySelector("[data-build-n]")!;
@@ -203,6 +212,15 @@ export class Hud {
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
     this.dashEl.classList.toggle("ready", fill >= 1);
+
+    // Boss health bar: a big top-center bar visible only while a boss is on the board,
+    // draining as it takes damage and flashing red when the boss is nearly dead.
+    this.bossbarEl.classList.toggle("show", s.isBossActive);
+    if (s.isBossActive) {
+      const bf = s.bossHpFrac < 0 ? 0 : s.bossHpFrac > 1 ? 1 : s.bossHpFrac;
+      this.bossFillEl.style.transform = `scaleX(${bf})`;
+      this.bossbarEl.classList.toggle("low", bf < 0.25);
+    }
 
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";

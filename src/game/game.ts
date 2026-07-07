@@ -1923,8 +1923,12 @@ export class Game {
     this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
     const comboTrauma = big ? 0 : COMBO_TRAUMA * ((this.comboMult() - 1) / (COMBO_MAX_MULT - 1));
     this.addTrauma((big ? TRAUMA_BOSS_KILL : TRAUMA_KILL) + comboTrauma);
-    // A boss dying clears its danger off the board so the victory beat isn't a death.
-    if (big) this.bullets = this.bullets.filter((b) => b.friendly);
+    // A boss dying clears its danger off the board so the victory beat isn't a death,
+    // and the intense boss track relaxes back to the normal dungeon music.
+    if (big) {
+      this.bullets = this.bullets.filter((b) => b.friendly);
+      audio.setMusic("dungeon");
+    }
     if (this.mods.lifestealChance > 0 && this.hp < this.maxHp && Math.random() < this.mods.lifestealChance) {
       this.hp++;
       this.spawnParticles(e.x, e.y, 8, "#ff6a9d");
@@ -2351,7 +2355,9 @@ export class Game {
   }
 
   private updateHud() {
-    const isBossActive = this.enemies.some((e) => e.kind === "boss");
+    const boss = this.enemies.find((e) => e.kind === "boss");
+    const isBossActive = boss !== undefined;
+    const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
     let coopLabel: string | null = null;
     if (this.coop) {
       const count = this.coop.remotePlayers().length + 1;
@@ -2365,6 +2371,7 @@ export class Game {
       isCleared: this.enemies.length === 0,
       enemiesLeft: this.enemies.length,
       isBossActive,
+      bossHpFrac,
       coopLabel,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,

@@ -60,7 +60,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   boss: {
     kind: "boss", sprite: "boss", movement: "boss", isPhasing: false,
     radius: 34, drawSize: 100, alpha: 1, tint: "#ffb43b", kbResist: 6,
-    baseHp: 42, hpPerFloor: 7, baseSpeed: 34, speedPerFloor: 1.5, touchDamage: 2,
+    baseHp: 90, hpPerFloor: 16, baseSpeed: 40, speedPerFloor: 2, touchDamage: 3,
   },
 };
 

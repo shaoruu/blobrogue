@@ -56,6 +56,19 @@
       .dash.ready{ box-shadow:inset 0 0 0 2px var(--grn); }
       .dash.ready .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
       .dash.ready .bar i{ background:var(--grn); box-shadow:0 0 8px var(--grn); }
+      /* boss health bar (top-center, above the combo widget). Shown only during a boss fight. */
+      .bossbar{ position:absolute; top:16px; left:50%; transform:translateX(-50%) translateY(-10px); width:min(560px,60vw);
+        display:flex; flex-direction:column; align-items:center; gap:4px; pointer-events:none;
+        opacity:0; transition:opacity .3s ease, transform .3s ease; }
+      .bossbar.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+      .bossbar-label{ font-family:var(--f-ui); font-size:10px; letter-spacing:4px; color:#ff8a8a;
+        text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,80,80,0.5); }
+      .bossbar-track{ width:100%; height:16px; background:var(--dun-0); box-shadow:inset 0 0 0 2px #5a2030, 0 0 12px rgba(255,60,60,0.35); position:relative; overflow:hidden; }
+      .bossbar-track i{ position:absolute; inset:0; transform-origin:left center; transform:scaleX(1);
+        background:linear-gradient(180deg,#ff5a5f 0%,#c81e2e 100%); box-shadow:0 0 10px rgba(255,60,60,0.6);
+        transition:transform .18s ease; }
+      .bossbar.low .bossbar-track i{ animation:bossLow .4s steps(2,jump-none) infinite; }
+      @keyframes bossLow{ 0%{opacity:1;} 100%{opacity:.45;} }
       /* kill-chain combo (top-center). Fixed + transform/opacity only so it never shifts layout;
          --combo-c is the tier accent set per-frame from the game. Hidden at combo 0. */
       .combo{ position:absolute; top:14px; left:50%; transform:translateX(-50%) translateY(-8px) scale(.9); transform-origin:top center;
