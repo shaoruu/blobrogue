@@ -51,6 +51,13 @@ export interface Enemy extends Entity {
   // Anti-stuck safety net: seconds a chaser has been trying to move but barely
   // progressing (wedged on geometry / another body). Nudged perpendicular past ~0.4s.
   stuckTimer: number;
+  // Elemental status scratch (allocated at spawn, ticked in updateEnemies). Same local
+  // per-enemy model as hp/knockback — driven by bullets, so co-op stays desync-free.
+  burn: number;       // seconds of burn DoT left
+  burnDmg: number;    // burn damage per second (stacks up to a cap)
+  chill: number;      // seconds of slow left (high stacks freeze solid)
+  shock: number;      // seconds the shocked tag is active (amp + on-hit arc)
+  statusTick: number; // burn DoT accumulator (fires a tick every 0.25s)
   anim: Anim;
   attack: AttackState;
   boss: BossState | null; // set only on the boss
@@ -59,7 +66,7 @@ export interface Enemy extends Entity {
 export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
-  | "sawnoff" | "railgun" | "nailer";
+  | "sawnoff" | "railgun" | "nailer" | "flamer";
 
 export interface Bullet {
   x: number; y: number;
@@ -78,6 +85,11 @@ export interface Bullet {
   homing?: number;         // homing: steering turn rate (rad/s) toward the nearest enemy
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
+  // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
+  // Undefined on plain rounds; the value is the status duration in seconds.
+  burn?: number;           // seconds of burn DoT the round applies
+  chill?: number;          // seconds of chill the round applies
+  shock?: number;          // seconds of shock the round applies
   // Render recipe tag (the firing weapon). Selects the layered sprite FX in
   // renderBullets; absent on enemy fire, which keeps its own halo-and-core look.
   fx?: WeaponId;
