@@ -243,11 +243,22 @@ export class Sprites {
     c.height = hero.naturalHeight;
     const g = c.getContext("2d");
     if (!g) return null;
+    // Recolor the hero to a player's hue while keeping the sprite's shading. The old path laid
+    // a flat 50% color over the strongly-amber base, so every hue got dragged toward the same
+    // muddy amber-ish tone and teammates looked alike ("all blue"). Instead: strip the amber to
+    // grayscale (a zero-saturation source keeps only luminance), then multiply the target color
+    // through it -- light/dark shading survives but the hue becomes a vivid, unambiguous cyan /
+    // green / pink / etc. Finally mask back to the silhouette, since the full-rect passes also
+    // cover the transparent margin.
     g.drawImage(hero, 0, 0);
-    g.globalCompositeOperation = "source-atop";
-    g.fillStyle = color;
-    g.globalAlpha = 0.5;
+    g.globalCompositeOperation = "saturation";
+    g.fillStyle = "hsl(0, 0%, 50%)";
     g.fillRect(0, 0, c.width, c.height);
+    g.globalCompositeOperation = "multiply";
+    g.fillStyle = color;
+    g.fillRect(0, 0, c.width, c.height);
+    g.globalCompositeOperation = "destination-in";
+    g.drawImage(hero, 0, 0);
     this.tintCache.set(color, c);
     return c;
   }
