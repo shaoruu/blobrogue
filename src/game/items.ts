@@ -27,6 +27,9 @@ export interface PlayerMods {
   thorns: number;          // damage reflected onto whatever touches you
   adrenaline: number;      // + fire-rate multiplier scaled by how low your HP is
   berserk: number;         // + damage multiplier scaled by how low your HP is
+  burnChance: number;      // 0..1 chance a hit also ignites (burn DoT)
+  chillChance: number;     // 0..1 chance a hit also chills (slow → freeze)
+  shockChance: number;     // 0..1 chance a hit also shocks (+dmg amp + arc)
 }
 
 export function createMods(): PlayerMods {
@@ -50,6 +53,9 @@ export function createMods(): PlayerMods {
     thorns: 0,
     adrenaline: 0,
     berserk: 0,
+    burnChance: 0,
+    chillChance: 0,
+    shockChance: 0,
   };
 }
 
@@ -156,6 +162,29 @@ export const ITEMS: readonly ItemDef[] = [
     id: "vitality", name: "Vitality", desc: "+2 max hearts, filled.",
     glyph: "H", tint: "#ff6a6a", rarity: "common",
     apply: (m) => { m.maxHpBonus += 2; },
+  },
+  // Elemental blessings — turn any weapon into a status-dealer. Chances stack across
+  // copies; Elementalist rolls all three, so a build can lace every shot with fire,
+  // frost, and lightning at once.
+  {
+    id: "incendiary_rounds", name: "Incendiary Rounds", desc: "+25% chance to ignite enemies.",
+    glyph: "F", tint: "#ff8a3b", rarity: "uncommon",
+    apply: (m) => { m.burnChance += 0.25; },
+  },
+  {
+    id: "cryo_coating", name: "Cryo Coating", desc: "+25% chance to chill (slow, then freeze) enemies.",
+    glyph: "C", tint: "#7fd3ff", rarity: "uncommon",
+    apply: (m) => { m.chillChance += 0.25; },
+  },
+  {
+    id: "static_charge", name: "Static Charge", desc: "+25% chance to shock enemies (+dmg, arcs).",
+    glyph: "Z", tint: "#7fe9ff", rarity: "uncommon",
+    apply: (m) => { m.shockChance += 0.25; },
+  },
+  {
+    id: "elementalist", name: "Elementalist", desc: "+15% chance to burn, chill, AND shock.",
+    glyph: "E", tint: "#c98bff", rarity: "rare",
+    apply: (m) => { m.burnChance += 0.15; m.chillChance += 0.15; m.shockChance += 0.15; },
   },
 ];
 
