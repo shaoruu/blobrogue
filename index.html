@@ -9,11 +9,50 @@
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Silkscreen:wght@400;700&family=VT323&display=swap" rel="stylesheet" />
     <title>blobrogue — a cowboy-blob roguelike</title>
     <style>
+      /* CANONICAL :root tokens (ui designer, docs/ui/root_tokens.css) — all HUD CSS resolves against these. */
+      :root{
+        --dun-0:#05030b; --dun-1:#0e0b1a; --dun-2:#171227; --dun-3:#2a2140; --dun-4:#46356b;
+        --amber:#ffb43b; --amber-hi:#ffd166; --amber-lo:#b06e12; --cream:#ffe9b0;
+        --lea-0:#301c0e; --lea-1:#6b401e; --lea-2:#9c6633;
+        --grn:#7fdd5a; --red:#ff5a5a; --bone:#e8e0c8; --blu:#5ab6ff; --pur:#b06bff;
+        --ink:#120a24;
+        --f-logo:'Press Start 2P',monospace;
+        --f-ui:'Silkscreen','Press Start 2P',monospace;
+        --f-num:'VT323',monospace;
+        --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+      }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { height: 100%; background: #0e0b1a; overflow: hidden; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
       #app { display: flex; align-items: center; justify-content: center; height: 100%; }
       canvas { image-rendering: pixelated; background: #14101f; touch-action: none; }
-      #minimap { position: fixed; top: 12px; right: 12px; z-index: 5; border-radius: 8px; }
+
+      /* --- HUD 4-corner layout (ui designer, docs/ui/hud_section_B_hud.css) --- */
+      #hud{ position:fixed; inset:0; z-index:5; pointer-events:none; font-family:var(--f-num); }
+      .hud-corner{ position:absolute; display:flex; flex-direction:column; gap:8px; }
+      .hud-corner.tl{ top:16px; left:16px; }
+      .hud-corner.tr{ top:16px; right:16px; align-items:flex-end; }
+      .hud-corner.br{ bottom:16px; right:16px; align-items:flex-end; }
+      .hud-corner.bl{ bottom:16px; left:16px; }
+      .statpanel{ background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:9px 11px; display:flex; flex-direction:column; gap:7px; }
+      .hearts{ display:flex; gap:3px; } .hearts canvas{ image-rendering:pixelated; }
+      .statrow{ display:flex; gap:6px; align-items:center; }
+      .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--dun-1); box-shadow:inset 0 0 0 2px var(--dun-3); padding:3px 9px; }
+      .chip .ic{ width:16px; height:16px; }
+      .chip .v{ font-family:var(--f-num); font-size:19px; line-height:1; margin-top:2px; color:var(--cream); }
+      .chip .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .chip.floor .v{ color:var(--amber); } .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
+      .coopstrip{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--blu); background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3); padding:4px 9px; text-transform:uppercase; }
+      .minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
+      .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
+      #minimap{ position:absolute; inset:3px; width:calc(100% - 6px); height:calc(100% - 6px); image-rendering:pixelated; display:block; }
+      .weapon{ display:flex; align-items:center; gap:11px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:8px 13px; }
+      .weapon .wname{ font-family:var(--f-ui); font-size:11px; color:var(--cream); letter-spacing:1px; }
+      .weapon .wammo{ font-family:var(--f-num); font-size:20px; color:var(--amber-hi); margin-top:2px; }
+      .dash{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
+      .dash .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); }
+      .dash .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
+      .dash .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--dash-fill,1)); background:var(--blu); box-shadow:0 0 6px var(--blu); transition:width .1s linear; }
+      .dash.ready .bar i{ background:var(--grn); box-shadow:0 0 6px var(--grn); }
 
       #overlay, .pause-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; text-align: center;
         background: radial-gradient(ellipse at center, rgba(20,16,36,0.82) 0%, rgba(8,6,16,0.94) 100%); }

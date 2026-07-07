@@ -3,8 +3,8 @@ import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
-import { Sprites, playerColor, FRAME } from "./assets.js";
-import type { SpriteName, SheetClip } from "./assets.js";
+import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
+import type { SpriteName, SheetClip, TileName } from "./assets.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import { Minimap } from "./minimap.js";
@@ -46,6 +46,7 @@ const REVIVE_HOLD = 1.1;
 const BOSS_MINION_CAP = 14;
 const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
+const DASH_COOLDOWN = 0.7; // seconds between dashes; drives the HUD dash meter fill
 
 const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
@@ -150,10 +151,32 @@ const BOSS_MINION_CD = 3.4;                // periodic slime drip
 const AIM_DASH: number[] = [7, 6];
 const AIM_SOLID: number[] = [];
 
+// Animated prop frame tables (indexed by frameIndex), hoisted so the tile loop never allocates.
+const TORCH_FRAMES: TileName[] = ["torch_f0", "torch_f1", "torch_f2"];
+const PORTAL_FRAMES: TileName[] = ["portal_f0", "portal_f1"];
+
+// Stable per-tile hash -> 0..1. Salted so different features (variant vs. detail) draw
+// from independent streams, and identical every frame so tiles never shimmer.
+function tileHash(x: number, y: number, salt: number): number {
+  let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(salt, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+// Pick a floor variant from a stable hash: mostly plain floor, others sprinkled in.
+function floorVariant(r: number): TileName {
+  if (r < 0.7) return "floor";
+  if (r < 0.8) return "floor2";
+  if (r < 0.9) return "floor3";
+  return "floor4";
+}
+
 export class Game {
   private ctx: CanvasRenderingContext2D;
   private canvas: HTMLCanvasElement;
   private sprites = new Sprites();
+  private tiles = new TileSet();
   private minimap: Minimap;
   private hud: Hud;
   private onGameOver: (result: RunResult) => void;
@@ -212,6 +235,8 @@ export class Game {
   private last = 0;
   private raf = 0;
   private runStart = 0;
+  private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
+  private torches: { tx: number; ty: number }[] = []; // wall-mounted torch cells, per floor
   private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
   private trauma = 0; // screen-shake trauma, 0..1
   private kickX = 0; private kickY = 0; // directional camera kick (recoil), render-only
@@ -327,6 +352,7 @@ export class Game {
     this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
     this.pickups = this.placeWeaponPickups(d);
+    this.torches = this.placeTorches(d);
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
     if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
@@ -352,6 +378,22 @@ export class Game {
     return drops;
   }
 
+  // Mount a torch on the wall directly above each room (facing into it), at a
+  // deterministic column. Roughly one per room -> a handful on screen, no per-frame cost.
+  private placeTorches(d: Dungeon): { tx: number; ty: number }[] {
+    const list: { tx: number; ty: number }[] = [];
+    const rng = new Rng((this.seed ^ 0x7f4a7c15) + this.floor * 92821);
+    for (const room of d.rooms) {
+      const ty = room.y - 1;
+      if (ty < 0) continue;
+      const tx = room.x + 1 + rng.int(0, Math.max(0, room.w - 3));
+      const isWall = d.tiles[ty * d.w + tx] === 1;
+      const isFloorBelow = d.tiles[(ty + 1) * d.w + tx] === 0;
+      if (isWall && isFloorBelow) list.push({ tx, ty });
+    }
+    return list;
+  }
+
   private isWall(px: number, py: number): boolean {
     const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
     if (tx < 0 || ty < 0 || tx >= this.dungeon.w || ty >= this.dungeon.h) return true;
@@ -369,6 +411,7 @@ export class Game {
     if (!this.isRunning) return;
     const dt = Math.min((t - this.last) / 1000, 0.05);
     this.last = t;
+    this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
     // Paused: keep drawing the frozen frame under the pause overlay, run no sim.
     if (this.isPaused) {
       this.render();
@@ -482,7 +525,7 @@ export class Game {
     const speed = 200;
     this.dashCd = Math.max(0, this.dashCd - dt);
     if (this.keys.has("shift") && this.dashCd === 0 && (ix || iy)) {
-      this.dashTime = 0.16; this.dashCd = 0.7; this.dashDx = ix; this.dashDy = iy;
+      this.dashTime = 0.16; this.dashCd = DASH_COOLDOWN; this.dashDx = ix; this.dashDy = iy;
       this.invuln = Math.max(this.invuln, 0.35); // real "get out of jail" dodge window
       this.dashImgCd = 0;
       this.spawnParticles(this.px, this.py, 10, "#ffd27a"); // takeoff puff
@@ -1223,6 +1266,7 @@ export class Game {
       enemiesLeft: this.enemies.length,
       isBossActive,
       coopLabel,
+      dashFill: 1 - this.dashCd / DASH_COOLDOWN,
     });
   }
 
@@ -1339,6 +1383,7 @@ export class Game {
     ctx.save();
     ctx.translate(shakeX + this.kickX, shakeY + this.kickY);
     this.renderTiles();
+    this.renderProps();
     this.renderDecals();
     this.renderExit();
     this.renderPickups();
@@ -1373,27 +1418,79 @@ export class Game {
   }
 
   private renderTiles() {
-    const { ctx, canvas, cam } = this;
+    const { ctx, canvas, cam, tiles } = this;
     const d = this.dungeon;
     // +1 tile of margin on each edge so the screen-shake translate never exposes bg.
     const x0 = Math.max(0, Math.floor(cam.x / TILE) - 1);
     const y0 = Math.max(0, Math.floor(cam.y / TILE) - 1);
     const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE) + 1);
     const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE) + 1);
+
+    // Pass 1: floors (+ occasional detail overlay + cast shadow under walls).
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
-        const wall = d.tiles[ty * d.w + tx] === 1;
+        if (d.tiles[ty * d.w + tx] !== 0) continue;
         const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
-        if (wall) {
-          ctx.fillStyle = "#241a3a";
-          ctx.fillRect(sx, sy, TILE, TILE);
-          ctx.fillStyle = "#2f2350";
-          ctx.fillRect(sx, sy, TILE, 6);
+        const variant = floorVariant(tileHash(tx, ty, 1));
+        if (tiles.ready(variant)) {
+          ctx.drawImage(tiles.get(variant), sx, sy, TILE, TILE);
         } else {
           ctx.fillStyle = (tx + ty) % 2 === 0 ? "#171227" : "#1b1530";
           ctx.fillRect(sx, sy, TILE, TILE);
         }
+        const rd = tileHash(tx, ty, 2);
+        if (rd < 0.09) {
+          const detail: TileName = rd < 0.03 ? "floor_crack" : rd < 0.06 ? "floor_grate" : "floor_moss";
+          if (tiles.ready(detail)) ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
+        }
+        // A wall directly above casts a shadow onto this floor tile — sells the height.
+        if (ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 1 && tiles.ready("wall_shadow")) {
+          ctx.drawImage(tiles.get("wall_shadow"), sx, sy, TILE, TILE);
+        }
       }
+    }
+
+    // Pass 2: walls (top cap + vertical face where a floor sits directly below).
+    for (let ty = y0; ty < y1; ty++) {
+      for (let tx = x0; tx < x1; tx++) {
+        if (d.tiles[ty * d.w + tx] !== 1) continue;
+        const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
+        if (tiles.ready("wall_top")) {
+          ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
+        } else {
+          ctx.fillStyle = "#241a3a";
+          ctx.fillRect(sx, sy, TILE, TILE);
+          ctx.fillStyle = "#2f2350";
+          ctx.fillRect(sx, sy, TILE, 6);
+        }
+        if (ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0 && tiles.ready("wall_face")) {
+          ctx.drawImage(tiles.get("wall_face"), sx, sy, TILE, TILE);
+        }
+      }
+    }
+  }
+
+  // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
+  // to the visible window; per-torch phase offset keeps them from flickering in sync.
+  private renderProps() {
+    const { ctx, cam, canvas, tiles } = this;
+    const clock = this.animClock;
+    const flame = TORCH_FRAMES[frameIndex(TORCH_FRAMES.length, 8, clock)];
+    const hasGlow = tiles.ready("torch_glow");
+    const hasFlame = tiles.ready(flame);
+    if (!hasGlow && !hasFlame) return;
+    for (const t of this.torches) {
+      const sx = t.tx * TILE - cam.x, sy = t.ty * TILE - cam.y;
+      if (sx <= -TILE || sy <= -TILE || sx >= canvas.width || sy >= canvas.height) continue;
+      if (hasGlow) {
+        const flick = 0.75 + 0.25 * Math.sin(clock * 11 + t.tx * 1.7 + t.ty * 0.9);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = 0.5 * flick;
+        ctx.drawImage(tiles.get("torch_glow"), sx + TILE / 2 - 48, sy + TILE / 2 - 48, 96, 96);
+        ctx.restore();
+      }
+      if (hasFlame) ctx.drawImage(tiles.get(flame), sx, sy, TILE, TILE);
     }
   }
 
@@ -1410,6 +1507,12 @@ export class Game {
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.arc(ex, ey, TILE * 0.7, 0, 6.28); ctx.fill();
     ctx.restore();
+
+    // Animated exit portal on top of the glow (2-frame pulse).
+    const portal = PORTAL_FRAMES[frameIndex(PORTAL_FRAMES.length, 3, this.animClock)];
+    if (this.tiles.ready(portal)) {
+      ctx.drawImage(this.tiles.get(portal), d.exit.x * TILE - cam.x, d.exit.y * TILE - cam.y, TILE, TILE);
+    }
   }
 
   // Draws a character sprite with its animation transform, an optional frame from a

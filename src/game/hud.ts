@@ -1,6 +1,10 @@
-// All the on-screen chrome that lives in the DOM (not the game canvas): the stat
-// bar, the hold-Tab stats panel, and the between-floor banner. Elements are built
-// once and updated via textContent / classList so nothing ever reflows the layout.
+// All the on-screen chrome that lives in the DOM (not the game canvas): the 4-corner
+// HUD (hearts / stat chips / minimap frame / weapon / dash meter), the hold-Tab stats
+// panel, and the between-floor banner. The 4-corner markup + CSS come from the ui
+// designer's spec (docs/ui). Elements are built once and updated via textContent /
+// classList / CSS vars so nothing ever reflows the layout mid-run.
+
+import { renderHearts, mountIcons } from "./hudIcons.js";
 
 export interface HudState {
   hp: number;
@@ -13,6 +17,7 @@ export interface HudState {
   enemiesLeft: number;
   isBossActive: boolean;
   coopLabel: string | null;
+  dashFill: number; // 0..1 dash-meter fill, 1 = ready
 }
 
 export interface ProfileStats {
@@ -48,119 +53,112 @@ function fmtTime(seconds: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-const PANEL_BG = "rgba(23,18,39,0.86)";
-const BORDER = "1px solid rgba(255,180,59,0.35)";
+// The 4-corner HUD DOM (docs/ui/hud_markup.html). The minimap canvas already lives in
+// index.html; its <canvas id="minimap"> is moved into the .tr .minimap frame at build.
+const HUD_MARKUP = `
+  <div class="hud-corner tl"><div class="statpanel">
+    <div class="hearts" data-hearts></div>
+    <div class="statrow">
+      <span class="chip floor"><span class="k">FL</span><span class="v" data-floor>1</span></span>
+      <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
+      <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
+    </div>
+  </div><div class="coopstrip" data-coop></div></div>
+  <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
+  <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
+  <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
+`;
 
 export class Hud {
-  private hearts: HTMLElement;
-  private heartCells: HTMLSpanElement[] = [];
-  private floorChip: HTMLElement;
-  private killsChip: HTMLElement;
-  private coinsChip: HTMLElement;
-  private weaponChip: HTMLElement;
-  private status: HTMLElement;
-  private coopChip: HTMLElement;
+  private hud: HTMLElement;
+  private heartsEl: HTMLElement;
+  private floorEl: HTMLElement;
+  private killsEl: HTMLElement;
+  private coinsEl: HTMLElement;
+  private wnameEl: HTMLElement;
+  private dashEl: HTMLElement;
+  private dashFillEl: HTMLElement;
+  private coopEl: HTMLElement;
 
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
   private banner: HTMLElement;
-  private bar: HTMLElement;
   private bannerTimer = 0;
 
+  // Hearts are the one expensive redraw (canvas per heart), so only rebuild on change.
+  private prevHp = -1;
+  private prevMaxHp = -1;
+
   constructor(root: HTMLElement) {
-    const bar = el("div",
-      `position:fixed;top:12px;left:12px;z-index:5;display:flex;flex-direction:column;gap:8px;` +
-      `padding:10px 12px;background:${PANEL_BG};border:${BORDER};border-radius:10px;` +
-      `color:#ffe6b0;font:13px ui-monospace,Menlo,monospace;pointer-events:none;` +
-      `text-shadow:0 1px 0 #000;font-variant-numeric:tabular-nums;`);
+    const hud = el("div", "");
+    hud.id = "hud";
+    hud.innerHTML = HUD_MARKUP;
+    hud.style.display = "none"; // hidden until a run starts
+    root.appendChild(hud);
+    this.hud = hud;
 
-    this.hearts = el("div", "display:flex;gap:3px;font-size:18px;line-height:1;");
-    bar.appendChild(this.hearts);
+    this.heartsEl = hud.querySelector("[data-hearts]")!;
+    this.floorEl = hud.querySelector("[data-floor]")!;
+    this.killsEl = hud.querySelector("[data-kills]")!;
+    this.coinsEl = hud.querySelector("[data-coins]")!;
+    this.wnameEl = hud.querySelector("[data-wname]")!;
+    this.dashEl = hud.querySelector(".dash")!;
+    this.dashFillEl = hud.querySelector(".dash .bar i")!;
+    this.coopEl = hud.querySelector("[data-coop]")!;
 
-    const chips = el("div", "display:flex;gap:8px;align-items:center;flex-wrap:wrap;");
-    const chipCss = "padding:3px 8px;background:rgba(255,180,59,0.10);border-radius:6px;white-space:nowrap;";
-    this.floorChip = el("span", chipCss, "floor 1");
-    this.killsChip = el("span", chipCss, "kills 0");
-    this.coinsChip = el("span", `${chipCss}color:#ffd27a;`, "coins 0");
-    this.weaponChip = el("span", `${chipCss}color:#ffb43b;`, "Pistol");
-    chips.append(this.floorChip, this.killsChip, this.coinsChip, this.weaponChip);
-    bar.appendChild(chips);
+    // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
+    const minimap = document.getElementById("minimap");
+    const frame = hud.querySelector(".minimap");
+    if (minimap && frame) frame.appendChild(minimap);
 
-    this.status = el("div", "font-size:12px;color:#9a8fb5;min-height:15px;");
-    bar.appendChild(this.status);
+    // Rasterize the chip icons (skull/coin/gun) once; hearts render on hp change.
+    mountIcons(hud);
 
-    this.coopChip = el("div", "font-size:11px;color:#5ad1ff;min-height:14px;letter-spacing:0.5px;");
-    bar.appendChild(this.coopChip);
-
-    bar.style.display = "none"; // hidden until a run starts
-    this.bar = bar;
-    root.appendChild(bar);
-
-    // Hold-Tab stats panel.
+    // Hold-Tab stats panel (token-styled to match the pixel dungeon frame).
     this.statsPanel = el("div",
       `position:fixed;inset:0;z-index:8;display:none;align-items:center;justify-content:center;` +
-      `background:rgba(8,6,16,0.72);backdrop-filter:blur(2px);`);
+      `background:rgba(5,3,11,0.72);`);
     const card = el("div",
-      `min-width:320px;max-width:440px;padding:22px 26px;background:${PANEL_BG};border:${BORDER};` +
-      `border-radius:14px;color:#ffe6b0;font:14px ui-monospace,Menlo,monospace;` +
-      `box-shadow:0 18px 50px rgba(0,0,0,0.5);font-variant-numeric:tabular-nums;`);
-    card.appendChild(el("h2", "color:#ffb43b;font-size:20px;letter-spacing:2px;margin-bottom:14px;", "RUN STATS"));
+      `min-width:320px;max-width:440px;padding:22px 26px;background:var(--dun-1);` +
+      `box-shadow:0 0 0 3px var(--dun-0),0 0 0 6px var(--dun-4),0 0 0 9px var(--dun-0),inset 0 0 0 2px var(--dun-2),0 12px 0 rgba(0,0,0,0.4);` +
+      `color:var(--cream);font:16px var(--f-num),ui-monospace,monospace;font-variant-numeric:tabular-nums;`);
+    card.appendChild(el("h2", "color:var(--amber);font:14px var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
     this.statsBody = el("div", "display:flex;flex-direction:column;gap:6px;");
     card.appendChild(this.statsBody);
-    card.appendChild(el("p", "margin-top:16px;font-size:11px;color:#6f6689;", "hold TAB to view · release to resume"));
+    card.appendChild(el("p", "margin-top:16px;font:8px var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "HOLD TAB TO VIEW \u00b7 RELEASE TO RESUME"));
     this.statsPanel.appendChild(card);
     root.appendChild(this.statsPanel);
 
     // Transient floor banner.
     this.banner = el("div",
       `position:fixed;top:26%;left:0;right:0;z-index:6;text-align:center;pointer-events:none;` +
-      `color:#ffb43b;font:700 30px ui-monospace,Menlo,monospace;letter-spacing:4px;` +
-      `text-shadow:0 3px 0 #000;opacity:0;transition:opacity 0.35s ease;`);
+      `color:var(--amber);font:22px var(--f-logo),monospace;letter-spacing:4px;` +
+      `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
     root.appendChild(this.banner);
-
-    this.syncHeartCells(6);
   }
 
   setVisible(v: boolean) {
-    this.bar.style.display = v ? "flex" : "none";
-  }
-
-  private syncHeartCells(maxHp: number) {
-    while (this.heartCells.length < maxHp) {
-      const cell = el("span", "");
-      this.heartCells.push(cell);
-      this.hearts.appendChild(cell);
-    }
-    while (this.heartCells.length > maxHp) {
-      const cell = this.heartCells.pop();
-      if (cell) this.hearts.removeChild(cell);
-    }
+    this.hud.style.display = v ? "block" : "none";
   }
 
   update(s: HudState) {
-    this.syncHeartCells(s.maxHp);
-    for (let i = 0; i < this.heartCells.length; i++) {
-      const filled = i < s.hp;
-      this.heartCells[i].textContent = filled ? "\u2665" : "\u2661";
-      this.heartCells[i].style.color = filled ? "#ff6a6a" : "#4a3a5a";
+    if (s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp) {
+      renderHearts(this.heartsEl, s.hp, s.maxHp);
+      this.prevHp = s.hp;
+      this.prevMaxHp = s.maxHp;
     }
-    this.floorChip.textContent = `floor ${s.floor}`;
-    this.killsChip.textContent = `kills ${s.kills}`;
-    this.coinsChip.textContent = `coins ${s.coins}`;
-    this.weaponChip.textContent = s.weaponName;
+    this.floorEl.textContent = String(s.floor);
+    this.killsEl.textContent = String(s.kills);
+    this.coinsEl.textContent = String(s.coins);
+    this.wnameEl.textContent = s.weaponName.toUpperCase();
+    // Ammo stays the infinity glyph from the markup — weapons have no clip concept.
 
-    if (s.isBossActive) {
-      this.status.textContent = "the slime king blocks the way";
-      this.status.style.color = "#ff8a5a";
-    } else if (s.isCleared) {
-      this.status.textContent = "floor cleared \u2014 find the exit \u25be";
-      this.status.style.color = "#8affc0";
-    } else {
-      this.status.textContent = `enemies: ${s.enemiesLeft}`;
-      this.status.style.color = "#9a8fb5";
-    }
+    const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
+    this.dashFillEl.style.setProperty("--dash-fill", String(fill));
+    this.dashEl.classList.toggle("ready", fill >= 1);
 
-    this.coopChip.textContent = s.coopLabel ?? "";
+    this.coopEl.textContent = s.coopLabel ?? "";
+    this.coopEl.style.display = s.coopLabel ? "block" : "none";
   }
 
   showStats(d: StatsPanelData) {
@@ -220,7 +218,7 @@ export class Hud {
   }
 
   clear() {
-    this.status.textContent = "";
-    this.coopChip.textContent = "";
+    this.coopEl.textContent = "";
+    this.coopEl.style.display = "none";
   }
 }
