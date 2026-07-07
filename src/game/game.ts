@@ -409,8 +409,10 @@ export class Game {
   }
 
   private resize() {
-    this.canvas.width = Math.min(window.innerWidth, 1100);
-    this.canvas.height = Math.min(window.innerHeight, 720);
+    // Fill the whole viewport (camera-follow world, so more screen = more visible area).
+    // Cap at a sane max so a huge monitor doesn't blow out fill-rate, but no letterbox.
+    this.canvas.width = Math.min(window.innerWidth, 2560);
+    this.canvas.height = Math.min(window.innerHeight, 1440);
   }
 
   private bindInput() {
