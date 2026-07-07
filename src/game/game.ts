@@ -111,6 +111,9 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   ricochet: "ricochet",
   homing: "homing",
   tesla: "tesla",
+  sawnoff: "shootShotgun",
+  railgun: "shootPistol",
+  nailer: "shootRapid",
 };
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
@@ -129,20 +132,24 @@ const SHAKE_MAX_PX = 26;
 const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
+  sawnoff: 0.6, railgun: 0.4, nailer: 0.06,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
 const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
+  sawnoff: 1.6, railgun: 1.5, nailer: 0.6,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
+  sawnoff: 11, railgun: 6, nailer: 1.2,
 };
 const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
+  sawnoff: 26, railgun: 6, nailer: 0,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -160,6 +167,7 @@ const TRAUMA_REMOTE_DOWN = 0.3;
 const WEAPON_KB: Record<WeaponId, number> = {
   pistol: 4, shotgun: 8, rapid: 2,
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
+  sawnoff: 10, railgun: 12, nailer: 3,
 };
 const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
 const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
@@ -2854,6 +2862,17 @@ export class Game {
         this.fxLayer("glow_round", color, bx, by, R * 7, R * 7, 0.5, 0);
         this.fxLayer("crackle", color, bx, by, R * 4.5, R * 4.5, 0.9, this.animClock * 9);
         return this.fxLayer("core_dot", color, bx, by, R * 2.6, R * 2.6, 1, 0);
+      case "sawnoff":
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.45, 0);
+        return this.fxLayer("slug", color, bx, by, R * 3.6, R * 3.6, 1, angle);
+      case "railgun":
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.45, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen, R * 1.4, 0.7, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 2.2, R * 2.2, 1, 0);
+      case "nailer":
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.4, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.75, R * 2, 0.55, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 3, R * 3, 1, 0);
       default:
         return false;
     }
