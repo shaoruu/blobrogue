@@ -21,6 +21,7 @@ export interface Weapon {
   color: string;
   muzzle: number;      // muzzle-flash particle count
   melee?: MeleeSpec;   // present => melee class (swing hitbox, no bullets)
+  basePierce?: number;  // intrinsic pass-through count before item pierce
   // Optional bullet behaviors. Absent on the base weapons; each stamps one field onto
   // every bullet it fires (see fire) to switch on an isolated update-loop branch.
   bounce?: number;     // ricochet: wall reflections before the bullet dies
@@ -56,6 +57,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   cannon: {
     id: "cannon", name: "Thunderbolt", fireCd: 0.72, speed: 520, life: 1.3,
     damage: 9, pellets: 1, spread: 0, bulletRadius: 11, color: "#ff8a3b", muzzle: 5,
+    basePierce: 2,
   },
   burst: {
     id: "burst", name: "Triplet", fireCd: 0.34, speed: 680, life: 1.0,

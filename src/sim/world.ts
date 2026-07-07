@@ -350,7 +350,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     radius: wep.bulletRadius * p.mods.bulletSizeMult,
     color: wep.color,
     damage: wep.damage * currentDamageMult(p),
-    pierce: p.mods.pierce,
+    pierce: Math.min(4, (wep.basePierce ?? 0) + p.mods.pierce),
     critChance: p.mods.critChance,
     critMult: p.mods.critMult,
     fx: wep.id,
@@ -1336,7 +1336,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         if (p.kind === "heart") {
           if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); collected = true; break; }
         }
-        if (p.kind === "weapon" && p.weapon) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "weapon" && p.weapon && !player.ownedWeapons.includes(p.weapon)) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
       }
     }
     if (!collected) remaining.push(p);
