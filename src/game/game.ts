@@ -1609,8 +1609,20 @@ export class Game {
       isBossActive,
       coopLabel,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
-      items: this.ownedItems.map((it) => ({ glyph: it.glyph, tint: it.tint })),
+      items: this.collapsedItems(),
     });
+  }
+
+  // Collapse owned blessings by id into count-bearing entries (first-seen order), so the
+  // HUD panel shows one chip per distinct item with an xN badge when a pick repeats.
+  private collapsedItems() {
+    const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
+    for (const it of this.ownedItems) {
+      const seen = collapsed.get(it.id);
+      if (seen) seen.count++;
+      else collapsed.set(it.id, { id: it.id, name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+    }
+    return [...collapsed.values()];
   }
 
   private openStats() {
@@ -1626,7 +1638,7 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
-      items: this.ownedItems.map((it) => ({ name: it.name, glyph: it.glyph, tint: it.tint })),
+      items: this.ownedItems.map((it) => ({ name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
     });
   }
 
@@ -2198,6 +2210,8 @@ export class Game {
       }
       ctx.restore();
 
+      if (!r.isDown) this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
+
       ctx.fillStyle = color;
       ctx.font = "11px ui-monospace, Menlo, monospace";
       ctx.textAlign = "center";
@@ -2219,6 +2233,7 @@ export class Game {
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock);
+    if (!this.isDown) this.renderHeldWeapon(psx, psy, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
       ctx.font = "12px ui-monospace, Menlo, monospace";
@@ -2226,6 +2241,25 @@ export class Game {
       ctx.fillText("DOWN \u2014 wait for a teammate", psx, psy - 34);
       ctx.textAlign = "left";
     }
+  }
+
+  // The equipped gun, drawn over the hero and rotated to aim. Held sprites are authored
+  // 48px pointing right with the grip at (12, 24); the vertical flip past |aim| > 90deg
+  // keeps the gun upright when aiming left. Weapons without art (the six newer guns) fall
+  // back to the pistol overlay; if even that isn't loaded yet it simply draws nothing.
+  private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0) {
+    const img = this.sprites.heldWeapon(weapon) ?? this.sprites.heldWeapon("pistol");
+    if (!img) return;
+    const { ctx } = this;
+    const handR = 8 - recoil * 3; // recoil pulls the grip back toward the blob on fire
+    const s = 0.5; // 48px sprite -> ~24px over the ~44px blob
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx + Math.cos(aim) * handR, cy + Math.sin(aim) * handR);
+    ctx.rotate(aim);
+    if (Math.abs(aim) > Math.PI / 2) ctx.scale(1, -1);
+    ctx.drawImage(img, -12 * s, -24 * s, 48 * s, 48 * s);
+    ctx.restore();
   }
 
   private renderAfterimages() {
