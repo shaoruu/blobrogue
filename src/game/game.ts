@@ -5,7 +5,7 @@ import { TILE } from "./types.js";
 import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
-import type { SpriteName, SheetClip, TileName } from "./assets.js";
+import type { SpriteName, SheetClip, TileName, FxName } from "./assets.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
@@ -35,8 +35,8 @@ export interface StartOptions {
   profile?: ProfileStats | null;
 }
 
-interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; }
-interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; }
+interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
+interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
@@ -64,7 +64,9 @@ const HALF_PI = Math.PI / 2;
 const REVIVE_RADIUS = 46;
 const REVIVE_HOLD = 1.1;
 const BOSS_MINION_CAP = 14;
-const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
+const DEATH_DUR = 0.3;        // seconds a fade-only corpse (ghost/spitter) animates out
+const DEATH_DUR_SHEET = 0.4;  // slime/skeleton/bat: their 5-frame death clip
+const DEATH_DUR_BOSS = 0.65;  // the boss's longer 8-frame death clip
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
 const DASH_COOLDOWN = 0.7; // seconds between dashes; drives the HUD dash meter fill
 const BASE_MAX_HP = 6;     // starting max hearts before any item bonus
@@ -278,7 +280,7 @@ export class Game {
   private playerAnim = createAnim();
   private isPlayerMoving = false;
   private playerLean = 0;
-  private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2 };
+  private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2, color: "#ffe6a0" };
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -630,7 +632,7 @@ export class Game {
       this.fireCd = w.fireCd / this.currentFireRate();
       this.shotSeq++;
       triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
-      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle;
+      this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle; this.muzzle.color = w.color;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
       if (this.weapon !== "rapid") this.spawnShell(this.px, this.py - 6, this.aimAngle);
       sfx(SHOOT_SFX[this.weapon]);
@@ -680,6 +682,7 @@ export class Game {
       pierce: this.mods.pierce,
       critChance: this.mods.critChance,
       critMult: this.mods.critMult,
+      fx: w.id,
       bounce: w.bounce,
       homing: w.homing,
       chain: w.chain,
@@ -788,6 +791,17 @@ export class Game {
     b.x = px; b.y = py;
     b.bounce = (b.bounce ?? 0) - 1;
     this.spawnSparks(b.x, b.y, 3, Math.atan2(b.vy, b.vx));
+    this.spawnSparkFlash(b.x, b.y, b.color);
+  }
+
+  private spawnSparkFlash(x: number, y: number, color: string) {
+    // A single bright sprite spark that pops and fades where a ricochet round hits a wall.
+    const life = 0.16;
+    this.particles.push({
+      x, y, vx: 0, vy: 0,
+      life, maxLife: life, color,
+      size: 22, kind: "sparkfx", rot: Math.random() * 6.28, vr: 0, gravity: 0, drag: 1,
+    });
   }
 
   private updateEnemies(dt: number) {
@@ -887,7 +901,7 @@ export class Game {
       this.remoteTracers.push({
         x: origin.x, y: origin.y,
         angle: Math.atan2(best.y - origin.y, best.x - origin.x),
-        life: 0.12, color: b.color, len: Math.sqrt(bestD),
+        life: 0.12, color: b.color, len: Math.sqrt(bestD), isArc: true,
       });
       best.hp -= dmg;
       triggerFlash(best.anim);
@@ -1348,7 +1362,12 @@ export class Game {
     this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
     this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
     this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
-    this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0 });
+    // Enemies with a death sheet play it once over a longer beat; ghost/spitter keep the
+    // short procedural fade. The renderer falls back to the fade if the sheet isn't loaded.
+    const dur = e.kind === "boss" ? DEATH_DUR_BOSS
+      : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
+      : DEATH_DUR;
+    this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
     sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
     this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
     this.addTrauma(big ? TRAUMA_BOSS_KILL : TRAUMA_KILL);
@@ -1433,7 +1452,7 @@ export class Game {
   }
 
   private updateCorpses(dt: number) {
-    for (const c of this.corpses) c.t += dt / DEATH_DUR;
+    for (const c of this.corpses) c.t += dt / c.dur;
     this.corpses = this.corpses.filter((c) => c.t < 1);
   }
 
@@ -1936,6 +1955,24 @@ export class Game {
     const { ctx, cam } = this;
     for (const c of this.corpses) {
       const p = c.t; // 0..1
+      // A registered death sheet plays once over the corpse's lifetime (frame from elapsed
+      // seconds, clamped to the last frame). The gib particles + splat decal still layer on
+      // top from killEnemy. Ghost/spitter (no sheet) and any not-yet-loaded sheet fall
+      // through to the procedural pop-and-fade below.
+      const death = this.sprites.sheet(c.sprite, "death");
+      if (death) {
+        const fw = death.img.naturalHeight || FRAME;
+        const count = Math.max(1, Math.round(death.img.naturalWidth / fw));
+        const frame = Math.min(count - 1, Math.floor(p * c.dur * death.fps));
+        const dsx = c.x - cam.x, dsy = c.y - cam.y;
+        ctx.save();
+        ctx.globalAlpha = p > 0.75 ? Math.max(0, 1 - (p - 0.75) / 0.25) : 1;
+        ctx.translate(dsx, dsy);
+        ctx.scale(c.facing, 1);
+        ctx.drawImage(death.img, frame * fw, 0, fw, fw, -c.size / 2, -c.size / 2, c.size, c.size);
+        ctx.restore();
+        continue;
+      }
       const grow = p < 0.2 ? 1 + (p / 0.2) * 0.4 : 1.4 - ((p - 0.2) / 0.8) * 1.4;
       const s = Math.max(0, grow);
       const sx = c.x - cam.x, sy = c.y - cam.y - p * 8;
@@ -1964,6 +2001,13 @@ export class Game {
     ctx.globalCompositeOperation = "lighter";
     ctx.translate(mx, my);
     ctx.rotate(this.muzzle.angle);
+    // A weapon-tinted sprite glow at the barrel, over the procedural gradient below.
+    const tint = this.sprites.fxTinted("glow_round", this.muzzle.color);
+    if (tint) {
+      const gs = (14 + sz * 4) * (0.6 + k * 0.6);
+      ctx.globalAlpha = k * 0.9;
+      ctx.drawImage(tint, -gs / 2, -gs / 2, gs, gs);
+    }
     // Round core glow.
     const core = 6 + sz * 1.3;
     const g = ctx.createRadialGradient(0, 0, 1, 0, 0, core + k * 10);
@@ -1998,6 +2042,17 @@ export class Game {
         ctx.rotate(p.rot);
         ctx.fillStyle = p.color;
         ctx.fillRect(-p.size / 2, -p.size * 0.35, p.size, p.size * 0.7);
+        ctx.restore();
+      } else if (p.kind === "sparkfx") {
+        const img = this.sprites.fxTinted("spark", p.color);
+        const sz = p.size * (0.6 + a * 0.6); // pop out then shrink as it fades
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = Math.min(1, a);
+        ctx.translate(p.x - cam.x, p.y - cam.y);
+        ctx.rotate(p.rot);
+        if (img) ctx.drawImage(img, -sz / 2, -sz / 2, sz, sz);
+        else { ctx.fillStyle = p.color; ctx.fillRect(-sz / 4, -sz / 4, sz / 2, sz / 2); }
         ctx.restore();
       } else {
         ctx.globalAlpha = p.kind === "puff" ? Math.min(1, a) * 0.55 : Math.min(1, a);
@@ -2155,6 +2210,9 @@ export class Game {
     for (const b of this.bullets) {
       const bx = b.x - cam.x, by = b.y - cam.y;
       if (b.friendly) {
+        // Layered additive sprite FX per weapon; falls back to the plain circle if the
+        // recipe's core sprite hasn't loaded yet, so a bullet always renders.
+        if (b.fx && this.drawBulletFx(b, bx, by)) continue;
         ctx.fillStyle = b.color;
         ctx.beginPath(); ctx.arc(bx, by, b.radius, 0, 6.28); ctx.fill();
       } else {
@@ -2172,17 +2230,117 @@ export class Game {
     ctx.globalAlpha = 1;
   }
 
+  private fxLayer(name: FxName, color: string, x: number, y: number, w: number, h: number, alpha: number, angle: number): boolean {
+    // One tinted FX primitive, drawn additively and centered (px sizes), optionally
+    // rotated. Returns whether it drew — the source sprite may still be streaming in.
+    const img = this.sprites.fxTinted(name, color);
+    if (!img) return false;
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    if (angle !== 0) ctx.rotate(angle);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+    return true;
+  }
+
+  private fxTrail(name: FxName, color: string, x: number, y: number, len: number, thick: number, alpha: number, angle: number): boolean {
+    // trail_streak/comet_trail are authored bright-head-at-+X; anchoring that head on the
+    // bullet and extending backward (len px) makes the streak trail the shot.
+    const img = this.sprites.fxTinted(name, color);
+    if (!img) return false;
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = alpha;
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.drawImage(img, -len, -thick / 2, len, thick);
+    ctx.restore();
+    return true;
+  }
+
+  private drawBulletFx(b: Bullet, bx: number, by: number): boolean {
+    // Per-weapon look: [smoke] -> glow -> trail (to velocity) -> core/slug, all additive.
+    // Tinted canvases are cached, so this is allocation-free. Returns false only when the
+    // recipe's core sprite is still loading (the caller then draws the fallback circle).
+    const color = b.color;
+    const R = b.radius;
+    const angle = Math.atan2(b.vy, b.vx);
+    const speed = Math.hypot(b.vx, b.vy);
+    // Streak length tracks bullet speed (clamped), so faster rounds read as longer smears.
+    const trailLen = Math.min(R * 9, Math.max(R * 2.5, speed * 0.05));
+    switch (b.fx) {
+      case "pistol":
+        this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.6, R * 2, 0.55, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 3, R * 3, 1, 0);
+      case "shotgun":
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.45, 0);
+        return this.fxLayer("slug", color, bx, by, R * 3.6, R * 3.6, 1, angle);
+      case "rapid":
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.3, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen, R * 1.8, 0.6, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 2.4, R * 2.4, 1, 0);
+      case "smg":
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.35, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.75, R * 1.9, 0.55, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 2.8, R * 2.8, 1, 0);
+      case "cannon":
+        this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.2, by - Math.sin(angle) * R * 2.2, R * 5, R * 5, 0.4, 0);
+        this.fxLayer("glow_round", color, bx, by, R * 10, R * 10, 0.5, 0);
+        return this.fxLayer("slug", color, bx, by, R * 5, R * 5, 1, angle);
+      case "burst":
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.45, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.5, R * 2, 0.5, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 3, R * 3, 1, 0);
+      case "ricochet":
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.4, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.75, R * 2, 0.55, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 3, R * 3, 1, 0);
+      case "homing":
+        this.fxLayer("glow_round", color, bx, by, R * 7, R * 7, 0.5, 0);
+        return this.fxTrail("comet_trail", color, bx, by, Math.max(R * 6, trailLen), R * 4, 0.7, angle);
+      case "tesla":
+        this.fxLayer("glow_round", color, bx, by, R * 7, R * 7, 0.5, 0);
+        this.fxLayer("crackle", color, bx, by, R * 4.5, R * 4.5, 0.9, this.animClock * 9);
+        return this.fxLayer("core_dot", color, bx, by, R * 2.6, R * 2.6, 1, 0);
+      default:
+        return false;
+    }
+  }
+
   private renderTracers() {
     const { ctx, cam } = this;
     for (const tr of this.remoteTracers) {
+      const len = tr.len ?? 42;
+      const x = tr.x - cam.x, y = tr.y - cam.y;
+      // Tesla chain arcs draw as a stretched, rotated lightning sprite between enemies;
+      // everything else (co-op shot tracers) keeps the thin line, with a line fallback if
+      // the sprite is still loading.
+      if (tr.isArc) {
+        const img = this.sprites.fxTinted("arc_chain", tr.color);
+        if (img) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+          ctx.globalAlpha = Math.max(0, tr.life / 0.12);
+          ctx.translate(x, y);
+          ctx.rotate(tr.angle);
+          const h = 14;
+          ctx.drawImage(img, 0, -h / 2, len, h);
+          ctx.restore();
+          continue;
+        }
+      }
       ctx.save();
       ctx.globalAlpha = Math.max(0, tr.life / 0.12) * 0.8;
       ctx.strokeStyle = tr.color;
       ctx.lineWidth = 2;
-      const len = tr.len ?? 42;
       ctx.beginPath();
-      ctx.moveTo(tr.x - cam.x, tr.y - cam.y);
-      ctx.lineTo(tr.x - cam.x + Math.cos(tr.angle) * len, tr.y - cam.y + Math.sin(tr.angle) * len);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(tr.angle) * len, y + Math.sin(tr.angle) * len);
       ctx.stroke();
       ctx.restore();
     }

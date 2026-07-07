@@ -84,6 +84,7 @@ export interface ShotSpec {
   pierce: number;
   critChance: number;
   critMult: number;
+  fx?: WeaponId;       // render recipe tag, stamped onto each bullet (see renderBullets)
   // Carried straight from the weapon (item mods never touch these) and stamped onto
   // each bullet. Undefined for weapons without the behavior.
   bounce?: number;
@@ -113,6 +114,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number): Bullet[
       pierce: spec.pierce,
       hitList: null,
       isCrit,
+      fx: spec.fx,
       bounce: spec.bounce,
       homing: spec.homing,
       chain: spec.chain,
