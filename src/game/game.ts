@@ -2190,21 +2190,16 @@ export class Game {
       for (let tx = x0; tx < x1; tx++) {
         if (d.tiles[ty * d.w + tx] !== 1) continue;
         const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
+        const aboveFloor = ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 0;
         const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
         const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
         const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
-        // AD autotile faces v2 (bold dark extrude): cap + the face piece for this
-        // neighbour config; skips the code-gradient fallback below when the art is loaded.
-        const auto: TileName | null = belowFloor && rightFloor ? "wall_a_SE"
-          : belowFloor && leftFloor ? "wall_a_SW"
-          : belowFloor ? "wall_a_S"
-          : rightFloor ? "wall_a_E"
-          : leftFloor ? "wall_a_W" : null;
-        if (auto && tiles.ready(auto)) {
-          if (tiles.ready("wall_top")) ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
-          ctx.drawImage(tiles.get(auto), sx, sy, TILE, TILE);
-          continue;
-        }
+        // Full 16-piece autotile (AD): pick the block by which of N/E/S/W neighbours are
+        // FLOOR (NESW order). One self-contained piece bakes cap + all exposed faces +
+        // corners — handles thin walls, pillars, and gaps, not just room perimeters.
+        const sides = (aboveFloor ? "N" : "") + (rightFloor ? "E" : "") + (belowFloor ? "S" : "") + (leftFloor ? "W" : "");
+        const wf = ("wf_" + (sides || "top")) as TileName;
+        if (tiles.ready(wf)) { ctx.drawImage(tiles.get(wf), sx, sy, TILE, TILE); continue; }
         if (tiles.ready("wall_top")) {
           ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
         } else {
