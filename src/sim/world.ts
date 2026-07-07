@@ -120,7 +120,10 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
   };
 }
 
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean }
+// skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
+// spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
+// Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; skipLocalPlayer?: boolean }
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
@@ -150,9 +153,28 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     targetY: 0,
   };
   loadFloorIntoWorld(w, floor);
-  const spawn = w.dungeon.spawn;
-  w.players.set(LOCAL_ID, createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2));
+  if (!opts.skipLocalPlayer) {
+    const spawn = w.dungeon.spawn;
+    w.players.set(LOCAL_ID, createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2));
+  }
   return w;
+}
+
+// Add a fresh player to a live world at the current dungeon spawn (authoritative server:
+// on join). Returns the created PlayerSim. No-ops to the existing entry if the id is taken.
+export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
+  const existing = w.players.get(id);
+  if (existing) return existing;
+  const spawn = w.dungeon.spawn;
+  const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+  w.players.set(id, p);
+  return p;
+}
+
+// Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
+// no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
+export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
+  return w.players.delete(id);
 }
 
 // A single open walled rectangle for the dev sandbox — reuses the Dungeon/Room shape so
@@ -1393,23 +1415,27 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
 
 // ---- the step ----
 
-export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: number): SimEvent[] {
-  const ev: SimEvent[] = [];
-  w.tick++;
-
-  for (const p of w.players.values()) {
-    const input = inputs.get(p.id) ?? IDLE_INPUT;
-    p.aimAngle = input.aim;
-    if (!p.isDown) {
-      updatePlayer(w, p, input, dt, ev);
-      updateShooting(w, p, input, dt, ev);
-    }
-    if (p.meleeSwing) {
-      p.meleeSwing.timer -= dt;
-      if (p.meleeSwing.timer <= 0) p.meleeSwing = null;
-    }
+// Advance ONE player for one input over dt: aim, movement/dash/collision, shooting, and the
+// melee-swing timer. This is the per-player half of stepWorld, factored out so the
+// authoritative server and client prediction can step ONLY the local player at an arbitrary
+// dt (each InputCmd carries its own frame dt) while the world half runs once per fixed tick.
+// stepWorld itself calls this, so solo behavior is unchanged.
+export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+  p.aimAngle = input.aim;
+  if (!p.isDown) {
+    updatePlayer(w, p, input, dt, ev);
+    updateShooting(w, p, input, dt, ev);
   }
+  if (p.meleeSwing) {
+    p.meleeSwing.timer -= dt;
+    if (p.meleeSwing.timer <= 0) p.meleeSwing = null;
+  }
+}
 
+// The world-systems half of stepWorld: bullets, enemies, props, chests, pickups, exit, and
+// combo decay. Runs once per authoritative tick at the fixed step AFTER every player has been
+// advanced. Only the sim RNG (w.rng) is consumed here, so the server is the single roller.
+export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
   updateProps(w, dt, ev);
@@ -1423,6 +1449,17 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
       if (p.comboTimer <= 0) { p.comboTimer = 0; p.combo = 0; }
     }
   }
+}
+
+export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: number): SimEvent[] {
+  const ev: SimEvent[] = [];
+  w.tick++;
+
+  for (const p of w.players.values()) {
+    stepPlayerPhase(w, p, inputs.get(p.id) ?? IDLE_INPUT, dt, ev);
+  }
+
+  stepWorldPhase(w, dt, ev);
 
   return ev;
 }
