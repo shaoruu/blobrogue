@@ -388,6 +388,11 @@ export class Game {
   private dungeon!: Dungeon;
   private floor = 1;
   private seed = 0;
+  // Seeded sim RNG: every gameplay-affecting random roll (pellet jitter, crit, enemy zig,
+  // status/loot rolls, boss minion placement) draws from here so the simulation is
+  // deterministic given (seed, per-tick inputs). Cosmetic randomness (particles, screen
+  // shake, anim phase) intentionally stays on Math.random — it never touches sim state.
+  private rng = new Rng(0);
   private kills = 0;
   private coins = 0;
   // Kill-chain combo: driven purely by this client's own kills (like `kills`/`coins`),
@@ -551,6 +556,7 @@ export class Game {
     this.profile = opts.profile ?? null;
     this.floor = this.coop ? this.coop.getFloor() : 1;
     this.seed = this.coop ? this.coop.getSeed() : randomSeed();
+    this.rng = new Rng(this.seed ^ 0x53696d21);
     this.kills = 0;
     this.coins = 0;
     this.combo = 0;
@@ -973,7 +979,7 @@ export class Game {
       const muzzleX = this.px + Math.cos(this.aimAngle) * 18;
       const muzzleY = this.py + Math.sin(this.aimAngle) * 18;
       const spec = this.resolveShot(w);
-      for (const b of fire(spec, muzzleX, muzzleY, this.aimAngle)) this.bullets.push(b);
+      for (const b of fire(spec, muzzleX, muzzleY, this.aimAngle, this.rng)) this.bullets.push(b);
       this.fireCd = w.fireCd / this.currentFireRate();
       this.shotSeq++;
       triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
@@ -996,7 +1002,7 @@ export class Game {
   private startMeleeSwing(w: (typeof WEAPONS)[WeaponId]) {
     const m = w.melee;
     if (!m) return;
-    const isCrit = this.mods.critChance > 0 && Math.random() < this.mods.critChance;
+    const isCrit = this.mods.critChance > 0 && this.rng.next() < this.mods.critChance;
     const baseDmg = w.damage * this.currentDamageMult();
     this.meleeSwing = {
       timer: m.swingDur ?? 0.2,
@@ -1341,11 +1347,11 @@ export class Game {
   // else-if means a flamethrower round (already burning) doesn't double-roll item burn.
   private applyHitStatuses(e: Enemy, src: { burn?: number; chill?: number; shock?: number }) {
     if (src.burn !== undefined) this.applyBurn(e, src.burn);
-    else if (this.mods.burnChance > 0 && Math.random() < this.mods.burnChance) this.applyBurn(e, ITEM_BURN_SECS);
+    else if (this.mods.burnChance > 0 && this.rng.next() < this.mods.burnChance) this.applyBurn(e, ITEM_BURN_SECS);
     if (src.chill !== undefined) this.applyChill(e, src.chill);
-    else if (this.mods.chillChance > 0 && Math.random() < this.mods.chillChance) this.applyChill(e, ITEM_CHILL_SECS);
+    else if (this.mods.chillChance > 0 && this.rng.next() < this.mods.chillChance) this.applyChill(e, ITEM_CHILL_SECS);
     if (src.shock !== undefined) this.applyShock(e, src.shock);
-    else if (this.mods.shockChance > 0 && Math.random() < this.mods.shockChance) this.applyShock(e, ITEM_SHOCK_SECS);
+    else if (this.mods.shockChance > 0 && this.rng.next() < this.mods.shockChance) this.applyShock(e, ITEM_SHOCK_SECS);
   }
 
   // Burn: refresh duration, add a stack of DoT (capped). First application seeds burnDmg.
@@ -1715,11 +1721,11 @@ export class Game {
   private spawnBossMinion(e: Enemy) {
     if (this.enemies.length >= BOSS_MINION_CAP) return;
     triggerRecoil(e.anim); // pop on the spawn beat
-    const a = Math.random() * Math.PI * 2;
+    const a = this.rng.next() * Math.PI * 2;
     const mx = e.x + Math.cos(a) * (e.radius + 20);
     const my = e.y + Math.sin(a) * (e.radius + 20);
     if (this.isWall(mx, my)) return;
-    this.enemies.push(createEnemy("slime", mx, my, this.floor));
+    this.enemies.push(createEnemy("slime", mx, my, this.floor, this.rng));
     this.spawnParticles(mx, my, 8, "#a855f7");
     if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
   }
@@ -1925,7 +1931,7 @@ export class Game {
     this.addTrauma((big ? TRAUMA_BOSS_KILL : TRAUMA_KILL) + comboTrauma);
     // A boss dying clears its danger off the board so the victory beat isn't a death.
     if (big) this.bullets = this.bullets.filter((b) => b.friendly);
-    if (this.mods.lifestealChance > 0 && this.hp < this.maxHp && Math.random() < this.mods.lifestealChance) {
+    if (this.mods.lifestealChance > 0 && this.hp < this.maxHp && this.rng.next() < this.mods.lifestealChance) {
       this.hp++;
       this.spawnParticles(e.x, e.y, 8, "#ff6a9d");
       sfx("heart", { gain: 0.5 });
@@ -1941,8 +1947,8 @@ export class Game {
       return;
     }
     // Kill coins carry the live combo multiplier baked in (props/chests stay face value).
-    if (Math.random() < 0.5) this.pickups.push(this.makePickup("coin", e.x, e.y, this.comboCoinValue()));
-    if (Math.random() < 0.12) this.pickups.push(this.makePickup("heart", e.x + 10, e.y));
+    if (this.rng.next() < 0.5) this.pickups.push(this.makePickup("coin", e.x, e.y, this.comboCoinValue()));
+    if (this.rng.next() < 0.12) this.pickups.push(this.makePickup("heart", e.x + 10, e.y));
   }
 
   private makePickup(kind: "heart" | "coin", x: number, y: number, value?: number): Pickup {
@@ -2026,20 +2032,20 @@ export class Game {
         this.spawnGibs(p.x, p.y, 10, "#b07a3c");
         this.spawnPuff(p.x, p.y, 6, "#c9a06a");
         this.sfxAt("barrel", p.x, p.y, { rate: 1.4, gain: 0.6 }); // light crate crack
-        if (Math.random() < 0.6) this.pickups.push(this.makePickup("coin", p.x, p.y));
-        if (Math.random() < 0.15) this.pickups.push(this.makePickup("heart", p.x + 12, p.y));
+        if (this.rng.next() < 0.6) this.pickups.push(this.makePickup("coin", p.x, p.y));
+        if (this.rng.next() < 0.15) this.pickups.push(this.makePickup("heart", p.x + 12, p.y));
         break;
       case "pot":
         this.spawnPuff(p.x, p.y, 10, "#8fb8d6");
         this.spawnGibs(p.x, p.y, 5, "#9c6b4a");
         this.sfxAt("barrel", p.x, p.y, { rate: 1.8, gain: 0.45 }); // high, brittle shatter
-        if (Math.random() < 0.35) this.pickups.push(this.makePickup("coin", p.x, p.y));
+        if (this.rng.next() < 0.35) this.pickups.push(this.makePickup("coin", p.x, p.y));
         break;
       case "barrel":
         this.spawnGibs(p.x, p.y, 10, "#8a5a2c");
         this.spawnPuff(p.x, p.y, 6, "#b07a3c");
         this.sfxAt("barrel", p.x, p.y, { rate: 1.1, gain: 0.7 });
-        if (Math.random() < 0.45) this.pickups.push(this.makePickup("coin", p.x, p.y));
+        if (this.rng.next() < 0.45) this.pickups.push(this.makePickup("coin", p.x, p.y));
         break;
       case "barrel_explosive":
         this.explodeBarrel(p);
@@ -2110,16 +2116,16 @@ export class Game {
   // Wood-chest table: mostly coins, then a heart, a blessing pick (the "chest -> power-up"
   // moment), and rarely a weapon. Coins/hearts/weapons ride the existing pickup collect loop.
   private rollWoodChest(c: Chest) {
-    const r = Math.random();
+    const r = this.rng.next();
     if (r < 0.55) {
-      const n = 3 + Math.floor(Math.random() * 4); // 3-6 coins
+      const n = 3 + Math.floor(this.rng.next() * 4); // 3-6 coins
       for (let i = 0; i < n; i++) this.pickups.push(this.makePickup("coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12));
     } else if (r < 0.75) {
       this.pickups.push(this.makePickup("heart", c.x, c.y));
     } else if (r < 0.93) {
       this.offerBlessing();
     } else {
-      const weapon = PICKUP_WEAPONS[Math.floor(Math.random() * PICKUP_WEAPONS.length)];
+      const weapon = PICKUP_WEAPONS[Math.floor(this.rng.next() * PICKUP_WEAPONS.length)];
       this.pickups.push({ kind: "weapon", x: c.x, y: c.y, radius: 16, weapon, anim: createAnim() });
     }
   }
@@ -3660,7 +3666,7 @@ export class Game {
   devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean): void {
     for (let i = 0; i < count; i++) {
       const p = this.devPlacePoint(atCursor);
-      this.enemies.push(createEnemy(kind, p.x, p.y, this.floor));
+      this.enemies.push(createEnemy(kind, p.x, p.y, this.floor, this.rng));
       this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
     }
   }

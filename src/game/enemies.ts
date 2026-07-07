@@ -69,7 +69,10 @@ export function isBossFloor(floor: number): boolean {
   return floor % BOSS_EVERY === 0;
 }
 
-export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number): Enemy {
+// The seeded sim Rng supplies the bat's initial `zig` heading so enemy creation is
+// deterministic (golden-master oracle + later prediction). spawnFloorEnemies passes its
+// own per-floor Rng; runtime spawns (boss minions, dev) pass the live world Rng.
+export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number, rng: Rng): Enemy {
   const a = ENEMY_ARCHETYPES[kind];
   const hp = Math.round(a.baseHp + a.hpPerFloor * (floor - 1));
   const isBoss = kind === "boss";
@@ -79,7 +82,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     hp, maxHp: hp, dead: false,
     speed: a.baseSpeed + a.speedPerFloor * (floor - 1),
     touchDamage: a.touchDamage,
-    zig: Math.random() * Math.PI * 2,
+    zig: rng.next() * Math.PI * 2,
     spawnTimer: SPAWN_GRACE,
     stuckTimer: 0,
     burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0,
@@ -134,12 +137,12 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number)
     // Boss lives in the last room (next to the exit). A few slimes for company.
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
-    enemies.push(createEnemy("boss", b.x, b.y, floor));
+    enemies.push(createEnemy("boss", b.x, b.y, floor, rng));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);
       const p = pointInRoom(rng, dungeon, roomIndex);
-      enemies.push(createEnemy("slime", p.x, p.y, floor));
+      enemies.push(createEnemy("slime", p.x, p.y, floor, rng));
     }
     return enemies;
   }
@@ -151,7 +154,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number)
   for (let i = 0; i < count; i++) {
     const roomIndex = 1 + rng.int(0, roomCount - 2);
     const p = pointInRoom(rng, dungeon, roomIndex);
-    enemies.push(createEnemy(weightedPick(rng, roster), p.x, p.y, floor));
+    enemies.push(createEnemy(weightedPick(rng, roster), p.x, p.y, floor, rng));
   }
   return enemies;
 }
