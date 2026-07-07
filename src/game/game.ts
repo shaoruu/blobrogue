@@ -2244,21 +2244,23 @@ export class Game {
   }
 
   // The equipped gun, drawn over the hero and rotated to aim. Held sprites are authored
-  // 48px pointing right with the grip at (12, 24); the vertical flip past |aim| > 90deg
-  // keeps the gun upright when aiming left. Weapons without art (the six newer guns) fall
-  // back to the pistol overlay; if even that isn't loaded yet it simply draws nothing.
+  // 40px with the gun centered in the file, pointing +X; the vertical flip past |aim| >
+  // 90deg keeps the barrel horizontal (not upside-down) when aiming left. The sprite
+  // center sits at the muzzle-flash anchor distance (18px out along aim), pulled in
+  // slightly on fire by recoil. Weapons without art (the six newer guns) fall back to the
+  // pistol overlay; if even that isn't loaded yet it simply draws nothing.
   private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0) {
     const img = this.sprites.heldWeapon(weapon) ?? this.sprites.heldWeapon("pistol");
     if (!img) return;
     const { ctx } = this;
-    const handR = 8 - recoil * 3; // recoil pulls the grip back toward the blob on fire
-    const s = 0.5; // 48px sprite -> ~24px over the ~44px blob
+    const anchor = 18 - recoil * 3; // recoil pulls the gun back toward the blob on fire
+    const d = 40 * 0.6; // ~24px over the ~44px blob
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.translate(cx + Math.cos(aim) * handR, cy + Math.sin(aim) * handR);
+    ctx.translate(cx + Math.cos(aim) * anchor, cy + Math.sin(aim) * anchor);
     ctx.rotate(aim);
     if (Math.abs(aim) > Math.PI / 2) ctx.scale(1, -1);
-    ctx.drawImage(img, -12 * s, -24 * s, 48 * s, 48 * s);
+    ctx.drawImage(img, -d / 2, -d / 2, d, d);
     ctx.restore();
   }
 

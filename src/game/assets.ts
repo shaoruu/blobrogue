@@ -46,9 +46,9 @@ const SOURCES: Record<SpriteName, string> = {
 export interface LoadedSheet { img: HTMLImageElement; fps: number; }
 
 // Held-weapon overlay sprites drawn over the hero, rotating to aim. Each is authored
-// 48px pointing right (0 rad) with the hand-grip at pixel (12, 24). Opt-in registry
-// like SHEETS: only weapons with real art are listed, so nothing else is fetched (no
-// 404s). Weapons absent here fall back at draw time (see game.ts renderHeldWeapon).
+// 40px with the gun centered in the file, pointing +X (0 rad). Opt-in registry like
+// SHEETS: only weapons with real art are listed, so nothing else is fetched (no 404s).
+// Weapons absent here fall back at draw time (see game.ts renderHeldWeapon).
 const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   pistol: "/sprites/held_pistol.png",
   shotgun: "/sprites/held_shotgun.png",
