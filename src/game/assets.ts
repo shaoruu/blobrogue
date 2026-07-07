@@ -261,7 +261,9 @@ export type TileName =
   | "floor_crack" | "floor_grate" | "floor_moss"
   | "wall_top" | "wall_face" | "wall_shadow"
   | "torch_f0" | "torch_f1" | "torch_f2" | "torch_glow"
-  | "portal_f0" | "portal_f1";
+  | "portal_f0" | "portal_f1"
+  | "stairs_f0" | "stairs_f1"
+  | "wall_a_top" | "wall_a_S" | "wall_a_E" | "wall_a_W" | "wall_a_SE" | "wall_a_SW";
 
 const TILE_SOURCES: Record<TileName, string> = {
   floor: "/tiles/floor.png",
@@ -280,6 +282,14 @@ const TILE_SOURCES: Record<TileName, string> = {
   torch_glow: "/tiles/props/torch_glow.png",
   portal_f0: "/tiles/props/portal_f0.png",
   portal_f1: "/tiles/props/portal_f1.png",
+  stairs_f0: "/sprites/stairs_f0.png",
+  stairs_f1: "/sprites/stairs_f1.png",
+  wall_a_top: "/sprites/walls/wall_top.png",
+  wall_a_S: "/sprites/walls/wall_S.png",
+  wall_a_E: "/sprites/walls/wall_E.png",
+  wall_a_W: "/sprites/walls/wall_W.png",
+  wall_a_SE: "/sprites/walls/wall_SE.png",
+  wall_a_SW: "/sprites/walls/wall_SW.png",
 };
 
 export class TileSet {
