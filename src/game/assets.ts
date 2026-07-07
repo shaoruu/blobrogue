@@ -119,6 +119,56 @@ export class Sprites {
   }
 }
 
+// Environment tiles + props. Every PNG is 48x48 (torch_glow is 96x96) and lives in
+// /public/tiles. Kept as a tiny parallel loader to Sprites so the tile renderer can
+// draw real art with a graceful fillRect fallback while images stream in.
+export type TileName =
+  | "floor" | "floor2" | "floor3" | "floor4"
+  | "floor_crack" | "floor_grate" | "floor_moss"
+  | "wall_top" | "wall_face" | "wall_shadow"
+  | "torch_f0" | "torch_f1" | "torch_f2" | "torch_glow"
+  | "portal_f0" | "portal_f1";
+
+const TILE_SOURCES: Record<TileName, string> = {
+  floor: "/tiles/floor.png",
+  floor2: "/tiles/floor2.png",
+  floor3: "/tiles/floor3.png",
+  floor4: "/tiles/floor4.png",
+  floor_crack: "/tiles/floor_crack.png",
+  floor_grate: "/tiles/floor_grate.png",
+  floor_moss: "/tiles/floor_moss.png",
+  wall_top: "/tiles/wall_top.png",
+  wall_face: "/tiles/wall_face.png",
+  wall_shadow: "/tiles/wall_shadow.png",
+  torch_f0: "/tiles/props/torch_f0.png",
+  torch_f1: "/tiles/props/torch_f1.png",
+  torch_f2: "/tiles/props/torch_f2.png",
+  torch_glow: "/tiles/props/torch_glow.png",
+  portal_f0: "/tiles/props/portal_f0.png",
+  portal_f1: "/tiles/props/portal_f1.png",
+};
+
+export class TileSet {
+  private images = new Map<TileName, HTMLImageElement>();
+
+  constructor() {
+    for (const name of Object.keys(TILE_SOURCES) as TileName[]) {
+      const img = new Image();
+      img.src = TILE_SOURCES[name];
+      this.images.set(name, img);
+    }
+  }
+
+  get(name: TileName): HTMLImageElement {
+    return this.images.get(name)!;
+  }
+
+  ready(name: TileName): boolean {
+    const img = this.images.get(name);
+    return !!img && img.complete && img.naturalWidth > 0;
+  }
+}
+
 // A stable, readable palette for co-op players (host first).
 export const PLAYER_COLORS = [
   "#ffb43b", // amber (you / host)
