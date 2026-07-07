@@ -2816,7 +2816,7 @@ export class Game {
       if (!r.isDown) this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
 
       ctx.fillStyle = color;
-      ctx.font = "11px ui-monospace, Menlo, monospace";
+      ctx.font = '700 11px "Silkscreen", monospace';
       ctx.textAlign = "center";
       ctx.fillText(r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
       ctx.textAlign = "left";
@@ -2839,7 +2839,7 @@ export class Game {
     if (!this.isDown) this.renderHeldWeapon(psx, psy, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
-      ctx.font = "12px ui-monospace, Menlo, monospace";
+      ctx.font = '700 12px "Silkscreen", monospace';
       ctx.textAlign = "center";
       ctx.fillText("DOWN \u2014 wait for a teammate", psx, psy - 34);
       ctx.textAlign = "left";
