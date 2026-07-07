@@ -77,12 +77,12 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
   shotgun: "shootShotgun",
   rapid: "shootRapid",
-  smg: "shootRapid",
-  cannon: "shootShotgun",
-  burst: "shootRapid",
-  ricochet: "shootPistol",
-  homing: "shootRapid",
-  tesla: "shootRapid",
+  smg: "smg",
+  cannon: "cannon",
+  burst: "burst",
+  ricochet: "ricochet",
+  homing: "homing",
+  tesla: "tesla",
 };
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
