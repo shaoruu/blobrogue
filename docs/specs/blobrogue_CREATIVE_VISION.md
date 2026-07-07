@@ -185,3 +185,14 @@ Every school reuses the existing bullet hooks (bounce/homing/chain/burn/pierce/c
 - **Warm soft hero, sharp cold world; power warms and corrupts** → the visual + tonal rule that makes every art and design call obvious.
 
 That's blobrogue: **a soft little thing learning dangerous ways to be strong, with a home worth protecting.** Everything we build should make that sentence more true.
+
+---
+## CREATIVE GOVERNANCE + HARD ART RULES (locked)
+
+**Decision routing:** The Creative Director brings bold, specific recommendations and buildable specs to the main blobrogue project runner. The project runner owns final calls, sequencing, and routing. Ian may react whenever he wants, but creative work must never stall behind an approval widget or ask him to babysit the pipeline.
+
+**NO LOW-EFFORT CIRCLE ART.** Generic bubbles, floating circles, rings, and procedural-looking magic geometry read as cheap placeholder art and are banned as visual shorthand across Rites, statuses, bosses, weapons, and world overlays. Every shape must earn its place through an authored silhouette, material, motif, or story function.
+
+For cursed/Grudge visuals specifically, use **sharp cursed calligraphy, torn ink, hooked teeth, thorns, severed brush-strokes, shrine architecture, bone slats, binding script, and asymmetric intentional forms.** A Rite should feel like a place or force with a specific visual thesis swallowing the room, not particles or circles laid over gameplay.
+
+**Domain: Endless Grudge correction:** remove all generic circular/ring/bubble motifs. The Domain is an asymmetric ruined shrine made of black-violet torn calligraphy and inward-pointing bone/teeth architecture. Cursed script should appear hand-authored and incomplete, like a vow violently crossed out. The frame closes through hooked shrine beams, thorned ink, and blade-like strokes; the hero remains in a readable negative-space pocket shaped like a torn wound, not a clean circle. Bright violet is reserved for intentional script cuts and curse seams against a near-black field.
