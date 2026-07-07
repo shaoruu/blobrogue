@@ -11,7 +11,7 @@ export function r(n: number): number {
 export interface PlayerView {
   x: number; y: number; hp: number; maxHp: number;
   fireCd: number; dashCd: number; dashTime: number; invuln: number;
-  weapon: string; kills: number; coins: number; combo: number; comboTimer: number;
+  weapon: string; ownedWeapons: string; kills: number; coins: number; combo: number; comboTimer: number;
   shotSeq: number; facing: number;
   // item mods that shots read (proves synergies applied identically)
   damageMult: number; fireRateMult: number; extraPellets: number; pierce: number;
@@ -59,7 +59,8 @@ export function playerView(p: Anyish, mods: Anyish): PlayerView {
   return {
     x: r(num(p.x)), y: r(num(p.y)), hp: r(num(p.hp)), maxHp: r(num(p.maxHp)),
     fireCd: r(num(p.fireCd)), dashCd: r(num(p.dashCd)), dashTime: r(num(p.dashTime)), invuln: r(num(p.invuln)),
-    weapon: String(p.weapon), kills: num(p.kills), coins: num(p.coins), combo: num(p.combo), comboTimer: r(num(p.comboTimer)),
+    weapon: String(p.weapon), ownedWeapons: Array.isArray(p.ownedWeapons) ? (p.ownedWeapons as string[]).join(",") : "",
+    kills: num(p.kills), coins: num(p.coins), combo: num(p.combo), comboTimer: r(num(p.comboTimer)),
     shotSeq: num(p.shotSeq), facing: num(p.facing),
     damageMult: r(num(mods.damageMult)), fireRateMult: r(num(mods.fireRateMult)),
     extraPellets: num(mods.extraPellets), pierce: num(mods.pierce), critChance: r(num(mods.critChance)),
