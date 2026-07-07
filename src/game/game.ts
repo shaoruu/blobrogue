@@ -26,6 +26,8 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { settings } from "./settings.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
+import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "./biomes.js";
+import type { Biome } from "./biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
@@ -67,10 +69,8 @@ const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
 // reads as a 3D cube rather than a flat cap. Tones step cap -> front -> side, darkening
 // toward the world floor. Side strips are precomputed gradients (built once) that fade
 // inward; corners where two faces meet get an extra darken so the cube edge reads.
-const WALL_SIDE_W = 7;                       // px width of an exposed side face
-const WALL_SIDE_RGB = "27,21,48";            // ~#1b1530, the side-face tone (below the front)
-const WALL_SIDE_ALPHA = 0.62;                // side-strip darkness at the edge
-const WALL_CORNER_FILL = "rgba(9,6,18,0.5)"; // extra darken where a side meets the front
+const WALL_SIDE_W = 7;        // px width of an exposed side face
+const WALL_SIDE_ALPHA = 0.62; // side-strip darkness at the edge
 
 // Enemy pathfinding. A shared BFS flow field is rebuilt at most every FLOW_REBUILD
 // seconds (or immediately when the local player changes tile) and every ground chaser
@@ -415,10 +415,10 @@ export class Game {
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
-  // Side-face gradients for the extruded wall look, built once (dark at the exposed edge,
-  // fading inward). Left edge darkens x=0; right edge darkens x=WALL_SIDE_W.
-  private wallSideGradL: CanvasGradient | null = null;
-  private wallSideGradR: CanvasGradient | null = null;
+  // Per-biome side-face gradients for the extruded wall look (built once). Indexed by biome.
+  private wallSideGrads: [CanvasGradient, CanvasGradient][] = [];
+  private currentBiome: Biome = biomeForFloor(1);
+  private biomeIdx = 0;
   private torches: { tx: number; ty: number }[] = []; // wall-mounted torch cells, per floor
   private props: Prop[] = [];   // destructible/atmosphere props, seeded per floor
   private chests: Chest[] = []; // touch-to-open treasure, seeded per floor
@@ -455,19 +455,19 @@ export class Game {
     window.addEventListener("resize", () => this.resize());
   }
 
-  // Precompute the two side-face gradients once (no per-frame allocation). Both span
-  // 0..WALL_SIDE_W in local x and are filled under a per-tile translate at draw time.
+  // Precompute per-biome side-face gradients once (no per-frame allocation).
   private buildWallGradients() {
-    const edge = `rgba(${WALL_SIDE_RGB},${WALL_SIDE_ALPHA})`;
-    const inner = `rgba(${WALL_SIDE_RGB},0)`;
-    const left = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
-    left.addColorStop(0, edge);
-    left.addColorStop(1, inner);
-    const right = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
-    right.addColorStop(0, inner);
-    right.addColorStop(1, edge);
-    this.wallSideGradL = left;
-    this.wallSideGradR = right;
+    this.wallSideGrads = BIOMES.map((biome) => {
+      const edge = `rgba(${biome.wallSideRgb},${WALL_SIDE_ALPHA})`;
+      const inner = `rgba(${biome.wallSideRgb},0)`;
+      const left = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
+      left.addColorStop(0, edge);
+      left.addColorStop(1, inner);
+      const right = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
+      right.addColorStop(0, inner);
+      right.addColorStop(1, edge);
+      return [left, right] as [CanvasGradient, CanvasGradient];
+    });
   }
 
   private resize() {
@@ -545,7 +545,7 @@ export class Game {
     this.runStart = performance.now();
     this.loadFloor();
     this.hud.setVisible(true);
-    this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
     // First run ever: briefly surface the core controls, then never nag again.
     if (!settings.isControlsHintSeen) {
       this.hud.showControlsHint();
@@ -563,6 +563,8 @@ export class Game {
   }
 
   private loadFloor() {
+    this.biomeIdx = biomeIndexForFloor(this.floor);
+    this.currentBiome = biomeForFloor(this.floor);
     // Dev sandbox loads a single open arena and stays empty until the dev spawns things.
     this.dungeon = this.isSandbox ? this.buildArena() : generateDungeon(this.seed, this.floor);
     const d = this.dungeon;
@@ -2076,7 +2078,7 @@ export class Game {
     sfx("descend");
     this.addTrauma(TRAUMA_DESCEND);
     this.loadFloor();
-    this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `DOWN TO FLOOR ${this.floor}`);
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isDescend: true }));
     this.offerBlessing(); // between-floor reward beat (every descend, from floor 1->2 on)
   }
 
@@ -2334,7 +2336,7 @@ export class Game {
 
   private render() {
     const { ctx, canvas } = this;
-    ctx.fillStyle = "#0e0b1a";
+    ctx.fillStyle = this.currentBiome.bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     // trauma² shake, scaled by the player's intensity setting. New random offset per
     // frame; the background fill above stays put so edges never flash the void.
@@ -2386,6 +2388,8 @@ export class Game {
   private renderTiles() {
     const { ctx, canvas, cam, tiles } = this;
     const d = this.dungeon;
+    const biome = this.currentBiome;
+    const [sideL, sideR] = this.wallSideGrads[this.biomeIdx];
     // +1 tile of margin on each edge so the screen-shake translate never exposes bg.
     const x0 = Math.max(0, Math.floor(cam.x / TILE) - 1);
     const y0 = Math.max(0, Math.floor(cam.y / TILE) - 1);
@@ -2401,7 +2405,7 @@ export class Game {
         if (tiles.ready(variant)) {
           ctx.drawImage(tiles.get(variant), sx, sy, TILE, TILE);
         } else {
-          ctx.fillStyle = (tx + ty) % 2 === 0 ? "#171227" : "#1b1530";
+          ctx.fillStyle = (tx + ty) % 2 === 0 ? biome.floorA : biome.floorB;
           ctx.fillRect(sx, sy, TILE, TILE);
         }
         const rd = tileHash(tx, ty, 2);
@@ -2419,7 +2423,6 @@ export class Game {
     // Pass 2: walls as extruded blocks — lit top cap, dark front face where a floor sits
     // directly below, and mid-dark side strips on exposed left/right edges. Corners where
     // the front meets a side get an extra darken so the cube edge reads.
-    const sideL = this.wallSideGradL, sideR = this.wallSideGradR;
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
         if (d.tiles[ty * d.w + tx] !== 1) continue;
@@ -2437,9 +2440,9 @@ export class Game {
         if (tiles.ready("wall_top")) {
           ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
         } else {
-          ctx.fillStyle = "#241a3a";
+          ctx.fillStyle = biome.wallFront;
           ctx.fillRect(sx, sy, TILE, TILE);
-          ctx.fillStyle = "#2f2350";
+          ctx.fillStyle = biome.wallCap;
           ctx.fillRect(sx, sy, TILE, 6);
         }
         // Front face (darkest): a real sprite if present, else the wall_face_left/right
@@ -2464,12 +2467,19 @@ export class Game {
         }
         // Darken the bottom corners where the front face meets a side face.
         if (belowFloor && (leftFloor || rightFloor)) {
-          ctx.fillStyle = WALL_CORNER_FILL;
+          ctx.fillStyle = biome.wallCorner;
           if (leftFloor) ctx.fillRect(sx, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
           if (rightFloor) ctx.fillRect(sx + TILE - WALL_SIDE_W, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
         }
       }
     }
+
+    ctx.save();
+    ctx.globalCompositeOperation = "color";
+    ctx.globalAlpha = biome.tintAlpha;
+    ctx.fillStyle = biome.tint;
+    ctx.fillRect(x0 * TILE - cam.x, y0 * TILE - cam.y, (x1 - x0) * TILE, (y1 - y0) * TILE);
+    ctx.restore();
   }
 
   // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
@@ -3465,7 +3475,7 @@ export class Game {
   devSetFloor(floor: number): void {
     this.floor = Math.max(1, Math.floor(floor));
     this.loadFloor();
-    this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
   }
 
   devToggleFlowDebug(): boolean {
