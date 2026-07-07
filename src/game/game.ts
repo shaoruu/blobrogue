@@ -161,6 +161,24 @@ const TRAUMA_DESCEND = 0.22;
 const TRAUMA_BOSS_FLOOR = 0.5;
 const TRAUMA_REMOTE_DOWN = 0.3;
 
+// ---- combo / kill-chain multiplier (per-local-player, mirrors the kills counter) ----
+// Each kill bumps the combo and refreshes a short window; let it lapse and the chain
+// resets to 0. The combo tier drives a coin/score multiplier, a small kill-trauma ramp,
+// and a rising kill-sound pitch — pure local upside, never shared/networked state (the
+// combo lives beside kills/coins and is never published), so co-op stays desync-free.
+const COMBO_WINDOW = 3;     // seconds a kill keeps the chain alive; every kill refreshes it
+const COMBO_TRAUMA = 0.16;  // extra kill-trauma at the top tier, scaled by (mult-1); layered on TRAUMA_KILL
+const COMBO_MAX_MULT = 3;   // top multiplier tier, referenced by the trauma/pitch ramps
+interface ComboTier { min: number; mult: number; color: string; } // min = combo count that engages the tier
+// Highest-first so the first `combo >= min` hit is the active tier. Colors are :root tokens
+// (cream -> amber -> amber-hi -> red) so the escalation reads at a glance.
+const COMBO_TIERS: ComboTier[] = [
+  { min: 20, mult: 3, color: "#ff5a5a" },
+  { min: 10, mult: 2, color: "#ffd166" },
+  { min: 5, mult: 1.5, color: "#ffb43b" },
+  { min: 0, mult: 1, color: "#ffe9b0" },
+];
+
 // Enemy knockback: a bullet adds a short velocity impulse along its travel direction
 // that decays every frame (never a teleport). WEAPON_KB is the ~total px shove on a
 // baseline slime; heavier enemies divide it by their kbResist. The impulse is stored
@@ -331,6 +349,10 @@ export class Game {
   private seed = 0;
   private kills = 0;
   private coins = 0;
+  // Kill-chain combo: driven purely by this client's own kills (like `kills`/`coins`),
+  // never networked. `comboTimer` drains each frame and resets the chain when it lapses.
+  private combo = 0;
+  private comboTimer = 0;
 
   // player
   private px = 0; private py = 0;
@@ -487,6 +509,8 @@ export class Game {
     this.seed = this.coop ? this.coop.getSeed() : randomSeed();
     this.kills = 0;
     this.coins = 0;
+    this.combo = 0;
+    this.comboTimer = 0;
     this.mods = createMods();
     this.ownedItems = [];
     this.maxHp = BASE_MAX_HP;
@@ -795,6 +819,10 @@ export class Game {
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
+    if (this.comboTimer > 0) {
+      this.comboTimer -= dt;
+      if (this.comboTimer <= 0) { this.comboTimer = 0; this.combo = 0; } // chain lapsed: reset
+    }
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
@@ -963,6 +991,20 @@ export class Game {
 
   private coinGain(): number {
     return Math.max(1, Math.round(this.mods.coinMult));
+  }
+
+  private comboTier(): ComboTier {
+    for (const t of COMBO_TIERS) if (this.combo >= t.min) return t;
+    return COMBO_TIERS[COMBO_TIERS.length - 1];
+  }
+
+  private comboMult(): number {
+    return this.comboTier().mult;
+  }
+
+  private comboCoinValue(): number {
+    // Base coin gain scaled by the live combo multiplier (props/chests drop face value).
+    return Math.max(1, Math.round(this.coinGain() * this.comboMult()));
   }
 
   private updateBullets(dt: number) {
@@ -1690,6 +1732,10 @@ export class Game {
   private killEnemy(e: Enemy) {
     e.dead = true;
     this.kills++;
+    // Extend the kill chain (this kill counts toward its own multiplier, so the coins it
+    // drops below already scale). The window refreshes on every kill.
+    this.combo++;
+    this.comboTimer = COMBO_WINDOW;
     const arch = ENEMY_ARCHETYPES[e.kind];
     const big = e.kind === "boss";
     this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
@@ -1701,9 +1747,13 @@ export class Game {
       : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
       : DEATH_DUR;
     this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
-    sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : undefined });
+    // Feel: the kill sound rises in pitch as the chain builds (boss keeps its deep roar),
+    // and kill-trauma ramps with the combo tier so a hot streak visibly kicks harder.
+    const comboRate = 1 + Math.min(this.combo - 1, 20) * 0.015; // up to +30% by combo 21+
+    sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
     this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
-    this.addTrauma(big ? TRAUMA_BOSS_KILL : TRAUMA_KILL);
+    const comboTrauma = big ? 0 : COMBO_TRAUMA * ((this.comboMult() - 1) / (COMBO_MAX_MULT - 1));
+    this.addTrauma((big ? TRAUMA_BOSS_KILL : TRAUMA_KILL) + comboTrauma);
     // A boss dying clears its danger off the board so the victory beat isn't a death.
     if (big) this.bullets = this.bullets.filter((b) => b.friendly);
     if (this.mods.lifestealChance > 0 && this.hp < this.maxHp && Math.random() < this.mods.lifestealChance) {
@@ -1721,16 +1771,17 @@ export class Game {
       this.chests.push({ kind: "boss", x: e.x, y: e.y, radius: 18, opened: false, anim: createAnim() });
       return;
     }
-    if (Math.random() < 0.5) this.pickups.push(this.makePickup("coin", e.x, e.y));
+    // Kill coins carry the live combo multiplier baked in (props/chests stay face value).
+    if (Math.random() < 0.5) this.pickups.push(this.makePickup("coin", e.x, e.y, this.comboCoinValue()));
     if (Math.random() < 0.12) this.pickups.push(this.makePickup("heart", e.x + 10, e.y));
   }
 
-  private makePickup(kind: "heart" | "coin", x: number, y: number): Pickup {
+  private makePickup(kind: "heart" | "coin", x: number, y: number, value?: number): Pickup {
     // A little drop pulse so freshly-dropped loot announces itself.
     const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
     this.addDecal(x, y, color, 15, "ring");
     this.spawnPuff(x, y, 5, color);
-    return { kind, x, y, radius: 13, weapon: null, anim: createAnim() };
+    return { kind, x, y, radius: 13, weapon: null, anim: createAnim(), value };
   }
 
   private updatePickups(dt: number) {
@@ -1747,7 +1798,7 @@ export class Game {
         }
       }
       if (!this.isDown && Math.hypot(this.px - p.x, this.py - p.y) < this.pr + p.radius) {
-        if (p.kind === "coin") { this.coins += this.coinGain(); this.spawnParticles(p.x, p.y, 6, "#ffd27a"); sfx("coin"); continue; }
+        if (p.kind === "coin") { this.coins += p.value ?? this.coinGain(); this.spawnParticles(p.x, p.y, 6, "#ffd27a"); sfx("coin"); continue; }
         if (p.kind === "heart") {
           if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); sfx("heart"); continue; }
         }
@@ -1980,6 +2031,7 @@ export class Game {
   private descend(nextFloor: number) {
     this.floor = nextFloor;
     this.pendingDescend = 0;
+    this.combo = 0; this.comboTimer = 0; // a fresh floor starts a clean chain
     this.isDown = false; // a fresh floor brings downed teammates back up
     this.hp = Math.min(this.maxHp, this.hp + 2);
     sfx("descend");
@@ -2109,6 +2161,7 @@ export class Game {
       const count = this.coop.remotePlayers().length + 1;
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     }
+    const comboTier = this.comboTier();
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
@@ -2118,6 +2171,10 @@ export class Game {
       isBossActive,
       coopLabel,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
+      combo: this.combo,
+      comboMult: comboTier.mult,
+      comboColor: comboTier.color,
+      comboFrac: this.comboTimer / COMBO_WINDOW,
       items: this.collapsedItems(),
     });
   }

@@ -103,6 +103,10 @@ export interface Pickup {
   radius: number;
   weapon: WeaponId | null; // set only when kind === "weapon"
   anim: Anim;
+  // Coins only: the coin worth baked in at drop time (combo multiplier applied then).
+  // Undefined falls back to the collector's base coin gain, so non-kill coins (props,
+  // chests) stay at face value.
+  value?: number;
 }
 
 // Destructible / atmosphere world props. Placed deterministically per floor (seeded Rng)

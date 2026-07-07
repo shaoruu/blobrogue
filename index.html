@@ -56,6 +56,22 @@
       .dash.ready{ box-shadow:inset 0 0 0 2px var(--grn); }
       .dash.ready .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
       .dash.ready .bar i{ background:var(--grn); box-shadow:0 0 8px var(--grn); }
+      /* kill-chain combo (top-center). Fixed + transform/opacity only so it never shifts layout;
+         --combo-c is the tier accent set per-frame from the game. Hidden at combo 0. */
+      .combo{ position:absolute; top:14px; left:50%; transform:translateX(-50%) translateY(-8px) scale(.9); transform-origin:top center;
+        display:flex; flex-direction:column; align-items:center; gap:3px; text-align:center; pointer-events:none;
+        opacity:0; transition:opacity .18s ease, transform .18s ease; }
+      .combo.show{ opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
+      .combo-mult{ font-family:var(--f-num); font-size:36px; line-height:.85; color:var(--combo-c,var(--cream)); transform-origin:center;
+        text-shadow:0 3px 0 var(--dun-0),0 0 16px color-mix(in srgb, var(--combo-c,var(--amber)) 45%, transparent); }
+      .combo-row{ display:flex; align-items:baseline; gap:5px; }
+      .combo-n{ font-family:var(--f-num); font-size:19px; line-height:1; color:var(--cream); }
+      .combo-k{ font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--dun-4); }
+      .combo-bar{ width:74px; height:5px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
+      .combo-bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--combo-fill,1));
+        background:var(--combo-c,var(--amber)); box-shadow:0 0 6px var(--combo-c,var(--amber)); transition:width .08s linear; }
+      .combo.low .combo-bar i{ animation:comboLow .38s steps(2,jump-none) infinite; }
+      @keyframes comboLow{ 0%{opacity:1;} 100%{opacity:.3;} }
 
       #overlay, .pause-overlay, .blessing-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; text-align: center;
         background: radial-gradient(ellipse at center, rgba(20,16,36,0.82) 0%, rgba(8,6,16,0.94) 100%); }
