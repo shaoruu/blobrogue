@@ -154,6 +154,17 @@ export interface Particle {
   drag: number;    // per-frame velocity multiplier (0.92 == the classic dot puff)
 }
 
+// A floating damage number that rises off an enemy on hit and fades out. Purely a visual
+// readout of damage already dealt — never touches balance/logic. Updated/drawn like Particle.
+export interface DmgNumber {
+  x: number; y: number;
+  vy: number;      // upward drift (negative = up); eased toward 0 each frame
+  life: number; maxLife: number;
+  value: number;   // the (already-rounded) damage shown
+  crit: boolean;   // crits render bigger + gold + a "!"
+  color: string;
+}
+
 // A teammate as the local client sees them (mapped from Convex presence rows).
 export interface RemotePlayer {
   playerId: string;

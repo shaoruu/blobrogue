@@ -2,7 +2,7 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest, TileKind } from "./types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest, TileKind } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
@@ -385,6 +385,7 @@ export class Game {
   private flowSources: number[] = [];
   private bullets: Bullet[] = [];
   private particles: Particle[] = [];
+  private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
   private pickups: Pickup[] = [];
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
@@ -569,6 +570,7 @@ export class Game {
     this.py = d.spawn.y * TILE + TILE / 2;
     this.bullets = [];
     this.particles = [];
+    this.dmgNumbers = [];
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
@@ -817,6 +819,7 @@ export class Game {
     this.updateChests(dt);
     this.updatePickups(dt);
     this.updateParticles(dt);
+    this.updateDmgNumbers(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
@@ -1119,6 +1122,7 @@ export class Game {
           const isFrozen = this.isFrozen(e);
           const dmg = b.damage * (e.shock > 0 ? SHOCK_DMG_MULT : 1) * (isFrozen ? FROZEN_DMG_MULT : 1);
           e.hp -= dmg; triggerFlash(e.anim);
+          this.spawnDmgNumber(e.x, e.y - e.radius, dmg, { crit: b.isCrit });
           this.spawnPuff(b.x, b.y, b.isCrit ? 9 : 5, b.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
           this.applyKnockback(e, b);
           // Any status the round carries (or an item blessing rolls), then the shock arc.
@@ -1168,6 +1172,7 @@ export class Game {
       while (e.statusTick > BURN_TICK) {
         e.hp -= e.burnDmg * BURN_TICK;
         e.statusTick -= BURN_TICK;
+        this.spawnDmgNumber(e.x, e.y - e.radius, e.burnDmg * BURN_TICK, { color: "#ff8a3b" });
         this.spawnEmber(e);
         if (e.hp <= 0) { this.killEnemy(e); break; }
       }
@@ -1243,6 +1248,7 @@ export class Game {
     if (this.mods.thorns <= 0 || e.dead) return;
     e.hp -= this.mods.thorns;
     triggerFlash(e.anim);
+    this.spawnDmgNumber(e.x, e.y - e.radius, this.mods.thorns, { color: "#c8b8ff" });
     this.spawnPuff(e.x, e.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
     if (e.hp <= 0 && !e.dead) this.killEnemy(e);
   }
@@ -1279,6 +1285,7 @@ export class Game {
       });
       best.hp -= dmg;
       triggerFlash(best.anim);
+      this.spawnDmgNumber(best.x, best.y - best.radius, dmg, { color });
       this.spawnPuff(best.x, best.y, 5, color);
       list.push(best);
       if (best.hp <= 0 && !best.dead) this.killEnemy(best);
@@ -1968,6 +1975,33 @@ export class Game {
     this.offerBlessing();
   }
 
+  // Floating damage number: a visual-only popup that rises off an enemy and fades. Never
+  // affects logic. Capped so a big tesla chain / flamethrower spray can't flood the array.
+  private spawnDmgNumber(x: number, y: number, dmg: number, opts?: { crit?: boolean; color?: string }) {
+    const value = Math.max(1, Math.round(dmg));
+    const crit = opts?.crit ?? false;
+    if (this.dmgNumbers.length >= 60) this.dmgNumbers.shift(); // drop oldest under flood
+    this.dmgNumbers.push({
+      x: x + (Math.random() * 2 - 1) * 8,
+      y: y - 8,
+      vy: crit ? -46 : -38,
+      life: crit ? 0.8 : 0.65, maxLife: crit ? 0.8 : 0.65,
+      value, crit,
+      color: opts?.color ?? (crit ? "#fff3c4" : "#ffe9c0"),
+    });
+  }
+
+  private updateDmgNumbers(dt: number) {
+    for (const n of this.dmgNumbers) {
+      n.y += n.vy * dt;
+      n.vy *= 0.9;      // ease the rise so it settles as it fades
+      n.life -= dt;
+    }
+    if (this.dmgNumbers.some((n) => n.life <= 0)) {
+      this.dmgNumbers = this.dmgNumbers.filter((n) => n.life > 0);
+    }
+  }
+
   private updateParticles(dt: number) {
     for (const p of this.particles) {
       p.x += p.vx * dt; p.y += p.vy * dt;
@@ -2319,6 +2353,7 @@ export class Game {
     this.renderChests();
     this.renderPickups();
     this.renderParticles();
+    this.renderDmgNumbers();
     this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
@@ -2816,6 +2851,34 @@ export class Game {
         ctx.fillRect(p.x - cam.x - p.size / 2, p.y - cam.y - p.size / 2, p.size, p.size);
       }
     }
+    ctx.globalAlpha = 1;
+  }
+
+  // Floating damage numbers, drawn in world space over the particles. Pixel font with a
+  // dark outline so they read on any background; crits are bigger + gold + a "!".
+  private renderDmgNumbers() {
+    const { ctx, cam } = this;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (const n of this.dmgNumbers) {
+      const a = n.life / n.maxLife;
+      if (a <= 0) continue;
+      const sx = n.x - cam.x, sy = n.y - cam.y;
+      // Crits pop in bigger then settle over the first third of their life.
+      const pop = n.crit ? 1 + Math.max(0, (a - 0.66) / 0.34) * 0.4 : 1;
+      const size = Math.round((n.crit ? 15 : 11) * pop);
+      const label = n.crit ? `${n.value}!` : `${n.value}`;
+      ctx.font = `700 ${size}px "Silkscreen", monospace`;
+      ctx.globalAlpha = Math.min(1, a * 1.4); // hold full opacity, fade only at the end
+      // dark outline
+      ctx.fillStyle = "rgba(8,6,16,0.9)";
+      ctx.fillText(label, sx + 1, sy + 1);
+      ctx.fillText(label, sx - 1, sy + 1);
+      ctx.fillStyle = n.color;
+      ctx.fillText(label, sx, sy);
+    }
+    ctx.restore();
     ctx.globalAlpha = 1;
   }
 
