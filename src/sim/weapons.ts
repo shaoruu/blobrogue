@@ -1,4 +1,5 @@
 import type { Bullet, WeaponId } from "./types.js";
+import type { Rng } from "./rng.js";
 
 export interface MeleeSpec {
   arc: number;         // swing arc in radians (thrust uses a narrow forward cone)
@@ -153,13 +154,15 @@ export interface ShotSpec {
 
 const CRIT_COLOR = "#fff3c4";
 
-export function fire(spec: ShotSpec, x: number, y: number, aim: number): Bullet[] {
+// The seeded sim Rng is threaded in so pellet jitter + crit rolls are deterministic
+// (required for the golden-master oracle and for later client prediction).
+export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng): Bullet[] {
   const shots: Bullet[] = [];
   for (let i = 0; i < spec.pellets; i++) {
     const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
-    const jitter = (Math.random() - 0.5) * (spec.spread * 0.3);
+    const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
     const a = aim + t * spec.spread + jitter;
-    const isCrit = spec.critChance > 0 && Math.random() < spec.critChance;
+    const isCrit = spec.critChance > 0 && rng.next() < spec.critChance;
     shots.push({
       x, y,
       vx: Math.cos(a) * spec.speed,

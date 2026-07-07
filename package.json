@@ -6,11 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "golden:capture": "tsx test/oracle.ts",
+    "test:golden": "tsx test/golden.test.ts",
+    "test": "tsx test/golden.test.ts"
   },
   "devDependencies": {
     "@fal-ai/serverless-client": "^0.15.0",
     "@types/node": "^26.1.0",
+    "tsx": "^4.23.0",
     "typescript": "~6.0.2",
     "vite": "^8.1.1"
   },

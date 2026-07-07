@@ -3,8 +3,8 @@ import { api } from "./api.js";
 import type { PresenceDoc, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
 import type { CoopBridge, LocalPlayerState } from "../game/coop.js";
-import type { RemotePlayer, WeaponId } from "../game/types.js";
-import { WEAPONS } from "../game/weapons.js";
+import type { RemotePlayer, WeaponId } from "../sim/types.js";
+import { WEAPONS } from "../sim/weapons.js";
 import { RemoteInterp } from "./interp.js";
 
 // Push cadence. We sync fast while a player is doing something the others need to see move
