@@ -108,3 +108,12 @@ Six bosses, six different verbs: summon / charge / bombard / duel / mirror / zon
 
 ## Coordination note (CD alignment)
 The creative-vision doc HAD landed, so I themed the roster to it directly (biomes + the Mirror Blob & Hollow Choir are the CD's own named ideas, specced here mechanically). Mechanics are the contract; themes match the CD and can be re-skinned without touching the movesets. NAMES NOW LOCKED with the CD: Marrow (Gore-Hulk), Jet (Mirror Blob); The Slime King / The Weaver / The Hollow Choir / The Gilded Warden kept. Naming logic (CD): single haunting nouns (Marrow, Jet) = intimate/eerie/personal fights; "The ___" titles = grand/mythic ones. Intro/death-card lines live in blobrogue_BOSS_NAMES_flavor.md. The fight designs are unchanged; Marrow's blindness is the one mechanic ADD (it enriches, doesn't alter, the timings). Every boss reuses the shipped telegraph system + existing FX masks (tinted per palette), so — like the CD said of the schools — no boss needs new engine architecture beyond its one signature AttackMove handler. All ride stepWorld, so they're authoritative-server-ready for co-op boss fights from day one.
+
+---
+## POST-SERVER ARENA-FLOOR USE (canonical pointer)
+Boss roster techniques may be reused in rare sealed Arena floors only through the authoritative overlap-arbitration contract in `blobrogue_POST_SERVER_WORLD_UX_spec.md`:
+- Duo bosses are miniboss-scaled complementary roles, max two committed patterns and one arena-wide denial; no random full boss pairing.
+- Boss+Lieutenant is the recommended first arena event; lieutenant death changes/removes a support pattern, not just HP.
+- Survivor escalation is one authored move, never blanket rage HP/damage.
+- Boss death/arena clear drives canonical objective + premium reward through server state.
+No arena-floor implementation before authoritative combat Stage C is production-green.

@@ -268,3 +268,7 @@ Thunderbolt is the feel benchmark for heavy ranged weapons. Lock it as a line-br
 - Raise/lock hard enemy knockback target to **18px total shove before kbResist** (current table14); player recoil/kick stays heavy. Every connect should visibly punch a line through the pack.
 - This becomes the benchmark: one input → one unmistakable projectile → line pierce + hard shove + long recovery.
 Charge weapons are desired and retain infinite reserve: hold→release controls local rhythm; no ammo pool. Charge state belongs to the weapon/player, server-authoritative later; tap shot stays useful, full charge changes size/damage/behavior. Do not couple charge to another currency/meter.
+
+---
+## POST-SERVER PHYSICAL CAMP / MODE GATES (canonical pointer)
+Menu-on-launch is replaced AFTER authoritative Stage C by the shared walkable Amber Camp in `blobrogue_POST_SERVER_WORLD_UX_spec.md`. The Amber tree/stations in this spec become physical NPCs/buildings; unlocked characters live in Camp; floor-run/open-world selection and party formation happen at authoritative physical gates. This changes presentation, not progression math/caps. Rare Arena floors use the same currencies/rewards and add no new progression layer.
