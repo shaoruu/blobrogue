@@ -97,6 +97,9 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   pistol: "/sprites/held_pistol.png",
   shotgun: "/sprites/held_shotgun.png",
   rapid: "/sprites/held_rapid.png",
+  sawnoff: "/sprites/held_sawnoff.png",
+  railgun: "/sprites/held_railgun.png",
+  nailer: "/sprites/held_nailer.png",
 };
 
 export class Sprites {
