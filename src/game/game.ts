@@ -34,7 +34,7 @@ export interface StartOptions {
   profile?: ProfileStats | null;
 }
 
-interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; }
+interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
@@ -703,9 +703,14 @@ export class Game {
 
   private updateBullets(dt: number) {
     for (const b of this.bullets) {
+      if (b.friendly && b.homing !== undefined) this.steerHoming(b, dt);
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-      // Walls kill any bullet — for enemy fire that IS the line-of-sight counterplay.
-      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); continue; }
+      // Walls kill any bullet — for enemy fire that IS the line-of-sight counterplay —
+      // unless it's a ricochet round with bounces left, which reflects and flies on.
+      if (this.isWall(b.x, b.y)) {
+        if (b.bounce !== undefined && b.bounce > 0) { this.bounceOffWall(b, dt); continue; }
+        b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); continue;
+      }
       // Enemy projectiles vs. the local player. invuln re-checked per bullet so a
       // radial burst can't multi-hit through one set of i-frames.
       if (!b.friendly && this.invuln === 0 && !this.isDown && this.hp > 0
@@ -716,6 +721,46 @@ export class Game {
       }
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
+  }
+
+  // HOMING (Wisp): rotate a bullet's velocity toward the nearest living enemy in range,
+  // capped at its turn rate so it can't snap into an impossible U-turn, keeping speed
+  // constant. Same nearest-enemy scan the enemy AI uses; runs only on homing bullets.
+  private steerHoming(b: Bullet, dt: number) {
+    const rate = b.homing;
+    if (rate === undefined || rate <= 0) return;
+    const RANGE = 260;
+    let best: Enemy | null = null;
+    let bestD = RANGE * RANGE;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const dx = e.x - b.x, dy = e.y - b.y, d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    if (!best) return;
+    const speed = Math.hypot(b.vx, b.vy) || 1;
+    const cur = Math.atan2(b.vy, b.vx);
+    let delta = Math.atan2(best.y - b.y, best.x - b.x) - cur;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    const maxTurn = rate * dt;
+    const turn = delta > maxTurn ? maxTurn : delta < -maxTurn ? -maxTurn : delta;
+    const a = cur + turn;
+    b.vx = Math.cos(a) * speed; b.vy = Math.sin(a) * speed;
+  }
+
+  // RICOCHET (Rebound): reflect a bullet off the wall it just entered instead of dying.
+  // Probes each axis at the pre-move position to pick the reflect axis (corner = both),
+  // steps back out of the wall, spends one bounce, and sparks so the deflect reads.
+  private bounceOffWall(b: Bullet, dt: number) {
+    const px = b.x - b.vx * dt, py = b.y - b.vy * dt;
+    let reflected = false;
+    if (this.isWall(b.x, py)) { b.vx = -b.vx; reflected = true; }
+    if (this.isWall(px, b.y)) { b.vy = -b.vy; reflected = true; }
+    if (!reflected) { b.vx = -b.vx; b.vy = -b.vy; }
+    b.x = px; b.y = py;
+    b.bounce = (b.bounce ?? 0) - 1;
+    this.spawnSparks(b.x, b.y, 3, Math.atan2(b.vy, b.vx));
   }
 
   private updateEnemies(dt: number) {
@@ -749,7 +794,13 @@ export class Game {
           this.spawnPuff(b.x, b.y, b.isCrit ? 9 : 5, b.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
           this.applyKnockback(e, b);
           if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
-          if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
+          // TESLA (Tesla): the round dies on its first hit, but first arcs lightning to
+          // nearby enemies. Reuses hitList (the pierce dedup) so an arc never doubles back.
+          if (b.chain !== undefined && b.chain > 0) {
+            (b.hitList ??= []).push(e);
+            this.chainLightning(b, e);
+            b.life = 0;
+          } else if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
           else b.life = 0;
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
           else sfx("enemyHit", { gain: 0.65 });
@@ -783,6 +834,41 @@ export class Game {
     triggerFlash(e.anim);
     this.spawnPuff(e.x, e.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
     if (e.hp <= 0 && !e.dead) this.killEnemy(e);
+  }
+
+  // TESLA arc: hop from the struck enemy to the nearest un-hit enemy within chainRange,
+  // drawing a lightning tracer and dealing reduced damage each jump, up to `chain` hops.
+  // Shares the bullet's hitList so an arc never revisits an enemy. Nearest-target
+  // resolution is local, so co-op clients may pick different arc paths — accepted visual
+  // variance on already-fired bullets (see PR notes), never shared sim state.
+  private chainLightning(b: Bullet, from: Enemy) {
+    const range = b.chainRange ?? 130;
+    const jumps = b.chain ?? 0;
+    const list = (b.hitList ??= []);
+    const dmg = b.damage * 0.7;
+    let origin: Enemy = from;
+    for (let j = 0; j < jumps; j++) {
+      let best: Enemy | null = null;
+      let bestD = range * range;
+      for (const e of this.enemies) {
+        if (e.dead || list.indexOf(e) !== -1) continue;
+        const dx = e.x - origin.x, dy = e.y - origin.y, d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (!best) break;
+      this.remoteTracers.push({
+        x: origin.x, y: origin.y,
+        angle: Math.atan2(best.y - origin.y, best.x - origin.x),
+        life: 0.12, color: b.color, len: Math.sqrt(bestD),
+      });
+      best.hp -= dmg;
+      triggerFlash(best.anim);
+      this.spawnPuff(best.x, best.y, 5, b.color);
+      list.push(best);
+      if (best.hp <= 0 && !best.dead) this.killEnemy(best);
+      else this.sfxAt("enemyHit", best.x, best.y, { gain: 0.5, rate: 1.5 });
+      origin = best;
+    }
   }
 
   private updateEnemyAI(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
@@ -1979,9 +2065,10 @@ export class Game {
       ctx.globalAlpha = Math.max(0, tr.life / 0.12) * 0.8;
       ctx.strokeStyle = tr.color;
       ctx.lineWidth = 2;
+      const len = tr.len ?? 42;
       ctx.beginPath();
       ctx.moveTo(tr.x - cam.x, tr.y - cam.y);
-      ctx.lineTo(tr.x - cam.x + Math.cos(tr.angle) * 42, tr.y - cam.y + Math.sin(tr.angle) * 42);
+      ctx.lineTo(tr.x - cam.x + Math.cos(tr.angle) * len, tr.y - cam.y + Math.sin(tr.angle) * len);
       ctx.stroke();
       ctx.restore();
     }
