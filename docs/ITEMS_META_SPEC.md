@@ -48,3 +48,14 @@ Sells "progression tree behind paywall" WITHOUT gating fun (core loop complete i
 2. Uncommons/Rares + synergies + boss-reward drop.
 3. Shop (coin purpose).
 4. Amber meta + Blob Camp screen.
+
+---
+## CANONICAL PLAYTEST OVERRIDE (see `docs/PROGRESSION_SPEC.md` §10)
+- Blessing duplicates are explicit LV2/LV3 upgrades, max Lv3 then removed from pool; chooser prioritizes new items 3× but may show clearly labeled upgrades. PlayerMods recomputes from item-level state. Exact per-item level effects are canonical in PROGRESSION_SPEC.
+- Coin Magnet: Lv1 radius90/pull240px/s; Lv2 radius240/pull480; Lv3 radius900/pull900 (add coinMagnetPull mod).
+- Coins are temporary Dealer-room currency; Amber alone is persistent.
+- Duplicate owned weapon pickups stay on floor and never auto-switch/consume.
+- First melee is guaranteed floors2–3; Dealer carries melee until account flag `discover:melee`.
+Any older duplicate/drop/economy wording in this document is superseded by PROGRESSION_SPEC §10.
+
+- Fang canonical sustain reset: Lv1/Lv2/Lv3 = 8/13/17%, shared 1.25s proc cooldown, trivial summons excluded. Dash iframe canonical 0.18s; Second Wind remains ×.65/.55/.50 with no iframe overlap/refresh.

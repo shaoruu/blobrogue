@@ -50,6 +50,17 @@ New helpers, all in sim/world AI:
 Everything else reuses `findTarget`, `chaseAngle`, `applyChaseStep`, `stepWindupTimer`, `beginWindup`, `enterRecover`, `enterIdle`, `moveEnemyBy`.
 
 ===============================================================
+# SMART AI CONTRACT (contextual, readable, never cheating)
+===============================================================
+"Smart" means decisions from authoritative WORLD FACTS the creature could plausibly sense — own HP, ally count/positions, distance/LOS, recent damage, terrain anchors, boss phase. It NEVER reads raw player input, aim cursor, cooldown buttons, future path, or hidden inventory to counter the player.
+- Evaluate expensive context at 4–6Hz, not every frame; commit to a state for a minimum duration so behavior is readable and network deterministic.
+- Every decision change has a material tell ≥0.35s and a counter: chase the bait vs hold ground; kill the leader vs accept flanks; deny a wall anchor vs dodge the leap.
+- Context creates positioning decisions, never perfect dodges. Enemies may target current/last-seen positions, not predicted inputs.
+- Pack roles are deterministic from stable entity ids and context, not random each tick. Leader death breaks coordination visibly before re-election.
+
+**Boss smart-movement contract (future boss handlers, lock now):** phase transitions may reposition using terrain, but only to authored arena anchors/valid walkable points. On phase change: choose the farthest valid anchor with LOS/path constraints, telegraph destination/material path ≥0.7s, then move; never teleport directly onto/behind a player. Bosses can choose a technique based on range/terrain/add count, not based on player button state. Reposition is limited to once/phase or a clear cooldown; reaching favorable terrain enables the move, it does not grant hidden stat buffs.
+
+===============================================================
 # 1. BAT — ORBIT → DIVE (existing bat; build FIRST)
 ===============================================================
 **Read:** bats stop being wobbly chasers. They circle your flank at range, then visibly fold wings and knife through you. Movement alone reads "harasser."
@@ -102,7 +113,34 @@ Staggered deterministic cooldowns prevent unavoidable simultaneous dogpiles. Aim
 No new sprite. Existing squash/stretch is ideal: exaggerated flat windup, long forward stretch active, pancake recovery. VFX only: a wet skid-shadow / stretched amber smear aligned to the hop + 1 puff on takeoff/landing; no geometric arrow.
 
 ===============================================================
-# 3. RATTLEBACK — BURROW → TRACK → ERUPT (build THIRD)
+# 3. KNELLBAT — SMART BAIT → RALLY → PACK COMMIT (build THIRD)
+===============================================================
+**First locked SMART archetype.** A Sunless-Caves bat variant with oversized ears. It does not become clairvoyant: it reacts only to own HP, nearby allies, player distance/LOS, and recent damage. The decision is readable: alone/wounded it flees while clicking; with support it turns and rallies flanking bats.
+**Stats:** baseHP4 (+0.5/floor), speed104, radius14, touch1, kbResist0.8. Movement=`fleeBait`; max1 leader per pack/room. Biome Sunless floor3+; never tutorial floor1–2.
+
+## Pack roles (recomputed every 0.5s, deterministic)
+Pack = bats/Knellbats within 240px sharing the room/region. Stable role assignment:
+- **Leader:** living Knellbat with lowest stable entity id. Only leader can Rally.
+- **Bait:** lowest-HP fraction non-leader bat; if none, leader baits.
+- **Flankers:** remaining bats; use existing Orbit→Dive with alternating orbitDir by id.
+If leader dies: all pack bats emit one sharp broken-click, **panic outward for 0.65s**, and cannot start dives/rally for **1.20s**. Then the next Knellbat id becomes leader. Counter is explicit: kill the leader to break the formation.
+
+## Context thresholds / state machine
+**BAIT/FLEE trigger:** own HP≤40% OR fewer than2 living allies within160px, while player within240px. Tell 0.35s: ears flare/tilt toward allies, three clicks rise in pitch, body turns sideways. Then FLEE for max1.25s @135px/s:
+- If ≥1 ally within320px: move toward centroid of nearest two allies, but offset 70px past them away from player (pulls pursuit into support, not directly through bodies).
+- If none: flee directly away from last-seen player using `applyChaseStep`/avoidance; no teleport.
+- Counter: do NOT chase into the pack; hold position/range and shoot the fragile bait. If blocked/no progress0.35s, perpendicular nudge via existing anti-stuck; after1.25s it stops fleeing regardless.
+
+**RALLY trigger (leader only):** at least2 allies within130px, player distance100–240px, LOS, cooldown0, spawn grace done. WINDUP0.60s; aim locks0.32s. Tell: leader plants, oversized ears pulse once, a visible sound-wave chevron points toward the locked player position (material/audio tell, not a clean ring). During windup flankers maintain orbit but cannot dive.
+**PACK COMMIT:** on release, assign flankers deterministic stagger `0.0/0.18/0.36s`; each performs the shipped Bat Dive from opposite orbit sides. Leader dives last at0.45s or remains at range if HP≤40%. No more than3 dives per rally. RECOVER leader0.55s; rally cooldown3.2s.
+
+## Fairness / no cheating
+Leader locks current position at0.32s and never reads subsequent movement input. Stagger prevents simultaneous unavoidable contact. The player has three counters: kill leader→break, refuse bait pursuit, or dodge the visually ordered dives. Pack decisions update only twice/sec and minimum state durations prevent twitchy perfect reactions.
+## Art/VFX
+Use Bat body initially with oversized ear silhouette/tint variant. Essential read: ears point toward support while fleeing; leader ear flare + authored sound chevron on rally; broken-click/panic wing flare on leader death. No invisible buff aura.
+
+===============================================================
+# 4. RATTLEBACK — BURROW → TRACK → ERUPT (build FOURTH)
 ===============================================================
 **Read:** Rattleback presses its floor-jaw down, disappears, a moving chevron of three lifted shale chips and a narrow seam track it, then an asymmetric rupture scar locks before it erupts. Ambush/area-denial unlike every current mob.
 **Biome:** Sunless Caves (rare intro, 1 max/room) → The Deep (2 max). Never Verdant/tutorial.
@@ -126,7 +164,7 @@ The ripple NEVER disappears; ground marker visible ≥0.4s. No tracking after lo
 One new sprite (low angular mole/beetle form). Use a simple low-wedge silhouette placeholder until final art; do not substitute a generic circle. VFX/art required: authored moving chevron of lifted shale chips, asymmetric rupture-seam mask with three raised stone teeth, soil/rock gibs. 3 visual poses: surface crawl, sink, erupt. Movement sells it more than detail.
 
 ===============================================================
-# 4. CROOKLEG — SEEK WALL → CLING → LEAP (build FOURTH)
+# 5. CROOKLEG — SEEK WALL → CLING → LEAP (build FIFTH)
 ===============================================================
 **Read:** Crookleg retreats SIDEWAYS to a wall, visibly refolds/clings, converging claw-scores plus its displaced body-shadow reveal the landing, then it snaps across the room. Vertical-feeling movement in a top-down game.
 **Biome:** The Deep first; Emberreach variant later. Max 1–2/room.
@@ -153,7 +191,7 @@ New angular crawler sprite with long legs or compressed spring-body. Needs wall-
 # ROSTER / BIOME PLACEMENT + COMPOSITION RULES
 ===============================================================
 - Verdant Hollow / floors1–2: Pack Slimes (encircle; surge only in groups3+) + current simple enemies. Teach spacing.
-- Sunless Caves / floors2–5: Orbit-Dive Bats + rare Rattleback. Teach flank + ground markers.
+- Sunless Caves / floors2–5: Orbit-Dive Bats; floor3+ introduces one Knellbat-led smart pack + rare Rattleback. Teach flank, bait/support decisions, then ground tells.
 - The Deep / floors6+: Crookleg + more Rattlebacks + Weaver boss. Teach vertical/ambush reads.
 - Emberreach: later elemental variants of these MOVEMENTS, not new movement systems (burning burrow trail, shock leap landing).
 
@@ -162,19 +200,18 @@ Composition budget per room (coherence/fairness): max **2 complex movement arche
 ===============================================================
 # WAVE 2 (creative pipeline — after Wave 1 proves modules)
 ===============================================================
-The CD's strongest seeds slot cleanly into the grammar without displacing the cheaper Wave-1 rollout:
-- **Knellbat (Sunless, FLEE/BAIT):** flees alone, clicks/calls, turns only after reaching 2+ allies. Reuses target/nearbyCount + reverse chase; high impact, very cheap after shared helpers. **Build first in Wave 2.**
+The remaining CD seeds slot cleanly into the grammar without displacing the cheaper Wave-1 rollout:
 - **Seamwalker (Deep, ORBIT):** lays 3–4 visible fracture segments and moves only along them; pauses at junctions before switching. Reuses orbit but adds path-preview geometry. Strong biome thesis, moderate hook.
 - **Rootkite (Verdant, FLOCK):** 3 leaf-backed blobs share formation; shooting one breaks formation, survivors panic outward then re-form. Uses the FLOCK/separation module but requires group identity + formation state.
 - **Bellows / Cinderjack (Emberreach):** ANCHOR thermal lane / jet HUNT; ship once hazards/projectile push exist.
 
-Why Wave 1 remains first: Bat+Slime deliver ORBIT/FLOCK with existing art and minimal code; Rattleback adds the shared free-motion/marker hook; Crookleg reuses it. The CD trio is creatively stronger as named new mobs but costs more art/group/path-preview infrastructure. Wave 1 proves the reusable verbs cheaply; Wave 2 expresses each biome's signature with bespoke silhouettes.
+Why Wave 1 remains first: Bat+Slime prove ORBIT/FLOCK with existing art; Knellbat adds contextual pack roles after the shared nearby-count helper; Rattleback adds free-motion/material destination tells; Crookleg reuses that foundation. Wave 2 then expresses the remaining biome grammars through more bespoke path-preview/formation/hazard hooks.
 
 ===============================================================
 # CODE / STEPWORLD INTEGRATION
 ===============================================================
 - Dispatch in `updateEnemyAI` by movement/archetype handler (current kind switch can migrate to `arch.movement` handlers in Stage-A; data-driven and avoids a growing kind switch).
-- All new state lives in Enemy plain data + AttackState; no anim clocks drive decisions. `moveSeed` comes from seeded Rng. Sim emits semantic events (diveStart, surge, burrowRipple/erupt, pounce/land); client owns art/VFX/telegraphs under the Stage-A event model.
+- All new state lives in Enemy plain data + AttackState; no anim clocks drive decisions. `moveSeed` comes from seeded Rng. Sim emits semantic events (diveStart, surge, rallyBreak, rattleTrack/erupt, pounce/land); client owns art/VFX/telegraphs under the Stage-A event model.
 - Chill/freeze still applies at `moveEnemyBy`. For `moveEnemyFree`, explicitly apply chill scale before free motion; frozen enemies cannot continue active motion (pause active timer or immediately recover — recommendation: pause active timer, keeping status universally meaningful).
 - Knockback: normal/windup/recover uses existing impulse. SUBMERGED ignores knockback; AIRBORNE accepts bullet damage but knockback applies only on landing (bank impulse or ignore until recover) to avoid arc corruption.
 - Server-ready: deterministic state/timers, no Math.random, no camera/render checks, fixed-dt. Golden-master scenario added per archetype.
@@ -184,15 +221,17 @@ Why Wave 1 remains first: Bat+Slime deliver ORBIT/FLOCK with existing art and mi
 ===============================================================
 1. **Bat Orbit→Dive** — no new sprite/kind, reuses AttackState/lunge/flow; fastest maximum-visible win.
 2. **Slime Pack Encircle→Surge** — upgrades tutorial mob with no art; adds the shared nearby-count/separation helper.
-3. **Rattleback** — adds `moveEnemyFree` + SUBMERGED flag + ground-lock marker; biggest surprise.
-4. **Crookleg** — reuses free-motion/marker from Rattleback, adds local wall scan + airborne arc; cheapest after #3.
+3. **Knellbat Smart Pack** — reuses Bat movement + nearbyCount; adds deterministic roles, flee/rally, and leader-break. First proof of contextual AI.
+4. **Rattleback** — adds `moveEnemyFree` + SUBMERGED flag + material destination lock.
+5. **Crookleg** — reuses free-motion/marker state, adds local wall scan + airborne arc; cheapest after #4.
 
 Acceptance per archetype:
-- Readable with simple silhouette placeholders: a blind playtester can name "circles/dive / surrounds / underground-erupt / wall-leap" from movement alone.
+- Readable with simple silhouette placeholders: a blind playtester can name "orbit-dive / surround-surge / bait-rally / underground-erupt / wall-leap" from movement alone.
 - Every committed attack dodgeable by walking, has ≥0.30s post-lock window, and ≥0.35s recover.
+- Smart-AI audit: Knellbat decisions derive only from HP/ally count/distance/LOS/recent damage; recorded input changes with identical world state do not alter its choice until the player position itself changes. Leader death always creates the 1.2s break window.
 - No enemy stuck >1s against walls/props in 100 seeded rooms.
 - Deterministic replay: same seed+inputs → same positions/phases tick-for-tick in stepWorld golden tests.
 - 50-enemy stress: new nearby/separation scans keep server tick well under budget (if not, replace O(n²) nearbyCount with the Stage-E spatial grid; API unchanged).
 
 ## Bottom line
-Wave 1 deliberately changes where danger comes from, not just speed or damage: bats FLANK, slimes SURROUND, Rattlebacks AMBUSH FROM BELOW, Crooklegs LEAP FROM WALLS. Two existing sprites become new fights before new art arrives; two new mobs reuse the same AttackState/flow/movement helpers. Four high-contrast reads, three small shared helpers, zero new combat architecture.
+Wave 1 deliberately changes where danger comes from, not just speed or damage: bats FLANK, slimes SURROUND, Knellbats BAIT THEN RALLY, Rattlebacks AMBUSH FROM BELOW, and Crooklegs LEAP FROM WALLS. Two existing enemies become new fights before new art arrives; one Bat-derived smart leader proves contextual AI; two new mobs reuse the same AttackState/flow/movement helpers. Five high-contrast reads, a few small shared helpers, zero new combat architecture.
