@@ -18,6 +18,11 @@ export interface HudState {
   isBossActive: boolean;
   coopLabel: string | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
+  // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
+  combo: number;      // current chain length
+  comboMult: number;  // score/coin multiplier for the current tier (1 / 1.5 / 2 / 3)
+  comboColor: string; // tier accent (drives the mult text + drain bar)
+  comboFrac: number;  // 0..1 of the combo window still remaining (drives the drain bar)
   // Collected blessings, duplicates collapsed into a count, shown in the YOUR BUILD panel.
   items: { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }[];
 }
@@ -70,6 +75,11 @@ const HUD_MARKUP = `
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
+  <div class="combo" data-combo>
+    <div class="combo-mult" data-combo-mult>x1</div>
+    <div class="combo-row"><span class="combo-n" data-combo-n>0</span><span class="combo-k">COMBO</span></div>
+    <div class="combo-bar"><i data-combo-fill></i></div>
+  </div>
 `;
 
 export class Hud {
@@ -82,6 +92,12 @@ export class Hud {
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
+  private comboEl: HTMLElement;
+  private comboMultEl: HTMLElement;
+  private comboNEl: HTMLElement;
+  private comboFillEl: HTMLElement;
+  private prevCombo = -1;
+  private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
   private buildPanel: HTMLElement;
   private buildGrid: HTMLElement;
   private buildN: HTMLElement;
@@ -114,6 +130,10 @@ export class Hud {
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
+    this.comboEl = hud.querySelector("[data-combo]")!;
+    this.comboMultEl = hud.querySelector("[data-combo-mult]")!;
+    this.comboNEl = hud.querySelector("[data-combo-n]")!;
+    this.comboFillEl = hud.querySelector("[data-combo-fill]")!;
     this.buildPanel = hud.querySelector("[data-build]")!;
     this.buildGrid = hud.querySelector("[data-build-grid]")!;
     this.buildN = hud.querySelector("[data-build-n]")!;
@@ -181,6 +201,8 @@ export class Hud {
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
 
+    this.updateCombo(s);
+
     // Rebuild the YOUR BUILD panel only when a blessing is picked. Gated on total picks
     // (sum of counts) so a repeat pick that just bumps a chip's count still refreshes.
     const totalPicks = s.items.reduce((n, it) => n + it.count, 0);
@@ -210,6 +232,24 @@ export class Hud {
       this.buildN.textContent = String(s.items.length);
       this.buildPanel.classList.toggle("show", s.items.length > 0);
     }
+  }
+
+  private updateCombo(s: HudState) {
+    // Text refreshes only on a change (and punches the mult when the chain grows); the
+    // drain bar tracks the window every frame. Show/hide is opacity+transform only, so
+    // the widget never shifts the layout, and combo 0 fades it out.
+    if (s.combo !== this.prevCombo) {
+      if (s.combo > this.prevCombo && this.prevCombo > 0) this.comboPop = 1; // ticked up mid-chain
+      this.comboNEl.textContent = String(s.combo);
+      this.comboMultEl.textContent = "x" + (Number.isInteger(s.comboMult) ? s.comboMult : s.comboMult.toFixed(1));
+      this.prevCombo = s.combo;
+    }
+    this.comboEl.style.setProperty("--combo-c", s.comboColor);
+    const frac = s.comboFrac < 0 ? 0 : s.comboFrac > 1 ? 1 : s.comboFrac;
+    this.comboFillEl.style.setProperty("--combo-fill", String(frac));
+    const isActive = s.combo > 0;
+    this.comboEl.classList.toggle("show", isActive);
+    this.comboEl.classList.toggle("low", isActive && frac < 0.34); // flash when about to expire
   }
 
   showStats(d: StatsPanelData) {
@@ -293,11 +333,19 @@ export class Hud {
       this.hintTimer -= dt;
       if (this.hintTimer <= 0) this.controlsHint.style.opacity = "0";
     }
+    if (this.comboPop > 0) {
+      this.comboPop = Math.max(0, this.comboPop - dt * 6); // punch eases out in ~0.16s
+      this.comboMultEl.style.transform = `scale(${1 + this.comboPop * 0.35})`;
+    }
   }
 
   clear() {
     this.coopEl.textContent = "";
     this.coopEl.style.display = "none";
+    this.comboEl.classList.remove("show", "low");
+    this.comboMultEl.style.transform = "scale(1)";
+    this.prevCombo = -1;
+    this.comboPop = 0;
     this.buildGrid.replaceChildren();
     this.buildPanel.classList.remove("show");
     this.prevItemsCount = -1;
