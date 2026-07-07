@@ -2622,7 +2622,17 @@ export class Game {
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
       const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;
       const pulse = p.kind === "coin" ? 1 : 1 + Math.sin(clock * 4) * 0.08;
-      if (this.sprites.ready(name)) {
+      // Weapon pickups draw their own 64px side-profile sprite so each gun is
+      // recognizable on the floor; anything without dedicated art (or not yet loaded)
+      // falls back to the generic "gun" sprite, then to a plain dot.
+      const weaponImg = p.kind === "weapon" && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
+      if (weaponImg) {
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.scale(spin * pulse, pulse);
+        ctx.drawImage(weaponImg, -19, -19, 38, 38);
+        ctx.restore();
+      } else if (this.sprites.ready(name)) {
         ctx.save();
         ctx.translate(sx, sy);
         ctx.scale(spin * pulse, pulse);
@@ -2910,6 +2920,10 @@ export class Game {
     }
     if (e.shock > 0) {
       const pulse = 0.6 + 0.4 * Math.sin(clock * 20);
+      // A dilating electric ring (AD's shock_ring mask) reads the shocked state at a
+      // glance; the crackle sits on top for the sparky detail. Both fall through to
+      // just the crackle if the ring mask isn't loaded (fxLayer no-ops on a missing tint).
+      this.fxLayer("shock_ring", SHOCK_TINT, sx, sy, size * (1.0 + 0.25 * pulse), size * (1.0 + 0.25 * pulse), 0.35 + 0.35 * pulse, clock * 4);
       this.fxLayer("crackle", SHOCK_TINT, sx, sy, size * 0.95, size * 0.95, pulse, clock * 9);
     }
   }
