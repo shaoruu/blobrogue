@@ -5,7 +5,11 @@ import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
 import { createAnim } from "./anim.js";
 
-export type Movement = "chase" | "zigzag" | "drift" | "boss";
+export type Movement = "chase" | "zigzag" | "drift" | "kite" | "boss";
+
+// Seconds a freshly-spawned enemy stays passive before it may start a windup, so
+// boss-spat adds (or a room's mob on entry) never telegraph-and-hit on frame one.
+export const SPAWN_GRACE = 0.8;
 
 export interface EnemyArchetype {
   kind: EnemyKind;
@@ -45,6 +49,14 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 15, drawSize: 46, alpha: 0.62, tint: "#bfe9ff", kbResist: 1.1,
     baseHp: 4, hpPerFloor: 0.6, baseSpeed: 56, speedPerFloor: 3, touchDamage: 1,
   },
+  // Glass-cannon ranged caster. Kites the player and lobs projectiles on a telegraph.
+  // TODO(art): using beetle.png as a placeholder body — the art director is making a
+  // dedicated bright-caster Spitter sprite (distinct from the purple boss).
+  spitter: {
+    kind: "spitter", sprite: "spitter", movement: "kite", isPhasing: false,
+    radius: 15, drawSize: 42, alpha: 1, tint: "#ff5a7a", kbResist: 0.8,
+    baseHp: 3, hpPerFloor: 0.5, baseSpeed: 30, speedPerFloor: 1, touchDamage: 1,
+  },
   boss: {
     kind: "boss", sprite: "boss", movement: "boss", isPhasing: false,
     radius: 34, drawSize: 100, alpha: 1, tint: "#ffb43b", kbResist: 6,
@@ -60,6 +72,7 @@ export function isBossFloor(floor: number): boolean {
 export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number): Enemy {
   const a = ENEMY_ARCHETYPES[kind];
   const hp = Math.round(a.baseHp + a.hpPerFloor * (floor - 1));
+  const isBoss = kind === "boss";
   return {
     kind, x, y, vx: 0, vy: 0,
     radius: a.radius,
@@ -67,8 +80,15 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     speed: a.baseSpeed + a.speedPerFloor * (floor - 1),
     touchDamage: a.touchDamage,
     zig: Math.random() * Math.PI * 2,
-    spawnTimer: 3,
+    spawnTimer: SPAWN_GRACE,
     anim: createAnim(),
+    attack: {
+      phase: "none", time: 0, move: "none", windup: 0,
+      // The boss waits a beat after its dramatic entrance before its first slam.
+      cooldown: isBoss ? 1.2 : 0,
+      lockedAngle: 0, isAimLocked: false, markX: 0, markY: 0,
+    },
+    boss: isBoss ? { phase: 1, minionTimer: 3, isNextRadial: false, burstParity: 0 } : null,
   };
 }
 
@@ -77,6 +97,9 @@ function floorRoster(floor: number): Array<{ kind: EnemyKind; weight: number }> 
   if (floor >= 2) {
     roster.push({ kind: "bat", weight: 3 });
     roster.push({ kind: "skeleton", weight: 2 });
+    // Ranged threat: rare on floor 2 (a gentle intro) and a bit more common from floor 3
+    // once the player has learned to dodge the melee lunge.
+    roster.push({ kind: "spitter", weight: floor >= 3 ? 2 : 1 });
   }
   if (floor >= 3) roster.push({ kind: "ghost", weight: 2 });
   return roster;
@@ -120,7 +143,9 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number)
   }
 
   const roster = floorRoster(floor);
-  const count = Math.min(3 + floor, 12);
+  // Pace keeps ramping into deeper floors (early floors unchanged); the real
+  // difficulty now comes from telegraphed attacks rather than raw enemy count.
+  const count = Math.min(3 + floor, 14);
   for (let i = 0; i < count; i++) {
     const roomIndex = 1 + rng.int(0, roomCount - 2);
     const p = pointInRoom(rng, dungeon, roomIndex);
