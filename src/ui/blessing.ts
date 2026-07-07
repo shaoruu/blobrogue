@@ -1,4 +1,5 @@
 import type { ItemDef, ItemRarity } from "../game/items.js";
+import { itemIconEl } from "../game/hudIcons.js";
 
 // The between-floor "choose a blessing" overlay. Modeled on PauseOverlay: it owns its
 // own fixed layer (never fights #overlay), freezes nothing itself — the game decides
@@ -84,7 +85,7 @@ export class BlessingOverlay {
       const icon = document.createElement("span");
       icon.className = "bc-icon";
       icon.style.setProperty("--t", item.tint);
-      icon.textContent = item.glyph;
+      icon.appendChild(itemIconEl(item.id, item.glyph));
       el.appendChild(icon);
 
       const name = document.createElement("span");
