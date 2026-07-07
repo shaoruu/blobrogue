@@ -114,6 +114,7 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   sawnoff: "shootShotgun",
   railgun: "shootPistol",
   nailer: "shootRapid",
+  flamer: "shootRapid",
 };
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
@@ -132,24 +133,24 @@ const SHAKE_MAX_PX = 26;
 const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
-  sawnoff: 0.6, railgun: 0.4, nailer: 0.06,
+  sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
 const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
-  sawnoff: 1.6, railgun: 1.5, nailer: 0.6,
+  sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
-  sawnoff: 11, railgun: 6, nailer: 1.2,
+  sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5,
 };
 const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
-  sawnoff: 26, railgun: 6, nailer: 0,
+  sawnoff: 26, railgun: 6, nailer: 0, flamer: 0,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -167,10 +168,35 @@ const TRAUMA_REMOTE_DOWN = 0.3;
 const WEAPON_KB: Record<WeaponId, number> = {
   pistol: 4, shotgun: 8, rapid: 2,
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
-  sawnoff: 10, railgun: 12, nailer: 3,
+  sawnoff: 10, railgun: 12, nailer: 3, flamer: 1,
 };
 const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
 const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
+
+// ---- elemental status effects (burn / chill / shock) ----
+// Local per-enemy state driven by bullets (same model as damage/knockback), so co-op
+// stays deterministic-enough with no new networking. Tuned a touch generous per the
+// game's vibe; enemies are never nerfed — this only adds player upside.
+const BURN_TICK = 0.25;        // DoT cadence (seconds); dmg dealt per tick = burnDmg * BURN_TICK
+const BURN_DMG_STACK = 2;      // burnDmg added per application
+const BURN_DMG_MAX = 6;        // cap (~3 stacks) so burn ramps but never runaway-melts
+const CHILL_SLOW = 0.5;        // movement multiplier while chilled
+const CHILL_MAX = 4;           // seconds of chill an enemy can bank
+const FREEZE_AT = 3;           // chill ≥ this = frozen solid (speed 0, +50% damage). Never the boss.
+const FROZEN_DMG_MULT = 1.5;   // shatter payoff: frozen enemies take +50%
+const SHOCK_DMG_MULT = 1.25;   // shocked enemies take +25%
+const SHOCK_ARC_RANGE = 130;   // px a shock arc can reach (matches the tesla feel)
+const SHOCK_ARC_DMG = 1;       // small zap dealt to the arc target
+// Durations rolled by item blessings (weapons carry their own via the `burn` field etc.).
+const ITEM_BURN_SECS = 2;
+const ITEM_CHILL_SECS = 1.2;
+const ITEM_SHOCK_SECS = 2;
+const BARREL_BURN_SECS = 2;    // explosive barrels lace the blast with fire
+// Status overlay tints (reused by the render pass + shock arc tracer).
+const BURN_TINT = "#ff8a3b";
+const CHILL_TINT = "#7fd3ff";
+const FREEZE_TINT = "#dff4ff";
+const SHOCK_TINT = "#7fe9ff";
 
 // Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
 const HURT_FLASH_DECAY = 3.2;
@@ -839,7 +865,7 @@ export class Game {
       triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
       this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle; this.muzzle.color = w.color;
       this.spawnParticles(muzzleX, muzzleY, w.muzzle, "#ffe6a0");
-      if (this.weapon !== "rapid") this.spawnShell(this.px, this.py - 6, this.aimAngle);
+      if (this.weapon !== "rapid" && this.weapon !== "flamer") this.spawnShell(this.px, this.py - 6, this.aimAngle);
       sfx(SHOOT_SFX[this.weapon]);
       this.addTrauma(FIRE_TRAUMA[this.weapon]);
       const kick = FIRE_KICK[this.weapon];
@@ -892,6 +918,9 @@ export class Game {
       homing: w.homing,
       chain: w.chain,
       chainRange: w.chainRange,
+      burn: w.burn,
+      chill: w.chill,
+      shock: w.shock,
     };
   }
 
@@ -1015,6 +1044,8 @@ export class Game {
     const remotes = this.coop ? this.coop.remotePlayers() : null;
     this.refreshFlowField(dt, remotes);
     for (const e of this.enemies) {
+      this.tickStatuses(e, dt);
+      if (e.dead) continue; // burn can kill; skip the rest of this frame for the corpse
       if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
       if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
 
@@ -1037,9 +1068,15 @@ export class Game {
         if (!b.friendly) continue;
         if (b.hitList && b.hitList.indexOf(e) !== -1) continue; // already pierced this one
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-          e.hp -= b.damage; triggerFlash(e.anim);
+          // Damage amps applied once, in order: shock (+25%) then frozen shatter (+50%).
+          const isFrozen = this.isFrozen(e);
+          const dmg = b.damage * (e.shock > 0 ? SHOCK_DMG_MULT : 1) * (isFrozen ? FROZEN_DMG_MULT : 1);
+          e.hp -= dmg; triggerFlash(e.anim);
           this.spawnPuff(b.x, b.y, b.isCrit ? 9 : 5, b.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
           this.applyKnockback(e, b);
+          // Any status the round carries (or an item blessing rolls), then the shock arc.
+          this.applyBulletStatuses(e, b);
+          if (e.shock > 0) this.shockArc(e);
           if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
           // TESLA (Tesla): the round dies on its first hit, but first arcs lightning to
           // nearby enemies. Reuses hitList (the pierce dedup) so an arc never doubles back.
@@ -1055,6 +1092,86 @@ export class Game {
       }
     }
     this.enemies = this.enemies.filter((e) => !e.dead);
+  }
+
+  // ---- elemental status effects ----
+
+  // Frozen solid: enough banked chill roots the enemy (speed 0) and opens the +50%
+  // shatter window. Excluded for the boss so it can never be trivially locked down.
+  private isFrozen(e: Enemy): boolean {
+    return e.kind !== "boss" && e.chill >= FREEZE_AT;
+  }
+
+  // Movement multiplier from chill: frozen = 0 (rooted), chilled = half speed, else 1.
+  // Applied at the single locomotion chokepoint (moveEnemyBy) so every AI path — chase,
+  // lunge, kite, boss chase — and knockback all respect it with no per-call threading.
+  private chillMoveScale(e: Enemy): number {
+    if (e.chill <= 0) return 1;
+    return this.isFrozen(e) ? 0 : CHILL_SLOW;
+  }
+
+  // Ticks the three statuses for one enemy. Burn is a DoT accumulator that can kill (it
+  // calls killEnemy and bails); chill/shock just count down. A few ops per enemy/frame.
+  private tickStatuses(e: Enemy, dt: number) {
+    if (e.chill > 0) e.chill = e.chill > dt ? e.chill - dt : 0;
+    if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
+    if (e.burn > 0) {
+      e.burn = e.burn > dt ? e.burn - dt : 0;
+      e.statusTick += dt;
+      while (e.statusTick > BURN_TICK) {
+        e.hp -= e.burnDmg * BURN_TICK;
+        e.statusTick -= BURN_TICK;
+        this.spawnEmber(e);
+        if (e.hp <= 0) { this.killEnemy(e); break; }
+      }
+      if (e.burn === 0) { e.burnDmg = 0; e.statusTick = 0; }
+    }
+  }
+
+  // Applies whatever status a round carries; else rolls the player's item chances. The
+  // else-if means a flamethrower round (already burning) doesn't double-roll item burn.
+  private applyBulletStatuses(e: Enemy, b: Bullet) {
+    if (b.burn !== undefined) this.applyBurn(e, b.burn);
+    else if (this.mods.burnChance > 0 && Math.random() < this.mods.burnChance) this.applyBurn(e, ITEM_BURN_SECS);
+    if (b.chill !== undefined) this.applyChill(e, b.chill);
+    else if (this.mods.chillChance > 0 && Math.random() < this.mods.chillChance) this.applyChill(e, ITEM_CHILL_SECS);
+    if (b.shock !== undefined) this.applyShock(e, b.shock);
+    else if (this.mods.shockChance > 0 && Math.random() < this.mods.shockChance) this.applyShock(e, ITEM_SHOCK_SECS);
+  }
+
+  // Burn: refresh duration, add a stack of DoT (capped). First application seeds burnDmg.
+  private applyBurn(e: Enemy, secs: number) {
+    if (secs > e.burn) e.burn = secs;
+    e.burnDmg = Math.min(BURN_DMG_MAX, e.burnDmg + BURN_DMG_STACK);
+  }
+
+  // Chill: banks duration toward the freeze threshold (capped).
+  private applyChill(e: Enemy, secs: number) {
+    e.chill = Math.min(CHILL_MAX, e.chill + secs);
+  }
+
+  // Shock: refresh the shocked tag (damage amp + on-hit arc).
+  private applyShock(e: Enemy, secs: number) {
+    if (secs > e.shock) e.shock = secs;
+  }
+
+  // A shocked enemy that gets hit arcs a single small zap to one nearby enemy — reuses
+  // the tesla arc core so it draws the same lightning tracer and shares the dedup model.
+  // The seed list holds the source so the arc never zaps the enemy that spawned it.
+  private shockArc(from: Enemy) {
+    this.arcLightning(from, 1, SHOCK_ARC_RANGE, SHOCK_ARC_DMG, SHOCK_TINT, [from]);
+  }
+
+  // A little ember puff rising off a burning enemy (also the DoT tick's visual).
+  private spawnEmber(e: Enemy) {
+    this.particles.push({
+      x: e.x + (Math.random() * 2 - 1) * e.radius * 0.6,
+      y: e.y + (Math.random() * 2 - 1) * e.radius * 0.5,
+      vx: (Math.random() * 2 - 1) * 24, vy: -40 - Math.random() * 50,
+      life: 0.3 + Math.random() * 0.25, maxLife: 0.55,
+      color: Math.random() < 0.5 ? BURN_TINT : "#ffd27a",
+      size: 2 + Math.random() * 2, kind: "puff", rot: 0, vr: 0, gravity: -40, drag: 0.9,
+    });
   }
 
   // Contact damage is kind-aware: a ghost only bites while fully solid; the boss is
@@ -1089,32 +1206,37 @@ export class Game {
   // resolution is local, so co-op clients may pick different arc paths — accepted visual
   // variance on already-fired bullets (see PR notes), never shared sim state.
   private chainLightning(b: Bullet, from: Enemy) {
-    const range = b.chainRange ?? 130;
-    const jumps = b.chain ?? 0;
-    const list = (b.hitList ??= []);
-    const dmg = b.damage * 0.7;
-    let origin: Enemy = from;
+    this.arcLightning(from, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []));
+  }
+
+  // Shared arc core for tesla chains AND shock arcs: hop from `origin` to the nearest
+  // un-hit enemy within range, drawing the lightning tracer and dealing flat damage each
+  // jump, up to `jumps` hops. `list` dedups (and seeds the source) so an arc never
+  // revisits an enemy. Nearest-target resolution is local — co-op clients may pick
+  // different arc paths, an accepted visual variance on already-resolved hits (never sim).
+  private arcLightning(origin: Enemy, jumps: number, range: number, dmg: number, color: string, list: Enemy[]) {
+    let cur: Enemy = origin;
     for (let j = 0; j < jumps; j++) {
       let best: Enemy | null = null;
       let bestD = range * range;
       for (const e of this.enemies) {
         if (e.dead || list.indexOf(e) !== -1) continue;
-        const dx = e.x - origin.x, dy = e.y - origin.y, d = dx * dx + dy * dy;
+        const dx = e.x - cur.x, dy = e.y - cur.y, d = dx * dx + dy * dy;
         if (d < bestD) { bestD = d; best = e; }
       }
       if (!best) break;
       this.remoteTracers.push({
-        x: origin.x, y: origin.y,
-        angle: Math.atan2(best.y - origin.y, best.x - origin.x),
-        life: 0.12, color: b.color, len: Math.sqrt(bestD), isArc: true,
+        x: cur.x, y: cur.y,
+        angle: Math.atan2(best.y - cur.y, best.x - cur.x),
+        life: 0.12, color, len: Math.sqrt(bestD), isArc: true,
       });
       best.hp -= dmg;
       triggerFlash(best.anim);
-      this.spawnPuff(best.x, best.y, 5, b.color);
+      this.spawnPuff(best.x, best.y, 5, color);
       list.push(best);
       if (best.hp <= 0 && !best.dead) this.killEnemy(best);
       else this.sfxAt("enemyHit", best.x, best.y, { gain: 0.5, rate: 1.5 });
-      origin = best;
+      cur = best;
     }
   }
 
@@ -1521,6 +1643,12 @@ export class Game {
   private enterIdle(e: Enemy) { const a = e.attack; a.phase = "none"; a.time = 0; a.move = "none"; a.windup = 0; }
 
   private moveEnemyBy(e: Enemy, dx: number, dy: number) {
+    // Chill slows (and freeze roots) all enemy locomotion here — the one point every AI
+    // path and the knockback impulse funnel through, so a frozen block never slides.
+    if (e.chill > 0) {
+      const s = this.chillMoveScale(e);
+      dx *= s; dy *= s;
+    }
     if (ENEMY_ARCHETYPES[e.kind].isPhasing) {
       // ghosts ignore geometry but stay inside the map bounds
       e.x = Math.max(TILE, Math.min((this.dungeon.w - 1) * TILE, e.x + dx));
@@ -1717,6 +1845,7 @@ export class Game {
       e.hp -= BARREL_EXPLOSION_DAMAGE;
       triggerFlash(e.anim);
       this.spawnPuff(e.x, e.y, 6, ENEMY_ARCHETYPES[e.kind].tint);
+      this.applyBurn(e, BARREL_BURN_SECS); // the blast leaves fire, tying props into the system
       if (e.hp <= 0 && !e.dead) this.killEnemy(e);
     }
     if (this.invuln === 0 && !this.isDown && this.hp > 0
@@ -2677,6 +2806,9 @@ export class Game {
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
       this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, alpha, Math.max(e.anim.flash, telegraphFlash), e.anim.clock);
 
+      // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
+      if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, arch.drawSize);
+
       // Shimmer flecks while a ghost is materializing.
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
       // Aura + aim line for a charging attack.
@@ -2758,6 +2890,28 @@ export class Game {
       ctx.fillRect(sx + Math.cos(ang) * rad - 1, sy + Math.sin(ang) * rad - 1, 2, 2);
     }
     ctx.restore();
+  }
+
+  // Layered status visuals, all additive via the shared fx path. Dedicated masks
+  // (ember/frost/freeze_shell) light up if the AD art is present; until then the
+  // always-loaded glow_round + crackle carry the tint so the status still reads.
+  private renderEnemyStatus(e: Enemy, sx: number, sy: number, size: number) {
+    const clock = e.anim.clock;
+    if (e.burn > 0) {
+      const pulse = 0.5 + 0.5 * Math.sin(clock * 12);
+      this.fxLayer("glow_round", BURN_TINT, sx, sy, size * 1.15, size * 1.15, 0.2 + 0.18 * pulse, 0);
+      this.fxLayer("ember", BURN_TINT, sx, sy - size * 0.1, size * 0.9, size * 0.9, 0.45 + 0.3 * pulse, clock);
+    }
+    if (e.chill > 0) {
+      const isFrozen = this.isFrozen(e);
+      this.fxLayer("glow_round", CHILL_TINT, sx, sy, size * 1.1, size * 1.1, isFrozen ? 0.4 : 0.22, 0);
+      this.fxLayer("frost", CHILL_TINT, sx, sy, size, size, 0.5, 0);
+      if (isFrozen) this.fxLayer("freeze_shell", FREEZE_TINT, sx, sy, size * 1.05, size * 1.05, 0.85, 0);
+    }
+    if (e.shock > 0) {
+      const pulse = 0.6 + 0.4 * Math.sin(clock * 20);
+      this.fxLayer("crackle", SHOCK_TINT, sx, sy, size * 0.95, size * 0.95, pulse, clock * 9);
+    }
   }
 
   private renderBullets() {
@@ -2873,6 +3027,12 @@ export class Game {
         this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.4, 0);
         this.fxTrail("trail_streak", color, bx, by, trailLen * 0.75, R * 2, 0.55, angle);
         return this.fxLayer("core_dot", color, bx, by, R * 3, R * 3, 1, 0);
+      case "flamer":
+        // Flame stream: a soft puff of fire (dedicated mask if present) under a warm glow
+        // and a bright hot core, so the fast short-life pellets blur into a flame cone.
+        this.fxLayer("flame_puff", color, bx, by, R * 4.5, R * 4.5, 0.75, angle);
+        this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.5, 0);
+        return this.fxLayer("core_dot", "#ffe6a0", bx, by, R * 2.4, R * 2.4, 0.9, 0);
       default:
         return false;
     }

@@ -18,6 +18,12 @@ export interface Weapon {
   homing?: number;     // homing: steering turn rate (rad/s)
   chain?: number;      // tesla: lightning jumps after the first hit
   chainRange?: number; // tesla: max px per chain jump
+  // Elemental status the weapon stamps on every round (seconds of the effect). The
+  // flamethrower is the only base weapon that carries one; item blessings roll the
+  // rest at hit time (see PlayerMods.burnChance etc.), so any weapon can go elemental.
+  burn?: number;
+  chill?: number;
+  shock?: number;
 }
 
 export const WEAPONS: Record<WeaponId, Weapon> = {
@@ -78,6 +84,14 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 1.4, pellets: 1, spread: 0.05, bulletRadius: 3, color: "#d9d2c0", muzzle: 1,
     bounce: 1,
   },
+  // Tier B — carries the `burn` status field. Fast tiny short-life wide puffs read as a
+  // continuous flame cone; low per-hit damage but every round stamps burn, so the DoT
+  // (and any elemental blessings) do the real work. See the status system in game.ts.
+  flamer: {
+    id: "flamer", name: "Dragon", fireCd: 0.04, speed: 300, life: 0.28,
+    damage: 0.6, pellets: 2, spread: 0.5, bulletRadius: 7, color: "#ff8a3b", muzzle: 2,
+    burn: 2,
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
@@ -85,7 +99,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer",
+  "sawnoff", "railgun", "nailer", "flamer",
 ];
 
 // A resolved shot: the base weapon merged with the player's in-run item mods. Built
@@ -108,6 +122,9 @@ export interface ShotSpec {
   homing?: number;
   chain?: number;
   chainRange?: number;
+  burn?: number;
+  chill?: number;
+  shock?: number;
 }
 
 const CRIT_COLOR = "#fff3c4";
@@ -136,6 +153,9 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number): Bullet[
       homing: spec.homing,
       chain: spec.chain,
       chainRange: spec.chainRange,
+      burn: spec.burn,
+      chill: spec.chill,
+      shock: spec.shock,
     });
   }
   return shots;
