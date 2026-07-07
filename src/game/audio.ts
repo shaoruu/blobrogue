@@ -1,16 +1,21 @@
-// Procedural WebAudio sound engine — every sound is synthesized in code (ZzFX-flavored
-// short blips / noise bursts with frequency sweeps and decay envelopes), so there are
-// zero audio asset files to fetch. Each play jitters pitch a touch so repeated shots
-// don't get grating.
+// Sample-based WebAudio sound engine. The game ships real, pre-generated audio files
+// under public/audio/ (per-weapon shots, enemy/player feedback, pickups, boss, plus two
+// looping instrumental tracks). We fetch + decode those into AudioBuffers on demand and
+// play one-shots through a gain bus; if a file ever fails to load/decode we fall back to
+// the original procedural synth for that one sound (kept below) so a missing asset can
+// never break — or throw in — the game.
 //
-// Browser rule: an AudioContext starts "suspended" and can only be resumed inside a
-// user gesture. We create it lazily and resume on the first pointer/key/touch event
-// (and again whenever the tab regains focus). Until it is actually "running", sfx()
-// no-ops rather than queuing sounds that would all blast out at once on resume.
+// Anti-repetition (the whole reason samples don't sound like a stuck machine gun): combat
+// sounds ship three variants (_v1/_v2/_v3); every play picks one at random and every
+// one-shot gets a ±5% playbackRate jitter.
 //
-// Nothing here runs in the per-frame hot path: sounds are event-driven and the music
-// scheduler wakes on a ~25ms timer (never requestAnimationFrame). The one buffer we
-// need (white noise) is generated once and reused across every noise voice.
+// Browser rule: an AudioContext starts "suspended" and can only be resumed inside a user
+// gesture. We create it lazily and resume on the first pointer/key/touch event (and again
+// whenever the tab regains focus). Music playback and buffer decoding only happen once the
+// context is actually "running", so there is no autoplay violation and no silent backlog.
+//
+// Nothing here runs in the per-frame hot path: sounds are event-driven, decoded buffers are
+// cached (never re-fetched per play), and only cheap node allocation happens per one-shot.
 
 import { settings } from "./settings.js";
 
@@ -18,14 +23,24 @@ export type SfxName =
   | "shootPistol"
   | "shootShotgun"
   | "shootRapid"
+  | "smg"
+  | "cannon"
+  | "burst"
+  | "ricochet"
+  | "homing"
+  | "tesla"
+  | "enemyAttack"
   | "enemyHit"
   | "enemyDeath"
   | "playerHurt"
   | "dash"
   | "coin"
+  | "chest"
+  | "barrel"
   | "heart"
   | "weapon"
   | "descend"
+  | "floorClear"
   | "bossSpawn"
   | "gameOver"
   | "revive"
@@ -35,9 +50,55 @@ export type MusicKind = "dungeon" | "boss" | null;
 
 export interface SfxOptions {
   gain?: number; // 0..1 scales this play's loudness (used to attenuate far-off co-op events)
-  rate?: number; // pitch/speed multiplier; defaults to a small per-play random jitter
+  rate?: number; // pitch/speed multiplier; a small per-play jitter is always applied on top
 }
 
+// Maps each logical event to a committed sample: `id` is the file stem under
+// public/audio/sfx/, `variants` is how many _vN takes exist (1 = single-take, no suffix).
+// Events with no entry (revive, uiClick) have no shipped sample and use the synth path.
+interface SampleSpec {
+  id: string;
+  variants: number;
+}
+
+const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
+  shootPistol: { id: "pistol", variants: 3 },
+  shootShotgun: { id: "shotgun", variants: 3 },
+  shootRapid: { id: "rapid", variants: 3 },
+  smg: { id: "smg", variants: 3 },
+  cannon: { id: "cannon", variants: 3 },
+  burst: { id: "burst", variants: 3 },
+  ricochet: { id: "ricochet", variants: 3 },
+  homing: { id: "homing", variants: 3 },
+  tesla: { id: "tesla", variants: 3 },
+  enemyAttack: { id: "enemyAttack", variants: 3 },
+  enemyHit: { id: "enemyHit", variants: 3 },
+  enemyDeath: { id: "enemyDeath", variants: 3 },
+  playerHurt: { id: "playerHurt", variants: 1 },
+  dash: { id: "dash", variants: 1 },
+  coin: { id: "coin", variants: 1 },
+  chest: { id: "chest", variants: 1 },
+  barrel: { id: "barrel", variants: 1 },
+  heart: { id: "heart", variants: 1 },
+  weapon: { id: "weaponPickup", variants: 1 },
+  descend: { id: "descend", variants: 1 },
+  floorClear: { id: "floorClear", variants: 1 },
+  bossSpawn: { id: "bossRoar", variants: 1 },
+  gameOver: { id: "gameOver", variants: 1 },
+};
+
+// Loaded up-front on the first user gesture so the frequent gameplay sounds are ready
+// before the first shot; everything else lazy-loads on first use.
+const PRELOAD: SfxName[] = [
+  "shootPistol", "shootShotgun", "shootRapid", "smg", "cannon", "burst", "ricochet",
+  "homing", "tesla", "enemyAttack", "enemyHit", "enemyDeath", "playerHurt", "dash",
+  "coin", "heart",
+];
+
+const MUSIC_FADE = 0.3;    // seconds of crossfade when swapping / starting / stopping tracks
+const PITCH_JITTER = 0.1;  // ±5% playbackRate spread applied to every one-shot
+
+// ---- procedural synth fallback (below) ----------------------------------------------
 interface MusicTrack {
   bpm: number;
   root: number; // bass root frequency (Hz)
@@ -49,9 +110,6 @@ interface MusicTrack {
   leadGain: number;
 }
 
-// Everything below is built from a minor-pentatonic set (offsets 0,3,5,7,10,12...) so
-// the loop never lands a sour note; the boss track leans on a couple of +6 tritones for
-// menace. Kept sparse + soft on purpose.
 const DUNGEON: MusicTrack = {
   bpm: 92,
   root: 110, // A2
@@ -85,11 +143,30 @@ class AudioEngine {
   private musicBus: GainNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
 
+  // Sample cache: buffers keyed by file stem ("pistol_v2", "coin"); loading/failed keyed
+  // by SampleSpec.id so a sound is loaded once and, on failure, routes to the synth.
+  private buffers = new Map<string, AudioBuffer>();
+  private loadingIds = new Set<string>();
+  private failedIds = new Set<string>();
+  private ext: "ogg" | "mp3" | null = null;
+
+  // Streamed music: a looping BufferSource per track, crossfaded through its own gain.
+  private musicBuffers = new Map<Exclude<MusicKind, null>, AudioBuffer>();
+  private musicLoading = new Set<Exclude<MusicKind, null>>();
+  private failedMusic = new Set<Exclude<MusicKind, null>>();
+  private musicSource: AudioBufferSourceNode | null = null;
+  private musicSourceGain: GainNode | null = null;
+  private playingKind: MusicKind = null;
+
   private currentKind: MusicKind = null;
+
+  // Synth fallback music scheduler state.
   private currentTrack: MusicTrack | null = null;
   private musicStep = 0;
   private nextNoteTime = 0;
   private musicTimer = 0;
+  private synthMusicKind: MusicKind = null;
+
   private sfxActive = new Map<SfxName, number>();
   private sfxLastAt = new Map<SfxName, number>();
 
@@ -110,8 +187,16 @@ class AudioEngine {
     this.ensureContext();
     const ctx = this.ctx;
     if (!ctx) return;
-    if (ctx.state === "suspended") void ctx.resume().then(() => this.applyMusic());
-    else this.applyMusic();
+    if (ctx.state === "suspended") {
+      void ctx.resume().then(() => this.onRunning());
+    } else {
+      this.onRunning();
+    }
+  }
+
+  private onRunning(): void {
+    this.preload();
+    this.applyMusic();
   }
 
   sfx(name: SfxName, opts?: SfxOptions): void {
@@ -132,82 +217,105 @@ class AudioEngine {
       const c = this.sfxActive.get(name) ?? 1;
       this.sfxActive.set(name, Math.max(0, c - 1));
     }, this.sfxMaxDur(name) * 1000 + 20);
-    const rate = opts?.rate ?? this.rand(0.94, 1.06);
-    switch (name) {
-      case "shootPistol":
-        this.blip(t, "square", 720 * rate, 190 * rate, 0.002, 0.09, 0.5 * gain);
-        this.noise(t, "highpass", 1400, 700, 0.04, 0.14 * gain, 0.9, rate);
-        break;
-      case "shootShotgun":
-        this.noise(t, "lowpass", 1900, 300, 0.22, 0.6 * gain, 1, rate);
-        this.blip(t, "sawtooth", 190 * rate, 60 * rate, 0.003, 0.18, 0.42 * gain);
-        break;
-      case "shootRapid": {
-        const rapidRate = opts?.rate ?? this.rand(0.90, 1.10);
-        this.blip(t, "sawtooth", 900 * rapidRate, 380 * rapidRate, 0.001, 0.06, 0.3 * gain);
-        break;
+
+    // A caller may pin the pitch (e.g. a deep boss thud); a subtle jitter rides on top
+    // of that so even repeated identical events never phase into a single grating tone.
+    const rate = (opts?.rate ?? 1) * (1 + (Math.random() - 0.5) * PITCH_JITTER);
+
+    // Loud impacts briefly duck the music so they punch through — kept from the synth era
+    // and applied regardless of which path (sample/synth) makes the sound.
+    if (this.musicBus) {
+      if (name === "playerHurt") this.duck(this.musicBus, settings.musicVol * 0.5, 0.12, 0.5);
+      else if (name === "bossSpawn") this.duck(this.musicBus, settings.musicVol * 0.3, 0.2, 0.8);
+    }
+
+    const spec = SAMPLES[name];
+    if (spec && !this.failedIds.has(spec.id)) {
+      this.playSample(spec, rate, gain);
+      return;
+    }
+    this.synth(name, t, rate, gain);
+  }
+
+  // ---- sample loading + playback ------------------------------------------------------
+
+  // Prefer Ogg/Vorbis (Chrome/Firefox); fall back to MP3 where Ogg isn't decodable (Safari).
+  private extension(): "ogg" | "mp3" {
+    if (this.ext) return this.ext;
+    let chosen: "ogg" | "mp3" = "mp3";
+    try {
+      const el = document.createElement("audio");
+      if (typeof el.canPlayType === "function" && el.canPlayType('audio/ogg; codecs="vorbis"') !== "") {
+        chosen = "ogg";
       }
-      case "enemyHit":
-        this.noise(t, "bandpass", 2200, 1400, 0.05, 0.24 * gain, 1.6, rate);
-        break;
-      case "enemyDeath":
-        this.noise(t, "lowpass", 2600, 200, 0.16, 0.5 * gain, 1);
-        this.blip(t, "triangle", 430 * rate, 90 * rate, 0.002, 0.15, 0.34 * gain);
-        break;
-      case "playerHurt":
-        this.blip(t, "sawtooth", 300 * rate, 70 * rate, 0.002, 0.28, 0.5 * gain);
-        this.blip(t, "sawtooth", 318 * rate, 70 * rate, 0.002, 0.28, 0.5 * gain);
-        this.noise(t, "lowpass", 1800, 400, 0.12, 0.3 * gain);
-        if (this.musicBus) this.duck(this.musicBus, settings.musicVol * 0.5, 0.12, 0.5);
-        break;
-      case "dash":
-        this.noise(t, "bandpass", 500, 2600, 0.22, 0.3 * gain, 0.7);
-        break;
-      case "coin":
-        this.blip(t, "square", 880 * rate, 880 * rate, 0.002, 0.08, 0.28 * gain);
-        this.blip(t + 0.06, "square", 1320 * rate, 1320 * rate, 0.002, 0.12, 0.28 * gain);
-        break;
-      case "heart": {
-        const base = 523.25 * rate; // C5, then a bright major triad
-        this.blip(t, "triangle", base, base, 0.006, 0.18, 0.26 * gain);
-        this.blip(t + 0.08, "triangle", base * 1.26, base * 1.26, 0.006, 0.18, 0.24 * gain);
-        this.blip(t + 0.16, "triangle", base * 1.5, base * 1.5, 0.006, 0.22, 0.24 * gain);
-        break;
-      }
-      case "weapon":
-        this.blip(t, "square", 160 * rate, 120 * rate, 0.004, 0.16, 0.4 * gain);
-        this.noise(t, "lowpass", 1400, 400, 0.1, 0.3 * gain);
-        this.blip(t + 0.05, "square", 300 * rate, 240 * rate, 0.003, 0.12, 0.3 * gain);
-        break;
-      case "descend": {
-        const notes = [660, 550, 440, 330];
-        for (let i = 0; i < notes.length; i++) {
-          this.blip(t + i * 0.07, "triangle", notes[i] * rate, notes[i] * rate, 0.004, 0.16, 0.3 * gain);
-        }
-        break;
-      }
-      case "bossSpawn":
-        this.blip(t, "sawtooth", 90 * rate, 58 * rate, 0.02, 0.9, 0.4 * gain);
-        this.blip(t, "square", 95 * rate, 62 * rate, 0.02, 0.9, 0.2 * gain); // slight detune -> ominous beating
-        this.noise(t, "lowpass", 600, 120, 0.7, 0.24 * gain);
-        if (this.musicBus) this.duck(this.musicBus, settings.musicVol * 0.3, 0.2, 0.8);
-        break;
-      case "gameOver": {
-        const notes = [440, 392, 330, 262];
-        for (let i = 0; i < notes.length; i++) {
-          this.blip(t + i * 0.16, "triangle", notes[i] * rate, notes[i] * rate, 0.01, 0.4, 0.32 * gain);
-        }
-        break;
-      }
-      case "revive":
-        this.blip(t, "triangle", 330 * rate, 660 * rate, 0.01, 0.3, 0.3 * gain);
-        this.blip(t + 0.1, "triangle", 660 * rate, 990 * rate, 0.01, 0.3, 0.24 * gain);
-        break;
-      case "uiClick":
-        this.blip(t, "square", 600, 900, 0.002, 0.05, 0.2 * gain);
-        break;
+    } catch {
+      chosen = "mp3";
+    }
+    this.ext = chosen;
+    return chosen;
+  }
+
+  private sfxUrl(fileStem: string): string {
+    return `${import.meta.env.BASE_URL}audio/sfx/${fileStem}.${this.extension()}`;
+  }
+
+  private musicUrl(kind: Exclude<MusicKind, null>): string {
+    return `${import.meta.env.BASE_URL}audio/music/${kind}.${this.extension()}`;
+  }
+
+  private fileStems(spec: SampleSpec): string[] {
+    if (spec.variants <= 1) return [spec.id];
+    const stems: string[] = [];
+    for (let v = 1; v <= spec.variants; v++) stems.push(`${spec.id}_v${v}`);
+    return stems;
+  }
+
+  private async fetchDecode(url: string): Promise<AudioBuffer> {
+    const ctx = this.ctx;
+    if (!ctx) throw new Error("no audio context");
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`fetch ${url} -> ${res.status}`);
+    const bytes = await res.arrayBuffer();
+    return await ctx.decodeAudioData(bytes);
+  }
+
+  private preload(): void {
+    for (const name of PRELOAD) {
+      const spec = SAMPLES[name];
+      if (spec) this.ensureLoaded(spec);
     }
   }
+
+  private ensureLoaded(spec: SampleSpec): void {
+    if (this.loadingIds.has(spec.id) || this.failedIds.has(spec.id)) return;
+    const stems = this.fileStems(spec);
+    if (stems.every((s) => this.buffers.has(s))) return;
+    this.loadingIds.add(spec.id);
+    Promise.all(stems.map((s) => this.fetchDecode(this.sfxUrl(s)).then((buf) => this.buffers.set(s, buf))))
+      .then(() => { this.loadingIds.delete(spec.id); })
+      .catch(() => { this.loadingIds.delete(spec.id); this.failedIds.add(spec.id); });
+  }
+
+  private playSample(spec: SampleSpec, rate: number, gain: number): void {
+    this.ensureLoaded(spec);
+    const ctx = this.ctx;
+    const bus = this.sfxBus;
+    if (!ctx || !bus) return;
+    const stem = spec.variants <= 1
+      ? spec.id
+      : `${spec.id}_v${1 + Math.floor(Math.random() * spec.variants)}`;
+    const buf = this.buffers.get(stem);
+    if (!buf) return; // still loading — skip this one play rather than blocking or stacking
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.playbackRate.value = Math.max(0.01, rate);
+    const g = ctx.createGain();
+    g.gain.value = gain;
+    src.connect(g).connect(bus);
+    src.start();
+  }
+
+  // ---- music --------------------------------------------------------------------------
 
   setMusic(kind: MusicKind): void {
     if (kind === this.currentKind) return;
@@ -217,25 +325,91 @@ class AudioEngine {
 
   private applyMusic(): void {
     const kind = this.currentKind;
-    if (!kind || settings.isMuted) { this.stopMusicLoop(); return; }
+    if (!kind || settings.isMuted) { this.stopMusic(); return; }
     this.ensureContext();
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return; // resume() re-applies once it resolves
-    const track = kind === "boss" ? BOSS : DUNGEON;
-    if (this.musicTimer && this.currentTrack === track) return; // already looping this one — don't restart
-    this.stopMusicLoop();
-    this.currentTrack = track;
+
+    // Sample track failed to load once — use the procedural score for it instead.
+    if (this.failedMusic.has(kind)) { this.applySynthMusic(kind); return; }
+
+    const buf = this.musicBuffers.get(kind);
+    if (!buf) { this.loadMusic(kind); return; }
+
+    this.stopSynthMusic();
+    if (this.playingKind === kind && this.musicSource) return; // already looping this one
+    this.startMusicSource(buf, kind);
+  }
+
+  private loadMusic(kind: Exclude<MusicKind, null>): void {
+    if (this.musicLoading.has(kind) || this.musicBuffers.has(kind)) return;
+    this.musicLoading.add(kind);
+    this.fetchDecode(this.musicUrl(kind))
+      .then((buf) => { this.musicBuffers.set(kind, buf); this.musicLoading.delete(kind); this.applyMusic(); })
+      .catch(() => { this.musicLoading.delete(kind); this.failedMusic.add(kind); this.applyMusic(); });
+  }
+
+  private startMusicSource(buf: AudioBuffer, kind: Exclude<MusicKind, null>): void {
+    const ctx = this.ctx;
+    const bus = this.musicBus;
+    if (!ctx || !bus) return;
+    const now = ctx.currentTime;
+    this.fadeOutMusicSource();
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(1, now + MUSIC_FADE);
+    src.connect(g).connect(bus);
+    src.start(now);
+    this.musicSource = src;
+    this.musicSourceGain = g;
+    this.playingKind = kind;
+  }
+
+  private fadeOutMusicSource(): void {
+    const ctx = this.ctx;
+    const src = this.musicSource;
+    const g = this.musicSourceGain;
+    if (!ctx || !src || !g) return;
+    const now = ctx.currentTime;
+    g.gain.cancelScheduledValues(now);
+    g.gain.setValueAtTime(g.gain.value, now);
+    g.gain.linearRampToValueAtTime(0.0001, now + MUSIC_FADE);
+    try { src.stop(now + MUSIC_FADE + 0.02); } catch { /* already stopped */ }
+    this.musicSource = null;
+    this.musicSourceGain = null;
+  }
+
+  private stopMusic(): void {
+    this.fadeOutMusicSource();
+    this.stopSynthMusic();
+    this.playingKind = null;
+  }
+
+  // ---- synth fallback -----------------------------------------------------------------
+
+  private applySynthMusic(kind: Exclude<MusicKind, null>): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== "running") return;
+    this.fadeOutMusicSource();
+    if (this.musicTimer && this.synthMusicKind === kind) return; // already looping this one
+    this.stopSynthMusic();
+    this.synthMusicKind = kind;
+    this.currentTrack = kind === "boss" ? BOSS : DUNGEON;
     this.musicStep = 0;
     this.nextNoteTime = ctx.currentTime + 0.12;
     this.musicTick();
   }
 
-  private stopMusicLoop(): void {
+  private stopSynthMusic(): void {
     if (this.musicTimer) {
       clearTimeout(this.musicTimer);
       this.musicTimer = 0;
     }
     this.currentTrack = null;
+    this.synthMusicKind = null;
   }
 
   private musicTick = (): void => {
@@ -271,7 +445,7 @@ class AudioEngine {
     if (ctx && this.musicBus) {
       this.musicBus.gain.setTargetAtTime(settings.musicVol, now, 0.02);
     }
-    if (settings.isMuted) this.stopMusicLoop();
+    if (settings.isMuted) this.stopMusic();
     else this.applyMusic();
   }
 
@@ -322,8 +496,95 @@ class AudioEngine {
     return buf;
   }
 
-  private rand(a: number, b: number): number {
-    return a + Math.random() * (b - a);
+  // Procedural voices, retained as the per-sound fallback and for events with no shipped
+  // sample (revive, uiClick). `rate` already carries the per-play jitter from sfx().
+  private synth(name: SfxName, t: number, rate: number, gain: number): void {
+    switch (name) {
+      case "shootPistol":
+        this.blip(t, "square", 720 * rate, 190 * rate, 0.002, 0.09, 0.5 * gain);
+        this.noise(t, "highpass", 1400, 700, 0.04, 0.14 * gain, 0.9, rate);
+        break;
+      case "shootShotgun":
+      case "cannon":
+        this.noise(t, "lowpass", 1900, 300, 0.22, 0.6 * gain, 1, rate);
+        this.blip(t, "sawtooth", 190 * rate, 60 * rate, 0.003, 0.18, 0.42 * gain);
+        break;
+      case "shootRapid":
+      case "smg":
+      case "burst":
+      case "ricochet":
+      case "homing":
+      case "tesla": {
+        this.blip(t, "sawtooth", 900 * rate, 380 * rate, 0.001, 0.06, 0.3 * gain);
+        break;
+      }
+      case "enemyAttack":
+        this.noise(t, "bandpass", 500, 2600, 0.22, 0.3 * gain, 0.7);
+        break;
+      case "enemyHit":
+        this.noise(t, "bandpass", 2200, 1400, 0.05, 0.24 * gain, 1.6, rate);
+        break;
+      case "enemyDeath":
+        this.noise(t, "lowpass", 2600, 200, 0.16, 0.5 * gain, 1);
+        this.blip(t, "triangle", 430 * rate, 90 * rate, 0.002, 0.15, 0.34 * gain);
+        break;
+      case "playerHurt":
+        this.blip(t, "sawtooth", 300 * rate, 70 * rate, 0.002, 0.28, 0.5 * gain);
+        this.blip(t, "sawtooth", 318 * rate, 70 * rate, 0.002, 0.28, 0.5 * gain);
+        this.noise(t, "lowpass", 1800, 400, 0.12, 0.3 * gain);
+        break;
+      case "dash":
+        this.noise(t, "bandpass", 500, 2600, 0.22, 0.3 * gain, 0.7);
+        break;
+      case "coin":
+        this.blip(t, "square", 880 * rate, 880 * rate, 0.002, 0.08, 0.28 * gain);
+        this.blip(t + 0.06, "square", 1320 * rate, 1320 * rate, 0.002, 0.12, 0.28 * gain);
+        break;
+      case "chest":
+      case "barrel":
+        this.blip(t, "square", 160 * rate, 120 * rate, 0.004, 0.16, 0.4 * gain);
+        this.noise(t, "lowpass", 1400, 400, 0.1, 0.3 * gain);
+        break;
+      case "heart": {
+        const base = 523.25 * rate; // C5, then a bright major triad
+        this.blip(t, "triangle", base, base, 0.006, 0.18, 0.26 * gain);
+        this.blip(t + 0.08, "triangle", base * 1.26, base * 1.26, 0.006, 0.18, 0.24 * gain);
+        this.blip(t + 0.16, "triangle", base * 1.5, base * 1.5, 0.006, 0.22, 0.24 * gain);
+        break;
+      }
+      case "weapon":
+        this.blip(t, "square", 160 * rate, 120 * rate, 0.004, 0.16, 0.4 * gain);
+        this.noise(t, "lowpass", 1400, 400, 0.1, 0.3 * gain);
+        this.blip(t + 0.05, "square", 300 * rate, 240 * rate, 0.003, 0.12, 0.3 * gain);
+        break;
+      case "descend":
+      case "floorClear": {
+        const notes = [660, 550, 440, 330];
+        for (let i = 0; i < notes.length; i++) {
+          this.blip(t + i * 0.07, "triangle", notes[i] * rate, notes[i] * rate, 0.004, 0.16, 0.3 * gain);
+        }
+        break;
+      }
+      case "bossSpawn":
+        this.blip(t, "sawtooth", 90 * rate, 58 * rate, 0.02, 0.9, 0.4 * gain);
+        this.blip(t, "square", 95 * rate, 62 * rate, 0.02, 0.9, 0.2 * gain); // slight detune -> ominous beating
+        this.noise(t, "lowpass", 600, 120, 0.7, 0.24 * gain);
+        break;
+      case "gameOver": {
+        const notes = [440, 392, 330, 262];
+        for (let i = 0; i < notes.length; i++) {
+          this.blip(t + i * 0.16, "triangle", notes[i] * rate, notes[i] * rate, 0.01, 0.4, 0.32 * gain);
+        }
+        break;
+      }
+      case "revive":
+        this.blip(t, "triangle", 330 * rate, 660 * rate, 0.01, 0.3, 0.3 * gain);
+        this.blip(t + 0.1, "triangle", 660 * rate, 990 * rate, 0.01, 0.3, 0.24 * gain);
+        break;
+      case "uiClick":
+        this.blip(t, "square", 600, 900, 0.002, 0.05, 0.2 * gain);
+        break;
+    }
   }
 
   // A short enveloped oscillator with an optional exponential frequency sweep.
@@ -369,14 +630,24 @@ class AudioEngine {
       case "shootPistol": return 0.12;
       case "shootShotgun": return 0.25;
       case "shootRapid": return 0.08;
-      case "enemyHit": return 0.08;
-      case "enemyDeath": return 0.2;
+      case "smg": return 0.08;
+      case "cannon": return 0.3;
+      case "burst": return 0.12;
+      case "ricochet": return 0.12;
+      case "homing": return 0.12;
+      case "tesla": return 0.14;
+      case "enemyAttack": return 0.3;
+      case "enemyHit": return 0.12;
+      case "enemyDeath": return 0.25;
       case "playerHurt": return 0.32;
       case "dash": return 0.26;
       case "coin": return 0.2;
+      case "chest": return 0.3;
+      case "barrel": return 0.3;
       case "heart": return 0.4;
       case "weapon": return 0.2;
       case "descend": return 0.35;
+      case "floorClear": return 0.5;
       case "bossSpawn": return 0.95;
       case "gameOver": return 0.75;
       case "revive": return 0.45;
