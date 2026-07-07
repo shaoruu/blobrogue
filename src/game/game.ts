@@ -408,6 +408,7 @@ export class Game {
   private isAutoFiring = false; // autofire mode only: click toggles continuous fire (settings.isAutofire)
   private facing = 1;
   private weapon: WeaponId = DEFAULT_WEAPON;
+  private ownedWeapons: WeaponId[] = [DEFAULT_WEAPON]; // inventory; switch with 1-9 / scroll
   private aimAngle = 0;
   private shotSeq = 0;
   private isDown = false;
@@ -527,6 +528,9 @@ export class Game {
       this.keys.add(k);
       if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
       if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
+      // Weapon switch: number keys 1-9 select that inventory slot directly.
+      if (k >= "1" && k <= "9") { const i = parseInt(k, 10) - 1; if (i < this.ownedWeapons.length) this.selectWeapon(i); }
+      if (k === "q") this.cycleWeapon(-1); // Q cycles back a slot
     });
     window.addEventListener("keyup", (e) => {
       const k = e.key.toLowerCase();
@@ -538,6 +542,10 @@ export class Game {
       this.mouse.x = e.clientX - r.left;
       this.mouse.y = e.clientY - r.top;
     });
+    this.canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
+    }, { passive: false });
     this.canvas.addEventListener("mousedown", (e) => {
       this.mouse.isDown = true;
       // Autofire: a left-click toggles continuous fire instead of requiring a hold.
@@ -560,6 +568,7 @@ export class Game {
     this.maxHp = BASE_MAX_HP;
     this.hp = this.maxHp;
     this.weapon = DEFAULT_WEAPON;
+    this.ownedWeapons = [DEFAULT_WEAPON];
     this.isDown = false;
     this.isAutoFiring = false;
     this.remoteShotSeen.clear();
@@ -957,6 +966,33 @@ export class Game {
     this.invuln = Math.max(0, this.invuln - dt);
     this.isPlayerMoving = ix !== 0 || iy !== 0;
     this.playerLean = ix;
+  }
+
+  // Weapon inventory: picking up a weapon adds it (deduped) and equips it; number keys
+  // 1-9 select a slot, Q / scroll cycle. Switching resets the fire cooldown so the new
+  // weapon fires promptly. All local — no networking.
+  private pickUpWeapon(id: WeaponId) {
+    if (!this.ownedWeapons.includes(id)) this.ownedWeapons.push(id);
+    this.equipWeapon(id);
+  }
+
+  private equipWeapon(id: WeaponId) {
+    if (this.weapon === id) return;
+    this.weapon = id;
+    this.fireCd = 0;
+    this.meleeSwing = null; // cancel any in-progress swing on switch
+  }
+
+  private selectWeapon(index: number) {
+    if (index < 0 || index >= this.ownedWeapons.length) return;
+    this.equipWeapon(this.ownedWeapons[index]);
+  }
+
+  private cycleWeapon(dir: number) {
+    if (this.ownedWeapons.length < 2) return;
+    const cur = this.ownedWeapons.indexOf(this.weapon);
+    const next = (cur + dir + this.ownedWeapons.length) % this.ownedWeapons.length;
+    this.equipWeapon(this.ownedWeapons[next]);
   }
 
   private updateShooting(dt: number) {
@@ -1975,7 +2011,7 @@ export class Game {
         if (p.kind === "heart") {
           if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); sfx("heart"); continue; }
         }
-        if (p.kind === "weapon" && p.weapon) { this.weapon = p.weapon; this.fireCd = 0; this.spawnParticles(p.x, p.y, 12, "#ffb43b"); sfx("weapon"); continue; }
+        if (p.kind === "weapon" && p.weapon) { this.pickUpWeapon(p.weapon); this.spawnParticles(p.x, p.y, 12, "#ffb43b"); sfx("weapon"); continue; }
       }
       remaining.push(p);
     }
@@ -2368,6 +2404,7 @@ export class Game {
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
       weaponName: WEAPONS[this.weapon].name,
+      weapons: this.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
       isCleared: this.enemies.length === 0,
       enemiesLeft: this.enemies.length,
       isBossActive,
@@ -3687,7 +3724,7 @@ export class Game {
   }
 
   devGiveWeapon(id: WeaponId): void {
-    this.weapon = id;
+    this.pickUpWeapon(id); // adds to inventory + equips, so the inventory HUD is testable
     sfx("weapon");
   }
 

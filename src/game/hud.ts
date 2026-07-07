@@ -13,6 +13,7 @@ export interface HudState {
   kills: number;
   coins: number;
   weaponName: string;
+  weapons: { name: string; current: boolean }[]; // inventory row
   isCleared: boolean;
   enemiesLeft: number;
   isBossActive: boolean;
@@ -78,7 +79,7 @@ const HUD_MARKUP = `
     <div class="bossbar-track"><i data-bossfill></i></div>
   </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
-  <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
+  <div class="hud-corner br"><div class="invrow" data-invrow></div><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
   <div class="combo" data-combo>
     <div class="combo-badge">
@@ -97,6 +98,8 @@ export class Hud {
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
   private wnameEl: HTMLElement;
+  private invrowEl!: HTMLElement;
+  private prevInvKey = "";
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
@@ -139,6 +142,7 @@ export class Hud {
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
     this.wnameEl = hud.querySelector("[data-wname]")!;
+    this.invrowEl = hud.querySelector("[data-invrow]")!;
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
@@ -207,6 +211,20 @@ export class Hud {
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     this.wnameEl.textContent = s.weaponName.toUpperCase();
+    // Weapon inventory row: one chip per owned weapon, current highlighted. Only rebuild
+    // when the set or selection changes (cheap string key), and hide it with <2 weapons.
+    const invKey = s.weapons.map((w) => (w.current ? "*" : "") + w.name).join("|");
+    if (invKey !== this.prevInvKey) {
+      this.prevInvKey = invKey;
+      this.invrowEl.classList.toggle("show", s.weapons.length >= 2);
+      this.invrowEl.replaceChildren();
+      s.weapons.forEach((w, i) => {
+        const chip = el("span", "");
+        chip.className = "invchip" + (w.current ? " on" : "");
+        chip.textContent = `${i + 1} ${w.name.toUpperCase()}`;
+        this.invrowEl.appendChild(chip);
+      });
+    }
     // Ammo stays the infinity glyph from the markup — weapons have no clip concept.
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
