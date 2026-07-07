@@ -16,6 +16,34 @@ export interface ProfileDoc {
   totalCoins: number;
   gamesPlayed: number;
   unlocks: string[];
+  // Present when the profile is account-backed (Google avatar URL).
+  image?: string;
+  // True when this stats row is linked to a signed-in account.
+  isAccount: boolean;
+}
+
+export interface CurrentUserDoc {
+  name: string | null;
+  email: string | null;
+  image: string | null;
+}
+
+// Convex Auth's sign-in/out actions live at the string references "auth:signIn" /
+// "auth:signOut" once the backend (convex/auth.ts + http.ts) is deployed. Typed here
+// so the vanilla auth client (src/net/auth.ts) can call them without importing the
+// React-only @convex-dev/auth bindings or the generated backend module.
+export type AuthSignInArgs = {
+  provider?: string;
+  params?: Record<string, string>;
+  verifier?: string;
+  refreshToken?: string;
+};
+
+export interface AuthSignInResult {
+  redirect?: string;
+  verifier?: string;
+  tokens?: { token: string; refreshToken: string } | null;
+  started?: boolean;
 }
 
 export interface RoomDoc {
@@ -63,7 +91,12 @@ export const api = {
   players: {
     ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
+    currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
     recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number }, ProfileDoc | null>("players:recordRun"),
+  },
+  auth: {
+    signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),
+    signOut: makeFunctionReference<"action", Record<string, never>, null>("auth:signOut"),
   },
   rooms: {
     create: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),

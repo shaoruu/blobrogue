@@ -1,6 +1,8 @@
 import type { ConvexClient } from "convex/browser";
 import type { Session } from "../net/session.js";
+import type { AuthClient } from "../net/auth.js";
 import type { ProfileDoc } from "../net/api.js";
+import { api } from "../net/api.js";
 import { Multiplayer } from "../net/multiplayer.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor } from "../game/assets.js";
@@ -31,15 +33,17 @@ export class Menu {
   private overlay: HTMLElement;
   private session: Session;
   private client: ConvexClient | null;
+  private auth: AuthClient | null;
   private host: MenuHost;
   private unsub: (() => void) | null = null;
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
 
-  constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, host: MenuHost) {
+  constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
     this.session = session;
     this.client = client;
+    this.auth = auth;
     this.host = host;
   }
 
@@ -103,9 +107,9 @@ export class Menu {
       colA.appendChild(actrow);
       body.appendChild(colA);
 
-      // RIGHT column: profile + settings.
+      // RIGHT column: identity (name or account) + profile + settings.
       const colB = el("div", "col-side");
-      colB.appendChild(this.nameRow());
+      colB.appendChild(this.identitySection());
       const profileBox = el("div", "profile");
       colB.appendChild(profileBox);
       colB.appendChild(createSettingsControls());
@@ -132,9 +136,85 @@ export class Menu {
     return row;
   }
 
+  // The right-column identity block. Signed in: a Google account chip (avatar + name
+  // + sign out). Signed out: the guest name input plus an optional "Sign in with
+  // Google" button. Guest play is always available either way.
+  private identitySection(): HTMLElement {
+    const wrap = el("div", "identity");
+    if (this.auth && this.auth.isSignedIn) {
+      wrap.appendChild(this.accountChip());
+    } else {
+      wrap.appendChild(this.nameRow());
+      if (this.auth) wrap.appendChild(this.googleRow());
+    }
+    return wrap;
+  }
+
+  private accountChip(): HTMLElement {
+    const box = el("div", "account");
+    const av = document.createElement("img");
+    av.className = "account-av";
+    av.alt = "";
+    av.width = 32;
+    av.height = 32;
+    const info = el("div", "account-info");
+    const name = el("div", "account-name", this.session.name || "signed in");
+    const sub = el("div", "account-sub", "google account");
+    info.append(name, sub);
+    const out = el("button", "secondary account-out", "sign out");
+    out.addEventListener("click", () => void this.doSignOut());
+    box.append(av, info, out);
+    void this.hydrateAccount(av, name);
+    return box;
+  }
+
+  private async hydrateAccount(av: HTMLImageElement, name: HTMLElement) {
+    if (!this.client) return;
+    try {
+      const user = await this.client.query(api.players.currentUser, {});
+      if (!user) return;
+      if (user.name) name.textContent = user.name;
+      if (user.image) { av.src = user.image; av.classList.add("has-img"); }
+    } catch {
+      // Backend not ready — keep the placeholder chip, don't crash the menu.
+    }
+  }
+
+  private googleRow(): HTMLElement {
+    const wrap = el("div", "authrow");
+    const btn = el("button", "secondary btn-google");
+    btn.appendChild(googleMark());
+    btn.appendChild(el("span", "", "Sign in with Google"));
+    const status = el("p", "muted auth-status");
+    btn.addEventListener("click", () => void this.doSignIn(status));
+    wrap.append(btn, status);
+    return wrap;
+  }
+
+  private async doSignIn(status: HTMLElement) {
+    if (!this.auth) return;
+    status.textContent = "";
+    try {
+      await this.auth.signInWithGoogle();
+      // On success the browser navigates to Google; control returns via ?code=.
+    } catch (err) {
+      status.textContent = "sign-in unavailable \u2014 server not configured yet";
+      console.warn("[menu] Google sign-in failed", err);
+    }
+  }
+
+  private async doSignOut() {
+    if (!this.auth) return;
+    await this.auth.signOut();
+    await this.showTitle();
+  }
+
   private async hydrateProfile(box: HTMLElement) {
-    const profile = this.session.name
-      ? await this.session.login(this.session.name)
+    // Signed in: always run the upsert so the account row exists (and any unowned
+    // guest stats migrate) before the first run is recorded. Guest: unchanged.
+    const signedIn = this.auth?.isSignedIn ?? false;
+    const profile = (this.session.name || signedIn)
+      ? await this.session.login(this.session.name || "blob")
       : await this.session.refreshProfile();
     if (!profile || profile.gamesPlayed === 0) return;
     box.replaceChildren();
@@ -376,4 +456,27 @@ export class Menu {
   private cleanErr(msg: string): string {
     return msg.replace(/^\[.*?\]\s*/, "");
   }
+}
+
+// The Google "G" mark, inline so it needs no network fetch and stays crisp at any DPI.
+function googleMark(): SVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 48 48");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("aria-hidden", "true");
+  const paths: Array<[string, string]> = [
+    ["#EA4335", "M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"],
+    ["#4285F4", "M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"],
+    ["#FBBC05", "M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"],
+    ["#34A853", "M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"],
+  ];
+  for (const [fill, d] of paths) {
+    const p = document.createElementNS(ns, "path");
+    p.setAttribute("fill", fill);
+    p.setAttribute("d", d);
+    svg.appendChild(p);
+  }
+  return svg;
 }
