@@ -4,7 +4,7 @@
 # From the art director's spec. Usage: python3 tools/pixelize.py in.png out.png [--grid 32]
 import argparse
 from PIL import Image
-PALETTE_HEX=["05030b","0e0b1a","171227","2a2140","46356b","7a3d12","c77320","ffb43b","ffd166","ffe9b0","5a1020","c0243a","ff5a5f","1f5a2e","3fbf5f","8fffa8","6b6f8a","c9c9de","ffffff","2a5fa0","57b6ff","bfeaff","6a2fb0","a24bff","d9a6ff","301c0e","6b401e","9c6633"]
+PALETTE_HEX=["05030b","0e0b1a","171227","2a2140","46356b","7a3d12","c77320","ffb43b","ffd166","ffe9b0","5a1020","c0243a","ff5a5f","1f5a2e","3fbf5f","8fffa8","6b6f8a","c9c9de","ffffff","2a5fa0","57b6ff","bfeaff","6a2fb0","a24bff","d9a6ff","301c0e","6b401e","9c6633","0f4a4a","1fa89a","6ff0d8"]
 PAL=[tuple(int(h[i:i+2],16) for i in (0,2,4)) for h in PALETTE_HEX]
 OUTLINE=(5,3,11)
 # Dungeon-tile darks that leak in via the birefnet cutout picking up floor pixels.
