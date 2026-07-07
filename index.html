@@ -179,6 +179,20 @@
       .namerow label{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
       .menu input[type=text]{ font-family:var(--f-num); font-size:20px; letter-spacing:1px; padding:8px 12px; background:#0d0819; color:var(--cream); border:0; box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 3px 6px rgba(0,0,0,.5); text-align:left; outline:none; width:100%; }
       .menu input::placeholder{ color:var(--dun-4); }
+      /* --- Optional Google sign-in (right column identity) --- */
+      .identity{ display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+      .authrow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; }
+      .btn-google{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; font-size:11px; padding:9px 12px; min-width:0; text-transform:none; letter-spacing:1px; }
+      .btn-google svg{ display:block; flex:0 0 auto; }
+      .auth-status{ font-size:10px; color:var(--red); text-align:left; min-height:12px; margin:0; }
+      .auth-status:empty{ display:none; }
+      .account{ display:flex; align-items:center; gap:10px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); padding:8px 10px; }
+      .account-av{ flex:0 0 auto; width:32px; height:32px; background:var(--dun-3); box-shadow:inset 0 0 0 2px var(--dun-4); image-rendering:auto; object-fit:cover; }
+      .account-av.has-img{ background:transparent; }
+      .account-info{ display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; text-align:left; }
+      .account-name{ font-family:var(--f-ui); font-size:12px; color:var(--cream); letter-spacing:.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .account-sub{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .account-out{ flex:0 0 auto; font-size:9px; padding:6px 9px; min-width:0; text-transform:uppercase; }
       .profile{ display:flex; flex-direction:column; gap:8px; align-items:stretch; }
       .profile:empty{ display:none; }
       .profile-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
