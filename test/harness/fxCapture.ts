@@ -38,7 +38,8 @@ export function installFxCapture(): void {
   wrap("spawnShell", (a) => `shell ${r(a[0])} ${r(a[1])} ${r(a[2])}`);
   wrap("spawnSparkFlash", (a) => `sparkfx ${r(a[0])} ${r(a[1])} ${a[2]}`);
   wrap("spawnEmber", (a) => `ember ${r(a[0]?.x ?? a[0])} ${r(a[0]?.y ?? a[1])}`);
-  wrap("spawnSlashWind", (a) => `slashwind ${a[1]}`);
+  wrap("spawnEmberAt", (a) => `ember ${r(a[0])} ${r(a[1])}`);
+  wrap("spawnSlashWind", (a) => `slashwind ${a[4] ?? a[1]}`);
   wrap("spawnDmgNumber", (a) => `dmg ${r(a[0])} ${r(a[1])} ${Math.max(1, Math.round(a[2]))} ${a[3]?.crit ? 1 : 0} ${a[3]?.color ?? ""}`);
   wrap("addDecal", (a) => `decal ${r(a[0])} ${r(a[1])} ${a[2]} ${r(a[3])} ${a[4]}`);
   wrap("addTrauma", (a) => `trauma ${r3(a[0])}`);
