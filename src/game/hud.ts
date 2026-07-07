@@ -13,9 +13,11 @@ export interface HudState {
   kills: number;
   coins: number;
   weaponName: string;
+  weapons: { name: string; current: boolean }[]; // inventory row
   isCleared: boolean;
   enemiesLeft: number;
   isBossActive: boolean;
+  bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
   coopLabel: string | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
@@ -72,8 +74,12 @@ const HUD_MARKUP = `
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
   </div><div class="coopstrip" data-coop></div><div class="build" data-build><div class="build-title">YOUR BUILD <span class="n" data-build-n>0</span></div><div class="build-grid" data-build-grid></div></div></div>
+  <div class="bossbar" data-bossbar>
+    <div class="bossbar-label">BOSS</div>
+    <div class="bossbar-track"><i data-bossfill></i></div>
+  </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
-  <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
+  <div class="hud-corner br"><div class="invrow" data-invrow></div><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
   <div class="combo" data-combo>
     <div class="combo-badge">
@@ -92,6 +98,8 @@ export class Hud {
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
   private wnameEl: HTMLElement;
+  private invrowEl!: HTMLElement;
+  private prevInvKey = "";
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
@@ -100,6 +108,8 @@ export class Hud {
   private comboNEl: HTMLElement;
   private comboFillEl: HTMLElement;
   private comboBurstEl: HTMLElement;
+  private bossbarEl!: HTMLElement;
+  private bossFillEl!: HTMLElement;
   private prevMult = 1;
   private prevCombo = -1;
   private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
@@ -132,6 +142,7 @@ export class Hud {
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
     this.wnameEl = hud.querySelector("[data-wname]")!;
+    this.invrowEl = hud.querySelector("[data-invrow]")!;
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
@@ -140,6 +151,8 @@ export class Hud {
     this.comboNEl = hud.querySelector("[data-combo-n]")!;
     this.comboFillEl = hud.querySelector("[data-combo-fill]")!;
     this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
+    this.bossbarEl = hud.querySelector("[data-bossbar]")!;
+    this.bossFillEl = hud.querySelector("[data-bossfill]")!;
     this.buildPanel = hud.querySelector("[data-build]")!;
     this.buildGrid = hud.querySelector("[data-build-grid]")!;
     this.buildN = hud.querySelector("[data-build-n]")!;
@@ -198,11 +211,34 @@ export class Hud {
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     this.wnameEl.textContent = s.weaponName.toUpperCase();
+    // Weapon inventory row: one chip per owned weapon, current highlighted. Only rebuild
+    // when the set or selection changes (cheap string key), and hide it with <2 weapons.
+    const invKey = s.weapons.map((w) => (w.current ? "*" : "") + w.name).join("|");
+    if (invKey !== this.prevInvKey) {
+      this.prevInvKey = invKey;
+      this.invrowEl.classList.toggle("show", s.weapons.length >= 2);
+      this.invrowEl.replaceChildren();
+      s.weapons.forEach((w, i) => {
+        const chip = el("span", "");
+        chip.className = "invchip" + (w.current ? " on" : "");
+        chip.textContent = `${i + 1} ${w.name.toUpperCase()}`;
+        this.invrowEl.appendChild(chip);
+      });
+    }
     // Ammo stays the infinity glyph from the markup — weapons have no clip concept.
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
     this.dashEl.classList.toggle("ready", fill >= 1);
+
+    // Boss health bar: a big top-center bar visible only while a boss is on the board,
+    // draining as it takes damage and flashing red when the boss is nearly dead.
+    this.bossbarEl.classList.toggle("show", s.isBossActive);
+    if (s.isBossActive) {
+      const bf = s.bossHpFrac < 0 ? 0 : s.bossHpFrac > 1 ? 1 : s.bossHpFrac;
+      this.bossFillEl.style.transform = `scaleX(${bf})`;
+      this.bossbarEl.classList.toggle("low", bf < 0.25);
+    }
 
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";

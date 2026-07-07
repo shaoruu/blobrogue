@@ -14,7 +14,7 @@ export const SLIME_HOP_FREQ = 3.4;
 export const SLIME_HOP_AMOUNT = 0.55;
 
 // Anti-stuck nudge for wedged chasers.
-export const STUCK_TIME = 0.4;
+export const STUCK_TIME = 0.22;
 export const STUCK_PROGRESS = 0.5;
 export const STUCK_MIN_STEP = 0.05;
 

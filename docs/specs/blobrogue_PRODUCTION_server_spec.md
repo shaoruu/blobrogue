@@ -136,13 +136,13 @@ ESSENTIAL (the moment a socket exists): malformed-input safety (2e), input valid
 **STAGE C — server owns all enemies + combat (co-op room).**
 ESSENTIAL: full prediction + reconciliation (1a/1b), input buffering (1d), lag-compensated hit-reg (1e — combat fairness now matters), jitter handling (1f), interest management per-player (§4), output backpressure (2d), metrics incl. tick-time (§6), reconciliation + adversity load-tests (§8), low-downtime drain deploy (2c), staging deploy (§8). DEFERRABLE: reconnect-resume (rooms still ephemeral — losing a run on disconnect matches today), spatial-index interest (distance filter is enough at one floor), binary/delta encoding, cross-process sharding. The netcode-heavy stage — its "done properly" list is the biggest.
 
-**STAGE D — one persistent world (collapse floors).**
-ESSENTIAL (new because progress is now losable): reconnect + session resume (2a), periodic durable-state persistence to Convex + flush-on-deploy/exit (2b/2c), crash-recovery that preserves SAVED progress. DEFERRABLE: sharding (still one world), binary encoding.
+**STAGE D — ADD open-world mode alongside floors (floors permanent; UPDATE: both modes, not a replacement).**
+The floor loop stays as-is as one mode; open-world is a SECOND mode on the same authoritative core (same stepWorld/server/biomes), selected from the menu, driven by a `mode` field on the World. ESSENTIAL for the open-world mode specifically (new because its progress is persistent + losable): reconnect + session resume (2a), periodic durable-state persistence to Convex + flush-on-deploy/exit (2b/2c), crash-recovery that preserves SAVED progress. Floor mode keeps today’s ephemeral-run behavior (a disconnect losing a run is acceptable, matches current). DEFERRABLE: sharding (still one open-world instance), binary encoding.
 
-**STAGE E — interest mgmt / regions + chunk streaming.**
+**STAGE E — interest mgmt / regions + chunk streaming (open-world mode).**
 ESSENTIAL: spatial-index interest management (§4), and NOW binary/delta encoding if load-tests show bandwidth pressure at open-world entity counts (§4). DEFERRABLE: multi-box sharding (unless one box's CPU is hit).
 
-**STAGE F — world bosses + drop-in public worlds.**
+**STAGE F — world bosses + drop-in public worlds (open-world mode).**
 ESSENTIAL: the world-directory + multi-world assignment (§5) for public drop-in matchmaking; per-world load balancing; the full anti-cheat surface under public (untrusted) players — rate limits + validation now face the open internet, so re-audit them. DEFERRABLE: cross-box horizontal scale until concurrency demands it (the directory indirection makes it a capacity add, not a rewrite).
 
 ## BOTTOM LINE

@@ -9,7 +9,7 @@ import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoices } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { LocalTransport } from "../client/transport.js";
-import { applyItemToWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest } from "../sim/world.js";
+import { applyItemToWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -394,6 +394,9 @@ export class Game {
       this.keys.add(k);
       if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
       if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
+      // Weapon switch: number keys 1-9 select that inventory slot directly.
+      if (k >= "1" && k <= "9") { const i = parseInt(k, 10) - 1; if (this.isRunning) this.selectWeapon(i); }
+      if (k === "q") this.cycleWeapon(-1); // Q cycles back a slot
     });
     window.addEventListener("keyup", (e) => {
       const k = e.key.toLowerCase();
@@ -405,6 +408,10 @@ export class Game {
       this.mouse.x = e.clientX - r.left;
       this.mouse.y = e.clientY - r.top;
     });
+    this.canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      if (this.isRunning) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
+    }, { passive: false });
     this.canvas.addEventListener("mousedown", (e) => {
       this.mouse.isDown = true;
       // Autofire: a left-click toggles continuous fire instead of requiring a hold.
@@ -732,6 +739,7 @@ export class Game {
       case "enemyKill": {
         const arch = ENEMY_ARCHETYPES[e.kind];
         const big = e.kind === "boss";
+        if (big) audio.setMusic("dungeon"); // the intense boss track relaxes after the kill
         this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
         this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
         this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
@@ -951,6 +959,23 @@ export class Game {
 
   private isFrozen(e: Enemy): boolean {
     return e.kind !== "boss" && e.chill >= FREEZE_AT;
+  }
+
+  // Weapon switching (1-9 / Q / scroll): resolves the target slot client-side, then equips
+  // it in the sim. All local — no networking. Switching resets fire cooldown + cancels any
+  // in-progress swing (in the sim).
+  private selectWeapon(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    equipWeaponInWorld(this.world, LOCAL_ID, owned[index]);
+  }
+
+  private cycleWeapon(dir: number) {
+    const owned = this.p.ownedWeapons;
+    if (owned.length < 2) return;
+    const cur = owned.indexOf(this.weapon);
+    const next = (cur + dir + owned.length) % owned.length;
+    equipWeaponInWorld(this.world, LOCAL_ID, owned[next]);
   }
 
 
@@ -1228,7 +1253,9 @@ export class Game {
   }
 
   private updateHud() {
-    const isBossActive = this.enemies.some((e) => e.kind === "boss");
+    const boss = this.enemies.find((e) => e.kind === "boss");
+    const isBossActive = boss !== undefined;
+    const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
     let coopLabel: string | null = null;
     if (this.coop) {
       const count = this.coop.remotePlayers().length + 1;
@@ -1239,9 +1266,11 @@ export class Game {
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
       weaponName: WEAPONS[this.weapon].name,
+      weapons: this.p.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
       isCleared: this.enemies.length === 0,
       enemiesLeft: this.enemies.length,
       isBossActive,
+      bossHpFrac,
       coopLabel,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,
@@ -2551,7 +2580,7 @@ export class Game {
   }
 
   devGiveWeapon(id: WeaponId): void {
-    this.p.weapon = id;
+    acquireWeaponInWorld(this.world, LOCAL_ID, id); // adds to inventory + equips, so the inventory HUD is testable
     sfx("weapon");
   }
 

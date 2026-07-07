@@ -63,6 +63,7 @@ export interface PlayerSim {
   dashCd: number; dashTime: number; dashDx: number; dashDy: number;
   fireCd: number;
   facing: number; aimAngle: number; weapon: WeaponId;
+  ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
   shotSeq: number; isDown: boolean;
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
@@ -111,6 +112,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     dashCd: 0, dashTime: 0, dashDx: 0, dashDy: 0,
     fireCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
+    ownedWeapons: [DEFAULT_WEAPON],
     shotSeq: 0, isDown: false,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
@@ -368,6 +370,34 @@ export function applyMaxHpBonus(p: PlayerSim): void {
   p.maxHp = next;
   if (p.hp > p.maxHp) p.hp = p.maxHp;
   if (p.hp < 1) p.hp = 1;
+}
+
+// Equip a weapon the player already owns. Switching resets the fire cooldown and cancels
+// any in-progress melee swing (matches the current game). No-ops if already equipped.
+function equipWeapon(p: PlayerSim, id: WeaponId): void {
+  if (p.weapon === id) return;
+  p.weapon = id;
+  p.fireCd = 0;
+  p.meleeSwing = null;
+}
+
+// Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
+// and by dev/grant. The client's keyboard/scroll switching calls equipWeaponInWorld.
+function acquireWeapon(p: PlayerSim, id: WeaponId): void {
+  if (!p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
+  equipWeapon(p, id);
+}
+
+// Client-driven weapon switch (1-9 / Q / scroll). Equips an already-owned slot.
+export function equipWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
+  const p = w.players.get(pid);
+  if (p) equipWeapon(p, id);
+}
+
+// Client-driven acquire + equip (dev grant, or golden 'weapon' command).
+export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
+  const p = w.players.get(pid);
+  if (p) acquireWeapon(p, id);
 }
 
 // Apply a picked blessing to a player (client calls this when a choice is made). Returns
@@ -1069,6 +1099,10 @@ function slimeHopPulse(e: Enemy): number {
 }
 
 function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step: number): void {
+  // Local obstacle avoidance: props/chests aren't in the flow field, so a chaser would
+  // path straight into a chest and wedge. Probe ahead; if a prop sits there, deflect the
+  // heading around it so the enemy curves past instead of grinding into it.
+  angle = avoidPropAhead(w, e, angle);
   const x0 = e.x, y0 = e.y;
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
   const moved = Math.hypot(e.x - x0, e.y - y0);
@@ -1076,10 +1110,35 @@ function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step
   e.stuckTimer = isBlocked ? e.stuckTimer + dt : 0;
   if (e.stuckTimer < C.STUCK_TIME) return;
   e.stuckTimer = 0;
+  // Wedged: a strong perpendicular escape on both sides, then a hard back-diagonal, so a
+  // chaser never freezes against geometry or a prop.
   const side = Math.sin(e.zig) >= 0 ? 1 : -1;
-  if (!nudgeEnemy(w, e, angle + side * C.HALF_PI, step)) {
-    nudgeEnemy(w, e, angle - side * C.HALF_PI, step);
+  const esc = step * 1.6;
+  if (nudgeEnemy(w, e, angle + side * C.HALF_PI, esc)) return;
+  if (nudgeEnemy(w, e, angle - side * C.HALF_PI, esc)) return;
+  nudgeEnemy(w, e, angle + side * (Math.PI * 0.75), esc);
+}
+
+// If a live prop lies within a short probe ahead of `angle`, return a deflected heading
+// that curves around it; otherwise return `angle`.
+function avoidPropAhead(w: WorldState, e: Enemy, angle: number): number {
+  const probe = e.radius + 22;
+  const px = e.x + Math.cos(angle) * probe, py = e.y + Math.sin(angle) * probe;
+  let hit: Prop | null = null;
+  let hitD2 = Infinity;
+  for (const p of w.props) {
+    if (p.dead) continue;
+    const rr = e.radius + p.radius;
+    const ddx = px - p.x, ddy = py - p.y, d2 = ddx * ddx + ddy * ddy;
+    if (d2 < rr * rr && d2 < hitD2) { hit = p; hitD2 = d2; }
   }
+  if (!hit) return angle;
+  const toProp = Math.atan2(hit.y - e.y, hit.x - e.x);
+  let diff = angle - toProp;
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  const turn = diff >= 0 ? 1 : -1;
+  return angle + turn * (Math.PI / 4);
 }
 
 function nudgeEnemy(w: WorldState, e: Enemy, angle: number, step: number): boolean {
@@ -1277,7 +1336,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         if (p.kind === "heart") {
           if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); collected = true; break; }
         }
-        if (p.kind === "weapon" && p.weapon) { player.weapon = p.weapon; player.fireCd = 0; ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "weapon" && p.weapon) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
       }
     }
     if (!collected) remaining.push(p);

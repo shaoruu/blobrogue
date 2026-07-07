@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 
 import { Game } from "../src/game/game.js";
 import { LOCAL_ID } from "../src/sim/input.js";
-import { devSpawnEnemy, devSpawnProp, devSpawnChest, applyItemToWorld } from "../src/sim/world.js";
+import { devSpawnEnemy, devSpawnProp, devSpawnChest, applyItemToWorld, acquireWeaponInWorld } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
@@ -57,9 +57,7 @@ function applyCommands(game: any, s: Scenario, tick: number): void {
   for (const c of s.commands) {
     if (c.tick !== tick) continue;
     if (c.t === "weapon") {
-      const p = w.players.get(LOCAL_ID)!;
-      p.weapon = c.weapon;
-      p.fireCd = 0;
+      acquireWeaponInWorld(w, LOCAL_ID, c.weapon);
     } else if (c.t === "item") {
       const item = ITEMS.find((it) => it.id === c.itemId);
       if (item) applyItemToWorld(w, LOCAL_ID, item);

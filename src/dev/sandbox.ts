@@ -16,6 +16,12 @@ const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
 };
 
+// Sprite filenames mostly follow WeaponId; melee uses its display-name art filenames.
+const WEAPON_ART_ID: Partial<Record<WeaponId, string>> = {
+  sword: "cutlass", longsword: "claymore", spear: "pike",
+};
+const weaponArtId = (id: WeaponId) => WEAPON_ART_ID[id] ?? id;
+
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
@@ -31,9 +37,26 @@ function btn(label: string, onClick: () => void, cls = ""): HTMLButtonElement {
   return b;
 }
 
+// A collapsible section. The header toggles a body wrapper; callers append their controls
+// to the returned element and they land in the body (an appendChild override keeps every
+// existing `sec.appendChild(...)` call site working unchanged). Starts expanded.
 function section(title: string): HTMLDivElement {
   const sec = h("div", "dev-sec");
-  sec.appendChild(h("div", "dev-h", title));
+  const header = h("button", "dev-h", title) as HTMLButtonElement;
+  header.type = "button";
+  const caret = h("span", "dev-caret", "\u25be"); // ▾
+  header.appendChild(caret);
+  const body = h("div", "dev-body");
+  sec.appendChild(header);
+  sec.appendChild(body);
+  header.addEventListener("click", () => {
+    const collapsed = sec.classList.toggle("collapsed");
+    caret.textContent = collapsed ? "\u25b8" : "\u25be"; // ▸ / ▾
+    header.blur();
+  });
+  // Route callers' appendChild into the body so section content is collapsible without
+  // touching any of the buildPanel call sites.
+  (sec as unknown as { appendChild: (n: Node) => Node }).appendChild = (node: Node) => body.appendChild(node);
   return sec;
 }
 
@@ -85,10 +108,37 @@ function buildPanel(game: Game): void {
 
   // ---- weapons ----
   const weaponSec = section("Weapons");
+  // Live inspection card: hover/focus a weapon to see its pickup + held art and stats;
+  // click still equips/adds it. This makes the dev list visual, not a wall of names.
+  const weaponPreview = h("div", "dev-weapon-preview");
+  const pickupImg = h("img", "dev-weapon-img pickup");
+  const heldImg = h("img", "dev-weapon-img held");
+  pickupImg.alt = "weapon pickup"; heldImg.alt = "held weapon";
+  const art = h("div", "dev-weapon-art"); art.append(pickupImg, heldImg);
+  const info = h("div", "dev-weapon-info");
+  const previewName = h("div", "dev-weapon-name");
+  const previewType = h("div", "dev-weapon-type");
+  const previewStats = h("div", "dev-weapon-stats");
+  info.append(previewName, previewType, previewStats);
+  weaponPreview.append(art, info);
+  const showWeapon = (id: WeaponId) => {
+    const w = WEAPONS[id]; const artId = weaponArtId(id);
+    pickupImg.src = `/sprites/weapon_${artId}.png`;
+    heldImg.src = `/sprites/held_${artId}.png`;
+    previewName.textContent = w.name.toUpperCase();
+    previewType.textContent = w.melee ? (w.melee.isThrust ? "MELEE · THRUST" : "MELEE · SWEEP") : "RANGED";
+    const rate = (1 / w.fireCd).toFixed(1);
+    const range = w.melee ? `${Math.round(w.melee.reach)} PX` : `${Math.round(w.speed * w.life)} PX`;
+    previewStats.textContent = `DMG ${w.damage}  ·  RATE ${rate}/S  ·  RANGE ${range}`;
+  };
+  showWeapon("pistol");
+  weaponSec.appendChild(weaponPreview);
   const weaponRow = h("div", "dev-row");
   const weaponBtns = new Map<WeaponId, HTMLButtonElement>();
   for (const id of WEAPON_IDS) {
-    const b = btn(WEAPONS[id].name, () => game.devGiveWeapon(id), "mini");
+    const b = btn(WEAPONS[id].name, () => { game.devGiveWeapon(id); showWeapon(id); }, "mini");
+    b.addEventListener("mouseenter", () => showWeapon(id));
+    b.addEventListener("focus", () => showWeapon(id));
     weaponBtns.set(id, b);
     weaponRow.appendChild(b);
   }
