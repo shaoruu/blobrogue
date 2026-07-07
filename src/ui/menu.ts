@@ -62,37 +62,60 @@ export class Menu {
 
   async showTitle() {
     const wrap = el("div", "menu");
+
+    // Hero banner: logo + tagline, divider under it.
+    const hero = el("div", "hero");
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
     logo.className = "logo-img";
     logo.alt = "BLOBROGUE";
-    wrap.appendChild(logo);
-    wrap.appendChild(el("p", "", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    hero.appendChild(logo);
+    hero.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    wrap.appendChild(hero);
 
     if (!this.client) {
-      wrap.appendChild(this.soloButton("\u25be  PLAY"));
-      wrap.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
+      // Offline build: no profile/co-op — single centered actions column, no split.
+      const colA = el("div", "col-actions");
+      colA.appendChild(this.soloButton("\u25be  PLAY"));
+      colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
+      wrap.appendChild(colA);
+      wrap.appendChild(createSettingsControls());
     } else {
-      const profileBox = el("div", "profile");
-      wrap.appendChild(this.nameRow());
-      wrap.appendChild(profileBox);
-      const quickBtn = el("button", "primary", "▶ quick play (co-op)");
+      const body = el("div", "body");
+
+      // LEFT column: play actions.
+      const colA = el("div", "col-actions");
+      colA.appendChild(el("div", "col-h", "Play"));
+      const quickBtn = el("button", "btn-quick primary");
+      quickBtn.appendChild(el("span", "", "\u25b6 QUICK PLAY (CO-OP)"));
+      quickBtn.appendChild(el("span", "sub", "jump into an open game \u2014 no code needed"));
       quickBtn.addEventListener("click", () => void this.doQuickPlay());
-      wrap.appendChild(quickBtn);
-      wrap.appendChild(el("p", "muted", "jump straight into an open game — no code needed"));
-      const row = el("div", "btnrow");
-      row.appendChild(this.soloButton("play solo"));
-      const hostBtn = el("button", "secondary", "private room");
+      colA.appendChild(quickBtn);
+      const solo = this.soloButton("PLAY SOLO");
+      solo.classList.add("play-solo");
+      colA.appendChild(solo);
+      const actrow = el("div", "actrow");
+      const hostBtn = el("button", "secondary", "PRIVATE ROOM");
       hostBtn.addEventListener("click", () => void this.doHost());
-      const joinBtn = el("button", "secondary", "join with code");
+      const joinBtn = el("button", "secondary", "JOIN CODE");
       joinBtn.addEventListener("click", () => void this.showJoin());
-      row.append(hostBtn, joinBtn);
-      wrap.appendChild(row);
+      actrow.append(hostBtn, joinBtn);
+      colA.appendChild(actrow);
+      body.appendChild(colA);
+
+      // RIGHT column: profile + settings.
+      const colB = el("div", "col-side");
+      colB.appendChild(this.nameRow());
+      const profileBox = el("div", "profile");
+      colB.appendChild(profileBox);
+      colB.appendChild(createSettingsControls());
+      body.appendChild(colB);
+
+      wrap.appendChild(body);
       void this.hydrateProfile(profileBox);
     }
 
-    wrap.appendChild(el("p", "hint", CONTROLS));
-    wrap.appendChild(createSettingsControls());
+    wrap.appendChild(el("p", "foot", CONTROLS));
     this.show(wrap);
   }
 
@@ -115,11 +138,13 @@ export class Menu {
       : await this.session.refreshProfile();
     if (!profile || profile.gamesPlayed === 0) return;
     box.replaceChildren();
-    box.appendChild(el("div", "profile-title", `${profile.name} \u2014 all time`));
+    box.appendChild(el("div", "col-h", `${profile.name} \u2014 all time`));
     const grid = el("div", "profile-grid");
     const stat = (label: string, value: number) => {
       const cell = el("div", "stat");
-      cell.appendChild(el("span", "stat-value", String(value)));
+      const v = el("span", "stat-value", String(value));
+      if (label === "deepest") v.classList.add("amber");
+      cell.appendChild(v);
       cell.appendChild(el("span", "stat-label", label));
       return cell;
     };
