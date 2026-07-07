@@ -46,6 +46,7 @@ const REVIVE_HOLD = 1.1;
 const BOSS_MINION_CAP = 14;
 const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
+const DASH_COOLDOWN = 0.7; // seconds between dashes; drives the HUD dash meter fill
 
 const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
@@ -524,7 +525,7 @@ export class Game {
     const speed = 200;
     this.dashCd = Math.max(0, this.dashCd - dt);
     if (this.keys.has("shift") && this.dashCd === 0 && (ix || iy)) {
-      this.dashTime = 0.16; this.dashCd = 0.7; this.dashDx = ix; this.dashDy = iy;
+      this.dashTime = 0.16; this.dashCd = DASH_COOLDOWN; this.dashDx = ix; this.dashDy = iy;
       this.invuln = Math.max(this.invuln, 0.35); // real "get out of jail" dodge window
       this.dashImgCd = 0;
       this.spawnParticles(this.px, this.py, 10, "#ffd27a"); // takeoff puff
@@ -1265,6 +1266,7 @@ export class Game {
       enemiesLeft: this.enemies.length,
       isBossActive,
       coopLabel,
+      dashFill: 1 - this.dashCd / DASH_COOLDOWN,
     });
   }
 
