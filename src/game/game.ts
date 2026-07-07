@@ -61,6 +61,12 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
   shotgun: "shootShotgun",
   rapid: "shootRapid",
+  smg: "shootRapid",
+  cannon: "shootShotgun",
+  burst: "shootRapid",
+  ricochet: "shootPistol",
+  homing: "shootRapid",
+  tesla: "shootRapid",
 };
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
@@ -76,12 +82,24 @@ const FREEZE_MAX = 0.08;
 // ones kick hard. The player's intensity setting (0..1) scales the whole thing.
 const TRAUMA_DECAY = 1.6;
 const SHAKE_MAX_PX = 26;
-const FIRE_TRAUMA: Record<WeaponId, number> = { pistol: 0.12, shotgun: 0.5, rapid: 0.06 };
+const FIRE_TRAUMA: Record<WeaponId, number> = {
+  pistol: 0.12, shotgun: 0.5, rapid: 0.06,
+  smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
+};
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
-// and knockback (px the shotgun shoves the player). Shotgun is the beefy end.
-const FIRE_RECOIL: Record<WeaponId, number> = { pistol: 1, shotgun: 1.4, rapid: 0.6 };
-const FIRE_KICK: Record<WeaponId, number> = { pistol: 3, shotgun: 8, rapid: 1.2 };
-const FIRE_KNOCKBACK: Record<WeaponId, number> = { pistol: 0, shotgun: 22, rapid: 0 };
+// and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
+const FIRE_RECOIL: Record<WeaponId, number> = {
+  pistol: 1, shotgun: 1.4, rapid: 0.6,
+  smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
+};
+const FIRE_KICK: Record<WeaponId, number> = {
+  pistol: 3, shotgun: 8, rapid: 1.2,
+  smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
+};
+const FIRE_KNOCKBACK: Record<WeaponId, number> = {
+  pistol: 0, shotgun: 22, rapid: 0,
+  smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
+};
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
 const TRAUMA_KILL = 0.16;
@@ -95,7 +113,10 @@ const TRAUMA_REMOTE_DOWN = 0.3;
 // that decays every frame (never a teleport). WEAPON_KB is the ~total px shove on a
 // baseline slime; heavier enemies divide it by their kbResist. The impulse is stored
 // in each enemy's otherwise-unused vx/vy.
-const WEAPON_KB: Record<WeaponId, number> = { pistol: 4, shotgun: 8, rapid: 2 };
+const WEAPON_KB: Record<WeaponId, number> = {
+  pistol: 4, shotgun: 8, rapid: 2,
+  smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
+};
 const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
 const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
 
@@ -632,6 +653,10 @@ export class Game {
       pierce: this.mods.pierce,
       critChance: this.mods.critChance,
       critMult: this.mods.critMult,
+      bounce: w.bounce,
+      homing: w.homing,
+      chain: w.chain,
+      chainRange: w.chainRange,
     };
   }
 
