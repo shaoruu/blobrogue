@@ -2386,7 +2386,13 @@ export class Game {
     ctx.globalAlpha = alpha;
     ctx.translate(cx + xf.ox, cy + xf.oy);
     ctx.rotate(xf.rot);
-    ctx.scale(facing * xf.sx * extra, xf.sy * extra);
+    // When a frame SHEET is playing, its frames ALREADY bake the squash/stretch, so
+    // applying the procedural sx/sy deform on top double-exposes it (the "ghosted /
+    // stacked slime" bug). Keep facing + the bob/lean offset, but neutralize the
+    // procedural scale toward 1 so the sheet's own animation carries the deform.
+    const sSx = sheet ? facing * extra : facing * xf.sx * extra;
+    const sSy = sheet ? extra : xf.sy * extra;
+    ctx.scale(sSx, sSy);
     if (sheet) {
       const fw = sheet.img.naturalHeight || FRAME;
       const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
