@@ -122,6 +122,25 @@ function buildPanel(game: Game): void {
   playerSec.appendChild(hpRow);
   panel.appendChild(playerSec);
 
+  // ---- combo (gate the kill-chain HUD without having to sustain a live chain) ----
+  const comboSec = section("Combo");
+  const comboRow = h("div", "dev-row");
+  // Values chosen to land squarely in each tier: x1 / x1.5 / x2 / x3.
+  comboRow.appendChild(btn("x1", () => game.devSetCombo(0), "mini"));
+  comboRow.appendChild(btn("x1.5", () => game.devSetCombo(6), "mini"));
+  comboRow.appendChild(btn("x2", () => game.devSetCombo(12), "mini"));
+  comboRow.appendChild(btn("x3", () => game.devSetCombo(25), "mini"));
+  comboSec.appendChild(comboRow);
+  const freezeBtn = btn("Freeze window: off", () => {
+    const on = game.devFreezeCombo(!freezeOn);
+    freezeOn = on;
+    freezeBtn.textContent = `Freeze window: ${on ? "on" : "off"}`;
+    freezeBtn.classList.toggle("on", on);
+  }, "wide");
+  let freezeOn = false;
+  comboSec.appendChild(freezeBtn);
+  panel.appendChild(comboSec);
+
   // ---- floor ----
   const floorSec = section("Floor");
   const floorRow = h("div", "dev-row");

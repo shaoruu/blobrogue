@@ -173,10 +173,14 @@ interface ComboTier { min: number; mult: number; color: string; } // min = combo
 // Highest-first so the first `combo >= min` hit is the active tier. Colors are :root tokens
 // (cream -> amber -> amber-hi -> red) so the escalation reads at a glance.
 const COMBO_TIERS: ComboTier[] = [
-  { min: 20, mult: 3, color: "#ff5a5a" },
-  { min: 10, mult: 2, color: "#ffd166" },
-  { min: 5, mult: 1.5, color: "#ffb43b" },
-  { min: 0, mult: 1, color: "#ffe9b0" },
+  // AD-locked escalation ramp (cool -> hot). x3 uses #ff3a3a specifically: a distinctly
+  // HOTTER step past the orange (not the enemy-bat #ff5a5f), so the top "rampage" tier
+  // reads as a jump, not a neighbor. It's a HUD accent, so one shade past the sprite
+  // palette is intentional (like the boss damage-flash exception).
+  { min: 20, mult: 3, color: "#ff3a3a" },   // hot red
+  { min: 10, mult: 2, color: "#ff8a3b" },   // orange
+  { min: 5, mult: 1.5, color: "#ffd166" },  // amber
+  { min: 0, mult: 1, color: "#d9d2c0" },    // bone-white
 ];
 
 // Enemy knockback: a bullet adds a short velocity impulse along its travel direction
@@ -353,6 +357,7 @@ export class Game {
   // never networked. `comboTimer` drains each frame and resets the chain when it lapses.
   private combo = 0;
   private comboTimer = 0;
+  private comboFreeze = false; // dev/sandbox: hold the chain at a set value so the HUD can be gated
 
   // player
   private px = 0; private py = 0;
@@ -819,7 +824,7 @@ export class Game {
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     this.updateExit();
-    if (this.comboTimer > 0) {
+    if (this.comboTimer > 0 && !this.comboFreeze) {
       this.comboTimer -= dt;
       if (this.comboTimer <= 0) { this.comboTimer = 0; this.combo = 0; } // chain lapsed: reset
     }
@@ -3368,6 +3373,20 @@ export class Game {
   devToggleGod(): boolean {
     this.isGodMode = !this.isGodMode;
     return this.isGodMode;
+  }
+
+  // Sandbox: force the combo to a value (and hold the window full) so the combo HUD can be
+  // screenshotted at a given tier. Pass 0 to clear. Only meaningful in the dev sandbox.
+  devSetCombo(n: number): void {
+    this.combo = Math.max(0, Math.floor(n));
+    this.comboTimer = this.combo > 0 ? COMBO_WINDOW : 0;
+  }
+
+  // Sandbox: when frozen, the combo window stops draining so the HUD stays put for a gate.
+  devFreezeCombo(on: boolean): boolean {
+    this.comboFreeze = on;
+    if (on && this.comboTimer <= 0 && this.combo > 0) this.comboTimer = COMBO_WINDOW;
+    return this.comboFreeze;
   }
 
   devHealFull(): void {
