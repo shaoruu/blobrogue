@@ -31,7 +31,7 @@ Live: https://blobrogue-shaoruuu.vercel.app/
 ## Next up (rough priority)
 1. **Server-authoritative enemies in co-op** — currently enemies are simulated per-client from the shared seed (identical at spawn, diverge on interaction). Make the host authoritative and sync enemy state so teammates fight the *same* mobs. (Seam is ready via `CoopBridge`.)
 2. Better dungeon generation — distinct room types, treasure rooms, locked doors.
-3. Damage numbers + more juice on top of the feel pass (screen shake, hit-stop, gibs, and audio are now done).
+3. ~~Damage numbers~~ (DONE — floating pixel-font damage popups on every enemy-hp-drop: bullet hits use the crit/shock/frozen-amped value + crit styling, burn ticks small orange, thorns violet, tesla arcs arc-colored; capped/allocation-conscious, world-space, co-op-safe) + more juice on top of the feel pass.
 4. Real frame animation — drop fal-generated `*_walk.png` / `*_idle.png` strips into `public/sprites` and register them (see `ART.md`).
 5. ~~More weapons~~ (DONE — 13 total, incl. ricochet/homing/tesla behaviors + Boomstick/Longshot/Nailer + the burn-stamping Flamethrower) + character/unlock meta (the `players.unlocks` field is already there).
 6. Mobile / touch controls (virtual sticks) so it's playable on phones.
