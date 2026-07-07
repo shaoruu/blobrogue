@@ -9,6 +9,7 @@ const AUTOFIRE_KEY = "blobrogue.autofire";
 const MASTER_KEY = "blobrogue.vol.master";
 const MUSIC_KEY = "blobrogue.vol.music";
 const SFX_KEY = "blobrogue.vol.sfx";
+const HINT_KEY = "blobrogue.controlsHintSeen"; // one-time controls onboarding hint
 
 function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n;
@@ -55,6 +56,7 @@ class Settings {
   private master: number; // 0..1 master volume (limiter catches peaks)
   private music: number;  // 0..1 music bus
   private sfx: number;    // 0..1 sfx bus
+  private controlsHintSeen: boolean; // has the one-time controls onboarding hint shown?
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -64,6 +66,7 @@ class Settings {
     this.master = clamp01(readNumber(MASTER_KEY, 0.7));
     this.music = clamp01(readNumber(MUSIC_KEY, 0.5));
     this.sfx = clamp01(readNumber(SFX_KEY, 0.9));
+    this.controlsHintSeen = readBool(HINT_KEY, false);
   }
 
   get isMuted(): boolean {
@@ -121,6 +124,14 @@ class Settings {
     this.setAutofire(!this.autofire);
     return this.autofire;
   }
+  get isControlsHintSeen(): boolean { return this.controlsHintSeen; }
+
+  markControlsHintSeen(): void {
+    if (this.controlsHintSeen) return;
+    this.controlsHintSeen = true;
+    try { localStorage.setItem(HINT_KEY, "1"); } catch {}
+  }
+
   get masterVol(): number { return this.master; }
   get musicVol(): number { return this.music; }
   get sfxVol(): number { return this.sfx; }

@@ -59,5 +59,15 @@ function bootNormal() {
     },
   });
 
+  // Preload the pixel fonts before any canvas draw — canvas ctx.font silently falls back
+  // to a system font if the web font isn't loaded yet at draw time (DOM text reflows on
+  // load, canvas does not). Guarantees HUD/GO-DOWN/name labels are pixel from frame 1.
+  void Promise.all([
+    document.fonts.load('10px "Press Start 2P"'),
+    document.fonts.load('700 11px "Silkscreen"'),
+    document.fonts.load('16px "VT323"'),
+    document.fonts.ready,
+  ]).catch(() => {});
+
   void menu.showTitle();
 }
