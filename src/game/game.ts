@@ -1496,7 +1496,7 @@ export class Game {
     sfx("descend");
     this.addTrauma(TRAUMA_DESCEND);
     this.loadFloor();
-    this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
+    this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `DOWN TO FLOOR ${this.floor}`);
     this.offerBlessing(); // between-floor reward beat (every descend, from floor 1->2 on)
   }
 
@@ -1887,6 +1887,20 @@ export class Game {
     const portal = PORTAL_FRAMES[frameIndex(PORTAL_FRAMES.length, 3, this.animClock)];
     if (this.tiles.ready(portal)) {
       ctx.drawImage(this.tiles.get(portal), d.exit.x * TILE - cam.x, d.exit.y * TILE - cam.y, TILE, TILE);
+    }
+
+    // Once the floor is clear, prompt the player to walk onto the portal.
+    if (isCleared) {
+      ctx.save();
+      const pulse = 0.6 + 0.4 * Math.abs(Math.sin(this.animClock * 3));
+      ctx.globalAlpha = pulse;
+      ctx.font = '10px "Press Start 2P", monospace';
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#05030b";
+      ctx.fillText("\u25be GO DOWN", ex + 1, ey - TILE * 0.7 + 1);
+      ctx.fillStyle = "#8affc0";
+      ctx.fillText("\u25be GO DOWN", ex, ey - TILE * 0.7);
+      ctx.restore();
     }
   }
 
