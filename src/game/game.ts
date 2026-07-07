@@ -2910,7 +2910,9 @@ export class Game {
     if (e.burn > 0) {
       const pulse = 0.5 + 0.5 * Math.sin(clock * 12);
       this.fxLayer("glow_round", BURN_TINT, sx, sy, size * 1.15, size * 1.15, 0.2 + 0.18 * pulse, 0);
-      this.fxLayer("ember", BURN_TINT, sx, sy - size * 0.1, size * 0.9, size * 0.9, 0.45 + 0.3 * pulse, clock);
+      // Bias the embers onto the lower body/edges (not the upper-center face) so the
+      // enemy's eyes — part of its identity/menace — stay readable while burning.
+      this.fxLayer("ember", BURN_TINT, sx, sy + size * 0.14, size * 0.82, size * 0.82, 0.45 + 0.3 * pulse, clock);
     }
     if (e.chill > 0) {
       const isFrozen = this.isFrozen(e);
@@ -2924,7 +2926,9 @@ export class Game {
       // glance; the crackle sits on top for the sparky detail. Both fall through to
       // just the crackle if the ring mask isn't loaded (fxLayer no-ops on a missing tint).
       this.fxLayer("shock_ring", SHOCK_TINT, sx, sy, size * (1.0 + 0.25 * pulse), size * (1.0 + 0.25 * pulse), 0.35 + 0.35 * pulse, clock * 4);
-      this.fxLayer("crackle", SHOCK_TINT, sx, sy, size * 0.95, size * 0.95, pulse, clock * 9);
+      // Ring stays centered (it frames the silhouette edges); bias the crackle detail
+      // down onto the body so the sparks don't bury the enemy's face/eyes.
+      this.fxLayer("crackle", SHOCK_TINT, sx, sy + size * 0.12, size * 0.85, size * 0.85, pulse, clock * 9);
     }
   }
 
