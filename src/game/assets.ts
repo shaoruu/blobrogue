@@ -274,7 +274,7 @@ export type TileName =
   | "torch_f0" | "torch_f1" | "torch_f2" | "torch_glow"
   | "portal_f0" | "portal_f1"
   | "stairs_f0" | "stairs_f1"
-  | "wall_a_top" | "wall_a_S" | "wall_a_E" | "wall_a_W" | "wall_a_SE" | "wall_a_SW";
+  | "wf_top" | "wf_N" | "wf_E" | "wf_S" | "wf_W" | "wf_NE" | "wf_ES" | "wf_SW" | "wf_NW" | "wf_EW" | "wf_NS" | "wf_NES" | "wf_ESW" | "wf_NEW" | "wf_NSW" | "wf_NESW";
 
 const TILE_SOURCES: Record<TileName, string> = {
   floor: "/tiles/floor.png",
@@ -295,12 +295,22 @@ const TILE_SOURCES: Record<TileName, string> = {
   portal_f1: "/tiles/props/portal_f1.png",
   stairs_f0: "/sprites/stairs_f0.png",
   stairs_f1: "/sprites/stairs_f1.png",
-  wall_a_top: "/sprites/walls/wall_top.png",
-  wall_a_S: "/sprites/walls/wall_S.png",
-  wall_a_E: "/sprites/walls/wall_E.png",
-  wall_a_W: "/sprites/walls/wall_W.png",
-  wall_a_SE: "/sprites/walls/wall_SE.png",
-  wall_a_SW: "/sprites/walls/wall_SW.png",
+  wf_top: "/sprites/walls_full/wall_top.png",
+  wf_N: "/sprites/walls_full/wall_N.png",
+  wf_E: "/sprites/walls_full/wall_E.png",
+  wf_S: "/sprites/walls_full/wall_S.png",
+  wf_W: "/sprites/walls_full/wall_W.png",
+  wf_NE: "/sprites/walls_full/wall_NE.png",
+  wf_ES: "/sprites/walls_full/wall_ES.png",
+  wf_SW: "/sprites/walls_full/wall_SW.png",
+  wf_NW: "/sprites/walls_full/wall_NW.png",
+  wf_EW: "/sprites/walls_full/wall_EW.png",
+  wf_NS: "/sprites/walls_full/wall_NS.png",
+  wf_NES: "/sprites/walls_full/wall_NES.png",
+  wf_ESW: "/sprites/walls_full/wall_ESW.png",
+  wf_NEW: "/sprites/walls_full/wall_NEW.png",
+  wf_NSW: "/sprites/walls_full/wall_NSW.png",
+  wf_NESW: "/sprites/walls_full/wall_NESW.png",
 };
 
 export class TileSet {
