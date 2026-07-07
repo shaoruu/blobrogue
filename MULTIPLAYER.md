@@ -82,7 +82,9 @@ bindings.
   source of truth that makes everyone generate the same dungeon.
 - **`presence`** — live per-player state within a room: `x/y`, `facing`, `hp/maxHp`,
   `weapon`, `floor`, `down`, `aimAngle`, `shotSeq`, `kills`, `colorIndex`, `reviveNonce`,
-  `updatedAt`. Synced ~11×/sec.
+  `updatedAt`. Pushed **~18×/sec while a player is moving/aiming/acting** and a **~1×/sec
+  idle keepalive** otherwise (see the interpolation section below for why the receiver stays
+  smooth regardless of this rate).
 
 ### Functions
 - [`convex/players.ts`](convex/players.ts): `ensurePlayer` (login/upsert), `getProfile`,
@@ -136,8 +138,10 @@ Delivered (the task's "at minimum", plus the down/revive nice-to-have):
 - **Same dungeon for everyone** — shared `seed` + `floor`; both the layout and the enemy
   spawns are fully deterministic (seeded RNG in [`src/game/rng.ts`](src/game/rng.ts)), so
   every client generates identical rooms and identical starting enemies.
-- **See each other move** — positions/facing/hp/weapon via `presence`, rendered as
-  hue-tinted heroes with name labels.
+- **See each other move (smoothly)** — positions/facing/hp/weapon via `presence`, rendered
+  as recolored heroes with name labels. Teammates are drawn with **client-side entity
+  interpolation** (see below), not at the raw latest network coords, so they glide instead
+  of teleporting between updates.
 - **See each other shoot** — a per-player `shotSeq` counter; when it ticks up, teammates
   flash a tracer + muzzle in that player's aim direction.
 - **Descend together** — reaching the exit calls `rooms.descend`, bumping the room's
@@ -145,6 +149,45 @@ Delivered (the task's "at minimum", plus the down/revive nice-to-have):
 - **Down-but-not-out + revive** — at 0 HP with a living teammate you go *down* (not dead);
   a teammate standing on you for ~1.1s revives you (`presence.revive` bumps `reviveNonce`,
   which your own client observes).
+
+### Remote-player rendering — entity interpolation (why co-op looks smooth)
+
+Convex is a database with realtime subscriptions, not a game server, so `presence` rows
+arrive as **discrete snapshots** a handful of times per second. Drawing a teammate at the
+raw latest `(x, y)` therefore snaps them between those network positions ~10-18×/sec — the
+"jitter" the game owner reported. The fix is **client-side entity interpolation**, the
+standard technique for this exact problem (Convex stays a plain database — no
+server-authoritative sim):
+
+- [`src/net/interp.ts`](src/net/interp.ts) keeps a tiny fixed-size history (6 samples) of
+  each remote player's received poses, **stamped with local receive time** (sidesteps
+  client/server clock skew).
+- On every read, `remotePlayers()` asks the buffer for the pose at a **render clock that
+  trails real time by one sync interval (`RENDER_DELAY_MS = 120`)**. That render point almost
+  always falls *between* two buffered samples, so we linearly interpolate `x/y` and
+  angle-lerp `aimAngle` (aim turns the short way). The blob glides along the path the network
+  described instead of snapping to each update.
+- A stale/late update **extrapolates briefly** from the last two samples (up to ~220ms) then
+  holds, rather than freezing hard; a jump larger than a dash could cover (floor descend /
+  respawn) is treated as a **teleport and snapped**, not slid across the level.
+- The trade is a fixed, imperceptible ~120ms of render latency on *other* players' positions
+  in exchange for smooth motion that is immune to network jitter. Your own player is always
+  drawn live from local input, unaffected.
+- The buffer is allocation-light: per-player sample slots and the returned pose object are
+  reused, so the hot path doesn't churn garbage.
+
+The local push cadence (`src/net/multiplayer.ts`) is tuned to keep that buffer fed without
+hammering Convex: **~18Hz while moving/aiming/acting**, dropping to a **~1Hz keepalive** when
+idle, and only when something meaningful changed. The interpolation is what makes motion
+smooth; the higher active rate just shrinks the gap it has to bridge.
+
+**Player colors:** each player gets a distinct `colorIndex` server-side
+(`rooms.ts smallestFreeColor` → `PLAYER_COLORS`: amber/cyan/green/pink/violet/orange, host =
+amber). `Sprites.tintedHero` recolors the hero by converting the amber base to grayscale and
+**multiplying** the player color through it, preserving the sprite's shading while making the
+hue read true — the old flat 50% overlay muddied every hue toward the amber base, which made
+teammates look alike. Name labels, minimap dots, and shot tracers all use the same
+`playerColor(colorIndex)`, so a player reads as one consistent color everywhere.
 
 **Client-authoritative-per-client enemies (the honest limitation):** enemies are
 simulated locally on each client from the shared seed. They start identical everywhere,
@@ -170,6 +213,7 @@ src/net/
   config.ts        VITE_CONVEX_URL gate
   api.ts           typed function references (no _generated needed)
   session.ts       identity + saved stats
+  interp.ts        per-player entity-interpolation buffer (smooth remote rendering)
   multiplayer.ts   CoopBridge implementation over ConvexClient
 src/ui/menu.ts     title / lobby / game-over
 src/game/coop.ts   CoopBridge contract (game ↔ net seam)
