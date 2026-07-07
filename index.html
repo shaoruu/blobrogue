@@ -54,10 +54,10 @@
       .dash .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--dash-fill,1)); background:var(--blu); box-shadow:0 0 6px var(--blu); transition:width .1s linear; }
       .dash.ready .bar i{ background:var(--grn); box-shadow:0 0 6px var(--grn); }
 
-      #overlay, .pause-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; text-align: center;
+      #overlay, .pause-overlay, .blessing-overlay { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; color: #ffe6b0; text-align: center;
         background: radial-gradient(ellipse at center, rgba(20,16,36,0.82) 0%, rgba(8,6,16,0.94) 100%); }
       /* subtle CRT scanlines over the overlay backing */
-      #overlay::before, .pause-overlay::before { content:""; position:absolute; inset:0; pointer-events:none; z-index:0;
+      #overlay::before, .pause-overlay::before, .blessing-overlay::before { content:""; position:absolute; inset:0; pointer-events:none; z-index:0;
         background: repeating-linear-gradient(0deg, rgba(0,0,0,0.18) 0px, rgba(0,0,0,0.18) 1px, transparent 1px, transparent 3px); opacity:0.5; }
       /* bordered pixel panel around menu content */
       .menu { position:relative; z-index:1; background:#120a24; padding:26px 30px;
@@ -117,6 +117,32 @@
       .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
       .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+      /* --- Between-floor "choose a blessing" cards --- */
+      .blessing { max-width: min(720px, 94vw); width: auto; }
+      .blessing-cards { display: flex; gap: 14px; margin: 6px 0 2px; flex-wrap: wrap; justify-content: center; }
+      .blessing-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px;
+        width: 178px; min-width: 178px; min-height: 214px; padding: 18px 14px 16px; text-align: center; cursor: pointer;
+        background: #0d0819; color: #ffe6b0; text-transform: none; letter-spacing: 0; font-family: var(--f-ui), monospace;
+        border: 0; clip-path: none; box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px #2a2140, 0 5px 0 rgba(5,3,11,0.5);
+        transition: transform .06s steps(2), box-shadow .06s steps(2); }
+      .blessing-card:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--dun-4), 0 5px 0 rgba(5,3,11,0.5); }
+      .blessing-card.selected, .blessing-card.selected:hover { box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--amber), 0 5px 0 rgba(5,3,11,0.5), 0 0 16px rgba(255,180,59,0.35); }
+      .blessing-card:focus-visible { outline: none; }
+      .bc-key { position: absolute; top: 8px; left: 8px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+        font-family: var(--f-logo), monospace; font-size: 10px; color: var(--dun-0); background: var(--amber); }
+      .bc-icon { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin-top: 6px; font-size: 30px; line-height: 1;
+        background: color-mix(in srgb, var(--t) 22%, #0d0819); box-shadow: inset 0 0 0 2px var(--t), 0 0 12px color-mix(in srgb, var(--t) 45%, transparent); }
+      .bc-name { font-family: var(--f-logo), monospace; font-size: 12px; color: var(--amber-hi); letter-spacing: 1px; line-height: 1.4; }
+      .bc-rarity { font-size: 9px; letter-spacing: 2px; color: var(--dun-4); }
+      .bc-rarity.uncommon { color: var(--blu); }
+      .bc-rarity.rare { color: var(--pur); }
+      .bc-desc { font-family: var(--f-num), monospace; font-size: 16px; line-height: 1.2; color: #cbb6d6; }
+
+      /* --- HUD collected-blessing glyph strip (top-left, under the coop strip) --- */
+      .itemstrip { display: none; flex-wrap: wrap; gap: 4px; max-width: 220px; }
+      .itemchip { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; font-size: 13px; line-height: 1;
+        background: rgba(5,3,11,.62); box-shadow: inset 0 0 0 2px var(--t, var(--dun-3)); }
     </style>
   </head>
   <body>

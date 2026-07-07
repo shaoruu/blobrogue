@@ -7,6 +7,9 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName } from "./assets.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
+import type { ShotSpec } from "./weapons.js";
+import { createMods, rollItemChoices } from "./items.js";
+import type { PlayerMods, ItemDef } from "./items.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
@@ -21,6 +24,7 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { settings } from "./settings.js";
 import { PauseOverlay } from "../ui/pause.js";
+import { BlessingOverlay } from "../ui/blessing.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
@@ -47,6 +51,11 @@ const BOSS_MINION_CAP = 14;
 const DEATH_DUR = 0.3;   // seconds a death "corpse" animates out
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
 const DASH_COOLDOWN = 0.7; // seconds between dashes; drives the HUD dash meter fill
+const BASE_MAX_HP = 6;     // starting max hearts before any item bonus
+// A shot firing more than one pellet fans them out; base pistol/rapid have ~no spread,
+// so pellet-adding items force a minimum cone or the extra shots would stack perfectly.
+const MIN_MULTI_SPREAD = 0.26;
+const COIN_MAGNET_PULL = 300; // px/s a magnet drags loose coins toward the player
 
 const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
@@ -182,7 +191,9 @@ export class Game {
   private onGameOver: (result: RunResult) => void;
   private onExit: () => void;
   private pause: PauseOverlay;
+  private blessing: BlessingOverlay;
   private isPaused = false;
+  private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
 
   private dungeon!: Dungeon;
   private floor = 1;
@@ -194,6 +205,8 @@ export class Game {
   private px = 0; private py = 0;
   private pr = 18;
   private hp = 6; private maxHp = 6;
+  private mods: PlayerMods = createMods();
+  private ownedItems: ItemDef[] = [];
   private invuln = 0;
   private dashCd = 0; private dashTime = 0; private dashDx = 0; private dashDy = 0;
   private fireCd = 0;
@@ -255,6 +268,7 @@ export class Game {
     this.onGameOver = onGameOver;
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
+    this.blessing = new BlessingOverlay();
     this.bindInput();
     this.resize();
     window.addEventListener("resize", () => this.resize());
@@ -303,6 +317,9 @@ export class Game {
     this.seed = this.coop ? this.coop.getSeed() : randomSeed();
     this.kills = 0;
     this.coins = 0;
+    this.mods = createMods();
+    this.ownedItems = [];
+    this.maxHp = BASE_MAX_HP;
     this.hp = this.maxHp;
     this.weapon = DEFAULT_WEAPON;
     this.isDown = false;
@@ -316,7 +333,9 @@ export class Game {
     this.kickX = 0; this.kickY = 0;
     this.hurtFlash = 0;
     this.isPaused = false;
+    this.isChoosing = false;
     this.pause.hide();
+    this.blessing.hide();
     audio.unlock();
     this.corpses = [];
     this.muzzle.t = 0;
@@ -412,8 +431,9 @@ export class Game {
     const dt = Math.min((t - this.last) / 1000, 0.05);
     this.last = t;
     this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
-    // Paused: keep drawing the frozen frame under the pause overlay, run no sim.
-    if (this.isPaused) {
+    // Paused (Esc) or picking a blessing: keep drawing the frozen frame under the
+    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates.
+    if (this.isPaused || this.isChoosing) {
       this.render();
       this.raf = requestAnimationFrame(this.loop);
       return;
@@ -431,7 +451,7 @@ export class Game {
   };
 
   private togglePause() {
-    if (!this.isRunning) return;
+    if (!this.isRunning || this.isChoosing) return; // a blessing pick owns the freeze
     this.setPaused(!this.isPaused);
   }
 
@@ -522,10 +542,10 @@ export class Game {
     ix /= len; iy /= len;
     if (ix !== 0) this.facing = ix > 0 ? 1 : -1;
 
-    const speed = 200;
+    const speed = 200 * this.mods.moveSpeedMult;
     this.dashCd = Math.max(0, this.dashCd - dt);
     if (this.keys.has("shift") && this.dashCd === 0 && (ix || iy)) {
-      this.dashTime = 0.16; this.dashCd = DASH_COOLDOWN; this.dashDx = ix; this.dashDy = iy;
+      this.dashTime = 0.16; this.dashCd = this.dashCooldown(); this.dashDx = ix; this.dashDy = iy;
       this.invuln = Math.max(this.invuln, 0.35); // real "get out of jail" dodge window
       this.dashImgCd = 0;
       this.spawnParticles(this.px, this.py, 10, "#ffd27a"); // takeoff puff
@@ -557,8 +577,9 @@ export class Game {
       const w = WEAPONS[this.weapon];
       const muzzleX = this.px + Math.cos(this.aimAngle) * 18;
       const muzzleY = this.py + Math.sin(this.aimAngle) * 18;
-      for (const b of fire(w, muzzleX, muzzleY, this.aimAngle)) this.bullets.push(b);
-      this.fireCd = w.fireCd;
+      const spec = this.resolveShot(w);
+      for (const b of fire(spec, muzzleX, muzzleY, this.aimAngle)) this.bullets.push(b);
+      this.fireCd = w.fireCd / this.currentFireRate();
       this.shotSeq++;
       triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
       this.muzzle.t = MUZZLE_DUR; this.muzzle.x = muzzleX; this.muzzle.y = muzzleY; this.muzzle.angle = this.aimAngle; this.muzzle.size = w.muzzle;
@@ -575,6 +596,84 @@ export class Game {
         [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, -Math.sin(this.aimAngle) * kb);
       }
     }
+  }
+
+  // ---- in-run item mods ----
+
+  // How empty the health bar is, 0 (full) .. 1 (near death) — drives the low-HP scalers.
+  private lowHpFactor(): number {
+    return this.maxHp > 0 ? 1 - Math.max(0, this.hp / this.maxHp) : 0;
+  }
+
+  private currentDamageMult(): number {
+    return this.mods.damageMult + this.mods.berserk * this.lowHpFactor();
+  }
+
+  private currentFireRate(): number {
+    return Math.max(0.25, this.mods.fireRateMult + this.mods.adrenaline * this.lowHpFactor());
+  }
+
+  private dashCooldown(): number {
+    return DASH_COOLDOWN * this.mods.dashCdMult;
+  }
+
+  // Merge the base weapon with the run's item mods into a concrete shot.
+  private resolveShot(w: (typeof WEAPONS)[WeaponId]): ShotSpec {
+    const pellets = w.pellets + this.mods.extraPellets;
+    const spread = pellets > 1 ? Math.max(w.spread, MIN_MULTI_SPREAD) + this.mods.spreadAdd : w.spread;
+    return {
+      pellets,
+      spread,
+      speed: w.speed * this.mods.bulletSpeedMult,
+      life: w.life * this.mods.bulletLifeMult,
+      radius: w.bulletRadius * this.mods.bulletSizeMult,
+      color: w.color,
+      damage: w.damage * this.currentDamageMult(),
+      pierce: this.mods.pierce,
+      critChance: this.mods.critChance,
+      critMult: this.mods.critMult,
+    };
+  }
+
+  // Present three blessings and freeze until the player picks one. Called on every
+  // descend (per client). Co-op note: items are purely local run-stat modifiers, so
+  // each client picks its OWN blessings — nothing is networked. The shared floor sync
+  // means a teammate descending pulls us through descend() too, so we never skip our
+  // pick, and this freeze is the same one co-op already tolerates via the Esc pause.
+  private offerBlessing() {
+    const choices = rollItemChoices(3);
+    if (choices.length === 0) return;
+    this.isChoosing = true;
+    this.isPaused = false;
+    this.mouse.isDown = false;
+    this.blessing.show(choices, (item) => {
+      this.applyItem(item);
+      this.isChoosing = false;
+      this.last = performance.now(); // avoid a huge catch-up dt after the freeze
+    });
+  }
+
+  private applyItem(item: ItemDef) {
+    item.apply(this.mods);
+    this.ownedItems.push(item);
+    this.applyMaxHpBonus();
+    sfx("weapon");
+    this.spawnParticles(this.px, this.py, 20, item.tint);
+    this.addTrauma(0.12);
+  }
+
+  // Re-derive max HP from the base + item bonus. Extra hearts come pre-filled; a
+  // reduction (Glass Cannon) trims the bar but never drops the player below 1.
+  private applyMaxHpBonus() {
+    const next = Math.max(1, BASE_MAX_HP + this.mods.maxHpBonus);
+    if (next > this.maxHp) this.hp += next - this.maxHp;
+    this.maxHp = next;
+    if (this.hp > this.maxHp) this.hp = this.maxHp;
+    if (this.hp < 1) this.hp = 1;
+  }
+
+  private coinGain(): number {
+    return Math.max(1, Math.round(this.mods.coinMult));
   }
 
   private updateBullets(dt: number) {
@@ -613,16 +712,20 @@ export class Game {
         && Math.hypot(this.px - e.x, this.py - e.y) < this.pr + e.radius && this.canTouchDamage(e)) {
         this.damagePlayer(e.touchDamage);
         if (e.kind === "skeleton" && e.attack.phase === "active") this.lungeImpact(e);
+        this.applyThorns(e);
         if (this.hp <= 0 && !this.coop) return;
       }
 
       for (const b of this.bullets) {
         if (!b.friendly) continue;
+        if (b.hitList && b.hitList.indexOf(e) !== -1) continue; // already pierced this one
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-          e.hp -= b.damage; b.life = 0; triggerFlash(e.anim);
-          this.spawnPuff(b.x, b.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
+          e.hp -= b.damage; triggerFlash(e.anim);
+          this.spawnPuff(b.x, b.y, b.isCrit ? 9 : 5, b.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
           this.applyKnockback(e, b);
           if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
+          if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
+          else b.life = 0;
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
           else sfx("enemyHit", { gain: 0.65 });
         }
@@ -645,6 +748,16 @@ export class Game {
     [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, Math.cos(ang) * push, 0);
     [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, Math.sin(ang) * push);
     this.addTrauma(0.16);
+  }
+
+  // Thorns: reflect flat damage onto whatever just touched the player. Shares the
+  // player's i-frames, so a lingering enemy is only punished once per contact.
+  private applyThorns(e: Enemy) {
+    if (this.mods.thorns <= 0 || e.dead) return;
+    e.hp -= this.mods.thorns;
+    triggerFlash(e.anim);
+    this.spawnPuff(e.x, e.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
+    if (e.hp <= 0 && !e.dead) this.killEnemy(e);
   }
 
   private updateEnemyAI(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
@@ -1004,6 +1117,7 @@ export class Game {
       x, y,
       vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
       radius, life, friendly: false, damage, color,
+      pierce: 0, hitList: null, isCrit: false,
     });
   }
 
@@ -1027,6 +1141,11 @@ export class Game {
     this.addTrauma(big ? TRAUMA_BOSS_KILL : TRAUMA_KILL);
     // A boss dying clears its danger off the board so the victory beat isn't a death.
     if (big) this.bullets = this.bullets.filter((b) => b.friendly);
+    if (this.mods.lifestealChance > 0 && this.hp < this.maxHp && Math.random() < this.mods.lifestealChance) {
+      this.hp++;
+      this.spawnParticles(e.x, e.y, 8, "#ff6a9d");
+      sfx("heart", { gain: 0.5 });
+    }
     this.dropLoot(e);
   }
 
@@ -1052,8 +1171,17 @@ export class Game {
     const remaining: Pickup[] = [];
     for (const p of this.pickups) {
       stepAnim(p.anim, dt, false, 0);
+      // Coin Magnet vacuums loose coins toward the player once they're in range.
+      if (this.mods.coinMagnet > 0 && p.kind === "coin" && !this.isDown) {
+        const dx = this.px - p.x, dy = this.py - p.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.5 && d < this.mods.coinMagnet) {
+          const pull = Math.min(d, COIN_MAGNET_PULL * dt);
+          p.x += (dx / d) * pull; p.y += (dy / d) * pull;
+        }
+      }
       if (!this.isDown && Math.hypot(this.px - p.x, this.py - p.y) < this.pr + p.radius) {
-        if (p.kind === "coin") { this.coins++; this.spawnParticles(p.x, p.y, 6, "#ffd27a"); sfx("coin"); continue; }
+        if (p.kind === "coin") { this.coins += this.coinGain(); this.spawnParticles(p.x, p.y, 6, "#ffd27a"); sfx("coin"); continue; }
         if (p.kind === "heart") {
           if (this.hp < this.maxHp) { this.hp++; this.spawnParticles(p.x, p.y, 8, "#ff6a6a"); sfx("heart"); continue; }
         }
@@ -1137,6 +1265,7 @@ export class Game {
     this.addTrauma(TRAUMA_DESCEND);
     this.loadFloor();
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
+    this.offerBlessing(); // between-floor reward beat (every descend, from floor 1->2 on)
   }
 
   private damagePlayer(amount: number) {
@@ -1266,7 +1395,8 @@ export class Game {
       enemiesLeft: this.enemies.length,
       isBossActive,
       coopLabel,
-      dashFill: 1 - this.dashCd / DASH_COOLDOWN,
+      dashFill: 1 - this.dashCd / this.dashCooldown(),
+      items: this.ownedItems.map((it) => ({ glyph: it.glyph, tint: it.tint })),
     });
   }
 
@@ -1283,6 +1413,7 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
+      items: this.ownedItems.map((it) => ({ name: it.name, glyph: it.glyph, tint: it.tint })),
     });
   }
 
