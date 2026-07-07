@@ -59,32 +59,33 @@ export interface SfxOptions {
 interface SampleSpec {
   id: string;
   variants: number;
+  mix?: number; // per-sound loudness trim (0..1, default 1) — the hand-tuned mix balance
 }
 
 const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
-  shootPistol: { id: "pistol", variants: 3 },
-  shootShotgun: { id: "shotgun", variants: 3 },
-  shootRapid: { id: "rapid", variants: 3 },
-  smg: { id: "smg", variants: 3 },
-  cannon: { id: "cannon", variants: 3 },
-  burst: { id: "burst", variants: 3 },
-  ricochet: { id: "ricochet", variants: 3 },
-  homing: { id: "homing", variants: 3 },
-  tesla: { id: "tesla", variants: 3 },
-  enemyAttack: { id: "enemyAttack", variants: 3 },
-  enemyHit: { id: "enemyHit", variants: 3 },
-  enemyDeath: { id: "enemyDeath", variants: 3 },
-  playerHurt: { id: "playerHurt", variants: 1 },
-  dash: { id: "dash", variants: 1 },
-  coin: { id: "coin", variants: 1 },
-  chest: { id: "chest", variants: 1 },
-  barrel: { id: "barrel", variants: 1 },
-  heart: { id: "heart", variants: 1 },
-  weapon: { id: "weaponPickup", variants: 1 },
-  descend: { id: "descend", variants: 1 },
-  floorClear: { id: "floorClear", variants: 1 },
-  bossSpawn: { id: "bossRoar", variants: 1 },
-  gameOver: { id: "gameOver", variants: 1 },
+  shootPistol: { id: "pistol", variants: 3, mix: 0.7 },
+  shootShotgun: { id: "shotgun", variants: 3, mix: 0.85 },
+  shootRapid: { id: "rapid", variants: 3, mix: 0.5 },
+  smg: { id: "smg", variants: 3, mix: 0.5 },
+  cannon: { id: "cannon", variants: 3, mix: 1.0 },
+  burst: { id: "burst", variants: 3, mix: 0.65 },
+  ricochet: { id: "ricochet", variants: 3, mix: 0.7 },
+  homing: { id: "homing", variants: 3, mix: 0.6 },
+  tesla: { id: "tesla", variants: 3, mix: 0.7 },
+  enemyAttack: { id: "enemyAttack", variants: 3, mix: 0.6 },
+  enemyHit: { id: "enemyHit", variants: 3, mix: 0.55 },
+  enemyDeath: { id: "enemyDeath", variants: 3, mix: 0.7 },
+  playerHurt: { id: "playerHurt", variants: 1, mix: 0.9 },
+  dash: { id: "dash", variants: 1, mix: 0.35 },
+  coin: { id: "coin", variants: 1, mix: 0.5 },
+  chest: { id: "chest", variants: 1, mix: 0.8 },
+  barrel: { id: "barrel", variants: 1, mix: 0.9 },
+  heart: { id: "heart", variants: 1, mix: 0.7 },
+  weapon: { id: "weaponPickup", variants: 1, mix: 0.75 },
+  descend: { id: "descend", variants: 1, mix: 0.7 },
+  floorClear: { id: "floorClear", variants: 1, mix: 0.75 },
+  bossSpawn: { id: "bossRoar", variants: 1, mix: 1.0 },
+  gameOver: { id: "gameOver", variants: 1, mix: 0.85 },
 };
 
 // Loaded up-front on the first user gesture so the frequent gameplay sounds are ready
@@ -310,7 +311,7 @@ class AudioEngine {
     src.buffer = buf;
     src.playbackRate.value = Math.max(0.01, rate);
     const g = ctx.createGain();
-    g.gain.value = gain;
+    g.gain.value = gain * (spec.mix ?? 1);
     src.connect(g).connect(bus);
     src.start();
   }
