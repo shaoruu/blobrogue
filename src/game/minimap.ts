@@ -1,5 +1,5 @@
-import type { Dungeon } from "./dungeon.js";
-import { TILE } from "./types.js";
+import type { Dungeon } from "../sim/dungeon.js";
+import { TILE } from "../sim/types.js";
 
 export interface MinimapDot { x: number; y: number; color: string; size: number; }
 

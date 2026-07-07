@@ -1,4 +1,4 @@
-import type { ItemDef, ItemRarity } from "../game/items.js";
+import type { ItemDef, ItemRarity } from "../sim/items.js";
 import { itemIconEl } from "../game/hudIcons.js";
 
 // The between-floor "choose a blessing" overlay. Modeled on PauseOverlay: it owns its

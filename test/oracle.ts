@@ -12,11 +12,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { Game } from "../src/game/game.js";
-import { Rng } from "../src/game/rng.js";
-import { createEnemy } from "../src/game/enemies.js";
+import { Rng } from "../src/sim/rng.js";
+import { createEnemy } from "../src/sim/enemies.js";
 import { createAnim } from "../src/game/anim.js";
-import { ITEMS, createMods } from "../src/game/items.js";
-import { TILE } from "../src/game/types.js";
+import { ITEMS, createMods } from "../src/sim/items.js";
+import { TILE } from "../src/sim/types.js";
 import { Hud } from "../src/game/hud.js";
 import { Minimap } from "../src/game/minimap.js";
 import { BlessingOverlay } from "../src/ui/blessing.js";

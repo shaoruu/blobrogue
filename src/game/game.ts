@@ -1,16 +1,16 @@
-import { generateDungeon } from "./dungeon.js";
-import type { Dungeon, Room } from "./dungeon.js";
-import { FlowField } from "./pathfind.js";
-import { TILE } from "./types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest, TileKind } from "./types.js";
-import { Rng, randomSeed } from "./rng.js";
+import { generateDungeon } from "../sim/dungeon.js";
+import type { Dungeon, Room } from "../sim/dungeon.js";
+import { FlowField } from "../sim/pathfind.js";
+import { TILE } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest, TileKind } from "../sim/types.js";
+import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "./enemies.js";
-import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
-import type { ShotSpec } from "./weapons.js";
-import { createMods, rollItemChoices } from "./items.js";
-import type { PlayerMods, ItemDef } from "./items.js";
+import { ENEMY_ARCHETYPES, spawnFloorEnemies, isBossFloor, createEnemy } from "../sim/enemies.js";
+import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "../sim/weapons.js";
+import type { ShotSpec } from "../sim/weapons.js";
+import { createMods, rollItemChoices } from "../sim/items.js";
+import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
@@ -26,8 +26,8 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { settings } from "./settings.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
-import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "./biomes.js";
-import type { Biome } from "./biomes.js";
+import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
+import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 

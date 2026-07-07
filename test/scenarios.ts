@@ -9,7 +9,7 @@
 // explosions/chests/pickups, elemental status + combo + lifesteal). Exact outcomes only
 // need to AGREE between oracle and refactor.
 
-import type { WeaponId, EnemyKind, PropKind } from "../src/game/types.js";
+import type { WeaponId, EnemyKind, PropKind } from "../src/sim/types.js";
 
 export interface FrameInput {
   moveX: number; // -1..1

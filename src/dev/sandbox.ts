@@ -4,9 +4,9 @@
 
 import { Game } from "../game/game.js";
 import type { DevSnapshot } from "../game/game.js";
-import type { EnemyKind, PropKind, WeaponId } from "../game/types.js";
-import { ITEMS } from "../game/items.js";
-import { WEAPONS } from "../game/weapons.js";
+import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
+import { ITEMS } from "../sim/items.js";
+import { WEAPONS } from "../sim/weapons.js";
 import { injectDevStyles } from "./styles.js";
 
 const ENEMY_KINDS: readonly EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "boss"];

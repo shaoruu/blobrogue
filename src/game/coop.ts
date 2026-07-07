@@ -1,4 +1,4 @@
-import type { RemotePlayer, WeaponId } from "./types.js";
+import type { RemotePlayer, WeaponId } from "../sim/types.js";
 
 // Snapshot of the local player that gets broadcast to teammates each tick.
 export interface LocalPlayerState {

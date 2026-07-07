@@ -1,4 +1,4 @@
-import type { Anim } from "./anim.js";
+import type { Anim } from "../game/anim.js";
 
 export interface Vec2 { x: number; y: number; }
 

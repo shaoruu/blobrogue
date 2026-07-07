@@ -1,6 +1,6 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId } from "./types.js";
+import type { WeaponId } from "../sim/types.js";
 
 export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"

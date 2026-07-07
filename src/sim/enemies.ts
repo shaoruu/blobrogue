@@ -1,9 +1,9 @@
 import type { Enemy, EnemyKind } from "./types.js";
-import type { SpriteName } from "./assets.js";
+import type { SpriteName } from "../game/assets.js";
 import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
-import { createAnim } from "./anim.js";
+import { createAnim } from "../game/anim.js";
 
 export type Movement = "chase" | "zigzag" | "drift" | "kite" | "boss";
 
