@@ -677,7 +677,16 @@ export class Game {
       used.add(ty * d.w + tx);
       list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false, anim: createAnim() });
     };
-    for (let i = 0; i < count; i++) {
+    const treasure = d.rooms.find((r) => r.kind === "treasure");
+    let remaining = count;
+    if (treasure) {
+      const spot = this.chestTile(d, treasure, used);
+      if (spot) {
+        addChest(spot.tx, spot.ty);
+        remaining--;
+      }
+    }
+    for (let i = 0; i < remaining; i++) {
       const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
       const spot = this.chestTile(d, room, used);
       if (spot) addChest(spot.tx, spot.ty);
@@ -3387,7 +3396,7 @@ export class Game {
         tiles[y * w + x] = isBorder ? 1 : 0;
       }
     }
-    const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1 };
+    const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal" };
     return { w, h, tiles, rooms: [room], spawn: { x: w >> 1, y: h >> 1 }, exit: { x: w - 3, y: 2 } };
   }
 
