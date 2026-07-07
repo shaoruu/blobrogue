@@ -18,6 +18,15 @@ export function createSettingsControls(): HTMLElement {
     syncMute();
   });
 
+  const autofire = document.createElement("button");
+  autofire.className = "secondary settings-autofire";
+  const syncAutofire = () => { autofire.textContent = settings.isAutofire ? "autofire: on" : "autofire: off"; };
+  syncAutofire();
+  autofire.addEventListener("click", () => {
+    settings.toggleAutofire();
+    syncAutofire();
+  });
+
   const shake = document.createElement("label");
   shake.className = "settings-shake";
   const label = document.createElement("span");
@@ -37,6 +46,6 @@ export function createSettingsControls(): HTMLElement {
   });
   shake.append(label, range);
 
-  wrap.append(mute, shake);
+  wrap.append(mute, autofire, shake);
   return wrap;
 }

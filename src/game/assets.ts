@@ -1,8 +1,8 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
 export type SpriteName =
-  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "boss"
-  | "heart" | "coin" | "gun";
+  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
+  | "heart" | "coin" | "gun" | "spit";
 
 // Animation clip an entity can request. When a matching sheet is registered below
 // it plays frame-by-frame; otherwise the draw path falls back to procedural juice.
@@ -33,10 +33,12 @@ const SOURCES: Record<SpriteName, string> = {
   bat: "/sprites/bat.png",
   skeleton: "/sprites/skeleton.png",
   ghost: "/sprites/ghost.png",
+  spitter: "/sprites/spitter.png",
   boss: "/sprites/boss.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",
+  spit: "/sprites/spit.png",
 };
 
 export interface LoadedSheet { img: HTMLImageElement; fps: number; }

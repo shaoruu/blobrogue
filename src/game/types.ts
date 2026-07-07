@@ -11,7 +11,35 @@ export interface Entity {
   dead: boolean;
 }
 
-export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "boss";
+export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss";
+
+// Telegraphed-attack state machine. Committed attacks read as
+// CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
+export type AttackPhase = "none" | "windup" | "active" | "recover";
+// Which move an attacker is mid-executing. The boss owns two; others own one.
+export type AttackMove = "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar";
+
+// Grouped so the whole attack subsystem lives in one cohesive place per enemy
+// (allocated once at spawn, never per frame).
+export interface AttackState {
+  phase: AttackPhase;
+  time: number;        // seconds elapsed in the current phase
+  move: AttackMove;
+  windup: number;      // 0..1 telegraph progress; drives tint pulse / aim line / marker
+  cooldown: number;    // seconds until this enemy may commit again
+  lockedAngle: number; // aim direction captured partway through the windup
+  isAimLocked: boolean;// whether lockedAngle has been captured this windup
+  markX: number;       // world-space AoE marker point (locked hop-slam tile)
+  markY: number;
+}
+
+// Boss-only extra state (HP-phase tracking + minion/attack pacing).
+export interface BossState {
+  phase: number;         // 1..3, driven by HP thresholds
+  minionTimer: number;   // countdown until it spits out a slime
+  isNextRadial: boolean; // alternates hop-slam / radial-burst in phase 2+
+  burstParity: number;   // flips the radial ring offset each burst (0/1)
+}
 
 export interface Enemy extends Entity {
   kind: EnemyKind;
@@ -19,8 +47,10 @@ export interface Enemy extends Entity {
   touchDamage: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
-  spawnTimer: number;  // boss: countdown until it spits out a minion
+  spawnTimer: number;  // spawn-in grace: counts to 0 before the enemy may attack
   anim: Anim;
+  attack: AttackState;
+  boss: BossState | null; // set only on the boss
 }
 
 export type WeaponId = "pistol" | "shotgun" | "rapid";
