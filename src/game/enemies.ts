@@ -76,6 +76,11 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const a = ENEMY_ARCHETYPES[kind];
   const hp = Math.round(a.baseHp + a.hpPerFloor * (floor - 1));
   const isBoss = kind === "boss";
+  // Seed the anim clock from the sim Rng (not Math.random): the slime's hop-cadence reads
+  // this clock, so it must be deterministic. The clock still desyncs each enemy (so a room
+  // of blobs doesn't bob in lockstep) but now reproducibly.
+  const anim = createAnim();
+  anim.clock = rng.next() * 10;
   return {
     kind, x, y, vx: 0, vy: 0,
     radius: a.radius,
@@ -86,7 +91,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     spawnTimer: SPAWN_GRACE,
     stuckTimer: 0,
     burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0,
-    anim: createAnim(),
+    anim,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
       // The boss waits a beat after its dramatic entrance before its first slam.
