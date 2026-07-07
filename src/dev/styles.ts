@@ -59,6 +59,18 @@ const DEV_CSS = `
   .dev-read .v.warn { color: var(--red); }
   .dev-note { font-family: var(--f-num); font-size: 13px; color: var(--dun-4); line-height: 1.2; }
 
+  /* Weapon inspection card: real pickup+held art plus the stats that distinguish it. */
+  .dev-weapon-preview { display:grid; grid-template-columns:94px 1fr; gap:8px; align-items:center;
+    min-height:76px; padding:7px; background:rgba(5,3,11,.66); box-shadow:inset 0 0 0 1px var(--dun-3); }
+  .dev-weapon-art { position:relative; height:72px; overflow:hidden; background:rgba(23,18,39,.75); }
+  .dev-weapon-img { position:absolute; image-rendering:pixelated; object-fit:contain; }
+  .dev-weapon-img.pickup { width:64px; height:64px; left:2px; top:4px; }
+  .dev-weapon-img.held { width:40px; height:40px; right:0; bottom:0; filter:drop-shadow(0 2px 0 rgba(0,0,0,.7)); }
+  .dev-weapon-info { min-width:0; display:flex; flex-direction:column; gap:5px; }
+  .dev-weapon-name { font-size:11px; color:var(--cream); letter-spacing:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dev-weapon-type { font-size:8px; color:var(--amber); letter-spacing:1px; }
+  .dev-weapon-stats { font-family:var(--f-num),monospace; font-size:14px; line-height:1.05; color:var(--dun-4); }
+
   /* --- sprite / animation viewer (?dev=sprites) --- */
   .dev-sprites {
     position: fixed; inset: 0; z-index: 30; overflow-y: auto;
