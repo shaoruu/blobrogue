@@ -44,7 +44,7 @@ export type FxName =
   | "comet_trail" | "crackle" | "arc_chain" | "smoke_puff"
   // Elemental status masks (public/sprites/fx). Authored by the AD; until the PNGs land
   // fxTinted returns null and the status/flame render falls back to glow_round + tint.
-  | "ember" | "frost" | "freeze_shell" | "flame_puff";
+  | "ember" | "frost" | "freeze_shell" | "flame_puff" | "shock_ring";
 
 const FX_SOURCES: Record<FxName, string> = {
   glow_round: "/sprites/fx/glow_round.png",
@@ -60,6 +60,7 @@ const FX_SOURCES: Record<FxName, string> = {
   frost: "/sprites/fx/frost.png",
   freeze_shell: "/sprites/fx/freeze_shell.png",
   flame_puff: "/sprites/fx/flame_puff.png",
+  shock_ring: "/sprites/fx/shock_ring.png",
 };
 
 // World props (destructibles + atmosphere) and the treasure chest, all in /public/sprites.
@@ -107,6 +108,19 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   sawnoff: "/sprites/held_sawnoff.png",
   railgun: "/sprites/held_railgun.png",
   nailer: "/sprites/held_nailer.png",
+  flamer: "/sprites/held_flamer.png",
+};
+
+// Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
+// without an entry falls back to the generic "gun" sprite in renderPickups.
+const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
+  pistol: "/sprites/weapon_pistol.png",
+  shotgun: "/sprites/weapon_shotgun.png",
+  rapid: "/sprites/weapon_rapid.png",
+  sawnoff: "/sprites/weapon_sawnoff.png",
+  railgun: "/sprites/weapon_railgun.png",
+  nailer: "/sprites/weapon_nailer.png",
+  flamer: "/sprites/weapon_flamer.png",
 };
 
 export class Sprites {
@@ -115,6 +129,7 @@ export class Sprites {
   private flashCache = new Map<SpriteName, HTMLCanvasElement>();
   private sheets = new Map<string, LoadedSheet>();
   private heldImages = new Map<WeaponId, HTMLImageElement>();
+  private pickupImages = new Map<WeaponId, HTMLImageElement>();
   private fxImages = new Map<FxName, HTMLImageElement>();
   private fxTintCache = new Map<string, HTMLCanvasElement>();
   private propImages = new Map<PropSpriteName, HTMLImageElement>();
@@ -139,6 +154,13 @@ export class Sprites {
       const img = new Image();
       img.src = src;
       this.heldImages.set(id, img);
+    }
+    for (const id of Object.keys(PICKUP_SOURCES) as WeaponId[]) {
+      const src = PICKUP_SOURCES[id];
+      if (!src) continue;
+      const img = new Image();
+      img.src = src;
+      this.pickupImages.set(id, img);
     }
     for (const name of Object.keys(FX_SOURCES) as FxName[]) {
       const img = new Image();
@@ -205,6 +227,11 @@ export class Sprites {
   // A loaded held-weapon overlay for this weapon, or null to skip / fall back.
   heldWeapon(id: WeaponId): HTMLImageElement | null {
     const img = this.heldImages.get(id);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  weaponPickup(id: WeaponId): HTMLImageElement | null {
+    const img = this.pickupImages.get(id);
     return img && img.complete && img.naturalWidth > 0 ? img : null;
   }
 
