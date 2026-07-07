@@ -1,5 +1,6 @@
 import { generateDungeon } from "./dungeon.js";
 import type { Dungeon } from "./dungeon.js";
+import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
@@ -44,6 +45,21 @@ interface Afterimage { x: number; y: number; facing: number; t: number; }
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
+
+// Enemy pathfinding. A shared BFS flow field is rebuilt at most every FLOW_REBUILD
+// seconds (or immediately when the local player changes tile) and every ground chaser
+// follows its gradient — cheap over a ~40×30 grid, never per-enemy per-frame.
+const FLOW_REBUILD = 0.2;
+// Slime hop-cadence: a gentle speed pulse synced to its squash/stretch so the crawl
+// reads as intent-driven hopping. Averages to 1× (sin mean 0), so balance is untouched.
+const SLIME_HOP_FREQ = 3.4;   // matches CHARACTER_STYLE.freq so pushes land on the stretch
+const SLIME_HOP_AMOUNT = 0.55;
+// Anti-stuck: if a chaser tries to move but progresses < this fraction of its step for
+// STUCK_TIME seconds, it's wedged — nudge it perpendicular to slip past the geometry.
+const STUCK_TIME = 0.4;
+const STUCK_PROGRESS = 0.5;
+const STUCK_MIN_STEP = 0.05; // ignore near-zero intended steps (not actually trying to move)
+const HALF_PI = Math.PI / 2;
 
 const REVIVE_RADIUS = 46;
 const REVIVE_HOLD = 1.1;
@@ -218,6 +234,13 @@ export class Game {
   private isDown = false;
 
   private enemies: Enemy[] = [];
+  // Shared enemy pathfinding field + its throttle/keying state. Sources buffer is
+  // reused across rebuilds (length reset, not reallocated) to stay off the GC.
+  private flow = new FlowField();
+  private flowCd = 0;
+  private flowKeyTx = -1;
+  private flowKeyTy = -1;
+  private flowSources: number[] = [];
   private bullets: Bullet[] = [];
   private particles: Particle[] = [];
   private pickups: Pickup[] = [];
@@ -370,6 +393,10 @@ export class Game {
     this.afterimages = [];
     this.muzzle.t = 0;
     this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
+    // Force a fresh flow field on the new grid before the first enemy update.
+    this.flowCd = 0;
+    this.flowKeyTx = -1;
+    this.flowKeyTy = -1;
     this.pickups = this.placeWeaponPickups(d);
     this.torches = this.placeTorches(d);
     const isBoss = isBossFloor(this.floor);
@@ -697,6 +724,7 @@ export class Game {
     // One presence snapshot per frame (not per enemy) — enemy AI targets the nearest
     // living player, which in co-op splits aggro instead of dogpiling one client.
     const remotes = this.coop ? this.coop.remotePlayers() : null;
+    this.refreshFlowField(dt, remotes);
     for (const e of this.enemies) {
       if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
       if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
@@ -805,19 +833,23 @@ export class Game {
       this.sfxAt("enemyHit", e.x, e.y, { rate: 0.5, gain: 0.6 }); // low coil tell
       return angle;
     }
-    const step = e.speed * dt;
-    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
-    return angle;
+    const chase = this.chaseAngle(e);
+    this.applyChaseStep(e, dt, chase, e.speed * dt);
+    return chase;
   }
 
-  // Slime (chase), bat (zigzag), and — until they grow their own moves — skeleton/ghost.
+  // Slime (chase) and bat (zigzag). Both now route via the flow field: they follow the
+  // downhill gradient around walls, and only beeline once they have line of sight for a
+  // precise final approach. The bat layers its erratic wobble on top of that direction,
+  // and the slime pulses its speed into a hop cadence.
   private updateChaser(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
     const arch = ENEMY_ARCHETYPES[e.kind];
     if (!this.findTarget(e.x, e.y, remotes)) return e.zig;
-    let angle = Math.atan2(this.targetY - e.y, this.targetX - e.x);
+    let angle = this.chaseAngle(e);
     if (arch.movement === "zigzag") { e.zig += dt * 5; angle += Math.sin(e.zig) * 0.9; }
-    const step = e.speed * dt;
-    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    let step = e.speed * dt;
+    if (e.kind === "slime") step *= this.slimeHopPulse(e);
+    this.applyChaseStep(e, dt, angle, step);
     return angle;
   }
 
@@ -1062,6 +1094,76 @@ export class Game {
       x += sx; y += sy;
     }
     return true;
+  }
+
+  // Rebuilds the shared chase flow field, throttled to FLOW_REBUILD (or immediately
+  // when the local player crosses a tile boundary, so the field never lags a sprint).
+  // Multi-source over all living players → each enemy naturally paths to the nearest.
+  private refreshFlowField(dt: number, remotes: RemotePlayer[] | null): void {
+    this.flowCd -= dt;
+    const d = this.dungeon;
+    const isUp = !this.isDown && this.hp > 0;
+    const ptx = Math.floor(this.px / TILE), pty = Math.floor(this.py / TILE);
+    const tileChanged = isUp && (ptx !== this.flowKeyTx || pty !== this.flowKeyTy);
+    if (this.flowCd > 0 && !tileChanged && this.flow.isReady()) return;
+    this.flowCd = FLOW_REBUILD;
+    this.flowKeyTx = ptx; this.flowKeyTy = pty;
+
+    const srcs = this.flowSources;
+    srcs.length = 0;
+    if (isUp && ptx >= 0 && pty >= 0 && ptx < d.w && pty < d.h) srcs.push(pty * d.w + ptx);
+    if (remotes) {
+      for (const r of remotes) {
+        if (r.isDown) continue;
+        const rtx = Math.floor(r.x / TILE), rty = Math.floor(r.y / TILE);
+        if (rtx < 0 || rty < 0 || rtx >= d.w || rty >= d.h) continue;
+        srcs.push(rty * d.w + rtx);
+      }
+    }
+    this.flow.build(d, srcs);
+  }
+
+  // Movement heading for a ground chaser (findTarget must have run first). With a clear
+  // line of sight it beelines for a crisp melee approach; otherwise it follows the flow
+  // field's downhill gradient around walls, falling back to a beeline only when no
+  // gradient exists (same tile as the target, or walled off).
+  private chaseAngle(e: Enemy): number {
+    if (this.hasLineOfSight(e.x, e.y, this.targetX, this.targetY)) {
+      return Math.atan2(this.targetY - e.y, this.targetX - e.x);
+    }
+    const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
+    if (this.flow.sampleStep(tx, ty)) return Math.atan2(this.flow.step.dy, this.flow.step.dx);
+    return Math.atan2(this.targetY - e.y, this.targetX - e.x);
+  }
+
+  // Gentle speed pulse for the slime, synced to its squash/stretch so it reads as a
+  // deliberate hop toward you rather than a constant crawl. Mean 1× → balance intact.
+  private slimeHopPulse(e: Enemy): number {
+    return 1 + SLIME_HOP_AMOUNT * Math.sin(e.anim.clock * SLIME_HOP_FREQ);
+  }
+
+  // Moves a chaser along `angle`, then applies the anti-stuck net: if it kept trying to
+  // move but barely progressed for STUCK_TIME, shove it perpendicular to slip past the
+  // geometry (or another body) it's wedged on, so nothing ever freezes against a wall.
+  private applyChaseStep(e: Enemy, dt: number, angle: number, step: number): void {
+    const x0 = e.x, y0 = e.y;
+    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    const moved = Math.hypot(e.x - x0, e.y - y0);
+    const isBlocked = step > STUCK_MIN_STEP && moved < step * STUCK_PROGRESS;
+    e.stuckTimer = isBlocked ? e.stuckTimer + dt : 0;
+    if (e.stuckTimer < STUCK_TIME) return;
+    e.stuckTimer = 0;
+    const side = Math.sin(e.zig) >= 0 ? 1 : -1; // bias the escape by the enemy's wobble
+    if (!this.nudgeEnemy(e, angle + side * HALF_PI, step)) {
+      this.nudgeEnemy(e, angle - side * HALF_PI, step);
+    }
+  }
+
+  // One perpendicular escape attempt; returns whether it made meaningful progress.
+  private nudgeEnemy(e: Enemy, angle: number, step: number): boolean {
+    const x0 = e.x, y0 = e.y;
+    this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
+    return Math.hypot(e.x - x0, e.y - y0) > step * STUCK_PROGRESS;
   }
 
   // Advances a windup timer: ramps windup 0..1, tracks aim toward the target until the

@@ -48,6 +48,9 @@ export interface Enemy extends Entity {
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   spawnTimer: number;  // spawn-in grace: counts to 0 before the enemy may attack
+  // Anti-stuck safety net: seconds a chaser has been trying to move but barely
+  // progressing (wedged on geometry / another body). Nudged perpendicular past ~0.4s.
+  stuckTimer: number;
   anim: Anim;
   attack: AttackState;
   boss: BossState | null; // set only on the boss
