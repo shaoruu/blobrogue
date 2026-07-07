@@ -1,10 +1,11 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId } from "../sim/types.js";
+import type { WeaponId, SpriteName } from "../sim/types.js";
 
-export type SpriteName =
-  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
-  | "heart" | "coin" | "gun" | "spit";
+// Re-exported so the many render call sites keep importing SpriteName from assets; the union
+// itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
+// imports into src/game.
+export type { SpriteName };
 
 // Animation clip an entity can request. When a matching sheet is registered below
 // it plays frame-by-frame; otherwise the draw path falls back to procedural juice.
