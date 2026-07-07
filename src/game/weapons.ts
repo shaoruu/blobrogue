@@ -62,6 +62,22 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 3, pellets: 1, spread: 0, bulletRadius: 5, color: "#7fe9ff", muzzle: 2,
     chain: 3, chainRange: 130,
   },
+  // Tier A — pure data. Point-blank devastator: a dense, short-range pellet wall.
+  sawnoff: {
+    id: "sawnoff", name: "Boomstick", fireCd: 0.62, speed: 440, life: 0.22,
+    damage: 2.4, pellets: 8, spread: 0.85, bulletRadius: 5, color: "#ff7a3b", muzzle: 8,
+  },
+  // Tier A — pure data. Near-hitscan precision slug (pierce comes from the Full Metal item).
+  railgun: {
+    id: "railgun", name: "Longshot", fireCd: 0.85, speed: 1400, life: 1.6,
+    damage: 11, pellets: 1, spread: 0, bulletRadius: 4, color: "#e8f0ff", muzzle: 3,
+  },
+  // Tier B — reuses the ricochet bounce field: fast full-auto that ricochets once.
+  nailer: {
+    id: "nailer", name: "Nailer", fireCd: 0.12, speed: 720, life: 1.1,
+    damage: 1.4, pellets: 1, spread: 0.05, bulletRadius: 3, color: "#d9d2c0", muzzle: 1,
+    bounce: 1,
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
@@ -69,6 +85,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
+  "sawnoff", "railgun", "nailer",
 ];
 
 // A resolved shot: the base weapon merged with the player's in-run item mods. Built
