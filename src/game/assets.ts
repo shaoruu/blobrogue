@@ -41,7 +41,10 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
 // composite additively. Sizes are baked into the art; the renderer scales per bullet.
 export type FxName =
   | "glow_round" | "core_dot" | "trail_streak" | "slug" | "spark"
-  | "comet_trail" | "crackle" | "arc_chain" | "smoke_puff";
+  | "comet_trail" | "crackle" | "arc_chain" | "smoke_puff"
+  // Elemental status masks (public/sprites/fx). Authored by the AD; until the PNGs land
+  // fxTinted returns null and the status/flame render falls back to glow_round + tint.
+  | "ember" | "frost" | "freeze_shell" | "flame_puff";
 
 const FX_SOURCES: Record<FxName, string> = {
   glow_round: "/sprites/fx/glow_round.png",
@@ -53,6 +56,10 @@ const FX_SOURCES: Record<FxName, string> = {
   crackle: "/sprites/fx/crackle.png",
   arc_chain: "/sprites/fx/arc_chain.png",
   smoke_puff: "/sprites/fx/smoke_puff.png",
+  ember: "/sprites/fx/ember.png",
+  frost: "/sprites/fx/frost.png",
+  freeze_shell: "/sprites/fx/freeze_shell.png",
+  flame_puff: "/sprites/fx/flame_puff.png",
 };
 
 // World props (destructibles + atmosphere) and the treasure chest, all in /public/sprites.

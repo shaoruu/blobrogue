@@ -82,6 +82,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     zig: Math.random() * Math.PI * 2,
     spawnTimer: SPAWN_GRACE,
     stuckTimer: 0,
+    burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0,
     anim: createAnim(),
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
