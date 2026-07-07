@@ -2879,11 +2879,29 @@ export class Game {
     ctx.globalAlpha = 1;
   }
 
+  // A proper crosshair (ring + four tick marks + center dot) rather than a bare circle,
+  // so the aim point reads clearly against a busy floor. Screen-space, drawn last.
   private renderReticle() {
     const { ctx } = this;
-    ctx.strokeStyle = "rgba(255,210,122,0.6)";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(this.mouse.x, this.mouse.y, 8, 0, 6.28); ctx.stroke();
+    const cx = this.mouse.x, cy = this.mouse.y;
+    const r = 8, tick = 4, gap = 3;
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,210,122,0.85)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, 6.28);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - r - gap); ctx.lineTo(cx, cy - r - gap - tick);
+    ctx.moveTo(cx, cy + r + gap); ctx.lineTo(cx, cy + r + gap + tick);
+    ctx.moveTo(cx - r - gap, cy); ctx.lineTo(cx - r - gap - tick, cy);
+    ctx.moveTo(cx + r + gap, cy); ctx.lineTo(cx + r + gap + tick, cy);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,210,122,0.95)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 1.5, 0, 6.28);
+    ctx.fill();
+    ctx.restore();
   }
 
   private renderMinimap() {
