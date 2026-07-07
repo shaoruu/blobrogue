@@ -10,7 +10,7 @@ import { WEAPONS } from "../game/weapons.js";
 import { injectDevStyles } from "./styles.js";
 
 const ENEMY_KINDS: readonly EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "boss"];
-const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer"];
+const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer", "sword", "longsword", "spear"];
 const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",

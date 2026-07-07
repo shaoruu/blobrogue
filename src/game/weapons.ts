@@ -1,17 +1,25 @@
 import type { Bullet, WeaponId } from "./types.js";
 
+export interface MeleeSpec {
+  arc: number;         // swing arc in radians (thrust uses a narrow forward cone)
+  reach: number;       // hitbox reach in px from the player center
+  isThrust?: boolean;  // spear: line/capsule forward instead of a wide sweep
+  swingDur?: number;   // active swing seconds (defaults to 0.2)
+}
+
 export interface Weapon {
   id: WeaponId;
   name: string;
-  fireCd: number;      // seconds between shots
-  speed: number;       // bullet speed px/s
-  life: number;        // bullet lifetime (doubles as range)
-  damage: number;      // per pellet
+  fireCd: number;      // seconds between shots / swings
+  speed: number;       // bullet speed px/s (unused on melee)
+  life: number;        // bullet lifetime (doubles as range; unused on melee)
+  damage: number;      // per pellet / per swing hit
   pellets: number;
   spread: number;      // total cone width in radians
   bulletRadius: number;
   color: string;
   muzzle: number;      // muzzle-flash particle count
+  melee?: MeleeSpec;   // present => melee class (swing hitbox, no bullets)
   // Optional bullet behaviors. Absent on the base weapons; each stamps one field onto
   // every bullet it fires (see fire) to switch on an isolated update-loop branch.
   bounce?: number;     // ricochet: wall reflections before the bullet dies
@@ -92,6 +100,21 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 0.6, pellets: 2, spread: 0.5, bulletRadius: 7, color: "#ff8a3b", muzzle: 2,
     burn: 2,
   },
+  sword: {
+    id: "sword", name: "Cutlass", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
+    pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
+    melee: { arc: 1.25, reach: 48, swingDur: 0.2 },
+  },
+  longsword: {
+    id: "longsword", name: "Claymore", fireCd: 0.38, speed: 0, life: 0, damage: 6.2,
+    pellets: 1, spread: 0, bulletRadius: 0, color: "#d8dce8", muzzle: 0,
+    melee: { arc: 1.85, reach: 58, swingDur: 0.25 },
+  },
+  spear: {
+    id: "spear", name: "Pike", fireCd: 0.28, speed: 0, life: 0, damage: 4.8,
+    pellets: 1, spread: 0, bulletRadius: 0, color: "#9ee8c8", muzzle: 0,
+    melee: { arc: 0.32, reach: 74, isThrust: true, swingDur: 0.18 },
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
@@ -100,6 +123,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
   "sawnoff", "railgun", "nailer", "flamer",
+  "sword", "longsword", "spear",
 ];
 
 // A resolved shot: the base weapon merged with the player's in-run item mods. Built

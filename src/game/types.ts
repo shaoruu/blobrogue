@@ -66,7 +66,8 @@ export interface Enemy extends Entity {
 export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
-  | "sawnoff" | "railgun" | "nailer" | "flamer";
+  | "sawnoff" | "railgun" | "nailer" | "flamer"
+  | "sword" | "longsword" | "spear";
 
 export interface Bullet {
   x: number; y: number;

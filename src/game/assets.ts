@@ -109,6 +109,7 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/held_railgun.png",
   nailer: "/sprites/held_nailer.png",
   flamer: "/sprites/held_flamer.png",
+  // Melee held sprites (held_sword / held_longsword / held_spear) can be added here when art lands.
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon

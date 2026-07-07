@@ -29,6 +29,8 @@ export type SfxName =
   | "ricochet"
   | "homing"
   | "tesla"
+  | "meleeSwing"
+  | "meleeHit"
   | "enemyAttack"
   | "enemyHit"
   | "enemyDeath"
@@ -72,6 +74,8 @@ const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
   ricochet: { id: "ricochet", variants: 3, mix: 0.7 },
   homing: { id: "homing", variants: 3, mix: 0.6 },
   tesla: { id: "tesla", variants: 3, mix: 0.7 },
+  meleeSwing: { id: "meleeSwing", variants: 3, mix: 0.6 },
+  meleeHit: { id: "meleeHit", variants: 3, mix: 0.8 },
   enemyAttack: { id: "enemyAttack", variants: 3, mix: 0.6 },
   enemyHit: { id: "enemyHit", variants: 3, mix: 0.55 },
   enemyDeath: { id: "enemyDeath", variants: 3, mix: 0.7 },
@@ -92,7 +96,7 @@ const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
 // before the first shot; everything else lazy-loads on first use.
 const PRELOAD: SfxName[] = [
   "shootPistol", "shootShotgun", "shootRapid", "smg", "cannon", "burst", "ricochet",
-  "homing", "tesla", "enemyAttack", "enemyHit", "enemyDeath", "playerHurt", "dash",
+  "homing", "tesla", "meleeSwing", "meleeHit", "enemyAttack", "enemyHit", "enemyDeath", "playerHurt", "dash",
   "coin", "heart",
 ];
 
@@ -519,6 +523,15 @@ class AudioEngine {
         this.blip(t, "sawtooth", 900 * rate, 380 * rate, 0.001, 0.06, 0.3 * gain);
         break;
       }
+      case "meleeSwing":
+        // airy whoosh: fast high-pass noise sweep
+        this.noise(t, "highpass", 900, 2600, 0.16, 0.22 * gain, 1.4, rate);
+        break;
+      case "meleeHit":
+        // meaty chunk: low thud + a short bandpass crack
+        this.blip(t, "sawtooth", 240 * rate, 70 * rate, 0.002, 0.1, 0.4 * gain);
+        this.noise(t, "bandpass", 1600, 900, 0.06, 0.3 * gain, 1.2, rate);
+        break;
       case "enemyAttack":
         this.noise(t, "bandpass", 500, 2600, 0.22, 0.3 * gain, 0.7);
         break;
@@ -637,6 +650,8 @@ class AudioEngine {
       case "ricochet": return 0.12;
       case "homing": return 0.12;
       case "tesla": return 0.14;
+      case "meleeSwing": return 0.18;
+      case "meleeHit": return 0.16;
       case "enemyAttack": return 0.3;
       case "enemyHit": return 0.12;
       case "enemyDeath": return 0.25;

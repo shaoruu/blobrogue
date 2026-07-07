@@ -60,6 +60,33 @@ interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
 interface Afterimage { x: number; y: number; facing: number; t: number; }
+interface MeleeSwing {
+  timer: number;
+  duration: number;
+  aim: number;
+  arc: number;
+  reach: number;
+  isThrust: boolean;
+  color: string;
+  damage: number;
+  isCrit: boolean;
+  hitList: Enemy[] | null;
+  burn?: number;
+  chill?: number;
+  shock?: number;
+}
+interface StrikeInfo {
+  damage: number;
+  isCrit: boolean;
+  puffX: number;
+  puffY: number;
+  kbDirX: number;
+  kbDirY: number;
+  burn?: number;
+  chill?: number;
+  shock?: number;
+  isMelee: boolean;
+}
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
@@ -115,6 +142,9 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   railgun: "shootPistol",
   nailer: "shootRapid",
   flamer: "shootRapid",
+  sword: "meleeSwing",
+  longsword: "meleeSwing",
+  spear: "meleeSwing",
 };
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
@@ -134,6 +164,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
   sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04,
+  sword: 0.06, longsword: 0.1, spear: 0.05,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -141,16 +172,19 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
   sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3,
+  sword: 0.7, longsword: 1.1, spear: 0.6,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
   sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5,
+  sword: 1.5, longsword: 2.5, spear: 1,
 };
 const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
   sawnoff: 26, railgun: 6, nailer: 0, flamer: 0,
+  sword: 0, longsword: 0, spear: 8,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -191,9 +225,12 @@ const WEAPON_KB: Record<WeaponId, number> = {
   pistol: 4, shotgun: 8, rapid: 2,
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
   sawnoff: 10, railgun: 12, nailer: 3, flamer: 1,
+  sword: 14, longsword: 20, spear: 16,
 };
 const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
 const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
+const MELEE_HIT_TRAUMA = 0.14; // extra thump layered on each melee connect (fire trauma is the whoosh)
+const MELEE_THRUST_WIDTH = 18; // half-width of the spear thrust capsule (px)
 
 // ---- elemental status effects (burn / chill / shock) ----
 // Local per-enemy state driven by bullets (same model as damage/knockback), so co-op
@@ -401,6 +438,7 @@ export class Game {
   private isPlayerMoving = false;
   private playerLean = 0;
   private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2, color: "#ffe6a0" };
+  private meleeSwing: MeleeSwing | null = null;
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -802,13 +840,34 @@ export class Game {
     this.trauma = t > 1 ? 1 : t;
   }
 
-  private applyKnockback(e: Enemy, b: Bullet) {
-    const sp = Math.hypot(b.vx, b.vy) || 1;
+  private applyKnockbackDir(e: Enemy, dirX: number, dirY: number) {
+    const sp = Math.hypot(dirX, dirY) || 1;
     const v = (WEAPON_KB[this.weapon] * KB_LAMBDA) / ENEMY_ARCHETYPES[e.kind].kbResist;
-    e.vx += (b.vx / sp) * v;
-    e.vy += (b.vy / sp) * v;
+    e.vx += (dirX / sp) * v;
+    e.vy += (dirY / sp) * v;
     const mag = Math.hypot(e.vx, e.vy);
     if (mag > KB_MAX_SPEED) { const s = KB_MAX_SPEED / mag; e.vx *= s; e.vy *= s; }
+  }
+
+  private strikeEnemy(e: Enemy, hit: StrikeInfo) {
+    const isFrozen = this.isFrozen(e);
+    const dmg = hit.damage * (e.shock > 0 ? SHOCK_DMG_MULT : 1) * (isFrozen ? FROZEN_DMG_MULT : 1);
+    e.hp -= dmg;
+    triggerFlash(e.anim);
+    this.spawnDmgNumber(e.x, e.y - e.radius, dmg, { crit: hit.isCrit });
+    this.spawnPuff(hit.puffX, hit.puffY, hit.isCrit ? 9 : 5, hit.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
+    this.applyKnockbackDir(e, hit.kbDirX, hit.kbDirY);
+    this.applyHitStatuses(e, hit);
+    if (e.shock > 0) this.shockArc(e);
+    if (!hit.isMelee && this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) {
+      this.addFreeze(FREEZE_SHOTGUN);
+    }
+    if (hit.isMelee) {
+      this.addTrauma(MELEE_HIT_TRAUMA);
+      this.addFreeze(FREEZE_KILL);
+    }
+    if (e.hp <= 0 && !e.dead) this.killEnemy(e);
+    else sfx(hit.isMelee ? "meleeHit" : "enemyHit", { gain: hit.isMelee ? 0.9 : 0.65 });
   }
 
   private update(dt: number) {
@@ -822,6 +881,10 @@ export class Game {
       this.updateShooting(dt);
     } else {
       this.isPlayerMoving = false;
+    }
+    if (this.meleeSwing) {
+      this.meleeSwing.timer -= dt;
+      if (this.meleeSwing.timer <= 0) this.meleeSwing = null;
     }
     stepAnim(this.playerAnim, dt, this.isPlayerMoving, this.playerLean);
     this.updateBullets(dt);
@@ -903,6 +966,10 @@ export class Game {
     const isFiring = settings.isAutofire ? this.isAutoFiring : this.mouse.isDown;
     if (isFiring && this.fireCd === 0) {
       const w = WEAPONS[this.weapon];
+      if (w.melee) {
+        this.startMeleeSwing(w);
+        return;
+      }
       const muzzleX = this.px + Math.cos(this.aimAngle) * 18;
       const muzzleY = this.py + Math.sin(this.aimAngle) * 18;
       const spec = this.resolveShot(w);
@@ -924,6 +991,63 @@ export class Game {
         [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, -Math.sin(this.aimAngle) * kb);
       }
     }
+  }
+
+  private startMeleeSwing(w: (typeof WEAPONS)[WeaponId]) {
+    const m = w.melee;
+    if (!m) return;
+    const isCrit = this.mods.critChance > 0 && Math.random() < this.mods.critChance;
+    const baseDmg = w.damage * this.currentDamageMult();
+    this.meleeSwing = {
+      timer: m.swingDur ?? 0.2,
+      duration: m.swingDur ?? 0.2,
+      aim: this.aimAngle,
+      arc: m.arc,
+      reach: m.reach,
+      isThrust: m.isThrust === true,
+      color: w.color,
+      damage: isCrit ? baseDmg * this.mods.critMult : baseDmg,
+      isCrit,
+      hitList: null,
+      burn: w.burn,
+      chill: w.chill,
+      shock: w.shock,
+    };
+    this.fireCd = w.fireCd / this.currentFireRate();
+    this.shotSeq++;
+    triggerRecoil(this.playerAnim, FIRE_RECOIL[this.weapon]);
+    this.spawnSlashWind(m, w.color); // wind/dust flung along the swing arc
+    sfx(SHOOT_SFX[this.weapon]);
+    this.addTrauma(FIRE_TRAUMA[this.weapon]);
+    const kick = FIRE_KICK[this.weapon];
+    this.kickX += -Math.cos(this.aimAngle) * kick;
+    this.kickY += -Math.sin(this.aimAngle) * kick;
+    const kb = FIRE_KNOCKBACK[this.weapon];
+    if (kb !== 0) {
+      [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, -Math.cos(this.aimAngle) * kb, 0);
+      [this.px, this.py] = this.moveCircle(this.px, this.py, this.pr, 0, -Math.sin(this.aimAngle) * kb);
+    }
+    this.spawnParticles(this.px + Math.cos(this.aimAngle) * 14, this.py + Math.sin(this.aimAngle) * 14, 4, w.color);
+  }
+
+  private isMeleeHit(e: Enemy, swing: MeleeSwing): boolean {
+    const dx = e.x - this.px;
+    const dy = e.y - this.py;
+    const dist = Math.hypot(dx, dy);
+    if (dist > swing.reach + e.radius) return false;
+    const cos = Math.cos(swing.aim);
+    const sin = Math.sin(swing.aim);
+    if (swing.isThrust) {
+      const fwd = dx * cos + dy * sin;
+      if (fwd < -e.radius * 0.4 || fwd > swing.reach + e.radius) return false;
+      const lat = Math.abs(dx * sin - dy * cos);
+      return lat < MELEE_THRUST_WIDTH + e.radius;
+    }
+    let ang = Math.atan2(dy, dx) - swing.aim;
+    while (ang > Math.PI) ang -= Math.PI * 2;
+    while (ang < -Math.PI) ang += Math.PI * 2;
+    const angPad = Math.atan2(e.radius, Math.max(dist, 1));
+    return Math.abs(ang) <= swing.arc * 0.5 + angPad;
   }
 
   // ---- in-run item mods ----
@@ -1129,17 +1253,18 @@ export class Game {
         if (!b.friendly) continue;
         if (b.hitList && b.hitList.indexOf(e) !== -1) continue; // already pierced this one
         if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-          // Damage amps applied once, in order: shock (+25%) then frozen shatter (+50%).
-          const isFrozen = this.isFrozen(e);
-          const dmg = b.damage * (e.shock > 0 ? SHOCK_DMG_MULT : 1) * (isFrozen ? FROZEN_DMG_MULT : 1);
-          e.hp -= dmg; triggerFlash(e.anim);
-          this.spawnDmgNumber(e.x, e.y - e.radius, dmg, { crit: b.isCrit });
-          this.spawnPuff(b.x, b.y, b.isCrit ? 9 : 5, b.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
-          this.applyKnockback(e, b);
-          // Any status the round carries (or an item blessing rolls), then the shock arc.
-          this.applyBulletStatuses(e, b);
-          if (e.shock > 0) this.shockArc(e);
-          if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
+          this.strikeEnemy(e, {
+            damage: b.damage,
+            isCrit: b.isCrit,
+            puffX: b.x,
+            puffY: b.y,
+            kbDirX: b.vx,
+            kbDirY: b.vy,
+            burn: b.burn,
+            chill: b.chill,
+            shock: b.shock,
+            isMelee: false,
+          });
           // TESLA (Tesla): the round dies on its first hit, but first arcs lightning to
           // nearby enemies. Reuses hitList (the pierce dedup) so an arc never doubles back.
           if (b.chain !== undefined && b.chain > 0) {
@@ -1148,8 +1273,29 @@ export class Game {
             b.life = 0;
           } else if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
           else b.life = 0;
-          if (e.hp <= 0 && !e.dead) this.killEnemy(e);
-          else sfx("enemyHit", { gain: 0.65 });
+        }
+      }
+
+      const swing = this.meleeSwing;
+      if (swing && swing.timer > 0) {
+        if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
+        if (this.isMeleeHit(e, swing)) {
+          const kbDirX = Math.cos(swing.aim);
+          const kbDirY = Math.sin(swing.aim);
+          const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
+          this.strikeEnemy(e, {
+            damage: swing.damage,
+            isCrit: swing.isCrit,
+            puffX: this.px + kbDirX * puffDist,
+            puffY: this.py + kbDirY * puffDist,
+            kbDirX,
+            kbDirY,
+            burn: swing.burn,
+            chill: swing.chill,
+            shock: swing.shock,
+            isMelee: true,
+          });
+          (swing.hitList ??= []).push(e);
         }
       }
     }
@@ -1193,12 +1339,12 @@ export class Game {
 
   // Applies whatever status a round carries; else rolls the player's item chances. The
   // else-if means a flamethrower round (already burning) doesn't double-roll item burn.
-  private applyBulletStatuses(e: Enemy, b: Bullet) {
-    if (b.burn !== undefined) this.applyBurn(e, b.burn);
+  private applyHitStatuses(e: Enemy, src: { burn?: number; chill?: number; shock?: number }) {
+    if (src.burn !== undefined) this.applyBurn(e, src.burn);
     else if (this.mods.burnChance > 0 && Math.random() < this.mods.burnChance) this.applyBurn(e, ITEM_BURN_SECS);
-    if (b.chill !== undefined) this.applyChill(e, b.chill);
+    if (src.chill !== undefined) this.applyChill(e, src.chill);
     else if (this.mods.chillChance > 0 && Math.random() < this.mods.chillChance) this.applyChill(e, ITEM_CHILL_SECS);
-    if (b.shock !== undefined) this.applyShock(e, b.shock);
+    if (src.shock !== undefined) this.applyShock(e, src.shock);
     else if (this.mods.shockChance > 0 && Math.random() < this.mods.shockChance) this.applyShock(e, ITEM_SHOCK_SECS);
   }
 
@@ -2285,6 +2431,40 @@ export class Game {
     }
   }
 
+  // Wind/slash dust flung off a melee swing: particles seeded ALONG the swing arc (or the
+  // thrust line for spears), each flying TANGENT to the sweep so they read as a gust of
+  // wind trailing the blade. Cheap, additive to the slash VFX; tinted to the weapon.
+  private spawnSlashWind(m: { arc: number; reach: number; isThrust?: boolean }, color: string) {
+    const cx = this.px, cy = this.py, aim = this.aimAngle;
+    if (m.isThrust) {
+      // Spear: streaks blown straight forward along the thrust line.
+      const n = 7;
+      for (let i = 0; i < n; i++) {
+        const t = 0.35 + Math.random() * 0.65;
+        const r = m.reach * t;
+        const jitter = (Math.random() * 2 - 1) * 6;
+        const px = cx + Math.cos(aim) * r - Math.sin(aim) * jitter;
+        const py = cy + Math.sin(aim) * r + Math.cos(aim) * jitter;
+        const sp = 120 + Math.random() * 120;
+        this.particles.push({ x: px, y: py, vx: Math.cos(aim) * sp, vy: Math.sin(aim) * sp, life: 0.14 + Math.random() * 0.14, maxLife: 0.28, color, size: 1 + Math.random() * 2.5, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.88 });
+      }
+      return;
+    }
+    // Sword/longsword: dust seeded across the arc, each blown along the sweep tangent.
+    const n = Math.round(6 + m.arc * 6);
+    for (let i = 0; i < n; i++) {
+      const frac = Math.random();                       // 0..1 across the arc
+      const ang = aim - m.arc / 2 + frac * m.arc;        // point on the arc
+      const r = m.reach * (0.55 + Math.random() * 0.5);
+      const px = cx + Math.cos(ang) * r;
+      const py = cy + Math.sin(ang) * r;
+      // Tangent to the sweep (perpendicular to the radius), in the swing's rotation sense.
+      const tang = ang + Math.PI / 2;
+      const sp = 90 + Math.random() * 130;
+      this.particles.push({ x: px, y: py, vx: Math.cos(tang) * sp, vy: Math.sin(tang) * sp, life: 0.16 + Math.random() * 0.16, maxLife: 0.32, color, size: 1 + Math.random() * 2.5, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.86 });
+    }
+  }
+
   // Chunky bits of the dead thing: fly out fast, tumble, fall, and fade a touch slower.
   private spawnGibs(x: number, y: number, n: number, color: string) {
     for (let i = 0; i < n; i++) {
@@ -2370,6 +2550,7 @@ export class Game {
     this.renderTracers();
     this.renderRemotePlayers();
     this.renderAfterimages();
+    this.renderMeleeSwing();
     this.renderPlayer();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
@@ -3286,7 +3467,7 @@ export class Game {
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock);
-    if (!this.isDown) this.renderHeldWeapon(psx, psy, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
+    if (!this.isDown) this.renderHeldWeapon(psx, psy, this.heldAimAngle(), this.weapon, alpha, this.playerAnim.recoil, this.heldThrustOffset());
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
       ctx.font = '700 12px "Silkscreen", monospace';
@@ -3296,17 +3477,71 @@ export class Game {
     }
   }
 
+  private heldAimAngle(): number {
+    const swing = this.meleeSwing;
+    if (!swing || swing.timer <= 0) return this.aimAngle;
+    const t = 1 - swing.timer / swing.duration;
+    if (swing.isThrust) return swing.aim;
+    return swing.aim - swing.arc * 0.5 + t * swing.arc;
+  }
+
+  private heldThrustOffset(): number {
+    const swing = this.meleeSwing;
+    if (!swing || swing.timer <= 0 || !swing.isThrust) return 0;
+    const t = 1 - swing.timer / swing.duration;
+    return Math.sin(t * Math.PI) * 14;
+  }
+
+  private renderMeleeSwing() {
+    const swing = this.meleeSwing;
+    if (!swing || swing.timer <= 0) return;
+    const { ctx, cam } = this;
+    const sx = this.px - cam.x;
+    const sy = this.py - cam.y;
+    const t = 1 - swing.timer / swing.duration;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(sx, sy);
+    ctx.rotate(swing.aim);
+    if (swing.isThrust) {
+      const len = swing.reach * (0.45 + 0.55 * Math.sin(t * Math.PI));
+      ctx.globalAlpha = 0.6 * (1 - t * 0.35);
+      ctx.strokeStyle = swing.color;
+      ctx.lineWidth = 7 * (1 - t * 0.4);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(14, 0);
+      ctx.lineTo(14 + len, 0);
+      ctx.stroke();
+    } else {
+      const start = -swing.arc * 0.5;
+      const sweep = swing.arc * t;
+      const inner = 10;
+      const outer = swing.reach * (0.82 + 0.18 * Math.sin(t * Math.PI));
+      ctx.globalAlpha = 0.5 * (1 - t * 0.3);
+      ctx.fillStyle = swing.color;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, outer, start, start + sweep);
+      ctx.arc(0, 0, inner, start + sweep, start, true);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   // The equipped gun, drawn over the hero and rotated to aim. Held sprites are authored
   // 40px with the gun centered in the file, pointing +X; the vertical flip past |aim| >
   // 90deg keeps the barrel horizontal (not upside-down) when aiming left. The sprite
   // center sits at the muzzle-flash anchor distance (18px out along aim), pulled in
   // slightly on fire by recoil. Weapons without art (the six newer guns) fall back to the
   // pistol overlay; if even that isn't loaded yet it simply draws nothing.
-  private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0) {
+  // Melee held art (held_sword / held_longsword / held_spear) can drop into HELD_SOURCES later.
+  private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0, thrustOff = 0) {
     const img = this.sprites.heldWeapon(weapon) ?? this.sprites.heldWeapon("pistol");
     if (!img) return;
     const { ctx } = this;
-    const anchor = 18 - recoil * 3; // recoil pulls the gun back toward the blob on fire
+    const anchor = 18 - recoil * 3 + thrustOff;
     const d = 40 * 0.6; // ~24px over the ~44px blob
     ctx.save();
     ctx.globalAlpha = alpha;
