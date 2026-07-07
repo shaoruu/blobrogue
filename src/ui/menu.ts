@@ -70,7 +70,7 @@ export class Menu {
     wrap.appendChild(el("p", "", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
 
     if (!this.client) {
-      wrap.appendChild(this.soloButton("descend \u25be"));
+      wrap.appendChild(this.soloButton("\u25be  PLAY"));
       wrap.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
     } else {
       const profileBox = el("div", "profile");
@@ -235,7 +235,7 @@ export class Menu {
 
       const row = el("div", "btnrow");
       if (mp.isHost) {
-        const start = el("button", "", "start descent \u25be");
+        const start = el("button", "", "\u25be  START RUN");
         start.addEventListener("click", () => void mp.startGame());
         row.appendChild(start);
       } else {
