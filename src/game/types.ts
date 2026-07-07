@@ -77,6 +77,9 @@ export interface Bullet {
   homing?: number;         // homing: steering turn rate (rad/s) toward the nearest enemy
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
+  // Render recipe tag (the firing weapon). Selects the layered sprite FX in
+  // renderBullets; absent on enemy fire, which keeps its own halo-and-core look.
+  fx?: WeaponId;
 }
 
 export type PickupKind = "heart" | "coin" | "weapon";
@@ -89,7 +92,7 @@ export interface Pickup {
   anim: Anim;
 }
 
-export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell";
+export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";
 
 export interface Particle {
   x: number; y: number;

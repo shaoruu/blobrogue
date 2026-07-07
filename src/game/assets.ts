@@ -8,7 +8,8 @@ export type SpriteName =
 
 // Animation clip an entity can request. When a matching sheet is registered below
 // it plays frame-by-frame; otherwise the draw path falls back to procedural juice.
-export type SheetClip = "idle" | "walk";
+// "death" is a one-shot clip played over a corpse (see game.ts renderCorpses).
+export type SheetClip = "idle" | "walk" | "death";
 
 export const FRAME = 64; // px per frame in a horizontal strip spritesheet
 
@@ -27,6 +28,31 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   "ghost.walk": { src: "/sprites/ghost_walk.png", fps: 6 },
   "boss.walk": { src: "/sprites/boss_walk.png", fps: 4 },
   "boss.idle": { src: "/sprites/boss_walk.png", fps: 4 },
+  // One-shot death clips, played once over the corpse. Ghost/spitter have none and keep
+  // the procedural corpse fade. Boss is 8 frames (768x96); the rest 5 frames (320x64).
+  "slime.death": { src: "/sprites/slime_death.png", fps: 12 },
+  "skeleton.death": { src: "/sprites/skeleton_death.png", fps: 12 },
+  "bat.death": { src: "/sprites/bat_death.png", fps: 12 },
+  "boss.death": { src: "/sprites/boss_death.png", fps: 12 },
+};
+
+// Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
+// intensity in the alpha channel so a single source-in fill recolors them and they
+// composite additively. Sizes are baked into the art; the renderer scales per bullet.
+export type FxName =
+  | "glow_round" | "core_dot" | "trail_streak" | "slug" | "spark"
+  | "comet_trail" | "crackle" | "arc_chain" | "smoke_puff";
+
+const FX_SOURCES: Record<FxName, string> = {
+  glow_round: "/sprites/fx/glow_round.png",
+  core_dot: "/sprites/fx/core_dot.png",
+  trail_streak: "/sprites/fx/trail_streak.png",
+  slug: "/sprites/fx/slug.png",
+  spark: "/sprites/fx/spark.png",
+  comet_trail: "/sprites/fx/comet_trail.png",
+  crackle: "/sprites/fx/crackle.png",
+  arc_chain: "/sprites/fx/arc_chain.png",
+  smoke_puff: "/sprites/fx/smoke_puff.png",
 };
 
 const SOURCES: Record<SpriteName, string> = {
@@ -61,6 +87,8 @@ export class Sprites {
   private flashCache = new Map<SpriteName, HTMLCanvasElement>();
   private sheets = new Map<string, LoadedSheet>();
   private heldImages = new Map<WeaponId, HTMLImageElement>();
+  private fxImages = new Map<FxName, HTMLImageElement>();
+  private fxTintCache = new Map<string, HTMLCanvasElement>();
 
   constructor() {
     for (const name of Object.keys(SOURCES) as SpriteName[]) {
@@ -82,6 +110,34 @@ export class Sprites {
       img.src = src;
       this.heldImages.set(id, img);
     }
+    for (const name of Object.keys(FX_SOURCES) as FxName[]) {
+      const img = new Image();
+      img.src = FX_SOURCES[name];
+      this.fxImages.set(name, img);
+    }
+  }
+
+  fxTinted(name: FxName, color: string): HTMLCanvasElement | null {
+    // White art carries its shape in alpha, so a single source-in fill recolors it once;
+    // callers draw the result with globalCompositeOperation 'lighter'. Cached per
+    // name+color, so steady state never allocates. Null until the source image has loaded,
+    // letting the bullet renderer fall back to a plain circle.
+    const key = `${name}|${color}`;
+    const cached = this.fxTintCache.get(key);
+    if (cached) return cached;
+    const img = this.fxImages.get(name);
+    if (!img || !img.complete || img.naturalWidth === 0) return null;
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.drawImage(img, 0, 0);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = color;
+    g.fillRect(0, 0, c.width, c.height);
+    this.fxTintCache.set(key, c);
+    return c;
   }
 
   // A loaded held-weapon overlay for this weapon, or null to skip / fall back.
