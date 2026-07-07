@@ -46,6 +46,16 @@ interface Afterimage { x: number; y: number; facing: number; t: number; }
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
 
+// Extruded-block wall look (Soul Knight): a lit top cap, a dark front face where the
+// tile below is floor, plus mid-dark side strips on exposed left/right edges so a wall
+// reads as a 3D cube rather than a flat cap. Tones step cap -> front -> side, darkening
+// toward the world floor. Side strips are precomputed gradients (built once) that fade
+// inward; corners where two faces meet get an extra darken so the cube edge reads.
+const WALL_SIDE_W = 7;                       // px width of an exposed side face
+const WALL_SIDE_RGB = "27,21,48";            // ~#1b1530, the side-face tone (below the front)
+const WALL_SIDE_ALPHA = 0.62;                // side-strip darkness at the edge
+const WALL_CORNER_FILL = "rgba(9,6,18,0.5)"; // extra darken where a side meets the front
+
 // Enemy pathfinding. A shared BFS flow field is rebuilt at most every FLOW_REBUILD
 // seconds (or immediately when the local player changes tile) and every ground chaser
 // follows its gradient — cheap over a ~40×30 grid, never per-enemy per-frame.
@@ -328,6 +338,10 @@ export class Game {
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
+  // Side-face gradients for the extruded wall look, built once (dark at the exposed edge,
+  // fading inward). Left edge darkens x=0; right edge darkens x=WALL_SIDE_W.
+  private wallSideGradL: CanvasGradient | null = null;
+  private wallSideGradR: CanvasGradient | null = null;
   private torches: { tx: number; ty: number }[] = []; // wall-mounted torch cells, per floor
   private props: Prop[] = [];   // destructible/atmosphere props, seeded per floor
   private chests: Chest[] = []; // touch-to-open treasure, seeded per floor
@@ -350,9 +364,25 @@ export class Game {
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
+    this.buildWallGradients();
     this.bindInput();
     this.resize();
     window.addEventListener("resize", () => this.resize());
+  }
+
+  // Precompute the two side-face gradients once (no per-frame allocation). Both span
+  // 0..WALL_SIDE_W in local x and are filled under a per-tile translate at draw time.
+  private buildWallGradients() {
+    const edge = `rgba(${WALL_SIDE_RGB},${WALL_SIDE_ALPHA})`;
+    const inner = `rgba(${WALL_SIDE_RGB},0)`;
+    const left = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
+    left.addColorStop(0, edge);
+    left.addColorStop(1, inner);
+    const right = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
+    right.addColorStop(0, inner);
+    right.addColorStop(1, edge);
+    this.wallSideGradL = left;
+    this.wallSideGradR = right;
   }
 
   private resize() {
@@ -2072,7 +2102,10 @@ export class Game {
       }
     }
 
-    // Pass 2: walls (top cap + vertical face where a floor sits directly below).
+    // Pass 2: walls as extruded blocks — lit top cap, dark front face where a floor sits
+    // directly below, and mid-dark side strips on exposed left/right edges. Corners where
+    // the front meets a side get an extra darken so the cube edge reads.
+    const sideL = this.wallSideGradL, sideR = this.wallSideGradR;
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
         if (d.tiles[ty * d.w + tx] !== 1) continue;
@@ -2085,8 +2118,34 @@ export class Game {
           ctx.fillStyle = "#2f2350";
           ctx.fillRect(sx, sy, TILE, 6);
         }
-        if (ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0 && tiles.ready("wall_face")) {
+        const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
+        const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
+        const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
+        // Front face (darkest): a real sprite if present, else the wall_face_left/right
+        // swap-ready fallback is the shaded strips below.
+        if (belowFloor && tiles.ready("wall_face")) {
           ctx.drawImage(tiles.get("wall_face"), sx, sy, TILE, TILE);
+        }
+        // Side faces: a translucent gradient strip fading inward from the exposed edge.
+        if (leftFloor && sideL) {
+          ctx.save();
+          ctx.translate(sx, sy);
+          ctx.fillStyle = sideL;
+          ctx.fillRect(0, 0, WALL_SIDE_W, TILE);
+          ctx.restore();
+        }
+        if (rightFloor && sideR) {
+          ctx.save();
+          ctx.translate(sx + TILE - WALL_SIDE_W, sy);
+          ctx.fillStyle = sideR;
+          ctx.fillRect(0, 0, WALL_SIDE_W, TILE);
+          ctx.restore();
+        }
+        // Darken the bottom corners where the front face meets a side face.
+        if (belowFloor && (leftFloor || rightFloor)) {
+          ctx.fillStyle = WALL_CORNER_FILL;
+          if (leftFloor) ctx.fillRect(sx, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
+          if (rightFloor) ctx.fillRect(sx + TILE - WALL_SIDE_W, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
         }
       }
     }
