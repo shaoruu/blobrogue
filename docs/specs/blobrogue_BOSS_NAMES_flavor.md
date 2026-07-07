@@ -28,7 +28,7 @@ Blessing this one. "The Weaver" carries two meanings at once — the arachnid *a
 
 ## 4. MIRROR BLOB → **JET**
 This is my flagship boss and it deserves a real name, not a description. **JET** — because jet is *black fossil resin,* the dark cousin of amber. Our hero is amber; its reflection is jet. Same material, gone cold and hollow. It's a one-syllable gut-punch and it encodes the whole theme in four letters.
-**Flavor hook:** Jet is what the blob *becomes* if it takes every forbidden school and pays no attention to the cost — the "power corrupts" thesis given a body. It fights like a player because it *was* one. The hollow eyes (your doc detail), the black-amber body, the Corrupted Domain at 33% — it's you, after. Intro card: *"You've come this far. Look what it costs."* Lowest art cost (recolored hero), highest meaning in the game. 
+**Flavor hook:** Jet is what the blob *becomes* if it takes every forbidden school and pays no attention to the cost — the "power corrupts" thesis given a body. It fights like a player because it *was* one. The hollow eyes (your doc detail), the black-amber body, the Corrupted Resonance at 33% — it's you, after. Intro card: *"You've come this far. Look what it costs."* Lowest art cost (recolored hero), highest meaning in the game. 
 **One idea for free:** have Jet's equipped schools *mirror the schools the player is actually carrying that run* if that's ever cheap — fighting your own build is the dream version. Not required; the fixed 2-3 school cycle is already great.
 *Alt: "The Other." I strongly prefer Jet.*
 

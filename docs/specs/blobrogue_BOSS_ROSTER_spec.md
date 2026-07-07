@@ -43,7 +43,7 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 - **CHARGE FLOOR** (new AttackMove "chargefloor"): telegraphs the WHOLE arena floor with a rising cyan pulse over 1.2s, then a room-wide discharge that ONLY spares tiles near the boss's body (invert the danger — forces players to run TOWARD the scary thing). The signature "learn the safe spot" mechanic.
 - **ADDS:** periodically births swarm blobs from its body (reuse minion drip) — the co-op crowd to clear.
 - **Phases:** P1 strike rain + adds. P2 (66%) adds choir swell + faster strikes. P3 (33%) charge-floor enters the rotation + strike rain doubles. A real endurance/positioning test.
-**Art/VFX brief:** a massive, tragic, screen-edge silhouette of fused sad-eyed blobs (warm-dark whimsy: tragic AND terrifying), half-submerged, glowing cyan mouths when it sings. VFX: cyan strike markers + bolts (reuse arc_chain/crackle + the slam marker), floor-pulse overlay (reuse a big tinted mask — same tech as the Rite overlays), ember/lava ambiance. Big bespoke art piece — the trailer boss. Drawsize ~200 (multi-tile).
+**Art/VFX brief:** a massive, tragic, screen-edge silhouette of fused sad-eyed blobs (warm-dark whimsy: tragic AND terrifying), half-submerged, glowing cyan mouths when it sings. VFX: cyan strike markers + bolts (reuse arc_chain/crackle + the slam marker), floor-pulse overlay (reuse a big tinted mask — same tech as the Resonance overlays), ember/lava ambiance. Big bespoke art piece — the trailer boss. Drawsize ~200 (multi-tile).
 
 ===============================================================
 # BOSS 4 — THE WEAVER  (MOBILE DUELIST / DODGER)  · The Deep
@@ -63,19 +63,19 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 ===============================================================
 **Identity/fantasy:** JET (the CD's flagship, now named) — jet is BLACK FOSSIL RESIN, the dark cousin of amber: the hero is amber, its reflection is jet, the same material gone cold and hollow. A hostile blob that has learned the SAME schools you have and turns them against you — what the blob BECOMES if it takes every forbidden school and ignores the cost. The "power corrupts" thesis given a body; the eeriest, most meaningful fight. Intro card (CD voice): "You've come this far. Look what it costs."
 **Profile:** hp ~120 (+18/fl), speed 100 (matches the player's read/feel), radius 30 (player-sized), touchDamage 2. It plays like a PLAYER, not a monster.
-**Build note (from the CD, confirmed feasible):** it's a reskinned PLAYER entity running enemy AI + the telegraph system + a scripted Rite. Mechanically: it "equips" weapon archetypes you've built and fires them at you with telegraphs.
-**BossState extra:** { equippedSchool: number, riteCharge: number }.
+**Build note (from the CD, confirmed feasible):** it's a reskinned PLAYER entity running enemy AI + the telegraph system + a scripted Resonance. Mechanically: it "equips" weapon archetypes you've built and fires them at you with telegraphs.
+**BossState extra:** { equippedSchool: number, ResonanceCharge: number }.
 **Signature moves:**
-- **MIRRORED FIRE** (new AttackMove "mirrorfire"): it shoots YOUR weapon types at you — cycles through 2-3 of the schools. (CD stretch idea, only if cheap: mirror the schools the player is ACTUALLY carrying that run — fighting your own build. The fixed 2-3 cycle is the shippable default.) (e.g. a Grudge homing volley, a High Noon aimed crit-shot with the duel sightline tell, a Choir chain-bolt). Each uses that weapon's real telegraph, so you're dodging your own arsenal. Reuses the actual weapon fire() + a windup wrapper.
+- **MIRRORED FIRE** (new AttackMove "mirrorfire"): it shoots YOUR weapon types at you — cycles through 2-3 of the schools. (CD stretch idea, only if cheap: mirror the schools the player is ACTUALLY carrying that run — fighting your own build. The fixed 2-3 cycle is the shippable default.) (e.g. a Hollow Fracture volley, a High Noon aimed crit-shot with the duel sightline tell, a Choir chain-bolt). Each uses that weapon's real telegraph, so you're dodging your own arsenal. Reuses the actual weapon fire() + a windup wrapper.
 - **CORRUPT DASH** (reuse the player dash + lunge): it dashes with i-frames exactly like you can — so you can't just spam into it; you have to catch its recover.
-- **THE RITE — "CORRUPTED DOMAIN"** (P3 scripted ultimate): at 33% it casts a corrupted Domain Expansion — a black-violet full-screen tinted overlay (reuse the Rite overlay tech the CD specced) + for ~4s the arena fills with a telegraphed cursed pattern you must survive (a bullet-hell dodge check with clear tells). Survive it → it's exhausted (long recover) → burst window. The climax of the whole game's telegraph language turned against you.
-- **Phases:** P1 mirrored fire (1 school). P2 (66%) 2 schools + corrupt dash. P3 (33%) all schools + the Corrupted Domain rite.
-**Art/VFX brief:** a near-exact copy of the hero blob but BLACK AMBER with hollow eyes (the CD's "eyes go hollow" detail), violet cursed aura. VFX: reuse the player's own weapon VFX (tinted dark/violet) + the Rite overlay mask. Cheapest bespoke art (it's a recolored hero) for the highest thematic payoff. Drawsize ~64 (player-sized). Audio: the CD's detuned/reversed cursed palette.
+- **THE RESONANCE — "LIGHT WITHOUT WARMTH"** (P3 scripted signature): at 33% Jet resonates and drains the EXISTING room toward soot-black and cold blue (reuse the Resonance environment-drain tech). For ~4s, black-resin Fracture paths telegraph across the actual floor as a readable bullet-pattern survival check. Survive it → Jet is exhausted (long recover) → burst window. The climax of the whole game's telegraph language turned against you.
+- **Phases:** P1 mirrored fire (1 school). P2 (66%) 2 schools + corrupt dash. P3 (33%) all schools + the Corrupted Resonance Resonance.
+**Art/VFX brief:** a near-exact copy of the hero blob but BLACK AMBER with hollow eyes (the CD's "eyes go hollow" detail), violet cursed aura. VFX: reuse the player's own weapon VFX (tinted soot/cold blue/dead amber) + the Resonance overlay mask. Cheapest bespoke art (it's a recolored hero) for the highest thematic payoff. Drawsize ~64 (player-sized). Audio: the CD's dry black-resin / falling amber-hum palette.
 
 ===============================================================
 # BOSS 6 — THE GILDED WARDEN  (ZONER / TRAP-SETTER)  · Goldwork guardian (optional / stretch)
 ===============================================================
-**Identity/fantasy:** an ancient amber construct of sacred geometry — the orderly opposite of the Grudge. It doesn't chase; it BUILDS a killbox around you: crystal turrets, binding glyphs, encasing you in amber. The tactician boss — control the space or die. (Goldwork theme; the only angular-but-warm boss, per the CD rule that amber is friendly-angular.)
+**Identity/fantasy:** an ancient amber construct of sacred geometry — the orderly orderly opposite of The Hollow. It doesn't chase; it BUILDS a killbox around you: crystal turrets, binding glyphs, encasing you in amber. The tactician boss — control the space or die. (Goldwork theme; the only angular-but-warm boss, per the CD rule that amber is friendly-angular.)
 **Profile:** hp ~130 (+20/fl), speed 25 (stately), radius 40, touchDamage 3. Stationary-ish; it wins by zoning.
 **BossState extra:** { turretTimer, glyphTimer }.
 **Signature moves:**
@@ -94,7 +94,7 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 | Marrow (blind) | Charger | bait the rush; go silent to juke | Sunless Caves | charge (sound-commit) (+stomp reuse) | med (eyeless brute) |
 | Hollow Choir | Artillery/zoner | keep moving, find safe tiles | Emberreach | strikerain, chargefloor | HIGH (raid boss) |
 | Weaver | Mobile duelist | read blinks, catch recover | The Deep | blinkstrike, lattice | med (spider-blob) |
-| Jet (Mirror Blob) | Adaptive (you) | dodge your own arsenal + a rite | The Deep (bottom) | mirrorfire (+reuse dash/rite) | LOW (recolored hero) |
+| Jet (Mirror Blob) | Adaptive (you) | dodge your own arsenal + a Resonance | The Deep (bottom) | mirrorfire (+reuse dash/Resonance) | LOW (recolored hero) |
 | Gilded Warden | Trap-setter | control the killbox | Goldwork | turret, glyph, prison | med (reuses Goldwork VFX) |
 
 Six bosses, six different verbs: summon / charge / bombard / duel / mirror / zone. None is a reskin.
@@ -102,7 +102,7 @@ Six bosses, six different verbs: summon / charge / bombard / duel / mirror / zon
 ## Build order (my ranking — additive, each is data + a handler or two)
 1. **Marrow** — the clearest new fight (charge is one new AttackMove reusing lunge tech), immediate variety, med art. Ships the "BossDef table" scaffolding (the one structural piece) with a simple second boss.
 2. **Weaver** — high skill-expression, mostly reuses lunge/dash/afterimage + bullets. Great difficulty-ceiling boss.
-3. **Jet** — LOWEST art cost (recolored hero), HIGHEST thematic payoff; but sequence it AFTER the weapon schools exist (it fires them), and it wants the Rite overlay tech. Slot it once Grudge/High Noon/Choir are in.
+3. **Jet** — LOWEST art cost (recolored hero), HIGHEST thematic payoff; but sequence it AFTER the weapon schools exist (it fires them), and it wants the Resonance overlay tech. Slot it once The Hollow/High Noon/Choir are in.
 4. **Hollow Choir** — the raid/world-boss; biggest art + the co-op showpiece. Do when multiplayer (authoritative server) is landing so the raid moment has an audience.
 5. **Gilded Warden** — build AFTER the Goldwork school (shares its deployable/crystallize/freeze tech), so it's cheap by then.
 
