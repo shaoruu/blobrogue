@@ -621,7 +621,7 @@ export class Game {
     if (a.phase === "windup") {
       if (this.stepWindupTimer(e, dt, SKELETON_WINDUP, SKELETON_LOCK, remotes, false)) {
         a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = SKELETON_CD;
-        this.sfxAt("enemyLunge", e.x, e.y);
+        this.sfxAt("dash", e.x, e.y, { gain: 0.85 }); // the lunge whoosh
         if (this.isNearCamera(e.x, e.y)) this.addTrauma(0.12);
       }
       return a.lockedAngle;
@@ -646,7 +646,7 @@ export class Game {
     if (dist <= SKELETON_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
       && this.hasLineOfSight(e.x, e.y, this.targetX, this.targetY)) {
       this.beginWindup(e, "lunge");
-      this.sfxAt("enemyWindup", e.x, e.y);
+      this.sfxAt("enemyHit", e.x, e.y, { rate: 0.5, gain: 0.6 }); // low coil tell
       return angle;
     }
     const step = e.speed * dt;
@@ -677,7 +677,7 @@ export class Game {
     const prev = a.windup;
     a.windup = near ? Math.min(1, a.windup + rate) : Math.max(0, a.windup - rate);
     // Soft materialize cue the instant it turns lethal.
-    if (prev < GHOST_SOLID_AT && a.windup >= GHOST_SOLID_AT) this.sfxAt("enemyWindup", e.x, e.y, { gain: 0.4, rate: 1.5 });
+    if (prev < GHOST_SOLID_AT && a.windup >= GHOST_SOLID_AT) this.sfxAt("enemyHit", e.x, e.y, { gain: 0.35, rate: 1.7 }); // soft materialize tick
     const step = e.speed * dt;
     this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
     return angle;
@@ -706,7 +706,7 @@ export class Game {
     if (dist >= SPITTER_FLEE && dist <= SPITTER_APPROACH && a.cooldown === 0 && e.spawnTimer === 0
       && this.hasLineOfSight(e.x, e.y, this.targetX, this.targetY)) {
       this.beginWindup(e, "spit");
-      this.sfxAt("spitCharge", e.x, e.y);
+      this.sfxAt("dash", e.x, e.y, { gain: 0.5, rate: 1.4 }); // airy charge-up
       return toTarget;
     }
     let dir = 0;
@@ -729,7 +729,7 @@ export class Game {
       this.spawnEnemyBullet(mx, my, a.lockedAngle + off, 300, 7, 1, "#ff5a7a", 2.5);
     }
     a.cooldown = SPITTER_CD;
-    this.sfxAt("spitFire", e.x, e.y);
+    this.sfxAt("shootRapid", e.x, e.y, { rate: 0.55, gain: 0.7 }); // low wet glob launch
     this.spawnPuff(mx, my, 6, "#ff5a7a");
   }
 
@@ -759,7 +759,7 @@ export class Game {
       boss.phase = desired;
       this.beginWindup(e, "roar");
       triggerFlash(e.anim);
-      this.sfxAt("bossRoar", e.x, e.y);
+      this.sfxAt("bossSpawn", e.x, e.y); // reuse the boss spawn/roar cue for phase-ups
       this.addTrauma(TRAUMA_BOSS_FLOOR);
       return a.lockedAngle;
     }
@@ -777,7 +777,7 @@ export class Game {
     if (boss.phase >= 2) boss.isNextRadial = !boss.isNextRadial;
     e.attack.cooldown = BOSS_ATTACK_CD[boss.phase];
     this.beginWindup(e, useRadial ? "radial" : "hopslam");
-    this.sfxAt("enemyWindup", e.x, e.y, { rate: useRadial ? 0.7 : 0.55 });
+    this.sfxAt("enemyHit", e.x, e.y, { rate: useRadial ? 0.6 : 0.4, gain: 0.7 }); // heavy windup tell
   }
 
   private bossWindup(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
@@ -797,7 +797,7 @@ export class Game {
     // hop-slam: track + lock the target tile, then take off.
     if (this.stepWindupTimer(e, dt, BOSS_HOPSLAM_WINDUP, BOSS_HOPSLAM_LOCK, remotes, true)) {
       a.phase = "active"; a.time = 0; a.windup = 0;
-      this.sfxAt("enemyLunge", e.x, e.y, { rate: 0.6 });
+      this.sfxAt("dash", e.x, e.y, { rate: 0.6, gain: 0.9 }); // heavy takeoff whoosh
     }
     return a.lockedAngle;
   }
@@ -827,7 +827,7 @@ export class Game {
     }
     this.addFreeze(FREEZE_HEAVY);
     this.addTrauma(TRAUMA_BOSS_SLAM);
-    this.sfxAt("bossSlam", x, y);
+    this.sfxAt("enemyDeath", x, y, { rate: 0.5 }); // heavy landing crunch
     this.spawnParticles(x, y, 22, "#ffd27a");
     this.spawnSparks(x, y, 12, 0);
     this.addDecal(x, y, "#ffb43b", BOSS_SLAM_RADIUS * 0.5, "splat");
@@ -847,7 +847,7 @@ export class Game {
     for (let i = 0; i < BOSS_RADIAL_COUNT; i++) {
       this.spawnEnemyBullet(e.x, e.y, base + (i / BOSS_RADIAL_COUNT) * 6.28, 260, 7, 1, "#a24bff", 2.6);
     }
-    this.sfxAt("spitFire", e.x, e.y, { rate: 0.7 });
+    this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.6, gain: 0.6 }); // radial ring blast
     this.addTrauma(0.2);
     this.spawnParticles(e.x, e.y, 12, "#c98bff");
   }
