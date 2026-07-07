@@ -1,5 +1,5 @@
 import { generateDungeon } from "./dungeon.js";
-import type { Dungeon } from "./dungeon.js";
+import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest } from "./types.js";
@@ -498,8 +498,10 @@ export class Game {
     if (this.floor < 2 || d.rooms.length <= 2) return [];
     const rng = new Rng((this.seed ^ 0x51ed270b) + this.floor * 40503);
     const drops: Pickup[] = [];
+    // Always one weapon pickup from floor 2 (so the other weapons get discovered early),
+    // with a good chance of a second from floor 3 on.
     const kinds: WeaponId[] = [rng.pick(PICKUP_WEAPONS)];
-    if (this.floor >= 4 && rng.chance(0.5)) kinds.push(rng.pick(PICKUP_WEAPONS));
+    if (this.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
     for (const weapon of kinds) {
       const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
       drops.push({
@@ -538,7 +540,7 @@ export class Game {
     const list: Prop[] = [];
     const occupied = new Set<number>();
     for (const room of d.rooms) {
-      const target = rng.int(2, 5);
+      const target = rng.int(3, 6);
       for (let i = 0; i < target; i++) {
         const tx = room.x + rng.int(0, room.w - 1);
         const ty = room.y + rng.int(0, room.h - 1);
@@ -563,20 +565,49 @@ export class Game {
     return "brazier";                        // atmosphere + light source
   }
 
-  // Wood chests in 1-2 non-spawn / non-exit rooms (mirrors placeWeaponPickups' seeded room
-  // pick). The boss chest is spawned on boss death instead (see dropLoot).
+  // Wood chests in 1-2 non-spawn rooms (mirrors placeWeaponPickups' seeded room pick). At
+  // least one wood chest is guaranteed on every floor, including floor 1 — if every roll
+  // lands on the spawn/exit tile we fall back to scanning rooms for a free floor tile. The
+  // boss chest is spawned on boss death instead (see dropLoot).
   private placeChests(d: Dungeon): Chest[] {
-    if (d.rooms.length <= 2) return [];
+    if (d.rooms.length < 2) return [];
     const rng = new Rng((this.seed ^ 0x1b3c9e77) + this.floor * 55697);
     const list: Chest[] = [];
+    const used = new Set<number>();
     const count = rng.chance(0.5) ? 2 : 1;
+    const addChest = (tx: number, ty: number) => {
+      used.add(ty * d.w + tx);
+      list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false, anim: createAnim() });
+    };
     for (let i = 0; i < count; i++) {
       const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
-      const tx = room.cx, ty = room.cy;
-      if (tx === d.exit.x && ty === d.exit.y) continue;
-      list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false, anim: createAnim() });
+      const spot = this.chestTile(d, room, used);
+      if (spot) addChest(spot.tx, spot.ty);
+    }
+    // Guarantee a minimum of one: scan the non-spawn rooms for any free floor tile.
+    if (list.length === 0) {
+      for (let ri = 1; ri < d.rooms.length; ri++) {
+        const spot = this.chestTile(d, d.rooms[ri], used);
+        if (spot) { addChest(spot.tx, spot.ty); break; }
+      }
     }
     return list;
+  }
+
+  // A free floor tile for a chest in the given room: prefer the room center, else scan.
+  // Skips walls, already-used tiles, and the spawn/exit tiles so chests stay reachable
+  // and never block the exit portal.
+  private chestTile(d: Dungeon, room: Room, used: Set<number>): { tx: number; ty: number } | null {
+    const isBad = (tx: number, ty: number) =>
+      d.tiles[ty * d.w + tx] !== 0 ||
+      used.has(ty * d.w + tx) ||
+      (tx === d.spawn.x && ty === d.spawn.y) ||
+      (tx === d.exit.x && ty === d.exit.y);
+    if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
+    for (let ty = room.y; ty < room.y + room.h; ty++)
+      for (let tx = room.x; tx < room.x + room.w; tx++)
+        if (!isBad(tx, ty)) return { tx, ty };
+    return null;
   }
 
   private isWall(px: number, py: number): boolean {
