@@ -28,6 +28,15 @@ after `source /workspace/.secrets/env.sh` (loads FAL_KEY etc.).
   loop music by trimming fades + equal-power crossfade tail→head. Export ogg + mp3 to public/audio/.
 
 ## QA / verification
+- **Dev sandbox / creative-mode page** — open the game with **`?dev=1`** for a hidden in-game
+  debug tool: the real `Game` running in a single open arena with a pixel-font DEV PANEL to
+  spawn any enemy (×1/×5/×10) / prop / chest, grant every weapon + blessing, toggle god mode,
+  jump floors, show the pathfinding flow-field overlay, and read live FPS/entity counts.
+  **`?dev=sprites`** opens a sprite/animation viewer that plays every walk/death sheet at its
+  real fps with a frame counter and an "Audit frames" button (the in-browser mirror of
+  `audit-sprites.py`). Gated behind the query flag only — never linked from the menu, and the
+  whole dev layer is dynamically imported so it never ships in the normal play bundle. Source
+  lives in `src/dev/` + the `dev*` hooks on `Game`. Fastest way to eyeball feel and animations.
 - **`audit-sprites.py`** — scans every spritesheet, flags degenerate frames (skinny/empty/wrong
   dims). RUN BEFORE EVERY ART SHIP. Exit 1 on any flag. Catches the "squashed slime" class of bug.
 - **`/workspace/qa/capture-gameplay.sh [secs] [out.mp4]`** — record live gameplay on display :1

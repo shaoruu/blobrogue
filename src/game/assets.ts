@@ -316,3 +316,31 @@ export const PLAYER_COLORS = [
 export function playerColor(index: number): string {
   return PLAYER_COLORS[index % PLAYER_COLORS.length];
 }
+
+// ---- dev sprite-viewer manifest (?dev=sprites) ----
+// A read-only listing of the registered art, used only by the dev sprite/anim viewer.
+// Nothing in a normal run calls these; they just re-expose the private source maps above
+// as a tidy, labeled surface so the viewer never has to reach into engine internals.
+export interface DevAssetEntry { label: string; src: string; group: string; }
+export interface DevSheetEntry { key: string; src: string; fps: number; }
+
+export function devSpriteManifest(): DevAssetEntry[] {
+  const out: DevAssetEntry[] = [];
+  for (const name of Object.keys(SOURCES) as SpriteName[]) out.push({ label: name, src: SOURCES[name], group: "sprites" });
+  for (const id of Object.keys(HELD_SOURCES) as WeaponId[]) {
+    const src = HELD_SOURCES[id];
+    if (src) out.push({ label: `held ${id}`, src, group: "held weapons" });
+  }
+  for (const name of Object.keys(PROP_SOURCES) as PropSpriteName[]) out.push({ label: name, src: PROP_SOURCES[name], group: "props" });
+  for (const name of Object.keys(FX_SOURCES) as FxName[]) out.push({ label: name, src: FX_SOURCES[name], group: "bullet fx" });
+  return out;
+}
+
+export function devSheetManifest(): DevSheetEntry[] {
+  const out: DevSheetEntry[] = [];
+  for (const key of Object.keys(SHEETS)) {
+    const def = SHEETS[key];
+    if (def) out.push({ key, src: def.src, fps: def.fps });
+  }
+  return out;
+}

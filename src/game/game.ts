@@ -2,7 +2,7 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest } from "./types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, Pickup, WeaponId, AttackMove, RemotePlayer, Prop, PropKind, Chest, TileKind } from "./types.js";
 import { Rng, randomSeed } from "./rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
@@ -33,6 +33,22 @@ export interface StartOptions {
   mode: "solo" | "coop";
   coop?: CoopBridge | null;
   profile?: ProfileStats | null;
+}
+
+// Read-only live state the dev sandbox panel polls for its readouts + button states.
+// Populated only via the dev hooks below; nothing in normal play reads it.
+export interface DevSnapshot {
+  fps: number;
+  floor: number;
+  hp: number;
+  maxHp: number;
+  weapon: WeaponId;
+  isGodMode: boolean;
+  isFlowDebug: boolean;
+  enemies: number;
+  bullets: number;
+  particles: number;
+  props: number;
 }
 
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
@@ -355,6 +371,14 @@ export class Game {
   private isStatsHeld = false;
   private pendingDescend = 0;
 
+  // ---- dev sandbox state (all false/0 in normal play; see the dev hooks at the end) ----
+  // Every flag below is inert unless the ?dev sandbox flips it, so the whole feature is a
+  // handful of cheap, harmless branches on the hot paths and tree-shakes out of a run.
+  private isSandbox = false;   // arena floor + no auto-population (dev spawns by hand)
+  private isGodMode = false;   // damagePlayer no-ops while true
+  private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
+  private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
+
   constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: () => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
@@ -474,7 +498,8 @@ export class Game {
   }
 
   private loadFloor() {
-    this.dungeon = generateDungeon(this.seed, this.floor);
+    // Dev sandbox loads a single open arena and stays empty until the dev spawns things.
+    this.dungeon = this.isSandbox ? this.buildArena() : generateDungeon(this.seed, this.floor);
     const d = this.dungeon;
     this.px = d.spawn.x * TILE + TILE / 2;
     this.py = d.spawn.y * TILE + TILE / 2;
@@ -485,15 +510,15 @@ export class Game {
     this.decals = [];
     this.afterimages = [];
     this.muzzle.t = 0;
-    this.enemies = spawnFloorEnemies(d, this.seed, this.floor);
+    this.enemies = this.isSandbox ? [] : spawnFloorEnemies(d, this.seed, this.floor);
     // Force a fresh flow field on the new grid before the first enemy update.
     this.flowCd = 0;
     this.flowKeyTx = -1;
     this.flowKeyTy = -1;
-    this.pickups = this.placeWeaponPickups(d);
+    this.pickups = this.isSandbox ? [] : this.placeWeaponPickups(d);
     this.torches = this.placeTorches(d);
-    this.props = this.placeProps(d);
-    this.chests = this.placeChests(d);
+    this.props = this.isSandbox ? [] : this.placeProps(d);
+    this.chests = this.isSandbox ? [] : this.placeChests(d);
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
     if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
@@ -630,8 +655,10 @@ export class Game {
 
   private loop = (t: number) => {
     if (!this.isRunning) return;
-    const dt = Math.min((t - this.last) / 1000, 0.05);
+    const raw = (t - this.last) / 1000;
+    const dt = Math.min(raw, 0.05);
     this.last = t;
+    if (raw > 0) this.fps += (1 / raw - this.fps) * 0.1; // dev readout only; harmless otherwise
     this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
     // Paused (Esc) or picking a blessing: keep drawing the frozen frame under the
     // overlay, run no sim. Reuses the exact freeze path co-op already tolerates.
@@ -1786,6 +1813,7 @@ export class Game {
   }
 
   private updateExit() {
+    if (this.isSandbox) return; // dev drives floors from the panel, not the exit portal
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
     const isCleared = this.enemies.length === 0;
@@ -1812,6 +1840,7 @@ export class Game {
   }
 
   private damagePlayer(amount: number) {
+    if (this.isGodMode) return; // dev god mode; never set outside the sandbox
     this.hp -= amount;
     this.invuln = 0.9;
     triggerFlash(this.playerAnim);
@@ -2069,6 +2098,7 @@ export class Game {
     ctx.save();
     ctx.translate(shakeX + this.kickX, shakeY + this.kickY);
     this.renderTiles();
+    if (this.isFlowDebug) this.renderFlowDebug();
     this.renderProps();
     this.renderDecals();
     this.renderExit();
@@ -2924,5 +2954,172 @@ export class Game {
       isCleared: this.enemies.length === 0,
       dots,
     });
+  }
+
+  // =====================================================================================
+  // DEV-ONLY HOOKS — reached exclusively from the ?dev sandbox (src/dev/*). None of this
+  // is wired into the menu or normal play; the guarded flags above (isSandbox/isGodMode/
+  // isFlowDebug) each cost one cheap branch on a hot path and are always false in a real
+  // run. Kept here (rather than reaching into privates from outside) so the surface the
+  // panel depends on is small, explicit, and safe.
+  // =====================================================================================
+
+  // A single large walled rectangle — the "creative mode" arena. Reuses the exact
+  // Dungeon/Room shape the renderer + pathfinder already consume, so the real game runs
+  // on it unchanged. Only ever called from loadFloor when isSandbox is set.
+  private buildArena(): Dungeon {
+    const w = 34, h = 24;
+    const tiles: TileKind[] = new Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const isBorder = x === 0 || y === 0 || x === w - 1 || y === h - 1;
+        tiles[y * w + x] = isBorder ? 1 : 0;
+      }
+    }
+    const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1 };
+    return { w, h, tiles, rooms: [room], spawn: { x: w >> 1, y: h >> 1 }, exit: { x: w - 3, y: 2 } };
+  }
+
+  // Boot the sandbox: a solo run whose loadFloor takes the arena branch above. Safe to
+  // call in place of start() — it flips isSandbox first, then reuses the whole start path.
+  devStartSandbox(): void {
+    this.isSandbox = true;
+    this.start({ mode: "solo", coop: null, profile: null });
+  }
+
+  // Where a freshly-spawned thing should land: the cursor tile if it's on open floor,
+  // otherwise a random open spot a short walk from the player (so bulk spawns spread out).
+  private devPlacePoint(atCursor: boolean): { x: number; y: number } {
+    if (atCursor) {
+      const wx = this.mouse.x + this.cam.x, wy = this.mouse.y + this.cam.y;
+      if (!this.isWall(wx, wy)) return { x: wx, y: wy };
+    }
+    for (let i = 0; i < 32; i++) {
+      const a = Math.random() * Math.PI * 2, r = 48 + Math.random() * 150;
+      const x = this.px + Math.cos(a) * r, y = this.py + Math.sin(a) * r;
+      if (!this.isWall(x, y)) return { x, y };
+    }
+    return { x: this.px, y: this.py };
+  }
+
+  devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean): void {
+    for (let i = 0; i < count; i++) {
+      const p = this.devPlacePoint(atCursor);
+      this.enemies.push(createEnemy(kind, p.x, p.y, this.floor));
+      this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
+    }
+  }
+
+  devClearEnemies(): void {
+    this.enemies.length = 0;
+  }
+
+  devSpawnProp(kind: PropKind, atCursor: boolean): void {
+    const p = this.devPlacePoint(atCursor);
+    this.props.push({ kind, x: p.x, y: p.y, radius: PROP_RADIUS, hp: PROP_HP[kind], dead: false, anim: createAnim() });
+  }
+
+  devSpawnChest(atCursor: boolean): void {
+    const p = this.devPlacePoint(atCursor);
+    this.chests.push({ kind: "wood", x: p.x, y: p.y, radius: 16, opened: false, anim: createAnim() });
+  }
+
+  devGiveWeapon(id: WeaponId): void {
+    this.weapon = id;
+    sfx("weapon");
+  }
+
+  // Apply a specific blessing immediately (reuses the real item pipeline + HUD strip).
+  devGrantItem(item: ItemDef): void {
+    this.applyItem(item);
+  }
+
+  // Pop the real between-floor blessing chooser (freezes the sim, exactly like a descend).
+  devOfferBlessing(): void {
+    this.offerBlessing();
+  }
+
+  devToggleGod(): boolean {
+    this.isGodMode = !this.isGodMode;
+    return this.isGodMode;
+  }
+
+  devHealFull(): void {
+    this.hp = this.maxHp;
+  }
+
+  devAddMaxHp(delta: number): void {
+    this.mods.maxHpBonus += delta;
+    this.applyMaxHpBonus();
+  }
+
+  // Rebuild the arena at a new floor (scales enemy HP/speed via createEnemy's floor arg).
+  devSetFloor(floor: number): void {
+    this.floor = Math.max(1, Math.floor(floor));
+    this.loadFloor();
+    this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
+  }
+
+  devToggleFlowDebug(): boolean {
+    this.isFlowDebug = !this.isFlowDebug;
+    return this.isFlowDebug;
+  }
+
+  devSnapshot(): DevSnapshot {
+    return {
+      fps: this.fps,
+      floor: this.floor,
+      hp: this.hp,
+      maxHp: this.maxHp,
+      weapon: this.weapon,
+      isGodMode: this.isGodMode,
+      isFlowDebug: this.isFlowDebug,
+      enemies: this.enemies.length,
+      bullets: this.bullets.length,
+      particles: this.particles.length,
+      props: this.props.length,
+    };
+  }
+
+  // Flow-field inspector: an arrow per open tile pointing downhill toward the player,
+  // plus a marker on source/unreachable tiles. Reads the shared field the AI already
+  // built this frame (see updateEnemies), so it costs nothing until toggled on.
+  private renderFlowDebug(): void {
+    if (!this.flow.isReady()) return;
+    const { ctx, cam, canvas } = this;
+    const d = this.dungeon;
+    const x0 = Math.max(0, Math.floor(cam.x / TILE));
+    const y0 = Math.max(0, Math.floor(cam.y / TILE));
+    const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE));
+    const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE));
+    ctx.save();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(122,220,255,0.5)";
+    ctx.fillStyle = "rgba(255,180,59,0.6)";
+    for (let ty = y0; ty < y1; ty++) {
+      for (let tx = x0; tx < x1; tx++) {
+        if (d.tiles[ty * d.w + tx] !== 0) continue;
+        const cx = tx * TILE + TILE / 2 - cam.x;
+        const cy = ty * TILE + TILE / 2 - cam.y;
+        if (!this.flow.sampleStep(tx, ty)) {
+          ctx.fillRect(cx - 3, cy - 3, 6, 6);
+          continue;
+        }
+        const dx = this.flow.step.dx, dy = this.flow.step.dy;
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len;
+        const arm = 14;
+        const hx = cx + ux * arm, hy = cy + uy * arm;
+        const ang = Math.atan2(uy, ux);
+        ctx.beginPath();
+        ctx.moveTo(cx - ux * arm, cy - uy * arm);
+        ctx.lineTo(hx, hy);
+        ctx.lineTo(hx - Math.cos(ang - 0.5) * 7, hy - Math.sin(ang - 0.5) * 7);
+        ctx.moveTo(hx, hy);
+        ctx.lineTo(hx - Math.cos(ang + 0.5) * 7, hy - Math.sin(ang + 0.5) * 7);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 }
