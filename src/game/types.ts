@@ -56,7 +56,9 @@ export interface Enemy extends Entity {
   boss: BossState | null; // set only on the boss
 }
 
-export type WeaponId = "pistol" | "shotgun" | "rapid";
+export type WeaponId =
+  | "pistol" | "shotgun" | "rapid"
+  | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla";
 
 export interface Bullet {
   x: number; y: number;
@@ -69,6 +71,12 @@ export interface Bullet {
   pierce: number;          // remaining enemies this bullet can punch through
   hitList: Enemy[] | null; // enemies already struck (only allocated for piercing shots)
   isCrit: boolean;         // rolled at fire time; drives the brighter hit feedback
+  // Optional per-weapon behaviors. Undefined for the base weapons, so their bullets
+  // take the exact same paths they always did.
+  bounce?: number;         // ricochet: wall reflections left before the bullet dies
+  homing?: number;         // homing: steering turn rate (rad/s) toward the nearest enemy
+  chain?: number;          // tesla: lightning jumps left after the first hit
+  chainRange?: number;     // tesla: max px a chain jump can reach
 }
 
 export type PickupKind = "heart" | "coin" | "weapon";

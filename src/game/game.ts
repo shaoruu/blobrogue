@@ -35,7 +35,7 @@ export interface StartOptions {
   profile?: ProfileStats | null;
 }
 
-interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; }
+interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
@@ -77,6 +77,12 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   pistol: "shootPistol",
   shotgun: "shootShotgun",
   rapid: "shootRapid",
+  smg: "shootRapid",
+  cannon: "shootShotgun",
+  burst: "shootRapid",
+  ricochet: "shootPistol",
+  homing: "shootRapid",
+  tesla: "shootRapid",
 };
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
@@ -92,12 +98,24 @@ const FREEZE_MAX = 0.08;
 // ones kick hard. The player's intensity setting (0..1) scales the whole thing.
 const TRAUMA_DECAY = 1.6;
 const SHAKE_MAX_PX = 26;
-const FIRE_TRAUMA: Record<WeaponId, number> = { pistol: 0.12, shotgun: 0.5, rapid: 0.06 };
+const FIRE_TRAUMA: Record<WeaponId, number> = {
+  pistol: 0.12, shotgun: 0.5, rapid: 0.06,
+  smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
+};
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
-// and knockback (px the shotgun shoves the player). Shotgun is the beefy end.
-const FIRE_RECOIL: Record<WeaponId, number> = { pistol: 1, shotgun: 1.4, rapid: 0.6 };
-const FIRE_KICK: Record<WeaponId, number> = { pistol: 3, shotgun: 8, rapid: 1.2 };
-const FIRE_KNOCKBACK: Record<WeaponId, number> = { pistol: 0, shotgun: 22, rapid: 0 };
+// and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
+const FIRE_RECOIL: Record<WeaponId, number> = {
+  pistol: 1, shotgun: 1.4, rapid: 0.6,
+  smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
+};
+const FIRE_KICK: Record<WeaponId, number> = {
+  pistol: 3, shotgun: 8, rapid: 1.2,
+  smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
+};
+const FIRE_KNOCKBACK: Record<WeaponId, number> = {
+  pistol: 0, shotgun: 22, rapid: 0,
+  smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
+};
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
 const TRAUMA_KILL = 0.16;
@@ -111,7 +129,10 @@ const TRAUMA_REMOTE_DOWN = 0.3;
 // that decays every frame (never a teleport). WEAPON_KB is the ~total px shove on a
 // baseline slime; heavier enemies divide it by their kbResist. The impulse is stored
 // in each enemy's otherwise-unused vx/vy.
-const WEAPON_KB: Record<WeaponId, number> = { pistol: 4, shotgun: 8, rapid: 2 };
+const WEAPON_KB: Record<WeaponId, number> = {
+  pistol: 4, shotgun: 8, rapid: 2,
+  smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
+};
 const KB_LAMBDA = 16;     // decay rate; with the impulse math the total shove ≈ WEAPON_KB px
 const KB_MAX_SPEED = 520; // cap so point-blank shotgun / rapid spam can't launch a mob
 
@@ -659,6 +680,10 @@ export class Game {
       pierce: this.mods.pierce,
       critChance: this.mods.critChance,
       critMult: this.mods.critMult,
+      bounce: w.bounce,
+      homing: w.homing,
+      chain: w.chain,
+      chainRange: w.chainRange,
     };
   }
 
@@ -705,9 +730,14 @@ export class Game {
 
   private updateBullets(dt: number) {
     for (const b of this.bullets) {
+      if (b.friendly && b.homing !== undefined) this.steerHoming(b, dt);
       b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-      // Walls kill any bullet — for enemy fire that IS the line-of-sight counterplay.
-      if (this.isWall(b.x, b.y)) { b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); continue; }
+      // Walls kill any bullet — for enemy fire that IS the line-of-sight counterplay —
+      // unless it's a ricochet round with bounces left, which reflects and flies on.
+      if (this.isWall(b.x, b.y)) {
+        if (b.bounce !== undefined && b.bounce > 0) { this.bounceOffWall(b, dt); continue; }
+        b.life = 0; this.spawnSparks(b.x, b.y, 5, Math.atan2(-b.vy, -b.vx)); continue;
+      }
       // Enemy projectiles vs. the local player. invuln re-checked per bullet so a
       // radial burst can't multi-hit through one set of i-frames.
       if (!b.friendly && this.invuln === 0 && !this.isDown && this.hp > 0
@@ -718,6 +748,46 @@ export class Game {
       }
     }
     this.bullets = this.bullets.filter((b) => b.life > 0);
+  }
+
+  // HOMING (Wisp): rotate a bullet's velocity toward the nearest living enemy in range,
+  // capped at its turn rate so it can't snap into an impossible U-turn, keeping speed
+  // constant. Same nearest-enemy scan the enemy AI uses; runs only on homing bullets.
+  private steerHoming(b: Bullet, dt: number) {
+    const rate = b.homing;
+    if (rate === undefined || rate <= 0) return;
+    const RANGE = 260;
+    let best: Enemy | null = null;
+    let bestD = RANGE * RANGE;
+    for (const e of this.enemies) {
+      if (e.dead) continue;
+      const dx = e.x - b.x, dy = e.y - b.y, d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    if (!best) return;
+    const speed = Math.hypot(b.vx, b.vy) || 1;
+    const cur = Math.atan2(b.vy, b.vx);
+    let delta = Math.atan2(best.y - b.y, best.x - b.x) - cur;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    const maxTurn = rate * dt;
+    const turn = delta > maxTurn ? maxTurn : delta < -maxTurn ? -maxTurn : delta;
+    const a = cur + turn;
+    b.vx = Math.cos(a) * speed; b.vy = Math.sin(a) * speed;
+  }
+
+  // RICOCHET (Rebound): reflect a bullet off the wall it just entered instead of dying.
+  // Probes each axis at the pre-move position to pick the reflect axis (corner = both),
+  // steps back out of the wall, spends one bounce, and sparks so the deflect reads.
+  private bounceOffWall(b: Bullet, dt: number) {
+    const px = b.x - b.vx * dt, py = b.y - b.vy * dt;
+    let reflected = false;
+    if (this.isWall(b.x, py)) { b.vx = -b.vx; reflected = true; }
+    if (this.isWall(px, b.y)) { b.vy = -b.vy; reflected = true; }
+    if (!reflected) { b.vx = -b.vx; b.vy = -b.vy; }
+    b.x = px; b.y = py;
+    b.bounce = (b.bounce ?? 0) - 1;
+    this.spawnSparks(b.x, b.y, 3, Math.atan2(b.vy, b.vx));
   }
 
   private updateEnemies(dt: number) {
@@ -752,7 +822,13 @@ export class Game {
           this.spawnPuff(b.x, b.y, b.isCrit ? 9 : 5, b.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
           this.applyKnockback(e, b);
           if (this.weapon === "shotgun" && Math.hypot(this.px - e.x, this.py - e.y) < 96) this.addFreeze(FREEZE_SHOTGUN);
-          if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
+          // TESLA (Tesla): the round dies on its first hit, but first arcs lightning to
+          // nearby enemies. Reuses hitList (the pierce dedup) so an arc never doubles back.
+          if (b.chain !== undefined && b.chain > 0) {
+            (b.hitList ??= []).push(e);
+            this.chainLightning(b, e);
+            b.life = 0;
+          } else if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
           else b.life = 0;
           if (e.hp <= 0 && !e.dead) this.killEnemy(e);
           else sfx("enemyHit", { gain: 0.65 });
@@ -786,6 +862,41 @@ export class Game {
     triggerFlash(e.anim);
     this.spawnPuff(e.x, e.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
     if (e.hp <= 0 && !e.dead) this.killEnemy(e);
+  }
+
+  // TESLA arc: hop from the struck enemy to the nearest un-hit enemy within chainRange,
+  // drawing a lightning tracer and dealing reduced damage each jump, up to `chain` hops.
+  // Shares the bullet's hitList so an arc never revisits an enemy. Nearest-target
+  // resolution is local, so co-op clients may pick different arc paths — accepted visual
+  // variance on already-fired bullets (see PR notes), never shared sim state.
+  private chainLightning(b: Bullet, from: Enemy) {
+    const range = b.chainRange ?? 130;
+    const jumps = b.chain ?? 0;
+    const list = (b.hitList ??= []);
+    const dmg = b.damage * 0.7;
+    let origin: Enemy = from;
+    for (let j = 0; j < jumps; j++) {
+      let best: Enemy | null = null;
+      let bestD = range * range;
+      for (const e of this.enemies) {
+        if (e.dead || list.indexOf(e) !== -1) continue;
+        const dx = e.x - origin.x, dy = e.y - origin.y, d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = e; }
+      }
+      if (!best) break;
+      this.remoteTracers.push({
+        x: origin.x, y: origin.y,
+        angle: Math.atan2(best.y - origin.y, best.x - origin.x),
+        life: 0.12, color: b.color, len: Math.sqrt(bestD),
+      });
+      best.hp -= dmg;
+      triggerFlash(best.anim);
+      this.spawnPuff(best.x, best.y, 5, b.color);
+      list.push(best);
+      if (best.hp <= 0 && !best.dead) this.killEnemy(best);
+      else this.sfxAt("enemyHit", best.x, best.y, { gain: 0.5, rate: 1.5 });
+      origin = best;
+    }
   }
 
   private updateEnemyAI(e: Enemy, dt: number, remotes: RemotePlayer[] | null): number {
@@ -2056,9 +2167,10 @@ export class Game {
       ctx.globalAlpha = Math.max(0, tr.life / 0.12) * 0.8;
       ctx.strokeStyle = tr.color;
       ctx.lineWidth = 2;
+      const len = tr.len ?? 42;
       ctx.beginPath();
       ctx.moveTo(tr.x - cam.x, tr.y - cam.y);
-      ctx.lineTo(tr.x - cam.x + Math.cos(tr.angle) * 42, tr.y - cam.y + Math.sin(tr.angle) * 42);
+      ctx.lineTo(tr.x - cam.x + Math.cos(tr.angle) * len, tr.y - cam.y + Math.sin(tr.angle) * len);
       ctx.stroke();
       ctx.restore();
     }
