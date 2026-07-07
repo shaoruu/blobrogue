@@ -19,20 +19,19 @@ import { TILE } from "../src/sim/types.js";
 import { Hud } from "../src/game/hud.js";
 import { Minimap } from "../src/game/minimap.js";
 import { BlessingOverlay } from "../src/ui/blessing.js";
-import { audio } from "../src/game/audio.js";
 import { SCENARIOS, DT, type Scenario, type FrameInput } from "./scenarios.js";
 import { playerView, enemyView, bulletView, pickupView, propView, chestView, type TickSnapshot } from "./snapshot.js";
+import { installFxCapture, beginTick, takeTick } from "./harness/fxCapture.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const PROP_RADIUS = 15;
 const PROP_HP: Record<string, number> = { crate: 4, pot: 1, barrel: 3, barrel_explosive: 3, brazier: 0 };
 
-// Neutralize per-frame DOM + audio so update() runs the pure sim only.
+// Capture FX atoms (also silences audio) and neutralize per-frame DOM so update() runs the
+// pure sim + records its FX side-effects.
 const noop = () => {};
-audio.unlock = noop as any;
-audio.setMusic = noop as any;
-audio.sfx = noop as any;
+installFxCapture();
 for (const m of ["update", "setVisible", "showBanner", "tick", "showStats", "hideStats", "clear", "showControlsHint"] as const) {
   (Hud.prototype as any)[m] = noop;
 }
@@ -117,18 +116,26 @@ function snapshot(game: any, tick: number): TickSnapshot {
   };
 }
 
-export function runOracle(s: Scenario): TickSnapshot[] {
+export interface OracleRun {
+  state: TickSnapshot[];
+  fx: string[][];
+}
+
+export function runOracle(s: Scenario): OracleRun {
   const game: any = new Game(domCanvas as any, domMinimap as any, domOverlay as any, noop, noop);
   resetScenario(game, s);
-  const stream: TickSnapshot[] = [];
+  const state: TickSnapshot[] = [];
+  const fx: string[][] = [];
   for (let tick = 0; tick < s.ticks; tick++) {
     applyCommands(game, s, tick);
     applyInput(game, s.input(tick));
+    beginTick();
     game.update(DT);
-    stream.push(snapshot(game, tick));
+    fx.push(takeTick());
+    state.push(snapshot(game, tick));
   }
   game.stop();
-  return stream;
+  return { state, fx };
 }
 
 function main(): void {
@@ -136,11 +143,12 @@ function main(): void {
   const outDir = join(here, "golden");
   mkdirSync(outDir, { recursive: true });
   for (const s of SCENARIOS) {
-    const stream = runOracle(s);
-    const lines = stream.map((t) => JSON.stringify(t)).join("\n");
-    writeFileSync(join(outDir, `${s.name}.jsonl`), lines + "\n");
-    const enemies = stream[stream.length - 1].enemies.length;
-    process.stdout.write(`captured ${s.name}: ${stream.length} ticks, final enemies=${enemies}, player.hp=${stream[stream.length - 1].player.hp}\n`);
+    const run = runOracle(s);
+    writeFileSync(join(outDir, `${s.name}.jsonl`), run.state.map((t) => JSON.stringify(t)).join("\n") + "\n");
+    writeFileSync(join(outDir, `${s.name}.fx.jsonl`), run.fx.map((t) => JSON.stringify(t)).join("\n") + "\n");
+    const last = run.state[run.state.length - 1];
+    const fxCount = run.fx.reduce((n, t) => n + t.length, 0);
+    process.stdout.write(`captured ${s.name}: ${run.state.length} ticks, final enemies=${last.enemies.length}, player.hp=${last.player.hp}, fx atoms=${fxCount}\n`);
   }
 }
 
