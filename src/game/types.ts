@@ -63,6 +63,9 @@ export interface Bullet {
   friendly: boolean;
   damage: number;
   color: string;
+  pierce: number;          // remaining enemies this bullet can punch through
+  hitList: Enemy[] | null; // enemies already struck (only allocated for piercing shots)
+  isCrit: boolean;         // rolled at fire time; drives the brighter hit feedback
 }
 
 export type PickupKind = "heart" | "coin" | "weapon";

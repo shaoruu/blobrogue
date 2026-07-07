@@ -34,21 +34,42 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = ["shotgun", "rapid"];
 
-export function fire(weapon: Weapon, x: number, y: number, aim: number): Bullet[] {
+// A resolved shot: the base weapon merged with the player's in-run item mods. Built
+// once per trigger-pull in the game core so fire() stays a pure geometry helper.
+export interface ShotSpec {
+  pellets: number;
+  spread: number;
+  speed: number;
+  life: number;
+  radius: number;
+  color: string;
+  damage: number;      // per-pellet damage, already scaled by damage mods
+  pierce: number;
+  critChance: number;
+  critMult: number;
+}
+
+const CRIT_COLOR = "#fff3c4";
+
+export function fire(spec: ShotSpec, x: number, y: number, aim: number): Bullet[] {
   const shots: Bullet[] = [];
-  for (let i = 0; i < weapon.pellets; i++) {
-    const t = weapon.pellets === 1 ? 0 : (i / (weapon.pellets - 1)) - 0.5;
-    const jitter = (Math.random() - 0.5) * (weapon.spread * 0.3);
-    const a = aim + t * weapon.spread + jitter;
+  for (let i = 0; i < spec.pellets; i++) {
+    const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
+    const jitter = (Math.random() - 0.5) * (spec.spread * 0.3);
+    const a = aim + t * spec.spread + jitter;
+    const isCrit = spec.critChance > 0 && Math.random() < spec.critChance;
     shots.push({
       x, y,
-      vx: Math.cos(a) * weapon.speed,
-      vy: Math.sin(a) * weapon.speed,
-      radius: weapon.bulletRadius,
-      life: weapon.life,
+      vx: Math.cos(a) * spec.speed,
+      vy: Math.sin(a) * spec.speed,
+      radius: spec.radius,
+      life: spec.life,
       friendly: true,
-      damage: weapon.damage,
-      color: weapon.color,
+      damage: isCrit ? spec.damage * spec.critMult : spec.damage,
+      color: isCrit ? CRIT_COLOR : spec.color,
+      pierce: spec.pierce,
+      hitList: null,
+      isCrit,
     });
   }
   return shots;
