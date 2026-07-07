@@ -227,7 +227,6 @@ const AIM_SOLID: number[] = [];
 
 // Animated prop frame tables (indexed by frameIndex), hoisted so the tile loop never allocates.
 const TORCH_FRAMES: TileName[] = ["torch_f0", "torch_f1", "torch_f2"];
-const PORTAL_FRAMES: TileName[] = ["portal_f0", "portal_f1"];
 
 // ---- destructible props + treasure chests ----
 // Placement is seeded per floor (co-op layout agreement); destruction resolves on the
@@ -2176,6 +2175,9 @@ export class Game {
       for (let tx = x0; tx < x1; tx++) {
         if (d.tiles[ty * d.w + tx] !== 1) continue;
         const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
+        const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
+        const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
+        const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
         if (tiles.ready("wall_top")) {
           ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
         } else {
@@ -2184,9 +2186,6 @@ export class Game {
           ctx.fillStyle = "#2f2350";
           ctx.fillRect(sx, sy, TILE, 6);
         }
-        const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
-        const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
-        const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
         // Front face (darkest): a real sprite if present, else the wall_face_left/right
         // swap-ready fallback is the shaded strips below.
         if (belowFloor && tiles.ready("wall_face")) {
@@ -2246,19 +2245,26 @@ export class Game {
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2 - cam.x, ey = d.exit.y * TILE + TILE / 2 - cam.y;
     const isCleared = this.enemies.length === 0;
-    ctx.save();
-    ctx.globalAlpha = isCleared ? 0.9 : 0.28;
-    const g = ctx.createRadialGradient(ex, ey, 2, ex, ey, TILE * 0.7);
-    g.addColorStop(0, isCleared ? "#8affc0" : "#5a6");
-    g.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(ex, ey, TILE * 0.7, 0, 6.28); ctx.fill();
-    ctx.restore();
-
-    // Animated exit portal on top of the glow (2-frame pulse).
-    const portal = PORTAL_FRAMES[frameIndex(PORTAL_FRAMES.length, 3, this.animClock)];
-    if (this.tiles.ready(portal)) {
-      ctx.drawImage(this.tiles.get(portal), d.exit.x * TILE - cam.x, d.exit.y * TILE - cam.y, TILE, TILE);
+    // Stairs-down sprite reads as the way to the next floor (replaces the vague portal
+    // ring). Subtle amber shimmer between the 2 frames + a soft glow once the floor's clear.
+    const stairs: TileName = (isCleared && Math.floor(this.animClock * 1.5) % 2 === 1) ? "stairs_f1" : "stairs_f0";
+    if (isCleared) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      const g = ctx.createRadialGradient(ex, ey, 2, ex, ey, TILE * 0.75);
+      g.addColorStop(0, "#ffb43b"); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(ex, ey, TILE * 0.75, 0, 6.28); ctx.fill();
+      ctx.restore();
+    }
+    if (this.tiles.ready(stairs)) {
+      ctx.drawImage(this.tiles.get(stairs), d.exit.x * TILE - cam.x, d.exit.y * TILE - cam.y, TILE, TILE);
+    } else {
+      // fallback: the old portal ring if the stairs art isn't loaded yet.
+      ctx.save(); ctx.globalAlpha = isCleared ? 0.9 : 0.28;
+      const g = ctx.createRadialGradient(ex, ey, 2, ex, ey, TILE * 0.7);
+      g.addColorStop(0, isCleared ? "#8affc0" : "#5a6"); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(ex, ey, TILE * 0.7, 0, 6.28); ctx.fill(); ctx.restore();
     }
 
     // Once the floor is clear, prompt the player to walk onto the portal.
@@ -2380,7 +2386,13 @@ export class Game {
     ctx.globalAlpha = alpha;
     ctx.translate(cx + xf.ox, cy + xf.oy);
     ctx.rotate(xf.rot);
-    ctx.scale(facing * xf.sx * extra, xf.sy * extra);
+    // When a frame SHEET is playing, its frames ALREADY bake the squash/stretch, so
+    // applying the procedural sx/sy deform on top double-exposes it (the "ghosted /
+    // stacked slime" bug). Keep facing + the bob/lean offset, but neutralize the
+    // procedural scale toward 1 so the sheet's own animation carries the deform.
+    const sSx = sheet ? facing * extra : facing * xf.sx * extra;
+    const sSy = sheet ? extra : xf.sy * extra;
+    ctx.scale(sSx, sSy);
     if (sheet) {
       const fw = sheet.img.naturalHeight || FRAME;
       const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
