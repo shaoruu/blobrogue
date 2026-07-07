@@ -92,6 +92,36 @@ export interface Pickup {
   anim: Anim;
 }
 
+// Destructible / atmosphere world props. Placed deterministically per floor (seeded Rng)
+// so co-op clients agree on layout; destruction resolves via bullets/explosions on the
+// shared floor state, exactly like enemies. `breakT` is set the moment a prop is
+// destroyed and drives its one-shot break animation before it's removed.
+export type PropKind = "crate" | "pot" | "barrel" | "barrel_explosive" | "brazier";
+
+export interface Prop {
+  kind: PropKind;
+  x: number; y: number;
+  radius: number;
+  hp: number;
+  dead: boolean;
+  anim: Anim;
+  breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
+}
+
+// Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are
+// local, so each client opens their own chest and gets their own blessing pick, while
+// the coins/hearts/weapons it spawns are ordinary first-come world pickups.
+export type ChestKind = "wood" | "boss";
+
+export interface Chest {
+  kind: ChestKind;
+  x: number; y: number;
+  radius: number;
+  opened: boolean;
+  anim: Anim;
+  openT?: number; // seconds into the open clip once opened (undefined = closed)
+}
+
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";
 
 export interface Particle {
