@@ -1,5 +1,3 @@
-import type { Anim } from "../game/anim.js";
-
 export interface Vec2 { x: number; y: number; }
 
 export interface Entity {
@@ -42,11 +40,18 @@ export interface BossState {
 }
 
 export interface Enemy extends Entity {
+  id: number;          // stable per-world id (client keys its cosmetic anim map by this)
   kind: EnemyKind;
   speed: number;
   touchDamage: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
+  // Deterministic slime hop-cadence clock. The slime pulses its speed off sin(hopClock);
+  // hopMove eases 0..1 with movement to modulate the clock rate. Seeded from the sim Rng
+  // (not the cosmetic anim clock) so movement stays reproducible. Mirrors the anim clock's
+  // old evolution exactly, so behavior is unchanged.
+  hopClock: number;
+  hopMove: number;
   spawnTimer: number;  // spawn-in grace: counts to 0 before the enemy may attack
   // Anti-stuck safety net: seconds a chaser has been trying to move but barely
   // progressing (wedged on geometry / another body). Nudged perpendicular past ~0.4s.
@@ -58,7 +63,6 @@ export interface Enemy extends Entity {
   chill: number;      // seconds of slow left (high stacks freeze solid)
   shock: number;      // seconds the shocked tag is active (amp + on-hit arc)
   statusTick: number; // burn DoT accumulator (fires a tick every 0.25s)
-  anim: Anim;
   attack: AttackState;
   boss: BossState | null; // set only on the boss
 }
@@ -103,7 +107,6 @@ export interface Pickup {
   x: number; y: number;
   radius: number;
   weapon: WeaponId | null; // set only when kind === "weapon"
-  anim: Anim;
   // Coins only: the coin worth baked in at drop time (combo multiplier applied then).
   // Undefined falls back to the collector's base coin gain, so non-kill coins (props,
   // chests) stay at face value.
@@ -117,12 +120,12 @@ export interface Pickup {
 export type PropKind = "crate" | "pot" | "barrel" | "barrel_explosive" | "brazier";
 
 export interface Prop {
+  id: number;      // stable per-world id (client keys its cosmetic anim map by this)
   kind: PropKind;
   x: number; y: number;
   radius: number;
   hp: number;
   dead: boolean;
-  anim: Anim;
   breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
 }
 
@@ -136,7 +139,6 @@ export interface Chest {
   x: number; y: number;
   radius: number;
   opened: boolean;
-  anim: Anim;
   openT?: number; // seconds into the open clip once opened (undefined = closed)
 }
 

@@ -444,6 +444,16 @@ export class Game {
   private playerLean = 0;
   private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2, color: "#ffe6a0" };
   private meleeSwing: MeleeSwing | null = null;
+  // Client-side cosmetic anim, split out of the now-pure sim structs. Enemies/props key by
+  // their stable sim id; pickups/chests key by object identity (LocalTransport shares the
+  // live objects and no anim event ever targets them). Enemy/prop entries are pruned when
+  // the entity is removed; loadFloor clears them wholesale.
+  private enemyAnims = new Map<number, Anim>();
+  private propAnims = new Map<number, Anim>();
+  private pickupAnims = new WeakMap<Pickup, Anim>();
+  private chestAnims = new WeakMap<Chest, Anim>();
+  private nextEnemyId = 0;
+  private nextPropId = 0;
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -622,7 +632,14 @@ export class Game {
     this.decals = [];
     this.afterimages = [];
     this.muzzle.t = 0;
+    // Fresh floor: drop all per-entity cosmetic anim and restart the id counters so the
+    // seeded floor spawn assigns the same ids every time.
+    this.enemyAnims.clear();
+    this.propAnims.clear();
+    this.nextEnemyId = 0;
+    this.nextPropId = 0;
     this.enemies = this.isSandbox ? [] : spawnFloorEnemies(d, this.seed, this.floor);
+    this.nextEnemyId = this.enemies.length;
     // Force a fresh flow field on the new grid before the first enemy update.
     this.flowCd = 0;
     this.flowKeyTx = -1;
@@ -652,7 +669,6 @@ export class Game {
         y: (room.cy + 0.5) * TILE,
         radius: 16,
         weapon,
-        anim: createAnim(),
       });
     }
     return drops;
@@ -692,7 +708,7 @@ export class Game {
         if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
         occupied.add(idx);
         const kind = this.rollPropKind(rng);
-        list.push({ kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: PROP_RADIUS, hp: PROP_HP[kind], dead: false, anim: createAnim() });
+        list.push({ id: this.nextPropId++, kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: PROP_RADIUS, hp: PROP_HP[kind], dead: false });
       }
     }
     return list;
@@ -719,7 +735,7 @@ export class Game {
     const count = rng.chance(0.5) ? 2 : 1;
     const addChest = (tx: number, ty: number) => {
       used.add(ty * d.w + tx);
-      list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false, anim: createAnim() });
+      list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false });
     };
     const treasure = d.rooms.find((r) => r.kind === "treasure");
     let remaining = count;
@@ -855,11 +871,34 @@ export class Game {
     if (mag > KB_MAX_SPEED) { const s = KB_MAX_SPEED / mag; e.vx *= s; e.vy *= s; }
   }
 
+  // Lazily create/fetch the client-side cosmetic anim for a sim entity. The sim no longer
+  // carries anim; the client owns it, keyed by id (enemy/prop) or object (pickup/chest).
+  private animForEnemy(e: Enemy): Anim {
+    let a = this.enemyAnims.get(e.id);
+    if (!a) { a = createAnim(); this.enemyAnims.set(e.id, a); }
+    return a;
+  }
+  private animForProp(p: Prop): Anim {
+    let a = this.propAnims.get(p.id);
+    if (!a) { a = createAnim(); this.propAnims.set(p.id, a); }
+    return a;
+  }
+  private animForPickup(p: Pickup): Anim {
+    let a = this.pickupAnims.get(p);
+    if (!a) { a = createAnim(); this.pickupAnims.set(p, a); }
+    return a;
+  }
+  private animForChest(c: Chest): Anim {
+    let a = this.chestAnims.get(c);
+    if (!a) { a = createAnim(); this.chestAnims.set(c, a); }
+    return a;
+  }
+
   private strikeEnemy(e: Enemy, hit: StrikeInfo) {
     const isFrozen = this.isFrozen(e);
     const dmg = hit.damage * (e.shock > 0 ? SHOCK_DMG_MULT : 1) * (isFrozen ? FROZEN_DMG_MULT : 1);
     e.hp -= dmg;
-    triggerFlash(e.anim);
+    triggerFlash(this.animForEnemy(e));
     this.spawnDmgNumber(e.x, e.y - e.radius, dmg, { crit: hit.isCrit });
     this.spawnPuff(hit.puffX, hit.puffY, hit.isCrit ? 9 : 5, hit.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint);
     this.applyKnockbackDir(e, hit.kbDirX, hit.kbDirY);
@@ -1245,7 +1284,11 @@ export class Game {
 
       // A charging / recovering enemy holds still; a lunging skeleton is moving fast.
       const isMoving = e.attack.phase === "none" || (e.attack.phase === "active" && e.attack.move === "lunge");
-      stepAnim(e.anim, dt, isMoving, Math.cos(angle));
+      // Advance the deterministic sim hop clock (slime cadence) exactly as the old anim
+      // clock evolved, then step the client-side cosmetic anim off the same inputs.
+      e.hopMove += ((isMoving ? 1 : 0) - e.hopMove) * Math.min(1, dt * 9);
+      e.hopClock += dt * (1 + e.hopMove * 1.5);
+      stepAnim(this.animForEnemy(e), dt, isMoving, Math.cos(angle));
 
       if (this.invuln === 0 && !this.isDown && this.hp > 0
         && Math.hypot(this.px - e.x, this.py - e.y) < this.pr + e.radius && this.canTouchDamage(e)) {
@@ -1305,7 +1348,10 @@ export class Game {
         }
       }
     }
-    this.enemies = this.enemies.filter((e) => !e.dead);
+    this.enemies = this.enemies.filter((e) => {
+      if (e.dead) { this.enemyAnims.delete(e.id); return false; }
+      return true;
+    });
   }
 
   // ---- elemental status effects ----
@@ -1410,7 +1456,7 @@ export class Game {
   private applyThorns(e: Enemy) {
     if (this.mods.thorns <= 0 || e.dead) return;
     e.hp -= this.mods.thorns;
-    triggerFlash(e.anim);
+    triggerFlash(this.animForEnemy(e));
     this.spawnDmgNumber(e.x, e.y - e.radius, this.mods.thorns, { color: "#c8b8ff" });
     this.spawnPuff(e.x, e.y, 5, ENEMY_ARCHETYPES[e.kind].tint);
     if (e.hp <= 0 && !e.dead) this.killEnemy(e);
@@ -1447,7 +1493,7 @@ export class Game {
         life: 0.12, color, len: Math.sqrt(bestD), isArc: true,
       });
       best.hp -= dmg;
-      triggerFlash(best.anim);
+      triggerFlash(this.animForEnemy(best));
       this.spawnDmgNumber(best.x, best.y - best.radius, dmg, { color });
       this.spawnPuff(best.x, best.y, 5, color);
       list.push(best);
@@ -1615,7 +1661,7 @@ export class Game {
     if (desired > boss.phase) {
       boss.phase = desired;
       this.beginWindup(e, "roar");
-      triggerFlash(e.anim);
+      triggerFlash(this.animForEnemy(e));
       this.sfxAt("bossSpawn", e.x, e.y); // reuse the boss spawn/roar cue for phase-ups
       this.addTrauma(TRAUMA_BOSS_FLOOR);
       return a.lockedAngle;
@@ -1720,12 +1766,12 @@ export class Game {
 
   private spawnBossMinion(e: Enemy) {
     if (this.enemies.length >= BOSS_MINION_CAP) return;
-    triggerRecoil(e.anim); // pop on the spawn beat
+    triggerRecoil(this.animForEnemy(e)); // pop on the spawn beat
     const a = this.rng.next() * Math.PI * 2;
     const mx = e.x + Math.cos(a) * (e.radius + 20);
     const my = e.y + Math.sin(a) * (e.radius + 20);
     if (this.isWall(mx, my)) return;
-    this.enemies.push(createEnemy("slime", mx, my, this.floor, this.rng));
+    this.enemies.push(createEnemy("slime", mx, my, this.floor, this.rng, this.nextEnemyId++));
     this.spawnParticles(mx, my, 8, "#a855f7");
     if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
   }
@@ -1808,7 +1854,7 @@ export class Game {
   // Gentle speed pulse for the slime, synced to its squash/stretch so it reads as a
   // deliberate hop toward you rather than a constant crawl. Mean 1× → balance intact.
   private slimeHopPulse(e: Enemy): number {
-    return 1 + SLIME_HOP_AMOUNT * Math.sin(e.anim.clock * SLIME_HOP_FREQ);
+    return 1 + SLIME_HOP_AMOUNT * Math.sin(e.hopClock * SLIME_HOP_FREQ);
   }
 
   // Moves a chaser along `angle`, then applies the anti-stuck net: if it kept trying to
@@ -1943,7 +1989,7 @@ export class Game {
     if (e.kind === "boss") {
       // The heart + coin cache now comes bundled inside a guaranteed boss chest, which
       // also grants a blessing when the player walks over to claim the kill.
-      this.chests.push({ kind: "boss", x: e.x, y: e.y, radius: 18, opened: false, anim: createAnim() });
+      this.chests.push({ kind: "boss", x: e.x, y: e.y, radius: 18, opened: false });
       return;
     }
     // Kill coins carry the live combo multiplier baked in (props/chests stay face value).
@@ -1956,13 +2002,13 @@ export class Game {
     const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
     this.addDecal(x, y, color, 15, "ring");
     this.spawnPuff(x, y, 5, color);
-    return { kind, x, y, radius: 13, weapon: null, anim: createAnim(), value };
+    return { kind, x, y, radius: 13, weapon: null, value };
   }
 
   private updatePickups(dt: number) {
     const remaining: Pickup[] = [];
     for (const p of this.pickups) {
-      stepAnim(p.anim, dt, false, 0);
+      stepAnim(this.animForPickup(p), dt, false, 0);
       // Coin Magnet vacuums loose coins toward the player once they're in range.
       if (this.mods.coinMagnet > 0 && p.kind === "coin" && !this.isDown) {
         const dx = this.px - p.x, dy = this.py - p.y;
@@ -1991,7 +2037,7 @@ export class Game {
     if (this.props.length === 0) return;
     let didBreakFinish = false;
     for (const p of this.props) {
-      stepAnim(p.anim, dt, false, 0);
+      stepAnim(this.animForProp(p), dt, false, 0);
       if (p.breakT !== undefined) {
         p.breakT += dt;
         if (p.breakT >= PROP_BREAK_DUR) didBreakFinish = true;
@@ -2002,14 +2048,18 @@ export class Game {
         if (!b.friendly || b.life <= 0) continue;
         if (Math.hypot(b.x - p.x, b.y - p.y) >= b.radius + p.radius) continue;
         p.hp -= b.damage;
-        triggerFlash(p.anim);
+        triggerFlash(this.animForProp(p));
         this.spawnPuff(b.x, b.y, 5, PROP_TINT[p.kind]);
         if (b.pierce <= 0) b.life = 0; // piercing rounds punch through, others are spent
         if (p.hp <= 0) { this.destroyProp(p); break; }
       }
     }
     if (didBreakFinish) {
-      this.props = this.props.filter((p) => p.breakT === undefined || p.breakT < PROP_BREAK_DUR);
+      this.props = this.props.filter((p) => {
+        const keep = p.breakT === undefined || p.breakT < PROP_BREAK_DUR;
+        if (!keep) this.propAnims.delete(p.id);
+        return keep;
+      });
     }
   }
 
@@ -2069,7 +2119,7 @@ export class Game {
       if (e.dead) continue;
       if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
       e.hp -= BARREL_EXPLOSION_DAMAGE;
-      triggerFlash(e.anim);
+      triggerFlash(this.animForEnemy(e));
       this.spawnPuff(e.x, e.y, 6, ENEMY_ARCHETYPES[e.kind].tint);
       this.applyBurn(e, BARREL_BURN_SECS); // the blast leaves fire, tying props into the system
       if (e.hp <= 0 && !e.dead) this.killEnemy(e);
@@ -2091,7 +2141,7 @@ export class Game {
   private updateChests(dt: number) {
     if (this.chests.length === 0) return;
     for (const c of this.chests) {
-      stepAnim(c.anim, dt, false, 0);
+      stepAnim(this.animForChest(c), dt, false, 0);
       if (c.opened) {
         if (c.openT !== undefined && c.openT < CHEST_OPEN_DUR) c.openT += dt;
         continue;
@@ -2126,7 +2176,7 @@ export class Game {
       this.offerBlessing();
     } else {
       const weapon = PICKUP_WEAPONS[Math.floor(this.rng.next() * PICKUP_WEAPONS.length)];
-      this.pickups.push({ kind: "weapon", x: c.x, y: c.y, radius: 16, weapon, anim: createAnim() });
+      this.pickups.push({ kind: "weapon", x: c.x, y: c.y, radius: 16, weapon });
     }
   }
 
@@ -2794,10 +2844,11 @@ export class Game {
     for (const p of this.props) {
       if (!this.isNearCamera(p.x, p.y, TILE)) continue;
       const sx = p.x - this.cam.x, sy = p.y - this.cam.y;
-      const xf = characterXform(p.anim, PROP_STYLE);
+      const anim = this.animForProp(p);
+      const xf = characterXform(anim, PROP_STYLE);
       if (p.kind === "brazier") { this.renderBrazier(p, sx, sy, xf); continue; }
       if (p.breakT === undefined) {
-        this.drawPropImage(PROP_INTACT_IMG[p.kind], 0, sx, sy, PROP_DRAW, xf, p.anim.flash);
+        this.drawPropImage(PROP_INTACT_IMG[p.kind], 0, sx, sy, PROP_DRAW, xf, anim.flash);
       } else {
         const sheet = PROP_BREAK_SHEET[p.kind];
         if (!sheet) continue;
@@ -2832,9 +2883,10 @@ export class Game {
     for (const c of this.chests) {
       if (!this.isNearCamera(c.x, c.y, TILE)) continue;
       const sx = c.x - cam.x, sy = c.y - cam.y;
+      const anim = this.animForChest(c);
       // A closed chest pulses a soft glow so touch-to-open reads as interactive.
       if (!c.opened) {
-        const pulse = 0.35 + 0.2 * Math.abs(Math.sin(c.anim.clock * 3));
+        const pulse = 0.35 + 0.2 * Math.abs(Math.sin(anim.clock * 3));
         ctx.save();
         ctx.globalAlpha = pulse;
         const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 24);
@@ -2846,7 +2898,7 @@ export class Game {
       }
       const t = c.openT ?? 0;
       const frame = c.opened ? Math.min(2, Math.floor((t / CHEST_OPEN_DUR) * 3)) : 0;
-      const xf = characterXform(c.anim, PROP_STYLE);
+      const xf = characterXform(anim, PROP_STYLE);
       this.drawPropImage("chest_open", frame, sx, sy, PROP_DRAW, xf, 0);
     }
   }
@@ -2918,7 +2970,7 @@ export class Game {
   private renderPickups() {
     const { ctx, cam } = this;
     for (const p of this.pickups) {
-      const clock = p.anim.clock;
+      const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
       const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
       ctx.save();
@@ -3127,6 +3179,7 @@ export class Game {
     for (const e of this.enemies) {
       const arch = ENEMY_ARCHETYPES[e.kind];
       const a = e.attack;
+      const anim = this.animForEnemy(e);
       const sx = e.x - cam.x, sy = e.y - cam.y;
       const facing = this.px >= e.x ? 1 : -1;
       const isWindup = a.phase === "windup";
@@ -3138,8 +3191,8 @@ export class Game {
       // Ghost solidify reads as an opacity ramp; everyone else uses the archetype alpha.
       const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup : arch.alpha;
 
-      const clip: SheetClip = e.anim.move > 0.5 ? "walk" : "idle";
-      const xf = characterXform(e.anim, e.kind === "boss" ? BOSS_STYLE : CHARACTER_STYLE);
+      const clip: SheetClip = anim.move > 0.5 ? "walk" : "idle";
+      const xf = characterXform(anim, e.kind === "boss" ? BOSS_STYLE : CHARACTER_STYLE);
       let extra = 1;
       // Skeleton coils down (squash) as its lunge charges.
       if (e.kind === "skeleton" && isWindup) { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
@@ -3150,9 +3203,9 @@ export class Game {
         if (isHopSlam && a.phase === "active") { xf.oy -= Math.sin(a.windup * Math.PI) * BOSS_JUMP_HEIGHT; extra = 1.08; }
       }
       // A white pulse on the sprite intensifies as the windup nears release.
-      const pulse = 0.55 + 0.45 * Math.sin(e.anim.clock * 13);
+      const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
-      this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, alpha, Math.max(e.anim.flash, telegraphFlash), e.anim.clock);
+      this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, arch.drawSize);
@@ -3178,7 +3231,7 @@ export class Game {
     const a = e.attack;
     const arch = ENEMY_ARCHETYPES[e.kind];
     const color = TELEGRAPH_COLOR[a.move];
-    const pulse = 0.5 + 0.5 * Math.sin(e.anim.clock * 13);
+    const pulse = 0.5 + 0.5 * Math.sin(this.animForEnemy(e).clock * 13);
     const r = arch.drawSize * (0.5 + 0.28 * a.windup);
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
@@ -3228,13 +3281,14 @@ export class Game {
 
   private renderGhostShimmer(e: Enemy, sx: number, sy: number) {
     const { ctx } = this;
+    const clock = this.animForEnemy(e).clock;
     const n = 4;
     ctx.save();
     ctx.fillStyle = "#e8faff";
     for (let i = 0; i < n; i++) {
-      const ang = e.anim.clock * 2 + (i / n) * 6.28;
+      const ang = clock * 2 + (i / n) * 6.28;
       const rad = 10 + (i % 2) * 8;
-      ctx.globalAlpha = 0.5 * e.attack.windup * (0.5 + 0.5 * Math.sin(e.anim.clock * 9 + i));
+      ctx.globalAlpha = 0.5 * e.attack.windup * (0.5 + 0.5 * Math.sin(clock * 9 + i));
       ctx.fillRect(sx + Math.cos(ang) * rad - 1, sy + Math.sin(ang) * rad - 1, 2, 2);
     }
     ctx.restore();
@@ -3244,7 +3298,7 @@ export class Game {
   // (ember/frost/freeze_shell) light up if the AD art is present; until then the
   // always-loaded glow_round + crackle carry the tint so the status still reads.
   private renderEnemyStatus(e: Enemy, sx: number, sy: number, size: number) {
-    const clock = e.anim.clock;
+    const clock = this.animForEnemy(e).clock;
     if (e.burn > 0) {
       const pulse = 0.5 + 0.5 * Math.sin(clock * 12);
       this.fxLayer("glow_round", BURN_TINT, sx, sy, size * 1.15, size * 1.15, 0.2 + 0.18 * pulse, 0);
@@ -3666,7 +3720,7 @@ export class Game {
   devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean): void {
     for (let i = 0; i < count; i++) {
       const p = this.devPlacePoint(atCursor);
-      this.enemies.push(createEnemy(kind, p.x, p.y, this.floor, this.rng));
+      this.enemies.push(createEnemy(kind, p.x, p.y, this.floor, this.rng, this.nextEnemyId++));
       this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
     }
   }
@@ -3677,12 +3731,12 @@ export class Game {
 
   devSpawnProp(kind: PropKind, atCursor: boolean): void {
     const p = this.devPlacePoint(atCursor);
-    this.props.push({ kind, x: p.x, y: p.y, radius: PROP_RADIUS, hp: PROP_HP[kind], dead: false, anim: createAnim() });
+    this.props.push({ id: this.nextPropId++, kind, x: p.x, y: p.y, radius: PROP_RADIUS, hp: PROP_HP[kind], dead: false });
   }
 
   devSpawnChest(atCursor: boolean): void {
     const p = this.devPlacePoint(atCursor);
-    this.chests.push({ kind: "wood", x: p.x, y: p.y, radius: 16, opened: false, anim: createAnim() });
+    this.chests.push({ kind: "wood", x: p.x, y: p.y, radius: 16, opened: false });
   }
 
   devGiveWeapon(id: WeaponId): void {

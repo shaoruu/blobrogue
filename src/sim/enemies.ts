@@ -3,7 +3,6 @@ import type { SpriteName } from "../game/assets.js";
 import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
-import { createAnim } from "../game/anim.js";
 
 export type Movement = "chase" | "zigzag" | "drift" | "kite" | "boss";
 
@@ -72,26 +71,26 @@ export function isBossFloor(floor: number): boolean {
 // The seeded sim Rng supplies the bat's initial `zig` heading so enemy creation is
 // deterministic (golden-master oracle + later prediction). spawnFloorEnemies passes its
 // own per-floor Rng; runtime spawns (boss minions, dev) pass the live world Rng.
-export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number, rng: Rng): Enemy {
+export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number, rng: Rng, id: number): Enemy {
   const a = ENEMY_ARCHETYPES[kind];
   const hp = Math.round(a.baseHp + a.hpPerFloor * (floor - 1));
   const isBoss = kind === "boss";
-  // Seed the anim clock from the sim Rng (not Math.random): the slime's hop-cadence reads
-  // this clock, so it must be deterministic. The clock still desyncs each enemy (so a room
-  // of blobs doesn't bob in lockstep) but now reproducibly.
-  const anim = createAnim();
-  anim.clock = rng.next() * 10;
+  // Seed the slime hop clock from the sim Rng (not Math.random): the slime's hop-cadence
+  // reads it, so it must be deterministic. Drawn BEFORE zig to match the historical rng
+  // stream order. Still desyncs each enemy, but reproducibly.
+  const hopClock = rng.next() * 10;
   return {
+    id,
     kind, x, y, vx: 0, vy: 0,
     radius: a.radius,
     hp, maxHp: hp, dead: false,
     speed: a.baseSpeed + a.speedPerFloor * (floor - 1),
     touchDamage: a.touchDamage,
     zig: rng.next() * Math.PI * 2,
+    hopClock, hopMove: 0,
     spawnTimer: SPAWN_GRACE,
     stuckTimer: 0,
     burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0,
-    anim,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
       // The boss waits a beat after its dramatic entrance before its first slam.
@@ -142,12 +141,12 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number)
     // Boss lives in the last room (next to the exit). A few slimes for company.
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
-    enemies.push(createEnemy("boss", b.x, b.y, floor, rng));
+    enemies.push(createEnemy("boss", b.x, b.y, floor, rng, enemies.length));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);
       const p = pointInRoom(rng, dungeon, roomIndex);
-      enemies.push(createEnemy("slime", p.x, p.y, floor, rng));
+      enemies.push(createEnemy("slime", p.x, p.y, floor, rng, enemies.length));
     }
     return enemies;
   }
@@ -159,7 +158,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number)
   for (let i = 0; i < count; i++) {
     const roomIndex = 1 + rng.int(0, roomCount - 2);
     const p = pointInRoom(rng, dungeon, roomIndex);
-    enemies.push(createEnemy(weightedPick(rng, roster), p.x, p.y, floor, rng));
+    enemies.push(createEnemy(weightedPick(rng, roster), p.x, p.y, floor, rng, enemies.length));
   }
   return enemies;
 }

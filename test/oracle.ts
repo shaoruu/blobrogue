@@ -14,7 +14,6 @@ import { dirname, join } from "node:path";
 import { Game } from "../src/game/game.js";
 import { Rng } from "../src/sim/rng.js";
 import { createEnemy } from "../src/sim/enemies.js";
-import { createAnim } from "../src/game/anim.js";
 import { ITEMS, createMods } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
 import { Hud } from "../src/game/hud.js";
@@ -76,13 +75,13 @@ function applyCommands(game: any, s: Scenario, tick: number): void {
       if (item) game.applyItem(item);
     } else if (c.t === "spawnEnemy") {
       const p = spawnCenter(game);
-      game.enemies.push(createEnemy(c.kind, p.x + c.dx, p.y + c.dy, game.floor, game.rng));
+      game.enemies.push(createEnemy(c.kind, p.x + c.dx, p.y + c.dy, game.floor, game.rng, game.nextEnemyId++));
     } else if (c.t === "spawnProp") {
       const p = spawnCenter(game);
-      game.props.push({ kind: c.kind, x: p.x + c.dx, y: p.y + c.dy, radius: PROP_RADIUS, hp: PROP_HP[c.kind], dead: false, anim: createAnim() });
+      game.props.push({ id: game.nextPropId++, kind: c.kind, x: p.x + c.dx, y: p.y + c.dy, radius: PROP_RADIUS, hp: PROP_HP[c.kind], dead: false });
     } else if (c.t === "spawnChest") {
       const p = spawnCenter(game);
-      game.chests.push({ kind: "wood", x: p.x + c.dx, y: p.y + c.dy, radius: 16, opened: false, anim: createAnim() });
+      game.chests.push({ kind: "wood", x: p.x + c.dx, y: p.y + c.dy, radius: 16, opened: false });
     }
   }
 }
