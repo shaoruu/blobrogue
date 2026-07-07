@@ -109,7 +109,7 @@ const SLIME_HOP_FREQ = 3.4;   // matches CHARACTER_STYLE.freq so pushes land on 
 const SLIME_HOP_AMOUNT = 0.55;
 // Anti-stuck: if a chaser tries to move but progresses < this fraction of its step for
 // STUCK_TIME seconds, it's wedged — nudge it perpendicular to slip past the geometry.
-const STUCK_TIME = 0.4;
+const STUCK_TIME = 0.22;
 const STUCK_PROGRESS = 0.5;
 const STUCK_MIN_STEP = 0.05; // ignore near-zero intended steps (not actually trying to move)
 const HALF_PI = Math.PI / 2;
@@ -1845,6 +1845,11 @@ export class Game {
   // move but barely progressed for STUCK_TIME, shove it perpendicular to slip past the
   // geometry (or another body) it's wedged on, so nothing ever freezes against a wall.
   private applyChaseStep(e: Enemy, dt: number, angle: number, step: number): void {
+    // Local obstacle avoidance: props/chests aren't in the flow field, so a chaser would
+    // path straight into a chest and wedge. Probe a short distance ahead along the intended
+    // heading; if a prop sits there, deflect the heading around it (pick whichever side is
+    // clear) so the enemy curves past instead of grinding into it.
+    angle = this.avoidPropAhead(e, angle);
     const x0 = e.x, y0 = e.y;
     this.moveEnemyBy(e, Math.cos(angle) * step, Math.sin(angle) * step);
     const moved = Math.hypot(e.x - x0, e.y - y0);
@@ -1852,10 +1857,37 @@ export class Game {
     e.stuckTimer = isBlocked ? e.stuckTimer + dt : 0;
     if (e.stuckTimer < STUCK_TIME) return;
     e.stuckTimer = 0;
-    const side = Math.sin(e.zig) >= 0 ? 1 : -1; // bias the escape by the enemy's wobble
-    if (!this.nudgeEnemy(e, angle + side * HALF_PI, step)) {
-      this.nudgeEnemy(e, angle - side * HALF_PI, step);
+    // Wedged: try a strong perpendicular escape on both sides, then a hard diagonal, so a
+    // chaser never freezes against geometry or a prop.
+    const side = Math.sin(e.zig) >= 0 ? 1 : -1;
+    const esc = step * 1.6; // shove harder than a normal step to break contact
+    if (this.nudgeEnemy(e, angle + side * HALF_PI, esc)) return;
+    if (this.nudgeEnemy(e, angle - side * HALF_PI, esc)) return;
+    this.nudgeEnemy(e, angle + side * (Math.PI * 0.75), esc); // last resort: back-diagonal
+  }
+
+  // If a live prop lies within a short probe ahead of `angle`, return a deflected heading
+  // that curves around it (whichever tangent side is clearer); otherwise return `angle`.
+  private avoidPropAhead(e: Enemy, angle: number): number {
+    const probe = e.radius + 22; // look this far ahead
+    const px = e.x + Math.cos(angle) * probe, py = e.y + Math.sin(angle) * probe;
+    let hit: Prop | null = null;
+    let hitD2 = Infinity;
+    for (const p of this.props) {
+      if (p.dead) continue;
+      const rr = e.radius + p.radius; // overlap radius
+      const ddx = px - p.x, ddy = py - p.y, d2 = ddx * ddx + ddy * ddy;
+      if (d2 < rr * rr && d2 < hitD2) { hit = p; hitD2 = d2; }
     }
+    if (!hit) return angle;
+    // Steer toward the tangent: cross product sign tells which side the prop is on; deflect
+    // to the opposite side by ~45deg so the enemy arcs around it.
+    const toProp = Math.atan2(hit.y - e.y, hit.x - e.x);
+    let diff = angle - toProp;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    const turn = diff >= 0 ? 1 : -1; // if heading is left of the prop, turn further left
+    return angle + turn * (Math.PI / 4);
   }
 
   // One perpendicular escape attempt; returns whether it made meaningful progress.
