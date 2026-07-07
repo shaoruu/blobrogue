@@ -4,7 +4,7 @@
 // designer's spec (docs/ui). Elements are built once and updated via textContent /
 // classList / CSS vars so nothing ever reflows the layout mid-run.
 
-import { renderHearts, mountIcons } from "./hudIcons.js";
+import { renderHearts, mountIcons, itemIconEl } from "./hudIcons.js";
 
 export interface HudState {
   hp: number;
@@ -18,7 +18,8 @@ export interface HudState {
   isBossActive: boolean;
   coopLabel: string | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
-  items: { glyph: string; tint: string }[]; // collected blessings, drawn as a glyph strip
+  // Collected blessings, duplicates collapsed into a count, shown in the YOUR BUILD panel.
+  items: { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }[];
 }
 
 export interface ProfileStats {
@@ -39,7 +40,7 @@ export interface StatsPanelData {
   weaponName: string;
   profile: ProfileStats | null;
   roster: RosterEntry[] | null;
-  items: { name: string; glyph: string; tint: string }[];
+  items: { name: string; desc: string; glyph: string; tint: string }[];
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, css: string, text?: string): HTMLElementTagNameMap[K] {
@@ -65,7 +66,7 @@ const HUD_MARKUP = `
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
-  </div><div class="coopstrip" data-coop></div><div class="itemstrip" data-items></div></div>
+  </div><div class="coopstrip" data-coop></div><div class="build" data-build><div class="build-title">YOUR BUILD <span class="n" data-build-n>0</span></div><div class="build-grid" data-build-grid></div></div></div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
@@ -81,7 +82,9 @@ export class Hud {
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
-  private itemsEl: HTMLElement;
+  private buildPanel: HTMLElement;
+  private buildGrid: HTMLElement;
+  private buildN: HTMLElement;
   private prevItemsCount = -1;
 
   private statsPanel: HTMLElement;
@@ -109,7 +112,9 @@ export class Hud {
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
-    this.itemsEl = hud.querySelector("[data-items]")!;
+    this.buildPanel = hud.querySelector("[data-build]")!;
+    this.buildGrid = hud.querySelector("[data-build-grid]")!;
+    this.buildN = hud.querySelector("[data-build-n]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
     const minimap = document.getElementById("minimap");
@@ -165,17 +170,34 @@ export class Hud {
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
 
-    // Rebuild the blessing glyph strip only when a new item is picked up.
-    if (s.items.length !== this.prevItemsCount) {
-      this.prevItemsCount = s.items.length;
-      this.itemsEl.replaceChildren();
+    // Rebuild the YOUR BUILD panel only when a blessing is picked. Gated on total picks
+    // (sum of counts) so a repeat pick that just bumps a chip's count still refreshes.
+    const totalPicks = s.items.reduce((n, it) => n + it.count, 0);
+    if (totalPicks !== this.prevItemsCount) {
+      this.prevItemsCount = totalPicks;
+      this.buildGrid.replaceChildren();
       for (const it of s.items) {
-        const chip = el("span", "", it.glyph);
-        chip.className = "itemchip";
+        const chip = el("div", "");
+        chip.className = "ichip" + (it.rarity === "rare" ? " rare" : "");
         chip.style.setProperty("--t", it.tint);
-        this.itemsEl.appendChild(chip);
+        chip.appendChild(itemIconEl(it.id, it.glyph));
+        if (it.count > 1) {
+          const c = el("span", "", "x" + it.count);
+          c.className = "cnt";
+          chip.appendChild(c);
+        }
+        const tip = el("div", "");
+        tip.className = "tip";
+        const tn = el("span", "", it.name.toUpperCase());
+        tn.className = "tn";
+        const td = el("span", "", it.desc);
+        td.className = "td";
+        tip.append(tn, td);
+        chip.appendChild(tip);
+        this.buildGrid.appendChild(chip);
       }
-      this.itemsEl.style.display = s.items.length ? "flex" : "none";
+      this.buildN.textContent = String(s.items.length);
+      this.buildPanel.classList.toggle("show", s.items.length > 0);
     }
   }
 
@@ -198,10 +220,15 @@ export class Hud {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
       this.statsBody.appendChild(el("div", "color:var(--amber);font-size:12px;letter-spacing:1px;", `BLESSINGS \u00b7 ${d.items.length}`));
       for (const it of d.items) {
-        const row = el("div", "display:flex;align-items:center;gap:8px;");
-        const icon = el("span", "font-size:14px;", it.glyph);
+        const row = el("div", "display:flex;align-items:flex-start;gap:8px;");
+        const icon = el("span", "font-size:14px;line-height:1.3;", it.glyph);
         icon.style.color = it.tint;
-        row.append(icon, el("span", "color:#ffe6b0;", it.name));
+        const text = el("div", "display:flex;flex-direction:column;gap:1px;");
+        text.append(
+          el("span", "color:#ffe6b0;", it.name),
+          el("span", "color:#9a8fb5;font-size:13px;", it.desc),
+        );
+        row.append(icon, text);
         this.statsBody.appendChild(row);
       }
     }
@@ -249,8 +276,8 @@ export class Hud {
   clear() {
     this.coopEl.textContent = "";
     this.coopEl.style.display = "none";
-    this.itemsEl.replaceChildren();
-    this.itemsEl.style.display = "none";
+    this.buildGrid.replaceChildren();
+    this.buildPanel.classList.remove("show");
     this.prevItemsCount = -1;
   }
 }

@@ -133,16 +133,29 @@
         font-family: var(--f-logo), monospace; font-size: 10px; color: var(--dun-0); background: var(--amber); }
       .bc-icon { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin-top: 6px; font-size: 30px; line-height: 1;
         background: color-mix(in srgb, var(--t) 22%, #0d0819); box-shadow: inset 0 0 0 2px var(--t), 0 0 12px color-mix(in srgb, var(--t) 45%, transparent); }
+      .bc-icon img { width: 48px; height: 48px; image-rendering: pixelated; }
+      .bc-icon .glyphfb { font-size: 30px; line-height: 1; color: var(--cream); }
       .bc-name { font-family: var(--f-logo), monospace; font-size: 12px; color: var(--amber-hi); letter-spacing: 1px; line-height: 1.4; }
       .bc-rarity { font-size: 9px; letter-spacing: 2px; color: var(--dun-4); }
       .bc-rarity.uncommon { color: var(--blu); }
       .bc-rarity.rare { color: var(--pur); }
       .bc-desc { font-family: var(--f-num), monospace; font-size: 16px; line-height: 1.2; color: #cbb6d6; }
 
-      /* --- HUD collected-blessing glyph strip (top-left, under the coop strip) --- */
-      .itemstrip { display: none; flex-wrap: wrap; gap: 4px; max-width: 220px; }
-      .itemchip { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; font-size: 13px; line-height: 1;
-        background: rgba(5,3,11,.62); box-shadow: inset 0 0 0 2px var(--t, var(--dun-3)); }
+      /* --- HUD "YOUR BUILD" owned-items panel (top-left, under the stat panel) --- */
+      .build{ background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:8px 9px; display:none; flex-direction:column; gap:6px; max-width:210px; pointer-events:auto; }
+      .build.show{ display:flex; }
+      .build-title{ font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; }
+      .build-title .n{ color:var(--amber); }
+      .build-grid{ display:flex; flex-wrap:wrap; gap:4px; }
+      .ichip{ position:relative; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--t,var(--dun-4)),0 2px 0 rgba(0,0,0,.5); cursor:default; }
+      .ichip img{ width:22px; height:22px; image-rendering:pixelated; }
+      .ichip .glyphfb{ font-family:var(--f-num); font-size:15px; line-height:1; color:var(--t,var(--cream)); }
+      .ichip .cnt{ position:absolute; right:-3px; bottom:-4px; font-family:var(--f-num); font-size:13px; line-height:1; color:var(--cream); background:var(--dun-2); box-shadow:inset 0 0 0 1px var(--dun-4); padding:0 2px; }
+      .ichip.rare{ box-shadow:inset 0 0 0 2px var(--t),0 0 0 2px rgba(255,180,59,.25),0 2px 0 rgba(0,0,0,.5); }
+      .ichip .tip{ position:absolute; left:32px; top:50%; transform:translateY(-50%); white-space:nowrap; z-index:5; background:var(--dun-1); box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:5px 8px; display:none; flex-direction:column; gap:2px; }
+      .ichip:hover .tip{ display:flex; }
+      .ichip .tip .tn{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--t,var(--cream)); }
+      .ichip .tip .td{ font-family:var(--f-num); font-size:14px; color:var(--bone); }
     </style>
   </head>
   <body>
