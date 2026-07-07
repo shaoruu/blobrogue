@@ -2353,7 +2353,6 @@ export class Game {
     this.renderChests();
     this.renderPickups();
     this.renderParticles();
-    this.renderDmgNumbers();
     this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
@@ -2362,6 +2361,7 @@ export class Game {
     this.renderAfterimages();
     this.renderPlayer();
     this.renderMuzzle();
+    this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     ctx.restore();
     this.renderHurtVignette();
     this.renderReticle();
