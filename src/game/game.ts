@@ -457,6 +457,11 @@ export class Game {
     this.loadFloor();
     this.hud.setVisible(true);
     this.hud.showBanner(isBossFloor(this.floor) ? "BOSS FLOOR" : `FLOOR ${this.floor}`);
+    // First run ever: briefly surface the core controls, then never nag again.
+    if (!settings.isControlsHintSeen) {
+      this.hud.showControlsHint();
+      settings.markControlsHintSeen();
+    }
     this.isRunning = true;
     this.last = performance.now();
     cancelAnimationFrame(this.raf);

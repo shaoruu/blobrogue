@@ -69,7 +69,7 @@ const HUD_MARKUP = `
   </div><div class="coopstrip" data-coop></div><div class="build" data-build><div class="build-title">YOUR BUILD <span class="n" data-build-n>0</span></div><div class="build-grid" data-build-grid></div></div></div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner br"><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
-  <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
+  <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
 `;
 
 export class Hud {
@@ -91,6 +91,8 @@ export class Hud {
   private statsBody: HTMLElement;
   private banner: HTMLElement;
   private bannerTimer = 0;
+  private controlsHint: HTMLElement;
+  private hintTimer = 0;
 
   // Hearts are the one expensive redraw (canvas per heart), so only rebuild on change.
   private prevHp = -1;
@@ -145,6 +147,15 @@ export class Hud {
       `color:var(--amber);font:22px var(--f-logo),monospace;letter-spacing:4px;` +
       `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
     root.appendChild(this.banner);
+
+    // One-time controls onboarding hint: a subtle, auto-dismissing line near the bottom.
+    // Fixed + opacity-only so it never shifts the layout.
+    this.controlsHint = el("div",
+      `position:fixed;left:0;right:0;bottom:64px;z-index:6;text-align:center;pointer-events:none;` +
+      `color:var(--cream);font:9px var(--f-ui),monospace;letter-spacing:1px;` +
+      `text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,0.6);opacity:0;transition:opacity 0.6s ease;`,
+      "WASD MOVE \u00b7 MOUSE AIM \u00b7 CLICK SHOOT \u00b7 SHIFT DASH");
+    root.appendChild(this.controlsHint);
   }
 
   setVisible(v: boolean) {
@@ -266,10 +277,21 @@ export class Hud {
     this.bannerTimer = 1.4;
   }
 
+  // Fade the controls hint in for ~5s, then let the CSS transition fade it out. Called
+  // once at run start (the caller gates it on the one-time settings flag).
+  showControlsHint() {
+    this.controlsHint.style.opacity = "1";
+    this.hintTimer = 5;
+  }
+
   tick(dt: number) {
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt;
       if (this.bannerTimer <= 0) this.banner.style.opacity = "0";
+    }
+    if (this.hintTimer > 0) {
+      this.hintTimer -= dt;
+      if (this.hintTimer <= 0) this.controlsHint.style.opacity = "0";
     }
   }
 
