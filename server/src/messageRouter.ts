@@ -106,10 +106,15 @@ export class MessageRouter {
     conn.authed = true;
     conn.authName = auth.playerId;
     conn.playerId = "p" + conn.id; // world-scoped id; auth identity kept for logs
-    const room = this.ctx.sessions.bind(conn, DEFAULT_WORLD_ID);
+    conn.displayName = auth.name ?? null;
+    conn.colorIndex = auth.colorIndex ?? null;
+    // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
+    // player proved membership in that room, so friends sharing a code land in the same
+    // isolated world and a client can never assert a world id. No claim -> the public default.
+    const room = this.ctx.sessions.bind(conn, auth.worldId ?? DEFAULT_WORLD_ID);
     conn.lastPongAt = this.ctx.clock.now();
     this.ctx.metrics.counters.joinsOk++;
-    conn.log.info("join ok", { authName: conn.authName, playerId: conn.playerId, worldId: room.id });
+    conn.log.info("join ok", { authName: conn.authName, playerId: conn.playerId, worldId: room.id, name: conn.displayName ?? "" });
     // Immediate FULL snapshot (carries selfId + authoritative spawn) — don't wait a tick.
     this.ctx.publisher.sendFull(room, conn);
   }

@@ -46,15 +46,20 @@ The Stage-B world is a fixed arena; both clients see the same server-owned enemi
 3. **Open two tabs** at:
 
    ```
-   http://localhost:5173/?online=1
+   http://localhost:5173/?gs=ws://127.0.0.1:8090/ws
    ```
 
-   Each tab fetches a dev ticket from `http://127.0.0.1:8090/dev-ticket`, joins the same
-   `arena-1` world, predicts its own blob (instant movement), and renders the same
-   authoritative enemies plus the other player (interpolated). Point at a different server with
-   `?gs=ws://host:port/ws` or `VITE_GS_URL`.
+   Each tab fetches a dev ticket from `http://127.0.0.1:8090/dev-ticket` (carrying the tab's
+   chosen name/color), joins the same `arena-1` world, predicts its own blob (instant
+   movement), and renders the same authoritative enemies plus the other player (interpolated,
+   name above the blob). To prove ROOM isolation without Convex, mint per-tab tickets with a
+   world claim: `curl "http://127.0.0.1:8090/dev-ticket?world=room:ABCD&name=Ada&color=2"` —
+   tabs whose tickets share a `world` share a world; different worlds never meet.
 
-Solo/co-op are unaffected: without `?online=1` the menu behaves exactly as before.
+The production player flow (`PLAY ONLINE` in the menu, or the `?online=1` deep link) goes
+through the Convex-backed room lobby instead: create/join/quick-play a room, then the ticket
+minted by `convex/gsTicket.ts` binds that room's world id (see MULTIPLAYER.md §7). Solo and
+classic co-op are unaffected either way.
 
 ## Health / metrics
 

@@ -39,6 +39,10 @@ export interface Conn {
   playerId: PlayerId | null; // world-scoped id ("p<connId>"); unique per connection
   authName: string | null;   // the verified identity from the ticket (for logs)
   worldId: string | null;
+  // Verified cosmetic identity from the ticket (broadcast to other clients via PlayerWire):
+  // the display name shown above this player's blob, and their chosen blob color.
+  displayName: string | null;
+  colorIndex: number | null;
   malformed: number;         // count of malformed messages (kick threshold)
 
   connectedAt: number;
@@ -99,7 +103,8 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "malformed" | "connectedAt" | "rate"
+  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "malformed"
+  | "connectedAt" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
   | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline" | "gameOver"
@@ -107,7 +112,7 @@ export function newConnState(now: number): Pick<Conn,
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
-    authed: false, playerId: null, authName: null, worldId: null, malformed: 0,
+    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, malformed: 0,
     connectedAt: now, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,

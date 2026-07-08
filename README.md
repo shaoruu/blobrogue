@@ -33,8 +33,11 @@ Clear a floor of enemies, then step into the glowing exit to descend. See how de
   currency, and gun pickups swap your weapon. Weapon shown in the HUD.
 - **Minimap + stats HUD** — top-right minimap (rooms, exit, enemies, teammates), a clean
   hearts/floor/kills/coins/weapon bar, and a hold-Tab run-stats panel.
-- **Co-op multiplayer via Convex** — host a game, share a 4-letter code, and descend the
-  same dungeon together in real time. Accounts + saved stats persist across sessions.
+- **Online multiplayer with rooms** — PLAY ONLINE from the menu: quick-play into a public
+  room, or create a private room and share its 4-letter code; everyone with the code lands
+  in the same **authoritative server world** (isolated per room), with names above blobs
+  and a pickable blob color. Classic peer-synced co-op is still there too. Accounts +
+  saved stats persist across sessions; guest play never requires sign-in.
 
 ## Stack
 - Vite + TypeScript, HTML5 canvas rendering (no engine)
@@ -47,14 +50,16 @@ var (`VITE_CONVEX_URL`). With it unset, the game runs exactly like solo v0 — n
 breaks. Full provisioning steps, the exact commands, and the architecture are in
 **[MULTIPLAYER.md](MULTIPLAYER.md)**.
 
-### Authoritative game server (Stage C)
+### Authoritative game server (Stage C) + rooms
 The multiplayer foundation is a real **authoritative WebSocket server** that runs the same
 `src/sim/stepWorld` as the single source of truth; clients send inputs and predict/reconcile.
-It lives in **[`server/`](server/README.md)** and is opt-in behind an explicit `?online=1`
-route — solo stays on the in-process `LocalTransport`, byte-identical. Stage C moves **all**
-combat onto it: 2+ clients fight the same server-owned enemies/boss with per-player ownership
-attribution, lag compensation, interest management, and adaptive prediction/reconciliation. See
-the measured reports in **[docs/blobrogue_STAGE_C_report.md](docs/blobrogue_STAGE_C_report.md)**
+It lives in **[`server/`](server/README.md)**; the player front door is the menu's
+**PLAY ONLINE** room lobby (each room code binds to its own isolated server world via a
+Convex-minted, server-verified ticket claim — see MULTIPLAYER.md §7). Solo stays on the
+in-process `LocalTransport`, byte-identical. Stage C moves **all** combat onto the server:
+2+ clients fight the same server-owned enemies/boss with per-player ownership attribution,
+lag compensation, interest management, and adaptive prediction/reconciliation. See the
+measured reports in **[docs/blobrogue_STAGE_C_report.md](docs/blobrogue_STAGE_C_report.md)**
 and **[docs/blobrogue_STAGE_B_report.md](docs/blobrogue_STAGE_B_report.md)**.
 
 ### Deployment / control plane (post-server ops)

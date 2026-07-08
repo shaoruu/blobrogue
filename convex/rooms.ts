@@ -1,12 +1,26 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+
+// Rooms come in two kinds that never cross-match (see schema.ts):
+//   "coop"   — classic peer-synced co-op (the pre-authoritative path, fully preserved).
+//   "online" — a lobby for the AUTHORITATIVE game server; the room code maps to a distinct
+//              server world and Convex only hosts the roster/status handshake.
+// `kind` is an optional arg everywhere, defaulting to "coop", so every pre-existing client
+// call keeps its exact behavior.
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous O/0/I/1
 const CODE_LEN = 4;
-const MAX_PLAYERS = 4;                 // co-op party cap
+const MAX_PLAYERS = 4;                 // party cap (both kinds)
 const QUICKPLAY_STALE_MS = 45_000;     // ignore rooms with no activity for this long
+
+const kindArg = v.optional(v.union(v.literal("coop"), v.literal("online")));
+type RoomKind = "coop" | "online";
+
+function kindOf(room: Doc<"rooms">): RoomKind {
+  return room.kind ?? "coop";
+}
 
 function randomCode(): string {
   let out = "";
@@ -57,28 +71,30 @@ async function ensurePresence(
   });
 }
 
-// Host a new room. Returns a short code to share with friends.
+// Host a new room. Returns a short code to share with friends. Online rooms use the caller's
+// chosen blob color for their roster dot (classic co-op keeps the assigned palette slot).
 export const create = mutation({
-  args: { playerId: v.id("players") },
-  handler: async (ctx, { playerId }) => {
+  args: { playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { playerId, kind, colorIndex }) => {
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const code = await uniqueCode(ctx);
     const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
     const now = Date.now();
     const roomId = await ctx.db.insert("rooms", {
-      code, hostPlayerId: playerId, seed, floor: 1,
+      code, kind: kind ?? "coop", hostPlayerId: playerId, seed, floor: 1,
       status: "lobby", isPublic: false, createdAt: now, lastActivity: now,
     });
-    await ensurePresence(ctx, roomId, playerId, player.name, 1, 0);
+    await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
     return { roomId, code, seed, floor: 1 };
   },
 });
 
-// Join an existing room by its share code.
+// Join an existing room by its share code. The kind must match the caller's flow so an online
+// code can never pull someone into classic co-op (or vice versa).
 export const join = mutation({
-  args: { code: v.string(), playerId: v.id("players") },
-  handler: async (ctx, { code, playerId }) => {
+  args: { code: v.string(), playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { code, playerId, kind, colorIndex }) => {
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const room = await ctx.db
@@ -86,8 +102,19 @@ export const join = mutation({
       .withIndex("by_code", (q) => q.eq("code", code.trim().toUpperCase()))
       .unique();
     if (!room) throw new Error("no room with that code");
+    const wantKind: RoomKind = kind ?? "coop";
+    if (kindOf(room) !== wantKind) {
+      throw new Error(wantKind === "online" ? "that code is a classic co-op room" : "that code is an online room");
+    }
     if (room.status === "ended") throw new Error("that game has ended");
-    const color = await smallestFreeColor(ctx, room._id);
+    if (wantKind === "online") {
+      // Online rooms enforce the party cap at join (classic co-op keeps its historical
+      // quickPlay-only cap, unchanged).
+      const members = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", room._id)).collect();
+      const isMember = members.some((r) => r.playerId === playerId);
+      if (!isMember && members.length >= MAX_PLAYERS) throw new Error("that room is full");
+    }
+    const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
     await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
     await ctx.db.patch(room._id, { lastActivity: Date.now() });
     return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status };
@@ -95,13 +122,16 @@ export const join = mutation({
 });
 
 
-// Quick Play: drop straight into an open PUBLIC game with room to spare, or spin up
-// a fresh public room for the next person. No codes, no hosting.
+// Quick Play: drop straight into an open PUBLIC game (of the SAME kind) with room to spare, or
+// spin up a fresh public room for the next person. No codes, no hosting. Online quick-play
+// rooms are born "playing" — the authoritative world runs on demand, so there is no host gate
+// and players drop in/out of the public pool freely.
 export const quickPlay = mutation({
-  args: { playerId: v.id("players") },
-  handler: async (ctx, { playerId }) => {
+  args: { playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { playerId, kind, colorIndex }) => {
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
+    const wantKind: RoomKind = kind ?? "coop";
     const now = Date.now();
 
     // Look for public rooms still going (lobby or playing), freshest first.
@@ -113,6 +143,7 @@ export const quickPlay = mutation({
 
     for (const room of candidates) {
       if (room.status === "ended") continue;
+      if (kindOf(room) !== wantKind) continue;
       if (now - room.lastActivity > QUICKPLAY_STALE_MS) continue;
       const players = await ctx.db
         .query("presence")
@@ -120,7 +151,7 @@ export const quickPlay = mutation({
         .collect();
       if (players.length >= MAX_PLAYERS) continue;
       // Join this one.
-      const color = await smallestFreeColor(ctx, room._id);
+      const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
       await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
       await ctx.db.patch(room._id, { lastActivity: now });
       return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status, joined: true };
@@ -129,12 +160,13 @@ export const quickPlay = mutation({
     // None available — create a fresh public room and wait for others to drop in.
     const code = await uniqueCode(ctx);
     const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
+    const status = wantKind === "online" ? ("playing" as const) : ("lobby" as const);
     const roomId = await ctx.db.insert("rooms", {
-      code, hostPlayerId: playerId, seed, floor: 1,
-      status: "lobby", isPublic: true, createdAt: now, lastActivity: now,
+      code, kind: wantKind, hostPlayerId: playerId, seed, floor: 1,
+      status, isPublic: true, createdAt: now, lastActivity: now,
     });
-    await ensurePresence(ctx, roomId, playerId, player.name, 1, 0);
-    return { roomId, code, seed, floor: 1, status: "lobby" as const, joined: false };
+    await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
+    return { roomId, code, seed, floor: 1, status, joined: false };
   },
 });
 
@@ -154,6 +186,25 @@ export const get = query({
   },
 });
 
+// Membership check backing the game-server ticket mint (gsTicket.mint): a `wld` claim is
+// minted ONLY for a player who actually sits in that online room. This is what turns "I know
+// a code" into a verified, signed world authorization.
+export const membership = query({
+  args: { code: v.string(), playerId: v.id("players") },
+  handler: async (ctx, { code, playerId }) => {
+    const room = await ctx.db
+      .query("rooms")
+      .withIndex("by_code", (q) => q.eq("code", code.trim().toUpperCase()))
+      .unique();
+    if (!room || kindOf(room) !== "online" || room.status === "ended") return { isMember: false };
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", room._id).eq("playerId", playerId))
+      .unique();
+    return { isMember: row !== null };
+  },
+});
+
 // Host flips the lobby into a live game; everyone waiting begins.
 export const start = mutation({
   args: { roomId: v.id("rooms"), playerId: v.id("players") },
@@ -162,6 +213,42 @@ export const start = mutation({
     if (!room) throw new Error("no such room");
     if (room.hostPlayerId !== playerId) throw new Error("only the host can start");
     await ctx.db.patch(roomId, { status: "playing", lastActivity: Date.now() });
+  },
+});
+
+// After an online run ends (party wipe), the room regroups: back from "playing" to "lobby" so
+// the same code hosts the next run. Any member may flip it (all clients land here at once
+// after a wipe; the patch is idempotent). Ended rooms stay ended.
+export const reopen = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players") },
+  handler: async (ctx, { roomId, playerId }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || room.status !== "playing") return;
+    const member = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!member) return;
+    await ctx.db.patch(roomId, { status: "lobby", lastActivity: Date.now() });
+  },
+});
+
+// Keepalive while a player sits in a lobby or plays on the game server: refreshes their
+// presence row (the roster hides rows stale for >12s) and the room's lastActivity (so open
+// public rooms stay quick-play matchable). Classic co-op refreshes through presence.update
+// instead; online play has no gameplay presence sync, hence this explicit heartbeat.
+export const heartbeat = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players") },
+  handler: async (ctx, { roomId, playerId }) => {
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!row) return;
+    const now = Date.now();
+    await ctx.db.patch(row._id, { updatedAt: now });
+    const room = await ctx.db.get(roomId);
+    if (room && room.status !== "ended") await ctx.db.patch(roomId, { lastActivity: now });
   },
 });
 

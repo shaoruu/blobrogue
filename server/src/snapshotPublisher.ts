@@ -12,7 +12,7 @@
 // additionally advances its ack to the snapshot's evTo, so filtered-out ids never wedge the
 // stream. Delivery is effectively-once (no missing, no double kill/loot/FX).
 
-import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type WireEvent } from "../../src/net/protocol.js";
+import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type WireEvent } from "../../src/net/protocol.js";
 import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
@@ -34,6 +34,7 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
   }
 
   publish(room: RoomRuntime): void {
+    const identities = this.identitiesFor(room);
     for (const conn of room.conns.values()) {
       if (conn.playerId === null || conn.closing) continue;
       const buffered = conn.ws.bufferedAmount;
@@ -49,9 +50,20 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
       const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
+        identities,
       });
       this.sendRaw(conn, this.codec.encodeServer(msg), false);
     }
+  }
+
+  // The room's verified cosmetic identities (name/color from each join ticket), keyed by
+  // world-scoped player id, so every client's snapshot can label the other players.
+  private identitiesFor(room: RoomRuntime): Map<string, PlayerIdentity> {
+    const out = new Map<string, PlayerIdentity>();
+    for (const conn of room.conns.values()) {
+      if (conn.playerId !== null) out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex });
+    }
+    return out;
   }
 
   // The reliable events newer than this client's ack, scoped to what this client should see:
@@ -81,7 +93,10 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     // Start the reliable-event stream from "now": the full snapshot bootstraps state, so the client
     // shouldn't replay the pre-join event backlog. Future events flow from here.
     conn.ackedEventId = room.latestEventId();
-    const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, { interestRadius: 0 });
+    const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
+      interestRadius: 0,
+      identities: this.identitiesFor(room),
+    });
     this.sendRaw(conn, this.codec.encodeServer(msg), true);
   }
 

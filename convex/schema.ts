@@ -26,6 +26,9 @@ export default defineSchema({
     // Account identity. Set once the row is linked to a signed-in Convex Auth user.
     userId: v.optional(v.id("users")),
     name: v.string(),
+    // Chosen blob tint (index into the client palette). Optional: absent until the
+    // player explicitly picks one, so a fresh browser never clobbers an account's pick.
+    colorIndex: v.optional(v.number()),
     totalKills: v.number(),
     deepestFloor: v.number(),
     totalCoins: v.number(),
@@ -37,10 +40,17 @@ export default defineSchema({
     .index("by_clientId", ["clientId"])
     .index("by_userId", ["userId"]),
 
-  // A co-op lobby / running game. The (seed, floor) pair is the shared source of
-  // truth that makes every player generate the same dungeon and descend together.
+  // A lobby / running game. The two kinds NEVER cross-match:
+  //   "coop"   — classic peer-synced co-op (each client simulates from the shared seed/floor;
+  //              this table's seed/floor pair is the source of truth). The default when
+  //              `kind` is absent, so pre-existing rows/clients keep exact behavior.
+  //   "online" — a room on the AUTHORITATIVE game server: the room code maps to a distinct
+  //              server world (`room:<CODE>`), minted into each member's join ticket by
+  //              gsTicket.mint. Convex holds only the lobby (roster/status); the game server
+  //              owns all gameplay state, so seed/floor here are unused for this kind.
   rooms: defineTable({
     code: v.string(),
+    kind: v.optional(v.union(v.literal("coop"), v.literal("online"))),
     hostPlayerId: v.id("players"),
     seed: v.number(),
     floor: v.number(),

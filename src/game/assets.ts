@@ -146,6 +146,7 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private tintCache = new Map<string, HTMLCanvasElement>();
+  private sheetTintCache = new Map<string, HTMLCanvasElement>();
   private flashCache = new Map<SpriteName, HTMLCanvasElement>();
   private sheets = new Map<string, LoadedSheet>();
   private heldImages = new Map<WeaponId, HTMLImageElement>();
@@ -290,24 +291,20 @@ export class Sprites {
     return c;
   }
 
-  tintedHero(color: string): HTMLCanvasElement | null {
-    const hero = this.images.get("hero")!;
-    if (!hero.complete || hero.naturalWidth === 0) return null;
-    const cached = this.tintCache.get(color);
-    if (cached) return cached;
+  // Recolor a loaded image to a player's hue while keeping the sprite's shading. A flat 50%
+  // color overlay would drag every hue toward the strongly-amber base and make teammates look
+  // alike ("all blue"); instead: strip to grayscale (a zero-saturation pass keeps only
+  // luminance), multiply the target color through it — light/dark shading survives but the
+  // hue reads true — then mask back to the silhouette, since the full-rect passes also cover
+  // the transparent margin.
+  private recolor(img: HTMLImageElement, color: string): HTMLCanvasElement | null {
+    if (!img.complete || img.naturalWidth === 0) return null;
     const c = document.createElement("canvas");
-    c.width = hero.naturalWidth;
-    c.height = hero.naturalHeight;
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
     const g = c.getContext("2d");
     if (!g) return null;
-    // Recolor the hero to a player's hue while keeping the sprite's shading. The old path laid
-    // a flat 50% color over the strongly-amber base, so every hue got dragged toward the same
-    // muddy amber-ish tone and teammates looked alike ("all blue"). Instead: strip the amber to
-    // grayscale (a zero-saturation source keeps only luminance), then multiply the target color
-    // through it -- light/dark shading survives but the hue becomes a vivid, unambiguous cyan /
-    // green / pink / etc. Finally mask back to the silhouette, since the full-rect passes also
-    // cover the transparent margin.
-    g.drawImage(hero, 0, 0);
+    g.drawImage(img, 0, 0);
     g.globalCompositeOperation = "saturation";
     g.fillStyle = "hsl(0, 0%, 50%)";
     g.fillRect(0, 0, c.width, c.height);
@@ -315,8 +312,37 @@ export class Sprites {
     g.fillStyle = color;
     g.fillRect(0, 0, c.width, c.height);
     g.globalCompositeOperation = "destination-in";
-    g.drawImage(hero, 0, 0);
-    this.tintCache.set(color, c);
+    g.drawImage(img, 0, 0);
+    return c;
+  }
+
+  // A recolored base sprite (cached per name+color); null while the source streams in.
+  tintedSprite(name: SpriteName, color: string): HTMLCanvasElement | null {
+    const key = `${name}|${color}`;
+    const cached = this.tintCache.get(key);
+    if (cached) return cached;
+    const img = this.images.get(name);
+    if (!img) return null;
+    const c = this.recolor(img, color);
+    if (c) this.tintCache.set(key, c);
+    return c;
+  }
+
+  tintedHero(color: string): HTMLCanvasElement | null {
+    return this.tintedSprite("hero", color);
+  }
+
+  // A recolored animation sheet, pixel-identical in layout to the source strip so callers can
+  // slice frames with the ORIGINAL sheet's metrics. Lets a color-picked hero keep its real
+  // walk animation instead of degrading to the static tinted base.
+  tintedSheetCanvas(name: SpriteName, clip: SheetClip, color: string): HTMLCanvasElement | null {
+    const key = `${name}.${clip}|${color}`;
+    const cached = this.sheetTintCache.get(key);
+    if (cached) return cached;
+    const sheet = this.sheets.get(`${name}.${clip}`);
+    if (!sheet) return null;
+    const c = this.recolor(sheet.img, color);
+    if (c) this.sheetTintCache.set(key, c);
     return c;
   }
 }

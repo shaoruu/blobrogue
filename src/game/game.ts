@@ -41,11 +41,18 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
+// Why a run exited without a game over: the player quit, or an online connection never came
+// up (lets the menu land back on the lobby with an explanation instead of silence).
+export type ExitReason = "quit" | "connect_failed";
+
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
 export interface OnlineOptions {
   url: string;
   getTicket: () => Promise<string>;
+  // The lobby room code this run belongs to (shown in the HUD so friends can be invited
+  // mid-run); null for direct dev joins.
+  roomCode: string | null;
 }
 
 export interface StartOptions {
@@ -53,6 +60,9 @@ export interface StartOptions {
   coop?: CoopBridge | null;
   online?: OnlineOptions | null;
   profile?: ProfileStats | null;
+  // The player's chosen blob tint (client palette index). Applies to solo + online; classic
+  // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
+  selfColorIndex?: number | null;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -256,7 +266,7 @@ export class Game {
   private minimap: Minimap;
   private hud: Hud;
   private onGameOver: (result: RunResult) => void;
-  private onExit: () => void;
+  private onExit: (reason?: ExitReason) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
   private isPaused = false;
@@ -284,6 +294,8 @@ export class Game {
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private isAutoFiring = false; // autofire mode only: click toggles continuous fire (settings.isAutofire)
+  private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
+  private onlineRoomCode: string | null = null; // lobby room code for the HUD label (online only)
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
@@ -375,7 +387,7 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: () => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason) => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
@@ -454,6 +466,9 @@ export class Game {
     this.mode = opts.mode;
     this.coop = opts.coop ?? null;
     this.profile = opts.profile ?? null;
+    // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
+    this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
+    this.onlineRoomCode = opts.online?.roomCode ?? null;
     let floor: number;
     if (this.mode === "online" && opts.online) {
       // Online: the SERVER owns the world (seed/floor/dungeon). WSTransport boots a placeholder
@@ -603,13 +618,13 @@ export class Game {
     }
   }
 
-  private quitToMenu() {
+  private quitToMenu(reason?: ExitReason) {
     this.setPaused(false);
     this.stop();
     audio.setMusic(null);
     this.hud.hideStats();
     this.hud.clear();
-    this.onExit();
+    this.onExit(reason);
   }
 
   private addFreeze(seconds: number) {
@@ -1435,7 +1450,9 @@ export class Game {
     } else if (this.mode === "online" && this.wsTransport) {
       const count = this.wsTransport.remotePlayers().length + 1;
       const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
-      coopLabel = `${live} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+      // Surface the room code mid-run so a friend can still be invited into this world.
+      const room = this.onlineRoomCode ? ` \u00b7 ${this.onlineRoomCode}` : "";
+      coopLabel = `${live}${room} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -1482,12 +1499,18 @@ export class Game {
   }
 
   private openStats() {
-    const roster = this.coop
-      ? [
-          { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown },
-          ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
-        ]
-      : null;
+    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean }> | null = null;
+    if (this.coop) {
+      roster = [
+        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown },
+        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
+      ];
+    } else if (this.mode === "online" && this.wsTransport) {
+      roster = [
+        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown },
+        ...this.wsTransport.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
+      ];
+    }
     this.hud.showStats({
       floor: this.floor, kills: this.kills, coins: this.coins,
       runTime: (performance.now() - this.runStart) / 1000,
@@ -1523,7 +1546,7 @@ export class Game {
     if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
     if (s !== "closed" && s !== "error") return;
     if (this.wsTransport.isReady()) this.gameOver();
-    else this.quitToMenu();
+    else this.quitToMenu("connect_failed");
   }
 
   // True when a world point is on (or near) the visible screen — used to gate audio
@@ -1984,8 +2007,9 @@ export class Game {
   }
 
   // Draws a character sprite with its animation transform, an optional frame from a
-  // spritesheet (falling back to the static PNG), and an optional white hit-flash.
-  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number) {
+  // spritesheet (falling back to the static PNG), an optional white hit-flash, and an
+  // optional identity tint (recolored via the shading-preserving cache in assets.ts).
+  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number, tint: string | null = null) {
     const { ctx } = this;
     const sheet = this.sprites.sheet(name, clip);
     if (!sheet && !this.sprites.ready(name)) {
@@ -2009,9 +2033,12 @@ export class Game {
       const fw = sheet.img.naturalHeight || FRAME;
       const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
       const i = frameIndex(count, sheet.fps, frameClock);
-      ctx.drawImage(sheet.img, i * fw, 0, fw, fw, -half, -half, size, size);
+      // The tinted sheet is pixel-identical in layout, so the source frame rect still applies.
+      const src = tint ? this.sprites.tintedSheetCanvas(name, clip, tint) ?? sheet.img : sheet.img;
+      ctx.drawImage(src, i * fw, 0, fw, fw, -half, -half, size, size);
     } else {
-      ctx.drawImage(this.sprites.get(name), -half, -half, size, size);
+      const src = tint ? this.sprites.tintedSprite(name, tint) ?? this.sprites.get(name) : this.sprites.get(name);
+      ctx.drawImage(src, -half, -half, size, size);
     }
     if (flash > 0) {
       const f = this.sprites.flashSprite(name);
@@ -2622,6 +2649,12 @@ export class Game {
     }
   }
 
+  // The chosen identity tint for the local blob, or null for the natural amber sprite
+  // (palette slot 0 IS the sprite's own coloring, so it never re-tints).
+  private selfTint(): string | null {
+    return this.selfColorIndex !== null && this.selfColorIndex > 0 ? playerColor(this.selfColorIndex) : null;
+  }
+
   private renderPlayer() {
     const { ctx, cam } = this;
     const psx = this.px - cam.x, psy = this.py - cam.y;
@@ -2634,7 +2667,7 @@ export class Game {
     const rec = this.playerAnim.recoil;
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
-    this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock);
+    this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
     if (!this.isDown) this.renderHeldWeapon(psx, psy, this.heldAimAngle(), this.weapon, alpha, this.playerAnim.recoil, this.heldThrustOffset());
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
@@ -2724,13 +2757,15 @@ export class Game {
     if (this.afterimages.length === 0) return;
     const { ctx, cam } = this;
     const isReady = this.sprites.ready("hero");
+    const tint = this.selfTint();
+    const heroImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
     for (const a of this.afterimages) {
       const k = 1 - a.t; // 1..0
       ctx.save();
       ctx.globalAlpha = k * 0.4;
       ctx.translate(a.x - cam.x, a.y - cam.y);
       ctx.scale(a.facing, 1);
-      if (isReady) ctx.drawImage(this.sprites.get("hero"), -26, -26, 52, 52);
+      if (isReady) ctx.drawImage(heroImg, -26, -26, 52, 52);
       else { ctx.fillStyle = "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
       ctx.restore();
     }

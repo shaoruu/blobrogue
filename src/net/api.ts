@@ -7,10 +7,15 @@ import { makeFunctionReference } from "convex/server";
 // must stay in sync with the handlers in /convex.
 
 export type RoomStatus = "lobby" | "playing" | "ended";
+// Which multiplayer flow a room belongs to: classic peer-synced co-op, or a lobby for the
+// authoritative game server (the room code maps to a distinct server world).
+export type RoomKind = "coop" | "online";
 
 export interface ProfileDoc {
   playerId: string;
   name: string;
+  // Chosen blob tint (client palette index); null until the player picks one.
+  colorIndex: number | null;
   totalKills: number;
   deepestFloor: number;
   totalCoins: number;
@@ -89,7 +94,7 @@ export type PresenceUpdateArgs = {
 
 export const api = {
   players: {
-    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string }, ProfileDoc>("players:ensurePlayer"),
+    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
     recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number }, ProfileDoc | null>("players:recordRun"),
@@ -100,14 +105,18 @@ export const api = {
   },
   gsTicket: {
     // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).
-    mint: makeFunctionReference<"action", { clientId: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
+    // With a roomCode, the mint verifies room membership and binds the room's world id into
+    // the ticket, so friends sharing a code land in the same isolated server world.
+    mint: makeFunctionReference<"action", { clientId: string; roomCode?: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
   },
   rooms: {
-    create: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
-    quickPlay: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),
-    join: makeFunctionReference<"mutation", { code: string; playerId: string }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus }>("rooms:join"),
+    create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
+    quickPlay: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),
+    join: makeFunctionReference<"mutation", { code: string; playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
+    reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:reopen"),
+    heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),
     leave: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:leave"),
   },

@@ -1,28 +1,67 @@
 // Auth-ticket seam (production spec §3, ops §7). Every WS join carries a short-lived signed
 // ticket that binds a playerId; the server verifies it BEFORE binding a player to a world —
 // an unauthenticated socket can do nothing. In production the ticket is minted by a trusted
-// party (a Convex action, Stage C wiring) using the SAME GS_AUTH_SECRET; here we implement the
-// verify side (production-ready) + a mint helper the tests/harness use.
+// party (the Convex action convex/gsTicket.ts) using the SAME GS_AUTH_SECRET; here we implement
+// the verify side (production-ready) + a mint helper the tests/harness use.
+//
+// Beyond identity (pid/exp) the payload can carry OPTIONAL room/identity claims, appended by
+// the minter in a fixed key order (see convex/gsTicketCore.ts — the byte contract):
+//   wld — the world id this ticket AUTHORIZES. Convex mints it only after verifying room
+//         membership, and the join handler binds the connection to exactly this world; a
+//         client can never assert a world id itself. Absent -> the default/public world.
+//   nm  — the player's display name (shown above their blob to other players).
+//   cl  — a cosmetic color index (player-chosen blob tint).
+// All three are validated/sanitized here before anything trusts them.
 //
 // The signature is HMAC-SHA256 over `v1.<payload>`, so the secret never leaves the server<->
 // minter trust boundary and can be rotated without a client change.
 //
 // A DEV bypass exists ONLY when explicitly enabled (GS_ALLOW_DEV_AUTH=1) and NEVER in
-// production (NODE_ENV=production hard-disables it). It accepts `dev:<playerId>` so a local
-// browser tab can connect without a Convex mint. It is off by default — production requires a
-// real signed ticket.
+// production (NODE_ENV=production hard-disables it). It accepts `dev:<playerId>` — optionally
+// `dev:<playerId>@<worldId>` so the zero-secret two-tab local proof can exercise room-scoped
+// worlds too. It is off by default — production requires a real signed ticket.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface TicketPayload {
-  pid: string; // authenticated playerId
-  exp: number; // unix seconds expiry
+  pid: string;  // authenticated playerId
+  exp: number;  // unix seconds expiry
+  wld?: string; // authorized world id
+  nm?: string;  // display name
+  cl?: number;  // cosmetic color index
+}
+
+// Optional claims for a mint (long-form field names of the wire keys above).
+export interface TicketClaims {
+  worldId?: string;
+  name?: string;
+  colorIndex?: number;
 }
 
 export interface AuthResult {
   ok: boolean;
   playerId?: string;
+  worldId?: string;     // verified world authorization (absent -> default world)
+  name?: string;        // sanitized display name
+  colorIndex?: number;  // validated cosmetic color index
   reason?: string;
+}
+
+// World ids are minter-controlled but still bounded/charset-checked so a compromised minter
+// can't inject log-breaking or unbounded ids ("room:ABCD", "arena-1", ...).
+const WORLD_ID_RE = /^[a-zA-Z0-9:_-]{1,40}$/;
+const NAME_MAX = 20;
+const COLOR_MAX = 15;
+
+export function isValidWorldId(id: string): boolean {
+  return WORLD_ID_RE.test(id);
+}
+
+// Display names render on other players' screens: strip control characters, collapse
+// whitespace runs, clamp length. Returns null when nothing displayable remains.
+export function sanitizeDisplayName(raw: string): string | null {
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim().slice(0, NAME_MAX);
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 function b64url(buf: Buffer): string {
@@ -37,9 +76,13 @@ function sign(secret: string, body: string): string {
 }
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
-// dev-ticket endpoint — mirrors what the production Convex minter will do.
-export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now()): string {
+// dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
+// (payload keys in the FIXED order pid, exp, wld, nm, cl; see convex/gsTicketCore.ts).
+export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
+  if (claims.worldId !== undefined) payload.wld = claims.worldId;
+  if (claims.name !== undefined) payload.nm = claims.name;
+  if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -49,16 +92,20 @@ export interface AuthConfig {
   allowDev: boolean;      // GS_ALLOW_DEV_AUTH=1 AND NODE_ENV!==production
 }
 
-// Verify a ticket, returning the bound playerId or a reason for rejection. Pure w.r.t. the
-// clock argument so it is deterministically testable.
+// Verify a ticket, returning the bound playerId (+ any verified claims) or a reason for
+// rejection. Pure w.r.t. the clock argument so it is deterministically testable.
 export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()): AuthResult {
   if (typeof ticket !== "string" || ticket.length === 0 || ticket.length > 512) {
     return { ok: false, reason: "malformed" };
   }
   if (cfg.allowDev && ticket.startsWith("dev:")) {
-    const pid = ticket.slice(4);
+    const raw = ticket.slice(4);
+    const at = raw.indexOf("@");
+    const pid = at < 0 ? raw : raw.slice(0, at);
+    const wld = at < 0 ? null : raw.slice(at + 1);
     if (pid.length < 1 || pid.length > 64) return { ok: false, reason: "bad_dev_id" };
-    return { ok: true, playerId: "dev:" + pid };
+    if (wld !== null && !isValidWorldId(wld)) return { ok: false, reason: "bad_world" };
+    return { ok: true, playerId: "dev:" + pid, ...(wld !== null ? { worldId: wld } : {}) };
   }
   if (!cfg.secret) return { ok: false, reason: "no_secret" };
 
@@ -82,7 +129,26 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
   }
   if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp)) return { ok: false, reason: "bad_exp" };
   if (payload.exp * 1000 < nowMs) return { ok: false, reason: "expired" };
-  return { ok: true, playerId: payload.pid };
+
+  // Optional claims: a signed-but-malformed claim is a minter bug or tamper attempt — reject
+  // outright rather than silently misrouting the player or trusting junk.
+  const out: AuthResult = { ok: true, playerId: payload.pid };
+  if (payload.wld !== undefined) {
+    if (typeof payload.wld !== "string" || !isValidWorldId(payload.wld)) return { ok: false, reason: "bad_world" };
+    out.worldId = payload.wld;
+  }
+  if (payload.nm !== undefined) {
+    if (typeof payload.nm !== "string" || payload.nm.length > 64) return { ok: false, reason: "bad_name" };
+    const name = sanitizeDisplayName(payload.nm);
+    if (name !== null) out.name = name;
+  }
+  if (payload.cl !== undefined) {
+    if (typeof payload.cl !== "number" || !Number.isInteger(payload.cl) || payload.cl < 0 || payload.cl > COLOR_MAX) {
+      return { ok: false, reason: "bad_color" };
+    }
+    out.colorIndex = payload.cl;
+  }
+  return out;
 }
 
 // Build the auth config from the environment, enforcing that the dev bypass can never be on
