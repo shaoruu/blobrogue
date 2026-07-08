@@ -188,15 +188,17 @@ export const ITEMS: readonly ItemDef[] = [
   },
 ];
 
-// Weighted, distinct draw for one blessing offer. Math.random is fine here — the
-// offered choices don't need to be deterministic across clients (picks are local).
-export function rollItemChoices(count: number): ItemDef[] {
+// Weighted, distinct draw for one blessing offer. The roll function is injected so the same
+// logic serves both the local (solo) path — Math.random, picks are local — and the authoritative
+// server, which passes a seeded generator so the OFFERED choices are server-decided and a client
+// can't fabricate an off-pool item (the server validates a pick against this exact set).
+export function rollItemChoicesWith(count: number, rand: () => number): ItemDef[] {
   const pool = ITEMS.slice();
   const chosen: ItemDef[] = [];
   for (let n = 0; n < count && pool.length > 0; n++) {
     let total = 0;
     for (const it of pool) total += RARITY_WEIGHT[it.rarity];
-    let r = Math.random() * total;
+    let r = rand() * total;
     let idx = 0;
     for (; idx < pool.length; idx++) {
       r -= RARITY_WEIGHT[pool[idx].rarity];
@@ -207,4 +209,14 @@ export function rollItemChoices(count: number): ItemDef[] {
     pool.splice(idx, 1);
   }
   return chosen;
+}
+
+export function rollItemChoices(count: number): ItemDef[] {
+  return rollItemChoicesWith(count, Math.random);
+}
+
+// Look up an item definition by id (the server validates a client's blessing pick against the
+// offered ids, then applies the corresponding ItemDef).
+export function itemById(id: string): ItemDef | undefined {
+  return ITEMS.find((it) => it.id === id);
 }

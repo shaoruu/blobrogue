@@ -111,6 +111,11 @@ export interface WorldState {
   histCount: number;
   remoteTargets: RemoteTarget[];
   isCoop: boolean;
+  // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
+  // (the server owns floor transitions), but unlike solo a player hitting 0 HP goes DOWN rather
+  // than ending the world, and enemy processing never aborts on a single downed player. Solo and
+  // the legacy Convex co-op path leave this false, so their behavior is unchanged.
+  isShared: boolean;
   isSandbox: boolean;
   isGodMode: boolean; // dev sandbox: damagePlayer no-ops while true
   // Per-query scratch (nearest living target); avoids per-frame allocation, matching the
@@ -139,7 +144,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
 // skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
 // spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
 // Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; skipLocalPlayer?: boolean }
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean }
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
@@ -166,6 +171,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     histCount: 0,
     remoteTargets: [],
     isCoop: opts.isCoop ?? false,
+    isShared: opts.isShared ?? false,
     isSandbox: opts.isSandbox ?? false,
     isGodMode: false,
     targetX: 0,
@@ -451,6 +457,17 @@ function acquireWeapon(p: PlayerSim, id: WeaponId): void {
 export function equipWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
   if (p) equipWeapon(p, id);
+}
+
+// Authoritative, validated weapon switch (the server's switch-input handler). Equips only a
+// slot the player actually owns; an unowned id is ignored (a tampered client can't equip a
+// weapon it never picked up). Returns whether the switch was accepted. equipWeapon resets the
+// fire cooldown and cancels any in-progress melee swing server-side.
+export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): boolean {
+  const p = w.players.get(pid);
+  if (!p || !p.ownedWeapons.includes(id)) return false;
+  equipWeapon(p, id);
+  return true;
 }
 
 // Client-driven acquire + equip (dev grant, or golden 'weapon' command).
@@ -834,7 +851,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         damagePlayer(w, victim, e.touchDamage, ev);
         if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
         applyThorns(w, victim, victim, e, ev);
-        if (victim.hp <= 0 && !w.isCoop) return;
+        // Solo aborts the enemy loop on death (game over). Co-op and the authoritative shared
+        // world keep processing — a downed player doesn't stop the world.
+        if (victim.hp <= 0 && !w.isCoop && !w.isShared) return;
       }
     }
 
@@ -1566,14 +1585,21 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
   const isCleared = w.enemies.length === 0;
   if (!isCleared) return;
-  const p = primaryPlayer(w);
-  if (p && !p.isDown && Math.hypot(p.x - ex, p.y - ey) < TILE) {
-    // Solo descends in-sim; co-op defers to the client's shared-floor orchestration
-    // (everyone descends together) so the sim stays authoritative per client without
-    // knowing about presence.
-    if (w.isCoop) ev.push({ t: "reachExit", toFloor: w.floor + 1 });
-    else descend(w, w.floor + 1, ev);
+  // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
+  // player, so this is identical to the old single-player check. The authoritative server owns
+  // this decision entirely off server positions — no client triggers the transition.
+  let anyLiving = false;
+  let allAtExit = true;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    anyLiving = true;
+    if (Math.hypot(p.x - ex, p.y - ey) >= TILE) { allAtExit = false; break; }
   }
+  if (!anyLiving || !allAtExit) return;
+  // Solo + shared server descend in-sim; the legacy Convex co-op path defers to the client's
+  // shared-floor orchestration (everyone descends together via presence).
+  if (w.isCoop) ev.push({ t: "reachExit", toFloor: w.floor + 1 });
+  else descend(w, w.floor + 1, ev);
 }
 
 // A floor descent (solo). Co-op's shared-floor sync is orchestrated client-side; the
@@ -1583,11 +1609,15 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   for (const p of w.players.values()) {
     p.combo = 0; p.comboTimer = 0;
     p.isDown = false;
+    p.reviveProgress = 0;
     p.hp = Math.min(p.maxHp, p.hp + 2);
   }
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
-  ev.push({ t: "offerBlessing", pid: LOCAL_ID });
+  // Offer a between-floor blessing to EVERY player (solo: the one LOCAL_ID player, identical to
+  // before). The server turns each offer into that client's seeded choice set (see the server's
+  // offer handling); solo rolls its own choices client-side.
+  for (const p of w.players.values()) ev.push({ t: "offerBlessing", pid: p.id });
 }
 
 // ---- the step ----
