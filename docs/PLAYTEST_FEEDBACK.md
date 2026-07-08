@@ -3,7 +3,7 @@
 This is the source of truth for Ian's playtest feedback. Main runner updates it after every feedback burst and links specs/commits/tests. Status vocabulary: `NEW`, `DIAGNOSED`, `SPECCED`, `BUILDING`, `SHIPPED`, `BLOCKED (dependency)`.
 
 ## Hard priorities / governance
-- `BUILDING` **Full authoritative multiplayer end-to-end is coding priority #1.** Server owns ALL gameplay state; no sim-heavy feature branches until Stage A/B/C production-green. Stage A merged PR #20; Stage B merged PR #21; Stage C PR #22 blocked/reworking TD findings. Slack updates: `#ian-brain`.
+- `SHIPPED` **Full authoritative multiplayer end-to-end (coding priority #1) — LIVE.** Server owns ALL gameplay state. Stage A #20, Stage B #21, Stage C SHIPPED via #24 (supersedes #22, now closed); lobby/rooms/identity #26; control plane #23; juice #27. TD daily gate: PASS, main production-green. Playable at blobrogue-shaoruuu.vercel.app (Play Online → room code). Slack updates: `#ian-brain`.
 - `LOCKED` Server hosting: Vercel client + Hetzner authoritative Node server; PM2/nginx/WSS; admin.create.town safe control plane; no laptop dependency.
 - `LOCKED` Technical Director owns daily architecture automation + every-major-PR PASS/BLOCK. Main runner routes fixes/final calls.
 - `LOCKED` Main runner makes product/creative decisions; no approval widgets/babysitting.
@@ -13,7 +13,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 ## Multiplayer / architecture / deployment
 - `SHIPPED` Stage A pure deterministic sim (`src/sim`, LocalTransport); 6 goldens / 4,500 ticks deterministic. PR #20.
 - `SHIPPED` Stage B authoritative WS transport/server/prediction/reconciliation/interpolation/security/harness. PR #21. Measured 100ms RTT+5% loss p90 ~179ms, drift 0px.
-- `BUILDING` Stage C ALL-state authority: players/inventory/blessings/coins/combo/floor seed+dungeon/objective/exit/descend/enemies/bullets/hits/status/loot/props/chests. PR #22 repair loop. TD blockers tracked in `/workspace/blobrogue_TECH_AUDIT_stageBC.md`.
+- `SHIPPED` Stage C ALL-state authority: players/inventory/blessings/coins/combo/floor seed+dungeon/objective/exit/descend/enemies/bullets/hits/status/loot/props/chests. SHIPPED via #24 (all TD blockers resolved; #22 superseded+closed). Deployed live (protocol v3, gs.create.town). Room-scoped worlds via #26. TD gate PASS.
 - `BUILDING` admin.create.town blobrogue panel cloud agent + blobrogue-control immutable release pipeline cloud agent.
 - `READY` admin.create.town persistent browser session logged in.
 - `BLOCKED` Actual Hetzner install: recreated box lacks town/Hetzner SSH key+host config; safe control plane is the preferred no-laptop solution.
@@ -56,7 +56,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SPECCED` Movement grammar: HUNT/ORBIT/BURROW/ANCHOR/FLOCK/FLEE-BAIT. First trio Rootkite, Knellbat, Seamwalker. Smart low-HP flee/reposition with tell/counter; no input cheating.
 - `SPECCED` Visible threat ladder: normal→large/brute→elite→miniboss, mechanical size/mass/attacks/loot; no HP sponge.
 - `SHIPPED` Slime King current boss bar/stat buff, but `FAILED PLAYTEST`: still killed in ~3s.
-- `SPECCED` Balance reset: Slime King initial F5 900 HP/formula-calibrated ~35–50s normal / 20–25s high-roll, phase pressure/carryover; healing rates cut ~half; co-op scaling Stage C only. `docs/specs/blobrogue_BALANCE_RESET_spec.md`.
+- `SHIPPED` Balance reset (#25, live): Slime King F5 900 HP, measured ~20-45s TTK (was ~3s), phase floors enforced, threat-budget floors w/ swarm/brute/elite tiers, heart economy halved, leveled blessings w/ raw caps, co-op scaling. `docs/specs/blobrogue_BALANCE_FINAL_impl.md`.
 - `SPECCED` Boss roster: Slime King, Marrow blind charger, Hollow Choir, Weaver, Jet, Gilded Warden. Only Slime King currently implemented.
 - `SPECCED` Arena floors: rare sealed center; boss+lieutenant first, duo, gauntlet, survival; overlap scheduler/fairness budget.
 - `LOCKED` Mobs/boss difficulty via techniques/movement/room pressure/scarcity, not only HP.
