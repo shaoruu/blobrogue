@@ -41,7 +41,7 @@ export interface XformStyle {
   lean: number;   // max lean (radians)
 }
 
-export const CHARACTER_STYLE: XformStyle = { freq: 3.4, bob: 1.7, squash: 0.065, hop: 3.4, lean: 0.14 };
+export const CHARACTER_STYLE: XformStyle = { freq: 3.4, bob: 1.4, squash: 0.065, hop: 1.6, lean: 0.12 };
 export const BOSS_STYLE: XformStyle = { freq: 1.4, bob: 1.3, squash: 0.05, hop: 1.2, lean: 0.05 };
 
 export interface Xform { ox: number; oy: number; sx: number; sy: number; rot: number; }

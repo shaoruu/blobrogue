@@ -2948,8 +2948,12 @@ export class Game {
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
     if (!this.isDown) {
-      if (WEAPONS[this.weapon].melee) this.renderHeldMelee(psx, psy, this.aimAngle, this.weapon, alpha, this.meleeSwing);
-      else this.renderHeldWeapon(psx, psy, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
+      // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)
+      // so the gun stays glued to the body while moving. The bullet/muzzle ORIGIN stays at the
+      // true sim center (psx/psy) — the weapon art is cosmetic and just follows the body.
+      const bx = psx + xf.ox, by = psy + xf.oy;
+      if (WEAPONS[this.weapon].melee) this.renderHeldMelee(bx, by, this.aimAngle, this.weapon, alpha, this.meleeSwing);
+      else this.renderHeldWeapon(bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
     }
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
