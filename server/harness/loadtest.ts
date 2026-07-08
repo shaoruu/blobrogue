@@ -78,6 +78,12 @@ async function main(): Promise<void> {
   for (const b of load) b.start();
   await waitUntil(() => observer.transport.isReady() && walker.transport.isReady() && mover.transport.isReady() && load.every((b) => b.transport.isReady()), 5000);
 
+  // God mode on the measurement world: the seeded arena enemies keep chasing (realistic
+  // entity/bandwidth load) but can no longer down the stationary probe bots mid-soak — a long
+  // run would otherwise end in an authoritative party wipe that closes every measured socket.
+  const measured = s.server.getWorld();
+  if (measured) measured.state.isGodMode = true;
+
   // Track the walker's interpolated x on the observer, and its authoritative x on the server.
   const walkerId = walker.serverId();
   if (walkerId) observer.trackRemote(walkerId);
