@@ -23,7 +23,7 @@ import {
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
   type ServerMsg,
 } from "../net/protocol.js";
-import { projectPlayer, applyPlayerSnapshot } from "../net/playerSnapshot.js";
+import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
 
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
@@ -494,7 +494,9 @@ export class WSTransport implements Transport {
     // Refresh the render player from the predicted one through the SAME exhaustive projection
     // boundary reconciliation uses (playerSnapshot.ts) — never a manual field list, so a new
     // server-owned field can't silently miss the render/HUD player — plus the render extras.
-    applyPlayerSnapshot(rp, projectPlayer(pp));
+    // PlayerSim is structurally a superset of the snapshot, so the predicted player applies
+    // directly (no per-frame intermediate projection object).
+    applyPlayerSnapshot(rp, pp);
     rp.aimAngle = pp.aimAngle;
     rp.meleeSwing = pp.meleeSwing;
     // Render-extrapolate the local player between 20Hz fixed steps so movement stays smooth at any
