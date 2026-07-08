@@ -111,10 +111,14 @@ bindings.
 ## 3. Identity & saved data — the approach, and why
 
 **Chosen: lightweight persistent identity** — each browser mints a random UUID
-(`clientId`) stored in `localStorage`, plus a display name. On boot the client calls
-`players.ensurePlayer({ clientId, name })`, which upserts one `players` row and returns
-the saved profile. Stats (`recordRun`) key off `clientId`, so they **persist across
-sessions** and show on the title screen and the hold-**Tab** stats panel.
+(`clientId`) stored in `localStorage`, plus a display name and a chosen **blob color**
+(a palette pick that tints your hero in solo + online; slot 0 is the natural amber). On
+boot the client calls `players.ensurePlayer({ clientId, name, colorIndex? })`, which
+upserts one `players` row and returns the saved profile — the color is only ever written
+on an explicit pick, so a fresh browser never clobbers an account's saved pick, and
+signing in adopts the account's pick across devices. Stats (`recordRun`) key off
+`clientId`, so they **persist across sessions** and show on the title screen and the
+hold-**Tab** stats panel.
 
 **Optional accounts via `@convex-dev/auth` (Google).** The guest path above is still
 the default and needs zero config. On top of it, players can *optionally* sign in with
@@ -223,13 +227,14 @@ convex/
   tsconfig.json    standard Convex tsconfig
   .gitignore       ignores _generated
 src/net/
-  config.ts        VITE_CONVEX_URL gate
+  config.ts        VITE_CONVEX_URL gate + game-server URL resolution
   api.ts           typed function references (no _generated needed)
-  session.ts       identity + saved stats
+  session.ts       identity (name + blob color) + saved stats
   auth.ts          vanilla Convex Auth client (Google sign-in, token storage)
   interp.ts        per-player entity-interpolation buffer (smooth remote rendering)
-  multiplayer.ts   CoopBridge implementation over ConvexClient
-src/ui/menu.ts     title / lobby / game-over / sign-in
+  multiplayer.ts   classic co-op CoopBridge implementation over ConvexClient
+  onlineLobby.ts   ONLINE room session (roster/status via Convex, ticket mint -> game server)
+src/ui/menu.ts     title / online rooms / classic co-op lobby / game-over / sign-in
 src/game/coop.ts   CoopBridge contract (game ↔ net seam)
 AUTH_SETUP.md      operator steps to enable Google sign-in
 ```
@@ -244,25 +249,52 @@ AUTH_SETUP.md      operator steps to enable Google sign-in
 
 ---
 
-## 7. Authoritative online play (the game server; `?online=1`)
+## 7. Authoritative online play (the game server + the room lobby)
 
-Separate from the Convex co-op above, the **authoritative WebSocket server** (`server/`)
-owns ALL gameplay state online: players, enemies, bullets, loot, inventory, blessings, and
-floor transitions. It is strictly opt-in behind `?online=1` (or `?gs=<wsUrl>`) — never a
-default path, so neither Convex nor the game server being unreachable can ever affect solo.
+Separate from the classic Convex co-op above, the **authoritative WebSocket server**
+(`server/`) owns ALL gameplay state online: players, enemies, bullets, loot, inventory,
+blessings, and floor transitions. The player-facing front door is **PLAY ONLINE** on the
+menu (`?online=1` deep-links straight to it): quick-play into the public pool, create a
+private room with a shareable 4-letter code, or join a friend's code. Neither Convex nor
+the game server being unreachable can ever affect solo — every failure lands back on a menu
+screen with a status line.
 
-**Production join flow** (players connecting to the live server):
+### Rooms → worlds (how friends share ONE world)
 
-1. The client resolves the server URL: `?gs=` override → `VITE_GS_URL` →
-   `wss://gs.create.town/ws` on production builds (`src/net/config.ts`).
-2. Production builds mint a join ticket through the trusted Convex action
-   [`convex/gsTicket.ts`](convex/gsTicket.ts) — an HMAC-SHA256 `v1.<payload>.<sig>` ticket
-   signed with the same `GS_AUTH_SECRET` the game server verifies
-   ([`server/src/auth.ts`](server/src/auth.ts)). Signed-in accounts mint for their players-row
-   id; guests for `guest:<clientId>`. The two implementations are locked byte-for-byte by
-   `server/test/ticket.test.ts`.
-3. Dev builds and explicit `?gs=` targets fetch a ticket from that server's local
-   `/dev-ticket` endpoint instead (dev auth only; hard-disabled in production).
+Room codes map to isolated authoritative worlds via a verified chain — the world id is
+never a client-asserted string:
+
+1. **Lobby (Convex).** `rooms.create/join/quickPlay` with `kind: "online"` put the player in
+   a room (roster + status only; Convex owns NO gameplay for this kind). Online and classic
+   co-op rooms never cross-match. The lobby screen shows the code + live roster (names,
+   colors, host) and the host's START control; joining a room whose run is live drops
+   straight in, and a wipe regroups the party in the same lobby (`rooms.reopen`).
+2. **Ticket (Convex → signed claim).** On connect, [`convex/gsTicket.ts`](convex/gsTicket.ts)
+   `mint({ clientId, roomCode })` verifies the caller actually SITS in that online room
+   (`rooms.membership`), then binds `wld: "room:<CODE>"` into the HMAC ticket payload —
+   along with the display name (`nm`) and chosen blob color (`cl`).
+3. **Join (game server).** The join message is unchanged (`{ t:"join", ticket, protocol }`);
+   the server verifies the ticket (`server/src/auth.ts`) and binds the connection to exactly
+   the ticket's world: `sessions.bind(conn, worldId)`. Same code → same world; different
+   codes → fully isolated runs (own seed/floor/enemies). No claim → the public default
+   world. Emptied room worlds are reset AND released, so codes never leak server memory.
+4. **Identity on the wire.** The verified name/color ride each snapshot's `PlayerWire`
+   (`nm`/`cl`), so names render above blobs and everyone sees your chosen tint. Both fields
+   are decode-optional with fallbacks — old/new client/server pairs interoperate.
+
+The mint/verify byte agreement (now including the `wld`/`nm`/`cl` claims) is locked by
+`server/test/ticket.test.ts`; the room isolation + identity flow end-to-end by
+`server/test/rooms.test.ts`.
+
+### Ticket sources
+
+- **Production / menu flow:** the trusted Convex action above — an HMAC-SHA256
+  `v1.<payload>.<sig>` ticket signed with the same `GS_AUTH_SECRET` the game server
+  verifies. Signed-in accounts mint for their players-row id; guests for
+  `guest:<clientId>`. Guest play never requires sign-in.
+- **Dev / ops (`?gs=<wsUrl>` direct join):** that server's local `/dev-ticket` endpoint
+  (dev auth only; hard-disabled in production), which accepts the same optional
+  `world`/`name`/`color` params for the two-tab room proof — see `server/README.md`.
 
 **Operator setup for production join:**
 
@@ -273,4 +305,6 @@ npx convex env set GS_AUTH_SECRET <the game server's GS_AUTH_SECRET>
 
 The game server side is unchanged (`GS_AUTH_SECRET` in its `.env`; nginx terminates wss on
 443 → loopback:8090 and sets `X-Real-IP`, which the server's trusted-proxy handling uses for
-real per-client connection limits).
+real per-client connection limits). Note the menu's online flow mints through Convex even on
+dev builds, so a local game server must share the dev deployment's `GS_AUTH_SECRET`; the
+zero-Convex path is `?gs=`.
