@@ -38,13 +38,21 @@ export interface RoomRuntime {
   // Authoritative gameplay actions (validated; inputs/intents only, never outcomes).
   queueInput(conn: Conn, cmd: InputIntent, maxQueue: number): void;
   trySwitchWeapon(pid: PlayerId, weapon: WeaponId): boolean;
-  rollBlessingChoices(): string[];
+  // Rolls against the player's owned levels (maxed blessings leave the pool; new ones weigh
+  // 3× an upgrade); rare = the boss-chest Rare-pool reward.
+  rollBlessingChoices(pid: PlayerId, rare: boolean): string[];
   applyBlessing(pid: PlayerId, itemId: string): boolean;
 
   // Player ids whose run ended this tick (full wipe) — the server drives the leave lifecycle.
   gameOverPlayers(): PlayerId[];
-  // Player ids offered a blessing this tick — the server turns each into a validated offer.
-  offerPlayers(): PlayerId[];
+  // Blessing offers raised this tick — the server turns each into a validated offer.
+  offerPlayers(): BlessingOfferRequest[];
+}
+
+// One sim-raised blessing offer (descend or boss chest) awaiting server-side rolling.
+export interface BlessingOfferRequest {
+  pid: PlayerId;
+  rare: boolean;
 }
 
 // Session / lifecycle store: which room a connection belongs to, room creation + teardown. In

@@ -144,7 +144,7 @@ async function eventChannelTests(): Promise<void> {
   rig.sock.deliver(rig.snap({ full: true }));
   rig.transport.poll();
 
-  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", x: 1, y: 2, combo: 1 } };
+  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", tier: "standard", x: 1, y: 2, combo: 1 } };
   rig.world.tick = 10;
   rig.sock.deliver(rig.snap({ events: [kill], evTo: 1 }));
   rig.world.tick = 11;

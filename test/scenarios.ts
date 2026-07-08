@@ -26,7 +26,10 @@ export type Command =
   | { t: "item"; tick: number; itemId: string }
   | { t: "spawnEnemy"; tick: number; kind: EnemyKind; dx: number; dy: number }
   | { t: "spawnProp"; tick: number; kind: PropKind; dx: number; dy: number }
-  | { t: "spawnChest"; tick: number; dx: number; dy: number };
+  | { t: "spawnChest"; tick: number; dx: number; dy: number }
+  // Sim god mode (damagePlayer no-ops): the boss scenario's stationary gunner must survive
+  // the full 900-HP phase machine — the scenario's purpose is state-machine coverage.
+  | { t: "godmode"; tick: number };
 
 export interface Scenario {
   name: string;
@@ -89,19 +92,21 @@ const combat: Scenario = {
   },
 };
 
-// Boss floor: spawn a boss point-blank, stack survivability + damage, and hose it down so
-// it walks its full 3-phase state machine (slam / radial / adds / death).
+// Boss floor: spawn the 900-HP Slime King point-blank and hose it down with a strong
+// Lv3 build (~40 sustained DPS) so the golden walks the FULL new phase machine: P1 hop
+// slams + adds, both 1.2s transition roars (floors + queued overflow), P2 radials, the P3
+// arena squeeze, and death. God mode keeps the stationary gunner alive through all of it.
 const boss: Scenario = {
   name: "boss",
   seed: 0x3333,
   floor: 5,
-  ticks: 1400,
+  ticks: 1750,
   commands: (() => {
     const cmds: Command[] = [];
-    for (let i = 0; i < 40; i++) cmds.push({ t: "item", tick: 0, itemId: "vitality" });
-    cmds.push({ t: "item", tick: 0, itemId: "big_iron" });
-    cmds.push({ t: "item", tick: 0, itemId: "deadeye" });
-    cmds.push({ t: "item", tick: 0, itemId: "hair_trigger" });
+    cmds.push({ t: "godmode", tick: 0 });
+    for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
+      for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+    }
     cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
     cmds.push({ t: "spawnEnemy", tick: 2, kind: "boss", dx: 170, dy: 0 });
     return cmds;

@@ -19,14 +19,15 @@ export type SimEvent =
   | { t: "thornsHit"; eid: number; x: number; y: number; radius: number; dmg: number; tint: string }
   | { t: "burnTick"; x: number; y: number; radius: number; dmg: number }
   | { t: "shockArc"; eid: number; x: number; y: number; tx: number; ty: number; tRadius: number; dmg: number; color: string; killed: boolean }
-  | { t: "enemyKill"; eid: number; kind: EnemyKind; x: number; y: number; combo: number }
+  | { t: "enemyKill"; eid: number; kind: EnemyKind; tier: string; x: number; y: number; combo: number }
   | { t: "heal"; pid: PlayerId; x: number; y: number }
   // player movement / state
   | { t: "dashStart"; pid: PlayerId; x: number; y: number }
   | { t: "dashTrail"; pid: PlayerId; x: number; y: number }
   | { t: "playerHurt"; pid: PlayerId; x: number; y: number }
   | { t: "itemPicked"; pid: PlayerId; x: number; y: number; tint: string }
-  | { t: "offerBlessing"; pid: PlayerId }
+  // rare: the boss-chest reward replaces the floor's pick with a Rare-pool offer.
+  | { t: "offerBlessing"; pid: PlayerId; rare: boolean }
   | { t: "revive"; pid: PlayerId; by: PlayerId; x: number; y: number } // downed player brought back by a teammate
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
@@ -46,6 +47,11 @@ export type SimEvent =
   | { t: "radialBurst"; x: number; y: number }
   | { t: "bossAddSpawn"; eid: number; x: number; y: number; mx: number; my: number; spawned: boolean }
   | { t: "bossPhase"; eid: number; x: number; y: number }
+  // Transition telemetry (§5/§7 gate 2): enter/exit of each 1.2s roar beat with the queued
+  // overflow, so the ≥20s anti-burst floor stays observable in logs and tests.
+  | { t: "bossTransition"; eid: number; phase: number; entering: boolean; queued: number; hpFrac: number }
+  // A reinforcement wave release or an elite split coming active (client plays a spawn puff).
+  | { t: "enemySpawn"; eid: number; kind: EnemyKind; tier: string; x: number; y: number }
   // flow / run
   | { t: "descend"; toFloor: number }
   | { t: "reachExit"; toFloor: number } // co-op: client requests a shared-floor descend

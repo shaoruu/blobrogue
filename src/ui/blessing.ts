@@ -1,5 +1,13 @@
 import type { ItemDef, ItemRarity } from "../sim/items.js";
+import { itemDesc } from "../sim/items.js";
 import { itemIconEl } from "../game/hudIcons.js";
+
+// One offered card: the blessing plus the cumulative level this pick would reach (an owned
+// blessing offered again IS its Lv2/Lv3 upgrade).
+export interface BlessingChoice {
+  item: ItemDef;
+  nextLevel: number;
+}
 
 // The between-floor "choose a blessing" overlay. Modeled on PauseOverlay: it owns its
 // own fixed layer (never fights #overlay), freezes nothing itself — the game decides
@@ -15,7 +23,7 @@ export class BlessingOverlay {
   private root: HTMLElement;
   private cardsEl: HTMLElement;
   private cards: HTMLElement[] = [];
-  private choices: ItemDef[] = [];
+  private choices: BlessingChoice[] = [];
   private selected = 0;
   private onPick: ((item: ItemDef) => void) | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -50,7 +58,7 @@ export class BlessingOverlay {
     this.root = root;
   }
 
-  show(choices: ItemDef[], onPick: (item: ItemDef) => void): void {
+  show(choices: BlessingChoice[], onPick: (item: ItemDef) => void): void {
     this.choices = choices;
     this.onPick = onPick;
     this.selected = 0;
@@ -72,7 +80,7 @@ export class BlessingOverlay {
   private render(): void {
     this.cardsEl.replaceChildren();
     this.cards = [];
-    this.choices.forEach((item, i) => {
+    this.choices.forEach(({ item, nextLevel }, i) => {
       const el = document.createElement("button");
       el.className = "blessing-card";
       el.type = "button";
@@ -90,17 +98,17 @@ export class BlessingOverlay {
 
       const name = document.createElement("span");
       name.className = "bc-name";
-      name.textContent = item.name;
+      name.textContent = nextLevel > 1 ? `${item.name} Lv${nextLevel}` : item.name;
       el.appendChild(name);
 
       const rarity = document.createElement("span");
       rarity.className = `bc-rarity ${item.rarity}`;
-      rarity.textContent = RARITY_LABEL[item.rarity];
+      rarity.textContent = nextLevel > 1 ? "UPGRADE" : RARITY_LABEL[item.rarity];
       el.appendChild(rarity);
 
       const desc = document.createElement("span");
       desc.className = "bc-desc";
-      desc.textContent = item.desc;
+      desc.textContent = itemDesc(item, nextLevel);
       el.appendChild(desc);
 
       el.addEventListener("click", () => this.pick(i));
@@ -134,10 +142,10 @@ export class BlessingOverlay {
   }
 
   private pick(i: number): void {
-    const item = this.choices[i];
+    const choice = this.choices[i];
     const cb = this.onPick;
-    if (!item || !cb) return;
+    if (!choice || !cb) return;
     this.hide();
-    cb(item);
+    cb(choice.item);
   }
 }

@@ -70,6 +70,8 @@ function applyCommands(game: any, s: Scenario, tick: number): void {
     } else if (c.t === "spawnChest") {
       const p = spawnCenter(w);
       devSpawnChest(w, p.x + c.dx, p.y + c.dy);
+    } else if (c.t === "godmode") {
+      w.isGodMode = true;
     }
   }
 }
