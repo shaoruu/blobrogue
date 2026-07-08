@@ -315,6 +315,12 @@ export class WSTransport implements Transport {
     this.interp = new RemoteInterp();
     this.smoothX = 0;
     this.smoothY = 0;
+    // Re-anchor the between-steps render extrapolation at the repositioned player: a stale
+    // anchor from the OLD world would otherwise leak a fraction of the whole old-to-new
+    // displacement into the first rendered frame (a visible spawn-frame offset).
+    const lp = this.predState.players.get(LOCAL_ID)!;
+    this.prevPredX = lp.x;
+    this.prevPredY = lp.y;
     this.isWorldRebuilt = true;
   }
 
@@ -421,6 +427,10 @@ export class WSTransport implements Transport {
     } else {
       this.smoothX = 0;
       this.smoothY = 0;
+      // A hard snap must land EXACTLY: re-anchor the render extrapolation too, or the next
+      // frame extrapolates along the correction and overshoots the true position by a step.
+      this.prevPredX = p.x;
+      this.prevPredY = p.y;
     }
   }
 

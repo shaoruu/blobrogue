@@ -29,6 +29,13 @@ export class Minimap {
     this.ctx = canvas.getContext("2d")!;
   }
 
+  // Blank the map (online boot: no authoritative dungeon yet, so show nothing stale).
+  clear() {
+    this.baked = null;
+    this.bakedFor = null;
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
   private bake(d: Dungeon) {
     this.scale = Math.min(MAX_W / d.w, MAX_H / d.h);
     const w = Math.ceil(d.w * this.scale);

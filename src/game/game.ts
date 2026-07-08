@@ -306,6 +306,9 @@ export class Game {
   private blessing: BlessingOverlay;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
+  // Online: whether the first authoritative snapshot has revealed the real world yet. Until
+  // then the run sits behind a connecting veil (the local world is a placeholder).
+  private isWorldRevealed = false;
 
   // The simulation is owned by the Transport. Solo/co-op run stepWorld in-process
   // (LocalTransport); online routes through WSTransport (predict + reconcile against an
@@ -547,6 +550,7 @@ export class Game {
     this.hurtFlash = 0;
     this.isPaused = false;
     this.isChoosing = false;
+    this.isWorldRevealed = this.mode !== "online";
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
@@ -555,11 +559,20 @@ export class Game {
     this.isPlayerMoving = false;
     this.playerLean = 0;
     this.runStart = performance.now();
-    this.loadFloorClient();
-    this.cam.x = this.px - this.canvas.width / 2;
-    this.cam.y = this.py - this.canvas.height / 2;
+    if (this.mode === "online") {
+      // The server owns the world; the local one is a pre-join prediction placeholder with
+      // the WRONG dungeon and spawn. Show nothing of it: the run boots behind a connecting
+      // veil (see tick/render) and the floor load + camera + banner happen when the first
+      // authoritative snapshot rebuilds the world — so the first visible frame already has
+      // the player at the true spawn instead of teleporting there a beat later.
+      this.minimap.clear();
+    } else {
+      this.loadFloorClient();
+      this.cam.x = this.px - this.canvas.width / 2;
+      this.cam.y = this.py - this.canvas.height / 2;
+      this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    }
     this.hud.setVisible(true);
-    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
     // First run ever: briefly surface the core controls, then never nag again.
     if (!settings.isControlsHintSeen) {
       this.hud.showControlsHint();
@@ -708,10 +721,25 @@ export class Game {
     return a;
   }
 
+  // Online, before the first authoritative snapshot: the local world is a placeholder built
+  // for pre-join prediction — the wrong dungeon, the wrong spawn. Nothing of it may run or
+  // render, or the player sees themselves spawn there and teleport once truth arrives.
+  private isAwaitingOnlineWorld(): boolean {
+    return this.mode === "online" && this.wsTransport !== null && !this.wsTransport.isReady();
+  }
+
   // One client frame: sample input -> drive the sim through the transport -> replay the
   // returned events into FX -> advance client-only cosmetics -> render (caller). Solo runs
   // stepWorld in-process (LocalTransport), so this IS the old update loop, just seam'd.
   private tick(dt: number) {
+    // Awaiting the authoritative world: keep the handshake alive (join resends live in
+    // advance) but run no gameplay — there is nothing real to play in yet.
+    if (this.isAwaitingOnlineWorld()) {
+      this.transport.advance(dt);
+      this.updateHud();
+      return;
+    }
+
     if (this.coop) this.syncCoop(dt);
 
     const cmd = this.buildInput();
@@ -724,9 +752,13 @@ export class Game {
     if (this.mode === "online" && this.wsTransport) {
       const rebuilt = this.wsTransport.consumeWorldRebuilt();
       if (rebuilt) {
+        const isFirstReveal = !this.isWorldRevealed;
+        this.isWorldRevealed = true;
         this.seed = rebuilt.seed;
         this.loadFloorClient();
         this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor) }));
+        // The run properly begins at the first reveal (the connect veil isn't run time).
+        if (isFirstReveal) this.runStart = performance.now();
       }
     }
 
@@ -1907,6 +1939,7 @@ export class Game {
 
   private render() {
     const { ctx, canvas } = this;
+    if (this.isAwaitingOnlineWorld()) { this.renderConnectingVeil(); return; }
     ctx.fillStyle = this.currentBiome.bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     // trauma² shake, scaled by the player's intensity setting. New random offset per
@@ -1943,6 +1976,23 @@ export class Game {
     this.renderHurtVignette();
     this.renderReticle();
     this.renderMinimap();
+  }
+
+  // The pre-world online frame: a plain dark hold with a pulsing status line. Never the
+  // placeholder dungeon — showing it is exactly the spawn-then-teleport artifact.
+  private renderConnectingVeil() {
+    const { ctx, canvas } = this;
+    ctx.fillStyle = "#0d0a18";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const pulse = 0.55 + 0.35 * Math.sin(this.animClock * 4);
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffb43b";
+    ctx.font = '700 14px "Silkscreen", monospace';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("ENTERING THE DUNGEON\u2026", canvas.width / 2, canvas.height / 2);
+    ctx.restore();
   }
 
   // Unmissable "you got hit" read: a red glow that hugs the screen edge and fades fast,
