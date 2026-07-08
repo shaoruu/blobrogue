@@ -401,6 +401,77 @@ function descendTests(): void {
   }
 }
 
+// Bug regression: "mobs still get stuck a lot next to barrels". An enemy chasing a target
+// with a prop dead in its path must route around it — reaching the target within a bounded
+// time and never staying wedged against the prop.
+function propAvoidanceTests(): void {
+  const DT = 1 / 20;
+
+  interface ChaseResult { reached: boolean; ticks: number; maxWedge: number; trace: string }
+  // Drive one chaser at a parked player through stepWorldPhase and measure progress. The
+  // wedge metric is the LONGEST streak of near-zero movement ticks — the old behavior
+  // ground against a prop for seconds; the reworked steering must never sit still.
+  const runChase = (seed: number, place: (w: WorldState) => void, maxTicks: number): ChaseResult => {
+    const w = createWorld(seed, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    spawnPlayerInWorld(w, "pB"); // standing ally: a stray touch downs rather than ending the world
+    const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+    a.x = cx + 110; a.y = cy;
+    const bp = w.players.get("pB")!;
+    bp.x = cx - 500; bp.y = cy - 400;
+    place(w);
+    const e = devSpawnEnemy(w, "slime", cx - 110, cy);
+    e.spawnTimer = 0;
+    let maxWedge = 0, wedge = 0, ticks = 0, reached = false;
+    const trace: number[] = [];
+    while (ticks < maxTicks && !reached) {
+      const x0 = e.x, y0 = e.y;
+      stepWorldPhase(w, DT, []);
+      ticks++;
+      trace.push(Math.round(e.x * 100) / 100, Math.round(e.y * 100) / 100);
+      const moved = Math.hypot(e.x - x0, e.y - y0);
+      wedge = moved < 0.3 ? wedge + 1 : 0;
+      if (wedge > maxWedge) maxWedge = wedge;
+      if (Math.hypot(e.x - a.x, e.y - a.y) <= e.radius + a.pr + 2) reached = true;
+    }
+    return { reached, ticks, maxWedge, trace: JSON.stringify(trace) };
+  };
+
+  section("prop avoidance: a chaser routes around a prop dead-center in its path");
+  {
+    // 220px straight-line chase ≈ 2.2s at slime speed; allow 3x for the detour.
+    const r = runChase(0xA401D, (w) => {
+      const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+      devSpawnProp(w, "barrel", cx, cy);
+    }, Math.ceil(7 / DT));
+    check("enemy reached the target around the barrel", r.reached, `${(r.ticks * DT).toFixed(1)}s`);
+    check("enemy never stayed wedged against it", r.maxWedge <= 8, `longest stall=${(r.maxWedge * DT).toFixed(2)}s`);
+  }
+
+  section("prop avoidance: a chaser rounds a WALL of props (commits to one side, no ping-pong)");
+  {
+    const r = runChase(0xA401E, (w) => {
+      const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+      devSpawnProp(w, "crate", cx, cy - 34);
+      devSpawnProp(w, "barrel", cx, cy);
+      devSpawnProp(w, "crate", cx, cy + 34);
+    }, Math.ceil(9 / DT));
+    check("enemy reached the target around the prop wall", r.reached, `${(r.ticks * DT).toFixed(1)}s`);
+    check("enemy never stayed wedged against the wall", r.maxWedge <= 8, `longest stall=${(r.maxWedge * DT).toFixed(2)}s`);
+  }
+
+  section("prop avoidance: the detour is deterministic (seeded, replay-identical)");
+  {
+    const place = (w: WorldState) => {
+      const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+      devSpawnProp(w, "barrel", cx, cy);
+    };
+    const r1 = runChase(0xA401F, place, Math.ceil(7 / DT));
+    const r2 = runChase(0xA401F, place, Math.ceil(7 / DT));
+    check("two runs of the same seed trace the identical path", r1.trace === r2.trace && r1.reached);
+  }
+}
+
 function lootOwnershipTests(): void {
   section("loot ownership: a coin is collected once, by the first player to reach it");
   {
@@ -626,6 +697,7 @@ function main(): void {
   propChainTests();
   weaponSwitchTests();
   descendTests();
+  propAvoidanceTests();
   lootOwnershipTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

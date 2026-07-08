@@ -317,7 +317,7 @@
 []
 []
 ["dmg 753.48 1026.63 2 0 ","puff 742 1032.32 5 #bfe9ff","sfx enemyHit 1 0.65"]
-["dmg 1281.05 1091.4 2 0 ","puff 1266.62 1105.45 5 #a855f7","sfx enemyHit 1 0.65"]
+["dmg 1277.24 1090.64 2 0 ","puff 1266.62 1105.45 5 #a855f7","sfx enemyHit 1 0.65"]
 []
 []
 ["particles 602 1032 2 #ffe6a0","sfx ricochet 1 1","shell 584 1026 0","trauma 0.14"]

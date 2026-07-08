@@ -1626,10 +1626,10 @@ function slimeHopPulse(e: Enemy): number {
 }
 
 function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step: number): void {
-  // Local obstacle avoidance: props/chests aren't in the flow field, so a chaser would
-  // path straight into a chest and wedge. Probe ahead; if a prop sits there, deflect the
-  // heading around it so the enemy curves past instead of grinding into it.
-  angle = avoidPropAhead(w, e, angle);
+  // Local obstacle avoidance: props aren't in the flow field, so a chaser would otherwise
+  // grind straight into a barrel/crate and wedge. Steer smoothly around the nearest
+  // blocking prop instead.
+  angle = avoidPropAhead(w, e, angle, dt);
   const x0 = e.x, y0 = e.y;
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
   const moved = Math.hypot(e.x - x0, e.y - y0);
@@ -1637,35 +1637,79 @@ function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step
   e.stuckTimer = isBlocked ? e.stuckTimer + dt : 0;
   if (e.stuckTimer < C.STUCK_TIME) return;
   e.stuckTimer = 0;
-  // Wedged: a strong perpendicular escape on both sides, then a hard back-diagonal, so a
-  // chaser never freezes against geometry or a prop.
-  const side = Math.sin(e.zig) >= 0 ? 1 : -1;
+  // Wedged despite the steering (a geometry corner, or a prop flush against a wall): a
+  // strong perpendicular escape preferring the committed detour side, then the other side,
+  // then a hard back-diagonal. Whichever side the escape actually took BECOMES the
+  // commitment, so the following steering keeps rounding the same way instead of shoving
+  // straight back into the prop.
+  const side = e.avoidSide !== 0 ? e.avoidSide : Math.sin(e.zig) >= 0 ? 1 : -1;
   const esc = step * 1.6;
+  e.avoidSide = side;
+  e.avoidTime = C.AVOID_COMMIT;
   if (nudgeEnemy(w, e, angle + side * C.HALF_PI, esc)) return;
-  if (nudgeEnemy(w, e, angle - side * C.HALF_PI, esc)) return;
+  if (nudgeEnemy(w, e, angle - side * C.HALF_PI, esc)) { e.avoidSide = -side; return; }
   nudgeEnemy(w, e, angle + side * (Math.PI * 0.75), esc);
 }
 
-// If a live prop lies within a short probe ahead of `angle`, return a deflected heading
-// that curves around it; otherwise return `angle`.
-function avoidPropAhead(w: WorldState, e: Enemy, angle: number): number {
-  const probe = e.radius + 22;
-  const px = e.x + Math.cos(angle) * probe, py = e.y + Math.sin(angle) * probe;
+// Steer a chaser around the nearest live prop blocking its path, or return `angle` when the
+// way is clear. Three properties keep enemies from wedging on barrels/crates (the playtest
+// complaint):
+//  - the whole swept CORRIDOR ahead is tested (radius sum wide, AVOID_LOOKAHEAD deep), not a
+//    single probe point, so an offset prop that would still clip the body is seen;
+//  - the deflection is the TANGENT past the prop's edge — gentle at range, growing to a
+//    perpendicular slide when touching — instead of a fixed 45° kink;
+//  - the detour side is COMMITTED for a short window (e.avoidSide/avoidTime), so a dead-on
+//    approach can't ping-pong left/right into the prop every tick, and a row of props is
+//    rounded consistently along one flank.
+function avoidPropAhead(w: WorldState, e: Enemy, angle: number, dt: number): number {
+  const cos = Math.cos(angle), sin = Math.sin(angle);
   let hit: Prop | null = null;
-  let hitD2 = Infinity;
+  let hitDist = Infinity;
   for (const p of w.props) {
     if (p.dead) continue;
+    const dx = p.x - e.x, dy = p.y - e.y;
     const rr = e.radius + p.radius;
-    const ddx = px - p.x, ddy = py - p.y, d2 = ddx * ddx + ddy * ddy;
-    if (d2 < rr * rr && d2 < hitD2) { hit = p; hitD2 = d2; }
+    const fwd = dx * cos + dy * sin;
+    if (fwd < 0 || fwd > rr + C.AVOID_LOOKAHEAD) continue; // behind, or beyond the lookahead
+    if (Math.abs(dx * sin - dy * cos) >= rr) continue;     // outside the swept corridor
+    const d = Math.hypot(dx, dy);
+    if (d < hitDist) { hit = p; hitDist = d; }
   }
-  if (!hit) return angle;
+  if (!hit) {
+    if (e.avoidTime > 0) {
+      e.avoidTime = e.avoidTime > dt ? e.avoidTime - dt : 0;
+      if (e.avoidTime === 0) e.avoidSide = 0;
+    }
+    return angle;
+  }
   const toProp = Math.atan2(hit.y - e.y, hit.x - e.x);
-  let diff = angle - toProp;
-  while (diff > Math.PI) diff -= 2 * Math.PI;
-  while (diff < -Math.PI) diff += 2 * Math.PI;
-  const turn = diff >= 0 ? 1 : -1;
-  return angle + turn * (Math.PI / 4);
+  if (e.avoidSide === 0) {
+    // A fresh detour follows the side the heading is already biased toward; a dead-on
+    // approach picks whichever side has open room (deterministic zig tiebreak).
+    let diff = angle - toProp;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    e.avoidSide = Math.abs(diff) > 0.08 ? (diff >= 0 ? 1 : -1) : clearerSide(w, e, toProp);
+  }
+  e.avoidTime = C.AVOID_COMMIT;
+  const clear = e.radius + hit.radius + C.AVOID_CLEARANCE;
+  const tangent = hitDist > clear ? Math.asin(clear / hitDist) : C.HALF_PI;
+  return toProp + e.avoidSide * tangent;
+}
+
+// Which flank of a blocking prop has open room: probe one point past the body on each side,
+// perpendicular to the prop direction. A tie falls back to the seeded zig heading, so the
+// pick is stable and deterministic.
+function clearerSide(w: WorldState, e: Enemy, toProp: number): number {
+  const px = -Math.sin(toProp), py = Math.cos(toProp);
+  const reach = e.radius + C.AVOID_SIDE_PROBE;
+  const isOpen = (side: number): boolean => {
+    const x = e.x + px * side * reach, y = e.y + py * side * reach;
+    return !isWall(w, x, y) && !blockedByProp(w, x, y, e.radius);
+  };
+  const left = isOpen(1), right = isOpen(-1);
+  if (left !== right) return left ? 1 : -1;
+  return Math.sin(e.zig) >= 0 ? 1 : -1;
 }
 
 function nudgeEnemy(w: WorldState, e: Enemy, angle: number, step: number): boolean {

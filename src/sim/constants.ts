@@ -15,9 +15,15 @@ export const SLIME_HOP_FREQ = 3.4;
 export const SLIME_HOP_AMOUNT = 0.55;
 
 // Anti-stuck nudge for wedged chasers.
-export const STUCK_TIME = 0.22;
+export const STUCK_TIME = 0.12;
 export const STUCK_PROGRESS = 0.5;
 export const STUCK_MIN_STEP = 0.05;
+
+// Local prop avoidance (props aren't in the flow field, so chasers steer around them).
+export const AVOID_LOOKAHEAD = 30;   // px past touching distance a chaser anticipates a prop
+export const AVOID_CLEARANCE = 5;    // px of extra clearance the detour tangent aims for
+export const AVOID_COMMIT = 0.45;    // seconds a chosen detour side persists after the last block
+export const AVOID_SIDE_PROBE = 20;  // px beyond the body the side-clearance probes test
 
 export const MIN_MULTI_SPREAD = 0.26;
 

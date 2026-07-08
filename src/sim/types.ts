@@ -81,8 +81,13 @@ export interface Enemy extends Entity {
   hopMove: number;
   spawnTimer: number;  // spawn-in grace: counts to 0 before the enemy may attack
   // Anti-stuck safety net: seconds a chaser has been trying to move but barely
-  // progressing (wedged on geometry / another body). Nudged perpendicular past ~0.4s.
+  // progressing (wedged on geometry / another body). Nudged perpendicular once it trips.
   stuckTimer: number;
+  // Prop-avoidance side commitment: which way this chaser is detouring around the prop
+  // blocking its path (-1/+1; 0 = none). Held for a short window after the last block so a
+  // dead-on approach can't ping-pong left/right into the prop every tick.
+  avoidSide: number;
+  avoidTime: number;   // seconds the current side commitment persists after the last block
   // Elemental status scratch (allocated at spawn, ticked in updateEnemies). Same local
   // per-enemy model as hp/knockback — driven by bullets, so co-op stays desync-free.
   burn: number;       // seconds of burn DoT left
