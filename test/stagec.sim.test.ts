@@ -285,11 +285,45 @@ function interestTests(): void {
   }
 }
 
+function propChainTests(): void {
+  section("prop chain: one barrel detonates the adjacent barrel; both blasts hit mobs identically");
+  {
+    const { w, a } = twoPlayerArena();
+    a.x = 50; a.y = 50;
+    devSpawnProp(w, "barrel_explosive", 500, 400);
+    devSpawnProp(w, "barrel_explosive", 540, 400); // within blast radius of the first
+    const e1 = devSpawnEnemy(w, "slime", 500, 440); e1.hp = 100; e1.spawnTimer = 0;
+    const e2 = devSpawnEnemy(w, "slime", 540, 440); e2.hp = 100; e2.spawnTimer = 0;
+    const h1 = e1.hp, h2 = e2.hp;
+    const barrel1 = w.props[0];
+    w.bullets.push({ x: barrel1.x, y: barrel1.y, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: a.id, damage: 10, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    for (let i = 0; i < 5; i++) stepWorldPhase(w, 1 / 20, []);
+    const liveBarrels = w.props.filter((p) => p.kind === "barrel_explosive" && p.breakT === undefined).length;
+    check("both barrels detonated (chain reaction)", liveBarrels === 0, `liveBarrels=${liveBarrels}`);
+    check("mob near the first barrel took blast damage", e1.hp < h1, `hp ${h1}->${e1.hp}`);
+    check("mob near the chained barrel also took blast damage", e2.hp < h2, `hp ${h2}->${e2.hp}`);
+  }
+
+  section("prop chain: explosion damages players in range (friendly fire is authoritative)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    // Park B far; put A right next to the barrel so the blast catches them.
+    b.x = 50; b.y = 50;
+    devSpawnProp(w, "barrel_explosive", 500, 400);
+    a.x = 520; a.y = 400; a.invuln = 0;
+    const hpBefore = a.hp;
+    w.bullets.push({ x: 500, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 10, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    stepWorldPhase(w, 1 / 20, []);
+    check("player caught in the blast took self/friendly-fire damage", a.hp < hpBefore, `hp ${hpBefore}->${a.hp}`);
+  }
+}
+
 function main(): void {
   ownershipTests();
   downReviveTests();
   lagCompTests();
   interestTests();
+  propChainTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll Stage-C sim assertions passed.\n");
