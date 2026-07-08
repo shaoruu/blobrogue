@@ -86,13 +86,14 @@ async function bootNormal() {
   // so an unreachable Convex/game server can never affect a solo player.
   const gsUrl = resolveGsUrl(window.location.search);
   if (gsUrl) {
-    // Ticket source: an explicit `?gs=` override targets a LOCAL dev server, whose own
-    // /dev-ticket endpoint mints (dev-auth only, hard-disabled in production). Otherwise —
-    // the real deployment — the trusted Convex action mints an HMAC ticket signed with the
-    // same GS_AUTH_SECRET the game server verifies (see convex/gsTicket.ts).
-    const isDevServer = isExplicitGsOverride(window.location.search);
+    // Ticket source: production builds mint a real HMAC ticket through the trusted Convex
+    // action (signed with the same GS_AUTH_SECRET the game server verifies — convex/gsTicket.ts).
+    // Dev builds and explicit `?gs=` overrides target a LOCAL dev server, whose /dev-ticket
+    // endpoint mints instead (dev-auth only, hard-disabled in production) — the documented
+    // two-tab local proof keeps working with zero Convex dependency.
+    const useConvexMint = import.meta.env.PROD && !isExplicitGsOverride(window.location.search) && client !== null;
     const getTicket = async (): Promise<string> => {
-      if (!isDevServer && client) {
+      if (useConvexMint && client) {
         const minted = await client.action(api.gsTicket.mint, { clientId: session.clientId });
         return minted.ticket;
       }

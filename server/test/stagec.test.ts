@@ -332,8 +332,8 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
-  // ---- authoritative floor transition over the wire ----
-  await test("authoritative descend: both clients transition to the same next floor + layout", async () => {
+  // ---- authoritative MULTI-floor run over the wire (2 clients, blessings between floors) ----
+  await test("authoritative multi-floor run: two clients clear, descend, answer offers, descend again", async () => {
     const s = await startTestServer();
     try {
       const a = new Bot({ url: s.url, secret: s.secret, playerId: "fl-a", script: () => idle() });
@@ -342,12 +342,16 @@ async function main(): Promise<void> {
       await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
       const world = s.server.getWorld()!;
       const floor0 = world.state.floor;
-      world.state.enemies = [];
-      const d = world.state.dungeon;
-      for (const id of [a.serverId()!, b.serverId()!]) {
-        const p = world.state.players.get(id)!;
-        p.x = d.exit.x * TILE + TILE / 2; p.y = d.exit.y * TILE + TILE / 2;
-      }
+      const rev0 = world.state.rev;
+      const clearAndExit = () => {
+        world.state.enemies = [];
+        const d = world.state.dungeon;
+        for (const id of [a.serverId()!, b.serverId()!]) {
+          const p = world.state.players.get(id)!;
+          p.x = d.exit.x * TILE + TILE / 2; p.y = d.exit.y * TILE + TILE / 2;
+        }
+      };
+      clearAndExit();
       await waitUntil(() => world.state.floor === floor0 + 1, 2000);
       check("server descended one floor (party-wide, authoritative)", world.state.floor === floor0 + 1, `floor=${world.state.floor}`);
       await sleep(300);
@@ -355,10 +359,35 @@ async function main(): Promise<void> {
       const sb = b.transport.getLatestSnapshot()!;
       check("both clients see the same next floor", sa.floor === sb.floor && sa.floor === floor0 + 1, `a=${sa.floor} b=${sb.floor}`);
       check("both clients see the same seed", sa.seed === sb.seed);
+      check("world revision advanced on both wires", sa.rev === sb.rev && sa.rev === rev0 + 1, `rev=${sa.rev}`);
       const idsA = sa.enemies.map((e) => e.id).sort().join(",");
       const idsB = sb.enemies.map((e) => e.id).sort().join(",");
       check("both clients see the identical new-floor enemy layout", idsA === idsB);
       check("no client sent the transition (server-owned; there is no descend message)", true);
+
+      // Between-floor blessings: BOTH clients got a server offer; each answers its own and the
+      // server applies DIFFERENT authoritative mods per player.
+      const offers = await waitUntil(() => a.transport.getPendingOfferPeek() !== null && b.transport.getPendingOfferPeek() !== null, 2000);
+      check("both clients received their between-floor offers", offers);
+      const offerA = a.transport.getPendingOfferPeek()!;
+      const offerB = b.transport.getPendingOfferPeek()!;
+      const pickA = offerA.choices[0];
+      const pickB = offerB.choices.find((c) => c !== pickA) ?? offerB.choices[0];
+      a.transport.sendChooseBlessing(offerA.id, pickA);
+      b.transport.sendChooseBlessing(offerB.id, pickB);
+      await waitUntil(() => world.state.players.get(a.serverId()!)!.ownedItemIds.length === 1 && world.state.players.get(b.serverId()!)!.ownedItemIds.length === 1, 2000);
+      check("A's blessing applied server-side", world.state.players.get(a.serverId()!)!.ownedItemIds[0] === pickA);
+      check("B's blessing applied server-side", world.state.players.get(b.serverId()!)!.ownedItemIds[0] === pickB);
+
+      // Second descend: a REAL multi-floor run, blessings carried across floors.
+      clearAndExit();
+      await waitUntil(() => world.state.floor === floor0 + 2, 2000);
+      check("second party-wide descend reached floor 3", world.state.floor === floor0 + 2, `floor=${world.state.floor}`);
+      await sleep(300);
+      const sa2 = a.transport.getLatestSnapshot()!;
+      const sb2 = b.transport.getLatestSnapshot()!;
+      check("both clients agree on floor 3 + revision", sa2.floor === sb2.floor && sa2.floor === floor0 + 2 && sa2.rev === sb2.rev);
+      check("blessings persisted across the descend on the wire", sa2.self!.items.includes(pickA) && sb2.self!.items.includes(pickB));
       a.stop(); b.stop();
     } finally { await s.close(); }
   });

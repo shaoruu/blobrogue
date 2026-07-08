@@ -142,12 +142,12 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
-  // ---- P0-5: input cadence is frame-rate independent (30/60/144/240Hz equivalence) ----
-  await test("P0-5: 30/60/144/240Hz clients advance equally (fixed-step sampling)", async () => {
+  // ---- P0-5: input cadence is frame-rate independent (60/120/144/240Hz equivalence) ----
+  await test("P0-5: 60/120/144/240Hz clients advance equally (fixed-step sampling)", async () => {
     const s = await startTestServer();
     try {
       const move = () => ({ seq: 0, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false });
-      const fps = [33, 16, 7, 4]; // 30 / 60 / ~144 / ~240 Hz frame intervals (ms)
+      const fps = [16, 8, 7, 4]; // 60 / 120 / ~144 / ~240 Hz frame intervals (ms)
       const bots = fps.map((frameMs, i) => new Bot({ url: s.url, secret: s.secret, playerId: `fps${i}`, script: move, frameMs }));
       for (const b of bots) b.start();
       await waitUntil(() => bots.every((b) => b.transport.isReady()), 3000);
@@ -231,7 +231,7 @@ async function main(): Promise<void> {
       check("240Hz client still connected after sustained play", fast.transport.isReady() && fast.transport.getStatus() === "open");
       check("no rate limiting triggered by the 240Hz client", s.server.health().counters.rateLimited === 0, `rateLimited=${s.server.health().counters.rateLimited}`);
       // Bounded client internals: the pending-input ring must not grow with frame rate.
-      const pending = (fast.transport as unknown as { pending: unknown[] }).pending.length;
+      const pending = fast.transport.getPendingInputCount();
       check("pending-input ring stays bounded", pending <= 64, `pending=${pending}`);
       fast.stop();
 

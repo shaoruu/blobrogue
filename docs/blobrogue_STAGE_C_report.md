@@ -11,16 +11,24 @@ byte-for-byte and `src/sim` stays pure).
 Built on the merged Stage B (`main` @ `f4bb8de`): the real `server/`, `src/net/protocol.ts`
 Codec, and `src/client/wsTransport.ts` seams — no parallel scaffolding.
 
-**Full-state authority + TD audit follow-up (this revision):** the server now owns ALL current
-floor-run gameplay state — authoritative weapon inventory + validated switch, server-decided +
-validated blessings, real generated dungeon with party-wide authoritative descend, and full
-player state (HP/mods/blessings/owned weapons/coins/kills/combo/down/revive) over the wire. The
-Technical-Director audit findings are all resolved with per-finding regression tests — see
-`/workspace/blobrogue_TECH_AUDIT_stageBC.md`. Key netcode change: **the server tick alone owns
-simulation time** — inputs are dt-less intent samples consumed one per fixed tick, so the sim is
-immune to client-authored dt and independent of client frame rate. Server architecture is split
-into small typed modules behind explicit ports (`RoomRuntime`/`SessionStore`/`SnapshotPublisher`);
-the Colyseus evaluation + adapter seam is `docs/adr/0001`.
+**Full-state authority + TD audit closeout (this revision):** the server now owns ALL floor-run
+gameplay state — authoritative weapon inventory + idempotent validated `equip{cseq}`,
+server-decided + validated + expiring blessings (`offer{id}` / `chooseBlessing{offerId}`), a
+real generated dungeon with a SERVER-ROLLED per-run seed, party-wide authoritative descend, a
+world revision + terminal-run state on every snapshot, and full player state
+(HP/mods/blessings/owned weapons/coins/kills/combo/down/revive) over the wire through ONE
+compile-time-exhaustive projection boundary (`src/net/playerSnapshot.ts`). Every blocker/High
+(and the Medium items) in `docs/specs/blobrogue_TECH_AUDIT_stageBC.md` is resolved with a named
+regression — see the PR description for the point-by-point mapping. Key netcode change: **the
+server tick alone owns simulation time** — inputs are dt-less intent samples consumed one per
+fixed tick (a smuggled `dt` field is a protocol error), so the sim is immune to client-authored
+dt and independent of client frame rate. Production join works end-to-end: a Convex action
+(`convex/gsTicket.ts`) mints the same `v1.<payload>.<sig>` HMAC ticket `server/src/auth.ts`
+verifies (byte-for-byte agreement locked by `server/test/ticket.test.ts`), and production
+builds default to `wss://gs.create.town/ws` behind the strictly opt-in `?online=1`. Server
+architecture stays in small typed modules behind explicit ports
+(`RoomRuntime`/`SessionStore`/`SnapshotPublisher`); the Colyseus evaluation + adapter seam is
+`docs/adr/0001`.
 
 ---
 
@@ -88,6 +96,7 @@ production runs the real dungeon with identical stepWorld/tick/netcode (only map
 | 4           | **0.00 px** | 170 / **193** ms | 0.23 / **0.36** / 2.23 ms | 1.9 KB · **38 KB/s/client** |
 | 8           | **0.00 px** | 171 / **196** ms | 0.31 / **0.45** / 1.66 ms | 2.4 KB · **48 KB/s/client** |
 | 6 · 30s soak| **0.00 px** | 177 / **197** ms | 0.22 / **0.32** / 2.08 ms | 2.2 KB · **43 KB/s/client** |
+| 4 · audit closeout rerun | **0.00 px** | 176 / **212** ms | 0.25 / **0.41** / 2.47 ms | 1.9 KB · **37.9 KB/s/client** |
 
 - **Reconciliation drift is 0.00 px** at 50/100/150ms RTT with jitter + 5% loss — no permanent
   drift, corrections stay sub-`SMOOTH_MAX_PX` and glide.
@@ -105,22 +114,34 @@ Adaptive interp measured 115-159ms (grows with jitter), correction-max ~26-31px 
 - **Solo goldens** (`npm test` root): 6/6 scenarios pass tick-for-tick (state + FX),
   deterministic. **`src/sim` purity**: PASS (no DOM/socket/Convex/client imports — enforced by
   `test/purity.test.ts`).
-- **Stage C pure-sim** (`npm run test:sim`): **61/61** — ownership (bullet/coin/burn/barrel),
-  down/revive (down vs game-over, contact skips downed, team wipe, teammate revive + decay),
+- **Stage C pure-sim** (`npm run test:sim`): **81/81** — ownership (bullet/coin/burn/barrel),
+  DEPARTED-owner attribution (kill credits no one, chest not phantom-opened, burn keeps the
+  immutable id), down/revive (down vs game-over, contact skips downed, team wipe, teammate
+  revive + decay), stranded-downed game over + idempotent terminal transition,
   down-does-not-abort-iteration (H1) + non-shared control, fire-time lag-comp (hitscan uses
-  fire-time view; slow projectile decays to present) + no-impossible-rewind, interest filtering,
-  barrel chain + friendly fire, validated weapon switch, party-wide descend + identical seed/
-  floor/layout, first-come coin/weapon ownership.
-- **Server suites** (`cd server && npm test`): Stage B **14/14** + Stage C **39/39** + hardening
-  **16/16** = **69/69**. Stage C: 2 bots + different weapons kill the same boss with identical
-  HP/phase/death and one authoritative chest both see; identical enemy set + shared props;
-  interest exclusion over the wire; tamper can't speed/fire-rate-hack (server owns cooldowns) and
-  has no message to claim a hit; prediction reconverges @ 50/100/150ms RTT; lag-comp lands laggy
-  shots; independent weapon switch + unowned/off-pool rejection; authoritative blessing apply;
-  authoritative party-wide descend (both clients agree floor/seed/layout). Hardening
-  (`test:hardening`): P0-3 input-flood ~1 step/tick, P0-4 trusted-proxy XFF + per-IP cap, P0-5
-  30/60/144/240Hz equivalence, H5 fuzz + strict protocol-0 rejection, H2 kill event once under
-  40% loss, H6 deterministic game-over leave.
+  fire-time view; slow projectile decays to present; melee rewinds BOTH actors) +
+  impossible-hit negatives, interest filtering, barrel chain + friendly fire, validated weapon
+  switch, party-wide descend + identical seed/floor/layout, first-come coin/weapon ownership.
+- **Protocol contract** (`npm run test:protocol`): **65/65** — both directions round-trip
+  losslessly, 2×3000-frame fuzz never escapes ProtocolError, unknown fields on client frames
+  rejected (malicious `dt` is an error), the AuthoritativePlayerSnapshot projection round-trips
+  every server-owned field, interest enter/exit hysteresis, event scope table.
+- **Client netcode ordering** (`npm run test:netcode`): **19/19** — stale/duplicate/reordered
+  snapshots ignored (rev + tick), ack never decreases (no input resurrection), reliable-event
+  dedupe + evTo ack advance, offer id dedupe, terminal state from snapshots, world rebuild from
+  the authoritative seed/floor.
+- **2-player generated-floor golden** (`npm run test:floorrun`): **36/36** — real generated
+  dungeon, diverging pickups/inventories, diverging server-applied blessings that measurably
+  change combat, full combat floor clear, party exit gate, one descend, fresh next dungeon with
+  per-floor resets, wire coherence for both players, determinism replay.
+- **Server suites** (`cd server && npm test`): Stage B **14/14** + Stage C **42/42** + hardening
+  **51/51** + ticket agreement **14/14** = **121/121**. Stage C adds: idempotent equip cseq,
+  offer-id echo validation. Hardening adds: adversarial-dt kick (0/huge/negative), >16 distinct
+  proxied users at the default cap, X-Real-IP (the documented nginx shape) + spoof safety,
+  60/120/144/240Hz equivalence, sustained 240Hz play without rate limiting + segmented-bucket
+  input-flood kick, offer expiry, pong-id mismatch timeout, config fail-fast, positional-event
+  interest filtering with evTo ack advance, run reset when the room empties. Ticket: the Convex
+  minter and the server verifier agree BYTE-FOR-BYTE; tamper/expiry/replay/wrong-secret reject.
 
 ## Manual two-tab proof (local, dev auth only)
 
@@ -139,7 +160,10 @@ Open **two browser tabs** at:
 http://localhost:5173/?online=1
 ```
 
-(`?online=1` uses `ws://127.0.0.1:8090/ws` by default; each tab fetches a local `dev:` ticket.)
+(`?online=1` on a dev build uses `ws://127.0.0.1:8090/ws` and fetches a local `/dev-ticket`;
+a PRODUCTION build defaults to `wss://gs.create.town/ws` and mints its ticket through the
+Convex `gsTicket:mint` action instead. `?gs=<wsUrl>` explicitly targets any server and always
+uses that server's dev-ticket path.)
 
 Both tabs join the **same** server world and see the shared boss + enemies + the other player.
 Aim at the boss and hold fire in both tabs: **the same boss HP bar drops for both**, phase
@@ -148,25 +172,31 @@ health/metrics: `curl -s localhost:8090/healthz` and `curl -s localhost:8090/met
 
 ## Honest deviations / limitations
 
-- **The server runs the real generated dungeon floor run** (authoritative seed/floor/dungeon/
-  enemies/props/chests/pickups + party-wide descend). Boss floors are every 5th; the multi-bot
-  boss test spawns a boss into the live authoritative world to keep boss-combat assertions
-  deterministic on floor 1 (the boss entity is authoritative regardless of how it spawned).
-- **Lag-comp rewind is anchored at FIRE time and decays** (fixed assumed interp delay
-  `INTERP_BASE_DELAY_MS` + server-measured RTT, clamped). Under jitter the client's actual interp
-  delay only grows, so the server slightly **under**-rewinds — safe/bounded, never over. Refining
-  the exact per-shot time math further is deferrable.
-- **RTT for lag-comp is sampled from ping/pong** at the heartbeat cadence, smoothed; the client's
-  own RTT (for interp) is measured per input→ack, much finer.
+- **The server runs the real generated dungeon floor run** (authoritative random per-run seed/
+  floor/dungeon/enemies/props/chests/pickups + party-wide descend + run reset when the room
+  empties). Boss floors are every 5th; the multi-bot boss test spawns a boss into the live
+  authoritative world to keep boss-combat assertions deterministic on floor 1 (the boss entity
+  is authoritative regardless of how it spawned).
+- **Lag-comp rewind is anchored at FIRE time and decays.** The rewind window uses the
+  server-measured RTT plus the client's REPORTED adaptive interp delay (`stat.dly`), clamped
+  server-side to the same [90,300]ms window the client's interpolation uses and to the sim's
+  bounded history — a lie can only mis-rewind the sender's own shots inside that window. Melee
+  evaluates BOTH actors at fire time (swing-origin pose + rewound target).
+- **RTT for lag-comp is sampled from ping/pong** at the heartbeat cadence, smoothed, with strict
+  pong-id matching; the client's own RTT (for interp) is measured per input→ack, much finer.
 - **Reconnect/session resume is Stage D** per the matrix (rooms ephemeral; a disconnect ends the
-  run, matching today's solo/co-op). Live gameplay state is fully server-owned while connected;
-  the `SessionStore` port is where reconnect tokens land at Stage D.
-- **Blessing/persistence:** blessing mods are authoritative + applied server-side; cross-run
-  persistence (Convex) is Stage D.
+  run, matching today's solo/co-op; the last standing player leaving cleanly game-overs any
+  stranded downed teammates). Live gameplay state is fully server-owned while connected; the
+  `SessionStore` port is where reconnect tokens land at Stage D.
+- **Blessing/persistence:** blessing mods are authoritative + applied server-side; offers carry
+  ids and expire server-side; cross-run persistence (Convex) is Stage D.
 - **Measurement is done in an open arena** (`GS_ARENA`) so the render-latency probe travels a
   clean monotonic line; production runs the real dungeon with identical stepWorld/tick/netcode.
-- **Not deployed.** No access to Ian's Hetzner from the cloud agent; the pm2/nginx/deploy/env
-  templates are shipped and staging-ready.
+- **Production join path is wired but not smoke-tested against the live box from this
+  environment** (no deploy access from the cloud agent): the Convex minter/action, the client
+  production ticket path, and the `wss://gs.create.town/ws` default are shipped and the
+  mint/verify agreement is locked by tests; deploying the updated server build + setting
+  `GS_AUTH_SECRET` in Convex (`npx convex env set GS_AUTH_SECRET ...`) are the two ops steps.
 
 ## Non-gameplay client-only state
 

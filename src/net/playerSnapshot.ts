@@ -111,14 +111,16 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.comboTimer = s.comboTimer;
 }
 
-// Reconstruct a full PlayerMods from a (possibly partial) received mods object, defaulting any
-// missing field to its identity so a malformed frame can't leave holes. Unknown keys are
-// dropped (only fields createMods defines survive).
-export function modsFromWire(w: Partial<PlayerMods> | undefined): PlayerMods {
+// Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is
+// unknown and every field is narrowed here), defaulting any missing/invalid field to its
+// identity so a malformed frame can't leave holes. Unknown keys are dropped (only fields
+// createMods defines survive).
+export function modsFromWire(w: unknown): PlayerMods {
   const base = createMods();
-  if (!w) return base;
+  if (typeof w !== "object" || w === null) return base;
+  const src = w as Record<string, number | undefined>;
   for (const key of Object.keys(base) as Array<keyof PlayerMods>) {
-    const v = w[key];
+    const v = src[key];
     if (typeof v === "number" && Number.isFinite(v)) base[key] = v;
   }
   return base;

@@ -122,8 +122,8 @@ export interface WorldState {
   dungeon: Dungeon;
   flow: FlowField;
   flowCd: number;
-  flowKeyTx: number;
-  flowKeyTy: number;
+  // Combined hash of every living source tile; the flow field rebuilds when it changes.
+  flowKey: number;
   flowSources: number[];
   rng: Rng;
   nextEnemyId: number;
@@ -189,8 +189,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     flow: new FlowField(),
     flowCd: 0,
-    flowKeyTx: -1,
-    flowKeyTy: -1,
+    flowKey: -1,
     flowSources: [],
     rng: new Rng(seed ^ 0x53696d21),
     nextEnemyId: 0,
@@ -262,8 +261,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.enemies = w.isSandbox ? [] : spawnFloorEnemies(w.dungeon, w.seed, floor);
   w.nextEnemyId = w.enemies.length;
   w.flowCd = 0;
-  w.flowKeyTx = -1;
-  w.flowKeyTy = -1;
+  w.flowKey = -1;
   w.pickups = w.isSandbox ? [] : placeWeaponPickups(w);
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
@@ -286,19 +284,11 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
   loadFloorIntoWorld(w, 1);
 }
 
-// The "primary" player used ONLY for flow-field rebuild keying (a positional heuristic, never
-// credit). Solo/co-op/prediction clients always have the LOCAL_ID player; the authoritative
-// server owns per-connection players ("p<id>") with no LOCAL_ID, so this falls back to the first
-// player and returns undefined only for an empty world (idle server). Because solo always has
-// LOCAL_ID, this returns the exact same player it always did (behavior unchanged, goldens green).
-function primaryPlayer(w: WorldState): PlayerSim | undefined {
-  return w.players.get(LOCAL_ID) ?? w.players.values().next().value;
-}
-
 // The still-connected player behind an attributed action (bullet/burn/explosion owner), or null
 // when the actor has left. Attribution is IMMUTABLE: a departed owner's outcomes credit NO ONE
 // (damage still lands, loot still drops at base value) and are never transferred to another live
-// player — the TD audit's ownership contract. Solo: `id` is always the one LOCAL_ID player.
+// player — the TD audit's ownership contract. There is deliberately NO "primary player"
+// fallback anywhere in the credit path. Solo: `id` is always the one LOCAL_ID player.
 function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
   return id !== null ? w.players.get(id) ?? null : null;
 }
@@ -1286,17 +1276,27 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
 function refreshFlowField(w: WorldState, dt: number): void {
   w.flowCd -= dt;
   const d = w.dungeon;
-  // Rebuild trigger keys off the primary player's tile (solo: LOCAL_ID, unchanged). The field
-  // itself is sourced from EVERY living player (solo: exactly one, so identical), so enemies
-  // flow toward whichever player is nearest.
-  const key = primaryPlayer(w);
-  const isUp = key !== undefined && !key.isDown && key.hp > 0;
-  const ptx = key ? Math.floor(key.x / TILE) : -1;
-  const pty = key ? Math.floor(key.y / TILE) : -1;
-  const tileChanged = isUp && (ptx !== w.flowKeyTx || pty !== w.flowKeyTy);
+  // Rebuild trigger keys off a combined hash of EVERY living source tile (players + legacy
+  // remote targets), so ANY player crossing a tile refreshes multi-source paths — not only the
+  // primary. Solo has exactly one player, so the hash changes precisely when that player's
+  // tile changes: identical rebuild ticks, goldens unchanged. The field itself is sourced from
+  // every living player, so enemies flow toward whichever player is nearest.
+  let keyHash = 0;
+  let anyUp = false;
+  for (const pl of w.players.values()) {
+    if (pl.isDown || pl.hp <= 0) continue;
+    anyUp = true;
+    keyHash = (Math.imul(keyHash, 31) + Math.floor(pl.y / TILE) * d.w + Math.floor(pl.x / TILE)) | 0;
+  }
+  for (const r of w.remoteTargets) {
+    if (r.isDown) continue;
+    anyUp = true;
+    keyHash = (Math.imul(keyHash, 31) + Math.floor(r.y / TILE) * d.w + Math.floor(r.x / TILE)) | 0;
+  }
+  const tileChanged = anyUp && keyHash !== w.flowKey;
   if (w.flowCd > 0 && !tileChanged && w.flow.isReady()) return;
   w.flowCd = C.FLOW_REBUILD;
-  w.flowKeyTx = ptx; w.flowKeyTy = pty;
+  w.flowKey = keyHash;
 
   const srcs = w.flowSources;
   srcs.length = 0;

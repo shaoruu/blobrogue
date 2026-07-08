@@ -241,3 +241,36 @@ AUTH_SETUP.md      operator steps to enable Google sign-in
       shoot, and descend together; kill a teammate and revive them.
 - [ ] `npx convex deploy` + `VITE_CONVEX_URL` set in Vercel → co-op works on the deployed URL.
 - [ ] Unset `VITE_CONVEX_URL` locally → menu hides co-op, solo still plays. (Graceful degrade.)
+
+---
+
+## 7. Authoritative online play (the game server; `?online=1`)
+
+Separate from the Convex co-op above, the **authoritative WebSocket server** (`server/`)
+owns ALL gameplay state online: players, enemies, bullets, loot, inventory, blessings, and
+floor transitions. It is strictly opt-in behind `?online=1` (or `?gs=<wsUrl>`) — never a
+default path, so neither Convex nor the game server being unreachable can ever affect solo.
+
+**Production join flow** (players connecting to the live server):
+
+1. The client resolves the server URL: `?gs=` override → `VITE_GS_URL` →
+   `wss://gs.create.town/ws` on production builds (`src/net/config.ts`).
+2. Production builds mint a join ticket through the trusted Convex action
+   [`convex/gsTicket.ts`](convex/gsTicket.ts) — an HMAC-SHA256 `v1.<payload>.<sig>` ticket
+   signed with the same `GS_AUTH_SECRET` the game server verifies
+   ([`server/src/auth.ts`](server/src/auth.ts)). Signed-in accounts mint for their players-row
+   id; guests for `guest:<clientId>`. The two implementations are locked byte-for-byte by
+   `server/test/ticket.test.ts`.
+3. Dev builds and explicit `?gs=` targets fetch a ticket from that server's local
+   `/dev-ticket` endpoint instead (dev auth only; hard-disabled in production).
+
+**Operator setup for production join:**
+
+```bash
+# The shared ticket secret: the SAME value on both sides.
+npx convex env set GS_AUTH_SECRET <the game server's GS_AUTH_SECRET>
+```
+
+The game server side is unchanged (`GS_AUTH_SECRET` in its `.env`; nginx terminates wss on
+443 → loopback:8090 and sets `X-Real-IP`, which the server's trusted-proxy handling uses for
+real per-client connection limits).

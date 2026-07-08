@@ -435,7 +435,7 @@ function validateSelfWire(v: unknown): SelfWire {
     rev: num(o, "rev", 0, 1e4),
     wpn: weaponOf(o, "wpn"),
     wpns, items,
-    mods: modsFromWire(obj(o.mods, "self.mods") as Partial<PlayerMods>),
+    mods: modsFromWire(obj(o.mods, "self.mods")),
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
     combo: num(o, "combo", 0, 1e9), ct: num(o, "ct", 0, 1e4),
   };

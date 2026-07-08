@@ -647,6 +647,10 @@ export class WSTransport implements Transport {
     const p = this.predState.players.get(LOCAL_ID)!;
     return { x: p.x, y: p.y };
   }
+  // Unacked-input ring depth (bounded-memory assertions in the soak tests).
+  getPendingInputCount(): number {
+    return this.pending.length;
+  }
   // The latest authoritative snapshot, for adversity/measurement harnesses.
   getLatestSnapshot(): Extract<ServerMsg, { t: "snap" }> | null {
     return this.latestSnap;
