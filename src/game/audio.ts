@@ -31,6 +31,11 @@ export type SfxName =
   | "tesla"
   | "meleeSwing"
   | "meleeHit"
+  | "heavySwing"
+  | "parry"
+  | "crit"
+  | "levelup"
+  | "blessing"
   | "enemyAttack"
   | "enemyHit"
   | "enemyDeath"
@@ -76,6 +81,11 @@ const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
   tesla: { id: "tesla", variants: 3, mix: 0.7 },
   meleeSwing: { id: "meleeSwing", variants: 3, mix: 0.6 },
   meleeHit: { id: "meleeHit", variants: 3, mix: 0.8 },
+  heavySwing: { id: "heavySwing", variants: 1, mix: 0.85 },
+  parry: { id: "parry", variants: 1, mix: 0.8 },
+  crit: { id: "crit", variants: 1, mix: 0.55 },
+  levelup: { id: "levelup", variants: 1, mix: 0.85 },
+  blessing: { id: "blessing", variants: 1, mix: 0.8 },
   enemyAttack: { id: "enemyAttack", variants: 3, mix: 0.6 },
   enemyHit: { id: "enemyHit", variants: 3, mix: 0.55 },
   enemyDeath: { id: "enemyDeath", variants: 3, mix: 0.7 },
@@ -96,7 +106,8 @@ const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
 // before the first shot; everything else lazy-loads on first use.
 const PRELOAD: SfxName[] = [
   "shootPistol", "shootShotgun", "shootRapid", "smg", "cannon", "burst", "ricochet",
-  "homing", "tesla", "meleeSwing", "meleeHit", "enemyAttack", "enemyHit", "enemyDeath", "playerHurt", "dash",
+  "homing", "tesla", "meleeSwing", "meleeHit", "heavySwing", "parry", "crit",
+  "enemyAttack", "enemyHit", "enemyDeath", "playerHurt", "dash",
   "coin", "heart",
 ];
 
@@ -532,6 +543,36 @@ class AudioEngine {
         this.blip(t, "sawtooth", 240 * rate, 70 * rate, 0.002, 0.1, 0.4 * gain);
         this.noise(t, "bandpass", 1600, 900, 0.06, 0.3 * gain, 1.2, rate);
         break;
+      case "heavySwing":
+        // deep two-stage whoosh: a slower low sweep under the airy one
+        this.noise(t, "bandpass", 400, 1400, 0.24, 0.32 * gain, 1.1, rate);
+        this.noise(t + 0.04, "highpass", 700, 2200, 0.18, 0.2 * gain, 1.3, rate);
+        break;
+      case "parry":
+        // metallic clang: two detuned high rings + a bright snap
+        this.blip(t, "triangle", 1180 * rate, 880 * rate, 0.002, 0.22, 0.32 * gain);
+        this.blip(t, "triangle", 1240 * rate, 920 * rate, 0.002, 0.22, 0.22 * gain);
+        this.noise(t, "highpass", 3200, 1800, 0.05, 0.2 * gain, 2.2, rate);
+        break;
+      case "crit":
+        // sharp reward tick: fast high blip + tiny snap
+        this.blip(t, "square", 1500 * rate, 2200 * rate, 0.001, 0.07, 0.24 * gain);
+        this.noise(t, "highpass", 2600, 1600, 0.03, 0.16 * gain, 1.8, rate);
+        break;
+      case "levelup": {
+        // rising resolve arpeggio — the "you got stronger" fanfare
+        const base = 392 * rate; // G4 up a bright major arc
+        const steps = [1, 1.26, 1.5, 2];
+        for (let i = 0; i < steps.length; i++) {
+          this.blip(t + i * 0.07, "triangle", base * steps[i], base * steps[i], 0.004, 0.2, 0.26 * gain);
+        }
+        break;
+      }
+      case "blessing":
+        // soft two-note shrine chime
+        this.blip(t, "sine", 660 * rate, 660 * rate, 0.006, 0.24, 0.26 * gain);
+        this.blip(t + 0.09, "sine", 990 * rate, 990 * rate, 0.006, 0.3, 0.22 * gain);
+        break;
       case "enemyAttack":
         this.noise(t, "bandpass", 500, 2600, 0.22, 0.3 * gain, 0.7);
         break;
@@ -652,6 +693,11 @@ class AudioEngine {
       case "tesla": return 0.14;
       case "meleeSwing": return 0.18;
       case "meleeHit": return 0.16;
+      case "heavySwing": return 0.32;
+      case "parry": return 0.3;
+      case "crit": return 0.12;
+      case "levelup": return 0.6;
+      case "blessing": return 0.5;
       case "enemyAttack": return 0.3;
       case "enemyHit": return 0.12;
       case "enemyDeath": return 0.25;
