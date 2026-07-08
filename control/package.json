@@ -1,0 +1,23 @@
+{
+  "name": "blobrogue-control",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "blobrogue deployment/control plane: a loopback-only, strictly-allowlisted ops service that the admin.create.town panel proxies to. Drives immutable releases (atomic symlink), pm2 reloads of exactly blobrogue-gs, and audited deploy/rollback. Never shares handlers or credentials with the game WS; never runs arbitrary shell.",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/control/src/main.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test": "tsx test/run.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.23.0",
+    "typescript": "~6.0.2"
+  }
+}
