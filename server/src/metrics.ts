@@ -49,3 +49,88 @@ export function newCounters(): Counters {
     joinsOk: 0, joinsRejected: 0, malformed: 0, rateLimited: 0, droppedSnaps: 0, rejectedInputs: 0,
   };
 }
+
+function pct(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const rank = Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))));
+  return sorted[rank];
+}
+
+// Per-connection netcode signals the metrics aggregator folds into the health report. Kept as a
+// plain input shape so Metrics doesn't depend on the Conn type (decoupling observability from
+// the transport).
+export interface ConnNetSample {
+  rttMs: number;            // server-measured (ping/pong)
+  cliJitterMs: number;      // client-reported
+  cliReconciliations: number;
+  cliCorrectionMaxPx: number;
+}
+
+export interface HealthReport {
+  status: string;
+  uptimeSec: number;
+  worlds: number;
+  players: number;
+  connections: number;
+  tickMs_p50: number;
+  tickMs_p95: number;
+  tickMs_max: number;
+  snapBytes_p50: number;
+  snapBytes_p95: number;
+  snapBytes_max: number;
+  rttMs_avg: number;
+  rttMs_p95: number;
+  jitterMs_avg: number;
+  reconciliations: number;
+  correctionMax_px: number;
+  counters: Counters;
+}
+
+// Owns all server observability state (tick + snapshot rolling windows, counters) and builds the
+// /healthz + /metrics report. Extracted from the server so the transport doesn't also own metrics
+// math — a single, testable observability module (production spec §6).
+export class Metrics {
+  readonly counters = newCounters();
+  private tick = new Rolling(1200);        // ~60s of ticks at 20Hz
+  private snapBytes = new Rolling(2000);   // recent per-client snapshot byte sizes
+
+  recordTick(ms: number): void {
+    this.tick.push(ms);
+  }
+  recordSnapshotBytes(bytes: number): void {
+    this.snapBytes.push(bytes);
+  }
+  tickP95(): number {
+    return this.tick.percentile(95);
+  }
+
+  report(startedAt: number, nowMs: number, worlds: number, players: number, connections: number, nets: ConnNetSample[]): HealthReport {
+    const rtts: number[] = [];
+    let jitterSum = 0, jitterN = 0, recSum = 0, corrMax = 0;
+    for (const c of nets) {
+      if (c.rttMs > 0) rtts.push(c.rttMs);
+      if (c.cliJitterMs > 0) { jitterSum += c.cliJitterMs; jitterN++; }
+      recSum += c.cliReconciliations;
+      if (c.cliCorrectionMaxPx > corrMax) corrMax = c.cliCorrectionMaxPx;
+    }
+    const rttAvg = rtts.length ? rtts.reduce((a, b) => a + b, 0) / rtts.length : 0;
+    return {
+      status: "ok",
+      uptimeSec: startedAt ? Math.round((nowMs - startedAt) / 1000) : 0,
+      worlds, players, connections,
+      tickMs_p50: Number(this.tick.percentile(50).toFixed(3)),
+      tickMs_p95: Number(this.tick.percentile(95).toFixed(3)),
+      tickMs_max: Number(this.tick.max().toFixed(3)),
+      snapBytes_p50: Math.round(this.snapBytes.percentile(50)),
+      snapBytes_p95: Math.round(this.snapBytes.percentile(95)),
+      snapBytes_max: Math.round(this.snapBytes.max()),
+      rttMs_avg: Number(rttAvg.toFixed(1)),
+      rttMs_p95: Number(pct(rtts, 95).toFixed(1)),
+      jitterMs_avg: Number((jitterN ? jitterSum / jitterN : 0).toFixed(1)),
+      reconciliations: recSum,
+      correctionMax_px: Number(corrMax.toFixed(1)),
+      counters: { ...this.counters },
+    };
+  }
+}

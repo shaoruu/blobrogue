@@ -11,6 +11,10 @@ export interface ServerConfig {
   wsPath: string;
   auth: AuthConfig;
   isProd: boolean;
+  // Trusted reverse-proxy CIDRs. Only when the immediate peer matches one of these do we read the
+  // real client IP from X-Forwarded-For (P0-4). Behind nginx this is loopback; direct-exposed
+  // deployments should leave it as loopback so no client can spoof its per-IP bucket via XFF.
+  trustedProxies: string[];
   // per-connection limits (production spec §3 / §2d)
   maxConnsPerIp: number;
   maxMsgsPerSec: number;      // inbound message rate cap per connection
@@ -43,6 +47,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     wsPath: env.GS_WS_PATH ?? "/ws",
     auth: authConfigFromEnv(env),
     isProd: env.NODE_ENV === "production",
+    trustedProxies: (env.GS_TRUSTED_PROXIES ?? "127.0.0.1/32,::1/128").split(",").map((s) => s.trim()).filter((s) => s.length > 0),
     maxConnsPerIp: intEnv(env, "GS_MAX_CONNS_PER_IP", 16),
     maxMsgsPerSec: intEnv(env, "GS_MAX_MSGS_PER_SEC", 120),
     maxInputQueue: intEnv(env, "GS_MAX_INPUT_QUEUE", 32),

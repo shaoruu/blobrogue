@@ -4,7 +4,7 @@
 // gates CI. Run: npm run test (in server/).
 
 import { WebSocket as WsClient } from "ws";
-import { GameWorld } from "../src/world.js";
+import type { RoomRuntime } from "../src/ports.js";
 import { startTestServer, Bot, SCRIPTS, idle, waitUntil, sleep, TEST_SECRET } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
 import { jsonCodec } from "../../src/net/protocol.js";
@@ -220,13 +220,13 @@ async function main(): Promise<void> {
       cheatWs.on("message", () => {});
       cheatWs.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(TEST_SECRET, "cheater"), protocol: 1 }));
       await sleep(200);
-      const world = s.server.getWorld() as GameWorld;
+      const world = s.server.getWorld() as RoomRuntime;
       const pid = [...world.state.players.keys()][0];
       const start = world.state.players.get(pid)!;
       const startX = start.x;
       // Blast max-magnitude move inputs; the sim normalizes to unit + the server caps total dt.
       for (let i = 1; i <= 30; i++) {
-        cheatWs.send(jsonCodec.encodeClient({ t: "input", seq: i, dt: 0.05, mx: 8, my: 0, aim: 0, fire: false, dash: false }));
+        cheatWs.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 8, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 }));
       }
       await sleep(500);
       const moved = Math.abs(world.state.players.get(pid)!.x - startX);

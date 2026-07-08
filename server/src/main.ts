@@ -16,7 +16,7 @@ async function main(): Promise<void> {
   }
   if (cfg.auth.allowDev) log.warn("DEV AUTH BYPASS ENABLED (local only) — accepting dev:<id> tickets");
 
-  const server = new GameServer(cfg, log);
+  const server = new GameServer(cfg, { logger: log });
   await server.listen();
 
   const shutdown = (sig: string) => {

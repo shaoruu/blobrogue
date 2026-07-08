@@ -9,13 +9,13 @@ import { startTestServer, Bot, SCRIPTS, idle, waitUntil, sleep } from "../harnes
 import { mintTicket } from "../src/auth.js";
 import { jsonCodec } from "../../src/net/protocol.js";
 import { acquireWeaponInWorld, devSpawnEnemy } from "../../src/sim/world.js";
-import type { GameWorld } from "../src/world.js";
+import type { RoomRuntime } from "../src/ports.js";
 import { TILE } from "../../src/sim/types.js";
 import { WebSocket as WsClient } from "ws";
 
 // Spawn a controlled boss near the dungeon spawn (where bots enter) so boss-combat tests are
 // deterministic on the real generated floor-1 dungeon (which has no boss of its own).
-function spawnBossNearSpawn(world: GameWorld, hp: number) {
+function spawnBossNearSpawn(world: RoomRuntime, hp: number) {
   const s = world.state.dungeon.spawn;
   const boss = devSpawnEnemy(world.state, "boss", s.x * TILE + TILE / 2, s.y * TILE + TILE / 2 - 120);
   boss.hp = hp; boss.maxHp = hp;
@@ -173,7 +173,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       let seq = 1;
       const flood = setInterval(() => {
-        cheat.send(jsonCodec.encodeClient({ t: "input", seq: seq++, dt: 1, mx: 8, my: 8, aim: 0, fire: true, dash: false }));
+        cheat.send(jsonCodec.encodeClient({ t: "input", seq: seq++, mx: 8, my: 8, aim: 0, fire: true, dash: false, ackEv: 0 }));
       }, 12);
       await sleep(1000);
       clearInterval(flood);

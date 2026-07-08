@@ -32,7 +32,7 @@ export async function startTestServer(overrides: Partial<ServerConfig> = {}, log
     auth: { secret: TEST_SECRET, allowDev: true },
     ...overrides,
   };
-  const server = new GameServer(cfg, createLogger({ app: "gs-test" }, logLevel));
+  const server = new GameServer(cfg, { logger: createLogger({ app: "gs-test" }, logLevel) });
   const port = await server.listen();
   return {
     server,

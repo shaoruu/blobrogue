@@ -6,11 +6,10 @@
 import type { WebSocket } from "ws";
 import type { PlayerId } from "../../src/sim/input.js";
 
-// The decoded, validated input intent (a ClientMsg "input" minus the tag). dt is the client's
-// frame duration; the server clamps it before integrating (anti speed-hack).
+// The decoded, validated input INTENT (a ClientMsg "input" minus the tag). It carries NO dt: the
+// server tick owns simulation time (one command = one fixed step). Purely what the player intends.
 export interface InputIntent {
   seq: number;
-  dt: number;
   mx: number; my: number;
   aim: number;
   fire: boolean; dash: boolean;
@@ -33,11 +32,14 @@ export interface Conn {
   windowStart: number;
   windowCount: number;
 
-  // bounded per-player input queue, drained each tick in seq order
+  // bounded per-player input queue, drained ONE command per tick in seq order (fixed timestep)
   queue: InputIntent[];
   lastAppliedSeq: number;
   lastInput: InputIntent | null;
   starveTicks: number;
+  // reliable-event channel: the highest event id this client has acked (via input.ackEv). The
+  // publisher resends only events newer than this from the room's bounded ring.
+  ackedEventId: number;
 
   // heartbeat / timeout
   lastPongAt: number;
@@ -53,6 +55,11 @@ export interface Conn {
   // The set of blessing item ids the server last offered this player (authoritative pending
   // offer). A pickBlessing is validated against exactly this set, then it is cleared.
   pendingOffer: string[] | null;
+  offerId: number;           // monotonic id of the current offer (client dedupes resends by it)
+  offerResendsLeft: number;  // bounded resends of the pending offer (loss/backpressure recovery)
+  // Set when this player's run ended (full wipe); the server sends the final snapshot then
+  // deterministically closes the socket (no lingering post-game-over connection).
+  gameOver: boolean;
 
   // observability
   bytesSent: number;
@@ -64,6 +71,6 @@ export interface Conn {
   cliCorrectionMaxPx: number;
 }
 
-export function inputToIntent(m: { seq: number; dt: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }): InputIntent {
-  return { seq: m.seq, dt: m.dt, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash };
+export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }): InputIntent {
+  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash };
 }
