@@ -125,7 +125,11 @@ export class Bot {
 
   private frameTick(): void {
     const now = Date.now();
-    const dt = Math.min(0.05, (now - this.lastT) / 1000);
+    // Bound a frame to the fixed-step catch-up window (MAX_STEPS_PER_FRAME * FIXED_DT = 0.25s), NOT
+    // one tick: under a loaded node process setInterval jitters well past 50ms, and a 0.05 cap
+    // would make the fixed-step accumulator lose wall-clock time (an artifact absent in a real
+    // 16ms-rAF browser). This keeps measured speed accurate while still bounding a long stall.
+    const dt = Math.min(0.25, (now - this.lastT) / 1000);
     this.lastT = now;
     let cmd = this.script(this.frame++, now);
     if (this.attack) cmd = this.aimAndFire(cmd);

@@ -22,7 +22,11 @@ import { createHttpHandler } from "./httpEndpoints.js";
 import type { SessionStore, SnapshotPublisher, RoomRuntime } from "./ports.js";
 
 const TICK_MS = 1000 / TICK_HZ;
-const MAX_CATCHUP = 5; // fell this far behind -> drop the backlog rather than spiral
+// Catch-up bound for the drift-corrected pump: if the event loop stalls, run up to this many
+// ticks in one pump to keep simulation time matched to real time (one input command is consumed
+// per tick, so dropping ticks would slow movement). ~1s of catch-up tolerates GC/scheduling
+// hitches (and in-process test contention) without a spiral of death.
+const MAX_CATCHUP = 20;
 const MAX_MALFORMED = 3;
 
 // Optional dependency overrides (DI) for tests / alternative backends. Anything omitted uses the
@@ -61,7 +65,7 @@ export class GameServer {
     this.log = deps.logger ?? createLogger({ app: "blobrogue-gs" });
     this.clock = deps.clock ?? systemClock;
     this.trustedProxies = parseCidrList(cfg.trustedProxies);
-    this.sessions = deps.sessions ?? new WorldRegistry((id) => new GameWorld(id), this.log);
+    this.sessions = deps.sessions ?? new WorldRegistry((id) => new GameWorld(id, undefined, cfg.arena), this.log);
     this.publisher = deps.publisher ?? new WsSnapshotPublisher({
       config: cfg,
       metrics: this.metrics,

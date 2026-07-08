@@ -9,11 +9,11 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, applyItemToWorld } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, applyItemToWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
-import type { WeaponId } from "../../src/sim/types.js";
+import { TILE, type WeaponId } from "../../src/sim/types.js";
 import { Rng } from "../../src/sim/rng.js";
 import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
@@ -63,10 +63,23 @@ export class GameWorld implements RoomRuntime {
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
-  constructor(id: string, seed: number = STAGE_B_SEED) {
+  constructor(id: string, seed: number = STAGE_B_SEED, arena = false) {
     this.id = id;
-    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true });
+    // Production: a REAL generated dungeon (isShared). Measurement (arena=true): an OPEN sandbox
+    // arena so the load harness can move a probe in a straight monotonic line — same stepWorld,
+    // tick, and netcode, only different geometry. Arena seeds a few enemies for bandwidth realism.
+    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena });
     this.offerRng = new Rng(seed ^ 0x0ffe4);
+    if (arena) this.seedArenaEnemies();
+  }
+
+  private seedArenaEnemies(): void {
+    const s = this.state.dungeon.spawn;
+    const cx = s.x * TILE + TILE / 2, cy = s.y * TILE + TILE / 2;
+    const layout: Array<[Parameters<typeof devSpawnEnemy>[1], number, number]> = [
+      ["slime", 220, -160], ["slime", 260, -120], ["bat", 120, -260], ["skeleton", 300, 160],
+    ];
+    for (const [kind, dx, dy] of layout) devSpawnEnemy(this.state, kind, cx + dx, cy + dy);
   }
 
   get playerCount(): number {

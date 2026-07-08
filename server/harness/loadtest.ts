@@ -53,7 +53,9 @@ async function main(): Promise<void> {
   process.stdout.write(`\nblobrogue Stage-B measurement harness\n`);
   process.stdout.write(`  net: RTT=${net.rttMs}ms jitter=${net.jitterMs}ms loss=${fmt(net.loss * 100, 0)}%  clients=${clients}  duration=${seconds}s\n`);
 
-  const s = await startTestServer();
+  // Measure in an OPEN arena (no dungeon walls) so the walker probe travels a clean monotonic
+  // line — production runs the real dungeon with identical stepWorld/tick/netcode.
+  const s = await startTestServer({ arena: true });
   const walkerSamples: ServerEnemySample[] = [];
 
   // observer stands still and watches a WALKER player stride in a straight line (monotonic x) —

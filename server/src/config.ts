@@ -31,6 +31,10 @@ export interface ServerConfig {
   maxTickDtPerPlayer: number; // total simulated dt per player per tick (speed-hack cap)
   // interest management: per-client snapshot radius in px (0 disables filtering)
   interestRadius: number;
+  // Measurement mode: build an OPEN arena world (no dungeon walls) so the load harness can move a
+  // probe in a straight monotonic line for render-latency correlation. Production runs the real
+  // dungeon (same stepWorld/tick/netcode); this only changes map geometry. Default off.
+  arena: boolean;
 }
 
 function intEnv(env: NodeJS.ProcessEnv, key: string, def: number): number {
@@ -60,5 +64,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxInputDt: 0.05,          // one server step; a client can't advance faster per input
     maxTickDtPerPlayer: 0.10,  // <= 2 ticks of movement per tick even under input floods
     interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 1100), // ~1.5x viewport half-extent; 0 = off
+    arena: env.GS_ARENA === "1",
   };
 }
