@@ -151,7 +151,7 @@ function buildPanel(game: Game): void {
   const itemRow = h("div", "dev-row");
   for (const item of ITEMS) {
     const b = btn(item.name, () => game.devGrantItem(item), "mini");
-    b.title = item.desc;
+    b.title = item.descs[0];
     itemRow.appendChild(b);
   }
   itemSec.appendChild(itemRow);

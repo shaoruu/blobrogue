@@ -20,11 +20,13 @@ export interface AuthoritativePlayerSnapshot {
   hp: number;
   maxHp: number;
   invuln: number;
+  dashInvuln: number;
   dashCd: number;
   dashTime: number;
   dashDx: number;
   dashDy: number;
   fireCd: number;
+  fangCd: number;
   facing: number;
   weapon: WeaponId;
   ownedWeapons: WeaponId[];
@@ -65,11 +67,13 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     hp: p.hp,
     maxHp: p.maxHp,
     invuln: p.invuln,
+    dashInvuln: p.dashInvuln,
     dashCd: p.dashCd,
     dashTime: p.dashTime,
     dashDx: p.dashDx,
     dashDy: p.dashDy,
     fireCd: p.fireCd,
+    fangCd: p.fangCd,
     facing: p.facing,
     weapon: p.weapon,
     ownedWeapons: p.ownedWeapons.slice(),
@@ -92,11 +96,13 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.hp = s.hp;
   p.maxHp = s.maxHp;
   p.invuln = s.invuln;
+  p.dashInvuln = s.dashInvuln;
   p.dashCd = s.dashCd;
   p.dashTime = s.dashTime;
   p.dashDx = s.dashDx;
   p.dashDy = s.dashDy;
   p.fireCd = s.fireCd;
+  p.fangCd = s.fangCd;
   p.facing = s.facing;
   p.weapon = s.weapon;
   p.ownedWeapons = s.ownedWeapons.slice();

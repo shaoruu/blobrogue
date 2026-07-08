@@ -20,7 +20,7 @@ import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
 import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
-import type { RoomRuntime } from "./ports.js";
+import type { RoomRuntime, BlessingOfferRequest } from "./ports.js";
 
 const BLESSING_CHOICES = 3;
 const TICK_MS = 1000 / TICK_HZ;
@@ -60,9 +60,9 @@ export class GameWorld implements RoomRuntime {
   private injectedEvents: SimEvent[] = [];
   // Players whose run ended this tick (full wipe) — the server drives a deterministic leave.
   private gameOverThisTick: PlayerId[] = [];
-  // Players offered a blessing this tick (descend/chest) — the server turns each into a
+  // Blessing offers raised this tick (descend/boss chest) — the server turns each into a
   // server-decided, validated offer message.
-  private offerThisTick: PlayerId[] = [];
+  private offerThisTick: BlessingOfferRequest[] = [];
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
@@ -115,8 +115,9 @@ export class GameWorld implements RoomRuntime {
     return switchWeaponInWorld(this.state, pid, weapon);
   }
 
-  rollBlessingChoices(): string[] {
-    return rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next()).map((it) => it.id);
+  rollBlessingChoices(pid: PlayerId, rare: boolean): string[] {
+    const owned = this.state.players.get(pid)?.ownedItemIds ?? [];
+    return rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next(), owned, { rareOnly: rare }).map((it) => it.id);
   }
 
   applyBlessing(pid: PlayerId, itemId: string): boolean {
@@ -149,7 +150,7 @@ export class GameWorld implements RoomRuntime {
   gameOverPlayers(): PlayerId[] {
     return this.gameOverThisTick;
   }
-  offerPlayers(): PlayerId[] {
+  offerPlayers(): BlessingOfferRequest[] {
     return this.offerThisTick;
   }
 
@@ -205,7 +206,7 @@ export class GameWorld implements RoomRuntime {
     for (const e of ev) {
       this.eventLog.push({ id: this.nextEventId++, e });
       if (e.t === "gameOver") this.gameOverThisTick.push(e.pid);
-      else if (e.t === "offerBlessing") this.offerThisTick.push(e.pid);
+      else if (e.t === "offerBlessing") this.offerThisTick.push({ pid: e.pid, rare: e.rare });
     }
     if (this.eventLog.length > EVENT_RING) this.eventLog.splice(0, this.eventLog.length - EVENT_RING);
   }

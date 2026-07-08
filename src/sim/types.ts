@@ -1,4 +1,5 @@
 import type { PlayerId } from "./input.js";
+import type { EnemyTier } from "./balance.js";
 
 export interface Vec2 { x: number; y: number; }
 
@@ -16,8 +17,8 @@ export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "bo
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
 export type AttackPhase = "none" | "windup" | "active" | "recover";
-// Which move an attacker is mid-executing. The boss owns two; others own one.
-export type AttackMove = "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar";
+// Which move an attacker is mid-executing. The boss owns several; others own one.
+export type AttackMove = "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -33,19 +34,43 @@ export interface AttackState {
   markY: number;
 }
 
-// Boss-only extra state (HP-phase tracking + minion/attack pacing).
+// A live phase-transition roar (the anti-burst beat): hard HP floor + queued overflow that
+// applies only after the roar exits. queuedBy remembers the last damaging actor so an
+// overflow kill still credits a player.
+export interface BossRoar {
+  floorHp: number;
+  queued: number;
+  queuedBy: PlayerId | null;
+}
+
+// Boss-only extra state (HP-phase tracking + add/attack pacing). Phase transitions are
+// driven by damage events (checked after every authoritative hit), never idle polling.
 export interface BossState {
-  phase: number;         // 1..3, driven by HP thresholds
-  minionTimer: number;   // countdown until it spits out a slime
-  isNextRadial: boolean; // alternates hop-slam / radial-burst in phase 2+
-  burstParity: number;   // flips the radial ring offset each burst (0/1)
+  phase: number;           // 1..3
+  transitionsDone: number; // 0..2 — which of the 70%/35% transition beats have fired
+  roar: BossRoar | null;   // non-null while the 1.2s transition roar is active
+  addTimer: number;        // countdown until the next cadence add spawn
+  attackCount: number;     // attacks committed in the current phase (radial/squeeze cadence)
+  isNextRadial: boolean;   // alternates hop-slam / radial-burst in phase 2
+  burstParity: number;     // flips the radial ring offset each burst (0/1)
 }
 
 export interface Enemy extends Entity {
   id: number;          // stable per-world id (client keys its cosmetic anim map by this)
   kind: EnemyKind;
+  // Variety tier (§4): swarm/standard/brute/elite stat + cost + render-scale profile.
+  tier: EnemyTier;
+  // Boss-spawned / elite-split adds: excluded from natural heart drops and Fang procs so
+  // summons are pressure, never a sustain farm.
+  isSummoned: boolean;
   speed: number;
   touchDamage: number;
+  // Knockback divisor, baked at spawn (archetype × tier × co-op stagger resist).
+  kbResist: number;
+  // Boss P2 pack-surge scratch: a delayed order (surgeDelay counts down) followed by a
+  // short burst of chase speed (surgeTime). Zero on everything untouched by the order.
+  surgeDelay: number;
+  surgeTime: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   // Deterministic slime hop-cadence clock. The slime pulses its speed off sin(hopClock);
@@ -116,7 +141,9 @@ export interface Bullet {
   lagRewind?: number;
 }
 
-export type PickupKind = "heart" | "coin" | "weapon";
+// dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
+// enough coins buys +1 HP; `value` carries the coin price.
+export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart";
 
 export interface Pickup {
   id: number;      // stable per-floor id (wire identity: interest view + client anim keying)
@@ -124,9 +151,9 @@ export interface Pickup {
   x: number; y: number;
   radius: number;
   weapon: WeaponId | null; // set only when kind === "weapon"
-  // Coins only: the coin worth baked in at drop time (combo multiplier applied then).
-  // Undefined falls back to the collector's base coin gain, so non-kill coins (props,
-  // chests) stay at face value.
+  // Coins: the coin worth baked in at drop time (combo multiplier applied then); undefined
+  // falls back to the collector's base coin gain, so non-kill coins stay at face value.
+  // Dealer hearts: the coin PRICE.
   value?: number;
 }
 
