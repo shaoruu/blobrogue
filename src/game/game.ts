@@ -1718,8 +1718,7 @@ export class Game {
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
-      weaponName: WEAPONS[this.weapon].name,
-      weapons: this.p.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
+      weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name, isCurrent: id === this.weapon })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
