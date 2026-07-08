@@ -160,9 +160,10 @@ This yields intentional two-step confirmation and makes accidental/duplicate cli
 
 ### 3.3 Rate limiting
 
-Token-bucket keyed by `(sub, remoteAddr)`: `BRC_RATE_CAPACITY` tokens, refilled
-`BRC_RATE_REFILL_PER_SEC`. Reads and mutates share the bucket; mutates additionally serialize on
-the single deploy lock (§4.4). Over-limit → `429` with no side effects.
+Token-bucket keyed by `remoteAddr`, evaluated **before** auth so an unauthenticated flood is
+cheap to shed: `BRC_RATE_CAPACITY` tokens, refilled `BRC_RATE_REFILL_PER_SEC`. Reads and mutates
+share the bucket; mutates additionally serialize on the single deploy lock (§4.4). Over-limit →
+`429` with no side effects.
 
 ### 3.4 Redaction
 
