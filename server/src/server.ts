@@ -169,6 +169,7 @@ export class GameServer {
         }
       }
       conn.awaitingPong = true;
+      conn.lastPingSentAt = now;
       const world = conn.worldId ? this.worlds.get(conn.worldId) : null;
       const tick = world ? world.state.tick : 0;
       try {
@@ -197,6 +198,7 @@ export class GameServer {
       connectedAt: now, windowStart: now, windowCount: 0,
       queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0,
       lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1,
+      lastPingSentAt: 0, rttMs: 0,
       needsFullSnap: false, closing: false, bytesSent: 0, droppedSnaps: 0,
     };
     this.conns.set(id, conn);
@@ -302,7 +304,13 @@ export class GameServer {
   private handlePong(conn: Conn): void {
     conn.awaitingPong = false;
     conn.missedPings = 0;
-    conn.lastPongAt = Date.now();
+    const now = Date.now();
+    conn.lastPongAt = now;
+    if (conn.lastPingSentAt > 0) {
+      const sample = now - conn.lastPingSentAt;
+      // EWMA so a single jittery sample doesn't swing the rewind; seed on first sample.
+      conn.rttMs = conn.rttMs === 0 ? sample : conn.rttMs * 0.7 + sample * 0.3;
+    }
   }
 
   private onClose(conn: Conn): void {

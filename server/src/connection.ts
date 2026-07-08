@@ -44,6 +44,9 @@ export interface Conn {
   awaitingPong: boolean;
   missedPings: number;
   nextPingId: number;
+  // round-trip time (ms), measured from ping->pong and smoothed; drives lag-comp rewind.
+  lastPingSentAt: number;
+  rttMs: number;
 
   needsFullSnap: boolean;
   closing: boolean;

@@ -68,6 +68,10 @@ export interface PlayerSim {
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
+  // Lag-compensation rewind for THIS player's shots/swings, in ticks (server-computed from the
+  // player's measured RTT + interp delay, clamped). 0 in solo/prediction, so hit tests use
+  // present-time positions and behavior is unchanged.
+  rewindTicks: number;
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
   meleeSwing: MeleeSwing | null;
@@ -76,6 +80,9 @@ export interface PlayerSim {
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
 // the existing presence path; the sim only needs remote POSITIONS as enemy aggro targets).
 export interface RemoteTarget { x: number; y: number; isDown: boolean }
+
+// A per-enemy ring of recent positions for lag-compensated hit rewind.
+interface EnemyHist { x: number[]; y: number[] }
 
 export interface WorldState {
   tick: number;
@@ -96,6 +103,12 @@ export interface WorldState {
   rng: Rng;
   nextEnemyId: number;
   nextPropId: number;
+  // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
+  // recent record). histHead is the ring slot of the most recent record; histCount is how many
+  // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
+  enemyHist: Map<number, EnemyHist>;
+  histHead: number;
+  histCount: number;
   remoteTargets: RemoteTarget[];
   isCoop: boolean;
   isSandbox: boolean;
@@ -116,7 +129,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false, reviveProgress: 0,
+    shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -148,6 +161,9 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     rng: new Rng(seed ^ 0x53696d21),
     nextEnemyId: 0,
     nextPropId: 0,
+    enemyHist: new Map(),
+    histHead: 0,
+    histCount: 0,
     remoteTargets: [],
     isCoop: opts.isCoop ?? false,
     isSandbox: opts.isSandbox ?? false,
@@ -757,6 +773,43 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
   ev.push({ t: "bulletBounce", x: b.x, y: b.y, aim: Math.atan2(b.vy, b.vx), color: b.color });
 }
 
+// Record every enemy's current position into the ring (one entry per world tick). Called at the
+// START of the world step so the newest record is the previous tick's end state — i.e. exactly
+// what a client rendered in the last snapshot. Stale entries for despawned enemies are pruned so
+// the map stays bounded. Pure + deterministic; never read when rewindTicks is 0 (solo), so the
+// golden-master behavior is unchanged.
+export function recordHistory(w: WorldState): void {
+  const H = C.LAGCOMP_HISTORY;
+  w.histHead = (w.histHead + 1) % H;
+  const slot = w.histHead;
+  for (const e of w.enemies) {
+    let h = w.enemyHist.get(e.id);
+    if (!h) { h = { x: new Array(H).fill(e.x), y: new Array(H).fill(e.y) }; w.enemyHist.set(e.id, h); }
+    h.x[slot] = e.x; h.y[slot] = e.y;
+  }
+  if (w.histCount < H) w.histCount++;
+  // Prune history for enemies no longer present (killed/removed) so the map can't grow forever.
+  if (w.enemyHist.size > w.enemies.length) {
+    const live = new Set<number>();
+    for (const e of w.enemies) live.add(e.id);
+    for (const id of w.enemyHist.keys()) if (!live.has(id)) w.enemyHist.delete(id);
+  }
+}
+
+// The position of enemy `e` as the shooter saw it `rewindTicks` ticks ago (offset rewindTicks-1
+// into the ring; rewind 1 == the most recent recorded tick). rewindTicks <= 0 returns the
+// present authoritative position (the solo/prediction path — identical behavior). Clamped to the
+// history window + LAGCOMP_MAX_TICKS so a hit can never be rewound to an impossible time.
+export function rewoundEnemyPos(w: WorldState, e: Enemy, rewindTicks: number): [number, number] {
+  if (rewindTicks <= 0) return [e.x, e.y];
+  const r = Math.min(rewindTicks, C.LAGCOMP_MAX_TICKS, w.histCount);
+  if (r <= 0) return [e.x, e.y];
+  const h = w.enemyHist.get(e.id);
+  if (!h) return [e.x, e.y];
+  const slot = (w.histHead - (r - 1) + C.LAGCOMP_HISTORY * 2) % C.LAGCOMP_HISTORY;
+  return [h.x[slot], h.y[slot]];
+}
+
 function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   // Stage C: every strike is attributed to the player who caused it (bullet.owner / swing owner
   // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
@@ -790,7 +843,11 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       const shooter = resolveOwner(w, b.owner);
       if (!shooter) continue;
-      if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
+      // Lag comp: test the overlap against where the shooter SAW the enemy (rewound by their
+      // render-time offset), then apply damage to its CURRENT authoritative state. rewindTicks
+      // is 0 in solo/prediction, so this is exactly the present-time overlap (goldens unchanged).
+      const [btx, bty] = rewoundEnemyPos(w, e, shooter.rewindTicks);
+      if (Math.hypot(b.x - btx, b.y - bty) < b.radius + e.radius) {
         strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
@@ -809,7 +866,8 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       const swing = player.meleeSwing;
       if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
-      if (isPointInMeleeHit(player, e.x, e.y, e.radius, swing)) {
+      const [mtx, mty] = rewoundEnemyPos(w, e, player.rewindTicks);
+      if (isPointInMeleeHit(player, mtx, mty, e.radius, swing)) {
         const kbDirX = Math.cos(swing.aim);
         const kbDirY = Math.sin(swing.aim);
         const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
@@ -1555,6 +1613,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 // combo decay. Runs once per authoritative tick at the fixed step AFTER every player has been
 // advanced. Only the sim RNG (w.rng) is consumed here, so the server is the single roller.
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
+  recordHistory(w);
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
   updateProps(w, dt, ev);

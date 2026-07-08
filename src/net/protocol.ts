@@ -18,6 +18,11 @@ export const TICK_HZ = 20;
 export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 export const PROTOCOL_VERSION = 1;
 
+// Base client interpolation delay (ms) for remote entities. The server assumes this when
+// computing a shooter's lag-comp rewind; the client may grow its ACTUAL delay under jitter
+// (adaptive), which only makes the server slightly under-rewind — safe/bounded, never over.
+export const INTERP_BASE_DELAY_MS = 120;
+
 // The Stage-B proof world: a fixed walled arena (seed-independent, isSandbox) with a few
 // server-owned enemies. Client rebuilds the identical arena locally for movement prediction;
 // all dynamic entities (players/enemies/bullets) arrive via snapshots. floor stays 1 (no

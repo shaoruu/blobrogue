@@ -8,7 +8,7 @@
 
 import {
   createWorld, spawnPlayerInWorld, devSpawnEnemy, devSpawnProp,
-  stepWorldPhase,
+  stepWorldPhase, recordHistory, rewoundEnemyPos,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -189,9 +189,78 @@ function downReviveTests(): void {
   }
 }
 
+function lagCompTests(): void {
+  section("lag-comp: a rewound shot lands on a moving target where the shooter saw it");
+  {
+    const { w, a, b } = twoPlayerArena();
+    // A single enemy marching steadily to the right; record a history trail.
+    const e = devSpawnEnemy(w, "slime", 400, 400);
+    e.hp = 100;
+    // Manually advance the enemy + record history for several ticks (no AI interference: keep
+    // players far so the enemy doesn't get pulled off its march).
+    a.x = 50; a.y = 50; b.x = 50; b.y = 50;
+    const trail: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < 5; i++) {
+      recordHistory(w);
+      trail.push({ x: e.x, y: e.y });
+      e.x += 40; // the enemy moved 40px between snapshots
+    }
+    // The enemy is now well ahead of where it was 3 records ago.
+    const past = rewoundEnemyPos(w, e, 3);
+    check("rewound position matches the recorded past", Math.abs(past[0] - trail[trail.length - 3].x) < 0.001, `past=${past[0].toFixed(1)} want=${trail[trail.length - 3].x}`);
+    check("present position differs from the rewound one", Math.abs(e.x - past[0]) > 1);
+  }
+
+  section("lag-comp: rewind=0 (solo/prediction) always uses the present position");
+  {
+    const { w } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", 400, 400);
+    for (let i = 0; i < 5; i++) { recordHistory(w); e.x += 40; }
+    const now = rewoundEnemyPos(w, e, 0);
+    check("rewind 0 returns present pos", now[0] === e.x && now[1] === e.y);
+  }
+
+  section("lag-comp: a lagged shooter hits a target that the present-time test would MISS");
+  {
+    const { w, a, b } = twoPlayerArena();
+    // Park both players (down) purely so the enemy AI finds no target and stays put — this lets
+    // us script an exact position trail through the REAL step (which records history internally).
+    a.isDown = true; b.isDown = true;
+    const e = devSpawnEnemy(w, "slime", 400, 400);
+    e.hp = 100; e.spawnTimer = 0;
+    // Drive 4 authoritative ticks, moving the enemy +40px before each: the internal recordHistory
+    // captures 400,440,480,520 as the enemy marches right.
+    for (let i = 0; i < 4; i++) { e.x = 400 + i * 40; stepWorldPhase(w, 1 / 20, []); }
+    // Present: enemy jumps to 560. B's client still renders it ~4 records back (x=440).
+    e.x = 560;
+    b.rewindTicks = 4;
+    const hpBefore = e.hp;
+    // B fires exactly where it SAW the enemy (x=440). Present-time (x=560) would miss by 120px.
+    w.bullets.push({ x: 440, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    stepWorldPhase(w, 1 / 20, []);
+    check("lagged shooter's rewound shot registered damage", e.hp < hpBefore, `hp ${hpBefore}->${e.hp}`);
+
+    // Control: the SAME shot with no rewind (rewind 0) misses the present-time enemy at 560.
+    e.hp = 100; b.rewindTicks = 0;
+    w.bullets.push({ x: 440, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    stepWorldPhase(w, 1 / 20, []);
+    check("without rewind the same shot misses (no impossible present-time hit)", e.hp === 100, `hp=${e.hp}`);
+  }
+
+  section("lag-comp: rewind is clamped to the history window (no impossible rewind)");
+  {
+    const { w } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", 400, 400);
+    recordHistory(w); // only one record
+    const deep = rewoundEnemyPos(w, e, 999); // absurd rewind
+    check("absurd rewind clamps to available history (present-ish)", Number.isFinite(deep[0]) && Number.isFinite(deep[1]));
+  }
+}
+
 function main(): void {
   ownershipTests();
   downReviveTests();
+  lagCompTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll Stage-C sim assertions passed.\n");

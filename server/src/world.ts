@@ -11,12 +11,23 @@ import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE } from "../../src/sim/types.js";
-import { FIXED_DT, STAGE_B_SEED, STAGE_B_FLOOR } from "../../src/net/protocol.js";
+import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
+import { FIXED_DT, TICK_HZ, STAGE_B_SEED, STAGE_B_FLOOR, INTERP_BASE_DELAY_MS } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 
+const TICK_MS = 1000 / TICK_HZ;
+
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// Ticks to rewind a shooter's hit test: the enemy the client rendered lagged behind the live
+// server by half the round-trip (input travel) plus the client's interpolation delay. Computed
+// from the SERVER's measured RTT (never client-claimed) and clamped, so it is anti-cheat-safe.
+function rewindTicksFor(conn: Conn): number {
+  const viewLagMs = conn.rttMs * 0.5 + INTERP_BASE_DELAY_MS;
+  return clamp(Math.round(viewLagMs / TICK_MS), 0, LAGCOMP_MAX_TICKS);
 }
 
 function intentToInput(i: InputIntent): InputCmd {
@@ -88,6 +99,10 @@ export class GameWorld {
       if (pid === null) continue;
       const p = this.state.players.get(pid);
       if (!p) continue;
+
+      // Refresh this player's lag-comp rewind from its measured RTT before the world resolves
+      // hits this tick (so shots register against the enemy positions the client actually saw).
+      p.rewindTicks = rewindTicksFor(conn);
 
       // Sort by seq and drop replays/dupes (<= lastAppliedSeq) — anti-cheat + ordering safety.
       const inputs = conn.queue.length > 1 ? conn.queue.slice().sort((a, b) => a.seq - b.seq) : conn.queue;
