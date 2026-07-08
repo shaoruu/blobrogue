@@ -20,13 +20,23 @@ const envGs: string | null = typeof rawGs === "string" && rawGs.trim().length > 
 // The deployed game server (nginx wss on 443 -> loopback:8090; ops spec §6/§7).
 export const PROD_GS_URL = "wss://gs.create.town/ws";
 
+// The game-server URL the MENU's "Play Online" flow connects to (no query param needed):
+// VITE_GS_URL override, else the production server on production builds / localhost on dev
+// builds. The menu never touches this URL until the player explicitly starts an online run,
+// so an unreachable game server can never affect solo play.
+export function defaultGsUrl(): string {
+  if (envGs) return envGs;
+  return import.meta.env.PROD ? PROD_GS_URL : "ws://127.0.0.1:8090/ws";
+}
+
+// Explicit ?gs=<wsUrl> override: the direct-join dev/ops route (two-tab local proof, load
+// harness). Returns null unless the override is present.
 export function resolveGsUrl(search: string): string | null {
   const params = new URLSearchParams(search);
   if (params.get("online") === null && !params.has("gs")) return null;
   const q = params.get("gs");
   if (q && q.trim().length > 0) return q.trim();
-  if (envGs) return envGs;
-  return import.meta.env.PROD ? PROD_GS_URL : "ws://127.0.0.1:8090/ws";
+  return defaultGsUrl();
 }
 
 // True when the url came from an explicit ?gs= override — the local-dev path, whose tickets

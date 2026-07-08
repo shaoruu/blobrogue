@@ -5,6 +5,7 @@ import type { RunResult } from "../game/game.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
 const NAME_KEY = "blobrogue.name";
+const COLOR_KEY = "blobrogue.color";
 
 function readOrMintClientId(): string {
   try {
@@ -19,11 +20,26 @@ function readOrMintClientId(): string {
   }
 }
 
-// Owns the persistent player identity and their saved stats. Works with or without
-// a Convex client: with none, it just remembers the display name locally.
+function readStoredColor(): number | null {
+  try {
+    const raw = localStorage.getItem(COLOR_KEY);
+    if (raw === null) return null;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 && n <= 15 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+// Owns the persistent player identity (name + chosen blob color) and their saved stats.
+// Works with or without a Convex client: with none, it just remembers everything locally.
 export class Session {
   readonly clientId: string;
   name: string;
+  // Chosen blob tint (client palette index). null = never picked (renders the natural
+  // amber hero). Persisted locally always, and onto the Convex profile at login so
+  // signed-in players keep it across devices.
+  colorIndex: number | null;
   profile: ProfileDoc | null = null;
   private client: ConvexClient | null;
 
@@ -33,6 +49,7 @@ export class Session {
     let stored = "";
     try { stored = localStorage.getItem(NAME_KEY) ?? ""; } catch { stored = ""; }
     this.name = stored;
+    this.colorIndex = readStoredColor();
   }
 
   get playerId(): string | null {
@@ -44,10 +61,27 @@ export class Session {
     try { localStorage.setItem(NAME_KEY, name); } catch { /* ignore */ }
   }
 
+  setColorIndex(colorIndex: number) {
+    this.colorIndex = colorIndex;
+    try { localStorage.setItem(COLOR_KEY, String(colorIndex)); } catch { /* ignore */ }
+    // Persist the pick onto the profile in the background; the local value already applies.
+    if (this.client) void this.login(this.name || "blob").catch(() => {});
+  }
+
   async login(name: string): Promise<ProfileDoc | null> {
     this.persistName(name);
     if (!this.client) return null;
-    this.profile = await this.client.mutation(api.players.ensurePlayer, { clientId: this.clientId, name });
+    this.profile = await this.client.mutation(api.players.ensurePlayer, {
+      clientId: this.clientId,
+      name,
+      // Only an explicit local pick is sent — undefined never overwrites a saved pick.
+      ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
+    });
+    // A signed-in account may carry a pick made on another device; adopt it locally.
+    if (this.colorIndex === null && this.profile.colorIndex !== null) {
+      this.colorIndex = this.profile.colorIndex;
+      try { localStorage.setItem(COLOR_KEY, String(this.profile.colorIndex)); } catch { /* ignore */ }
+    }
     return this.profile;
   }
 
