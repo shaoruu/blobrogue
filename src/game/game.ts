@@ -33,6 +33,7 @@ import {
 import type { Anim, Xform, XformStyle } from "./anim.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
+import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
@@ -105,14 +106,40 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   homing: "homing",
   tesla: "tesla",
   sawnoff: "shootShotgun",
-  railgun: "shootPistol",
+  railgun: "cannon",
   nailer: "shootRapid",
   flamer: "shootRapid",
   sword: "meleeSwing",
   longsword: "meleeSwing",
   spear: "meleeSwing",
 };
-const MELEE_HIT_TRAUMA = 0.14; // extra thump layered on each melee connect
+// Per-shot pitch/gain trims where a shared sample needs to read as a different gun
+// (the railgun borrows the cannon boom, pitched up into a sharp crack).
+const SHOOT_SFX_OPTS: Partial<Record<WeaponId, SfxOptions>> = {
+  railgun: { rate: 1.35, gain: 0.85 },
+  sawnoff: { rate: 0.9 },
+};
+// Weapons whose shots leave a curl of barrel smoke (the beefy, black-powder end).
+const SMOKY_WEAPONS: ReadonlySet<WeaponId> = new Set(["shotgun", "cannon", "sawnoff", "railgun"]);
+
+// Per-melee-weapon feel: the swing cue, connect thump (trauma) and hit-stop, plus how big
+// the held blade draws. Light/quick (cutlass) reads high and snappy; the claymore is the
+// slow heavy arc with the dedicated heavySwing sample; the pike is a fast narrow lunge.
+interface MeleeFeel {
+  swingSfx: SfxName;
+  swingRate: number;
+  swingGain: number;
+  hitTrauma: number;
+  hitFreeze: number;
+  bladeSize: number; // held blade draw size in px (the 40px art scaled up)
+}
+const MELEE_FEEL: Partial<Record<WeaponId, MeleeFeel>> = {
+  sword: { swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7, hitTrauma: 0.12, hitFreeze: 0.045, bladeSize: 46 },
+  longsword: { swingSfx: "heavySwing", swingRate: 1, swingGain: 1, hitTrauma: 0.22, hitFreeze: 0.07, bladeSize: 56 },
+  spear: { swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6, hitTrauma: 0.15, hitFreeze: 0.05, bladeSize: 58 },
+};
+const MELEE_HIT_TRAUMA = 0.14; // fallback thump when the striker's weapon is unknown (remote hits)
+const MELEE_CLASH_FREEZE = 0.055; // extra stop when a swing connects mid enemy attack (the "parry")
 const BOSS_SLAM_RADIUS = BOSS.slamRadius; // shockwave radius (also the ground-marker size)
 const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
 const FREEZE_AT = 3;           // chill >= this renders as frozen-solid crust
@@ -150,7 +177,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
   sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04,
-  sword: 0.06, longsword: 0.1, spear: 0.05,
+  sword: 0.08, longsword: 0.16, spear: 0.07,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -190,6 +217,13 @@ const SHOCK_TINT = "#7fe9ff";
 
 // Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
 const HURT_FLASH_DECAY = 3.2;
+// Low-HP warning: at/below this health fraction the screen edge breathes red.
+const LOW_HP_FRAC = 0.25;
+
+// Client particle budget: the newest effect wins; the oldest particle is dropped when the
+// pool is full, so a busy screen degrades gracefully instead of eating the frame budget.
+const MAX_PARTICLES = 700;
+const FOOTSTEP_INTERVAL = 0.17; // seconds between dust kicks while running
 
 // ---- combat depth: telegraph rendering ----
 // A per-enemy windup (0..1) drives a pulsing colored aura + aim line; the boss adds a
@@ -313,6 +347,14 @@ export class Game {
   private isPlayerMoving = false;
   private playerLean = 0;
   private muzzle = { t: 0, x: 0, y: 0, angle: 0, size: 2, color: "#ffe6a0" };
+  // Client-only VFX subsystems (see vfx.ts) — pure cosmetics over the sim's event stream.
+  private shockwaves = new ShockwaveField();
+  private screenFlash = new ScreenFlash();
+  private motes = new MoteField();
+  private meleeFlipDir = 1;      // alternates the visual sweep direction per swing (hitbox is symmetric)
+  private footstepCd = 0;        // spacing timer for run-dust kicks
+  private hurtDir: number | null = null; // world angle toward the last damage source (screen-edge hint)
+  private isClearCelebrated = false; // edge detector for the floor-clear flourish
   // Client-side cosmetic anim, split out of the now-pure sim structs. Enemies/props key by
   // their stable sim id; pickups/chests key by object identity (LocalTransport shares the
   // live objects and no anim event ever targets them). Enemy/prop entries are pruned when
@@ -549,6 +591,12 @@ export class Game {
     this.decals = [];
     this.afterimages = [];
     this.muzzle.t = 0;
+    this.shockwaves.clear();
+    this.screenFlash.clear();
+    this.motes.reseed(this.biomeIdx, this.px - this.canvas.width / 2, this.py - this.canvas.height / 2, this.canvas.width, this.canvas.height);
+    this.hurtDir = null;
+    this.footstepCd = 0;
+    this.isClearCelebrated = this.isCurrentFloorCleared();
     this.enemyAnims.clear();
     this.enemyAnimPos.clear();
     this.enemyFacing.clear();
@@ -787,12 +835,15 @@ export class Game {
       if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0 }); this.dashImgCd = 0.04; }
     }
 
+    this.updateFootstepDust(dt);
     this.updateParticles(dt);
     this.updateDmgNumbers(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
     this.updateAfterimages(dt);
+    this.shockwaves.update(dt);
+    this.screenFlash.update(dt);
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
     if (this.coop) this.updateRemoteAnims(dt);
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
@@ -800,8 +851,46 @@ export class Game {
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
     if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * HURT_FLASH_DECAY);
 
+    this.checkFloorCleared();
+
     this.cam.x = this.px - this.canvas.width / 2;
     this.cam.y = this.py - this.canvas.height / 2;
+    this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height);
+  }
+
+  // Little dust kicks at the feet while running — the floor reacts to movement. Direct
+  // particle pushes (never event-driven), so it stays a purely local cosmetic.
+  private updateFootstepDust(dt: number) {
+    if (!this.isPlayerMoving || this.isDown || this.p.dashTime > 0) { this.footstepCd = 0; return; }
+    this.footstepCd -= dt;
+    if (this.footstepCd > 0) return;
+    this.footstepCd = FOOTSTEP_INTERVAL;
+    this.pushParticle({
+      x: this.px + (Math.random() * 2 - 1) * 6, y: this.py + 15,
+      vx: (Math.random() * 2 - 1) * 16 - this.playerLean * 22, vy: -6 - Math.random() * 10,
+      life: 0.24 + Math.random() * 0.12, maxLife: 0.36,
+      color: "#9a8f80", size: 2 + Math.random() * 1.6, kind: "puff", rot: 0, vr: 0, gravity: -12, drag: 0.9,
+    });
+  }
+
+  private isCurrentFloorCleared(): boolean {
+    if (this.mode === "online" && this.wsTransport) return this.wsTransport.isFloorCleared();
+    return isFloorCleared(this.world);
+  }
+
+  // The floor-clear beat: the moment the last enemy (and queued reinforcement) is gone,
+  // celebrate once — fanfare, a banner pointing at the stairs, and a sparkle at the exit.
+  private checkFloorCleared() {
+    const isClearedNow = this.isCurrentFloorCleared();
+    if (!isClearedNow) { this.isClearCelebrated = false; return; }
+    if (this.isClearCelebrated) return;
+    this.isClearCelebrated = true;
+    sfx("floorClear");
+    this.addTrauma(0.1);
+    this.screenFlash.flash(140, 255, 190, 0.08, 2.5);
+    this.hud.showBanner("FLOOR CLEARED \u00b7 \u25be TAKE THE STAIRS");
+    const d = this.dungeon;
+    this.spawnSparkleBurst(d.exit.x * TILE + TILE / 2, d.exit.y * TILE + TILE / 2, 14, "#8affc0");
   }
 
   // Replay each SimEvent into the EXACT existing FX body (spawnParticles/sfx/addTrauma/...)
@@ -818,8 +907,9 @@ export class Game {
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon]);
         this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim; this.muzzle.size = w.muzzle; this.muzzle.color = w.color;
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
+        if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
-        sfx(SHOOT_SFX[e.weapon]);
+        sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         const kick = FIRE_KICK[e.weapon];
         this.kickX += -Math.cos(e.aim) * kick;
@@ -829,13 +919,17 @@ export class Game {
       case "meleeSwing": {
         const w = WEAPONS[e.weapon];
         const m = w.melee;
+        this.meleeFlipDir = -this.meleeFlipDir; // alternate the visual sweep; the hitbox wedge is symmetric
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon]);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
-        sfx(SHOOT_SFX[e.weapon]);
+        const feel = MELEE_FEEL[e.weapon];
+        if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
+        else sfx(SHOOT_SFX[e.weapon]);
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
+        // Melee kicks the camera INTO the strike (a lunge), not back like gun recoil.
         const kick = FIRE_KICK[e.weapon];
-        this.kickX += -Math.cos(e.aim) * kick;
-        this.kickY += -Math.sin(e.aim) * kick;
+        this.kickX += Math.cos(e.aim) * kick * 1.6;
+        this.kickY += Math.sin(e.aim) * kick * 1.6;
         this.spawnParticles(e.bx + Math.cos(e.aim) * 14, e.by + Math.sin(e.aim) * 14, 4, w.color);
         break;
       }
@@ -843,8 +937,13 @@ export class Game {
         triggerFlash(this.animForId(e.eid));
         this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
         this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
+        if (e.crit) {
+          sfx("crit", { gain: 0.6 });
+          this.spawnSparkFlash(e.puffX, e.puffY, "#fff3c4");
+          this.addFreeze(0.03); // a hair of impact-frame so a crit lands harder
+        }
         if (e.closeShotgun) this.addFreeze(FREEZE_SHOTGUN);
-        if (e.melee) { this.addTrauma(MELEE_HIT_TRAUMA); this.addFreeze(FREEZE_KILL); }
+        if (e.melee) this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
         if (!e.killed) sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
         break;
       }
@@ -873,6 +972,7 @@ export class Game {
         this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
         this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
         this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
+        this.replayDeathBurst(e.kind, e.x, e.y);
         const dur = e.kind === "boss" ? DEATH_DUR_BOSS
           : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
           : DEATH_DUR;
@@ -894,6 +994,7 @@ export class Game {
       case "dashStart":
         this.dashImgCd = 0;
         this.spawnParticles(e.x, e.y, 10, "#ffd27a");
+        this.addDecal(e.x, e.y, "#ffd27a", 16, "ring");
         sfx("dash");
         break;
       case "dashTrail":
@@ -906,10 +1007,14 @@ export class Game {
         this.addFreeze(FREEZE_HURT);
         this.addTrauma(TRAUMA_HURT);
         this.hurtFlash = 1;
+        this.hurtDir = this.findThreatDir(); // point the vignette at whatever just hit us
         break;
       case "itemPicked":
-        sfx("weapon");
+        // The pick SOUND (blessing vs levelup) plays at choice time in the blessing overlay,
+        // where the reached level is known; this event carries the world-space glow.
         this.spawnParticles(e.x, e.y, 20, e.tint);
+        this.spawnSparkleBurst(e.x, e.y, 14, e.tint);
+        this.screenFlash.flash(255, 210, 122, 0.1, 2.5);
         this.addTrauma(0.12);
         break;
       case "offerBlessing":
@@ -919,9 +1024,9 @@ export class Game {
         if (this.mode !== "online") this.offerBlessing(e.rare);
         break;
       case "pickup":
-        if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); sfx("coin"); }
-        else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); sfx("heart"); }
-        else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); sfx("weapon"); }
+        if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
+        else if (e.kind === "heart" || e.kind === "dealer_heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
+        else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); sfx("weapon"); }
         break;
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
@@ -952,10 +1057,14 @@ export class Game {
         this.spawnSparks(e.x, e.y, 16, Math.random() * 6.28);
         this.spawnParticles(e.x, e.y, 20, "#ffb43b");
         this.addDecal(e.x, e.y, "#ff7a2a", e.r * 0.6, "splat");
+        this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.6, 0.38, "#ffb43b", 5);
+        this.spawnSparkleBurst(e.x, e.y, 10, "#ff8a3b");
+        if (this.isNearCamera(e.x, e.y)) this.screenFlash.flash(255, 150, 60, 0.13, 3.2);
         break;
       case "chestOpen":
         sfx("chest");
         this.spawnParticles(e.x, e.y, 22, e.kind === "boss" ? "#ffb43b" : "#ffd27a");
+        this.spawnSparkleBurst(e.x, e.y, e.kind === "boss" ? 18 : 12, "#ffd27a");
         this.addDecal(e.x, e.y, "#ffd27a", 20, "ring");
         this.addTrauma(0.18);
         break;
@@ -971,6 +1080,8 @@ export class Game {
         this.spawnParticles(e.x, e.y, 22, "#ffd27a");
         this.spawnSparks(e.x, e.y, 12, 0);
         this.addDecal(e.x, e.y, "#ffb43b", BOSS_SLAM_RADIUS * 0.5, "splat");
+        this.shockwaves.spawn(e.x, e.y, 20, BOSS_SLAM_RADIUS * 1.25, 0.42, "#ffd27a", 6);
+        this.spawnDustRing(e.x, e.y, BOSS_SLAM_RADIUS * 0.55, 14, "#c9a06a");
         this.addFreeze(FREEZE_HEAVY);
         this.addTrauma(TRAUMA_BOSS_SLAM);
         break;
@@ -978,6 +1089,7 @@ export class Game {
         this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.6, gain: 0.6 });
         this.addTrauma(0.2);
         this.spawnParticles(e.x, e.y, 12, "#c98bff");
+        this.shockwaves.spawn(e.x, e.y, 12, 72, 0.3, "#c98bff", 3);
         break;
       case "bossAddSpawn":
         triggerRecoil(this.animForId(e.eid));
@@ -990,6 +1102,8 @@ export class Game {
         triggerFlash(this.animForId(e.eid));
         this.sfxAt("bossSpawn", e.x, e.y);
         this.addTrauma(TRAUMA_BOSS_FLOOR);
+        this.shockwaves.spawn(e.x, e.y, 30, 190, 0.55, "#ffb43b", 4);
+        this.screenFlash.flash(255, 180, 59, 0.12, 2.8);
         break;
       case "bossTransition":
         // Telemetry-bearing beat (enter/exit + queued overflow); the juice rides bossPhase.
@@ -1018,6 +1132,7 @@ export class Game {
         // player's own client replays the juice (wsTransport only forwards its own pid events).
         sfx("revive");
         this.spawnParticles(e.x, e.y, 14, "#8affe0");
+        this.shockwaves.spawn(e.x, e.y, 8, 46, 0.4, "#8affe0", 3);
         break;
       case "gameOver":
         this.gameOver();
@@ -1053,7 +1168,7 @@ export class Game {
   }
 
   private spawnEmberAt(x: number, y: number, radius: number) {
-    this.particles.push({
+    this.pushParticle({
       x: x + (Math.random() * 2 - 1) * radius * 0.6,
       y: y + (Math.random() * 2 - 1) * radius * 0.5,
       vx: (Math.random() * 2 - 1) * 24, vy: -40 - Math.random() * 50,
@@ -1061,6 +1176,80 @@ export class Game {
       color: Math.random() < 0.5 ? BURN_TINT : "#ffd27a",
       size: 2 + Math.random() * 2, kind: "puff", rot: 0, vr: 0, gravity: -40, drag: 0.9,
     });
+  }
+
+  // Melee connect: metal-on-flesh weight. Sparks fly out along the strike line from the
+  // player through the contact point, a bright flash pops at the blade, and the per-weapon
+  // hit-stop/trauma land the blow. Striking an enemy MID-ATTACK (windup/active) reads as a
+  // clash — the parry CLANG, a white flash, and a longer stop — rewarding aggressive timing.
+  private replayMeleeImpact(eid: number, hitX: number, hitY: number, isCrit: boolean) {
+    const feel = MELEE_FEEL[this.weapon];
+    this.addTrauma(feel?.hitTrauma ?? MELEE_HIT_TRAUMA);
+    this.addFreeze(feel?.hitFreeze ?? FREEZE_KILL);
+    const dir = Math.atan2(hitY - this.py, hitX - this.px);
+    this.spawnSparks(hitX, hitY, isCrit ? 10 : 6, dir);
+    const bladeColor = WEAPONS[this.weapon].melee ? WEAPONS[this.weapon].color : "#fff3c4";
+    this.spawnSparkFlash(hitX, hitY, bladeColor);
+    const target = this.enemies.find((en) => en.id === eid);
+    const isClash = target !== undefined && (target.attack.phase === "windup" || target.attack.phase === "active") && target.attack.move !== "none";
+    if (isClash) {
+      sfx("parry", { gain: 0.85 });
+      this.spawnSparkFlash(hitX, hitY, "#ffffff");
+      this.addFreeze(MELEE_CLASH_FREEZE);
+      this.addTrauma(0.08);
+    }
+  }
+
+  // Kind-flavored death burst layered over the shared gib/splat kill juice, so each enemy
+  // dies in its own material: goo, bone, wing-dust, wisps, spray — and the boss goes out
+  // with rings and a golden screen wash.
+  private replayDeathBurst(kind: EnemyKind, x: number, y: number) {
+    switch (kind) {
+      case "slime":
+        this.spawnPuff(x, y, 12, ENEMY_ARCHETYPES.slime.tint);
+        break;
+      case "skeleton":
+        this.spawnGibs(x, y, 8, "#e8e4d8");
+        break;
+      case "bat":
+        this.spawnParticles(x, y, 6, "#6f7a99");
+        break;
+      case "ghost":
+        this.spawnWisps(x, y, 7, "#dff4ff");
+        break;
+      case "spitter":
+        this.spawnPuff(x, y, 9, "#ff9ab8");
+        break;
+      case "boss":
+        this.screenFlash.flash(255, 214, 120, 0.4, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd27a", 5);
+        this.shockwaves.spawn(x, y, 12, 260, 0.8, "#ffb43b", 3);
+        this.spawnSparkleBurst(x, y, 26, "#ffd27a");
+        break;
+    }
+  }
+
+  // Best guess at what just hurt the player, for the directional hurt hint: the nearest
+  // enemy bullet (projectile hits), else the nearest living enemy (contact damage).
+  // Pure world-state reads — no RNG, nothing mutated.
+  private findThreatDir(): number | null {
+    let bestX = 0, bestY = 0;
+    let bestD = 130 * 130;
+    let isFound = false;
+    for (const b of this.bullets) {
+      if (b.friendly) continue;
+      const d = (b.x - this.px) ** 2 + (b.y - this.py) ** 2;
+      if (d < bestD) { bestD = d; bestX = b.x; bestY = b.y; isFound = true; }
+    }
+    if (!isFound) {
+      bestD = 170 * 170;
+      for (const en of this.enemies) {
+        if (en.dead) continue;
+        const d = (en.x - this.px) ** 2 + (en.y - this.py) ** 2;
+        if (d < bestD) { bestD = d; bestX = en.x; bestY = en.y; isFound = true; }
+      }
+    }
+    return isFound ? Math.atan2(bestY - this.py, bestX - this.px) : null;
   }
 
   private replayPropBreak(kind: PropKind, x: number, y: number) {
@@ -1096,12 +1285,20 @@ export class Game {
     this.isPaused = false;
     this.mouse.isDown = false;
     this.blessing.show(this.toBlessingCards(choices), (item) => {
+      this.playBlessingPickSfx(item);
       const events = applyItemToWorld(this.world, LOCAL_ID, item);
       if (events.length > 0) this.ownedItemDefs.push(item);
       this.handleSimEvents(events);
       this.isChoosing = false;
       this.last = performance.now();
     });
+  }
+
+  // The pick moment's sound: a fresh blessing chimes; a duplicate pick IS its Lv2/Lv3
+  // upgrade, so it gets the bigger level-up fanfare. Levels are read pre-apply.
+  private playBlessingPickSfx(item: ItemDef) {
+    const level = (itemLevelsOf(this.p.ownedItemIds).get(item.id) ?? 0) + 1;
+    sfx(level >= 2 ? "levelup" : "blessing");
   }
 
   // Online: show the SERVER's decided blessing choice set (already validated pool) and reply with
@@ -1115,6 +1312,7 @@ export class Game {
     this.isPaused = false;
     this.mouse.isDown = false;
     this.blessing.show(this.toBlessingCards(choices), (item) => {
+      this.playBlessingPickSfx(item);
       this.wsTransport?.sendChooseBlessing(offer.id, item.id);
       this.isChoosing = false;
       this.last = performance.now();
@@ -1189,7 +1387,7 @@ export class Game {
   private spawnSparkFlash(x: number, y: number, color: string) {
     // A single bright sprite spark that pops and fades where a ricochet round hits a wall.
     const life = 0.16;
-    this.particles.push({
+    this.pushParticle({
       x, y, vx: 0, vy: 0,
       life, maxLife: life, color,
       size: 22, kind: "sparkfx", rot: Math.random() * 6.28, vr: 0, gravity: 0, drag: 1,
@@ -1556,10 +1754,61 @@ export class Game {
       && y >= this.cam.y - margin && y <= this.cam.y + this.canvas.height + margin;
   }
 
+  // Every particle enters through here so the pool stays capped: when full, the oldest
+  // particle yields to the newest — a busy screen softens instead of dropping frames.
+  private pushParticle(p: Particle) {
+    if (this.particles.length >= MAX_PARTICLES) this.particles.shift();
+    this.particles.push(p);
+  }
+
   private spawnParticles(x: number, y: number, n: number, color: string) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.28, s = 40 + Math.random() * 140;
-      this.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.92 });
+      this.pushParticle({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.3 + Math.random() * 0.4, maxLife: 0.7, color, size: 1 + Math.random() * 3, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.92 });
+    }
+  }
+
+  // Celebration sparkles: bright flecks that leap upward and rain back down under gravity.
+  // Every third one runs white-hot so the burst glitters instead of reading as one color.
+  private spawnSparkleBurst(x: number, y: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.7;
+      const s = 110 + Math.random() * 190;
+      const life = 0.45 + Math.random() * 0.4;
+      this.pushParticle({
+        x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life, maxLife: life, color: i % 3 === 0 ? "#fff3c4" : color,
+        size: 1.5 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 430, drag: 0.96,
+      });
+    }
+  }
+
+  // Ghostly wisps: soft flecks that float up and dissolve — a spirit coming apart.
+  private spawnWisps(x: number, y: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const life = 0.5 + Math.random() * 0.5;
+      this.pushParticle({
+        x: x + (Math.random() * 2 - 1) * 12, y: y + (Math.random() * 2 - 1) * 8,
+        vx: (Math.random() * 2 - 1) * 24, vy: -34 - Math.random() * 44,
+        life, maxLife: life, color,
+        size: 3 + Math.random() * 3, kind: "puff", rot: 0, vr: 0, gravity: -22, drag: 0.94,
+      });
+    }
+  }
+
+  // A ring of dust thrown outward from a ground impact (boss slam), slightly flattened
+  // so it sits on the floor plane.
+  private spawnDustRing(x: number, y: number, r: number, n: number, color: string) {
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * 6.28 + (Math.random() - 0.5) * 0.3;
+      const s = 70 + Math.random() * 70;
+      const life = 0.34 + Math.random() * 0.22;
+      this.pushParticle({
+        x: x + Math.cos(a) * r, y: y + Math.sin(a) * r * 0.6,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s * 0.6,
+        life, maxLife: life, color,
+        size: 3 + Math.random() * 3.5, kind: "puff", rot: 0, vr: 0, gravity: -16, drag: 0.88,
+      });
     }
   }
 
@@ -1577,7 +1826,7 @@ export class Game {
         const px = cx + Math.cos(aim) * r - Math.sin(aim) * jitter;
         const py = cy + Math.sin(aim) * r + Math.cos(aim) * jitter;
         const sp = 120 + Math.random() * 120;
-        this.particles.push({ x: px, y: py, vx: Math.cos(aim) * sp, vy: Math.sin(aim) * sp, life: 0.14 + Math.random() * 0.14, maxLife: 0.28, color, size: 1 + Math.random() * 2.5, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.88 });
+        this.pushParticle({ x: px, y: py, vx: Math.cos(aim) * sp, vy: Math.sin(aim) * sp, life: 0.14 + Math.random() * 0.14, maxLife: 0.28, color, size: 1 + Math.random() * 2.5, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.88 });
       }
       return;
     }
@@ -1592,7 +1841,7 @@ export class Game {
       // Tangent to the sweep (perpendicular to the radius), in the swing's rotation sense.
       const tang = ang + Math.PI / 2;
       const sp = 90 + Math.random() * 130;
-      this.particles.push({ x: px, y: py, vx: Math.cos(tang) * sp, vy: Math.sin(tang) * sp, life: 0.16 + Math.random() * 0.16, maxLife: 0.32, color, size: 1 + Math.random() * 2.5, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.86 });
+      this.pushParticle({ x: px, y: py, vx: Math.cos(tang) * sp, vy: Math.sin(tang) * sp, life: 0.16 + Math.random() * 0.16, maxLife: 0.32, color, size: 1 + Math.random() * 2.5, kind: "dot", rot: 0, vr: 0, gravity: 0, drag: 0.86 });
     }
   }
 
@@ -1601,7 +1850,7 @@ export class Game {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.28, s = 90 + Math.random() * 210;
       const life = 0.45 + Math.random() * 0.5;
-      this.particles.push({
+      this.pushParticle({
         x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 60,
         life, maxLife: life, color, size: 3 + Math.random() * 4, kind: "gib",
         rot: Math.random() * 6.28, vr: (Math.random() * 2 - 1) * 14, gravity: 560, drag: 0.9,
@@ -1614,7 +1863,7 @@ export class Game {
     for (let i = 0; i < n; i++) {
       const a = angle + (Math.random() * 2 - 1) * 0.9, s = 160 + Math.random() * 220;
       const life = 0.12 + Math.random() * 0.16;
-      this.particles.push({
+      this.pushParticle({
         x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
         life, maxLife: life, color: Math.random() < 0.5 ? "#fff3c4" : "#ffb43b",
         size: 1 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 120, drag: 0.86,
@@ -1627,7 +1876,7 @@ export class Game {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * 6.28, s = 20 + Math.random() * 80;
       const life = 0.2 + Math.random() * 0.3;
-      this.particles.push({
+      this.pushParticle({
         x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s,
         life, maxLife: life, color, size: 3 + Math.random() * 4, kind: "puff", rot: 0, vr: 0, gravity: -30, drag: 0.9,
       });
@@ -1640,7 +1889,7 @@ export class Game {
     const perp = aim + side * (Math.PI / 2) + (Math.random() * 2 - 1) * 0.3;
     const s = 70 + Math.random() * 70;
     const life = 0.5 + Math.random() * 0.3;
-    this.particles.push({
+    this.pushParticle({
       x, y, vx: Math.cos(perp) * s, vy: Math.sin(perp) * s - 50,
       life, maxLife: life, color: "#d9a441", size: 3.5, kind: "shell",
       rot: Math.random() * 6.28, vr: (Math.random() * 2 - 1) * 18, gravity: 560, drag: 0.99,
@@ -1669,12 +1918,14 @@ export class Game {
     if (this.isFlowDebug) this.renderFlowDebug();
     this.renderProps();
     this.renderDecals();
+    this.motes.render(ctx, this.cam.x, this.cam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
     this.renderPropEntities();
     this.renderChests();
     this.renderPickups();
     this.renderParticles();
+    this.shockwaves.render(ctx, this.cam.x, this.cam.y);
     this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
@@ -1686,24 +1937,48 @@ export class Game {
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     ctx.restore();
+    this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
     this.renderReticle();
     this.renderMinimap();
   }
 
-  // Unmissable "you got hit" read: a red glow that hugs the screen edge and fades fast.
-  // Drawn in screen space (outside the shake translate) so it frames the whole viewport.
+  // Unmissable "you got hit" read: a red glow that hugs the screen edge and fades fast,
+  // plus a brighter lobe on the edge FACING the damage source (findThreatDir) so a hit
+  // also tells you where to look. At low HP the edge keeps breathing softly as a
+  // standing warning. All screen space (outside the shake translate).
   private renderHurtVignette() {
-    if (this.hurtFlash <= 0) return;
     const { ctx, canvas } = this;
     const cx = canvas.width / 2, cy = canvas.height / 2;
+    const lowFrac = this.maxHp > 0 ? this.hp / this.maxHp : 1;
+    const isLow = this.isRunning && !this.isDown && this.hp > 0 && lowFrac <= LOW_HP_FRAC;
+    if (this.hurtFlash <= 0 && !isLow) return;
     const inner = Math.min(cx, cy) * 0.55;
     const outer = Math.hypot(cx, cy);
+    if (isLow) {
+      const pulse = 0.1 + 0.05 * Math.sin(this.animClock * 4.2) + (lowFrac <= LOW_HP_FRAC / 2 ? 0.05 : 0);
+      const g = ctx.createRadialGradient(cx, cy, inner * 1.15, cx, cy, outer);
+      g.addColorStop(0, "rgba(255,40,40,0)");
+      g.addColorStop(1, `rgba(200,20,30,${pulse})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    if (this.hurtFlash <= 0) return;
     const g = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
     g.addColorStop(0, "rgba(255,40,40,0)");
     g.addColorStop(1, `rgba(255,30,30,${0.55 * this.hurtFlash})`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (this.hurtDir !== null) {
+      const edgeR = Math.min(cx, cy) * 0.92;
+      const bx = cx + Math.cos(this.hurtDir) * edgeR;
+      const by = cy + Math.sin(this.hurtDir) * edgeR;
+      const dg = ctx.createRadialGradient(bx, by, 8, bx, by, 230);
+      dg.addColorStop(0, `rgba(255,60,50,${0.42 * this.hurtFlash})`);
+      dg.addColorStop(1, "rgba(255,60,50,0)");
+      ctx.fillStyle = dg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
   }
 
   private renderTiles() {
@@ -2639,7 +2914,10 @@ export class Game {
       }
       ctx.restore();
 
-      if (!r.isDown) this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
+      if (!r.isDown) {
+        if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
+        else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
+      }
 
       ctx.fillStyle = color;
       ctx.font = '700 11px "Silkscreen", monospace';
@@ -2668,7 +2946,10 @@ export class Game {
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
-    if (!this.isDown) this.renderHeldWeapon(psx, psy, this.heldAimAngle(), this.weapon, alpha, this.playerAnim.recoil, this.heldThrustOffset());
+    if (!this.isDown) {
+      if (WEAPONS[this.weapon].melee) this.renderHeldMelee(psx, psy, this.aimAngle, this.weapon, alpha, this.meleeSwing);
+      else this.renderHeldWeapon(psx, psy, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
+    }
     if (this.isDown) {
       ctx.fillStyle = "#ff6a6a";
       ctx.font = '700 12px "Silkscreen", monospace';
@@ -2678,77 +2959,179 @@ export class Game {
     }
   }
 
-  private heldAimAngle(): number {
-    const swing = this.meleeSwing;
-    if (!swing || swing.timer <= 0) return this.aimAngle;
-    const t = 1 - swing.timer / swing.duration;
-    if (swing.isThrust) return swing.aim;
-    return swing.aim - swing.arc * 0.5 + t * swing.arc;
+  // Where the blade POINTS at swing progress t (0..1): an eased sweep across the sim's
+  // exact hit wedge — aim ± arc/2 — alternating direction per swing. The hitbox is the
+  // whole wedge for the whole swing (see isPointInMeleeHit), so the visual sweep passes
+  // through precisely the area that can hit.
+  private swingBladeAngle(swing: MeleeSwing, t: number): number {
+    const u = t < 0 ? 0 : t > 1 ? 1 : t;
+    const k = 1 - (1 - u) * (1 - u) * (1 - u); // easeOutCubic: snaps through, settles at the end
+    return swing.aim + this.meleeFlipDir * swing.arc * (k - 0.5);
   }
 
-  private heldThrustOffset(): number {
-    const swing = this.meleeSwing;
-    if (!swing || swing.timer <= 0 || !swing.isThrust) return 0;
-    const t = 1 - swing.timer / swing.duration;
-    return Math.sin(t * Math.PI) * 14;
-  }
-
+  // The slash VFX: a crescent ribbon that TRAILS the blade through its eased sweep (or a
+  // lunging streak for thrusts), plus a white-hot leading edge where the blade is right
+  // now. Analytic — sampled from the same easing the blade uses — so the trail and the
+  // held sprite always agree, at any framerate, with zero retained state.
   private renderMeleeSwing() {
     const swing = this.meleeSwing;
     if (!swing || swing.timer <= 0) return;
+    const t = 1 - swing.timer / swing.duration;
+    if (swing.isThrust) this.renderThrustFx(swing, t);
+    else this.renderSlashArc(swing, t);
+  }
+
+  private renderSlashArc(swing: MeleeSwing, t: number) {
     const { ctx, cam } = this;
     const sx = this.px - cam.x;
     const sy = this.py - cam.y;
-    const t = 1 - swing.timer / swing.duration;
+    const inner = 12;
+    const outer = swing.reach * (0.9 + 0.1 * Math.sin(t * Math.PI));
+    const SEGS = 9;
+    const SPAN = 0.55; // how far back (in swing-progress units) the ribbon reaches
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.translate(sx, sy);
-    ctx.rotate(swing.aim);
-    if (swing.isThrust) {
-      const len = swing.reach * (0.45 + 0.55 * Math.sin(t * Math.PI));
-      ctx.globalAlpha = 0.6 * (1 - t * 0.35);
-      ctx.strokeStyle = swing.color;
-      ctx.lineWidth = 7 * (1 - t * 0.4);
-      ctx.lineCap = "round";
+    ctx.fillStyle = swing.color;
+    for (let i = 0; i < SEGS; i++) {
+      const u1 = t - SPAN * (i / SEGS);
+      if (u1 <= 0) break;
+      const u0 = Math.max(0, t - SPAN * ((i + 1) / SEGS));
+      const a1 = this.swingBladeAngle(swing, u1);
+      const a0 = this.swingBladeAngle(swing, u0);
+      if (Math.abs(a1 - a0) < 0.002) continue;
+      const fade = 1 - i / SEGS; // newest segment brightest
+      ctx.globalAlpha = 0.4 * fade * fade * (1 - t * 0.25);
+      const ro = outer * (0.82 + 0.18 * fade); // tail tapers inward
+      const ccw = a1 < a0;
       ctx.beginPath();
-      ctx.moveTo(14, 0);
-      ctx.lineTo(14 + len, 0);
-      ctx.stroke();
-    } else {
-      const start = -swing.arc * 0.5;
-      const sweep = swing.arc * t;
-      const inner = 10;
-      const outer = swing.reach * (0.82 + 0.18 * Math.sin(t * Math.PI));
-      ctx.globalAlpha = 0.5 * (1 - t * 0.3);
-      ctx.fillStyle = swing.color;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.arc(0, 0, outer, start, start + sweep);
-      ctx.arc(0, 0, inner, start + sweep, start, true);
+      ctx.arc(0, 0, ro, a0, a1, ccw);
+      ctx.arc(0, 0, inner, a1, a0, !ccw);
       ctx.closePath();
       ctx.fill();
     }
+    // Leading edge: the blade line itself, white-hot over a colored glow.
+    const head = this.swingBladeAngle(swing, t);
+    const hx = Math.cos(head), hy = Math.sin(head);
+    ctx.lineCap = "round";
+    ctx.globalAlpha = 0.55 * (1 - t * 0.4);
+    ctx.strokeStyle = swing.color;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(hx * inner, hy * inner);
+    ctx.lineTo(hx * outer, hy * outer);
+    ctx.stroke();
+    ctx.globalAlpha = 0.85 * (1 - t * 0.5);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(hx * (inner + 4), hy * (inner + 4));
+    ctx.lineTo(hx * (outer - 2), hy * (outer - 2));
+    ctx.stroke();
     ctx.restore();
+  }
+
+  private renderThrustFx(swing: MeleeSwing, t: number) {
+    const { ctx, cam } = this;
+    const sx = this.px - cam.x;
+    const sy = this.py - cam.y;
+    const ext = Math.sin(t * Math.PI); // 0 -> full extension -> 0
+    const len = swing.reach * (0.45 + 0.55 * ext);
+    const headX = sx + Math.cos(swing.aim) * (12 + len);
+    const headY = sy + Math.sin(swing.aim) * (12 + len);
+    // Colored streak trailing back from the tip (sprite glow with a stroke fallback).
+    const isStreak = this.fxTrail("trail_streak", swing.color, headX, headY, len, 13 * (1 - t * 0.3), 0.8 * (1 - t * 0.25), swing.aim);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    if (!isStreak) {
+      ctx.globalAlpha = 0.6 * (1 - t * 0.35);
+      ctx.strokeStyle = swing.color;
+      ctx.lineWidth = 7 * (1 - t * 0.4);
+      ctx.beginPath();
+      ctx.moveTo(sx + Math.cos(swing.aim) * 14, sy + Math.sin(swing.aim) * 14);
+      ctx.lineTo(headX, headY);
+      ctx.stroke();
+    }
+    // White-hot core line + a glint at the tip at full extension.
+    ctx.globalAlpha = 0.8 * (1 - t * 0.4);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(sx + Math.cos(swing.aim) * 16, sy + Math.sin(swing.aim) * 16);
+    ctx.lineTo(headX, headY);
+    ctx.stroke();
+    ctx.restore();
+    if (ext > 0.65) this.fxLayer("spark", "#ffffff", headX, headY, 18, 18, (ext - 0.65) * 2.4, swing.aim);
   }
 
   // The equipped gun, drawn over the hero and rotated to aim. Held sprites are authored
   // 40px with the gun centered in the file, pointing +X; the vertical flip past |aim| >
   // 90deg keeps the barrel horizontal (not upside-down) when aiming left. The sprite
   // center sits at the muzzle-flash anchor distance (18px out along aim), pulled in
-  // slightly on fire by recoil. Weapons without art (the six newer guns) fall back to the
-  // pistol overlay; if even that isn't loaded yet it simply draws nothing.
-  // Melee held art (held_sword / held_longsword / held_spear) can drop into HELD_SOURCES later.
-  private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0, thrustOff = 0) {
+  // slightly on fire by recoil. Weapons without art fall back to the pistol overlay; if
+  // even that isn't loaded yet it simply draws nothing. Melee never comes through here —
+  // blades have their own aim-tracking, arc-sweeping path (renderHeldMelee).
+  private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0) {
     const img = this.sprites.heldWeapon(weapon) ?? this.sprites.heldWeapon("pistol");
     if (!img) return;
     const { ctx } = this;
-    const anchor = 18 - recoil * 3 + thrustOff;
+    const anchor = 18 - recoil * 3;
     const d = 40 * 0.6; // ~24px over the ~44px blob
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(cx + Math.cos(aim) * anchor, cy + Math.sin(aim) * anchor);
     ctx.rotate(aim);
     if (Math.abs(aim) > Math.PI / 2) ctx.scale(1, -1);
+    ctx.drawImage(img, -d / 2, -d / 2, d, d);
+    ctx.restore();
+  }
+
+  // The held BLADE. Idle it points exactly at the cursor (live aim); during a swing it
+  // sweeps through the sim's real hit wedge on the same eased curve as the slash VFX
+  // (swingBladeAngle), with a smear of ghost blades behind it — so what you see IS where
+  // the hitbox is. Thrusts lunge the pike out along the locked aim instead of arcing.
+  // Drawn big (per-weapon bladeSize; the tip lands at the weapon's true reach) so the
+  // weapon reads as a weapon, not a bar. Remotes pass swing=null and get the aim-tracking
+  // idle pose.
+  private renderHeldMelee(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, swing: MeleeSwing | null) {
+    const img = this.sprites.heldWeapon(weapon);
+    if (!img) { this.renderHeldWeapon(cx, cy, aim, weapon, alpha); return; }
+    const d = MELEE_FEEL[weapon]?.bladeSize ?? 46;
+    const isSwinging = swing !== null && swing.timer > 0;
+    let angle = aim;
+    let stretch = 0;
+    let scale = 1;
+    let t = 0;
+    if (isSwinging) {
+      t = 1 - swing.timer / swing.duration;
+      if (swing.isThrust) {
+        angle = swing.aim;
+        stretch = Math.sin(t * Math.PI) * swing.reach * 0.34;
+      } else {
+        angle = this.swingBladeAngle(swing, t);
+      }
+      scale = 1 + 0.12 * Math.sin(t * Math.PI); // punch out slightly mid-swing
+    }
+    // Flip so the blade's edge faces up when pointing left; frozen to the swing's locked
+    // aim while swinging so the sprite can't pop mid-sweep as it crosses straight-up/down.
+    const isFlip = Math.abs(isSwinging ? swing.aim : aim) > Math.PI / 2;
+    const anchor = d * 0.55 + stretch;
+    // Ghost smears behind an arcing blade sell the speed of the sweep.
+    if (isSwinging && !swing.isThrust) {
+      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.22), anchor, d * scale, alpha * 0.16, isFlip);
+      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.11), anchor, d * scale, alpha * 0.32, isFlip);
+    }
+    this.drawBlade(img, cx, cy, angle, anchor, d * scale, alpha, isFlip);
+  }
+
+  private drawBlade(img: HTMLImageElement, cx: number, cy: number, angle: number, anchor: number, d: number, alpha: number, isFlip: boolean) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx + Math.cos(angle) * anchor, cy + Math.sin(angle) * anchor);
+    ctx.rotate(angle);
+    if (isFlip) ctx.scale(1, -1);
     ctx.drawImage(img, -d / 2, -d / 2, d, d);
     ctx.restore();
   }
