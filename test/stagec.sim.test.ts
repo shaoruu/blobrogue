@@ -13,6 +13,7 @@ import {
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
+import { REVIVE_HP } from "../src/sim/constants.js";
 
 let passed = 0;
 let failed = 0;
@@ -47,6 +48,14 @@ function plantBullet(w: WorldState, owner: string, target: Enemy, damage: number
   };
   w.bullets.push(b);
   return b;
+}
+
+// An enemy bullet planted on `victim` so the next world step hits them for `damage`.
+function plantEnemyBullet(w: WorldState, victim: PlayerSim, damage: number): void {
+  w.bullets.push({
+    x: victim.x, y: victim.y, vx: 0, vy: 0, radius: 6, life: 1, friendly: false,
+    owner: null, damage, color: "#f00", pierce: 0, hitList: null, isCrit: false,
+  });
 }
 
 function ownershipTests(): void {
@@ -115,8 +124,74 @@ function ownershipTests(): void {
   }
 }
 
+function downReviveTests(): void {
+  section("down/revive: a player at 0 HP goes DOWN (not game over) while a teammate is up");
+  {
+    const { w, a, b } = twoPlayerArena();
+    a.hp = 1;
+    plantEnemyBullet(w, a, 5);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("A is downed, not dead", a.isDown && a.hp === 0);
+    check("no gameOver while B stands", !ev.some((x) => x.t === "gameOver"));
+    check("B is unaffected and still up", !b.isDown && b.hp > 0);
+  }
+
+  section("down/revive: contact/enemy damage skips a downed player");
+  {
+    const { w, a } = twoPlayerArena();
+    a.isDown = true; a.hp = 0;
+    plantEnemyBullet(w, a, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    // The bullet should pass through a downed player (still alive at 0, still down, no crash).
+    check("downed player not further damaged", a.isDown && a.hp === 0);
+  }
+
+  section("down/revive: full team wipe ends the run for everyone");
+  {
+    const { w, a, b } = twoPlayerArena();
+    a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
+    check("A down first", a.isDown);
+    b.hp = 1; plantEnemyBullet(w, b, 5);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    const gos = ev.filter((x) => x.t === "gameOver").map((x) => (x as { pid: string }).pid);
+    check("gameOver emitted for the whole room", gos.includes(a.id) && gos.includes(b.id), `pids=${gos.join(",")}`);
+  }
+
+  section("down/revive: a standing teammate revives a downed player after a sustained hold");
+  {
+    const { w, a, b } = twoPlayerArena();
+    a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
+    check("A downed", a.isDown);
+    // B walks onto A and holds.
+    b.x = a.x + 10; b.y = a.y;
+    let revived = false;
+    let ticks = 0;
+    for (let i = 0; i < 40 && !revived; i++) {
+      const ev: SimEvent[] = [];
+      stepWorldPhase(w, 1 / 20, ev);
+      ticks++;
+      if (ev.some((x) => x.t === "revive" && (x as { pid: string }).pid === a.id)) revived = true;
+    }
+    check("A revived by B", revived && !a.isDown, `after ${ticks} ticks`);
+    check("A returns at the revive HP", a.hp === REVIVE_HP, `hp=${a.hp}`);
+    check("A briefly invulnerable after revive", a.invuln > 0);
+  }
+
+  section("down/revive: revive progress decays without a teammate present (needs a sustained hold)");
+  {
+    const { w, a } = twoPlayerArena();
+    // A downed with a far-away B: partial progress must not persist to a free revive.
+    a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
+    for (let i = 0; i < 60; i++) stepWorldPhase(w, 1 / 20, []); // B far -> never revives
+    check("A stays down with no nearby reviver", a.isDown && a.reviveProgress === 0);
+  }
+}
+
 function main(): void {
   ownershipTests();
+  downReviveTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll Stage-C sim assertions passed.\n");

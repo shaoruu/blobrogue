@@ -902,6 +902,12 @@ export class Game {
       case "reachExit":
         if (this.coop && this.pendingDescend !== e.toFloor) { this.pendingDescend = e.toFloor; this.coop.requestDescend(e.toFloor); }
         break;
+      case "revive":
+        // Authoritative (online) revive: the server brought a downed player back. The revived
+        // player's own client replays the juice (wsTransport only forwards its own pid events).
+        sfx("revive");
+        this.spawnParticles(e.x, e.y, 14, "#8affe0");
+        break;
       case "gameOver":
         this.gameOver();
         break;

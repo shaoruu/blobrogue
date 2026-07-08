@@ -27,6 +27,7 @@ export type SimEvent =
   | { t: "playerHurt"; pid: PlayerId; x: number; y: number }
   | { t: "itemPicked"; pid: PlayerId; x: number; y: number; tint: string }
   | { t: "offerBlessing"; pid: PlayerId }
+  | { t: "revive"; pid: PlayerId; by: PlayerId; x: number; y: number } // downed player brought back by a teammate
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }

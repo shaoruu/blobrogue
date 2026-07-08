@@ -65,6 +65,9 @@ export interface PlayerSim {
   facing: number; aimAngle: number; weapon: WeaponId;
   ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
   shotSeq: number; isDown: boolean;
+  // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
+  // up or when no one is reviving. Solo never downs, so this stays 0.
+  reviveProgress: number;
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
   meleeSwing: MeleeSwing | null;
@@ -113,7 +116,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false,
+    shotSeq: 0, isDown: false, reviveProgress: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -1441,6 +1444,16 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.pickups = remaining;
 }
 
+// Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
+// could revive `p`? Drives the authoritative down-vs-gameover decision.
+function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
+  for (const other of w.players.values()) {
+    if (other === p) continue;
+    if (!other.isDown && other.hp > 0) return true;
+  }
+  return w.isCoop && w.remoteTargets.some((r) => !r.isDown);
+}
+
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
   p.hp -= amount;
@@ -1448,10 +1461,41 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
-    if (w.isCoop && w.remoteTargets.some((r) => !r.isDown)) {
+    if (hasStandingAlly(w, p)) {
+      // A teammate can still revive: go DOWN, not out. reviveProgress accrues in updateRevives.
       p.isDown = true;
+      p.reviveProgress = 0;
     } else {
-      ev.push({ t: "gameOver", pid: p.id });
+      // No one left to revive -> solo death or full team wipe. End the run for the whole room
+      // (every remaining player, incl. already-downed teammates) so all clients see game over.
+      // Solo has one player, so this emits exactly one gameOver as before.
+      for (const other of w.players.values()) ev.push({ t: "gameOver", pid: other.id });
+    }
+  }
+}
+
+// Authoritative revive: a living teammate standing within REVIVE_RADIUS of a downed player for
+// REVIVE_HOLD seconds brings them back. Progress decays when no one is nearby, so it takes a
+// sustained hold. Solo never has a downed player with a standing ally, so this no-ops there.
+function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
+  for (const downed of w.players.values()) {
+    if (!downed.isDown) continue;
+    let reviver: PlayerSim | undefined;
+    for (const other of w.players.values()) {
+      if (other === downed || other.isDown || other.hp <= 0) continue;
+      if (Math.hypot(other.x - downed.x, other.y - downed.y) <= C.REVIVE_RADIUS) { reviver = other; break; }
+    }
+    if (reviver) {
+      downed.reviveProgress += dt;
+      if (downed.reviveProgress >= C.REVIVE_HOLD) {
+        downed.isDown = false;
+        downed.hp = Math.min(downed.maxHp, C.REVIVE_HP);
+        downed.invuln = Math.max(downed.invuln, C.REVIVE_INVULN);
+        downed.reviveProgress = 0;
+        ev.push({ t: "revive", pid: downed.id, by: reviver.id, x: downed.x, y: downed.y });
+      }
+    } else {
+      downed.reviveProgress = downed.reviveProgress > dt ? downed.reviveProgress - dt : 0;
     }
   }
 }
@@ -1516,6 +1560,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
   updatePickups(w, dt, ev);
+  updateRevives(w, dt, ev);
   updateExit(w, ev);
 
   for (const p of w.players.values()) {
