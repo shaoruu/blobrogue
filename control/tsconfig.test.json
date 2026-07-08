@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "../server/src/**/*.ts",
+    "../src/sim/**/*.ts",
+    "../src/net/protocol.ts",
+    "../src/net/interp.ts",
+    "../src/client/transport.ts",
+    "../src/client/wsTransport.ts"
+  ]
+}
