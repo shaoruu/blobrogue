@@ -4,13 +4,22 @@ import type { AuthClient } from "../net/auth.js";
 import type { ProfileDoc } from "../net/api.js";
 import { api } from "../net/api.js";
 import { Multiplayer } from "../net/multiplayer.js";
+import { OnlineLobby } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
-import { playerColor } from "../game/assets.js";
+import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { createSettingsControls } from "./settings.js";
 
 export interface MenuHost {
   startSolo(profile: ProfileDoc | null): void;
   startCoop(mp: Multiplayer, profile: ProfileDoc | null): void;
+  startOnline(lobby: OnlineLobby, profile: ProfileDoc | null): void;
+}
+
+// Context for the game-over screen: which flow the run came from decides the retry action.
+export interface GameOverContext {
+  wasCoop: boolean;
+  isNewBest: boolean;
+  online: OnlineLobby | null;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -27,8 +36,8 @@ function fmtClock(seconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// Drives everything shown in #overlay: the title/menu, the co-op lobby, and the
-// game-over screen. It is the only place that knows whether multiplayer exists.
+// Drives everything shown in #overlay: the title/menu, the online lobby, the classic co-op
+// lobby, and the game-over screen. It is the only place that knows whether multiplayer exists.
 export class Menu {
   private overlay: HTMLElement;
   private session: Session;
@@ -38,6 +47,7 @@ export class Menu {
   private unsub: (() => void) | null = null;
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
+  private syncColorRow: (() => void) | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -78,7 +88,7 @@ export class Menu {
     wrap.appendChild(hero);
 
     if (!this.client) {
-      // Offline build: no profile/co-op — single centered actions column, no split.
+      // Offline build: no profile/multiplayer — single centered actions column, no split.
       const colA = el("div", "col-actions");
       colA.appendChild(this.soloButton("\u25be  PLAY"));
       colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
@@ -87,27 +97,26 @@ export class Menu {
     } else {
       const body = el("div", "body");
 
-      // LEFT column: play actions.
+      // LEFT column: play actions. Online (the authoritative server) is the headline;
+      // solo below it; the classic peer-synced co-op keeps its own door underneath.
       const colA = el("div", "col-actions");
       colA.appendChild(el("div", "col-h", "Play"));
-      const quickBtn = el("button", "btn-quick primary");
-      quickBtn.appendChild(el("span", "", "\u25b6 QUICK PLAY (CO-OP)"));
-      quickBtn.appendChild(el("span", "sub", "jump into an open game \u2014 no code needed"));
-      quickBtn.addEventListener("click", () => void this.doQuickPlay());
-      colA.appendChild(quickBtn);
+      const onlineBtn = el("button", "btn-quick primary");
+      onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
+      onlineBtn.appendChild(el("span", "sub", "rooms & quick play on the live server"));
+      onlineBtn.addEventListener("click", () => void this.showOnlineHome());
+      colA.appendChild(onlineBtn);
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
       colA.appendChild(solo);
       const actrow = el("div", "actrow");
-      const hostBtn = el("button", "secondary", "PRIVATE ROOM");
-      hostBtn.addEventListener("click", () => void this.doHost());
-      const joinBtn = el("button", "secondary", "JOIN CODE");
-      joinBtn.addEventListener("click", () => void this.showJoin());
-      actrow.append(hostBtn, joinBtn);
+      const classicBtn = el("button", "secondary", "CLASSIC CO-OP");
+      classicBtn.addEventListener("click", () => void this.showClassicCoop());
+      actrow.append(classicBtn);
       colA.appendChild(actrow);
       body.appendChild(colA);
 
-      // RIGHT column: identity (name or account) + profile + settings.
+      // RIGHT column: identity (name, blob color, account) + profile + settings.
       const colB = el("div", "col-side");
       colB.appendChild(this.identitySection());
       const profileBox = el("div", "profile");
@@ -131,22 +140,51 @@ export class Menu {
     input.maxLength = 20;
     input.placeholder = "your blob name";
     input.value = this.session.name;
-    input.addEventListener("change", () => void this.session.login(input.value.trim() || "blob"));
+    input.addEventListener("change", () => void this.session.login(input.value.trim() || "blob").catch(() => {}));
     row.append(label, input);
+    return row;
+  }
+
+  // The blob-color pick: one swatch per palette slot. Slot 0 (amber) is the natural
+  // sprite; any other pick tints your blob everywhere (solo + online) and is persisted
+  // (locally always, onto the profile when the backend is reachable).
+  private colorRow(): HTMLElement {
+    const row = el("div", "namerow");
+    row.appendChild(el("label", "", "blob color"));
+    const swatches = el("div", "swatches");
+    const buttons: HTMLButtonElement[] = [];
+    const sync = () => {
+      const current = this.session.colorIndex ?? 0;
+      buttons.forEach((b, i) => b.classList.toggle("sel", i === current));
+    };
+    for (let i = 0; i < PLAYER_COLORS.length; i++) {
+      const b = el("button", "swatch");
+      b.type = "button";
+      b.style.background = PLAYER_COLORS[i];
+      b.title = i === 0 ? "amber (classic)" : "";
+      b.addEventListener("click", () => { this.session.setColorIndex(i); sync(); });
+      buttons.push(b);
+      swatches.appendChild(b);
+    }
+    sync();
+    this.syncColorRow = sync;
+    row.appendChild(swatches);
     return row;
   }
 
   // The right-column identity block. Signed in: a Google account chip (avatar + name
   // + sign out). Signed out: the guest name input plus an optional "Sign in with
-  // Google" button. Guest play is always available either way.
+  // Google" button. Guest play is always available either way; the blob-color pick
+  // shows for both.
   private identitySection(): HTMLElement {
     const wrap = el("div", "identity");
     if (this.auth && this.auth.isSignedIn) {
       wrap.appendChild(this.accountChip());
     } else {
       wrap.appendChild(this.nameRow());
-      if (this.auth) wrap.appendChild(this.googleRow());
     }
+    wrap.appendChild(this.colorRow());
+    if (this.auth && !this.auth.isSignedIn) wrap.appendChild(this.googleRow());
     return wrap;
   }
 
@@ -212,10 +250,18 @@ export class Menu {
   private async hydrateProfile(box: HTMLElement) {
     // Signed in: always run the upsert so the account row exists (and any unowned
     // guest stats migrate) before the first run is recorded. Guest: unchanged.
-    const signedIn = this.auth?.isSignedIn ?? false;
-    const profile = (this.session.name || signedIn)
-      ? await this.session.login(this.session.name || "blob")
-      : await this.session.refreshProfile();
+    // Never let an unreachable backend break the title screen.
+    let profile: ProfileDoc | null = null;
+    try {
+      const signedIn = this.auth?.isSignedIn ?? false;
+      profile = (this.session.name || signedIn)
+        ? await this.session.login(this.session.name || "blob")
+        : await this.session.refreshProfile();
+    } catch {
+      return;
+    }
+    // Login may have adopted an account's saved color pick; reflect it in the swatches.
+    this.syncColorRow?.();
     if (!profile || profile.gamesPlayed === 0) return;
     box.replaceChildren();
     box.appendChild(el("div", "col-h", `${profile.name} \u2014 all time`));
@@ -239,15 +285,206 @@ export class Menu {
 
   private soloButton(label: string): HTMLButtonElement {
     const btn = el("button", "", label);
-    btn.addEventListener("click", () => void this.doSolo());
+    btn.addEventListener("click", () => this.doSolo());
     return btn;
   }
 
   private doSolo() {
     // Solo must never block on the network: kick off the (optional) identity
     // upsert in the background and start immediately with whatever profile we have.
-    if (this.client) void this.session.login(this.session.name || "blob");
+    if (this.client) void this.session.login(this.session.name || "blob").catch(() => {});
     this.host.startSolo(this.session.profile);
+  }
+
+  // ---- ONLINE (authoritative server): rooms + quick play -----------------------------
+
+  // The online home: quick play into the public pool, create a private room (shareable
+  // code), or join a friend's code. Every action stays on this screen until it succeeds,
+  // so a failed backend just writes a status line — never a dead end.
+  async showOnlineHome(note = "") {
+    if (!this.client) { await this.showTitle(); return; }
+    const wrap = el("div", "menu");
+    wrap.appendChild(el("h1", "", "PLAY ONLINE"));
+    wrap.appendChild(el("p", "", "Server-run worlds. Drop into the public pool, or make a room and share its code."));
+
+    const colA = el("div", "col-actions");
+    const quick = el("button", "btn-quick primary");
+    quick.appendChild(el("span", "", "\u25b6 QUICK PLAY"));
+    quick.appendChild(el("span", "sub", "drop into an open public room"));
+    colA.appendChild(quick);
+    const actrow = el("div", "actrow");
+    const create = el("button", "secondary", "CREATE ROOM");
+    const join = el("button", "secondary", "JOIN CODE");
+    actrow.append(create, join);
+    colA.appendChild(actrow);
+    wrap.appendChild(colA);
+
+    const status = el("p", "muted", note);
+    wrap.appendChild(status);
+
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+
+    const buttons = [quick, create, join];
+    const setBusy = (isBusy: boolean, text: string) => {
+      buttons.forEach((b) => (b.disabled = isBusy));
+      status.textContent = text;
+    };
+    quick.addEventListener("click", () => void this.doQuickPlayOnline(setBusy));
+    create.addEventListener("click", () => void this.doCreateOnline(setBusy));
+    join.addEventListener("click", () => void this.showJoinScreen({
+      title: "JOIN ROOM",
+      hint: "Enter the 4-letter room code your friend shared.",
+      onBack: () => void this.showOnlineHome(),
+      onJoin: (code, joinStatus) => void this.doJoinOnline(code, joinStatus),
+    }));
+
+    this.show(wrap);
+  }
+
+  private async doQuickPlayOnline(setBusy: (b: boolean, t: string) => void) {
+    if (!this.client) return;
+    setBusy(true, "finding a room\u2026");
+    try {
+      const profile = await this.session.login(this.session.name || "blob");
+      const lobby = new OnlineLobby(this.client, this.session);
+      await lobby.quickPlay();
+      // The public pool has no start gate: the room is live, drop straight in.
+      this.launchOnline(lobby, profile);
+    } catch (err) {
+      setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not find a room"));
+    }
+  }
+
+  private async doCreateOnline(setBusy: (b: boolean, t: string) => void) {
+    if (!this.client) return;
+    setBusy(true, "creating room\u2026");
+    try {
+      const profile = await this.session.login(this.session.name || "blob");
+      const lobby = new OnlineLobby(this.client, this.session);
+      await lobby.create();
+      this.showOnlineLobby(lobby, profile);
+    } catch (err) {
+      setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not create room"));
+    }
+  }
+
+  private async doJoinOnline(code: string, status: HTMLElement) {
+    if (!this.client || code.trim().length < 4) { status.textContent = "enter a valid code"; return; }
+    status.textContent = "joining\u2026";
+    try {
+      const profile = await this.session.login(this.session.name || "blob");
+      const lobby = new OnlineLobby(this.client, this.session);
+      await lobby.join(code);
+      // A live room means the run is on — drop straight in; otherwise wait in the lobby.
+      if (lobby.status === "playing") this.launchOnline(lobby, profile);
+      else this.showOnlineLobby(lobby, profile);
+    } catch (err) {
+      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not join");
+    }
+  }
+
+  private launchOnline(lobby: OnlineLobby, profile: ProfileDoc | null) {
+    this.teardownLobby();
+    this.host.startOnline(lobby, profile);
+  }
+
+  // The room lobby: the shareable code, who's here (names + colors, host tag), and the
+  // start/waiting/rejoin control. Re-renders on every roster/status change.
+  showOnlineLobby(lobby: OnlineLobby, profile: ProfileDoc | null, note = "") {
+    let prevStatus = lobby.status;
+    const render = () => {
+      if (lobby.status === "ended") { lobby.leave(); void this.showTitle(); return; }
+      // The host pressing START flips the room live; everyone waiting launches together.
+      // (Only on the transition — re-opening this screen mid-run shows REJOIN instead.)
+      if (lobby.status === "playing" && prevStatus === "lobby") { this.launchOnline(lobby, profile); return; }
+      prevStatus = lobby.status;
+
+      const wrap = el("div", "menu");
+      wrap.appendChild(el("h1", "", "ROOM " + lobby.code));
+      wrap.appendChild(el("p", "", "Share this code \u2014 friends pick PLAY ONLINE \u2192 JOIN CODE to join you."));
+      wrap.appendChild(el("div", "code-badge", lobby.code));
+
+      const players = lobby.players();
+      const list = el("div", "playerlist");
+      for (const p of players) {
+        const rowEl = el("div", "playerrow");
+        const dot = el("span", "dot");
+        dot.style.background = playerColor(p.colorIndex);
+        const you = p.playerId === lobby.selfId ? " (you)" : "";
+        rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
+        list.appendChild(rowEl);
+      }
+      wrap.appendChild(list);
+      wrap.appendChild(el("p", "muted", `${players.length} player${players.length === 1 ? "" : "s"} in the room`));
+
+      const row = el("div", "btnrow");
+      if (lobby.status === "playing") {
+        // A run is live in this room (e.g. you stepped out mid-run) — jump back in.
+        const rejoin = el("button", "", "\u25be  REJOIN RUN");
+        rejoin.addEventListener("click", () => this.launchOnline(lobby, profile));
+        row.appendChild(rejoin);
+      } else if (lobby.isHost) {
+        const start = el("button", "", "\u25be  START RUN");
+        start.addEventListener("click", () => void lobby.start().catch(() => {}));
+        row.appendChild(start);
+      } else {
+        wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
+      }
+      const leave = el("button", "secondary", "leave");
+      leave.addEventListener("click", () => { lobby.leave(); void this.showTitle(); });
+      row.appendChild(leave);
+      wrap.appendChild(row);
+      if (note) wrap.appendChild(el("p", "muted", note));
+      wrap.appendChild(el("p", "hint", CONTROLS));
+
+      this.overlay.classList.remove("hidden");
+      this.overlay.replaceChildren(wrap);
+    };
+
+    this.teardownLobby();
+    this.unsub = lobby.onChange(render);
+    render();
+  }
+
+  // ---- CLASSIC CO-OP (peer-synced, the original path — fully preserved) --------------
+
+  async showClassicCoop() {
+    if (!this.client) { await this.showTitle(); return; }
+    const wrap = el("div", "menu");
+    wrap.appendChild(el("h1", "", "CLASSIC CO-OP"));
+    wrap.appendChild(el("p", "", "The original peer-synced co-op \u2014 everyone runs the same dungeon side by side."));
+
+    const colA = el("div", "col-actions");
+    const quickBtn = el("button", "btn-quick primary");
+    quickBtn.appendChild(el("span", "", "\u25b6 QUICK PLAY (CO-OP)"));
+    quickBtn.appendChild(el("span", "sub", "jump into an open game \u2014 no code needed"));
+    quickBtn.addEventListener("click", () => void this.doQuickPlay());
+    colA.appendChild(quickBtn);
+    const actrow = el("div", "actrow");
+    const hostBtn = el("button", "secondary", "PRIVATE ROOM");
+    hostBtn.addEventListener("click", () => void this.doHost());
+    const joinBtn = el("button", "secondary", "JOIN CODE");
+    joinBtn.addEventListener("click", () => void this.showJoinScreen({
+      title: "JOIN GAME",
+      hint: "Enter the 4-letter code your host shared.",
+      onBack: () => void this.showClassicCoop(),
+      onJoin: (code, status) => void this.doJoin(code, status),
+    }));
+    actrow.append(hostBtn, joinBtn);
+    colA.appendChild(actrow);
+    wrap.appendChild(colA);
+
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+
+    this.show(wrap);
   }
 
   private async doQuickPlay() {
@@ -276,10 +513,16 @@ export class Menu {
     }
   }
 
-  private async showJoin() {
+  // Shared join-by-code screen (classic co-op and online rooms use the same 4-letter codes).
+  private showJoinScreen(opts: {
+    title: string;
+    hint: string;
+    onBack: () => void;
+    onJoin: (code: string, status: HTMLElement) => void;
+  }) {
     const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", "JOIN GAME"));
-    wrap.appendChild(el("p", "", "Enter the 4-letter code your host shared."));
+    wrap.appendChild(el("h1", "", opts.title));
+    wrap.appendChild(el("p", "", opts.hint));
     const input = el("input", "code-input");
     input.type = "text";
     input.maxLength = 4;
@@ -290,10 +533,10 @@ export class Menu {
     const status = el("p", "muted");
     const row = el("div", "btnrow");
     const go = el("button", "", "join");
-    go.addEventListener("click", () => void this.doJoin(input.value, status));
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") void this.doJoin(input.value, status); });
+    go.addEventListener("click", () => opts.onJoin(input.value, status));
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") opts.onJoin(input.value, status); });
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => void this.showTitle());
+    back.addEventListener("click", () => opts.onBack());
     row.append(go, back);
     wrap.append(row, status);
     this.show(wrap);
@@ -361,10 +604,13 @@ export class Menu {
     render();
   }
 
-  showGameOver(result: RunResult, profile: ProfileDoc | null, wasCoop: boolean, isNewBest: boolean) {
+  showGameOver(result: RunResult, profile: ProfileDoc | null, ctx: GameOverContext) {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "died", "YOU DIED"));
-    wrap.appendChild(el("p", "", wasCoop ? "The party fights on without you." : "The depths claim another blob."));
+    const flavor = ctx.online
+      ? "The run is over \u2014 regroup and go again."
+      : ctx.wasCoop ? "The party fights on without you." : "The depths claim another blob.";
+    wrap.appendChild(el("p", "", flavor));
 
     // A run summary that counts its numbers up. Each cell reserves width so the
     // count-up never nudges the layout (tabular-nums keeps digits fixed-width too).
@@ -385,7 +631,7 @@ export class Menu {
     stat("time", result.durationMs / 1000, fmtClock);
     wrap.appendChild(grid);
 
-    if (isNewBest) {
+    if (ctx.isNewBest) {
       const best = el("p", "", "\u2605 NEW BEST \u2014 your deepest run yet");
       best.style.color = "#ffb43b";
       best.style.fontWeight = "700";
@@ -397,38 +643,75 @@ export class Menu {
     }
 
     const row = el("div", "btnrow");
-    // Solo: "play again" restarts a fresh solo run (the one-key retention loop).
-    // Co-op: the party already ended, so restarting to a lone solo run would silently
-    // yank the player out of co-op — instead offer a clear "back to menu" as primary.
-    if (wasCoop) {
+    let primary: () => void;
+    let hint: string;
+    const online = ctx.online;
+    if (online && online.isActive && !online.isQuickPlay) {
+      // Private room: the party regroups in the same lobby, same code, ready to go again.
+      primary = () => { void online.reopen(); this.showOnlineLobby(online, profile); };
+      const backBtn = el("button", "", "back to lobby \u21b5");
+      backBtn.addEventListener("click", () => primary());
+      const leaveBtn = el("button", "secondary", "leave room");
+      leaveBtn.addEventListener("click", () => { online.leave(); void this.showTitle(); });
+      row.append(backBtn, leaveBtn);
+      hint = "press ENTER for the lobby";
+    } else if (online) {
+      // Quick play (or a room that ended underneath us): matchmake again.
+      primary = () => void this.retryQuickPlayOnline(online);
+      const again = el("button", "", "play again \u21b5");
+      again.addEventListener("click", () => primary());
+      const back = el("button", "secondary", "back to menu \u25b8");
+      back.addEventListener("click", () => { online.leave(); void this.showTitle(); });
+      row.append(again, back);
+      hint = "press ENTER to play again";
+    } else if (ctx.wasCoop) {
+      // Co-op: the party already ended, so restarting to a lone solo run would silently
+      // yank the player out of co-op — instead offer a clear "back to menu" as primary.
+      primary = () => void this.showTitle();
       const menuBtn = el("button", "", "back to menu \u21b5");
-      menuBtn.addEventListener("click", () => void this.showTitle());
+      menuBtn.addEventListener("click", () => primary());
       const soloAgain = el("button", "secondary", "play solo");
       soloAgain.addEventListener("click", () => this.doSolo());
       row.append(menuBtn, soloAgain);
-      wrap.appendChild(row);
-      wrap.appendChild(el("p", "hint", "press ENTER for menu"));
+      hint = "press ENTER for menu";
     } else {
+      // Solo: "play again" restarts a fresh solo run (the one-key retention loop).
+      primary = () => this.doSolo();
       const again = el("button", "", "play again \u21b5");
-      again.addEventListener("click", () => this.doSolo());
+      again.addEventListener("click", () => primary());
       const back = el("button", "secondary", "back to menu \u25b8");
       back.addEventListener("click", () => void this.showTitle());
       row.append(again, back);
-      wrap.appendChild(row);
-      wrap.appendChild(el("p", "hint", "press ENTER or R to play again"));
+      hint = "press ENTER or R to play again";
     }
+    wrap.appendChild(row);
+    wrap.appendChild(el("p", "hint", hint));
 
     this.show(wrap);
     this.runCountups(counts);
 
-    // One-key retention loop. Solo → restart run; co-op → back to menu (don't force solo).
+    // One-key retention loop: ENTER always triggers the primary action (R also, solo only).
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (wasCoop) { if (k === "enter") { e.preventDefault(); void this.showTitle(); } }
-      else if (k === "enter" || k === "r") { e.preventDefault(); this.doSolo(); }
+      if (k === "enter" || (k === "r" && !ctx.wasCoop && !ctx.online)) { e.preventDefault(); primary(); }
     };
     this.gameOverKeys = onKey;
     window.addEventListener("keydown", onKey);
+  }
+
+  // Leave the finished quick-play room and matchmake a fresh one in one motion.
+  private async retryQuickPlayOnline(old: OnlineLobby) {
+    if (!this.client) { await this.showTitle(); return; }
+    old.leave();
+    await this.showOnlineHome("finding a room\u2026");
+    try {
+      const profile = await this.session.login(this.session.name || "blob");
+      const lobby = new OnlineLobby(this.client, this.session);
+      await lobby.quickPlay();
+      this.launchOnline(lobby, profile);
+    } catch (err) {
+      await this.showOnlineHome(this.cleanErr(err instanceof Error ? err.message : "could not find a room"));
+    }
   }
 
   private runCountups(items: Array<{ node: HTMLElement; to: number; fmt: (v: number) => string }>, durationMs = 700) {
@@ -454,7 +737,7 @@ export class Menu {
   }
 
   private cleanErr(msg: string): string {
-    return msg.replace(/^\[.*?\]\s*/, "");
+    return msg.replace(/^\[.*?\]\s*/, "").replace(/^Uncaught Error:\s*/, "");
   }
 }
 

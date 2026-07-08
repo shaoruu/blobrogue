@@ -1,13 +1,13 @@
 import { ConvexClient } from "convex/browser";
 import { Game } from "./game/game.js";
-import type { RunResult } from "./game/game.js";
-import { api } from "./net/api.js";
+import type { RunResult, ExitReason } from "./game/game.js";
 import type { ProfileDoc } from "./net/api.js";
-import { CONVEX_URL, resolveGsUrl, isExplicitGsOverride, devTicketUrl } from "./net/config.js";
+import { CONVEX_URL, resolveGsUrl, defaultGsUrl, devTicketUrl, isExplicitGsOverride } from "./net/config.js";
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
 import type { Multiplayer } from "./net/multiplayer.js";
+import type { OnlineLobby } from "./net/onlineLobby.js";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const minimap = document.getElementById("minimap") as HTMLCanvasElement;
@@ -33,20 +33,36 @@ async function bootNormal() {
   const session = new Session(client);
 
   let activeCoop: Multiplayer | null = null;
+  let activeOnline: OnlineLobby | null = null;
 
   async function onGameOver(result: RunResult) {
     const wasCoop = activeCoop !== null;
     if (activeCoop) { activeCoop.leave(); activeCoop = null; }
+    // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
+    // game-over screen offers "back to lobby" / "play again" and owns leaving the room).
+    const online = activeOnline;
     // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
     const prevBest = session.profile?.deepestFloor ?? 0;
     const saved = await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
-    menu.showGameOver(result, saved ?? session.profile, wasCoop, isNewBest);
+    menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online });
   }
 
-  function onExit() {
+  function onExit(reason?: ExitReason) {
     if (activeCoop) { activeCoop.leave(); activeCoop = null; }
+    // Stepping out of an online run (Esc, or the server was unreachable) lands back in the
+    // room lobby, not the title — the run may still be live for friends (REJOIN RUN).
+    if (activeOnline && activeOnline.isActive) {
+      const note = reason === "connect_failed" ? "couldn't reach the game server \u2014 try again in a moment" : "";
+      menu.showOnlineLobby(activeOnline, session.profile, note);
+      return;
+    }
+    activeOnline = null;
     void menu.showTitle();
+  }
+
+  function leaveOnlineIfAny() {
+    if (activeOnline) { activeOnline.leave(); activeOnline = null; }
   }
 
   const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result), onExit);
@@ -54,13 +70,33 @@ async function bootNormal() {
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
       activeCoop = null;
+      leaveOnlineIfAny();
       menu.hide();
-      game.start({ mode: "solo", coop: null, profile });
+      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex });
     },
     startCoop(mp: Multiplayer, profile: ProfileDoc | null) {
       activeCoop = mp;
+      leaveOnlineIfAny();
       menu.hide();
       game.start({ mode: "coop", coop: mp, profile });
+    },
+    startOnline(lobby: OnlineLobby, profile: ProfileDoc | null) {
+      activeCoop = null;
+      if (activeOnline && activeOnline !== lobby) activeOnline.leave();
+      activeOnline = lobby;
+      menu.hide();
+      game.start({
+        mode: "online",
+        online: {
+          url: defaultGsUrl(),
+          // The lobby mints a Convex ticket bound to THIS room's world id (verified against
+          // room membership server-side) — that binding is what puts the party in one world.
+          getTicket: () => lobby.mintTicket(),
+          roomCode: lobby.code,
+        },
+        profile,
+        selfColorIndex: session.colorIndex,
+      });
     },
   });
 
@@ -81,29 +117,30 @@ async function bootNormal() {
     try { await auth.init(); } catch { /* menu stays usable */ }
   }
 
-  // Explicit online (authoritative WS) route: `?online=1` (or `?gs=<wsUrl>`), analogous to the
-  // hidden `?dev` route. Solo/co-op stay on their normal paths; this never triggers by default,
-  // so an unreachable Convex/game server can never affect a solo player.
-  const gsUrl = resolveGsUrl(window.location.search);
-  if (gsUrl) {
-    // Ticket source: production builds mint a real HMAC ticket through the trusted Convex
-    // action (signed with the same GS_AUTH_SECRET the game server verifies — convex/gsTicket.ts).
-    // Dev builds and explicit `?gs=` overrides target a LOCAL dev server, whose /dev-ticket
-    // endpoint mints instead (dev-auth only, hard-disabled in production) — the documented
-    // two-tab local proof keeps working with zero Convex dependency.
-    const useConvexMint = import.meta.env.PROD && !isExplicitGsOverride(window.location.search) && client !== null;
+  // Explicit `?gs=<wsUrl>` override: the DIRECT dev/ops join (two-tab local proof, load
+  // harness) — no lobby, tickets minted by that server's own /dev-ticket endpoint (dev-auth
+  // only, hard-disabled in production). Identity still rides along so names/colors show.
+  const gsOverride = resolveGsUrl(window.location.search);
+  if (gsOverride && isExplicitGsOverride(window.location.search)) {
     const getTicket = async (): Promise<string> => {
-      if (useConvexMint && client) {
-        const minted = await client.action(api.gsTicket.mint, { clientId: session.clientId });
-        return minted.ticket;
-      }
-      const res = await fetch(`${devTicketUrl(gsUrl)}?playerId=guest-${Math.random().toString(36).slice(2, 8)}`);
+      const params = new URLSearchParams({ playerId: `guest-${Math.random().toString(36).slice(2, 8)}` });
+      if (session.name) params.set("name", session.name);
+      if (session.colorIndex !== null) params.set("color", String(session.colorIndex));
+      const res = await fetch(`${devTicketUrl(gsOverride)}?${params}`);
       if (!res.ok) throw new Error(`ticket endpoint ${res.status}`);
       const data = (await res.json()) as { ticket: string };
       return data.ticket;
     };
     menu.hide();
-    game.start({ mode: "online", online: { url: gsUrl, getTicket }, profile: null });
+    game.start({ mode: "online", online: { url: gsOverride, getTicket, roomCode: null }, profile: null, selfColorIndex: session.colorIndex });
+    return;
+  }
+
+  // `?online=1` deep-links to the online rooms screen (create/join/quick-play). It never
+  // auto-joins a world anymore — the lobby is the front door. Without a Convex backend the
+  // link degrades to the plain title (online play needs the ticket minter).
+  if (gsOverride && client) {
+    await menu.showOnlineHome();
     return;
   }
 
