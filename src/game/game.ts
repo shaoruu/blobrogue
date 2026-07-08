@@ -135,9 +135,9 @@ interface MeleeFeel {
   artAngle: number;  // baked-in angle of the blade axis in the art (rad; measured tip-ward)
 }
 const MELEE_FEEL: Partial<Record<WeaponId, MeleeFeel>> = {
-  sword: { swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7, hitTrauma: 0.12, hitFreeze: 0.045, bladeSize: 46, artAngle: -0.31 },
-  longsword: { swingSfx: "heavySwing", swingRate: 1, swingGain: 1, hitTrauma: 0.22, hitFreeze: 0.07, bladeSize: 56, artAngle: -0.45 },
-  spear: { swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6, hitTrauma: 0.15, hitFreeze: 0.05, bladeSize: 58, artAngle: -0.43 },
+  sword: { swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7, hitTrauma: 0.12, hitFreeze: 0.045, bladeSize: 46, artAngle: -0.80 },
+  longsword: { swingSfx: "heavySwing", swingRate: 1, swingGain: 1, hitTrauma: 0.22, hitFreeze: 0.07, bladeSize: 56, artAngle: -0.80 },
+  spear: { swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6, hitTrauma: 0.15, hitFreeze: 0.05, bladeSize: 58, artAngle: -0.80 },
 };
 const MELEE_HIT_TRAUMA = 0.14; // fallback thump when the striker's weapon is unknown (remote hits)
 const MELEE_CLASH_FREEZE = 0.055; // extra stop when a swing connects mid enemy attack (the "parry")
