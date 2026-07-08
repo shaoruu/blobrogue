@@ -1,0 +1,21 @@
+# Log rotation for blobrogue-gs + blobrogue-control, beside town. pm2's own pm2-logrotate module
+# (recommended: `pm2 install pm2-logrotate`) handles rotation for pm2-managed logs; this system
+# logrotate stanza is an alternative/backstop if you prefer OS-level rotation.
+#
+# Install to /etc/logrotate.d/blobrogue and adjust the user/group to your deploy user.
+
+/var/log/blobrogue-gs/*.log /var/log/blobrogue-control/*.log {
+    daily
+    rotate 14
+    maxsize 50M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+
+# pm2-logrotate equivalent (module config), if you use the module instead:
+#   pm2 set pm2-logrotate:max_size 50M
+#   pm2 set pm2-logrotate:retain 14
+#   pm2 set pm2-logrotate:compress true

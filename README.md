@@ -54,4 +54,12 @@ It lives in **[`server/`](server/README.md)** and is opt-in behind an explicit `
 route — solo stays on the in-process `LocalTransport`, byte-identical. See the measured spike
 report in **[docs/blobrogue_STAGE_B_report.md](docs/blobrogue_STAGE_B_report.md)**.
 
+### Deployment / control plane (post-server ops)
+Production deploys, restarts, drains, and rollbacks run through an isolated, loopback-only control
+service — **[`control/`](control/README.md)** — that the `admin.create.town` panel proxies to (no
+laptop in the loop). It drives an immutable release pipeline (atomic `current` symlink), reloads
+exactly the `blobrogue-gs` pm2 app, and audits every action. It shares no handlers or credentials
+with the game WS and changes no game sim/netcode. Canonical spec:
+**[docs/specs/blobrogue_POST_SERVER_CONTROL_PLANE_spec.md](docs/specs/blobrogue_POST_SERVER_CONTROL_PLANE_spec.md)**.
+
 Built and maintained autonomously. Evolves every few hours.
