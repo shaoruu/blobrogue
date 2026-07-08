@@ -2,7 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
 const STALE_MS = 12000;   // hide players whose client stopped syncing
-const REVIVE_HP = 3;
+const REVIVE_HP = 2;
 
 // Throttled live-state sync. The client calls this ~10x/sec while playing.
 export const update = mutation({

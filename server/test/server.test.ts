@@ -205,7 +205,9 @@ async function main(): Promise<void> {
       const bytesPerClientPerSec = bytesOut / dt / bots.length;
       check("tick p95 < 50ms budget", h.tickMs_p95 < 50, `p95=${h.tickMs_p95}ms max=${h.tickMs_max}ms`);
       check("tick p95 comfortably under target (<10ms) at POC scale", h.tickMs_p95 < 10, `p95=${h.tickMs_p95}ms`);
-      check("avg snapshot < 4KB", avgSnap < 4096, `avg=${avgSnap.toFixed(0)}B/msg, ${(bytesPerClientPerSec / 1024).toFixed(1)}KB/s/client`);
+      // Budgeted to the balance-reset floor composition: the §4 threat budget spawns ~6-10
+      // floor-1 bodies (was 4), so four clustered clients see more enemies per snapshot.
+      check("avg snapshot < 6KB", avgSnap < 6144, `avg=${avgSnap.toFixed(0)}B/msg, ${(bytesPerClientPerSec / 1024).toFixed(1)}KB/s/client`);
       for (const b of bots) b.stop();
     } finally {
       await s.close();

@@ -14,15 +14,21 @@ import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
-import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy } from "./enemies.js";
+import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
-import { createMods } from "./items.js";
+import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
 import type { InputCmd, PlayerId } from "./input.js";
 import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
+import {
+  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
+  activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
+  REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
+} from "./balance.js";
+import { biomeIndexForFloor } from "./biomes.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
 export interface MeleeSwing {
@@ -76,9 +82,14 @@ export interface PlayerSim {
   x: number; y: number; pr: number;
   hp: number; maxHp: number;
   mods: PlayerMods;
+  // Post-hit protection (0.80s). SEPARATE from the dash iframe: neither may extend the other.
   invuln: number;
+  // Dash iframe (0.18s), set once per dash — non-refreshing, non-overlapping.
+  dashInvuln: number;
   dashCd: number; dashTime: number; dashDx: number; dashDy: number;
   fireCd: number;
+  // Vampire Fang shared proc cooldown (1.25s): at most one kill-heal per window.
+  fangCd: number;
   facing: number; aimAngle: number; weapon: WeaponId;
   ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
   shotSeq: number; isDown: boolean;
@@ -126,6 +137,19 @@ export interface WorldState {
   flowKey: number;
   flowSources: number[];
   rng: Rng;
+  // Co-op encounter snapshot (§8): living players at floor build, clamped 1–4. Drives
+  // enemy HP / threat budget / heart-rate scaling; NEVER rescales living enemies mid-floor.
+  encounterPlayers: number;
+  // Threat-cap reinforcements: pre-planned units beyond the ActiveThreatCap, released in
+  // waves as the living threat drops (spawnReleaseCd staggers the trickle).
+  pendingSpawns: Enemy[];
+  spawnReleaseCd: number;
+  // Heart-economy pity (§2): hearts generated this floor, whether the party entered below
+  // 50% HP, the dry-floor streak, and whether the next wood chest is forced to hold a heart.
+  heartsThisFloor: number;
+  isFloorEnteredLow: boolean;
+  pityStreak: number;
+  isPityHeartArmed: boolean;
   nextEnemyId: number;
   nextPropId: number;
   nextPickupId: number;
@@ -154,11 +178,11 @@ export interface WorldState {
 export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
   return {
     id, x, y, pr: 18,
-    hp: C.BASE_MAX_HP, maxHp: C.BASE_MAX_HP,
+    hp: PLAYER.baseMaxHp, maxHp: PLAYER.baseMaxHp,
     mods: createMods(),
-    invuln: 0,
+    invuln: 0, dashInvuln: 0,
     dashCd: 0, dashTime: 0, dashDx: 0, dashDy: 0,
-    fireCd: 0,
+    fireCd: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
     shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
@@ -192,6 +216,13 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     flowKey: -1,
     flowSources: [],
     rng: new Rng(seed ^ 0x53696d21),
+    encounterPlayers: 1,
+    pendingSpawns: [],
+    spawnReleaseCd: 0,
+    heartsThisFloor: 0,
+    isFloorEnteredLow: false,
+    pityStreak: 0,
+    isPityHeartArmed: false,
     nextEnemyId: 0,
     nextPropId: 0,
     nextPickupId: 0,
@@ -249,20 +280,31 @@ function buildArena(): Dungeon {
 
 // Build (or rebuild, on descend) the floor's world content. Does NOT reseed w.rng — the
 // sim RNG stream is continuous across a run (matching the old start()/loadFloor split).
+// The co-op player count is SNAPSHOTTED here (encounter creation, §8) and never rescales
+// living enemies mid-floor.
 export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.floor = floor;
   w.rev++;
+  w.encounterPlayers = clampPlayers(Math.max(1, w.players.size));
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.nextEnemyId = 0;
   w.nextPropId = 0;
   w.nextPickupId = 0;
   w.nextChestId = 0;
-  w.enemies = w.isSandbox ? [] : spawnFloorEnemies(w.dungeon, w.seed, floor);
-  w.nextEnemyId = w.enemies.length;
+  const spawns = w.isSandbox
+    ? { active: [], pending: [] }
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
+  w.enemies = spawns.active;
+  w.pendingSpawns = spawns.pending;
+  w.spawnReleaseCd = 0;
+  w.nextEnemyId = spawns.active.length + spawns.pending.length;
+  w.heartsThisFloor = 0;
+  w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.flowCd = 0;
   w.flowKey = -1;
   w.pickups = w.isSandbox ? [] : placeWeaponPickups(w);
+  if (!w.isSandbox) placeDealerHearts(w);
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   // Reposition living players to the new spawn.
@@ -273,6 +315,12 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   }
 }
 
+// Floor cleared = every active enemy dead AND no reinforcements still queued. The exit,
+// the snapshot `cleared` flag, and the client HUD/minimap all read this one predicate.
+export function isFloorCleared(w: WorldState): boolean {
+  return w.enemies.length === 0 && w.pendingSpawns.length === 0;
+}
+
 // Reset a live world to a FRESH run: new seed, new RNG stream, floor 1, cleared terminal state.
 // The authoritative server calls this when a room empties (party wiped or everyone left), so the
 // next group starts a new run rather than inheriting a half-played dungeon. tick keeps counting
@@ -281,6 +329,8 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
   w.seed = seed;
   w.rng = new Rng(seed ^ 0x53696d21);
   w.isRunOver = false;
+  w.pityStreak = 0;
+  w.isPityHeartArmed = false;
   loadFloorIntoWorld(w, 1);
 }
 
@@ -309,11 +359,31 @@ function placeWeaponPickups(w: WorldState): Pickup[] {
   return drops;
 }
 
-function rollPropKind(rng: Rng): Prop["kind"] {
+// The Dealer's stock (§2): on every third floor, P purchasable hearts near a mid-run room
+// center. Walking over one with enough coins buys exactly +1 HP — never a full heal.
+function placeDealerHearts(w: WorldState): void {
+  if (w.floor % DEALER.floorInterval !== 0 || isBossFloor(w.floor)) return;
+  const d = w.dungeon;
+  if (d.rooms.length < 3) return;
+  const rng = new Rng((w.seed ^ 0x0dea1e12) + w.floor * 68927);
+  const room = d.rooms.find((r) => r.kind === "treasure") ?? d.rooms[1 + rng.int(0, d.rooms.length - 3)];
+  const stock = w.encounterPlayers;
+  for (let i = 0; i < stock; i++) {
+    w.pickups.push({
+      id: w.nextPickupId++, kind: "dealer_heart",
+      x: (room.cx + 0.5) * TILE + (i - (stock - 1) / 2) * 30, y: (room.cy + 0.5) * TILE - 26,
+      radius: 13, weapon: null, value: DEALER.price,
+    });
+  }
+}
+
+// Deep floors bias hazard density (§4 biome pressure): a wider explosive-barrel band.
+function rollPropKind(rng: Rng, hazardMult: number): Prop["kind"] {
   const r = rng.next();
+  const explosiveBand = 0.10 * hazardMult;
   if (r < 0.34) return "pot";
   if (r < 0.62) return "crate";
-  if (r < 0.84) return "barrel";
+  if (r < 0.94 - explosiveBand) return "barrel";
   if (r < 0.94) return "barrel_explosive";
   return "brazier";
 }
@@ -321,6 +391,7 @@ function rollPropKind(rng: Rng): Prop["kind"] {
 function placeProps(w: WorldState): Prop[] {
   const d = w.dungeon;
   const rng = new Rng((w.seed ^ 0x2f6a35c1) + w.floor * 26417);
+  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult;
   const list: Prop[] = [];
   const occupied = new Set<number>();
   for (const room of d.rooms) {
@@ -333,7 +404,7 @@ function placeProps(w: WorldState): Prop[] {
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
       occupied.add(idx);
-      const kind = rollPropKind(rng);
+      const kind = rollPropKind(rng, hazardMult);
       list.push({ id: w.nextPropId++, kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
     }
   }
@@ -414,14 +485,21 @@ function blockedByProp(w: WorldState, x: number, y: number, r: number): boolean 
 function lowHpFactor(p: PlayerSim): number {
   return p.maxHp > 0 ? 1 - Math.max(0, p.hp / p.maxHp) : 0;
 }
+// The raw caps (§6) bind the LIVE multipliers too: low-HP scalers (berserk/adrenaline) are
+// expressive risk payoffs but can never push raw damage/fire-rate past the cap.
 function currentDamageMult(p: PlayerSim): number {
-  return p.mods.damageMult + p.mods.berserk * lowHpFactor(p);
+  return Math.min(CAPS.damageMult, p.mods.damageMult + p.mods.berserk * lowHpFactor(p));
 }
 function currentFireRate(p: PlayerSim): number {
-  return Math.max(0.25, p.mods.fireRateMult + p.mods.adrenaline * lowHpFactor(p));
+  return Math.max(0.25, Math.min(CAPS.fireRateMult, p.mods.fireRateMult + p.mods.adrenaline * lowHpFactor(p)));
 }
 function dashCooldown(p: PlayerSim): number {
-  return C.DASH_COOLDOWN * p.mods.dashCdMult;
+  return PLAYER.dashCooldown * p.mods.dashCdMult;
+}
+// Post-hit protection and the dash iframe are separate, non-extending windows; a player is
+// safe while either is live.
+function isProtected(p: PlayerSim): boolean {
+  return p.invuln > 0 || p.dashInvuln > 0;
 }
 function coinGain(p: PlayerSim): number {
   return Math.max(1, Math.round(p.mods.coinMult));
@@ -459,10 +537,11 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
   };
 }
 
+// Recompute maxHp from the mods bonus and clamp current HP into it. Deliberately does NOT
+// heal the capacity delta — a max-HP upgrade restores exactly 1 heart (see applyItemToWorld),
+// per the Vitality rule in spec §2.
 export function applyMaxHpBonus(p: PlayerSim): void {
-  const next = Math.max(1, C.BASE_MAX_HP + p.mods.maxHpBonus);
-  if (next > p.maxHp) p.hp += next - p.maxHp;
-  p.maxHp = next;
+  p.maxHp = Math.max(1, PLAYER.baseMaxHp + p.mods.maxHpBonus);
   if (p.hp > p.maxHp) p.hp = p.maxHp;
   if (p.hp < 1) p.hp = 1;
 }
@@ -506,14 +585,19 @@ export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId)
   if (p) acquireWeapon(p, id);
 }
 
-// Apply a picked blessing to a player (client calls this when a choice is made). Returns
-// the itemPicked FX event.
+// Apply a picked blessing to a player: append the pick to the level history, RECOMPUTE the
+// whole build from levels (no incremental applies — spec §6), clamp the raw caps, and heal
+// exactly 1 heart when max HP grew (the Vitality rule). A pick past Lv3 is a no-op.
+// Returns the itemPicked FX event.
 export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): SimEvent[] {
   const p = w.players.get(pid);
   if (!p) return [];
-  item.apply(p.mods);
+  if ((itemLevelsOf(p.ownedItemIds).get(item.id) ?? 0) >= MAX_ITEM_LEVEL) return [];
   p.ownedItemIds.push(item.id);
+  const maxHpBefore = p.maxHp;
+  recomputeMods(p.mods, p.ownedItemIds);
   applyMaxHpBonus(p);
+  if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
   return [{ t: "itemPicked", pid, x: p.x, y: p.y, tint: item.tint }];
 }
 
@@ -521,7 +605,7 @@ export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): S
 
 function applyKnockbackDir(weapon: WeaponId, e: Enemy, dirX: number, dirY: number): void {
   const sp = Math.hypot(dirX, dirY) || 1;
-  const v = (C.WEAPON_KB[weapon] * C.KB_LAMBDA) / ENEMY_ARCHETYPES[e.kind].kbResist;
+  const v = (C.WEAPON_KB[weapon] * C.KB_LAMBDA) / e.kbResist;
   e.vx += (dirX / sp) * v;
   e.vy += (dirY / sp) * v;
   const mag = Math.hypot(e.vx, e.vy);
@@ -579,7 +663,7 @@ function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     e.burn = e.burn > dt ? e.burn - dt : 0;
     e.statusTick += dt;
     while (e.statusTick > C.BURN_TICK) {
-      e.hp -= e.burnDmg * C.BURN_TICK;
+      damageEnemy(w, e.burnOwner, e, e.burnDmg * C.BURN_TICK, ev);
       e.statusTick -= C.BURN_TICK;
       ev.push({ t: "burnTick", x: e.x, y: e.y, radius: e.radius, dmg: e.burnDmg * C.BURN_TICK });
       // The burn DoT kill credits whoever last ignited this enemy (authoritative attribution).
@@ -605,7 +689,7 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
       if (d < bestD) { bestD = d; best = e; }
     }
     if (!best) break;
-    best.hp -= dmg;
+    damageEnemy(w, p ? p.id : null, best, dmg, ev);
     const killed = best.hp <= 0 && !best.dead;
     ev.push({ t: "shockArc", eid: best.id, x: cur.x, y: cur.y, tx: best.x, ty: best.y, tRadius: best.radius, dmg, color, killed });
     list.push(best);
@@ -616,13 +700,88 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
 
 // ---- strikes / kills ----
 
+// EVERY authoritative point of enemy damage funnels through here, so the boss's phase
+// thresholds are evaluated after every damage event (spec §5) — bullets, melee, burn ticks,
+// arcs, thorns and barrels alike — and its transition roar can reduce/floor/queue uniformly.
+function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[]): void {
+  if (!e.boss) {
+    e.hp -= dmg;
+    return;
+  }
+  const boss = e.boss;
+  if (boss.roar) {
+    // Transition beat: 35% damage reduction (not immunity) + a hard phase floor. Damage
+    // that would cross the floor is QUEUED and applies only after the roar exits.
+    const reduced = dmg * (1 - BOSS.roarDamageReduction);
+    const target = e.hp - reduced;
+    if (target < boss.roar.floorHp) {
+      boss.roar.queued += boss.roar.floorHp - target;
+      boss.roar.queuedBy = by;
+      e.hp = boss.roar.floorHp;
+    } else {
+      e.hp = target;
+    }
+    return;
+  }
+  e.hp -= dmg;
+  checkBossTransition(w, e, ev);
+}
+
+// Crossing 70% / 35% starts a 1.2s transition roar immediately (mid-attack included): the
+// HP floors at 62% / 27% (overflow queued), nearby bullets clear, and two slimes spawn at
+// opposite marked edges. Total forced downtime across the fight is exactly 2×1.2s. The
+// floor is the HARD anti-burst: even an arbitrarily large hit lands on the floor and its
+// excess waits out the full roar — the boss can never be deleted through a threshold.
+function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss || boss.roar) return;
+  if (boss.transitionsDone >= BOSS.phaseAt.length) return;
+  const threshold = BOSS.phaseAt[boss.transitionsDone] * e.maxHp;
+  if (e.hp > threshold) return;
+  const floorHp = BOSS.phaseFloor[boss.transitionsDone] * e.maxHp;
+  const queued = Math.max(0, floorHp - e.hp);
+  if (e.hp < floorHp) e.hp = floorHp;
+  boss.transitionsDone++;
+  boss.phase = boss.transitionsDone + 1;
+  boss.attackCount = 0;
+  boss.isNextRadial = true;
+  boss.roar = { floorHp, queued, queuedBy: null };
+  beginWindup(e, "roar");
+  // The roar shockwave dissipates every projectile near the boss — a readable reset beat.
+  for (const b of w.bullets) {
+    if (Math.hypot(b.x - e.x, b.y - e.y) <= BOSS.roarBulletClearRadius) b.life = 0;
+  }
+  // Two slimes at opposite marked edges of the boss.
+  const edgeAngle = w.rng.next() * Math.PI * 2;
+  for (let i = 0; i < BOSS.transitionAddCount; i++) {
+    spawnBossAdd(w, e, edgeAngle + i * Math.PI, ev);
+  }
+  ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
+  ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: true, queued: boss.roar.queued, hpFrac: e.hp / e.maxHp });
+}
+
+// Roar over: apply the queued overflow as a fresh damage event (it may immediately trigger
+// the next transition — the 70%→35% double-cross case resolves as two full beats) and log
+// the exit so the ≥20s anti-burst gate stays observable.
+function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss || !boss.roar) return;
+  const { queued, queuedBy } = boss.roar;
+  boss.roar = null;
+  ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: false, queued, hpFrac: e.hp / e.maxHp });
+  if (queued > 0) {
+    damageEnemy(w, queuedBy, e, queued, ev);
+    if (e.hp <= 0 && !e.dead) killEnemy(w, ownerOf(w, queuedBy), e, ev);
+  }
+}
+
 // `p` may be null when the striking actor has left (their projectile outlived them): damage,
 // knockback (from the fire-time weapon), and baked-in statuses still land, but nothing is
 // credited to any player.
 function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
   const frozen = isFrozen(e);
   const dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
-  e.hp -= dmg;
+  damageEnemy(w, hit.ownerId, e, dmg, ev);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit);
   const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
@@ -646,13 +805,44 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.comboTimer = C.COMBO_WINDOW;
   }
   const big = e.kind === "boss";
-  ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, x: e.x, y: e.y, combo: p ? p.combo : 0 });
-  if (big) w.bullets = w.bullets.filter((b) => b.friendly);
-  if (p && p.mods.lifestealChance > 0 && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
+  ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
+  if (big) endBossDanger(w, e, ev);
+  // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
+  // sustain comes from scarcity decisions, not add-farming.
+  if (p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
+    && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
     p.hp++;
+    p.fangCd = FANG_PROC_COOLDOWN;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
   }
+  // The shipped elite affix: SPLIT — on death the elite breaks into swarm units (readable,
+  // summoned, so they feed no hearts/Fang).
+  if (e.tier === "elite" && !w.isRunOver) {
+    for (let i = 0; i < ELITE_SPLIT_COUNT; i++) {
+      const a = w.rng.next() * Math.PI * 2;
+      const sx = e.x + Math.cos(a) * (e.radius + 6);
+      const sy = e.y + Math.sin(a) * (e.radius + 6);
+      if (isWall(w, sx, sy)) continue;
+      const child = createEnemy(e.kind, sx, sy, w.floor, w.rng, w.nextEnemyId++, {
+        tier: "swarm", isSummoned: true, players: w.encounterPlayers,
+      });
+      w.enemies.push(child);
+      ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: sx, y: sy });
+    }
+  }
   dropLoot(w, p, e, ev);
+}
+
+// Boss death ends danger immediately (spec §5): every remaining enemy and queued
+// reinforcement despawns (no loot, no credit) and the exit opens regardless of adds.
+function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
+  w.bullets = w.bullets.filter((b) => b.friendly);
+  w.pendingSpawns = [];
+  for (const other of w.enemies) {
+    if (other === boss || other.dead) continue;
+    other.dead = true;
+    ev.push({ t: "puff", x: other.x, y: other.y, n: 6, color: ENEMY_ARCHETYPES[other.kind].tint });
+  }
 }
 
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
@@ -662,12 +852,16 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
   if (w.rng.next() < 0.5) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(p) : 1));
-  if (w.rng.next() < 0.12) w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
+  // Ambient hearts (§2): halved rate, party-scaled in co-op, never from summoned adds.
+  if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
+    w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
+  }
 }
 
 function makePickup(w: WorldState, kind: "heart" | "coin", x: number, y: number, ev: SimEvent[], value?: number): Pickup {
   const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
   ev.push({ t: "lootDrop", x, y, color });
+  if (kind === "heart") w.heartsThisFloor++;
   return { id: w.nextPickupId++, kind, x, y, radius: 13, weapon: null, value };
 }
 
@@ -680,17 +874,23 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   ix /= len; iy /= len;
   if (ix !== 0) p.facing = ix > 0 ? 1 : -1;
 
-  const speed = 200 * p.mods.moveSpeedMult;
+  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult;
+  // Snap accumulated float dust to zero so a cooldown that is an exact multiple of the
+  // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
   p.dashCd = Math.max(0, p.dashCd - dt);
+  if (p.dashCd < 1e-9) p.dashCd = 0;
   if (input.dash && p.dashCd === 0 && (ix || iy)) {
-    p.dashTime = 0.16; p.dashCd = dashCooldown(p); p.dashDx = ix; p.dashDy = iy;
-    p.invuln = Math.max(p.invuln, 0.35);
+    p.dashTime = PLAYER.dashActive; p.dashCd = dashCooldown(p); p.dashDx = ix; p.dashDy = iy;
+    // The dash iframe is its own window (0.18s, covering the 0.16s active dash + tail):
+    // SET, never max'd against post-hit protection, so the two can neither refresh nor
+    // extend each other.
+    p.dashInvuln = PLAYER.dashIframe;
     ev.push({ t: "dashStart", pid: p.id, x: p.x, y: p.y });
   }
   let mvx: number, mvy: number;
   if (p.dashTime > 0) {
     p.dashTime -= dt;
-    mvx = p.dashDx * 620 * dt; mvy = p.dashDy * 620 * dt;
+    mvx = p.dashDx * PLAYER.dashSpeed * dt; mvy = p.dashDy * PLAYER.dashSpeed * dt;
     ev.push({ t: "dashTrail", pid: p.id, x: p.x, y: p.y });
   } else {
     mvx = ix * speed * dt; mvy = iy * speed * dt;
@@ -699,6 +899,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, mvy);
   if (p.dashTime > 0 && w.props.length > 0) dashBreakProps(w, p, ev);
   p.invuln = Math.max(0, p.invuln - dt);
+  p.dashInvuln = Math.max(0, p.dashInvuln - dt);
 }
 
 function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
@@ -810,7 +1011,7 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (!b.friendly) {
       for (const p of w.players.values()) {
-        if (p.invuln === 0 && !p.isDown && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
+        if (!isProtected(p) && !p.isDown && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
           b.life = 0;
           ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color });
           damagePlayer(w, p, b.damage, ev);
@@ -904,16 +1105,46 @@ export function rewoundEnemyPos(w: WorldState, e: Enemy, rewindTicks: number): [
   return [h.x[slot], h.y[slot]];
 }
 
+// Reinforcement waves (§4): pending units trickle in whenever the LIVING active threat has
+// room under the ActiveThreatCap, staggered so a wave reads as a wave (Emberreach
+// reinforces faster). Deterministic — pure function of state, positions pre-rolled at
+// floor generation, spawn grace protects fairness.
+function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void {
+  if (w.pendingSpawns.length === 0) return;
+  w.spawnReleaseCd -= dt;
+  if (w.spawnReleaseCd > 0) return;
+  let living = 0;
+  for (const e of w.enemies) {
+    if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
+  }
+  const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
+  const next = w.pendingSpawns[0];
+  if (living + threatCostOf(next.kind, next.tier) > cap) return;
+  // Its spawn grace never ticked while pending, so it activates with the full grace window.
+  w.pendingSpawns.shift();
+  w.enemies.push(next);
+  w.spawnReleaseCd = REINFORCE_STAGGER / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
+  ev.push({ t: "enemySpawn", eid: next.id, kind: next.kind, tier: next.tier, x: next.x, y: next.y });
+}
+
 function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   // Stage C: every strike is attributed to the player who caused it (bullet.owner / swing owner
   // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
   // authoritative player. Solo resolves to the one player, so behavior is unchanged.
+  releaseReinforcements(w, dt, ev);
   refreshFlowField(w, dt);
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
+    // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
+    if (e.surgeDelay > 0) {
+      e.surgeDelay -= dt;
+      if (e.surgeDelay <= 0) { e.surgeDelay = 0; e.surgeTime = BOSS.packSurgeDuration; }
+    } else if (e.surgeTime > 0) {
+      e.surgeTime = e.surgeTime > dt ? e.surgeTime - dt : 0;
+    }
 
     updateEnemyAI(w, e, dt, ev);
     applyKnockbackDecay(w, e, dt);
@@ -923,9 +1154,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     e.hopClock += dt * (1 + e.hopMove * 1.5);
 
     for (const victim of w.players.values()) {
-      if (victim.invuln === 0 && !victim.isDown && victim.hp > 0
+      if (!isProtected(victim) && !victim.isDown && victim.hp > 0
         && Math.hypot(victim.x - e.x, victim.y - e.y) < victim.pr + e.radius && canTouchDamage(e)) {
-        damagePlayer(w, victim, e.touchDamage, ev);
+        damagePlayer(w, victim, contactDamageOf(e), ev);
         if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
         applyThorns(w, victim, victim, e, ev);
         // Solo aborts the enemy loop on death (game over). Co-op and the authoritative shared
@@ -990,6 +1221,13 @@ function canTouchDamage(e: Enemy): boolean {
   return true;
 }
 
+// Damage tiers (§3): light/contact stays 1 at every floor; only a brute's authored,
+// clearly telegraphed commitment (the skeleton's lunge, mid-active) deals the heavy 2.
+function contactDamageOf(e: Enemy): number {
+  if (e.tier === "brute" && e.kind === "skeleton" && e.attack.phase === "active") return BRUTE_HEAVY_DAMAGE;
+  return e.touchDamage;
+}
+
 function lungeImpact(w: WorldState, p: PlayerSim, e: Enemy, ev: SimEvent[]): void {
   const push = 26, ang = e.attack.lockedAngle;
   [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, Math.cos(ang) * push, 0);
@@ -999,7 +1237,7 @@ function lungeImpact(w: WorldState, p: PlayerSim, e: Enemy, ev: SimEvent[]): voi
 
 function applyThorns(w: WorldState, src: PlayerSim, victim: PlayerSim, e: Enemy, ev: SimEvent[]): void {
   if (victim.mods.thorns <= 0 || e.dead) return;
-  e.hp -= victim.mods.thorns;
+  damageEnemy(w, victim.id, e, victim.mods.thorns, ev);
   ev.push({ t: "thornsHit", eid: e.id, x: e.x, y: e.y, radius: e.radius, dmg: victim.mods.thorns, tint: ENEMY_ARCHETYPES[e.kind].tint });
   if (e.hp <= 0 && !e.dead) killEnemy(w, src, e, ev);
 }
@@ -1020,7 +1258,7 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
   const a = e.attack;
   if (a.phase === "windup") {
     if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)) {
-      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD;
+      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.12 });
     }
     return;
@@ -1058,6 +1296,7 @@ function updateChaser(w: WorldState, e: Enemy, dt: number): void {
   if (arch.movement === "zigzag") { e.zig += dt * 5; angle += Math.sin(e.zig) * 0.9; }
   let step = e.speed * dt;
   if (e.kind === "slime") step *= slimeHopPulse(e);
+  if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
   applyChaseStep(w, e, dt, angle, step);
 }
 
@@ -1116,48 +1355,72 @@ function spitterFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     const off = n === 1 ? 0 : (i - 1) * C.GLOB_SPREAD;
     spawnEnemyBullet(w, mx, my, a.lockedAngle + off, 300, 7, 1, "#ff5a7a", 2.5);
   }
-  a.cooldown = C.SPITTER_CD;
+  a.cooldown = C.SPITTER_CD * attackCdMultOf(e);
   ev.push({ t: "spitMuzzle", x: mx, y: my });
 }
 
+// Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier.
+function attackCdMultOf(e: Enemy): number {
+  return TIERS[e.tier].attackCdMult;
+}
+
+// The Slime King (spec §5, calibrated to ~37.5s median / ≥20s absolute solo TTK). Phase
+// changes ride damage events (checkBossTransition); this state machine owns the cadence:
+//   P1 (100–70%): hop slam every 3.2s; adds 1 slime @4.5s then every 6.5s (cap 5).
+//   P2 (70–35%):  2.7s cadence alternating hop / 10-glob radial; every 2nd radial orders
+//                 the living slimes into a delayed pack surge (pressure, no extra HP).
+//   P3 (35–0%):   2.25s cadence; hop landings fire 4 cardinal globs; every 3rd attack is a
+//                 telegraphed 3s arena squeeze; chase +12%; adds 2 slimes / 7s (cap 7).
 function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
   const a = e.attack;
 
-  boss.minionTimer -= dt;
-  if (boss.minionTimer <= 0) { boss.minionTimer = C.BOSS_MINION_CD; spawnBossMinion(w, e, ev); }
+  // Add pacing pauses during the transition roar (the roar spawns its own marked pair).
+  if (!boss.roar) {
+    boss.addTimer -= dt;
+    if (boss.addTimer <= 0) {
+      boss.addTimer = BOSS.addInterval[boss.phase];
+      const cap = BOSS.addCap[boss.phase];
+      for (let i = 0; i < BOSS.addBatch[boss.phase]; i++) {
+        if (countBossAdds(w) >= cap) break;
+        spawnBossAdd(w, e, w.rng.next() * Math.PI * 2, ev);
+      }
+    }
+  }
 
   if (a.phase === "windup") { bossWindup(w, e, dt, ev); return; }
   if (a.phase === "active") { bossActive(w, e, dt, ev); return; }
   if (a.phase === "recover") {
     a.time += dt;
-    const recDur = a.move === "hopslam" ? C.BOSS_HOPSLAM_RECOVER : C.BOSS_RADIAL_RECOVER;
+    const recDur = a.move === "hopslam" ? BOSS.hopRecover : BOSS.radialRecover;
     if (a.time >= recDur) enterIdle(e);
     return;
   }
 
-  const desired = bossPhaseFor(e);
-  if (desired > boss.phase) {
-    boss.phase = desired;
-    beginWindup(e, "roar");
-    ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
-    return;
-  }
   if (a.cooldown === 0 && e.spawnTimer === 0) { bossBeginAttack(e, ev); return; }
   bossChase(w, e, dt);
 }
 
-function bossPhaseFor(e: Enemy): number {
-  const r = e.hp / e.maxHp;
-  return r > 0.66 ? 1 : r > 0.33 ? 2 : 3;
+// Living boss-summoned adds (the cadence cap counts only summons, never floor enemies).
+function countBossAdds(w: WorldState): number {
+  let n = 0;
+  for (const e of w.enemies) if (!e.dead && e.isSummoned && e.kind !== "boss") n++;
+  return n;
 }
 
 function bossBeginAttack(e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
-  const useRadial = boss.phase >= 2 && boss.isNextRadial;
-  if (boss.phase >= 2) boss.isNextRadial = !boss.isNextRadial;
-  e.attack.cooldown = C.BOSS_ATTACK_CD[boss.phase];
+  boss.attackCount++;
+  e.attack.cooldown = BOSS.attackCd[boss.phase];
+  // P3: every 3rd attack is the arena squeeze (1.0s telegraph, 3.0s hold).
+  if (boss.phase >= 3 && boss.attackCount % BOSS.squeezeEvery === 0) {
+    beginWindup(e, "squeeze");
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.8, gain: 0.7, trauma: 0.1 });
+    return;
+  }
+  const useRadial = boss.phase === 2 && boss.isNextRadial;
+  if (boss.phase === 2) boss.isNextRadial = !boss.isNextRadial;
   beginWindup(e, useRadial ? "radial" : "hopslam");
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: useRadial ? 0.6 : 0.4, gain: 0.7, trauma: 0 });
 }
@@ -1166,17 +1429,26 @@ function bossWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   if (a.move === "roar") {
     a.time += dt;
-    a.windup = Math.min(1, a.time / C.BOSS_ROAR_DUR);
-    if (a.time >= C.BOSS_ROAR_DUR) enterIdle(e);
+    a.windup = Math.min(1, a.time / BOSS.roarDuration);
+    if (a.time >= BOSS.roarDuration) {
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
     return;
   }
   if (a.move === "radial") {
     a.time += dt;
-    a.windup = Math.min(1, a.time / C.BOSS_RADIAL_WINDUP);
-    if (a.time >= C.BOSS_RADIAL_WINDUP) { bossRadialFire(w, e, ev); enterRecover(e); }
+    a.windup = Math.min(1, a.time / BOSS.radialWindup);
+    if (a.time >= BOSS.radialWindup) { bossRadialFire(w, e, ev); enterRecover(e); }
     return;
   }
-  if (stepWindupTimer(w, e, dt, C.BOSS_HOPSLAM_WINDUP, C.BOSS_HOPSLAM_LOCK, true)) {
+  if (a.move === "squeeze") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / BOSS.squeezeTelegraph);
+    if (a.time >= BOSS.squeezeTelegraph) { a.phase = "active"; a.time = 0; a.windup = 0; }
+    return;
+  }
+  if (stepWindupTimer(w, e, dt, BOSS.hopWindup, BOSS.hopLock, true)) {
     a.phase = "active"; a.time = 0; a.windup = 0;
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.6, gain: 0.9, trauma: 0 });
   }
@@ -1184,31 +1456,48 @@ function bossWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
 
 function bossActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
+  if (a.move === "squeeze") { bossSqueezeActive(w, e, dt, ev); return; }
   a.time += dt;
   const prev = a.windup;
-  a.windup = Math.min(1, a.time / C.BOSS_HOPSLAM_AIR);
+  a.windup = Math.min(1, a.time / BOSS.hopAir);
   const rem = 1 - prev;
   if (rem > 0.0001) {
     const f = Math.min(1, (a.windup - prev) / rem);
     e.x += (a.markX - e.x) * f;
     e.y += (a.markY - e.y) * f;
   }
-  if (a.time >= C.BOSS_HOPSLAM_AIR) { bossLand(w, e, ev); enterRecover(e); }
+  if (a.time >= BOSS.hopAir) { bossLand(w, e, ev); enterRecover(e); }
+}
+
+// The arena squeeze: a safe circle around the boss shrinks over 3s — stand inside it or
+// take ring damage. Forces movement TOWARD the fight while the boss holds still (the DPS
+// window is the reward for reading it). windup carries squeeze progress for the renderer.
+function bossSqueezeActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  a.time += dt;
+  const t = Math.min(1, a.time / BOSS.squeezeDuration);
+  a.windup = t;
+  const safeR = BOSS.squeezeStartRadius + (BOSS.squeezeEndRadius - BOSS.squeezeStartRadius) * t;
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (Math.hypot(p.x - e.x, p.y - e.y) > safeR) damagePlayer(w, p, BOSS.squeezeDamage, ev);
+  }
+  if (a.time >= BOSS.squeezeDuration) enterIdle(e);
 }
 
 function bossLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const a = e.attack, boss = e.boss;
   const x = a.markX, y = a.markY;
+  // Slam center hits for 2; the outer shockwave ring for 1 (spec §5 damage table).
   for (const p of w.players.values()) {
-    if (p.invuln === 0 && !p.isDown && p.hp > 0 && Math.hypot(p.x - x, p.y - y) < C.BOSS_SLAM_RADIUS) {
-      damagePlayer(w, p, 2, ev);
-    }
+    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    const d = Math.hypot(p.x - x, p.y - y);
+    if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev);
+    else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev);
   }
   ev.push({ t: "bossSlam", x, y });
   if (boss && boss.phase >= 3) {
-    for (let i = 0; i < 4; i++) spawnEnemyBullet(w, x, y, (i / 4) * 6.28, 220, 7, 1, "#a24bff", 2.5);
-    spawnBossMinion(w, e, ev);
-    spawnBossMinion(w, e, ev);
+    for (let i = 0; i < 4; i++) spawnEnemyBullet(w, x, y, (i / 4) * 6.28, 220, 7, BOSS.globDamage, "#a24bff", 2.5);
   }
 }
 
@@ -1216,30 +1505,38 @@ function bossRadialFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss;
   const parity = boss ? boss.burstParity : 0;
   if (boss) boss.burstParity = parity ^ 1;
-  const base = parity ? Math.PI / C.BOSS_RADIAL_COUNT : 0;
-  for (let i = 0; i < C.BOSS_RADIAL_COUNT; i++) {
-    spawnEnemyBullet(w, e.x, e.y, base + (i / C.BOSS_RADIAL_COUNT) * 6.28, 260, 7, 1, "#a24bff", 2.6);
+  const base = parity ? Math.PI / BOSS.radialCount : 0;
+  for (let i = 0; i < BOSS.radialCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / BOSS.radialCount) * 6.28, 260, 7, BOSS.globDamage, "#a24bff", 2.6);
   }
   ev.push({ t: "radialBurst", x: e.x, y: e.y });
+  // Every 2nd radial orders the living slimes into a delayed pack surge — coordinated
+  // pressure with zero extra HP.
+  if (boss && boss.burstParity === 0) {
+    for (const add of w.enemies) {
+      if (add.dead || !add.isSummoned || add.kind !== "slime") continue;
+      add.surgeDelay = BOSS.packSurgeDelay;
+    }
+  }
 }
 
 function bossChase(w: WorldState, e: Enemy, dt: number): void {
   if (!findTarget(w, e.x, e.y)) return;
   const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
-  const mult = e.boss && e.boss.phase >= 3 ? 1.2 : 1;
+  const mult = e.boss && e.boss.phase >= 3 ? BOSS.p3ChaseMult : 1;
   const step = e.speed * mult * dt;
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
 }
 
-function spawnBossMinion(w: WorldState, e: Enemy, ev: SimEvent[]): void {
-  if (w.enemies.length >= C.BOSS_MINION_CAP) return;
-  // The recoil pop fires regardless (matches the old triggerRecoil-before-wall-check);
-  // the particle burst + near-cam sound/trauma only fire when a minion actually spawns.
-  const a = w.rng.next() * Math.PI * 2;
-  const mx = e.x + Math.cos(a) * (e.radius + 20);
-  const my = e.y + Math.sin(a) * (e.radius + 20);
+// Spawn one summoned slime at `angle` off the boss's edge. Summons are excluded from
+// hearts/Fang (isSummoned) so add pressure never becomes a sustain farm.
+function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): void {
+  const mx = e.x + Math.cos(angle) * (e.radius + 20);
+  const my = e.y + Math.sin(angle) * (e.radius + 20);
   if (isWall(w, mx, my)) { ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false }); return; }
-  w.enemies.push(createEnemy("slime", mx, my, w.floor, w.rng, w.nextEnemyId++));
+  w.enemies.push(createEnemy("slime", mx, my, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  }));
   ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx, my, spawned: true });
 }
 
@@ -1482,7 +1779,9 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
       if (w.rng.next() < 0.6) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
-      if (w.rng.next() < 0.15) w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
+      if (w.rng.next() < SUSTAIN.crateHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
+        w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
+      }
       break;
     case "pot":
       ev.push({ t: "propBreak", kind: "pot", x: p.x, y: p.y });
@@ -1504,14 +1803,14 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
   for (const e of w.enemies) {
     if (e.dead) continue;
     if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
-    e.hp -= C.BARREL_EXPLOSION_DAMAGE;
+    damageEnemy(w, p ? p.id : null, e, C.BARREL_EXPLOSION_DAMAGE, ev);
     ev.push({ t: "flash", eid: e.id });
     ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES[e.kind].tint });
     applyBurn(e, C.BARREL_BURN_SECS, p ? p.id : null);
     if (e.hp <= 0 && !e.dead) killEnemy(w, p, e, ev);
   }
   for (const victim of w.players.values()) {
-    if (victim.invuln === 0 && !victim.isDown && victim.hp > 0
+    if (!isProtected(victim) && !victim.isDown && victim.hp > 0
       && Math.hypot(victim.x - source.x, victim.y - source.y) <= r) {
       damagePlayer(w, victim, C.BARREL_EXPLOSION_SELF_DMG, ev);
     }
@@ -1567,28 +1866,37 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
   if (c.kind === "boss") grantBossChest(w, p, c, ev);
-  else rollWoodChest(w, p, c, ev);
+  else rollWoodChest(w, c, ev);
 }
 
-function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
-  const r = w.rng.next();
-  if (r < 0.55) {
-    const n = 3 + Math.floor(w.rng.next() * 4);
-    for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
-  } else if (r < 0.75) {
+// Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer
+// drop from random chests — the reward cadence lives on descents and the boss chest. The
+// recovery pity, once armed, forces the heart.
+function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
+  if (w.isPityHeartArmed) {
+    w.isPityHeartArmed = false;
+    w.pityStreak = 0;
     w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
-  } else if (r < 0.93) {
-    ev.push({ t: "offerBlessing", pid: p.id });
-  } else {
+    return;
+  }
+  const r = w.rng.next();
+  if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers)) {
+    w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
+  } else if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers) + SUSTAIN.woodChestWeapon) {
     const weapon = PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)];
     w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x: c.x, y: c.y, radius: 16, weapon });
+  } else {
+    const n = 3 + Math.floor(w.rng.next() * 4);
+    for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
   }
 }
 
+// Boss completion recovery is the chest's +1 heart ONLY (no descent heal), and its blessing
+// offer is the floor's reward — a Rare pick (the `rare` flag steers the roll pool).
 function grantBossChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
   w.pickups.push(makePickup(w, "heart", c.x - 18, c.y, ev));
   for (let i = 0; i < 5; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - 2) * 16, c.y + 18, ev));
-  ev.push({ t: "offerBlessing", pid: p.id });
+  ev.push({ t: "offerBlessing", pid: p.id, rare: true });
 }
 
 function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -1600,14 +1908,28 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         const dx = player.x - p.x, dy = player.y - p.y;
         const d = Math.hypot(dx, dy);
         if (d > 0.5 && d < player.mods.coinMagnet) {
-          const pull = Math.min(d, C.COIN_MAGNET_PULL * dt);
+          const pull = Math.min(d, player.mods.coinMagnetPull * dt);
           p.x += (dx / d) * pull; p.y += (dy / d) * pull;
         }
       }
       if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + p.radius) {
         if (p.kind === "coin") { player.coins += p.value ?? coinGain(player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
         if (p.kind === "heart") {
-          if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); collected = true; break; }
+          // At full HP the heart is consumed and converts to coins (§2) — no backtracking
+          // stockpile of floor hearts.
+          if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); }
+          else { player.coins += SUSTAIN.fullHpHeartCoins; ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); }
+          collected = true; break;
+        }
+        if (p.kind === "dealer_heart") {
+          // The Dealer sells exactly +1 HP for coins; broke or full-health players walk past.
+          if (player.hp < player.maxHp && player.coins >= (p.value ?? DEALER.price)) {
+            player.coins -= p.value ?? DEALER.price;
+            player.hp += DEALER.heal;
+            ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y });
+            collected = true; break;
+          }
+          continue;
         }
         if (p.kind === "weapon" && p.weapon && !player.ownedWeapons.includes(p.weapon)) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
       }
@@ -1630,7 +1952,13 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
   p.hp -= amount;
-  p.invuln = 0.9;
+  p.invuln = PLAYER.postHitInvuln;
+  // Any damage cancels a revive channel the victim was holding (§2): reviving is a real
+  // commitment, not something you tank through.
+  for (const downed of w.players.values()) {
+    if (!downed.isDown || downed.reviveProgress <= 0) continue;
+    if (Math.hypot(p.x - downed.x, p.y - downed.y) <= REVIVE.radius) downed.reviveProgress = 0;
+  }
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
@@ -1670,23 +1998,26 @@ function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
   if (!anyUp && anyDown) endRun(w, ev);
 }
 
-// Authoritative revive: a living teammate standing within REVIVE_RADIUS of a downed player for
-// REVIVE_HOLD seconds brings them back. Progress decays when no one is nearby, so it takes a
-// sustained hold. Solo never has a downed player with a standing ally, so this no-ops there.
+// Authoritative revive (§2): a living teammate holds within REVIVE.radius for the full
+// 1.5s channel (any damage to the channeler cancels it — see damagePlayer). The revived
+// player returns at 2 HP with 1.0s protection and a 0.35s attack lockout. Progress decays
+// when no one is nearby, so it takes a sustained hold. Solo never has a downed player with
+// a standing ally, so this no-ops there.
 function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const downed of w.players.values()) {
     if (!downed.isDown) continue;
     let reviver: PlayerSim | undefined;
     for (const other of w.players.values()) {
       if (other === downed || other.isDown || other.hp <= 0) continue;
-      if (Math.hypot(other.x - downed.x, other.y - downed.y) <= C.REVIVE_RADIUS) { reviver = other; break; }
+      if (Math.hypot(other.x - downed.x, other.y - downed.y) <= REVIVE.radius) { reviver = other; break; }
     }
     if (reviver) {
       downed.reviveProgress += dt;
-      if (downed.reviveProgress >= C.REVIVE_HOLD) {
+      if (downed.reviveProgress >= REVIVE.channel) {
         downed.isDown = false;
-        downed.hp = Math.min(downed.maxHp, C.REVIVE_HP);
-        downed.invuln = Math.max(downed.invuln, C.REVIVE_INVULN);
+        downed.hp = Math.min(downed.maxHp, REVIVE.hp);
+        downed.invuln = Math.max(downed.invuln, REVIVE.invuln);
+        downed.fireCd = Math.max(downed.fireCd, REVIVE.fireLockout);
         downed.reviveProgress = 0;
         ev.push({ t: "revive", pid: downed.id, by: reviver.id, x: downed.x, y: downed.y });
       }
@@ -1702,8 +2033,7 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   if (w.isSandbox) return;
   const d = w.dungeon;
   const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
-  const isCleared = w.enemies.length === 0;
-  if (!isCleared) return;
+  if (!isFloorCleared(w)) return;
   // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
   // player, so this is identical to the old single-player check. The authoritative server owns
   // this decision entirely off server positions — no client triggers the transition.
@@ -1723,20 +2053,36 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
 
 // A floor descent (solo). Co-op's shared-floor sync is orchestrated client-side; the
 // client calls descend via stepWorld's exit check or directly on a coop descend request.
+// There is NO descent heal (§2) — the descent is pacing, not a free mistake reset.
 export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void {
+  const isLeavingBossFloor = isBossFloor(w.floor);
+  // Recovery pity (§2): two consecutive dry non-boss floors entered below 50% HP arm a
+  // guaranteed heart in the next wood chest. Any generated heart resets the streak.
+  if (!isLeavingBossFloor && w.heartsThisFloor === 0 && w.isFloorEnteredLow) {
+    w.pityStreak++;
+    if (w.pityStreak >= SUSTAIN.pityFloors) {
+      w.isPityHeartArmed = true;
+      w.pityStreak = 0;
+    }
+  } else if (w.heartsThisFloor > 0) {
+    w.pityStreak = 0;
+  }
   w.floor = nextFloor;
   for (const p of w.players.values()) {
     p.combo = 0; p.comboTimer = 0;
     p.isDown = false;
     p.reviveProgress = 0;
-    p.hp = Math.min(p.maxHp, p.hp + 2);
+    if (SUSTAIN.descentHeal > 0) p.hp = Math.min(p.maxHp, p.hp + SUSTAIN.descentHeal);
   }
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
-  // Offer a between-floor blessing to EVERY player (solo: the one LOCAL_ID player, identical to
-  // before). The server turns each offer into that client's seeded choice set (see the server's
-  // offer handling); solo rolls its own choices client-side.
-  for (const p of w.players.values()) ev.push({ t: "offerBlessing", pid: p.id });
+  // Reward cadence (§6): one blessing offer per NON-BOSS descent for every player (solo:
+  // the one LOCAL_ID player). A boss floor's reward was its chest (the Rare pick), so
+  // leaving it offers nothing. The server turns each offer into that client's seeded
+  // choice set; solo rolls its own choices client-side.
+  if (!isLeavingBossFloor) {
+    for (const p of w.players.values()) ev.push({ t: "offerBlessing", pid: p.id, rare: false });
+  }
 }
 
 // ---- the step ----
@@ -1777,6 +2123,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
       p.comboTimer -= dt;
       if (p.comboTimer <= 0) { p.comboTimer = 0; p.combo = 0; }
     }
+    if (p.fangCd > 0) p.fangCd = p.fangCd > dt ? p.fangCd - dt : 0;
   }
 }
 
@@ -1796,7 +2143,7 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
 // ---- dev sandbox helpers (client dev tools mutate the world through these) ----
 
 export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: number): Enemy {
-  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++);
+  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers });
   w.enemies.push(e);
   return e;
 }

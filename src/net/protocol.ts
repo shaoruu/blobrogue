@@ -11,10 +11,12 @@
 // field type-checked before the client trusts it).
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
+import { isFloorCleared } from "../sim/world.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
   PropKind, PickupKind, ChestKind,
 } from "../sim/types.js";
+import type { EnemyTier } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
@@ -29,13 +31,14 @@ export { modsFromWire } from "./playerSnapshot.js";
 // ---- fixed timing (server tick + snapshot rate) ----
 export const TICK_HZ = 20;
 export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
-// v2: authoritative run world (rev/over/evTo, stable pickup/chest ids, equip{cseq},
-// chooseBlessing{offerId}, stat{dly}). Joins must carry EXACTLY this version.
-// v2-additive (no bump — client->server messages are UNCHANGED, so the strict join gate is
+// v3: balance reset (dash-iframe/fang fields on SelfWire, enemy tier on EnemyWire,
+// dealer_heart pickups, squeeze attack move, offerBlessing{rare} + bossTransition/
+// enemySpawn events). Joins must carry EXACTLY this version.
+// v3-additive (no bump — client->server messages are UNCHANGED, so the strict join gate is
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -58,10 +61,12 @@ export const STAGE_B_FLOOR = 1;
 export interface SelfWire {
   x: number; y: number;
   hp: number; mhp: number;
-  inv: number;                 // invuln seconds
+  inv: number;                 // post-hit invuln seconds
+  dnv: number;                 // dash-iframe seconds (separate, non-extending window)
   dcd: number; dti: number;    // dashCd, dashTime
   ddx: number; ddy: number;    // dash direction
   fcd: number;                 // fireCd
+  fng: number;                 // Vampire Fang shared proc cooldown
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
   rev: number;                 // reviveProgress seconds (authoritative revive hold readout)
@@ -105,6 +110,7 @@ export interface EnemyWire {
   id: number; kind: EnemyKind;
   x: number; y: number;
   hp: number; mhp: number; r: number;
+  tr: EnemyTier;               // variety tier (drives the client's draw scale + markers)
   atk: AttackWire;
   bph: number;                 // boss phase (0 when not a boss)
   burn: number; chill: number; shock: number;
@@ -252,10 +258,11 @@ function isEnemyKind(v: unknown): v is EnemyKind {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ENEMY_ARCHETYPES, v);
 }
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
-const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
+const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
-const ATTACK_MOVES: Record<AttackMove, true> = { none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true };
+const ATTACK_MOVES: Record<AttackMove, true> = { none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true };
+const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
   if (typeof v !== "string" || !Object.prototype.hasOwnProperty.call(set, v)) throw new ProtocolError(`bad ${what}`);
   return v as T;
@@ -280,13 +287,13 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   thornsHit: { scope: "pos", fields: { eid: "num", x: "num", y: "num", radius: "num", dmg: "num", tint: "str" } },
   burnTick: { scope: "pos", fields: { x: "num", y: "num", radius: "num", dmg: "num" } },
   shockArc: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", tRadius: "num", dmg: "num", color: "str", killed: "bool" } },
-  enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", x: "num", y: "num", combo: "num" } },
+  enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num", combo: "num" } },
   heal: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   dashStart: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   dashTrail: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
-  offerBlessing: { scope: "pid", fields: { pid: "str" } },
+  offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
   revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
@@ -304,6 +311,8 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   bossAddSpawn: { scope: "pos", fields: { eid: "num", x: "num", y: "num", mx: "num", my: "num", spawned: "bool" } },
   // Global: shared-objective transitions every client must see regardless of distance.
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
+  bossTransition: { scope: "global", fields: { eid: "num", phase: "num", entering: "bool", queued: "num", hpFrac: "num" } },
+  enemySpawn: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num" } },
   descend: { scope: "global", fields: { toFloor: "num" } },
   reachExit: { scope: "global", fields: { toFloor: "num" } },
   gameOver: { scope: "pid", fields: { pid: "str" } },
@@ -436,9 +445,11 @@ function validateSelfWire(v: unknown): SelfWire {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     inv: num(o, "inv", 0, 1e4),
+    dnv: num(o, "dnv", 0, 1e4),
     dcd: num(o, "dcd", 0, 1e4), dti: num(o, "dti", -1e4, 1e4),
     ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
     fcd: num(o, "fcd", 0, 1e4),
+    fng: num(o, "fng", 0, 1e4),
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
     rev: num(o, "rev", 0, 1e4),
@@ -478,6 +489,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
     id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER), kind,
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     hp: num(o, "hp", -1e6, 1e6), mhp: num(o, "mhp", 0, 1e6), r: num(o, "r", 0, 1e4),
+    tr: inSet(ENEMY_TIERS, o.tr, "enemy.tr"),
     atk: {
       ph: inSet(ATTACK_PHASES, a.ph, "enemy.atk.ph"),
       mv: inSet(ATTACK_MOVES, a.mv, "enemy.atk.mv"),
@@ -607,8 +619,8 @@ export const jsonCodec: Codec = {
 // map its full-fidelity field names onto the compact wire keys, 1:1.
 export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
-    x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln,
-    dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd,
+    x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
+    dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, fng: s.fangCd,
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
@@ -617,8 +629,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
 
 export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
   return {
-    x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv,
-    dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd,
+    x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv, dashInvuln: w.dnv,
+    dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, fangCd: w.fng,
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
@@ -655,7 +667,7 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
 export function toEnemyWire(e: Enemy): EnemyWire {
   const a = e.attack;
   return {
-    id: e.id, kind: e.kind, x: e.x, y: e.y, hp: e.hp, mhp: e.maxHp, r: e.radius,
+    id: e.id, kind: e.kind, x: e.x, y: e.y, hp: e.hp, mhp: e.maxHp, r: e.radius, tr: e.tier,
     atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
     bph: e.boss ? e.boss.phase : 0,
     burn: e.burn, chill: e.chill, shock: e.shock,
@@ -671,13 +683,16 @@ export function toBulletWire(b: Bullet): BulletWire {
 export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
   return {
     id: w.id, kind: w.kind, x, y, vx: 0, vy: 0, radius: w.r, hp: w.hp, maxHp: w.mhp, dead: false,
+    tier: w.tr, isSummoned: false, kbResist: 1, surgeDelay: 0, surgeTime: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
-    boss: w.bph > 0 ? { phase: w.bph, minionTimer: 0, isNextRadial: false, burstParity: 0 } : null,
+    boss: w.bph > 0
+      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0 }
+      : null,
   };
 }
 
@@ -831,7 +846,7 @@ export function buildSnapshot(
     selfId: selfPid,
     seed: w.seed,
     floor: w.floor,
-    cleared: w.enemies.length === 0,
+    cleared: isFloorCleared(w),
     evTo,
     self: self ? toSelfWire(self) : null,
     players,

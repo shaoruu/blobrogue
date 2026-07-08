@@ -6,13 +6,15 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { rollItemChoices, itemById } from "../sim/items.js";
+import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
+import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
+import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld } from "../sim/world.js";
+import { applyItemToWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -111,7 +113,7 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   spear: "meleeSwing",
 };
 const MELEE_HIT_TRAUMA = 0.14; // extra thump layered on each melee connect
-const BOSS_SLAM_RADIUS = 90;   // shockwave radius (also the ground-marker size)
+const BOSS_SLAM_RADIUS = BOSS.slamRadius; // shockwave radius (also the ground-marker size)
 const BOSS_JUMP_HEIGHT = 42;   // px the boss visually lifts mid hop-slam
 const FREEZE_AT = 3;           // chill >= this renders as frozen-solid crust
 const BURN_TINT = "#ff8a3b";   // ember/burn overlay + burn-tick dmg number color
@@ -126,13 +128,10 @@ const WALL_SIDE_W = 7;        // px width of an exposed side face
 const WALL_SIDE_ALPHA = 0.62; // side-strip darkness at the edge
 
 
-const REVIVE_RADIUS = 46;
-const REVIVE_HOLD = 1.1;
 const DEATH_DUR = 0.3;        // seconds a fade-only corpse (ghost/spitter) animates out
 const DEATH_DUR_SHEET = 0.4;  // slime/skeleton/bat: their 5-frame death clip
 const DEATH_DUR_BOSS = 0.65;  // the boss's longer 8-frame death clip
 const MUZZLE_DUR = 0.07; // seconds the muzzle flash lingers
-const DASH_COOLDOWN = 0.7; // seconds between dashes; drives the HUD dash meter fill
 
 // Hit-stop: freeze the sim for a beat on impact (render keeps going). Values are
 // taken as a max, never summed, and capped so a busy frame can't grind to a halt.
@@ -203,6 +202,13 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   hopslam: "#ffd27a", // boss slam: amber
   radial: "#c98bff",  // boss burst: violet
   roar: "#ffb43b",    // boss phase change: gold
+  squeeze: "#ff5a5a", // boss arena squeeze: closing red ring
+};
+
+// Ground-ring accents that make brutes/elites read at a glance (tier is also on the wire).
+const TIER_RING_COLOR: Partial<Record<EnemyTier, string>> = {
+  brute: "#ff8a3b",
+  elite: "#c98bff",
 };
 
 const AIM_SOLID: number[] = [];
@@ -279,6 +285,9 @@ export class Game {
   private world!: WorldState;
   private inputSeq = 0;
   private seed = 0;
+  // Seeded stream for solo/co-op blessing choice rolls (the sim never rolls choices; online
+  // the server decides). Keeps the whole client Math.random-free on the choice path.
+  private blessingRng = new Rng(0);
 
   private comboFreeze = false; // dev/sandbox: hold the chain at a set value so the HUD can be gated
 
@@ -482,6 +491,7 @@ export class Game {
     }
     this.world = this.transport.poll().state;
     this.inputSeq = 0;
+    this.blessingRng = new Rng(this.seed ^ 0x0b1e55);
     this.ownedItemDefs = [];
     this.isAutoFiring = false;
     this.remoteShotSeen.clear();
@@ -866,7 +876,8 @@ export class Game {
         const dur = e.kind === "boss" ? DEATH_DUR_BOSS
           : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
           : DEATH_DUR;
-        this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size: arch.drawSize, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
+        const size = arch.drawSize * (TIERS[e.tier as EnemyTier]?.drawMult ?? 1);
+        this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
         const comboRate = 1 + Math.min(e.combo - 1, 20) * 0.015;
         sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
         this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
@@ -905,7 +916,7 @@ export class Game {
         // Online: the SERVER decides the choice set and sends a separate `offer` message (drained
         // in tick via the transport); ignore the sim event's local roll so choice authority stays
         // server-side. Solo/co-op roll their own choices locally.
-        if (this.mode !== "online") this.offerBlessing();
+        if (this.mode !== "online") this.offerBlessing(e.rare);
         break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); sfx("coin"); }
@@ -980,6 +991,15 @@ export class Game {
         this.sfxAt("bossSpawn", e.x, e.y);
         this.addTrauma(TRAUMA_BOSS_FLOOR);
         break;
+      case "bossTransition":
+        // Telemetry-bearing beat (enter/exit + queued overflow); the juice rides bossPhase.
+        break;
+      case "enemySpawn": {
+        const tint = ENEMY_ARCHETYPES[e.kind].tint;
+        this.spawnPuff(e.x, e.y, 8, tint);
+        if (this.isNearCamera(e.x, e.y)) sfx("enemyHit", { gain: 0.4, rate: 0.7 });
+        break;
+      }
       case "descend":
         sfx("descend");
         this.addTrauma(TRAUMA_DESCEND);
@@ -1066,17 +1086,19 @@ export class Game {
   }
 
   // Present three blessings and freeze until the player picks one (per client; items are
-  // purely local run-stat modifiers). Applying a pick mutates the sim via applyItemToWorld
-  // and replays its itemPicked FX.
-  private offerBlessing() {
-    const choices = rollItemChoices(3);
+  // purely local run-stat modifiers). A duplicate choice reads as its Lv2/Lv3 upgrade.
+  // Applying a pick mutates the sim via applyItemToWorld and replays its itemPicked FX.
+  private offerBlessing(rare = false) {
+    const owned = this.p.ownedItemIds;
+    const choices = rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
     if (choices.length === 0) return;
     this.isChoosing = true;
     this.isPaused = false;
     this.mouse.isDown = false;
-    this.blessing.show(choices, (item) => {
-      this.ownedItemDefs.push(item);
-      this.handleSimEvents(applyItemToWorld(this.world, LOCAL_ID, item));
+    this.blessing.show(this.toBlessingCards(choices), (item) => {
+      const events = applyItemToWorld(this.world, LOCAL_ID, item);
+      if (events.length > 0) this.ownedItemDefs.push(item);
+      this.handleSimEvents(events);
       this.isChoosing = false;
       this.last = performance.now();
     });
@@ -1092,15 +1114,22 @@ export class Game {
     this.isChoosing = true;
     this.isPaused = false;
     this.mouse.isDown = false;
-    this.blessing.show(choices, (item) => {
+    this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.wsTransport?.sendChooseBlessing(offer.id, item.id);
       this.isChoosing = false;
       this.last = performance.now();
     });
   }
 
+  // Card view of a choice set: each card shows the level the pick WOULD reach (an owned
+  // blessing offered again is its upgrade) and that level's effect text.
+  private toBlessingCards(choices: ItemDef[]) {
+    const levels = itemLevelsOf(this.p.ownedItemIds);
+    return choices.map((item) => ({ item, nextLevel: (levels.get(item.id) ?? 0) + 1 }));
+  }
+
   private dashCooldown(): number {
-    return DASH_COOLDOWN * this.mods.dashCdMult;
+    return PLAYER.dashCooldown * this.mods.dashCdMult;
   }
 
   private comboTier(): ComboTier {
@@ -1335,7 +1364,7 @@ export class Game {
     if (revived !== null && this.isDown) {
       this.p.isDown = false;
       this.p.hp = revived;
-      this.p.invuln = 1.2;
+      this.p.invuln = REVIVE.invuln;
       this.spawnParticles(this.px, this.py, 20, "#8affc0");
       sfx("revive");
     }
@@ -1385,12 +1414,12 @@ export class Game {
     const seen = new Set<string>();
     for (const r of this.coop.remotePlayers()) {
       if (!r.isDown) continue;
-      if (Math.hypot(this.px - r.x, this.py - r.y) < REVIVE_RADIUS) {
+      if (Math.hypot(this.px - r.x, this.py - r.y) < REVIVE.radius) {
         seen.add(r.playerId);
         const held = (this.reviveHold.get(r.playerId) ?? 0) + dt;
         this.reviveHold.set(r.playerId, held);
         this.spawnParticles(r.x, r.y, 1, "#8affc0");
-        if (held >= REVIVE_HOLD) {
+        if (held >= REVIVE.channel) {
           this.coop.requestRevive(r.playerId);
           this.reviveHold.set(r.playerId, -2); // debounce until the row flips
         }
@@ -1433,7 +1462,7 @@ export class Game {
       weapons: this.p.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
-      isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : this.enemies.length === 0,
+      isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
       enemiesLeft: this.enemies.length,
       isBossActive,
       bossHpFrac,
@@ -1456,14 +1485,15 @@ export class Game {
     return this.ownedItemDefs;
   }
 
-  // Collapse owned blessings by id into count-bearing entries (first-seen order), so the
-  // HUD panel shows one chip per distinct item with an xN badge when a pick repeats.
+  // Collapse owned blessings by id into level-bearing entries (first-seen order), so the
+  // HUD panel shows one chip per distinct blessing with an xN level badge; the chip text
+  // tracks the current level's effect.
   private collapsedItems() {
     const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
     for (const it of this.currentItemDefs()) {
       const seen = collapsed.get(it.id);
-      if (seen) seen.count++;
-      else collapsed.set(it.id, { id: it.id, name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      if (seen) { seen.count++; seen.desc = itemDesc(it, seen.count); }
+      else collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
     }
     return [...collapsed.values()];
   }
@@ -1487,7 +1517,7 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
-      items: this.currentItemDefs().map((it) => ({ name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
+      items: this.collapsedItems().map((it) => ({ name: it.count > 1 ? `${it.name} Lv${it.count}` : it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
     });
   }
 
@@ -1808,7 +1838,7 @@ export class Game {
     const { ctx, cam } = this;
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2 - cam.x, ey = d.exit.y * TILE + TILE / 2 - cam.y;
-    const isCleared = this.enemies.length === 0;
+    const isCleared = isFloorCleared(this.world);
     // Stairs-down sprite reads as the way to the next floor (replaces the vague portal
     // ring). Subtle amber shimmer between the 2 frames + a soft glow once the floor's clear.
     const stairs: TileName = (isCleared && Math.floor(this.animClock * 1.5) % 2 === 1) ? "stairs_f1" : "stairs_f0";
@@ -1874,7 +1904,8 @@ export class Game {
       if (e.dead) continue;
       const arch = ENEMY_ARCHETYPES[e.kind];
       if (arch.isPhasing) continue; // ghosts float — no ground shadow
-      if (this.isNearCamera(e.x, e.y, TILE)) this.shadow(e.x - cam.x, e.y - cam.y + arch.drawSize * 0.3, arch.drawSize * 0.62);
+      const size = this.enemyDrawSize(e);
+      if (this.isNearCamera(e.x, e.y, TILE)) this.shadow(e.x - cam.x, e.y - cam.y + size * 0.3, size * 0.62);
     }
     // remote players (co-op presence or authoritative server)
     for (const r of this.remotes()) {
@@ -2021,15 +2052,27 @@ export class Game {
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
-      const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
+      const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
       ctx.save();
       ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
       const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" ? "#ffd27a" : "#ffb43b");
+      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" ? "#ffd27a" : "#ffb43b");
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
+      // The Dealer's heart wears its coin price; gray if this player can't afford it.
+      if (p.kind === "dealer_heart") {
+        const price = p.value ?? 6;
+        ctx.save();
+        ctx.font = '700 10px "Silkscreen", monospace';
+        ctx.textAlign = "center";
+        ctx.fillStyle = "rgba(8,6,16,0.9)";
+        ctx.fillText(`${price}c`, sx + 1, sy - 17);
+        ctx.fillStyle = this.coins >= price ? "#ffd27a" : "#8a8378";
+        ctx.fillText(`${price}c`, sx, sy - 18);
+        ctx.restore();
+      }
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
       const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;
       const pulse = p.kind === "coin" ? 1 : 1 + Math.sin(clock * 4) * 0.08;
@@ -2223,6 +2266,11 @@ export class Game {
     ctx.globalAlpha = 1;
   }
 
+  // Tier-scaled sprite size: swarm 0.78x, brute 1.35x, elite 1.12x of the archetype draw.
+  private enemyDrawSize(e: Enemy): number {
+    return ENEMY_ARCHETYPES[e.kind].drawSize * TIERS[e.tier].drawMult;
+  }
+
   private renderEnemies() {
     const { ctx, cam } = this;
     for (const e of this.enemies) {
@@ -2233,9 +2281,15 @@ export class Game {
       const facing = this.enemyFacing.get(e.id) ?? (this.px >= e.x ? 1 : -1);
       const isWindup = a.phase === "windup";
       const isHopSlam = e.kind === "boss" && a.move === "hopslam";
+      const drawSize = this.enemyDrawSize(e);
 
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
+      // The shrinking safe-ring of the boss arena squeeze.
+      if (e.kind === "boss" && a.move === "squeeze") this.renderSqueeze(e);
+      // Brutes/elites carry a colored ground ring so the tier reads before the first hit.
+      const ring = TIER_RING_COLOR[e.tier];
+      if (ring) this.renderTierRing(sx, sy, drawSize, ring);
 
       // Ghost solidify reads as an opacity ramp; everyone else uses the archetype alpha.
       const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup : arch.alpha;
@@ -2245,19 +2299,19 @@ export class Game {
       let extra = 1;
       // Skeleton coils down (squash) as its lunge charges.
       if (e.kind === "skeleton" && isWindup) { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
-      // Boss inflates for radial/roar telegraphs and lifts off the ground mid-slam.
+      // Boss inflates for radial/roar/squeeze telegraphs and lifts off the ground mid-slam.
       if (e.kind === "boss") {
-        if (isWindup && (a.move === "radial" || a.move === "roar")) extra = 1 + a.windup * 0.16;
+        if (isWindup && (a.move === "radial" || a.move === "roar" || a.move === "squeeze")) extra = 1 + a.windup * 0.16;
         if (isHopSlam && a.phase === "windup") xf.sy -= 0.18 * a.windup; // crouch before the leap
         if (isHopSlam && a.phase === "active") { xf.oy -= Math.sin(a.windup * Math.PI) * BOSS_JUMP_HEIGHT; extra = 1.08; }
       }
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
-      this.drawChar(arch.sprite, clip, sx, sy, arch.drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock);
+      this.drawChar(arch.sprite, clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
-      if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, arch.drawSize);
+      if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
 
       // Shimmer flecks while a ghost is materializing.
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
@@ -2265,11 +2319,43 @@ export class Game {
       if (isWindup) this.renderTelegraph(e, sx, sy);
 
       const barW = e.kind === "boss" ? 64 : 32;
-      const barY = sy - arch.drawSize / 2 - 8;
+      const barY = sy - drawSize / 2 - 8;
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
       ctx.fillStyle = e.kind === "boss" ? "#ffb43b" : "#ff5a5a";
       ctx.fillRect(sx - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), 4);
     }
+  }
+
+  // A thin pulsing ellipse under a brute/elite — the tier tell.
+  private renderTierRing(sx: number, sy: number, size: number, color: string) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.2 * Math.sin(this.animClock * 5);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy + size * 0.3, size * 0.44, size * 0.2, 0, 0, 6.28);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The arena squeeze: outside the safe ring is danger. During the 1s telegraph the ring
+  // fades in at its start radius; during the 3s hold it shrinks toward the boss.
+  private renderSqueeze(e: Enemy) {
+    const { ctx, cam } = this;
+    const a = e.attack;
+    const t = a.phase === "active" ? a.windup : 0;
+    const safeR = BOSS.squeezeStartRadius + (BOSS.squeezeEndRadius - BOSS.squeezeStartRadius) * t;
+    const sx = e.x - cam.x, sy = e.y - cam.y;
+    const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 8);
+    ctx.save();
+    ctx.globalAlpha = (a.phase === "windup" ? 0.25 + 0.35 * a.windup : 0.75) * pulse;
+    ctx.strokeStyle = TELEGRAPH_COLOR.squeeze;
+    ctx.lineWidth = a.phase === "active" ? 5 : 3;
+    ctx.setLineDash(a.phase === "active" ? AIM_SOLID : AIM_DASH);
+    ctx.beginPath(); ctx.arc(sx, sy, safeR, 0, 6.28); ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
   }
 
   // Pulsing colored aura + an aim line for a charging attack. The line tracks the
@@ -2278,10 +2364,9 @@ export class Game {
   private renderTelegraph(e: Enemy, sx: number, sy: number) {
     const { ctx } = this;
     const a = e.attack;
-    const arch = ENEMY_ARCHETYPES[e.kind];
     const color = TELEGRAPH_COLOR[a.move];
     const pulse = 0.5 + 0.5 * Math.sin(this.animForEnemy(e).clock * 13);
-    const r = arch.drawSize * (0.5 + 0.28 * a.windup);
+    const r = this.enemyDrawSize(e) * (0.5 + 0.28 * a.windup);
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, r);
@@ -2722,7 +2807,7 @@ export class Game {
       dungeon: this.dungeon,
       playerX: this.px, playerY: this.py,
       exit: this.dungeon.exit,
-      isCleared: this.enemies.length === 0,
+      isCleared: isFloorCleared(this.world),
       dots,
     });
   }
@@ -2792,9 +2877,11 @@ export class Game {
   }
 
   // Apply a specific blessing immediately (reuses the real item pipeline + HUD strip).
+  // A grant past Lv3 is a sim no-op, so the HUD mirror only records applied picks.
   devGrantItem(item: ItemDef): void {
-    this.ownedItemDefs.push(item);
-    this.handleSimEvents(applyItemToWorld(this.world, LOCAL_ID, item));
+    const events = applyItemToWorld(this.world, LOCAL_ID, item);
+    if (events.length > 0) this.ownedItemDefs.push(item);
+    this.handleSimEvents(events);
   }
 
   // Pop the real between-floor blessing chooser (freezes the sim, exactly like a descend).

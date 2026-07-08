@@ -1,6 +1,7 @@
-// Simulation tuning constants. These drive gameplay logic in stepWorld and must live
-// with the sim (node + browser). Cosmetic magnitudes (trauma/freeze amounts, recoil,
-// camera kick, tints, sprite tables) stay client-side in game.ts.
+// Simulation ENGINE constants: mechanical tuning that drives stepWorld but is not part of
+// the balance contract (that lives in balance.ts — the versioned BalanceDef). Cosmetic
+// magnitudes (trauma/freeze amounts, recoil, camera kick, tints, sprite tables) stay
+// client-side in game.ts.
 
 import type { WeaponId, PropKind } from "./types.js";
 
@@ -18,11 +19,7 @@ export const STUCK_TIME = 0.22;
 export const STUCK_PROGRESS = 0.5;
 export const STUCK_MIN_STEP = 0.05;
 
-export const BOSS_MINION_CAP = 14;
-export const DASH_COOLDOWN = 0.7;
-export const BASE_MAX_HP = 6;
 export const MIN_MULTI_SPREAD = 0.26;
-export const COIN_MAGNET_PULL = 300;
 
 // Enemy knockback impulse.
 export const WEAPON_KB: Record<WeaponId, number> = {
@@ -62,21 +59,22 @@ export const ITEM_CHILL_SECS = 1.2;
 export const ITEM_SHOCK_SECS = 2;
 export const BARREL_BURN_SECS = 2;
 
-// Skeleton lunge.
+// Skeleton lunge. Aim locks early enough to leave the ≥0.30s post-lock dodge window the
+// balance spec (§4) guarantees on every commitment.
 export const SKELETON_TRIGGER = 200;
 export const SKELETON_WINDUP = 0.55;
-export const SKELETON_LOCK = 0.35;
+export const SKELETON_LOCK = 0.25;
 export const SKELETON_LUNGE_DUR = 0.28;
 export const SKELETON_LUNGE_SPEED = 520;
 export const SKELETON_RECOVER = 0.5;
 export const SKELETON_CD = 2.0;
 
-// Spitter caster.
+// Spitter caster. Same §4 guarantees: ≥0.30s post-lock dodge, ≥0.35s recovery.
 export const SPITTER_FLEE = 160;
 export const SPITTER_APPROACH = 420;
 export const SPITTER_WINDUP = 0.7;
-export const SPITTER_LOCK = 0.45;
-export const SPITTER_RECOVER = 0.3;
+export const SPITTER_LOCK = 0.4;
+export const SPITTER_RECOVER = 0.35;
 export const SPITTER_CD = 1.8;
 export const SPITTER_SPREAD_FLOOR = 4;
 export const GLOB_SPREAD = 0.18;
@@ -85,19 +83,6 @@ export const GLOB_SPREAD = 0.18;
 export const GHOST_SOLID_RANGE = 120;
 export const GHOST_SOLID_TIME = 0.4;
 export const GHOST_SOLID_AT = 0.98;
-
-// Boss Slime King.
-export const BOSS_SLAM_RADIUS = 90;
-export const BOSS_ROAR_DUR = 0.8;
-export const BOSS_HOPSLAM_WINDUP = 0.6;
-export const BOSS_HOPSLAM_LOCK = 0.3;
-export const BOSS_HOPSLAM_AIR = 0.5;
-export const BOSS_HOPSLAM_RECOVER = 0.7;
-export const BOSS_RADIAL_WINDUP = 0.8;
-export const BOSS_RADIAL_RECOVER = 0.6;
-export const BOSS_RADIAL_COUNT = 8;
-export const BOSS_ATTACK_CD = [0, 3.5, 2.8, 2.2]; // indexed by phase 1..3
-export const BOSS_MINION_CD = 3.4;
 
 // Destructible props + chests.
 export const PROP_RADIUS = 15;
@@ -117,14 +102,6 @@ export const BARREL_EXPLOSION_SELF_DMG = 2;
 // (derived from measured RTT + interp delay) is clamped to LAGCOMP_MAX_TICKS.
 export const LAGCOMP_HISTORY = 6;    // stored past ticks (~300ms at 20Hz)
 export const LAGCOMP_MAX_TICKS = 6;  // max ticks a hit test may be rewound
-
-// Authoritative down/revive (Stage C). A player at 0 HP goes DOWN (not game-over) while a
-// teammate is still up; a living teammate standing within REVIVE_RADIUS for REVIVE_HOLD seconds
-// brings them back at REVIVE_HP with a short mercy-invuln. A full team wipe ends the run.
-export const REVIVE_RADIUS = 46;
-export const REVIVE_HOLD = 1.1;
-export const REVIVE_HP = 2;
-export const REVIVE_INVULN = 1.0;
 
 // Kill-chain combo. The multiplier is sim (drives coin value); the color is a HUD accent
 // (client) kept here so the tiers have a single source of truth.

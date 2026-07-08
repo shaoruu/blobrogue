@@ -148,10 +148,10 @@ export class GameServer {
   // backpressure recovery), and an expiry deadline — unanswered offers die instead of living as
   // forever-claimable server state.
   private applyOffers(room: RoomRuntime): void {
-    for (const pid of room.offerPlayers()) {
-      const conn = this.connForPlayer(room, pid);
+    for (const offer of room.offerPlayers()) {
+      const conn = this.connForPlayer(room, offer.pid);
       if (!conn || conn.closing) continue;
-      conn.pendingOffer = room.rollBlessingChoices();
+      conn.pendingOffer = room.rollBlessingChoices(offer.pid, offer.rare);
       conn.offerId++;
       conn.offerResendsLeft = OFFER_RESENDS;
       conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;
