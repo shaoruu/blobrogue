@@ -492,8 +492,8 @@ export class WSTransport implements Transport {
     const rp = this.renderState.players.get(LOCAL_ID)!;
     const pp = this.predState.players.get(LOCAL_ID)!;
     // Refresh the render player from the predicted one through the SAME exhaustive projection
-    // boundary reconciliation uses (playerSnapshot.ts), plus the client-owned render extras.
-    // Manual field-by-field copying here is what previously dropped inventory/mods (TD audit).
+    // boundary reconciliation uses (playerSnapshot.ts) — never a manual field list, so a new
+    // server-owned field can't silently miss the render/HUD player — plus the render extras.
     applyPlayerSnapshot(rp, projectPlayer(pp));
     rp.aimAngle = pp.aimAngle;
     rp.meleeSwing = pp.meleeSwing;
