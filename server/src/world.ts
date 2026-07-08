@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, applyItemToWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -123,9 +123,15 @@ export class GameWorld implements RoomRuntime {
   applyBlessing(pid: PlayerId, itemId: string): boolean {
     const def = itemById(itemId);
     if (!def) return false;
-    const evs = applyItemToWorld(this.state, pid, def);
+    // Resolves the sim's pending offer too: the pick ends the player's pause/damage shield
+    // and releases the party's descend gate.
+    const evs = chooseBlessingInWorld(this.state, pid, def);
     for (const e of evs) this.injectedEvents.push(e);
     return true;
+  }
+
+  dismissBlessing(pid: PlayerId): void {
+    dismissBlessingOfferInWorld(this.state, pid);
   }
 
   // Queue a validated input INTENT. Bounded (drop oldest beyond the cap) so a fast/flooding client

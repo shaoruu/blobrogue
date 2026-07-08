@@ -357,11 +357,15 @@ async function main(): Promise<void> {
       const world = s.server.getWorld()!;
       const seed0 = world.state.seed;
       const rev0 = world.state.rev;
-      // Advance the run: force floor 2 via an authoritative descend.
+      // Advance the run: force floor 2 via an authoritative descend (the exit gate offers the
+      // between-floor blessing first and holds the descend until the pick resolves).
       world.state.enemies = [];
       const d = world.state.dungeon;
       const p = world.state.players.get(bot.serverId()!)!;
       p.x = d.exit.x * TILE + TILE / 2; p.y = d.exit.y * TILE + TILE / 2;
+      await waitUntil(() => bot.transport.getPendingOfferPeek() !== null, 3000);
+      const offer = bot.transport.getPendingOfferPeek()!;
+      bot.transport.sendChooseBlessing(offer.id, offer.choices[0]);
       await waitUntil(() => world.state.floor === 2, 3000);
       check("run advanced to floor 2", world.state.floor === 2);
       bot.stop();

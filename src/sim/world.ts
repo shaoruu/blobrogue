@@ -160,6 +160,15 @@ export interface WorldState {
   enemyHist: Map<number, EnemyHist>;
   histHead: number;
   histCount: number;
+  // Authoritative pending blessing offers: pid -> seconds left to answer. An entry exists
+  // from the moment an offerBlessing event is raised until the pick is applied (or the offer
+  // expires / the player leaves). While pending, that player is PAUSED (stepPlayerPhase
+  // no-ops) and cannot be damaged, and the party's descend gate holds — a blessing is always
+  // picked on the safe side of a floor transition, never under live enemies.
+  pendingBlessings: Map<PlayerId, number>;
+  // Whether this floor's between-floor blessing offers were already raised at the exit gate
+  // (one offer per cleared non-boss floor; reset on every floor build).
+  isBlessingOfferedThisFloor: boolean;
   remoteTargets: RemoteTarget[];
   isCoop: boolean;
   // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
@@ -230,6 +239,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
+    pendingBlessings: new Map(),
+    isBlessingOfferedThisFloor: false,
     remoteTargets: [],
     isCoop: opts.isCoop ?? false,
     isShared: opts.isShared ?? false,
@@ -259,7 +270,10 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
 
 // Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
 // no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
+// Their pending blessing offer (if any) dies with them so the descend gate can't be held
+// by a player who is no longer in the world.
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
+  w.pendingBlessings.delete(id);
   return w.players.delete(id);
 }
 
@@ -301,6 +315,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.nextEnemyId = spawns.active.length + spawns.pending.length;
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
+  w.pendingBlessings.clear();
+  w.isBlessingOfferedThisFloor = false;
   w.flowCd = 0;
   w.flowKey = -1;
   w.pickups = w.isSandbox ? [] : placeWeaponPickups(w);
@@ -599,6 +615,40 @@ export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): S
   applyMaxHpBonus(p);
   if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
   return [{ t: "itemPicked", pid, x: p.x, y: p.y, tint: item.tint }];
+}
+
+// Raise a blessing offer for one player: the offerBlessing event surfaces the choice UI
+// (solo rolls locally; the server rolls + sends a validated offer), and the pending entry
+// pauses/shields that player and holds the descend gate until the pick resolves.
+function raiseBlessingOffer(w: WorldState, pid: PlayerId, rare: boolean, ev: SimEvent[]): void {
+  w.pendingBlessings.set(pid, C.BLESSING_OFFER_TTL);
+  ev.push({ t: "offerBlessing", pid, rare });
+}
+
+// Resolve a blessing OFFER with a pick: apply the item and clear the player's pending state
+// (ending their pause/shield and releasing the descend gate). This is the answer path for
+// every real offer — the solo/co-op overlay callback and the server's validated
+// chooseBlessing command; dev grants (no offer) keep calling applyItemToWorld directly.
+export function chooseBlessingInWorld(w: WorldState, pid: PlayerId, item: ItemDef): SimEvent[] {
+  w.pendingBlessings.delete(pid);
+  return applyItemToWorld(w, pid, item);
+}
+
+// Resolve a pending offer WITHOUT a pick — the roll came up empty (every blessing maxed), so
+// there is nothing to choose and the pause/gate must not wait out the TTL.
+export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void {
+  w.pendingBlessings.delete(pid);
+}
+
+// Tick pending offers on the SIM clock: an unanswered offer expires after BLESSING_OFFER_TTL
+// and the run moves on without the pick, so an AFK/hostile client can never hold the party's
+// descend gate (or their own damage shield) forever.
+function tickPendingBlessings(w: WorldState, dt: number): void {
+  if (w.pendingBlessings.size === 0) return;
+  for (const [pid, left] of w.pendingBlessings) {
+    if (left <= dt) w.pendingBlessings.delete(pid);
+    else w.pendingBlessings.set(pid, left - dt);
+  }
 }
 
 // ---- knockback ----
@@ -1936,11 +1986,13 @@ function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
 }
 
 // Boss completion recovery is the chest's +1 heart ONLY (no descent heal), and its blessing
-// offer is the floor's reward — a Rare pick (the `rare` flag steers the roll pool).
+// offer is the floor's reward — a Rare pick (the `rare` flag steers the roll pool). The boss
+// kill already cleared the floor (endBossDanger), so this offer is inherently on the safe
+// side; the pending entry still applies so a party can't descend out from under the pick.
 function grantBossChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
   w.pickups.push(makePickup(w, "heart", c.x - 18, c.y, ev));
   for (let i = 0; i < 5; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - 2) * 16, c.y + 18, ev));
-  ev.push({ t: "offerBlessing", pid: p.id, rare: true });
+  raiseBlessingOffer(w, p.id, true, ev);
 }
 
 function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -1995,6 +2047,10 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
 
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
+  // A player mid-blessing-pick cannot be hurt. Offers are only raised on the safe side of a
+  // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
+  // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
+  if (w.pendingBlessings.has(p.id)) return;
   p.hp -= amount;
   p.invuln = PLAYER.postHitInvuln;
   // Any damage cancels a revive channel the victim was holding (§2): reviving is a real
@@ -2090,9 +2146,23 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   }
   if (!anyLiving || !allAtExit) return;
   // Solo + shared server descend in-sim; the legacy Convex co-op path defers to the client's
-  // shared-floor orchestration (everyone descends together via presence).
-  if (w.isCoop) ev.push({ t: "reachExit", toFloor: w.floor + 1 });
-  else descend(w, w.floor + 1, ev);
+  // shared-floor orchestration (everyone descends together via presence, offers ride descend).
+  if (w.isCoop) {
+    ev.push({ t: "reachExit", toFloor: w.floor + 1 });
+    return;
+  }
+  // The safe-side blessing gate (spec §6 cadence, moved off the descend): with the party
+  // gathered at a cleared floor's exit, raise this floor's offers ONCE, then hold the
+  // descend until every pick resolves (or expires). The pick therefore always happens
+  // BEFORE the next floor's threats exist — never mid-fight, never as a boss floor loads.
+  // A boss floor's reward was its chest (the Rare pick), so leaving it offers nothing.
+  if (!w.isBlessingOfferedThisFloor && !isBossFloor(w.floor)) {
+    w.isBlessingOfferedThisFloor = true;
+    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
+    return;
+  }
+  if (w.pendingBlessings.size > 0) return;
+  descend(w, w.floor + 1, ev);
 }
 
 // A floor descent (solo). Co-op's shared-floor sync is orchestrated client-side; the
@@ -2100,6 +2170,14 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
 // There is NO descent heal (§2) — the descent is pacing, not a free mistake reset.
 export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void {
   const isLeavingBossFloor = isBossFloor(w.floor);
+  // Reward cadence (§6): one blessing offer per NON-BOSS descent for every player. In solo
+  // and the authoritative shared world the exit gate already raised this floor's offers on
+  // the safe side (isBlessingOfferedThisFloor — see updateExit), so the debt is paid. A
+  // descend that arrives WITHOUT the gate having offered — a legacy co-op follower pulled
+  // down by the room's shared floor, or a directly scripted descend — still owes each
+  // player their pick and offers it post-load exactly as before (those clients freeze their
+  // own local sim under the overlay, so the pick is safe there too).
+  const isOfferDue = !isLeavingBossFloor && !w.isBlessingOfferedThisFloor;
   // Recovery pity (§2): two consecutive dry non-boss floors entered below 50% HP arm a
   // guaranteed heart in the next wood chest. Any generated heart resets the streak.
   if (!isLeavingBossFloor && w.heartsThisFloor === 0 && w.isFloorEnteredLow) {
@@ -2120,12 +2198,8 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   }
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
-  // Reward cadence (§6): one blessing offer per NON-BOSS descent for every player (solo:
-  // the one LOCAL_ID player). A boss floor's reward was its chest (the Rare pick), so
-  // leaving it offers nothing. The server turns each offer into that client's seeded
-  // choice set; solo rolls its own choices client-side.
-  if (!isLeavingBossFloor) {
-    for (const p of w.players.values()) ev.push({ t: "offerBlessing", pid: p.id, rare: false });
+  if (isOfferDue) {
+    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
   }
 }
 
@@ -2137,6 +2211,10 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
 // dt (each InputCmd carries its own frame dt) while the world half runs once per fixed tick.
 // stepWorld itself calls this, so solo behavior is unchanged.
 export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+  // A player with a blessing offer open is paused: no aim, movement, or fire. Their client
+  // freezes under the overlay and sends nothing anyway; the guard makes a tampered client
+  // equally inert (it can't kite or shoot from inside the damage-shielded pick window).
+  if (w.pendingBlessings.has(p.id)) return;
   p.aimAngle = input.aim;
   if (!p.isDown) {
     updatePlayer(w, p, input, dt, ev);
@@ -2160,6 +2238,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
   checkStrandedWipe(w, ev);
+  tickPendingBlessings(w, dt);
   updateExit(w, ev);
 
   for (const p of w.players.values()) {

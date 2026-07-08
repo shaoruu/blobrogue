@@ -42,6 +42,9 @@ export interface RoomRuntime {
   // 3× an upgrade); rare = the boss-chest Rare-pool reward.
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[];
   applyBlessing(pid: PlayerId, itemId: string): boolean;
+  // Resolve a pending offer without a pick (the roll came up empty — every blessing maxed),
+  // so the sim's pick-pause and descend gate don't wait out the offer TTL.
+  dismissBlessing(pid: PlayerId): void;
 
   // Player ids whose run ended this tick (full wipe) — the server drives the leave lifecycle.
   gameOverPlayers(): PlayerId[];

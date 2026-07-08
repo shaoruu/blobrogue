@@ -25,6 +25,11 @@ export const AVOID_CLEARANCE = 5;    // px of extra clearance the detour tangent
 export const AVOID_COMMIT = 0.45;    // seconds a chosen detour side persists after the last block
 export const AVOID_SIDE_PROBE = 20;  // px beyond the body the side-clearance probes test
 
+// How long a pending blessing offer may sit unanswered (sim seconds) before it expires and
+// the run moves on without the pick. Matches the server's offer TTL default, and — because
+// it ticks on the SIM clock — it can never hold the party's descend gate hostage.
+export const BLESSING_OFFER_TTL = 60;
+
 export const MIN_MULTI_SPREAD = 0.26;
 
 // Enemy knockback impulse.

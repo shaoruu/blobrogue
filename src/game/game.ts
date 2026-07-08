@@ -14,7 +14,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -1277,17 +1277,18 @@ export class Game {
 
   // Present three blessings and freeze until the player picks one (per client; items are
   // purely local run-stat modifiers). A duplicate choice reads as its Lv2/Lv3 upgrade.
-  // Applying a pick mutates the sim via applyItemToWorld and replays its itemPicked FX.
+  // The pick resolves through chooseBlessingInWorld, which applies the item AND clears the
+  // sim's pending-offer state (releasing the descend gate the exit is holding).
   private offerBlessing(rare = false) {
     const owned = this.p.ownedItemIds;
     const choices = rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
-    if (choices.length === 0) return;
+    if (choices.length === 0) { dismissBlessingOfferInWorld(this.world, LOCAL_ID); return; }
     this.isChoosing = true;
     this.isPaused = false;
     this.mouse.isDown = false;
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
-      const events = applyItemToWorld(this.world, LOCAL_ID, item);
+      const events = chooseBlessingInWorld(this.world, LOCAL_ID, item);
       if (events.length > 0) this.ownedItemDefs.push(item);
       this.handleSimEvents(events);
       this.isChoosing = false;

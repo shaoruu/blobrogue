@@ -9,13 +9,15 @@
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest,
   stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
-  switchWeaponInWorld, acquireWeaponInWorld,
+  switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
 import { REVIVE } from "../src/sim/balance.js";
+import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
+import * as C from "../src/sim/constants.js";
 import { buildSnapshot } from "../src/net/protocol.js";
 
 let passed = 0;
@@ -368,13 +370,22 @@ function descendTests(): void {
     b.x = ex - 400; b.y = ey;
     stepWorldPhase(w, 1 / 20, []);
     check("no descend while a living teammate is away from the exit", w.floor === 1, `floor=${w.floor}`);
+    check("no blessing offered while the party is split", w.pendingBlessings.size === 0);
     b.x = ex; b.y = ey; // now both at the exit
     const ev: SimEvent[] = [];
     stepWorldPhase(w, 1 / 20, ev);
-    check("descend once ALL living players are at the exit", w.floor === 2, `floor=${w.floor}`);
-    check("descend event emitted", ev.some((e) => e.t === "descend"));
+    check("gathering at the exit first OFFERS the blessings (safe side of the transition)",
+      ev.filter((e) => e.t === "offerBlessing").length === 2 && w.floor === 1, `floor=${w.floor}`);
+    // Resolve both picks; only then does the party descend.
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[1]);
+    const ev2: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev2);
+    check("descend once ALL picks resolved (and everyone still at the exit)", w.floor === 2, `floor=${w.floor}`);
+    check("descend event emitted", ev2.some((e) => e.t === "descend"));
     check("a fresh floor-2 dungeon loaded with enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
-    check("both players offered a between-floor blessing", ev.filter((e) => e.t === "offerBlessing").length === 2);
+    check("the descend itself re-offers nothing (the gate already paid the cadence)",
+      ev2.filter((e) => e.t === "offerBlessing").length === 0);
   }
 
   section("descend: two players in the SAME world get the SAME next floor + seed + enemy layout");
@@ -388,7 +399,10 @@ function descendTests(): void {
     w.enemies = [];
     const { ex, ey } = exitCenter(w);
     a.x = ex; a.y = ey; b.x = ex; b.y = ey;
-    stepWorldPhase(w, 1 / 20, []);
+    stepWorldPhase(w, 1 / 20, []); // raises the exit-gate offers
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[0]);
+    stepWorldPhase(w, 1 / 20, []); // descends
     const snapA = buildSnapshot(w, "pA", 0, [], 0, false, {});
     const snapB = buildSnapshot(w, "pB", 0, [], 0, false, {});
     if (snapA.t === "snap" && snapB.t === "snap") {
@@ -398,6 +412,105 @@ function descendTests(): void {
       const idsB = snapB.enemies.map((e) => e.id).sort().join(",");
       check("both snapshots carry the identical enemy layout", idsA === idsB && idsA.length > 0);
     }
+  }
+}
+
+// Bug regression: "i died while picking my blessing". The offer must sit on the SAFE side of
+// the floor transition (cleared exit, before the next floor's threats exist), the chooser must
+// be paused + unhittable while the pick is open, and the descend must wait for every pick —
+// with expiry/disconnect releasing the gate so nothing can hold the run hostage.
+function blessingSafetyTests(): void {
+  const DT = 1 / 20;
+  const exitCenter = (w: WorldState) => ({ ex: w.dungeon.exit.x * TILE + TILE / 2, ey: w.dungeon.exit.y * TILE + TILE / 2 });
+  const partyAtExit = (w: WorldState): { a: PlayerSim; b: PlayerSim } => {
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const { ex, ey } = exitCenter(w);
+    a.x = ex; a.y = ey; b.x = ex; b.y = ey;
+    return { a, b };
+  };
+
+  section("blessing safety: a player mid-pick is paused and cannot be damaged");
+  {
+    const w = createWorld(0xB1E55, 1, { isShared: true, skipLocalPlayer: true });
+    const { a } = partyAtExit(w);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("offers raised at the cleared exit", ev.filter((e) => e.t === "offerBlessing").length === 2);
+    check("pending state tracks both players", w.pendingBlessings.has("pA") && w.pendingBlessings.has("pB"));
+    // A stray enemy glob (in flight when the last enemy died) crosses the chooser: no damage.
+    a.invuln = 0;
+    const hp0 = a.hp;
+    plantEnemyBullet(w, a, 3);
+    stepWorldPhase(w, DT, []);
+    check("no damage lands on a player mid-pick", a.hp === hp0, `hp=${a.hp}`);
+    // The paused player ignores movement/fire (a tampered client can't act while shielded).
+    const ax = a.x;
+    stepPlayerPhase(w, a, { seq: 1, moveX: 1, moveY: 0, aim: 0, firing: true, dash: false }, DT, []);
+    check("a mid-pick player is paused (no movement, no shot)", a.x === ax && a.shotSeq === 0);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    stepPlayerPhase(w, a, { seq: 2, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false }, DT, []);
+    check("play resumes once the pick resolves", a.x > ax);
+  }
+
+  section("blessing safety: descend waits for every pick; expiry + disconnect release the gate");
+  {
+    const w = createWorld(0xB1E56, 1, { isShared: true, skipLocalPlayer: true });
+    partyAtExit(w);
+    stepWorldPhase(w, DT, []); // raises both offers
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    stepWorldPhase(w, DT, []);
+    check("descend held while a teammate's pick is open", w.floor === 1, `floor=${w.floor}`);
+    // B never answers: the offer expires on the sim clock and the run moves on without it.
+    let ticks = 0;
+    const maxTicks = Math.ceil(C.BLESSING_OFFER_TTL / DT) + 4;
+    while (w.floor === 1 && ticks < maxTicks) { stepWorldPhase(w, DT, []); ticks++; }
+    check("an unanswered offer expires and the party descends", w.floor === 2, `after ${(ticks * DT).toFixed(1)}s`);
+    check("B got no item from the lapsed offer", w.players.get("pB")!.ownedItemIds.length === 0);
+  }
+  {
+    const w = createWorld(0xB1E57, 1, { isShared: true, skipLocalPlayer: true });
+    partyAtExit(w);
+    stepWorldPhase(w, DT, []);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    removePlayerFromWorld(w, "pB"); // mid-pick disconnect
+    stepWorldPhase(w, DT, []);
+    check("a mid-pick disconnect releases the gate immediately", w.floor === 2, `floor=${w.floor}`);
+  }
+
+  section("blessing safety: the boss-chest Rare pick also holds the descend");
+  {
+    const w = createWorld(0xB1E58, 5, { isShared: true, skipLocalPlayer: true });
+    const { a } = partyAtExit(w);
+    // The boss chest (dropped on the boss kill; the floor is already cleared by then).
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false });
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    const offer = ev.find((e) => e.t === "offerBlessing");
+    check("opening the boss chest raised the Rare offer", offer !== undefined && offer.t === "offerBlessing" && offer.rare);
+    check("boss floor exit raised no extra offer", ev.filter((e) => e.t === "offerBlessing").length === 1);
+    check("descend held for the chest pick", w.floor === 5, `floor=${w.floor}`);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    stepWorldPhase(w, DT, []);
+    check("party descends once the Rare pick resolves", w.floor === 6, `floor=${w.floor}`);
+  }
+
+  section("blessing safety: a boss floor loads with NO pick open (the playtest death)");
+  {
+    // The owner died entering floor 5: the offer used to fire AFTER the descend, with the
+    // boss floor's threats already live. Now the pick fully resolves on floor 4's exit.
+    const w = createWorld(0xB1E59, 4, { isShared: true, skipLocalPlayer: true });
+    partyAtExit(w);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("offers raised on floor 4's safe exit", ev.filter((e) => e.t === "offerBlessing").length === 2);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[1]);
+    stepWorldPhase(w, DT, []);
+    check("descended into the boss floor", w.floor === 5 && w.enemies.some((e) => e.kind === "boss"));
+    check("no pick is open while the boss floor's threats are live", w.pendingBlessings.size === 0);
   }
 }
 
@@ -697,6 +810,7 @@ function main(): void {
   propChainTests();
   weaponSwitchTests();
   descendTests();
+  blessingSafetyTests();
   propAvoidanceTests();
   lootOwnershipTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

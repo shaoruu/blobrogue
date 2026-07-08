@@ -352,8 +352,23 @@ async function main(): Promise<void> {
         }
       };
       clearAndExit();
+      // Between-floor blessings come FIRST, on the safe side of the transition: the gathered
+      // party is offered at the cleared exit and the descend HOLDS until every pick resolves.
+      const offers = await waitUntil(() => a.transport.getPendingOfferPeek() !== null && b.transport.getPendingOfferPeek() !== null, 2000);
+      check("both clients received their between-floor offers at the exit", offers);
+      check("descend held while the picks are open", world.state.floor === floor0, `floor=${world.state.floor}`);
+      const offerA = a.transport.getPendingOfferPeek()!;
+      const offerB = b.transport.getPendingOfferPeek()!;
+      const pickA = offerA.choices[0];
+      const pickB = offerB.choices.find((c) => c !== pickA) ?? offerB.choices[0];
+      a.transport.sendChooseBlessing(offerA.id, pickA);
+      b.transport.sendChooseBlessing(offerB.id, pickB);
+      await waitUntil(() => world.state.players.get(a.serverId()!)!.ownedItemIds.length === 1 && world.state.players.get(b.serverId()!)!.ownedItemIds.length === 1, 2000);
+      check("A's blessing applied server-side", world.state.players.get(a.serverId()!)!.ownedItemIds[0] === pickA);
+      check("B's blessing applied server-side", world.state.players.get(b.serverId()!)!.ownedItemIds[0] === pickB);
+
       await waitUntil(() => world.state.floor === floor0 + 1, 2000);
-      check("server descended one floor (party-wide, authoritative)", world.state.floor === floor0 + 1, `floor=${world.state.floor}`);
+      check("server descended one floor once both picks resolved (party-wide, authoritative)", world.state.floor === floor0 + 1, `floor=${world.state.floor}`);
       await sleep(300);
       const sa = a.transport.getLatestSnapshot()!;
       const sb = b.transport.getLatestSnapshot()!;
@@ -365,22 +380,16 @@ async function main(): Promise<void> {
       check("both clients see the identical new-floor enemy layout", idsA === idsB);
       check("no client sent the transition (server-owned; there is no descend message)", true);
 
-      // Between-floor blessings: BOTH clients got a server offer; each answers its own and the
-      // server applies DIFFERENT authoritative mods per player.
-      const offers = await waitUntil(() => a.transport.getPendingOfferPeek() !== null && b.transport.getPendingOfferPeek() !== null, 2000);
-      check("both clients received their between-floor offers", offers);
-      const offerA = a.transport.getPendingOfferPeek()!;
-      const offerB = b.transport.getPendingOfferPeek()!;
-      const pickA = offerA.choices[0];
-      const pickB = offerB.choices.find((c) => c !== pickA) ?? offerB.choices[0];
-      a.transport.sendChooseBlessing(offerA.id, pickA);
-      b.transport.sendChooseBlessing(offerB.id, pickB);
-      await waitUntil(() => world.state.players.get(a.serverId()!)!.ownedItemIds.length === 1 && world.state.players.get(b.serverId()!)!.ownedItemIds.length === 1, 2000);
-      check("A's blessing applied server-side", world.state.players.get(a.serverId()!)!.ownedItemIds[0] === pickA);
-      check("B's blessing applied server-side", world.state.players.get(b.serverId()!)!.ownedItemIds[0] === pickB);
-
-      // Second descend: a REAL multi-floor run, blessings carried across floors.
+      // Second descend: a REAL multi-floor run, blessings carried across floors. The bots never
+      // consume their offers (only the game does), so wait for a NEW offer id past round one.
       clearAndExit();
+      const offers2 = await waitUntil(() =>
+        (a.transport.getPendingOfferPeek()?.id ?? 0) > offerA.id && (b.transport.getPendingOfferPeek()?.id ?? 0) > offerB.id, 2000);
+      check("second exit gate offered again", offers2);
+      const oA2 = a.transport.getPendingOfferPeek()!;
+      const oB2 = b.transport.getPendingOfferPeek()!;
+      a.transport.sendChooseBlessing(oA2.id, oA2.choices[0]);
+      b.transport.sendChooseBlessing(oB2.id, oB2.choices[0]);
       await waitUntil(() => world.state.floor === floor0 + 2, 2000);
       check("second party-wide descend reached floor 3", world.state.floor === floor0 + 2, `floor=${world.state.floor}`);
       await sleep(300);
