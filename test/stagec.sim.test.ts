@@ -14,7 +14,7 @@ import {
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
-import { REVIVE_HP } from "../src/sim/constants.js";
+import { REVIVE } from "../src/sim/balance.js";
 import { TILE } from "../src/sim/types.js";
 import { buildSnapshot } from "../src/net/protocol.js";
 
@@ -178,7 +178,7 @@ function downReviveTests(): void {
       if (ev.some((x) => x.t === "revive" && (x as { pid: string }).pid === a.id)) revived = true;
     }
     check("A revived by B", revived && !a.isDown, `after ${ticks} ticks`);
-    check("A returns at the revive HP", a.hp === REVIVE_HP, `hp=${a.hp}`);
+    check("A returns at the revive HP", a.hp === REVIVE.hp, `hp=${a.hp}`);
     check("A briefly invulnerable after revive", a.invuln > 0);
   }
 

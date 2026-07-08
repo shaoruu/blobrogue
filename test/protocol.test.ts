@@ -47,9 +47,9 @@ function mulberry(seed: number): () => number {
 function distinctivePlayer(): PlayerSim {
   const p = createPlayer("pX", 1234.5, -678.25);
   p.hp = 7; p.maxHp = 11;
-  p.invuln = 0.375;
+  p.invuln = 0.375; p.dashInvuln = 0.125;
   p.dashCd = 0.5; p.dashTime = 0.0625; p.dashDx = -0.6; p.dashDy = 0.8;
-  p.fireCd = 0.11;
+  p.fireCd = 0.11; p.fangCd = 0.85;
   p.facing = -1;
   p.weapon = "railgun";
   p.ownedWeapons = ["pistol", "railgun", "tesla"];
@@ -109,7 +109,7 @@ function serverRoundTripTests(): void {
   devSpawnEnemy(w, "boss", me.x + 200, me.y);
   w.bullets.push({ x: me.x + 10, y: me.y + 5, vx: 250, vy: -40, radius: 5, life: 1, friendly: true, owner: "pMe", damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false, fx: "pistol" });
   const events: WireEvent[] = [
-    { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", x: 10, y: 20, combo: 3 } },
+    { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3 } },
     { id: 8, e: { t: "descend", toFloor: 3 } },
     { id: 9, e: { t: "gameOver", pid: "pMe" } },
   ];
@@ -234,7 +234,7 @@ function eventScopeTests(): void {
     [{ t: "descend", toFloor: 2 }, "global"],
     [{ t: "bossPhase", eid: 3, x: 5, y: 6 }, "global"],
     [{ t: "gameOver", pid: "p1" }, "pid"],
-    [{ t: "enemyKill", eid: 1, kind: "slime", x: 3, y: 4, combo: 0 }, "pos"],
+    [{ t: "enemyKill", eid: 1, kind: "slime", tier: "standard", x: 3, y: 4, combo: 0 }, "pos"],
   ];
   for (const [e, kind] of cases) {
     check(`${e.t} -> ${kind}`, eventScope(e).kind === kind, `got=${eventScope(e).kind}`);

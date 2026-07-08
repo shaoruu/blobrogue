@@ -10,7 +10,7 @@ export function r(n: number): number {
 
 export interface PlayerView {
   x: number; y: number; hp: number; maxHp: number;
-  fireCd: number; dashCd: number; dashTime: number; invuln: number;
+  fireCd: number; dashCd: number; dashTime: number; invuln: number; dashInvuln: number;
   weapon: string; ownedWeapons: string; kills: number; coins: number; combo: number; comboTimer: number;
   shotSeq: number; facing: number;
   // item mods that shots read (proves synergies applied identically)
@@ -19,12 +19,13 @@ export interface PlayerView {
 }
 
 export interface EnemyView {
-  kind: string; x: number; y: number; hp: number; maxHp: number; vx: number; vy: number;
+  kind: string; tier: string; x: number; y: number; hp: number; maxHp: number; vx: number; vy: number;
   zig: number; spawnTimer: number; stuckTimer: number;
   burn: number; burnDmg: number; chill: number; shock: number; statusTick: number;
   phase: string; atkTime: number; move: string; windup: number; cooldown: number;
   lockedAngle: number; isAimLocked: boolean; markX: number; markY: number;
-  bossPhase: number; minionTimer: number; isNextRadial: boolean; burstParity: number;
+  bossPhase: number; addTimer: number; isNextRadial: boolean; burstParity: number;
+  attackCount: number; transitionsDone: number; roarQueued: number;
 }
 
 export interface BulletView {
@@ -58,7 +59,8 @@ function num(v: unknown): number {
 export function playerView(p: Anyish, mods: Anyish): PlayerView {
   return {
     x: r(num(p.x)), y: r(num(p.y)), hp: r(num(p.hp)), maxHp: r(num(p.maxHp)),
-    fireCd: r(num(p.fireCd)), dashCd: r(num(p.dashCd)), dashTime: r(num(p.dashTime)), invuln: r(num(p.invuln)),
+    fireCd: r(num(p.fireCd)), dashCd: r(num(p.dashCd)), dashTime: r(num(p.dashTime)),
+    invuln: r(num(p.invuln)), dashInvuln: r(num(p.dashInvuln)),
     weapon: String(p.weapon), ownedWeapons: Array.isArray(p.ownedWeapons) ? (p.ownedWeapons as string[]).join(",") : "",
     kills: num(p.kills), coins: num(p.coins), combo: num(p.combo), comboTimer: r(num(p.comboTimer)),
     shotSeq: num(p.shotSeq), facing: num(p.facing),
@@ -71,15 +73,18 @@ export function playerView(p: Anyish, mods: Anyish): PlayerView {
 export function enemyView(e: Anyish): EnemyView {
   const a = e.attack as Anyish;
   const boss = (e.boss as Anyish) ?? null;
+  const roar = boss ? ((boss.roar as Anyish) ?? null) : null;
   return {
-    kind: String(e.kind), x: r(num(e.x)), y: r(num(e.y)), hp: r(num(e.hp)), maxHp: r(num(e.maxHp)),
+    kind: String(e.kind), tier: String(e.tier), x: r(num(e.x)), y: r(num(e.y)), hp: r(num(e.hp)), maxHp: r(num(e.maxHp)),
     vx: r(num(e.vx)), vy: r(num(e.vy)), zig: r(num(e.zig)), spawnTimer: r(num(e.spawnTimer)), stuckTimer: r(num(e.stuckTimer)),
     burn: r(num(e.burn)), burnDmg: r(num(e.burnDmg)), chill: r(num(e.chill)), shock: r(num(e.shock)), statusTick: r(num(e.statusTick)),
     phase: String(a.phase), atkTime: r(num(a.time)), move: String(a.move), windup: r(num(a.windup)),
     cooldown: r(num(a.cooldown)), lockedAngle: r(num(a.lockedAngle)), isAimLocked: Boolean(a.isAimLocked),
     markX: r(num(a.markX)), markY: r(num(a.markY)),
-    bossPhase: boss ? num(boss.phase) : 0, minionTimer: boss ? r(num(boss.minionTimer)) : 0,
+    bossPhase: boss ? num(boss.phase) : 0, addTimer: boss ? r(num(boss.addTimer)) : 0,
     isNextRadial: boss ? Boolean(boss.isNextRadial) : false, burstParity: boss ? num(boss.burstParity) : 0,
+    attackCount: boss ? num(boss.attackCount) : 0, transitionsDone: boss ? num(boss.transitionsDone) : 0,
+    roarQueued: roar ? r(num(roar.queued)) : 0,
   };
 }
 
