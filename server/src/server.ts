@@ -142,7 +142,9 @@ export class GameServer {
       return;
     }
     const events = full ? [] : world.lastEvents;
-    const msg = buildSnapshot(world.state, conn.playerId!, conn.lastAppliedSeq, events, full);
+    // Full snapshots (join) send everything to bootstrap; per-tick snapshots are interest-filtered.
+    const interestRadius = full ? 0 : this.cfg.interestRadius;
+    const msg = buildSnapshot(world.state, conn.playerId!, conn.lastAppliedSeq, events, full, { interestRadius });
     const raw = jsonCodec.encodeServer(msg);
     try {
       conn.ws.send(raw);

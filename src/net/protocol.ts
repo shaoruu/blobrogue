@@ -301,16 +301,50 @@ export function bulletFromWire(b: BulletWire): Bullet {
 // Snapshot the current server world into a full ServerMsg body for one client. The client's
 // own player becomes `self`; everyone else becomes a PlayerWire. events are supplied by the
 // caller (accumulated over the ticks since this client's last snapshot).
+export interface SnapshotOpts {
+  // Interest radius in px around the client's own player. Entities outside it are omitted from
+  // this client's snapshot (the primary bandwidth + CPU lever @ Stage C). <= 0 disables the
+  // filter (send everything) — the default, so direct callers/tests keep full snapshots.
+  interestRadius?: number;
+}
+
+// Interest management (Stage C): a client always receives its OWN player + globally-relevant
+// state (the boss enemy and the boss chest — the shared objective) and, in addition, only the
+// nearby players/enemies/bullets/props/pickups/chests within its interest radius. A simple
+// distance filter is enough for a single bounded floor (a spatial index is Stage E).
 export function buildSnapshot(
   w: WorldState,
   selfPid: PlayerId,
   ackSeq: number,
   events: SimEvent[],
   full: boolean,
+  opts: SnapshotOpts = {},
 ): ServerMsg {
   const self = w.players.get(selfPid);
+  const r = opts.interestRadius ?? 0;
+  const r2 = r * r;
+  const sx = self ? self.x : 0;
+  const sy = self ? self.y : 0;
+  // No radius, or we don't know where this client is yet -> send everything.
+  const near = (x: number, y: number): boolean => {
+    if (r <= 0 || !self) return true;
+    const dx = x - sx, dy = y - sy;
+    return dx * dx + dy * dy <= r2;
+  };
+
   const players: PlayerWire[] = [];
-  for (const p of w.players.values()) if (p.id !== selfPid) players.push(toPlayerWire(p));
+  for (const p of w.players.values()) if (p.id !== selfPid && near(p.x, p.y)) players.push(toPlayerWire(p));
+  const enemies: EnemyWire[] = [];
+  for (const e of w.enemies) if (e.kind === "boss" || near(e.x, e.y)) enemies.push(toEnemyWire(e));
+  const bullets: BulletWire[] = [];
+  for (const b of w.bullets) if (near(b.x, b.y)) bullets.push(toBulletWire(b));
+  const props: PropWire[] = [];
+  for (const p of w.props) if (near(p.x, p.y)) props.push(toPropWire(p));
+  const pickups: PickupWire[] = [];
+  for (const p of w.pickups) if (near(p.x, p.y)) pickups.push(toPickupWire(p));
+  const chests: ChestWire[] = [];
+  for (const c of w.chests) if (c.kind === "boss" || near(c.x, c.y)) chests.push(toChestWire(c));
+
   return {
     t: "snap",
     tick: w.tick,
@@ -320,11 +354,11 @@ export function buildSnapshot(
     floor: w.floor,
     self: self ? toSelfWire(self) : null,
     players,
-    enemies: w.enemies.map(toEnemyWire),
-    bullets: w.bullets.map(toBulletWire),
-    props: w.props.map(toPropWire),
-    pickups: w.pickups.map(toPickupWire),
-    chests: w.chests.map(toChestWire),
+    enemies,
+    bullets,
+    props,
+    pickups,
+    chests,
     events,
   };
 }

@@ -25,6 +25,8 @@ export interface ServerConfig {
   // anti-cheat step clamps
   maxInputDt: number;         // per-input dt cap (seconds)
   maxTickDtPerPlayer: number; // total simulated dt per player per tick (speed-hack cap)
+  // interest management: per-client snapshot radius in px (0 disables filtering)
+  interestRadius: number;
 }
 
 function intEnv(env: NodeJS.ProcessEnv, key: string, def: number): number {
@@ -52,5 +54,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxStarveTicks: intEnv(env, "GS_MAX_STARVE_TICKS", 10),
     maxInputDt: 0.05,          // one server step; a client can't advance faster per input
     maxTickDtPerPlayer: 0.10,  // <= 2 ticks of movement per tick even under input floods
+    interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 1100), // ~1.5x viewport half-extent; 0 = off
   };
 }

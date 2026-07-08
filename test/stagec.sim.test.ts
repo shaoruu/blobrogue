@@ -14,6 +14,7 @@ import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
 import { REVIVE_HP } from "../src/sim/constants.js";
+import { buildSnapshot } from "../src/net/protocol.js";
 
 let passed = 0;
 let failed = 0;
@@ -257,10 +258,38 @@ function lagCompTests(): void {
   }
 }
 
+function interestTests(): void {
+  section("interest mgmt: distant entities are excluded, own player + boss objective always sent");
+  {
+    const w = createWorld(0xC0FFEE, 1, { isSandbox: true, skipLocalPlayer: true });
+    const me = spawnPlayerInWorld(w, "pMe");
+    me.x = 300; me.y = 300;
+    const nearSlime = devSpawnEnemy(w, "slime", 360, 340);   // ~72px away -> in range
+    const farSlime = devSpawnEnemy(w, "slime", 1400, 1000);  // far -> out of range
+    const boss = devSpawnEnemy(w, "boss", 1500, 1000);       // far, but a GLOBAL objective
+    devSpawnProp(w, "crate", 380, 320);                       // near -> in
+    devSpawnProp(w, "crate", 1450, 980);                      // far -> out
+
+    const snap = buildSnapshot(w, "pMe", 0, [], false, { interestRadius: 400 });
+    if (snap.t !== "snap") { check("snapshot built", false); return; }
+    const ids = new Set(snap.enemies.map((e) => e.id));
+    check("own player is always included", snap.self !== null);
+    check("nearby enemy included", ids.has(nearSlime.id));
+    check("distant enemy excluded", !ids.has(farSlime.id));
+    check("boss included regardless of distance (global objective)", ids.has(boss.id));
+    check("nearby prop included, distant prop excluded", snap.props.length === 1, `props=${snap.props.length}`);
+
+    // No filter (radius 0) -> everything is sent (full-snapshot / bootstrap path).
+    const fullSnap = buildSnapshot(w, "pMe", 0, [], true, { interestRadius: 0 });
+    if (fullSnap.t === "snap") check("radius 0 sends all enemies", fullSnap.enemies.length === 3, `enemies=${fullSnap.enemies.length}`);
+  }
+}
+
 function main(): void {
   ownershipTests();
   downReviveTests();
   lagCompTests();
+  interestTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll Stage-C sim assertions passed.\n");
