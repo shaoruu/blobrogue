@@ -404,6 +404,7 @@ export class Game {
 
   private isRunning = false;
   private last = 0;
+  private simAccum = 0; // fixed-timestep accumulator (seconds) for smooth framerate-independent sim
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
@@ -644,7 +645,17 @@ export class Game {
     if (this.freeze > 0) {
       this.freeze = Math.max(0, this.freeze - dt);
     } else {
-      this.tick(dt);
+      // Fixed-timestep sim: step in constant FIXED_DT chunks so movement advances the same
+      // amount every step regardless of frame rate — removes variable-dt micro-jitter. Leftover
+      // time carries in the accumulator; cap the catch-up so a long stall can't spiral.
+      const FIXED_DT = 1 / 60;
+      this.simAccum = Math.min(this.simAccum + dt, FIXED_DT * 5);
+      let steps = 0;
+      while (this.simAccum >= FIXED_DT && steps < 5) {
+        this.tick(FIXED_DT);
+        this.simAccum -= FIXED_DT;
+        steps++;
+      }
     }
     this.render();
     this.hud.tick(dt);
@@ -860,7 +871,7 @@ export class Game {
     {
       const tx = this.px - this.canvas.width / 2;
       const ty = this.py - this.canvas.height / 2;
-      const k = 1 - Math.pow(0.0015, dt); // ~tight follow, frame-rate independent
+      const k = 1 - Math.pow(0.000001, dt); // very tight follow; movement is already smooth (fixed-step)
       this.cam.x += (tx - this.cam.x) * k;
       this.cam.y += (ty - this.cam.y) * k;
     }
