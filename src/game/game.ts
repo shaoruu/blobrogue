@@ -132,11 +132,12 @@ interface MeleeFeel {
   hitTrauma: number;
   hitFreeze: number;
   bladeSize: number; // held blade draw size in px (the 40px art scaled up)
+  artAngle: number;  // baked-in angle of the blade axis in the art (rad; measured tip-ward)
 }
 const MELEE_FEEL: Partial<Record<WeaponId, MeleeFeel>> = {
-  sword: { swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7, hitTrauma: 0.12, hitFreeze: 0.045, bladeSize: 46 },
-  longsword: { swingSfx: "heavySwing", swingRate: 1, swingGain: 1, hitTrauma: 0.22, hitFreeze: 0.07, bladeSize: 56 },
-  spear: { swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6, hitTrauma: 0.15, hitFreeze: 0.05, bladeSize: 58 },
+  sword: { swingSfx: "meleeSwing", swingRate: 1.12, swingGain: 0.7, hitTrauma: 0.12, hitFreeze: 0.045, bladeSize: 46, artAngle: -0.31 },
+  longsword: { swingSfx: "heavySwing", swingRate: 1, swingGain: 1, hitTrauma: 0.22, hitFreeze: 0.07, bladeSize: 56, artAngle: -0.45 },
+  spear: { swingSfx: "meleeSwing", swingRate: 1.3, swingGain: 0.6, hitTrauma: 0.15, hitFreeze: 0.05, bladeSize: 58, artAngle: -0.43 },
 };
 const MELEE_HIT_TRAUMA = 0.14; // fallback thump when the striker's weapon is unknown (remote hits)
 const MELEE_CLASH_FREEZE = 0.055; // extra stop when a swing connects mid enemy attack (the "parry")
@@ -2987,22 +2988,21 @@ export class Game {
     const sy = this.py - cam.y;
     const inner = 12;
     const outer = swing.reach * (0.9 + 0.1 * Math.sin(t * Math.PI));
-    const SEGS = 9;
-    const SPAN = 0.55; // how far back (in swing-progress units) the ribbon reaches
+    const SEGS = 10;
+    const fadeOut = 1 - t * t; // the whole crescent dissolves as the swing settles
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.translate(sx, sy);
     ctx.fillStyle = swing.color;
+    // The full swept crescent so far (swing start -> blade), brightest at the blade and
+    // fading toward the tail — a real slash arc, not a momentary sliver.
     for (let i = 0; i < SEGS; i++) {
-      const u1 = t - SPAN * (i / SEGS);
-      if (u1 <= 0) break;
-      const u0 = Math.max(0, t - SPAN * ((i + 1) / SEGS));
-      const a1 = this.swingBladeAngle(swing, u1);
-      const a0 = this.swingBladeAngle(swing, u0);
+      const s0 = i / SEGS, s1 = (i + 1) / SEGS; // 0 = tail (swing start), 1 = head (blade)
+      const a0 = this.swingBladeAngle(swing, t * s0);
+      const a1 = this.swingBladeAngle(swing, t * s1);
       if (Math.abs(a1 - a0) < 0.002) continue;
-      const fade = 1 - i / SEGS; // newest segment brightest
-      ctx.globalAlpha = 0.4 * fade * fade * (1 - t * 0.25);
-      const ro = outer * (0.82 + 0.18 * fade); // tail tapers inward
+      ctx.globalAlpha = 0.5 * Math.pow(s1, 1.4) * fadeOut;
+      const ro = outer * (0.78 + 0.22 * s1); // tail tapers inward
       const ccw = a1 < a0;
       ctx.beginPath();
       ctx.arc(0, 0, ro, a0, a1, ccw);
@@ -3014,14 +3014,14 @@ export class Game {
     const head = this.swingBladeAngle(swing, t);
     const hx = Math.cos(head), hy = Math.sin(head);
     ctx.lineCap = "round";
-    ctx.globalAlpha = 0.55 * (1 - t * 0.4);
+    ctx.globalAlpha = 0.6 * fadeOut;
     ctx.strokeStyle = swing.color;
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.moveTo(hx * inner, hy * inner);
     ctx.lineTo(hx * outer, hy * outer);
     ctx.stroke();
-    ctx.globalAlpha = 0.85 * (1 - t * 0.5);
+    ctx.globalAlpha = 0.9 * fadeOut;
     ctx.strokeStyle = "#ffffff";
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -3097,7 +3097,9 @@ export class Game {
   private renderHeldMelee(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, swing: MeleeSwing | null) {
     const img = this.sprites.heldWeapon(weapon);
     if (!img) { this.renderHeldWeapon(cx, cy, aim, weapon, alpha); return; }
-    const d = MELEE_FEEL[weapon]?.bladeSize ?? 46;
+    const feel = MELEE_FEEL[weapon];
+    const d = feel?.bladeSize ?? 46;
+    const artAngle = feel?.artAngle ?? 0;
     const isSwinging = swing !== null && swing.timer > 0;
     let angle = aim;
     let stretch = 0;
@@ -3119,19 +3121,23 @@ export class Game {
     const anchor = d * 0.55 + stretch;
     // Ghost smears behind an arcing blade sell the speed of the sweep.
     if (isSwinging && !swing.isThrust) {
-      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.22), anchor, d * scale, alpha * 0.16, isFlip);
-      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.11), anchor, d * scale, alpha * 0.32, isFlip);
+      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.22), anchor, d * scale, alpha * 0.16, isFlip, artAngle);
+      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.11), anchor, d * scale, alpha * 0.32, isFlip, artAngle);
     }
-    this.drawBlade(img, cx, cy, angle, anchor, d * scale, alpha, isFlip);
+    this.drawBlade(img, cx, cy, angle, anchor, d * scale, alpha, isFlip, artAngle);
   }
 
-  private drawBlade(img: HTMLImageElement, cx: number, cy: number, angle: number, anchor: number, d: number, alpha: number, isFlip: boolean) {
+  // Draws blade art so its ACTUAL blade axis (the art carries a baked diagonal — artAngle)
+  // lands exactly on `angle`: rotate to aim, mirror if aiming left, then back out the art's
+  // own tilt inside that frame so the tip points precisely where the hitbox says.
+  private drawBlade(img: HTMLImageElement, cx: number, cy: number, angle: number, anchor: number, d: number, alpha: number, isFlip: boolean, artAngle: number) {
     const { ctx } = this;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(cx + Math.cos(angle) * anchor, cy + Math.sin(angle) * anchor);
     ctx.rotate(angle);
     if (isFlip) ctx.scale(1, -1);
+    ctx.rotate(-artAngle);
     ctx.drawImage(img, -d / 2, -d / 2, d, d);
     ctx.restore();
   }
