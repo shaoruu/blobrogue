@@ -19,10 +19,11 @@ import type { RemotePlayer } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
+  propFromWire, pickupFromWire, chestFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION,
   type ServerMsg,
 } from "../net/protocol.js";
-import type { Enemy, Bullet } from "../sim/types.js";
+import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
 
 // Minimal socket surface (a subset shared by browser WebSocket and the `ws` package).
 export interface SocketLike {
@@ -232,6 +233,11 @@ export class WSTransport implements Transport {
     }
     this.interp.retain(live);
 
+    // Props are near-static shared state; mirror them into the PREDICTED world so local movement
+    // prediction collides with the same barrels/crates the server does (no rubber-band near
+    // props). They only change on break, so rebuilding per snapshot is cheap.
+    this.predState.props = snap.props.map(propFromWire);
+
     // Queue juice: keep global (enemy/world) events + this client's own player events.
     for (const e of snap.events) {
       const pid = pidOf(e);
@@ -310,6 +316,10 @@ export class WSTransport implements Transport {
 
     this.renderState.enemies = this.composeEnemies();
     this.renderState.bullets = this.composeBullets();
+    this.renderState.props = this.composeProps();
+    this.renderState.pickups = this.composePickups();
+    this.renderState.chests = this.composeChests();
+    this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
 
     const events = this.events;
     this.events = [];
@@ -342,6 +352,21 @@ export class WSTransport implements Transport {
       out.push(b);
     }
     return out;
+  }
+
+  // Shared world content rebuilt from the authoritative snapshot (discrete state; rendered
+  // directly, no interpolation — they only change on break/open/collect).
+  private composeProps(): Prop[] {
+    const snap = this.latestSnap;
+    return snap ? snap.props.map(propFromWire) : [];
+  }
+  private composePickups(): Pickup[] {
+    const snap = this.latestSnap;
+    return snap ? snap.pickups.map(pickupFromWire) : [];
+  }
+  private composeChests(): Chest[] {
+    const snap = this.latestSnap;
+    return snap ? snap.chests.map(chestFromWire) : [];
   }
 
   private copyPlayer(dst: PlayerSim, src: PlayerSim): void {

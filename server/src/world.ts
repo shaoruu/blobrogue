@@ -6,7 +6,7 @@
 // few server-owned enemies. Enemies chase whatever players are connected. All dynamic state
 // (players/enemies/bullets) rides the snapshot; the static arena the client rebuilds locally.
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -31,24 +31,39 @@ export class GameWorld {
 
   constructor(id: string) {
     this.id = id;
-    // Arena world: fixed walls, no props/pickups/chests clutter, no implicit local player.
+    // Stage C combat arena: fixed walls (no descend), no implicit local player. Seeded with a
+    // boss, a spread of enemy archetypes, an explosive-barrel chain + breakables, and a chest,
+    // so every server-owned combat subsystem (AI, projectiles, collision, status, explosions,
+    // loot) is exercised and identical for all clients.
     this.state = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { isSandbox: true, skipLocalPlayer: true });
-    this.seedEnemies();
+    this.seedStageC();
   }
 
-  // A deterministic handful of enemies placed around the arena center. They read the players
-  // map as aggro targets, so they only chase once someone joins.
-  private seedEnemies(): void {
+  // A deterministic combat layout around the arena center. Enemies read the players map as
+  // aggro targets, so they only chase once someone joins. Kept lean enough to stay well within
+  // the per-tick + snapshot-size budgets.
+  private seedStageC(): void {
     const s = this.state.dungeon.spawn;
     const cx = s.x * TILE + TILE / 2;
     const cy = s.y * TILE + TILE / 2;
-    const layout: Array<{ kind: Parameters<typeof devSpawnEnemy>[1]; dx: number; dy: number }> = [
-      { kind: "slime", dx: -220, dy: -160 },
-      { kind: "slime", dx: 240, dy: -140 },
-      { kind: "bat", dx: -60, dy: -260 },
-      { kind: "skeleton", dx: 200, dy: 180 },
+    const enemies: Array<{ kind: Parameters<typeof devSpawnEnemy>[1]; dx: number; dy: number }> = [
+      { kind: "boss", dx: 0, dy: -300 },
+      { kind: "slime", dx: -260, dy: -120 },
+      { kind: "slime", dx: 280, dy: -120 },
+      { kind: "bat", dx: -120, dy: -320 },
+      { kind: "skeleton", dx: 260, dy: 180 },
+      { kind: "spitter", dx: -320, dy: 140 },
     ];
-    for (const l of layout) devSpawnEnemy(this.state, l.kind, cx + l.dx, cy + l.dy);
+    for (const l of enemies) devSpawnEnemy(this.state, l.kind, cx + l.dx, cy + l.dy);
+
+    // Two adjacent explosive barrels (chain reaction) plus a crate + pot to break.
+    devSpawnProp(this.state, "barrel_explosive", cx - 90, cy + 210);
+    devSpawnProp(this.state, "barrel_explosive", cx - 50, cy + 210);
+    devSpawnProp(this.state, "crate", cx + 90, cy + 210);
+    devSpawnProp(this.state, "pot", cx + 140, cy + 210);
+
+    // A wood chest players can open (touch / shoot / melee) — shared loot.
+    devSpawnChest(this.state, cx - 220, cy + 260);
   }
 
   get playerCount(): number {

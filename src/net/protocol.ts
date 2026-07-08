@@ -8,7 +8,8 @@
 // the client sends INPUTS ONLY (never outcomes/positions/hits) — the core anti-cheat rule.
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
-import type { Enemy, Bullet, EnemyKind, WeaponId, AttackPhase, AttackMove } from "../sim/types.js";
+import type { Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove, PropKind, PickupKind, ChestKind } from "../sim/types.js";
+import { PROP_RADIUS } from "../sim/constants.js";
 import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
 
@@ -74,6 +75,14 @@ export interface BulletWire {
   fx: WeaponId | null;
 }
 
+// Shared world content (Stage C): every client sees the SAME authoritative props/pickups/
+// chests, so loot/objective state is identical. These are near-static (state flips on break/
+// open/collect), so they ride the snapshot as discrete values — no interpolation needed. The
+// client rebuilds radius from kind, keeping the wire tiny.
+export interface PropWire { id: number; kind: PropKind; x: number; y: number; brk: number } // brk<0 => intact
+export interface PickupWire { kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number } // val<0 => face value
+export interface ChestWire { kind: ChestKind; x: number; y: number; op: boolean; opt: number } // opt<0 => not yet open
+
 // ---- messages ----
 
 // Client -> server. The client authors INPUTS ONLY.
@@ -91,10 +100,14 @@ export type ServerMsg =
       full: boolean;            // initial (full) snapshot on join (carries no events)
       selfId: PlayerId;         // this client's server-assigned id (on every snap so a dropped
                                 // join snapshot never loses identity)
+      floor: number;            // shared floor number (objective/HUD)
       self: SelfWire | null;    // authoritative local player (null until spawned)
-      players: PlayerWire[];    // OTHER players (B: all)
+      players: PlayerWire[];    // OTHER players (interest-filtered @ C)
       enemies: EnemyWire[];
       bullets: BulletWire[];
+      props: PropWire[];        // shared destructibles
+      pickups: PickupWire[];    // shared loot on the ground
+      chests: ChestWire[];      // shared chests (incl. the boss chest)
       events: SimEvent[];       // events since last snap -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
@@ -248,6 +261,30 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
   };
 }
 
+export function toPropWire(p: Prop): PropWire {
+  return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
+}
+export function toPickupWire(p: Pickup): PickupWire {
+  return { kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1 };
+}
+export function toChestWire(c: Chest): ChestWire {
+  return { kind: c.kind, x: c.x, y: c.y, op: c.opened, opt: c.openT ?? -1 };
+}
+
+// Radius reconstructed from kind so the wire stays tiny. Matches the sim's placement radii
+// (constants.PROP_RADIUS for props; pickups 13/16; chests 16/18) so client collision +
+// pickup ranges agree with the server.
+export function propFromWire(w: PropWire): Prop {
+  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: PROP_RADIUS, hp: 1, dead: w.brk >= 0, breakT: w.brk < 0 ? undefined : w.brk };
+}
+export function pickupFromWire(w: PickupWire): Pickup {
+  const radius = w.kind === "weapon" ? 16 : 13;
+  return { kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val };
+}
+export function chestFromWire(w: ChestWire): Chest {
+  return { kind: w.kind, x: w.x, y: w.y, radius: w.kind === "boss" ? 18 : 16, opened: w.op, openT: w.opt < 0 ? undefined : w.opt };
+}
+
 export function bulletFromWire(b: BulletWire): Bullet {
   return {
     x: b.x, y: b.y, vx: b.vx, vy: b.vy, radius: b.r, life: 1, friendly: b.friend,
@@ -275,10 +312,14 @@ export function buildSnapshot(
     ackSeq,
     full,
     selfId: selfPid,
+    floor: w.floor,
     self: self ? toSelfWire(self) : null,
     players,
     enemies: w.enemies.map(toEnemyWire),
     bullets: w.bullets.map(toBulletWire),
+    props: w.props.map(toPropWire),
+    pickups: w.pickups.map(toPickupWire),
+    chests: w.chests.map(toChestWire),
     events,
   };
 }
