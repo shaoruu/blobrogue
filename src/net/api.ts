@@ -98,6 +98,10 @@ export const api = {
     signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),
     signOut: makeFunctionReference<"action", Record<string, never>, null>("auth:signOut"),
   },
+  gsTicket: {
+    // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).
+    mint: makeFunctionReference<"action", { clientId: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
+  },
   rooms: {
     create: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
     quickPlay: makeFunctionReference<"mutation", { playerId: string }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),

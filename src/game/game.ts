@@ -6,7 +6,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { rollItemChoices } from "../sim/items.js";
+import { rollItemChoices, itemById } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
@@ -299,8 +299,10 @@ export class Game {
   private enemyAnims = new Map<number, Anim>();
   private enemyAnimPos = new Map<number, { x: number; y: number }>();
   private propAnims = new Map<number, Anim>();
-  private pickupAnims = new WeakMap<Pickup, Anim>();
-  private chestAnims = new WeakMap<Chest, Anim>();
+  // Keyed by the sim's stable per-floor id (like enemies/props): online rebuilds pickup/chest
+  // objects from each snapshot, so object-identity keying would reset the idle anim 20x/s.
+  private pickupAnims = new Map<number, Anim>();
+  private chestAnims = new Map<number, Anim>();
 
   private keys = new Set<string>();
   private mouse = { x: 0, y: 0, isDown: false };
@@ -444,9 +446,15 @@ export class Game {
     this.profile = opts.profile ?? null;
     let floor: number;
     if (this.mode === "online" && opts.online) {
-      // Online: the SERVER owns the world. Bind WSTransport; seed/floor are the fixed Stage-B
-      // arena the client rebuilds locally for prediction (WSTransport ignores the passed args).
-      this.wsTransport = new WSTransport({ url: opts.online.url, getTicket: opts.online.getTicket });
+      // Online: the SERVER owns the world (seed/floor/dungeon). WSTransport boots a placeholder
+      // world for pre-join prediction; the first snapshot's authoritative seed/floor/rev rebuilds
+      // it (consumeWorldRebuilt below refreshes the cosmetic floor state to match). A transport
+      // terminal state (closed/error) while running ends the run — never a stranded session.
+      this.wsTransport = new WSTransport({
+        url: opts.online.url,
+        getTicket: opts.online.getTicket,
+        onStatus: (s) => this.onOnlineStatus(s),
+      });
       this.seed = STAGE_B_SEED;
       floor = STAGE_B_FLOOR;
       this.transport.start(this.seed, floor, { isSandbox: true, isCoop: false });
@@ -518,6 +526,8 @@ export class Game {
     this.enemyAnims.clear();
     this.enemyAnimPos.clear();
     this.propAnims.clear();
+    this.pickupAnims.clear();
+    this.chestAnims.clear();
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
     if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
@@ -612,13 +622,13 @@ export class Game {
     return a;
   }
   private animForPickup(p: Pickup): Anim {
-    let a = this.pickupAnims.get(p);
-    if (!a) { a = createAnim(); this.pickupAnims.set(p, a); }
+    let a = this.pickupAnims.get(p.id);
+    if (!a) { a = createAnim(); this.pickupAnims.set(p.id, a); }
     return a;
   }
   private animForChest(c: Chest): Anim {
-    let a = this.chestAnims.get(c);
-    if (!a) { a = createAnim(); this.chestAnims.set(c, a); }
+    let a = this.chestAnims.get(c.id);
+    if (!a) { a = createAnim(); this.chestAnims.set(c.id, a); }
     return a;
   }
 
@@ -632,8 +642,33 @@ export class Game {
     this.world.remoteTargets = this.coopTargets();
     this.transport.sendInput(cmd);
     this.transport.advance(dt);
+
+    // Online: the authoritative world geometry changed (initial join / party descend) — refresh
+    // the seed-keyed cosmetic floor state (biome/torches/music/banner) BEFORE replaying events.
+    if (this.mode === "online" && this.wsTransport) {
+      const rebuilt = this.wsTransport.consumeWorldRebuilt();
+      if (rebuilt) {
+        this.seed = rebuilt.seed;
+        this.loadFloorClient();
+        this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor) }));
+      }
+    }
+
     const { events } = this.transport.poll();
     this.handleSimEvents(events);
+
+    // Online: terminal run state is derivable from SNAPSHOT state too, so a backpressure-dropped
+    // gameOver event (or its final snapshot) can never strand this client in a dead run.
+    if (this.mode === "online" && this.wsTransport && this.wsTransport.isRunOver() && (this.isDown || this.hp <= 0)) {
+      this.gameOver();
+      return;
+    }
+
+    // Online: surface any server-decided blessing offer (choice authority is server-side).
+    if (this.mode === "online" && this.wsTransport && !this.isChoosing) {
+      const offer = this.wsTransport.consumePendingOffer();
+      if (offer) this.offerServerBlessing(offer);
+    }
 
     // Dev combo-freeze holds the chain full so the HUD can be screenshotted at a tier.
     if (this.comboFreeze && this.combo > 0) this.p.comboTimer = COMBO_WINDOW;
@@ -708,8 +743,12 @@ export class Game {
     const livePropIds = new Set<number>();
     for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
     if (this.propAnims.size > livePropIds.size) for (const id of this.propAnims.keys()) if (!livePropIds.has(id)) this.propAnims.delete(id);
-    for (const pickup of this.pickups) stepAnim(this.animForPickup(pickup), dt, false, 0);
-    for (const chest of this.chests) stepAnim(this.animForChest(chest), dt, false, 0);
+    const livePickupIds = new Set<number>();
+    for (const pickup of this.pickups) { livePickupIds.add(pickup.id); stepAnim(this.animForPickup(pickup), dt, false, 0); }
+    if (this.pickupAnims.size > livePickupIds.size) for (const id of this.pickupAnims.keys()) if (!livePickupIds.has(id)) this.pickupAnims.delete(id);
+    const liveChestIds = new Set<number>();
+    for (const chest of this.chests) { liveChestIds.add(chest.id); stepAnim(this.animForChest(chest), dt, false, 0); }
+    if (this.chestAnims.size > liveChestIds.size) for (const id of this.chestAnims.keys()) if (!liveChestIds.has(id)) this.chestAnims.delete(id);
 
     // Dash afterimages (pure ghost trail): spaced by dashImgCd while the sim reports a dash.
     if (this.p.dashTime > 0) {
@@ -842,7 +881,10 @@ export class Game {
         this.addTrauma(0.12);
         break;
       case "offerBlessing":
-        this.offerBlessing();
+        // Online: the SERVER decides the choice set and sends a separate `offer` message (drained
+        // in tick via the transport); ignore the sim event's local roll so choice authority stays
+        // server-side. Solo/co-op roll their own choices locally.
+        if (this.mode !== "online") this.offerBlessing();
         break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); sfx("coin"); }
@@ -920,11 +962,21 @@ export class Game {
       case "descend":
         sfx("descend");
         this.addTrauma(TRAUMA_DESCEND);
-        this.loadFloorClient();
-        this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isDescend: true }));
+        // Online, the structural floor load is driven by the authoritative world rebuild
+        // (consumeWorldRebuilt in tick) — the event only carries the juice. Solo/co-op load here.
+        if (this.mode !== "online") {
+          this.loadFloorClient();
+          this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isDescend: true }));
+        }
         break;
       case "reachExit":
         if (this.coop && this.pendingDescend !== e.toFloor) { this.pendingDescend = e.toFloor; this.coop.requestDescend(e.toFloor); }
+        break;
+      case "revive":
+        // Authoritative (online) revive: the server brought a downed player back. The revived
+        // player's own client replays the juice (wsTransport only forwards its own pid events).
+        sfx("revive");
+        this.spawnParticles(e.x, e.y, 14, "#8affe0");
         break;
       case "gameOver":
         this.gameOver();
@@ -1009,6 +1061,23 @@ export class Game {
     });
   }
 
+  // Online: show the SERVER's decided blessing choice set (already validated pool) and reply with
+  // the authoritative choice — the answer echoes the offer id so the server validates it against
+  // exactly that offer, applies the mods, and reflects them via SelfWire; this client never
+  // mutates its own run stats. Choices arrive as item ids we resolve to defs.
+  private offerServerBlessing(offer: { id: number; choices: string[] }) {
+    const choices = offer.choices.map((id) => itemById(id)).filter((it): it is ItemDef => it !== undefined);
+    if (choices.length === 0 || !this.wsTransport) return;
+    this.isChoosing = true;
+    this.isPaused = false;
+    this.mouse.isDown = false;
+    this.blessing.show(choices, (item) => {
+      this.wsTransport?.sendChooseBlessing(offer.id, item.id);
+      this.isChoosing = false;
+      this.last = performance.now();
+    });
+  }
+
   private dashCooldown(): number {
     return DASH_COOLDOWN * this.mods.dashCdMult;
   }
@@ -1027,7 +1096,7 @@ export class Game {
   private selectWeapon(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
-    equipWeaponInWorld(this.world, LOCAL_ID, owned[index]);
+    this.equipOrRequest(owned[index]);
   }
 
   private cycleWeapon(dir: number) {
@@ -1035,7 +1104,15 @@ export class Game {
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
     const next = (cur + dir + owned.length) % owned.length;
-    equipWeaponInWorld(this.world, LOCAL_ID, owned[next]);
+    this.equipOrRequest(owned[next]);
+  }
+
+  // Solo/co-op equip in the local sim (authoritative locally); online sends an authoritative
+  // equip command — the server validates ownership + equips, and the result returns via SelfWire.
+  // There is NO client-local inventory mutation on the online path.
+  private equipOrRequest(weapon: WeaponId) {
+    if (this.mode === "online" && this.wsTransport) this.wsTransport.sendEquip(weapon);
+    else equipWeaponInWorld(this.world, LOCAL_ID, weapon);
   }
 
 
@@ -1331,7 +1408,9 @@ export class Game {
       floor: this.floor, kills: this.kills, coins: this.coins,
       weaponName: WEAPONS[this.weapon].name,
       weapons: this.p.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
-      isCleared: this.enemies.length === 0,
+      // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
+      // out of this client's snapshot, so a local count can't decide "cleared").
+      isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : this.enemies.length === 0,
       enemiesLeft: this.enemies.length,
       isBossActive,
       bossHpFrac,
@@ -1345,11 +1424,20 @@ export class Game {
     });
   }
 
+  // The player's owned blessing defs from the authoritative source: online that is the server's
+  // SelfWire item ids (never a local mirror); solo/co-op the locally-picked defs.
+  private currentItemDefs(): ItemDef[] {
+    if (this.mode === "online") {
+      return this.p.ownedItemIds.map((id) => itemById(id)).filter((it): it is ItemDef => it !== undefined);
+    }
+    return this.ownedItemDefs;
+  }
+
   // Collapse owned blessings by id into count-bearing entries (first-seen order), so the
   // HUD panel shows one chip per distinct item with an xN badge when a pick repeats.
   private collapsedItems() {
     const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
-    for (const it of this.ownedItemDefs) {
+    for (const it of this.currentItemDefs()) {
       const seen = collapsed.get(it.id);
       if (seen) seen.count++;
       else collapsed.set(it.id, { id: it.id, name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
@@ -1370,7 +1458,7 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
-      items: this.ownedItemDefs.map((it) => ({ name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
+      items: this.currentItemDefs().map((it) => ({ name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
     });
   }
 
@@ -1379,12 +1467,27 @@ export class Game {
     this.isRunning = false;
     this.isAutoFiring = false;
     cancelAnimationFrame(this.raf);
+    // Terminal exit STOPS the transport: online this closes the socket and leaves the
+    // authoritative world (no lingering post-run connection); solo LocalTransport.stop is a
+    // no-op, so solo behavior is unchanged.
+    this.transport.stop();
     audio.setMusic(null);
     sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
     this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
+  }
+
+  // Online transport terminal states end the run cleanly instead of freezing the last frame:
+  // once we were in the authoritative world, a closed/errored socket IS the end of this run
+  // (the server also closes the socket after a game over — same path). If the connection never
+  // became ready (server unreachable / rejected), return to the menu instead.
+  private onOnlineStatus(s: "connecting" | "open" | "closed" | "error") {
+    if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
+    if (s !== "closed" && s !== "error") return;
+    if (this.wsTransport.isReady()) this.gameOver();
+    else this.quitToMenu();
   }
 
   // True when a world point is on (or near) the visible screen — used to gate audio

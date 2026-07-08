@@ -39,6 +39,16 @@ export interface MeleeSwing {
   burn?: number;
   chill?: number;
   shock?: number;
+  // The attacker's pose when the swing started. While the swing's fire-time rewind is active
+  // (online), hit tests use THIS pose so both actors are evaluated at fire time — the attacker
+  // moving after the swing can't drag the hit arc with it. Solo rewind is 0, so the live pose is
+  // used and behavior is unchanged.
+  originX: number;
+  originY: number;
+  // Fire-time lag compensation for the swing (see Bullet.bornTick/lagRewind). A swing is short,
+  // so this rewinds hits to when the swing started. 0/undefined in solo.
+  bornTick?: number;
+  lagRewind?: number;
 }
 
 interface StrikeInfo {
@@ -52,6 +62,13 @@ interface StrikeInfo {
   chill?: number;
   shock?: number;
   isMelee: boolean;
+  // Immutable actor identity for status attribution (burn DoT). Survives the actor's disconnect
+  // — a burn lit by a departed player keeps crediting THAT id (which then resolves to no one),
+  // never a different live player.
+  ownerId: PlayerId | null;
+  // The weapon whose knockback profile applies when the striking player is gone (bullet.fx —
+  // the fire-time weapon). A present player uses their live weapon, exactly as before.
+  fxWeapon: WeaponId | null;
 }
 
 export interface PlayerSim {
@@ -65,6 +82,13 @@ export interface PlayerSim {
   facing: number; aimAngle: number; weapon: WeaponId;
   ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
   shotSeq: number; isDown: boolean;
+  // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
+  // up or when no one is reviving. Solo never downs, so this stays 0.
+  reviveProgress: number;
+  // Lag-compensation rewind for THIS player's shots/swings, in ticks (server-computed from the
+  // player's measured RTT + interp delay, clamped). 0 in solo/prediction, so hit tests use
+  // present-time positions and behavior is unchanged.
+  rewindTicks: number;
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
   meleeSwing: MeleeSwing | null;
@@ -74,10 +98,21 @@ export interface PlayerSim {
 // the existing presence path; the sim only needs remote POSITIONS as enemy aggro targets).
 export interface RemoteTarget { x: number; y: number; isDown: boolean }
 
+// A per-enemy ring of recent positions for lag-compensated hit rewind.
+interface EnemyHist { x: number[]; y: number[] }
+
 export interface WorldState {
   tick: number;
   seed: number;
   floor: number;
+  // World revision: increments on EVERY floor build (create/descend/run reset). Snapshots carry
+  // it so a client can key its geometry rebuild + reject stale cross-floor snapshots explicitly
+  // (tick alone stays monotonic, but rev makes the world identity first-class on the wire).
+  rev: number;
+  // Terminal run state: set once when the whole party wipes (or the last standing player leaves
+  // a shared world with only downed players behind). Snapshots carry it so game-over is
+  // derivable from STATE, not only from the transient gameOver event.
+  isRunOver: boolean;
   players: Map<PlayerId, PlayerSim>;
   enemies: Enemy[];
   bullets: Bullet[];
@@ -87,14 +122,27 @@ export interface WorldState {
   dungeon: Dungeon;
   flow: FlowField;
   flowCd: number;
-  flowKeyTx: number;
-  flowKeyTy: number;
+  // Combined hash of every living source tile; the flow field rebuilds when it changes.
+  flowKey: number;
   flowSources: number[];
   rng: Rng;
   nextEnemyId: number;
   nextPropId: number;
+  nextPickupId: number;
+  nextChestId: number;
+  // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
+  // recent record). histHead is the ring slot of the most recent record; histCount is how many
+  // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
+  enemyHist: Map<number, EnemyHist>;
+  histHead: number;
+  histCount: number;
   remoteTargets: RemoteTarget[];
   isCoop: boolean;
+  // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
+  // (the server owns floor transitions), but unlike solo a player hitting 0 HP goes DOWN rather
+  // than ending the world, and enemy processing never aborts on a single downed player. Solo and
+  // the legacy Convex co-op path leave this false, so their behavior is unchanged.
+  isShared: boolean;
   isSandbox: boolean;
   isGodMode: boolean; // dev sandbox: damagePlayer no-ops while true
   // Per-query scratch (nearest living target); avoids per-frame allocation, matching the
@@ -113,7 +161,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false,
+    shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -123,13 +171,15 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
 // skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
 // spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
 // Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; skipLocalPlayer?: boolean }
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean }
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
     tick: 0,
     seed,
     floor,
+    rev: 0,
+    isRunOver: false,
     players: new Map(),
     enemies: [],
     bullets: [],
@@ -139,14 +189,19 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     flow: new FlowField(),
     flowCd: 0,
-    flowKeyTx: -1,
-    flowKeyTy: -1,
+    flowKey: -1,
     flowSources: [],
     rng: new Rng(seed ^ 0x53696d21),
     nextEnemyId: 0,
     nextPropId: 0,
+    nextPickupId: 0,
+    nextChestId: 0,
+    enemyHist: new Map(),
+    histHead: 0,
+    histCount: 0,
     remoteTargets: [],
     isCoop: opts.isCoop ?? false,
+    isShared: opts.isShared ?? false,
     isSandbox: opts.isSandbox ?? false,
     isGodMode: false,
     targetX: 0,
@@ -196,15 +251,17 @@ function buildArena(): Dungeon {
 // sim RNG stream is continuous across a run (matching the old start()/loadFloor split).
 export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.floor = floor;
+  w.rev++;
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.nextEnemyId = 0;
   w.nextPropId = 0;
+  w.nextPickupId = 0;
+  w.nextChestId = 0;
   w.enemies = w.isSandbox ? [] : spawnFloorEnemies(w.dungeon, w.seed, floor);
   w.nextEnemyId = w.enemies.length;
   w.flowCd = 0;
-  w.flowKeyTx = -1;
-  w.flowKeyTy = -1;
+  w.flowKey = -1;
   w.pickups = w.isSandbox ? [] : placeWeaponPickups(w);
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
@@ -216,14 +273,24 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   }
 }
 
-// The "primary" player used for flow-field sourcing, kill/status credit, and the exit check.
-// Solo/co-op/prediction clients always have the LOCAL_ID player; the authoritative server owns
-// per-connection players ("p<id>") with no LOCAL_ID, so this falls back to the first player and
-// returns undefined only for an empty world (idle server) — callers guard that case. Because
-// solo always has LOCAL_ID, this returns the exact same player it always did (behavior
-// unchanged, goldens green).
-function primaryPlayer(w: WorldState): PlayerSim | undefined {
-  return w.players.get(LOCAL_ID) ?? w.players.values().next().value;
+// Reset a live world to a FRESH run: new seed, new RNG stream, floor 1, cleared terminal state.
+// The authoritative server calls this when a room empties (party wiped or everyone left), so the
+// next group starts a new run rather than inheriting a half-played dungeon. tick keeps counting
+// (snapshot ordering stays monotonic across resets); rev increments via loadFloorIntoWorld.
+export function resetRunInWorld(w: WorldState, seed: number): void {
+  w.seed = seed;
+  w.rng = new Rng(seed ^ 0x53696d21);
+  w.isRunOver = false;
+  loadFloorIntoWorld(w, 1);
+}
+
+// The still-connected player behind an attributed action (bullet/burn/explosion owner), or null
+// when the actor has left. Attribution is IMMUTABLE: a departed owner's outcomes credit NO ONE
+// (damage still lands, loot still drops at base value) and are never transferred to another live
+// player — the TD audit's ownership contract. There is deliberately NO "primary player"
+// fallback anywhere in the credit path. Solo: `id` is always the one LOCAL_ID player.
+function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
+  return id !== null ? w.players.get(id) ?? null : null;
 }
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
@@ -237,7 +304,7 @@ function placeWeaponPickups(w: WorldState): Pickup[] {
   if (w.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
   for (const weapon of kinds) {
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
-    drops.push({ kind: "weapon", x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE, radius: 16, weapon });
+    drops.push({ id: w.nextPickupId++, kind: "weapon", x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE, radius: 16, weapon });
   }
   return drops;
 }
@@ -282,7 +349,7 @@ function placeChests(w: WorldState): Chest[] {
   const count = rng.chance(0.5) ? 2 : 1;
   const addChest = (tx: number, ty: number) => {
     used.add(ty * d.w + tx);
-    list.push({ kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false });
+    list.push({ id: w.nextChestId++, kind: "wood", x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: 16, opened: false });
   };
   const treasure = d.rooms.find((r) => r.kind === "treasure");
   let remaining = count;
@@ -422,6 +489,17 @@ export function equipWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): 
   if (p) equipWeapon(p, id);
 }
 
+// Authoritative, validated weapon switch (the server's switch-input handler). Equips only a
+// slot the player actually owns; an unowned id is ignored (a tampered client can't equip a
+// weapon it never picked up). Returns whether the switch was accepted. equipWeapon resets the
+// fire cooldown and cancels any in-progress melee swing server-side.
+export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): boolean {
+  const p = w.players.get(pid);
+  if (!p || !p.ownedWeapons.includes(id)) return false;
+  equipWeapon(p, id);
+  return true;
+}
+
 // Client-driven acquire + equip (dev grant, or golden 'weapon' command).
 export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
@@ -468,9 +546,13 @@ function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
   return isFrozen(e) ? 0 : C.CHILL_SLOW;
 }
-function applyBurn(e: Enemy, secs: number): void {
+function applyBurn(e: Enemy, secs: number, owner: PlayerId | null): void {
   if (secs > e.burn) e.burn = secs;
   e.burnDmg = Math.min(C.BURN_DMG_MAX, e.burnDmg + C.BURN_DMG_STACK);
+  // The most recent igniter owns the burn; its DoT tick credits that id on a kill. The identity
+  // is immutable: if the igniter disconnects, the burn keeps THEIR id (which then credits no
+  // one), never a different live player.
+  e.burnOwner = owner;
 }
 function applyChill(e: Enemy, secs: number): void {
   e.chill = Math.min(C.CHILL_MAX, e.chill + secs);
@@ -478,16 +560,19 @@ function applyChill(e: Enemy, secs: number): void {
 function applyShock(e: Enemy, secs: number): void {
   if (secs > e.shock) e.shock = secs;
 }
-function applyHitStatuses(w: WorldState, p: PlayerSim, e: Enemy, src: { burn?: number; chill?: number; shock?: number }): void {
-  if (src.burn !== undefined) applyBurn(e, src.burn);
-  else if (p.mods.burnChance > 0 && w.rng.next() < p.mods.burnChance) applyBurn(e, C.ITEM_BURN_SECS);
+// `p` is the striking player when still connected; null when the actor has left (their in-flight
+// bullet keeps its baked-in statuses via `src` + the immutable ownerId, but the mods-chance rolls
+// need a live player and are skipped).
+function applyHitStatuses(w: WorldState, p: PlayerSim | null, e: Enemy, src: StrikeInfo): void {
+  if (src.burn !== undefined) applyBurn(e, src.burn, src.ownerId);
+  else if (p && p.mods.burnChance > 0 && w.rng.next() < p.mods.burnChance) applyBurn(e, C.ITEM_BURN_SECS, p.id);
   if (src.chill !== undefined) applyChill(e, src.chill);
-  else if (p.mods.chillChance > 0 && w.rng.next() < p.mods.chillChance) applyChill(e, C.ITEM_CHILL_SECS);
+  else if (p && p.mods.chillChance > 0 && w.rng.next() < p.mods.chillChance) applyChill(e, C.ITEM_CHILL_SECS);
   if (src.shock !== undefined) applyShock(e, src.shock);
-  else if (p.mods.shockChance > 0 && w.rng.next() < p.mods.shockChance) applyShock(e, C.ITEM_SHOCK_SECS);
+  else if (p && p.mods.shockChance > 0 && w.rng.next() < p.mods.shockChance) applyShock(e, C.ITEM_SHOCK_SECS);
 }
 
-function tickStatuses(w: WorldState, p: PlayerSim, e: Enemy, dt: number, ev: SimEvent[]): void {
+function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (e.chill > 0) e.chill = e.chill > dt ? e.chill - dt : 0;
   if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
   if (e.burn > 0) {
@@ -497,17 +582,19 @@ function tickStatuses(w: WorldState, p: PlayerSim, e: Enemy, dt: number, ev: Sim
       e.hp -= e.burnDmg * C.BURN_TICK;
       e.statusTick -= C.BURN_TICK;
       ev.push({ t: "burnTick", x: e.x, y: e.y, radius: e.radius, dmg: e.burnDmg * C.BURN_TICK });
-      if (e.hp <= 0) { killEnemy(w, p, e, ev); break; }
+      // The burn DoT kill credits whoever last ignited this enemy (authoritative attribution).
+      // A departed igniter credits no one — the kill still resolves and drops base-value loot.
+      if (e.hp <= 0) { killEnemy(w, ownerOf(w, e.burnOwner), e, ev); break; }
     }
     if (e.burn === 0) { e.burnDmg = 0; e.statusTick = 0; }
   }
 }
 
-function shockArc(w: WorldState, p: PlayerSim, from: Enemy, ev: SimEvent[]): void {
+function shockArc(w: WorldState, p: PlayerSim | null, from: Enemy, ev: SimEvent[]): void {
   arcLightning(w, p, from, 1, C.SHOCK_ARC_RANGE, C.SHOCK_ARC_DMG, "#7fe9ff", [from], ev);
 }
 
-function arcLightning(w: WorldState, p: PlayerSim, origin: Enemy, jumps: number, range: number, dmg: number, color: string, list: Enemy[], ev: SimEvent[]): void {
+function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: number, range: number, dmg: number, color: string, list: Enemy[], ev: SimEvent[]): void {
   let cur: Enemy = origin;
   for (let j = 0; j < jumps; j++) {
     let best: Enemy | null = null;
@@ -529,13 +616,16 @@ function arcLightning(w: WorldState, p: PlayerSim, origin: Enemy, jumps: number,
 
 // ---- strikes / kills ----
 
-function strikeEnemy(w: WorldState, p: PlayerSim, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
+// `p` may be null when the striking actor has left (their projectile outlived them): damage,
+// knockback (from the fire-time weapon), and baked-in statuses still land, but nothing is
+// credited to any player.
+function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
   const frozen = isFrozen(e);
   const dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
   e.hp -= dmg;
-  applyKnockbackDir(p.weapon, e, hit.kbDirX, hit.kbDirY);
+  applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit);
-  const closeShotgun = !hit.isMelee && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
+  const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
   const killed = e.hp <= 0 && !e.dead;
   const puffColor = hit.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint;
   ev.push({
@@ -546,34 +636,39 @@ function strikeEnemy(w: WorldState, p: PlayerSim, e: Enemy, hit: StrikeInfo, ev:
   if (killed) killEnemy(w, p, e, ev);
 }
 
-function killEnemy(w: WorldState, p: PlayerSim, e: Enemy, ev: SimEvent[]): void {
+// `p` null = the killing actor has left: the kill still resolves (death, loot, boss chest) but
+// grants no personal reward (kills/combo/lifesteal) and never credits another live player.
+function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   e.dead = true;
-  p.kills++;
-  p.combo++;
-  p.comboTimer = C.COMBO_WINDOW;
+  if (p) {
+    p.kills++;
+    p.combo++;
+    p.comboTimer = C.COMBO_WINDOW;
+  }
   const big = e.kind === "boss";
-  ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, x: e.x, y: e.y, combo: p.combo });
+  ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, x: e.x, y: e.y, combo: p ? p.combo : 0 });
   if (big) w.bullets = w.bullets.filter((b) => b.friendly);
-  if (p.mods.lifestealChance > 0 && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
+  if (p && p.mods.lifestealChance > 0 && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
     p.hp++;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
   }
   dropLoot(w, p, e, ev);
 }
 
-function dropLoot(w: WorldState, p: PlayerSim, e: Enemy, ev: SimEvent[]): void {
+function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   if (e.kind === "boss") {
-    w.chests.push({ kind: "boss", x: e.x, y: e.y, radius: 18, opened: false });
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false });
     return;
   }
-  if (w.rng.next() < 0.5) w.pickups.push(makePickup("coin", e.x, e.y, ev, comboCoinValue(p)));
-  if (w.rng.next() < 0.12) w.pickups.push(makePickup("heart", e.x + 10, e.y, ev));
+  // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
+  if (w.rng.next() < 0.5) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(p) : 1));
+  if (w.rng.next() < 0.12) w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
 }
 
-function makePickup(kind: "heart" | "coin", x: number, y: number, ev: SimEvent[], value?: number): Pickup {
+function makePickup(w: WorldState, kind: "heart" | "coin", x: number, y: number, ev: SimEvent[], value?: number): Pickup {
   const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
   ev.push({ t: "lootDrop", x, y, color });
-  return { kind, x, y, radius: 13, weapon: null, value };
+  return { id: w.nextPickupId++, kind, x, y, radius: 13, weapon: null, value };
 }
 
 // ---- per-tick systems ----
@@ -617,7 +712,13 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
     const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
     const spec = resolveShot(p, p.weapon);
-    for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng)) w.bullets.push(b);
+    for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
+      // Anchor lag-comp at fire time: record the tick + the shooter's rewind depth NOW, so hit
+      // tests use the shooter's fire-time view and decay to present as the projectile travels.
+      b.bornTick = w.tick;
+      b.lagRewind = p.rewindTicks;
+      w.bullets.push(b);
+    }
     p.fireCd = wep.fireCd / currentFireRate(p);
     p.shotSeq++;
     ev.push({ t: "shot", pid: p.id, weapon: p.weapon, x: muzzleX, y: muzzleY, aim: p.aimAngle, px: p.x, py: p.y });
@@ -649,6 +750,10 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
+    originX: p.x,
+    originY: p.y,
+    bornTick: w.tick,
+    lagRewind: p.rewindTicks,
   };
   p.fireCd = wep.fireCd / currentFireRate(p);
   p.shotSeq++;
@@ -660,12 +765,24 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, -Math.cos(p.aimAngle) * kb, 0);
     [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, -Math.sin(p.aimAngle) * kb);
   }
+  // The fire-time attacker pose is the post-knockback one (what the first hit test would see).
+  p.meleeSwing.originX = p.x;
+  p.meleeSwing.originY = p.y;
   ev.push({ t: "meleeSwing", pid: p.id, weapon: p.weapon, x: preX, y: preY, aim: p.aimAngle, bx: p.x, by: p.y });
 }
 
-function isPointInMeleeHit(p: PlayerSim, x: number, y: number, radius: number, swing: MeleeSwing): boolean {
-  const dx = x - p.x;
-  const dy = y - p.y;
+// The attacker pose a swing's hit tests use: while the swing's fire-time rewind is active
+// (online lag comp), the swing-START pose — both actors are then evaluated at fire time, so an
+// attacker moving after the swing can neither drag the arc onto a target nor have a laggy swing
+// judged from a pose it never fired at. Solo/prediction rewind is 0 → the live pose (unchanged).
+function swingPose(w: WorldState, p: PlayerSim, swing: MeleeSwing): [number, number] {
+  if (fireTimeRewind(w, swing.bornTick, swing.lagRewind) > 0) return [swing.originX, swing.originY];
+  return [p.x, p.y];
+}
+
+function isPointInMeleeHit(px: number, py: number, x: number, y: number, radius: number, swing: MeleeSwing): boolean {
+  const dx = x - px;
+  const dy = y - py;
   const dist = Math.hypot(dx, dy);
   if (dist > swing.reach + radius) return false;
   const cos = Math.cos(swing.aim);
@@ -739,14 +856,61 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
   ev.push({ t: "bulletBounce", x: b.x, y: b.y, aim: Math.atan2(b.vy, b.vx), color: b.color });
 }
 
+// Record every enemy's current position into the ring (one entry per world tick). Called at the
+// START of the world step so the newest record is the previous tick's end state — i.e. exactly
+// what a client rendered in the last snapshot. Stale entries for despawned enemies are pruned so
+// the map stays bounded. Pure + deterministic; never read when rewindTicks is 0 (solo), so the
+// golden-master behavior is unchanged.
+export function recordHistory(w: WorldState): void {
+  const H = C.LAGCOMP_HISTORY;
+  w.histHead = (w.histHead + 1) % H;
+  const slot = w.histHead;
+  for (const e of w.enemies) {
+    let h = w.enemyHist.get(e.id);
+    if (!h) { h = { x: new Array(H).fill(e.x), y: new Array(H).fill(e.y) }; w.enemyHist.set(e.id, h); }
+    h.x[slot] = e.x; h.y[slot] = e.y;
+  }
+  if (w.histCount < H) w.histCount++;
+  // Prune history for enemies no longer present (killed/removed) so the map can't grow forever.
+  if (w.enemyHist.size > w.enemies.length) {
+    const live = new Set<number>();
+    for (const e of w.enemies) live.add(e.id);
+    for (const id of w.enemyHist.keys()) if (!live.has(id)) w.enemyHist.delete(id);
+  }
+}
+
+// The position of enemy `e` as the shooter saw it `rewindTicks` ticks ago (offset rewindTicks-1
+// into the ring; rewind 1 == the most recent recorded tick). rewindTicks <= 0 returns the
+// present authoritative position (the solo/prediction path — identical behavior). Clamped to the
+// history window + LAGCOMP_MAX_TICKS so a hit can never be rewound to an impossible time.
+// Effective rewind depth for a hit whose lag-comp is anchored at FIRE time. As the projectile/
+// swing ages, the shooter's past view converges to the present, so the rewind shrinks one tick
+// per tick and reaches 0 — after which collisions test present positions (correct for slow
+// projectiles). bornTick/lagRewind undefined (solo, enemy fire) => 0 (present-time), unchanged.
+export function fireTimeRewind(w: WorldState, bornTick: number | undefined, lagRewind: number | undefined): number {
+  if (bornTick === undefined || lagRewind === undefined || lagRewind <= 0) return 0;
+  const age = w.tick - bornTick;
+  const eff = lagRewind - (age > 0 ? age : 0);
+  return eff > 0 ? eff : 0;
+}
+
+export function rewoundEnemyPos(w: WorldState, e: Enemy, rewindTicks: number): [number, number] {
+  if (rewindTicks <= 0) return [e.x, e.y];
+  const r = Math.min(rewindTicks, C.LAGCOMP_MAX_TICKS, w.histCount);
+  if (r <= 0) return [e.x, e.y];
+  const h = w.enemyHist.get(e.id);
+  if (!h) return [e.x, e.y];
+  const slot = (w.histHead - (r - 1) + C.LAGCOMP_HISTORY * 2) % C.LAGCOMP_HISTORY;
+  return [h.x[slot], h.y[slot]];
+}
+
 function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
-  // `credit` receives kill/status attribution + lightning-chain origin. Solo: the LOCAL_ID
-  // player (unchanged). Multiplayer: the first player (bullets carry no owner at Stage B — the
-  // per-shooter ledger is a Stage-C combat concern). Undefined only for an empty world.
-  const credit = primaryPlayer(w);
+  // Stage C: every strike is attributed to the player who caused it (bullet.owner / swing owner
+  // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
+  // authoritative player. Solo resolves to the one player, so behavior is unchanged.
   refreshFlowField(w, dt);
   for (const e of w.enemies) {
-    if (credit) tickStatuses(w, credit, e, dt, ev);
+    tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
@@ -764,21 +928,30 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         damagePlayer(w, victim, e.touchDamage, ev);
         if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
         applyThorns(w, victim, victim, e, ev);
-        if (victim.hp <= 0 && !w.isCoop) return;
+        // Solo aborts the enemy loop on death (game over). Co-op and the authoritative shared
+        // world keep processing — a downed player doesn't stop the world.
+        if (victim.hp <= 0 && !w.isCoop && !w.isShared) return;
       }
     }
 
-    if (credit) for (const b of w.bullets) {
+    for (const b of w.bullets) {
       if (!b.friendly) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
-      if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-        strikeEnemy(w, credit, e, {
+      // Immutable attribution: the bullet keeps flying and dealing damage after its owner leaves
+      // (shooter null) — it just credits no one. Never re-attributed to another live player.
+      const shooter = ownerOf(w, b.owner);
+      // Lag comp anchored at FIRE time (decays as the bullet travels): a hitscan-fast shot tests
+      // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
+      const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
+      if (Math.hypot(b.x - btx, b.y - bty) < b.radius + e.radius) {
+        strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
+          ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
         if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);
-          arcLightning(w, credit, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
+          arcLightning(w, shooter, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
           b.life = 0;
         } else if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
         else b.life = 0;
@@ -790,7 +963,11 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       const swing = player.meleeSwing;
       if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
-      if (isPointInMeleeHit(player, e.x, e.y, e.radius, swing)) {
+      // Fire-time lag comp for the whole swing: BOTH actors evaluate at fire time while the
+      // rewind is active (attacker = swing-start pose, target = rewound position).
+      const [mtx, mty] = rewoundEnemyPos(w, e, fireTimeRewind(w, swing.bornTick, swing.lagRewind));
+      const [sx, sy] = swingPose(w, player, swing);
+      if (isPointInMeleeHit(sx, sy, mtx, mty, e.radius, swing)) {
         const kbDirX = Math.cos(swing.aim);
         const kbDirY = Math.sin(swing.aim);
         const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
@@ -798,6 +975,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           damage: swing.damage, isCrit: swing.isCrit,
           puffX: player.x + kbDirX * puffDist, puffY: player.y + kbDirY * puffDist,
           kbDirX, kbDirY, burn: swing.burn, chill: swing.chill, shock: swing.shock, isMelee: true,
+          ownerId: player.id, fxWeapon: null,
         }, ev);
         (swing.hitList ??= []).push(e);
       }
@@ -1098,17 +1276,27 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
 function refreshFlowField(w: WorldState, dt: number): void {
   w.flowCd -= dt;
   const d = w.dungeon;
-  // Rebuild trigger keys off the primary player's tile (solo: LOCAL_ID, unchanged). The field
-  // itself is sourced from EVERY living player (solo: exactly one, so identical), so enemies
-  // flow toward whichever player is nearest.
-  const key = primaryPlayer(w);
-  const isUp = key !== undefined && !key.isDown && key.hp > 0;
-  const ptx = key ? Math.floor(key.x / TILE) : -1;
-  const pty = key ? Math.floor(key.y / TILE) : -1;
-  const tileChanged = isUp && (ptx !== w.flowKeyTx || pty !== w.flowKeyTy);
+  // Rebuild trigger keys off a combined hash of EVERY living source tile (players + legacy
+  // remote targets), so ANY player crossing a tile refreshes multi-source paths — not only the
+  // primary. Solo has exactly one player, so the hash changes precisely when that player's
+  // tile changes: identical rebuild ticks, goldens unchanged. The field itself is sourced from
+  // every living player, so enemies flow toward whichever player is nearest.
+  let keyHash = 0;
+  let anyUp = false;
+  for (const pl of w.players.values()) {
+    if (pl.isDown || pl.hp <= 0) continue;
+    anyUp = true;
+    keyHash = (Math.imul(keyHash, 31) + Math.floor(pl.y / TILE) * d.w + Math.floor(pl.x / TILE)) | 0;
+  }
+  for (const r of w.remoteTargets) {
+    if (r.isDown) continue;
+    anyUp = true;
+    keyHash = (Math.imul(keyHash, 31) + Math.floor(r.y / TILE) * d.w + Math.floor(r.x / TILE)) | 0;
+  }
+  const tileChanged = anyUp && keyHash !== w.flowKey;
   if (w.flowCd > 0 && !tileChanged && w.flow.isReady()) return;
   w.flowCd = C.FLOW_REBUILD;
-  w.flowKeyTx = ptx; w.flowKeyTy = pty;
+  w.flowKey = keyHash;
 
   const srcs = w.flowSources;
   srcs.length = 0;
@@ -1228,7 +1416,7 @@ function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, sp
   w.bullets.push({
     x, y,
     vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-    radius, life, friendly: false, damage, color,
+    radius, life, friendly: false, owner: null, damage, color,
     pierce: 0, hitList: null, isCrit: false,
   });
 }
@@ -1251,12 +1439,14 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
       p.hp -= b.damage;
       ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: b.x, y: b.y });
       if (b.pierce <= 0) b.life = 0;
-      if (p.hp <= 0) { destroyProp(w, p, ev); break; }
+      if (p.hp <= 0) { destroyProp(w, p, ev, ownerOf(w, b.owner) ?? undefined); break; }
     }
     if (p.breakT === undefined) {
       for (const player of w.players.values()) {
         const swing = player.meleeSwing;
-        if (!swing || swing.timer <= 0 || !isPointInMeleeHit(player, p.x, p.y, p.radius, swing)) continue;
+        if (!swing || swing.timer <= 0) continue;
+        const [sx, sy] = swingPose(w, player, swing);
+        if (!isPointInMeleeHit(sx, sy, p.x, p.y, p.radius, swing)) continue;
         // Reuse the swing hitList with a stable negative prop id namespace to prevent
         // repeated damage every frame while the same swing overlaps the prop.
         const marker = -1 - p.id;
@@ -1264,7 +1454,7 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
         (swing.hitList ??= []).push(marker);
         p.hp -= swing.damage;
         ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: p.x, y: p.y });
-        if (p.hp <= 0) destroyProp(w, p, ev);
+        if (p.hp <= 0) destroyProp(w, p, ev, player);
         break;
       }
     }
@@ -1277,36 +1467,38 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
 function dashBreakProps(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   for (const prop of w.props) {
     if (prop.breakT !== undefined || prop.kind === "brazier") continue;
-    if (Math.hypot(p.x - prop.x, p.y - prop.y) < p.pr + prop.radius) destroyProp(w, prop, ev);
+    if (Math.hypot(p.x - prop.x, p.y - prop.y) < p.pr + prop.radius) destroyProp(w, prop, ev, p);
   }
 }
 
-function destroyProp(w: WorldState, p: Prop, ev: SimEvent[]): void {
+// `by` is the player who destroyed the prop (bullet owner / melee / dash / chain source), so an
+// explosive barrel credits its kills to the right player. A departed destroyer (undefined)
+// still detonates the barrel — its damage credits no one and never another live player.
+function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): void {
   if (p.breakT !== undefined || p.kind === "brazier") return;
   p.dead = true;
   p.breakT = 0;
-  const player = primaryPlayer(w);
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
-      if (w.rng.next() < 0.6) w.pickups.push(makePickup("coin", p.x, p.y, ev));
-      if (w.rng.next() < 0.15) w.pickups.push(makePickup("heart", p.x + 12, p.y, ev));
+      if (w.rng.next() < 0.6) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.15) w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
       break;
     case "pot":
       ev.push({ t: "propBreak", kind: "pot", x: p.x, y: p.y });
-      if (w.rng.next() < 0.35) w.pickups.push(makePickup("coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.35) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       break;
     case "barrel":
       ev.push({ t: "propBreak", kind: "barrel", x: p.x, y: p.y });
-      if (w.rng.next() < 0.45) w.pickups.push(makePickup("coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.45) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       break;
     case "barrel_explosive":
-      if (player) explodeBarrel(w, player, p, ev);
+      explodeBarrel(w, by ?? null, p, ev);
       break;
   }
 }
 
-function explodeBarrel(w: WorldState, p: PlayerSim, source: Prop, ev: SimEvent[]): void {
+function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: SimEvent[]): void {
   const r = C.BARREL_EXPLOSION_RADIUS;
   ev.push({ t: "explosion", x: source.x, y: source.y, r });
   for (const e of w.enemies) {
@@ -1315,7 +1507,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim, source: Prop, ev: SimEvent[]
     e.hp -= C.BARREL_EXPLOSION_DAMAGE;
     ev.push({ t: "flash", eid: e.id });
     ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES[e.kind].tint });
-    applyBurn(e, C.BARREL_BURN_SECS);
+    applyBurn(e, C.BARREL_BURN_SECS, p ? p.id : null);
     if (e.hp <= 0 && !e.dead) killEnemy(w, p, e, ev);
   }
   for (const victim of w.players.values()) {
@@ -1326,7 +1518,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim, source: Prop, ev: SimEvent[]
   }
   for (const other of w.props) {
     if (other === source || other.breakT !== undefined || other.kind === "brazier") continue;
-    if (Math.hypot(other.x - source.x, other.y - source.y) <= r + other.radius) destroyProp(w, other, ev);
+    if (Math.hypot(other.x - source.x, other.y - source.y) <= r + other.radius) destroyProp(w, other, ev, p ?? undefined);
   }
 }
 
@@ -1334,12 +1526,13 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.chests.length === 0) return;
   for (const c of w.chests) {
     if (!c.opened) {
-      // A friendly bullet implies a shooter; credit the primary player (solo: LOCAL_ID —
-      // identical to before). Guarded so an empty world never dereferences a missing player.
-      const opener = primaryPlayer(w);
       for (const b of w.bullets) {
         if (!b.friendly || b.life <= 0) continue;
         if (Math.hypot(b.x - c.x, b.y - c.y) >= b.radius + c.radius) continue;
+        // The chest opener is the BULLET's owner (the actual shooter) — never a "primary" player.
+        // If that shooter has since disconnected, the bullet still stops on the chest but opens
+        // nothing (no one is there to receive the roll); the chest stays for live players.
+        const opener = ownerOf(w, b.owner);
         if (opener) openChest(w, opener, c, ev);
         if (b.pierce > 0) b.pierce--; else b.life = 0;
         break;
@@ -1348,7 +1541,9 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (!c.opened) {
       for (const player of w.players.values()) {
         const swing = player.meleeSwing;
-        if (swing && swing.timer > 0 && isPointInMeleeHit(player, c.x, c.y, c.radius, swing)) {
+        if (!swing || swing.timer <= 0) continue;
+        const [sx, sy] = swingPose(w, player, swing);
+        if (isPointInMeleeHit(sx, sy, c.x, c.y, c.radius, swing)) {
           openChest(w, player, c, ev);
           break;
         }
@@ -1379,20 +1574,20 @@ function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): v
   const r = w.rng.next();
   if (r < 0.55) {
     const n = 3 + Math.floor(w.rng.next() * 4);
-    for (let i = 0; i < n; i++) w.pickups.push(makePickup("coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
+    for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
   } else if (r < 0.75) {
-    w.pickups.push(makePickup("heart", c.x, c.y, ev));
+    w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
   } else if (r < 0.93) {
     ev.push({ t: "offerBlessing", pid: p.id });
   } else {
     const weapon = PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)];
-    w.pickups.push({ kind: "weapon", x: c.x, y: c.y, radius: 16, weapon });
+    w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x: c.x, y: c.y, radius: 16, weapon });
   }
 }
 
 function grantBossChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
-  w.pickups.push(makePickup("heart", c.x - 18, c.y, ev));
-  for (let i = 0; i < 5; i++) w.pickups.push(makePickup("coin", c.x + (i - 2) * 16, c.y + 18, ev));
+  w.pickups.push(makePickup(w, "heart", c.x - 18, c.y, ev));
+  for (let i = 0; i < 5; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - 2) * 16, c.y + 18, ev));
   ev.push({ t: "offerBlessing", pid: p.id });
 }
 
@@ -1422,6 +1617,16 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.pickups = remaining;
 }
 
+// Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
+// could revive `p`? Drives the authoritative down-vs-gameover decision.
+function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
+  for (const other of w.players.values()) {
+    if (other === p) continue;
+    if (!other.isDown && other.hp > 0) return true;
+  }
+  return w.isCoop && w.remoteTargets.some((r) => !r.isDown);
+}
+
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
   p.hp -= amount;
@@ -1429,10 +1634,64 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
-    if (w.isCoop && w.remoteTargets.some((r) => !r.isDown)) {
+    if (hasStandingAlly(w, p)) {
+      // A teammate can still revive: go DOWN, not out. reviveProgress accrues in updateRevives.
       p.isDown = true;
+      p.reviveProgress = 0;
     } else {
-      ev.push({ t: "gameOver", pid: p.id });
+      // No one left to revive -> solo death or full team wipe. End the run for the whole room
+      // (every remaining player, incl. already-downed teammates) so all clients see game over.
+      // Solo has one player, so this emits exactly one gameOver as before. isRunOver makes the
+      // terminal transition derivable from STATE (snapshots carry it), not only from the event.
+      endRun(w, ev);
+    }
+  }
+}
+
+// Terminal run transition: mark the world over (once) and emit gameOver for every remaining
+// player. Idempotent — re-entering while already over emits nothing.
+function endRun(w: WorldState, ev: SimEvent[]): void {
+  if (w.isRunOver) return;
+  w.isRunOver = true;
+  for (const other of w.players.values()) ev.push({ t: "gameOver", pid: other.id });
+}
+
+// Shared-world safety net: if the last STANDING player leaves (disconnect, not death), the
+// remaining downed players have no possible revive — end the run for them instead of stranding
+// them on the floor forever. damagePlayer covers the death path; this covers the leave path.
+function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
+  if (!w.isShared || w.isRunOver || w.players.size === 0) return;
+  let anyUp = false;
+  let anyDown = false;
+  for (const p of w.players.values()) {
+    if (!p.isDown && p.hp > 0) anyUp = true;
+    else anyDown = true;
+  }
+  if (!anyUp && anyDown) endRun(w, ev);
+}
+
+// Authoritative revive: a living teammate standing within REVIVE_RADIUS of a downed player for
+// REVIVE_HOLD seconds brings them back. Progress decays when no one is nearby, so it takes a
+// sustained hold. Solo never has a downed player with a standing ally, so this no-ops there.
+function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
+  for (const downed of w.players.values()) {
+    if (!downed.isDown) continue;
+    let reviver: PlayerSim | undefined;
+    for (const other of w.players.values()) {
+      if (other === downed || other.isDown || other.hp <= 0) continue;
+      if (Math.hypot(other.x - downed.x, other.y - downed.y) <= C.REVIVE_RADIUS) { reviver = other; break; }
+    }
+    if (reviver) {
+      downed.reviveProgress += dt;
+      if (downed.reviveProgress >= C.REVIVE_HOLD) {
+        downed.isDown = false;
+        downed.hp = Math.min(downed.maxHp, C.REVIVE_HP);
+        downed.invuln = Math.max(downed.invuln, C.REVIVE_INVULN);
+        downed.reviveProgress = 0;
+        ev.push({ t: "revive", pid: downed.id, by: reviver.id, x: downed.x, y: downed.y });
+      }
+    } else {
+      downed.reviveProgress = downed.reviveProgress > dt ? downed.reviveProgress - dt : 0;
     }
   }
 }
@@ -1445,14 +1704,21 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
   const isCleared = w.enemies.length === 0;
   if (!isCleared) return;
-  const p = primaryPlayer(w);
-  if (p && !p.isDown && Math.hypot(p.x - ex, p.y - ey) < TILE) {
-    // Solo descends in-sim; co-op defers to the client's shared-floor orchestration
-    // (everyone descends together) so the sim stays authoritative per client without
-    // knowing about presence.
-    if (w.isCoop) ev.push({ t: "reachExit", toFloor: w.floor + 1 });
-    else descend(w, w.floor + 1, ev);
+  // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
+  // player, so this is identical to the old single-player check. The authoritative server owns
+  // this decision entirely off server positions — no client triggers the transition.
+  let anyLiving = false;
+  let allAtExit = true;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    anyLiving = true;
+    if (Math.hypot(p.x - ex, p.y - ey) >= TILE) { allAtExit = false; break; }
   }
+  if (!anyLiving || !allAtExit) return;
+  // Solo + shared server descend in-sim; the legacy Convex co-op path defers to the client's
+  // shared-floor orchestration (everyone descends together via presence).
+  if (w.isCoop) ev.push({ t: "reachExit", toFloor: w.floor + 1 });
+  else descend(w, w.floor + 1, ev);
 }
 
 // A floor descent (solo). Co-op's shared-floor sync is orchestrated client-side; the
@@ -1462,11 +1728,15 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   for (const p of w.players.values()) {
     p.combo = 0; p.comboTimer = 0;
     p.isDown = false;
+    p.reviveProgress = 0;
     p.hp = Math.min(p.maxHp, p.hp + 2);
   }
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
-  ev.push({ t: "offerBlessing", pid: LOCAL_ID });
+  // Offer a between-floor blessing to EVERY player (solo: the one LOCAL_ID player, identical to
+  // before). The server turns each offer into that client's seeded choice set (see the server's
+  // offer handling); solo rolls its own choices client-side.
+  for (const p of w.players.values()) ev.push({ t: "offerBlessing", pid: p.id });
 }
 
 // ---- the step ----
@@ -1492,11 +1762,14 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 // combo decay. Runs once per authoritative tick at the fixed step AFTER every player has been
 // advanced. Only the sim RNG (w.rng) is consumed here, so the server is the single roller.
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
+  recordHistory(w);
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
   updatePickups(w, dt, ev);
+  updateRevives(w, dt, ev);
+  checkStrandedWipe(w, ev);
   updateExit(w, ev);
 
   for (const p of w.players.values()) {
@@ -1531,5 +1804,5 @@ export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: nu
   w.props.push({ id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
 }
 export function devSpawnChest(w: WorldState, x: number, y: number): void {
-  w.chests.push({ kind: "wood", x, y, radius: 16, opened: false });
+  w.chests.push({ id: w.nextChestId++, kind: "wood", x, y, radius: 16, opened: false });
 }

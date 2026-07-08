@@ -9,7 +9,13 @@
     "preview": "vite preview",
     "golden:capture": "tsx test/oracle.ts",
     "test:golden": "tsx test/golden.test.ts",
-    "test": "tsx test/golden.test.ts"
+    "test:sim": "tsx test/stagec.sim.test.ts",
+    "test:protocol": "tsx test/protocol.test.ts",
+    "test:netcode": "tsx test/netcode.test.ts",
+    "test:floorrun": "tsx test/floorrun.test.ts",
+    "test:purity": "tsx test/purity.test.ts",
+    "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/protocol.test.ts && tsx test/netcode.test.ts && tsx test/floorrun.test.ts && tsx test/purity.test.ts",
+    "harness": "npm --prefix server run harness"
   },
   "devDependencies": {
     "@fal-ai/serverless-client": "^0.15.0",

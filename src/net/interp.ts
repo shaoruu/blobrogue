@@ -55,6 +55,16 @@ function lerpAngle(a: number, b: number, t: number): number {
 
 export class RemoteInterp {
   private tracks = new Map<string, Track>();
+  // Effective render trail (ms). Defaults to the tuned base but the authoritative-server client
+  // sizes it adaptively from measured jitter (Stage C) via setRenderDelay.
+  private renderDelayMs = RENDER_DELAY_MS;
+
+  setRenderDelay(ms: number): void {
+    this.renderDelayMs = ms;
+  }
+  getRenderDelay(): number {
+    return this.renderDelayMs;
+  }
 
   // Feed the latest snapshot for one player. Only rows whose server timestamp advanced add a
   // keyframe, so a burst of subscription callbacks (fired whenever ANY player changes) never
@@ -94,7 +104,7 @@ export class RemoteInterp {
     if (!track || track.samples.length === 0) return null;
     const s = track.samples;
     const pose = track.pose;
-    const renderAt = now - RENDER_DELAY_MS;
+    const renderAt = now - this.renderDelayMs;
 
     // Before the oldest keyframe (just joined, or a long stall): hold the oldest pose.
     if (renderAt <= s[0].recvAt) {

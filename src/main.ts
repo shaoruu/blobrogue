@@ -1,8 +1,9 @@
 import { ConvexClient } from "convex/browser";
 import { Game } from "./game/game.js";
 import type { RunResult } from "./game/game.js";
+import { api } from "./net/api.js";
 import type { ProfileDoc } from "./net/api.js";
-import { CONVEX_URL, resolveGsUrl, devTicketUrl } from "./net/config.js";
+import { CONVEX_URL, resolveGsUrl, isExplicitGsOverride, devTicketUrl } from "./net/config.js";
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
@@ -81,12 +82,22 @@ async function bootNormal() {
   }
 
   // Explicit online (authoritative WS) route: `?online=1` (or `?gs=<wsUrl>`), analogous to the
-  // hidden `?dev` route. Solo/co-op stay on their normal paths; this never triggers by default.
+  // hidden `?dev` route. Solo/co-op stay on their normal paths; this never triggers by default,
+  // so an unreachable Convex/game server can never affect a solo player.
   const gsUrl = resolveGsUrl(window.location.search);
   if (gsUrl) {
-    const ticketUrl = devTicketUrl(gsUrl);
+    // Ticket source: production builds mint a real HMAC ticket through the trusted Convex
+    // action (signed with the same GS_AUTH_SECRET the game server verifies — convex/gsTicket.ts).
+    // Dev builds and explicit `?gs=` overrides target a LOCAL dev server, whose /dev-ticket
+    // endpoint mints instead (dev-auth only, hard-disabled in production) — the documented
+    // two-tab local proof keeps working with zero Convex dependency.
+    const useConvexMint = import.meta.env.PROD && !isExplicitGsOverride(window.location.search) && client !== null;
     const getTicket = async (): Promise<string> => {
-      const res = await fetch(`${ticketUrl}?playerId=guest-${Math.random().toString(36).slice(2, 8)}`);
+      if (useConvexMint && client) {
+        const minted = await client.action(api.gsTicket.mint, { clientId: session.clientId });
+        return minted.ticket;
+      }
+      const res = await fetch(`${devTicketUrl(gsUrl)}?playerId=guest-${Math.random().toString(36).slice(2, 8)}`);
       if (!res.ok) throw new Error(`ticket endpoint ${res.status}`);
       const data = (await res.json()) as { ticket: string };
       return data.ticket;

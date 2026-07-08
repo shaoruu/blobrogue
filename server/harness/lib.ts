@@ -9,6 +9,7 @@ import { mintTicket } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
 import { WSTransport } from "../../src/client/wsTransport.js";
 import type { InputCmd } from "../../src/sim/input.js";
+import type { SimEvent } from "../../src/sim/events.js";
 import { LatencySocket, type NetConditions, PERFECT_NET } from "./latencySocket.js";
 
 export const TEST_SECRET = "harness-shared-secret";
@@ -32,7 +33,7 @@ export async function startTestServer(overrides: Partial<ServerConfig> = {}, log
     auth: { secret: TEST_SECRET, allowDev: true },
     ...overrides,
   };
-  const server = new GameServer(cfg, createLogger({ app: "gs-test" }, logLevel));
+  const server = new GameServer(cfg, { logger: createLogger({ app: "gs-test" }, logLevel) });
   const port = await server.listen();
   return {
     server,
@@ -70,6 +71,8 @@ export interface BotSample {
   enemyX: number | null; // rendered enemy[0].x (interpolated), for render-latency measurement
 }
 
+export interface RenderSample { t: number; x: number }
+
 export interface BotOptions {
   url: string;
   secret: string;
@@ -77,21 +80,35 @@ export interface BotOptions {
   net?: NetConditions;
   script?: InputScript;
   frameMs?: number;
+  // When set, the bot reads the latest snapshot each frame and aims+fires at the boss (or the
+  // nearest enemy), overriding the script's aim/firing. Movement still comes from the script.
+  attack?: "boss" | "nearest";
 }
 
 export class Bot {
   readonly transport: WSTransport;
   private readonly script: InputScript;
   private readonly frameMs: number;
+  private readonly attack: "boss" | "nearest" | undefined;
   private timer: ReturnType<typeof setInterval> | null = null;
   private frame = 0;
   private lastT = 0;
+  private trackId: string | null = null;
   samples: BotSample[] = [];
+  renderSamples: RenderSample[] = []; // interpolated x of a tracked remote player (latency probe)
+  events: SimEvent[] = [];            // all replayed events (reliable-channel delivery assertions)
+
+  // Track a remote player's interpolated render position (for a clean, monotonic render-latency
+  // probe: a straight-walking player, unlike a chasing enemy, gives a 1:1 value->time mapping).
+  trackRemote(serverId: string): void {
+    this.trackId = serverId;
+  }
 
   constructor(o: BotOptions) {
     const net = o.net ?? PERFECT_NET;
     this.script = o.script ?? SCRIPTS.idle;
     this.frameMs = o.frameMs ?? 16;
+    this.attack = o.attack;
     this.transport = new WSTransport({
       url: o.url,
       getTicket: () => Promise.resolve(mintTicket(o.secret, o.playerId)),
@@ -108,14 +125,41 @@ export class Bot {
 
   private frameTick(): void {
     const now = Date.now();
-    const dt = Math.min(0.05, (now - this.lastT) / 1000);
+    // Bound a frame to the fixed-step catch-up window (MAX_STEPS_PER_FRAME * FIXED_DT = 0.25s), NOT
+    // one tick: under a loaded node process setInterval jitters well past 50ms, and a 0.05 cap
+    // would make the fixed-step accumulator lose wall-clock time (an artifact absent in a real
+    // 16ms-rAF browser). This keeps measured speed accurate while still bounding a long stall.
+    const dt = Math.min(0.25, (now - this.lastT) / 1000);
     this.lastT = now;
-    const cmd = this.script(this.frame++, now);
+    let cmd = this.script(this.frame++, now);
+    if (this.attack) cmd = this.aimAndFire(cmd);
     this.transport.sendInput(cmd);
     this.transport.advance(dt);
-    const { state } = this.transport.poll();
+    const { state, events } = this.transport.poll();
+    for (const e of events) this.events.push(e);
     const e0 = state.enemies.length > 0 ? state.enemies[0] : null;
     this.samples.push({ t: now, enemyX: e0 ? e0.x : null });
+    if (this.trackId) {
+      const rp = this.transport.remotePlayers().find((r) => r.playerId === this.trackId);
+      if (rp) this.renderSamples.push({ t: now, x: rp.x });
+    }
+  }
+
+  // Override aim/firing to shoot at the boss (or nearest enemy) from the latest snapshot.
+  private aimAndFire(cmd: InputCmd): InputCmd {
+    const snap = this.transport.getLatestSnapshot();
+    if (!snap || snap.enemies.length === 0) return cmd;
+    const self = this.transport.getPredictedSelf();
+    let target = this.attack === "boss" ? snap.enemies.find((e) => e.kind === "boss") : undefined;
+    if (!target) {
+      let bestD = Infinity;
+      for (const e of snap.enemies) {
+        const d = (e.x - self.x) ** 2 + (e.y - self.y) ** 2;
+        if (d < bestD) { bestD = d; target = e; }
+      }
+    }
+    if (!target) return cmd;
+    return { ...cmd, aim: Math.atan2(target.y - self.y, target.x - self.x), firing: true };
   }
 
   predictedSelf(): { x: number; y: number } {

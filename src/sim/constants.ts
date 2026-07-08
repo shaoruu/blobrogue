@@ -110,6 +110,22 @@ export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;
 
+// Lag compensation (Stage C). The world keeps a short ring of past enemy positions so the
+// server can rewind a shooter's hit test to where they actually saw the target (their
+// render-time view), then apply damage in the present. Bounded to anti-cheat-safe depth: a
+// rewind can never reach further back than the history window, and the per-player rewind
+// (derived from measured RTT + interp delay) is clamped to LAGCOMP_MAX_TICKS.
+export const LAGCOMP_HISTORY = 6;    // stored past ticks (~300ms at 20Hz)
+export const LAGCOMP_MAX_TICKS = 6;  // max ticks a hit test may be rewound
+
+// Authoritative down/revive (Stage C). A player at 0 HP goes DOWN (not game-over) while a
+// teammate is still up; a living teammate standing within REVIVE_RADIUS for REVIVE_HOLD seconds
+// brings them back at REVIVE_HP with a short mercy-invuln. A full team wipe ends the run.
+export const REVIVE_RADIUS = 46;
+export const REVIVE_HOLD = 1.1;
+export const REVIVE_HP = 2;
+export const REVIVE_INVULN = 1.0;
+
 // Kill-chain combo. The multiplier is sim (drives coin value); the color is a HUD accent
 // (client) kept here so the tiers have a single source of truth.
 export const COMBO_WINDOW = 3;

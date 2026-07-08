@@ -9,7 +9,11 @@
     "start": "node dist/server/src/main.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx test/server.test.ts",
+    "test": "tsx test/server.test.ts && tsx test/stagec.test.ts && tsx test/stagec.hardening.test.ts && tsx test/ticket.test.ts",
+    "test:stage-b": "tsx test/server.test.ts",
+    "test:stagec": "tsx test/stagec.test.ts",
+    "test:hardening": "tsx test/stagec.hardening.test.ts",
+    "test:ticket": "tsx test/ticket.test.ts",
     "harness": "tsx harness/loadtest.ts"
   },
   "dependencies": {
