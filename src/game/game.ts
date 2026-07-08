@@ -298,6 +298,7 @@ export class Game {
   // the entity is removed; loadFloor clears them wholesale.
   private enemyAnims = new Map<number, Anim>();
   private enemyAnimPos = new Map<number, { x: number; y: number }>();
+  private enemyFacing = new Map<number, number>(); // stable L/R facing (velocity-driven + deadzone) to kill mirror-flicker
   private propAnims = new Map<number, Anim>();
   // Keyed by the sim's stable per-floor id (like enemies/props): online rebuilds pickup/chest
   // objects from each snapshot, so object-identity keying would reset the idle anim 20x/s.
@@ -525,6 +526,7 @@ export class Game {
     this.muzzle.t = 0;
     this.enemyAnims.clear();
     this.enemyAnimPos.clear();
+    this.enemyFacing.clear();
     this.propAnims.clear();
     this.pickupAnims.clear();
     this.chestAnims.clear();
@@ -734,11 +736,15 @@ export class Game {
       const prev = this.enemyAnimPos.get(e.id);
       const dx = prev ? e.x - prev.x : 0, dy = prev ? e.y - prev.y : 0;
       const moving = dx * dx + dy * dy > 0.12;
+      // Stable facing: only flip on committed horizontal movement (deadzone), never from
+      // player-relative x every frame — that was the ghost/mob mirror-flicker.
+      if (dx > 0.6) this.enemyFacing.set(e.id, 1);
+      else if (dx < -0.6) this.enemyFacing.set(e.id, -1);
       stepAnim(anim, dt, moving, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
       this.enemyAnimPos.set(e.id, { x: e.x, y: e.y });
     }
     if (this.enemyAnims.size > liveEnemyIds.size) {
-      for (const id of this.enemyAnims.keys()) if (!liveEnemyIds.has(id)) { this.enemyAnims.delete(id); this.enemyAnimPos.delete(id); }
+      for (const id of this.enemyAnims.keys()) if (!liveEnemyIds.has(id)) { this.enemyAnims.delete(id); this.enemyAnimPos.delete(id); this.enemyFacing.delete(id); }
     }
     const livePropIds = new Set<number>();
     for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
@@ -2197,7 +2203,7 @@ export class Game {
       const a = e.attack;
       const anim = this.animForEnemy(e);
       const sx = e.x - cam.x, sy = e.y - cam.y;
-      const facing = this.px >= e.x ? 1 : -1;
+      const facing = this.enemyFacing.get(e.id) ?? (this.px >= e.x ? 1 : -1);
       const isWindup = a.phase === "windup";
       const isHopSlam = e.kind === "boss" && a.move === "hopslam";
 
