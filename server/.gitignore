@@ -1,0 +1,6 @@
+# Track the example env (the root .gitignore ignores all .env*; re-include the template).
+!.env.example
+
+# Never track a real env or build output.
+.env
+dist/

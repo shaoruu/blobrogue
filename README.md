@@ -47,4 +47,11 @@ var (`VITE_CONVEX_URL`). With it unset, the game runs exactly like solo v0 — n
 breaks. Full provisioning steps, the exact commands, and the architecture are in
 **[MULTIPLAYER.md](MULTIPLAYER.md)**.
 
+### Authoritative game server (Stage B)
+The multiplayer foundation is moving to a real **authoritative WebSocket server** that runs the
+same `src/sim/stepWorld` as the single source of truth; clients send inputs and predict/reconcile.
+It lives in **[`server/`](server/README.md)** and is opt-in behind an explicit `?online=1`
+route — solo stays on the in-process `LocalTransport`, byte-identical. See the measured spike
+report in **[docs/blobrogue_STAGE_B_report.md](docs/blobrogue_STAGE_B_report.md)**.
+
 Built and maintained autonomously. Evolves every few hours.

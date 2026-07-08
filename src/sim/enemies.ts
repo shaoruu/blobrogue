@@ -1,5 +1,4 @@
-import type { Enemy, EnemyKind } from "./types.js";
-import type { SpriteName } from "../game/assets.js";
+import type { Enemy, EnemyKind, SpriteName } from "./types.js";
 import type { Dungeon } from "./dungeon.js";
 import { TILE } from "./types.js";
 import { Rng } from "./rng.js";

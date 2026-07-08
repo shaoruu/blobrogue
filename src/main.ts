@@ -2,7 +2,7 @@ import { ConvexClient } from "convex/browser";
 import { Game } from "./game/game.js";
 import type { RunResult } from "./game/game.js";
 import type { ProfileDoc } from "./net/api.js";
-import { CONVEX_URL } from "./net/config.js";
+import { CONVEX_URL, resolveGsUrl, devTicketUrl } from "./net/config.js";
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
@@ -78,6 +78,22 @@ async function bootNormal() {
   // failure (e.g. auth backend not deployed) is swallowed — the menu still loads.
   if (auth) {
     try { await auth.init(); } catch { /* menu stays usable */ }
+  }
+
+  // Explicit online (authoritative WS) route: `?online=1` (or `?gs=<wsUrl>`), analogous to the
+  // hidden `?dev` route. Solo/co-op stay on their normal paths; this never triggers by default.
+  const gsUrl = resolveGsUrl(window.location.search);
+  if (gsUrl) {
+    const ticketUrl = devTicketUrl(gsUrl);
+    const getTicket = async (): Promise<string> => {
+      const res = await fetch(`${ticketUrl}?playerId=guest-${Math.random().toString(36).slice(2, 8)}`);
+      if (!res.ok) throw new Error(`ticket endpoint ${res.status}`);
+      const data = (await res.json()) as { ticket: string };
+      return data.ticket;
+    };
+    menu.hide();
+    game.start({ mode: "online", online: { url: gsUrl, getTicket }, profile: null });
+    return;
   }
 
   void menu.showTitle();

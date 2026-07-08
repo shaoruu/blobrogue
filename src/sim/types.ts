@@ -186,3 +186,12 @@ export interface RemotePlayer {
 
 export const TILE = 48;
 export type TileKind = 0 | 1; // 0 = floor, 1 = wall
+
+// Sprite-atlas keys. These are cosmetic (the client's asset loader maps them to images), but
+// the enemy archetype table in the pure sim references its own sprite by name, so the union
+// lives here in the pure types module rather than in the client's asset loader. That keeps
+// src/sim free of any import into src/game (which pulls in DOM types). The client re-exports
+// this from assets.ts for its render call sites.
+export type SpriteName =
+  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
+  | "heart" | "coin" | "gun" | "spit";

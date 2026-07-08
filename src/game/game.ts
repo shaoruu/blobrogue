@@ -1,6 +1,6 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, RemotePlayer } from "../sim/types.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
@@ -9,6 +9,9 @@ import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoices } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { LocalTransport } from "../client/transport.js";
+import type { Transport } from "../client/transport.js";
+import { WSTransport } from "../client/wsTransport.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
 import { applyItemToWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
@@ -36,9 +39,17 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
+// Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
+// explicit config and routes through WSTransport instead of LocalTransport.
+export interface OnlineOptions {
+  url: string;
+  getTicket: () => Promise<string>;
+}
+
 export interface StartOptions {
-  mode: "solo" | "coop";
+  mode: "solo" | "coop" | "online";
   coop?: CoopBridge | null;
+  online?: OnlineOptions | null;
   profile?: ProfileStats | null;
 }
 
@@ -245,10 +256,16 @@ export class Game {
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
 
-  // The simulation is owned by the Transport (LocalTransport in solo runs stepWorld
-  // in-process). The client reads the world for rendering + camera and drives it via
+  // The simulation is owned by the Transport. Solo/co-op run stepWorld in-process
+  // (LocalTransport); online routes through WSTransport (predict + reconcile against an
+  // authoritative server). The client reads the world for rendering + camera and drives it via
   // InputCmds; it never mutates sim state directly outside dev tools + blessing picks.
-  private transport = new LocalTransport();
+  private mode: "solo" | "coop" | "online" = "solo";
+  private localTransport = new LocalTransport();
+  private wsTransport: WSTransport | null = null;
+  private get transport(): Transport {
+    return this.mode === "online" && this.wsTransport ? this.wsTransport : this.localTransport;
+  }
   private world!: WorldState;
   private inputSeq = 0;
   private seed = 0;
@@ -421,12 +438,23 @@ export class Game {
   }
 
   start(opts: StartOptions) {
+    this.mode = opts.mode;
     this.coop = opts.coop ?? null;
     this.profile = opts.profile ?? null;
-    const floor = this.coop ? this.coop.getFloor() : 1;
-    this.seed = this.coop ? this.coop.getSeed() : randomSeed();
-    // Boot the (in-process) sim through the transport and grab the live world for reads.
-    this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
+    let floor: number;
+    if (this.mode === "online" && opts.online) {
+      // Online: the SERVER owns the world. Bind WSTransport; seed/floor are the fixed Stage-B
+      // arena the client rebuilds locally for prediction (WSTransport ignores the passed args).
+      this.wsTransport = new WSTransport({ url: opts.online.url, getTicket: opts.online.getTicket });
+      this.seed = STAGE_B_SEED;
+      floor = STAGE_B_FLOOR;
+      this.transport.start(this.seed, floor, { isSandbox: true, isCoop: false });
+    } else {
+      this.wsTransport = null;
+      floor = this.coop ? this.coop.getFloor() : 1;
+      this.seed = this.coop ? this.coop.getSeed() : randomSeed();
+      this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
+    }
     this.world = this.transport.poll().state;
     this.inputSeq = 0;
     this.ownedItemDefs = [];
@@ -636,6 +664,14 @@ export class Game {
   private coopTargets(): RemoteTarget[] {
     if (!this.coop) return [];
     return this.coop.remotePlayers().map((r) => ({ x: r.x, y: r.y, isDown: r.isDown }));
+  }
+
+  // Other players to render, from whichever remote source is active: co-op presence (Convex)
+  // or the authoritative server (WSTransport). Solo returns none.
+  private remotes(): RemotePlayer[] {
+    if (this.mode === "coop" && this.coop) return this.coop.remotePlayers();
+    if (this.mode === "online" && this.wsTransport) return this.wsTransport.remotePlayers();
+    return [];
   }
 
   // Advance the client-only cosmetics the sim no longer owns: player anim, dash trail
@@ -1260,6 +1296,10 @@ export class Game {
     if (this.coop) {
       const count = this.coop.remotePlayers().length + 1;
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+    } else if (this.mode === "online" && this.wsTransport) {
+      const count = this.wsTransport.remotePlayers().length + 1;
+      const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
+      coopLabel = `${live} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -1680,8 +1720,8 @@ export class Game {
       if (arch.isPhasing) continue; // ghosts float — no ground shadow
       if (this.isNearCamera(e.x, e.y, TILE)) this.shadow(e.x - cam.x, e.y - cam.y + arch.drawSize * 0.3, arch.drawSize * 0.62);
     }
-    // remote players (co-op)
-    if (this.coop) for (const r of this.coop.remotePlayers()) {
+    // remote players (co-op presence or authoritative server)
+    for (const r of this.remotes()) {
       if (!r.isDown) this.shadow(r.x - cam.x, r.y - cam.y + 15, 34);
     }
     // local player
@@ -2332,9 +2372,10 @@ export class Game {
   }
 
   private renderRemotePlayers() {
-    if (!this.coop) return;
+    const remotes = this.remotes();
+    if (remotes.length === 0) return;
     const { ctx, cam } = this;
-    for (const r of this.coop.remotePlayers()) {
+    for (const r of remotes) {
       const sx = r.x - cam.x, sy = r.y - cam.y;
       const color = playerColor(r.colorIndex);
       const tinted = this.sprites.tintedHero(color);
@@ -2508,9 +2549,7 @@ export class Game {
     for (const e of this.enemies) {
       dots.push({ x: e.x, y: e.y, color: e.kind === "boss" ? "#ffb43b" : "#ff6a6a", size: e.kind === "boss" ? 3 : 2 });
     }
-    if (this.coop) {
-      for (const r of this.coop.remotePlayers()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
-    }
+    for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
     this.minimap.render({
       dungeon: this.dungeon,
       playerX: this.px, playerY: this.py,
