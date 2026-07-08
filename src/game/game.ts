@@ -6,7 +6,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { rollItemChoices } from "../sim/items.js";
+import { rollItemChoices, itemById } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
@@ -633,6 +633,12 @@ export class Game {
     const { events } = this.transport.poll();
     this.handleSimEvents(events);
 
+    // Online: surface any server-decided blessing offer (choice authority is server-side).
+    if (this.mode === "online" && this.wsTransport && !this.isChoosing) {
+      const offer = this.wsTransport.consumePendingOffer();
+      if (offer) this.offerServerBlessing(offer);
+    }
+
     // Dev combo-freeze holds the chain full so the HUD can be screenshotted at a tier.
     if (this.comboFreeze && this.combo > 0) this.p.comboTimer = COMBO_WINDOW;
 
@@ -818,7 +824,10 @@ export class Game {
         this.addTrauma(0.12);
         break;
       case "offerBlessing":
-        this.offerBlessing();
+        // Online: the SERVER decides the choice set and sends a separate `offer` message (drained
+        // in tick via the transport); ignore the sim event's local roll so choice authority stays
+        // server-side. Solo/co-op roll their own choices locally.
+        if (this.mode !== "online") this.offerBlessing();
         break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); sfx("coin"); }
@@ -991,6 +1000,22 @@ export class Game {
     });
   }
 
+  // Online: show the SERVER's decided blessing choice set (already validated pool) and reply with
+  // the authoritative pick — the server applies the mods and reflects them via SelfWire, so this
+  // client never mutates its own run stats. Choices arrive as item ids we resolve to defs.
+  private offerServerBlessing(choiceIds: string[]) {
+    const choices = choiceIds.map((id) => itemById(id)).filter((it): it is ItemDef => it !== undefined);
+    if (choices.length === 0 || !this.wsTransport) return;
+    this.isChoosing = true;
+    this.isPaused = false;
+    this.mouse.isDown = false;
+    this.blessing.show(choices, (item) => {
+      this.wsTransport?.sendPickBlessing(item.id);
+      this.isChoosing = false;
+      this.last = performance.now();
+    });
+  }
+
   private dashCooldown(): number {
     return DASH_COOLDOWN * this.mods.dashCdMult;
   }
@@ -1009,7 +1034,7 @@ export class Game {
   private selectWeapon(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
-    equipWeaponInWorld(this.world, LOCAL_ID, owned[index]);
+    this.equipOrRequest(owned[index]);
   }
 
   private cycleWeapon(dir: number) {
@@ -1017,7 +1042,14 @@ export class Game {
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
     const next = (cur + dir + owned.length) % owned.length;
-    equipWeaponInWorld(this.world, LOCAL_ID, owned[next]);
+    this.equipOrRequest(owned[next]);
+  }
+
+  // Solo/co-op equip in the local sim (authoritative locally); online sends an authoritative
+  // switch request — the server validates ownership + equips, and the result returns via SelfWire.
+  private equipOrRequest(weapon: WeaponId) {
+    if (this.mode === "online" && this.wsTransport) this.wsTransport.sendSwitch(weapon);
+    else equipWeaponInWorld(this.world, LOCAL_ID, weapon);
   }
 
 
@@ -1313,7 +1345,9 @@ export class Game {
       floor: this.floor, kills: this.kills, coins: this.coins,
       weaponName: WEAPONS[this.weapon].name,
       weapons: this.p.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
-      isCleared: this.enemies.length === 0,
+      // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
+      // out of this client's snapshot, so a local count can't decide "cleared").
+      isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : this.enemies.length === 0,
       enemiesLeft: this.enemies.length,
       isBossActive,
       bossHpFrac,
@@ -1330,8 +1364,13 @@ export class Game {
   // Collapse owned blessings by id into count-bearing entries (first-seen order), so the
   // HUD panel shows one chip per distinct item with an xN badge when a pick repeats.
   private collapsedItems() {
+    // Online: the authoritative owned-item ids come from the server (SelfWire), so the HUD reflects
+    // the server's inventory, not a local mirror. Solo/co-op use the locally-picked defs.
+    const defs = this.mode === "online"
+      ? this.p.ownedItemIds.map((id) => itemById(id)).filter((it): it is ItemDef => it !== undefined)
+      : this.ownedItemDefs;
     const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
-    for (const it of this.ownedItemDefs) {
+    for (const it of defs) {
       const seen = collapsed.get(it.id);
       if (seen) seen.count++;
       else collapsed.set(it.id, { id: it.id, name: it.name, desc: it.desc, glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });

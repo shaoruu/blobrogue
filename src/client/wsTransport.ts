@@ -10,12 +10,12 @@
 // native-WebSocket factory; the harness passes a `ws` (optionally latency-wrapped) one.
 
 import type { Transport, PollResult } from "./transport.js";
-import { createWorld, stepPlayerPhase } from "../sim/world.js";
+import { createWorld, stepPlayerPhase, loadFloorIntoWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
-import type { RemotePlayer } from "../sim/types.js";
+import type { RemotePlayer, WeaponId } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
@@ -119,6 +119,14 @@ export class WSTransport implements Transport {
   private smoothY = 0;
   private lastStatAt = 0;
 
+  // Authoritative shared-world tracking: the client rebuilds the identical dungeon geometry when
+  // the server's seed/floor changes (party-wide descend), so movement prediction collides with
+  // the same walls the server does.
+  private curSeed = -1;
+  private curFloor = -1;
+  // A server-decided blessing offer waiting to be shown (consumed by the game each frame).
+  private pendingOffer: string[] | null = null;
+
   // observability for the harness / HUD
   bytesRecv = 0;
   snapsRecv = 0;
@@ -139,10 +147,14 @@ export class WSTransport implements Transport {
   }
 
   start(): void {
-    // seed/floor are fixed by the protocol for the Stage-B arena; the passed args (a random
-    // solo seed) are intentionally ignored — the server owns the world.
-    this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { isSandbox: true });
-    this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { isSandbox: true });
+    // The server owns the world; the passed args (a random solo seed) are ignored. Build a
+    // placeholder real-dungeon world for pre-join prediction; the first snapshot's seed/floor
+    // rebuilds it to match the authoritative geometry (see maybeRebuildWorld).
+    this.curSeed = STAGE_B_SEED;
+    this.curFloor = STAGE_B_FLOOR;
+    this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {});
+    this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {});
+    this.pendingOffer = null;
     this.pending = [];
     this.nextInput = null;
     this.seq = 0;
@@ -237,10 +249,35 @@ export class WSTransport implements Transport {
       this.lastError = `${msg.code}: ${msg.msg}`;
       return;
     }
+    if (msg.t === "offer") {
+      // A server-decided blessing choice set for this client; the game shows it and replies with
+      // pickBlessing. Latest offer wins if two arrive before a pick.
+      this.pendingOffer = msg.choices.slice();
+      return;
+    }
     this.ingestSnapshot(msg);
   }
 
+  // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
+  // floor (initial join and every party-wide descend). Enemies/bullets/props ride the snapshot,
+  // so only the walls + a local player need to exist; the next reconcile snaps self to truth.
+  private maybeRebuildWorld(seed: number, floor: number): void {
+    if (seed === this.curSeed && floor === this.curFloor) return;
+    this.curSeed = seed;
+    this.curFloor = floor;
+    this.predState.seed = seed;
+    this.renderState.seed = seed;
+    loadFloorIntoWorld(this.predState, floor);
+    loadFloorIntoWorld(this.renderState, floor);
+    // A fresh floor is a hard teleport for every remote entity; drop stale interp history so
+    // nothing slides across the new map for one render delay.
+    this.interp = new RemoteInterp();
+    this.smoothX = 0;
+    this.smoothY = 0;
+  }
+
   private ingestSnapshot(snap: Extract<ServerMsg, { t: "snap" }>): void {
+    this.maybeRebuildWorld(snap.seed, snap.floor);
     this.latestSnap = snap;
     const prevSnapAt = this.lastSnapAtForJitter;
     this.snapRecvAt = this.now();
@@ -469,6 +506,43 @@ export class WSTransport implements Transport {
   }
   getStatus(): ConnStatus {
     return this.status;
+  }
+
+  // ---- authoritative gameplay actions (inputs only; the server owns every outcome) ----
+
+  // Request an authoritative weapon switch. The server equips only if the id is actually owned;
+  // the result returns via SelfWire (wpn/fireCd). Predicting the equip locally would fight the
+  // reconcile on an invalid switch, so we let the snapshot confirm it (switches aren't
+  // latency-critical). No-op if the weapon isn't in the last authoritative inventory.
+  sendSwitch(weapon: WeaponId): void {
+    const self = this.latestSnap?.self;
+    if (self && !self.wpns.includes(weapon)) return;
+    this.sendMsg({ t: "switch", weapon });
+  }
+
+  // Reply to a server blessing offer. The server validates the id against what it offered this
+  // player and applies it authoritatively (mods flow back via SelfWire).
+  sendPickBlessing(itemId: string): void {
+    this.sendMsg({ t: "pickBlessing", itemId });
+  }
+
+  // Consume a pending server-decided blessing offer (choice ids), or null if none. The game shows
+  // it once, then replies via sendPickBlessing.
+  consumePendingOffer(): string[] | null {
+    const o = this.pendingOffer;
+    this.pendingOffer = null;
+    return o;
+  }
+
+  // Non-destructive read of the pending offer (harness/tests inspect without consuming).
+  getPendingOfferPeek(): string[] | null {
+    return this.pendingOffer;
+  }
+
+  // Authoritative floor-cleared / exit-open flag (global objective state; survives interest
+  // filtering, unlike deriving it from the possibly-filtered enemy list).
+  isFloorCleared(): boolean {
+    return this.latestSnap?.cleared ?? false;
   }
 
   // ---- read-only introspection (HUD / harness / tests) ----

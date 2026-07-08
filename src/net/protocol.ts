@@ -9,6 +9,8 @@
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove, PropKind, PickupKind, ChestKind } from "../sim/types.js";
+import type { PlayerMods } from "../sim/items.js";
+import { createMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
@@ -43,7 +45,11 @@ export interface SelfWire {
   fcd: number;                 // fireCd
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
+  rev: number;                 // reviveProgress seconds (authoritative revive hold readout)
   wpn: WeaponId;
+  wpns: WeaponId[];            // authoritative owned-weapon inventory (validated switch source)
+  items: string[];             // authoritative owned blessing/item ids (HUD strip)
+  mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
 }
 
@@ -95,6 +101,12 @@ export type ClientMsg =
   | { t: "join"; ticket: string; protocol: number }
   | { t: "input"; seq: number; dt: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }
   | { t: "pong"; id: number }
+  // Authoritative weapon switch: the server equips ONLY if the id is in the player's owned set
+  // (a tampered client can't equip an unowned weapon). Never carries any outcome.
+  | { t: "switch"; weapon: WeaponId }
+  // Authoritative blessing pick: the server applies the item ONLY if it is in the set it offered
+  // this player (validated against the pending offer), then reflects the mods via SelfWire.
+  | { t: "pickBlessing"; itemId: string }
   // Client netcode telemetry uplink (observability only; never affects the sim). Lets /metrics
   // report client-side signals the server can't measure itself: reconciliations + correction.
   | { t: "stat"; rtt: number; jit: number; rec: number; corr: number };
@@ -108,7 +120,9 @@ export type ServerMsg =
       full: boolean;            // initial (full) snapshot on join (carries no events)
       selfId: PlayerId;         // this client's server-assigned id (on every snap so a dropped
                                 // join snapshot never loses identity)
+      seed: number;             // shared world seed (client rebuilds the identical dungeon geometry)
       floor: number;            // shared floor number (objective/HUD)
+      cleared: boolean;         // authoritative floor-cleared / exit-open flag (global objective)
       self: SelfWire | null;    // authoritative local player (null until spawned)
       players: PlayerWire[];    // OTHER players (interest-filtered @ C)
       enemies: EnemyWire[];
@@ -119,6 +133,10 @@ export type ServerMsg =
       events: SimEvent[];       // events since last snap -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
+  // A server-decided blessing offer for this client (seeded choice set). The client renders these
+  // exact choices and replies with a `pickBlessing` naming one of them; the server validates the
+  // pick against this set and applies it authoritatively. Keeps choice authority server-side.
+  | { t: "offer"; choices: string[] }
   | { t: "error"; code: string; msg: string };
 
 // ---- Codec seam (JSON now; binary is a later swap) ----
@@ -146,6 +164,11 @@ function num(o: Record<string, unknown>, k: string, lo: number, hi: number): num
 function boolOf(o: Record<string, unknown>, k: string): boolean {
   const v = o[k];
   if (typeof v !== "boolean") throw new ProtocolError(`bad ${k}`);
+  return v;
+}
+function shortStr(o: Record<string, unknown>, k: string, max: number): string {
+  const v = o[k];
+  if (typeof v !== "string" || v.length < 1 || v.length > max) throw new ProtocolError(`bad ${k}`);
   return v;
 }
 
@@ -188,6 +211,13 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "pong": {
       return { t: "pong", id: num(o, "id", -1e12, 1e12) };
     }
+    case "switch": {
+      // The weapon id is a short string; the server further validates it is actually owned.
+      return { t: "switch", weapon: shortStr(o, "weapon", 32) as WeaponId };
+    }
+    case "pickBlessing": {
+      return { t: "pickBlessing", itemId: shortStr(o, "itemId", 48) };
+    }
     case "stat": {
       return {
         t: "stat",
@@ -213,7 +243,7 @@ function decodeServerMsg(raw: string): ServerMsg {
   }
   if (typeof parsed !== "object" || parsed === null) throw new ProtocolError("not an object");
   const o = parsed as { t?: unknown };
-  if (o.t !== "snap" && o.t !== "ping" && o.t !== "error") throw new ProtocolError(`unknown server type ${String(o.t)}`);
+  if (o.t !== "snap" && o.t !== "ping" && o.t !== "error" && o.t !== "offer") throw new ProtocolError(`unknown server type ${String(o.t)}`);
   return parsed as ServerMsg;
 }
 
@@ -230,7 +260,8 @@ export function toSelfWire(p: PlayerSim): SelfWire {
   return {
     x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, inv: p.invuln,
     dcd: p.dashCd, dti: p.dashTime, ddx: p.dashDx, ddy: p.dashDy, fcd: p.fireCd,
-    fac: p.facing, down: p.isDown, wpn: p.weapon,
+    fac: p.facing, down: p.isDown, rev: p.reviveProgress, wpn: p.weapon,
+    wpns: p.ownedWeapons.slice(), items: p.ownedItemIds.slice(), mods: p.mods,
     coins: p.coins, kills: p.kills, combo: p.combo, ct: p.comboTimer,
   };
 }
@@ -259,8 +290,19 @@ export function toBulletWire(b: Bullet): BulletWire {
 export function applySelfWire(p: PlayerSim, s: SelfWire): void {
   p.x = s.x; p.y = s.y; p.hp = s.hp; p.maxHp = s.mhp; p.invuln = s.inv;
   p.dashCd = s.dcd; p.dashTime = s.dti; p.dashDx = s.ddx; p.dashDy = s.ddy; p.fireCd = s.fcd;
-  p.facing = s.fac; p.isDown = s.down; p.weapon = s.wpn;
+  p.facing = s.fac; p.isDown = s.down; p.reviveProgress = s.rev; p.weapon = s.wpn;
+  p.ownedWeapons = s.wpns.slice();
+  p.ownedItemIds = s.items.slice();
+  // Mods drive client prediction (move speed, fire rate, dash cd), so the predicted player MUST
+  // run the server's authoritative mods or reconciliation would fight every blessed step.
+  Object.assign(p.mods, s.mods);
   p.coins = s.coins; p.kills = s.kills; p.combo = s.combo; p.comboTimer = s.ct;
+}
+
+// Reconstruct a full PlayerMods from a (possibly partial/trusted-server) wire mods object,
+// defaulting any missing field to its identity so a malformed frame can't leave holes.
+export function modsFromWire(w: Partial<PlayerMods> | undefined): PlayerMods {
+  return Object.assign(createMods(), w ?? {});
 }
 
 // Build a render-ready Enemy from a wire struct at an (interpolated) position. Scratch fields
@@ -363,7 +405,9 @@ export function buildSnapshot(
     ackSeq,
     full,
     selfId: selfPid,
+    seed: w.seed,
     floor: w.floor,
+    cleared: w.enemies.length === 0,
     self: self ? toSelfWire(self) : null,
     players,
     enemies,
