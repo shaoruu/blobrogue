@@ -70,6 +70,8 @@ export interface BotSample {
   enemyX: number | null; // rendered enemy[0].x (interpolated), for render-latency measurement
 }
 
+export interface RenderSample { t: number; x: number }
+
 export interface BotOptions {
   url: string;
   secret: string;
@@ -90,7 +92,15 @@ export class Bot {
   private timer: ReturnType<typeof setInterval> | null = null;
   private frame = 0;
   private lastT = 0;
+  private trackId: string | null = null;
   samples: BotSample[] = [];
+  renderSamples: RenderSample[] = []; // interpolated x of a tracked remote player (latency probe)
+
+  // Track a remote player's interpolated render position (for a clean, monotonic render-latency
+  // probe: a straight-walking player, unlike a chasing enemy, gives a 1:1 value->time mapping).
+  trackRemote(serverId: string): void {
+    this.trackId = serverId;
+  }
 
   constructor(o: BotOptions) {
     const net = o.net ?? PERFECT_NET;
@@ -122,6 +132,10 @@ export class Bot {
     const { state } = this.transport.poll();
     const e0 = state.enemies.length > 0 ? state.enemies[0] : null;
     this.samples.push({ t: now, enemyX: e0 ? e0.x : null });
+    if (this.trackId) {
+      const rp = this.transport.remotePlayers().find((r) => r.playerId === this.trackId);
+      if (rp) this.renderSamples.push({ t: now, x: rp.x });
+    }
   }
 
   // Override aim/firing to shoot at the boss (or nearest enemy) from the latest snapshot.
