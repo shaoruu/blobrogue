@@ -7,8 +7,8 @@
 // Run: npm run test:sim
 
 import {
-  createWorld, spawnPlayerInWorld, devSpawnEnemy, devSpawnProp,
-  stepWorldPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
+  createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest,
+  stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
   switchWeaponInWorld, acquireWeaponInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
@@ -424,6 +424,160 @@ function lootOwnershipTests(): void {
   }
 }
 
+function departedOwnerTests(): void {
+  section("attribution: a DEPARTED owner's bullet still lands but credits NO ONE");
+  {
+    const { w, a, b } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", 500, 400);
+    e.hp = 1;
+    plantBullet(w, b.id, e, 10);
+    removePlayerFromWorld(w, b.id); // B disconnects with the bullet in flight
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("enemy still died to the in-flight bullet", w.enemies.length === 0);
+    check("the kill credited NO live player (never re-attributed)", a.kills === 0, `A.kills=${a.kills}`);
+    const killEv = ev.find((x) => x.t === "enemyKill");
+    check("kill event emitted with no combo credit", !!killEv && (killEv as { combo: number }).combo === 0);
+  }
+
+  section("attribution: a departed igniter's burn DoT kill credits no one");
+  {
+    const { w, a, b } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", 500, 400);
+    e.hp = 2;
+    const burn: Bullet = {
+      x: e.x, y: e.y, vx: 1, vy: 0, radius: 6, life: 1, friendly: true,
+      owner: b.id, damage: 0.1, color: "#f80", pierce: 0, hitList: null, isCrit: false, burn: 3,
+    };
+    w.bullets.push(burn);
+    stepWorldPhase(w, 1 / 20, []); // ignite
+    removePlayerFromWorld(w, b.id);
+    for (let i = 0; i < 120 && !e.dead && w.enemies.length > 0; i++) stepWorldPhase(w, 1 / 20, []);
+    check("burn finished the kill after the igniter left", w.enemies.length === 0);
+    check("no live player was credited", a.kills === 0, `A.kills=${a.kills}`);
+  }
+
+  section("attribution: a departed owner's bullet does NOT open a chest for someone else");
+  {
+    const { w, a, b } = twoPlayerArena();
+    devSpawnChest(w, 500, 400);
+    const chest = w.chests[0];
+    const det: Bullet = {
+      x: chest.x, y: chest.y, vx: 1, vy: 0, radius: 6, life: 1, friendly: true,
+      owner: b.id, damage: 1, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    };
+    w.bullets.push(det);
+    removePlayerFromWorld(w, b.id);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("chest stays closed (no phantom opener, nothing credited to A)", !chest.opened);
+    check("no blessing offered to anyone", !ev.some((x) => x.t === "offerBlessing"));
+    check("the bullet was still consumed by the chest", w.bullets.every((bl) => bl.life <= 0));
+    check("A untouched", a.coins === 0 && a.ownedItemIds.length === 0);
+  }
+
+  section("attribution: chest opened by a LIVE bullet credits the bullet's owner, not a primary");
+  {
+    const { w, a, b } = twoPlayerArena();
+    devSpawnChest(w, 500, 400);
+    const chest = w.chests[0];
+    plantBullet(w, b.id, { x: chest.x, y: chest.y, radius: chest.radius } as Enemy, 1); // aimed at the chest
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("chest opened by B's bullet", chest.opened);
+    const offer = ev.find((x) => x.t === "offerBlessing") as { pid: string } | undefined;
+    if (offer) check("any blessing offer targets the SHOOTER (B), never A", offer.pid === b.id, `pid=${offer.pid}`);
+    else check("no offer this roll (coins/heart/weapon rolled instead) — never credited to A", a.ownedItemIds.length === 0);
+  }
+}
+
+function meleeFireTimeTests(): void {
+  section("melee lag comp: BOTH actors evaluate at fire time (attacker origin + rewound target)");
+  {
+    const w = createWorld(0xFACE, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    spawnPlayerInWorld(w, "pB"); // ally so downs don't end the world
+    a.x = 300; a.y = 300;
+    // A target that sat at (340,300) in the shooter's view (history — inside sword reach), but
+    // is somewhere else now.
+    const e = devSpawnEnemy(w, "slime", 340, 300);
+    e.hp = 100; e.spawnTimer = 0;
+    for (let i = 0; i < 4; i++) { w.tick++; recordHistory(w); }
+    e.x = 700; // present position far outside any swing reach
+    // A laggy swordsman (rewind 3) swings from (300,300) toward +x.
+    acquireWeaponInWorld(w, a.id, "sword");
+    a.rewindTicks = 3;
+    a.aimAngle = 0;
+    const ev: SimEvent[] = [];
+    stepPlayerPhase(w, a, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false }, 1 / 20, ev);
+    check("swing started", a.meleeSwing !== null);
+    // The attacker then MOVES far away — but the swing must still evaluate from its ORIGIN.
+    a.x = 1000; a.y = 800;
+    const hpBefore = e.hp;
+    w.tick++;
+    stepWorldPhase(w, 1 / 20, []);
+    check("fire-time swing hit the target where the attacker SAW it", e.hp < hpBefore, `hp ${hpBefore}->${e.hp}`);
+  }
+
+  section("melee lag comp: the attacker's NEW position cannot drag a laggy swing onto a target (impossible hit)");
+  {
+    const w = createWorld(0xFACE, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    spawnPlayerInWorld(w, "pB");
+    a.x = 300; a.y = 300;
+    // The target is FAR from the swing origin, near where the attacker will move to.
+    const e = devSpawnEnemy(w, "slime", 1000, 830);
+    e.hp = 100; e.spawnTimer = 0;
+    for (let i = 0; i < 4; i++) { w.tick++; recordHistory(w); }
+    acquireWeaponInWorld(w, a.id, "sword");
+    a.rewindTicks = 3;
+    a.aimAngle = 0;
+    stepPlayerPhase(w, a, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false }, 1 / 20, []);
+    a.x = 1000; a.y = 800; // teleport next to the target AFTER firing
+    const hpBefore = e.hp;
+    w.tick++;
+    stepWorldPhase(w, 1 / 20, []);
+    check("no impossible hit from the post-fire position while rewound", e.hp === hpBefore, `hp=${e.hp}`);
+  }
+}
+
+function strandedDownTests(): void {
+  section("lifecycle: the last standing player LEAVING ends the run for stranded downed players");
+  {
+    const w = createWorld(0xD0EE, 1, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    a.x = 200; a.y = 200; b.x = 900; b.y = 700;
+    // A goes down while B stands.
+    a.hp = 1; a.invuln = 0;
+    plantEnemyBullet(w, a, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("A is down (revivable while B stands)", a.isDown && !w.isRunOver);
+    // B disconnects — A can never be revived.
+    removePlayerFromWorld(w, b.id);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("run ended for the stranded downed player", w.isRunOver);
+    check("gameOver emitted for A", ev.some((x) => x.t === "gameOver" && (x as { pid: string }).pid === a.id));
+    // Terminal transition is idempotent: another tick emits nothing new.
+    const ev2: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev2);
+    check("terminal transition emits exactly once", !ev2.some((x) => x.t === "gameOver"));
+  }
+
+  section("lifecycle: a wipe by damage also marks the world over (state-derived game over)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    w.isShared = true;
+    a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
+    b.hp = 1; b.invuln = 0; plantEnemyBullet(w, b, 5);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("wipe marked the world over", w.isRunOver);
+    check("gameOver events for the whole room", ev.filter((x) => x.t === "gameOver").length === 2);
+  }
+}
+
 function downIterationTests(): void {
   // Regression for the TD finding: a player going DOWN must not abort the enemy loop (which would
   // freeze the rest of the world for everyone). Solo keeps its game-over early-return.
@@ -462,9 +616,12 @@ function downIterationTests(): void {
 
 function main(): void {
   ownershipTests();
+  departedOwnerTests();
   downReviveTests();
   downIterationTests();
+  strandedDownTests();
   lagCompTests();
+  meleeFireTimeTests();
   interestTests();
   propChainTests();
   weaponSwitchTests();
