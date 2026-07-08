@@ -297,6 +297,7 @@ export class Game {
   // live objects and no anim event ever targets them). Enemy/prop entries are pruned when
   // the entity is removed; loadFloor clears them wholesale.
   private enemyAnims = new Map<number, Anim>();
+  private enemyAnimPos = new Map<number, { x: number; y: number }>();
   private propAnims = new Map<number, Anim>();
   private pickupAnims = new WeakMap<Pickup, Anim>();
   private chestAnims = new WeakMap<Chest, Anim>();
@@ -515,6 +516,7 @@ export class Game {
     this.afterimages = [];
     this.muzzle.t = 0;
     this.enemyAnims.clear();
+    this.enemyAnimPos.clear();
     this.propAnims.clear();
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
@@ -686,6 +688,28 @@ export class Game {
       this.isPlayerMoving = false;
     }
     stepAnim(this.playerAnim, dt, this.isPlayerMoving, this.playerLean);
+
+    // Sim entities no longer carry Anim after Stage A, so every client-owned cosmetic
+    // map must advance here. Without this, hit flash stays at 1 forever (white mobs),
+    // and pickup/chest/prop idle clocks freeze. Movement is derived from last snapshot.
+    const liveEnemyIds = new Set<number>();
+    for (const e of this.enemies) {
+      liveEnemyIds.add(e.id);
+      const anim = this.animForEnemy(e);
+      const prev = this.enemyAnimPos.get(e.id);
+      const dx = prev ? e.x - prev.x : 0, dy = prev ? e.y - prev.y : 0;
+      const moving = dx * dx + dy * dy > 0.12;
+      stepAnim(anim, dt, moving, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
+      this.enemyAnimPos.set(e.id, { x: e.x, y: e.y });
+    }
+    if (this.enemyAnims.size > liveEnemyIds.size) {
+      for (const id of this.enemyAnims.keys()) if (!liveEnemyIds.has(id)) { this.enemyAnims.delete(id); this.enemyAnimPos.delete(id); }
+    }
+    const livePropIds = new Set<number>();
+    for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
+    if (this.propAnims.size > livePropIds.size) for (const id of this.propAnims.keys()) if (!livePropIds.has(id)) this.propAnims.delete(id);
+    for (const pickup of this.pickups) stepAnim(this.animForPickup(pickup), dt, false, 0);
+    for (const chest of this.chests) stepAnim(this.animForChest(chest), dt, false, 0);
 
     // Dash afterimages (pure ghost trail): spaced by dashImgCd while the sim reports a dash.
     if (this.p.dashTime > 0) {
