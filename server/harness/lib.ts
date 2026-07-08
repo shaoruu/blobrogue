@@ -9,6 +9,7 @@ import { mintTicket } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
 import { WSTransport } from "../../src/client/wsTransport.js";
 import type { InputCmd } from "../../src/sim/input.js";
+import type { SimEvent } from "../../src/sim/events.js";
 import { LatencySocket, type NetConditions, PERFECT_NET } from "./latencySocket.js";
 
 export const TEST_SECRET = "harness-shared-secret";
@@ -95,6 +96,7 @@ export class Bot {
   private trackId: string | null = null;
   samples: BotSample[] = [];
   renderSamples: RenderSample[] = []; // interpolated x of a tracked remote player (latency probe)
+  events: SimEvent[] = [];            // all replayed events (reliable-channel delivery assertions)
 
   // Track a remote player's interpolated render position (for a clean, monotonic render-latency
   // probe: a straight-walking player, unlike a chasing enemy, gives a 1:1 value->time mapping).
@@ -129,7 +131,8 @@ export class Bot {
     if (this.attack) cmd = this.aimAndFire(cmd);
     this.transport.sendInput(cmd);
     this.transport.advance(dt);
-    const { state } = this.transport.poll();
+    const { state, events } = this.transport.poll();
+    for (const e of events) this.events.push(e);
     const e0 = state.enemies.length > 0 ? state.enemies[0] : null;
     this.samples.push({ t: now, enemyX: e0 ? e0.x : null });
     if (this.trackId) {

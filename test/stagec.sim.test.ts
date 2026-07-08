@@ -424,9 +424,46 @@ function lootOwnershipTests(): void {
   }
 }
 
+function downIterationTests(): void {
+  // Regression for the TD finding: a player going DOWN must not abort the enemy loop (which would
+  // freeze the rest of the world for everyone). Solo keeps its game-over early-return.
+  section("down does NOT abort enemy iteration in a shared world (other enemies still resolve)");
+  {
+    const w = createWorld(0xD00D, 1, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    a.x = 200; a.y = 200; a.hp = 1; a.invuln = 0;
+    b.x = 1200; b.y = 900; // B far + alive so A goes DOWN (not game over)
+    // enemy1 sits on A (contact -> downs A this tick). enemy2 elsewhere with a bullet on it.
+    const e1 = devSpawnEnemy(w, "slime", a.x, a.y); e1.spawnTimer = 0;
+    const e2 = devSpawnEnemy(w, "slime", 700, 500); e2.hp = 100; e2.spawnTimer = 0;
+    plantBullet(w, b.id, e2, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("A was downed by contact", a.isDown);
+    check("iteration continued past the down: e2 still took its bullet's damage", e2.hp < 100, `e2.hp=${e2.hp}`);
+  }
+
+  section("control: a NON-shared world aborts the enemy loop on down (solo game-over semantics)");
+  {
+    const w = createWorld(0xD00D, 1, { skipLocalPlayer: true }); // isShared:false, isCoop:false
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    a.x = 200; a.y = 200; a.hp = 1; a.invuln = 0;
+    b.x = 1200; b.y = 900;
+    // Enemies are inserted so e1 (which downs A) iterates BEFORE e2; the loop aborts after A downs.
+    const e1 = devSpawnEnemy(w, "slime", a.x, a.y); e1.spawnTimer = 0;
+    const e2 = devSpawnEnemy(w, "slime", 700, 500); e2.hp = 100; e2.spawnTimer = 0;
+    plantBullet(w, b.id, e2, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("A downed (a standing ally still exists)", a.isDown);
+    check("non-shared loop aborted: e2 untouched this tick", e2.hp === 100, `e2.hp=${e2.hp}`);
+  }
+}
+
 function main(): void {
   ownershipTests();
   downReviveTests();
+  downIterationTests();
   lagCompTests();
   interestTests();
   propChainTests();
