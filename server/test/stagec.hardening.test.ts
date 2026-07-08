@@ -230,9 +230,11 @@ async function main(): Promise<void> {
       await sleep(3000); // ~720 frames; fixed-step sampling must keep sends ~20/s
       check("240Hz client still connected after sustained play", fast.transport.isReady() && fast.transport.getStatus() === "open");
       check("no rate limiting triggered by the 240Hz client", s.server.health().counters.rateLimited === 0, `rateLimited=${s.server.health().counters.rateLimited}`);
-      // Bounded client internals: the pending-input ring must not grow with frame rate.
+      // Bounded client internals: the pending-input ring and the hidden prediction world must
+      // not grow with frame rate or sustained fire.
       const pending = fast.transport.getPendingInputCount();
       check("pending-input ring stays bounded", pending <= 64, `pending=${pending}`);
+      check("prediction world holds no leaked bullets under sustained fire", fast.transport.getPredictedBulletCount() === 0, `bullets=${fast.transport.getPredictedBulletCount()}`);
       fast.stop();
 
       // Segmented buckets: an INPUT-class flood (well over maxInputPerSec, under the aggregate

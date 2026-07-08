@@ -462,6 +462,11 @@ export class WSTransport implements Transport {
       }
     }
     if (this.accumulator > FIXED_DT) this.accumulator = FIXED_DT; // clamp after a long stall
+    // Prediction only needs the fire COOLDOWN side effects of shooting; the spawned bullet
+    // objects themselves are server-owned (rendered from snapshots) and predState never runs
+    // the world phase that would expire them — drop them so replayed fire can't grow the
+    // hidden prediction world without bound (TD audit).
+    if (this.predState.bullets.length > 0) this.predState.bullets.length = 0;
     // Periodic telemetry uplink (observability only): report client-side netcode signals the
     // server can't measure so /metrics can surface RTT/jitter/reconciliations/correction.
     if (this.isReady() && this.now() - this.lastStatAt > 2000) {
@@ -647,9 +652,13 @@ export class WSTransport implements Transport {
     const p = this.predState.players.get(LOCAL_ID)!;
     return { x: p.x, y: p.y };
   }
-  // Unacked-input ring depth (bounded-memory assertions in the soak tests).
+  // Unacked-input ring depth / hidden prediction-world bullet count (bounded-memory
+  // assertions in the soak tests).
   getPendingInputCount(): number {
     return this.pending.length;
+  }
+  getPredictedBulletCount(): number {
+    return this.predState.bullets.length;
   }
   // The latest authoritative snapshot, for adversity/measurement harnesses.
   getLatestSnapshot(): Extract<ServerMsg, { t: "snap" }> | null {
