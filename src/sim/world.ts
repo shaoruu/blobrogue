@@ -216,8 +216,14 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   }
 }
 
-function localPlayer(w: WorldState): PlayerSim {
-  return w.players.get(LOCAL_ID)!;
+// The "primary" player used for flow-field sourcing, kill/status credit, and the exit check.
+// Solo/co-op/prediction clients always have the LOCAL_ID player; the authoritative server owns
+// per-connection players ("p<id>") with no LOCAL_ID, so this falls back to the first player and
+// returns undefined only for an empty world (idle server) — callers guard that case. Because
+// solo always has LOCAL_ID, this returns the exact same player it always did (behavior
+// unchanged, goldens green).
+function primaryPlayer(w: WorldState): PlayerSim | undefined {
+  return w.players.get(LOCAL_ID) ?? w.players.values().next().value;
 }
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
@@ -734,10 +740,13 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
 }
 
 function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
-  const p = localPlayer(w);
+  // `credit` receives kill/status attribution + lightning-chain origin. Solo: the LOCAL_ID
+  // player (unchanged). Multiplayer: the first player (bullets carry no owner at Stage B — the
+  // per-shooter ledger is a Stage-C combat concern). Undefined only for an empty world.
+  const credit = primaryPlayer(w);
   refreshFlowField(w, dt);
   for (const e of w.enemies) {
-    tickStatuses(w, p, e, dt, ev);
+    if (credit) tickStatuses(w, credit, e, dt, ev);
     if (e.dead) continue;
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
@@ -754,38 +763,40 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         && Math.hypot(victim.x - e.x, victim.y - e.y) < victim.pr + e.radius && canTouchDamage(e)) {
         damagePlayer(w, victim, e.touchDamage, ev);
         if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
-        applyThorns(w, p, victim, e, ev);
+        applyThorns(w, victim, victim, e, ev);
         if (victim.hp <= 0 && !w.isCoop) return;
       }
     }
 
-    for (const b of w.bullets) {
+    if (credit) for (const b of w.bullets) {
       if (!b.friendly) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-        strikeEnemy(w, p, e, {
+        strikeEnemy(w, credit, e, {
           damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
         }, ev);
         if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);
-          arcLightning(w, p, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
+          arcLightning(w, credit, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
           b.life = 0;
         } else if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
         else b.life = 0;
       }
     }
 
-    const swing = p.meleeSwing;
-    if (swing && swing.timer > 0) {
+    // Each player resolves their own melee swing against this enemy (solo: one player).
+    for (const player of w.players.values()) {
+      const swing = player.meleeSwing;
+      if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
-      if (isMeleeHit(p, e, swing)) {
+      if (isMeleeHit(player, e, swing)) {
         const kbDirX = Math.cos(swing.aim);
         const kbDirY = Math.sin(swing.aim);
         const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
-        strikeEnemy(w, p, e, {
+        strikeEnemy(w, player, e, {
           damage: swing.damage, isCrit: swing.isCrit,
-          puffX: p.x + kbDirX * puffDist, puffY: p.y + kbDirY * puffDist,
+          puffX: player.x + kbDirX * puffDist, puffY: player.y + kbDirY * puffDist,
           kbDirX, kbDirY, burn: swing.burn, chill: swing.chill, shock: swing.shock, isMelee: true,
         }, ev);
         (swing.hitList ??= []).push(e);
@@ -1087,9 +1098,13 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
 function refreshFlowField(w: WorldState, dt: number): void {
   w.flowCd -= dt;
   const d = w.dungeon;
-  const p = localPlayer(w);
-  const isUp = !p.isDown && p.hp > 0;
-  const ptx = Math.floor(p.x / TILE), pty = Math.floor(p.y / TILE);
+  // Rebuild trigger keys off the primary player's tile (solo: LOCAL_ID, unchanged). The field
+  // itself is sourced from EVERY living player (solo: exactly one, so identical), so enemies
+  // flow toward whichever player is nearest.
+  const key = primaryPlayer(w);
+  const isUp = key !== undefined && !key.isDown && key.hp > 0;
+  const ptx = key ? Math.floor(key.x / TILE) : -1;
+  const pty = key ? Math.floor(key.y / TILE) : -1;
   const tileChanged = isUp && (ptx !== w.flowKeyTx || pty !== w.flowKeyTy);
   if (w.flowCd > 0 && !tileChanged && w.flow.isReady()) return;
   w.flowCd = C.FLOW_REBUILD;
@@ -1097,7 +1112,12 @@ function refreshFlowField(w: WorldState, dt: number): void {
 
   const srcs = w.flowSources;
   srcs.length = 0;
-  if (isUp && ptx >= 0 && pty >= 0 && ptx < d.w && pty < d.h) srcs.push(pty * d.w + ptx);
+  for (const pl of w.players.values()) {
+    if (pl.isDown || pl.hp <= 0) continue;
+    const tx = Math.floor(pl.x / TILE), ty = Math.floor(pl.y / TILE);
+    if (tx < 0 || ty < 0 || tx >= d.w || ty >= d.h) continue;
+    srcs.push(ty * d.w + tx);
+  }
   for (const r of w.remoteTargets) {
     if (r.isDown) continue;
     const rtx = Math.floor(r.x / TILE), rty = Math.floor(r.y / TILE);
@@ -1250,7 +1270,7 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[]): void {
   if (p.breakT !== undefined || p.kind === "brazier") return;
   p.dead = true;
   p.breakT = 0;
-  const player = localPlayer(w);
+  const player = primaryPlayer(w);
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
@@ -1266,7 +1286,7 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[]): void {
       if (w.rng.next() < 0.45) w.pickups.push(makePickup("coin", p.x, p.y, ev));
       break;
     case "barrel_explosive":
-      explodeBarrel(w, player, p, ev);
+      if (player) explodeBarrel(w, player, p, ev);
       break;
   }
 }
@@ -1389,8 +1409,8 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
   const isCleared = w.enemies.length === 0;
   if (!isCleared) return;
-  const p = localPlayer(w);
-  if (!p.isDown && Math.hypot(p.x - ex, p.y - ey) < TILE) {
+  const p = primaryPlayer(w);
+  if (p && !p.isDown && Math.hypot(p.x - ex, p.y - ey) < TILE) {
     // Solo descends in-sim; co-op defers to the client's shared-floor orchestration
     // (everyone descends together) so the sim stays authoritative per client without
     // knowing about presence.

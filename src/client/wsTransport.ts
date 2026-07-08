@@ -102,6 +102,8 @@ export class WSTransport implements Transport {
   private latestSnap: Extract<ServerMsg, { t: "snap" }> | null = null;
   private snapRecvAt = 0;
   private selfServerId: PlayerId | null = null;
+  private joinTicket: string | null = null;
+  private lastJoinAt = 0;
 
   private interp = new RemoteInterp();
   private events: SimEvent[] = [];
@@ -156,9 +158,10 @@ export class WSTransport implements Transport {
       return;
     }
     this.socket = sock;
+    this.joinTicket = ticket;
     sock.onopen = () => {
       this.setStatus("open");
-      this.sendMsg({ t: "join", ticket, protocol: PROTOCOL_VERSION });
+      this.sendJoin();
     };
     sock.onmessage = (ev) => this.onMessage(ev.data);
     sock.onclose = () => { this.socket = null; this.setStatus("closed"); };
@@ -168,6 +171,12 @@ export class WSTransport implements Transport {
   private setStatus(s: ConnStatus): void {
     this.status = s;
     this.opts.onStatus?.(s);
+  }
+
+  private sendJoin(): void {
+    if (!this.joinTicket) return;
+    this.lastJoinAt = this.now();
+    this.sendMsg({ t: "join", ticket: this.joinTicket, protocol: PROTOCOL_VERSION });
   }
 
   private sendMsg(msg: Parameters<typeof jsonCodec.encodeClient>[0]): void {
@@ -204,7 +213,7 @@ export class WSTransport implements Transport {
     this.latestSnap = snap;
     this.snapRecvAt = this.now();
     this.snapsRecv++;
-    if (snap.full && snap.selfId) this.selfServerId = snap.selfId;
+    if (snap.selfId) this.selfServerId = snap.selfId;
 
     if (snap.self) this.reconcile(snap);
 
@@ -256,19 +265,33 @@ export class WSTransport implements Transport {
   }
 
   advance(dt: number): void {
+    // A lost join handshake (packet loss on connect) would otherwise strand the client. While
+    // connected but not yet acknowledged (no snapshot), resend the join periodically. A
+    // duplicate join after success is a harmless no-op server-side, and tick broadcasts heal a
+    // lost initial full snapshot on their own.
+    const sock = this.socket;
+    if (sock && sock.readyState === SOCKET_OPEN && !this.isReady() && this.now() - this.lastJoinAt > 500) {
+      this.sendJoin();
+    }
     const cmd = this.nextInput;
     this.nextInput = null;
     if (cmd) {
-      const seq = ++this.seq;
-      const stamped: InputCmd = { ...cmd, seq };
-      this.pending.push({ seq, dt, cmd: stamped });
-      while (this.pending.length > MAX_PENDING) this.pending.shift();
-      this.sendMsg({ t: "input", seq, dt, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash });
-      // Predict the local player immediately (discard predicted FX — juice comes from the
-      // server's authoritative event stream so it never double-fires).
       const p = this.predState.players.get(LOCAL_ID)!;
       const scratch: SimEvent[] = [];
-      stepPlayerPhase(this.predState, p, stamped, dt, scratch);
+      if (this.isReady()) {
+        // Joined: stamp + ring + send for server reconciliation, then predict.
+        const seq = ++this.seq;
+        const stamped: InputCmd = { ...cmd, seq };
+        this.pending.push({ seq, dt, cmd: stamped });
+        while (this.pending.length > MAX_PENDING) this.pending.shift();
+        this.sendMsg({ t: "input", seq, dt, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash });
+        stepPlayerPhase(this.predState, p, stamped, dt, scratch);
+      } else {
+        // Pre-join: predict locally for instant feel, but don't send inputs before the join is
+        // acknowledged (a reordered input arriving before the join would be dropped server-side).
+        // The first snapshot snaps us to the authoritative spawn, discarding this transient.
+        stepPlayerPhase(this.predState, p, cmd, dt, scratch);
+      }
     }
     // Retire the smoothing error over a few frames.
     const k = Math.min(1, dt * SMOOTH_RETIRE_PER_SEC);
@@ -358,6 +381,20 @@ export class WSTransport implements Transport {
   }
   getStatus(): ConnStatus {
     return this.status;
+  }
+
+  // ---- read-only introspection (HUD / harness / tests) ----
+  getSelfServerId(): PlayerId | null {
+    return this.selfServerId;
+  }
+  // The current predicted local-player position (true prediction, pre-smoothing).
+  getPredictedSelf(): { x: number; y: number } {
+    const p = this.predState.players.get(LOCAL_ID)!;
+    return { x: p.x, y: p.y };
+  }
+  // The latest authoritative snapshot, for adversity/measurement harnesses.
+  getLatestSnapshot(): Extract<ServerMsg, { t: "snap" }> | null {
+    return this.latestSnap;
   }
 
   stop(): void {

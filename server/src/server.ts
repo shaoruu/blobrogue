@@ -286,7 +286,10 @@ export class GameServer {
   }
 
   private handleInput(conn: Conn, msg: { seq: number; dt: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }): void {
-    if (!conn.authed) { this.rejectJoin(conn, "unauth_input", "input before join"); return; }
+    // Drop inputs that arrive before the join is bound — under jitter an input can be reordered
+    // ahead of the join, so this is expected and must NOT kill the connection (the join timeout
+    // handles a client that never authenticates at all).
+    if (!conn.authed) { this.counters.rejectedInputs++; return; }
     conn.queue.push(inputToIntent(msg));
     // Bounded queue (backpressure): drop OLDEST beyond the cap so a fast client can't flood the
     // tick loop or gain an advantage by piling up inputs.
@@ -376,7 +379,7 @@ export class GameServer {
       tickMs_p50: Number(this.tickMetric.percentile(50).toFixed(3)),
       tickMs_p95: Number(this.tickMetric.percentile(95).toFixed(3)),
       tickMs_max: Number(this.tickMetric.max().toFixed(3)),
-      counters: this.counters,
+      counters: { ...this.counters },
     };
   }
 

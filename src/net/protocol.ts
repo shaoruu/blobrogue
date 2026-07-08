@@ -88,8 +88,9 @@ export type ServerMsg =
       t: "snap";
       tick: number;
       ackSeq: number;           // last input seq from THIS client the server applied
-      full: boolean;            // initial (full) snapshot on join
-      selfId: PlayerId | null;  // set on the full snapshot: this client's server-assigned id
+      full: boolean;            // initial (full) snapshot on join (carries no events)
+      selfId: PlayerId;         // this client's server-assigned id (on every snap so a dropped
+                                // join snapshot never loses identity)
       self: SelfWire | null;    // authoritative local player (null until spawned)
       players: PlayerWire[];    // OTHER players (B: all)
       enemies: EnemyWire[];
@@ -273,7 +274,7 @@ export function buildSnapshot(
     tick: w.tick,
     ackSeq,
     full,
-    selfId: full ? selfPid : null,
+    selfId: selfPid,
     self: self ? toSelfWire(self) : null,
     players,
     enemies: w.enemies.map(toEnemyWire),

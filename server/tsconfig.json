@@ -24,6 +24,9 @@
     "test/**/*.ts",
     "harness/**/*.ts",
     "../src/sim/**/*.ts",
-    "../src/net/protocol.ts"
+    "../src/net/protocol.ts",
+    "../src/net/interp.ts",
+    "../src/client/transport.ts",
+    "../src/client/wsTransport.ts"
   ]
 }
