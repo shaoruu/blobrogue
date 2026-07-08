@@ -81,8 +81,13 @@ export interface Enemy extends Entity {
   hopMove: number;
   spawnTimer: number;  // spawn-in grace: counts to 0 before the enemy may attack
   // Anti-stuck safety net: seconds a chaser has been trying to move but barely
-  // progressing (wedged on geometry / another body). Nudged perpendicular past ~0.4s.
+  // progressing (wedged on geometry / another body). Nudged perpendicular once it trips.
   stuckTimer: number;
+  // Prop-avoidance side commitment: which way this chaser is detouring around the prop
+  // blocking its path (-1/+1; 0 = none). Held for a short window after the last block so a
+  // dead-on approach can't ping-pong left/right into the prop every tick.
+  avoidSide: number;
+  avoidTime: number;   // seconds the current side commitment persists after the last block
   // Elemental status scratch (allocated at spawn, ticked in updateEnemies). Same local
   // per-enemy model as hp/knockback — driven by bullets, so co-op stays desync-free.
   burn: number;       // seconds of burn DoT left
@@ -139,6 +144,12 @@ export interface Bullet {
   // near-instant hit is tested against the shooter's fire-time view. Undefined/0 in solo.
   bornTick?: number;
   lagRewind?: number;
+  // Position before this tick's move (stamped by updateBullets): the swept-collision segment
+  // [prev -> current] is what hit tests check, so a fast round (the Longshot's 1400px/s slug
+  // crosses ~70px per 20Hz tick) can never tunnel between endpoint samples. Sim-internal
+  // scratch — never on the wire. Undefined only before the bullet's first move.
+  prevX?: number;
+  prevY?: number;
 }
 
 // dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
@@ -185,6 +196,10 @@ export interface Chest {
   radius: number;
   opened: boolean;
   openT?: number; // seconds into the open clip once opened (undefined = closed)
+  // Baked contents: the floor's weapon drops live in chests, never loose on the floor.
+  // Opening ejects it as a real pickup. Sim-side only (not on the wire) — contents stay
+  // hidden until the open. undefined = the ordinary loot roll only.
+  weapon?: WeaponId;
 }
 
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";

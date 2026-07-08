@@ -160,6 +160,15 @@ export interface WorldState {
   enemyHist: Map<number, EnemyHist>;
   histHead: number;
   histCount: number;
+  // Authoritative pending blessing offers: pid -> seconds left to answer. An entry exists
+  // from the moment an offerBlessing event is raised until the pick is applied (or the offer
+  // expires / the player leaves). While pending, that player is PAUSED (stepPlayerPhase
+  // no-ops) and cannot be damaged, and the party's descend gate holds — a blessing is always
+  // picked on the safe side of a floor transition, never under live enemies.
+  pendingBlessings: Map<PlayerId, number>;
+  // Whether this floor's between-floor blessing offers were already raised at the exit gate
+  // (one offer per cleared non-boss floor; reset on every floor build).
+  isBlessingOfferedThisFloor: boolean;
   remoteTargets: RemoteTarget[];
   isCoop: boolean;
   // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
@@ -230,6 +239,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
+    pendingBlessings: new Map(),
+    isBlessingOfferedThisFloor: false,
     remoteTargets: [],
     isCoop: opts.isCoop ?? false,
     isShared: opts.isShared ?? false,
@@ -241,7 +252,11 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
   loadFloorIntoWorld(w, floor);
   if (!opts.skipLocalPlayer) {
     const spawn = w.dungeon.spawn;
-    w.players.set(LOCAL_ID, createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2));
+    const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+    // Run start is a floor entry too: the same spawn grace every descend grants (the
+    // reposition loop in loadFloorIntoWorld ran before this player existed).
+    p.invuln = C.PLAYER_SPAWN_GRACE;
+    w.players.set(LOCAL_ID, p);
   }
   return w;
 }
@@ -259,7 +274,10 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
 
 // Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
 // no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
+// Their pending blessing offer (if any) dies with them so the descend gate can't be held
+// by a player who is no longer in the world.
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
+  w.pendingBlessings.delete(id);
   return w.players.delete(id);
 }
 
@@ -301,17 +319,24 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.nextEnemyId = spawns.active.length + spawns.pending.length;
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
+  w.pendingBlessings.clear();
+  w.isBlessingOfferedThisFloor = false;
   w.flowCd = 0;
   w.flowKey = -1;
-  w.pickups = w.isSandbox ? [] : placeWeaponPickups(w);
-  if (!w.isSandbox) placeDealerHearts(w);
+  w.pickups = [];
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
-  // Reposition living players to the new spawn.
+  if (!w.isSandbox) {
+    stockWeaponChests(w);
+    placeDealerHearts(w);
+  }
+  // Reposition living players to the new spawn, each under the spawn-grace mercy window:
+  // nobody loads into a fresh floor (a boss floor especially) already taking damage.
   const spawn = w.dungeon.spawn;
   for (const p of w.players.values()) {
     p.x = spawn.x * TILE + TILE / 2;
     p.y = spawn.y * TILE + TILE / 2;
+    p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
   }
 }
 
@@ -345,18 +370,32 @@ function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
 
-function placeWeaponPickups(w: WorldState): Pickup[] {
+// The floor's weapon drops are CONTENTS of chests, never loose floor pickups. (They used to
+// spawn at room centers — the same tiles chests and props prefer — so guns sat visibly
+// stacked on top of chests, and free weapons in the open undercut chests as the reward
+// container.) Each rolled weapon is stocked into a weaponless wood chest, treasure room
+// first; when the floor placed fewer chests than weapons, an extra chest is placed to hold
+// the overflow, roomed where the loose drop used to land. Opening the chest ejects the
+// weapon (see openChest). Same seeded stream as the old loose drops, so a given seed still
+// finds the same arsenal — just inside chests.
+function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
-  if (w.floor < 2 || d.rooms.length <= 2) return [];
+  if (w.floor < 2 || d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
-  const drops: Pickup[] = [];
   const kinds: WeaponId[] = [rng.pick(PICKUP_WEAPONS)];
   if (w.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
+  const used = new Set<number>();
+  for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
   for (const weapon of kinds) {
+    const host = w.chests.find((c) => c.kind === "wood" && c.weapon === undefined);
+    if (host) { host.weapon = weapon; continue; }
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
-    drops.push({ id: w.nextPickupId++, kind: "weapon", x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE, radius: 16, weapon });
+    let spot = chestTile(w, room, used);
+    for (let ri = 1; spot === null && ri < d.rooms.length; ri++) spot = chestTile(w, d.rooms[ri], used);
+    if (!spot) continue; // no open tile anywhere: forfeit this weapon roll
+    used.add(spot.ty * d.w + spot.tx);
+    w.chests.push({ id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE, radius: 16, opened: false, weapon });
   }
-  return drops;
 }
 
 // The Dealer's stock (§2): on every third floor, P purchasable hearts near a mid-run room
@@ -425,27 +464,32 @@ function placeChests(w: WorldState): Chest[] {
   const treasure = d.rooms.find((r) => r.kind === "treasure");
   let remaining = count;
   if (treasure) {
-    const spot = chestTile(d, treasure, used);
+    const spot = chestTile(w, treasure, used);
     if (spot) { addChest(spot.tx, spot.ty); remaining--; }
   }
   for (let i = 0; i < remaining; i++) {
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
-    const spot = chestTile(d, room, used);
+    const spot = chestTile(w, room, used);
     if (spot) addChest(spot.tx, spot.ty);
   }
   if (list.length === 0) {
     for (let ri = 1; ri < d.rooms.length; ri++) {
-      const spot = chestTile(d, d.rooms[ri], used);
+      const spot = chestTile(w, d.rooms[ri], used);
       if (spot) { addChest(spot.tx, spot.ty); break; }
     }
   }
   return list;
 }
 
-function chestTile(d: Dungeon, room: Room, used: Set<number>): { tx: number; ty: number } | null {
+// A free tile for a chest: open floor, unused, not the spawn/exit tile, and not a tile a
+// prop already occupies (props are placed first, and a chest materializing on a barrel is
+// the same stacked-loot eyesore as a gun on a chest).
+function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; ty: number } | null {
+  const d = w.dungeon;
   const isBad = (tx: number, ty: number) =>
     d.tiles[ty * d.w + tx] !== 0 ||
     used.has(ty * d.w + tx) ||
+    hasLivePropOnTile(w, tx, ty) ||
     (tx === d.spawn.x && ty === d.spawn.y) ||
     (tx === d.exit.x && ty === d.exit.y);
   if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
@@ -453,6 +497,13 @@ function chestTile(d: Dungeon, room: Room, used: Set<number>): { tx: number; ty:
     for (let tx = room.x; tx < room.x + room.w; tx++)
       if (!isBad(tx, ty)) return { tx, ty };
   return null;
+}
+
+function hasLivePropOnTile(w: WorldState, tx: number, ty: number): boolean {
+  for (const p of w.props) {
+    if (!p.dead && Math.floor(p.x / TILE) === tx && Math.floor(p.y / TILE) === ty) return true;
+  }
+  return false;
 }
 
 // ---- geometry / collision ----
@@ -599,6 +650,40 @@ export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): S
   applyMaxHpBonus(p);
   if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
   return [{ t: "itemPicked", pid, x: p.x, y: p.y, tint: item.tint }];
+}
+
+// Raise a blessing offer for one player: the offerBlessing event surfaces the choice UI
+// (solo rolls locally; the server rolls + sends a validated offer), and the pending entry
+// pauses/shields that player and holds the descend gate until the pick resolves.
+function raiseBlessingOffer(w: WorldState, pid: PlayerId, rare: boolean, ev: SimEvent[]): void {
+  w.pendingBlessings.set(pid, C.BLESSING_OFFER_TTL);
+  ev.push({ t: "offerBlessing", pid, rare });
+}
+
+// Resolve a blessing OFFER with a pick: apply the item and clear the player's pending state
+// (ending their pause/shield and releasing the descend gate). This is the answer path for
+// every real offer — the solo/co-op overlay callback and the server's validated
+// chooseBlessing command; dev grants (no offer) keep calling applyItemToWorld directly.
+export function chooseBlessingInWorld(w: WorldState, pid: PlayerId, item: ItemDef): SimEvent[] {
+  w.pendingBlessings.delete(pid);
+  return applyItemToWorld(w, pid, item);
+}
+
+// Resolve a pending offer WITHOUT a pick — the roll came up empty (every blessing maxed), so
+// there is nothing to choose and the pause/gate must not wait out the TTL.
+export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void {
+  w.pendingBlessings.delete(pid);
+}
+
+// Tick pending offers on the SIM clock: an unanswered offer expires after BLESSING_OFFER_TTL
+// and the run moves on without the pick, so an AFK/hostile client can never hold the party's
+// descend gate (or their own damage shield) forever.
+function tickPendingBlessings(w: WorldState, dt: number): void {
+  if (w.pendingBlessings.size === 0) return;
+  for (const [pid, left] of w.pendingBlessings) {
+    if (left <= dt) w.pendingBlessings.delete(pid);
+    else w.pendingBlessings.set(pid, left - dt);
+  }
 }
 
 // ---- knockback ----
@@ -1003,6 +1088,11 @@ function isPointInMeleeHit(px: number, py: number, x: number, y: number, radius:
 
 function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const b of w.bullets) {
+    // Anchor this tick's swept-collision segment BEFORE any steering/move. A wall bounce
+    // resets the bullet to exactly this point, leaving that tick's segment degenerate —
+    // a reflected round never sweeps backward through the wall it hit.
+    b.prevX = b.x;
+    b.prevY = b.y;
     if (b.friendly && b.homing !== undefined) steerHoming(w, b, dt);
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
     if (isWall(w, b.x, b.y)) {
@@ -1055,6 +1145,27 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
   b.x = px; b.y = py;
   b.bounce = (b.bounce ?? 0) - 1;
   ev.push({ t: "bulletBounce", x: b.x, y: b.y, aim: Math.atan2(b.vy, b.vx), color: b.color });
+}
+
+// Swept (continuous) bullet collision. Fast rounds cover many body-widths per fixed tick —
+// the Longshot's 1400px/s slug crosses ~70px per 20Hz step against swarm bodies barely 10px
+// wide — so testing only the endpoint tunnels straight through small targets. The whole
+// travel segment [prev -> current] is tested against the target circle; the closest point
+// comes back in `sweptHit` (per-query scratch, like w.targetX/targetY) so impact FX land ON
+// the target instead of wherever the bullet ended up.
+const sweptHit = { x: 0, y: 0 };
+function sweptBulletHit(b: Bullet, cx: number, cy: number, r: number): boolean {
+  const x1 = b.x, y1 = b.y;
+  const x0 = b.prevX ?? x1, y0 = b.prevY ?? y1;
+  const dx = x1 - x0, dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((cx - x0) * dx + (cy - y0) * dy) / len2)) : 0;
+  const px = x0 + dx * t, py = y0 + dy * t;
+  const ddx = cx - px, ddy = cy - py;
+  if (ddx * ddx + ddy * ddy >= r * r) return false;
+  sweptHit.x = px;
+  sweptHit.y = py;
+  return true;
 }
 
 // Record every enemy's current position into the ring (one entry per world tick). Called at the
@@ -1174,9 +1285,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // Lag comp anchored at FIRE time (decays as the bullet travels): a hitscan-fast shot tests
       // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
       const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
-      if (Math.hypot(b.x - btx, b.y - bty) < b.radius + e.radius) {
+      if (sweptBulletHit(b, btx, bty, b.radius + e.radius)) {
         strikeEnemy(w, shooter, e, {
-          damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage, isCrit: b.isCrit, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
@@ -1626,10 +1737,10 @@ function slimeHopPulse(e: Enemy): number {
 }
 
 function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step: number): void {
-  // Local obstacle avoidance: props/chests aren't in the flow field, so a chaser would
-  // path straight into a chest and wedge. Probe ahead; if a prop sits there, deflect the
-  // heading around it so the enemy curves past instead of grinding into it.
-  angle = avoidPropAhead(w, e, angle);
+  // Local obstacle avoidance: props aren't in the flow field, so a chaser would otherwise
+  // grind straight into a barrel/crate and wedge. Steer smoothly around the nearest
+  // blocking prop instead.
+  angle = avoidPropAhead(w, e, angle, dt);
   const x0 = e.x, y0 = e.y;
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
   const moved = Math.hypot(e.x - x0, e.y - y0);
@@ -1637,35 +1748,79 @@ function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step
   e.stuckTimer = isBlocked ? e.stuckTimer + dt : 0;
   if (e.stuckTimer < C.STUCK_TIME) return;
   e.stuckTimer = 0;
-  // Wedged: a strong perpendicular escape on both sides, then a hard back-diagonal, so a
-  // chaser never freezes against geometry or a prop.
-  const side = Math.sin(e.zig) >= 0 ? 1 : -1;
+  // Wedged despite the steering (a geometry corner, or a prop flush against a wall): a
+  // strong perpendicular escape preferring the committed detour side, then the other side,
+  // then a hard back-diagonal. Whichever side the escape actually took BECOMES the
+  // commitment, so the following steering keeps rounding the same way instead of shoving
+  // straight back into the prop.
+  const side = e.avoidSide !== 0 ? e.avoidSide : Math.sin(e.zig) >= 0 ? 1 : -1;
   const esc = step * 1.6;
+  e.avoidSide = side;
+  e.avoidTime = C.AVOID_COMMIT;
   if (nudgeEnemy(w, e, angle + side * C.HALF_PI, esc)) return;
-  if (nudgeEnemy(w, e, angle - side * C.HALF_PI, esc)) return;
+  if (nudgeEnemy(w, e, angle - side * C.HALF_PI, esc)) { e.avoidSide = -side; return; }
   nudgeEnemy(w, e, angle + side * (Math.PI * 0.75), esc);
 }
 
-// If a live prop lies within a short probe ahead of `angle`, return a deflected heading
-// that curves around it; otherwise return `angle`.
-function avoidPropAhead(w: WorldState, e: Enemy, angle: number): number {
-  const probe = e.radius + 22;
-  const px = e.x + Math.cos(angle) * probe, py = e.y + Math.sin(angle) * probe;
+// Steer a chaser around the nearest live prop blocking its path, or return `angle` when the
+// way is clear. Three properties keep enemies from wedging on barrels/crates (the playtest
+// complaint):
+//  - the whole swept CORRIDOR ahead is tested (radius sum wide, AVOID_LOOKAHEAD deep), not a
+//    single probe point, so an offset prop that would still clip the body is seen;
+//  - the deflection is the TANGENT past the prop's edge — gentle at range, growing to a
+//    perpendicular slide when touching — instead of a fixed 45° kink;
+//  - the detour side is COMMITTED for a short window (e.avoidSide/avoidTime), so a dead-on
+//    approach can't ping-pong left/right into the prop every tick, and a row of props is
+//    rounded consistently along one flank.
+function avoidPropAhead(w: WorldState, e: Enemy, angle: number, dt: number): number {
+  const cos = Math.cos(angle), sin = Math.sin(angle);
   let hit: Prop | null = null;
-  let hitD2 = Infinity;
+  let hitDist = Infinity;
   for (const p of w.props) {
     if (p.dead) continue;
+    const dx = p.x - e.x, dy = p.y - e.y;
     const rr = e.radius + p.radius;
-    const ddx = px - p.x, ddy = py - p.y, d2 = ddx * ddx + ddy * ddy;
-    if (d2 < rr * rr && d2 < hitD2) { hit = p; hitD2 = d2; }
+    const fwd = dx * cos + dy * sin;
+    if (fwd < 0 || fwd > rr + C.AVOID_LOOKAHEAD) continue; // behind, or beyond the lookahead
+    if (Math.abs(dx * sin - dy * cos) >= rr) continue;     // outside the swept corridor
+    const d = Math.hypot(dx, dy);
+    if (d < hitDist) { hit = p; hitDist = d; }
   }
-  if (!hit) return angle;
+  if (!hit) {
+    if (e.avoidTime > 0) {
+      e.avoidTime = e.avoidTime > dt ? e.avoidTime - dt : 0;
+      if (e.avoidTime === 0) e.avoidSide = 0;
+    }
+    return angle;
+  }
   const toProp = Math.atan2(hit.y - e.y, hit.x - e.x);
-  let diff = angle - toProp;
-  while (diff > Math.PI) diff -= 2 * Math.PI;
-  while (diff < -Math.PI) diff += 2 * Math.PI;
-  const turn = diff >= 0 ? 1 : -1;
-  return angle + turn * (Math.PI / 4);
+  if (e.avoidSide === 0) {
+    // A fresh detour follows the side the heading is already biased toward; a dead-on
+    // approach picks whichever side has open room (deterministic zig tiebreak).
+    let diff = angle - toProp;
+    while (diff > Math.PI) diff -= 2 * Math.PI;
+    while (diff < -Math.PI) diff += 2 * Math.PI;
+    e.avoidSide = Math.abs(diff) > 0.08 ? (diff >= 0 ? 1 : -1) : clearerSide(w, e, toProp);
+  }
+  e.avoidTime = C.AVOID_COMMIT;
+  const clear = e.radius + hit.radius + C.AVOID_CLEARANCE;
+  const tangent = hitDist > clear ? Math.asin(clear / hitDist) : C.HALF_PI;
+  return toProp + e.avoidSide * tangent;
+}
+
+// Which flank of a blocking prop has open room: probe one point past the body on each side,
+// perpendicular to the prop direction. A tie falls back to the seeded zig heading, so the
+// pick is stable and deterministic.
+function clearerSide(w: WorldState, e: Enemy, toProp: number): number {
+  const px = -Math.sin(toProp), py = Math.cos(toProp);
+  const reach = e.radius + C.AVOID_SIDE_PROBE;
+  const isOpen = (side: number): boolean => {
+    const x = e.x + px * side * reach, y = e.y + py * side * reach;
+    return !isWall(w, x, y) && !blockedByProp(w, x, y, e.radius);
+  };
+  const left = isOpen(1), right = isOpen(-1);
+  if (left !== right) return left ? 1 : -1;
+  return Math.sin(e.zig) >= 0 ? 1 : -1;
 }
 
 function nudgeEnemy(w: WorldState, e: Enemy, angle: number, step: number): boolean {
@@ -1732,9 +1887,9 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (p.kind === "brazier") continue;
     for (const b of w.bullets) {
       if (!b.friendly || b.life <= 0) continue;
-      if (Math.hypot(b.x - p.x, b.y - p.y) >= b.radius + p.radius) continue;
+      if (!sweptBulletHit(b, p.x, p.y, b.radius + p.radius)) continue;
       p.hp -= b.damage;
-      ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: b.x, y: b.y });
+      ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: sweptHit.x, y: sweptHit.y });
       if (b.pierce <= 0) b.life = 0;
       if (p.hp <= 0) { destroyProp(w, p, ev, ownerOf(w, b.owner) ?? undefined); break; }
     }
@@ -1827,7 +1982,7 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (!c.opened) {
       for (const b of w.bullets) {
         if (!b.friendly || b.life <= 0) continue;
-        if (Math.hypot(b.x - c.x, b.y - c.y) >= b.radius + c.radius) continue;
+        if (!sweptBulletHit(b, c.x, c.y, b.radius + c.radius)) continue;
         // The chest opener is the BULLET's owner (the actual shooter) — never a "primary" player.
         // If that shooter has since disconnected, the bullet still stops on the chest but opens
         // nothing (no one is there to receive the roll); the chest stays for live players.
@@ -1865,14 +2020,50 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   c.opened = true;
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
-  if (c.kind === "boss") grantBossChest(w, p, c, ev);
-  else rollWoodChest(w, c, ev);
+  if (c.kind === "boss") { grantBossChest(w, p, c, ev); return; }
+  // Baked contents first (the floor's weapon drop lives in this chest — see
+  // stockWeaponChests), then the ordinary roll: the weapon replaces nothing, so the heart
+  // economy and pity behave exactly as they always did per chest opened.
+  if (c.weapon !== undefined) ejectChestWeapon(w, p, c, c.weapon, ev);
+  rollWoodChest(w, p, c, ev);
+}
+
+// A weapon coming out of a chest lands just in FRONT of it — toward the opener — so it
+// reads as spilled loot, clearly collectible, never a pickup stacked under the chest
+// sprite. The landing spot must be somewhere the opener can actually STAND (open floor,
+// off every live prop's collision ring, clear of other chests): the old loose floor drops
+// could sit where the 34px collect range never triggered — the unreachable gun of the
+// playtest. Candidate angles fan out from the opener direction in a fixed order; if every
+// one is blocked (a chest boxed in by props), the drop degrades to the chest's own tile,
+// which is open, prop-free floor by construction (see chestTile).
+function ejectChestWeapon(w: WorldState, p: PlayerSim, c: Chest, weapon: WeaponId, ev: SimEvent[]): void {
+  const dx = p.x - c.x, dy = p.y - c.y;
+  const base = Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
+  let x = c.x, y = c.y;
+  for (const off of C.CHEST_EJECT_ANGLES) {
+    const ex = c.x + Math.cos(base + off) * C.CHEST_WEAPON_EJECT;
+    const ey = c.y + Math.sin(base + off) * C.CHEST_WEAPON_EJECT;
+    if (isStandableSpot(w, ex, ey, p.pr)) { x = ex; y = ey; break; }
+  }
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon });
+  ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+}
+
+// Whether a player of radius `pr` can physically stand at (x, y): open floor and outside
+// every live prop's collision ring. Chests don't block movement but a drop under one would
+// hide the sprite, so they're excluded too.
+function isStandableSpot(w: WorldState, x: number, y: number, pr: number): boolean {
+  if (isWall(w, x, y) || blockedByProp(w, x, y, pr)) return false;
+  for (const c of w.chests) {
+    if (Math.hypot(x - c.x, y - c.y) < c.radius + 16) return false;
+  }
+  return true;
 }
 
 // Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer
 // drop from random chests — the reward cadence lives on descents and the boss chest. The
 // recovery pity, once armed, forces the heart.
-function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
+function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
   if (w.isPityHeartArmed) {
     w.isPityHeartArmed = false;
     w.pityStreak = 0;
@@ -1884,7 +2075,7 @@ function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
     w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
   } else if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers) + SUSTAIN.woodChestWeapon) {
     const weapon = PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)];
-    w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x: c.x, y: c.y, radius: 16, weapon });
+    ejectChestWeapon(w, p, c, weapon, ev);
   } else {
     const n = 3 + Math.floor(w.rng.next() * 4);
     for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
@@ -1892,11 +2083,13 @@ function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
 }
 
 // Boss completion recovery is the chest's +1 heart ONLY (no descent heal), and its blessing
-// offer is the floor's reward — a Rare pick (the `rare` flag steers the roll pool).
+// offer is the floor's reward — a Rare pick (the `rare` flag steers the roll pool). The boss
+// kill already cleared the floor (endBossDanger), so this offer is inherently on the safe
+// side; the pending entry still applies so a party can't descend out from under the pick.
 function grantBossChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
   w.pickups.push(makePickup(w, "heart", c.x - 18, c.y, ev));
   for (let i = 0; i < 5; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - 2) * 16, c.y + 18, ev));
-  ev.push({ t: "offerBlessing", pid: p.id, rare: true });
+  raiseBlessingOffer(w, p.id, true, ev);
 }
 
 function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -1951,6 +2144,10 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
 
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
+  // A player mid-blessing-pick cannot be hurt. Offers are only raised on the safe side of a
+  // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
+  // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
+  if (w.pendingBlessings.has(p.id)) return;
   p.hp -= amount;
   p.invuln = PLAYER.postHitInvuln;
   // Any damage cancels a revive channel the victim was holding (§2): reviving is a real
@@ -2046,9 +2243,23 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   }
   if (!anyLiving || !allAtExit) return;
   // Solo + shared server descend in-sim; the legacy Convex co-op path defers to the client's
-  // shared-floor orchestration (everyone descends together via presence).
-  if (w.isCoop) ev.push({ t: "reachExit", toFloor: w.floor + 1 });
-  else descend(w, w.floor + 1, ev);
+  // shared-floor orchestration (everyone descends together via presence, offers ride descend).
+  if (w.isCoop) {
+    ev.push({ t: "reachExit", toFloor: w.floor + 1 });
+    return;
+  }
+  // The safe-side blessing gate (spec §6 cadence, moved off the descend): with the party
+  // gathered at a cleared floor's exit, raise this floor's offers ONCE, then hold the
+  // descend until every pick resolves (or expires). The pick therefore always happens
+  // BEFORE the next floor's threats exist — never mid-fight, never as a boss floor loads.
+  // A boss floor's reward was its chest (the Rare pick), so leaving it offers nothing.
+  if (!w.isBlessingOfferedThisFloor && !isBossFloor(w.floor)) {
+    w.isBlessingOfferedThisFloor = true;
+    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
+    return;
+  }
+  if (w.pendingBlessings.size > 0) return;
+  descend(w, w.floor + 1, ev);
 }
 
 // A floor descent (solo). Co-op's shared-floor sync is orchestrated client-side; the
@@ -2056,6 +2267,14 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
 // There is NO descent heal (§2) — the descent is pacing, not a free mistake reset.
 export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void {
   const isLeavingBossFloor = isBossFloor(w.floor);
+  // Reward cadence (§6): one blessing offer per NON-BOSS descent for every player. In solo
+  // and the authoritative shared world the exit gate already raised this floor's offers on
+  // the safe side (isBlessingOfferedThisFloor — see updateExit), so the debt is paid. A
+  // descend that arrives WITHOUT the gate having offered — a legacy co-op follower pulled
+  // down by the room's shared floor, or a directly scripted descend — still owes each
+  // player their pick and offers it post-load exactly as before (those clients freeze their
+  // own local sim under the overlay, so the pick is safe there too).
+  const isOfferDue = !isLeavingBossFloor && !w.isBlessingOfferedThisFloor;
   // Recovery pity (§2): two consecutive dry non-boss floors entered below 50% HP arm a
   // guaranteed heart in the next wood chest. Any generated heart resets the streak.
   if (!isLeavingBossFloor && w.heartsThisFloor === 0 && w.isFloorEnteredLow) {
@@ -2076,12 +2295,8 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   }
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
-  // Reward cadence (§6): one blessing offer per NON-BOSS descent for every player (solo:
-  // the one LOCAL_ID player). A boss floor's reward was its chest (the Rare pick), so
-  // leaving it offers nothing. The server turns each offer into that client's seeded
-  // choice set; solo rolls its own choices client-side.
-  if (!isLeavingBossFloor) {
-    for (const p of w.players.values()) ev.push({ t: "offerBlessing", pid: p.id, rare: false });
+  if (isOfferDue) {
+    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
   }
 }
 
@@ -2093,6 +2308,10 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
 // dt (each InputCmd carries its own frame dt) while the world half runs once per fixed tick.
 // stepWorld itself calls this, so solo behavior is unchanged.
 export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
+  // A player with a blessing offer open is paused: no aim, movement, or fire. Their client
+  // freezes under the overlay and sends nothing anyway; the guard makes a tampered client
+  // equally inert (it can't kite or shoot from inside the damage-shielded pick window).
+  if (w.pendingBlessings.has(p.id)) return;
   p.aimAngle = input.aim;
   if (!p.isDown) {
     updatePlayer(w, p, input, dt, ev);
@@ -2116,6 +2335,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
   checkStrandedWipe(w, ev);
+  tickPendingBlessings(w, dt);
   updateExit(w, ev);
 
   for (const p of w.players.values()) {

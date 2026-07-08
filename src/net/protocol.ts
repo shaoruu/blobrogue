@@ -685,6 +685,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     id: w.id, kind: w.kind, x, y, vx: 0, vy: 0, radius: w.r, hp: w.hp, maxHp: w.mhp, dead: false,
     tier: w.tr, isSummoned: false, kbResist: 1, surgeDelay: 0, surgeTime: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
+    avoidSide: 0, avoidTime: 0,
     burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,

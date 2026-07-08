@@ -136,6 +136,8 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     hopClock, hopMove: 0,
     spawnTimer: SPAWN_GRACE,
     stuckTimer: 0,
+    avoidSide: 0,
+    avoidTime: 0,
     burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0, burnOwner: null,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,

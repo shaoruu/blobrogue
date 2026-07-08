@@ -10,7 +10,7 @@
 
 import {
   createWorld, spawnPlayerInWorld, stepWorld, acquireWeaponInWorld, switchWeaponInWorld,
-  applyItemToWorld,
+  applyItemToWorld, chooseBlessingInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -52,15 +52,20 @@ function main(): void {
   const b = spawnPlayerInWorld(w, "pB");
   check("generated dungeon has rooms", w.dungeon.rooms.length > 2, `rooms=${w.dungeon.rooms.length}`);
   check("floor spawned enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
-  check("floor spawned at least one weapon pickup", w.pickups.some((p) => p.kind === "weapon"), `pickups=${w.pickups.length}`);
+  check("floor stocked a weapon INSIDE a chest (never loose on the floor)",
+    w.chests.some((c) => c.weapon !== undefined) && w.pickups.every((p) => p.kind !== "weapon"), `chests=${w.chests.length}`);
   check("both players share the spawn point", Math.hypot(a.x - b.x, a.y - b.y) < 1);
   const rev0 = w.rev;
 
-  section("pickups: A takes the weapon pickup -> inventories DIVERGE");
+  section("chest loot: A opens the weapon chest -> inventories DIVERGE");
+  const weaponChest = w.chests.find((c) => c.weapon !== undefined)!;
+  const droppedWeapon = weaponChest.weapon!;
+  placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
+  placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
+  step(w);
   const weaponDrop = w.pickups.find((p) => p.kind === "weapon")!;
-  const droppedWeapon = weaponDrop.weapon!;
-  placeAt(a, weaponDrop.x, weaponDrop.y); // A stands on it; B stays away
-  placeAt(b, weaponDrop.x + 400, weaponDrop.y + 300);
+  check("opening the chest ejected its weapon as a real pickup", weaponChest.opened && weaponDrop !== undefined && weaponDrop.weapon === droppedWeapon);
+  placeAt(a, weaponDrop.x, weaponDrop.y); // A walks onto the drop; B stays away
   const pickupEvents = step(w);
   check("pickup collected through the ordinary pickup system", pickupEvents.some((e) => e.t === "pickup" && e.kind === "weapon" && e.pid === "pA"));
   check("A owns the picked weapon", a.ownedWeapons.includes(droppedWeapon), `A=${a.ownedWeapons.join(",")}`);
@@ -105,18 +110,27 @@ function main(): void {
   check("floor fully cleared through combat kills", w.enemies.length === 0, `enemies=${w.enemies.length} after ${guard} ticks`);
   check("the killer was credited authoritative kills", a.kills > 0, `A.kills=${a.kills}`);
 
-  section("exit gate: descend requires EVERY living player at the exit");
+  section("exit gate: blessings are offered at the cleared exit; descend waits for the picks");
   const ex = w.dungeon.exit.x * TILE + TILE / 2;
   const ey = w.dungeon.exit.y * TILE + TILE / 2;
   placeAt(a, ex, ey);
-  placeAt(b, ex + 500, ey); // B is far: the party must NOT descend yet
+  placeAt(b, ex + 500, ey); // B is far: the party must NOT descend (or be offered) yet
   step(w);
   check("no descend while B is away", w.floor === 2, `floor=${w.floor}`);
   placeAt(b, ex, ey);
+  const offerEvents = step(w);
+  check("BOTH players offered their between-floor blessing at the exit (before descending)",
+    offerEvents.filter((e) => e.t === "offerBlessing").length === 2);
+  check("floor holds while the picks are open", w.floor === 2, `floor=${w.floor}`);
+  const blessA = ITEMS.find((it) => it.id === "vitality")!;
+  const blessB = ITEMS.find((it) => it.id === "second_wind")!;
+  chooseBlessingInWorld(w, "pA", blessA);
+  chooseBlessingInWorld(w, "pB", blessB);
   const descendEvents = step(w);
-  check("party-wide descend fired once both stood at the exit", w.floor === 3, `floor=${w.floor}`);
+  check("party-wide descend fired once every pick resolved", w.floor === 3, `floor=${w.floor}`);
   check("descend event emitted", descendEvents.some((e) => e.t === "descend"));
-  check("BOTH players were offered a between-floor blessing", descendEvents.filter((e) => e.t === "offerBlessing").length === 2);
+  check("the descend re-offers nothing (cadence already paid at the gate)",
+    descendEvents.filter((e) => e.t === "offerBlessing").length === 0);
 
   section("new dungeon: fresh geometry/content, per-floor resets, revision advanced");
   check("world revision advanced with the floor build", w.rev === rev0 + 1, `rev=${w.rev}`);

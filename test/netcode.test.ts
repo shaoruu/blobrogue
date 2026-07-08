@@ -191,6 +191,43 @@ async function offerAndRunOverTests(): Promise<void> {
   rig.transport.stop();
 }
 
+// Bug regression: "i get spawned and immediately teleported to another place". Before the
+// first authoritative snapshot the local world is a placeholder with the WRONG dungeon and
+// spawn (the game hides it behind a connecting veil, keyed off isReady). The first snapshot
+// must place the player EXACTLY at authoritative truth — no residual smoothing offset, no
+// extrapolation leak — so the first visible frame is already correct.
+async function firstSpawnPlacementTests(): Promise<void> {
+  section("first-frame spawn placement: the first snapshot lands exactly, with nothing to glide");
+  const rig = await makeRig(0xD156E); // a real run seed, distinct from the placeholder's
+  // Pre-join frames with held movement: the client predicts inside the placeholder world.
+  advanceSteps(rig, 6);
+  check("transport not ready before the first snapshot (the game shows a veil, not the placeholder)", !rig.transport.isReady());
+  const placeholder = rig.transport.getPredictedSelf();
+  const authoritative = rig.world.players.get(rig.pid)!;
+  check("the placeholder position is genuinely elsewhere (the old visible teleport)",
+    Math.hypot(placeholder.x - authoritative.x, placeholder.y - authoritative.y) > 40,
+    `off by ${Math.hypot(placeholder.x - authoritative.x, placeholder.y - authoritative.y).toFixed(0)}px`);
+
+  rig.sock.deliver(rig.snap({ full: true }));
+  check("ready after the full snapshot", rig.transport.isReady());
+  const polled = rig.transport.poll().state.players.get("local")!;
+  const err0 = Math.hypot(polled.x - authoritative.x, polled.y - authoritative.y);
+  check("first polled frame sits EXACTLY on the authoritative spawn", err0 < 1e-6, `err=${err0}px`);
+
+  // And it STAYS exact over the following idle frames — no smoothing residue gliding the
+  // player, no extrapolation anchor from the placeholder leaking in.
+  let maxDrift = 0;
+  for (let i = 0; i < 5; i++) {
+    rig.transport.sendInput({ seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false });
+    rig.tickNow(50);
+    rig.transport.advance(0.05);
+    const p = rig.transport.poll().state.players.get("local")!;
+    maxDrift = Math.max(maxDrift, Math.hypot(p.x - authoritative.x, p.y - authoritative.y));
+  }
+  check("no post-spawn drift/glide across the idle frames that follow", maxDrift < 1e-6, `maxDrift=${maxDrift}px`);
+  rig.transport.stop();
+}
+
 async function worldRebuildTests(): Promise<void> {
   section("world rebuild keys off the authoritative seed/floor (join + descend)");
   const rig = await makeRig(0x1111);
@@ -217,6 +254,7 @@ async function main(): Promise<void> {
   await ackMonotonicTests();
   await eventChannelTests();
   await offerAndRunOverTests();
+  await firstSpawnPlacementTests();
   await worldRebuildTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

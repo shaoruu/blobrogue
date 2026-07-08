@@ -8,14 +8,16 @@
 
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest,
-  stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
-  switchWeaponInWorld, acquireWeaponInWorld,
+  stepWorld, stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
+  switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
-import { REVIVE } from "../src/sim/balance.js";
+import { REVIVE, BOSS } from "../src/sim/balance.js";
+import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
+import * as C from "../src/sim/constants.js";
 import { buildSnapshot } from "../src/net/protocol.js";
 
 let passed = 0;
@@ -368,13 +370,22 @@ function descendTests(): void {
     b.x = ex - 400; b.y = ey;
     stepWorldPhase(w, 1 / 20, []);
     check("no descend while a living teammate is away from the exit", w.floor === 1, `floor=${w.floor}`);
+    check("no blessing offered while the party is split", w.pendingBlessings.size === 0);
     b.x = ex; b.y = ey; // now both at the exit
     const ev: SimEvent[] = [];
     stepWorldPhase(w, 1 / 20, ev);
-    check("descend once ALL living players are at the exit", w.floor === 2, `floor=${w.floor}`);
-    check("descend event emitted", ev.some((e) => e.t === "descend"));
+    check("gathering at the exit first OFFERS the blessings (safe side of the transition)",
+      ev.filter((e) => e.t === "offerBlessing").length === 2 && w.floor === 1, `floor=${w.floor}`);
+    // Resolve both picks; only then does the party descend.
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[1]);
+    const ev2: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev2);
+    check("descend once ALL picks resolved (and everyone still at the exit)", w.floor === 2, `floor=${w.floor}`);
+    check("descend event emitted", ev2.some((e) => e.t === "descend"));
     check("a fresh floor-2 dungeon loaded with enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
-    check("both players offered a between-floor blessing", ev.filter((e) => e.t === "offerBlessing").length === 2);
+    check("the descend itself re-offers nothing (the gate already paid the cadence)",
+      ev2.filter((e) => e.t === "offerBlessing").length === 0);
   }
 
   section("descend: two players in the SAME world get the SAME next floor + seed + enemy layout");
@@ -388,7 +399,10 @@ function descendTests(): void {
     w.enemies = [];
     const { ex, ey } = exitCenter(w);
     a.x = ex; a.y = ey; b.x = ex; b.y = ey;
-    stepWorldPhase(w, 1 / 20, []);
+    stepWorldPhase(w, 1 / 20, []); // raises the exit-gate offers
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[0]);
+    stepWorldPhase(w, 1 / 20, []); // descends
     const snapA = buildSnapshot(w, "pA", 0, [], 0, false, {});
     const snapB = buildSnapshot(w, "pB", 0, [], 0, false, {});
     if (snapA.t === "snap" && snapB.t === "snap") {
@@ -398,6 +412,435 @@ function descendTests(): void {
       const idsB = snapB.enemies.map((e) => e.id).sort().join(",");
       check("both snapshots carry the identical enemy layout", idsA === idsB && idsA.length > 0);
     }
+  }
+}
+
+// Bug regression: "i died while picking my blessing". The offer must sit on the SAFE side of
+// the floor transition (cleared exit, before the next floor's threats exist), the chooser must
+// be paused + unhittable while the pick is open, and the descend must wait for every pick —
+// with expiry/disconnect releasing the gate so nothing can hold the run hostage.
+function blessingSafetyTests(): void {
+  const DT = 1 / 20;
+  const exitCenter = (w: WorldState) => ({ ex: w.dungeon.exit.x * TILE + TILE / 2, ey: w.dungeon.exit.y * TILE + TILE / 2 });
+  const partyAtExit = (w: WorldState): { a: PlayerSim; b: PlayerSim } => {
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const { ex, ey } = exitCenter(w);
+    a.x = ex; a.y = ey; b.x = ex; b.y = ey;
+    return { a, b };
+  };
+
+  section("blessing safety: a player mid-pick is paused and cannot be damaged");
+  {
+    const w = createWorld(0xB1E55, 1, { isShared: true, skipLocalPlayer: true });
+    const { a } = partyAtExit(w);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("offers raised at the cleared exit", ev.filter((e) => e.t === "offerBlessing").length === 2);
+    check("pending state tracks both players", w.pendingBlessings.has("pA") && w.pendingBlessings.has("pB"));
+    // A stray enemy glob (in flight when the last enemy died) crosses the chooser: no damage.
+    a.invuln = 0;
+    const hp0 = a.hp;
+    plantEnemyBullet(w, a, 3);
+    stepWorldPhase(w, DT, []);
+    check("no damage lands on a player mid-pick", a.hp === hp0, `hp=${a.hp}`);
+    // The paused player ignores movement/fire (a tampered client can't act while shielded).
+    const ax = a.x;
+    stepPlayerPhase(w, a, { seq: 1, moveX: 1, moveY: 0, aim: 0, firing: true, dash: false }, DT, []);
+    check("a mid-pick player is paused (no movement, no shot)", a.x === ax && a.shotSeq === 0);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    stepPlayerPhase(w, a, { seq: 2, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false }, DT, []);
+    check("play resumes once the pick resolves", a.x > ax);
+  }
+
+  section("blessing safety: descend waits for every pick; expiry + disconnect release the gate");
+  {
+    const w = createWorld(0xB1E56, 1, { isShared: true, skipLocalPlayer: true });
+    partyAtExit(w);
+    stepWorldPhase(w, DT, []); // raises both offers
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    stepWorldPhase(w, DT, []);
+    check("descend held while a teammate's pick is open", w.floor === 1, `floor=${w.floor}`);
+    // B never answers: the offer expires on the sim clock and the run moves on without it.
+    let ticks = 0;
+    const maxTicks = Math.ceil(C.BLESSING_OFFER_TTL / DT) + 4;
+    while (w.floor === 1 && ticks < maxTicks) { stepWorldPhase(w, DT, []); ticks++; }
+    check("an unanswered offer expires and the party descends", w.floor === 2, `after ${(ticks * DT).toFixed(1)}s`);
+    check("B got no item from the lapsed offer", w.players.get("pB")!.ownedItemIds.length === 0);
+  }
+  {
+    const w = createWorld(0xB1E57, 1, { isShared: true, skipLocalPlayer: true });
+    partyAtExit(w);
+    stepWorldPhase(w, DT, []);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    removePlayerFromWorld(w, "pB"); // mid-pick disconnect
+    stepWorldPhase(w, DT, []);
+    check("a mid-pick disconnect releases the gate immediately", w.floor === 2, `floor=${w.floor}`);
+  }
+
+  section("blessing safety: the boss-chest Rare pick also holds the descend");
+  {
+    const w = createWorld(0xB1E58, 5, { isShared: true, skipLocalPlayer: true });
+    const { a } = partyAtExit(w);
+    // The boss chest (dropped on the boss kill; the floor is already cleared by then).
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false });
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    const offer = ev.find((e) => e.t === "offerBlessing");
+    check("opening the boss chest raised the Rare offer", offer !== undefined && offer.t === "offerBlessing" && offer.rare);
+    check("boss floor exit raised no extra offer", ev.filter((e) => e.t === "offerBlessing").length === 1);
+    check("descend held for the chest pick", w.floor === 5, `floor=${w.floor}`);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    stepWorldPhase(w, DT, []);
+    check("party descends once the Rare pick resolves", w.floor === 6, `floor=${w.floor}`);
+  }
+
+  section("blessing safety: a boss floor loads with NO pick open (the playtest death)");
+  {
+    // The owner died entering floor 5: the offer used to fire AFTER the descend, with the
+    // boss floor's threats already live. Now the pick fully resolves on floor 4's exit.
+    const w = createWorld(0xB1E59, 4, { isShared: true, skipLocalPlayer: true });
+    partyAtExit(w);
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("offers raised on floor 4's safe exit", ev.filter((e) => e.t === "offerBlessing").length === 2);
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[1]);
+    stepWorldPhase(w, DT, []);
+    check("descended into the boss floor", w.floor === 5 && w.enemies.some((e) => e.kind === "boss"));
+    check("no pick is open while the boss floor's threats are live", w.pendingBlessings.size === 0);
+  }
+}
+
+// Bug reinforcement: "i enter the game after picking a blessing and i'm already surrounded
+// by boss and taking damage." Beyond the safe-side pick, every floor entry grants a
+// spawn-grace mercy window, and every foe begins idle (its own spawn grace, the boss's
+// entrance grace, and a mandatory telegraph) — a fresh floor can never hurt you on frame one.
+function spawnGraceTests(): void {
+  const DT = 1 / 20;
+  const GRACE_TICKS = Math.round(C.PLAYER_SPAWN_GRACE / DT);
+
+  // The owner's exact route: clear floor 4, pick blessings at the exit gate, descend into
+  // the boss floor.
+  const descendIntoBossFloor = (seed: number) => {
+    const w = createWorld(seed, 4, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const ex = w.dungeon.exit.x * TILE + TILE / 2, ey = w.dungeon.exit.y * TILE + TILE / 2;
+    a.x = ex; a.y = ey; b.x = ex; b.y = ey;
+    stepWorld(w, new Map(), DT); // the exit gate raises the offers
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[0]);
+    stepWorld(w, new Map(), DT); // every pick resolved -> descend
+    const boss = w.enemies.find((e) => e.kind === "boss")!;
+    return { w, a, b, boss };
+  };
+
+  section("spawn grace: a boss floor loads with everyone shielded and nothing mid-attack");
+  {
+    const { w, a, b, boss } = descendIntoBossFloor(0x6ACE1);
+    check("descended into the boss floor with every pick resolved", w.floor === 5 && w.pendingBlessings.size === 0 && boss !== undefined);
+    check("every enemy enters idle under its own spawn grace (nothing loads mid-attack)",
+      w.enemies.every((e) => e.attack.phase === "none" && e.spawnTimer > 0));
+    check("the boss's first attack additionally waits out its entrance grace",
+      boss.attack.cooldown >= BOSS.entranceGrace - 1e-9, `cd=${boss.attack.cooldown.toFixed(2)}s`);
+    check("both players landed under the spawn-grace shield",
+      a.invuln >= C.PLAYER_SPAWN_GRACE - DT && b.invuln >= C.PLAYER_SPAWN_GRACE - DT, `invuln=${a.invuln.toFixed(2)}s`);
+  }
+
+  section("spawn grace: glued to the boss on entry, zero damage lands until the grace expires");
+  {
+    const { w, a, boss } = descendIntoBossFloor(0x6ACE2);
+    w.enemies = w.enemies.filter((e) => e.kind === "boss"); // isolate the boss (minions can't reach anyway)
+    a.x = boss.x; a.y = boss.y; // the literal "already surrounded by boss" worst case
+    let graceBreached = false;
+    let firstHitTick = -1;
+    for (let t = 1; t <= GRACE_TICKS + 4 && firstHitTick === -1; t++) {
+      stepWorld(w, new Map(), DT);
+      if (a.hp < a.maxHp) {
+        if (t < GRACE_TICKS) graceBreached = true;
+        firstHitTick = t;
+      }
+      a.x = boss.x; a.y = boss.y; // stay glued through the boss's own movement
+    }
+    check("zero damage lands inside the grace window", !graceBreached);
+    check("the mercy window is bounded: contact hurts again right after it expires",
+      firstHitTick >= GRACE_TICKS && firstHitTick <= GRACE_TICKS + 2, `firstHit=${(firstHitTick * DT).toFixed(2)}s grace=${C.PLAYER_SPAWN_GRACE}s`);
+  }
+
+  section("spawn grace: the boss's first ATTACK lands only after its telegraph, post-grace");
+  {
+    const { w, a, boss } = descendIntoBossFloor(0x6ACE3);
+    w.enemies = w.enemies.filter((e) => e.kind === "boss");
+    a.x = boss.x + 120; a.y = boss.y; // in slam range, outside the contact ring
+    let windupTick = -1;
+    let firstHitTick = -1;
+    for (let t = 1; t <= Math.round(4 / DT) && firstHitTick === -1; t++) {
+      stepWorld(w, new Map(), DT);
+      if (windupTick === -1 && boss.attack.phase === "windup") windupTick = t;
+      if (a.hp < a.maxHp) firstHitTick = t;
+    }
+    check("the boss telegraphed (windup) before ever dealing damage",
+      windupTick !== -1 && firstHitTick !== -1 && windupTick < firstHitTick,
+      `windup=${(windupTick * DT).toFixed(2)}s firstHit=${(firstHitTick * DT).toFixed(2)}s`);
+    check("its first hit lands after the player's grace window", firstHitTick > GRACE_TICKS, `firstHit=${(firstHitTick * DT).toFixed(2)}s`);
+  }
+
+  section("spawn grace: run start is a floor entry too");
+  {
+    const w = createWorld(0x6ACE4, 1, {});
+    const p = w.players.get("local")!;
+    check("the run's first spawn lands under the same grace", p.invuln === C.PLAYER_SPAWN_GRACE, `invuln=${p.invuln}`);
+  }
+}
+
+// Bug regression: "i often see guns on top of chests?" Floor weapons used to spawn loose at
+// room centers — the same tiles chests and props prefer — so guns sat stacked on chests.
+// They are now chest CONTENTS: no loose weapon pickup exists at floor build, chests never
+// land on prop tiles, and opening the chest ejects its weapon just in front of the opener.
+function chestWeaponTests(): void {
+  const DT = 1 / 20;
+
+  section("chest weapons: floors stock weapons INSIDE chests, never loose over props/chests");
+  {
+    let looseWeapons = 0, stockedFloors = 0, chestPropOverlaps = 0, floorsChecked = 0;
+    for (const seed of [0xF100D, 0x1234, 0xBEEF, 0xC0FFE, 0x5EED5]) {
+      for (let floor = 2; floor <= 6; floor++) {
+        const w = createWorld(seed, floor, { isShared: true, skipLocalPlayer: true });
+        if (w.dungeon.rooms.length <= 2) continue;
+        floorsChecked++;
+        looseWeapons += w.pickups.filter((p) => p.kind === "weapon").length;
+        if (w.chests.some((c) => c.weapon !== undefined)) stockedFloors++;
+        for (const c of w.chests) {
+          for (const p of w.props) {
+            if (Math.hypot(c.x - p.x, c.y - p.y) < c.radius + p.radius) chestPropOverlaps++;
+          }
+        }
+      }
+    }
+    check("no loose weapon pickup exists at floor build", looseWeapons === 0, `loose=${looseWeapons} across ${floorsChecked} floors`);
+    check("every eligible floor stocked at least one weapon chest", stockedFloors === floorsChecked, `${stockedFloors}/${floorsChecked}`);
+    check("no chest spawns overlapping a prop", chestPropOverlaps === 0, `overlaps=${chestPropOverlaps}`);
+  }
+
+  section("chest weapons: opening the chest ejects its weapon in front of the opener");
+  {
+    const w = createWorld(0xF100D, 2, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    b.x = 50; b.y = 50;
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const chest = w.chests.find((c) => c.weapon !== undefined)!;
+    const contents = chest.weapon!;
+    a.x = chest.x + 1; a.y = chest.y;
+    stepWorldPhase(w, DT, []);
+    check("chest opened by touch", chest.opened);
+    const drop = w.pickups.find((p) => p.kind === "weapon");
+    check("the chest ejected exactly its stocked weapon", drop !== undefined && drop.weapon === contents, `weapon=${drop?.weapon}`);
+    check("the drop lands clear of the chest (in front, never under it)",
+      drop !== undefined && Math.hypot(drop.x - chest.x, drop.y - chest.y) >= chest.radius + drop.radius,
+      drop ? `dist=${Math.hypot(drop.x - chest.x, drop.y - chest.y).toFixed(0)}px` : "no drop");
+    a.x = drop!.x; a.y = drop!.y;
+    stepWorldPhase(w, DT, []);
+    check("weapon collected into the opener's inventory", a.ownedWeapons.includes(contents), `owned=${a.ownedWeapons.join(",")}`);
+  }
+
+  section("chest weapons: identical seed stocks the identical chests (deterministic contents)");
+  {
+    const contentsOf = (w: WorldState) => JSON.stringify(w.chests.map((c) => [c.x, c.y, c.weapon ?? ""]));
+    const w1 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
+    const w2 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
+    check("two builds of the same floor agree on chest positions + contents", contentsOf(w1) === contentsOf(w2));
+  }
+
+  section("chest weapons: every ejected weapon lands on a standable tile and is collectible");
+  {
+    // The playtest's unreachable gun: loose drops could sit on walls/props where the collect
+    // range never triggered. Open every weapon chest across seeded floors and prove each
+    // drop sits on open floor, off every prop's collision ring, and actually collects when
+    // the player stands on it.
+    let drops = 0, onWall = 0, onProp = 0, uncollected = 0;
+    for (const seed of [0xF100D, 0x1234, 0xBEEF, 0xC0FFE, 0x5EED5]) {
+      for (let floor = 2; floor <= 6; floor++) {
+        const w = createWorld(seed, floor, { isShared: true, skipLocalPlayer: true });
+        const a = spawnPlayerInWorld(w, "pA");
+        const b = spawnPlayerInWorld(w, "pB");
+        b.x = 40; b.y = 40;
+        w.enemies = [];
+        w.pendingSpawns = [];
+        for (const chest of w.chests.filter((c) => c.weapon !== undefined)) {
+          const contents = chest.weapon!;
+          const dropId = w.nextPickupId; // the baked weapon ejects first, so it takes this id
+          a.x = chest.x + 1; a.y = chest.y;
+          stepWorldPhase(w, 1 / 20, []);
+          const drop = w.pickups.find((pk) => pk.id === dropId && pk.kind === "weapon");
+          if (!drop) {
+            // A boxed-in fallback drops on the chest tile, right under the opener, and
+            // collects the same tick — reachable by definition.
+            if (a.ownedWeapons.includes(contents)) drops++; else uncollected++;
+            continue;
+          }
+          drops++;
+          const d = w.dungeon;
+          if (d.tiles[Math.floor(drop.y / TILE) * d.w + Math.floor(drop.x / TILE)] !== 0) onWall++;
+          for (const prop of w.props) {
+            if (!prop.dead && Math.hypot(drop.x - prop.x, drop.y - prop.y) < a.pr + prop.radius * 0.8) onProp++;
+          }
+          a.x = drop.x; a.y = drop.y;
+          stepWorldPhase(w, 1 / 20, []);
+          if (!a.ownedWeapons.includes(contents)) uncollected++;
+        }
+      }
+    }
+    check("weapon chests ejected a drop for every open", drops > 0 && uncollected === 0, `drops=${drops} uncollected=${uncollected}`);
+    check("no drop landed on a wall tile", onWall === 0, `onWall=${onWall}`);
+    check("no drop landed inside a prop's collision ring", onProp === 0, `onProp=${onProp}`);
+  }
+
+  section("chest weapons: a chest boxed in by props still yields a collectible weapon");
+  {
+    const w = createWorld(0xB0CED, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    b.x = 60; b.y = 60;
+    const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+    devSpawnChest(w, cx, cy);
+    const chest = w.chests[0];
+    chest.weapon = "railgun";
+    // Barrels sat exactly on every eject candidate: no landing spot is standable, so the
+    // drop must degrade to the chest's own tile and still collect.
+    for (const off of C.CHEST_EJECT_ANGLES) {
+      devSpawnProp(w, "barrel", cx + Math.cos(off) * C.CHEST_WEAPON_EJECT, cy + Math.sin(off) * C.CHEST_WEAPON_EJECT);
+    }
+    a.x = cx + 1; a.y = cy;
+    stepWorldPhase(w, 1 / 20, []);
+    // Every eject candidate is blocked, so the drop degrades to the chest's own tile —
+    // right under the opener, who collects it the same tick. Reachable by construction.
+    check("the boxed-in chest's weapon still reaches the opener", a.ownedWeapons.includes("railgun"), `owned=${a.ownedWeapons.join(",")}`);
+    check("no weapon pickup left stranded on a prop", w.pickups.every((pk) => pk.kind !== "weapon"));
+  }
+}
+
+// Bug regression: the Longshot (1400px/s, small radius) whiffed point-blank-obvious hits.
+// Collision was an endpoint-only overlap test, so a round crossing ~70px per 20Hz tick
+// tunneled straight over small bodies between samples. Hits are now swept along the whole
+// travel segment.
+function sweptBulletTests(): void {
+  const DT = 1 / 20;
+
+  section("swept collision: a Longshot-speed round cannot tunnel through a small enemy");
+  {
+    const { w, a } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", 600, 400);
+    e.hp = 100;
+    e.spawnTimer = 0;
+    // One 20Hz tick at 1400px/s covers 70px: start 35px short so the tick ENDS 35px past
+    // the body — the endpoint misses by well over the combined radii; only the segment
+    // between the samples crosses the enemy.
+    const b: Bullet = {
+      x: e.x - 35, y: e.y, vx: 1400, vy: 0, radius: 4, life: 1, friendly: true,
+      owner: a.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    };
+    w.bullets.push(b);
+    const hp0 = e.hp;
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("the endpoint alone misses (the old tunneling geometry)",
+      Math.hypot(b.x - e.x, b.y - e.y) > b.radius + e.radius, `endDist=${Math.hypot(b.x - e.x, b.y - e.y).toFixed(0)}px`);
+    check("the swept segment registers the hit", e.hp < hp0, `hp ${hp0}->${e.hp}`);
+    const hit = ev.find((x) => x.t === "enemyHit");
+    check("impact FX lands ON the enemy, not where the round ended up",
+      hit !== undefined && hit.t === "enemyHit" && Math.hypot(hit.puffX - e.x, hit.puffY - e.y) <= e.radius + b.radius + 6,
+      hit && hit.t === "enemyHit" ? `puffDist=${Math.hypot(hit.puffX - e.x, hit.puffY - e.y).toFixed(0)}px` : "no hit event");
+  }
+
+  section("swept collision: fast rounds break the props they cross too");
+  {
+    const { w, a } = twoPlayerArena();
+    devSpawnProp(w, "barrel", 600, 400);
+    const barrel = w.props[0];
+    w.bullets.push({
+      x: barrel.x - 35, y: barrel.y, vx: 1400, vy: 0, radius: 4, life: 1, friendly: true,
+      owner: a.id, damage: 10, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    });
+    stepWorldPhase(w, DT, []);
+    check("the crossed barrel took the hit (no tunneling past props)", barrel.dead || barrel.hp < C.PROP_HP.barrel, `hp=${barrel.hp}`);
+  }
+}
+
+// Bug regression: "mobs still get stuck a lot next to barrels". An enemy chasing a target
+// with a prop dead in its path must route around it — reaching the target within a bounded
+// time and never staying wedged against the prop.
+function propAvoidanceTests(): void {
+  const DT = 1 / 20;
+
+  interface ChaseResult { reached: boolean; ticks: number; maxWedge: number; trace: string }
+  // Drive one chaser at a parked player through stepWorldPhase and measure progress. The
+  // wedge metric is the LONGEST streak of near-zero movement ticks — the old behavior
+  // ground against a prop for seconds; the reworked steering must never sit still.
+  const runChase = (seed: number, place: (w: WorldState) => void, maxTicks: number): ChaseResult => {
+    const w = createWorld(seed, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    spawnPlayerInWorld(w, "pB"); // standing ally: a stray touch downs rather than ending the world
+    const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+    a.x = cx + 110; a.y = cy;
+    const bp = w.players.get("pB")!;
+    bp.x = cx - 500; bp.y = cy - 400;
+    place(w);
+    const e = devSpawnEnemy(w, "slime", cx - 110, cy);
+    e.spawnTimer = 0;
+    let maxWedge = 0, wedge = 0, ticks = 0, reached = false;
+    const trace: number[] = [];
+    while (ticks < maxTicks && !reached) {
+      const x0 = e.x, y0 = e.y;
+      stepWorldPhase(w, DT, []);
+      ticks++;
+      trace.push(Math.round(e.x * 100) / 100, Math.round(e.y * 100) / 100);
+      const moved = Math.hypot(e.x - x0, e.y - y0);
+      wedge = moved < 0.3 ? wedge + 1 : 0;
+      if (wedge > maxWedge) maxWedge = wedge;
+      if (Math.hypot(e.x - a.x, e.y - a.y) <= e.radius + a.pr + 2) reached = true;
+    }
+    return { reached, ticks, maxWedge, trace: JSON.stringify(trace) };
+  };
+
+  section("prop avoidance: a chaser routes around a prop dead-center in its path");
+  {
+    // 220px straight-line chase ≈ 2.2s at slime speed; allow 3x for the detour.
+    const r = runChase(0xA401D, (w) => {
+      const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+      devSpawnProp(w, "barrel", cx, cy);
+    }, Math.ceil(7 / DT));
+    check("enemy reached the target around the barrel", r.reached, `${(r.ticks * DT).toFixed(1)}s`);
+    check("enemy never stayed wedged against it", r.maxWedge <= 8, `longest stall=${(r.maxWedge * DT).toFixed(2)}s`);
+  }
+
+  section("prop avoidance: a chaser rounds a WALL of props (commits to one side, no ping-pong)");
+  {
+    const r = runChase(0xA401E, (w) => {
+      const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+      devSpawnProp(w, "crate", cx, cy - 34);
+      devSpawnProp(w, "barrel", cx, cy);
+      devSpawnProp(w, "crate", cx, cy + 34);
+    }, Math.ceil(9 / DT));
+    check("enemy reached the target around the prop wall", r.reached, `${(r.ticks * DT).toFixed(1)}s`);
+    check("enemy never stayed wedged against the wall", r.maxWedge <= 8, `longest stall=${(r.maxWedge * DT).toFixed(2)}s`);
+  }
+
+  section("prop avoidance: the detour is deterministic (seeded, replay-identical)");
+  {
+    const place = (w: WorldState) => {
+      const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+      devSpawnProp(w, "barrel", cx, cy);
+    };
+    const r1 = runChase(0xA401F, place, Math.ceil(7 / DT));
+    const r2 = runChase(0xA401F, place, Math.ceil(7 / DT));
+    check("two runs of the same seed trace the identical path", r1.trace === r2.trace && r1.reached);
   }
 }
 
@@ -626,6 +1069,11 @@ function main(): void {
   propChainTests();
   weaponSwitchTests();
   descendTests();
+  blessingSafetyTests();
+  spawnGraceTests();
+  chestWeaponTests();
+  sweptBulletTests();
+  propAvoidanceTests();
   lootOwnershipTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

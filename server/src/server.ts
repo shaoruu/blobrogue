@@ -151,7 +151,11 @@ export class GameServer {
     for (const offer of room.offerPlayers()) {
       const conn = this.connForPlayer(room, offer.pid);
       if (!conn || conn.closing) continue;
-      conn.pendingOffer = room.rollBlessingChoices(offer.pid, offer.rare);
+      const choices = room.rollBlessingChoices(offer.pid, offer.rare);
+      // Nothing left to offer (every blessing maxed): resolve the sim's pending offer right
+      // away — an unanswerable empty offer must not pause the player until the TTL.
+      if (choices.length === 0) { room.dismissBlessing(offer.pid); continue; }
+      conn.pendingOffer = choices;
       conn.offerId++;
       conn.offerResendsLeft = OFFER_RESENDS;
       conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;

@@ -37,7 +37,7 @@ export interface BulletView {
 
 export interface PickupView { kind: string; x: number; y: number; value: number; weapon: string }
 export interface PropView { kind: string; x: number; y: number; dead: boolean; hp: number; breakT: number }
-export interface ChestView { kind: string; x: number; y: number; opened: boolean; openT: number }
+export interface ChestView { kind: string; x: number; y: number; opened: boolean; openT: number; weapon: string }
 
 export interface TickSnapshot {
   tick: number;
@@ -106,7 +106,7 @@ export function propView(p: Anyish): PropView {
 }
 
 export function chestView(c: Anyish): ChestView {
-  return { kind: String(c.kind), x: r(num(c.x)), y: r(num(c.y)), opened: Boolean(c.opened), openT: c.openT === undefined ? -1 : r(num(c.openT)) };
+  return { kind: String(c.kind), x: r(num(c.x)), y: r(num(c.y)), opened: Boolean(c.opened), openT: c.openT === undefined ? -1 : r(num(c.openT)), weapon: c.weapon ? String(c.weapon) : "" };
 }
 
 // Compare two snapshot streams; returns a human-readable divergence or null if identical.

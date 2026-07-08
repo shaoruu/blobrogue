@@ -15,9 +15,29 @@ export const SLIME_HOP_FREQ = 3.4;
 export const SLIME_HOP_AMOUNT = 0.55;
 
 // Anti-stuck nudge for wedged chasers.
-export const STUCK_TIME = 0.22;
+export const STUCK_TIME = 0.12;
 export const STUCK_PROGRESS = 0.5;
 export const STUCK_MIN_STEP = 0.05;
+
+// Local prop avoidance (props aren't in the flow field, so chasers steer around them).
+export const AVOID_LOOKAHEAD = 30;   // px past touching distance a chaser anticipates a prop
+export const AVOID_CLEARANCE = 5;    // px of extra clearance the detour tangent aims for
+export const AVOID_COMMIT = 0.45;    // seconds a chosen detour side persists after the last block
+export const AVOID_SIDE_PROBE = 20;  // px beyond the body the side-clearance probes test
+
+// How long a pending blessing offer may sit unanswered (sim seconds) before it expires and
+// the run moves on without the pick. Matches the server's offer TTL default, and — because
+// it ticks on the SIM clock — it can never hold the party's descend gate hostage.
+export const BLESSING_OFFER_TTL = 60;
+
+// Mercy window on spawning into a freshly BUILT floor (run start, every descend, run
+// reset): no damage can land while the level is still fading in and the player is
+// reorienting after the blessing pick. Belt-and-suspenders on top of the enemies' own
+// SPAWN_GRACE and the boss's entranceGrace — every foe also begins idle and must telegraph
+// its first attack, so nothing can even START an attack inside this window, let alone
+// land one. Rides the ordinary post-hit invuln timer (it protects, decays, and renders
+// exactly like post-hit protection).
+export const PLAYER_SPAWN_GRACE = 1.75;
 
 export const MIN_MULTI_SPREAD = 0.26;
 
@@ -91,6 +111,11 @@ export const PROP_HP: Record<PropKind, number> = {
 };
 export const PROP_BREAK_DUR = 0.25;
 export const CHEST_OPEN_DUR = 0.4;
+// How far a chest's weapon lands in front of it on open (past both sprites, clearly loot).
+export const CHEST_WEAPON_EJECT = 36;
+// Candidate directions for that landing spot, relative to the opener, tried in order until
+// one is standable (see ejectChestWeapon). Fixed order keeps the drop deterministic.
+export const CHEST_EJECT_ANGLES: readonly number[] = [0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0, Math.PI];
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;
