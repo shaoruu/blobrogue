@@ -43,12 +43,14 @@ Harness: in-process server + 4 clients (one idle observer, one mover, two orbiti
 **real** `WSTransport` over latency-injected sockets, `5%` packet loss, jitter `= RTT/5`, 8s.
 Reproduce with `cd server && GS_RTT=<ms> GS_LOSS=0.05 npm run harness`.
 
+Numbers below are the FINAL post-merge run (after integrating current `origin/main`):
+
 | metric | threshold | RTT 0ms | RTT 50ms | RTT 100ms |
 |---|---|---|---|---|
 | reconciliation drift (predicted vs authoritative, post-idle) | no permanent drift | **0.00 px** | **0.00 px** | **0.00 px** |
-| remote-enemy move → client render (p50 / p90) | p90 < 200ms | 113 / **131** ms | 138 / **158** ms | 163 / **182** ms |
-| server tick time (p50 / p95 / max) | p95 < 50ms (target <10ms) | 0.20 / **0.32** / 1.80 ms | 0.19 / **0.32** / 1.71 ms | 0.19 / **0.30** / 1.47 ms |
-| snapshot size / bandwidth | low-KB/s/client | ~1.46 KB/msg, **28.5 KB/s** | ~1.45 KB/msg, **28.3 KB/s** | ~1.45 KB/msg, **28.3 KB/s** |
+| remote-enemy move → client render (p50 / p90) | p90 < 200ms | 112 / **131** ms | 135 / **157** ms | 164 / **184** ms |
+| server tick time (p50 / p95 / max) | p95 < 50ms (target <10ms) | 0.20 / **0.34** / 1.80 ms | 0.19 / **0.28** / 1.72 ms | 0.20 / **0.38** / 1.45 ms |
+| snapshot size / bandwidth | low-KB/s/client | ~1.45 KB/msg, **28.3 KB/s** | ~1.44 KB/msg, **28.2 KB/s** | ~1.45 KB/msg, **28.3 KB/s** |
 
 All four go/no-go thresholds **PASS** at 50–100ms simulated RTT with 5% loss. Render latency
 scales with RTT exactly as predicted (interp delay ~120ms + half-RTT + up to one tick).
@@ -68,6 +70,18 @@ low-KB and extrapolates fine to Stage-C counts once interest management (deferre
 - a silent socket is dropped by the heartbeat; a clean disconnect removes the player.
 - tick p95 within budget + avg snapshot < 4KB under load.
 - speed-hacked movement (`mx` far beyond unit) is clamped by the sim + per-tick dt cap.
+
+## Integrated with current `origin/main`
+
+This branch merges the latest `main` (Thunderbolt `basePierce:2` line-pierce, non-invasive
+duplicate weapon pickups, melee breaks props + weapons/melee open chests, and the refreshed
+deterministic goldens). The only merge overlap was `src/sim/world.ts`, where main's generalized
+`isPointInMeleeHit` + prop/chest interactions and my multiplayer-safe `updateEnemies`/
+`primaryPlayer` refactor touch the same regions. Resolution keeps BOTH: the per-player melee
+loop now calls main's generalized hit test, and the new bullet-opens-chest path uses
+`primaryPlayer` (LOCAL_ID in solo — identical to main's `localPlayer`) with an empty-world
+guard. All 6 refreshed goldens pass tick-for-tick against the merged sim, so every new main
+behavior is preserved.
 
 ## Solo unchanged
 
