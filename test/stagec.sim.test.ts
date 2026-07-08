@@ -8,13 +8,13 @@
 
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest,
-  stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
+  stepWorld, stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
   switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
-import { REVIVE } from "../src/sim/balance.js";
+import { REVIVE, BOSS } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
 import * as C from "../src/sim/constants.js";
@@ -514,6 +514,90 @@ function blessingSafetyTests(): void {
   }
 }
 
+// Bug reinforcement: "i enter the game after picking a blessing and i'm already surrounded
+// by boss and taking damage." Beyond the safe-side pick, every floor entry grants a
+// spawn-grace mercy window, and every foe begins idle (its own spawn grace, the boss's
+// entrance grace, and a mandatory telegraph) — a fresh floor can never hurt you on frame one.
+function spawnGraceTests(): void {
+  const DT = 1 / 20;
+  const GRACE_TICKS = Math.round(C.PLAYER_SPAWN_GRACE / DT);
+
+  // The owner's exact route: clear floor 4, pick blessings at the exit gate, descend into
+  // the boss floor.
+  const descendIntoBossFloor = (seed: number) => {
+    const w = createWorld(seed, 4, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const ex = w.dungeon.exit.x * TILE + TILE / 2, ey = w.dungeon.exit.y * TILE + TILE / 2;
+    a.x = ex; a.y = ey; b.x = ex; b.y = ey;
+    stepWorld(w, new Map(), DT); // the exit gate raises the offers
+    chooseBlessingInWorld(w, "pA", ITEMS[0]);
+    chooseBlessingInWorld(w, "pB", ITEMS[0]);
+    stepWorld(w, new Map(), DT); // every pick resolved -> descend
+    const boss = w.enemies.find((e) => e.kind === "boss")!;
+    return { w, a, b, boss };
+  };
+
+  section("spawn grace: a boss floor loads with everyone shielded and nothing mid-attack");
+  {
+    const { w, a, b, boss } = descendIntoBossFloor(0x6ACE1);
+    check("descended into the boss floor with every pick resolved", w.floor === 5 && w.pendingBlessings.size === 0 && boss !== undefined);
+    check("every enemy enters idle under its own spawn grace (nothing loads mid-attack)",
+      w.enemies.every((e) => e.attack.phase === "none" && e.spawnTimer > 0));
+    check("the boss's first attack additionally waits out its entrance grace",
+      boss.attack.cooldown >= BOSS.entranceGrace - 1e-9, `cd=${boss.attack.cooldown.toFixed(2)}s`);
+    check("both players landed under the spawn-grace shield",
+      a.invuln >= C.PLAYER_SPAWN_GRACE - DT && b.invuln >= C.PLAYER_SPAWN_GRACE - DT, `invuln=${a.invuln.toFixed(2)}s`);
+  }
+
+  section("spawn grace: glued to the boss on entry, zero damage lands until the grace expires");
+  {
+    const { w, a, boss } = descendIntoBossFloor(0x6ACE2);
+    w.enemies = w.enemies.filter((e) => e.kind === "boss"); // isolate the boss (minions can't reach anyway)
+    a.x = boss.x; a.y = boss.y; // the literal "already surrounded by boss" worst case
+    let graceBreached = false;
+    let firstHitTick = -1;
+    for (let t = 1; t <= GRACE_TICKS + 4 && firstHitTick === -1; t++) {
+      stepWorld(w, new Map(), DT);
+      if (a.hp < a.maxHp) {
+        if (t < GRACE_TICKS) graceBreached = true;
+        firstHitTick = t;
+      }
+      a.x = boss.x; a.y = boss.y; // stay glued through the boss's own movement
+    }
+    check("zero damage lands inside the grace window", !graceBreached);
+    check("the mercy window is bounded: contact hurts again right after it expires",
+      firstHitTick >= GRACE_TICKS && firstHitTick <= GRACE_TICKS + 2, `firstHit=${(firstHitTick * DT).toFixed(2)}s grace=${C.PLAYER_SPAWN_GRACE}s`);
+  }
+
+  section("spawn grace: the boss's first ATTACK lands only after its telegraph, post-grace");
+  {
+    const { w, a, boss } = descendIntoBossFloor(0x6ACE3);
+    w.enemies = w.enemies.filter((e) => e.kind === "boss");
+    a.x = boss.x + 120; a.y = boss.y; // in slam range, outside the contact ring
+    let windupTick = -1;
+    let firstHitTick = -1;
+    for (let t = 1; t <= Math.round(4 / DT) && firstHitTick === -1; t++) {
+      stepWorld(w, new Map(), DT);
+      if (windupTick === -1 && boss.attack.phase === "windup") windupTick = t;
+      if (a.hp < a.maxHp) firstHitTick = t;
+    }
+    check("the boss telegraphed (windup) before ever dealing damage",
+      windupTick !== -1 && firstHitTick !== -1 && windupTick < firstHitTick,
+      `windup=${(windupTick * DT).toFixed(2)}s firstHit=${(firstHitTick * DT).toFixed(2)}s`);
+    check("its first hit lands after the player's grace window", firstHitTick > GRACE_TICKS, `firstHit=${(firstHitTick * DT).toFixed(2)}s`);
+  }
+
+  section("spawn grace: run start is a floor entry too");
+  {
+    const w = createWorld(0x6ACE4, 1, {});
+    const p = w.players.get("local")!;
+    check("the run's first spawn lands under the same grace", p.invuln === C.PLAYER_SPAWN_GRACE, `invuln=${p.invuln}`);
+  }
+}
+
 // Bug regression: "i often see guns on top of chests?" Floor weapons used to spawn loose at
 // room centers — the same tiles chests and props prefer — so guns sat stacked on chests.
 // They are now chest CONTENTS: no loose weapon pickup exists at floor build, chests never
@@ -986,6 +1070,7 @@ function main(): void {
   weaponSwitchTests();
   descendTests();
   blessingSafetyTests();
+  spawnGraceTests();
   chestWeaponTests();
   sweptBulletTests();
   propAvoidanceTests();

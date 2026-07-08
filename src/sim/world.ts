@@ -252,7 +252,11 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
   loadFloorIntoWorld(w, floor);
   if (!opts.skipLocalPlayer) {
     const spawn = w.dungeon.spawn;
-    w.players.set(LOCAL_ID, createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2));
+    const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+    // Run start is a floor entry too: the same spawn grace every descend grants (the
+    // reposition loop in loadFloorIntoWorld ran before this player existed).
+    p.invuln = C.PLAYER_SPAWN_GRACE;
+    w.players.set(LOCAL_ID, p);
   }
   return w;
 }
@@ -326,11 +330,13 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
     stockWeaponChests(w);
     placeDealerHearts(w);
   }
-  // Reposition living players to the new spawn.
+  // Reposition living players to the new spawn, each under the spawn-grace mercy window:
+  // nobody loads into a fresh floor (a boss floor especially) already taking damage.
   const spawn = w.dungeon.spawn;
   for (const p of w.players.values()) {
     p.x = spawn.x * TILE + TILE / 2;
     p.y = spawn.y * TILE + TILE / 2;
+    p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
   }
 }
 
