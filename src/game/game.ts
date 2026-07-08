@@ -3141,13 +3141,20 @@ export class Game {
     // Flip so the blade's edge faces up when pointing left; frozen to the swing's locked
     // aim while swinging so the sprite can't pop mid-sweep as it crosses straight-up/down.
     const isFlip = Math.abs(isSwinging ? swing.aim : aim) > Math.PI / 2;
-    const anchor = d * 0.55 + stretch;
+    // Grip the weapon at a HAND position offset from body center, not dead center — a bit forward
+    // along the aim and to the side — so the handle doesn't cut through the blob's face. The blade
+    // then extends outward from the hand.
+    const hand = isSwinging ? swing.aim : aim;
+    const side = isFlip ? -1 : 1;
+    const hx = cx + Math.cos(hand) * 10 - Math.sin(hand) * 7 * side;
+    const hy = cy + Math.sin(hand) * 10 + Math.cos(hand) * 7 * side;
+    const anchor = d * 0.42 + stretch; // shorter: base near the hand, blade reaches out
     // Ghost smears behind an arcing blade sell the speed of the sweep.
     if (isSwinging && !swing.isThrust) {
-      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.22), anchor, d * scale, alpha * 0.16, isFlip, artAngle);
-      this.drawBlade(img, cx, cy, this.swingBladeAngle(swing, t - 0.11), anchor, d * scale, alpha * 0.32, isFlip, artAngle);
+      this.drawBlade(img, hx, hy, this.swingBladeAngle(swing, t - 0.22), anchor, d * scale, alpha * 0.16, isFlip, artAngle);
+      this.drawBlade(img, hx, hy, this.swingBladeAngle(swing, t - 0.11), anchor, d * scale, alpha * 0.32, isFlip, artAngle);
     }
-    this.drawBlade(img, cx, cy, angle, anchor, d * scale, alpha, isFlip, artAngle);
+    this.drawBlade(img, hx, hy, angle, anchor, d * scale, alpha, isFlip, artAngle);
   }
 
   // Draws blade art so its ACTUAL blade axis (the art carries a baked diagonal — artAngle)
