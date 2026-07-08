@@ -1,3 +1,5 @@
+import type { PlayerId } from "./input.js";
+
 export interface Vec2 { x: number; y: number; }
 
 export interface Entity {
@@ -63,6 +65,10 @@ export interface Enemy extends Entity {
   chill: number;      // seconds of slow left (high stacks freeze solid)
   shock: number;      // seconds the shocked tag is active (amp + on-hit arc)
   statusTick: number; // burn DoT accumulator (fires a tick every 0.25s)
+  // Who applied the current burn (authoritative kill attribution for the DoT). Solo: always
+  // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
+  // tick that finishes a kill credits the correct player's combo/loot. null before any burn.
+  burnOwner: PlayerId | null;
   attack: AttackState;
   boss: BossState | null; // set only on the boss
 }
@@ -79,6 +85,9 @@ export interface Bullet {
   radius: number;
   life: number;
   friendly: boolean;
+  // The player who fired this bullet (authoritative attribution: kills/coins/combo/lifesteal go
+  // here). null for enemy fire. Solo: always the single local player, so behavior is unchanged.
+  owner: PlayerId | null;
   damage: number;
   color: string;
   pierce: number;          // remaining enemies this bullet can punch through

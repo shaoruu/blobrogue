@@ -239,7 +239,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
   return {
     id: w.id, kind: w.kind, x, y, vx: 0, vy: 0, radius: w.r, hp: w.hp, maxHp: w.mhp, dead: false,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
-    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0,
+    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
@@ -251,7 +251,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
 export function bulletFromWire(b: BulletWire): Bullet {
   return {
     x: b.x, y: b.y, vx: b.vx, vy: b.vy, radius: b.r, life: 1, friendly: b.friend,
-    damage: 0, color: b.color, pierce: 0, hitList: null, isCrit: false,
+    owner: null, damage: 0, color: b.color, pierce: 0, hitList: null, isCrit: false,
     fx: b.fx ?? undefined,
   };
 }

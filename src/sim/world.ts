@@ -226,6 +226,18 @@ function primaryPlayer(w: WorldState): PlayerSim | undefined {
   return w.players.get(LOCAL_ID) ?? w.players.values().next().value;
 }
 
+// Resolve the player who should receive credit for an attributed action (bullet/burn/etc).
+// Returns the owning player if still connected, else falls back to the primary player so loot
+// still drops and combos still resolve when the shooter has left mid-flight (bullet outlives
+// its owner). Solo: `id` is always LOCAL_ID, so this returns the one player unchanged.
+function resolveOwner(w: WorldState, id: PlayerId | null): PlayerSim | undefined {
+  if (id !== null) {
+    const p = w.players.get(id);
+    if (p) return p;
+  }
+  return primaryPlayer(w);
+}
+
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
 
 function placeWeaponPickups(w: WorldState): Pickup[] {
@@ -468,9 +480,11 @@ function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
   return isFrozen(e) ? 0 : C.CHILL_SLOW;
 }
-function applyBurn(e: Enemy, secs: number): void {
+function applyBurn(e: Enemy, secs: number, owner: PlayerId): void {
   if (secs > e.burn) e.burn = secs;
   e.burnDmg = Math.min(C.BURN_DMG_MAX, e.burnDmg + C.BURN_DMG_STACK);
+  // The most recent igniter owns the burn; its DoT tick credits that player on a kill.
+  e.burnOwner = owner;
 }
 function applyChill(e: Enemy, secs: number): void {
   e.chill = Math.min(C.CHILL_MAX, e.chill + secs);
@@ -479,15 +493,15 @@ function applyShock(e: Enemy, secs: number): void {
   if (secs > e.shock) e.shock = secs;
 }
 function applyHitStatuses(w: WorldState, p: PlayerSim, e: Enemy, src: { burn?: number; chill?: number; shock?: number }): void {
-  if (src.burn !== undefined) applyBurn(e, src.burn);
-  else if (p.mods.burnChance > 0 && w.rng.next() < p.mods.burnChance) applyBurn(e, C.ITEM_BURN_SECS);
+  if (src.burn !== undefined) applyBurn(e, src.burn, p.id);
+  else if (p.mods.burnChance > 0 && w.rng.next() < p.mods.burnChance) applyBurn(e, C.ITEM_BURN_SECS, p.id);
   if (src.chill !== undefined) applyChill(e, src.chill);
   else if (p.mods.chillChance > 0 && w.rng.next() < p.mods.chillChance) applyChill(e, C.ITEM_CHILL_SECS);
   if (src.shock !== undefined) applyShock(e, src.shock);
   else if (p.mods.shockChance > 0 && w.rng.next() < p.mods.shockChance) applyShock(e, C.ITEM_SHOCK_SECS);
 }
 
-function tickStatuses(w: WorldState, p: PlayerSim, e: Enemy, dt: number, ev: SimEvent[]): void {
+function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (e.chill > 0) e.chill = e.chill > dt ? e.chill - dt : 0;
   if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
   if (e.burn > 0) {
@@ -497,7 +511,8 @@ function tickStatuses(w: WorldState, p: PlayerSim, e: Enemy, dt: number, ev: Sim
       e.hp -= e.burnDmg * C.BURN_TICK;
       e.statusTick -= C.BURN_TICK;
       ev.push({ t: "burnTick", x: e.x, y: e.y, radius: e.radius, dmg: e.burnDmg * C.BURN_TICK });
-      if (e.hp <= 0) { killEnemy(w, p, e, ev); break; }
+      // The burn DoT kill credits whoever last ignited this enemy (authoritative attribution).
+      if (e.hp <= 0) { const cr = resolveOwner(w, e.burnOwner); if (cr) killEnemy(w, cr, e, ev); else e.dead = true; break; }
     }
     if (e.burn === 0) { e.burnDmg = 0; e.statusTick = 0; }
   }
@@ -617,7 +632,7 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
     const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
     const spec = resolveShot(p, p.weapon);
-    for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng)) w.bullets.push(b);
+    for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) w.bullets.push(b);
     p.fireCd = wep.fireCd / currentFireRate(p);
     p.shotSeq++;
     ev.push({ t: "shot", pid: p.id, weapon: p.weapon, x: muzzleX, y: muzzleY, aim: p.aimAngle, px: p.x, py: p.y });
@@ -740,13 +755,12 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
 }
 
 function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
-  // `credit` receives kill/status attribution + lightning-chain origin. Solo: the LOCAL_ID
-  // player (unchanged). Multiplayer: the first player (bullets carry no owner at Stage B — the
-  // per-shooter ledger is a Stage-C combat concern). Undefined only for an empty world.
-  const credit = primaryPlayer(w);
+  // Stage C: every strike is attributed to the player who caused it (bullet.owner / swing owner
+  // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
+  // authoritative player. Solo resolves to the one player, so behavior is unchanged.
   refreshFlowField(w, dt);
   for (const e of w.enemies) {
-    if (credit) tickStatuses(w, credit, e, dt, ev);
+    tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
@@ -768,17 +782,19 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
 
-    if (credit) for (const b of w.bullets) {
+    for (const b of w.bullets) {
       if (!b.friendly) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
+      const shooter = resolveOwner(w, b.owner);
+      if (!shooter) continue;
       if (Math.hypot(b.x - e.x, b.y - e.y) < b.radius + e.radius) {
-        strikeEnemy(w, credit, e, {
+        strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
         }, ev);
         if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);
-          arcLightning(w, credit, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
+          arcLightning(w, shooter, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
           b.life = 0;
         } else if (b.pierce > 0) { b.pierce--; (b.hitList ??= []).push(e); }
         else b.life = 0;
@@ -1228,7 +1244,7 @@ function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, sp
   w.bullets.push({
     x, y,
     vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-    radius, life, friendly: false, damage, color,
+    radius, life, friendly: false, owner: null, damage, color,
     pierce: 0, hitList: null, isCrit: false,
   });
 }
@@ -1251,7 +1267,7 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
       p.hp -= b.damage;
       ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: b.x, y: b.y });
       if (b.pierce <= 0) b.life = 0;
-      if (p.hp <= 0) { destroyProp(w, p, ev); break; }
+      if (p.hp <= 0) { destroyProp(w, p, ev, resolveOwner(w, b.owner)); break; }
     }
     if (p.breakT === undefined) {
       for (const player of w.players.values()) {
@@ -1264,7 +1280,7 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
         (swing.hitList ??= []).push(marker);
         p.hp -= swing.damage;
         ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: p.x, y: p.y });
-        if (p.hp <= 0) destroyProp(w, p, ev);
+        if (p.hp <= 0) destroyProp(w, p, ev, player);
         break;
       }
     }
@@ -1277,15 +1293,18 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
 function dashBreakProps(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   for (const prop of w.props) {
     if (prop.breakT !== undefined || prop.kind === "brazier") continue;
-    if (Math.hypot(p.x - prop.x, p.y - prop.y) < p.pr + prop.radius) destroyProp(w, prop, ev);
+    if (Math.hypot(p.x - prop.x, p.y - prop.y) < p.pr + prop.radius) destroyProp(w, prop, ev, p);
   }
 }
 
-function destroyProp(w: WorldState, p: Prop, ev: SimEvent[]): void {
+// `by` is the player who destroyed the prop (bullet owner / melee / dash / chain source), so an
+// explosive barrel credits its kills to the right player. Falls back to the primary player if a
+// caller can't attribute it. Solo: always the one player, so behavior is unchanged.
+function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): void {
   if (p.breakT !== undefined || p.kind === "brazier") return;
   p.dead = true;
   p.breakT = 0;
-  const player = primaryPlayer(w);
+  const player = by ?? primaryPlayer(w);
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
@@ -1315,7 +1334,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim, source: Prop, ev: SimEvent[]
     e.hp -= C.BARREL_EXPLOSION_DAMAGE;
     ev.push({ t: "flash", eid: e.id });
     ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES[e.kind].tint });
-    applyBurn(e, C.BARREL_BURN_SECS);
+    applyBurn(e, C.BARREL_BURN_SECS, p.id);
     if (e.hp <= 0 && !e.dead) killEnemy(w, p, e, ev);
   }
   for (const victim of w.players.values()) {
@@ -1326,7 +1345,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim, source: Prop, ev: SimEvent[]
   }
   for (const other of w.props) {
     if (other === source || other.breakT !== undefined || other.kind === "brazier") continue;
-    if (Math.hypot(other.x - source.x, other.y - source.y) <= r + other.radius) destroyProp(w, other, ev);
+    if (Math.hypot(other.x - source.x, other.y - source.y) <= r + other.radius) destroyProp(w, other, ev, p);
   }
 }
 

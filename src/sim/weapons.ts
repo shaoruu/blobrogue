@@ -1,4 +1,5 @@
 import type { Bullet, WeaponId } from "./types.js";
+import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
 
 export interface MeleeSpec {
@@ -157,8 +158,9 @@ export interface ShotSpec {
 const CRIT_COLOR = "#fff3c4";
 
 // The seeded sim Rng is threaded in so pellet jitter + crit rolls are deterministic
-// (required for the golden-master oracle and for later client prediction).
-export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng): Bullet[] {
+// (required for the golden-master oracle and for later client prediction). `owner` is the
+// firing player's id, stamped onto each bullet for authoritative kill/loot attribution.
+export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng, owner: PlayerId): Bullet[] {
   const shots: Bullet[] = [];
   for (let i = 0; i < spec.pellets; i++) {
     const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
@@ -172,6 +174,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       radius: spec.radius,
       life: spec.life,
       friendly: true,
+      owner,
       damage: isCrit ? spec.damage * spec.critMult : spec.damage,
       color: isCrit ? CRIT_COLOR : spec.color,
       pierce: spec.pierce,

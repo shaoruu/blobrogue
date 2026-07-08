@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "golden:capture": "tsx test/oracle.ts",
     "test:golden": "tsx test/golden.test.ts",
-    "test": "tsx test/golden.test.ts"
+    "test:sim": "tsx test/stagec.sim.test.ts",
+    "test:purity": "tsx test/purity.test.ts",
+    "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/purity.test.ts"
   },
   "devDependencies": {
     "@fal-ai/serverless-client": "^0.15.0",
