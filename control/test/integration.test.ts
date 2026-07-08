@@ -24,7 +24,7 @@ const CTX: OperationContext = { actor: "op", requestId: "itest", idempotencyKey:
 
 async function bootGs(heartbeatMs: number): Promise<{ port: number; close: () => Promise<void> }> {
   const cfg = { ...loadGsConfig({}), host: "127.0.0.1", port: 0, auth: { secret: GS_SECRET, allowDev: true }, heartbeatMs, heartbeatMisses: 3 };
-  const gs = new GameServer(cfg, createGsLogger({ app: "gs-itest" }, "error"));
+  const gs = new GameServer(cfg, { logger: createGsLogger({ app: "gs-itest" }, "error") });
   const port = await gs.listen();
   return { port, close: () => gs.close() };
 }
