@@ -20,7 +20,7 @@ import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire,
-  STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION,
+  STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
   type ServerMsg,
 } from "../net/protocol.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
@@ -58,10 +58,12 @@ const MAX_PENDING = 256;
 
 interface PendingInput {
   seq: number;
-  dt: number;
-  cmd: InputCmd;
-  sentAt: number; // local time the input was sent (for RTT = ack time - sentAt)
+  cmd: InputCmd;   // applied at the FIXED step (the server tick owns time; no per-input dt)
+  sentAt: number;  // local time the command was sent (for RTT = ack time - sentAt)
 }
+
+// Cap fixed steps simulated in one frame so a long stall (tab backgrounded) can't spiral.
+const MAX_STEPS_PER_FRAME = 5;
 
 // Adaptive interpolation delay bounds (ms). Floor keeps ~2 snapshot intervals so two keyframes
 // almost always straddle the render clock; ceiling caps how laggy remotes get under bad jitter.
@@ -119,6 +121,22 @@ export class WSTransport implements Transport {
   private smoothY = 0;
   private lastStatAt = 0;
 
+  // Fixed-timestep prediction (matches the server tick): accumulate real frame time and step the
+  // predicted local player exactly FIXED_DT per step, sampling+sending one input command per step.
+  // This makes input cadence frame-rate independent (a 240Hz client sends the same ~20 cmds/s as a
+  // 30Hz client) and carries NO client dt (the server tick owns simulation time).
+  private accumulator = 0;
+  // Render extrapolation: the predicted position before + after the latest fixed step, so the
+  // local player renders smoothly between 20Hz steps (extrapolate by the leftover accumulator).
+  private prevPredX = 0;
+  private prevPredY = 0;
+
+  // Reliable-event channel: the highest event id processed (dedupe: ignore ids <= this; ack: send
+  // this back so the server stops resending). Defends against backpressure-dropped snapshots.
+  private lastEventId = 0;
+  private lastOfferId = 0;      // dedupe repeated (resent) offers
+  private lastSnapTick = -1;    // reject stale / out-of-order snapshots (H4)
+
   // Authoritative shared-world tracking: the client rebuilds the identical dungeon geometry when
   // the server's seed/floor changes (party-wide descend), so movement prediction collides with
   // the same walls the server does.
@@ -171,6 +189,12 @@ export class WSTransport implements Transport {
     this.correctionEwmaPx = 0;
     this.correctionMaxPx = 0;
     this.lastStatAt = 0;
+    this.accumulator = 0;
+    this.lastEventId = 0;
+    this.lastOfferId = 0;
+    this.lastSnapTick = -1;
+    const lp = this.predState.players.get(LOCAL_ID)!;
+    this.prevPredX = lp.x; this.prevPredY = lp.y;
     this.stopped = false;
     void this.connect();
   }
@@ -250,9 +274,12 @@ export class WSTransport implements Transport {
       return;
     }
     if (msg.t === "offer") {
-      // A server-decided blessing choice set for this client; the game shows it and replies with
-      // pickBlessing. Latest offer wins if two arrive before a pick.
-      this.pendingOffer = msg.choices.slice();
+      // Idempotent: the server resends an offer (bounded) until the pick arrives; show each id
+      // only once so resends never re-prompt.
+      if (msg.id > this.lastOfferId) {
+        this.lastOfferId = msg.id;
+        this.pendingOffer = msg.choices.slice();
+      }
       return;
     }
     this.ingestSnapshot(msg);
@@ -277,6 +304,11 @@ export class WSTransport implements Transport {
   }
 
   private ingestSnapshot(snap: Extract<ServerMsg, { t: "snap" }>): void {
+    // Reject stale / out-of-order snapshots (H4): a full (join) snapshot always resyncs; otherwise
+    // ignore any tick <= the last one processed (defends against reordering under the adversity
+    // shim; on real ordered TCP this is a cheap belt-and-suspenders).
+    if (!snap.full && snap.tick <= this.lastSnapTick) return;
+    this.lastSnapTick = snap.tick;
     this.maybeRebuildWorld(snap.seed, snap.floor);
     this.latestSnap = snap;
     const prevSnapAt = this.lastSnapAtForJitter;
@@ -318,8 +350,13 @@ export class WSTransport implements Transport {
     // props). They only change on break, so rebuilding per snapshot is cheap.
     this.predState.props = snap.props.map(propFromWire);
 
-    // Queue juice: keep global (enemy/world) events + this client's own player events.
-    for (const e of snap.events) {
+    // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
+    // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep only
+    // global (enemy/world) events + this client's own player events.
+    for (const w of snap.events) {
+      if (w.id <= this.lastEventId) continue; // already processed (resend) — dedupe
+      this.lastEventId = w.id;
+      const e = w.e;
       const pid = pidOf(e);
       if (pid === undefined || pid === this.selfServerId) this.events.push(e);
     }
@@ -337,8 +374,10 @@ export class WSTransport implements Transport {
     }
     applySelfWire(p, snap.self!);
     this.pending = this.pending.filter((i) => i.seq > snap.ackSeq);
+    // Replay unacked commands at the SAME fixed step the server uses — deterministic replay is
+    // what makes reconciliation converge exactly.
     const scratch: SimEvent[] = [];
-    for (const inp of this.pending) stepPlayerPhase(this.predState, p, inp.cmd, inp.dt, scratch);
+    for (const inp of this.pending) stepPlayerPhase(this.predState, p, inp.cmd, FIXED_DT, scratch);
     // Fold the correction into the smoothing offset so it glides instead of snapping — unless
     // it is large (a real server-side displacement), which we let snap.
     const errX = beforeX - p.x, errY = beforeY - p.y;
@@ -365,33 +404,38 @@ export class WSTransport implements Transport {
 
   advance(dt: number): void {
     // A lost join handshake (packet loss on connect) would otherwise strand the client. While
-    // connected but not yet acknowledged (no snapshot), resend the join periodically. A
-    // duplicate join after success is a harmless no-op server-side, and tick broadcasts heal a
-    // lost initial full snapshot on their own.
+    // connected but not yet acknowledged (no snapshot), resend the join periodically.
     const sock = this.socket;
     if (sock && sock.readyState === SOCKET_OPEN && !this.isReady() && this.now() - this.lastJoinAt > 500) {
       this.sendJoin();
     }
-    const cmd = this.nextInput;
-    this.nextInput = null;
-    if (cmd) {
-      const p = this.predState.players.get(LOCAL_ID)!;
+
+    // FIXED-TIMESTEP prediction: accumulate real frame time and step the predicted local player
+    // EXACTLY FIXED_DT per step, sampling+sending one input command per step. Frame-rate
+    // independent (a 240Hz client produces the same command cadence as a 30Hz one) and carries no
+    // client dt — the server tick owns simulation time.
+    const p = this.predState.players.get(LOCAL_ID)!;
+    this.accumulator += dt;
+    let steps = 0;
+    while (this.accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
+      this.accumulator -= FIXED_DT;
+      steps++;
+      this.prevPredX = p.x; this.prevPredY = p.y;
+      const cmd = this.nextInput ?? { seq: 0, moveX: 0, moveY: 0, aim: p.aimAngle, firing: false, dash: false };
       const scratch: SimEvent[] = [];
       if (this.isReady()) {
-        // Joined: stamp + ring + send for server reconciliation, then predict.
         const seq = ++this.seq;
         const stamped: InputCmd = { ...cmd, seq };
-        this.pending.push({ seq, dt, cmd: stamped, sentAt: this.now() });
+        this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
-        this.sendMsg({ t: "input", seq, dt, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash });
-        stepPlayerPhase(this.predState, p, stamped, dt, scratch);
+        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, ackEv: this.lastEventId });
+        stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
       } else {
-        // Pre-join: predict locally for instant feel, but don't send inputs before the join is
-        // acknowledged (a reordered input arriving before the join would be dropped server-side).
-        // The first snapshot snaps us to the authoritative spawn, discarding this transient.
-        stepPlayerPhase(this.predState, p, cmd, dt, scratch);
+        // Pre-join: predict locally for instant feel; don't send before the join is acknowledged.
+        stepPlayerPhase(this.predState, p, cmd, FIXED_DT, scratch);
       }
     }
+    if (this.accumulator > FIXED_DT) this.accumulator = FIXED_DT; // clamp after a long stall
     // Periodic telemetry uplink (observability only): report client-side netcode signals the
     // server can't measure so /metrics can surface RTT/jitter/reconciliations/correction.
     if (this.isReady() && this.now() - this.lastStatAt > 2000) {
@@ -411,8 +455,13 @@ export class WSTransport implements Transport {
     const rp = this.renderState.players.get(LOCAL_ID)!;
     const pp = this.predState.players.get(LOCAL_ID)!;
     this.copyPlayer(rp, pp);
-    rp.x = pp.x + this.smoothX;
-    rp.y = pp.y + this.smoothY;
+    // Render-extrapolate the local player between 20Hz fixed steps so movement stays smooth at any
+    // FPS: advance from the last fixed position toward the current one by the leftover accumulator
+    // fraction. Extrapolation naturally rests when the player stops (prev == cur). Any small
+    // overshoot is corrected on the next fixed step.
+    const frac = FIXED_DT > 0 ? Math.min(1, this.accumulator / FIXED_DT) : 0;
+    rp.x = pp.x + (pp.x - this.prevPredX) * frac + this.smoothX;
+    rp.y = pp.y + (pp.y - this.prevPredY) * frac + this.smoothY;
 
     this.renderState.enemies = this.composeEnemies();
     this.renderState.bullets = this.composeBullets();

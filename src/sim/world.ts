@@ -39,6 +39,10 @@ export interface MeleeSwing {
   burn?: number;
   chill?: number;
   shock?: number;
+  // Fire-time lag compensation for the swing (see Bullet.bornTick/lagRewind). A swing is short,
+  // so this rewinds hits to when the swing started. 0/undefined in solo.
+  bornTick?: number;
+  lagRewind?: number;
 }
 
 interface StrikeInfo {
@@ -668,7 +672,13 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
     const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
     const spec = resolveShot(p, p.weapon);
-    for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) w.bullets.push(b);
+    for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
+      // Anchor lag-comp at fire time: record the tick + the shooter's rewind depth NOW, so hit
+      // tests use the shooter's fire-time view and decay to present as the projectile travels.
+      b.bornTick = w.tick;
+      b.lagRewind = p.rewindTicks;
+      w.bullets.push(b);
+    }
     p.fireCd = wep.fireCd / currentFireRate(p);
     p.shotSeq++;
     ev.push({ t: "shot", pid: p.id, weapon: p.weapon, x: muzzleX, y: muzzleY, aim: p.aimAngle, px: p.x, py: p.y });
@@ -700,6 +710,8 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
+    bornTick: w.tick,
+    lagRewind: p.rewindTicks,
   };
   p.fireCd = wep.fireCd / currentFireRate(p);
   p.shotSeq++;
@@ -817,6 +829,17 @@ export function recordHistory(w: WorldState): void {
 // into the ring; rewind 1 == the most recent recorded tick). rewindTicks <= 0 returns the
 // present authoritative position (the solo/prediction path — identical behavior). Clamped to the
 // history window + LAGCOMP_MAX_TICKS so a hit can never be rewound to an impossible time.
+// Effective rewind depth for a hit whose lag-comp is anchored at FIRE time. As the projectile/
+// swing ages, the shooter's past view converges to the present, so the rewind shrinks one tick
+// per tick and reaches 0 — after which collisions test present positions (correct for slow
+// projectiles). bornTick/lagRewind undefined (solo, enemy fire) => 0 (present-time), unchanged.
+export function fireTimeRewind(w: WorldState, bornTick: number | undefined, lagRewind: number | undefined): number {
+  if (bornTick === undefined || lagRewind === undefined || lagRewind <= 0) return 0;
+  const age = w.tick - bornTick;
+  const eff = lagRewind - (age > 0 ? age : 0);
+  return eff > 0 ? eff : 0;
+}
+
 export function rewoundEnemyPos(w: WorldState, e: Enemy, rewindTicks: number): [number, number] {
   if (rewindTicks <= 0) return [e.x, e.y];
   const r = Math.min(rewindTicks, C.LAGCOMP_MAX_TICKS, w.histCount);
@@ -862,10 +885,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       const shooter = resolveOwner(w, b.owner);
       if (!shooter) continue;
-      // Lag comp: test the overlap against where the shooter SAW the enemy (rewound by their
-      // render-time offset), then apply damage to its CURRENT authoritative state. rewindTicks
-      // is 0 in solo/prediction, so this is exactly the present-time overlap (goldens unchanged).
-      const [btx, bty] = rewoundEnemyPos(w, e, shooter.rewindTicks);
+      // Lag comp anchored at FIRE time (decays as the bullet travels): a hitscan-fast shot tests
+      // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
+      const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
       if (Math.hypot(b.x - btx, b.y - bty) < b.radius + e.radius) {
         strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
@@ -885,7 +907,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       const swing = player.meleeSwing;
       if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
-      const [mtx, mty] = rewoundEnemyPos(w, e, player.rewindTicks);
+      const [mtx, mty] = rewoundEnemyPos(w, e, fireTimeRewind(w, swing.bornTick, swing.lagRewind));
       if (isPointInMeleeHit(player, mtx, mty, e.radius, swing)) {
         const kbDirX = Math.cos(swing.aim);
         const kbDirY = Math.sin(swing.aim);
@@ -1433,12 +1455,12 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.chests.length === 0) return;
   for (const c of w.chests) {
     if (!c.opened) {
-      // A friendly bullet implies a shooter; credit the primary player (solo: LOCAL_ID —
-      // identical to before). Guarded so an empty world never dereferences a missing player.
-      const opener = primaryPlayer(w);
       for (const b of w.bullets) {
         if (!b.friendly || b.life <= 0) continue;
         if (Math.hypot(b.x - c.x, b.y - c.y) >= b.radius + c.radius) continue;
+        // Credit the BULLET's owner (the actual shooter), falling back to the primary player only
+        // if that shooter has since disconnected (bullet outlived them). Solo: the one player.
+        const opener = resolveOwner(w, b.owner);
         if (opener) openChest(w, opener, c, ev);
         if (b.pierce > 0) b.pierce--; else b.life = 0;
         break;

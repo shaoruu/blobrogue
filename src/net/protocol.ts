@@ -62,6 +62,12 @@ export interface PlayerWire {
   wpn: WeaponId; down: boolean;
 }
 
+// A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
+// ignores ids it already processed) and ack (client reports the max id it has seen; the server
+// resends only unacked events from a bounded ring). This makes one-shot juice (kills/loot/FX)
+// effectively once-delivered under packet loss — no missing, no double.
+export interface WireEvent { id: number; e: SimEvent }
+
 // Compact attack-state for enemy telegraph rendering.
 export interface AttackWire {
   ph: AttackPhase; mv: AttackMove;
@@ -99,7 +105,11 @@ export interface ChestWire { kind: ChestKind; x: number; y: number; op: boolean;
 // Client -> server. The client authors INPUTS ONLY.
 export type ClientMsg =
   | { t: "join"; ticket: string; protocol: number }
-  | { t: "input"; seq: number; dt: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }
+  // An input is an INTENT SAMPLE, not a time authority: it carries NO dt. The server advances
+  // simulation time by its own fixed tick (one command = one fixed step), so a client can't buy
+  // extra time by claiming a large dt. `ackEv` piggybacks the reliable-event ack (last event id
+  // the client has processed) so the server can stop resending delivered events.
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; ackEv: number }
   | { t: "pong"; id: number }
   // Authoritative weapon switch: the server equips ONLY if the id is in the player's owned set
   // (a tampered client can't equip an unowned weapon). Never carries any outcome.
@@ -130,13 +140,15 @@ export type ServerMsg =
       props: PropWire[];        // shared destructibles
       pickups: PickupWire[];    // shared loot on the ground
       chests: ChestWire[];      // shared chests (incl. the boss chest)
-      events: SimEvent[];       // events since last snap -> client replays juice
+      events: WireEvent[];      // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
-  // A server-decided blessing offer for this client (seeded choice set). The client renders these
-  // exact choices and replies with a `pickBlessing` naming one of them; the server validates the
-  // pick against this set and applies it authoritatively. Keeps choice authority server-side.
-  | { t: "offer"; choices: string[] }
+  // A server-decided blessing offer for this client (seeded choice set), carrying a monotonic
+  // `id` so it is idempotent: the server resends it (bounded) until the pick arrives, defending
+  // against a backpressure-dropped message, and the client shows each id only once (no double
+  // prompt from resends). The client replies with `pickBlessing`; the server validates the pick
+  // against this set and applies it authoritatively — choice authority stays server-side.
+  | { t: "offer"; id: number; choices: string[] }
   | { t: "error"; code: string; msg: string };
 
 // ---- Codec seam (JSON now; binary is a later swap) ----
@@ -190,22 +202,28 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "join": {
       const ticket = o.ticket;
       if (typeof ticket !== "string" || ticket.length < 1 || ticket.length > 512) throw new ProtocolError("bad ticket");
-      const protocol = isFiniteNum(o.protocol) ? o.protocol : 0;
+      // Protocol must be an explicit finite integer (no defaulting to 0 — that was a bypass). The
+      // join handler additionally enforces it EQUALS the current PROTOCOL_VERSION.
+      const protocol = o.protocol;
+      if (!isFiniteNum(protocol) || Math.floor(protocol) !== protocol) throw new ProtocolError("bad protocol");
       return { t: "join", ticket, protocol };
     }
     case "input": {
-      // seq: non-negative safe integer. dt: bounded (server further clamps for anti-cheat).
+      // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
+      // tick owns simulation time.
       const seq = o.seq;
       if (!isFiniteNum(seq) || seq < 0 || seq > Number.MAX_SAFE_INTEGER || Math.floor(seq) !== seq) throw new ProtocolError("bad seq");
+      const ackEv = o.ackEv;
+      if (!isFiniteNum(ackEv) || ackEv < 0 || ackEv > Number.MAX_SAFE_INTEGER || Math.floor(ackEv) !== ackEv) throw new ProtocolError("bad ackEv");
       return {
         t: "input",
         seq,
-        dt: num(o, "dt", 0, 1),          // seconds; a frame is ~0.016, server caps to a tick
         mx: num(o, "mx", -8, 8),         // raw axis; server clamps to unit length
         my: num(o, "my", -8, 8),
         aim: num(o, "aim", -1000, 1000), // radians; unbounded angle is fine to clamp loosely
         fire: boolOf(o, "fire"),
         dash: boolOf(o, "dash"),
+        ackEv,
       };
     }
     case "pong": {
@@ -370,7 +388,7 @@ export function buildSnapshot(
   w: WorldState,
   selfPid: PlayerId,
   ackSeq: number,
-  events: SimEvent[],
+  events: WireEvent[],
   full: boolean,
   opts: SnapshotOpts = {},
 ): ServerMsg {

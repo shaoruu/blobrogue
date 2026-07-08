@@ -107,6 +107,13 @@ export interface Bullet {
   // Render recipe tag (the firing weapon). Selects the layered sprite FX in
   // renderBullets; absent on enemy fire, which keeps its own halo-and-core look.
   fx?: WeaponId;
+  // Lag compensation anchored at FIRE time (not collision time). bornTick is the world tick the
+  // shot was fired; lagRewind is the shooter's rewind depth (ticks) at that moment. The effective
+  // rewind used for a hit test decays as the projectile travels (max(0, lagRewind - age)), so a
+  // slow projectile that collides many ticks later is tested against PRESENT positions, while a
+  // near-instant hit is tested against the shooter's fire-time view. Undefined/0 in solo.
+  bornTick?: number;
+  lagRewind?: number;
 }
 
 export type PickupKind = "heart" | "coin" | "weapon";

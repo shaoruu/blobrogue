@@ -8,7 +8,7 @@
 
 import {
   createWorld, spawnPlayerInWorld, devSpawnEnemy, devSpawnProp,
-  stepWorldPhase, recordHistory, rewoundEnemyPos,
+  stepWorldPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
   switchWeaponInWorld, acquireWeaponInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
@@ -223,31 +223,42 @@ function lagCompTests(): void {
     check("rewind 0 returns present pos", now[0] === e.x && now[1] === e.y);
   }
 
-  section("lag-comp: a lagged shooter hits a target that the present-time test would MISS");
+  section("lag-comp: a hitscan-fast shot uses the shooter's FIRE-time view (hits what they saw)");
   {
     const { w, a, b } = twoPlayerArena();
-    // Park both players (down) purely so the enemy AI finds no target and stays put — this lets
-    // us script an exact position trail through the REAL step (which records history internally).
+    // Park players so the enemy AI stays put; script an exact position trail via the real step.
     a.isDown = true; b.isDown = true;
     const e = devSpawnEnemy(w, "slime", 400, 400);
     e.hp = 100; e.spawnTimer = 0;
-    // Drive 4 authoritative ticks, moving the enemy +40px before each: the internal recordHistory
-    // captures 400,440,480,520 as the enemy marches right.
     for (let i = 0; i < 4; i++) { e.x = 400 + i * 40; stepWorldPhase(w, 1 / 20, []); }
-    // Present: enemy jumps to 560. B's client still renders it ~4 records back (x=440).
-    e.x = 560;
-    b.rewindTicks = 4;
+    e.x = 560; // present jump; B's client still rendered it ~4 records back (x=440)
     const hpBefore = e.hp;
-    // B fires exactly where it SAW the enemy (x=440). Present-time (x=560) would miss by 120px.
-    w.bullets.push({ x: 440, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    // A near-instant shot fired THIS tick (bornTick = now) with fire-time rewind 4, placed where
+    // B saw the enemy (x=440). Present-time (x=560) would miss by 120px.
+    w.bullets.push({ x: 440, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false, bornTick: w.tick, lagRewind: 4 });
     stepWorldPhase(w, 1 / 20, []);
-    check("lagged shooter's rewound shot registered damage", e.hp < hpBefore, `hp ${hpBefore}->${e.hp}`);
+    check("fire-time-rewound shot registered damage", e.hp < hpBefore, `hp ${hpBefore}->${e.hp}`);
 
-    // Control: the SAME shot with no rewind (rewind 0) misses the present-time enemy at 560.
-    e.hp = 100; b.rewindTicks = 0;
-    w.bullets.push({ x: 440, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    // Control: the same shot with NO fire-time anchor (lagRewind 0) misses the present enemy.
+    e.hp = 100;
+    w.bullets.push({ x: 440, y: 400, vx: 1, vy: 0, radius: 6, life: 1, friendly: true, owner: b.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false, bornTick: w.tick, lagRewind: 0 });
     stepWorldPhase(w, 1 / 20, []);
-    check("without rewind the same shot misses (no impossible present-time hit)", e.hp === 100, `hp=${e.hp}`);
+    check("without a fire-time anchor the same shot misses (no impossible present-time hit)", e.hp === 100, `hp=${e.hp}`);
+  }
+
+  section("lag-comp: a SLOW projectile decays to PRESENT-time collision (not rewound at impact)");
+  {
+    // The fire-time rewind shrinks one tick per tick. A projectile fired with rewind 4 that
+    // collides 6 ticks later must test PRESENT positions — rewinding a long-traveled bullet to
+    // the shooter's old view would be wrong (the TD finding). fireTimeRewind proves the decay.
+    const { w } = twoPlayerArena();
+    const born = w.tick;
+    check("at fire (age 0) rewind is full", fireTimeRewind(w, born, 4) === 4);
+    // Advance the world clock 6 ticks (stepWorldPhase is the world-systems half; the tick counter
+    // is bumped by the server/solo stepWorld wrapper, so advance it explicitly here).
+    for (let i = 0; i < 6; i++) { w.tick++; stepWorldPhase(w, 1 / 20, []); }
+    check("after 6 ticks a rewind-4 shot has decayed to present-time (0)", fireTimeRewind(w, born, 4) === 0, `eff=${fireTimeRewind(w, born, 4)}`);
+    check("a mid-flight shot (age 1) keeps partial rewind", fireTimeRewind(w, w.tick - 1, 4) === 3);
   }
 
   section("lag-comp: rewind is clamped to the history window (no impossible rewind)");
