@@ -4,7 +4,7 @@
 
 import { startTestServer, Bot, waitUntil, sleep } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
-import { jsonCodec } from "../../src/net/protocol.js";
+import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { clientIpFrom, parseCidrList } from "../src/net.js";
 import { devSpawnEnemy } from "../../src/sim/world.js";
 import { TILE } from "../../src/sim/types.js";
@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     try {
       // Three connections carrying DISTINCT client IPs via XFF -> distinct buckets, all allowed.
       const distinct = [await rawSocket(s.url, { "x-forwarded-for": "1.1.1.1" }), await rawSocket(s.url, { "x-forwarded-for": "2.2.2.2" }), await rawSocket(s.url, { "x-forwarded-for": "3.3.3.3" })];
-      for (const w of distinct) w.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "u"), protocol: 1 }));
+      for (const w of distinct) w.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "u"), protocol: PROTOCOL_VERSION }));
       await sleep(200);
       check("3 distinct-IP clients all admitted (proxy did not collapse them)", s.server.getWorld()?.playerCount === 3, `players=${s.server.getWorld()?.playerCount}`);
       for (const w of distinct) w.close();
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     try {
       const ws = await rawSocket(s.url);
       ws.on("message", () => {});
-      ws.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "flood"), protocol: 1 }));
+      ws.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "flood"), protocol: PROTOCOL_VERSION }));
       await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) >= 1, 2000);
       const world = s.server.getWorld()!;
       const pid = [...world.state.players.keys()][0];

@@ -9,15 +9,15 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, applyItemToWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, applyItemToWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
-import { Rng } from "../../src/sim/rng.js";
+import { Rng, randomSeed } from "../../src/sim/rng.js";
 import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
-import { FIXED_DT, TICK_HZ, STAGE_B_SEED, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
+import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 import type { RoomRuntime } from "./ports.js";
@@ -33,10 +33,13 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 // Ticks to rewind a shooter's hit test, from the SERVER's measured RTT (never client-claimed) +
-// interp delay, clamped — anti-cheat-safe. Stamped onto bullets/swings at FIRE time (fire-time
-// lag comp), so it decays as a projectile travels.
+// the client's REPORTED adaptive interp delay (clamped by the router to the same [90,300]ms
+// window the client's interpolation actually uses; base default until reported), clamped to the
+// sim history window — anti-cheat-safe. Stamped onto bullets/swings at FIRE time (fire-time lag
+// comp), so it decays as a projectile travels.
 function rewindTicksFor(conn: Conn): number {
-  const viewLagMs = conn.rttMs * 0.5 + INTERP_BASE_DELAY_MS;
+  const interpMs = conn.cliInterpDelayMs > 0 ? conn.cliInterpDelayMs : INTERP_BASE_DELAY_MS;
+  const viewLagMs = conn.rttMs * 0.5 + interpMs;
   return clamp(Math.round(viewLagMs / TICK_MS), 0, LAGCOMP_MAX_TICKS);
 }
 
@@ -63,14 +66,28 @@ export class GameWorld implements RoomRuntime {
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
-  constructor(id: string, seed: number = STAGE_B_SEED, arena = false) {
+  constructor(id: string, seed: number = randomSeed(), arena = false) {
     this.id = id;
-    // Production: a REAL generated dungeon (isShared). Measurement (arena=true): an OPEN sandbox
-    // arena so the load harness can move a probe in a straight monotonic line — same stepWorld,
-    // tick, and netcode, only different geometry. Arena seeds a few enemies for bandwidth realism.
+    // Production: a REAL generated dungeon (isShared) with a FRESH random run seed — the server
+    // alone owns the seed; clients rebuild geometry from the snapshot's authoritative seed/floor.
+    // Measurement (arena=true): an OPEN sandbox arena so the load harness can move a probe in a
+    // straight monotonic line — same stepWorld, tick, and netcode, only different geometry.
+    // Arena seeds a few enemies for bandwidth realism.
     this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena });
     this.offerRng = new Rng(seed ^ 0x0ffe4);
     if (arena) this.seedArenaEnemies();
+  }
+
+  // Reset to a FRESH run (new seed/floor 1/cleared terminal state). Called by the session store
+  // when the room empties — the next party starts a new dungeon, not a half-played one. The
+  // world revision increments (stale-snapshot guard) and tick stays monotonic.
+  resetRun(): void {
+    const seed = randomSeed();
+    resetRunInWorld(this.state, seed);
+    this.offerRng = new Rng(seed ^ 0x0ffe4);
+    this.injectedEvents.length = 0;
+    this.gameOverThisTick = [];
+    this.offerThisTick = [];
   }
 
   private seedArenaEnemies(): void {

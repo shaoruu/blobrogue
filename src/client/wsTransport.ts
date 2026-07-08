@@ -11,7 +11,7 @@
 
 import type { Transport, PollResult } from "./transport.js";
 import { createWorld, stepPlayerPhase, loadFloorIntoWorld } from "../sim/world.js";
-import type { WorldState, PlayerSim } from "../sim/world.js";
+import type { WorldState } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
@@ -23,7 +23,12 @@ import {
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
   type ServerMsg,
 } from "../net/protocol.js";
+import { projectPlayer, applyPlayerSnapshot } from "../net/playerSnapshot.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
+
+// A server blessing offer as surfaced to the game: the id must be echoed back with the choice
+// so the server can validate the answer against exactly this offer.
+export interface BlessingOffer { id: number; choices: string[] }
 
 // Minimal socket surface (a subset shared by browser WebSocket and the `ws` package).
 export interface SocketLike {
@@ -135,15 +140,20 @@ export class WSTransport implements Transport {
   // this back so the server stops resending). Defends against backpressure-dropped snapshots.
   private lastEventId = 0;
   private lastOfferId = 0;      // dedupe repeated (resent) offers
-  private lastSnapTick = -1;    // reject stale / out-of-order snapshots (H4)
+  private lastSnapTick = -1;    // reject stale / out-of-order snapshots
+  private lastSnapRev = -1;     // reject snapshots from an older world revision
+  private lastAckSeq = 0;       // the server ack never decreases (reorder guard)
+  private cseq = 0;             // monotonic command sequence for equip commands
 
   // Authoritative shared-world tracking: the client rebuilds the identical dungeon geometry when
-  // the server's seed/floor changes (party-wide descend), so movement prediction collides with
-  // the same walls the server does.
+  // the server's seed/floor/revision changes (initial join + every party-wide descend), so
+  // movement prediction collides with the same walls the server does. isWorldRebuilt latches for
+  // the game to refresh its cosmetic floor state (biome/torches/music) off the new world.
   private curSeed = -1;
   private curFloor = -1;
+  private isWorldRebuilt = false;
   // A server-decided blessing offer waiting to be shown (consumed by the game each frame).
-  private pendingOffer: string[] | null = null;
+  private pendingOffer: BlessingOffer | null = null;
 
   // observability for the harness / HUD
   bytesRecv = 0;
@@ -193,6 +203,10 @@ export class WSTransport implements Transport {
     this.lastEventId = 0;
     this.lastOfferId = 0;
     this.lastSnapTick = -1;
+    this.lastSnapRev = -1;
+    this.lastAckSeq = 0;
+    this.cseq = 0;
+    this.isWorldRebuilt = false;
     const lp = this.predState.players.get(LOCAL_ID)!;
     this.prevPredX = lp.x; this.prevPredY = lp.y;
     this.stopped = false;
@@ -274,11 +288,11 @@ export class WSTransport implements Transport {
       return;
     }
     if (msg.t === "offer") {
-      // Idempotent: the server resends an offer (bounded) until the pick arrives; show each id
+      // Idempotent: the server resends an offer (bounded) until the choice arrives; show each id
       // only once so resends never re-prompt.
       if (msg.id > this.lastOfferId) {
         this.lastOfferId = msg.id;
-        this.pendingOffer = msg.choices.slice();
+        this.pendingOffer = { id: msg.id, choices: msg.choices.slice() };
       }
       return;
     }
@@ -301,13 +315,18 @@ export class WSTransport implements Transport {
     this.interp = new RemoteInterp();
     this.smoothX = 0;
     this.smoothY = 0;
+    this.isWorldRebuilt = true;
   }
 
   private ingestSnapshot(snap: Extract<ServerMsg, { t: "snap" }>): void {
-    // Reject stale / out-of-order snapshots (H4): a full (join) snapshot always resyncs; otherwise
-    // ignore any tick <= the last one processed (defends against reordering under the adversity
-    // shim; on real ordered TCP this is a cheap belt-and-suspenders).
-    if (!snap.full && snap.tick <= this.lastSnapTick) return;
+    // Reject stale / out-of-order snapshots: a full (join) snapshot always resyncs; otherwise
+    // ignore anything from an older world revision or an older/duplicate tick (defends against
+    // reordering under the adversity shim; on real ordered TCP this is belt-and-suspenders).
+    if (!snap.full) {
+      if (snap.rev < this.lastSnapRev) return;
+      if (snap.rev === this.lastSnapRev && snap.tick <= this.lastSnapTick) return;
+    }
+    this.lastSnapRev = snap.rev;
     this.lastSnapTick = snap.tick;
     this.maybeRebuildWorld(snap.seed, snap.floor);
     this.latestSnap = snap;
@@ -352,7 +371,9 @@ export class WSTransport implements Transport {
 
     // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
     // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep only
-    // global (enemy/world) events + this client's own player events.
+    // global (enemy/world) events + this client's own player events. evTo advances the ack even
+    // when every pending event was interest-filtered away for this client, so the server stops
+    // re-scanning them; critical transitions stay derivable from snapshot STATE regardless.
     for (const w of snap.events) {
       if (w.id <= this.lastEventId) continue; // already processed (resend) — dedupe
       this.lastEventId = w.id;
@@ -360,10 +381,15 @@ export class WSTransport implements Transport {
       const pid = pidOf(e);
       if (pid === undefined || pid === this.selfServerId) this.events.push(e);
     }
+    if (snap.evTo > this.lastEventId) this.lastEventId = snap.evTo;
   }
 
   // Snap the predicted local player to authoritative truth, drop acked inputs, replay the rest.
   private reconcile(snap: Extract<ServerMsg, { t: "snap" }>): void {
+    // The ack never decreases: a reordered/duplicated frame that slipped past the tick guard
+    // (e.g. a full resync) must not resurrect already-consumed inputs into the replay set.
+    if (snap.ackSeq < this.lastAckSeq) return;
+    this.lastAckSeq = snap.ackSeq;
     const p = this.predState.players.get(LOCAL_ID)!;
     const beforeX = p.x, beforeY = p.y;
     // RTT = time between sending the acked input and this snapshot confirming it.
@@ -440,7 +466,13 @@ export class WSTransport implements Transport {
     // server can't measure so /metrics can surface RTT/jitter/reconciliations/correction.
     if (this.isReady() && this.now() - this.lastStatAt > 2000) {
       this.lastStatAt = this.now();
-      this.sendMsg({ t: "stat", rtt: Math.round(this.rttMs), jit: Math.round(this.jitterMs), rec: this.reconcileCount, corr: Math.round(this.correctionMaxPx) });
+      // dly = this client's ACTUAL adaptive interp delay, so the server's lag-comp rewind uses
+      // the delay this client renders at (server-clamped to the adaptive [min,max] window).
+      this.sendMsg({
+        t: "stat", rtt: Math.round(this.rttMs), jit: Math.round(this.jitterMs),
+        rec: this.reconcileCount, corr: Math.round(this.correctionMaxPx),
+        dly: Math.round(this.interp.getRenderDelay()),
+      });
     }
 
     // Retire the smoothing error over a few frames.
@@ -454,7 +486,12 @@ export class WSTransport implements Transport {
   poll(): PollResult {
     const rp = this.renderState.players.get(LOCAL_ID)!;
     const pp = this.predState.players.get(LOCAL_ID)!;
-    this.copyPlayer(rp, pp);
+    // Refresh the render player from the predicted one through the SAME exhaustive projection
+    // boundary reconciliation uses (playerSnapshot.ts), plus the client-owned render extras.
+    // Manual field-by-field copying here is what previously dropped inventory/mods (TD audit).
+    applyPlayerSnapshot(rp, projectPlayer(pp));
+    rp.aimAngle = pp.aimAngle;
+    rp.meleeSwing = pp.meleeSwing;
     // Render-extrapolate the local player between 20Hz fixed steps so movement stays smooth at any
     // FPS: advance from the last fixed position toward the current one by the leftover accumulator
     // fraction. Extrapolation naturally rests when the player stops (prev == cur). Any small
@@ -518,15 +555,6 @@ export class WSTransport implements Transport {
     return snap ? snap.chests.map(chestFromWire) : [];
   }
 
-  private copyPlayer(dst: PlayerSim, src: PlayerSim): void {
-    dst.hp = src.hp; dst.maxHp = src.maxHp; dst.invuln = src.invuln;
-    dst.dashCd = src.dashCd; dst.dashTime = src.dashTime; dst.dashDx = src.dashDx; dst.dashDy = src.dashDy;
-    dst.fireCd = src.fireCd; dst.facing = src.facing; dst.aimAngle = src.aimAngle;
-    dst.weapon = src.weapon; dst.isDown = src.isDown;
-    dst.coins = src.coins; dst.kills = src.kills; dst.combo = src.combo; dst.comboTimer = src.comboTimer;
-    dst.meleeSwing = src.meleeSwing;
-  }
-
   // Other players for the client's remote-player renderer (interpolated, never predicted).
   remotePlayers(): RemotePlayer[] {
     const snap = this.latestSnap;
@@ -540,7 +568,7 @@ export class WSTransport implements Transport {
         y: pose ? pose.y : p.y,
         facing: p.fac,
         hp: p.hp, maxHp: p.mhp,
-        weapon: p.wpn, floor: STAGE_B_FLOOR,
+        weapon: p.wpn, floor: snap.floor,
         isDown: p.down,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
@@ -559,32 +587,34 @@ export class WSTransport implements Transport {
 
   // ---- authoritative gameplay actions (inputs only; the server owns every outcome) ----
 
-  // Request an authoritative weapon switch. The server equips only if the id is actually owned;
+  // Request an authoritative weapon equip. The server equips only if the id is actually owned;
   // the result returns via SelfWire (wpn/fireCd). Predicting the equip locally would fight the
   // reconcile on an invalid switch, so we let the snapshot confirm it (switches aren't
-  // latency-critical). No-op if the weapon isn't in the last authoritative inventory.
-  sendSwitch(weapon: WeaponId): void {
+  // latency-critical). cseq makes the command idempotent server-side (stale/duplicate ignored).
+  // No-op if the weapon isn't in the last authoritative inventory.
+  sendEquip(weapon: WeaponId): void {
     const self = this.latestSnap?.self;
     if (self && !self.wpns.includes(weapon)) return;
-    this.sendMsg({ t: "switch", weapon });
+    this.sendMsg({ t: "equip", weapon, cseq: ++this.cseq });
   }
 
-  // Reply to a server blessing offer. The server validates the id against what it offered this
-  // player and applies it authoritatively (mods flow back via SelfWire).
-  sendPickBlessing(itemId: string): void {
-    this.sendMsg({ t: "pickBlessing", itemId });
+  // Answer a server blessing offer. The offerId names exactly which offer this choice answers;
+  // the server validates it against the live pending offer (id + expiry) and the choice against
+  // that offer's set, then applies the mods authoritatively (they flow back via SelfWire).
+  sendChooseBlessing(offerId: number, choiceId: string): void {
+    this.sendMsg({ t: "chooseBlessing", offerId, choiceId });
   }
 
-  // Consume a pending server-decided blessing offer (choice ids), or null if none. The game shows
-  // it once, then replies via sendPickBlessing.
-  consumePendingOffer(): string[] | null {
+  // Consume a pending server-decided blessing offer, or null if none. The game shows it once,
+  // then replies via sendChooseBlessing with the same offer id.
+  consumePendingOffer(): BlessingOffer | null {
     const o = this.pendingOffer;
     this.pendingOffer = null;
     return o;
   }
 
   // Non-destructive read of the pending offer (harness/tests inspect without consuming).
-  getPendingOfferPeek(): string[] | null {
+  getPendingOfferPeek(): BlessingOffer | null {
     return this.pendingOffer;
   }
 
@@ -592,6 +622,20 @@ export class WSTransport implements Transport {
   // filtering, unlike deriving it from the possibly-filtered enemy list).
   isFloorCleared(): boolean {
     return this.latestSnap?.cleared ?? false;
+  }
+
+  // Terminal run state from authoritative SNAPSHOT state (not just the transient gameOver
+  // event) — a backpressure-dropped final snapshot can't strand the client mid-run.
+  isRunOver(): boolean {
+    return this.latestSnap?.over ?? false;
+  }
+
+  // Latch-consume the "world geometry was rebuilt" signal (initial join + every descend). The
+  // game refreshes its cosmetic floor state (seed-keyed torches, biome, music) off it.
+  consumeWorldRebuilt(): { seed: number; floor: number } | null {
+    if (!this.isWorldRebuilt) return null;
+    this.isWorldRebuilt = false;
+    return { seed: this.curSeed, floor: this.curFloor };
   }
 
   // ---- read-only introspection (HUD / harness / tests) ----

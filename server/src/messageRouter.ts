@@ -2,9 +2,13 @@
 // dispatch. Extracted from the socket server and driven by an injected context (DI: clock, codec,
 // auth, metrics, session store, publisher) so message handling is a small, testable unit — no god
 // server. A malformed/garbage message is isolated per-connection (it can never reach the tick loop).
+//
+// Rate limiting is SEGMENTED here by message class (input/control/stat/pong — separate sliding
+// windows per connection), so a flood in one class can neither starve nor kill the others, and a
+// legitimate high-refresh client (whose input cadence is fixed-step ~20/s regardless of FPS)
+// stays far below every cap.
 
-import { jsonCodec, PROTOCOL_VERSION, ProtocolError, type ClientMsg, type Codec } from "../../src/net/protocol.js";
-import type { WeaponId } from "../../src/sim/types.js";
+import { jsonCodec, PROTOCOL_VERSION, ProtocolError, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, type ClientMsg, type Codec } from "../../src/net/protocol.js";
 import { verifyTicket } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { Clock } from "./clock.js";
@@ -33,6 +37,21 @@ export interface RouterContext {
   close: (conn: Conn, code: number, reason: string) => void;
 }
 
+type MsgClass = "input" | "control" | "stat" | "pong";
+
+function classOf(t: ClientMsg["t"]): MsgClass {
+  switch (t) {
+    case "input": return "input";
+    case "pong": return "pong";
+    case "stat": return "stat";
+    case "join":
+    case "equip":
+    case "chooseBlessing":
+      return "control";
+    default: return assertNever(t);
+  }
+}
+
 export class MessageRouter {
   private codec: Codec;
   constructor(private ctx: RouterContext) {
@@ -43,15 +62,36 @@ export class MessageRouter {
   // it per-connection); never throws anything else out of a well-formed message.
   handle(conn: Conn, raw: string): void {
     const msg = this.codec.decodeClient(raw);
+    if (!this.admitClass(conn, classOf(msg.t))) return; // over a class cap -> connection closed
     switch (msg.t) {
       case "join": this.onJoin(conn, msg); return;
       case "input": this.onInput(conn, msg); return;
-      case "pong": this.onPong(conn); return;
+      case "pong": this.onPong(conn, msg); return;
       case "stat": this.onStat(conn, msg); return;
-      case "switch": this.onSwitch(conn, msg); return;
-      case "pickBlessing": this.onPick(conn, msg); return;
+      case "equip": this.onEquip(conn, msg); return;
+      case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
       default: assertNever(msg); // exhaustive — a new variant won't compile until handled
     }
+  }
+
+  // Per-class sliding 1s windows. Exceeding a class cap disconnects: no legitimate client can
+  // reach these rates (input is fixed-step ~20/s at ANY frame rate; control is user-paced).
+  private admitClass(conn: Conn, cls: MsgClass): boolean {
+    const now = this.ctx.clock.now();
+    const r = conn.rate;
+    if (now - r.start >= 1000) { r.start = now; r.input = 0; r.control = 0; r.stat = 0; r.pong = 0; }
+    const cfg = this.ctx.config;
+    const cap = cls === "input" ? cfg.maxInputPerSec
+      : cls === "control" ? cfg.maxControlPerSec
+      : cls === "stat" ? cfg.maxStatPerSec
+      : cfg.maxPongPerSec;
+    r[cls]++;
+    if (r[cls] > cap) {
+      this.ctx.metrics.counters.rateLimited++;
+      this.ctx.close(conn, 4003, `rate limit (${cls})`);
+      return false;
+    }
+    return true;
   }
 
   private onJoin(conn: Conn, msg: Extract<ClientMsg, { t: "join" }>): void {
@@ -85,7 +125,11 @@ export class MessageRouter {
     if (msg.ackEv > conn.ackedEventId) conn.ackedEventId = msg.ackEv;
   }
 
-  private onPong(conn: Conn): void {
+  private onPong(conn: Conn, msg: Extract<ClientMsg, { t: "pong" }>): void {
+    // Only the OUTSTANDING ping's pong counts: a stale/unsolicited pong (id mismatch, or no ping
+    // in flight) must neither reset liveness nor contaminate the RTT estimate (TD M16).
+    const expected = conn.nextPingId - 1;
+    if (!conn.awaitingPong || msg.id !== expected) return;
     conn.awaitingPong = false;
     conn.missedPings = 0;
     const now = this.ctx.clock.now();
@@ -101,21 +145,37 @@ export class MessageRouter {
     conn.cliJitterMs = msg.jit;
     conn.cliReconciliations = msg.rec;
     conn.cliCorrectionMaxPx = msg.corr;
+    // The client's reported render delay feeds lag comp, CLAMPED to the same adaptive window the
+    // client's interpolation actually uses — a lie can only mis-rewind the sender's own shots
+    // within [90,300]ms, and the sim additionally clamps total rewind to its history window.
+    conn.cliInterpDelayMs = Math.min(INTERP_DELAY_MAX_MS, Math.max(INTERP_DELAY_MIN_MS, msg.dly));
   }
 
-  private onSwitch(conn: Conn, msg: Extract<ClientMsg, { t: "switch" }>): void {
+  private onEquip(conn: Conn, msg: Extract<ClientMsg, { t: "equip" }>): void {
     if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    // Idempotent semantic command: stale/duplicate cseq is dropped (a retry can never re-apply
+    // over a newer choice); only strictly newer commands advance.
+    if (msg.cseq <= conn.lastCseq) return;
+    conn.lastCseq = msg.cseq;
     const room = this.ctx.sessions.room(conn.worldId);
-    if (room && !room.trySwitchWeapon(conn.playerId, msg.weapon as WeaponId)) this.ctx.metrics.counters.rejectedInputs++;
+    if (room && !room.trySwitchWeapon(conn.playerId, msg.weapon)) this.ctx.metrics.counters.rejectedInputs++;
   }
 
-  private onPick(conn: Conn, msg: Extract<ClientMsg, { t: "pickBlessing" }>): void {
+  private onChooseBlessing(conn: Conn, msg: Extract<ClientMsg, { t: "chooseBlessing" }>): void {
     if (!conn.authed || !conn.playerId || !conn.worldId) return;
-    // Valid ONLY if it names one of the choices the server offered this player (anti-cheat gate).
-    if (!conn.pendingOffer || !conn.pendingOffer.includes(msg.itemId)) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    // Valid ONLY against the live pending offer: matching offer id, unexpired, and a choice the
+    // server itself put in that offer's set (anti-cheat gate — the client can never mint items).
+    if (!conn.pendingOffer || msg.offerId !== conn.offerId) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    if (this.ctx.clock.now() > conn.offerDeadline) {
+      conn.pendingOffer = null;
+      conn.offerResendsLeft = 0;
+      this.ctx.metrics.counters.rejectedInputs++;
+      return;
+    }
+    if (!conn.pendingOffer.includes(msg.choiceId)) { this.ctx.metrics.counters.rejectedInputs++; return; }
     const room = this.ctx.sessions.room(conn.worldId);
     if (!room) return;
-    if (room.applyBlessing(conn.playerId, msg.itemId)) { conn.pendingOffer = null; conn.offerResendsLeft = 0; }
+    if (room.applyBlessing(conn.playerId, msg.choiceId)) { conn.pendingOffer = null; conn.offerResendsLeft = 0; }
     else this.ctx.metrics.counters.rejectedInputs++;
   }
 }

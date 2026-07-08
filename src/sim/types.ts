@@ -119,6 +119,7 @@ export interface Bullet {
 export type PickupKind = "heart" | "coin" | "weapon";
 
 export interface Pickup {
+  id: number;      // stable per-floor id (wire identity: interest view + client anim keying)
   kind: PickupKind;
   x: number; y: number;
   radius: number;
@@ -151,6 +152,7 @@ export interface Prop {
 export type ChestKind = "wood" | "boss";
 
 export interface Chest {
+  id: number;      // stable per-floor id (wire identity: interest view + client anim keying)
   kind: ChestKind;
   x: number; y: number;
   radius: number;

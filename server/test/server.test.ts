@@ -7,7 +7,7 @@ import { WebSocket as WsClient } from "ws";
 import type { RoomRuntime } from "../src/ports.js";
 import { startTestServer, Bot, SCRIPTS, idle, waitUntil, sleep, TEST_SECRET } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
-import { jsonCodec } from "../../src/net/protocol.js";
+import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 
 let passed = 0;
 let failed = 0;
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
       const ws = await rawSocket(s.url);
       let closed = false;
       ws.on("close", () => (closed = true));
-      ws.send(jsonCodec.encodeClient({ t: "join", ticket: "totally-bogus", protocol: 1 }));
+      ws.send(jsonCodec.encodeClient({ t: "join", ticket: "totally-bogus", protocol: PROTOCOL_VERSION }));
       await waitUntil(() => closed, 1500);
       check("bad ticket -> rejected + closed", closed && s.server.health().counters.joinsRejected > before);
     } finally {
@@ -169,7 +169,7 @@ async function main(): Promise<void> {
       silent.on("close", () => (silentClosed = true));
       // Swallow pings so we never auto-pong.
       silent.on("message", () => {});
-      silent.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(TEST_SECRET, "ghost"), protocol: 1 }));
+      silent.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(TEST_SECRET, "ghost"), protocol: PROTOCOL_VERSION }));
       const dropped = await waitUntil(() => silentClosed, 2000);
       check("silent socket dropped by heartbeat", dropped);
 
@@ -218,7 +218,7 @@ async function main(): Promise<void> {
     try {
       const cheatWs = await rawSocket(s.url);
       cheatWs.on("message", () => {});
-      cheatWs.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(TEST_SECRET, "cheater"), protocol: 1 }));
+      cheatWs.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(TEST_SECRET, "cheater"), protocol: PROTOCOL_VERSION }));
       await sleep(200);
       const world = s.server.getWorld() as RoomRuntime;
       const pid = [...world.state.players.keys()][0];

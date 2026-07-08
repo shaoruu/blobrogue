@@ -7,7 +7,7 @@
 
 import { startTestServer, Bot, SCRIPTS, idle, waitUntil, sleep } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
-import { jsonCodec } from "../../src/net/protocol.js";
+import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { acquireWeaponInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { RoomRuntime } from "../src/ports.js";
 import { TILE } from "../../src/sim/types.js";
@@ -159,31 +159,36 @@ async function main(): Promise<void> {
     try {
       const cheat = await rawSocket(s.url);
       cheat.on("message", () => {}); // never pong; we only measure our own player
-      cheat.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "cheater"), protocol: 1 }));
+      cheat.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "cheater"), protocol: PROTOCOL_VERSION }));
       await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) >= 1, 2000);
       const world = s.server.getWorld()!;
       const pid = [...world.state.players.keys()][0];
       const p = world.state.players.get(pid)!;
       const startX = p.x, startY = p.y;
       const startShots = p.shotSeq;
-      // Blast wire-valid but impossible inputs (dt=1s each, over-unit move, fire every message)
-      // at ~80/s — under the rate-limit cap so the client stays connected and we can measure that
-      // the SERVER, not the flood, decides movement + fire rate. Unclamped these would advance
-      // ~80s of movement and fire 80x/s; the per-tick dt cap + server fireCd make it impossible.
+      // Blast wire-valid but hostile inputs (over-unit move, fire every message) at ~50/s —
+      // 2.5x the legit fixed-step cadence but under the per-class input cap, so the client stays
+      // connected and we can measure that the SERVER TICK, not the flood, decides simulation
+      // time. The server consumes ONE intent per fixed tick: unclamped, 50 cmds/s would be 50
+      // fixed steps of movement per second (~500px/s) and 50 shots/s; the tick cadence makes
+      // both impossible.
       const t0 = Date.now();
       let seq = 1;
       const flood = setInterval(() => {
         cheat.send(jsonCodec.encodeClient({ t: "input", seq: seq++, mx: 8, my: 8, aim: 0, fire: true, dash: false, ackEv: 0 }));
-      }, 12);
+      }, 20);
       await sleep(1000);
       clearInterval(flood);
       const dt = (Date.now() - t0) / 1000;
-      const after = world.state.players.get(pid)!;
+      const after = world.state.players.get(pid);
+      check("flooding client stayed connected (under the input-class cap)", after !== undefined);
+      if (!after) { cheat.close(); return; }
       const moved = Math.hypot(after.x - startX, after.y - startY);
       const shots = after.shotSeq - startShots;
-      // Honest ceiling: the per-tick dt cap allows <= ~2 ticks of 200px/s movement per tick,
-      // i.e. <= ~400px/s (vs ~16000px if dt=1 were honored). Pistol fires ~6/s (fireCd 0.16).
-      check("speed-hack movement clamped", moved < 450 * dt, `moved=${moved.toFixed(0)}px in ${dt.toFixed(1)}s`);
+      // Honest ceiling: one intent per 50ms tick = 200px/s of diagonal movement (~285px/s along
+      // the hypotenuse is impossible: the axis input normalizes to unit length -> 200px/s).
+      // Pistol fires ~6/s (fireCd 0.16) regardless of how many fire=true intents arrive.
+      check("speed-hack movement clamped to the tick cadence", moved < 260 * dt, `moved=${moved.toFixed(0)}px in ${dt.toFixed(1)}s`);
       check("fire-rate-hack clamped (server owns fireCd)", shots < 12 * dt, `shots=${shots} in ${dt.toFixed(1)}s`);
       check("no client message can even assert a hit/kill (structural)", true);
       check("server healthy after tamper flood", s.server.health().status === "ok");
@@ -249,8 +254,8 @@ async function main(): Promise<void> {
       world.state.players.get(aid)!.weapon = "pistol";
       world.state.players.get(bid)!.weapon = "pistol";
       await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns.includes("shotgun") ?? false), 1500);
-      a.transport.sendSwitch("shotgun");
-      b.transport.sendSwitch("tesla");
+      a.transport.sendEquip("shotgun");
+      b.transport.sendEquip("tesla");
       await sleep(300);
       check("A switched to its own weapon", world.state.players.get(aid)!.weapon === "shotgun", `A=${world.state.players.get(aid)!.weapon}`);
       check("B switched to its own weapon", world.state.players.get(bid)!.weapon === "tesla", `B=${world.state.players.get(bid)!.weapon}`);
@@ -259,13 +264,22 @@ async function main(): Promise<void> {
       const rej0 = s.server.health().counters.rejectedInputs;
       const raw = await rawSocket(s.url);
       raw.on("message", () => {});
-      raw.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "sw-cheat"), protocol: 1 }));
+      raw.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "sw-cheat"), protocol: PROTOCOL_VERSION }));
       await waitUntil(() => world.playerCount >= 3, 1500);
       const cheatId = [...world.state.players.keys()].find((k) => k !== aid && k !== bid)!;
-      raw.send(jsonCodec.encodeClient({ t: "switch", weapon: "railgun" })); // never acquired
+      raw.send(jsonCodec.encodeClient({ t: "equip", weapon: "railgun", cseq: 1 })); // never acquired
       await sleep(200);
-      check("unowned-weapon switch rejected (weapon stays pistol)", world.state.players.get(cheatId)!.weapon === "pistol");
-      check("rejected switch counted", s.server.health().counters.rejectedInputs > rej0);
+      check("unowned-weapon equip rejected (weapon stays pistol)", world.state.players.get(cheatId)!.weapon === "pistol");
+      check("rejected equip counted", s.server.health().counters.rejectedInputs > rej0);
+
+      // Idempotent semantic command: a replayed cseq is dropped. Equip shotgun (cseq 2), then
+      // replay an OLD equip for pistol with the same cseq — the newer state must survive.
+      acquireWeaponInWorld(world.state, cheatId, "shotgun");
+      raw.send(jsonCodec.encodeClient({ t: "equip", weapon: "shotgun", cseq: 2 }));
+      await sleep(150);
+      raw.send(jsonCodec.encodeClient({ t: "equip", weapon: "pistol", cseq: 2 })); // stale replay
+      await sleep(150);
+      check("stale/duplicate cseq equip ignored (no regression to pistol)", world.state.players.get(cheatId)!.weapon === "shotgun", `weapon=${world.state.players.get(cheatId)!.weapon}`);
       raw.close();
       a.stop(); b.stop();
     } finally { await s.close(); }
@@ -288,26 +302,32 @@ async function main(): Promise<void> {
       const gotOffer = await waitUntil(() => bot.transport.getPendingOfferPeek() !== null, 2000);
       check("server sent a blessing offer on descend", gotOffer);
       const offer = bot.transport.getPendingOfferPeek();
-      check("offer carries a choice set", !!offer && offer.length > 0, `choices=${offer?.join(",")}`);
+      check("offer carries a choice set", !!offer && offer.choices.length > 0, `choices=${offer?.choices.join(",")}`);
 
-      // Off-pool pick is rejected: no item applied.
+      // Off-pool choice is rejected: no item applied.
       const rej0 = s.server.health().counters.rejectedInputs;
       const itemsBefore = world.state.players.get(pid)!.ownedItemIds.length;
-      bot.transport.sendPickBlessing("not_a_real_item");
+      bot.transport.sendChooseBlessing(offer!.id, "not_a_real_item");
       await sleep(200);
-      check("off-pool blessing pick rejected (no item applied)", world.state.players.get(pid)!.ownedItemIds.length === itemsBefore);
-      check("rejected pick counted", s.server.health().counters.rejectedInputs > rej0);
+      check("off-pool blessing choice rejected (no item applied)", world.state.players.get(pid)!.ownedItemIds.length === itemsBefore);
+      check("rejected choice counted", s.server.health().counters.rejectedInputs > rej0);
 
-      // A valid pick (one of the offered ids) is applied authoritatively.
-      const pick = offer![0];
-      bot.transport.sendPickBlessing(pick);
+      // A wrong offer id is rejected even with a valid choice (a stale answer can't claim a
+      // newer offer).
+      bot.transport.sendChooseBlessing(offer!.id + 7, offer!.choices[0]);
+      await sleep(200);
+      check("wrong-offer-id choice rejected", world.state.players.get(pid)!.ownedItemIds.length === itemsBefore);
+
+      // A valid choice (right offer id + an offered item) is applied authoritatively.
+      const pick = offer!.choices[0];
+      bot.transport.sendChooseBlessing(offer!.id, pick);
       await waitUntil(() => world.state.players.get(pid)!.ownedItemIds.includes(pick), 1500);
       check("valid blessing applied server-side", world.state.players.get(pid)!.ownedItemIds.includes(pick), `items=${world.state.players.get(pid)!.ownedItemIds.join(",")}`);
-      // Picking again with the now-consumed offer is rejected (can't re-apply).
+      // Answering again with the now-consumed offer is rejected (can't re-apply).
       const items2 = world.state.players.get(pid)!.ownedItemIds.length;
-      bot.transport.sendPickBlessing(pick);
+      bot.transport.sendChooseBlessing(offer!.id, pick);
       await sleep(200);
-      check("a consumed offer can't be re-picked", world.state.players.get(pid)!.ownedItemIds.length === items2);
+      check("a consumed offer can't be re-claimed", world.state.players.get(pid)!.ownedItemIds.length === items2);
       bot.stop();
     } finally { await s.close(); }
   });

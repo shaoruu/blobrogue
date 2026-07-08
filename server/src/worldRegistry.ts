@@ -51,13 +51,19 @@ export class WorldRegistry implements SessionStore {
     return room;
   }
 
-  // Unbind on disconnect: remove the player + the conn from its room.
+  // Unbind on disconnect: remove the player + the conn from its room. When the LAST player
+  // leaves (wipe or exodus), reset the room to a fresh run — runs are party-scoped and a new
+  // group must never inherit a half-played dungeon (rooms stay ephemeral; resume is Stage D).
   unbind(conn: Conn): void {
     if (!conn.worldId) return;
     const room = this.worlds.get(conn.worldId);
     if (room && conn.playerId) {
       room.removePlayer(conn.playerId);
       room.conns.delete(conn.id);
+      if (room.playerCount === 0) {
+        room.resetRun();
+        this.log.info("run reset (room emptied)", { worldId: room.id });
+      }
     }
   }
 }

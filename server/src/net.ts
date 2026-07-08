@@ -1,9 +1,15 @@
 // Trusted-proxy client-IP resolution (P0-4). Behind nginx, req.socket.remoteAddress is ALWAYS
-// the loopback proxy, so a naive per-IP cap collapses every real user into one bucket. We instead
-// derive the real client IP from X-Forwarded-For — but ONLY when the immediate peer is a
-// configured trusted proxy (loopback by default). An untrusted peer's XFF is IGNORED (it can't
-// spoof its cap bucket). We take the RIGHTMOST XFF entry that is not itself a trusted proxy: the
-// address the trusted proxy observed, which a client cannot forge past the trusted hop.
+// the loopback proxy, so a naive per-IP cap collapses every real user into one bucket. We
+// instead derive the real client IP from the forwarded headers — but ONLY when the immediate
+// peer is a configured trusted proxy (loopback by default). An untrusted peer's headers are
+// IGNORED (it can't spoof its cap bucket). Behind a trusted proxy we take, in order:
+//   1. the RIGHTMOST X-Forwarded-For entry that is not itself a trusted proxy (the address the
+//      trusted proxy observed, which a client cannot forge past the trusted hop), else
+//   2. X-Real-IP — the header the shipped nginx template actually sets (proxy_set_header
+//      X-Real-IP $remote_addr), else
+//   3. the socket peer.
+// Forwarded values must parse as real IPs; junk falls through (a proxied garbage header can't
+// mint unbounded per-IP buckets).
 
 import type { IncomingMessage } from "node:http";
 
@@ -75,10 +81,11 @@ export function isTrustedProxy(ip: string, trusted: Cidr[]): boolean {
 }
 
 // Resolve the rate-limiting client IP for a connection.
-// - If the immediate peer is NOT a trusted proxy, use the peer address (direct connection; XFF is
-//   attacker-controlled and ignored).
+// - If the immediate peer is NOT a trusted proxy, use the peer address (direct connection;
+//   forwarded headers are attacker-controlled and ignored).
 // - If it IS a trusted proxy, walk X-Forwarded-For from the right, skipping trusted-proxy hops,
-//   and return the first non-trusted address (the real client as the trusted edge saw it).
+//   and return the first non-trusted VALID address (the real client as the trusted edge saw
+//   it); else fall back to X-Real-IP (the header the shipped nginx config sets), else the peer.
 export function clientIpFrom(req: IncomingMessage, trusted: Cidr[]): string {
   const peer = req.socket.remoteAddress ?? "unknown";
   if (!isTrustedProxy(peer, trusted)) return peer;
@@ -88,8 +95,11 @@ export function clientIpFrom(req: IncomingMessage, trusted: Cidr[]): string {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   for (let i = chain.length - 1; i >= 0; i--) {
-    if (!isTrustedProxy(chain[i], trusted)) return chain[i];
+    if (!isTrustedProxy(chain[i], trusted) && ipToBytes(chain[i]) !== null) return chain[i];
   }
-  // Whole chain is trusted proxies (or empty) — fall back to the peer.
+  const realIpRaw = req.headers["x-real-ip"];
+  const realIp = Array.isArray(realIpRaw) ? realIpRaw[0] : realIpRaw;
+  if (realIp && !isTrustedProxy(realIp, trusted) && ipToBytes(realIp) !== null) return realIp.trim();
+  // Whole chain is trusted proxies (or empty/junk) — fall back to the peer.
   return peer;
 }

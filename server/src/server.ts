@@ -12,6 +12,7 @@ import type { ServerConfig } from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
 import { GameWorld } from "./world.js";
 import type { Conn } from "./connection.js";
+import { newConnState } from "./connection.js";
 import { Metrics, type HealthReport } from "./metrics.js";
 import { systemClock, type Clock } from "./clock.js";
 import { parseCidrList, clientIpFrom } from "./net.js";
@@ -143,6 +144,9 @@ export class GameServer {
   }
 
   // Turn this tick's per-player offerBlessing events into server-decided, validated offers.
+  // Each offer carries a monotonic id the client must echo, a bounded resend budget (loss/
+  // backpressure recovery), and an expiry deadline — unanswered offers die instead of living as
+  // forever-claimable server state.
   private applyOffers(room: RoomRuntime): void {
     for (const pid of room.offerPlayers()) {
       const conn = this.connForPlayer(room, pid);
@@ -150,6 +154,7 @@ export class GameServer {
       conn.pendingOffer = room.rollBlessingChoices();
       conn.offerId++;
       conn.offerResendsLeft = OFFER_RESENDS;
+      conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;
     }
   }
 
@@ -201,17 +206,7 @@ export class GameServer {
 
     const id = this.nextConnId++;
     const now = this.clock.now();
-    const conn: Conn = {
-      id, ws, ip, log: this.log.child({ connId: id }),
-      authed: false, playerId: null, authName: null, worldId: null, malformed: 0,
-      connectedAt: now, windowStart: now, windowCount: 0,
-      queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0,
-      lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1,
-      lastPingSentAt: 0, rttMs: 0,
-      needsFullSnap: false, closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, gameOver: false,
-      bytesSent: 0, droppedSnaps: 0,
-      cliRttMs: 0, cliJitterMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,
-    };
+    const conn: Conn = { id, ws, ip, log: this.log.child({ connId: id }), ...newConnState(now) };
     this.conns.set(id, conn);
     this.metrics.counters.connsOpened++;
     conn.log.info("conn open", { ip });
@@ -224,12 +219,13 @@ export class GameServer {
 
   private onMessage(conn: Conn, data: unknown, isBinary: boolean): void {
     if (conn.closing) return;
-    // Rate limit BEFORE parsing (cheap sliding 1s window).
+    // Aggregate rate limit BEFORE parsing (cheap sliding 1s window); per-CLASS limits apply
+    // after decode in the router (segmented buckets for input/control/stat/pong).
     const now = this.clock.now();
-    if (now - conn.windowStart >= 1000) { conn.windowStart = now; conn.windowCount = 0; }
-    conn.windowCount++;
+    if (now - conn.rate.start >= 1000) { conn.rate.start = now; conn.rate.total = 0; conn.rate.input = 0; conn.rate.control = 0; conn.rate.stat = 0; conn.rate.pong = 0; }
+    conn.rate.total++;
     this.metrics.counters.msgsIn++;
-    if (conn.windowCount > this.cfg.maxMsgsPerSec) { this.metrics.counters.rateLimited++; this.closeConn(conn, 4003, "rate limit"); return; }
+    if (conn.rate.total > this.cfg.maxMsgsPerSec) { this.metrics.counters.rateLimited++; this.closeConn(conn, 4003, "rate limit"); return; }
     // One connection's malformed/garbage input is ISOLATED — it can never throw into the tick loop.
     try {
       if (isBinary) throw new ProtocolError("binary frame");

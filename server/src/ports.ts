@@ -24,6 +24,10 @@ export interface RoomRuntime {
   addPlayer(pid: PlayerId): void;
   removePlayer(pid: PlayerId): void;
 
+  // Reset to a fresh run (new seed, floor 1). The session store calls this when the room
+  // empties, so runs are party-scoped: the next group never inherits a half-played dungeon.
+  resetRun(): void;
+
   // Advance one authoritative tick (fixed step; the room owns simulation time).
   step(cfg: ServerConfig): void;
 

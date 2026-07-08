@@ -1,14 +1,18 @@
 // State publication (SnapshotPublisher port): turns authoritative room state into per-client wire
-// snapshots (interest-filtered) + a RELIABLE event stream, honoring output backpressure. Extracted
-// from the socket server so publication isn't welded to the transport (a Colyseus schema/StateView
-// delta publisher is a drop-in behind this port; see docs/adr/0001).
+// snapshots (interest-filtered with enter/exit hysteresis) + a RELIABLE event stream, honoring
+// output backpressure. Extracted from the socket server so publication isn't welded to the
+// transport (a Colyseus schema/StateView delta publisher is a drop-in behind this port; see
+// docs/adr/0001).
 //
 // Reliability: each event carries a monotonic id (assigned by the room). A per-tick snapshot
-// includes every event newer than the client's ack (from the room's bounded ring), so a snapshot
-// dropped by backpressure loses nothing — the events resend next tick until the client acks. The
-// client dedupes by id, so delivery is effectively-once (no missing/double kill/loot/FX).
+// includes every event newer than the client's ack that is IN SCOPE for that client (pid-scoped
+// events go only to their player; positional one-shot FX only to clients whose interest view
+// covers them; global objective events to everyone), so a snapshot dropped by backpressure loses
+// nothing — the events resend next tick until the client acks. The client dedupes by id and
+// additionally advances its ack to the snapshot's evTo, so filtered-out ids never wedge the
+// stream. Delivery is effectively-once (no missing, no double kill/loot/FX).
 
-import { buildSnapshot, jsonCodec, type Codec } from "../../src/net/protocol.js";
+import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type WireEvent } from "../../src/net/protocol.js";
 import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
@@ -41,17 +45,43 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
         this.deps.metrics.counters.droppedSnaps++;
         continue;
       }
-      const events = room.eventsSince(conn.ackedEventId);
-      const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, false, { interestRadius: this.deps.config.interestRadius });
+      const events = this.eventsFor(room, conn);
+      const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
+        interestRadius: this.deps.config.interestRadius,
+        view: conn.view,
+      });
       this.sendRaw(conn, this.codec.encodeServer(msg), false);
     }
+  }
+
+  // The reliable events newer than this client's ack, scoped to what this client should see:
+  // its own pid events, global objective events, and positional FX within its (exit-hysteresis)
+  // interest radius. Skipped ids are covered by the snapshot's evTo ack advance.
+  private eventsFor(room: RoomRuntime, conn: Conn): WireEvent[] {
+    const pending = room.eventsSince(conn.ackedEventId);
+    if (pending.length === 0) return pending;
+    const r = this.deps.config.interestRadius;
+    if (r <= 0) return pending; // interest filtering disabled -> full stream
+    const self = conn.playerId ? room.state.players.get(conn.playerId) : undefined;
+    const rEvents = r * INTEREST_EXIT_FACTOR;
+    const r2 = rEvents * rEvents;
+    const out: WireEvent[] = [];
+    for (const w of pending) {
+      const scope = eventScope(w.e);
+      if (scope.kind === "global") { out.push(w); continue; }
+      if (scope.kind === "pid") { if (scope.pid === conn.playerId) out.push(w); continue; }
+      if (!self) continue;
+      const dx = scope.x - self.x, dy = scope.y - self.y;
+      if (dx * dx + dy * dy <= r2) out.push(w);
+    }
+    return out;
   }
 
   sendFull(room: RoomRuntime, conn: Conn): void {
     // Start the reliable-event stream from "now": the full snapshot bootstraps state, so the client
     // shouldn't replay the pre-join event backlog. Future events flow from here.
     conn.ackedEventId = room.latestEventId();
-    const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], true, { interestRadius: 0 });
+    const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, { interestRadius: 0 });
     this.sendRaw(conn, this.codec.encodeServer(msg), true);
   }
 
