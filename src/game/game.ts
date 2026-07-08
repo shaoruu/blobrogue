@@ -408,6 +408,9 @@ export class Game {
   private isRunning = false;
   private last = 0;
   private simAccum = 0; // fixed-timestep accumulator (seconds) for smooth framerate-independent sim
+  private renderPrevX = 0; private renderPrevY = 0; // player pos before the last sim step (render interpolation)
+  private hasRenderPrev = false;
+  private renderAlpha = 0; // 0..1 interpolation factor within the current sim step (set each frame)
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
@@ -669,6 +672,9 @@ export class Game {
         this.simAccum -= FIXED_DT;
         steps++;
       }
+      // Fraction into the next sim step — the renderer draws the player interpolated between
+      // the last two sim positions by this alpha, so motion is smooth at any frame rate.
+      this.renderAlpha = this.hasRenderPrev ? this.simAccum / FIXED_DT : 1;
     }
     this.render();
     this.hud.tick(dt);
@@ -743,6 +749,9 @@ export class Game {
   // returned events into FX -> advance client-only cosmetics -> render (caller). Solo runs
   // stepWorld in-process (LocalTransport), so this IS the old update loop, just seam'd.
   private tick(dt: number) {
+    // Snapshot player pos BEFORE this sim step so the renderer can interpolate between the
+    // last two sim positions (smooth motion at any frame rate vs the fixed sim rate).
+    this.renderPrevX = this.px; this.renderPrevY = this.py; this.hasRenderPrev = true;
     // Awaiting the authoritative world: keep the handshake alive (join resends live in
     // advance) but run no gameplay — there is nothing real to play in yet.
     if (this.isAwaitingOnlineWorld()) {
@@ -3006,7 +3015,11 @@ export class Game {
 
   private renderPlayer() {
     const { ctx, cam } = this;
-    const psx = this.px - cam.x, psy = this.py - cam.y;
+    // Interpolate the render position between the last two sim steps for smooth motion.
+    const a = this.hasRenderPrev ? this.renderAlpha : 1;
+    const ipx = this.renderPrevX + (this.px - this.renderPrevX) * a;
+    const ipy = this.renderPrevY + (this.py - this.renderPrevY) * a;
+    const psx = ipx - cam.x, psy = ipy - cam.y;
     let alpha = 1;
     if (this.isDown) alpha = 0.4;
     else if (this.invuln > 0 && Math.floor(this.invuln * 20) % 2 === 0) alpha = 0.4;
