@@ -143,6 +143,60 @@ function serverRoundTripTests(): void {
   }
 }
 
+// PlayerWire identity (nm/cl): decorated from the verified per-connection identities at
+// snapshot build, decoded defensively (absent -> id-as-name / no color) so an old server's
+// frames still decode, and rejected when present-but-malformed.
+function identityWireTests(): void {
+  section("player identity on the wire: names/colors decorate, default, and validate");
+  const w = createWorld(0xD00D, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(w, "pMe");
+  const named = spawnPlayerInWorld(w, "pNamed");
+  const anon = spawnPlayerInWorld(w, "pAnon");
+  anon.x = named.x + 30;
+
+  const identities = new Map([
+    ["pNamed", { name: "Ada", colorIndex: 2 }],
+    ["pAnon", { name: null, colorIndex: null }],
+  ]);
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { identities });
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  const wNamed = snap.players.find((p) => p.id === "pNamed");
+  const wAnon = snap.players.find((p) => p.id === "pAnon");
+  check("identity decorates the wire (name + color)", wNamed?.nm === "Ada" && wNamed?.cl === 2, `nm=${wNamed?.nm} cl=${wNamed?.cl}`);
+  check("guest identity falls back to id-as-name, no color", wAnon?.nm === "pAnon" && wAnon?.cl === null);
+
+  const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
+  check("identity round-trips deep-equal", deepEqual(decoded, snap));
+
+  // An OLD server's PlayerWire (no nm/cl at all) still decodes, with the safe fallbacks.
+  const legacy = JSON.parse(jsonCodec.encodeServer(snap)) as { players: Array<Record<string, unknown>> };
+  for (const p of legacy.players) { delete p.nm; delete p.cl; }
+  const fromLegacy = jsonCodec.decodeServer(JSON.stringify(legacy));
+  if (fromLegacy.t === "snap") {
+    const lp = fromLegacy.players.find((p) => p.id === "pNamed");
+    check("nm/cl absent decodes with fallbacks (old-server compat)", lp?.nm === "pNamed" && lp?.cl === null);
+  } else {
+    check("legacy frame decoded", false);
+  }
+
+  // Present-but-malformed identity fields are protocol errors (defensive validation).
+  const base = JSON.parse(jsonCodec.encodeServer(snap)) as { players: Array<Record<string, unknown>> };
+  const badVariants: Array<[string, unknown, unknown]> = [
+    ["oversized nm", "x".repeat(25), null],
+    ["non-string nm", 42, null],
+    ["non-integer cl", "Ada", 1.5],
+    ["out-of-range cl", "Ada", 999],
+  ];
+  for (const [label, nm, cl] of badVariants) {
+    const bad = JSON.parse(JSON.stringify(base)) as { players: Array<Record<string, unknown>> };
+    bad.players[0].nm = nm;
+    bad.players[0].cl = cl;
+    let isRejected = false;
+    try { jsonCodec.decodeServer(JSON.stringify(bad)); } catch (err) { isRejected = err instanceof ProtocolError; }
+    check(`${label} rejected`, isRejected);
+  }
+}
+
 function fuzzTests(): void {
   section("fuzz: both decoders only ever throw ProtocolError");
   const rnd = mulberry(0x5eed);
@@ -245,6 +299,7 @@ function main(): void {
   clientRoundTripTests();
   unknownFieldTests();
   serverRoundTripTests();
+  identityWireTests();
   fuzzTests();
   projectionTests();
   interestHysteresisTests();

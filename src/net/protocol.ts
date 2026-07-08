@@ -31,6 +31,10 @@ export const TICK_HZ = 20;
 export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v2: authoritative run world (rev/over/evTo, stable pickup/chest ids, equip{cseq},
 // chooseBlessing{offerId}, stat{dly}). Joins must carry EXACTLY this version.
+// v2-additive (no bump — client->server messages are UNCHANGED, so the strict join gate is
+// honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
+// server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
+// defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
 export const PROTOCOL_VERSION = 2;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
@@ -69,12 +73,17 @@ export interface SelfWire {
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
+// nm/cl are the verified cosmetic identity from that player's join ticket (name above the
+// blob, chosen blob tint). Both are decode-OPTIONAL with safe fallbacks (nm -> id, cl ->
+// null) so frames from an older server still decode.
 export interface PlayerWire {
   id: PlayerId;
   x: number; y: number;
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  nm: string;
+  cl: number | null;
 }
 
 // A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
@@ -443,12 +452,20 @@ function validateSelfWire(v: unknown): SelfWire {
 
 function validatePlayerWire(v: unknown): PlayerWire {
   const o = obj(v, "player");
+  const id = shortStr(o, "id", 64);
+  // nm/cl are optional (older servers omit them): validate strictly WHEN present, fall back
+  // safely when absent — never a decode failure across a version skew.
+  let nm = id;
+  if (o.nm !== undefined) nm = shortStr(o, "nm", 24);
+  let cl: number | null = null;
+  if (o.cl !== undefined && o.cl !== null) cl = intOf(o, "cl", 0, 63);
   return {
-    id: shortStr(o, "id", 64),
+    id,
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    nm, cl,
   };
 }
 
@@ -619,8 +636,20 @@ export function applySelfWire(p: PlayerSim, s: SelfWire): void {
   applyPlayerSnapshot(p, snapshotFromSelfWire(s));
 }
 
-export function toPlayerWire(p: PlayerSim): PlayerWire {
-  return { id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown };
+// Cosmetic identity attached to a player's wire struct. It lives OUTSIDE the sim (the sim
+// stays pure gameplay state); the server keeps it per-connection from the verified join
+// ticket and passes it in at snapshot-build time.
+export interface PlayerIdentity {
+  name: string | null;
+  colorIndex: number | null;
+}
+
+export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
+  return {
+    id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    nm: identity?.name ?? p.id,
+    cl: identity?.colorIndex ?? null,
+  };
 }
 
 export function toEnemyWire(e: Enemy): EnemyWire {
@@ -718,6 +747,9 @@ export interface SnapshotOpts {
   // The client's persistent view membership (enter/exit hysteresis). Omitted => no hysteresis
   // (pure radius filter), which full/bootstrap snapshots and tests use.
   view?: InterestView;
+  // Per-player cosmetic identity (verified name/color from each join ticket), keyed by the
+  // world-scoped player id. Omitted / missing entries fall back to id-as-name, no color.
+  identities?: ReadonlyMap<PlayerId, PlayerIdentity>;
 }
 
 // Interest management: a client always receives its OWN player + globally-relevant state (the
@@ -757,7 +789,7 @@ export function buildSnapshot(
   const keepPlayers = new Set<PlayerId>();
   for (const p of w.players.values()) {
     if (p.id === selfPid) continue;
-    if (near(p.x, p.y, view?.players.has(p.id) ?? false)) { players.push(toPlayerWire(p)); keepPlayers.add(p.id); }
+    if (near(p.x, p.y, view?.players.has(p.id) ?? false)) { players.push(toPlayerWire(p, opts.identities?.get(p.id))); keepPlayers.add(p.id); }
   }
   const enemies: EnemyWire[] = [];
   const keepEnemies = new Set<number>();

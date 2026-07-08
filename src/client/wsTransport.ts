@@ -563,6 +563,8 @@ export class WSTransport implements Transport {
   }
 
   // Other players for the client's remote-player renderer (interpolated, never predicted).
+  // Name + color come from each player's verified ticket identity when present (nm/cl on the
+  // wire); a player with no chosen color keeps the stable id-hash palette slot.
   remotePlayers(): RemotePlayer[] {
     const snap = this.latestSnap;
     if (!snap) return [];
@@ -570,7 +572,7 @@ export class WSTransport implements Transport {
     return snap.players.map((p) => {
       const pose = this.interp.sample("p" + p.id, now);
       return {
-        playerId: p.id, name: p.id,
+        playerId: p.id, name: p.nm,
         x: pose ? pose.x : p.x,
         y: pose ? pose.y : p.y,
         facing: p.fac,
@@ -579,7 +581,7 @@ export class WSTransport implements Transport {
         isDown: p.down,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
-        colorIndex: colorIndexFor(p.id),
+        colorIndex: p.cl ?? colorIndexFor(p.id),
         updatedAt: now,
       };
     });
