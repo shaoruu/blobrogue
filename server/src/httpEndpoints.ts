@@ -4,7 +4,7 @@
 // loopback and must not be exposed to the internet (ops spec §7).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { mintTicket } from "./auth.js";
+import { mintTicket, isValidWorldId, sanitizeDisplayName, type TicketClaims } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { HealthReport } from "./metrics.js";
 
@@ -34,10 +34,25 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
 
     if (url.pathname === "/dev-ticket") {
       // Local-only convenience: mint a ticket for a browser tab without a Convex minter. Enabled
-      // ONLY when the dev bypass is on (hard-disabled in production).
+      // ONLY when the dev bypass is on (hard-disabled in production). Mirrors the production
+      // minter's optional claims so the two-tab proof covers room-scoped worlds + identity:
+      // ?world=<worldId>&name=<displayName>&color=<index>.
       if (!deps.config.auth.allowDev) { res.writeHead(404).end(); return; }
       const playerId = (url.searchParams.get("playerId") ?? "guest-" + Math.random().toString(36).slice(2, 8)).slice(0, 48);
-      const ticket = deps.config.auth.secret ? mintTicket(deps.config.auth.secret, playerId) : "dev:" + playerId;
+      const claims: TicketClaims = {};
+      const world = url.searchParams.get("world");
+      if (world !== null && isValidWorldId(world)) claims.worldId = world;
+      const name = url.searchParams.get("name");
+      const cleanName = name !== null ? sanitizeDisplayName(name) : null;
+      if (cleanName !== null) claims.name = cleanName;
+      const colorRaw = url.searchParams.get("color");
+      if (colorRaw !== null && colorRaw !== "") {
+        const color = Number(colorRaw);
+        if (Number.isInteger(color) && color >= 0 && color <= 15) claims.colorIndex = color;
+      }
+      const ticket = deps.config.auth.secret
+        ? mintTicket(deps.config.auth.secret, playerId, undefined, undefined, claims)
+        : "dev:" + playerId + (claims.worldId !== undefined ? "@" + claims.worldId : "");
       res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" }).end(JSON.stringify({ ticket, playerId }));
       return;
     }
