@@ -6,15 +6,20 @@
 // few server-owned enemies. Enemies chase whatever players are connected. All dynamic state
 // (players/enemies/bullets) rides the snapshot; the static arena the client rebuilds locally.
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, applyItemToWorld } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
-import { TILE } from "../../src/sim/types.js";
+import type { WeaponId } from "../../src/sim/types.js";
+import { Rng } from "../../src/sim/rng.js";
+import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
-import { FIXED_DT, TICK_HZ, STAGE_B_SEED, STAGE_B_FLOOR, INTERP_BASE_DELAY_MS } from "../../src/net/protocol.js";
+import { FIXED_DT, TICK_HZ, STAGE_B_SEED, INTERP_BASE_DELAY_MS } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
+
+// The number of blessing choices offered per prompt.
+const BLESSING_CHOICES = 3;
 
 const TICK_MS = 1000 / TICK_HZ;
 
@@ -39,42 +44,22 @@ export class GameWorld {
   readonly state: WorldState;
   readonly conns = new Map<number, Conn>();
   lastEvents: SimEvent[] = [];
+  // Events produced OUTSIDE the tick (e.g. an async blessing apply on a pickBlessing message),
+  // merged into the next tick's event stream so they broadcast to clients exactly once.
+  private injectedEvents: SimEvent[] = [];
+  // Dedicated RNG for server-decided blessing offers, kept OUT of the sim's own RNG stream so
+  // offering choices never perturbs deterministic loot/spawn rolls. Seeded from the world seed.
+  private offerRng: Rng;
 
-  constructor(id: string) {
+  constructor(id: string, seed: number = STAGE_B_SEED) {
     this.id = id;
-    // Stage C combat arena: fixed walls (no descend), no implicit local player. Seeded with a
-    // boss, a spread of enemy archetypes, an explosive-barrel chain + breakables, and a chest,
-    // so every server-owned combat subsystem (AI, projectiles, collision, status, explosions,
-    // loot) is exercised and identical for all clients.
-    this.state = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, { isSandbox: true, skipLocalPlayer: true });
-    this.seedStageC();
-  }
-
-  // A deterministic combat layout around the arena center. Enemies read the players map as
-  // aggro targets, so they only chase once someone joins. Kept lean enough to stay well within
-  // the per-tick + snapshot-size budgets.
-  private seedStageC(): void {
-    const s = this.state.dungeon.spawn;
-    const cx = s.x * TILE + TILE / 2;
-    const cy = s.y * TILE + TILE / 2;
-    const enemies: Array<{ kind: Parameters<typeof devSpawnEnemy>[1]; dx: number; dy: number }> = [
-      { kind: "boss", dx: 0, dy: -300 },
-      { kind: "slime", dx: -260, dy: -120 },
-      { kind: "slime", dx: 280, dy: -120 },
-      { kind: "bat", dx: -120, dy: -320 },
-      { kind: "skeleton", dx: 260, dy: 180 },
-      { kind: "spitter", dx: -320, dy: 140 },
-    ];
-    for (const l of enemies) devSpawnEnemy(this.state, l.kind, cx + l.dx, cy + l.dy);
-
-    // Two adjacent explosive barrels (chain reaction) plus a crate + pot to break.
-    devSpawnProp(this.state, "barrel_explosive", cx - 90, cy + 210);
-    devSpawnProp(this.state, "barrel_explosive", cx - 50, cy + 210);
-    devSpawnProp(this.state, "crate", cx + 90, cy + 210);
-    devSpawnProp(this.state, "pot", cx + 140, cy + 210);
-
-    // A wood chest players can open (touch / shoot / melee) — shared loot.
-    devSpawnChest(this.state, cx - 220, cy + 260);
+    // A REAL authoritative dungeon floor run (not a sandbox arena): the server owns floor
+    // seed/index/dungeon/enemies/props/chests/pickups and the descend transition. Clients rebuild
+    // the identical dungeon geometry from the snapshot's seed+floor for movement prediction.
+    // isShared: a downed player doesn't end the world (down/revive), and descend happens in-sim
+    // (party-wide) — the server, never a client, decides the transition.
+    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true });
+    this.offerRng = new Rng(seed ^ 0x0ffe4);
   }
 
   get playerCount(): number {
@@ -89,10 +74,35 @@ export class GameWorld {
     removePlayerFromWorld(this.state, pid);
   }
 
+  // Authoritative weapon switch: equips only an owned slot (a tampered client can't equip a
+  // weapon it never acquired). Returns whether it was accepted.
+  trySwitchWeapon(pid: PlayerId, weapon: WeaponId): boolean {
+    return switchWeaponInWorld(this.state, pid, weapon);
+  }
+
+  // Roll a server-decided blessing choice set (deterministic via the dedicated offer RNG). The
+  // ids are sent to the offered client; a pick is later validated against exactly this set.
+  rollBlessingChoices(): string[] {
+    return rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next()).map((it) => it.id);
+  }
+
+  // Authoritative blessing apply: the item must be one the server offered this player (validated
+  // by the caller against the pending offer) AND a real item id. Applies mods server-side and
+  // returns the emitted events (itemPicked) for broadcast, or null if the id is invalid.
+  applyBlessing(pid: PlayerId, itemId: string): SimEvent[] | null {
+    const def = itemById(itemId);
+    if (!def) return null;
+    const evs = applyItemToWorld(this.state, pid, def);
+    for (const e of evs) this.injectedEvents.push(e);
+    return evs;
+  }
+
   // Advance one authoritative tick: drain each connected player's queued inputs (seq order,
   // clamped dt, bounded total movement per tick), step the shared world once at FIXED_DT.
   step(cfg: ServerConfig): void {
     const ev: SimEvent[] = [];
+    // Fold in any out-of-tick events (async blessing applies) so they broadcast exactly once.
+    if (this.injectedEvents.length > 0) { for (const e of this.injectedEvents) ev.push(e); this.injectedEvents.length = 0; }
 
     for (const conn of this.conns.values()) {
       const pid = conn.playerId;

@@ -50,6 +50,9 @@ export interface Conn {
 
   needsFullSnap: boolean;
   closing: boolean;
+  // The set of blessing item ids the server last offered this player (authoritative pending
+  // offer). A pickBlessing is validated against exactly this set, then it is cleared.
+  pendingOffer: string[] | null;
 
   // observability
   bytesSent: number;

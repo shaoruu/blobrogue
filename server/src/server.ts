@@ -11,6 +11,7 @@ import { performance } from "node:perf_hooks";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { jsonCodec, buildSnapshot, TICK_HZ, FIXED_DT, PROTOCOL_VERSION, ProtocolError } from "../../src/net/protocol.js";
+import type { WeaponId } from "../../src/sim/types.js";
 import { verifyTicket, mintTicket } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
@@ -131,6 +132,7 @@ export class GameServer {
         this.log.error("world step failed", { worldId: world.id, err: String(err) });
       }
     }
+    for (const world of this.worlds.values()) this.dispatchOffers(world);
     for (const world of this.worlds.values()) this.broadcast(world);
     const dur = performance.now() - t0;
     this.tickMetric.push(dur);
@@ -218,7 +220,8 @@ export class GameServer {
       queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0,
       lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1,
       lastPingSentAt: 0, rttMs: 0,
-      needsFullSnap: false, closing: false, bytesSent: 0, droppedSnaps: 0,
+      needsFullSnap: false, closing: false, pendingOffer: null,
+      bytesSent: 0, droppedSnaps: 0,
       cliRttMs: 0, cliJitterMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,
     };
     this.conns.set(id, conn);
@@ -258,6 +261,8 @@ export class GameServer {
         case "input": this.handleInput(conn, msg); break;
         case "pong": this.handlePong(conn); break;
         case "stat": this.handleStat(conn, msg); break;
+        case "switch": this.handleSwitch(conn, msg.weapon); break;
+        case "pickBlessing": this.handlePickBlessing(conn, msg.itemId); break;
       }
     } catch (err) {
       if (err instanceof ProtocolError) {
@@ -320,6 +325,45 @@ export class GameServer {
       conn.queue.shift();
       this.counters.rejectedInputs++;
     }
+  }
+
+  private handleSwitch(conn: Conn, weapon: string): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    const world = this.worlds.get(conn.worldId);
+    // The sim validates ownership; a rejected switch is a benign no-op (counted for observability).
+    if (world && !world.trySwitchWeapon(conn.playerId, weapon as WeaponId)) {
+      this.counters.rejectedInputs++;
+    }
+  }
+
+  private handlePickBlessing(conn: Conn, itemId: string): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    // A pick is valid ONLY if it names one of the choices the server offered this player. This is
+    // the anti-cheat gate: a client can't apply an item it wasn't offered (or an off-pool one).
+    if (!conn.pendingOffer || !conn.pendingOffer.includes(itemId)) { this.counters.rejectedInputs++; return; }
+    const world = this.worlds.get(conn.worldId);
+    if (!world) return;
+    const applied = world.applyBlessing(conn.playerId, itemId);
+    if (applied) conn.pendingOffer = null; // consumed
+    else this.counters.rejectedInputs++;
+  }
+
+  // Turn the sim's per-player offerBlessing events into server-decided offer messages: roll a
+  // seeded choice set, record it as the player's pending offer (for pick validation), and send it.
+  private dispatchOffers(world: GameWorld): void {
+    for (const e of world.lastEvents) {
+      if (e.t !== "offerBlessing") continue;
+      const conn = this.connForPlayer(world, e.pid);
+      if (!conn || conn.closing) continue;
+      const choices = world.rollBlessingChoices();
+      conn.pendingOffer = choices;
+      try { conn.ws.send(jsonCodec.encodeServer({ t: "offer", choices })); } catch { /* closing */ }
+    }
+  }
+
+  private connForPlayer(world: GameWorld, pid: string): Conn | undefined {
+    for (const conn of world.conns.values()) if (conn.playerId === pid) return conn;
+    return undefined;
   }
 
   private handleStat(conn: Conn, msg: { rtt: number; jit: number; rec: number; corr: number }): void {

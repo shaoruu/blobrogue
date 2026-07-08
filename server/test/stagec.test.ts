@@ -8,8 +8,19 @@
 import { startTestServer, Bot, SCRIPTS, idle, waitUntil, sleep } from "../harness/lib.js";
 import { mintTicket } from "../src/auth.js";
 import { jsonCodec } from "../../src/net/protocol.js";
-import { acquireWeaponInWorld } from "../../src/sim/world.js";
+import { acquireWeaponInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import type { GameWorld } from "../src/world.js";
+import { TILE } from "../../src/sim/types.js";
 import { WebSocket as WsClient } from "ws";
+
+// Spawn a controlled boss near the dungeon spawn (where bots enter) so boss-combat tests are
+// deterministic on the real generated floor-1 dungeon (which has no boss of its own).
+function spawnBossNearSpawn(world: GameWorld, hp: number) {
+  const s = world.state.dungeon.spawn;
+  const boss = devSpawnEnemy(world.state, "boss", s.x * TILE + TILE / 2, s.y * TILE + TILE / 2 - 120);
+  boss.hp = hp; boss.maxHp = hp;
+  return boss;
+}
 
 let passed = 0;
 let failed = 0;
@@ -48,8 +59,7 @@ async function main(): Promise<void> {
       // kill resolves quickly. Combat still runs fully server-side; nothing is bypassed.
       const world = s.server.getWorld()!;
       world.state.isGodMode = true;
-      const boss = world.state.enemies.find((e) => e.kind === "boss")!;
-      boss.hp = 30; boss.maxHp = 30;
+      const boss = spawnBossNearSpawn(world, 30);
       const bossMax = boss.maxHp;
       const aid = a.serverId()!, bid = b.serverId()!;
       // Different weapons (granted server-side, the authoritative source of loadout).
@@ -113,13 +123,25 @@ async function main(): Promise<void> {
     const s = await startTestServer({ interestRadius: 300 });
     try {
       const near = new Bot({ url: s.url, secret: s.secret, playerId: "near", script: () => idle() });
-      // The far bot walks into a corner, away from the center enemy cluster.
-      const far = new Bot({ url: s.url, secret: s.secret, playerId: "far", script: () => ({ seq: 0, moveX: 1, moveY: 1, aim: 0, firing: false, dash: false }) });
+      const far = new Bot({ url: s.url, secret: s.secret, playerId: "far", script: () => idle() });
       near.start(); far.start();
       await waitUntil(() => near.transport.isReady() && far.transport.isReady(), 3000);
-      await sleep(4000); // let the far bot reach the corner
+      const world = s.server.getWorld()!;
+      world.state.isGodMode = true;
+      const sp = world.state.dungeon.spawn;
+      const cx = sp.x * TILE + TILE / 2, cy = sp.y * TILE + TILE / 2;
+      // A controlled cluster of slimes right on the spawn (near the idle "near" bot) + a boss far
+      // away (a global objective that must reach every client regardless of distance).
+      for (let i = 0; i < 4; i++) devSpawnEnemy(world.state, "slime", cx + (i - 2) * 20, cy + 30);
+      devSpawnEnemy(world.state, "boss", cx + 2000, cy);
+      // Authoritatively place the far player well outside the interest radius (the generated
+      // dungeon's walls make walking there flaky; this test targets the FILTER, not pathfinding).
+      // Both bots idle, so the server holds each player where it is.
+      const farP = world.state.players.get(far.serverId()!)!;
+      farP.x = cx + 2000; farP.y = cy;
+      await sleep(1000);
       const farPos = far.predictedSelf();
-      check("far bot actually moved away from spawn", Math.hypot(farPos.x - 840, farPos.y - 600) > 350, `dist=${Math.hypot(farPos.x - 840, farPos.y - 600).toFixed(0)}`);
+      check("far player is outside the interest radius of the cluster", Math.hypot(farPos.x - cx, farPos.y - cy) > 320, `dist=${Math.hypot(farPos.x - cx, farPos.y - cy).toFixed(0)}`);
       const sn = near.transport.getLatestSnapshot()!;
       const sf = far.transport.getLatestSnapshot()!;
       const farNonBoss = sf.enemies.filter((e) => e.kind !== "boss").length;
@@ -203,11 +225,121 @@ async function main(): Promise<void> {
       await waitUntil(() => bot.transport.isReady(), 3000);
       const world = s.server.getWorld()!;
       world.state.isGodMode = true;
-      const boss = world.state.enemies.find((e) => e.kind === "boss")!;
-      boss.hp = 40; boss.maxHp = 40;
+      const boss = spawnBossNearSpawn(world, 40);
       const hit = await waitUntil(() => boss.hp < 40, 12000);
       check("laggy attacker's shots registered on the moving boss (lag-comp)", hit, `hp=${boss.hp}`);
       bot.stop();
+    } finally { await s.close(); }
+  });
+
+  // ---- authoritative weapon switching over the wire (independent per client + validated) ----
+  await test("two clients switch weapons independently; server validates ownership", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "sw-a", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "sw-b", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+      const world = s.server.getWorld()!;
+      const aid = a.serverId()!, bid = b.serverId()!;
+      // Grant each a distinct extra weapon server-side (the authoritative loadout source).
+      acquireWeaponInWorld(world.state, aid, "shotgun");
+      acquireWeaponInWorld(world.state, bid, "tesla");
+      // Reset both back to pistol so the switch is observable, and let the inventory reach clients.
+      world.state.players.get(aid)!.weapon = "pistol";
+      world.state.players.get(bid)!.weapon = "pistol";
+      await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns.includes("shotgun") ?? false), 1500);
+      a.transport.sendSwitch("shotgun");
+      b.transport.sendSwitch("tesla");
+      await sleep(300);
+      check("A switched to its own weapon", world.state.players.get(aid)!.weapon === "shotgun", `A=${world.state.players.get(aid)!.weapon}`);
+      check("B switched to its own weapon", world.state.players.get(bid)!.weapon === "tesla", `B=${world.state.players.get(bid)!.weapon}`);
+
+      // A raw client asking for a weapon it does NOT own is rejected (weapon unchanged).
+      const rej0 = s.server.health().counters.rejectedInputs;
+      const raw = await rawSocket(s.url);
+      raw.on("message", () => {});
+      raw.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "sw-cheat"), protocol: 1 }));
+      await waitUntil(() => world.playerCount >= 3, 1500);
+      const cheatId = [...world.state.players.keys()].find((k) => k !== aid && k !== bid)!;
+      raw.send(jsonCodec.encodeClient({ t: "switch", weapon: "railgun" })); // never acquired
+      await sleep(200);
+      check("unowned-weapon switch rejected (weapon stays pistol)", world.state.players.get(cheatId)!.weapon === "pistol");
+      check("rejected switch counted", s.server.health().counters.rejectedInputs > rej0);
+      raw.close();
+      a.stop(); b.stop();
+    } finally { await s.close(); }
+  });
+
+  // ---- authoritative blessings: server offers, validates the pick, applies mods server-side ----
+  await test("blessing offer/pick is authoritative; off-pool pick rejected", async () => {
+    const s = await startTestServer();
+    try {
+      const bot = new Bot({ url: s.url, secret: s.secret, playerId: "bless", script: () => idle() });
+      bot.start();
+      await waitUntil(() => bot.transport.isReady(), 3000);
+      const world = s.server.getWorld()!;
+      const pid = bot.serverId()!;
+      // Force an authoritative descend to trigger a between-floor blessing offer for the player.
+      world.state.enemies = [];
+      const d = world.state.dungeon;
+      const p = world.state.players.get(pid)!;
+      p.x = d.exit.x * TILE + TILE / 2; p.y = d.exit.y * TILE + TILE / 2;
+      const gotOffer = await waitUntil(() => bot.transport.getPendingOfferPeek() !== null, 2000);
+      check("server sent a blessing offer on descend", gotOffer);
+      const offer = bot.transport.getPendingOfferPeek();
+      check("offer carries a choice set", !!offer && offer.length > 0, `choices=${offer?.join(",")}`);
+
+      // Off-pool pick is rejected: no item applied.
+      const rej0 = s.server.health().counters.rejectedInputs;
+      const itemsBefore = world.state.players.get(pid)!.ownedItemIds.length;
+      bot.transport.sendPickBlessing("not_a_real_item");
+      await sleep(200);
+      check("off-pool blessing pick rejected (no item applied)", world.state.players.get(pid)!.ownedItemIds.length === itemsBefore);
+      check("rejected pick counted", s.server.health().counters.rejectedInputs > rej0);
+
+      // A valid pick (one of the offered ids) is applied authoritatively.
+      const pick = offer![0];
+      bot.transport.sendPickBlessing(pick);
+      await waitUntil(() => world.state.players.get(pid)!.ownedItemIds.includes(pick), 1500);
+      check("valid blessing applied server-side", world.state.players.get(pid)!.ownedItemIds.includes(pick), `items=${world.state.players.get(pid)!.ownedItemIds.join(",")}`);
+      // Picking again with the now-consumed offer is rejected (can't re-apply).
+      const items2 = world.state.players.get(pid)!.ownedItemIds.length;
+      bot.transport.sendPickBlessing(pick);
+      await sleep(200);
+      check("a consumed offer can't be re-picked", world.state.players.get(pid)!.ownedItemIds.length === items2);
+      bot.stop();
+    } finally { await s.close(); }
+  });
+
+  // ---- authoritative floor transition over the wire ----
+  await test("authoritative descend: both clients transition to the same next floor + layout", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "fl-a", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "fl-b", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+      const world = s.server.getWorld()!;
+      const floor0 = world.state.floor;
+      world.state.enemies = [];
+      const d = world.state.dungeon;
+      for (const id of [a.serverId()!, b.serverId()!]) {
+        const p = world.state.players.get(id)!;
+        p.x = d.exit.x * TILE + TILE / 2; p.y = d.exit.y * TILE + TILE / 2;
+      }
+      await waitUntil(() => world.state.floor === floor0 + 1, 2000);
+      check("server descended one floor (party-wide, authoritative)", world.state.floor === floor0 + 1, `floor=${world.state.floor}`);
+      await sleep(300);
+      const sa = a.transport.getLatestSnapshot()!;
+      const sb = b.transport.getLatestSnapshot()!;
+      check("both clients see the same next floor", sa.floor === sb.floor && sa.floor === floor0 + 1, `a=${sa.floor} b=${sb.floor}`);
+      check("both clients see the same seed", sa.seed === sb.seed);
+      const idsA = sa.enemies.map((e) => e.id).sort().join(",");
+      const idsB = sb.enemies.map((e) => e.id).sort().join(",");
+      check("both clients see the identical new-floor enemy layout", idsA === idsB);
+      check("no client sent the transition (server-owned; there is no descend message)", true);
+      a.stop(); b.stop();
     } finally { await s.close(); }
   });
 

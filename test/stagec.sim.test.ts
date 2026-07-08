@@ -9,11 +9,13 @@
 import {
   createWorld, spawnPlayerInWorld, devSpawnEnemy, devSpawnProp,
   stepWorldPhase, recordHistory, rewoundEnemyPos,
+  switchWeaponInWorld, acquireWeaponInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
 import { REVIVE_HP } from "../src/sim/constants.js";
+import { TILE } from "../src/sim/types.js";
 import { buildSnapshot } from "../src/net/protocol.js";
 
 let passed = 0;
@@ -318,12 +320,108 @@ function propChainTests(): void {
   }
 }
 
+function weaponSwitchTests(): void {
+  section("weapon switch: only an OWNED slot equips; an unowned id is rejected");
+  {
+    const { w, a } = twoPlayerArena();
+    check("switching to an unowned weapon is rejected", switchWeaponInWorld(w, a.id, "railgun") === false);
+    check("weapon unchanged after a rejected switch", a.weapon === "pistol", `weapon=${a.weapon}`);
+    acquireWeaponInWorld(w, a.id, "railgun");
+    check("after acquiring, switch to it succeeds", switchWeaponInWorld(w, a.id, "railgun") === true && a.weapon === "railgun");
+  }
+
+  section("weapon switch: independent per player (one switch doesn't touch the other)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    acquireWeaponInWorld(w, a.id, "shotgun");
+    acquireWeaponInWorld(w, b.id, "tesla");
+    switchWeaponInWorld(w, a.id, "shotgun");
+    switchWeaponInWorld(w, b.id, "tesla");
+    check("A equipped its own choice", a.weapon === "shotgun");
+    check("B equipped its own choice", b.weapon === "tesla");
+    check("switching a weapon B owns but A does not is rejected for A", switchWeaponInWorld(w, a.id, "tesla") === false && a.weapon === "shotgun");
+  }
+}
+
+function descendTests(): void {
+  const exitCenter = (w: WorldState) => ({ ex: w.dungeon.exit.x * TILE + TILE / 2, ey: w.dungeon.exit.y * TILE + TILE / 2 });
+
+  section("descend: party-wide — floor holds until ALL living players reach the cleared exit");
+  {
+    const w = createWorld(0xBEEF, 1, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    w.enemies = []; // floor cleared (authoritative)
+    const { ex, ey } = exitCenter(w);
+    a.x = ex; a.y = ey; // only A at the exit
+    b.x = ex - 400; b.y = ey;
+    stepWorldPhase(w, 1 / 20, []);
+    check("no descend while a living teammate is away from the exit", w.floor === 1, `floor=${w.floor}`);
+    b.x = ex; b.y = ey; // now both at the exit
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, 1 / 20, ev);
+    check("descend once ALL living players are at the exit", w.floor === 2, `floor=${w.floor}`);
+    check("descend event emitted", ev.some((e) => e.t === "descend"));
+    check("a fresh floor-2 dungeon loaded with enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
+    check("both players offered a between-floor blessing", ev.filter((e) => e.t === "offerBlessing").length === 2);
+  }
+
+  section("descend: two players in the SAME world get the SAME next floor + seed + enemy layout");
+  {
+    // Same seed → the generated floor-2 layout is deterministic; both clients read the one world,
+    // so their snapshots carry identical seed/floor/enemy ids by construction.
+    const seed = 0x1234;
+    const w = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    w.enemies = [];
+    const { ex, ey } = exitCenter(w);
+    a.x = ex; a.y = ey; b.x = ex; b.y = ey;
+    stepWorldPhase(w, 1 / 20, []);
+    const snapA = buildSnapshot(w, "pA", 0, [], false, {});
+    const snapB = buildSnapshot(w, "pB", 0, [], false, {});
+    if (snapA.t === "snap" && snapB.t === "snap") {
+      check("both snapshots carry the same seed", snapA.seed === snapB.seed && snapA.seed === seed);
+      check("both snapshots carry the same next floor", snapA.floor === snapB.floor && snapA.floor === 2);
+      const idsA = snapA.enemies.map((e) => e.id).sort().join(",");
+      const idsB = snapB.enemies.map((e) => e.id).sort().join(",");
+      check("both snapshots carry the identical enemy layout", idsA === idsB && idsA.length > 0);
+    }
+  }
+}
+
+function lootOwnershipTests(): void {
+  section("loot ownership: a coin is collected once, by the first player to reach it");
+  {
+    const { w, a, b } = twoPlayerArena();
+    a.coins = 0; b.coins = 0;
+    // One coin sitting exactly on A (A is the first/only collector this step).
+    w.pickups.push({ kind: "coin", x: a.x, y: a.y, radius: 13, weapon: null, value: 7 });
+    stepWorldPhase(w, 1 / 20, []);
+    check("coin removed from the world (collected once)", w.pickups.length === 0);
+    check("exactly one player gained the coin's value", (a.coins === 7) !== (b.coins === 7), `A=${a.coins} B=${b.coins}`);
+    check("the collector was the player standing on it (A)", a.coins === 7 && b.coins === 0);
+  }
+
+  section("loot ownership: a weapon pickup goes to the collector's inventory only");
+  {
+    const { w, a, b } = twoPlayerArena();
+    w.pickups.push({ kind: "weapon", x: a.x, y: a.y, radius: 16, weapon: "tesla" });
+    stepWorldPhase(w, 1 / 20, []);
+    check("collector (A) acquired the weapon", a.ownedWeapons.includes("tesla"));
+    check("the other player (B) did not", !b.ownedWeapons.includes("tesla"));
+  }
+}
+
 function main(): void {
   ownershipTests();
   downReviveTests();
   lagCompTests();
   interestTests();
   propChainTests();
+  weaponSwitchTests();
+  descendTests();
+  lootOwnershipTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll Stage-C sim assertions passed.\n");
