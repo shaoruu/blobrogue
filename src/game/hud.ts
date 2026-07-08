@@ -14,8 +14,8 @@ export interface HudState {
   floor: number;
   kills: number;
   coins: number;
-  // Hotbar slots in inventory order (= the 1-9 selection order); `current` = equipped.
-  weapons: { id: WeaponId; name: string; current: boolean }[];
+  // Hotbar slots in inventory order (= the 1-9 selection order); `isCurrent` = equipped.
+  weapons: { id: WeaponId; name: string; isCurrent: boolean }[];
   isCleared: boolean;
   enemiesLeft: number;
   isBossActive: boolean;
@@ -71,7 +71,7 @@ function fmtTime(seconds: number): string {
 // never resizes anything.
 function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
-  slot.className = "hb-slot" + (w.current ? " on" : "");
+  slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
   if (index < 9) {
     const key = el("span", "", String(index + 1));
     key.className = "hb-key";
@@ -227,10 +227,10 @@ export class Hud {
       `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
     root.appendChild(this.banner);
 
-    // One-time controls onboarding hint: a subtle, auto-dismissing line just above the
-    // hotbar. Fixed + opacity-only so it never shifts the layout.
+    // One-time controls onboarding hint: a subtle, auto-dismissing line above the hotbar
+    // (clear of its blessing-chip row). Fixed + opacity-only so it never shifts the layout.
     this.controlsHint = el("div",
-      `position:fixed;left:0;right:0;bottom:104px;z-index:6;text-align:center;pointer-events:none;` +
+      `position:fixed;left:0;right:0;bottom:122px;z-index:6;text-align:center;pointer-events:none;` +
       `color:var(--cream);font:9px var(--f-ui),monospace;letter-spacing:1px;` +
       `text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,0.6);opacity:0;transition:opacity 0.6s ease;`,
       "WASD MOVE \u00b7 MOUSE AIM \u00b7 CLICK SHOOT \u00b7 SHIFT DASH");
@@ -252,7 +252,7 @@ export class Hud {
     this.coinsEl.textContent = String(s.coins);
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
     // Only rebuild when the set or selection changes (cheap string key).
-    const slotsKey = s.weapons.map((w) => (w.current ? "*" : "") + w.id).join("|");
+    const slotsKey = s.weapons.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|");
     if (slotsKey !== this.prevSlotsKey) {
       this.prevSlotsKey = slotsKey;
       this.slotsEl.replaceChildren();
