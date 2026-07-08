@@ -854,8 +854,16 @@ export class Game {
 
     this.checkFloorCleared();
 
-    this.cam.x = this.px - this.canvas.width / 2;
-    this.cam.y = this.py - this.canvas.height / 2;
+    // Smooth camera follow: ease toward the player instead of hard-snapping every frame, so
+    // per-frame movement variance (variable-dt sim step) doesn't read as jitter. High factor
+    // = still tight tracking, just enough smoothing to absorb frame-time noise.
+    {
+      const tx = this.px - this.canvas.width / 2;
+      const ty = this.py - this.canvas.height / 2;
+      const k = 1 - Math.pow(0.0015, dt); // ~tight follow, frame-rate independent
+      this.cam.x += (tx - this.cam.x) * k;
+      this.cam.y += (ty - this.cam.y) * k;
+    }
     this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height);
   }
 
