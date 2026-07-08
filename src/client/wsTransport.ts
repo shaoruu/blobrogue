@@ -60,7 +60,14 @@ interface PendingInput {
   seq: number;
   dt: number;
   cmd: InputCmd;
+  sentAt: number; // local time the input was sent (for RTT = ack time - sentAt)
 }
+
+// Adaptive interpolation delay bounds (ms). Floor keeps ~2 snapshot intervals so two keyframes
+// almost always straddle the render clock; ceiling caps how laggy remotes get under bad jitter.
+const INTERP_MIN_MS = 90;
+const INTERP_MAX_MS = 300;
+const SNAP_INTERVAL_MS = 50; // 20Hz authoritative snapshot cadence
 
 function defaultSocketFactory(url: string): SocketLike {
   const g = globalThis as { WebSocket?: new (url: string) => SocketLike };
@@ -116,6 +123,15 @@ export class WSTransport implements Transport {
   snapsRecv = 0;
   lastError: string | null = null;
 
+  // ---- adaptive netcode telemetry (Stage C) ----
+  private rttMs = 0;                 // measured input->ack round trip (EWMA)
+  private jitterMs = 0;              // EWMA deviation of snapshot inter-arrival from the cadence
+  private lastSnapAtForJitter = 0;
+  private clockOffsetMs = 0;         // serverTime - localTime estimate (from ping.time)
+  private reconcileCount = 0;        // corrections applied beyond a sub-pixel threshold
+  private correctionEwmaPx = 0;      // smoothed correction magnitude
+  private correctionMaxPx = 0;       // worst correction seen
+
   constructor(opts: WSTransportOptions) {
     this.opts = opts;
     this.now = opts.now ?? nowMs;
@@ -134,6 +150,13 @@ export class WSTransport implements Transport {
     this.events = [];
     this.smoothX = 0;
     this.smoothY = 0;
+    this.rttMs = 0;
+    this.jitterMs = 0;
+    this.lastSnapAtForJitter = 0;
+    this.clockOffsetMs = 0;
+    this.reconcileCount = 0;
+    this.correctionEwmaPx = 0;
+    this.correctionMaxPx = 0;
     this.stopped = false;
     void this.connect();
   }
@@ -201,6 +224,11 @@ export class WSTransport implements Transport {
     }
     if (msg.t === "ping") {
       this.sendMsg({ t: "pong", id: msg.id });
+      // Clock sync: the server stamps its wall clock; offset ~= serverTime - localRecvTime (the
+      // one-way latency is folded in, but half-RTT is small and this only drives HUD/metrics —
+      // interpolation itself keys off local receive time, so it never needs a synced clock).
+      const off = msg.time - this.now();
+      this.clockOffsetMs = this.clockOffsetMs === 0 ? off : this.clockOffsetMs * 0.9 + off * 0.1;
       return;
     }
     if (msg.t === "error") {
@@ -212,9 +240,22 @@ export class WSTransport implements Transport {
 
   private ingestSnapshot(snap: Extract<ServerMsg, { t: "snap" }>): void {
     this.latestSnap = snap;
+    const prevSnapAt = this.lastSnapAtForJitter;
     this.snapRecvAt = this.now();
     this.snapsRecv++;
     if (snap.selfId) this.selfServerId = snap.selfId;
+
+    // Jitter = EWMA deviation of snapshot inter-arrival from the 50ms cadence. Size the interp
+    // delay adaptively: calmer link -> tighter (snappier remotes); jittery link -> wider buffer
+    // so a late/dropped snapshot is covered by interpolation rather than a visible stall.
+    if (prevSnapAt > 0) {
+      const gap = this.snapRecvAt - prevSnapAt;
+      const dev = Math.abs(gap - SNAP_INTERVAL_MS);
+      this.jitterMs = this.jitterMs === 0 ? dev : this.jitterMs * 0.8 + dev * 0.2;
+      const delay = Math.max(INTERP_MIN_MS, Math.min(INTERP_MAX_MS, 2 * SNAP_INTERVAL_MS + this.jitterMs * 2));
+      this.interp.setRenderDelay(delay);
+    }
+    this.lastSnapAtForJitter = this.snapRecvAt;
 
     if (snap.self) this.reconcile(snap);
 
@@ -249,6 +290,12 @@ export class WSTransport implements Transport {
   private reconcile(snap: Extract<ServerMsg, { t: "snap" }>): void {
     const p = this.predState.players.get(LOCAL_ID)!;
     const beforeX = p.x, beforeY = p.y;
+    // RTT = time between sending the acked input and this snapshot confirming it.
+    const acked = this.pending.find((i) => i.seq === snap.ackSeq);
+    if (acked) {
+      const sample = this.snapRecvAt - acked.sentAt;
+      if (sample >= 0 && sample < 5000) this.rttMs = this.rttMs === 0 ? sample : this.rttMs * 0.8 + sample * 0.2;
+    }
     applySelfWire(p, snap.self!);
     this.pending = this.pending.filter((i) => i.seq > snap.ackSeq);
     const scratch: SimEvent[] = [];
@@ -256,7 +303,14 @@ export class WSTransport implements Transport {
     // Fold the correction into the smoothing offset so it glides instead of snapping — unless
     // it is large (a real server-side displacement), which we let snap.
     const errX = beforeX - p.x, errY = beforeY - p.y;
-    if (Math.hypot(errX, errY) <= SMOOTH_MAX_PX) {
+    const errMag = Math.hypot(errX, errY);
+    // Correction telemetry: count only meaningful (non-sub-pixel) reconciliations.
+    if (errMag > 0.5) {
+      this.reconcileCount++;
+      this.correctionEwmaPx = this.correctionEwmaPx === 0 ? errMag : this.correctionEwmaPx * 0.8 + errMag * 0.2;
+      if (errMag > this.correctionMaxPx) this.correctionMaxPx = errMag;
+    }
+    if (errMag <= SMOOTH_MAX_PX) {
       this.smoothX += errX;
       this.smoothY += errY;
       if (Math.hypot(this.smoothX, this.smoothY) > SMOOTH_MAX_PX) { this.smoothX = 0; this.smoothY = 0; }
@@ -288,7 +342,7 @@ export class WSTransport implements Transport {
         // Joined: stamp + ring + send for server reconciliation, then predict.
         const seq = ++this.seq;
         const stamped: InputCmd = { ...cmd, seq };
-        this.pending.push({ seq, dt, cmd: stamped });
+        this.pending.push({ seq, dt, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
         this.sendMsg({ t: "input", seq, dt, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash });
         stepPlayerPhase(this.predState, p, stamped, dt, scratch);
@@ -420,6 +474,23 @@ export class WSTransport implements Transport {
   // The latest authoritative snapshot, for adversity/measurement harnesses.
   getLatestSnapshot(): Extract<ServerMsg, { t: "snap" }> | null {
     return this.latestSnap;
+  }
+
+  // Adaptive netcode telemetry (HUD / harness / metrics). All measured client-side from the
+  // input->ack round trip and snapshot arrival cadence.
+  getNetStats(): {
+    rttMs: number; jitterMs: number; interpDelayMs: number; clockOffsetMs: number;
+    reconciliations: number; correctionAvgPx: number; correctionMaxPx: number;
+  } {
+    return {
+      rttMs: this.rttMs,
+      jitterMs: this.jitterMs,
+      interpDelayMs: this.interp.getRenderDelay(),
+      clockOffsetMs: this.clockOffsetMs,
+      reconciliations: this.reconcileCount,
+      correctionAvgPx: this.correctionEwmaPx,
+      correctionMaxPx: this.correctionMaxPx,
+    };
   }
 
   stop(): void {
