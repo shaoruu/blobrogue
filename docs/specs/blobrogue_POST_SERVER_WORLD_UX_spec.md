@@ -102,3 +102,7 @@ No D-stage work begins before A/B/C production gates pass.
 
 ## Bottom line
 The future UX is a place, not menus: players wake in Amber Camp, walk to people and gates, gather physically, and leave together. Arena floors are rare authored pressure tests governed by a server-side overlap scheduler, not random boss piles. Depth reads through material, ecology, geometry, and movement; hue only reinforces it. All of it is built on the authoritative World abstraction, never as throwaway static UI.
+
+---
+## REAL LIGHTING POINTER (post-server only)
+Lighting/darkness is specified in `blobrogue_POST_SERVER_LIGHTING_spec.md`: authoritative coarse light field + client authored rendering, strict tell/objective readability, biome light grammars, and contextual mob pressure. It supersedes hue-only identity but does not change D-stage ordering; no implementation before A/B/C.

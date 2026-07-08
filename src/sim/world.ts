@@ -35,7 +35,7 @@ export interface MeleeSwing {
   color: string;
   damage: number;
   isCrit: boolean;
-  hitList: Enemy[] | null;
+  hitList: Array<Enemy | number> | null; // enemies + negative prop-id markers
   burn?: number;
   chill?: number;
   shock?: number;
@@ -378,7 +378,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     radius: wep.bulletRadius * p.mods.bulletSizeMult,
     color: wep.color,
     damage: wep.damage * currentDamageMult(p),
-    pierce: p.mods.pierce,
+    pierce: Math.min(4, (wep.basePierce ?? 0) + p.mods.pierce),
     critChance: p.mods.critChance,
     critMult: p.mods.critMult,
     fx: wep.id,
@@ -663,23 +663,23 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   ev.push({ t: "meleeSwing", pid: p.id, weapon: p.weapon, x: preX, y: preY, aim: p.aimAngle, bx: p.x, by: p.y });
 }
 
-function isMeleeHit(p: PlayerSim, e: Enemy, swing: MeleeSwing): boolean {
-  const dx = e.x - p.x;
-  const dy = e.y - p.y;
+function isPointInMeleeHit(p: PlayerSim, x: number, y: number, radius: number, swing: MeleeSwing): boolean {
+  const dx = x - p.x;
+  const dy = y - p.y;
   const dist = Math.hypot(dx, dy);
-  if (dist > swing.reach + e.radius) return false;
+  if (dist > swing.reach + radius) return false;
   const cos = Math.cos(swing.aim);
   const sin = Math.sin(swing.aim);
   if (swing.isThrust) {
     const fwd = dx * cos + dy * sin;
-    if (fwd < -e.radius * 0.4 || fwd > swing.reach + e.radius) return false;
+    if (fwd < -radius * 0.4 || fwd > swing.reach + radius) return false;
     const lat = Math.abs(dx * sin - dy * cos);
-    return lat < C.MELEE_THRUST_WIDTH + e.radius;
+    return lat < C.MELEE_THRUST_WIDTH + radius;
   }
   let ang = Math.atan2(dy, dx) - swing.aim;
   while (ang > Math.PI) ang -= Math.PI * 2;
   while (ang < -Math.PI) ang += Math.PI * 2;
-  const angPad = Math.atan2(e.radius, Math.max(dist, 1));
+  const angPad = Math.atan2(radius, Math.max(dist, 1));
   return Math.abs(ang) <= swing.arc * 0.5 + angPad;
 }
 
@@ -790,7 +790,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       const swing = player.meleeSwing;
       if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
-      if (isMeleeHit(player, e, swing)) {
+      if (isPointInMeleeHit(player, e.x, e.y, e.radius, swing)) {
         const kbDirX = Math.cos(swing.aim);
         const kbDirY = Math.sin(swing.aim);
         const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
@@ -1253,6 +1253,21 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.pierce <= 0) b.life = 0;
       if (p.hp <= 0) { destroyProp(w, p, ev); break; }
     }
+    if (p.breakT === undefined) {
+      for (const player of w.players.values()) {
+        const swing = player.meleeSwing;
+        if (!swing || swing.timer <= 0 || !isPointInMeleeHit(player, p.x, p.y, p.radius, swing)) continue;
+        // Reuse the swing hitList with a stable negative prop id namespace to prevent
+        // repeated damage every frame while the same swing overlaps the prop.
+        const marker = -1 - p.id;
+        if (swing.hitList?.includes(marker)) continue;
+        (swing.hitList ??= []).push(marker);
+        p.hp -= swing.damage;
+        ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: p.x, y: p.y });
+        if (p.hp <= 0) destroyProp(w, p, ev);
+        break;
+      }
+    }
   }
   if (didBreakFinish) {
     w.props = w.props.filter((p) => p.breakT === undefined || p.breakT < C.PROP_BREAK_DUR);
@@ -1318,6 +1333,27 @@ function explodeBarrel(w: WorldState, p: PlayerSim, source: Prop, ev: SimEvent[]
 function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.chests.length === 0) return;
   for (const c of w.chests) {
+    if (!c.opened) {
+      // A friendly bullet implies a shooter; credit the primary player (solo: LOCAL_ID —
+      // identical to before). Guarded so an empty world never dereferences a missing player.
+      const opener = primaryPlayer(w);
+      for (const b of w.bullets) {
+        if (!b.friendly || b.life <= 0) continue;
+        if (Math.hypot(b.x - c.x, b.y - c.y) >= b.radius + c.radius) continue;
+        if (opener) openChest(w, opener, c, ev);
+        if (b.pierce > 0) b.pierce--; else b.life = 0;
+        break;
+      }
+    }
+    if (!c.opened) {
+      for (const player of w.players.values()) {
+        const swing = player.meleeSwing;
+        if (swing && swing.timer > 0 && isPointInMeleeHit(player, c.x, c.y, c.radius, swing)) {
+          openChest(w, player, c, ev);
+          break;
+        }
+      }
+    }
     if (c.opened) {
       if (c.openT !== undefined && c.openT < C.CHEST_OPEN_DUR) c.openT += dt;
       continue;
@@ -1378,7 +1414,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         if (p.kind === "heart") {
           if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); collected = true; break; }
         }
-        if (p.kind === "weapon" && p.weapon) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "weapon" && p.weapon && !player.ownedWeapons.includes(p.weapon)) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
       }
     }
     if (!collected) remaining.push(p);

@@ -31,3 +31,7 @@ Strong yes, and it's low-risk: it's a tint-lane pass on the existing mask pipeli
 
 ## Routing note (locked)
 This is a Creative Director recommendation to the main blobrogue project runner, who owns the decision and rollout. Do not gate it on Ian approval. Recommended execution remains: prototype Verdant as one vertical slice, gate readability with the project runner, then extend the proven system.
+
+---
+## POST-SERVER SUPERSESSION: REAL LIGHTING
+Hue lanes remain palette support, but are NOT sufficient biome/depth identity. After authoritative Stage C, use `blobrogue_POST_SERVER_LIGHTING_spec.md`: material/ecology/room grammar + real authored light sources and darkness behavior. Preserve this doc's contrast/accessibility intent; do not treat its old "constant value structure" as a ban on authored light variation. Player/tells/objectives retain a readability floor.
