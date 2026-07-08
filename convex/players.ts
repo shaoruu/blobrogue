@@ -7,6 +7,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 export interface Profile {
   playerId: string;
   name: string;
+  // Chosen blob tint (client palette index); null until the player picks one.
+  colorIndex: number | null;
   totalKills: number;
   deepestFloor: number;
   totalCoins: number;
@@ -22,6 +24,7 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
   return {
     playerId: doc._id,
     name: doc.name,
+    colorIndex: doc.colorIndex ?? null,
     totalKills: doc.totalKills,
     deepestFloor: doc.deepestFloor,
     totalCoins: doc.totalCoins,
@@ -34,6 +37,12 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
 
 function cleanName(name: string): string {
   return name.trim().slice(0, 20) || "blob";
+}
+
+// Clamp a chosen color to a sane palette range; undefined = "no pick", never a write.
+function cleanColor(colorIndex: number | undefined): number | undefined {
+  if (colorIndex === undefined || !Number.isInteger(colorIndex)) return undefined;
+  return Math.min(15, Math.max(0, colorIndex));
 }
 
 async function findByClientId(ctx: QueryCtx, clientId: string): Promise<Doc<"players"> | null> {
@@ -114,30 +123,40 @@ async function ensureAccountRow(
 }
 
 // Upsert the caller's player row, returning the saved profile. This is the "login":
-// called on boot with the localStorage clientId + chosen name.
+// called on boot with the localStorage clientId + chosen name (+ optionally the chosen
+// blob color — only ever written when the player has explicitly picked one, so logging in
+// from a fresh browser can never clobber an account's saved pick).
 //
 // - Guest (no auth token): upserts by clientId, exactly as before.
 // - Signed in: keys off the authenticated userId (see ensureAccountRow).
 export const ensurePlayer = mutation({
-  args: { clientId: v.string(), name: v.string() },
-  handler: async (ctx, { clientId, name }) => {
+  args: { clientId: v.string(), name: v.string(), colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { clientId, name, colorIndex }) => {
+    const color = cleanColor(colorIndex);
     const userId = await getAuthUserId(ctx);
     if (userId) {
       const { row, user } = await ensureAccountRow(ctx, userId, clientId, name);
+      if (color !== undefined && row.colorIndex !== color) {
+        await ctx.db.patch(row._id, { colorIndex: color });
+        return toProfile({ ...row, colorIndex: color }, user);
+      }
       return toProfile(row, user);
     }
 
-    // Guest path (unchanged behaviour).
+    // Guest path (unchanged behaviour, plus the optional color pick).
     const now = Date.now();
     const trimmed = cleanName(name);
     const existing = await findByClientId(ctx, clientId);
     if (existing) {
-      await ctx.db.patch(existing._id, { name: trimmed, lastSeen: now });
-      return toProfile({ ...existing, name: trimmed });
+      const patch: { name: string; lastSeen: number; colorIndex?: number } = { name: trimmed, lastSeen: now };
+      if (color !== undefined) patch.colorIndex = color;
+      await ctx.db.patch(existing._id, patch);
+      return toProfile({ ...existing, ...patch });
     }
     const id = await ctx.db.insert("players", {
       clientId,
       name: trimmed,
+      ...(color !== undefined ? { colorIndex: color } : {}),
       ...ZERO_STATS,
       createdAt: now,
       lastSeen: now,
