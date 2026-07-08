@@ -49,13 +49,12 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - meleeSwing:  derived swing state; the client's own prediction recreates it from inputs
 type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing";
 
-// Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. A new field
-// fails BOTH assertions until it is added to one (and only one) of the two lists above.
-type Unclassified = Exclude<keyof PlayerSim, ServerOwnedField | ClientOwnedField>;
-type DoublyClassified = Extract<ServerOwnedField, ClientOwnedField>;
-type AssertTrue<T extends true> = T;
-export type _AssertAllPlayerFieldsClassified = AssertTrue<Unclassified extends never ? true : never>;
-export type _AssertClassificationDisjoint = AssertTrue<DoublyClassified extends never ? true : never>;
+// Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
+// MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
+// field without classifying it above (or classifying it twice) is a COMPILE error here.
+type MustBeNever<T extends never> = T;
+export type _AssertAllPlayerFieldsClassified = MustBeNever<Exclude<keyof PlayerSim, ServerOwnedField | ClientOwnedField>>;
+export type _AssertClassificationDisjoint = MustBeNever<Extract<ServerOwnedField, ClientOwnedField>>;
 
 // Project the server-owned slice out of a live player. Arrays/objects are copied so the
 // snapshot never aliases sim state.
