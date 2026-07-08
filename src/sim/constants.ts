@@ -102,6 +102,8 @@ export const PROP_HP: Record<PropKind, number> = {
 };
 export const PROP_BREAK_DUR = 0.25;
 export const CHEST_OPEN_DUR = 0.4;
+// How far a chest's weapon lands in front of it on open (past both sprites, clearly loot).
+export const CHEST_WEAPON_EJECT = 36;
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;

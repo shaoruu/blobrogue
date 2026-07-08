@@ -190,6 +190,10 @@ export interface Chest {
   radius: number;
   opened: boolean;
   openT?: number; // seconds into the open clip once opened (undefined = closed)
+  // Baked contents: the floor's weapon drops live in chests, never loose on the floor.
+  // Opening ejects it as a real pickup. Sim-side only (not on the wire) — contents stay
+  // hidden until the open. undefined = the ordinary loot roll only.
+  weapon?: WeaponId;
 }
 
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";

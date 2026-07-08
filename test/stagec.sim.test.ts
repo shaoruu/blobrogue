@@ -514,6 +514,67 @@ function blessingSafetyTests(): void {
   }
 }
 
+// Bug regression: "i often see guns on top of chests?" Floor weapons used to spawn loose at
+// room centers — the same tiles chests and props prefer — so guns sat stacked on chests.
+// They are now chest CONTENTS: no loose weapon pickup exists at floor build, chests never
+// land on prop tiles, and opening the chest ejects its weapon just in front of the opener.
+function chestWeaponTests(): void {
+  const DT = 1 / 20;
+
+  section("chest weapons: floors stock weapons INSIDE chests, never loose over props/chests");
+  {
+    let looseWeapons = 0, stockedFloors = 0, chestPropOverlaps = 0, floorsChecked = 0;
+    for (const seed of [0xF100D, 0x1234, 0xBEEF, 0xC0FFE, 0x5EED5]) {
+      for (let floor = 2; floor <= 6; floor++) {
+        const w = createWorld(seed, floor, { isShared: true, skipLocalPlayer: true });
+        if (w.dungeon.rooms.length <= 2) continue;
+        floorsChecked++;
+        looseWeapons += w.pickups.filter((p) => p.kind === "weapon").length;
+        if (w.chests.some((c) => c.weapon !== undefined)) stockedFloors++;
+        for (const c of w.chests) {
+          for (const p of w.props) {
+            if (Math.hypot(c.x - p.x, c.y - p.y) < c.radius + p.radius) chestPropOverlaps++;
+          }
+        }
+      }
+    }
+    check("no loose weapon pickup exists at floor build", looseWeapons === 0, `loose=${looseWeapons} across ${floorsChecked} floors`);
+    check("every eligible floor stocked at least one weapon chest", stockedFloors === floorsChecked, `${stockedFloors}/${floorsChecked}`);
+    check("no chest spawns overlapping a prop", chestPropOverlaps === 0, `overlaps=${chestPropOverlaps}`);
+  }
+
+  section("chest weapons: opening the chest ejects its weapon in front of the opener");
+  {
+    const w = createWorld(0xF100D, 2, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    b.x = 50; b.y = 50;
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const chest = w.chests.find((c) => c.weapon !== undefined)!;
+    const contents = chest.weapon!;
+    a.x = chest.x + 1; a.y = chest.y;
+    stepWorldPhase(w, DT, []);
+    check("chest opened by touch", chest.opened);
+    const drop = w.pickups.find((p) => p.kind === "weapon");
+    check("the chest ejected exactly its stocked weapon", drop !== undefined && drop.weapon === contents, `weapon=${drop?.weapon}`);
+    check("the drop lands clear of the chest (in front, never under it)",
+      drop !== undefined && Math.hypot(drop.x - chest.x, drop.y - chest.y) >= chest.radius + drop.radius,
+      drop ? `dist=${Math.hypot(drop.x - chest.x, drop.y - chest.y).toFixed(0)}px` : "no drop");
+    a.x = drop!.x; a.y = drop!.y;
+    stepWorldPhase(w, DT, []);
+    check("weapon collected into the opener's inventory", a.ownedWeapons.includes(contents), `owned=${a.ownedWeapons.join(",")}`);
+  }
+
+  section("chest weapons: identical seed stocks the identical chests (deterministic contents)");
+  {
+    const contentsOf = (w: WorldState) => JSON.stringify(w.chests.map((c) => [c.x, c.y, c.weapon ?? ""]));
+    const w1 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
+    const w2 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
+    check("two builds of the same floor agree on chest positions + contents", contentsOf(w1) === contentsOf(w2));
+  }
+}
+
 // Bug regression: "mobs still get stuck a lot next to barrels". An enemy chasing a target
 // with a prop dead in its path must route around it — reaching the target within a bounded
 // time and never staying wedged against the prop.
@@ -811,6 +872,7 @@ function main(): void {
   weaponSwitchTests();
   descendTests();
   blessingSafetyTests();
+  chestWeaponTests();
   propAvoidanceTests();
   lootOwnershipTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

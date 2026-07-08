@@ -52,15 +52,20 @@ function main(): void {
   const b = spawnPlayerInWorld(w, "pB");
   check("generated dungeon has rooms", w.dungeon.rooms.length > 2, `rooms=${w.dungeon.rooms.length}`);
   check("floor spawned enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
-  check("floor spawned at least one weapon pickup", w.pickups.some((p) => p.kind === "weapon"), `pickups=${w.pickups.length}`);
+  check("floor stocked a weapon INSIDE a chest (never loose on the floor)",
+    w.chests.some((c) => c.weapon !== undefined) && w.pickups.every((p) => p.kind !== "weapon"), `chests=${w.chests.length}`);
   check("both players share the spawn point", Math.hypot(a.x - b.x, a.y - b.y) < 1);
   const rev0 = w.rev;
 
-  section("pickups: A takes the weapon pickup -> inventories DIVERGE");
+  section("chest loot: A opens the weapon chest -> inventories DIVERGE");
+  const weaponChest = w.chests.find((c) => c.weapon !== undefined)!;
+  const droppedWeapon = weaponChest.weapon!;
+  placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
+  placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
+  step(w);
   const weaponDrop = w.pickups.find((p) => p.kind === "weapon")!;
-  const droppedWeapon = weaponDrop.weapon!;
-  placeAt(a, weaponDrop.x, weaponDrop.y); // A stands on it; B stays away
-  placeAt(b, weaponDrop.x + 400, weaponDrop.y + 300);
+  check("opening the chest ejected its weapon as a real pickup", weaponChest.opened && weaponDrop !== undefined && weaponDrop.weapon === droppedWeapon);
+  placeAt(a, weaponDrop.x, weaponDrop.y); // A walks onto the drop; B stays away
   const pickupEvents = step(w);
   check("pickup collected through the ordinary pickup system", pickupEvents.some((e) => e.t === "pickup" && e.kind === "weapon" && e.pid === "pA"));
   check("A owns the picked weapon", a.ownedWeapons.includes(droppedWeapon), `A=${a.ownedWeapons.join(",")}`);

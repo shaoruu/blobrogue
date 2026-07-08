@@ -319,10 +319,13 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.isBlessingOfferedThisFloor = false;
   w.flowCd = 0;
   w.flowKey = -1;
-  w.pickups = w.isSandbox ? [] : placeWeaponPickups(w);
-  if (!w.isSandbox) placeDealerHearts(w);
+  w.pickups = [];
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
+  if (!w.isSandbox) {
+    stockWeaponChests(w);
+    placeDealerHearts(w);
+  }
   // Reposition living players to the new spawn.
   const spawn = w.dungeon.spawn;
   for (const p of w.players.values()) {
@@ -361,18 +364,32 @@ function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
 
-function placeWeaponPickups(w: WorldState): Pickup[] {
+// The floor's weapon drops are CONTENTS of chests, never loose floor pickups. (They used to
+// spawn at room centers — the same tiles chests and props prefer — so guns sat visibly
+// stacked on top of chests, and free weapons in the open undercut chests as the reward
+// container.) Each rolled weapon is stocked into a weaponless wood chest, treasure room
+// first; when the floor placed fewer chests than weapons, an extra chest is placed to hold
+// the overflow, roomed where the loose drop used to land. Opening the chest ejects the
+// weapon (see openChest). Same seeded stream as the old loose drops, so a given seed still
+// finds the same arsenal — just inside chests.
+function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
-  if (w.floor < 2 || d.rooms.length <= 2) return [];
+  if (w.floor < 2 || d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
-  const drops: Pickup[] = [];
   const kinds: WeaponId[] = [rng.pick(PICKUP_WEAPONS)];
   if (w.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
+  const used = new Set<number>();
+  for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
   for (const weapon of kinds) {
+    const host = w.chests.find((c) => c.kind === "wood" && c.weapon === undefined);
+    if (host) { host.weapon = weapon; continue; }
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
-    drops.push({ id: w.nextPickupId++, kind: "weapon", x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE, radius: 16, weapon });
+    let spot = chestTile(w, room, used);
+    for (let ri = 1; spot === null && ri < d.rooms.length; ri++) spot = chestTile(w, d.rooms[ri], used);
+    if (!spot) continue; // no open tile anywhere: forfeit this weapon roll
+    used.add(spot.ty * d.w + spot.tx);
+    w.chests.push({ id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE, radius: 16, opened: false, weapon });
   }
-  return drops;
 }
 
 // The Dealer's stock (§2): on every third floor, P purchasable hearts near a mid-run room
@@ -441,27 +458,32 @@ function placeChests(w: WorldState): Chest[] {
   const treasure = d.rooms.find((r) => r.kind === "treasure");
   let remaining = count;
   if (treasure) {
-    const spot = chestTile(d, treasure, used);
+    const spot = chestTile(w, treasure, used);
     if (spot) { addChest(spot.tx, spot.ty); remaining--; }
   }
   for (let i = 0; i < remaining; i++) {
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
-    const spot = chestTile(d, room, used);
+    const spot = chestTile(w, room, used);
     if (spot) addChest(spot.tx, spot.ty);
   }
   if (list.length === 0) {
     for (let ri = 1; ri < d.rooms.length; ri++) {
-      const spot = chestTile(d, d.rooms[ri], used);
+      const spot = chestTile(w, d.rooms[ri], used);
       if (spot) { addChest(spot.tx, spot.ty); break; }
     }
   }
   return list;
 }
 
-function chestTile(d: Dungeon, room: Room, used: Set<number>): { tx: number; ty: number } | null {
+// A free tile for a chest: open floor, unused, not the spawn/exit tile, and not a tile a
+// prop already occupies (props are placed first, and a chest materializing on a barrel is
+// the same stacked-loot eyesore as a gun on a chest).
+function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; ty: number } | null {
+  const d = w.dungeon;
   const isBad = (tx: number, ty: number) =>
     d.tiles[ty * d.w + tx] !== 0 ||
     used.has(ty * d.w + tx) ||
+    hasLivePropOnTile(w, tx, ty) ||
     (tx === d.spawn.x && ty === d.spawn.y) ||
     (tx === d.exit.x && ty === d.exit.y);
   if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
@@ -469,6 +491,13 @@ function chestTile(d: Dungeon, room: Room, used: Set<number>): { tx: number; ty:
     for (let tx = room.x; tx < room.x + room.w; tx++)
       if (!isBad(tx, ty)) return { tx, ty };
   return null;
+}
+
+function hasLivePropOnTile(w: WorldState, tx: number, ty: number): boolean {
+  for (const p of w.props) {
+    if (!p.dead && Math.floor(p.x / TILE) === tx && Math.floor(p.y / TILE) === ty) return true;
+  }
+  return false;
 }
 
 // ---- geometry / collision ----
@@ -1959,14 +1988,32 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   c.opened = true;
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
-  if (c.kind === "boss") grantBossChest(w, p, c, ev);
-  else rollWoodChest(w, c, ev);
+  if (c.kind === "boss") { grantBossChest(w, p, c, ev); return; }
+  // Baked contents first (the floor's weapon drop lives in this chest — see
+  // stockWeaponChests), then the ordinary roll: the weapon replaces nothing, so the heart
+  // economy and pity behave exactly as they always did per chest opened.
+  if (c.weapon !== undefined) ejectChestWeapon(w, p, c, c.weapon, ev);
+  rollWoodChest(w, p, c, ev);
+}
+
+// A weapon coming out of a chest lands just in FRONT of it — toward the opener — so it
+// reads as spilled loot, clearly collectible, never a pickup stacked under the chest
+// sprite. A chest opened dead-center (or ejecting into a wall) degrades to the chest's own
+// tile, which is open floor by construction.
+function ejectChestWeapon(w: WorldState, p: PlayerSim, c: Chest, weapon: WeaponId, ev: SimEvent[]): void {
+  const dx = p.x - c.x, dy = p.y - c.y;
+  const len = Math.hypot(dx, dy);
+  let x = c.x + (len > 1 ? dx / len : 0) * C.CHEST_WEAPON_EJECT;
+  let y = c.y + (len > 1 ? dy / len : 1) * C.CHEST_WEAPON_EJECT;
+  if (isWall(w, x, y)) { x = c.x; y = c.y; }
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon });
+  ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
 }
 
 // Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer
 // drop from random chests — the reward cadence lives on descents and the boss chest. The
 // recovery pity, once armed, forces the heart.
-function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
+function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
   if (w.isPityHeartArmed) {
     w.isPityHeartArmed = false;
     w.pityStreak = 0;
@@ -1978,7 +2025,7 @@ function rollWoodChest(w: WorldState, c: Chest, ev: SimEvent[]): void {
     w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
   } else if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers) + SUSTAIN.woodChestWeapon) {
     const weapon = PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)];
-    w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x: c.x, y: c.y, radius: 16, weapon });
+    ejectChestWeapon(w, p, c, weapon, ev);
   } else {
     const n = 3 + Math.floor(w.rng.next() * 4);
     for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
