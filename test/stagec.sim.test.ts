@@ -642,6 +642,53 @@ function chestWeaponTests(): void {
   }
 }
 
+// Bug regression: the Longshot (1400px/s, small radius) whiffed point-blank-obvious hits.
+// Collision was an endpoint-only overlap test, so a round crossing ~70px per 20Hz tick
+// tunneled straight over small bodies between samples. Hits are now swept along the whole
+// travel segment.
+function sweptBulletTests(): void {
+  const DT = 1 / 20;
+
+  section("swept collision: a Longshot-speed round cannot tunnel through a small enemy");
+  {
+    const { w, a } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", 600, 400);
+    e.hp = 100;
+    e.spawnTimer = 0;
+    // One 20Hz tick at 1400px/s covers 70px: start 35px short so the tick ENDS 35px past
+    // the body — the endpoint misses by well over the combined radii; only the segment
+    // between the samples crosses the enemy.
+    const b: Bullet = {
+      x: e.x - 35, y: e.y, vx: 1400, vy: 0, radius: 4, life: 1, friendly: true,
+      owner: a.id, damage: 5, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    };
+    w.bullets.push(b);
+    const hp0 = e.hp;
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("the endpoint alone misses (the old tunneling geometry)",
+      Math.hypot(b.x - e.x, b.y - e.y) > b.radius + e.radius, `endDist=${Math.hypot(b.x - e.x, b.y - e.y).toFixed(0)}px`);
+    check("the swept segment registers the hit", e.hp < hp0, `hp ${hp0}->${e.hp}`);
+    const hit = ev.find((x) => x.t === "enemyHit");
+    check("impact FX lands ON the enemy, not where the round ended up",
+      hit !== undefined && hit.t === "enemyHit" && Math.hypot(hit.puffX - e.x, hit.puffY - e.y) <= e.radius + b.radius + 6,
+      hit && hit.t === "enemyHit" ? `puffDist=${Math.hypot(hit.puffX - e.x, hit.puffY - e.y).toFixed(0)}px` : "no hit event");
+  }
+
+  section("swept collision: fast rounds break the props they cross too");
+  {
+    const { w, a } = twoPlayerArena();
+    devSpawnProp(w, "barrel", 600, 400);
+    const barrel = w.props[0];
+    w.bullets.push({
+      x: barrel.x - 35, y: barrel.y, vx: 1400, vy: 0, radius: 4, life: 1, friendly: true,
+      owner: a.id, damage: 10, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    });
+    stepWorldPhase(w, DT, []);
+    check("the crossed barrel took the hit (no tunneling past props)", barrel.dead || barrel.hp < C.PROP_HP.barrel, `hp=${barrel.hp}`);
+  }
+}
+
 // Bug regression: "mobs still get stuck a lot next to barrels". An enemy chasing a target
 // with a prop dead in its path must route around it — reaching the target within a bounded
 // time and never staying wedged against the prop.
@@ -940,6 +987,7 @@ function main(): void {
   descendTests();
   blessingSafetyTests();
   chestWeaponTests();
+  sweptBulletTests();
   propAvoidanceTests();
   lootOwnershipTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

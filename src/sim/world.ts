@@ -1082,6 +1082,11 @@ function isPointInMeleeHit(px: number, py: number, x: number, y: number, radius:
 
 function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const b of w.bullets) {
+    // Anchor this tick's swept-collision segment BEFORE any steering/move. A wall bounce
+    // resets the bullet to exactly this point, leaving that tick's segment degenerate —
+    // a reflected round never sweeps backward through the wall it hit.
+    b.prevX = b.x;
+    b.prevY = b.y;
     if (b.friendly && b.homing !== undefined) steerHoming(w, b, dt);
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
     if (isWall(w, b.x, b.y)) {
@@ -1134,6 +1139,27 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
   b.x = px; b.y = py;
   b.bounce = (b.bounce ?? 0) - 1;
   ev.push({ t: "bulletBounce", x: b.x, y: b.y, aim: Math.atan2(b.vy, b.vx), color: b.color });
+}
+
+// Swept (continuous) bullet collision. Fast rounds cover many body-widths per fixed tick —
+// the Longshot's 1400px/s slug crosses ~70px per 20Hz step against swarm bodies barely 10px
+// wide — so testing only the endpoint tunnels straight through small targets. The whole
+// travel segment [prev -> current] is tested against the target circle; the closest point
+// comes back in `sweptHit` (per-query scratch, like w.targetX/targetY) so impact FX land ON
+// the target instead of wherever the bullet ended up.
+const sweptHit = { x: 0, y: 0 };
+function sweptBulletHit(b: Bullet, cx: number, cy: number, r: number): boolean {
+  const x1 = b.x, y1 = b.y;
+  const x0 = b.prevX ?? x1, y0 = b.prevY ?? y1;
+  const dx = x1 - x0, dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((cx - x0) * dx + (cy - y0) * dy) / len2)) : 0;
+  const px = x0 + dx * t, py = y0 + dy * t;
+  const ddx = cx - px, ddy = cy - py;
+  if (ddx * ddx + ddy * ddy >= r * r) return false;
+  sweptHit.x = px;
+  sweptHit.y = py;
+  return true;
 }
 
 // Record every enemy's current position into the ring (one entry per world tick). Called at the
@@ -1253,9 +1279,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // Lag comp anchored at FIRE time (decays as the bullet travels): a hitscan-fast shot tests
       // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
       const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
-      if (Math.hypot(b.x - btx, b.y - bty) < b.radius + e.radius) {
+      if (sweptBulletHit(b, btx, bty, b.radius + e.radius)) {
         strikeEnemy(w, shooter, e, {
-          damage: b.damage, isCrit: b.isCrit, puffX: b.x, puffY: b.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage, isCrit: b.isCrit, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
@@ -1855,9 +1881,9 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (p.kind === "brazier") continue;
     for (const b of w.bullets) {
       if (!b.friendly || b.life <= 0) continue;
-      if (Math.hypot(b.x - p.x, b.y - p.y) >= b.radius + p.radius) continue;
+      if (!sweptBulletHit(b, p.x, p.y, b.radius + p.radius)) continue;
       p.hp -= b.damage;
-      ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: b.x, y: b.y });
+      ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: sweptHit.x, y: sweptHit.y });
       if (b.pierce <= 0) b.life = 0;
       if (p.hp <= 0) { destroyProp(w, p, ev, ownerOf(w, b.owner) ?? undefined); break; }
     }
@@ -1950,7 +1976,7 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (!c.opened) {
       for (const b of w.bullets) {
         if (!b.friendly || b.life <= 0) continue;
-        if (Math.hypot(b.x - c.x, b.y - c.y) >= b.radius + c.radius) continue;
+        if (!sweptBulletHit(b, c.x, c.y, b.radius + c.radius)) continue;
         // The chest opener is the BULLET's owner (the actual shooter) — never a "primary" player.
         // If that shooter has since disconnected, the bullet still stops on the chest but opens
         // nothing (no one is there to receive the roll); the chest stays for live players.

@@ -86,9 +86,11 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 2.4, pellets: 8, spread: 0.85, bulletRadius: 5, color: "#ff7a3b", muzzle: 8,
   },
   // Tier A — pure data. Near-hitscan precision slug (pierce comes from the Full Metal item).
+  // The 6px radius keeps the slug precise but forgiving enough that a near-graze on a small
+  // body connects (collision is swept, so its 1400px/s can never tunnel between ticks).
   railgun: {
     id: "railgun", name: "Longshot", fireCd: 0.85, speed: 1400, life: 1.6,
-    damage: 11, pellets: 1, spread: 0, bulletRadius: 4, color: "#e8f0ff", muzzle: 3,
+    damage: 11, pellets: 1, spread: 0, bulletRadius: 6, color: "#e8f0ff", muzzle: 3,
   },
   // Tier B — reuses the ricochet bounce field: fast full-auto that ricochets once.
   nailer: {

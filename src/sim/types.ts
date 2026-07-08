@@ -144,6 +144,12 @@ export interface Bullet {
   // near-instant hit is tested against the shooter's fire-time view. Undefined/0 in solo.
   bornTick?: number;
   lagRewind?: number;
+  // Position before this tick's move (stamped by updateBullets): the swept-collision segment
+  // [prev -> current] is what hit tests check, so a fast round (the Longshot's 1400px/s slug
+  // crosses ~70px per 20Hz tick) can never tunnel between endpoint samples. Sim-internal
+  // scratch — never on the wire. Undefined only before the bullet's first move.
+  prevX?: number;
+  prevY?: number;
 }
 
 // dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
