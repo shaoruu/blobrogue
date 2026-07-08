@@ -104,6 +104,9 @@ export const PROP_BREAK_DUR = 0.25;
 export const CHEST_OPEN_DUR = 0.4;
 // How far a chest's weapon lands in front of it on open (past both sprites, clearly loot).
 export const CHEST_WEAPON_EJECT = 36;
+// Candidate directions for that landing spot, relative to the opener, tried in order until
+// one is standable (see ejectChestWeapon). Fixed order keeps the drop deterministic.
+export const CHEST_EJECT_ANGLES: readonly number[] = [0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0, Math.PI];
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;

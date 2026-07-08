@@ -1998,16 +1998,34 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
 
 // A weapon coming out of a chest lands just in FRONT of it — toward the opener — so it
 // reads as spilled loot, clearly collectible, never a pickup stacked under the chest
-// sprite. A chest opened dead-center (or ejecting into a wall) degrades to the chest's own
-// tile, which is open floor by construction.
+// sprite. The landing spot must be somewhere the opener can actually STAND (open floor,
+// off every live prop's collision ring, clear of other chests): the old loose floor drops
+// could sit where the 34px collect range never triggered — the unreachable gun of the
+// playtest. Candidate angles fan out from the opener direction in a fixed order; if every
+// one is blocked (a chest boxed in by props), the drop degrades to the chest's own tile,
+// which is open, prop-free floor by construction (see chestTile).
 function ejectChestWeapon(w: WorldState, p: PlayerSim, c: Chest, weapon: WeaponId, ev: SimEvent[]): void {
   const dx = p.x - c.x, dy = p.y - c.y;
-  const len = Math.hypot(dx, dy);
-  let x = c.x + (len > 1 ? dx / len : 0) * C.CHEST_WEAPON_EJECT;
-  let y = c.y + (len > 1 ? dy / len : 1) * C.CHEST_WEAPON_EJECT;
-  if (isWall(w, x, y)) { x = c.x; y = c.y; }
+  const base = Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
+  let x = c.x, y = c.y;
+  for (const off of C.CHEST_EJECT_ANGLES) {
+    const ex = c.x + Math.cos(base + off) * C.CHEST_WEAPON_EJECT;
+    const ey = c.y + Math.sin(base + off) * C.CHEST_WEAPON_EJECT;
+    if (isStandableSpot(w, ex, ey, p.pr)) { x = ex; y = ey; break; }
+  }
   w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon });
   ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+}
+
+// Whether a player of radius `pr` can physically stand at (x, y): open floor and outside
+// every live prop's collision ring. Chests don't block movement but a drop under one would
+// hide the sprite, so they're excluded too.
+function isStandableSpot(w: WorldState, x: number, y: number, pr: number): boolean {
+  if (isWall(w, x, y) || blockedByProp(w, x, y, pr)) return false;
+  for (const c of w.chests) {
+    if (Math.hypot(x - c.x, y - c.y) < c.radius + 16) return false;
+  }
+  return true;
 }
 
 // Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer

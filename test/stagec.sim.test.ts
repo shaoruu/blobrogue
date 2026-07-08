@@ -573,6 +573,73 @@ function chestWeaponTests(): void {
     const w2 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
     check("two builds of the same floor agree on chest positions + contents", contentsOf(w1) === contentsOf(w2));
   }
+
+  section("chest weapons: every ejected weapon lands on a standable tile and is collectible");
+  {
+    // The playtest's unreachable gun: loose drops could sit on walls/props where the collect
+    // range never triggered. Open every weapon chest across seeded floors and prove each
+    // drop sits on open floor, off every prop's collision ring, and actually collects when
+    // the player stands on it.
+    let drops = 0, onWall = 0, onProp = 0, uncollected = 0;
+    for (const seed of [0xF100D, 0x1234, 0xBEEF, 0xC0FFE, 0x5EED5]) {
+      for (let floor = 2; floor <= 6; floor++) {
+        const w = createWorld(seed, floor, { isShared: true, skipLocalPlayer: true });
+        const a = spawnPlayerInWorld(w, "pA");
+        const b = spawnPlayerInWorld(w, "pB");
+        b.x = 40; b.y = 40;
+        w.enemies = [];
+        w.pendingSpawns = [];
+        for (const chest of w.chests.filter((c) => c.weapon !== undefined)) {
+          const contents = chest.weapon!;
+          const dropId = w.nextPickupId; // the baked weapon ejects first, so it takes this id
+          a.x = chest.x + 1; a.y = chest.y;
+          stepWorldPhase(w, 1 / 20, []);
+          const drop = w.pickups.find((pk) => pk.id === dropId && pk.kind === "weapon");
+          if (!drop) {
+            // A boxed-in fallback drops on the chest tile, right under the opener, and
+            // collects the same tick — reachable by definition.
+            if (a.ownedWeapons.includes(contents)) drops++; else uncollected++;
+            continue;
+          }
+          drops++;
+          const d = w.dungeon;
+          if (d.tiles[Math.floor(drop.y / TILE) * d.w + Math.floor(drop.x / TILE)] !== 0) onWall++;
+          for (const prop of w.props) {
+            if (!prop.dead && Math.hypot(drop.x - prop.x, drop.y - prop.y) < a.pr + prop.radius * 0.8) onProp++;
+          }
+          a.x = drop.x; a.y = drop.y;
+          stepWorldPhase(w, 1 / 20, []);
+          if (!a.ownedWeapons.includes(contents)) uncollected++;
+        }
+      }
+    }
+    check("weapon chests ejected a drop for every open", drops > 0 && uncollected === 0, `drops=${drops} uncollected=${uncollected}`);
+    check("no drop landed on a wall tile", onWall === 0, `onWall=${onWall}`);
+    check("no drop landed inside a prop's collision ring", onProp === 0, `onProp=${onProp}`);
+  }
+
+  section("chest weapons: a chest boxed in by props still yields a collectible weapon");
+  {
+    const w = createWorld(0xB0CED, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    b.x = 60; b.y = 60;
+    const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
+    devSpawnChest(w, cx, cy);
+    const chest = w.chests[0];
+    chest.weapon = "railgun";
+    // Barrels sat exactly on every eject candidate: no landing spot is standable, so the
+    // drop must degrade to the chest's own tile and still collect.
+    for (const off of C.CHEST_EJECT_ANGLES) {
+      devSpawnProp(w, "barrel", cx + Math.cos(off) * C.CHEST_WEAPON_EJECT, cy + Math.sin(off) * C.CHEST_WEAPON_EJECT);
+    }
+    a.x = cx + 1; a.y = cy;
+    stepWorldPhase(w, 1 / 20, []);
+    // Every eject candidate is blocked, so the drop degrades to the chest's own tile —
+    // right under the opener, who collects it the same tick. Reachable by construction.
+    check("the boxed-in chest's weapon still reaches the opener", a.ownedWeapons.includes("railgun"), `owned=${a.ownedWeapons.join(",")}`);
+    check("no weapon pickup left stranded on a prop", w.pickups.every((pk) => pk.kind !== "weapon"));
+  }
 }
 
 // Bug regression: "mobs still get stuck a lot next to barrels". An enemy chasing a target
