@@ -11,8 +11,27 @@ after `source /workspace/.secrets/env.sh` (loads FAL_KEY etc.).
   — general text→image. recraft is best for clean icons.
 - **`falrmbg.mjs <in.png> <out.png>`** — background removal (birefnet) → clean transparency.
 - **`keyout.py <in.png> <out.png> [size]`** — flood-fill remove light bg, trim, center, resize.
-- **`pixelize.py <in.png> <out.png> [--grid N]`** — enforce the art bible: downscale to a
-  pixel grid, snap to the locked ~30-color palette, 1px outline, export at 64px NEAREST.
+- **`pixelize.py <in.png> <out.png> --lane <name> [--grid N]`** — enforce the art bible:
+  downscale to a pixel grid, snap to a FAMILY PALETTE LANE, 1px outline, export 64px NEAREST.
+  - **`--lane <name>`** restricts nearest-color lookup to one family's ramp (+ soot outline).
+    Lanes (typed in `LANES` inside the script, from the AD's manifest): `neutral_bone`,
+    `choir_cyan`, `cold_indigo`, `amber_construct`, `shale_bone`, `red_brute`, `cold_orbiter`,
+    `weapon_orange`, `weapon_metal`, `weapon_beam`, `teal_spitter`, `global` (legacy).
+    ONLY `teal_spitter` contains the teal ramp `0f4a4a/1fa89a/6ff0d8` — this is the fix for
+    the palette-contamination bug where global snapping pulled cool/dark neutral shadows
+    into teal (Weaver 32%, Marrow 28%, Orbiter 41%, Beam 44%, Flak ~20-40% contaminated;
+    Ian rejected the green cast).
+  - **`--palette-hex 6b6f8a,c9c9de,ffffff`** — explicit comma-separated hex list for
+    one-off work (mutually exclusive with `--lane`).
+  - Omitting both = the legacy `global` lane (whole-palette snapping), kept ONLY for
+    byte-identical reproduction of old recipes. **New assets must pass an explicit lane.**
+  - Leaked dungeon-tile darks still always get clamped, but now to the LANE's family-dark
+    (`--family-dark RRGGBB` overrides). `--tile` (dungeon-ramp tile enforce) is unchanged.
+  - Examples:
+    `python3 tools/pixelize.py weaver-cut.png weaver.png --lane neutral_bone`
+    `python3 tools/pixelize.py spitter-cut.png spitter.png --lane teal_spitter`
+    `python3 tools/pixelize.py icon-cut.png icon.png --palette-hex 5a1020,c0243a,ff5a5f`
+  - Tested by `tools/test_pixelize.py` (runs in `npm test` via `npm run test:tools`).
   ⚠️ Do NOT run on an already-assembled multi-frame STRIP (it collapses the sheet — this
   caused the slime_walk bug). Pixelize single frames, then assemble the strip.
 - **`add_shadow.py`**, **`faledit.mjs`** — grounding shadow / fal image edit helpers.
@@ -50,3 +69,7 @@ after `source /workspace/.secrets/env.sh` (loads FAL_KEY etc.).
    via a tool-managed background shell (block_until_ms:0), or playtest the live Vercel deploy.
 4. Box has no audio sink — can't hear audio; verify the pipeline (files serve, WebAudio inits) +
    let Ian judge sound by ear.
+5. **LOCKED ART PIPELINE (AD rule):** flux/dev → birefnet → crop-to-fill → pixelize with an
+   EXPLICIT `--lane` → assemble → audit. New assets must NOT use unrestricted global
+   snapping — that is how the teal Spitter ramp contaminated Weaver/Marrow/Orbiter/Beam/Flak
+   shadows. The `global` lane exists only to reproduce pre-lane assets byte-identically.
