@@ -6,7 +6,7 @@
   "description": "blobrogue deployment/control plane: a loopback-only, strictly-allowlisted ops service that the admin.create.town panel proxies to. Drives immutable releases (atomic symlink), pm2 reloads of exactly blobrogue-gs, and audited deploy/rollback. Never shares handlers or credentials with the game WS; never runs arbitrary shell.",
   "scripts": {
     "dev": "tsx watch src/main.ts",
-    "start": "node dist/control/src/main.js",
+    "start": "node dist/src/main.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json --noEmit",
     "test": "tsx test/run.ts"
