@@ -95,7 +95,7 @@ export function verifyAdminToken(secret: string, token: string, policy: AdminTok
   const exp = numField(o, "exp");
   const scope = Array.isArray(o.scope) ? o.scope.filter((s): s is string => typeof s === "string") : null;
   if (sub === null || sub.length < 1 || sub.length > 128) return { ok: false, reason: "bad_sub" };
-  if (jti === null || jti.length < 8 || jti.length > 128) return { ok: false, reason: "bad_jti" };
+  if (jti === null || jti.length < 1 || jti.length > 128) return { ok: false, reason: "bad_jti" };
   if (iat === null || exp === null) return { ok: false, reason: "bad_times" };
   if (aud !== policy.audience) return { ok: false, reason: "bad_audience" };
   if (scope === null || !scope.includes(REQUIRED_SCOPE)) return { ok: false, reason: "missing_scope" };
@@ -123,7 +123,7 @@ export function verifyConfirmToken(secret: string, token: string, audience: stri
   const releaseId = str(o, "releaseId"); // null when the object omits it or it is not a string
   if (action !== "deploy" && action !== "restart" && action !== "rollback") return { ok: false, reason: "bad_action" };
   if (sub === null) return { ok: false, reason: "bad_sub" };
-  if (jti === null || jti.length < 8 || jti.length > 128) return { ok: false, reason: "bad_jti" };
+  if (jti === null || jti.length < 1 || jti.length > 128) return { ok: false, reason: "bad_jti" };
   if (iat === null || exp === null) return { ok: false, reason: "bad_times" };
   if (aud !== audience) return { ok: false, reason: "bad_audience" };
   const nowSec = Math.floor(nowMs / 1000);

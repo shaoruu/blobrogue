@@ -17,7 +17,7 @@ import type { ArtifactVerifier, AuditSink, GameServerAdmin, OperationStore, Rele
 import type { Logger } from "./logger.js";
 import type { Clock } from "./ports.js";
 import type { OperationRecord } from "./types.js";
-import { parseConfirmBody, parseJsonObject, parseReleaseIdBody } from "./validation.js";
+import { findForbiddenKey, parseConfirmBody, parseJsonObject, parseReleaseIdBody } from "./validation.js";
 
 export interface ControlDeps {
   cfg: ControlConfig;
@@ -188,6 +188,8 @@ export class ControlHttpServer {
   private async handleRestart(body: string, rc: RouteCtx, res: ServerResponse): Promise<void> {
     const parsed = parseJsonObject(body);
     if (!parsed.ok) return this.send(res, 400, { error: parsed.reason });
+    const forbidden = findForbiddenKey(parsed.value);
+    if (forbidden !== null) return this.send(res, 400, { error: `forbidden_key:${forbidden}` });
     const confirm = this.d.authGate.verifyConfirmation(this.header(rc, "x-confirm-token"), "restart", null);
     if (!confirm.ok) return this.send(res, confirm.status, { error: confirm.reason });
     await this.runOperation(res, this.idemKey(rc), () => this.d.controller.restart(this.ctx(rc, this.idemKey(rc), confirm.jti)));
@@ -262,19 +264,22 @@ export class ControlHttpServer {
   }
 
   private readBody(req: IncomingMessage): Promise<string | null> {
+    // Over the soft limit -> drop further chunks and return null (413) while still draining the
+    // request so a clean response can be sent. A hard limit destroys a truly abusive stream.
     return new Promise((resolve) => {
       let size = 0;
+      let over = false;
       const chunks: Buffer[] = [];
       req.on("data", (c: Buffer) => {
         size += c.length;
-        if (size > MAX_BODY_BYTES) {
+        if (size > MAX_BODY_BYTES) over = true;
+        else chunks.push(c);
+        if (size > MAX_BODY_BYTES * 64) {
           resolve(null);
           req.destroy();
-          return;
         }
-        chunks.push(c);
       });
-      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      req.on("end", () => resolve(over ? null : Buffer.concat(chunks).toString("utf8")));
       req.on("error", () => resolve(null));
     });
   }
