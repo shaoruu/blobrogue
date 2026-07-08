@@ -117,6 +117,7 @@ export class WSTransport implements Transport {
   private events: SimEvent[] = [];
   private smoothX = 0;
   private smoothY = 0;
+  private lastStatAt = 0;
 
   // observability for the harness / HUD
   bytesRecv = 0;
@@ -157,6 +158,7 @@ export class WSTransport implements Transport {
     this.reconcileCount = 0;
     this.correctionEwmaPx = 0;
     this.correctionMaxPx = 0;
+    this.lastStatAt = 0;
     this.stopped = false;
     void this.connect();
   }
@@ -353,6 +355,13 @@ export class WSTransport implements Transport {
         stepPlayerPhase(this.predState, p, cmd, dt, scratch);
       }
     }
+    // Periodic telemetry uplink (observability only): report client-side netcode signals the
+    // server can't measure so /metrics can surface RTT/jitter/reconciliations/correction.
+    if (this.isReady() && this.now() - this.lastStatAt > 2000) {
+      this.lastStatAt = this.now();
+      this.sendMsg({ t: "stat", rtt: Math.round(this.rttMs), jit: Math.round(this.jitterMs), rec: this.reconcileCount, corr: Math.round(this.correctionMaxPx) });
+    }
+
     // Retire the smoothing error over a few frames.
     const k = Math.min(1, dt * SMOOTH_RETIRE_PER_SEC);
     this.smoothX -= this.smoothX * k;

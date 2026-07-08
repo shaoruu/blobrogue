@@ -23,6 +23,13 @@ const MAX_CATCHUP = 5; // if we fall this far behind, drop the backlog rather th
 const DEFAULT_WORLD_ID = "arena-1";
 const MAX_MALFORMED = 3;
 
+function pct(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const rank = Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))));
+  return sorted[rank];
+}
+
 export interface HealthReport {
   status: string;
   uptimeSec: number;
@@ -32,6 +39,14 @@ export interface HealthReport {
   tickMs_p50: number;
   tickMs_p95: number;
   tickMs_max: number;
+  snapBytes_p50: number;
+  snapBytes_p95: number;
+  snapBytes_max: number;
+  rttMs_avg: number;        // server-measured (ping/pong), averaged over connections
+  rttMs_p95: number;
+  jitterMs_avg: number;     // client-reported
+  reconciliations: number;  // client-reported, summed across connections
+  correctionMax_px: number; // client-reported worst correction
   counters: Counters;
 }
 
@@ -52,6 +67,7 @@ export class GameServer {
   private startedAt = 0;
 
   private tickMetric = new Rolling(1200); // ~60s at 20Hz
+  private snapSizeMetric = new Rolling(2000); // recent per-client snapshot byte sizes
   private counters = newCounters();
 
   constructor(cfg: ServerConfig, log?: Logger) {
@@ -155,6 +171,7 @@ export class GameServer {
     conn.bytesSent += bytes;
     this.counters.bytesOut += bytes;
     this.counters.msgsOut++;
+    if (!full) this.snapSizeMetric.push(bytes);
   }
 
   // ---- heartbeat / timeout ----
@@ -202,6 +219,7 @@ export class GameServer {
       lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1,
       lastPingSentAt: 0, rttMs: 0,
       needsFullSnap: false, closing: false, bytesSent: 0, droppedSnaps: 0,
+      cliRttMs: 0, cliJitterMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,
     };
     this.conns.set(id, conn);
     this.counters.connsOpened++;
@@ -239,6 +257,7 @@ export class GameServer {
         case "join": this.handleJoin(conn, msg.ticket, msg.protocol); break;
         case "input": this.handleInput(conn, msg); break;
         case "pong": this.handlePong(conn); break;
+        case "stat": this.handleStat(conn, msg); break;
       }
     } catch (err) {
       if (err instanceof ProtocolError) {
@@ -303,6 +322,13 @@ export class GameServer {
     }
   }
 
+  private handleStat(conn: Conn, msg: { rtt: number; jit: number; rec: number; corr: number }): void {
+    conn.cliRttMs = msg.rtt;
+    conn.cliJitterMs = msg.jit;
+    conn.cliReconciliations = msg.rec;
+    conn.cliCorrectionMaxPx = msg.corr;
+  }
+
   private handlePong(conn: Conn): void {
     conn.awaitingPong = false;
     conn.missedPings = 0;
@@ -362,7 +388,10 @@ export class GameServer {
     }
     if (url.pathname === "/metrics") {
       const h = this.health();
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ...h.counters, ...{ tickMs_p50: h.tickMs_p50, tickMs_p95: h.tickMs_p95, tickMs_max: h.tickMs_max, worlds: h.worlds, players: h.players, connections: h.connections } }));
+      const { counters, status, ...scalars } = h;
+      // Flat JSON of every metric (counters + tick/snapshot/rtt/reconciliation gauges). A
+      // Prometheus text exposition is a trivial later reformat behind the same numbers.
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status, ...scalars, ...counters }));
       return;
     }
     if (url.pathname === "/dev-ticket") {
@@ -380,6 +409,17 @@ export class GameServer {
   health(): HealthReport {
     let players = 0;
     for (const w of this.worlds.values()) players += w.playerCount;
+    // Aggregate per-connection netcode signals (server-measured RTT + client-reported stats).
+    const rtts: number[] = [];
+    let jitterSum = 0, jitterN = 0, recSum = 0, corrMax = 0;
+    for (const c of this.conns.values()) {
+      if (c.rttMs > 0) rtts.push(c.rttMs);
+      if (c.cliJitterMs > 0) { jitterSum += c.cliJitterMs; jitterN++; }
+      recSum += c.cliReconciliations;
+      if (c.cliCorrectionMaxPx > corrMax) corrMax = c.cliCorrectionMaxPx;
+    }
+    const rttAvg = rtts.length ? rtts.reduce((a, b) => a + b, 0) / rtts.length : 0;
+    const rttP95 = pct(rtts, 95);
     return {
       status: "ok",
       uptimeSec: this.startedAt ? Math.round((Date.now() - this.startedAt) / 1000) : 0,
@@ -389,6 +429,14 @@ export class GameServer {
       tickMs_p50: Number(this.tickMetric.percentile(50).toFixed(3)),
       tickMs_p95: Number(this.tickMetric.percentile(95).toFixed(3)),
       tickMs_max: Number(this.tickMetric.max().toFixed(3)),
+      snapBytes_p50: Math.round(this.snapSizeMetric.percentile(50)),
+      snapBytes_p95: Math.round(this.snapSizeMetric.percentile(95)),
+      snapBytes_max: Math.round(this.snapSizeMetric.max()),
+      rttMs_avg: Number(rttAvg.toFixed(1)),
+      rttMs_p95: Number(rttP95.toFixed(1)),
+      jitterMs_avg: Number((jitterN ? jitterSum / jitterN : 0).toFixed(1)),
+      reconciliations: recSum,
+      correctionMax_px: Number(corrMax.toFixed(1)),
       counters: { ...this.counters },
     };
   }

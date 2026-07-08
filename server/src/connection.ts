@@ -54,6 +54,11 @@ export interface Conn {
   // observability
   bytesSent: number;
   droppedSnaps: number;
+  // client-reported netcode telemetry (from "stat" uplink; observability only)
+  cliRttMs: number;
+  cliJitterMs: number;
+  cliReconciliations: number;
+  cliCorrectionMaxPx: number;
 }
 
 export function inputToIntent(m: { seq: number; dt: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }): InputIntent {

@@ -94,7 +94,10 @@ export interface ChestWire { kind: ChestKind; x: number; y: number; op: boolean;
 export type ClientMsg =
   | { t: "join"; ticket: string; protocol: number }
   | { t: "input"; seq: number; dt: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }
-  | { t: "pong"; id: number };
+  | { t: "pong"; id: number }
+  // Client netcode telemetry uplink (observability only; never affects the sim). Lets /metrics
+  // report client-side signals the server can't measure itself: reconciliations + correction.
+  | { t: "stat"; rtt: number; jit: number; rec: number; corr: number };
 
 // Server -> client.
 export type ServerMsg =
@@ -184,6 +187,15 @@ function decodeClientMsg(raw: string): ClientMsg {
     }
     case "pong": {
       return { t: "pong", id: num(o, "id", -1e12, 1e12) };
+    }
+    case "stat": {
+      return {
+        t: "stat",
+        rtt: num(o, "rtt", 0, 60000),
+        jit: num(o, "jit", 0, 60000),
+        rec: num(o, "rec", 0, 1e9),
+        corr: num(o, "corr", 0, 1e7),
+      };
     }
     default:
       throw new ProtocolError(`unknown type ${String(o.t)}`);
