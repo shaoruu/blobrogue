@@ -45,15 +45,36 @@
       .minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
       .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
       #minimap{ position:absolute; inset:3px; width:calc(100% - 6px); height:calc(100% - 6px); image-rendering:pixelated; display:block; }
-      /* weapon inventory row (above the current-weapon chip, bottom-right). Hidden with <2 weapons. */
-      .invrow{ display:none; flex-direction:column; align-items:flex-end; gap:3px; margin-bottom:6px; }
-      .invrow.show{ display:flex; }
-      .invchip{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4);
-        background:rgba(5,3,11,.6); box-shadow:inset 0 0 0 1px var(--dun-3); padding:3px 6px; }
-      .invchip.on{ color:var(--dun-0); background:var(--amber-hi); box-shadow:inset 0 0 0 1px var(--amber-hi),0 0 8px rgba(255,180,59,.5); }
-      .weapon{ display:flex; align-items:center; gap:11px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:8px 13px; }
-      .weapon .wname{ font-family:var(--f-ui); font-size:11px; color:var(--cream); letter-spacing:1px; }
-      .weapon .wammo{ font-family:var(--f-num); font-size:20px; color:var(--amber-hi); margin-top:2px; }
+      /* --- bottom-center hotbar (Minecraft-style): one slot per owned weapon --- */
+      .hotbar{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%);
+        display:flex; flex-direction:column; align-items:center; gap:7px; max-width:min(94vw,940px); }
+      .hb-slots{ display:flex; flex-wrap:wrap; justify-content:center; gap:6px; }
+      .hb-slot{ position:relative; width:84px; padding:9px 4px 7px; display:flex; flex-direction:column; align-items:center; gap:5px;
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4);
+        transition:transform .06s steps(2),box-shadow .06s steps(2); }
+      .hb-slot.on{ background:rgba(23,18,39,.92); transform:translateY(-4px);
+        box-shadow:inset 0 0 0 2px var(--amber),0 0 14px rgba(255,180,59,.4),0 3px 0 rgba(0,0,0,.4); }
+      .hb-key{ position:absolute; top:3px; left:3px; min-width:14px; height:14px; display:flex; align-items:center; justify-content:center;
+        font-family:var(--f-logo); font-size:8px; line-height:1; color:var(--dun-4); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .hb-slot.on .hb-key{ color:var(--dun-0); background:var(--amber); box-shadow:inset 0 0 0 1px var(--amber-hi); }
+      .hb-icon{ width:34px; height:34px; display:flex; align-items:center; justify-content:center; filter:drop-shadow(0 2px 0 rgba(0,0,0,.45)); }
+      .hb-icon img{ width:32px; height:32px; image-rendering:pixelated; }
+      .hb-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; line-height:1; color:var(--bone); opacity:.68; max-width:100%; overflow:hidden; white-space:nowrap; }
+      .hb-slot.on .hb-name{ color:var(--amber-hi); opacity:1; }
+      /* blessing chips (icon + name + Lv) on the row above the slots. The chips are the
+         only pointer-enabled part of the hotbar: hover shows the level's effect text. */
+      .hb-buffs{ display:none; flex-wrap:wrap; justify-content:center; gap:4px; pointer-events:auto; }
+      .hb-buffs.show{ display:flex; }
+      .hb-buff{ position:relative; display:inline-flex; align-items:center; gap:5px; padding:3px 7px 3px 5px;
+        background:rgba(5,3,11,.66); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 60%, var(--dun-3)); }
+      .hb-buff.rare{ box-shadow:inset 0 0 0 1px var(--t),0 0 8px color-mix(in srgb, var(--t) 35%, transparent); }
+      .hb-buff img{ width:14px; height:14px; image-rendering:pixelated; }
+      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:13px; line-height:1; color:var(--t,var(--cream)); }
+      .hb-buff .bn{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; line-height:1; color:var(--cream); }
+      .hb-buff .bl{ font-family:var(--f-ui); font-size:8px; line-height:1; color:var(--t,var(--dun-4)); }
+      .hb-buff .tip{ position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); white-space:nowrap; z-index:5; display:none;
+        font-family:var(--f-num); font-size:14px; color:var(--bone); background:var(--dun-1); box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:5px 8px; }
+      .hb-buff:hover .tip{ display:block; }
       .dash{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
       .dash .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); }
       .dash .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
@@ -195,22 +216,6 @@
       .bc-rarity.uncommon { color: var(--blu); }
       .bc-rarity.rare { color: var(--pur); }
       .bc-desc { font-family: var(--f-num), monospace; font-size: 16px; line-height: 1.2; color: #cbb6d6; }
-
-      /* --- HUD "YOUR BUILD" owned-items panel (top-left, under the stat panel) --- */
-      .build{ background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:8px 9px; display:none; flex-direction:column; gap:6px; max-width:210px; pointer-events:auto; }
-      .build.show{ display:flex; }
-      .build-title{ font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; display:flex; justify-content:space-between; align-items:center; }
-      .build-title .n{ color:var(--amber); }
-      .build-grid{ display:flex; flex-wrap:wrap; gap:4px; }
-      .ichip{ position:relative; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--t,var(--dun-4)),0 2px 0 rgba(0,0,0,.5); cursor:default; }
-      .ichip img{ width:22px; height:22px; image-rendering:pixelated; }
-      .ichip .glyphfb{ font-family:var(--f-num); font-size:15px; line-height:1; color:var(--t,var(--cream)); }
-      .ichip .cnt{ position:absolute; right:-3px; bottom:-4px; font-family:var(--f-num); font-size:13px; line-height:1; color:var(--cream); background:var(--dun-2); box-shadow:inset 0 0 0 1px var(--dun-4); padding:0 2px; }
-      .ichip.rare{ box-shadow:inset 0 0 0 2px var(--t),0 0 0 2px rgba(255,180,59,.25),0 2px 0 rgba(0,0,0,.5); }
-      .ichip .tip{ position:absolute; left:32px; top:50%; transform:translateY(-50%); white-space:nowrap; z-index:5; background:var(--dun-1); box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:5px 8px; display:none; flex-direction:column; gap:2px; }
-      .ichip:hover .tip{ display:flex; }
-      .ichip .tip .tn{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--t,var(--cream)); }
-      .ichip .tip .td{ font-family:var(--f-num); font-size:14px; color:var(--bone); }
 
       /* === MENU REDESIGN (ui designer, 2-column pixel-font) — overrides earlier menu rules === */
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
