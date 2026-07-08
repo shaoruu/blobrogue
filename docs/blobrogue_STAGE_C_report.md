@@ -11,6 +11,17 @@ byte-for-byte and `src/sim` stays pure).
 Built on the merged Stage B (`main` @ `f4bb8de`): the real `server/`, `src/net/protocol.ts`
 Codec, and `src/client/wsTransport.ts` seams — no parallel scaffolding.
 
+**Full-state authority + TD audit follow-up (this revision):** the server now owns ALL current
+floor-run gameplay state — authoritative weapon inventory + validated switch, server-decided +
+validated blessings, real generated dungeon with party-wide authoritative descend, and full
+player state (HP/mods/blessings/owned weapons/coins/kills/combo/down/revive) over the wire. The
+Technical-Director audit findings are all resolved with per-finding regression tests — see
+`/workspace/blobrogue_TECH_AUDIT_stageBC.md`. Key netcode change: **the server tick alone owns
+simulation time** — inputs are dt-less intent samples consumed one per fixed tick, so the sim is
+immune to client-authored dt and independent of client frame rate. Server architecture is split
+into small typed modules behind explicit ports (`RoomRuntime`/`SessionStore`/`SnapshotPublisher`);
+the Colyseus evaluation + adapter seam is `docs/adr/0001`.
+
 ---
 
 ## Required engineering (task items 1-10) → where it lives
@@ -68,12 +79,15 @@ waves / balance reset. Full combat sync only.
 Headless harness: in-process server + real `WSTransport` bots over latency-injected sockets, 5%
 loss, jitter = RTT/4-5. Reproduce: `cd server && GS_CLIENTS=<n> GS_SECONDS=<s> GS_RTT=<ms> npm run harness`.
 
+Measured in an OPEN arena (`GS_ARENA`) so the render-latency probe travels a clean monotonic line;
+production runs the real dungeon with identical stepWorld/tick/netcode (only map geometry differs).
+
 | clients | reconciliation drift | render latency p50 / p90 | tick p50 / p95 / max | snapshot / bandwidth |
 |---|---|---|---|---|
-| 3 (co-op)   | **0.00 px** | 171 / **196** ms | 0.23 / **0.37** / 2.06 ms | 2.3 KB · **45 KB/s/client** |
-| 4           | **0.00 px** | 178 / **201** ms | 0.27 / **0.41** / 2.27 ms | 2.5 KB · **48 KB/s/client** |
-| 8           | **0.00 px** | 175 / **200** ms | 0.32 / **0.49** / 1.82 ms | 3.1 KB · **60 KB/s/client** |
-| 6 · 30s soak| **0.00 px** | 181 / **211** ms | 0.23 / **0.35** / 2.13 ms | 3.3 KB · **64 KB/s/client** |
+| 3 (co-op)   | **0.00 px** | 175 / **199** ms | 0.21 / **0.38** / 1.99 ms | 1.8 KB · **35 KB/s/client** |
+| 4           | **0.00 px** | 170 / **193** ms | 0.23 / **0.36** / 2.23 ms | 1.9 KB · **38 KB/s/client** |
+| 8           | **0.00 px** | 171 / **196** ms | 0.31 / **0.45** / 1.66 ms | 2.4 KB · **48 KB/s/client** |
+| 6 · 30s soak| **0.00 px** | 177 / **197** ms | 0.22 / **0.32** / 2.08 ms | 2.2 KB · **43 KB/s/client** |
 
 - **Reconciliation drift is 0.00 px** at 50/100/150ms RTT with jitter + 5% loss — no permanent
   drift, corrections stay sub-`SMOOTH_MAX_PX` and glide.
@@ -91,16 +105,22 @@ Adaptive interp measured 115-159ms (grows with jitter), correction-max ~26-31px 
 - **Solo goldens** (`npm test` root): 6/6 scenarios pass tick-for-tick (state + FX),
   deterministic. **`src/sim` purity**: PASS (no DOM/socket/Convex/client imports — enforced by
   `test/purity.test.ts`).
-- **Stage C pure-sim** (`npm run test:sim`): **35/35** — ownership (bullet/coin/burn/barrel),
+- **Stage C pure-sim** (`npm run test:sim`): **61/61** — ownership (bullet/coin/burn/barrel),
   down/revive (down vs game-over, contact skips downed, team wipe, teammate revive + decay),
-  lag-comp (rewound hit that present-time misses + no-impossible-rewind control), interest
-  filtering, barrel chain + friendly fire.
-- **Server suites** (`cd server && npm test`): Stage B **14/14** + Stage C **24/24** = **38/38** —
-  incl. 2 bots + different weapons kill the same boss with identical HP/phase/death and one
-  authoritative chest both see; identical enemy set + shared props across clients; interest
-  exclusion over the wire; tampered client can't speed/fire-rate-hack (server owns cooldowns) and
-  has no message to claim a hit; prediction reconverges @ 50/100/150ms RTT with bounded interp;
-  high-latency attacker still lands shots (lag-comp); malformed/flood can't crash.
+  down-does-not-abort-iteration (H1) + non-shared control, fire-time lag-comp (hitscan uses
+  fire-time view; slow projectile decays to present) + no-impossible-rewind, interest filtering,
+  barrel chain + friendly fire, validated weapon switch, party-wide descend + identical seed/
+  floor/layout, first-come coin/weapon ownership.
+- **Server suites** (`cd server && npm test`): Stage B **14/14** + Stage C **39/39** + hardening
+  **16/16** = **69/69**. Stage C: 2 bots + different weapons kill the same boss with identical
+  HP/phase/death and one authoritative chest both see; identical enemy set + shared props;
+  interest exclusion over the wire; tamper can't speed/fire-rate-hack (server owns cooldowns) and
+  has no message to claim a hit; prediction reconverges @ 50/100/150ms RTT; lag-comp lands laggy
+  shots; independent weapon switch + unowned/off-pool rejection; authoritative blessing apply;
+  authoritative party-wide descend (both clients agree floor/seed/layout). Hardening
+  (`test:hardening`): P0-3 input-flood ~1 step/tick, P0-4 trusted-proxy XFF + per-IP cap, P0-5
+  30/60/144/240Hz equivalence, H5 fuzz + strict protocol-0 rejection, H2 kill event once under
+  40% loss, H6 deterministic game-over leave.
 
 ## Manual two-tab proof (local, dev auth only)
 
@@ -128,25 +148,33 @@ health/metrics: `curl -s localhost:8090/healthz` and `curl -s localhost:8090/met
 
 ## Honest deviations / limitations
 
-- **Stage-C proof world is a fixed combat arena** (boss + mixed enemies + explosive-barrel chain
-  + breakables + a chest), not a descending dungeon. This exercises every combat subsystem
-  deterministically for all clients and avoids multi-player floor-descent orchestration, which is
-  not part of "full combat sync". Floor-clear/boss-defeated **state** is shared and observable;
-  multi-floor descend orchestration is left for a follow-up (the sim's `descend` exists).
-- **Lag-comp rewind uses a fixed assumed interp delay** (`INTERP_BASE_DELAY_MS`) server-side, not
-  the client's exact adaptive delay. Under jitter the client's delay only grows, so the server
-  slightly **under**-rewinds — safe/bounded, never over-rewinds. Documented; refining the exact
-  time math is the deferrable part of §1e.
-- **RTT for lag-comp is sampled from ping/pong** at the heartbeat cadence (5s default), smoothed;
-  it tracks slowly-changing links well. The client's own RTT (for interp) is measured per
-  input→ack, much finer.
-- **Reconnect/session resume is Stage D** per the matrix (rooms ephemeral; a disconnect losing a
-  run matches today's solo/co-op).
-- **Weapon switching has no wire message yet** — the harness grants different weapons server-side
-  (the authoritative loadout source) to prove multi-weapon boss damage. A `switch` input is a
-  clean later addition on the same seam.
+- **The server runs the real generated dungeon floor run** (authoritative seed/floor/dungeon/
+  enemies/props/chests/pickups + party-wide descend). Boss floors are every 5th; the multi-bot
+  boss test spawns a boss into the live authoritative world to keep boss-combat assertions
+  deterministic on floor 1 (the boss entity is authoritative regardless of how it spawned).
+- **Lag-comp rewind is anchored at FIRE time and decays** (fixed assumed interp delay
+  `INTERP_BASE_DELAY_MS` + server-measured RTT, clamped). Under jitter the client's actual interp
+  delay only grows, so the server slightly **under**-rewinds — safe/bounded, never over. Refining
+  the exact per-shot time math further is deferrable.
+- **RTT for lag-comp is sampled from ping/pong** at the heartbeat cadence, smoothed; the client's
+  own RTT (for interp) is measured per input→ack, much finer.
+- **Reconnect/session resume is Stage D** per the matrix (rooms ephemeral; a disconnect ends the
+  run, matching today's solo/co-op). Live gameplay state is fully server-owned while connected;
+  the `SessionStore` port is where reconnect tokens land at Stage D.
+- **Blessing/persistence:** blessing mods are authoritative + applied server-side; cross-run
+  persistence (Convex) is Stage D.
+- **Measurement is done in an open arena** (`GS_ARENA`) so the render-latency probe travels a
+  clean monotonic line; production runs the real dungeon with identical stepWorld/tick/netcode.
 - **Not deployed.** No access to Ian's Hetzner from the cloud agent; the pm2/nginx/deploy/env
   templates are shipped and staging-ready.
+
+## Non-gameplay client-only state
+
+Presentation only, never authority: camera/viewport; particles/decals/gibs/afterimages/muzzle;
+trauma/shake/hit-stop/hurt-flash; audio/music; pause + blessing overlays (the *choice* is
+server-validated, the overlay is UI); minimap; HUD layout; cosmetic squash/lean; biome tint/
+torches; key bindings + autofire resolution; FPS/dev readouts; local render-extrapolation of the
+predicted player between fixed steps.
 
 ## Stage B dependency
 
