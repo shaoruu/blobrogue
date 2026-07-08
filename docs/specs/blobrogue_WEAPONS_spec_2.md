@@ -89,3 +89,29 @@ Canonical stats/override: damage9, CD0.72, speed520, life1.3, radius11; `basePie
 
 ### Universal weapon constraint
 No universal ammo reserve/reload layer. Per-weapon local rhythms may include cooldown, charge, cylinder/reload, heat, HP cost, positioning, or recovery. Infinite reserve remains the foundation; never balance Wisp/Thunderbolt through ammo scarcity.
+
+---
+## UNIVERSAL WEAPON ROOM-VERB CONTRACT (canonical)
+Every weapon must answer: **“What room decision does this make?”** and be identifiable with sprite/name/audio hidden. Infinite reserve is universal; identity comes from trajectory, commitment, spacing, impact, and local rhythm. If two weapons share the same verb/read, one must change.
+
+| Weapon | Room verb | Blind-identifiable behavior / constraint |
+|---|---|---|
+| Pistol | **CHECK** | neutral straight cadence; reliable baseline, no special path/control |
+| Shotgun | **CLEAR NEAR** | short cone, multi-hit spread, close shove; weak beyond cone |
+| Rapid | **TRACE** | sustained thin stream follows aim; low per-hit force |
+| Hornet SMG | **SUPPRESS** | tighter controllable stream than Rapid; holds a lane, accuracy over raw volume |
+| Thunderbolt | **BREAK LINE** | one fat straight slug, 3 baseline hits/max5, synchronized hard shove, long recovery |
+| Triplet | **FAN** | simultaneous 3-line spatial burst; covers a small arc rhythmically |
+| Rebound | **BANK** | deliberate wall geometry / two ricochets; wins around corners |
+| Wisp | **SEEK** | wide release curves/converges within260px; low-force consistency, capped turn/no snap-U-turn |
+| Tesla | **CHAIN PACK** | first connect chooses cluster; arcs through nearby bodies, poor isolated payoff |
+| Boomstick | **EJECT** | widest shortest burst + large self-shove; creates immediate escape space |
+| Longshot | **PUNCTURE** | fastest thinnest commitment; precision line, poor correction/crowd spread |
+| Nailer | **RATTLE ROOM** | rapid single-bounce nails create noisy persistent angle pressure |
+| Dragon flamer | **DENY CLOSE** | short continuous cone + burn; hold a near zone, cannot reach safely across room |
+| Cutlass | **CIRCLE CLEAR** | fast wide melee sweep; trims nearby crowd, demands proximity |
+| Claymore | **COMMIT SWEEP** | slower wider/heavier arc; big punish window after commitment |
+| Pike | **KEEP LINE** | longest narrow thrust; holds one approach lane, weak side coverage |
+| Future charge weapon | **STORE / RELEASE** | tap remains useful; hold visibly banks power; full release changes behavior (size/split/impact), not merely +damage |
+
+Acceptance: with white primitive projectiles/weapons and muted audio, a tester correctly identifies the verb from one room interaction ≥80% of trials. Balance changes may tune numbers but cannot erase the verb.

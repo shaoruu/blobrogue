@@ -276,3 +276,26 @@ Menu-on-launch is replaced AFTER authoritative Stage C by the shared walkable Am
 ---
 ## WEAPON BENCHMARK POINTER
 Wisp and Thunderbolt are locked blind-identifiable benchmarks in `blobrogue_WEAPONS_spec_2.md`. Infinite reserve is universal; weapon identity comes from per-weapon movement/commitment/charge/cylinder/heat constraints, never a shared ammo scarcity layer.
+
+---
+## FLOOR PURPOSE CADENCE (locked; floors cannot feel like filler)
+Every floor has ONE primary purpose communicated by objective, room grammar, reward, or new threat—not merely more HP/bodies or a hue swap.
+
+### First 10-floor authored cadence
+- **F1 — Establish:** simplest clear-floor loop, ranged baseline, Verdant material/elastic movement. Short/readable.
+- **F2 — Discover:** guaranteed first melee; introduce one new movement verb safely.
+- **F3 — Choose:** first Dealer + second-wave pressure; spend temporary coins, commit toward a build.
+- **F4 — Synthesize:** composition test using learned verbs/status/positioning; no brand-new system and no Arena directly before boss.
+- **F5 — Prove:** milestone boss + horizontal unlock + premium reward.
+- **F6 — Recover / Arrive:** new biome material/ecology grammar, Dealer, lower body count but one new contextual tell; breath after boss.
+- **F7 — Adapt:** first smart/complex movement composition (Knellbat/Rattleback band), authored environment interaction.
+- **F8 — Risk:** first Arena-floor eligibility / elite challenge / premium optional pressure.
+- **F9 — Prepare:** Dealer + late-build upgrade decision; clear preview/tell of next boss grammar.
+- **F10 — Master:** second milestone boss tests the biome’s verbs; unlocks next region/options.
+Then repeat the five-beat macro (`arrive/discover → choose → synthesize/risk → prepare → boss`) with new material/ecology/movement, not new currencies.
+
+### Floor-content rules
+- At most ONE new mechanic/verb per floor; next floor remixes before adding another.
+- New biome changes at least room shapes/material props/ecology/light grammar, not palette alone (see post-server World/Lighting specs).
+- Non-event normal floors still get a purpose via composition or environment interaction; threat budgets obey Balance Reset TTK/readability.
+- Arena floors are rare authored substitutions, not extra filler rooms; Dealer/boss/Arena never stack into one overloaded floor.
