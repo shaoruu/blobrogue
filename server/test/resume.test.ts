@@ -18,7 +18,9 @@
 //      (ab flag + away roster), and an absent-but-alive member prevents a false wipe until
 //      the grace truly expires
 //   6. a flaky network (latency + jitter + packet loss + repeated socket kills) still
-//      converges to a single resumed body with the same state
+//      converges to a single resumed body with the same state — including a seeded stress
+//      gate whose drop schedules sweep the whole reconnect handshake (the token-rotation
+//      ack window included) and demand zero rejections across every iteration
 //   7. a server RESTART loses in-memory seats BY DESIGN: the reconnecting client gets
 //      resume_expired and lands terminal connection_lost (documented in MULTIPLAYER.md)
 // Run: npm run test:resume (in server/).
@@ -33,6 +35,7 @@ import { WSTransport } from "../../src/client/wsTransport.js";
 import { jsonCodec, PROTOCOL_VERSION, RESUME_GRACE_MS } from "../../src/net/protocol.js";
 import { devSpawnEnemy } from "../../src/sim/world.js";
 import { TILE } from "../../src/sim/types.js";
+import { Rng } from "../../src/sim/rng.js";
 import { WebSocket as WsClient } from "ws";
 
 let passed = 0;
@@ -159,6 +162,12 @@ async function main(): Promise<void> {
       bot.dropConnection(false);
       await waitUntil(() => isResumed(bot, tickBefore), 4000);
       check("victim resumed (token consumed + rotated)", bot.transport.getResumeToken() !== stolenToken);
+
+      // Wait until the victim's post-resume input CONFIRMED receipt of the rotated token:
+      // that is the moment the previous token dies. (Until then the server deliberately
+      // honors it — rotation-ack ordering — so the replay must come after confirmation to
+      // assert the security property, exactly like a real capture-and-replay would.)
+      await waitUntil(() => [...(s.server.getWorld("room:STLN")?.conns.values() ?? [])].some((c) => c.isResumeTokenConfirmed), 2000);
 
       // The attacker replays the CAPTURED (pre-rotation) token with a valid same-identity
       // ticket. The live connection holds a different token -> hard reject.
@@ -416,9 +425,10 @@ async function main(): Promise<void> {
   await test("flaky network (latency + jitter + 25% loss + repeated drops) still converges to ONE resumed body", async () => {
     const s = await startTestServer({ resumeGraceMs: 6000 });
     try {
+      const netRng = new Rng(0xF1A6);
       const bot = new Bot({
         url: s.url, secret: s.secret, playerId: "flaky-id", world: "room:FLKY", script: () => idle(),
-        net: { rttMs: 60, jitterMs: 25, loss: 0.25 },
+        net: { rttMs: 60, jitterMs: 25, loss: 0.25, random: () => netRng.next() },
         reconnect: { ...FAST, graceMs: 6000 },
       });
       bot.start();
@@ -442,6 +452,57 @@ async function main(): Promise<void> {
       check("no forged/replayed rejections tripped (clean resumes only)", s.server.health().counters.resumesRejected === 0);
       bot.stop();
     } finally { await s.close(); }
+  });
+
+  // The stress gate for the token-rotation ack race: drops are scheduled at SEEDED offsets
+  // that sweep every phase of the reconnect handshake — mid-backoff, mid-join-uplink, and the
+  // window between the server rotating the seat token and the client receiving it (the race
+  // that flaked build-release: the client's only credential was the previous token, and the
+  // old strict match rejected it as a replay -> terminal lockout -> seat expiry -> world
+  // released). Every iteration must converge to exactly one clean body with zero rejections;
+  // convergence is AWAITED explicitly (state predicates), never assumed from timers. The
+  // seeded net RNG makes a failing seed re-runnable. GS_TEST_STRESS_SEEDS raises the seed
+  // count for local soak runs (50-200 reproduction-grade iterations).
+  await test("stress gate: seeded flaky-network drop schedules across the whole handshake always resume cleanly", async () => {
+    const seedCount = Math.max(1, Number(process.env.GS_TEST_STRESS_SEEDS ?? 3));
+    const DROPS_PER_SEED = 10;
+    for (let i = 0; i < seedCount; i++) {
+      const seed = 0xBEEF + i * 7919;
+      const rng = new Rng(seed);
+      const s = await startTestServer({ resumeGraceMs: 6000 });
+      try {
+        const bot = new Bot({
+          url: s.url, secret: s.secret, playerId: "stress-id", world: "room:STRS", script: () => idle(),
+          net: { rttMs: 60, jitterMs: 25, loss: 0.25, random: () => rng.next() },
+          reconnect: { ...FAST, graceMs: 6000 },
+        });
+        bot.start();
+        await waitUntil(() => bot.transport.isReady(), 5000);
+        const world = s.server.getWorld("room:STRS")!;
+        const pid = bot.transport.getSelfServerId()!;
+        world.state.players.get(pid)!.coins = 777;
+
+        // Seeded gaps in [40, 300)ms: with ~80ms backoff plus ~30ms one-way latency per leg,
+        // these land drops before, during, and just after each resume handshake.
+        for (let k = 0; k < DROPS_PER_SEED; k++) {
+          await sleep(40 + Math.floor(rng.next() * 260));
+          bot.dropConnection(false);
+        }
+        const isSettled = await waitUntil(() => {
+          const snap = bot.transport.getLatestSnapshot();
+          return !bot.transport.getReconnectInfo().isReconnecting && snap !== null && snap.self?.coins === 777
+            && s.server.getWorld("room:STRS")?.playerCount === 1;
+        }, 10000);
+        const c = s.server.health().counters;
+        check(`[seed ${seed.toString(16)}] converged: resumed, exact state, exactly one body`, isSettled,
+          `players=${s.server.getWorld("room:STRS")?.playerCount} coins=${bot.transport.getLatestSnapshot()?.self?.coins} closeKind=${bot.transport.getCloseKind()}`);
+        check(`[seed ${seed.toString(16)}] same identity throughout`, bot.transport.getSelfServerId() === pid);
+        check(`[seed ${seed.toString(16)}] zero rejections and zero expiries for clean resume attempts`,
+          c.resumesRejected === 0 && c.resumesExpired === 0,
+          `rejected=${c.resumesRejected} expired=${c.resumesExpired} prevTokenResumes=${c.resumesPrevToken}`);
+        bot.stop();
+      } finally { await s.close(); }
+    }
   });
 
   await test("server restart: in-memory seats are gone BY DESIGN — reconnecting clients get the explicit expired answer", async () => {
