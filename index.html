@@ -397,6 +397,22 @@
       .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 
+      /* --- The one-time online name gate + the lobby's YOU confirmation --- */
+      .name-gate { max-width: 380px; }
+      .gate-namerow { display: flex; gap: 8px; width: 100%; align-items: stretch; }
+      .gate-namerow input.gate-name { flex: 1; }
+      .gate-dice { flex: 0 0 auto; font-size: 18px; padding: 6px 12px; }
+      .gate-colorrow { display: flex; gap: 16px; align-items: center; }
+      .swatch-row { display: grid; grid-template-columns: repeat(3, 34px); gap: 8px; }
+      .swatch { position: relative; width: 34px; height: 34px; border: 2px solid #05030b; box-shadow: inset 0 0 0 2px rgba(5,3,11,.55); padding: 0; cursor: pointer; }
+      /* Selected state is GEOMETRY: the check glyph + an inset ring, never hue alone. */
+      .swatch.sel { box-shadow: inset 0 0 0 3px #05030b, inset 0 0 0 5px #ffe9b0; }
+      .swatch-check { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #05030b; text-shadow: 0 0 3px rgba(255,255,255,.6); pointer-events: none; }
+      .lobby-you { display: flex; align-items: center; gap: 8px; font-size: 13px; letter-spacing: 1px; color: #cbb6d6; }
+      .lobby-you .you-label { color: #8579a0; font-size: 11px; }
+      .lobby-you .you-swatch { width: 14px; height: 14px; display: inline-block; border: 2px solid #05030b; box-shadow: inset 0 0 0 1px rgba(5,3,11,.4); }
+      .lobby-you .you-name { color: #ffe6b0; font-weight: 700; }
+
       /* --- Between-floor "choose a blessing" cards --- */
       .blessing { max-width: min(720px, 94vw); width: auto; }
       .blessing-cards { display: flex; gap: 14px; margin: 6px 0 2px; flex-wrap: wrap; justify-content: center; }

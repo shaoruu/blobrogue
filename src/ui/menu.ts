@@ -6,7 +6,8 @@ import { api } from "../net/api.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { LobbyPlayer } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
-import { playerColor } from "../game/assets.js";
+import { playerColor, PLAYER_COLORS } from "../game/assets.js";
+import { resolveNameInput, rerollBlobName } from "../net/blobName.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
@@ -288,12 +289,11 @@ export class Menu {
 
   // The title's one hydration duty: flush/adopt the identity row (name, color, cosmetics)
   // so lobby tickets and the profile surfaces never race a stale write. Never lets an
-  // unreachable backend break the home screen.
+  // unreachable backend break the home screen. The session always holds a real name (typed
+  // or the generated default), so this is a plain login.
   private async flushTitleIdentity() {
     try {
-      const signedIn = this.auth?.isSignedIn ?? false;
-      if (this.session.name || signedIn) await this.session.login(this.session.name || "blob");
-      else await this.session.refreshProfile();
+      await this.session.login();
     } catch {
       // the home shell stands
     }
@@ -316,7 +316,13 @@ export class Menu {
     input.maxLength = 20;
     input.placeholder = "your blob name";
     input.value = this.session.name;
-    input.addEventListener("change", () => void this.session.login(input.value.trim() || "blob").catch(() => {}));
+    // An emptied/junk input keeps the standing name (typed or generated) — a profile edit
+    // can never blank a name or resurrect the literal "blob".
+    input.addEventListener("change", () => {
+      const name = resolveNameInput(input.value, this.session.name);
+      input.value = name;
+      void this.session.login(name).catch(() => {});
+    });
     row.append(label, input);
     return row;
   }
@@ -463,7 +469,7 @@ export class Menu {
   private doSolo() {
     // Solo must never block on the network: kick off the (optional) identity
     // upsert in the background and start immediately with whatever profile we have.
-    if (this.client) void this.session.login(this.session.name || "blob").catch(() => {});
+    if (this.client) void this.session.login().catch(() => {});
     this.host.startSolo(this.session.profile);
   }
 
@@ -802,7 +808,7 @@ export class Menu {
   private buildOwnOverview(wrap: HTMLElement) {
     const card = this.profileCard(
       lookOf(this.session.cosmetics, this.session.colorIndex),
-      this.session.name || "blob",
+      this.session.name,
       this.session.cosmetics.title,
     );
     this.ownCard = card;
@@ -854,9 +860,9 @@ export class Menu {
     }
     // Lifetime (and identity adoption) from the profile row; card regions fill in place.
     try {
-      const profile = await this.session.login(this.session.name || "blob");
+      const profile = await this.session.login();
       if (profile) {
-        card.nameEl.textContent = (profile.name.trim() || "blob").toUpperCase();
+        card.nameEl.textContent = (profile.name.trim() || "anonymous blob").toUpperCase();
         card.titleEl.textContent = titleTextOf(profile.cosmetics.title);
         card.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
         card.setLifetime(profile);
@@ -1087,7 +1093,7 @@ export class Menu {
     // locked states standing, never an error screen).
     if (!this.client) return;
     try {
-      await this.session.login(this.session.name || "blob");
+      await this.session.login();
       this.closetRefresh?.();
       this.markSeenUnlocks(this.session.profile?.unlocks ?? []);
     } catch {
@@ -1116,11 +1122,109 @@ export class Menu {
 
   // ---- ONLINE (authoritative server): rooms + quick play -----------------------------
 
+  // The ONE-TIME identity gate before a guest's first online start: name + color committed
+  // together in the canonical menu shell, so the ticket/roster identity teammates see is
+  // explicit and confirmed — never the generated default by accident, never the literal
+  // "blob". Signed-in players (Google name) and already-confirmed guests skip it entirely;
+  // it never appears on the title or for solo.
+  private needsNameGate(): boolean {
+    return !(this.auth?.isSignedIn ?? false) && !this.session.isNameConfirmed;
+  }
+
+  private showNameGate() {
+    const wrap = el("div", "menu name-gate");
+    wrap.appendChild(el("h1", "", "WHAT'S YOUR NAME?"));
+    wrap.appendChild(el("p", "", "Teammates will see this in your run."));
+
+    const nameRow = el("div", "gate-namerow");
+    const input = el("input", "gate-name");
+    input.type = "text";
+    input.maxLength = 20;
+    input.value = this.session.name;
+    input.setAttribute("aria-label", "your blob name");
+    input.addEventListener("focus", () => input.select());
+    const dice = el("button", "secondary gate-dice", "\u{1F3B2}");
+    dice.type = "button";
+    dice.setAttribute("aria-label", "shuffle name");
+    let roll = 0;
+    dice.onclick = () => {
+      input.value = rerollBlobName(this.session.clientId, ++roll, input.value);
+    };
+    nameRow.append(input, dice);
+    wrap.appendChild(nameRow);
+
+    // The color pick lives HERE too — one place sets the whole online identity before the
+    // first join. The live preview renders through the shared blob renderer, and the
+    // selected swatch is marked by GEOMETRY (check glyph + inset ring), never hue alone.
+    let selected = this.session.colorIndex ?? 0;
+    const colorRow = el("div", "gate-colorrow");
+    const preview = createBlobPreview(this.gateLook(selected), 96);
+    colorRow.appendChild(preview.el);
+    const swatches = el("div", "swatch-row");
+    swatches.setAttribute("role", "radiogroup");
+    swatches.setAttribute("aria-label", "blob color");
+    const renderSwatches = () => {
+      swatches.replaceChildren();
+      for (let i = 0; i < PLAYER_COLORS.length; i++) {
+        const isSel = i === selected;
+        const btn = el("button", `swatch${isSel ? " sel" : ""}`);
+        btn.type = "button";
+        btn.style.background = playerColor(i);
+        btn.setAttribute("aria-pressed", String(isSel));
+        btn.setAttribute("aria-label", `blob color ${i + 1}${isSel ? " — selected" : ""}`);
+        btn.appendChild(el("span", "swatch-check", isSel ? "\u2713" : ""));
+        btn.onclick = () => {
+          selected = i;
+          preview.setLook(this.gateLook(selected));
+          renderSwatches();
+        };
+        swatches.appendChild(btn);
+      }
+    };
+    renderSwatches();
+    colorRow.appendChild(swatches);
+    wrap.appendChild(colorRow);
+
+    const proceed = () => {
+      // The typed name wins; junk/empty keeps the generated default — never empty, never
+      // the literal "blob". Color + name commit together and the flush is CHAINED: every
+      // room operation and ticket mint awaits it, so the run is joined as exactly this
+      // confirmed identity.
+      const name = resolveNameInput(input.value, this.session.name);
+      this.session.setColorIndex(selected);
+      this.session.markNameConfirmed();
+      void this.session.login(name).catch(() => {});
+      void this.showOnlineHome();
+    };
+    const row = el("div", "btnrow");
+    const play = el("button", "", "PLAY ONLINE \u25b8");
+    play.onclick = proceed;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") proceed(); });
+    const goBack = () => void this.showTitle({ dest: "online" });
+    const back = el("button", "secondary", "back");
+    back.onclick = goBack;
+    row.append(play, back);
+    wrap.appendChild(row);
+    wrap.appendChild(el("p", "muted", "You can change this later in Profile."));
+
+    this.show(wrap);
+    this.bindEscape(goBack);
+    input.focus();
+  }
+
+  // The gate preview's render look: the candidate party color (0 = the natural amber
+  // sprite) under the player's already-equipped overlay cosmetics.
+  private gateLook(colorIndex: number): BlobLook {
+    const cosmetics = this.session.cosmetics;
+    return { colorIndex: colorIndex > 0 ? colorIndex : null, hat: cosmetics.hat, face: cosmetics.face };
+  }
+
   // The online home: quick play into the public pool, create a private room (shareable
   // code), or join a friend's code. Every action stays on this screen until it succeeds,
   // so a failed backend just writes a status line — never a dead end.
   async showOnlineHome(note = "") {
     if (!this.client) { await this.showTitle(); return; }
+    if (this.needsNameGate()) { this.showNameGate(); return; }
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "PLAY ONLINE"));
     wrap.appendChild(el("p", "", "Server-run worlds. Drop into the public pool, or make a room and share its code."));
@@ -1171,7 +1275,7 @@ export class Menu {
     if (!this.client) return;
     setBusy(true, "finding a room\u2026");
     try {
-      const profile = await this.session.login(this.session.name || "blob");
+      const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.quickPlay();
       // The public pool has no start gate: the room is live, drop straight in.
@@ -1185,7 +1289,7 @@ export class Menu {
     if (!this.client) return;
     setBusy(true, "creating room\u2026");
     try {
-      const profile = await this.session.login(this.session.name || "blob");
+      const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.create();
       this.showOnlineLobby(lobby, profile);
@@ -1198,7 +1302,7 @@ export class Menu {
     if (!this.client || code.trim().length < 4) { status.textContent = "enter a valid code"; return; }
     status.textContent = "joining\u2026";
     try {
-      const profile = await this.session.login(this.session.name || "blob");
+      const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.join(code);
       // A live room means the run is on — drop straight in; otherwise wait in the lobby.
@@ -1230,6 +1334,13 @@ export class Menu {
 
       const wrap = el("div", "menu");
       wrap.appendChild(el("h1", "", "ROOM " + lobby.code));
+      // The header confirms the identity THIS player joins as (the same swatch + name the
+      // ticket carries), so a wrong color/name is caught before the run, not during it.
+      const you = el("div", "lobby-you");
+      const youSwatch = el("span", "you-swatch");
+      youSwatch.style.background = playerColor(this.session.colorIndex ?? 0);
+      you.append(el("span", "you-label", "YOU:"), youSwatch, el("span", "you-name", this.session.name));
+      wrap.appendChild(you);
       wrap.appendChild(el("p", "", "Share this code \u2014 friends pick PLAY ONLINE \u2192 JOIN CODE to join you."));
       wrap.appendChild(el("div", "code-badge", lobby.code));
 
@@ -1522,7 +1633,7 @@ export class Menu {
     old.leave();
     await this.showOnlineHome("finding a room\u2026");
     try {
-      const profile = await this.session.login(this.session.name || "blob");
+      const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.quickPlay();
       this.launchOnline(lobby, profile, false);
