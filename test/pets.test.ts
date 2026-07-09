@@ -16,7 +16,7 @@ import type { Bullet, Pet } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { PETS, PET_KINDS, PET_BALANCE, PET_CAPS, isPetKind, isPetUnlocked, petUnlocksFor } from "../src/sim/pets.js";
-import { BURN_DMG_STACK } from "../src/sim/constants.js";
+import { BURN_DMG_STACK, PROP_BLOCK_RING } from "../src/sim/constants.js";
 import { createMods, recomputeMods } from "../src/sim/items.js";
 import { FIXED_DT } from "../src/net/protocol.js";
 
@@ -353,7 +353,7 @@ function teleportTests(): void {
     && !isWallAt(w, pet.x, pet.y - r) && !isWallAt(w, pet.x, pet.y + r);
   check("the landing spot is clearance-checked open floor", isOpen);
   check("the landing spot is outside every live prop",
-    w.props.every((pr) => pr.dead || Math.hypot(pet.x - pr.x, pet.y - pr.y) >= pr.radius * 0.8 + r));
+    w.props.every((pr) => pr.dead || Math.hypot(pet.x - pr.x, pet.y - pr.y) >= pr.radius * PROP_BLOCK_RING + r));
   check("the event carries both ends for the puff", tp?.t === "petTeleport" && Number.isFinite(tp.ox) && Number.isFinite(tp.x));
 
   // Stuck failsafe: owner within teleportDist but a wall wedges the path — the patience
