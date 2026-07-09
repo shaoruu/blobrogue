@@ -23,9 +23,11 @@ import {
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
+  DIFFICULTIES, DIFFICULTY_IDS, DEFAULT_DIFFICULTY, isDifficulty,
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
 } from "../src/sim/balance.js";
+import type { Difficulty } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
 import { Rng } from "../src/sim/rng.js";
@@ -107,8 +109,10 @@ function enemyTableGates(): void {
 
 interface TtkResult { seconds: number; killed: boolean; transitions: Array<{ entering: boolean; at: number; queued: number }> }
 
-function measureBossTtk(weapon: WeaponId, picks: string[]): TtkResult {
-  const w = createWorld(0xBA1A4CE, 5, { isSandbox: true });
+function measureBossTtk(weapon: WeaponId, picks: string[], difficulty: Difficulty = "brutal"): TtkResult {
+  // The §5/§7 calibration gates are authored at the ×1.0 baseline, which is BRUTAL;
+  // difficultyGates() below measures the softened modes against their own bands.
+  const w = createWorld(0xBA1A4CE, 5, { isSandbox: true, difficulty });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
@@ -200,8 +204,8 @@ function bossOverflowGates(): void {
 
 // ---- gate 3: normal/brute/elite focused TTK at representative legal builds ----
 
-function measureFocusedTtk(kind: EnemyKind, floor: number, weapon: WeaponId, picks: string[]): number {
-  const w = createWorld(0xF0C05, floor, { isSandbox: true });
+function measureFocusedTtk(kind: EnemyKind, floor: number, weapon: WeaponId, picks: string[], difficulty: Difficulty = "brutal"): number {
+  const w = createWorld(0xF0C05, floor, { isSandbox: true, difficulty });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
@@ -227,11 +231,12 @@ function normalTtkGates(): void {
   check("F9 skeleton focused TTK ≤ 1.4s at a late median build (HP never sponges)", late <= 1.4, `ttk=${late.toFixed(2)}s`);
 
   // Tier bands, measured against the same late median build on their first-eligible floors.
-  const bruteHp = createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute" }).hp;
+  // Exact §4 tier numbers are authored at the ×1.0 baseline (brutal).
+  const bruteHp = createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute", difficulty: "brutal" }).hp;
   check("brute = 2.40x scaled HP (6 x 1.72 x 2.4 -> 25)", bruteHp === 25, `hp=${bruteHp}`);
-  const eliteHp = createEnemy("spitter", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp;
+  const eliteHp = createEnemy("spitter", 0, 0, 6, new Rng(1), 0, { tier: "elite", difficulty: "brutal" }).hp;
   check("elite = 1.70x scaled HP (3 x 2.12 x 1.7 -> 11; one affix, never doubled stats)", eliteHp === 11, `hp=${eliteHp}`);
-  const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm" });
+  const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm", difficulty: "brutal" });
   check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 2 && swarm.speed === 48
     && Math.abs(swarm.radius - 16 * 0.78) < 1e-9, `hp=${swarm.hp} speed=${swarm.speed}`);
 }
@@ -249,7 +254,9 @@ function threatBudgetGates(): void {
     for (let floor = 1; floor <= 10; floor++) {
       if (isBossFloor(floor)) continue;
       const d = generateDungeon(seed, floor);
-      const spawns = spawnFloorEnemies(d, seed, floor);
+      // ×1.0 baseline: the exact FloorThreat/ActiveThreatCap formulas are the brutal budget;
+      // difficultyGates() asserts the scaled budgets for the softer modes.
+      const spawns = spawnFloorEnemies(d, seed, floor, 1, "brutal");
       const all = [...spawns.active, ...spawns.pending];
       const totalCost = all.reduce((s, e) => s + threatCostOf(e.kind, e.tier), 0);
       const budget = floorThreat(floor) * BIOME_PRESSURE[biomeIndexForFloor(floor)].budgetMult;
@@ -282,8 +289,8 @@ function threatBudgetGates(): void {
     && BOSS.hopWindup - BOSS.hopLock >= 0.30 - EPS && BOSS.hopRecover >= 0.35 - EPS && BOSS.radialRecover >= 0.35 - EPS);
 
   // The cap holds LIVE too: on a deep floor the reinforcement queue only releases into room
-  // under the cap.
-  const w = createWorld(0xCA9, 8);
+  // under the cap (baseline mode, so the comparison is the exact unscaled formula).
+  const w = createWorld(0xCA9, 8, { difficulty: "brutal" });
   w.isGodMode = true;
   let liveOk = true;
   let released = false;
@@ -516,6 +523,168 @@ function powerBudgetGates(): void {
     PERMANENT_ADVANTAGE_CEILING <= 0.30);
 }
 
+// ---- §0.5 difficulty modes: contract, identity, deltas, TTK bands, sustain, grace ----
+
+function measureHearts(difficulty: Difficulty, kills: number): number {
+  // Same seed + same kill order for every mode: the unconditional drop rolls consume the
+  // IDENTICAL rng stream, so a softer mode's heart set is a strict superset of a harder
+  // mode's (only the threshold moves). Counts are therefore deterministically monotone.
+  const w = createWorld(0x5EED5, 2, { isSandbox: true, difficulty });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  for (let i = 0; i < kills; i++) {
+    const e = devSpawnEnemy(w, "slime", p.x + 300, p.y);
+    plantBullet(w, e.x, e.y, 999, 20);
+    step(w, idle(i));
+  }
+  return w.pickups.filter((k) => k.kind === "heart").length;
+}
+
+function difficultyGates(): void {
+  section("difficulty contract: three exact modes, standard default, strict validation");
+  check("exactly casual/standard/brutal, in order", DIFFICULTY_IDS.join(",") === "casual,standard,brutal");
+  check("the compatibility default is STANDARD", DEFAULT_DIFFICULTY === "standard");
+  check("isDifficulty accepts exactly the three ids",
+    DIFFICULTY_IDS.every((id) => isDifficulty(id))
+    && !isDifficulty("CASUAL") && !isDifficulty("easy") && !isDifficulty("") && !isDifficulty(1) && !isDifficulty(null));
+  const c = DIFFICULTIES.casual, s = DIFFICULTIES.standard, b = DIFFICULTIES.brutal;
+  check("casual knobs: enemyHp 0.75 / bossHp 0.75 / threat 0.75 / hearts 1.5 / grace 2.25s",
+    c.enemyHpMult === 0.75 && c.bossHpMult === 0.75 && c.threatMult === 0.75 && c.heartMult === 1.5 && c.playerSpawnGrace === 2.25);
+  check("standard knobs: enemyHp 0.92 / bossHp 0.92 / threat 0.95 / hearts 1.15 / grace 1.75s",
+    s.enemyHpMult === 0.92 && s.bossHpMult === 0.92 && s.threatMult === 0.95 && s.heartMult === 1.15 && s.playerSpawnGrace === 1.75);
+  check("brutal is the exact x1.0 identity (the pre-difficulty live balance)",
+    b.enemyHpMult === 1 && b.bossHpMult === 1 && b.threatMult === 1 && b.heartMult === 1 && b.playerSpawnGrace === 1.75);
+  check("every mode has a one-sentence blurb for the run-setup UI",
+    DIFFICULTY_IDS.every((id) => DIFFICULTIES[id].blurb.length > 0));
+
+  section("difficulty: brutal reproduces the baseline §3/§5 tables exactly (identity proof)");
+  {
+    const kinds: Array<Exclude<EnemyKind, "boss">> = ["slime", "bat", "skeleton", "ghost", "spitter"];
+    let isIdentity = true;
+    for (const kind of kinds) {
+      for (let f = 1; f <= 10; f++) {
+        if (createEnemy(kind, 0, 0, f, new Rng(1), 0, { difficulty: "brutal" }).hp !== enemyHpForFloor(kind, f)) isIdentity = false;
+      }
+    }
+    check("brutal enemy HP == the exact §3 tables for every kind x floor", isIdentity);
+    check("brutal F5 boss HP == the 900 calibration",
+      createEnemy("boss", 0, 0, 5, new Rng(1), 0, { difficulty: "brutal" }).hp === bossHpForFloor(5));
+  }
+
+  section("difficulty: exact deterministic HP deltas (single rounding pass)");
+  {
+    const bossHp = (d: Difficulty) => createEnemy("boss", 0, 0, 5, new Rng(1), 0, { difficulty: d }).hp;
+    check("F5 boss HP 680 / 830 / 900", bossHp("casual") === 680 && bossHp("standard") === 830 && bossHp("brutal") === 900,
+      `${bossHp("casual")}/${bossHp("standard")}/${bossHp("brutal")}`);
+    const skelHp = (d: Difficulty) => createEnemy("skeleton", 0, 0, 5, new Rng(1), 0, { difficulty: d }).hp;
+    check("F5 skeleton HP 9 / 11 / 12", skelHp("casual") === 9 && skelHp("standard") === 11 && skelHp("brutal") === 12,
+      `${skelHp("casual")}/${skelHp("standard")}/${skelHp("brutal")}`);
+    const bruteHp = (d: Difficulty) => createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute", difficulty: d }).hp;
+    check("F4 brute HP 19 / 23 / 25", bruteHp("casual") === 19 && bruteHp("standard") === 23 && bruteHp("brutal") === 25,
+      `${bruteHp("casual")}/${bruteHp("standard")}/${bruteHp("brutal")}`);
+    const slimeHp = (d: Difficulty) => createEnemy("slime", 0, 0, 1, new Rng(1), 0, { difficulty: d }).hp;
+    check("F1 slime HP 2 / 3 / 3 (casual softens even the intro floor)",
+      slimeHp("casual") === 2 && slimeHp("standard") === 3 && slimeHp("brutal") === 3);
+  }
+
+  section("difficulty: measured boss TTK bands (same median legal build in every mode)");
+  {
+    const casual = measureBossTtk("pistol", L3("hair_trigger"), "casual");
+    const standard = measureBossTtk("pistol", L3("hair_trigger"), "standard");
+    const brutal = measureBossTtk("pistol", L3("hair_trigger"), "brutal");
+    check("every mode kills the boss with the median build",
+      casual.killed && standard.killed && brutal.killed);
+    check("TTK orders casual < standard < brutal",
+      casual.seconds < standard.seconds && standard.seconds < brutal.seconds,
+      `${casual.seconds.toFixed(1)}s / ${standard.seconds.toFixed(1)}s / ${brutal.seconds.toFixed(1)}s`);
+    check("casual median-build boss TTK sits in the forgiving 28-40s band",
+      casual.seconds >= 28 && casual.seconds <= 40, `ttk=${casual.seconds.toFixed(1)}s`);
+    check("standard median-build boss TTK sits in the 37-48s band (slightly under brutal)",
+      standard.seconds >= 37 && standard.seconds <= 48, `ttk=${standard.seconds.toFixed(1)}s`);
+    const highCasual = measureBossTtk("sawnoff", [...L3("deadeye"), "glass_cannon"], "casual");
+    const highBrutal = measureBossTtk("sawnoff", [...L3("deadeye"), "glass_cannon"], "brutal");
+    check("high-roll TTK keeps the same ordering (casual < brutal)",
+      highCasual.killed && highBrutal.killed && highCasual.seconds < highBrutal.seconds,
+      `${highCasual.seconds.toFixed(1)}s < ${highBrutal.seconds.toFixed(1)}s`);
+    check("casual keeps the anti-burst floor: both 1.2s roars still gate even a high roll",
+      highCasual.seconds >= 2 * BOSS.roarDuration + 2, `ttk=${highCasual.seconds.toFixed(1)}s`);
+    check("telegraphs are untouched: attack cadence/windups are not difficulty knobs",
+      !Object.prototype.hasOwnProperty.call(DIFFICULTIES.casual, "attackCdMult"));
+  }
+
+  section("difficulty: threat budget/density scales by the knob and stays under its cap");
+  {
+    let isBudgetOk = true, isCapOk = true;
+    const totals: Record<Difficulty, number> = { casual: 0, standard: 0, brutal: 0 };
+    for (let seedIdx = 0; seedIdx < 20; seedIdx++) {
+      const seed = 0x5eed + seedIdx * 7919;
+      for (let floor = 1; floor <= 10; floor++) {
+        if (isBossFloor(floor)) continue;
+        const d = generateDungeon(seed, floor);
+        for (const id of DIFFICULTY_IDS) {
+          const spawns = spawnFloorEnemies(d, seed, floor, 1, id);
+          const all = [...spawns.active, ...spawns.pending];
+          const cost = all.reduce((sum, e) => sum + threatCostOf(e.kind, e.tier), 0);
+          totals[id] += cost;
+          const budget = floorThreat(floor) * BIOME_PRESSURE[biomeIndexForFloor(floor)].budgetMult * DIFFICULTIES[id].threatMult;
+          if (cost > budget + 1e-9) isBudgetOk = false;
+          const activeCost = spawns.active.reduce((sum, e) => sum + threatCostOf(e.kind, e.tier), 0);
+          if (activeCost > activeThreatCap(floor) * DIFFICULTIES[id].threatMult + 1e-9) isCapOk = false;
+        }
+      }
+    }
+    check("planned cost never exceeds the mode-scaled budget (all modes, 20 seeds x F1-10)", isBudgetOk);
+    check("initially-active cost never exceeds the mode-scaled cap", isCapOk);
+    check("aggregate threat orders casual < standard < brutal",
+      totals.casual < totals.standard && totals.standard < totals.brutal,
+      `${totals.casual.toFixed(0)} / ${totals.standard.toFixed(0)} / ${totals.brutal.toFixed(0)}`);
+    const minions = (id: Difficulty) => spawnFloorEnemies(generateDungeon(0x5eed, 5), 0x5eed, 5, 1, id).active.length - 1;
+    check("boss-floor escort scales: F5 minions 2 / 3 / 3",
+      minions("casual") === 2 && minions("standard") === 3 && minions("brutal") === 3,
+      `${minions("casual")}/${minions("standard")}/${minions("brutal")}`);
+  }
+
+  section("difficulty: sustain knob (exact chances + deterministically monotone drops)");
+  {
+    const chance = (id: Difficulty) => SUSTAIN.enemyHeartDrop * DIFFICULTIES[id].heartMult;
+    check("enemy heart chance 9% / 6.9% / 6%",
+      Math.abs(chance("casual") - 0.09) < 1e-9 && Math.abs(chance("standard") - 0.069) < 1e-9 && Math.abs(chance("brutal") - 0.06) < 1e-9);
+    const hearts: Record<Difficulty, number> = { casual: 0, standard: 0, brutal: 0 };
+    for (const id of DIFFICULTY_IDS) hearts[id] = measureHearts(id, 400);
+    check("hearts over the same 400 seeded kills are monotone (superset property)",
+      hearts.casual >= hearts.standard && hearts.standard >= hearts.brutal && hearts.casual > hearts.brutal,
+      `${hearts.casual} / ${hearts.standard} / ${hearts.brutal}`);
+  }
+
+  section("difficulty: spawn grace is the mode's mercy window");
+  {
+    const grace = (id: Difficulty) => createWorld(0x6ACE, 1, { difficulty: id }).players.get(LOCAL_ID)!.invuln;
+    check("floor-entry invuln 2.25s / 1.75s / 1.75s",
+      grace("casual") === 2.25 && grace("standard") === 1.75 && grace("brutal") === 1.75,
+      `${grace("casual")}/${grace("standard")}/${grace("brutal")}`);
+  }
+
+  section("difficulty: determinism (same seed+mode replays identically; modes differ)");
+  {
+    const run = (id: Difficulty) => {
+      const w = createWorld(0xD1FF, 3, { difficulty: id });
+      const states: string[] = [];
+      for (let t = 0; t < 200; t++) {
+        step(w, { seq: t, moveX: (t % 40) < 20 ? 1 : -1, moveY: 0, aim: t * 0.05, firing: t % 3 === 0, dash: false });
+        if (t % 50 === 0) states.push(JSON.stringify(w.enemies.map((e) => [e.kind, e.tier, e.hp, Math.round(e.x), Math.round(e.y)])));
+      }
+      return states.join("|");
+    };
+    check("casual replays bit-stable for the same seed", run("casual") === run("casual"));
+    check("brutal replays bit-stable for the same seed", run("brutal") === run("brutal"));
+    const layout = (id: Difficulty) => JSON.stringify(
+      createWorld(0xD1FF, 3, { difficulty: id }).enemies.map((e) => [e.kind, e.tier, e.hp]),
+    );
+    check("the same seed produces DIFFERENT floors across modes (composition, not a reskin)",
+      layout("casual") !== layout("brutal"));
+  }
+}
+
 // ---- §8 co-op scaling (Stage C authoritative combat) ----
 
 function coopScalingGates(): void {
@@ -526,13 +695,14 @@ function coopScalingGates(): void {
   check("heart rate mult 1.00/1.30/1.60/1.90", [1, 2, 3, 4].every((p) => Math.abs(coopHeartRateMult(p) - (1 + 0.30 * (p - 1))) < 1e-9));
 
   const rng = new Rng(3);
-  const duoSkeleton = createEnemy("skeleton", 0, 0, 3, rng, 0, { players: 2 });
+  const duoSkeleton = createEnemy("skeleton", 0, 0, 3, rng, 0, { players: 2, difficulty: "brutal" });
   check("duo F3 skeleton HP = round(9 x 1.55)", duoSkeleton.hp === 14, `hp=${duoSkeleton.hp}`);
-  const duoBoss = createEnemy("boss", 0, 0, 5, rng, 1, { players: 2 });
+  const duoBoss = createEnemy("boss", 0, 0, 5, rng, 1, { players: 2, difficulty: "brutal" });
   check("duo F5 boss HP = round10(900 x 1.65)", duoBoss.hp === 1490, `hp=${duoBoss.hp}`);
 
   // Snapshot at encounter creation: the floor build carries P; later loads re-snapshot.
-  const w = createWorld(0xC0093, 1, { isShared: true, skipLocalPlayer: true });
+  // Pinned to the ×1.0 baseline so the exact-HP expectation below reads off the §3 table.
+  const w = createWorld(0xC0093, 1, { isShared: true, skipLocalPlayer: true, difficulty: "brutal" });
   spawnPlayerInWorld(w, "pA");
   spawnPlayerInWorld(w, "pB");
   check("pre-join world built at P=1", w.encounterPlayers === 1);
@@ -588,6 +758,7 @@ function main(): void {
   bossOverflowGates();
   normalTtkGates();
   threatBudgetGates();
+  difficultyGates();
   sustainGates();
   dashIframeGates();
   powerBudgetGates();

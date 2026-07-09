@@ -25,9 +25,11 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
+  DIFFICULTIES, DEFAULT_DIFFICULTY,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
 } from "./balance.js";
+import type { Difficulty } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
@@ -116,6 +118,10 @@ export interface WorldState {
   tick: number;
   seed: number;
   floor: number;
+  // Run difficulty: fixed at world creation (solo pick / room state), consumed at the
+  // deterministic floor-build/sim seams (enemy HP, threat, hearts, entry grace). Never
+  // changes mid-run — a room keeps its mode across floors and run resets.
+  difficulty: Difficulty;
   // World revision: increments on EVERY floor build (create/descend/run reset). Snapshots carry
   // it so a client can key its geometry rebuild + reject stale cross-floor snapshots explicitly
   // (tick alone stays monotonic, but rev makes the world identity first-class on the wire).
@@ -204,13 +210,14 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
 // skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
 // spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
 // Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean }
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean; difficulty?: Difficulty }
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
     tick: 0,
     seed,
     floor,
+    difficulty: opts.difficulty ?? DEFAULT_DIFFICULTY,
     rev: 0,
     isRunOver: false,
     players: new Map(),
@@ -255,7 +262,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
     // Run start is a floor entry too: the same spawn grace every descend grants (the
     // reposition loop in loadFloorIntoWorld ran before this player existed).
-    p.invuln = C.PLAYER_SPAWN_GRACE;
+    p.invuln = DIFFICULTIES[w.difficulty].playerSpawnGrace;
     w.players.set(LOCAL_ID, p);
   }
   return w;
@@ -312,7 +319,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.nextChestId = 0;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.difficulty);
   w.enemies = spawns.active;
   w.pendingSpawns = spawns.pending;
   w.spawnReleaseCd = 0;
@@ -336,7 +343,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   for (const p of w.players.values()) {
     p.x = spawn.x * TILE + TILE / 2;
     p.y = spawn.y * TILE + TILE / 2;
-    p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
+    p.invuln = Math.max(p.invuln, DIFFICULTIES[w.difficulty].playerSpawnGrace);
   }
 }
 
@@ -366,6 +373,13 @@ export function resetRunInWorld(w: WorldState, seed: number): void {
 // fallback anywhere in the credit path. Solo: `id` is always the one LOCAL_ID player.
 function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
   return id !== null ? w.players.get(id) ?? null : null;
+}
+
+function heartChanceMult(w: WorldState): number {
+  // The one combined multiplier every ambient heart-drop chance rides (§2): co-op party
+  // scaling × the run difficulty's sustain knob. The rolls themselves stay unconditional,
+  // so the sim RNG stream is identical across difficulties (only thresholds move).
+  return coopHeartRateMult(w.encounterPlayers) * DIFFICULTIES[w.difficulty].heartMult;
 }
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
@@ -909,7 +923,7 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
       const sy = e.y + Math.sin(a) * (e.radius + 6);
       if (isWall(w, sx, sy)) continue;
       const child = createEnemy(e.kind, sx, sy, w.floor, w.rng, w.nextEnemyId++, {
-        tier: "swarm", isSummoned: true, players: w.encounterPlayers,
+        tier: "swarm", isSummoned: true, players: w.encounterPlayers, difficulty: w.difficulty,
       });
       w.enemies.push(child);
       ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: sx, y: sy });
@@ -937,8 +951,8 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
   if (w.rng.next() < 0.5) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(p) : 1));
-  // Ambient hearts (§2): halved rate, party-scaled in co-op, never from summoned adds.
-  if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
+  // Ambient hearts (§2): halved rate, party- and difficulty-scaled, never from summoned adds.
+  if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * heartChanceMult(w)) {
     w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
   }
 }
@@ -1228,7 +1242,7 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   for (const e of w.enemies) {
     if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
   }
-  const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
+  const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers) * DIFFICULTIES[w.difficulty].threatMult;
   const next = w.pendingSpawns[0];
   if (living + threatCostOf(next.kind, next.tier) > cap) return;
   // Its spawn grace never ticked while pending, so it activates with the full grace window.
@@ -1646,7 +1660,7 @@ function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): v
   const my = e.y + Math.sin(angle) * (e.radius + 20);
   if (isWall(w, mx, my)) { ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false }); return; }
   w.enemies.push(createEnemy("slime", mx, my, w.floor, w.rng, w.nextEnemyId++, {
-    isSummoned: true, players: w.encounterPlayers,
+    isSummoned: true, players: w.encounterPlayers, difficulty: w.difficulty,
   }));
   ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx, my, spawned: true });
 }
@@ -1934,7 +1948,7 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
       if (w.rng.next() < 0.6) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
-      if (w.rng.next() < SUSTAIN.crateHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
+      if (w.rng.next() < SUSTAIN.crateHeartDrop * heartChanceMult(w)) {
         w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
       }
       break;
@@ -2138,7 +2152,7 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
     return [{ kind: "heart" }];
   }
   const r = w.rng.next();
-  const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
+  const heartChance = SUSTAIN.woodChestHeart * heartChanceMult(w);
   if (r < heartChance) return [{ kind: "heart" }];
   if (r < heartChance + SUSTAIN.woodChestWeapon) {
     return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
@@ -2425,7 +2439,7 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
 // ---- dev sandbox helpers (client dev tools mutate the world through these) ----
 
 export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: number): Enemy {
-  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers });
+  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers, difficulty: w.difficulty });
   w.enemies.push(e);
   return e;
 }

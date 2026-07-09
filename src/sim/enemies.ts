@@ -4,12 +4,12 @@ import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
-  TIERS, BIOME_PRESSURE, BOSS,
+  TIERS, BIOME_PRESSURE, BOSS, DIFFICULTIES, DEFAULT_DIFFICULTY,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
 } from "./balance.js";
-import type { EnemyTier } from "./balance.js";
+import type { Difficulty, EnemyTier } from "./balance.js";
 
 export type Movement = "chase" | "zigzag" | "drift" | "kite" | "boss";
 
@@ -100,6 +100,7 @@ export interface CreateEnemyOpts {
   tier?: EnemyTier;
   isSummoned?: boolean;
   players?: number; // encounter player snapshot (co-op HP/KB scaling); 1 = solo
+  difficulty?: Difficulty; // run difficulty (HP scaling); brutal = the ×1.0 baseline
 }
 
 // The seeded sim Rng supplies the bat's initial `zig` heading so enemy creation is
@@ -110,10 +111,13 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const tier = opts.tier ?? "standard";
   const tierDef = TIERS[tier];
   const players = opts.players ?? 1;
+  const dif = DIFFICULTIES[opts.difficulty ?? DEFAULT_DIFFICULTY];
   const isBoss = kind === "boss";
+  // Difficulty multiplies INSIDE the single rounding pass (never round-then-round), so
+  // each (floor, tier, players, difficulty) tuple maps to one exact deterministic HP.
   const hp = isBoss
-    ? Math.round((bossHpForFloor(floor) * coopBossHpMult(players)) / 10) * 10
-    : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players)));
+    ? Math.round((bossHpForFloor(floor) * coopBossHpMult(players) * dif.bossHpMult) / 10) * 10
+    : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players) * dif.enemyHpMult));
   const speed = isBoss
     ? a.baseSpeed
     : roundHalfToEven(a.baseSpeed * floorSpeedMult(floor) * tierDef.speedMult);
@@ -204,9 +208,9 @@ interface RoomLoad {
 // Deterministic threat-budget floor composition (§4): spend FloorThreat on a tiered unit
 // mix instead of counting bodies. Elites/brutes are planned first (they anchor the opening
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
-function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number): PlannedUnit[] {
+function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number, difficulty: Difficulty): PlannedUnit[] {
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
-  let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
+  let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players) * DIFFICULTIES[difficulty].threatMult;
   const roster = floorRoster(floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
 
@@ -278,35 +282,36 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
   return plan;
 }
 
-export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1): FloorSpawns {
+export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, difficulty: Difficulty = DEFAULT_DIFFICULTY): FloorSpawns {
   const rng = new Rng((seed ^ 0x9e3779b9) + floor * 2654435761);
   const roomCount = dungeon.rooms.length;
   if (roomCount <= 1) return { active: [], pending: [] };
 
   if (isBossFloor(floor)) {
-    // Boss lives in the last room (next to the exit). A few slimes for company.
+    // Boss lives in the last room (next to the exit). A few slimes for company —
+    // the escort is density, so the difficulty threat knob scales it (never below 1).
     const active: Enemy[] = [];
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
-    active.push(createEnemy("boss", b.x, b.y, floor, rng, active.length, { players }));
-    const minions = 2 + Math.floor(floor / BOSS_EVERY);
+    active.push(createEnemy("boss", b.x, b.y, floor, rng, active.length, { players, difficulty }));
+    const minions = Math.max(1, roundHalfToEven((2 + Math.floor(floor / BOSS_EVERY)) * DIFFICULTIES[difficulty].threatMult));
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);
       const p = pointInRoom(rng, dungeon, roomIndex);
-      active.push(createEnemy("slime", p.x, p.y, floor, rng, active.length, { players }));
+      active.push(createEnemy("slime", p.x, p.y, floor, rng, active.length, { players, difficulty }));
     }
     return { active, pending: [] };
   }
 
-  const plan = planFloorUnits(rng, floor, roomCount, players);
-  const cap = activeThreatCap(floor) * coopThreatMult(players);
+  const plan = planFloorUnits(rng, floor, roomCount, players, difficulty);
+  const cap = activeThreatCap(floor) * coopThreatMult(players) * DIFFICULTIES[difficulty].threatMult;
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;
   let id = 0;
   for (const unit of plan) {
     const p = pointInRoom(rng, dungeon, unit.room);
-    const enemy = createEnemy(unit.kind, p.x, p.y, floor, rng, id++, { tier: unit.tier, players });
+    const enemy = createEnemy(unit.kind, p.x, p.y, floor, rng, id++, { tier: unit.tier, players, difficulty });
     const cost = threatCostOf(unit.kind, unit.tier);
     // Never exceed the ActiveThreatCap simultaneously: overflow becomes reinforcements.
     if (activeThreat + cost <= cap) {

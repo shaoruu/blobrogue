@@ -7,7 +7,63 @@
 // Engine-mechanical constants that are not balance (pathfinding cadence, knockback physics,
 // status-system plumbing) stay in constants.ts.
 
-export const BALANCE_VERSION = 1;
+export const BALANCE_VERSION = 2;
+
+// ---- §0.5 difficulty modes ----
+//
+// ONE typed definition per mode, consumed at the deterministic floor-build/sim seams
+// (createEnemy HP, threat budget + active cap, ambient heart rates, floor-entry grace).
+// Every knob multiplies the SAME baseline tables below — gameplay logic is never forked,
+// telegraphs/damage/commitment timings are identical across modes.
+//
+// BRUTAL is the identity (×1.0 everywhere): it IS the pre-difficulty live balance, which
+// is what keeps the golden-master oracle honest (goldens pin brutal and stay byte-stable).
+// STANDARD (the default everywhere: solo, quick play, claimless tickets) softens live
+// slightly; CASUAL keeps every mechanic intact but forgiving.
+
+export type Difficulty = "casual" | "standard" | "brutal";
+
+export interface DifficultyDef {
+  id: Difficulty;
+  blurb: string;          // one-sentence run-setup description (menu + lobby)
+  tint: string;           // HUD/menu accent for this mode
+  enemyHpMult: number;    // regular-enemy HP (applied inside the single §3 rounding pass)
+  bossHpMult: number;     // boss HP (applied inside the round-to-10 pass)
+  threatMult: number;     // §4 threat budget, active cap, and boss-floor minion density
+  heartMult: number;      // §2 ambient heart-drop chances (enemy / crate / wood chest)
+  playerSpawnGrace: number; // seconds of mercy invuln on entering a freshly built floor
+}
+
+export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
+  casual: {
+    id: "casual",
+    blurb: "Fewer, softer foes and more hearts \u2014 learn the depths at your own pace.",
+    tint: "#7dd87d",
+    enemyHpMult: 0.75, bossHpMult: 0.75, threatMult: 0.75, heartMult: 1.5, playerSpawnGrace: 2.25,
+  },
+  standard: {
+    id: "standard",
+    blurb: "The intended descent \u2014 dangerous but fair, with room to breathe.",
+    tint: "#ffd166",
+    enemyHpMult: 0.92, bossHpMult: 0.92, threatMult: 0.95, heartMult: 1.15, playerSpawnGrace: 1.75,
+  },
+  brutal: {
+    id: "brutal",
+    blurb: "The depths at full pressure \u2014 every body, every scarcity, no mercy.",
+    tint: "#ff6a6a",
+    enemyHpMult: 1.0, bossHpMult: 1.0, threatMult: 1.0, heartMult: 1.0, playerSpawnGrace: 1.75,
+  },
+};
+
+export const DIFFICULTY_IDS = ["casual", "standard", "brutal"] as const satisfies readonly Difficulty[];
+
+// The compatibility default for every claimless/legacy path: solo before a pick is made,
+// quick play, dev tickets, tickets minted without a df claim, and old snapshots.
+export const DEFAULT_DIFFICULTY: Difficulty = "standard";
+
+export function isDifficulty(v: unknown): v is Difficulty {
+  return typeof v === "string" && Object.prototype.hasOwnProperty.call(DIFFICULTIES, v);
+}
 
 // ---- §1 player constants ----
 

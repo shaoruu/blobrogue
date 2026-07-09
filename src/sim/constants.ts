@@ -30,14 +30,10 @@ export const AVOID_SIDE_PROBE = 20;  // px beyond the body the side-clearance pr
 // it ticks on the SIM clock — it can never hold the party's descend gate hostage.
 export const BLESSING_OFFER_TTL = 60;
 
-// Mercy window on spawning into a freshly BUILT floor (run start, every descend, run
-// reset): no damage can land while the level is still fading in and the player is
-// reorienting after the blessing pick. Belt-and-suspenders on top of the enemies' own
-// SPAWN_GRACE and the boss's entranceGrace — every foe also begins idle and must telegraph
-// its first attack, so nothing can even START an attack inside this window, let alone
-// land one. Rides the ordinary post-hit invuln timer (it protects, decays, and renders
-// exactly like post-hit protection).
-export const PLAYER_SPAWN_GRACE = 1.75;
+// The mercy window on spawning into a freshly BUILT floor (run start, every descend, run
+// reset) is now a DIFFICULTY knob: DIFFICULTIES[difficulty].playerSpawnGrace in balance.ts.
+// It rides the ordinary post-hit invuln timer, on top of the enemies' own SPAWN_GRACE and
+// the boss's entranceGrace — every foe begins idle and must telegraph its first attack.
 
 export const MIN_MULTI_SPREAD = 0.26;
 

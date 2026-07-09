@@ -14,7 +14,7 @@ import {
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
-import { REVIVE, BOSS } from "../src/sim/balance.js";
+import { REVIVE, BOSS, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
 import * as C from "../src/sim/constants.js";
@@ -520,7 +520,9 @@ function blessingSafetyTests(): void {
 // entrance grace, and a mandatory telegraph) — a fresh floor can never hurt you on frame one.
 function spawnGraceTests(): void {
   const DT = 1 / 20;
-  const GRACE_TICKS = Math.round(C.PLAYER_SPAWN_GRACE / DT);
+  // The mercy window is a difficulty knob now; these worlds run the STANDARD default.
+  const GRACE = DIFFICULTIES[DEFAULT_DIFFICULTY].playerSpawnGrace;
+  const GRACE_TICKS = Math.round(GRACE / DT);
 
   // The owner's exact route: clear floor 4, pick blessings at the exit gate, descend into
   // the boss floor.
@@ -549,7 +551,7 @@ function spawnGraceTests(): void {
     check("the boss's first attack additionally waits out its entrance grace",
       boss.attack.cooldown >= BOSS.entranceGrace - 1e-9, `cd=${boss.attack.cooldown.toFixed(2)}s`);
     check("both players landed under the spawn-grace shield",
-      a.invuln >= C.PLAYER_SPAWN_GRACE - DT && b.invuln >= C.PLAYER_SPAWN_GRACE - DT, `invuln=${a.invuln.toFixed(2)}s`);
+      a.invuln >= GRACE - DT && b.invuln >= GRACE - DT, `invuln=${a.invuln.toFixed(2)}s`);
   }
 
   section("spawn grace: glued to the boss on entry, zero damage lands until the grace expires");
@@ -569,7 +571,7 @@ function spawnGraceTests(): void {
     }
     check("zero damage lands inside the grace window", !graceBreached);
     check("the mercy window is bounded: contact hurts again right after it expires",
-      firstHitTick >= GRACE_TICKS && firstHitTick <= GRACE_TICKS + 2, `firstHit=${(firstHitTick * DT).toFixed(2)}s grace=${C.PLAYER_SPAWN_GRACE}s`);
+      firstHitTick >= GRACE_TICKS && firstHitTick <= GRACE_TICKS + 2, `firstHit=${(firstHitTick * DT).toFixed(2)}s grace=${GRACE}s`);
   }
 
   section("spawn grace: the boss's first ATTACK lands only after its telegraph, post-grace");
@@ -594,7 +596,7 @@ function spawnGraceTests(): void {
   {
     const w = createWorld(0x6ACE4, 1, {});
     const p = w.players.get("local")!;
-    check("the run's first spawn lands under the same grace", p.invuln === C.PLAYER_SPAWN_GRACE, `invuln=${p.invuln}`);
+    check("the run's first spawn lands under the same grace", p.invuln === GRACE, `invuln=${p.invuln}`);
   }
 }
 

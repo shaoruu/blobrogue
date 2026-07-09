@@ -41,8 +41,10 @@ function spawnCenter(w: WorldState): { x: number; y: number } {
 function reset(game: any, s: Scenario): void {
   game.isSandbox = false;
   game.start({ mode: "solo", coop: null, profile: null });
-  // Force the deterministic seed/floor by rebooting the transport's world.
-  game.transport.start(s.seed, s.floor, { isSandbox: false, isCoop: false });
+  // Force the deterministic seed/floor by rebooting the transport's world. Difficulty pins
+  // BRUTAL — the ×1.0 identity mode that IS the pre-difficulty balance — so the golden
+  // streams stay byte-comparable to the pre-extraction oracle captures.
+  game.transport.start(s.seed, s.floor, { isSandbox: false, isCoop: false, difficulty: "brutal" });
   game.world = game.transport.poll().state;
   game.seed = s.seed;
   game.ownedItemDefs = [];
