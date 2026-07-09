@@ -194,6 +194,94 @@ export const SHIELDER_BASH_SPEED = 420;
 export const SHIELDER_RECOVER = 0.55;
 export const SHIELDER_CD = 2.6;
 
+// Rootward: the formation anchor. A slow-turning frontal guard that eats non-piercing
+// bullets (flank, melee over the top, pierce through, or splash) with a small reach pad
+// so allies trailing its shadow get real cover. It has NO committed attack — the body is
+// a moving wall, the pressure is positioning.
+export const ROOTWARD_GUARD_ARC = 2.6;   // radians of protected frontage (~150°)
+export const ROOTWARD_GUARD_PAD = 12;    // px beyond the body the guard still blocks
+export const ROOTWARD_TURN_RATE = 1.4;   // rad/s the guard can track — flanking wins
+
+// Echojack: the fleeing trickster. Keeps its distance, plants a false-noise decoy on a
+// telegraphed beat, then BLINKS — a visible perpendicular relocation dash, never a
+// teleport. The decoy (kind "echo") is a 1-HP fake body that soaks homing/attention.
+export const ECHOJACK_FLEE = 220;
+export const ECHOJACK_APPROACH = 460;
+export const ECHOJACK_DECOY_WINDUP = 0.7;
+export const ECHOJACK_BLINK_DUR = 0.35;
+export const ECHOJACK_BLINK_SPEED = 520;
+export const ECHOJACK_RECOVER = 0.4;
+export const ECHOJACK_CD = 5.0;
+export const ECHO_LIFE = 4.0;            // decoy lifetime (rides the aux channel)
+export const ECHO_CAP = 3;               // live decoys before new plants are held
+
+// Seamcutter: the lane. Windup previews the whole wall-to-wall seam (mark = the far
+// wall), active travels it at a flat speed emitting timed PERPENDICULAR sweep bolts,
+// recover is the punish window at the far wall. Cross early or stay behind it.
+export const SEAM_TRIGGER = 360;
+export const SEAM_WINDUP = 1.0;
+export const SEAM_LOCK = 0.55;           // long post-lock window: the lane is readable
+export const SEAM_SPEED = 300;
+export const SEAM_MAX_DUR = 2.2;
+export const SEAM_SWEEP_INTERVAL = 0.4;
+export const SEAM_SWEEP_SPEED = 240;
+export const SEAM_SWEEP_RADIUS = 6;
+export const SEAM_SWEEP_LIFE = 1.2;
+export const SEAM_RECOVER = 0.9;
+export const SEAM_CD = 4.0;
+
+// Caskbellows: the stationary lane sentry. Locks a target, fires a 3-shot volley down
+// the locked lane, and STAGGERS (crash grammar — the long punish window) when a shot
+// lands on its rear crank mid-commitment. Backpedals when crowded; otherwise it holds.
+export const CASK_TRIGGER = 460;
+export const CASK_WINDUP = 0.85;
+export const CASK_LOCK = 0.5;
+export const CASK_SHOTS = 3;
+export const CASK_SHOT_GAP = 0.22;
+export const CASK_BOLT_SPEED = 340;
+export const CASK_BOLT_RADIUS = 6;
+export const CASK_BOLT_LIFE = 2.0;
+export const CASK_RECOVER = 0.6;
+export const CASK_CD = 2.8;
+export const CASK_REAR_ARC = 2.1;        // radians centered on its back (the crank)
+export const CASK_STAGGER = 1.5;         // the rear-crank stun (crash recover)
+export const CASK_TOO_CLOSE = 180;       // inside this it waddles back to its lane range
+
+// Sinderling: the heat-feeder. Unarmed it seeks environmental heat (an active fire vent
+// or a brazier) and consumes one pulse to ARM; with no heat in reach it stokes itself on
+// a long stationary channel. Armed: a locked flame-jet dash that lays a burning cinder
+// wake, and an armed DEATH bursts shared-risk fire (players 1, enemies more).
+export const SINDER_HEAT_RANGE = 600;
+export const SINDER_BRAZIER_RANGE = 30;
+export const SINDER_STOKE_WINDUP = 1.3;
+export const SINDER_ARMED_SPEED_MULT = 1.3;
+export const SINDER_JET_TRIGGER = 300;
+export const SINDER_JET_WINDUP = 0.6;
+export const SINDER_JET_LOCK = 0.35;
+export const SINDER_JET_SPEED = 420;
+export const SINDER_JET_DUR = 0.45;
+export const SINDER_JET_RECOVER = 0.5;
+export const SINDER_CD = 3.4;
+export const SINDER_CINDER_GAP = 0.08;   // seconds between cinder drops along the jet
+export const SINDER_CINDER_RADIUS = 24;
+export const SINDER_CINDER_LIFE = 3.0;
+export const SINDER_CINDER_CAP = 12;     // hard cap on live cinders (squeeze, never fill)
+export const SINDER_BURST_RADIUS = 60;
+export const SINDER_BURST_PLAYER_DMG = 1;
+export const SINDER_BURST_ENEMY_DMG = 3;
+
+// Choir fragment: the tethered voice. It binds to the nearest other enemy in line of
+// sight; on cadence the tether HARMONIZES — the line between the two bodies becomes a
+// damaging lane for a short pulse. Kill the source (or break line of sight) and the
+// fragment falls silent: a slow drifting body with contact only.
+export const FRAGMENT_TETHER_RANGE = 380;
+export const FRAGMENT_HOLD_DIST = 240;   // it hovers at mid-range, singing
+export const FRAGMENT_PULSE_WINDUP = 0.9;
+export const FRAGMENT_PULSE_ACTIVE = 0.5;
+export const FRAGMENT_PULSE_RECOVER = 0.5;
+export const FRAGMENT_CD = 3.2;
+export const FRAGMENT_BEAM_HALF_WIDTH = 14;
+
 // Destructible props + chests.
 export const PROP_RADIUS = 15;
 export const PROP_HP: Record<PropKind, number> = {

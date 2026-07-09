@@ -170,6 +170,121 @@ export const ELITE_BRACE = {
   slideSpeed: 230,
 } as const;
 
+// ---- the behavior-elite affix set (bestiary wave) ----
+// Each elite carries EXACTLY ONE affix, assigned deterministically BY KIND (see
+// ELITE_AFFIXES in enemies.ts) so the read is learnable: "an elite slime is always a
+// commander". No affix multiplies damage; each is a visible behavior with counterplay.
+
+export type EliteAffix = "brace" | "commander" | "bulwark" | "volatile" | "echoed";
+
+// Commander: a synchronized ONE commit — the rally. A fixed roar-grammar beat that
+// orders every nearby ally into the existing pack-surge (speed, never damage, so the
+// gate's release arbiter is untouched). Killing the commander PANICS the pack: nearby
+// allies flee leaderless for panicDuration and start nothing from idle.
+export const ELITE_COMMANDER = {
+  rallyWindup: 0.8,       // the horn — a stationary fixed beat (roar semantics)
+  rallyRadius: 260,
+  rallyRecover: 0.5,
+  rallyCooldown: 6.0,
+  rallyTrigger: 420,      // target must be within this range to sound the horn
+  surgeDelay: 0.35,       // the ordered surge lands a beat later (readable, dodgeable)
+  panicRadius: 260,
+  panicDuration: 1.4,
+  panicSpeedMult: 0.85,   // a scattering pack, not a second charge
+} as const;
+
+// Bulwark: ONE directional breakable plate. Absorbs non-piercing bullets arriving inside
+// its frontal arc until plateHp is spent, then shatters for good — never immunity, and
+// never against melee/blasts/pierce. The plate tracks its target SLOWLY, so footwork
+// beats it even solo.
+export const ELITE_BULWARK = {
+  arc: 2.0,             // radians of protected frontage (~115°)
+  plateHp: 8,           // floor-1 baseline; scaled by floorHpMult at spawn
+  turnRate: 1.6,        // rad/s the plate can track — a strafing player out-turns it
+} as const;
+
+// Volatile: a DELAYED shared burst. Death plants a fused charge (a visible hazard) that
+// detonates after fuseSeconds — players take 1 inside the radius, enemies take more
+// (shared risk: the burst is nobody's friend), props are destroyed. The delay is the
+// counterplay: the kill itself is always safe, lingering on the corpse is not.
+export const ELITE_VOLATILE = {
+  fuseSeconds: 0.9,
+  radius: 60,
+  playerDamage: 1,
+  enemyDamage: 4,
+} as const;
+
+// Echoed: the last ranged release REPEATS once after a delay, along the same locked
+// bearing, from wherever the body now stands. Never simultaneous double damage — the
+// offset IS the affix (you dodge the shot, then its echo).
+export const ELITE_ECHOED = {
+  delay: 0.6,
+} as const;
+
+// ---- the mid-band miniboss cadence (bestiary wave) ----
+// Authored two-phase captains (the gauntlet's 50%-split contract: one short stagger,
+// non-invulnerable, no HP floor) placed on the seeded mid-band floors between bosses:
+// F13, F18, F23, F28, … (floor % 5 === firstFloor % 5, from firstFloor). The pick walks
+// a seeded no-immediate-repeat ladder over the template roster, like the deep bosses.
+// HP anchors to the same calibrated MARROW base the gauntlet captains use, ridden up the
+// §3 floor curve and party-scaled at spawn.
+export const MINIBOSS = {
+  firstFloor: 13,
+  // The floor's ordinary threat plan keeps this share of its budget — the miniboss IS
+  // the rest of the room's pressure, so the floor never reads as "a boss plus a full mob".
+  budgetShare: 0.6,
+  hpFrac: { marshal: 0.30, toll: 0.34 } as Readonly<Partial<Record<string, number>>>,
+} as const;
+
+// ---- ROOT MARSHAL (miniboss template: the formation fight) ----
+// P1 (100–50%): a broad, slow-turning guard (the rootward's frontage, wider and deeper)
+// and a live formation — it raises swarm rootwards to wall for it and rallies them.
+// At 50%: the shield SHATTERS INTO DESTRUCTIBLE COVER — real crates on the field where
+// the guard hung — and P2 trades the wall for tempo: ring sweeps alternating aimed fans.
+export const MARSHAL = {
+  guardArc: 2.6,
+  guardReach: 22,        // px beyond the body the guard still eats bullets (formation cover)
+  guardTurnRate: 1.1,    // rad/s — flanking is the whole P1 answer
+  summonInterval: 5.0,
+  summonCap: 2,          // live swarm rootwards it may field at once
+  coverCount: 3,         // crates the shattering shield leaves behind
+  coverDist: 64,
+  sweepCooldown: 3.2,
+  sweepWindup: 0.8,
+  sweepCount: 8,
+  sweepSpeed: 200,
+  sweepRecover: 0.9,
+  fanShots: 5,
+  fanSpread: 0.24,
+  fanSpeed: 280,
+  shotRadius: 7,
+  shotLife: 2.4,
+} as const;
+
+// ---- THE TOLL (miniboss template: the sound-lane fight) ----
+// A near-stationary bell. P1: the knell — expanding sound rings, alternating with an
+// aimed three-bolt peal down a locked lane (volley grammar). P2 (50%): every knell also
+// plants a NOISE-LURE at the nearest player's feet — a 1-HP knell decoy that tolls its
+// own ring when its fuse runs out. Shoot the noise or leave it; the lure is the fight.
+export const TOLL = {
+  ringCooldown: 3.4,
+  ringWindup: 1.0,
+  ringCount: 10,
+  ringSpeed: 190,
+  ringRecover: 0.8,
+  pealWindup: 0.8,
+  pealLock: 0.45,
+  pealShots: 3,
+  pealSpread: 0.14,
+  pealSpeed: 280,
+  pealRecover: 0.7,
+  shotRadius: 7,
+  shotLife: 2.6,
+  lureLife: 2.2,      // knell decoy fuse (aux countdown)
+  lureRingCount: 6,
+  lureRingSpeed: 200,
+} as const;
+
 // Brute damage rule: only its authored, clearly telegraphed commitment (the skeleton lunge)
 // deals 2 — ordinary contact stays 1. No tier ever blanket-multiplies damage.
 export const BRUTE_HEAVY_DAMAGE = 2;
@@ -187,6 +302,9 @@ export const MAX_COMPLEX_MOVERS_ACTIVE = 2;
 // consume more than 35% of the room's threat spend.
 export const MAX_BURROWERS_PER_ROOM = 1;
 export const MAX_SHIELDERS_PER_ROOM = 1;
+// The rootward is the same wall-verb readability problem as the shielder: one anchor per
+// room keeps a formation a formation, never a bullet-proof hedge.
+export const MAX_ROOTWARDS_PER_ROOM = 1;
 export const FLOCK_THREAT_SHARE_MAX = 0.35;
 
 // Reinforcement release pacing: pending threat trickles in as waves whenever the living

@@ -17,7 +17,10 @@ import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind } from "./types.js";
 import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
 import { Rng } from "./rng.js";
-import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover, isGauntletFloor } from "./enemies.js";
+import {
+  ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
+  isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
+} from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -31,6 +34,7 @@ import {
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
+  ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
@@ -1306,7 +1310,10 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
 // grants no personal reward (kills/combo/lifesteal) and never credits another live player.
 function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   e.dead = true;
-  if (p) {
+  // Decoys are noise, not kills: no credit, no combo fuel — popping the echojack's echo
+  // (or silencing a knell) is a play, never an economy.
+  const isDecoy = e.kind === "echo" || e.kind === "knell";
+  if (p && !isDecoy) {
     p.kills++;
     p.combo++;
     p.comboTimer = C.COMBO_WINDOW;
@@ -1314,6 +1321,31 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
   const big = isBossKind(e.kind);
   ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
   if (big) endBossDanger(w, e, ev);
+  // An ARMED sinderling dies loudly: an immediate shared-risk burst — players take 1,
+  // enemies take more (the fire is nobody's friend), cover splinters. Enemy kills inside
+  // the burst credit the sinderling's killer (their shot lit the fuse).
+  if (e.kind === "sinderling" && e.aux === 1) sinderlingBurst(w, p, e, ev);
+  // Volatile elite: the delayed shared burst — death plants a visible fused charge that
+  // detonates on expiry (see updateHazards). The kill itself is always safe.
+  if (e.tier === "elite" && e.captainPhase === undefined && eliteAffixOf(e.kind) === "volatile") {
+    w.hazards.push({
+      id: w.nextHazardId++, kind: "charge", x: e.x, y: e.y,
+      radius: ELITE_VOLATILE.radius, life: ELITE_VOLATILE.fuseSeconds, maxLife: ELITE_VOLATILE.fuseSeconds,
+    });
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 1.6, gain: 0.5, trauma: 0 });
+  }
+  // Commander elite: the pack PANICS leaderless — nearby allies scatter and start
+  // nothing from idle for the panic window.
+  if (e.tier === "elite" && e.captainPhase === undefined && eliteAffixOf(e.kind) === "commander") {
+    for (const ally of w.enemies) {
+      if (ally === e || ally.dead || isBossKind(ally.kind) || ally.touchDamage <= 0) continue;
+      if (Math.hypot(ally.x - e.x, ally.y - e.y) > ELITE_COMMANDER.panicRadius) continue;
+      ally.panicTime = ELITE_COMMANDER.panicDuration;
+      ally.surgeDelay = 0;
+      ally.surgeTime = 0;
+    }
+    ev.push({ t: "cue", name: "enemyDeath", x: e.x, y: e.y, rate: 0.7, gain: 0.6, trauma: 0.05 });
+  }
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
   // sustain comes from scarcity decisions, not add-farming.
   if (p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
@@ -1352,6 +1384,17 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
       id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false,
       weapon: BOSS_SIGNATURE_WEAPON[e.kind],
     });
+    return;
+  }
+  // Decoys (the echojack's echo, The Toll's knell) are noise, not bodies: no loot, ever.
+  if (e.kind === "echo" || e.kind === "knell") return;
+  // A mid-band miniboss pays an authored purse (a heart + a coin handful) instead of the
+  // ambient roll — the floor's beat has a guaranteed reward without a whole boss chest.
+  if (isMinibossKind(e.kind)) {
+    w.pickups.push(makePickup(w, "heart", e.x, e.y, ev));
+    for (let i = 0; i < 3; i++) {
+      w.pickups.push(makePickup(w, "coin", e.x + (i - 1) * 18, e.y + 16, ev, p ? comboCoinValue(p) : 1));
+    }
     return;
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
@@ -1751,10 +1794,17 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
-    if (e.captainPhase !== undefined) tickCaptainPhase(e, ev);
+    if (e.captainPhase !== undefined) tickCaptainPhase(w, e, ev);
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
     if (e.braceCd !== undefined && e.braceCd > 0) e.braceCd = e.braceCd > dt ? e.braceCd - dt : 0;
+    if (e.panicTime > 0) e.panicTime = e.panicTime > dt ? e.panicTime - dt : 0;
+    // The echoed elite's scheduled repeat: the last ranged release refires once, along
+    // the same locked bearing, from wherever the body now stands.
+    if (e.echoTime > 0) {
+      e.echoTime = e.echoTime > dt ? e.echoTime - dt : 0;
+      if (e.echoTime === 0) refireEcho(w, e, ev);
+    }
     // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
     if (e.surgeDelay > 0) {
       e.surgeDelay -= dt;
@@ -1804,25 +1854,42 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // Lag comp anchored at FIRE time (decays as the bullet travels): a hitscan-fast shot tests
       // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
       const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
-      if (sweptBulletHit(b, btx, bty, b.radius + e.radius)) {
+      // Formation guards (rootward / P1 marshal) reach a little PAST the body: allies
+      // trailing the guard's shadow get real cover. The pad only matters to the guard —
+      // a graze through it that the arc does not cover passes clean.
+      const guardPad = guardPadOf(e);
+      const isBodyHit = sweptBulletHit(b, btx, bty, b.radius + e.radius);
+      const isGuardHit = !isBodyHit && guardPad > 0 && sweptBulletHit(b, btx, bty, b.radius + e.radius + guardPad);
+      if (isBodyHit || isGuardHit) {
         // Mortar shells never strike directly — the blast IS the payload (the direct
         // target is inside the radius and takes exactly one blast hit; explosions are
-        // the one ranged answer a shielder's guard cannot eat).
+        // the one ranged answer a guard cannot eat).
         if (b.blast !== undefined) {
           detonateBullet(w, b, sweptHit.x, sweptHit.y, ev);
           continue;
         }
+        // A formation guard swallows a non-piercing shot arriving inside its slow arc.
+        if (isGuardBlocked(e, b)) {
+          b.life = 0;
+          ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
+          continue;
+        }
+        if (!isBodyHit) continue; // pad graze the guard did not cover: flies on
         // The shielder's front arc swallows the shot: no damage, the round is spent.
         if (isShieldBlocked(e, b.vx, b.vy)) {
           b.life = 0;
           ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
           continue;
         }
+        // A bulwark elite's directional plate absorbs the round instead (until it breaks).
+        if (absorbOnBulwark(e, b, ev)) continue;
         strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
+        // The caskbellows' rear crank: a hit on its back mid-commitment staggers it.
+        if (!e.dead) maybeCrankStagger(e, b, ev);
         if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);
           arcLightning(w, shooter, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
@@ -1861,6 +1928,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 }
 
 function canTouchDamage(e: Enemy): boolean {
+  if (e.touchDamage <= 0) return false; // decoys (echo/knell) are fake bodies, not threats
   if (isUntargetable(e)) return false; // an underground burrower neither deals nor takes touch
   if (e.kind === "ghost") return e.attack.windup >= C.GHOST_SOLID_AT;
   if (e.kind === "boss" && e.attack.move === "hopslam" && e.attack.phase === "active") return false;
@@ -1887,7 +1955,8 @@ function isUntargetable(e: Enemy): boolean {
   }
 }
 
-// The straight-line commitments that shove on impact (skeleton lunge, charger/MARROW rush).
+// The straight-line commitments that shove on impact (skeleton lunge, charger/MARROW
+// rush, the sinderling's flame jet).
 function isRushMove(move: AttackMove): boolean {
   return move === "lunge" || move === "rush";
 }
@@ -1965,7 +2034,17 @@ function updateEliteBrace(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
 }
 
 function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
-  if (e.tier === "elite" && e.captainPhase === undefined && updateEliteBrace(w, e, dt, ev)) return;
+  // Commander-panic: a leaderless body SCATTERS — flees the nearest player and starts
+  // nothing from idle. A committed telegraph still finishes (a panic never deletes an
+  // already-visible attack), so the read stays honest.
+  if (e.panicTime > 0 && e.attack.phase === "none") {
+    if (findTarget(w, e.x, e.y)) {
+      const away = Math.atan2(e.y - w.targetY, e.x - w.targetX);
+      applyChaseStep(w, e, dt, away, e.speed * ELITE_COMMANDER.panicSpeedMult * dt);
+    }
+    return;
+  }
+  if (e.tier === "elite" && e.captainPhase === undefined && updateEliteAffix(w, e, dt, ev)) return;
   switch (e.kind) {
     case "spitter": updateSpitter(w, e, dt, ev); return;
     case "bat": updateFlocker(w, e, dt); return;
@@ -1975,12 +2054,103 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "burrower": updateBurrower(w, e, dt, ev); return;
     case "orbiter": updateOrbiter(w, e, dt, ev); return;
     case "shielder": updateShielder(w, e, dt, ev); return;
+    case "rootward": updateRootward(w, e, dt); return;
+    case "echojack": updateEchojack(w, e, dt, ev); return;
+    case "seamcutter": updateSeamcutter(w, e, dt, ev); return;
+    case "caskbellows": updateCaskbellows(w, e, dt, ev); return;
+    case "sinderling": updateSinderling(w, e, dt, ev); return;
+    case "fragment": updateFragment(w, e, dt, ev); return;
+    case "echo": updateEcho(e, dt, ev); return;
+    case "knell": updateKnell(w, e, dt, ev); return;
+    case "marshal": updateMarshal(w, e, dt, ev); return;
+    case "toll": updateToll(w, e, dt, ev); return;
     case "boss": updateBoss(w, e, dt, ev); return;
     case "marrow": updateMarrow(w, e, dt, ev); return;
     case "choir": updateChoir(w, e, dt, ev); return;
     case "weaver": updateWeaver(w, e, dt, ev); return;
     case "gilded": updateGilded(w, e, dt, ev); return;
     default: updateChaser(w, e, dt); return;
+  }
+}
+
+// One affix per elite, deterministic by kind (ELITE_AFFIXES). Returns true when the
+// affix consumed this tick's AI (a live brace slide, a rally beat); passive affixes
+// (bulwark's plate upkeep, volatile/echoed which act on death/after fire) return false
+// so the chassis behavior runs unchanged.
+function updateEliteAffix(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): boolean {
+  switch (eliteAffixOf(e.kind)) {
+    case "commander": return updateEliteCommander(w, e, dt, ev);
+    case "bulwark":
+      // The plate tracks its target SLOWLY while the body is idle (committed attacks own
+      // lockedAngle themselves, and the plate rides along — an attacking bulwark faces
+      // its attack). Slower than a strafing player: footwork beats it even solo.
+      if (e.aux > 0 && e.attack.phase === "none" && findTarget(w, e.x, e.y)) {
+        const want = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+        const d = angleDiff(want, e.attack.lockedAngle);
+        const maxTurn = ELITE_BULWARK.turnRate * dt;
+        e.attack.lockedAngle += d > maxTurn ? maxTurn : d < -maxTurn ? -maxTurn : d;
+      }
+      return false;
+    case "volatile":
+    case "echoed":
+      return false;
+    default:
+      return updateEliteBrace(w, e, dt, ev);
+  }
+}
+
+// The commander's synchronized ONE commit: a fixed rally beat (roar grammar — a
+// stationary horn) that orders every nearby ally into the existing pack surge. Speed,
+// never damage: the gate's release arbiter is untouched, and the surge lands a readable
+// beat later. The cooldown rides the shared elite-affix timer (braceCd).
+function updateEliteCommander(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): boolean {
+  const a = e.attack;
+  if (a.move === "roar") {
+    if (a.phase === "windup") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / ELITE_COMMANDER.rallyWindup);
+      if (a.time >= ELITE_COMMANDER.rallyWindup) {
+        commanderRally(w, e, ev);
+        enterRecover(e);
+      }
+      return true;
+    }
+    if (a.phase === "recover") {
+      a.time += dt;
+      if (a.time >= ELITE_COMMANDER.rallyRecover) {
+        enterIdle(e);
+        e.braceCd = ELITE_COMMANDER.rallyCooldown;
+      }
+      return true;
+    }
+  }
+  if (a.phase === "none" && (e.braceCd ?? 0) <= 0 && e.spawnTimer === 0 && findTarget(w, e.x, e.y)
+    && Math.hypot(w.targetX - e.x, w.targetY - e.y) <= ELITE_COMMANDER.rallyTrigger) {
+    beginWindup(e, "roar");
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.6, gain: 0.7, trauma: 0 });
+    return true;
+  }
+  return false;
+}
+
+function commanderRally(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  e.surgeDelay = ELITE_COMMANDER.surgeDelay;
+  for (const ally of w.enemies) {
+    if (ally === e || ally.dead || isBossKind(ally.kind) || ally.touchDamage <= 0) continue;
+    if (Math.hypot(ally.x - e.x, ally.y - e.y) > ELITE_COMMANDER.rallyRadius) continue;
+    ally.surgeDelay = ELITE_COMMANDER.surgeDelay;
+  }
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.4, gain: 0.6, trauma: 0.04 });
+}
+
+// The echoed elite's repeat: refire the last ranged release along its stored bearing
+// from the CURRENT position. The refire never re-arms itself, so one shot echoes once.
+function refireEcho(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  if (e.dead) return;
+  switch (e.kind) {
+    case "spitter": spitterVolley(w, e, e.echoAngle, ev); return;
+    case "orbiter": orbiterBolt(w, e, e.echoAngle, ev); return;
+    default: return;
   }
 }
 
@@ -2020,7 +2190,7 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
     return;
   }
   const chase = chaseAngle(w, e);
-  applyChaseStep(w, e, dt, chase, e.speed * dt);
+  applyChaseStep(w, e, dt, chase, e.speed * surgeMult(e) * dt);
 }
 
 function updateChaser(w: WorldState, e: Enemy, dt: number): void {
@@ -2028,8 +2198,14 @@ function updateChaser(w: WorldState, e: Enemy, dt: number): void {
   const angle = chaseAngle(w, e);
   let step = e.speed * dt;
   if (e.kind === "slime") step *= slimeHopPulse(e);
-  if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
+  step *= surgeMult(e);
   applyChaseStep(w, e, dt, angle, step);
+}
+
+// The pack-surge speed factor (the boss's P2 order AND the commander elite's rally):
+// consumed by every ordinary ground walk, never by committed attack movement.
+function surgeMult(e: Enemy): number {
+  return e.surgeTime > 0 ? BOSS.packSurgeSpeedMult : 1;
 }
 
 // Deterministic boids for the bat family. Each bat carries a persistent heading in its
@@ -2112,8 +2288,7 @@ function updateFlocker(w: WorldState, e: Enemy, dt: number): void {
     // unstack a pair flying the same axis at the same speed.
     brake = C.FLOCK_MIN_SPEED + (1 - C.FLOCK_MIN_SPEED) * Math.max(0, Math.cos(delta));
   }
-  let step = e.speed * brake * dt;
-  if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
+  const step = e.speed * brake * dt * surgeMult(e);
   applyChaseStep(w, e, dt, e.zig, step);
 }
 
@@ -2165,7 +2340,7 @@ function updateCharger(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.45, gain: 0.65, trauma: 0 });
     return;
   }
-  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * surgeMult(e) * dt);
 }
 
 // The burrower: kite-denial. It dives (telegraph), tunnels toward the target at a speed
@@ -2243,11 +2418,9 @@ function updateOrbiter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   const a = e.attack;
   if (a.phase === "windup") {
     if (stepWindupTimer(w, e, dt, C.ORBITER_WINDUP, C.ORBITER_LOCK, false)) {
-      const mx = e.x + Math.cos(a.lockedAngle) * (e.radius + 4);
-      const my = e.y + Math.sin(a.lockedAngle) * (e.radius + 4);
-      spawnEnemyBullet(w, mx, my, a.lockedAngle, C.ORBITER_BOLT_SPEED, C.ORBITER_BOLT_RADIUS, 1, "#8fb8ff", C.ORBITER_BOLT_LIFE);
-      ev.push({ t: "spitMuzzle", x: mx, y: my });
+      orbiterBolt(w, e, a.lockedAngle, ev);
       a.cooldown = C.ORBITER_CD * attackCdMultOf(e);
+      armEcho(e, a.lockedAngle);
       enterRecover(e);
     }
     return;
@@ -2275,6 +2448,14 @@ function updateOrbiter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
   if (dist > C.ORBITER_RING + C.ORBITER_RING_SLACK) angle = toTarget + side * (Math.PI * 0.3);
   else if (dist < C.ORBITER_RING - C.ORBITER_RING_SLACK) angle = toTarget + Math.PI - side * (Math.PI * 0.3);
   applyChaseStep(w, e, dt, angle, e.speed * dt);
+}
+
+// The orbiter's release body, shared by the live fire and the echoed repeat.
+function orbiterBolt(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): void {
+  const mx = e.x + Math.cos(angle) * (e.radius + 4);
+  const my = e.y + Math.sin(angle) * (e.radius + 4);
+  spawnEnemyBullet(w, mx, my, angle, C.ORBITER_BOLT_SPEED, C.ORBITER_BOLT_RADIUS, 1, "#8fb8ff", C.ORBITER_BOLT_LIFE);
+  ev.push({ t: "spitMuzzle", x: mx, y: my });
 }
 
 // The shielder: an ordinary chaser whose front arc EATS bullets (see the bullet pass in
@@ -2326,6 +2507,739 @@ function isShieldBlocked(e: Enemy, vx: number, vy: number): boolean {
   return Math.abs(diff) <= C.SHIELDER_BLOCK_ARC / 2;
 }
 
+function angleDiff(a: number, b: number): number {
+  let d = a - b;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+// How far past the body a formation guard still eats bullets: the rootward's shadow pad,
+// the marshal's wider P1 frontage. 0 everywhere else (the ordinary body-only test).
+function guardPadOf(e: Enemy): number {
+  if (e.kind === "rootward") return C.ROOTWARD_GUARD_PAD;
+  if (e.kind === "marshal" && e.captainPhase !== 2) return MARSHAL.guardReach;
+  return 0;
+}
+
+// The formation guard (rootward / P1 marshal): swallows NON-PIERCING bullets arriving
+// inside its slow-turning frontal arc (anchored on lockedAngle, exactly what the wire
+// carries). Piercing rounds punch through — the authored hard counter alongside the
+// flank, melee over the top, and splash.
+function isGuardBlocked(e: Enemy, b: Bullet): boolean {
+  if (b.pierce > 0) return false;
+  const arc = e.kind === "rootward" ? C.ROOTWARD_GUARD_ARC
+    : e.kind === "marshal" && e.captainPhase !== 2 ? MARSHAL.guardArc
+    : 0;
+  if (arc === 0) return false;
+  const incoming = Math.atan2(-b.vy, -b.vx);
+  return Math.abs(angleDiff(incoming, e.attack.lockedAngle)) <= arc / 2;
+}
+
+// The bulwark elite's ONE directional breakable plate: absorbs non-piercing bullets
+// arriving inside its frontal arc until the plate HP (the aux channel) is spent, then
+// shatters for good. Reduction of a different shape — never immunity: melee, blasts,
+// pierce and the flank always work, and the plate itself is finite.
+function absorbOnBulwark(e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
+  if (e.tier !== "elite" || e.captainPhase !== undefined || e.aux <= 0) return false;
+  if (eliteAffixOf(e.kind) !== "bulwark") return false;
+  if (b.pierce > 0) return false;
+  const incoming = Math.atan2(-b.vy, -b.vx);
+  if (Math.abs(angleDiff(incoming, e.attack.lockedAngle)) > ELITE_BULWARK.arc / 2) return false;
+  e.aux = Math.max(0, e.aux - b.damage);
+  b.life = 0;
+  ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
+  if (e.aux === 0) {
+    // The shatter: loud and final — from here the elite is just its chassis.
+    ev.push({ t: "puff", x: e.x, y: e.y, n: 8, color: "#cfd6dd" });
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.55, gain: 0.8, trauma: 0.06 });
+  }
+  return true;
+}
+
+// The caskbellows' rear crank: a round landing on its BACK arc mid-commitment knocks the
+// sentry into the shared crash-grammar stagger — the long punish window. The stagger
+// also spends the volley (cooldown restarts), so circling behind between shots is the
+// authored answer.
+function maybeCrankStagger(e: Enemy, b: Bullet, ev: SimEvent[]): void {
+  if (e.kind !== "caskbellows") return;
+  const a = e.attack;
+  if (a.phase !== "windup" && a.phase !== "active") return;
+  const incoming = Math.atan2(-b.vy, -b.vx);
+  if (Math.abs(angleDiff(incoming, a.lockedAngle + Math.PI)) > C.CASK_REAR_ARC / 2) return;
+  a.move = "crash";
+  enterRecover(e);
+  a.cooldown = C.CASK_CD * attackCdMultOf(e);
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.5, gain: 0.75, trauma: 0.05 });
+}
+
+// ---- the bestiary wave: rootward / echojack / seamcutter / caskbellows / sinderling /
+// ---- fragment, their decoys (echo / knell), and the mid-band miniboss templates ----
+
+// The rootward: a walking wall with a SLOW-TURNING guard. No committed attack — it herds.
+// Its guard angle lives in lockedAngle (already on the wire), turning toward the chase
+// heading at a capped rate, so circling it opens the flank the shielder never gives.
+function updateRootward(w: WorldState, e: Enemy, dt: number): void {
+  if (!findTarget(w, e.x, e.y)) return;
+  const chase = chaseAngle(w, e);
+  const d = angleDiff(chase, e.attack.lockedAngle);
+  const maxTurn = C.ROOTWARD_TURN_RATE * dt;
+  e.attack.lockedAngle += d > maxTurn ? maxTurn : d < -maxTurn ? -maxTurn : d;
+  applyChaseStep(w, e, dt, chase, e.speed * surgeMult(e) * dt);
+}
+
+function countLiveKind(w: WorldState, kind: Enemy["kind"]): number {
+  let n = 0;
+  for (const e of w.enemies) if (!e.dead && e.kind === kind) n++;
+  return n;
+}
+
+// The echojack: flee support. It keeps its distance; on cadence it PLANTS a false-noise
+// decoy at its own position (a telegraphed beat — the jangling is visible), then BLINKS:
+// a fast perpendicular relocation dash, deterministic side by id parity. The decoy is a
+// real 1-HP body that draws homing fire and attention; the jack is already elsewhere.
+function updateEchojack(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.ECHOJACK_DECOY_WINDUP);
+    if (a.time >= C.ECHOJACK_DECOY_WINDUP) {
+      spawnEchoDecoy(w, e, ev);
+      a.phase = "active"; a.move = "blink"; a.time = 0; a.windup = 0;
+      a.cooldown = C.ECHOJACK_CD * attackCdMultOf(e);
+      const toTarget = findTarget(w, e.x, e.y) ? Math.atan2(w.targetY - e.y, w.targetX - e.x) : e.zig;
+      a.lockedAngle = toTarget + (e.id % 2 === 0 ? C.HALF_PI : -C.HALF_PI);
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.6, gain: 0.6, trauma: 0 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    const step = C.ECHOJACK_BLINK_SPEED * dt;
+    moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+    if (a.time >= C.ECHOJACK_BLINK_DUR) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.ECHOJACK_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dx = w.targetX - e.x, dy = w.targetY - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const toTarget = Math.atan2(dy, dx);
+  if (dist <= C.ECHOJACK_APPROACH && a.cooldown === 0 && e.spawnTimer === 0
+    && countLiveKind(w, "echo") < C.ECHO_CAP) {
+    beginWindup(e, "decoy");
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 1.5, gain: 0.5, trauma: 0 });
+    return;
+  }
+  if (dist < C.ECHOJACK_FLEE) {
+    const step = e.speed * dt;
+    moveEnemyBy(w, e, -Math.cos(toTarget) * step, -Math.sin(toTarget) * step);
+  } else if (dist > C.ECHOJACK_APPROACH) {
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  }
+}
+
+function spawnEchoDecoy(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const decoy = createEnemy("echo", e.x, e.y, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  });
+  decoy.aux = C.ECHO_LIFE;
+  w.enemies.push(decoy);
+  ev.push({ t: "enemySpawn", eid: decoy.id, kind: decoy.kind, tier: decoy.tier, x: decoy.x, y: decoy.y });
+}
+
+// The echo: pure noise. It stands still, counts its fuse down the aux channel, and
+// expires quietly (never a kill, never loot). Shooting it works — that is the trick.
+function updateEcho(e: Enemy, dt: number, ev: SimEvent[]): void {
+  e.aux -= dt;
+  if (e.aux <= 0) {
+    e.aux = 0;
+    e.dead = true;
+    ev.push({ t: "puff", x: e.x, y: e.y, n: 5, color: ENEMY_ARCHETYPES.echo.tint });
+  }
+}
+
+// The Toll's noise-lure: a planted bell-bomb. Harmless while the fuse (aux) burns; on
+// expiry it tolls its own ring. Killed early (1 HP), it never sounds.
+function updateKnell(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  e.aux -= dt;
+  if (e.aux > 0) return;
+  e.aux = 0;
+  e.dead = true;
+  for (let i = 0; i < TOLL.lureRingCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, (i / TOLL.lureRingCount) * Math.PI * 2, TOLL.lureRingSpeed, TOLL.shotRadius, 1, ENEMY_ARCHETYPES.knell.tint, TOLL.shotLife);
+  }
+  ev.push({ t: "radialBurst", x: e.x, y: e.y });
+  ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.8, trauma: 0.06 });
+}
+
+// The seamcutter: the lane. Windup previews the whole wall-to-wall seam (the mark is the
+// far wall, frozen at aim lock); active travels it at a flat speed, splintering cover
+// and throwing timed PERPENDICULAR sweep bolts; the far-wall recover is the punish
+// window. Cross the seam early or trail behind it — the lane never turns post-lock.
+function updateSeamcutter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.SEAM_WINDUP);
+    if (!a.isAimLocked) {
+      if (findTarget(w, e.x, e.y)) a.lockedAngle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+      setSeamMark(w, e);
+      if (a.time >= C.SEAM_LOCK) a.isAimLocked = true;
+    }
+    if (a.time >= C.SEAM_WINDUP
+      && tryReleaseLane(w, e, a.lockedAngle, Math.hypot(a.markX - e.x, a.markY - e.y))) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      e.seq = 0;
+      a.cooldown = C.SEAM_CD * attackCdMultOf(e);
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.7, gain: 0.85, trauma: 0.06 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    const step = C.SEAM_SPEED * dt;
+    const x0 = e.x, y0 = e.y;
+    rushSmashEnvironment(w, e, ev); // the seam splinters its furrow — furniture never wedges the cut
+    moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+    // The timed sweeps: a perpendicular bolt pair every interval along the cut.
+    while (e.seq < Math.floor(a.time / C.SEAM_SWEEP_INTERVAL)) {
+      e.seq++;
+      spawnEnemyBullet(w, e.x, e.y, a.lockedAngle + C.HALF_PI, C.SEAM_SWEEP_SPEED, C.SEAM_SWEEP_RADIUS, 1, ENEMY_ARCHETYPES.seamcutter.tint, C.SEAM_SWEEP_LIFE);
+      spawnEnemyBullet(w, e.x, e.y, a.lockedAngle - C.HALF_PI, C.SEAM_SWEEP_SPEED, C.SEAM_SWEEP_RADIUS, 1, ENEMY_ARCHETYPES.seamcutter.tint, C.SEAM_SWEEP_LIFE);
+      ev.push({ t: "spitMuzzle", x: e.x, y: e.y });
+    }
+    const moved = Math.hypot(e.x - x0, e.y - y0);
+    if (moved < step * chillMoveScale(e) * 0.5 || a.time >= C.SEAM_MAX_DUR) {
+      enterRecover(e);
+      ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.6, gain: 0.6, trauma: 0.04 });
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.SEAM_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (dist <= C.SEAM_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "seam");
+    setSeamMark(w, e);
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.4, gain: 0.65, trauma: 0 });
+    return;
+  }
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * surgeMult(e) * dt);
+}
+
+// The seam's far endpoint: a bounded ray march from the body along the locked bearing to
+// the first wall (or the travel cap). Recomputed while tracking, frozen at aim lock —
+// the previewed lane IS the traveled lane.
+function setSeamMark(w: WorldState, e: Enemy): void {
+  const a = e.attack;
+  const maxDist = C.SEAM_SPEED * C.SEAM_MAX_DUR;
+  const stepLen = TILE / 2;
+  const cos = Math.cos(a.lockedAngle), sin = Math.sin(a.lockedAngle);
+  let x = e.x, y = e.y;
+  for (let d = stepLen; d <= maxDist; d += stepLen) {
+    const nx = e.x + cos * d, ny = e.y + sin * d;
+    if (isWall(w, nx, ny)) break;
+    x = nx; y = ny;
+  }
+  a.markX = x;
+  a.markY = y;
+}
+
+// The caskbellows: a stationary lane sentry. It locks a target, fires a 3-shot volley
+// down the locked lane, and staggers hard (crash grammar — see maybeCrankStagger) when a
+// round lands on its rear crank mid-commitment. It waddles back to range when crowded;
+// otherwise it holds its ground and tracks.
+function updateCaskbellows(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (stepWindupTimer(w, e, dt, C.CASK_WINDUP, C.CASK_LOCK, false)) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      e.seq = 0;
+      a.cooldown = C.CASK_CD * attackCdMultOf(e);
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    while (e.seq < C.CASK_SHOTS && a.time >= e.seq * C.CASK_SHOT_GAP) {
+      const mx = e.x + Math.cos(a.lockedAngle) * (e.radius + 4);
+      const my = e.y + Math.sin(a.lockedAngle) * (e.radius + 4);
+      spawnEnemyBullet(w, mx, my, a.lockedAngle, C.CASK_BOLT_SPEED, C.CASK_BOLT_RADIUS, 1, ENEMY_ARCHETYPES.caskbellows.tint, C.CASK_BOLT_LIFE);
+      ev.push({ t: "spitMuzzle", x: mx, y: my });
+      e.seq++;
+    }
+    if (e.seq >= C.CASK_SHOTS && a.time >= (C.CASK_SHOTS - 1) * C.CASK_SHOT_GAP + 0.05) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "crash" ? C.CASK_STAGGER : C.CASK_RECOVER)) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dx = w.targetX - e.x, dy = w.targetY - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const toTarget = Math.atan2(dy, dx);
+  // The crank faces away from the lane: keep the lane tracking while idle so the rear
+  // arc (and the client's crank render) stays honest between volleys.
+  a.lockedAngle = toTarget;
+  if (dist <= C.CASK_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "volley");
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.8, gain: 0.6, trauma: 0 });
+    return;
+  }
+  // The periodic reposition: crowded, it waddles back toward its firing range; too far,
+  // it closes. In its band it is a turret.
+  if (dist < C.CASK_TOO_CLOSE) {
+    const step = e.speed * dt;
+    moveEnemyBy(w, e, -Math.cos(toTarget) * step, -Math.sin(toTarget) * step);
+  } else if (dist > C.CASK_TRIGGER) {
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  }
+}
+
+// The sinderling: the heat-feeder. Unarmed it seeks environmental heat — an ACTIVE fire
+// vent or a brazier — and consumes one pulse to ARM (aux 1, on the wire: the client
+// renders the stoked glow). With no heat in reach it stokes itself on a long stationary
+// channel instead, so the identity works on every floor. Armed: a locked flame-jet dash
+// (rush grammar) laying a burning cinder wake; an armed DEATH bursts shared-risk fire.
+function updateSinderling(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (a.move === "stoke") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / C.SINDER_STOKE_WINDUP);
+      if (a.time >= C.SINDER_STOKE_WINDUP) {
+        sinderArm(e, ev);
+        enterIdle(e);
+      }
+      return;
+    }
+    // The jet (rush grammar: aimed, locked, shoves on impact).
+    if (stepWindupTimer(w, e, dt, C.SINDER_JET_WINDUP, C.SINDER_JET_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.SINDER_JET_SPEED * C.SINDER_JET_DUR)) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      e.seq = 0;
+      a.cooldown = C.SINDER_CD * attackCdMultOf(e);
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.2, gain: 0.75, trauma: 0.05 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
+    const step = C.SINDER_JET_SPEED * dt;
+    const x0 = e.x, y0 = e.y;
+    moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+    // The flame wedge: a burning cinder dropped every few px of the jet's wake.
+    while (e.seq < Math.floor(a.time / C.SINDER_CINDER_GAP)) {
+      e.seq++;
+      plantCinder(w, e.x, e.y);
+    }
+    const moved = Math.hypot(e.x - x0, e.y - y0);
+    if (moved < step * chillMoveScale(e) * 0.5 || a.time >= C.SINDER_JET_DUR) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.SINDER_JET_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (e.aux === 0) {
+    // Unarmed: feed first. Consume standing heat, else walk to the nearest source, else
+    // stoke — the channel is long and stationary: killing it unarmed is always on offer.
+    if (isOnHeat(w, e)) { sinderArm(e, ev); return; }
+    const heat = nearestHeatPoint(w, e);
+    if (heat !== null) {
+      applyChaseStep(w, e, dt, Math.atan2(heat.y - e.y, heat.x - e.x), e.speed * dt);
+      return;
+    }
+    if (a.cooldown === 0 && e.spawnTimer === 0 && dist <= C.SINDER_HEAT_RANGE) {
+      beginWindup(e, "stoke");
+      ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.65, gain: 0.55, trauma: 0 });
+      return;
+    }
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+    return;
+  }
+  // Armed: faster, hungrier, and carrying the jet.
+  if (dist <= C.SINDER_JET_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "rush");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.9, gain: 0.6, trauma: 0 });
+    return;
+  }
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * C.SINDER_ARMED_SPEED_MULT * surgeMult(e) * dt);
+}
+
+function sinderArm(e: Enemy, ev: SimEvent[]): void {
+  e.aux = 1;
+  ev.push({ t: "flash", eid: e.id });
+  ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES.sinderling.tint });
+  ev.push({ t: "cue", name: "barrel", x: e.x, y: e.y, rate: 1.4, gain: 0.5, trauma: 0 });
+}
+
+// Standing heat: an ACTIVE fire vent under its feet, or a brazier at arm's reach.
+function isOnHeat(w: WorldState, e: Enemy): boolean {
+  const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
+  for (const h of w.floorHazards) {
+    if (h.kind !== "fire_vent" || h.tx !== tx || h.ty !== ty) continue;
+    if (floorHazardPhaseAt(h, w.floorHazardClock) === "active") return true;
+  }
+  for (const p of w.props) {
+    if (p.dead || p.kind !== "brazier") continue;
+    if (Math.hypot(e.x - p.x, e.y - p.y) <= e.radius + p.radius + C.SINDER_BRAZIER_RANGE) return true;
+  }
+  return false;
+}
+
+// Shared scratch for nearestHeatPoint (read immediately by the one caller).
+const heatPoint = { x: 0, y: 0 };
+
+function nearestHeatPoint(w: WorldState, e: Enemy): { x: number; y: number } | null {
+  let bestD = C.SINDER_HEAT_RANGE * C.SINDER_HEAT_RANGE;
+  let found = false;
+  for (const h of w.floorHazards) {
+    if (h.kind !== "fire_vent") continue;
+    const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
+    const dx = cx - e.x, dy = cy - e.y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; heatPoint.x = cx; heatPoint.y = cy; found = true; }
+  }
+  for (const p of w.props) {
+    if (p.dead || p.kind !== "brazier") continue;
+    const dx = p.x - e.x, dy = p.y - e.y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; heatPoint.x = p.x; heatPoint.y = p.y; found = true; }
+  }
+  return found ? heatPoint : null;
+}
+
+function plantCinder(w: WorldState, x: number, y: number): void {
+  if (isWall(w, x, y)) return;
+  let cinders = 0;
+  for (const h of w.hazards) if (h.kind === "cinder") cinders++;
+  if (cinders >= C.SINDER_CINDER_CAP) return; // hard cap: a wake, never a lake
+  w.hazards.push({
+    id: w.nextHazardId++, kind: "cinder", x, y,
+    radius: C.SINDER_CINDER_RADIUS, life: C.SINDER_CINDER_LIFE, maxLife: C.SINDER_CINDER_LIFE,
+  });
+}
+
+// The armed sinderling's death: an immediate SHARED-risk burst. Players take 1 (their
+// protection rules apply); enemies take more — the fire is nobody's friend — and enemy
+// kills inside it credit the sinderling's killer. Cover splinters.
+function sinderlingBurst(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
+  const r = C.SINDER_BURST_RADIUS;
+  ev.push({ t: "explosion", x: e.x, y: e.y, r });
+  for (const victim of w.players.values()) {
+    if (isProtected(victim) || victim.isDown || victim.isAbsent || victim.hp <= 0) continue;
+    if (Math.hypot(victim.x - e.x, victim.y - e.y) <= r) damagePlayer(w, victim, C.SINDER_BURST_PLAYER_DMG, ev);
+  }
+  for (const other of w.enemies) {
+    if (other === e || other.dead || isUntargetable(other)) continue;
+    if (Math.hypot(other.x - e.x, other.y - e.y) > r + other.radius) continue;
+    damageEnemy(w, p ? p.id : null, other, C.SINDER_BURST_ENEMY_DMG, ev);
+    ev.push({ t: "puff", x: other.x, y: other.y, n: 4, color: ENEMY_ARCHETYPES[other.kind].tint });
+    if (other.hp <= 0 && !other.dead) killEnemy(w, p, other, ev);
+  }
+  enemySmashEnvironment(w, e.x, e.y, r, ev);
+}
+
+// The choir fragment: the tethered voice. It binds to the nearest OTHER enemy in line of
+// sight (the source id + 1 rides the aux channel so the client draws the authoritative
+// tether); on cadence the tether HARMONIZES — the segment between the two bodies becomes
+// a damaging lane for a short pulse. Kill the source or break line of sight and the
+// pattern simplifies to a slow contact drifter.
+function updateFragment(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  let src = fragmentSourceOf(w, e);
+  if (src !== null && (src.dead || !hasLineOfSight(w, e.x, e.y, src.x, src.y))) src = null;
+  if (src === null) {
+    if (e.aux !== 0) {
+      e.aux = 0;
+      // The lane dissolves the moment the tether breaks — mid-pulse included.
+      if (a.move === "harmonize") enterIdle(e);
+    }
+    src = pickFragmentSource(w, e);
+    if (src !== null) e.aux = src.id + 1;
+  }
+  if (a.phase === "windup" && a.move === "harmonize") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.FRAGMENT_PULSE_WINDUP);
+    if (a.time >= C.FRAGMENT_PULSE_WINDUP && src !== null) {
+      // The release area is the whole lane: arbitrated at its midpoint like every other
+      // line commitment. Blocked pulses hold at full windup and re-check.
+      const midX = (e.x + src.x) / 2, midY = (e.y + src.y) / 2;
+      const half = Math.hypot(src.x - e.x, src.y - e.y) / 2;
+      if (tryRelease(w, midX, midY, half)) {
+        a.phase = "active"; a.time = 0; a.windup = 0;
+        ev.push({ t: "cue", name: "tesla", x: e.x, y: e.y, rate: 0.7, gain: 0.6, trauma: 0.03 });
+      }
+    }
+    return;
+  }
+  if (a.phase === "active" && a.move === "harmonize") {
+    a.time += dt;
+    if (src !== null) harmonizeLaneDamage(w, e, src, ev);
+    if (a.time >= C.FRAGMENT_PULSE_ACTIVE) {
+      enterRecover(e);
+      a.cooldown = C.FRAGMENT_CD * attackCdMultOf(e);
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.FRAGMENT_PULSE_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  // Tethered it hovers at mid-range, singing; untethered it drifts in with contact only.
+  const hold = e.aux !== 0 ? C.FRAGMENT_HOLD_DIST : 0;
+  if (dist > hold) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  if (e.aux !== 0 && src !== null && a.cooldown === 0 && e.spawnTimer === 0) {
+    beginWindup(e, "harmonize");
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 1.8, gain: 0.45, trauma: 0 });
+  }
+}
+
+function fragmentSourceOf(w: WorldState, e: Enemy): Enemy | null {
+  if (e.aux === 0) return null;
+  const id = e.aux - 1;
+  for (const other of w.enemies) if (other.id === id && !other.dead) return other;
+  return null;
+}
+
+// A valid tether source: the nearest other living enemy in range with line of sight —
+// never another fragment (no daisy chains) and never a decoy (noise cannot sing).
+function pickFragmentSource(w: WorldState, e: Enemy): Enemy | null {
+  let best: Enemy | null = null;
+  let bestD = C.FRAGMENT_TETHER_RANGE * C.FRAGMENT_TETHER_RANGE;
+  for (const other of w.enemies) {
+    if (other === e || other.dead) continue;
+    if (other.kind === "fragment" || other.kind === "echo" || other.kind === "knell") continue;
+    const dx = other.x - e.x, dy = other.y - e.y, d = dx * dx + dy * dy;
+    if (d >= bestD) continue;
+    if (!hasLineOfSight(w, e.x, e.y, other.x, other.y)) continue;
+    bestD = d;
+    best = other;
+  }
+  return best;
+}
+
+function harmonizeLaneDamage(w: WorldState, e: Enemy, src: Enemy, ev: SimEvent[]): void {
+  const dx = src.x - e.x, dy = src.y - e.y;
+  const len2 = dx * dx + dy * dy;
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
+    const t = len2 > 0 ? Math.max(0, Math.min(1, ((p.x - e.x) * dx + (p.y - e.y) * dy) / len2)) : 0;
+    const px = e.x + dx * t, py = e.y + dy * t;
+    if (Math.hypot(p.x - px, p.y - py) < C.FRAGMENT_BEAM_HALF_WIDTH + p.pr) damagePlayer(w, p, 1, ev);
+  }
+}
+
+// ROOT MARSHAL (miniboss template: the formation fight). P1 (captainPhase 1): a wide
+// slow-turning guard + a live formation — it raises swarm rootwards on a cadence and
+// walks its wall forward. At 50% the generic captain transition fires and the shield
+// SHATTERS INTO DESTRUCTIBLE COVER (see marshalShatterShield); P2 trades the wall for
+// tempo: ring sweeps alternating aimed fans, with the guard gone for good.
+function updateMarshal(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (e.captainPhase === 1 || e.captainPhase === undefined) {
+    if (!findTarget(w, e.x, e.y)) return;
+    const chase = chaseAngle(w, e);
+    const d = angleDiff(chase, a.lockedAngle);
+    const maxTurn = MARSHAL.guardTurnRate * dt;
+    a.lockedAngle += d > maxTurn ? maxTurn : d < -maxTurn ? -maxTurn : d;
+    // The formation: seq is the summon countdown while the shield stands.
+    e.seq -= dt;
+    if (e.seq <= 0 && e.spawnTimer === 0) {
+      e.seq = MARSHAL.summonInterval;
+      if (countMarshalWards(w) < MARSHAL.summonCap) spawnMarshalWard(w, e, ev);
+    }
+    applyChaseStep(w, e, dt, chase, e.speed * dt);
+    return;
+  }
+  // P2: the sweeps.
+  if (a.phase === "windup") {
+    if (a.move === "sweep") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / MARSHAL.sweepWindup);
+      if (a.time >= MARSHAL.sweepWindup) {
+        marshalRing(w, e, ev);
+        enterRecover(e);
+      }
+      return;
+    }
+    // The aimed fan (volley grammar).
+    if (stepWindupTimer(w, e, dt, MARSHAL.sweepWindup, MARSHAL.sweepWindup * 0.55, false)) {
+      marshalFan(w, e, ev);
+      enterRecover(e);
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= MARSHAL.sweepRecover) enterIdle(e);
+    return;
+  }
+  if (a.cooldown === 0 && e.spawnTimer === 0 && findTarget(w, e.x, e.y)) {
+    e.seq = Math.floor(e.seq) + 1;
+    a.cooldown = MARSHAL.sweepCooldown;
+    beginWindup(e, e.seq % 2 === 1 ? "sweep" : "volley");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+function countMarshalWards(w: WorldState): number {
+  let n = 0;
+  for (const e of w.enemies) if (!e.dead && e.isSummoned && e.kind === "rootward") n++;
+  return n;
+}
+
+function spawnMarshalWard(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const angle = e.attack.lockedAngle + (countMarshalWards(w) === 0 ? 0.9 : -0.9);
+  const mx = e.x + Math.cos(angle) * (e.radius + 26);
+  const my = e.y + Math.sin(angle) * (e.radius + 26);
+  if (!settleSpawnPoint(w, mx, my, ENEMY_ARCHETYPES.rootward.radius)) return;
+  const ward = createEnemy("rootward", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    tier: "swarm", isSummoned: true, players: w.encounterPlayers,
+  });
+  w.enemies.push(ward);
+  ev.push({ t: "enemySpawn", eid: ward.id, kind: ward.kind, tier: ward.tier, x: ward.x, y: ward.y });
+}
+
+function marshalRing(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const base = e.seq % 4 < 2 ? 0 : Math.PI / MARSHAL.sweepCount;
+  for (let i = 0; i < MARSHAL.sweepCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / MARSHAL.sweepCount) * Math.PI * 2, MARSHAL.sweepSpeed, MARSHAL.shotRadius, 1, ENEMY_ARCHETYPES.marshal.tint, MARSHAL.shotLife);
+  }
+  ev.push({ t: "radialBurst", x: e.x, y: e.y });
+}
+
+function marshalFan(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  for (let i = 0; i < MARSHAL.fanShots; i++) {
+    const off = (i - (MARSHAL.fanShots - 1) / 2) * MARSHAL.fanSpread;
+    spawnEnemyBullet(w, e.x, e.y, a.lockedAngle + off, MARSHAL.fanSpeed, MARSHAL.shotRadius, 1, ENEMY_ARCHETYPES.marshal.tint, MARSHAL.shotLife);
+  }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
+}
+
+// The marshal's 50% beat: the shield SHATTERS INTO COVER — real destructible crates land
+// where the guard hung, becoming the player's cover against the P2 rings. Placement is
+// deterministic (the guard's arc), validated for walls/props/players, and bumps the
+// obstacle revision through the ordinary door so navigation re-routes.
+function marshalShatterShield(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const spread = 0.7;
+  for (let i = 0; i < MARSHAL.coverCount; i++) {
+    const ang = e.attack.lockedAngle + (i - (MARSHAL.coverCount - 1) / 2) * spread;
+    const x = e.x + Math.cos(ang) * MARSHAL.coverDist;
+    const y = e.y + Math.sin(ang) * MARSHAL.coverDist;
+    if (isWall(w, x, y) || blockedByProp(w, x, y, C.PROP_RADIUS)) continue;
+    let isClear = true;
+    for (const p of w.players.values()) {
+      if (Math.hypot(p.x - x, p.y - y) < p.pr + C.PROP_RADIUS + 4) { isClear = false; break; }
+    }
+    if (!isClear) continue;
+    w.props.push({ id: w.nextPropId++, kind: "crate", x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP.crate, dead: false });
+    ev.push({ t: "puff", x, y, n: 5, color: ENEMY_ARCHETYPES.marshal.tint });
+  }
+  w.obstacleRev++;
+  e.seq = 0; // P2's sweep alternation starts fresh
+  ev.push({ t: "cue", name: "enemyDeath", x: e.x, y: e.y, rate: 0.6, gain: 0.85, trauma: 0.1 });
+}
+
+// THE TOLL (miniboss template: the sound-lane fight). Nearly stationary. P1: the knell —
+// an expanding sound ring — alternating an aimed three-bolt peal (volley grammar). P2:
+// every knell also plants a NOISE-LURE at the nearest player's feet (a 1-HP knell decoy
+// that tolls its own ring when its fuse runs out — shoot the noise or leave it).
+function updateToll(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (a.move === "knell") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / TOLL.ringWindup);
+      if (a.time >= TOLL.ringWindup) {
+        tollRing(w, e, ev);
+        if (e.captainPhase === 2) tollPlantLure(w, e, ev);
+        enterRecover(e);
+      }
+      return;
+    }
+    // The peal (volley grammar: aimed, locked).
+    if (stepWindupTimer(w, e, dt, TOLL.pealWindup, TOLL.pealLock, false)) {
+      tollPeal(w, e, ev);
+      enterRecover(e);
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "knell" ? TOLL.ringRecover : TOLL.pealRecover)) enterIdle(e);
+    return;
+  }
+  if (a.cooldown === 0 && e.spawnTimer === 0 && findTarget(w, e.x, e.y)) {
+    e.seq++;
+    a.cooldown = TOLL.ringCooldown;
+    beginWindup(e, e.seq % 2 === 1 ? "knell" : "volley");
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.45, gain: 0.7, trauma: 0 });
+    return;
+  }
+  // The bell barely walks: it creeps only when the fight has left it behind entirely.
+  if (!findTarget(w, e.x, e.y)) return;
+  if (Math.hypot(w.targetX - e.x, w.targetY - e.y) > 500) {
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  }
+}
+
+function tollRing(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const base = e.seq % 4 < 2 ? 0 : Math.PI / TOLL.ringCount;
+  for (let i = 0; i < TOLL.ringCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / TOLL.ringCount) * Math.PI * 2, TOLL.ringSpeed, TOLL.shotRadius, 1, ENEMY_ARCHETYPES.toll.tint, TOLL.shotLife);
+  }
+  ev.push({ t: "radialBurst", x: e.x, y: e.y });
+}
+
+function tollPeal(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  for (let i = 0; i < TOLL.pealShots; i++) {
+    const off = (i - (TOLL.pealShots - 1) / 2) * TOLL.pealSpread;
+    spawnEnemyBullet(w, e.x, e.y, a.lockedAngle + off, TOLL.pealSpeed, TOLL.shotRadius, 1, ENEMY_ARCHETYPES.toll.tint, TOLL.shotLife);
+  }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
+}
+
+function tollPlantLure(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  if (!findTarget(w, e.x, e.y)) return;
+  if (!settleSpawnPoint(w, w.targetX, w.targetY, ENEMY_ARCHETYPES.knell.radius)) return;
+  const lure = createEnemy("knell", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    isSummoned: true, players: w.encounterPlayers,
+  });
+  lure.aux = TOLL.lureLife;
+  w.enemies.push(lure);
+  ev.push({ t: "enemySpawn", eid: lure.id, kind: lure.kind, tier: lure.tier, x: lure.x, y: lure.y });
+  ev.push({ t: "cue", name: "uiClick", x: lure.x, y: lure.y, rate: 0.6, gain: 0.6, trauma: 0 });
+}
+
 function updateGhost(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   const has = findTarget(w, e.x, e.y);
@@ -2375,16 +3289,29 @@ function updateSpitter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
 }
 
 function spitterFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
-  const a = e.attack;
+  spitterVolley(w, e, e.attack.lockedAngle, ev);
+  e.attack.cooldown = C.SPITTER_CD * attackCdMultOf(e);
+  armEcho(e, e.attack.lockedAngle);
+}
+
+// The release body, shared by the live fire and the echoed elite's delayed repeat.
+function spitterVolley(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): void {
   const n = w.floor >= C.SPITTER_SPREAD_FLOOR ? 3 : 1;
-  const mx = e.x + Math.cos(a.lockedAngle) * (e.radius + 4);
-  const my = e.y + Math.sin(a.lockedAngle) * (e.radius + 4);
+  const mx = e.x + Math.cos(angle) * (e.radius + 4);
+  const my = e.y + Math.sin(angle) * (e.radius + 4);
   for (let i = 0; i < n; i++) {
     const off = n === 1 ? 0 : (i - 1) * C.GLOB_SPREAD;
-    spawnEnemyBullet(w, mx, my, a.lockedAngle + off, 300, 7, 1, "#ff5a7a", 2.5);
+    spawnEnemyBullet(w, mx, my, angle + off, 300, 7, 1, "#ff5a7a", 2.5);
   }
-  a.cooldown = C.SPITTER_CD * attackCdMultOf(e);
   ev.push({ t: "spitMuzzle", x: mx, y: my });
+}
+
+// Arm the echoed elite's one repeat at fire time. A refire never re-arms (refireEcho
+// calls the volley bodies directly), so a release echoes exactly once.
+function armEcho(e: Enemy, angle: number): void {
+  if (e.tier !== "elite" || e.captainPhase !== undefined || eliteAffixOf(e.kind) !== "echoed") return;
+  e.echoTime = ELITE_ECHOED.delay;
+  e.echoAngle = angle;
 }
 
 // Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier.
@@ -3489,29 +4416,67 @@ function spawnGauntletRound(w: WorldState, round: (typeof GAUNTLET.rounds)[numbe
 // The captain's two-phase contract: crossing 50% triggers ONE 0.8s stagger — the current
 // windup drops and the next commitment waits — with no invulnerability, no damage
 // reduction, and no HP floor (a big hit may carry straight through the threshold).
-function tickCaptainPhase(e: Enemy, ev: SimEvent[]): void {
+function tickCaptainPhase(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   if (e.captainPhase !== 1 || e.dead || e.hp > e.maxHp * GAUNTLET.captainPhaseAt) return;
   e.captainPhase = 2;
   if (e.attack.phase === "windup") enterIdle(e);
   e.spawnTimer = Math.max(e.spawnTimer, GAUNTLET.captainTransition);
   e.attack.cooldown = Math.max(e.attack.cooldown, GAUNTLET.captainTransition);
+  // The miniboss templates mirror the phase onto the aux channel (the client's marshal
+  // shield render keys off it; captainPhase itself never travels the wire).
+  if (isMinibossKind(e.kind)) e.aux = 2;
+  // Per-template phase beat: the Root Marshal's shield shatters into destructible cover.
+  if (e.kind === "marshal") marshalShatterShield(w, e, ev);
   ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
   ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.1, gain: 0.7, trauma: 0.08 });
 }
 
-// ---- hazards (the Weaver's webs) ----
+// ---- dynamic hazards (webs / cinders / volatile charges) ----
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
   for (const h of w.hazards) {
+    if (h.kind !== "web") continue;
     if (Math.hypot(x - h.x, y - h.y) < h.radius) return WEAVER.webSlow;
   }
   return 1;
 }
 
-function updateHazards(w: WorldState, dt: number): void {
+function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.hazards.length === 0) return;
-  for (const h of w.hazards) h.life -= dt;
+  for (const h of w.hazards) {
+    h.life -= dt;
+    // A volatile charge detonates the instant its fuse runs out — the delayed shared burst.
+    if (h.kind === "charge" && h.life <= 0) detonateCharge(w, h, ev);
+    // Cinders burn any player standing in them; post-hit protection self-limits the ticks.
+    if (h.kind === "cinder") cinderBurn(w, h, ev);
+  }
   w.hazards = w.hazards.filter((h) => h.life > 0);
+}
+
+function cinderBurn(w: WorldState, h: Hazard, ev: SimEvent[]): void {
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0 || w.pendingBlessings.has(p.id)) continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) < h.radius) damagePlayer(w, p, 1, ev);
+  }
+}
+
+// The volatile elite's fused charge: a SHARED-risk burst — players take 1 (their
+// protection rules apply), enemies take more, cover splinters. Ownerless by design
+// (nobody's kill credit): the corpse's spite, not anyone's weapon.
+function detonateCharge(w: WorldState, h: Hazard, ev: SimEvent[]): void {
+  ev.push({ t: "explosion", x: h.x, y: h.y, r: h.radius });
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
+    if (Math.hypot(p.x - h.x, p.y - h.y) <= h.radius) damagePlayer(w, p, ELITE_VOLATILE.playerDamage, ev);
+  }
+  for (const other of w.enemies) {
+    if (other.dead || isUntargetable(other)) continue;
+    if (Math.hypot(other.x - h.x, other.y - h.y) > h.radius + other.radius) continue;
+    damageEnemy(w, null, other, ELITE_VOLATILE.enemyDamage, ev);
+    ev.push({ t: "puff", x: other.x, y: other.y, n: 4, color: ENEMY_ARCHETYPES[other.kind].tint });
+    if (other.hp <= 0 && !other.dead) killEnemy(w, null, other, ev);
+  }
+  enemySmashEnvironment(w, h.x, h.y, h.radius, ev);
 }
 
 // ---- the mob overlap arbiter (studio gate §2) ----
@@ -4304,7 +5269,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
   updateGauntlet(w, dt, ev);
-  updateHazards(w, dt);
+  updateHazards(w, dt, ev);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
   updateFloorHazards(w, dt, ev);

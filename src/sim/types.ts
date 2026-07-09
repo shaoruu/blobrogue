@@ -15,6 +15,20 @@ export interface Entity {
 export type EnemyKind =
   | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
+  // The bestiary expansion's first wave (see enemies.ts for each identity):
+  //  - rootward: slow formation anchor with a slow-turning frontal guard (flank/melee/pierce);
+  //  - echojack: fleeing trickster that plants a false-noise decoy, then blinks sideways;
+  //  - seamcutter: previews a wall-to-wall seam, then cuts it with timed perpendicular sweeps;
+  //  - caskbellows: stationary lane sentry — locked 3-shot volleys, rear-crank stagger;
+  //  - sinderling: consumes environmental heat to arm a flame-jet dash + a death burst;
+  //  - fragment: tethers to another enemy; the tether is the attack lane (kill/LOS-break defuses).
+  | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment"
+  // Summon-only bodies (never in the floor planner):
+  //  - echo: the echojack's 1-HP false-noise decoy — soaks homing/attention, expires quietly;
+  //  - knell: The Toll's noise-lure bomb — shoot it before it tolls, or leave its radius.
+  | "echo" | "knell"
+  // Miniboss templates (captain machinery, seeded mid-band cadence — see minibossKindForFloor):
+  | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded";
 
 // Telegraphed-attack state machine. Committed attacks read as
@@ -31,10 +45,23 @@ export type AttackPhase = "none" | "windup" | "active" | "recover";
 //  - "pounce"/"weave": the Weaver's marked leap and web-planting.
 //  - "slam"/"sweep": the Gilded Warden's in-place marked quake and heavy ring waves
 //    (its sanctify beat reuses "roar" — same fixed-beat semantics as the King).
+//  - "decoy"/"blink": the echojack's plant-a-false-noise beat and its perpendicular
+//    relocation dash (blink is the visible escape, never a teleport).
+//  - "seam": the seamcutter's full lane — windup previews the wall-to-wall cut, active
+//    travels it, recover is the punish window at the far wall.
+//  - "stoke": the sinderling's self-arming channel when no environmental heat is near.
+//  - "harmonize": the fragment's tether pulse — the line to its source becomes the lane.
+//  - "knell": The Toll's ring — a radial sound wave (its aimed lane reuses "volley").
+//  - "volley" is shared grammar: MARROW's fan, the caskbellows' 3-shot lane, The Toll's
+//    aimed peal, the marshal's P2 fan — one read (aimed ranged commitment) everywhere.
+//  - "crash" is shared grammar for every punishable self-stun: wall crashes AND the
+//    caskbellows' rear-crank stagger.
+//  - "roar" is shared fixed-beat grammar: boss transitions AND the commander elite's rally.
 export type AttackMove =
   | "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze"
   | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield"
-  | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep" | "brace";
+  | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep" | "brace"
+  | "decoy" | "blink" | "seam" | "stoke" | "harmonize" | "knell";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -101,6 +128,25 @@ export interface Enemy extends Entity {
   captainPhase?: number;
   // The elite brace affix's cooldown (keeps its duty cycle ≤35%). Only elites tick it.
   braceCd?: number;
+  // The one per-kind/per-affix AUXILIARY channel that rides the wire (EnemyWire.aux) so
+  // the client can render authoritative special state without a bespoke field per kind:
+  //  - sinderling: 0 = unarmed, 1 = armed (stoked — jet + death burst live);
+  //  - echo/knell: remaining decoy life in seconds (drives the client fade/fuse);
+  //  - fragment: tethered source enemy id + 1 (0 = untethered — the simplified pattern);
+  //  - bulwark elites: remaining plate HP (0 = shattered);
+  //  - everyone else: 0.
+  aux: number;
+  // Generic per-behavior sequence counter (sim-internal, never on the wire): the
+  // seamcutter's sweep emissions, the caskbellows' volley shots, the sinderling's wedge
+  // drops, the marshal/toll attack alternation. Reset by each move's begin.
+  seq: number;
+  // Commander-elite pack panic: seconds this body flees leaderless (no attack triggers
+  // from idle while it runs). Sim-internal — clients read the movement itself.
+  panicTime: number;
+  // Echoed-elite scratch: a scheduled repeat of the last ranged release (echoTime counts
+  // down; echoAngle is the locked bearing it refires along). Sim-internal.
+  echoTime: number;
+  echoAngle: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   // Deterministic slime hop-cadence clock. The slime pulses its speed off sin(hopClock);
@@ -225,11 +271,15 @@ export interface Prop {
   breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
 }
 
-// Authored ground hazards (the Weaver's webs). Shared, authoritative floor state like
-// props: placed by boss moves, expire on a timer, rebuilt empty on every floor load.
-// Webs SLOW players standing inside (never enemies — it's their home turf); they never
-// damage, so the pressure is routing, not attrition.
-export type HazardKind = "web";
+// Authored ground hazards. Shared, authoritative floor state like props: placed by
+// enemy/boss moves, expire on a timer, rebuilt empty on every floor load.
+//  - web: the Weaver's slow-zone — slows players standing inside (never enemies); it
+//    never damages, so the pressure is routing, not attrition.
+//  - cinder: the sinderling's burning wake — 1 damage to a standing player, gated by the
+//    same protection rules as enemy contact. Enemies are immune (their fire).
+//  - charge: a volatile elite's death fuse — harmless while it burns (life > 0), then
+//    detonates a SHARED-risk burst (players 1, enemies more) when it expires.
+export type HazardKind = "web" | "cinder" | "charge";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)
@@ -340,5 +390,7 @@ export type TileKind = 0 | 1; // 0 = floor, 1 = wall
 export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
+  | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment"
+  | "echo" | "knell" | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "heart" | "coin" | "gun" | "spit";
