@@ -18,6 +18,14 @@ export class NodeFileSystem implements FileSystemPort {
     }
   }
 
+  async readFileBytes(path: string): Promise<Uint8Array | null> {
+    try {
+      return await readFile(path);
+    } catch {
+      return null;
+    }
+  }
+
   async writeFileAtomic(path: string, data: string, mode = 0o600): Promise<void> {
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
