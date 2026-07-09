@@ -42,7 +42,7 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event. New CLIENT
 // message types change the wire contract, so the strict join gate bumps.
 // v5 (intentional bump, the content wave): the snapshot grew the `hzds` hazard list
-// (webs/rubble slow PREDICTED movement, so clients must know them), boss-choice/dealer
+// (webs slow PREDICTED movement, so clients must know them), boss-choice/dealer
 // pickup flags + the personal-claim player flag, and the enemy wire's closed kind/move
 // sets grew (charger/burrower/orbiter/shielder + the boss roster; a v4 client would
 // reject any snapshot carrying them as a ProtocolError). The join gate enforcing

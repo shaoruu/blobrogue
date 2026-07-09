@@ -375,7 +375,7 @@ export class WSTransport implements Transport {
     // props). They only change on break, so rebuilding per snapshot is cheap. The obstacle
     // revision rides along so any local navigation cache (the dev flow inspector) never
     // reads routes through a stale prop set. Hazards mirror for the same reason: the
-    // predicted walk must feel the web/rubble slow the server will apply.
+    // predicted walk must feel the web slow the server will apply.
     this.predState.props = snap.props.map(propFromWire);
     this.predState.obstacleRev++;
     this.predState.hazards = snap.hzds.map(hazardFromWire);
