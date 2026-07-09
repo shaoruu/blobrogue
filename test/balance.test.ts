@@ -22,8 +22,8 @@ import {
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
-  PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, floorThreat, activeThreatCap,
+  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CAPS, TIERS,
+  PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
@@ -75,21 +75,26 @@ function step(w: WorldState, cmd: InputCmd): SimEvent[] {
 
 function enemyTableGates(): void {
   section("§3 exact enemy tables (HP + speed per floor, round-half-to-even)");
-  const HP: Record<Exclude<EnemyKind, "boss">, number[]> = {
+  type RegularKind = Exclude<EnemyKind, "boss" | "marrow">;
+  const HP: Record<RegularKind, number[]> = {
     slime: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
     bat: [2, 2, 3, 3, 4, 4, 5, 5, 5, 5],
     skeleton: [6, 8, 9, 10, 12, 13, 14, 15, 16, 16],
     ghost: [4, 5, 6, 7, 8, 8, 9, 10, 10, 11],
     spitter: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
+    charger: [5, 6, 8, 9, 10, 11, 12, 12, 13, 14],
+    burrower: [4, 5, 6, 7, 8, 8, 9, 10, 10, 11],
   };
-  const SPEED: Record<Exclude<EnemyKind, "boss">, number[]> = {
+  const SPEED: Record<RegularKind, number[]> = {
     slime: [42, 43, 44, 45, 45, 46, 47, 47, 48, 49],
     bat: [96, 98, 100, 102, 103, 105, 107, 108, 109, 111],
     skeleton: [62, 63, 64, 66, 66, 68, 69, 70, 71, 72],
     ghost: [56, 57, 58, 59, 60, 61, 62, 63, 64, 65],
     spitter: [30, 31, 31, 32, 32, 33, 33, 34, 34, 35],
+    charger: [46, 47, 48, 49, 49, 50, 51, 52, 52, 53],
+    burrower: [40, 41, 42, 42, 43, 44, 44, 45, 46, 46],
   };
-  for (const kind of Object.keys(HP) as Array<Exclude<EnemyKind, "boss">>) {
+  for (const kind of Object.keys(HP) as RegularKind[]) {
     let hpOk = true, spOk = true;
     for (let f = 1; f <= 10; f++) {
       if (enemyHpForFloor(kind, f) !== HP[kind][f - 1]) hpOk = false;
@@ -107,23 +112,23 @@ function enemyTableGates(): void {
 
 interface TtkResult { seconds: number; killed: boolean; transitions: Array<{ entering: boolean; at: number; queued: number }> }
 
-function measureBossTtk(weapon: WeaponId, picks: string[]): TtkResult {
-  const w = createWorld(0xBA1A4CE, 5, { isSandbox: true });
+function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKind; floor: number } = { kind: "boss", floor: 5 }): TtkResult {
+  const w = createWorld(0xBA1A4CE, boss.floor, { isSandbox: true });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
   grant(w, LOCAL_ID, picks);
-  const boss = devSpawnEnemy(w, "boss", p.x + 170, p.y);
+  const target = devSpawnEnemy(w, boss.kind, p.x + 170, p.y);
   const transitions: TtkResult["transitions"] = [];
   let ticks = 0;
   let killed = false;
   const maxTicks = 60 * 120;
   while (!killed && ticks < maxTicks) {
-    const aim = Math.atan2(boss.y - p.y, boss.x - p.x);
+    const aim = Math.atan2(target.y - p.y, target.x - p.x);
     const evs = step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
     for (const e of evs) {
       if (e.t === "bossTransition") transitions.push({ entering: e.entering, at: ticks * DT, queued: e.queued });
-      if (e.t === "enemyKill" && e.kind === "boss") killed = true;
+      if (e.t === "enemyKill" && e.kind === boss.kind) killed = true;
     }
     ticks++;
   }
@@ -165,6 +170,44 @@ function bossTtkGates(): void {
   }
   check("no reduction beat exceeds 1.2s", eachOk);
   check("total forced transition time ≤ 2.4s", total <= 2 * BOSS.roarDuration + 4 * DT, `total=${total.toFixed(2)}s`);
+}
+
+// ---- §5b MARROW: same TTK band and anti-burst contract, deeper anchor ----
+
+function marrowGates(): void {
+  section("§5b MARROW TTK (calibrated at F10, same 30–45s median band)");
+  check("F10 Marrow HP matches its calibration anchor", marrowHpForFloor(10) === MARROW.baseHp, `hp=${marrowHpForFloor(10)}`);
+  check("deeper Marrows stay within the ≤1.5x later-boss ceiling", marrowHpForFloor(20) <= MARROW.baseHp * 1.5,
+    `hp=${marrowHpForFloor(20)}`);
+  check("Marrow contact damage is 2 (like the King — never scales)", ENEMY_ARCHETYPES.marrow.touchDamage === 2);
+
+  // F10 median build ≈ Hair Trigger Lv3 + Glass Cannon Lv2 on the pistol (~39 sustained DPS).
+  const median = measureBossTtk("pistol", [...L3("hair_trigger"), "glass_cannon", "glass_cannon"], { kind: "marrow", floor: 10 });
+  check("F10 median build kills MARROW in 30–45s",
+    median.killed && median.seconds >= 30 && median.seconds <= 45, `ttk=${median.seconds.toFixed(1)}s`);
+  const highRoll = measureBossTtk("smg", [...L3("deadeye"), "glass_cannon", "glass_cannon"], { kind: "marrow", floor: 10 });
+  check("high-roll (smg + Deadeye Lv3 + Glass Cannon Lv2) stays ≥20s",
+    highRoll.killed && highRoll.seconds >= 20, `ttk=${highRoll.seconds.toFixed(1)}s`);
+  process.stdout.write(`  info: marrow median=${median.seconds.toFixed(1)}s, high-roll=${highRoll.seconds.toFixed(1)}s (band 30–45s)\n`);
+
+  section("§5b shield beats: two per fight, bounded, interactive");
+  const enters = median.transitions.filter((t) => t.entering);
+  const exits = median.transitions.filter((t) => !t.entering);
+  check("exactly two shield beats fire across the fight", enters.length === 2 && exits.length === 2,
+    `enters=${enters.length} exits=${exits.length}`);
+  let eachOk = true;
+  let total = 0;
+  for (let i = 0; i < Math.min(enters.length, exits.length); i++) {
+    const dur = exits[i].at - enters[i].at;
+    total += dur;
+    if (dur > MARROW.shieldDuration + 2 * DT) eachOk = false;
+  }
+  check("no shield beat exceeds its 2.6s cap", eachOk);
+  check("worst-case forced downtime ≤ 2×2.6s (and breakable early via the husks)",
+    total <= 2 * MARROW.shieldDuration + 4 * DT, `total=${total.toFixed(2)}s`);
+  check("the beat always reads: minimum duration under the cap",
+    MARROW.shieldMinDuration > 0 && MARROW.shieldMinDuration < MARROW.shieldDuration);
+  check("shield is reduction, not immunity", MARROW.shieldDamageReduction < 1 && MARROW.shieldDamageReduction === BOSS.roarDamageReduction);
 }
 
 // The anti-burst floor as a hard mechanism: even an absurd single hit cannot delete the
@@ -279,7 +322,14 @@ function threatBudgetGates(): void {
   check("every commitment leaves ≥0.30s post-lock dodge and ≥0.35s recovery",
     C.SKELETON_WINDUP - C.SKELETON_LOCK >= 0.30 - EPS && C.SKELETON_RECOVER >= 0.35 - EPS
     && C.SPITTER_WINDUP - C.SPITTER_LOCK >= 0.30 - EPS && C.SPITTER_RECOVER >= 0.35 - EPS
-    && BOSS.hopWindup - BOSS.hopLock >= 0.30 - EPS && BOSS.hopRecover >= 0.35 - EPS && BOSS.radialRecover >= 0.35 - EPS);
+    && BOSS.hopWindup - BOSS.hopLock >= 0.30 - EPS && BOSS.hopRecover >= 0.35 - EPS && BOSS.radialRecover >= 0.35 - EPS
+    && C.CHARGER_WINDUP - C.CHARGER_LOCK >= 0.30 - EPS && C.CHARGER_RECOVER >= 0.35 - EPS
+    // The burrower's eruption mark is frozen from the windup's first tick, so the whole
+    // windup is the post-lock dodge window.
+    && C.BURROW_ERUPT_WINDUP >= 0.30 - EPS && C.BURROW_RECOVER >= 0.35 - EPS
+    && MARROW.chargeWindup - MARROW.chargeLock >= 0.30 - EPS && MARROW.chargeRecover >= 0.35 - EPS
+    && MARROW.volleyWindup - MARROW.volleyLock >= 0.30 - EPS && MARROW.volleyRecover >= 0.35 - EPS
+    && MARROW.spinRecover >= 0.35 - EPS);
 
   // The cap holds LIVE too: on a deep floor the reinforcement queue only releases into room
   // under the cap.
@@ -585,6 +635,7 @@ function reviveGates(): void {
 function main(): void {
   enemyTableGates();
   bossTtkGates();
+  marrowGates();
   bossOverflowGates();
   normalTtkGates();
   threatBudgetGates();
