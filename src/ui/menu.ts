@@ -117,6 +117,9 @@ export class Menu {
   private lbCache: LeaderboardEntryDoc[] | null = null;
   // The per-session latch of the post-run sign-in nudge (never nag twice in one sitting).
   private isNudgeShownThisSession = false;
+  // The title's live identity region: auth settling (an OAuth exchange finishing after the
+  // shell painted) re-renders CONTENT inside this reserved box — never the shell around it.
+  private identityMount: HTMLElement | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -124,6 +127,11 @@ export class Menu {
     this.client = client;
     this.auth = auth;
     this.host = host;
+    // Auth state settles asynchronously only on the post-OAuth boot; swap the identity
+    // region's content in place when it does (same reserved geometry, zero layout shift).
+    this.auth?.onChange(() => {
+      if (this.identityMount) this.renderIdentityInto(this.identityMount);
+    });
   }
 
   hide() {
@@ -133,6 +141,7 @@ export class Menu {
 
   private show(...nodes: HTMLElement[]) {
     this.teardownLobby();
+    this.identityMount = null; // the title re-arms it after its own show()
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
   }
@@ -173,12 +182,15 @@ export class Menu {
     const wrap = el("div", "menu title");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
-    // Hero banner: logo + tagline, divider under it.
+    // Hero banner: logo + tagline, divider under it. The logo carries its intrinsic
+    // dimensions (1128x192) so the box is reserved before the file streams in.
     const hero = el("div", "hero");
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
     logo.className = "logo-img";
     logo.alt = "BLOBROGUE";
+    logo.width = 1128;
+    logo.height = 192;
     hero.appendChild(logo);
     hero.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
     wrap.appendChild(hero);
@@ -212,36 +224,41 @@ export class Menu {
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
       colA.appendChild(solo);
-      colA.appendChild(this.leaderboardPreview());
+      colA.appendChild(this.leaderboardPreview(focusTargets));
       body.appendChild(colA);
 
       // RIGHT column: the reserved identity card, the passive identity/progress strip,
-      // then the explicit destinations.
+      // then the PROFILE / SETTINGS destinations (the leaderboard's explicit door is the
+      // VIEW LEADERBOARD action on the glance itself — the right side stays about YOU).
       const colB = el("div", "col-side");
-      colB.appendChild(this.identitySection());
+      const identity = this.identitySection();
+      colB.appendChild(identity);
       const you = this.youStrip();
       colB.appendChild(you.strip);
       const nav = el("div", "navrow");
-      const lbBtn = this.navButton("LEADERBOARD", () => void this.showLeaderboard());
       const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
       const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
-      focusTargets.set("leaderboard", lbBtn);
       focusTargets.set("profile", profileBtn);
       focusTargets.set("settings", settingsBtn);
-      nav.append(lbBtn, profileBtn, settingsBtn);
+      nav.append(profileBtn, settingsBtn);
       colB.appendChild(nav);
       body.appendChild(colB);
 
       wrap.appendChild(body);
+      wrap.appendChild(el("p", "foot", CONTROLS));
+      this.show(wrap);
+      this.identityMount = identity;
       void this.hydrateTitle(you);
+      // Back/Escape focus restore: land keyboard focus on the destination that was used
+      // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
+      if (focus?.dest) focusTargets.get(focus.dest)?.focus();
+      if (focus?.lbRow !== undefined) this.pendingLbRowFocus = focus.lbRow;
+      return;
     }
 
     wrap.appendChild(el("p", "foot", CONTROLS));
     this.show(wrap);
-    // Back/Escape focus restore: land keyboard focus on the destination that was used
-    // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
     if (focus?.dest) focusTargets.get(focus.dest)?.focus();
-    if (focus?.lbRow !== undefined) this.pendingLbRowFocus = focus.lbRow;
   }
 
   // One hydration pass for the title: login/refresh the profile (fills the you-card stats in
@@ -343,18 +360,27 @@ export class Menu {
 
   // The right-column identity card. Signed in: the Google account chip + a quiet
   // confirmation of what the account holds. Signed out: the guest name input plus the
-  // sign-in CTA with its concrete benefits. Both states render inside the SAME reserved
-  // geometry (.identity min-height), and guest play is never gated on signing in.
+  // sign-in CTA with its concrete benefits. Mid-OAuth (back from Google with ?code=): a
+  // quiet "signing you in" placeholder that settles into chip or CTA. ALL states render
+  // inside the SAME reserved geometry (.identity min-height), content-swapped in place —
+  // and guest play is never gated on signing in.
   private identitySection(): HTMLElement {
     const wrap = el("div", "identity");
+    this.renderIdentityInto(wrap);
+    return wrap;
+  }
+
+  private renderIdentityInto(wrap: HTMLElement) {
+    wrap.replaceChildren();
     if (this.auth && this.auth.isSignedIn) {
       wrap.appendChild(this.accountChip());
       wrap.appendChild(el("p", "id-note", "progress, cosmetics & leaderboard runs are saved to this account"));
+    } else if (this.auth && this.auth.isCompletingSignIn) {
+      wrap.appendChild(el("p", "id-note id-pending", "signing you in with Google\u2026"));
     } else {
       wrap.appendChild(this.nameRow());
       if (this.auth) wrap.appendChild(this.googleCta());
     }
-    return wrap;
   }
 
   private accountChip(): HTMLElement {
@@ -504,13 +530,16 @@ export class Menu {
     }
   }
 
-  // The title's compact preview: header + view action, then the fixed top-run rows.
-  private leaderboardPreview(): HTMLElement {
+  // The title's compact preview: header + view action, then the fixed top-run rows. The
+  // VIEW LEADERBOARD action IS the leaderboard's explicit destination (registered as the
+  // Back/Escape focus-restore target for it).
+  private leaderboardPreview(focusTargets?: Map<string, HTMLButtonElement>): HTMLElement {
     const panel = el("div", "lb-preview");
     const head = el("div", "lb-head");
     head.appendChild(el("span", "col-h", "Top runs \u2014 global"));
     const view = el("button", "secondary lb-view", "VIEW LEADERBOARD \u25b8");
     view.addEventListener("click", () => void this.showLeaderboard());
+    focusTargets?.set("leaderboard", view);
     head.appendChild(view);
     panel.appendChild(head);
     const { box, rows, note } = this.leaderboardRows(LB_PREVIEW_ROWS);

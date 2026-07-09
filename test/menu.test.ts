@@ -144,13 +144,22 @@ function fakeConvex(opts: FakeOpts = {}): ConvexClient {
   return fake as unknown as ConvexClient;
 }
 
-function fakeAuth(isSignedIn: boolean): AuthClient {
-  return {
-    isSignedIn,
+type FakeAuth = AuthClient & { fire(): void; setSignedIn(v: boolean): void; setCompleting(v: boolean): void };
+
+function fakeAuth(isSignedIn: boolean, isCompletingSignIn = false): FakeAuth {
+  const listeners = new Set<() => void>();
+  const state = { isSignedIn, isCompletingSignIn };
+  const auth = {
+    get isSignedIn() { return state.isSignedIn; },
+    get isCompletingSignIn() { return state.isCompletingSignIn; },
     signInWithGoogle: () => Promise.resolve(),
     signOut: () => Promise.resolve(),
-    onChange: () => () => {},
-  } as unknown as AuthClient;
+    onChange: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
+    fire: () => { for (const cb of listeners) cb(); },
+    setSignedIn: (v: boolean) => { state.isSignedIn = v; },
+    setCompleting: (v: boolean) => { state.isCompletingSignIn = v; },
+  };
+  return auth as unknown as FakeAuth;
 }
 
 interface LaunchRecord { code: string; isPartyStart: boolean }
@@ -249,12 +258,11 @@ async function main(): Promise<void> {
     const { menu, overlay } = makeMenu();
     await menu.showTitle();
     const buttons = buttonsOf(overlay);
-    check("LEADERBOARD destination", buttons.some((b) => b === "LEADERBOARD"));
     check("PROFILE destination", buttons.some((b) => b === "PROFILE"));
     check("SETTINGS destination", buttons.some((b) => b === "SETTINGS"));
     const navs = byClass(overlay, "nav-btn").map(textOf);
-    check("exactly the three destinations, in order", navs.join("|") === "LEADERBOARD|PROFILE|SETTINGS", navs.join("|"));
-    check("VIEW LEADERBOARD action on the preview", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
+    check("the right side is about YOU: exactly PROFILE + SETTINGS", navs.join("|") === "PROFILE|SETTINGS", navs.join("|"));
+    check("the leaderboard's explicit door is VIEW LEADERBOARD on the glance", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
     const all = textOf(overlay);
     check("no inline settings controls on the title (sound/shake live behind SETTINGS)",
       !all.includes("sound:") && !all.includes("screen shake"), all.slice(0, 160));
@@ -345,7 +353,8 @@ async function main(): Promise<void> {
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
     const navs = byClass(signed.overlay, "nav-btn").map(textOf);
-    check("signed-in title keeps the same three destinations", navs.join("|") === "LEADERBOARD|PROFILE|SETTINGS", navs.join("|"));
+    check("signed-in title keeps the same destinations", navs.join("|") === "PROFILE|SETTINGS", navs.join("|"));
+    check("...and the same leaderboard door", buttonsOf(signed.overlay).some((b) => b.includes("VIEW LEADERBOARD")));
 
     const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });
     await menu.showSettings();
@@ -366,7 +375,7 @@ async function main(): Promise<void> {
     await menu.showLeaderboard();
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
-    check("Escape from leaderboard restores the LEADERBOARD destination", lastFocused()?.textContent === "LEADERBOARD");
+    check("Escape from leaderboard restores the VIEW LEADERBOARD door", lastFocused()?.className?.includes("lb-view") === true, lastFocused()?.className);
 
     await menu.showOnlineHome();
     fireWindowEvent("keydown", { key: "Escape" });
@@ -387,6 +396,33 @@ async function main(): Promise<void> {
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
     check("Escape on the title is inert (no screen change)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+  }
+
+  section("synchronous shell + in-place auth settle (the post-OAuth boot)");
+  {
+    // Returning from Google: the identity card renders its reserved pending state at
+    // FIRST paint (no guest-CTA flash), then settles IN PLACE when the exchange lands —
+    // the shell around it (play buttons, glance, destinations) never rebuilds.
+    const auth = fakeAuth(false, true);
+    const { menu, overlay } = makeMenu({ auth, lb: LB_ENTRIES.slice(0, 2) });
+    await menu.showTitle();
+    check("pending state renders in the reserved identity card", textOf(overlay).includes("signing you in"));
+    check("no guest CTA while the exchange is pending", !buttonsOf(overlay).some((b) => b.includes("Sign in with Google")));
+    const playBefore = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
+    auth.setCompleting(false);
+    auth.setSignedIn(true);
+    auth.fire();
+    const playAfter = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
+    check("the exchange settles into the account chip in place", buttonsOf(overlay).some((b) => b === "sign out"));
+    check("the shell around the identity card is NOT rebuilt (same play node)", playBefore === playAfter);
+
+    // The failure path settles into the guest CTA instead — same box.
+    const failAuth = fakeAuth(false, true);
+    const failed = makeMenu({ auth: failAuth, lb: [] });
+    await failed.menu.showTitle();
+    failAuth.setCompleting(false);
+    failAuth.fire();
+    check("a failed exchange settles into the guest CTA", buttonsOf(failed.overlay).some((b) => b.includes("Sign in with Google")));
   }
 
   section("failure/retry geometry: action-screen status lines are reserved boxes");

@@ -109,25 +109,43 @@ export class AuthClient {
     this.client.setAuth(this.fetchToken, this.onAuthConfirmed);
   }
 
-  // Call once on boot. Completes any pending OAuth redirect (consuming `?code=`),
-  // restores a stored session, and attaches auth to the live Convex client.
-  async init(): Promise<void> {
+  // True while a `?code=` OAuth redirect is waiting to be exchanged — the menu renders the
+  // identity region in its "signing you in" state instead of flashing the guest CTA.
+  get isCompletingSignIn(): boolean {
+    return new URLSearchParams(window.location.search).get("code") !== null;
+  }
+
+  // SYNCHRONOUS boot step: restore any stored session from localStorage and attach auth to
+  // the live Convex client. No network — the home shell renders immediately after this with
+  // the correct signed-in/out state for every ordinary load.
+  restoreLocal(): void {
+    if (!this.isCompletingSignIn) this.token = safeGet(this.key(JWT_KEY));
+    this.wireClientAuth();
+  }
+
+  // ASYNC boot step: complete a pending OAuth redirect (consuming `?code=`). Runs AFTER the
+  // shell painted; listeners (the menu's identity region) re-render in place either way —
+  // success or failure — so the pending state never sticks.
+  async completeOAuth(): Promise<void> {
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
-    if (code) {
-      this.stripCodeFromUrl();
-      const verifier = safeGet(this.key(VERIFIER_KEY)) ?? undefined;
-      safeRemove(this.key(VERIFIER_KEY));
-      try {
-        const res = await this.http.action(api.auth.signIn, { params: { code }, verifier });
-        if (res.tokens) this.setTokens(res.tokens);
-      } catch (err) {
-        console.warn("[auth] could not complete Google sign-in", err);
-      }
-    } else {
-      this.token = safeGet(this.key(JWT_KEY));
+    if (!code) return;
+    this.stripCodeFromUrl();
+    const verifier = safeGet(this.key(VERIFIER_KEY)) ?? undefined;
+    safeRemove(this.key(VERIFIER_KEY));
+    try {
+      const res = await this.http.action(api.auth.signIn, { params: { code }, verifier });
+      if (res.tokens) { this.setTokens(res.tokens); return; }
+    } catch (err) {
+      console.warn("[auth] could not complete Google sign-in", err);
     }
-    this.wireClientAuth();
+    this.notify(); // failed/empty exchange: tell the UI to settle into the guest state
+  }
+
+  // Both boot steps in order (kept for callers that can afford to block on the exchange).
+  async init(): Promise<void> {
+    this.restoreLocal();
+    await this.completeOAuth();
     this.notify();
   }
 

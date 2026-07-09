@@ -357,13 +357,19 @@
       .bc-rarity.rare { color: var(--pur); }
       .bc-desc { font-family: var(--f-num), monospace; font-size: 16px; line-height: 1.2; color: #cbb6d6; }
 
-      /* === MENU REDESIGN (ui designer, 2-column pixel-font) — overrides earlier menu rules === */
+      /* === MENU SHELL (fixed-geometry launchpad) — overrides earlier menu rules ===
+         The home shell renders SYNCHRONOUSLY before any auth/network work, so every box
+         below carries explicit dimensions: the desktop shell is min(820px,94vw), the hero/
+         body/foot own fixed heights, and hydration only ever swaps content INSIDE them. */
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
-        padding:22px 26px 20px; width:min(860px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
+        padding:22px 26px 20px; width:min(820px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
         display:flex; flex-direction:column; gap:16px; align-items:stretch; }
-      .hero{ display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; padding-bottom:14px; border-bottom:2px solid var(--dun-3); }
-      .logo-img{ image-rendering:pixelated; height:clamp(46px,8vh,72px); width:auto; max-width:100%; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
-      .hero .tag{ font-family:var(--f-ui); font-size:11px; line-height:1.5; letter-spacing:.5px; color:var(--dun-4); max-width:540px; text-transform:none; margin:0; }
+      .hero{ display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; min-height:104px; padding-bottom:14px; border-bottom:2px solid var(--dun-3); }
+      /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
+         attributes so the space is reserved before the file streams in). */
+      .logo-img{ image-rendering:pixelated; height:56px; width:329px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
+      .hero .tag{ font-family:var(--f-ui); font-size:11px; line-height:1.5; letter-spacing:.5px; color:var(--dun-4); max-width:540px; min-height:33px; text-transform:none; margin:0; }
+      .menu.title .body{ min-height:352px; }
       .body{ display:flex; gap:20px; align-items:stretch; }
       .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
       .col-side{ flex:1; display:flex; flex-direction:column; gap:12px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
@@ -408,7 +414,7 @@
       .settings-shake{ display:flex; flex-direction:column; gap:5px; font-family:var(--f-ui); font-size:9px; color:var(--dun-4); text-transform:uppercase; letter-spacing:1px; }
       .settings-shake .lab{ display:flex; justify-content:space-between; } .settings-val{ color:var(--amber); }
       .menu input[type=range]{ -webkit-appearance:none; appearance:none; width:160px; width:100%; height:6px; background:rgba(255,180,59,.22); cursor:pointer; border-radius:0; }
-      .foot{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); text-align:center; text-transform:none; padding-top:6px; border-top:2px solid var(--dun-3); margin:0; }
+      .foot{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); text-align:center; text-transform:none; min-height:20px; padding-top:6px; border-top:2px solid var(--dun-3); margin:0; }
       @media (max-width:640px){ .body{ flex-direction:column; } .col-side{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; } }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===
@@ -462,6 +468,9 @@
       .identity{ display:flex; flex-direction:column; gap:9px; align-items:stretch; min-height:158px;
         padding:11px 12px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
       .id-note{ font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:var(--dun-4); text-transform:none; line-height:1.5; margin:0; text-align:left; }
+      /* Mid-OAuth placeholder: the identity card's "signing you in" state, centered in the
+         same reserved box the chip/CTA occupy — it settles in place when the exchange ends. */
+      .id-pending{ margin:auto; text-align:center; color:var(--cream); }
       .gcta{ display:flex; flex-direction:column; gap:6px; align-items:stretch; margin-top:auto; }
       .gcta-benefits{ font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:var(--cream); text-transform:none; line-height:1.5; margin:0; text-align:left; }
       .btn-google{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; font-size:11px; padding:10px 12px; min-width:0; text-transform:none; letter-spacing:1px;

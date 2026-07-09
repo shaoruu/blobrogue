@@ -122,12 +122,12 @@ async function bootNormal() {
     document.fonts.ready,
   ]).catch(() => {});
 
-  // Complete any pending Google OAuth redirect and attach auth before first render,
-  // so the menu shows the correct signed-in/out state immediately (no flicker). Any
-  // failure (e.g. auth backend not deployed) is swallowed — the menu still loads.
-  if (auth) {
-    try { await auth.init(); } catch { /* menu stays usable */ }
-  }
+  // SYNCHRONOUS auth restore (localStorage only — no network): the home shell renders
+  // immediately with the correct signed-in/out state for every ordinary load. The one
+  // async case — returning from Google with `?code=` — paints the identity region in its
+  // reserved "signing you in" state and settles in place when the exchange finishes
+  // (the menu listens on auth.onChange); the shell never waits on the network.
+  if (auth) auth.restoreLocal();
 
   // Give the pixel fonts a short head start before the title paints: DOM text set in a
   // fallback font reflows (layout shift) when the web font lands. Cached fonts win the
@@ -169,8 +169,12 @@ async function bootNormal() {
   // link degrades to the plain title (online play needs the ticket minter).
   if (gsOverride && client) {
     await menu.showOnlineHome();
+    if (auth) void auth.completeOAuth();
     return;
   }
 
   void menu.showTitle();
+  // The pending-OAuth exchange (rare: only right after returning from Google) runs AFTER
+  // the shell painted; the identity region settles in place via auth.onChange.
+  if (auth) void auth.completeOAuth();
 }
