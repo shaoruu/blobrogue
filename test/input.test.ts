@@ -254,6 +254,44 @@ function spectateTests(): void {
     isIdle(input) && !actions.some((a) => a.kind === "selectWeapon"));
   input.keyDown("Tab");
   check("spectate: stats panel still available", actions.some((a) => a.kind === "stats" && a.isHeld));
+
+  section("spectate: Q/E, arrows, and the wheel cycle the watched teammate — nowhere else");
+  {
+    const { input, actions } = harness();
+    input.setContext("spectate");
+    input.keyDown("q");
+    input.keyDown("e");
+    input.keyDown("ArrowLeft");
+    input.keyDown("ArrowRight");
+    input.wheel(120);
+    const cycles = actions.filter((a) => a.kind === "cycleSpectate");
+    check("spectate: q/e/arrows/wheel all cycle", cycles.length === 5,
+      cycles.map((a) => (a.kind === "cycleSpectate" ? a.dir : 0)).join(","));
+    check("spectate: directions map q/left=-1, e/right/wheel-down=+1",
+      JSON.stringify(cycles.map((a) => (a.kind === "cycleSpectate" ? a.dir : 0))) === "[-1,1,-1,1,1]");
+    check("spectate: no weapon action leaked from those keys", !actions.some((a) => WEAPON_ACTIONS.includes(a.kind)));
+  }
+  for (const ctx of ["menu", "gameplay", "hud", "pause", "blessing", "reconnect"] as InputContext[]) {
+    const { input, actions } = harness();
+    input.setContext(ctx);
+    input.keyDown("e");
+    input.keyDown("ArrowRight");
+    input.wheel(120);
+    check(`${ctx}: cycleSpectate never fires`, !actions.some((a) => a.kind === "cycleSpectate"));
+  }
+
+  section("spectate/interact: the revive-channel hold samples only in live gameplay");
+  {
+    const { input } = harness();
+    input.setContext("gameplay");
+    input.keyDown("e");
+    check("gameplay: held E samples interact + reports isInteractHeld", input.sample().interact && input.isInteractHeld);
+    input.setContext("spectate");
+    check("spectate: the same held E samples released (a downed body can't channel)",
+      !input.sample().interact && !input.isInteractHeld);
+    input.setContext("blessing");
+    check("blessing: mid-pick E samples released (a chooser can't channel)", !input.sample().interact);
+  }
 }
 
 interface FakeFocusable { focus(): void; isConnected: boolean; focusCount: number }

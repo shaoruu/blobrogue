@@ -9,12 +9,12 @@
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest,
   stepWorld, stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
-  switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld,
+  switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld, descend, isPlayerOut,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
-import { REVIVE, BOSS } from "../src/sim/balance.js";
+import { REVIVE, BOSS, WIPE_HOLD_SECONDS } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
 import * as C from "../src/sim/constants.js";
@@ -164,13 +164,18 @@ function downReviveTests(): void {
     check("gameOver emitted for the whole room", gos.includes(a.id) && gos.includes(b.id), `pids=${gos.join(",")}`);
   }
 
-  section("down/revive: a standing teammate revives a downed player after a sustained hold");
+  section("down/revive: a standing teammate revives a downed player with a sustained INTERACT hold");
   {
     const { w, a, b } = twoPlayerArena();
     a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
     check("A downed", a.isDown);
-    // B walks onto A and holds.
+    // B walks onto A — proximity alone must NOT channel (the explicit interact key does).
     b.x = a.x + 10; b.y = a.y;
+    for (let i = 0; i < 20; i++) stepWorldPhase(w, 1 / 20, []);
+    check("standing in range WITHOUT the interact hold never channels", a.isDown && a.reviveProgress === 0, `progress=${a.reviveProgress}`);
+    // B holds the interact key (as stepPlayerPhase derives it from the consumed input).
+    stepPlayerPhase(w, b, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, interact: true }, 1 / 20, []);
+    check("the consumed input's interact bit set the hold", b.isInteracting);
     let revived = false;
     let ticks = 0;
     for (let i = 0; i < 40 && !revived; i++) {
@@ -179,9 +184,21 @@ function downReviveTests(): void {
       ticks++;
       if (ev.some((x) => x.t === "revive" && (x as { pid: string }).pid === a.id)) revived = true;
     }
-    check("A revived by B", revived && !a.isDown, `after ${ticks} ticks`);
+    check("A revived by B's held channel", revived && !a.isDown, `after ${ticks} ticks`);
     check("A returns at the revive HP", a.hp === REVIVE.hp, `hp=${a.hp}`);
     check("A briefly invulnerable after revive", a.invuln > 0);
+  }
+
+  section("down/revive: the interact bit alone cannot revive from afar (server-validated radius)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
+    check("A downed", a.isDown);
+    // A tampered client holds interact from across the arena: nothing may accrue.
+    b.x = a.x + 400; b.y = a.y;
+    b.isInteracting = true;
+    for (let i = 0; i < 40; i++) stepWorldPhase(w, 1 / 20, []);
+    check("no channel accrues outside the revive radius", a.isDown && a.reviveProgress === 0, `progress=${a.reviveProgress}`);
   }
 
   section("down/revive: revive progress decays without a teammate present (needs a sustained hold)");
@@ -191,6 +208,127 @@ function downReviveTests(): void {
     a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
     for (let i = 0; i < 60; i++) stepWorldPhase(w, 1 / 20, []); // B far -> never revives
     check("A stays down with no nearby reviver", a.isDown && a.reviveProgress === 0);
+  }
+
+  section("down/revive: the 1.5s channel is UNINTERRUPTED — any break resets it to zero (gate §6)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    a.hp = 1; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
+    b.x = a.x + 10; b.y = a.y;
+    b.isInteracting = true;
+    for (let i = 0; i < 10; i++) stepWorldPhase(w, 1 / 20, []);
+    const held = a.reviveProgress;
+    check("channel accrued while held", held > 0.4, `progress=${held.toFixed(2)}`);
+    b.isInteracting = false; // key released, still standing in range
+    stepWorldPhase(w, 1 / 20, []);
+    check("releasing the key RESETS the channel (no partial credit)", a.isDown && a.reviveProgress === 0, `progress=${a.reviveProgress}`);
+    // Resume the hold: the channel starts over from zero and still completes.
+    b.isInteracting = true;
+    let ticks = 0;
+    while (a.isDown && ticks < 40) { stepWorldPhase(w, 1 / 20, []); ticks++; }
+    check("a fresh uninterrupted hold completes at the full channel length",
+      !a.isDown && ticks >= Math.floor(REVIVE.channel * 20), `ticks=${ticks}`);
+  }
+
+  section("down/revive: the reviver's dash, attack, or damage cancels the channel (gate §6)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    w.isShared = true;
+    const downA = (): void => { a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []); };
+    const channelTo = (secs: number): void => {
+      b.x = a.x + 10; b.y = a.y; b.isInteracting = true;
+      for (let i = 0; i < Math.round(secs * 20); i++) stepWorldPhase(w, 1 / 20, []);
+    };
+    downA();
+    channelTo(0.5);
+    check("channel running", a.reviveProgress > 0.4 && a.reviveBy === b.id);
+    // Dash: the movement commitment cancels at the dash-start site.
+    stepPlayerPhase(w, b, { seq: 2, moveX: 1, moveY: 0, aim: 0, firing: false, dash: true, interact: true }, 1 / 20, []);
+    check("the reviver's DASH reset the channel", a.reviveProgress === 0 && a.reviveBy === null, `progress=${a.reviveProgress}`);
+    b.dashTime = 0; b.dashCd = 0; b.dashInvuln = 0;
+    channelTo(0.5);
+    check("channel re-ran after the dash", a.reviveProgress > 0.4);
+    // Attack: a real trigger pull through updateShooting cancels.
+    b.fireCd = 0;
+    stepPlayerPhase(w, b, { seq: 3, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false, interact: true }, 1 / 20, []);
+    check("the reviver's ATTACK reset the channel", a.reviveProgress === 0, `progress=${a.reviveProgress}`);
+    channelTo(0.5);
+    const before = a.reviveProgress;
+    // Damage to the CHANNELER cancels (the same tick may open a FRESH channel — the hold
+    // is still down — so the proof is the drop to at most one step's worth of progress).
+    b.invuln = 0; b.dashInvuln = 0;
+    plantEnemyBullet(w, b, 1);
+    stepWorldPhase(w, 1 / 20, []);
+    check("damage to the reviver reset the channel", before > 0.4 && a.reviveProgress <= 1 / 20 + 1e-9, `progress=${a.reviveProgress}`);
+  }
+
+  section("down/revive: ONE reviver only — a second helper neither accelerates nor inherits progress");
+  {
+    const w = createWorld(0xC0AB, 1, { isSandbox: true, isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    const c = spawnPlayerInWorld(w, "pC");
+    // Down A alone (helpers out of the bullet's overlap), THEN move both helpers in.
+    a.x = 300; a.y = 300; b.x = 700; b.y = 300; c.x = 300; c.y = 620;
+    a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("A downed with both helpers clear", a.isDown);
+    b.x = 310; b.y = 300; c.x = 300; c.y = 310;
+    b.isInteracting = true; c.isInteracting = true;
+    const t0 = 10;
+    for (let i = 0; i < t0; i++) stepWorldPhase(w, 1 / 20, []);
+    const twoHelperProgress = a.reviveProgress;
+    check("two helpers accrue at exactly 1x (no stacking)",
+      Math.abs(twoHelperProgress - t0 / 20) < 1e-9 && a.reviveBy !== null, `progress=${twoHelperProgress.toFixed(2)}`);
+    // The active channeler breaks off: the understudy starts a FRESH channel, no inheritance.
+    const first = a.reviveBy;
+    const firstSim = w.players.get(first!)!;
+    firstSim.isInteracting = false;
+    stepWorldPhase(w, 1 / 20, []);
+    check("the takeover restarted from zero under the OTHER helper",
+      a.reviveBy !== null && a.reviveBy !== first && a.reviveProgress <= 1 / 20 + 1e-9,
+      `by=${a.reviveBy} progress=${a.reviveProgress.toFixed(3)}`);
+  }
+
+  section("down/revive: the per-floor down limit (3) makes the 4th down OUT — descend resets it");
+  {
+    const { w, a, b } = twoPlayerArena();
+    w.isShared = true;
+    const cycle = (): void => {
+      a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5);
+      stepWorldPhase(w, 1 / 20, []);
+      b.x = a.x + 10; b.y = a.y; b.isInteracting = true;
+      let guard = 0;
+      while (a.isDown && guard++ < 60) stepWorldPhase(w, 1 / 20, []);
+      b.isInteracting = false;
+    };
+    for (let i = 0; i < REVIVE.downsPerFloor; i++) cycle();
+    check(`downs 1..${REVIVE.downsPerFloor} all revivable`, !a.isDown && a.downsThisFloor === REVIVE.downsPerFloor, `downs=${a.downsThisFloor}`);
+    a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("the 4th down is OUT (wire-visible)", a.isDown && isPlayerOut(a));
+    b.x = a.x + 10; b.y = a.y; b.isInteracting = true;
+    for (let i = 0; i < 40; i++) stepWorldPhase(w, 1 / 20, []);
+    check("an OUT body cannot be channeled at all", a.isDown && a.reviveProgress === 0, `progress=${a.reviveProgress}`);
+    const ev: SimEvent[] = [];
+    descend(w, 2, ev);
+    check("the descent rescues an OUT member at revive HP and resets the floor's downs",
+      !a.isDown && a.hp === REVIVE.hp && a.downsThisFloor === 0 && !isPlayerOut(a));
+  }
+
+  section("down/revive: descending rescues a downed member at the revive HP (never a 0-HP living body)");
+  {
+    const w = createWorld(0xDE5C, 1, { isShared: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    const b = spawnPlayerInWorld(w, "pB");
+    a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("A down before the descend", a.isDown && a.hp === 0);
+    const ev: SimEvent[] = [];
+    descend(w, 2, ev);
+    check("descend brought A back up", !a.isDown);
+    check("A rescued at the revive HP, not 0", a.hp === REVIVE.hp, `hp=${a.hp}`);
+    check("B untouched by the rescue", b.hp === b.maxHp);
   }
 }
 
@@ -480,21 +618,35 @@ function blessingSafetyTests(): void {
     check("a mid-pick disconnect releases the gate immediately", w.floor === 2, `floor=${w.floor}`);
   }
 
-  section("blessing safety: the boss-chest Rare pick also holds the descend");
+  section("blessing safety: the boss chest offers EVERY member a Rare pick, all holding the descend");
   {
     const w = createWorld(0xB1E58, 5, { isShared: true, skipLocalPlayer: true });
     const { a } = partyAtExit(w);
-    // The boss chest (dropped on the boss kill; the floor is already cleared by then).
-    w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false });
+    // The encounter snapshot the floor would carry had it been built with both present
+    // (P is snapshotted at floor build; these harness worlds spawn after createWorld).
+    w.encounterPlayers = 2;
+    // The boss chest (dropped on the boss kill; the floor is already cleared by then). A
+    // real boss drop carries its signature weapon, which seeds the min(P+1,5) personal
+    // choice pedestals on open (gate §4 — see openChest/updatePickups).
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false, weapon: "mortar" });
     const ev: SimEvent[] = [];
     stepWorldPhase(w, DT, ev);
-    const offer = ev.find((e) => e.t === "offerBlessing");
-    check("opening the boss chest raised the Rare offer", offer !== undefined && offer.t === "offerBlessing" && offer.rare);
-    check("boss floor exit raised no extra offer", ev.filter((e) => e.t === "offerBlessing").length === 1);
-    check("descend held for the chest pick", w.floor === 5, `floor=${w.floor}`);
+    const offers = ev.filter((e) => e.t === "offerBlessing");
+    check("opening the boss chest raised a Rare offer for EVERY party member (not only the opener)",
+      offers.length === 2 && offers.every((o) => o.t === "offerBlessing" && o.rare)
+      && new Set(offers.map((o) => (o as { pid: string }).pid)).size === 2,
+      `offers=${offers.length}`);
+    const choices = w.pickups.filter((p) => p.isBossChoice);
+    check("the chest spilled the min(P+1,5) personal boss choices (P2 -> 3, signature first)",
+      choices.length === 3 && choices.some((p) => p.weapon === "mortar")
+      && new Set(choices.map((p) => p.weapon)).size === 3, choices.map((p) => p.weapon).join(","));
+    check("descend held while ANY chest pick is open", w.floor === 5, `floor=${w.floor}`);
     chooseBlessingInWorld(w, "pA", ITEMS[0]);
     stepWorldPhase(w, DT, []);
-    check("party descends once the Rare pick resolves", w.floor === 6, `floor=${w.floor}`);
+    check("one member picking is not enough — the gate waits for all", w.floor === 5, `floor=${w.floor}`);
+    chooseBlessingInWorld(w, "pB", ITEMS[1]);
+    stepWorldPhase(w, DT, []);
+    check("party descends once EVERY Rare pick resolves", w.floor === 6, `floor=${w.floor}`);
   }
 
   section("blessing safety: a boss floor loads with NO pick open (the playtest death)");
@@ -652,7 +804,7 @@ function chestWeaponTests(): void {
 
   section("chest weapons: identical seed stocks the identical chests (deterministic contents)");
   {
-    const contentsOf = (w: WorldState) => JSON.stringify(w.chests.map((c) => [c.x, c.y, c.weapon ?? ""]));
+    const contentsOf = (w: WorldState) => JSON.stringify(w.chests.map((c) => [c.x, c.y, c.weapon ?? null]));
     const w1 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
     const w2 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
     check("two builds of the same floor agree on chest positions + contents", contentsOf(w1) === contentsOf(w2));
@@ -1223,10 +1375,13 @@ function strandedDownTests(): void {
     plantEnemyBullet(w, a, 5);
     stepWorldPhase(w, 1 / 20, []);
     check("A is down (revivable while B stands)", a.isDown && !w.isRunOver);
-    // B disconnects — A can never be revived.
+    // B disconnects — A can never be revived. The wipe is a held 4.0s all-down beat
+    // (gate §6), never an instant cut: the run ends only after the hold elapses.
     removePlayerFromWorld(w, b.id);
+    stepWorldPhase(w, 1 / 20, []);
+    check("the stranded down does NOT end the run instantly (the 4.0s wipe hold)", !w.isRunOver);
     const ev: SimEvent[] = [];
-    stepWorldPhase(w, 1 / 20, ev);
+    for (let t = 0; t < Math.ceil(WIPE_HOLD_SECONDS * 20) + 2; t++) stepWorldPhase(w, 1 / 20, ev);
     check("run ended for the stranded downed player", w.isRunOver);
     check("gameOver emitted for A", ev.some((x) => x.t === "gameOver" && (x as { pid: string }).pid === a.id));
     // Terminal transition is idempotent: another tick emits nothing new.
@@ -1241,9 +1396,11 @@ function strandedDownTests(): void {
     w.isShared = true;
     a.hp = 1; a.invuln = 0; plantEnemyBullet(w, a, 5); stepWorldPhase(w, 1 / 20, []);
     b.hp = 1; b.invuln = 0; plantEnemyBullet(w, b, 5);
+    stepWorldPhase(w, 1 / 20, []);
+    check("the LAST player going to 0 goes DOWN in a shared world (never a direct cut)", b.isDown && !w.isRunOver);
     const ev: SimEvent[] = [];
-    stepWorldPhase(w, 1 / 20, ev);
-    check("wipe marked the world over", w.isRunOver);
+    for (let t = 0; t < Math.ceil(WIPE_HOLD_SECONDS * 20) + 2; t++) stepWorldPhase(w, 1 / 20, ev);
+    check("wipe marked the world over after the 4.0s all-down hold", w.isRunOver);
     check("gameOver events for the whole room", ev.filter((x) => x.t === "gameOver").length === 2);
   }
 }

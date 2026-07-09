@@ -11,6 +11,8 @@ with friends. Inspired by Soul Knight.
 - **Mouse** — aim
 - **Click / hold** — shoot
 - **Shift** — dash (brief i-frames)
+- **E (hold)** — revive a downed teammate (stand inside their ring)
+- **Q/E, arrows, or scroll (while down)** — cycle which teammate you spectate
 - **Tab (hold)** — run + all-time stats
 - **Esc** — pause + settings (mute, screen-shake intensity)
 

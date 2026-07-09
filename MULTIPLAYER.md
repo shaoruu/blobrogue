@@ -515,6 +515,116 @@ Re-enable criteria (in order, all required):
 Until all three hold, leave the env at `0`. The global objective state (`cleared`, boss,
 boss chest, `descend`) is global-scoped on the wire regardless of the radius.
 
+### Same-world coherence (division of labor)
+
+A live playtest incident had one player NOT bound to the party's room — two clients played
+visually-similar but separate simulations. The permanent lobby-to-authoritative trust
+chain — the world-id snapshot echo + client assertion, the verified per-member readiness
+veil at START, reconnect grace/resume, and the one-multiplayer-path cleanup — is the
+**Sev-0 coherence system** (PR #39); this branch consumes its interfaces rather than
+duplicating them. What THIS branch adds on top is experience-level coherence: the party
+gates (`wait`, `exr`) ride every snapshot as server-derived state, party members are never
+interest-filtered out, and `server/test/coop.test.ts` asserts both wires agree on
+seed/floor/rev, enemy ids+positions, pickup ids/positions, chest ids/state, and each
+other's verified ticket names/colors — under production-default full snapshots AND with
+interest filtering re-enabled.
+
+### Down, revive, spectate (authoritative — studio balance gate §6)
+
+At 0 HP in a shared world you go **down**, never straight to game over. A teammate stands
+inside your revive ring and **holds E** for the 1.5s channel — the interact intent rides
+the input stream (`act`), and the server validates radius/liveness/pause state, so the bit
+alone can never conjure a revive. The channel is **uninterrupted by contract**: the
+reviver taking damage, dashing, attacking, releasing the key, or leaving the radius resets
+it to zero (no partial credit), exactly **one reviver** powers it (identity-tracked in the
+sim — extra helpers neither accelerate nor inherit progress), and both sides watch the
+same authoritative progress (SelfWire `rev` / PlayerWire `rv`) as a world-space ring.
+Revive returns you at 2 HP with 1.0s protection and a 0.35s attack lockout.
+
+Standard's **down limit is 3 per player per floor**: the fourth down is OUT — the body is
+unrevivable (both wires carry the derived `out` bit, so no client ever prompts a channel
+the sim would refuse; the world label reads `<NAME> IS OUT — DESCEND TO RESCUE`) — and the
+party's descend rescues OUT and downed members alike at the revive HP, resetting the
+count. The **wipe is a held beat, not an instant cut**: the run ends only after every
+connected player has been down simultaneously for 4.0s (`checkStrandedWipe` accumulates
+the hold; anyone standing — or, under the coherence system's grace, a resumed player —
+resets it). Solo-local keeps its classic immediate game over, byte-identical goldens and
+all.
+
+While down you **spectate**: the camera rides a living teammate (`SPECTATING <NAME>`),
+Q/E, the arrows, or the wheel cycle targets, and a semantic `spec` message tells the
+server which teammate to center your interest view on. The spectate input context samples
+idle at the source, and the server ignores gameplay inputs from downed players — a
+spectator cannot affect the sim. Game over only lands when the whole party is wiped.
+
+**Reconnecting teammates** (the coherence system's reconnect grace, PR #39) are neither
+dead nor departed: every experience surface here consumes its roster status
+(`RemotePlayer.isAbsent`) rather than reimplementing any of it. The spectate ring prefers
+teammates who are actually playing, falls back to watching a reconnecting ghost only when
+the whole party is mid-outage (no wipe can fire inside the grace), and the banner reads
+`<NAME> IS RECONNECTING…`; the exit gate readout never counts or points a chevron at a
+reserved body (`… GF RECONNECTING…` instead of "waiting for"); a pending blessing pick
+held by a dropped member reads `RECONNECTING…` (their offer survives the grace and stays
+answerable); and the hold-Tab roster marks them `reconnecting…`. Replay is untouched by
+the grace: a party wipe closes sockets deliberately (no seat is reserved), so the regroup
+lifecycle only ever runs on truly-ended runs.
+
+### The party blessing gate
+
+Cleared-floor offers (and the boss chest's Rare offers) go to EVERY member — downed
+players included — and the descend holds until each pick resolves. Snapshots carry the
+pending set with each member's **authoritative expiry countdown**
+(`wait: {pid, s}[]` — the sim clock's remaining seconds), so everyone sees
+`WAITING FOR GF TO CHOOSE · 41s` ticking down with SERVER truth. The client never runs
+its own timer: resolution, expiry, and every countdown step arrive as snapshots or not at
+all — 35 seconds of pure client time without a frame changes nothing (locked by tests).
+Choosers are paused and damage-shielded; a disconnect releases their hold immediately,
+and the sim's TTL expiry (`blessingExpired` — the coherence system's authoritative fix,
+landed with PR #39) forfeits an unanswered pick, lifts the pause, and releases the gate.
+
+### The party weapon economy (studio balance gate §4, Stage C shared worlds)
+
+Quantity scales **options, never rarity or stats** — the roll pools, drop rates, and
+weapon stats are identical solo/co-op, and every count is deterministic per
+`(seed, floor, P)` with the encounter's `P` snapshotted at floor build:
+
+- **Pedestals**: `max(1, ceil(P/2))` distinct weapon rolls per floor (P1–2: one, P3–4:
+  two), stocked into wood chests on the solo cadence.
+- **The Dealer** stocks `max(2, P)` distinct stalls priced **12/18/24** by slot. Purchases
+  are **personal**: a stall never depletes — every member can buy the same stall once
+  (ownership blocks a rebuy), so there is no shared-drop race at the shop.
+- **The boss reward** is `min(P+1, 5)` distinct choice PEDESTALS spilled from the chest
+  (the boss's authored signature weapon first). Each member **claims exactly one by
+  touch** (`isBossChoice` pickups + the per-player claim flag); a claim removes nothing
+  for teammates, claiming an OWNED duplicate grants a seeded reroll instead (never coins),
+  and the pedestals clear only once every living player has claimed.
+
+### Party exit coordination
+
+The descend gate always required every LIVING member on the cleared stairs; now the gate's
+own readiness predicate rides every snapshot (`exr` = `playersAtExit`, one shared function,
+so the UI can never drift from the rule). The HUD shows `WAITING AT EXIT · 1/2` with who is
+missing, the straggler reads `STAND ON THE STAIRS` with a chevron toward the exit, staged
+players get chevrons toward each missing teammate, and the hold-Tab roster marks who is
+`at the stairs`. Downed members are neither required nor listed (the descend rescues them
+at the revive HP), and once everyone stages, the blessing gate takes over the same message
+slot — picks always resolve before the floor changes.
+
+### Room replay (play again after a wipe)
+
+A party wipe is authoritative: the server ends the run for every member, closes the
+sockets, and releases the room's world, so a replay can never inherit the dead run. On the
+client side, any member's game-over screen flips the room's status back to `lobby`
+(idempotent — the old bug left it on `playing`, offering REJOIN into a dead world). Every
+member's results screen keeps following the room: the host's next START pulls everyone —
+wherever they sit — into the fresh run together (only on a `lobby → playing` transition;
+the wiped run's stale status can never relaunch anyone). Lobby readiness is the coherence
+system's: the per-member READY toggle plus the authoritative world-connection mirror
+(`gsWorldId`) drive the host's START gate. A lost CONNECTION (vs. a wipe) never reopens
+the room and is NEVER a game over: the run may still be live for the rest of the party,
+and the client returns to the lobby with its explicit reason (`connection_lost`), where
+REJOIN RUN reclaims the reserved seat.
+
 ### Ticket sources
 
 - **Production / menu flow:** the trusted Convex action above — an HMAC-SHA256

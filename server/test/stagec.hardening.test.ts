@@ -134,7 +134,7 @@ async function main(): Promise<void> {
       const pid = [...world.state.players.keys()][0];
       const startX = world.state.players.get(pid)!.x;
       // Dump 40 move commands in a single burst (as a 240Hz cheat might), then wait ~5 ticks.
-      for (let i = 1; i <= 40; i++) ws.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 }));
+      for (let i = 1; i <= 40; i++) ws.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0 }));
       await sleep(300); // ~6 ticks
       const moved = Math.abs(world.state.players.get(pid)!.x - startX);
       // 40 commands unclamped would be 40 fixed steps (~400px). One-per-tick over ~6 ticks is ~60px.
@@ -246,7 +246,7 @@ async function main(): Promise<void> {
       flooder.on("close", () => (closed = true));
       flooder.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "flood2"), protocol: PROTOCOL_VERSION }));
       await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) >= 1, 2000);
-      for (let i = 1; i <= 100; i++) flooder.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 0, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 }));
+      for (let i = 1; i <= 100; i++) flooder.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 0, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0 }));
       const kicked = await waitUntil(() => closed, 2000);
       check("input-class flood (100 msgs in <1s) disconnected by the input bucket", kicked);
       check("input-bucket kick counted as rate limiting", s.server.health().counters.rateLimited > 0);
@@ -388,9 +388,12 @@ async function main(): Promise<void> {
       const pid = bot.serverId()!;
       const p = world.state.players.get(pid)!;
       p.hp = 1; p.invuln = 0;
-      // A slime on top of the (only) player -> contact kills -> no ally -> game over.
+      // A slime on top of the (only) player -> contact downs them; the wipe is the held
+      // 4.0s all-down beat (studio balance gate §6), THEN game over closes the socket.
       devSpawnEnemy(world.state, "slime", p.x, p.y).spawnTimer = 0;
-      const closed = await waitUntil(() => bot.transport.getStatus() === "closed", 3000);
+      const isDowned = await waitUntil(() => world.state.players.get(pid)?.isDown === true, 3000);
+      check("the last player going to 0 goes DOWN first (the 4.0s wipe hold)", isDowned && !world.state.isRunOver);
+      const closed = await waitUntil(() => bot.transport.getStatus() === "closed", 8000);
       check("socket deterministically closed on game over", closed);
       const removed = await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) === 0, 2000);
       check("player removed from the world on game over", removed, `players=${s.server.getWorld()?.playerCount}`);

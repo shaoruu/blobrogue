@@ -68,12 +68,13 @@ function clientRoundTripTests(): void {
   section("client messages round-trip losslessly through the strict decoder");
   const msgs: ClientMsg[] = [
     { t: "join", ticket: "v1.abc.def", protocol: PROTOCOL_VERSION },
-    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, ackEv: 17 },
+    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ackEv: 17 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
     { t: "drop", weapon: "railgun", cseq: 7 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
+    { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
   ];
   for (const m of msgs) {
@@ -86,7 +87,7 @@ function unknownFieldTests(): void {
   section("security-sensitive client frames REJECT unknown fields (malicious dt)");
   const dtVariants = [0, 1e9, -5, 0.0001];
   for (const dt of dtVariants) {
-    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0, dt });
+    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0, dt });
     let rejected = false;
     try { jsonCodec.decodeClient(raw); } catch (err) { rejected = err instanceof ProtocolError; }
     check(`input carrying dt=${dt} is a protocol error`, rejected);
@@ -99,6 +100,14 @@ function unknownFieldTests(): void {
   try { jsonCodec.decodeClient(JSON.stringify({ t: "join", ticket: "x" })); }
   catch (err) { missing = err instanceof ProtocolError; }
   check("join with a MISSING protocol version is a protocol error (no default-to-0)", missing);
+  let legacyInput = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 })); }
+  catch (err) { legacyInput = err instanceof ProtocolError; }
+  check("a v4 input (no act) is a protocol error — the interact intent is mandatory", legacyInput);
+  let specExtra = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "spec", target: "p1", x: 5 })); }
+  catch (err) { specExtra = err instanceof ProtocolError; }
+  check("spec with a smuggled extra field is a protocol error", specExtra);
 
   // Inventory commands are strict too: unknown fields, out-of-range/float indices, and
   // unknown weapon ids are protocol errors, never silently coerced.
@@ -126,6 +135,8 @@ function serverRoundTripTests(): void {
   const me = spawnPlayerInWorld(w, "pMe");
   const other = spawnPlayerInWorld(w, "pOther");
   other.x = me.x + 40; other.y = me.y - 25;
+  // A live pending pick so pnd round-trips non-empty with its authoritative countdown.
+  w.pendingBlessings.set("pOther", 41.2);
   devSpawnEnemy(w, "boss", me.x + 200, me.y);
   w.bullets.push({ x: me.x + 10, y: me.y + 5, vx: 250, vy: -40, radius: 5, life: 1, friendly: true, owner: "pMe", damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false, fx: "pistol" });
   const events: WireEvent[] = [
@@ -155,6 +166,9 @@ function serverRoundTripTests(): void {
     { ...snapObj, self: { hp: 1 } },
     { ...snapObj, enemies: [{ id: 1 }] },
     { ...snapObj, events: [{ id: 0, e: { t: "enemyKill" } }] },
+    { ...snapObj, wait: [42] },
+    { ...snapObj, exr: [""] },
+    { ...snapObj, exr: "p1" },
     { t: "snap" },
   ];
   for (let i = 0; i < corrupt.length; i++) {
@@ -169,7 +183,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers room-correctness (v4) + the content wave (v5) + the depth-progression world (v6)", PROTOCOL_VERSION === 6, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth-progression world (v7)", PROTOCOL_VERSION === 7, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -345,7 +359,7 @@ function interestHysteresisTests(): void {
   me.x = 300; me.y = 300;
   const R = 400;
   const e = devSpawnEnemy(w, "slime", me.x + R - 10, me.y); // just inside -> enters
-  const view = { rev: -1, players: new Set<string>(), enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
+  const view = { rev: -1, enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
   const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity inside R enters the view", snapIn.t === "snap" && snapIn.enemies.some((x) => x.id === e.id));
   // Drift just past R but inside the exit radius: hysteresis keeps it.

@@ -816,19 +816,21 @@ function reviveGates(): void {
   stepWorld(w, new Map(), DT);
   check("A goes down with a standing ally", a.isDown);
   b.x = a.x; b.y = a.y + 10;
+  // The channel is an explicit HOLD: B's input carries the interact intent every tick.
+  const hold = new Map<PlayerId, InputCmd>([["pB", { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, interact: true }]]);
   // 1.2s of channel is not enough at the 1.5s requirement.
-  for (let t = 0; t < Math.round(1.2 / DT); t++) stepWorld(w, new Map(), DT);
+  for (let t = 0; t < Math.round(1.2 / DT); t++) stepWorld(w, hold, DT);
   check("1.2s of channel does not revive (1.5s required)", a.isDown, `progress=${a.reviveProgress.toFixed(2)}`);
   // Damage to the channeler restarts the whole channel from zero.
   w.bullets.push({ x: b.x, y: b.y, vx: 1, vy: 0, radius: 10, life: 0.05, friendly: false, owner: null, damage: 1, color: "#fff", pierce: 0, hitList: null, isCrit: false });
-  stepWorld(w, new Map(), DT);
+  stepWorld(w, hold, DT);
   check("damage to the reviver cancels the channel (progress restarts from zero)",
     a.reviveProgress <= 2 * DT, `progress=${a.reviveProgress.toFixed(3)}`);
   // A full uninterrupted hold completes; assert the revive-instant state via the event.
   b.invuln = 10;
   let revived = false;
   for (let t = 0; t < Math.round(1.8 / DT) && !revived; t++) {
-    const evs = stepWorld(w, new Map(), DT);
+    const evs = stepWorld(w, hold, DT);
     if (evs.some((e) => e.t === "revive")) revived = true;
   }
   check("a full 1.5s hold revives at 2 HP with 1.0s protection and the attack lockout",

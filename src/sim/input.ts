@@ -14,6 +14,10 @@ export interface InputCmd {
   aim: number;        // radians, world-space (client computes from mouse+camera)
   firing: boolean;    // resolved autofire/hold state
   dash: boolean;      // shift held (stepWorld still gates on cooldown + movement)
+  // Interact key held (E) — the explicit revive-channel intent. Optional so pre-existing
+  // callers (tests/harness scripts) stay valid; absent reads as released. Solo has nothing
+  // to interact with, so the bit is inert there.
+  interact?: boolean;
 }
 
 export const IDLE_INPUT: InputCmd = { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
