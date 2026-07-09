@@ -34,11 +34,29 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v3: balance reset (dash-iframe/fang fields on SelfWire, enemy tier on EnemyWire,
 // dealer_heart pickups, squeeze attack move, offerBlessing{rare} + bossTransition/
 // enemySpawn events). Joins must carry EXACTLY this version.
-// v3-additive (no bump — client->server messages are UNCHANGED, so the strict join gate is
-// honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
-// server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
-// defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-export const PROTOCOL_VERSION = 3;
+// v4: room-correctness snapshot fields, both REQUIRED (strict decode): `wid` — the
+// authoritative world id this connection is bound to, on EVERY snap, so the client can
+// ASSERT it landed in the room it expected (mismatch = close + never play); `roster` — the
+// verified identity of every connection in the world, independent of interest filtering, so
+// the readiness veil and HUD can show who actually joined. The strict equal-version join
+// gate makes the skew explicit instead of silently interoperating on a Sev-0 surface.
+export const PROTOCOL_VERSION = 4;
+
+// World ids are minter-controlled but still bounded/charset-checked so a compromised minter
+// can't inject log-breaking or unbounded ids ("room:ABCD", "arena-1", ...). Shared by the
+// ticket verifier (server), the snapshot decoder (client), and the dev mint endpoint.
+const WORLD_ID_RE = /^[a-zA-Z0-9:_-]{1,40}$/;
+
+export function isValidWorldId(id: string): boolean {
+  return WORLD_ID_RE.test(id);
+}
+
+// The single room-code -> authoritative-world-id mapping the CLIENT and SERVER share. The
+// Convex minter keeps its own copy (convex/gsTicketCore.ts must stay import-free of app
+// code for bundling); server/test/ticket.test.ts locks the two to byte agreement.
+export function worldIdForRoomCode(code: string): string {
+  return "room:" + code.trim().toUpperCase();
+}
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -87,6 +105,18 @@ export interface PlayerWire {
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  nm: string;
+  cl: number | null;
+}
+
+// One connection in this world, as published on every snapshot REGARDLESS of interest
+// filtering: the world-scoped player id, the VERIFIED ticket identity it joined with (aid —
+// the same id the lobby roster keys on, so readiness can be matched member-by-member), and
+// the cosmetic name/color. This is the server's authoritative "who is actually in this
+// world" — the lobby's Convex presence is only the expectation.
+export interface RosterWire {
+  pid: PlayerId;
+  aid: string;
   nm: string;
   cl: number | null;
 }
@@ -166,6 +196,11 @@ export type ServerMsg =
       over: boolean;             // terminal run state (party wiped) — derivable from STATE
       selfId: PlayerId;          // this client's server-assigned id (on every snap so a dropped
                                  // join snapshot never loses identity)
+      wid: string;               // the authoritative world id this connection is BOUND to —
+                                 // the client asserts it against the expected room world and
+                                 // refuses to play on a mismatch
+      roster: RosterWire[];      // every connection in this world (verified identities),
+                                 // interest-INDEPENDENT — drives readiness + the HUD count
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
@@ -552,6 +587,24 @@ function validateWireEvent(v: unknown): WireEvent {
   return { id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), e: validateEvent(o.e) };
 }
 
+function validateRosterWire(v: unknown): RosterWire {
+  const o = obj(v, "roster");
+  let cl: number | null = null;
+  if (o.cl !== undefined && o.cl !== null) cl = intOf(o, "cl", 0, 63);
+  return {
+    pid: shortStr(o, "pid", 64),
+    aid: shortStr(o, "aid", 64),
+    nm: shortStr(o, "nm", 24),
+    cl,
+  };
+}
+
+function worldIdOf(o: Record<string, unknown>): string {
+  const wid = shortStr(o, "wid", 40);
+  if (!isValidWorldId(wid)) throw new ProtocolError("bad wid");
+  return wid;
+}
+
 function decodeServerMsg(raw: string): ServerMsg {
   let parsed: unknown;
   try {
@@ -570,6 +623,8 @@ function decodeServerMsg(raw: string): ServerMsg {
         full: boolOf(o, "full"),
         over: boolOf(o, "over"),
         selfId: shortStr(o, "selfId", 64),
+        wid: worldIdOf(o),
+        roster: arr(o.roster, "roster").map(validateRosterWire),
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
@@ -756,6 +811,12 @@ export function createInterestView(): InterestView {
 // own player becomes `self`; everyone else becomes a PlayerWire. events are supplied by the
 // caller (per-client reliable stream); evTo is the room's highest committed event id.
 export interface SnapshotOpts {
+  // The authoritative world id this snapshot describes (REQUIRED — the client asserts it
+  // against the room it expected to join; see the v4 protocol note).
+  worldId: string;
+  // Every connection in this world (verified identities), independent of interest filtering.
+  // Omitted => empty (direct test callers that don't exercise readiness).
+  roster?: RosterWire[];
   // Interest radius in px around the client's own player. Entities outside it are omitted from
   // this client's snapshot (the primary bandwidth + CPU lever). <= 0 disables the filter (send
   // everything) — the default, so direct callers/tests keep full snapshots.
@@ -779,7 +840,7 @@ export function buildSnapshot(
   events: WireEvent[],
   evTo: number,
   full: boolean,
-  opts: SnapshotOpts = {},
+  opts: SnapshotOpts,
 ): ServerMsg {
   const self = w.players.get(selfPid);
   const r = opts.interestRadius ?? 0;
@@ -845,6 +906,8 @@ export function buildSnapshot(
     full,
     over: w.isRunOver,
     selfId: selfPid,
+    wid: opts.worldId,
+    roster: opts.roster ?? [],
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),

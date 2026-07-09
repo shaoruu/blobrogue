@@ -9,8 +9,8 @@
 
 import {
   jsonCodec, ProtocolError, buildSnapshot, toSelfWire, applySelfWire, eventScope,
-  PROTOCOL_VERSION, INTEREST_EXIT_FACTOR,
-  type ClientMsg, type ServerMsg, type WireEvent,
+  PROTOCOL_VERSION, INTEREST_EXIT_FACTOR, worldIdForRoomCode, isValidWorldId,
+  type ClientMsg, type RosterWire, type ServerMsg, type WireEvent,
 } from "../src/net/protocol.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "../src/net/playerSnapshot.js";
 import { createWorld, createPlayer, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world.js";
@@ -113,7 +113,7 @@ function serverRoundTripTests(): void {
     { id: 8, e: { t: "descend", toFloor: 3 } },
     { id: 9, e: { t: "gameOver", pid: "pMe" } },
   ];
-  const snap = buildSnapshot(w, "pMe", 12, events, 9, false, {});
+  const snap = buildSnapshot(w, "pMe", 12, events, 9, false, { worldId: "w-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("full snapshot round-trips deep-equal", deepEqual(decoded, snap));
 
@@ -143,6 +143,47 @@ function serverRoundTripTests(): void {
   }
 }
 
+// v4 room-correctness fields: the authoritative world id + connected roster are REQUIRED and
+// strictly validated on every snapshot — a client can always assert which world it is in and
+// who is actually there (the Sev-0 readout).
+function worldBindingWireTests(): void {
+  section("v4: authoritative world id + roster are required, strict, and round-trip");
+  check("protocol version bumped for the room-correctness fields", PROTOCOL_VERSION === 4, `v=${PROTOCOL_VERSION}`);
+  check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
+  check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
+  check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
+
+  const w = createWorld(0xF00D, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(w, "pMe");
+  spawnPlayerInWorld(w, "pOther");
+  const roster: RosterWire[] = [
+    { pid: "pMe", aid: "player-1", nm: "Ada", cl: 2 },
+    { pid: "pOther", aid: "guest:abc", nm: "Bob", cl: null },
+  ];
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: worldIdForRoomCode("ABCD"), roster });
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  check("snapshot carries the world id", snap.wid === "room:ABCD");
+  check("snapshot carries the full roster (interest-independent identities)", deepEqual(snap.roster, roster));
+  const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
+  check("wid/roster round-trip deep-equal", deepEqual(decoded, snap));
+
+  const base = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
+  const bad: Array<[string, Record<string, unknown>]> = [
+    ["missing wid", (() => { const o = { ...base }; delete o.wid; return o; })()],
+    ["empty wid", { ...base, wid: "" }],
+    ["junk-charset wid", { ...base, wid: "room:../../etc" }],
+    ["missing roster", (() => { const o = { ...base }; delete o.roster; return o; })()],
+    ["non-array roster", { ...base, roster: {} }],
+    ["roster entry missing aid", { ...base, roster: [{ pid: "p1", nm: "x", cl: null }] }],
+    ["roster entry with junk color", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: 99999 }] }],
+  ];
+  for (const [label, frame] of bad) {
+    let rejected = false;
+    try { jsonCodec.decodeServer(JSON.stringify(frame)); } catch (err) { rejected = err instanceof ProtocolError; }
+    check(`${label} is a protocol error`, rejected);
+  }
+}
+
 // PlayerWire identity (nm/cl): decorated from the verified per-connection identities at
 // snapshot build, decoded defensively (absent -> id-as-name / no color) so an old server's
 // frames still decode, and rejected when present-but-malformed.
@@ -158,7 +199,7 @@ function identityWireTests(): void {
     ["pNamed", { name: "Ada", colorIndex: 2 }],
     ["pAnon", { name: null, colorIndex: null }],
   ]);
-  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { identities });
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", identities });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   const wNamed = snap.players.find((p) => p.id === "pNamed");
   const wAnon = snap.players.find((p) => p.id === "pAnon");
@@ -262,20 +303,20 @@ function interestHysteresisTests(): void {
   const R = 400;
   const e = devSpawnEnemy(w, "slime", me.x + R - 10, me.y); // just inside -> enters
   const view = { rev: -1, players: new Set<string>(), enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
-  const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity inside R enters the view", snapIn.t === "snap" && snapIn.enemies.some((x) => x.id === e.id));
   // Drift just past R but inside the exit radius: hysteresis keeps it.
   e.x = me.x + R + 20;
-  const snapHold = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapHold = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity between R and exit radius is RETAINED (hysteresis)", snapHold.t === "snap" && snapHold.enemies.some((x) => x.id === e.id));
   // Past the exit radius: leaves.
   e.x = me.x + R * INTEREST_EXIT_FACTOR + 30;
-  const snapOut = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapOut = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity beyond the exit radius leaves the view", snapOut.t === "snap" && !snapOut.enemies.some((x) => x.id === e.id));
   // Back inside R re-enters; a NEVER-known entity between R and exit stays out (no false enter).
   e.x = me.x + R - 40;
   const fresh = devSpawnEnemy(w, "slime", me.x + R + 20, me.y);
-  const snapBack = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapBack = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity re-enters inside R", snapBack.t === "snap" && snapBack.enemies.some((x) => x.id === e.id));
   check("an unknown entity in the hysteresis band does NOT enter", snapBack.t === "snap" && !snapBack.enemies.some((x) => x.id === fresh.id));
 }
@@ -299,6 +340,7 @@ function main(): void {
   clientRoundTripTests();
   unknownFieldTests();
   serverRoundTripTests();
+  worldBindingWireTests();
   identityWireTests();
   fuzzTests();
   projectionTests();
