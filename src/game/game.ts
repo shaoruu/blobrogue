@@ -2706,12 +2706,40 @@ export class Game {
     const sx = e.x - cam.x, sy = e.y - cam.y;
     const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 8);
     ctx.save();
-    ctx.globalAlpha = (a.phase === "windup" ? 0.25 + 0.35 * a.windup : 0.75) * pulse;
+    // Communicate the RULE, not merely the boundary: outside is danger, inside is safe.
+    // The old lone red circle looked like a damaging ring and made players stand outside.
+    const dangerAlpha = a.phase === "windup" ? 0.07 + 0.10 * a.windup : 0.16 + 0.04 * pulse;
+    ctx.globalAlpha = dangerAlpha;
+    ctx.fillStyle = "#ff3d52";
+    ctx.beginPath();
+    ctx.rect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.arc(sx, sy, safeR, 0, Math.PI * 2, true);
+    ctx.fill("evenodd");
+    ctx.globalAlpha = a.phase === "windup" ? 0.05 + 0.07 * a.windup : 0.10;
+    ctx.fillStyle = "#8affc0";
+    ctx.beginPath(); ctx.arc(sx, sy, Math.max(0, safeR - 5), 0, Math.PI * 2); ctx.fill();
+
+    ctx.globalAlpha = (a.phase === "windup" ? 0.45 + 0.35 * a.windup : 0.9) * pulse;
     ctx.strokeStyle = TELEGRAPH_COLOR.squeeze;
     ctx.lineWidth = a.phase === "active" ? 5 : 3;
     ctx.setLineDash(a.phase === "active" ? AIM_SOLID : AIM_DASH);
     ctx.beginPath(); ctx.arc(sx, sy, safeR, 0, 6.28); ctx.stroke();
     ctx.setLineDash(AIM_SOLID);
+
+    // Four inward chevrons and an explicit instruction make the safe-side impossible to misread.
+    ctx.fillStyle = "#8affc0";
+    ctx.font = '10px "Press Start 2P", monospace';
+    ctx.textAlign = "center";
+    ctx.globalAlpha = 0.75 + 0.2 * pulse;
+    ctx.fillText("GET INSIDE", sx, sy - Math.min(safeR - 18, 54));
+    for (let i = 0; i < 4; i++) {
+      const ang = i * Math.PI / 2;
+      const r = Math.max(22, safeR - 18);
+      const x = sx + Math.cos(ang) * r, y = sy + Math.sin(ang) * r;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(ang + Math.PI);
+      ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -6); ctx.lineTo(-5, 6); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
     ctx.restore();
   }
 
