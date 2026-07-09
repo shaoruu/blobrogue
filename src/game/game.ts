@@ -885,7 +885,9 @@ export class Game {
     // Wave layer: sweep entity-keyed loops/tells from the old floor, crossfade the biome's
     // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually here).
     waveAudio.onFloorLoad();
-    waveAudio.setAmbientZone(this.biomeIdx);
+    // Deterministic biome-ambient RNG: the Deep's sparse pattern is a pure function of
+    // (run seed, floor) — reproducible per floor, different across floors.
+    waveAudio.setAmbientZone(this.biomeIdx, (this.seed ^ Math.imul(this.floor, 0x9E3779B9)) | 0);
     const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
     // First-trigger contract: decode every cue this floor can reach — the boss actually
     // here plus every spawned archetype's tells — before any of them can fire.
@@ -1431,6 +1433,9 @@ export class Game {
       },
       enemies: this.world.enemies,
       players: this.waveFramePlayers(),
+      // Diegetic ambience placement (the Deep emitter): only wall/material cells are
+      // valid sources — the biome's fabric creaks, never the empty air over the floor.
+      isMaterialCellAt: (x, y) => this.isWallAt(x, y),
     });
   }
 

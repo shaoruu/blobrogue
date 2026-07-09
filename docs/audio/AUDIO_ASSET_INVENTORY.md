@@ -67,25 +67,28 @@ immediate repeat (single-take selections necessarily repeat).
 Authoring: dry mono one-shots ≤0.5s, immediate transient, no tail — they overlap by
 design.
 
-## 4. The Deep's sparse ambience components (selection-driven, near-silent)
+## 4. The Deep's sparse ambience components (FINAL P0 selection — closes P0 material selection)
 
-Deterministic per-channel scheduler (`stepDeepEmitter`): each SELECTED channel keeps its
-own opportunity clock; an opportunity sounds with the channel's chance and is authored
-silence otherwise. Max ONE event sounding at a time; 140–380px listener ring; deterministic
-per-play gain inside the channel range; suppressed ±250ms around combat locks. Channels
-with empty take selections never schedule, and the selected channels NEVER speed up to
-fill missing categories.
+Selection manifest: `audio-gen-p0-deep-final/selected_deep_manifest.json` (main agent
+copies the selected binaries into `public/audio/amb/` after **Ian's human spot-check**;
+hooks/config are wired now). The continuous bed stays authored silence.
 
-| selected take(s) | channel | opportunity cadence | chance | gain |
+Deterministic scheduler (`stepDeepEmitter`): ONE global opportunity every **1.5–3.2s**
+draws one category by weight; the drawn category sounds only if its own re-arm window
+elapsed — otherwise the opportunity is silence, never rerolled onto another category.
+Max ONE Deep event sounding at a time; deterministic biome-ambient RNG seeded from
+(run seed, floor); suppressed ±250ms around lock/critical cues; positions land on a
+deterministic **160–520px ring around the camera**, accepted only on valid wall/material
+cells (diegetic — never listener-centered, never non-diegetic).
+
+| selected take(s) | category | weight | re-arm | gain |
 |---|---|---|---|---|
-| `amb/deep_mineral_tick_v1`, `_v2` | mineral tick | every 2–4s | 35% | .08–.12 |
-| `amb/deep_architecture_shift_v1` | architecture shift | every 5–9s | 15% | .10–.13 |
-| (EMPTY — awaiting the 8 replacement analogues) | resin creak | 1.5–3.5s (retune with replacements) | 35% | .10–.14 |
-| (EMPTY — awaiting the 8 replacement analogues) | resin drip | 1.5–3.5s (retune with replacements) | 15% | .08–.10 |
+| `amb/deep_mineral_tick_v1`, `_v2` | mineral tick | 35% | 2–4.5s | .07–.11 |
+| `amb/deep_resin_drip_r4_v1/_v2/_v3` (v1 take-weight .5) | resin drip | 25% | 2.5–5s | .06–.10 |
+| `amb/deep_resin_creak_r4_v3` (event `deep.resinStress` — a sticky stress/release, not a beam creak; ±2% jitter) | resin stress | 20% | 3.5–6.5s | .08–.12 |
+| `amb/deep_architecture_shift_r4_v1` (gain ×.8), `_r4_v2` | architecture shift | 20% | 5–9s | .09–.13 |
 
-When the replacement resin/architecture analogues are selected, extend
-`SELECTED_DEEP_TAKES` in waveSpec.ts — the channels arm themselves automatically.
-Authoring: mono, ≤1.2s, no melody, no reverb tail past the sample.
+RETIRED, never reference: pre-r4 `deep_architecture_shift_v1` (registry-tested absent).
 
 ## 5. Pending wave-manifest files (asset hooks already wired + preloaded)
 

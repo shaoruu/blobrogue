@@ -31,6 +31,8 @@ export interface WavePlayOpts {
   rate?: number;
   // Deterministic variant selection (the seeded emitters); absent = Math.random.
   variantRoll?: number;
+  // Exact take index (weighted emitter draws own the pick AND the anti-repeat rule).
+  variantIndex?: number;
 }
 
 // Camera-space listener (the local player + view rect); drives attenuation + combat gating.
@@ -66,6 +68,9 @@ export interface WaveFrameInput {
   readonly listener: WaveListener;
   readonly enemies: Iterable<WaveFrameEnemy>;
   readonly players: Iterable<WaveFramePlayer>;
+  // Whether a world position is a valid wall/material cell for diegetic ambience
+  // placement (the Deep emitter). Absent = every ring position is acceptable.
+  readonly isMaterialCellAt?: (x: number, y: number) => boolean;
 }
 
 // Mirrors the content-wave orbiter ring (ORBITER_RING/SLACK) for the once-per-entity
@@ -98,10 +103,14 @@ interface BurrowEmitterState {
 }
 
 // The Deep's sparse ambience scheduler (one per director; active only in the Deep zone).
-// One opportunity clock per channel; recent starts are shared (the max-overlap cap).
+// One GLOBAL opportunity clock; per-channel re-arm clocks and last-take memory; recent
+// starts are shared (the max-one-active cap).
 interface DeepEmitterState {
-  rngState: number;
-  nextAtMs: number[];
+  seed: number;     // the arming seed (floor identity), immutable
+  rngState: number; // the live LCG cursor
+  nextOpportunityAtMs: number;
+  rearmAtMs: number[];
+  lastTake: number[];
   recentAtMs: number[]; // recent event starts, pruned to the overlap window
 }
 
@@ -147,7 +156,7 @@ class WaveAudioDirector {
     }
     if (gain < 0.02) return false;
 
-    const variantIndex = this.pickVariant(event, spec, opts?.variantRoll);
+    const variantIndex = this.pickVariant(event, spec, opts?.variantRoll, opts?.variantIndex);
     const rate = (opts?.rate ?? 1) * (1 + (Math.random() * 2 - 1) * spec.jitter);
     const isPlayed = this.engine.playWave({
       event,
@@ -209,9 +218,18 @@ class WaveAudioDirector {
 
   // ---- ambient zones (§5) ----
 
-  setAmbientZone(zoneIndex: number | null): void {
+  // `ambientSeed` is the deterministic biome-ambient RNG seed (the caller derives it
+  // from the run seed + floor): the same floor always schedules the same Deep pattern,
+  // different floors get different ones. Absent = a fixed default.
+  setAmbientZone(zoneIndex: number | null, ambientSeed?: number): void {
     if (zoneIndex !== null && (zoneIndex < 0 || zoneIndex >= AMBIENT_ZONE_EVENTS.length)) zoneIndex = null;
-    if (zoneIndex === this.ambientZone) return;
+    const seed = (ambientSeed ?? 0x0DEE9) | 0;
+    if (zoneIndex === this.ambientZone) {
+      // Same zone, new floor: the bed crossfades nothing, but the Deep scheduler
+      // re-seeds so its deterministic pattern follows the floor.
+      if (this.deepEmitter !== null && this.deepEmitter.seed !== seed) this.deepEmitter = this.armDeepEmitter(seed);
+      return;
+    }
     if (this.ambientZone !== null) {
       this.stopLoop(AMBIENT_ZONE_EVENTS[this.ambientZone], "zone", AMBIENT_CROSSFADE_SEC);
     }
@@ -220,10 +238,21 @@ class WaveAudioDirector {
       this.startLoop(AMBIENT_ZONE_EVENTS[zoneIndex], "zone", { fadeSec: AMBIENT_CROSSFADE_SEC });
     }
     // The Deep has no bed (authored silence): entering it arms the sparse positional
-    // scheduler from a fixed seed, so every visit produces the same pattern.
+    // scheduler from the deterministic ambient seed.
     this.deepEmitter = zoneIndex !== null && AMBIENT_ZONE_EVENTS[zoneIndex] === "ambient.deep"
-      ? { rngState: 0x0DEE9 | 0, nextAtMs: DEEP_EMITTER.channels.map(() => -1), recentAtMs: [] }
+      ? this.armDeepEmitter(seed)
       : null;
+  }
+
+  private armDeepEmitter(seed: number): DeepEmitterState {
+    return {
+      seed,
+      rngState: seed,
+      nextOpportunityAtMs: -1,
+      rearmAtMs: DEEP_EMITTER.channels.map(() => 0),
+      lastTake: DEEP_EMITTER.channels.map(() => -1),
+      recentAtMs: [],
+    };
   }
 
   // ---- weapons (§4) ----
@@ -333,7 +362,7 @@ class WaveAudioDirector {
       this.startLoop(AMBIENT_ZONE_EVENTS[this.ambientZone], "zone", { fadeSec: AMBIENT_CROSSFADE_SEC });
     }
 
-    this.stepDeepEmitter(nowMs, input.listener);
+    this.stepDeepEmitter(nowMs, input.listener, input.isMaterialCellAt);
   }
 
   private observeEnemy(e: WaveFrameEnemy, distToListener: number, nowMs: number): void {
@@ -398,54 +427,90 @@ class WaveAudioDirector {
     }
   }
 
-  // The Deep's near-silent sparse ambience: each SELECTED channel runs its own
-  // deterministic opportunity clock (mineral 2–4s @35%, architecture 5–9s @15%); an
-  // opportunity that misses its chance is authored silence, never rerolled. Events land
-  // on a deterministic ring around the listener at a deterministic gain inside the
-  // channel's range; at most ONE event sounds at a time, and a due channel holds (not
-  // rescheduled) through the ±250ms combat-lock mute window so a lock tell is never
-  // crowded. Channels with an empty take selection never schedule — the others never
-  // speed up to fill the gap.
-  private stepDeepEmitter(nowMs: number, l: WaveListener): void {
+  // The Deep's near-silent sparse ambience (FINAL P0 contract): ONE global opportunity
+  // every 1.5–3.2s draws one category by weight (mineral 35 / drip 25 / stress 20 /
+  // architecture 20). The drawn category sounds only if its own re-arm window elapsed —
+  // otherwise the opportunity is authored silence, never rerolled (categories never
+  // fill in for each other). Every play lands on a deterministic 160–520px ring
+  // position around the camera, accepted only on valid wall/material cells (diegetic —
+  // never centered on the listener); at most ONE Deep event sounds at a time, and a
+  // due opportunity holds (not rescheduled) through the ±250ms lock/critical-cue mute.
+  private stepDeepEmitter(nowMs: number, l: WaveListener, isMaterialCellAt?: (x: number, y: number) => boolean): void {
     const st = this.deepEmitter;
     if (!st) return;
-    for (let i = 0; i < DEEP_EMITTER.channels.length; i++) {
-      const ch = DEEP_EMITTER.channels[i];
-      const spec = waveSpecOf(ch.event);
-      if (takeStemsOf(spec).length === 0) continue; // awaiting selection: silent
-      if (st.nextAtMs[i] < 0) st.nextAtMs[i] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
-      if (nowMs < st.nextAtMs[i]) continue;
-      if (nowMs - this.lastCombatLockAtMs < DEEP_EMITTER.lockMuteMs) continue; // hold
-      st.recentAtMs = st.recentAtMs.filter((t) => nowMs - t < DEEP_EMITTER.overlapWindowSec * 1000);
-      if (st.recentAtMs.length >= DEEP_EMITTER.maxOverlap) continue; // hold
-      const chanceRoll = emitterRand(st.rngState);
-      const ang = emitterRand(chanceRoll.state);
-      const dist = emitterRand(ang.state);
-      const gainRoll = emitterRand(dist.state);
-      const variant = emitterRand(gainRoll.state);
-      st.rngState = variant.state;
-      if (chanceRoll.value < ch.chance) {
-        const angle = ang.value * Math.PI * 2;
-        const distance = DEEP_EMITTER.minDistPx + dist.value * (DEEP_EMITTER.maxDistPx - DEEP_EMITTER.minDistPx);
-        // The row's gain is the channel max; scale this play down into the authored
-        // range (deterministic), before the ordinary distance attenuation.
-        const target = ch.gainMin + gainRoll.value * (ch.gainMax - ch.gainMin);
-        const isPlayed = this.play(ch.event, {
-          x: l.x + Math.cos(angle) * distance,
-          y: l.y + Math.sin(angle) * distance,
-          gain: target / spec.gain,
-          variantRoll: variant.value,
-        });
-        if (isPlayed) st.recentAtMs.push(nowMs);
-      }
-      st.nextAtMs[i] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
+    if (st.nextOpportunityAtMs < 0) {
+      st.nextOpportunityAtMs = nowMs + this.drawGapMs(st, DEEP_EMITTER.globalMinGapSec, DEEP_EMITTER.globalMaxGapSec);
     }
+    if (nowMs < st.nextOpportunityAtMs) return;
+    if (nowMs - this.lastCombatLockAtMs < DEEP_EMITTER.lockMuteMs) return; // hold
+    st.recentAtMs = st.recentAtMs.filter((t) => nowMs - t < DEEP_EMITTER.overlapWindowSec * 1000);
+    if (st.recentAtMs.length >= DEEP_EMITTER.maxOverlap) return; // hold
+
+    // Weighted category draw (one per opportunity).
+    const catRoll = this.drawRand(st);
+    const totalWeight = DEEP_EMITTER.channels.reduce((s, c) => s + c.weight, 0);
+    let r = catRoll * totalWeight;
+    let index = DEEP_EMITTER.channels.length - 1;
+    for (let i = 0; i < DEEP_EMITTER.channels.length; i++) {
+      r -= DEEP_EMITTER.channels[i].weight;
+      if (r <= 0) { index = i; break; }
+    }
+    const ch = DEEP_EMITTER.channels[index];
+    const spec = waveSpecOf(ch.event);
+    const takes = takeStemsOf(spec);
+    if (takes.length > 0 && nowMs >= st.rearmAtMs[index]) {
+      // Weighted take pick with the anti-repeat rule owned here (per-channel memory).
+      const takeIndex = this.pickWeightedTake(st, index, takes.length, ch.takeWeights);
+      const target = (ch.gainMin + this.drawRand(st) * (ch.gainMax - ch.gainMin)) * (ch.takeGainMult?.[takeIndex] ?? 1);
+      // Diegetic placement: deterministic ring draws, accepted only on material cells.
+      let pos: { x: number; y: number } | null = null;
+      for (let attempt = 0; attempt < DEEP_EMITTER.placementTries && pos === null; attempt++) {
+        const angle = this.drawRand(st) * Math.PI * 2;
+        const distance = DEEP_EMITTER.minDistPx + this.drawRand(st) * (DEEP_EMITTER.maxDistPx - DEEP_EMITTER.minDistPx);
+        const x = l.x + Math.cos(angle) * distance;
+        const y = l.y + Math.sin(angle) * distance;
+        if (isMaterialCellAt === undefined || isMaterialCellAt(x, y)) pos = { x, y };
+      }
+      if (pos !== null) {
+        const isPlayed = this.play(ch.event, {
+          x: pos.x, y: pos.y,
+          // The row's gain is the channel max; scale this play into its authored range
+          // (deterministic), before the ordinary distance attenuation.
+          gain: target / spec.gain,
+          variantIndex: takeIndex,
+        });
+        if (isPlayed) {
+          st.recentAtMs.push(nowMs);
+          st.lastTake[index] = takeIndex;
+          st.rearmAtMs[index] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
+        }
+      }
+    }
+    st.nextOpportunityAtMs = nowMs + this.drawGapMs(st, DEEP_EMITTER.globalMinGapSec, DEEP_EMITTER.globalMaxGapSec);
+  }
+
+  private pickWeightedTake(st: DeepEmitterState, channelIndex: number, count: number, weights?: readonly number[]): number {
+    if (count <= 1) return 0;
+    const last = st.lastTake[channelIndex];
+    const weightOf = (i: number): number => (i === last ? 0 : weights?.[i] ?? 1);
+    let total = 0;
+    for (let i = 0; i < count; i++) total += weightOf(i);
+    let r = this.drawRand(st) * total;
+    for (let i = 0; i < count; i++) {
+      r -= weightOf(i);
+      if (weightOf(i) > 0 && r <= 0) return i;
+    }
+    return (last + 1) % count;
+  }
+
+  private drawRand(st: { rngState: number }): number {
+    const r = emitterRand(st.rngState);
+    st.rngState = r.state;
+    return r.value;
   }
 
   private drawGapMs(st: { rngState: number }, minSec: number, maxSec: number): number {
-    const r = emitterRand(st.rngState);
-    st.rngState = r.state;
-    return (minSec + r.value * (maxSec - minSec)) * 1000;
+    return (minSec + this.drawRand(st) * (maxSec - minSec)) * 1000;
   }
 
   private observeRevives(players: Iterable<WaveFramePlayer>): void {
@@ -530,12 +595,14 @@ class WaveAudioDirector {
     this.reviveChannels.clear();
   }
 
-  // Variant selection over the event's SELECTED take set: seeded emitters pass their own
-  // deterministic roll; everything else rides Math.random. Either way the same take never
-  // repeats back-to-back (single-take selections necessarily repeat).
-  private pickVariant(event: WaveEventId, spec: WaveSoundSpec, roll?: number): number {
+  // Variant selection over the event's SELECTED take set: an exact index wins (weighted
+  // emitter draws own their pick AND anti-repeat rule); seeded emitters may pass a
+  // deterministic roll; everything else rides Math.random. The uniform paths never play
+  // the same take back-to-back (single-take selections necessarily repeat).
+  private pickVariant(event: WaveEventId, spec: WaveSoundSpec, roll?: number, exactIndex?: number): number {
     const count = takeStemsOf(spec).length;
     if (count <= 1) return 0;
+    if (exactIndex !== undefined) return Math.min(count - 1, Math.max(0, exactIndex));
     const last = this.lastVariant.get(event);
     let index = Math.floor((roll ?? Math.random()) * count) % count;
     if (index === last) index = (index + 1) % count; // never the same take twice
