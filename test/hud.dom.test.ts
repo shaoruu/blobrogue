@@ -499,10 +499,14 @@ function shopPanelTests(): void {
   const buy = root.querySelector<HTMLButtonElement>(".shop-buy")!;
   check("opens as a labeled dialog", panel.isOpen && root.getAttribute("role") === "dialog"
     && root.getAttribute("aria-labelledby") === "shop-item-name");
-  check("the item is fully labeled: name + kind + ownership + exact stat line",
+  // The stat line derives from weaponDisplayStats (the ONE live model the hotbar tooltip
+  // reads): role verb first, then POWER + the shared CADENCE/REACH/COVERAGE bands.
+  const expectedStats = weaponDisplayStats(weapon.weapon!, createMods(), 0);
+  const lineTexts = [...root.querySelectorAll(".shop-lines p")].map((p) => p.textContent!);
+  check("the item is fully labeled: name + kind + ownership + the tooltip-model stat line",
     root.textContent!.includes("WEAPON") && root.textContent!.includes("SHARED \u2014 FIRST BUY CLAIMS")
-    && root.querySelectorAll(".shop-lines p").length >= 1
-    && /DMG [\d.]+ \u00b7 RATE [\d.]+\/s/.test(root.querySelector(".shop-lines p")!.textContent!));
+    && lineTexts[0] === expectedStats.role
+    && new RegExp(`^POWER [\\d.]+.* \\u00b7 ${expectedStats.cadence.band} \\u00b7 ${expectedStats.reach.band} \\u00b7 ${expectedStats.coverage.kind}$`).test(lineTexts[1]));
   check("the action row is a real focusable button with a live region",
     buy.tagName === "BUTTON" && buy.getAttribute("aria-live") === "polite" && document.activeElement === buy);
   check("affordable: BUY \u00b7 12 COINS, enabled", buy.textContent === "BUY \u00b7 12 COINS" && !buy.disabled);

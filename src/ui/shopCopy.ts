@@ -9,6 +9,7 @@ import { shopSlotStatusFor } from "../sim/shop.js";
 import { SHOP } from "../sim/balance.js";
 import { WEAPONS } from "../sim/weapons.js";
 import type { WeaponId } from "../sim/types.js";
+import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods } from "../sim/items.js";
 
@@ -75,25 +76,25 @@ const KIND_LABEL: Record<ShopSlot["kind"], string> = {
   reroll: "REROLL POST",
 };
 
-function round1(v: number): number {
-  return Math.round(v * 10) / 10;
+// Stat numbers read at one decimal, trailing .0 dropped — the tooltip convention.
+function fmt(n: number): string {
+  const r = Math.round(n * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
 }
 
-// The full per-viewer panel view for one station. Weapon stats are the buyer's EFFECTIVE
-// numbers (base × their live run mods), so the sheet answers "what would this do in MY
-// hands right now", exactly like the hotbar drawer.
+// The full per-viewer panel view for one station. Weapon lines derive from
+// weaponDisplayStats — the ONE live effective-stats model the hotbar tooltip and drawer
+// read — so what the shop promises can never drift from what the buy delivers.
 export function shopPanelView(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, mods: PlayerMods): ShopPanelView {
   const status = shopSlotStatusFor(shop, slot, viewer);
   const lines: string[] = [];
   let icon: ShopPanelIcon = { kind: "reroll" };
   let tag: string | null = null;
   if (slot.kind === "weapon" && slot.weapon !== null) {
-    const w = WEAPONS[slot.weapon];
-    const dmg = round1(w.damage * mods.damageMult);
-    const rate = round1((1 / w.fireCd) * mods.fireRateMult);
-    const range = Math.round(w.melee ? w.melee.reach : w.speed * w.life * mods.bulletLifeMult);
-    lines.push(`DMG ${dmg} \u00b7 RATE ${rate}/s \u00b7 ${w.melee ? "REACH" : "RANGE"} ${range}`);
-    if (w.pellets > 1 || mods.extraPellets > 0) lines.push(`${w.pellets + mods.extraPellets} PROJECTILES PER SHOT`);
+    const s = weaponDisplayStats(slot.weapon, mods, lowHpFrac(viewer.hp, viewer.maxHp));
+    lines.push(s.role);
+    lines.push(`POWER ${fmt(s.power.perHit)}${s.power.count > 1 ? ` \u00d7${s.power.count}` : ""} \u00b7 ${s.cadence.band} \u00b7 ${s.reach.band} \u00b7 ${s.coverage.kind}`);
+    for (const m of s.mechanics.slice(0, 2)) lines.push(m.text);
     icon = { kind: "weapon", weapon: slot.weapon };
   } else if (slot.kind === "blessing" && slot.itemId !== null) {
     const def = itemById(slot.itemId);
