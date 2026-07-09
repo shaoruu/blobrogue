@@ -42,6 +42,7 @@ import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
+import { WeaponClaimOverlay } from "../ui/weaponClaim.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 
@@ -317,6 +318,7 @@ export class Game {
   private onExit: (reason?: ExitReason) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
+  private weaponClaim: WeaponClaimOverlay;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
   // Online: whether the first authoritative snapshot has revealed the real world yet. Until
@@ -473,6 +475,7 @@ export class Game {
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
+    this.weaponClaim = new WeaponClaimOverlay();
     this.buildWallGradients();
     this.bindInput();
     this.resize();
@@ -632,6 +635,7 @@ export class Game {
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
+    this.weaponClaim.hide();
     audio.unlock();
     waveAudio.reset();
     resetAnim(this.playerAnim);
@@ -895,10 +899,25 @@ export class Game {
     // (game over only lands on a full wipe — the check above). Revive releases it.
     this.updateSpectate();
 
-    // Online: surface any server-decided blessing offer (choice authority is server-side).
+    // Online: surface any server-decided reward pick (choice authority is server-side).
+    // Blessing offers drain first, then the boss weapon claim (gate §4) — sequential
+    // overlays, one decision at a time. A claim that resolved/expired server-side while
+    // its overlay was up (the 60s sim TTL) closes itself: the pending set is the truth.
     if (this.mode === "online" && this.wsTransport && !this.isChoosing) {
       const offer = this.wsTransport.consumePendingOffer();
       if (offer) this.offerServerBlessing(offer);
+      else {
+        const woffer = this.wsTransport.consumePendingWeaponOffer();
+        if (woffer) this.offerWeaponClaim(woffer);
+      }
+    }
+    if (this.weaponClaim.isOpen() && this.wsTransport) {
+      const selfId = this.wsTransport.getSelfServerId();
+      if (selfId !== null && !this.wsTransport.pendingBlessingParty().includes(selfId)) {
+        this.weaponClaim.hide();
+        this.isChoosing = false;
+        this.syncInputContext();
+      }
     }
 
     // Dev combo-freeze holds the chain full so the HUD can be screenshotted at a tier.
@@ -1584,6 +1603,28 @@ export class Game {
     return choices.map((item) => ({ item, nextLevel: (levels.get(item.id) ?? 0) + 1 }));
   }
 
+  // The boss weapon claim (gate §4): a personal pick from the party's shared choice set.
+  // Claim/reroll/pass are all requests — the sim owns the grant (SelfWire.wpns reflects
+  // it), the reroll budget, and the TTL. A reroll's fresh view arrives as a new `woffer`,
+  // which the drain above re-surfaces.
+  private offerWeaponClaim(offer: { id: number; choices: WeaponId[]; rerollsLeft: number }) {
+    if (!this.wsTransport || offer.choices.length === 0) return;
+    const owned = new Set<WeaponId>(this.wsTransport.getLatestSnapshot()?.self?.wpns ?? this.p.ownedWeapons);
+    this.isChoosing = true;
+    this.isPaused = false;
+    this.syncInputContext();
+    const done = () => {
+      this.isChoosing = false;
+      this.syncInputContext();
+      this.last = performance.now();
+    };
+    this.weaponClaim.show(offer.choices, owned, offer.rerollsLeft, {
+      onClaim: (id) => { this.wsTransport?.sendClaimWeapon(offer.id, id); sfx("blessing"); done(); },
+      onReroll: () => { this.wsTransport?.sendRerollWeapons(offer.id); done(); },
+      onPass: () => { this.wsTransport?.sendSkipWeapons(offer.id); done(); },
+    });
+  }
+
   private dashCooldown(): number {
     return PLAYER.dashCooldown * this.mods.dashCdMult;
   }
@@ -2015,7 +2056,8 @@ export class Game {
     }
     const total = remotes.length + 1;
     const parts: string[] = [];
-    if (picking.length > 0) parts.push(`${picking.join(" \u00b7 ")} PICKING A BLESSING`);
+    // pnd is the union of blessing picks and boss weapon claims — "reward" covers both.
+    if (picking.length > 0) parts.push(`${picking.join(" \u00b7 ")} CHOOSING A REWARD`);
     if (reconnecting.length > 0) parts.push(`${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026`);
     return `WAITING FOR ${others.length}/${total} PLAYER${others.length === 1 ? "" : "S"}\u2026 ${parts.join(" \u00b7 ")}`;
   }
@@ -2073,19 +2115,20 @@ export class Game {
   }
 
   private openStats() {
-    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean; isReconnecting: boolean }> | null = null;
+    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean; isOut: boolean; isAtExit: boolean; isReconnecting: boolean }> | null = null;
     if (this.coop) {
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isAtExit: false, isReconnecting: false },
-        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isAtExit: false, isReconnecting: false })),
+        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isOut: false, isAtExit: false, isReconnecting: false },
+        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isOut: false, isAtExit: false, isReconnecting: false })),
       ];
     } else if (this.mode === "online" && this.wsTransport) {
       const exr = this.wsTransport.exitReadyParty();
       const selfId = this.wsTransport.getSelfServerId();
+      const isSelfOut = this.wsTransport.getLatestSnapshot()?.self?.out === true;
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isAtExit: selfId !== null && exr.includes(selfId), isReconnecting: false },
+        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isOut: isSelfOut, isAtExit: selfId !== null && exr.includes(selfId), isReconnecting: false },
         ...this.wsTransport.remotePlayers().map((r) => ({
-          name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown,
+          name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isOut: r.isOut,
           isAtExit: exr.includes(r.playerId), isReconnecting: isReconnectingTeammate(r),
         })),
       ];
@@ -3476,6 +3519,12 @@ export class Game {
     for (const r of this.remotes()) {
       if (!r.isDown) continue;
       const sx = r.x - cam.x, sy = r.y - cam.y;
+      // Past the floor's down limit (gate §1) the body is OUT: the sim refuses the channel,
+      // so the UI must stop inviting one — no ring, no prompt, just the descent-rescue read.
+      if (r.isOut) {
+        label(sx, sy, `${r.name.toUpperCase()} IS OUT \u2014 DESCEND TO RESCUE`, "#ff8a7a");
+        continue;
+      }
       const isNear = !this.isDown && this.hp > 0 && Math.hypot(this.px - r.x, this.py - r.y) <= REVIVE.radius;
       if (!this.isDown) drawStandRing(sx, sy);
       if (r.reviveProgress > 0) drawProgress(sx, sy, r.reviveProgress / REVIVE.channel);
@@ -3556,6 +3605,7 @@ export class Game {
     const y = canvas.height - 168;
     const isBeingRevived = this.p.reviveProgress > 0;
     const isTargetReconnecting = isReconnectingTeammate(target);
+    const isSelfOut = this.wsTransport?.getLatestSnapshot()?.self?.out === true;
     const living = this.remotes().filter((r) => !r.isDown).length;
     ctx.save();
     ctx.textAlign = "center";
@@ -3564,15 +3614,17 @@ export class Game {
     ctx.globalAlpha = 0.85 + 0.15 * Math.sin(this.animClock * 3);
     ctx.fillText(`SPECTATING ${target.name.toUpperCase()}`, cx, y);
     ctx.globalAlpha = 0.8;
-    ctx.fillStyle = isBeingRevived ? "#8affc0" : "#d9d2c0";
+    ctx.fillStyle = isBeingRevived ? "#8affc0" : isSelfOut ? "#ff8a7a" : "#d9d2c0";
     ctx.font = '700 10px "Silkscreen", monospace';
     const hint = living > 1 ? "Q / E \u2014 SWITCH TEAMMATE \u00b7 " : "";
     ctx.fillText(
       isBeingRevived
         ? `A TEAMMATE IS REVIVING YOU\u2026 ${Math.round((this.p.reviveProgress / REVIVE.channel) * 100)}%`
-        : isTargetReconnecting
-          ? `${target.name.toUpperCase()} IS RECONNECTING\u2026 THE RUN RESUMES WHEN THEY RETURN`
-          : `${hint}A TEAMMATE CAN HOLD E ON YOUR BODY TO REVIVE YOU`,
+        : isSelfOut
+          ? `${hint}NO REVIVES LEFT THIS FLOOR \u2014 THE PARTY'S DESCENT RESCUES YOU`
+          : isTargetReconnecting
+            ? `${target.name.toUpperCase()} IS RECONNECTING\u2026 THE RUN RESUMES WHEN THEY RETURN`
+            : `${hint}A TEAMMATE CAN HOLD E ON YOUR BODY TO REVIVE YOU`,
       cx, y + 18,
     );
     ctx.restore();

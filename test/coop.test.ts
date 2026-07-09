@@ -24,6 +24,7 @@ import { domCanvas, domMinimap, domOverlay } from "./harness/domShim.js";
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, loadFloorIntoWorld, devSpawnEnemy,
   stepWorldPhase, chooseBlessingInWorld, acquireWeaponInWorld, playersAtExit,
+  claimBossWeaponInWorld, rerollBossWeaponsInWorld, skipBossWeaponInWorld, isPickPaused,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -32,7 +33,7 @@ import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 import {
   REVIVE, WEAPON_ECONOMY,
-  coopExtraWeaponRolls, coopWeaponRateMult, dealerWeaponStockFor, bossChestWeaponsFor,
+  pedestalWeaponsFor, dealerWeaponStockFor, dealerWeaponPriceFor, bossWeaponChoicesFor,
 } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
@@ -491,38 +492,63 @@ function exitReadinessTests(): void {
   }
 }
 
-// ---- 3. the party-scaled weapon economy P1-P4 ----
+// ---- 3. the party weapon economy P1-P4 (studio balance gate §4, tested per §7.6) ----
 
 function weaponEconomyTests(): void {
   const seeds = [0xF100D, 0x1234, 0xBEEF, 0xC0FFE];
+  // The §7.6 sweep, scaled for CI: the gate's opportunity formulas hold EXACTLY on every
+  // (seed, floor, P) cell — a wide deterministic net rather than a statistical claim.
+  const gateSeeds = [...seeds, 0x51ab, 0x9e3d, 0x77aa01, 0x00d1ce, 0xfeed5, 0xabc123, 0x31415, 0x27182];
 
-  section("economy: per-floor chest opportunities scale exactly +1 per extra member");
+  section("economy: pedestal counts stay the solo cadence; each pedestal holds exactly max(1, ceil(P/2))");
   {
-    let mismatches = 0, floorsChecked = 0;
-    for (const seed of seeds) {
+    let cadenceBreaks = 0, contentBreaks = 0, cells = 0;
+    for (const seed of gateSeeds) {
       for (let floor = 2; floor <= 6; floor++) {
-        const solo = chestWeaponCount(partyWorld(seed, floor, 1).w);
-        if (solo === 0) continue; // a degenerate layout can forfeit; not the contract under test
-        floorsChecked++;
-        for (const size of [2, 3, 4]) {
-          const count = chestWeaponCount(partyWorld(seed, floor, size).w);
-          if (count !== solo + coopExtraWeaponRolls(size)) mismatches++;
+        if (floor === 5) continue; // boss floor: the reward is the claim set, not pedestals
+        const soloPedestals = partyWorld(seed, floor, 1).w.chests.filter((c) => c.weapons !== undefined).length;
+        for (const size of [1, 2, 3, 4]) {
+          cells++;
+          const pedestals = partyWorld(seed, floor, size).w.chests.filter((c) => c.weapons !== undefined);
+          if (pedestals.length !== soloPedestals) cadenceBreaks++;
+          if (!pedestals.every((c) => c.weapons!.length === pedestalWeaponsFor(size))) contentBreaks++;
         }
       }
     }
-    check("chest stock == solo + (P-1) across seeds x floors 2-6", floorsChecked >= 16 && mismatches === 0,
-      `floors=${floorsChecked} mismatches=${mismatches}`);
+    check("pedestal COUNT identical to solo on every cell (party scales contents, not chests)",
+      cells >= 100 && cadenceBreaks === 0, `cells=${cells} breaks=${cadenceBreaks}`);
+    check("every pedestal holds exactly ceil(P/2) weapons (P1-2: 1, P3-4: 2)",
+      contentBreaks === 0, `breaks=${contentBreaks}`);
   }
 
-  section("economy: floor 2 alone guarantees an early weapon opportunity per member (before the first boss)");
+  section("economy: every non-boss floor from 2 up offers a weapon opportunity (nobody starves)");
   {
-    let shortfalls = 0;
-    for (const seed of seeds) {
-      for (const size of [1, 2, 3, 4]) {
-        if (chestWeaponCount(partyWorld(seed, 2, size).w) < size) shortfalls++;
+    let dryFloors = 0;
+    for (const seed of gateSeeds) {
+      for (let floor = 2; floor <= 8; floor++) {
+        if (floor === 5) continue;
+        const { w } = partyWorld(seed, floor, 4);
+        const hasPedestal = w.chests.some((c) => c.weapons !== undefined);
+        const hasDealer = w.pickups.some((p) => p.kind === "dealer_weapon");
+        if (!hasPedestal && !hasDealer) dryFloors++;
       }
     }
-    check("floor-2 stock >= P for every party size", shortfalls === 0, `shortfalls=${shortfalls}`);
+    check("no dry non-boss floor anywhere in the sweep (gate: never >2 consecutive)", dryFloors === 0, `dry=${dryFloors}`);
+  }
+
+  section("economy: the starvation guard force-stocks after 2 consecutive dry floors");
+  {
+    // Floor 1 stocks nothing by cadence — repeated floor-1 rebuilds walk the drought
+    // counter up; at 2 the guard forces a pedestal even where the cadence says none.
+    const w = createWorld(0xD10, 1, { isShared: true, skipLocalPlayer: true });
+    spawnPlayerInWorld(w, "p0");
+    spawnPlayerInWorld(w, "p1");
+    check("floor 1 stocks no pedestal (cadence) and counts drought 1", chestWeaponCount(w) === 0 && w.weaponDrought === 1);
+    loadFloorIntoWorld(w, 1);
+    check("second dry floor counts drought 2", chestWeaponCount(w) === 0 && w.weaponDrought === 2);
+    loadFloorIntoWorld(w, 1);
+    check("the third floor is FORCE-stocked and the drought resets",
+      chestWeaponCount(w) >= 1 && w.weaponDrought === 0, `stock=${chestWeaponCount(w)}`);
   }
 
   section("economy: identical (seed, floor, P) builds an identical arsenal (no per-client divergence)");
@@ -578,133 +604,245 @@ function weaponEconomyTests(): void {
         }
       }
     }
-    check("every P4 chest sits on an open floor tile", placed > 40 && onWall === 0, `placed=${placed} onWall=${onWall}`);
+    check("every P4 chest sits on an open floor tile", placed >= 30 && onWall === 0, `placed=${placed} onWall=${onWall}`);
     check("no chest overlaps a live prop", onProp === 0, `onProp=${onProp}`);
     check("no two chests share a tile", stackedTiles === 0, `stacked=${stackedTiles}`);
   }
 
-  section("economy: every party-stocked weapon is openable and collectible where it lands");
+  section("economy: every party-stocked pedestal is openable and its FULL contents collectible");
   {
-    let opened = 0, uncollected = 0;
-    for (const seed of seeds.slice(0, 2)) {
-      const { w, ps } = partyWorld(seed, 2, 4);
+    let opened = 0, stockedCount = 0, uncollected = 0;
+    for (const seed of seeds) {
+      const { w, ps } = partyWorld(seed, 3, 4);
       const a = ps[0];
       w.enemies = [];
       w.pendingSpawns = [];
       for (const chest of w.chests.filter((c) => c.weapons !== undefined)) {
-        const contents = chest.weapons![0];
+        const contents = chest.weapons!.slice();
+        stockedCount += contents.length;
         a.x = chest.x + 1; a.y = chest.y;
         stepWorldPhase(w, DT, []);
         if (!chest.opened) continue;
         opened++;
-        const drop = w.pickups.find((pk) => pk.kind === "weapon" && pk.weapon === contents);
-        if (drop) {
-          a.x = drop.x; a.y = drop.y;
-          stepWorldPhase(w, DT, []);
+        // Walk to every ejected weapon (a P3-4 pedestal spills two).
+        for (const id of contents) {
+          const drop = w.pickups.find((pk) => pk.kind === "weapon" && pk.weapon === id);
+          if (drop) {
+            a.x = drop.x; a.y = drop.y;
+            stepWorldPhase(w, DT, []);
+          }
+          if (!a.ownedWeapons.includes(id)) uncollected++;
         }
-        if (!a.ownedWeapons.includes(contents)) uncollected++;
       }
     }
-    check("every stocked chest opened and its weapon collected", opened >= 8 && uncollected === 0, `opened=${opened} uncollected=${uncollected}`);
+    check("every stocked pedestal opened and its whole contents collected",
+      opened >= 4 && stockedCount >= 8 && uncollected === 0,
+      `opened=${opened} stocked=${stockedCount} uncollected=${uncollected}`);
   }
 
-  section("economy: the Dealer stocks party weapons — priced, standable, first-come");
+  section("economy: the Dealer stocks max(2,P) distinct stalls at 12/18/24 — purchases PERSONAL");
   {
     for (const size of [1, 2, 3, 4]) {
       const { w } = partyWorld(0xDEA1, 3, size);
       const stock = w.pickups.filter((p) => p.kind === "dealer_weapon");
       const hearts = w.pickups.filter((p) => p.kind === "dealer_heart");
-      check(`P${size}: dealer stocks ${dealerWeaponStockFor(size)} weapon(s) + ${size} heart(s)`,
+      check(`P${size}: dealer stocks ${dealerWeaponStockFor(size)} stall(s) + ${size} heart(s)`,
         stock.length === dealerWeaponStockFor(size) && hearts.length === size,
         `weapons=${stock.length} hearts=${hearts.length}`);
+      check(`P${size}: stall kinds distinct, slot prices 12/18/24`,
+        new Set(stock.map((s) => s.weapon)).size === stock.length
+        && stock.every((s, i) => s.value === dealerWeaponPriceFor(i)),
+        stock.map((s) => `${s.weapon}@${s.value}`).join(","));
       for (const s of stock) {
         const tx = Math.floor(s.x / TILE), ty = Math.floor(s.y / TILE);
-        check(`P${size}: dealer weapon priced + on open floor`,
-          s.value === WEAPON_ECONOMY.dealerWeaponPrice && w.dungeon.tiles[ty * w.dungeon.w + tx] === 0,
-          `price=${s.value}`);
+        check(`P${size}: stall on open floor`, w.dungeon.tiles[ty * w.dungeon.w + tx] === 0);
       }
     }
-    // Buy flow on a P2 world: broke walks past; an owner walks past; a funded buyer takes it.
+    // Personal-purchase flow on a P2 world: broke walks past; a buyer pays and the stall
+    // STAYS; the buyer can't rebuy (owns it); a teammate buys the SAME stall.
     const { w, ps } = partyWorld(0xDEA1, 3, 2);
     w.enemies = []; w.pendingSpawns = [];
     const stall = w.pickups.find((p) => p.kind === "dealer_weapon")!;
     const merch = stall.weapon!;
+    const price = stall.value!;
     const [a, b] = ps;
     a.coins = 0;
     a.x = stall.x; a.y = stall.y;
     stepWorldPhase(w, DT, []);
     check("broke player walks past the stall", w.pickups.includes(stall) && !a.ownedWeapons.includes(merch));
-    acquireWeaponInWorld(w, b.id, merch);
-    b.coins = 50;
+    a.coins = price;
+    stepWorldPhase(w, DT, []);
+    check("a funded buyer pays the slot price and the stall STAYS (personal purchase)",
+      w.pickups.includes(stall) && a.ownedWeapons.includes(merch) && a.coins === 0,
+      `owned=${a.ownedWeapons.join(",")} coins=${a.coins}`);
+    // Exactly the first stall's price: a rebuy would spend it, and the pricier neighbor
+    // stall (18) stays out of reach — so unchanged coins prove the ownership block.
+    a.coins = price;
+    stepWorldPhase(w, DT, []);
+    check("an owner never rebuys their own stall", a.coins === price, `coins=${a.coins}`);
+    b.coins = price;
     b.x = stall.x; b.y = stall.y;
     stepWorldPhase(w, DT, []);
-    check("an owner never double-buys (stock stays for a teammate)", w.pickups.includes(stall) && b.coins === 50);
-    a.coins = WEAPON_ECONOMY.dealerWeaponPrice;
-    stepWorldPhase(w, DT, []);
-    check("a funded buyer takes the weapon for the price",
-      !w.pickups.includes(stall) && a.ownedWeapons.includes(merch) && a.coins === 0,
-      `owned=${a.ownedWeapons.join(",")} coins=${a.coins}`);
+    check("a teammate buys the SAME stall (no depletion race)",
+      w.pickups.includes(stall) && b.ownedWeapons.includes(merch) && b.coins === 0);
   }
 
-  section("economy: the boss chest bakes a P-sized arsenal (solo keeps the tuned heart+coins)");
+  section("economy: the boss reward is min(P+1,5) CHOICES, claimed personally (gate §4)");
   {
     for (const size of [1, 2, 3, 4]) {
       const { w, ps } = partyWorld(0xB055, 5, size);
       killBoss(w, ps[0].id);
       const chest = w.chests.find((c) => c.kind === "boss")!;
-      const want = bossChestWeaponsFor(size);
-      check(`P${size}: boss chest holds ${want} weapon(s)`, (chest.weapons?.length ?? 0) === want, `got=${chest.weapons?.length ?? 0}`);
-      if (want > 0) {
-        check(`P${size}: arsenal kinds are distinct`, new Set(chest.weapons).size === want, chest.weapons!.join(","));
-        if (want >= 3) check(`P${size}: arsenal mixes melee + ranged`, chest.weapons!.some(isMelee) && !chest.weapons!.every(isMelee));
-      }
-      // Open from afar (a planted bullet) so the whole spill stays on the floor to count.
+      check(`P${size}: the boss chest bakes NO floor weapons (the reward is the claim set)`, chest.weapons === undefined);
+      // Open from afar (a planted bullet) so the spill stays on the floor to count.
       const opener = ps[0];
       opener.x = chest.x + 400; opener.y = chest.y + 300;
       plantKillBullet(w, opener.id, chest.x, chest.y, 6);
       const ev: SimEvent[] = [];
       stepWorldPhase(w, DT, ev);
-      check(`P${size}: opening ejected the arsenal + the tuned heart + 5 coins`,
+      check(`P${size}: opening ejected the tuned heart + 5 coins (no weapon spill)`,
         chest.opened
-        && w.pickups.filter((p) => p.kind === "weapon").length === want
+        && w.pickups.filter((p) => p.kind === "weapon").length === 0
         && w.pickups.filter((p) => p.kind === "heart").length === 1
-        && w.pickups.filter((p) => p.kind === "coin").length === 5,
-        `weapons=${w.pickups.filter((p) => p.kind === "weapon").length}`);
+        && w.pickups.filter((p) => p.kind === "coin").length === 5);
       const rare = ev.filter((e) => e.t === "offerBlessing");
       check(`P${size}: every member got the Rare pick from the boss chest`,
         rare.length === size && rare.every((o) => o.t === "offerBlessing" && o.rare)
         && new Set(rare.map((o) => (o as { pid: string }).pid)).size === size,
         `offers=${rare.length}`);
+      const want = bossWeaponChoicesFor(size);
+      const claims = w.weaponClaims!;
+      const wofferEv = ev.filter((e) => e.t === "offerWeapons");
+      check(`P${size}: every member holds a personal claim over ${want} distinct choices`,
+        claims.pending.size === size && wofferEv.length === size
+        && claims.choices.length === want && new Set(claims.choices).size === want,
+        claims.choices.join(","));
+      if (want >= 3) check(`P${size}: the choice set mixes melee + ranged`, claims.choices.some(isMelee) && !claims.choices.every(isMelee));
     }
   }
 
-  section("economy: party rolls prefer weapons NOBODY owns (anti-junk)");
+  section("economy: claims grant personally, never deplete, reject dupes, reroll exactly once");
+  {
+    const { w, ps } = partyWorld(0xC1A1, 5, 3);
+    killBoss(w, ps[0].id);
+    const chest = w.chests.find((c) => c.kind === "boss")!;
+    ps[0].x = chest.x + 1; ps[0].y = chest.y;
+    stepWorldPhase(w, DT, []);
+    const claims = w.weaponClaims!;
+    const base = claims.choices.slice();
+    check("a claim inside the view grants the weapon personally",
+      claimBossWeaponInWorld(w, ps[0].id, base[0]) && ps[0].ownedWeapons.includes(base[0]));
+    check("teammates keep the FULL choice set after a claim (no depletion)",
+      claims.pending.get(ps[1].id)!.view.join(",") === base.join(","));
+    check("claiming twice rejects (one personal claim each)", !claimBossWeaponInWorld(w, ps[0].id, base[1]));
+    check("a choice outside the view rejects",
+      !claimBossWeaponInWorld(w, ps[1].id, PICKUP_WEAPONS.find((id) => !base.includes(id))!));
+    acquireWeaponInWorld(w, ps[1].id, base[1]);
+    check("an owned duplicate rejects (dupes route to the reroll, never coins)",
+      !claimBossWeaponInWorld(w, ps[1].id, base[1]));
+    const rerolled = rerollBossWeaponsInWorld(w, ps[1].id)!;
+    check("the reroll is a fresh personal view of the same size, off the base set",
+      rerolled.length === base.length && rerolled.every((id) => !base.includes(id)),
+      rerolled.join(","));
+    check("the reroll is personal — a teammate's view is still the base set",
+      w.weaponClaims!.pending.get(ps[2].id)!.view.join(",") === base.join(","));
+    check("a second reroll rejects (exactly one)", rerollBossWeaponsInWorld(w, ps[1].id) === null);
+    check("claiming from the rerolled view grants", claimBossWeaponInWorld(w, ps[1].id, rerolled[0]));
+    check("mid-claim members are pick-paused and shielded", isPickPaused(w, ps[2].id));
+    skipBossWeaponInWorld(w, ps[2].id);
+    check("a skip resolves the last claim and releases the state", w.weaponClaims === null);
+    check("the boss chest's blessing pick still pauses independently of the claim",
+      isPickPaused(w, ps[2].id) && w.pendingBlessings.has(ps[2].id));
+  }
+
+  section("economy: an unanswered claim expires on the sim clock; a disconnect releases immediately");
+  {
+    const { w, ps } = partyWorld(0xC1A2, 5, 2);
+    killBoss(w, ps[0].id);
+    const chest = w.chests.find((c) => c.kind === "boss")!;
+    ps[0].x = chest.x + 1; ps[0].y = chest.y;
+    stepWorldPhase(w, DT, []);
+    check("both claims open", w.weaponClaims!.pending.size === 2);
+    removePlayerFromWorld(w, ps[1].id);
+    check("a disconnect resolves that member's claim", w.weaponClaims!.pending.size === 1);
+    const ticks = Math.ceil(WEAPON_ECONOMY.claimTtl / DT) + 2;
+    for (let t = 0; t < ticks; t++) stepWorldPhase(w, DT, []);
+    check("the AFK claim expired on the sim clock (the descend gate always drains)", w.weaponClaims === null);
+  }
+
+  section("economy: reroll views are deterministic per (seed, floor, player)");
+  {
+    const build = (): string => {
+      const { w, ps } = partyWorld(0xC1A3, 5, 2);
+      killBoss(w, ps[0].id);
+      const chest = w.chests.find((c) => c.kind === "boss")!;
+      ps[0].x = chest.x + 1; ps[0].y = chest.y;
+      stepWorldPhase(w, DT, []);
+      return (rerollBossWeaponsInWorld(w, ps[0].id) ?? []).join(",");
+    };
+    check("identical reroll on a rebuilt world", build() === build() && build().length > 0, build());
+  }
+
+  section("economy: rolls prefer weapons NOBODY owns; family coverage tracks what's equipped");
   {
     const { w, ps } = partyWorld(0x0A11, 5, 2);
-    // The party owns 13 of the 15 pickup kinds — only two remain fresh.
-    const fresh: WeaponId[] = ["flamer", "spear"];
+    // The party owns 12 of the 15 pickup kinds — three remain fresh.
+    const fresh: WeaponId[] = ["flamer", "spear", "sword"];
     for (const p of ps) for (const id of PICKUP_WEAPONS) if (!fresh.includes(id)) acquireWeaponInWorld(w, p.id, id);
     killBoss(w, ps[0].id);
     const chest = w.chests.find((c) => c.kind === "boss")!;
-    check("the P2 arsenal is exactly the two unowned kinds",
-      chest.weapons !== undefined && chest.weapons.length === 2 && fresh.every((id) => chest.weapons!.includes(id)),
-      chest.weapons?.join(",") ?? "none");
+    ps[0].x = chest.x + 1; ps[0].y = chest.y;
+    stepWorldPhase(w, DT, []);
+    const choices = w.weaponClaims!.choices;
+    check("the P2 choice set is drawn from the unowned kinds",
+      choices.length === 3 && choices.every((id) => fresh.includes(id)), choices.join(","));
+    // Family coverage: a party wielding ONLY melee still sees a ranged option (and vice
+    // versa there's ≥1 melee-compatible pick when someone holds melee).
+    const { w: w2, ps: ps2 } = partyWorld(0x0A12, 5, 2);
+    for (const p of ps2) { acquireWeaponInWorld(w2, p.id, "sword"); p.weapon = "sword"; }
+    killBoss(w2, ps2[0].id);
+    const chest2 = w2.chests.find((c) => c.kind === "boss")!;
+    ps2[0].x = chest2.x + 1; ps2[0].y = chest2.y;
+    stepWorldPhase(w2, DT, []);
+    const set2 = w2.weaponClaims!.choices;
+    check("an all-melee party's set still carries >=1 melee-compatible AND >=1 ranged pick",
+      set2.some(isMelee) && set2.some((id) => !isMelee(id)), set2.join(","));
   }
 
-  section("economy: scarcity preserved — totals grow, but sub-linearly per person");
+  section("economy: solo-local keeps the tuned baseline (no dealer stalls, no boss claims)");
+  {
+    const w = createWorld(0xB055, 5, {});
+    const local = w.players.values().next().value!;
+    killBoss(w, local.id);
+    const chest = w.chests.find((c) => c.kind === "boss")!;
+    local.x = chest.x + 1; local.y = chest.y;
+    stepWorldPhase(w, DT, []);
+    check("local boss chest: heart + coins, no weapons, no claim state",
+      chest.opened && chest.weapons === undefined && w.weaponClaims === null);
+    const w3 = createWorld(0xDEA1, 3, {});
+    check("local dealer floor: hearts only, no weapon stalls",
+      w3.pickups.some((p) => p.kind === "dealer_heart") && !w3.pickups.some((p) => p.kind === "dealer_weapon"));
+  }
+
+  section("economy: options scale, scarcity holds — the measured §4 table");
   {
     const total = (size: number): number => {
       let n = 0;
-      for (const seed of seeds) for (let floor = 2; floor <= 6; floor++) n += chestWeaponCount(partyWorld(seed, floor, size).w);
+      for (const seed of seeds) {
+        for (let floor = 2; floor <= 6; floor++) {
+          const { w } = partyWorld(seed, floor, size);
+          n += chestWeaponCount(w);
+          n += w.pickups.filter((p) => p.kind === "dealer_weapon").length;
+          if (floor === 5) n += bossWeaponChoicesFor(size);
+        }
+      }
       return n;
     };
     const t1 = total(1), t2 = total(2), t3 = total(3), t4 = total(4);
-    check("P4 total stays under 4x the solo total (per-person scarcity)", t4 < 4 * t1, `P1=${t1} P4=${t4}`);
-    check("P4 total meaningfully exceeds solo (the playtest fix)", t4 >= t1 + 50, `P1=${t1} P4=${t4}`);
-    check("ambient wood-chest weapon window widens with the party",
-      coopWeaponRateMult(1) === 1 && coopWeaponRateMult(4) > coopWeaponRateMult(2) && coopWeaponRateMult(2) > 1);
-    process.stdout.write(`  measured chest opportunities (floors 2-6 x ${seeds.length} seeds): P1=${t1} P2=${t2} P3=${t3} P4=${t4}\n`);
-    process.stdout.write(`  measured per person: P1=${(t1 / 1).toFixed(1)} P2=${(t2 / 2).toFixed(1)} P3=${(t3 / 3).toFixed(1)} P4=${(t4 / 4).toFixed(1)}\n`);
+    check("P4 offers stay well under 4x solo (per-person scarcity)", t4 < 4 * t1, `P1=${t1} P4=${t4}`);
+    check("P4 offers meaningfully exceed solo (the playtest fix)", t4 > t1 + 10, `P1=${t1} P4=${t4}`);
+    process.stdout.write(`  measured §4 offers (pedestal slots + stalls + boss choices, floors 2-6 x ${seeds.length} seeds): P1=${t1} P2=${t2} P3=${t3} P4=${t4}\n`);
+    process.stdout.write(`  per person: P1=${t1.toFixed(1)} P2=${(t2 / 2).toFixed(1)} P3=${(t3 / 3).toFixed(1)} P4=${(t4 / 4).toFixed(1)}\n`);
   }
 }
 

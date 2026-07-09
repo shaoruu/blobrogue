@@ -49,6 +49,9 @@ function classOf(t: ClientMsg["t"]): MsgClass {
     case "reorder":
     case "drop":
     case "chooseBlessing":
+    case "claimWeapon":
+    case "rerollWeapons":
+    case "skipWeapons":
     case "spec":
       return "control";
     default: return assertNever(t);
@@ -75,6 +78,9 @@ export class MessageRouter {
       case "reorder": this.onReorder(conn, msg); return;
       case "drop": this.onDrop(conn, msg); return;
       case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
+      case "claimWeapon": this.onClaimWeapon(conn, msg); return;
+      case "rerollWeapons": this.onRerollWeapons(conn, msg); return;
+      case "skipWeapons": this.onSkipWeapons(conn, msg); return;
       case "spec": this.onSpectate(conn, msg); return;
       default: assertNever(msg); // exhaustive — a new variant won't compile until handled
     }
@@ -217,6 +223,45 @@ export class MessageRouter {
     if (!room) return;
     if (room.applyBlessing(conn.playerId, msg.choiceId)) { conn.pendingOffer = null; conn.offerResendsLeft = 0; }
     else this.ctx.metrics.counters.rejectedInputs++;
+  }
+
+  // Boss weapon claim (gate §4). The echo-id/view check is delivery hygiene; the SIM is the
+  // authority (it owns the pending claim, its TTL, and the never-a-duplicate grant), so a
+  // tampered client can neither claim outside its view nor mint a second weapon.
+  private onClaimWeapon(conn: Conn, msg: Extract<ClientMsg, { t: "claimWeapon" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    if (!conn.pendingWeaponOffer || msg.offerId !== conn.weaponOfferId || !conn.pendingWeaponOffer.includes(msg.weapon)) {
+      this.ctx.metrics.counters.rejectedInputs++;
+      return;
+    }
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (!room) return;
+    if (room.applyWeaponClaim(conn.playerId, msg.weapon)) { conn.pendingWeaponOffer = null; conn.weaponOfferResendsLeft = 0; }
+    else this.ctx.metrics.counters.rejectedInputs++;
+  }
+
+  // The claimant's one reroll: the sim validates the budget; the fresh view re-arms the
+  // delivery under a NEW monotonic id so stale answers can never hit the new set.
+  private onRerollWeapons(conn: Conn, msg: Extract<ClientMsg, { t: "rerollWeapons" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    if (!conn.pendingWeaponOffer || msg.offerId !== conn.weaponOfferId) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (!room) return;
+    const view = room.rerollWeaponClaim(conn.playerId);
+    if (view === null) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    conn.pendingWeaponOffer = view;
+    conn.weaponOfferId++;
+    conn.weaponOfferResendsLeft = OFFER_RESENDS;
+  }
+
+  private onSkipWeapons(conn: Conn, msg: Extract<ClientMsg, { t: "skipWeapons" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    if (!conn.pendingWeaponOffer || msg.offerId !== conn.weaponOfferId) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (!room) return;
+    room.skipWeaponClaim(conn.playerId);
+    conn.pendingWeaponOffer = null;
+    conn.weaponOfferResendsLeft = 0;
   }
 }
 

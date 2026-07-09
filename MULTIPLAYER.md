@@ -300,15 +300,27 @@ seed/floor/rev, enemy ids+positions, pickup ids/positions, chest ids/state, and 
 other's verified ticket names/colors — under production-default full snapshots AND with
 interest filtering re-enabled.
 
-### Down, revive, spectate (authoritative)
+### Down, revive, spectate (authoritative — studio balance gate §6)
 
-At 0 HP with a living teammate you go **down**, not dead. A teammate stands inside your
-revive ring and **holds E** for the 1.5s channel — the interact intent rides the input
-stream (`act`), and the server validates radius/liveness/pause state, so the bit alone can
-never conjure a revive. Both sides watch the SAME authoritative progress (SelfWire `rev` /
-PlayerWire `rv`) as a world-space ring; damage to the reviver cancels, walking away or
-releasing decays. Revive returns you at 2 HP with 1.0s protection and a 0.35s attack
-lockout; a party descend rescues any downed member at the same partial HP.
+At 0 HP in a shared world you go **down**, never straight to game over. A teammate stands
+inside your revive ring and **holds E** for the 1.5s channel — the interact intent rides
+the input stream (`act`), and the server validates radius/liveness/pause state, so the bit
+alone can never conjure a revive. The channel is **uninterrupted by contract**: the
+reviver taking damage, dashing, attacking, releasing the key, or leaving the radius resets
+it to zero (no partial credit), exactly **one reviver** powers it (identity-tracked in the
+sim — extra helpers neither accelerate nor inherit progress), and both sides watch the
+same authoritative progress (SelfWire `rev` / PlayerWire `rv`) as a world-space ring.
+Revive returns you at 2 HP with 1.0s protection and a 0.35s attack lockout.
+
+Standard's **down limit is 3 per player per floor**: the fourth down is OUT — the body is
+unrevivable (both wires carry the derived `out` bit, so no client ever prompts a channel
+the sim would refuse; the world label reads `<NAME> IS OUT — DESCEND TO RESCUE`) — and the
+party's descend rescues OUT and downed members alike at the revive HP, resetting the
+count. The **wipe is a held beat, not an instant cut**: the run ends only after every
+connected player has been down simultaneously for 4.0s (`checkStrandedWipe` accumulates
+the hold; anyone standing — or, under the coherence system's grace, a resumed player —
+resets it). Solo-local keeps its classic immediate game over, byte-identical goldens and
+all.
 
 While down you **spectate**: the camera rides a living teammate (`SPECTATING <NAME>`),
 Q/E, the arrows, or the wheel cycle targets, and a semantic `spec` message tells the
@@ -335,6 +347,29 @@ players included — and the descend holds until each pick resolves. Snapshots c
 pending set (`pnd`), so everyone sees `WAITING FOR N/M PLAYERS…` with the names still
 picking. Choosers are paused and damage-shielded; a disconnect releases their hold
 immediately and an unanswered offer expires after 60s on the sim clock.
+
+### The party weapon economy (studio balance gate §4, Stage C shared worlds)
+
+Quantity scales **options, never rarity or stats** — the roll pools, drop rates, and
+weapon stats are identical solo/co-op, and every count is deterministic per
+`(seed, floor, P)` with the encounter's `P` snapshotted at floor build:
+
+- **Pedestals** keep the solo cadence per floor; each holds `max(1, ceil(P/2))` distinct
+  weapons (P1–2: one, P3–4: two), preferring kinds nobody owns. A starvation guard
+  force-stocks a pedestal if the party somehow goes 2 consecutive non-boss floors without
+  any weapon opportunity.
+- **The Dealer** stocks `max(2, P)` distinct stalls priced **12/18/24** by slot. Purchases
+  are **personal**: a stall never depletes — every member can buy the same stall once
+  (ownership blocks a rebuy), so there is no shared-drop race at the shop.
+- **The boss reward** is `min(P+1, 5)` distinct choices — rolled once per encounter,
+  covering every weapon family the party has equipped — and each member **claims one
+  personally** through the claim overlay (`woffer` → `claimWeapon`). A claim removes
+  nothing for teammates; an owned duplicate can't be claimed (each claimant instead holds
+  **one reroll** to a fresh personal view — never coins, never raw damage); a skip is
+  explicit; and pending claims pause+shield their player and hold the descend exactly like
+  blessing picks, expiring after 60s on the sim clock so the gate always drains. `pnd` on
+  the wire is the union of blessing picks and weapon claims — the HUD reads
+  `<NAME> CHOOSING A REWARD`.
 
 ### Party exit coordination
 

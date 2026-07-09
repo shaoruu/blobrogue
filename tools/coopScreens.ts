@@ -180,38 +180,20 @@ async function main(): Promise<void> {
     });
   }
 
-  // 4. The boss-chest arsenal (P4): the party's four distinct weapons spilled on the floor.
+  // 4. The down limit (gate §1): gf spent her three downs — her body is OUT, unrevivable,
+  // and the world says exactly what the party's move is (the stairs), with no stand-here
+  // ring inviting a channel the sim would refuse.
   {
-    const { w, identities } = partyScene(0xB055, 5, ["s0", "s1", "s2", "s3"]);
-    const boss = w.enemies.find((e) => e.kind === "boss")!;
-    boss.hp = 1;
-    boss.boss!.transitionsDone = 2;
-    // Drag the boss to an open mid-room spot away from the exit so the spill frames clean.
-    const room = w.dungeon.rooms[Math.floor(w.dungeon.rooms.length / 2)];
-    boss.x = (room.cx + 0.5) * TILE; boss.y = (room.cy + 0.5) * TILE;
-    // Park the whole party far while the chest opens, so nothing is collected instantly.
-    const spots: Array<[number, number]> = [[-90, 70], [110, 60], [-60, -80], [120, -60]];
-    for (const id of ["s0", "s1", "s2", "s3"]) { const p = w.players.get(id)!; p.x = boss.x + 600; p.y = boss.y + 500; }
-    w.bullets.push({
-      x: boss.x, y: boss.y, vx: 1, vy: 0, radius: boss.radius + 6, life: 1, friendly: true,
-      owner: "s0", damage: 100000, color: "#fff", pierce: 0, hitList: null, isCrit: false,
-    });
-    stepWorldPhase(w, 1 / 20, []); // kill -> the chest drops with the P4 arsenal baked
-    const chest = w.chests.find((c) => c.kind === "boss")!;
-    w.bullets.push({
-      x: chest.x, y: chest.y, vx: 1, vy: 0, radius: 6, life: 1, friendly: true,
-      owner: "s0", damage: 1, color: "#fff", pierce: 0, hitList: null, isCrit: false,
-    });
-    stepWorldPhase(w, 1 / 20, []); // open -> 4 weapons + heart + 5 coins eject in the fan
-    ["s0", "s1", "s2", "s3"].forEach((id, i) => {
-      const p = w.players.get(id)!;
-      p.x = chest.x + spots[i][0]; p.y = chest.y + spots[i][1];
-    });
-    // Everyone got the Rare offer at the open; resolve them so the scene isn't paused.
-    w.pendingBlessings.clear();
+    const { w, identities } = partyScene(0x0071, 4, ["s0", "s1"]);
+    const me = w.players.get("s0")!;
+    const gf = w.players.get("s1")!;
+    gf.x = me.x + 120; gf.y = me.y + 30;
+    gf.isDown = true; gf.hp = 0; gf.downsThisFloor = REVIVE.downsPerFloor + 1;
+    devSpawnEnemy(w, "skeleton", me.x + 300, me.y - 60);
+    devSpawnEnemy(w, "bat", me.x - 180, me.y + 160);
     await capture({
-      name: "boss-arsenal-p4", world: w, selfId: "s0", identities, ticks: 6,
-      setup: (game) => game.input.mouseMove(700, 300),
+      name: "down-limit-out", world: w, selfId: "s0", identities, ticks: 8,
+      setup: (game) => game.input.mouseMove(760, 340),
     });
   }
 

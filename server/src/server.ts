@@ -160,6 +160,17 @@ export class GameServer {
       conn.offerResendsLeft = OFFER_RESENDS;
       conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;
     }
+    // Boss weapon claims (gate §4): the sim already holds the pending state + choice set;
+    // arm the per-connection delivery (monotonic id + bounded resends) for each member.
+    for (const pid of room.weaponOfferPlayers()) {
+      const conn = this.connForPlayer(room, pid);
+      if (!conn || conn.closing) continue;
+      const view = room.weaponClaimViewFor(pid);
+      if (view === null) continue;
+      conn.pendingWeaponOffer = view.choices;
+      conn.weaponOfferId++;
+      conn.weaponOfferResendsLeft = OFFER_RESENDS;
+    }
   }
 
   // Deterministic leave on game over: the final snapshot (carrying the gameOver event) has just

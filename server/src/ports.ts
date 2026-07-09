@@ -51,10 +51,19 @@ export interface RoomRuntime {
   // so the sim's pick-pause and descend gate don't wait out the offer TTL.
   dismissBlessing(pid: PlayerId): void;
 
+  // Boss weapon claims (gate §4): the SIM owns the pending state (shared choice set,
+  // per-player view/reroll budget/TTL); these read and answer it.
+  weaponClaimViewFor(pid: PlayerId): { choices: WeaponId[]; rerollsLeft: number } | null;
+  applyWeaponClaim(pid: PlayerId, weapon: WeaponId): boolean;
+  rerollWeaponClaim(pid: PlayerId): WeaponId[] | null;
+  skipWeaponClaim(pid: PlayerId): void;
+
   // Player ids whose run ended this tick (full wipe) — the server drives the leave lifecycle.
   gameOverPlayers(): PlayerId[];
   // Blessing offers raised this tick — the server turns each into a validated offer.
   offerPlayers(): BlessingOfferRequest[];
+  // Members whose boss weapon claim opened this tick — the server arms each delivery.
+  weaponOfferPlayers(): PlayerId[];
 }
 
 // One sim-raised blessing offer (descend or boss chest) awaiting server-side rolling.

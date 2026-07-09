@@ -29,6 +29,8 @@ import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
 // so the server can validate the answer against exactly this offer.
 export interface BlessingOffer { id: number; choices: string[] }
+// The boss weapon claim view (gate §4): this client's current choice set + rerolls left.
+export interface WeaponOffer { id: number; choices: WeaponId[]; rerollsLeft: number }
 
 // Minimal socket surface (a subset shared by browser WebSocket and the `ws` package).
 export interface SocketLike {
@@ -140,6 +142,7 @@ export class WSTransport implements Transport {
   // this back so the server stops resending). Defends against backpressure-dropped snapshots.
   private lastEventId = 0;
   private lastOfferId = 0;      // dedupe repeated (resent) offers
+  private lastWeaponOfferId = 0;
   private lastSnapTick = -1;    // reject stale / out-of-order snapshots
   private lastSnapRev = -1;     // reject snapshots from an older world revision
   private lastAckSeq = 0;       // the server ack never decreases (reorder guard)
@@ -154,6 +157,7 @@ export class WSTransport implements Transport {
   private isWorldRebuilt = false;
   // A server-decided blessing offer waiting to be shown (consumed by the game each frame).
   private pendingOffer: BlessingOffer | null = null;
+  private pendingWeaponOffer: WeaponOffer | null = null;
 
   // observability for the harness / HUD
   bytesRecv = 0;
@@ -293,6 +297,15 @@ export class WSTransport implements Transport {
       if (msg.id > this.lastOfferId) {
         this.lastOfferId = msg.id;
         this.pendingOffer = { id: msg.id, choices: msg.choices.slice() };
+      }
+      return;
+    }
+    if (msg.t === "woffer") {
+      // The boss weapon claim view (same idempotent-id contract as `offer`). A REROLL
+      // arrives as a fresh id for the same claim, so it replaces the view.
+      if (msg.id > this.lastWeaponOfferId) {
+        this.lastWeaponOfferId = msg.id;
+        this.pendingWeaponOffer = { id: msg.id, choices: msg.choices.slice(), rerollsLeft: msg.rr };
       }
       return;
     }
@@ -596,6 +609,7 @@ export class WSTransport implements Transport {
         weapon: p.wpn, floor: snap.floor,
         isDown: p.down,
         reviveProgress: p.rv,
+        isOut: p.out,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl ?? colorIndexFor(p.id),
@@ -673,6 +687,33 @@ export class WSTransport implements Transport {
   // Non-destructive read of the pending offer (harness/tests inspect without consuming).
   getPendingOfferPeek(): BlessingOffer | null {
     return this.pendingOffer;
+  }
+
+  // Answer the boss weapon claim (gate §4). The server validates the id against this
+  // client's live view and the sim enforces ownership (dupes reject) — the grant flows
+  // back via SelfWire.wpns, never locally.
+  sendClaimWeapon(offerId: number, weapon: WeaponId): void {
+    this.sendMsg({ t: "claimWeapon", offerId, weapon });
+  }
+
+  // Spend the claim's one reroll: the fresh personal view arrives as a new `woffer`.
+  sendRerollWeapons(offerId: number): void {
+    this.sendMsg({ t: "rerollWeapons", offerId });
+  }
+
+  // Pass on the claim entirely (releases this player's hold on the descend gate).
+  sendSkipWeapons(offerId: number): void {
+    this.sendMsg({ t: "skipWeapons", offerId });
+  }
+
+  consumePendingWeaponOffer(): WeaponOffer | null {
+    const o = this.pendingWeaponOffer;
+    this.pendingWeaponOffer = null;
+    return o;
+  }
+
+  getPendingWeaponOfferPeek(): WeaponOffer | null {
+    return this.pendingWeaponOffer;
   }
 
   // Authoritative floor-cleared / exit-open flag (global objective state; survives interest

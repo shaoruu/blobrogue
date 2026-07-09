@@ -52,13 +52,19 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - isInteracting: per-tick input derivative (the interact key) — the wire carries the input
 //                  bit itself; both server and prediction re-derive this from consumed inputs
 type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting";
+// Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
+// - reviveBy:       the channel's identity (WHO is reviving whom) — prediction has no
+//                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
+// - downsThisFloor: the per-floor down count behind the OUT state — the client consumes
+//                   the derived out flag on the wire, never the counter
+type ServerOnlyField = "reviveBy" | "downsThisFloor";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
 // field without classifying it above (or classifying it twice) is a COMPILE error here.
 type MustBeNever<T extends never> = T;
-export type _AssertAllPlayerFieldsClassified = MustBeNever<Exclude<keyof PlayerSim, ServerOwnedField | ClientOwnedField>>;
-export type _AssertClassificationDisjoint = MustBeNever<Extract<ServerOwnedField, ClientOwnedField>>;
+export type _AssertAllPlayerFieldsClassified = MustBeNever<Exclude<keyof PlayerSim, ServerOwnedField | ClientOwnedField | ServerOnlyField>>;
+export type _AssertClassificationDisjoint = MustBeNever<Extract<ServerOwnedField, ClientOwnedField | ServerOnlyField>>;
 
 // Project the server-owned slice out of a live player. Arrays/objects are copied so the
 // snapshot never aliases sim state.

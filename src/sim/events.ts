@@ -28,6 +28,9 @@ export type SimEvent =
   | { t: "itemPicked"; pid: PlayerId; x: number; y: number; tint: string }
   // rare: the boss-chest reward replaces the floor's pick with a Rare-pool offer.
   | { t: "offerBlessing"; pid: PlayerId; rare: boolean }
+  // The boss weapon reward opened a personal claim for this player (gate §4). The choice
+  // set is SIM STATE (weaponClaims) — the event only tells the server to deliver the view.
+  | { t: "offerWeapons"; pid: PlayerId }
   | { t: "revive"; pid: PlayerId; by: PlayerId; x: number; y: number } // downed player brought back by a teammate
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }

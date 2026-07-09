@@ -178,7 +178,8 @@ async function main(): Promise<void> {
             owner: null, damage: 5, color: "#f00", pierce: 0, hitList: null, isCrit: false,
           });
         }
-        const ended = await waitUntil(() => a.transport.isRunOver() || a.transport.getStatus() === "closed", 3000);
+        // The wipe is the held 4.0s all-down beat (gate §6) before the terminal close.
+        const ended = await waitUntil(() => a.transport.isRunOver() || a.transport.getStatus() === "closed", 8000);
         check(`round ${round}: clients observed the wipe (terminal snapshot or server close)`, ended);
         // The server closes every socket after the final snapshot and RELEASES the world —
         // the replay can never inherit the dead run.
@@ -219,6 +220,65 @@ async function main(): Promise<void> {
       check("all-at-exit flips straight into the party blessing gate (pnd on both wires)",
         offered && (a.transport.getLatestSnapshot()?.pnd.length ?? 0) === 2);
       check("still floor 1 until the picks resolve", world.state.floor === 1);
+      a.stop(); b.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("boss weapon claims END-TO-END: woffer delivery, personal claim, one reroll, junk rejected", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "claim-a", world: "room:CLMS", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "claim-b", world: "room:CLMS", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+      const world = s.server.getWorld("room:CLMS")!;
+      // Arm the claim state directly through the sim's own path: a boss chest on floor 1's
+      // world, opened by A (the transport flow from here — woffer, claim, reroll — is
+      // exactly the production path; only the chest's provenance is scripted).
+      world.state.enemies = [];
+      world.state.pendingSpawns = [];
+      // The encounter snapshot a boss floor would carry (P is snapshotted at floor build;
+      // this harness world was built before the bots joined).
+      world.state.encounterPlayers = 2;
+      const aSim = world.state.players.get(a.serverId()!)!;
+      const bSim = world.state.players.get(b.serverId()!)!;
+      world.state.chests.push({ id: world.state.nextChestId++, kind: "boss", x: aSim.x, y: aSim.y, radius: 18, opened: false });
+      await waitUntil(() => a.transport.getPendingWeaponOfferPeek() !== null && b.transport.getPendingWeaponOfferPeek() !== null, 3000);
+      const wa = a.transport.getPendingWeaponOfferPeek()!;
+      const wb = b.transport.getPendingWeaponOfferPeek()!;
+      check("both members received the SAME shared choice set (P2 -> 3 distinct, 1 reroll)",
+        wa.choices.join(",") === wb.choices.join(",") && wa.choices.length === 3
+        && new Set(wa.choices).size === 3 && wa.rerollsLeft === 1, wa.choices.join(","));
+
+      // A claims: the grant arrives authoritatively via SelfWire.wpns.
+      a.transport.sendClaimWeapon(wa.id, wa.choices[0]);
+      const isGranted = await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns ?? []).includes(wa.choices[0]), 2000);
+      check("A's claim granted personally (SelfWire.wpns)", isGranted);
+      check("A's claim removed nothing from B's pending view",
+        world.state.weaponClaims !== null && world.state.weaponClaims.pending.get(b.serverId()!)!.view.join(",") === wb.choices.join(","));
+
+      // B rerolls: a FRESH woffer (new id, different set) replaces the view; then claims.
+      b.transport.sendRerollWeapons(wb.id);
+      const isRerolled = await waitUntil(() => {
+        const o = b.transport.getPendingWeaponOfferPeek();
+        return o !== null && o.id > wb.id;
+      }, 2000);
+      const wb2 = b.transport.getPendingWeaponOfferPeek()!;
+      check("B's reroll delivered a fresh view (new id, off the base set, budget spent)",
+        isRerolled && wb2.rerollsLeft === 0 && wb2.choices.every((id) => !wb.choices.includes(id)), wb2.choices.join(","));
+      b.transport.sendRerollWeapons(wb2.id);
+      await sleep(200);
+      check("a second reroll is rejected (budget is authoritative)", world.state.weaponClaims !== null
+        && world.state.weaponClaims.pending.get(b.serverId()!)!.view.join(",") === wb2.choices.join(","));
+      // Junk claim: an id outside B's current view must not grant.
+      b.transport.sendClaimWeapon(wb2.id, wb.choices[0]);
+      await sleep(200);
+      check("a claim outside the live view rejects", !(b.transport.getLatestSnapshot()?.self?.wpns ?? []).includes(wb.choices[0]));
+      b.transport.sendClaimWeapon(wb2.id, wb2.choices[0]);
+      const isBGranted = await waitUntil(() => (b.transport.getLatestSnapshot()?.self?.wpns ?? []).includes(wb2.choices[0]), 2000);
+      check("B's claim from the rerolled view granted", isBGranted);
+      check("all claims resolved: the sim released the state", await waitUntil(() => world.state.weaponClaims === null, 1000));
+      check("B holds the sim-side body too", bSim.ownedWeapons.includes(wb2.choices[0]));
       a.stop(); b.stop();
     } finally { await s.close(); }
   });

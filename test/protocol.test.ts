@@ -74,6 +74,9 @@ function clientRoundTripTests(): void {
     { t: "reorder", from: 0, to: 3, cseq: 6 },
     { t: "drop", weapon: "railgun", cseq: 7 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
+    { t: "claimWeapon", offerId: 3, weapon: "railgun" },
+    { t: "rerollWeapons", offerId: 3 },
+    { t: "skipWeapons", offerId: 3 },
     { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
   ];
@@ -120,6 +123,11 @@ function unknownFieldTests(): void {
     ["drop with an unknown weapon id", { t: "drop", weapon: "bfg9000", cseq: 1 }],
     ["drop with a smuggled extra field", { t: "drop", weapon: "pistol", cseq: 1, x: 10 }],
     ["drop without cseq", { t: "drop", weapon: "pistol" }],
+    ["claimWeapon with an unknown weapon id", { t: "claimWeapon", offerId: 1, weapon: "bfg9000" }],
+    ["claimWeapon with a smuggled extra field", { t: "claimWeapon", offerId: 1, weapon: "pistol", free: true }],
+    ["claimWeapon without an offer id", { t: "claimWeapon", weapon: "pistol" }],
+    ["rerollWeapons with a smuggled extra field", { t: "rerollWeapons", offerId: 1, count: 9 }],
+    ["skipWeapons with a float offer id", { t: "skipWeapons", offerId: 1.5 }],
   ];
   for (const [label, frame] of badInventoryFrames) {
     let isRejected = false;
@@ -150,11 +158,16 @@ function serverRoundTripTests(): void {
   const others: ServerMsg[] = [
     { t: "ping", id: 4, tick: 100, time: 1234567 },
     { t: "offer", id: 2, choices: ["it_a", "it_b", "it_c"] },
+    { t: "woffer", id: 3, choices: ["railgun", "sword", "flamer"], rr: 1 },
     { t: "error", code: "auth", msg: "nope" },
   ];
   for (const m of others) {
     check(`round-trip ${m.t}`, deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(m)), m));
   }
+  let isWofferRejected = false;
+  try { jsonCodec.decodeServer(JSON.stringify({ t: "woffer", id: 1, choices: ["bfg9000"], rr: 0 })); }
+  catch (err) { isWofferRejected = err instanceof ProtocolError; }
+  check("a woffer with an unknown weapon id is a protocol error", isWofferRejected);
 
   section("corrupt server frames are ProtocolError, never NaN state");
   const snapObj = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;

@@ -12,7 +12,7 @@
 // additionally advances its ack to the snapshot's evTo, so filtered-out ids never wedge the
 // stream. Delivery is effectively-once (no missing, no double kill/loot/FX).
 
-import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type WireEvent } from "../../src/net/protocol.js";
+import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type ServerMsg, type WireEvent } from "../../src/net/protocol.js";
 import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
@@ -123,9 +123,20 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   sendOffers(room: RoomRuntime): void {
     for (const conn of room.conns.values()) {
-      if (conn.closing || !conn.pendingOffer || conn.offerResendsLeft <= 0) continue;
-      conn.offerResendsLeft--;
-      try { conn.ws.send(this.codec.encodeServer({ t: "offer", id: conn.offerId, choices: conn.pendingOffer })); } catch { /* closing */ }
+      if (conn.closing) continue;
+      if (conn.pendingOffer && conn.offerResendsLeft > 0) {
+        conn.offerResendsLeft--;
+        try { conn.ws.send(this.codec.encodeServer({ t: "offer", id: conn.offerId, choices: conn.pendingOffer })); } catch { /* closing */ }
+      }
+      if (conn.pendingWeaponOffer !== null && conn.playerId !== null) {
+        // The SIM owns the claim lifecycle: when it resolved/expired there, stop delivering.
+        const view = room.weaponClaimViewFor(conn.playerId);
+        if (view === null) { conn.pendingWeaponOffer = null; conn.weaponOfferResendsLeft = 0; continue; }
+        if (conn.weaponOfferResendsLeft <= 0) continue;
+        conn.weaponOfferResendsLeft--;
+        const msg: ServerMsg = { t: "woffer", id: conn.weaponOfferId, choices: conn.pendingWeaponOffer, rr: view.rerollsLeft };
+        try { conn.ws.send(this.codec.encodeServer(msg)); } catch { /* closing */ }
+      }
     }
   }
 

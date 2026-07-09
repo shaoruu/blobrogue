@@ -387,9 +387,12 @@ async function main(): Promise<void> {
       const pid = bot.serverId()!;
       const p = world.state.players.get(pid)!;
       p.hp = 1; p.invuln = 0;
-      // A slime on top of the (only) player -> contact kills -> no ally -> game over.
+      // A slime on top of the (only) player -> contact downs them; the wipe is the held
+      // 4.0s all-down beat (studio balance gate §6), THEN game over closes the socket.
       devSpawnEnemy(world.state, "slime", p.x, p.y).spawnTimer = 0;
-      const closed = await waitUntil(() => bot.transport.getStatus() === "closed", 3000);
+      const isDowned = await waitUntil(() => world.state.players.get(pid)?.isDown === true, 3000);
+      check("the last player going to 0 goes DOWN first (the 4.0s wipe hold)", isDowned && !world.state.isRunOver);
+      const closed = await waitUntil(() => bot.transport.getStatus() === "closed", 8000);
       check("socket deterministically closed on game over", closed);
       const removed = await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) === 0, 2000);
       check("player removed from the world on game over", removed, `players=${s.server.getWorld()?.playerCount}`);

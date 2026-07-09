@@ -11,7 +11,7 @@
 // field type-checked before the client trusts it).
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
-import { isFloorCleared, playersAtExit } from "../sim/world.js";
+import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
   PropKind, PickupKind, ChestKind,
@@ -82,6 +82,7 @@ export interface SelfWire {
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
   rev: number;                 // reviveProgress seconds (authoritative revive hold readout)
+  out: boolean;                // past the floor's down limit: unrevivable until the descent
   wpn: WeaponId;
   wpns: WeaponId[];            // authoritative owned-weapon inventory (validated equip source)
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
@@ -101,6 +102,7 @@ export interface PlayerWire {
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
   rv: number;
+  out: boolean; // past the floor's down limit — teammates stop offering the revive
   nm: string;
   cl: number | null;
 }
@@ -181,6 +183,16 @@ export type ClientMsg =
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
   | { t: "chooseBlessing"; offerId: number; choiceId: string }
+  // Boss weapon claim (gate §4): answer the live `woffer` by naming the claimed weapon. The
+  // server validates the id against THIS client's current view (base set or their reroll)
+  // and the sim re-validates ownership (a duplicate claim rejects — dupes route to the
+  // reroll, never to coins). A claim removes nothing for teammates.
+  | { t: "claimWeapon"; offerId: number; weapon: WeaponId }
+  // The claimant's one reroll of their personal view. Replies with a fresh `woffer`.
+  | { t: "rerollWeapons"; offerId: number }
+  // Explicitly pass on the boss weapon claim (the claimant wants neither the set nor their
+  // reroll): resolves the pending claim so the descend gate never waits on a decided player.
+  | { t: "skipWeapons"; offerId: number }
   // Client netcode telemetry uplink (observability + the lag-comp render-delay sample `dly`,
   // which the server clamps to the adaptive [90,300]ms window — a lie can only mis-rewind the
   // sender's own shots within that bounded window).
@@ -224,6 +236,10 @@ export type ServerMsg =
   // offer expires, and the client shows each id only once (no double prompt from resends). The
   // client replies with `chooseBlessing {offerId, choiceId}`; choice authority stays server-side.
   | { t: "offer"; id: number; choices: string[] }
+  // The boss weapon claim view for this client (gate §4): the shared choice set — or this
+  // claimant's personal reroll — plus the rerolls they still hold. Same idempotent-id +
+  // bounded-resend contract as `offer`; answered by claimWeapon/rerollWeapons/skipWeapons.
+  | { t: "woffer"; id: number; choices: WeaponId[]; rr: number }
   | { t: "error"; code: string; msg: string };
 
 // ---- Codec seam (JSON now; binary is a later swap) ----
@@ -332,6 +348,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
+  // Like offerBlessing, the server intercepts this (the claim view rides `woffer`); the
+  // spec keeps the exhaustive table honest if one ever leaks to the wire.
+  offerWeapons: { scope: "pid", fields: { pid: "str" } },
   // Positional: the revive moment plays for everyone standing at it (the reviver most of
   // all), not only the revived player. The revived player is AT the point by definition.
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
@@ -471,6 +490,18 @@ function decodeClientMsg(raw: string): ClientMsg {
       exactKeys(o, ["t", "offerId", "choiceId"]);
       return { t: "chooseBlessing", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER), choiceId: shortStr(o, "choiceId", 48) };
     }
+    case "claimWeapon": {
+      exactKeys(o, ["t", "offerId", "weapon"]);
+      return { t: "claimWeapon", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER), weapon: weaponOf(o, "weapon") };
+    }
+    case "rerollWeapons": {
+      exactKeys(o, ["t", "offerId"]);
+      return { t: "rerollWeapons", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER) };
+    }
+    case "skipWeapons": {
+      exactKeys(o, ["t", "offerId"]);
+      return { t: "skipWeapons", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER) };
+    }
     case "stat": {
       exactKeys(o, ["t", "rtt", "jit", "rec", "corr", "dly"]);
       return {
@@ -516,6 +547,7 @@ function validateSelfWire(v: unknown): SelfWire {
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
     rev: num(o, "rev", 0, 1e4),
+    out: boolOf(o, "out"),
     wpn: weaponOf(o, "wpn"),
     wpns, items,
     mods: modsFromWire(obj(o.mods, "self.mods")),
@@ -540,6 +572,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
     rv: num(o, "rv", 0, 1e4),
+    out: boolOf(o, "out"),
     nm, cl,
   };
 }
@@ -671,6 +704,14 @@ function decodeServerMsg(raw: string): ServerMsg {
       if (choices.length < 1 || choices.length > 8) throw new ProtocolError("bad offer size");
       return { t: "offer", id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), choices };
     }
+    case "woffer": {
+      const choices = arr(o.choices, "woffer.choices").map((c) => {
+        if (!isWeaponId(c)) throw new ProtocolError("bad woffer choice");
+        return c;
+      });
+      if (choices.length < 1 || choices.length > 8) throw new ProtocolError("bad woffer size");
+      return { t: "woffer", id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), choices, rr: intOf(o, "rr", 0, 8) };
+    }
     case "error":
       return { t: "error", code: shortStr(o, "code", 64), msg: typeof o.msg === "string" && o.msg.length <= 256 ? o.msg : "" };
     default:
@@ -693,7 +734,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, fng: s.fangCd,
-    fac: s.facing, down: s.isDown, rev: s.reviveProgress, wpn: s.weapon,
+    fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
   };
@@ -710,7 +751,10 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
 }
 
 export function toSelfWire(p: PlayerSim): SelfWire {
-  return selfWireFromSnapshot(projectPlayer(p));
+  // `out` is derived from server-only down bookkeeping (never reconciled back — the
+  // prediction world has no down counter to apply it to), so it rides beside the
+  // snapshot-projected fields.
+  return { ...selfWireFromSnapshot(projectPlayer(p)), out: isPlayerOut(p) };
 }
 
 // Reset a predicted local player to authoritative server truth (the reconciliation snap). All
@@ -732,6 +776,7 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
     rv: p.reviveProgress,
+    out: isPlayerOut(p),
     nm: identity?.name ?? p.id,
     cl: identity?.colorIndex ?? null,
   };
@@ -850,6 +895,15 @@ export interface SnapshotOpts {
 // relevant state (the boss enemy and the boss chest), and, in addition, the nearby
 // enemies/bullets/props/pickups/chests within its interest radius (with exit hysteresis).
 // A simple distance filter is enough for a single bounded floor.
+// The party members whose pending reward picks (blessing offers AND boss weapon claims)
+// currently hold the descend gate — the union the sim's gate actually waits on, so the
+// "WAITING FOR N PLAYERS…" readout can never drift from the rule.
+function pendingPickParty(w: WorldState): PlayerId[] {
+  const pending = new Set<PlayerId>(w.pendingBlessings.keys());
+  if (w.weaponClaims !== null) for (const pid of w.weaponClaims.pending.keys()) pending.add(pid);
+  return [...pending];
+}
+
 export function buildSnapshot(
   w: WorldState,
   selfPid: PlayerId,
@@ -923,7 +977,7 @@ export function buildSnapshot(
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),
-    pnd: [...w.pendingBlessings.keys()],
+    pnd: pendingPickParty(w),
     exr: playersAtExit(w),
     evTo,
     self: self ? toSelfWire(self) : null,

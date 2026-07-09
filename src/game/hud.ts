@@ -65,7 +65,7 @@ export interface ProfileStats {
   gamesPlayed: number;
 }
 
-export interface RosterEntry { name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean; isReconnecting: boolean; }
+export interface RosterEntry { name: string; isYou: boolean; color: string; isDown: boolean; isOut: boolean; isAtExit: boolean; isReconnecting: boolean; }
 
 export interface StatsPanelData {
   floor: number;
@@ -739,9 +739,10 @@ export class Hud {
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
         // A reconnecting member is neither dead nor departed — their body is reserved for
         // the reconnect grace (the Sev-0 coherence system); the roster says so explicitly.
-        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
+        // OUT (down limit spent) outranks plain down: the party's move is the stairs.
+        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isReconnecting ? "#9a8fb5" : r.isDown ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "#9a8fb5" : r.isDown || r.isOut ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
         this.statsBody.appendChild(row);
       }
     }

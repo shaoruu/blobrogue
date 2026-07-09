@@ -47,13 +47,25 @@ export const DEALER = {
   heal: 1,
 } as const;
 
+// Revive (studio balance gate §6, Standard baseline): 1.5s UNINTERRUPTED channel — any
+// reviver damage, dash, attack, or leaving the radius cancels the whole channel (hard
+// reset, no partial credit). One reviver only; extra players never accelerate.
 export const REVIVE = {
   radius: 46,
-  channel: 1.5,     // was 1.1 — any damage to the reviver cancels the channel
+  channel: 1.5,
   hp: 2,
   invuln: 1.0,
   fireLockout: 0.35, // a revived player cannot attack for this long
+  // Down limit per floor (gate §1, Standard): after this many downs on one floor the player
+  // is OUT — unrevivable until the party's descent rescues them at the stairs.
+  downsPerFloor: 3,
 } as const;
+
+// Wipe (gate §6): the run ends only after every connected player has been down
+// SIMULTANEOUSLY for this long — a held beat, not an instant cut. Reconnect reservations
+// neither block nor extend it (absent bodies are outside the calculus — the coherence
+// system's rule). Solo-local keeps the classic instant game over.
+export const WIPE_HOLD_SECONDS = 4.0;
 
 // Vampire Fang: shared proc cooldown; boss-spawned/summoned adds are excluded from both
 // Fang procs and natural heart drops (no farmable trivial sustain).
@@ -256,40 +268,45 @@ export function coopHeartRateMult(players: number): number {
   return 1 + COOP.heartRatePerExtra * (clampPlayers(players) - 1);
 }
 
-// ---- §8b party weapon economy (post-playtest: shared world loot meant fewer guns per person) ----
-// Weapon OPPORTUNITIES scale with the encounter's player count while staying sub-linear per
-// person at the top end (scarcity is a design pillar — see the per-person table in the tests).
-// Everything below is deterministic per (seed, floor, P): the server rolls once; every client
-// sees the same shared, first-come pickups.
+// ---- §8b party weapon opportunities (studio balance gate §4 — Stage C shared worlds only) ----
+// Quantity increases OPTIONS, never rarity or stats: weapon stats and roll pools are
+// identical solo/co-op; only opportunity COUNTS follow the gate's exact formulas, and every
+// count is deterministic per (seed, floor, P). The local solo economy is untouched
+// (golden-locked); a shared world applies §4 at every P including 1.
 
 export const WEAPON_ECONOMY = {
-  // The floor's ambient wood-chest weapon chance scales like the heart rate does. This only
-  // moves a threshold on the SAME rng draw, so the solo stream is untouched.
-  woodChestWeaponPerExtra: 0.35,
-  // The Dealer stocks purchasable weapons for parties (never solo — the solo economy is the
-  // tuned baseline). Indexed by P-1. Priced above the heart so it stays a real decision.
-  dealerWeaponStock: [0, 1, 1, 2] as readonly number[],
-  dealerWeaponPrice: 12,
-  // The boss chest holds the party's arsenal: one weapon CHOICE per member (shared,
-  // first-come). Solo keeps the tuned heart+coins reward. Indexed by P-1.
-  bossChestWeapons: [0, 2, 3, 4] as readonly number[],
+  // Dealer stall prices by slot (gate: "prices unchanged 12/18/24") — a fourth stall (P4)
+  // clamps to the last price. Purchases are PERSONAL: a stall never depletes for teammates.
+  dealerPrices: [12, 18, 24] as readonly number[],
+  // Boss reward choices are capped regardless of party size.
+  bossChoiceCap: 5,
+  // Boss weapon claims expire on the sim clock like blessing offers (the descend gate must
+  // always drain); each claimant gets exactly one reroll, never coins/raw damage.
+  claimTtl: 60,
+  claimRerolls: 1,
+  // Starvation guard (gate §4): no player goes more than this many consecutive non-boss
+  // floors without a weapon opportunity — the next floor force-stocks a pedestal.
+  maxDroughtFloors: 2,
 } as const;
 
-// Extra deterministic weapon-chest rolls per floor beyond the solo table: exactly one per
-// extra party member. Floor 2 therefore stocks >= P opportunities — the guaranteed early
-// weapon beat every member can reach before the first boss (floor 5).
-export function coopExtraWeaponRolls(players: number): number {
-  return clampPlayers(players) - 1;
+// Weapons per pedestal (gate: `max(1, ceil(P/2))` — P1–2: 1, P3–4: 2), distinct IDs when
+// the pool permits. The pedestal COUNT per floor stays the solo cadence.
+export function pedestalWeaponsFor(players: number): number {
+  return Math.max(1, Math.ceil(clampPlayers(players) / 2));
 }
 
-export function coopWeaponRateMult(players: number): number {
-  return 1 + WEAPON_ECONOMY.woodChestWeaponPerExtra * (clampPlayers(players) - 1);
-}
-
+// Dealer weapon stalls (gate: `max(2,P)` distinct weapons) — Stage C shared worlds only.
 export function dealerWeaponStockFor(players: number): number {
-  return WEAPON_ECONOMY.dealerWeaponStock[clampPlayers(players) - 1];
+  return Math.max(2, clampPlayers(players));
 }
 
-export function bossChestWeaponsFor(players: number): number {
-  return WEAPON_ECONOMY.bossChestWeapons[clampPlayers(players) - 1];
+export function dealerWeaponPriceFor(slot: number): number {
+  const prices = WEAPON_ECONOMY.dealerPrices;
+  return prices[Math.min(Math.max(0, slot), prices.length - 1)];
+}
+
+// Boss weapon reward (gate: `P+1` distinct choices, capped 5): every member claims ONE
+// personal choice from the shared set; claims never remove choices for teammates.
+export function bossWeaponChoicesFor(players: number): number {
+  return Math.min(clampPlayers(players) + 1, WEAPON_ECONOMY.bossChoiceCap);
 }

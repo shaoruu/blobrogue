@@ -5,6 +5,7 @@
 
 import type { WebSocket } from "ws";
 import type { PlayerId } from "../../src/sim/input.js";
+import type { WeaponId } from "../../src/sim/types.js";
 import type { InterestView } from "../../src/net/protocol.js";
 import { createInterestView } from "../../src/net/protocol.js";
 
@@ -79,6 +80,13 @@ export interface Conn {
   offerId: number;           // monotonic id of the current offer (client dedupes resends by it)
   offerResendsLeft: number;  // bounded resends of the pending offer (loss/backpressure recovery)
   offerDeadline: number;     // wall-clock ms after which the pending offer expires
+  // The boss weapon claim delivery (gate §4), mirroring the blessing offer contract: the
+  // client's current VIEW (base set or their reroll), a monotonic id it must echo, and a
+  // bounded resend budget. Claim/reroll/skip validity is enforced in the SIM (which owns
+  // the pending state and its TTL); this is delivery + echo bookkeeping only.
+  pendingWeaponOffer: WeaponId[] | null;
+  weaponOfferId: number;
+  weaponOfferResendsLeft: number;
   // Set when this player's run ended (full wipe); the server sends the final snapshot then
   // deterministically closes the socket (no lingering post-game-over connection).
   gameOver: boolean;
@@ -112,7 +120,8 @@ export function newConnState(now: number): Pick<Conn,
   | "connectedAt" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
-  | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline" | "gameOver"
+  | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline"
+  | "pendingWeaponOffer" | "weaponOfferId" | "weaponOfferResendsLeft" | "gameOver"
   | "view" | "spectateTarget" | "bytesSent" | "droppedSnaps" | "cliRttMs" | "cliJitterMs" | "cliInterpDelayMs"
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
@@ -121,7 +130,8 @@ export function newConnState(now: number): Pick<Conn,
     connectedAt: now, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,
-    closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0, gameOver: false,
+    closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0,
+    pendingWeaponOffer: null, weaponOfferId: 0, weaponOfferResendsLeft: 0, gameOver: false,
     view: createInterestView(), spectateTarget: null,
     bytesSent: 0, droppedSnaps: 0,
     cliRttMs: 0, cliJitterMs: 0, cliInterpDelayMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,

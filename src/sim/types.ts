@@ -245,6 +245,9 @@ export interface RemotePlayer {
   // Authoritative revive-channel progress on THIS (downed) player, in seconds — drives the
   // reviver-side progress ring. 0 when up / not being revived / on the legacy co-op path.
   reviveProgress: number;
+  // Past the floor's down limit (gate §1): down AND unrevivable until the descent rescue —
+  // teammates stop being prompted to revive. Always false on the legacy co-op path.
+  isOut: boolean;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   colorIndex: number; // stable palette slot for this player

@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, claimBossWeaponInWorld, rerollBossWeaponsInWorld, skipBossWeaponInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -63,6 +63,7 @@ export class GameWorld implements RoomRuntime {
   // Blessing offers raised this tick (descend/boss chest) — the server turns each into a
   // server-decided, validated offer message.
   private offerThisTick: BlessingOfferRequest[] = [];
+  private weaponOfferThisTick: PlayerId[] = [];
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
@@ -147,6 +148,26 @@ export class GameWorld implements RoomRuntime {
     dismissBlessingOfferInWorld(this.state, pid);
   }
 
+  // ---- boss weapon claims (gate §4): the sim owns the pending state; these read/answer it ----
+
+  weaponClaimViewFor(pid: PlayerId): { choices: WeaponId[]; rerollsLeft: number } | null {
+    const pend = this.state.weaponClaims?.pending.get(pid);
+    if (!pend) return null;
+    return { choices: pend.view.slice(), rerollsLeft: pend.rerollsLeft };
+  }
+
+  applyWeaponClaim(pid: PlayerId, weapon: WeaponId): boolean {
+    return claimBossWeaponInWorld(this.state, pid, weapon);
+  }
+
+  rerollWeaponClaim(pid: PlayerId): WeaponId[] | null {
+    return rerollBossWeaponsInWorld(this.state, pid);
+  }
+
+  skipWeaponClaim(pid: PlayerId): void {
+    skipBossWeaponInWorld(this.state, pid);
+  }
+
   // Queue a validated input INTENT. Bounded (drop oldest beyond the cap) so a fast/flooding client
   // can neither exhaust memory nor gain an advantage — the tick still consumes only one per tick.
   queueInput(conn: Conn, cmd: InputIntent, maxQueue: number): void {
@@ -171,6 +192,9 @@ export class GameWorld implements RoomRuntime {
   }
   offerPlayers(): BlessingOfferRequest[] {
     return this.offerThisTick;
+  }
+  weaponOfferPlayers(): PlayerId[] {
+    return this.weaponOfferThisTick;
   }
 
   // Advance ONE authoritative tick. The server tick owns simulation time: each connected player
@@ -222,7 +246,11 @@ export class GameWorld implements RoomRuntime {
   private commitEvents(ev: SimEvent[]): void {
     this.gameOverThisTick = [];
     this.offerThisTick = [];
+    this.weaponOfferThisTick = [];
     for (const e of ev) {
+      // offerWeapons is a server-directive, not client FX: the claim view rides `woffer`
+      // (validated + resent per client), so the event never enters the reliable ring.
+      if (e.t === "offerWeapons") { this.weaponOfferThisTick.push(e.pid); continue; }
       this.eventLog.push({ id: this.nextEventId++, e });
       if (e.t === "gameOver") this.gameOverThisTick.push(e.pid);
       else if (e.t === "offerBlessing") this.offerThisTick.push({ pid: e.pid, rare: e.rare });
