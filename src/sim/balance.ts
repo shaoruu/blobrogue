@@ -201,7 +201,8 @@ export const BOSS = {
   // HP = max(round10(targetMedianBurn × medianPracticalDPS),
   //          ceil10((minLegalTTK − forcedTransitionTime) × P95LegalDPS))   [gate §3]
   // The gate's initial Standard-solo calibration is 900, but its own rule recalibrates HP
-  // from telemetry whenever the legal arsenal changes (this wave added Thumper/Sunlance):
+  // from measurement whenever the legal arsenal changes (this wave added Thumper/
+  // Sunlance) — ours are deterministic sim-harness measurements, not live telemetry:
   // at 900 the fastest legal build (point-blank sawnoff + Deadeye Lv3 + Glass Cannon)
   // measures 19.0s — under the 20s high-roll floor. The anti-burst term lands 950:
   // median 48.2s ∈ 35–50, fastest legal high-roll 22.8s ∈ 20–25 (see balance tests).
@@ -329,8 +330,9 @@ export function marrowHpForFloor(floor: number): number {
 
 export const CHOIR = {
   // The corrected gate lists 1,130 as the in-flight initial; at the F30 median build it
-  // burns in ≈34s — under the 40s floor — so the §3 recalibration formula lands the
-  // anchor below (measured in-band; see balance tests).
+  // burns in ≈34s (deterministic sim harness, not live telemetry) — under the 40s floor —
+  // so the §3 recalibration formula lands the anchor below (measured in-band; see
+  // balance tests).
   baseHp: 1450,
   baseHpFloor: 30,
   contactDamage: 2,
@@ -383,9 +385,10 @@ export function choirHpForFloor(floor: number): number {
 
 export const WEAVER = {
   // The corrected gate lists 1,080 as the in-flight initial and recalibrates by
-  // telemetry for the intended floor's legal build pool (§3): at the F20 median build
-  // 1,080 burns in ≈32s — under the 38s floor — so the formula lands 1,500 (measured
-  // in-band; see balance tests).
+  // measurement for the intended floor's legal build pool (§3) — deterministic
+  // sim-harness numbers, not live telemetry: at the F20 median build 1,080 burns in
+  // ≈32s — under the 38s floor — so the formula lands 1,500 (measured in-band; see
+  // balance tests).
   baseHp: 1500,
   baseHpFloor: 20,
   contactDamage: 2,
