@@ -35,7 +35,10 @@ export type Difficulty = "casual" | "standard" | "brutal";
 
 export interface DifficultyDef {
   id: Difficulty;
-  blurb: string;               // one-sentence run-setup description (menu + lobby)
+  // Plain one-sentence run-setup description (menu cards + lobby). UI direction: describe
+  // only REAL implemented mechanics in plain words — never flavor claims, never numbers or
+  // percentages the player can't verify.
+  blurb: string;
   tint: string;                // HUD/menu accent for this mode
   // §1 pins normal/elite and boss HP at 1.00× in EVERY mode ("focused TTK stays
   // authored"); the typed seam stays so a future gate revision can recalibrate without
@@ -61,7 +64,7 @@ export interface DifficultyDef {
 export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
   casual: {
     id: "casual",
-    blurb: "More room to breathe \u2014 fewer foes at once, gentler pacing, richer recovery.",
+    blurb: "Fewer foes at once, gentler attack pacing, more hearts, easier revives, unlimited downs.",
     tint: "#7dd87d",
     enemyHpMult: 1.00, bossHpMult: 1.00,
     threatBudgetMult: 0.80, activeCapMult: 0.85, attackCdMult: 1.15,
@@ -72,7 +75,7 @@ export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
   },
   standard: {
     id: "standard",
-    blurb: "The authored descent \u2014 dangerous, fair, and exactly as tuned.",
+    blurb: "The game as tuned: full pressure, standard revives, three downs per floor.",
     tint: "#ffd166",
     enemyHpMult: 1.00, bossHpMult: 1.00,
     threatBudgetMult: 1.00, activeCapMult: 1.00, attackCdMult: 1.00,
@@ -83,7 +86,7 @@ export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
   },
   brutal: {
     id: "brutal",
-    blurb: "Denser waves, faster commits, leaner hearts \u2014 same foes, no sponges.",
+    blurb: "Denser waves, faster attack pacing, scarcer hearts, slower revives, two downs per floor.",
     tint: "#ff6a6a",
     enemyHpMult: 1.00, bossHpMult: 1.00,
     threatBudgetMult: 1.20, activeCapMult: 1.15, attackCdMult: 0.85,

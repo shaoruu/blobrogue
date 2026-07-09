@@ -91,18 +91,23 @@ async function clearRoomReadiness(ctx: MutationCtx, roomId: Id<"rooms">): Promis
 }
 
 // Host a new room. Returns a short code to share with friends. Online rooms use the caller's
-// chosen blob color for their roster dot (classic co-op keeps the assigned palette slot).
+// chosen blob color for their roster dot (classic co-op keeps the assigned palette slot) and
+// may seed the room's difficulty from the host's saved preference — the same host-only state
+// rooms.setDifficulty edits later, so the lobby opens on the mode the host last played.
 export const create = mutation({
-  args: { playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()) },
-  handler: async (ctx, { playerId, kind, colorIndex }) => {
+  args: { playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()), difficulty: v.optional(difficultyArg) },
+  handler: async (ctx, { playerId, kind, colorIndex, difficulty }) => {
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const code = await uniqueCode(ctx);
     const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
     const now = Date.now();
+    const roomKind: RoomKind = kind ?? "coop";
     const roomId = await ctx.db.insert("rooms", {
-      code, kind: kind ?? "coop", hostPlayerId: playerId, seed, floor: 1,
+      code, kind: roomKind, hostPlayerId: playerId, seed, floor: 1,
       status: "lobby", isPublic: false, createdAt: now, lastActivity: now,
+      // Difficulty is an online-room concept; classic co-op rooms never carry one.
+      ...(roomKind === "online" && difficulty !== undefined ? { difficulty } : {}),
     });
     await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
     return { roomId, code, seed, floor: 1 };

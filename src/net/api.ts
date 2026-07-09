@@ -115,7 +115,7 @@ export const api = {
     mint: makeFunctionReference<"action", { clientId: string; roomCode?: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
   },
   rooms: {
-    create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
+    create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number; difficulty?: Difficulty }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
     quickPlay: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),
     join: makeFunctionReference<"mutation", { code: string; playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),

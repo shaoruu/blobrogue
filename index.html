@@ -337,20 +337,29 @@
       .namerow label{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
       .menu input[type=text]{ font-family:var(--f-num); font-size:20px; letter-spacing:1px; padding:8px 12px; background:#0d0819; color:var(--cream); border:0; box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 3px 6px rgba(0,0,0,.5); text-align:left; outline:none; width:100%; }
       .menu input::placeholder{ color:var(--dun-4); }
-      /* --- Difficulty picker (title solo setup + online lobby, host-editable) --- */
-      .diffrow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; text-align:left; width:100%; max-width:430px; }
+      /* --- Difficulty cards (title solo setup + online lobby, host-editable; ui director:
+             owner naming, plain always-visible mechanic descriptions, no invented numbers,
+             selection changes highlight only — nothing swaps or shifts) --- */
+      .diffrow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; text-align:left; width:100%; max-width:560px; }
       .diffrow label{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
-      .diffseg{ display:flex; gap:7px; }
-      .diffbtn{ flex:1; min-width:0; padding:10px 6px; font-size:11px; letter-spacing:1px;
-        --c:#1a1330; --c-hi:#2a2140; --c-lo:#0d0819; --tx:#8579a0; text-shadow:none; }
-      .diffbtn:hover{ --c:#241a3d; --c-hi:#392d5c; --c-lo:#120c22; --tx:#cbb6d6; }
+      .diffcards{ display:flex; gap:8px; align-items:stretch; }
+      .diffcard{ --t:#8579a0; flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:5px;
+        padding:10px 11px; text-align:left; text-transform:none; letter-spacing:0; cursor:pointer;
+        background:#0d0819; color:var(--cream); border:0; clip-path:none; text-shadow:none;
+        box-shadow:inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--dun-2), 0 3px 0 rgba(5,3,11,.5);
+        transition:transform .06s steps(2), box-shadow .06s steps(2); }
+      .diffcard:hover{ transform:translateY(-1px); box-shadow:inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--dun-4), 0 3px 0 rgba(5,3,11,.5); }
+      .diffcard.sel, .diffcard.sel:hover{ transform:none;
+        box-shadow:inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--t), 0 3px 0 rgba(5,3,11,.5), 0 0 12px color-mix(in srgb, var(--t) 40%, transparent); }
+      .diffcard.casual{ --t:#7dd87d; } .diffcard.standard{ --t:#ffd166; } .diffcard.brutal{ --t:#ff6a6a; }
+      .diffcard .dc-name{ font-family:var(--f-logo), monospace; font-size:10px; letter-spacing:1px; color:var(--dun-4); }
+      .diffcard.sel .dc-name{ color:var(--t); }
+      .diffcard .dc-desc{ font-family:var(--f-ui); font-size:8px; letter-spacing:.3px; line-height:1.55; color:#9a8fb5; }
+      .diffcard.sel .dc-desc{ color:var(--cream); }
       /* Read-only (member view) keeps full legibility — the selection must stay obvious. */
-      .diffbtn:disabled{ cursor:default; transform:none; opacity:1; filter:none; pointer-events:none; }
-      .diffbtn.casual.sel, .diffbtn.casual.sel:hover{ --c:#7dd87d; --c-hi:#a8e8a8; --c-lo:#3f8f4a; --tx:#0c2410; }
-      .diffbtn.standard.sel, .diffbtn.standard.sel:hover{ --c:#ffd166; --c-hi:#ffe9b0; --c-lo:#c9942e; --tx:#241a06; }
-      .diffbtn.brutal.sel, .diffbtn.brutal.sel:hover{ --c:#ff6a6a; --c-hi:#ff9a9a; --c-lo:#b23a3a; --tx:#2a0a0a; }
-      /* Reserves two lines so swapping the one-sentence blurb never shifts the layout. */
-      .diffblurb{ font-family:var(--f-ui); font-size:9px; letter-spacing:.4px; line-height:1.5; color:var(--dun-4); min-height:27px; margin:0; text-transform:none; }
+      .diffcard:disabled{ cursor:default; transform:none; opacity:1; filter:none; pointer-events:none; }
+      /* Responsive: vertical stack on narrow/mobile viewports. */
+      @media (max-width:640px){ .diffcards{ flex-direction:column; } .diffcard{ flex-direction:row; align-items:baseline; gap:10px; } .diffcard .dc-name{ flex:0 0 auto; min-width:96px; } }
       /* --- Blob-color pick (right column identity) --- */
       .swatches{ display:flex; gap:7px; }
       .swatch{ flex:0 0 auto; width:26px; height:26px; min-width:0; padding:0; border:0; cursor:pointer; box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }

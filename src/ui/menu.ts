@@ -292,30 +292,33 @@ export class Menu {
   }
 
   private difficultyRow(opts: { selected: () => Difficulty; isEditable: boolean; onPick: (d: Difficulty) => void }): HTMLElement {
-    // The three-mode difficulty row (CASUAL / STANDARD / BRUTAL + the selected mode's
-    // one-sentence description). One component, two homes: the title's solo run setup
-    // (persisted preference) and the online room lobby (host-selected room state — members
-    // see the same control read-only, so the whole party always knows the mode).
+    // The three difficulty CARDS (ui director): owner naming CASUAL / STANDARD / BRUTAL,
+    // each card carrying its plain always-visible description of the real mechanics —
+    // no flavor copy, no invented numbers, and nothing swaps on selection (no shifts).
+    // One component, two homes: the title's solo run setup (persisted preference) and
+    // the online room lobby (host-selected room state — members see the same cards
+    // read-only, so the whole party always knows the mode). Stacks vertically on narrow
+    // viewports.
     const row = el("div", "diffrow");
     row.appendChild(el("label", "", "difficulty"));
-    const seg = el("div", "diffseg");
-    const blurb = el("p", "diffblurb");
+    const cards = el("div", "diffcards");
     const buttons = new Map<Difficulty, HTMLButtonElement>();
     const sync = () => {
       const current = opts.selected();
       for (const [id, b] of buttons) b.classList.toggle("sel", id === current);
-      blurb.textContent = DIFFICULTIES[current].blurb;
     };
     for (const id of DIFFICULTY_IDS) {
-      const b = el("button", `diffbtn ${id}`, id.toUpperCase());
-      b.type = "button";
-      b.disabled = !opts.isEditable;
-      if (opts.isEditable) b.addEventListener("click", () => { opts.onPick(id); sync(); });
-      buttons.set(id, b);
-      seg.appendChild(b);
+      const card = el("button", `diffcard ${id}`);
+      card.type = "button";
+      card.disabled = !opts.isEditable;
+      card.appendChild(el("span", "dc-name", id.toUpperCase()));
+      card.appendChild(el("span", "dc-desc", DIFFICULTIES[id].blurb));
+      if (opts.isEditable) card.addEventListener("click", () => { opts.onPick(id); sync(); });
+      buttons.set(id, card);
+      cards.appendChild(card);
     }
     sync();
-    row.append(seg, blurb);
+    row.appendChild(cards);
     return row;
   }
 
@@ -409,7 +412,8 @@ export class Menu {
     try {
       const profile = await this.session.login(this.session.name || "blob");
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.create();
+      // The room opens on the host's saved last choice; the lobby cards can still change it.
+      await lobby.create(settings.preferredDifficulty);
       this.showOnlineLobby(lobby, profile);
     } catch (err) {
       setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not create room"));
@@ -481,7 +485,11 @@ export class Menu {
       wrap.appendChild(this.difficultyRow({
         selected: () => lobby.difficulty,
         isEditable: lobby.isHost && isLobbyPhase,
-        onPick: (d) => void lobby.setDifficulty(d).catch(() => {}),
+        onPick: (d) => {
+          // A host pick is also the saved "last choice" the next created room seeds from.
+          settings.setPreferredDifficulty(d);
+          void lobby.setDifficulty(d).catch(() => {});
+        },
       }));
 
       const row = el("div", "btnrow");

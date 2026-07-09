@@ -76,15 +76,20 @@ export class OnlineLobby {
     await this.session.login(this.session.name || "blob");
   }
 
-  // Create a private room and get a shareable code.
-  async create(): Promise<void> {
+  // Create a private room and get a shareable code. The room's difficulty seeds from the
+  // host's saved last choice (the same room state the lobby picker edits afterwards).
+  async create(difficulty?: Difficulty): Promise<void> {
     await this.flushIdentity();
     const playerId = this.requirePlayerId();
-    const res = await this.client.mutation(api.rooms.create, { playerId, kind: "online", ...this.colorArg() });
+    const res = await this.client.mutation(api.rooms.create, {
+      playerId, kind: "online", ...this.colorArg(),
+      ...(difficulty !== undefined ? { difficulty } : {}),
+    });
     this.roomId = res.roomId;
     this.code = res.code;
     this.status = "lobby";
     this.hostPlayerId = playerId;
+    if (difficulty !== undefined) this.difficulty = difficulty;
     this.isQuickPlay = false;
     this.subscribe();
   }
