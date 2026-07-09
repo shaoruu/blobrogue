@@ -404,28 +404,43 @@ const TILE_SOURCES: Record<TileName, string> = {
 };
 
 // ---- per-biome tile art (opt-in, like SHEETS) ----
-// Keyed by Biome.tileKey (src/sim/biomes.ts). EMPTY BY DEFAULT so nothing extra is
-// fetched (no 404s): a biome without an entry renders the shared tile set graded by its
-// palette (the renderer's fallback). Drop 48x48 seamless tiles into
-// /public/tiles/biomes/<key>/ (generated via the locked fal recipe: falgen flux ->
-// pixelize --tile) and list them here to light a biome up — no other code changes.
-// Example:
-//   verdant: { floors: ["/tiles/biomes/verdant/floor.png", "/tiles/biomes/verdant/floor2.png"],
-//              wallTop: "/tiles/biomes/verdant/wall_top.png" },
+// Keyed by Biome.tileKey (src/sim/biomes.ts). A biome without an entry renders the
+// shared tile set graded by its palette (the renderer's fallback); a listed biome lights
+// up the moment its PNGs exist — no other code changes. Loading is graceful: a listed
+// but not-yet-copied file just 404s once and the fallback holds.
+//
+// The entries below are the AD's APPROVED set (filenames verbatim from the approval, so
+// the ship step is exactly `cp /workspace/fal-art/biomes/*.png public/tiles/biomes/`).
+// Band mapping per the canon re-band: the approved "verdant" art IS the Amberwild band's
+// living-roots identity. Rootbound (same ecology per curriculum §10) and Gilded Archive
+// have no approved art yet and stay on the graded fallback; the approved fracture_* set
+// predates the re-band and stays uncopied unless the AD re-purposes it.
 export interface BiomeTileArt {
   floors: string[];    // floor variants, hash-picked per tile (>= 1)
   wallTop?: string;    // 48x48 wall block used when the full autotile set is absent
 }
 
-export const BIOME_TILE_SOURCES: Partial<Record<string, BiomeTileArt>> = {};
+export const BIOME_TILE_SOURCES: Partial<Record<string, BiomeTileArt>> = {
+  amberwild: { floors: ["/tiles/biomes/verdant_floor_px.png"], wallTop: "/tiles/biomes/verdant_wall_px.png" },
+  sunless: { floors: ["/tiles/biomes/sunless_floor_px.png"], wallTop: "/tiles/biomes/sunless_wall_px.png" },
+  deep: { floors: ["/tiles/biomes/deep_floor_px.png"], wallTop: "/tiles/biomes/deep_wall2_final_px.png" },
+  ember: { floors: ["/tiles/biomes/ember_floor_px.png"], wallTop: "/tiles/biomes/ember_wall2_final_px.png" },
+  nullvoid: { floors: ["/tiles/biomes/nullvoid_floor2_final_px.png"], wallTop: "/tiles/biomes/nullvoid_wall2_final_px.png" },
+};
 
 // ---- hazard body art (opt-in) ----
 // 64x64 PNG (or a 1xN 64px strip; frame count inferred from width) per hazard kind:
 //   spikes: 3 frames (retracted / arming / extended), toxic_pool: 2-frame slow boil,
 //   fire_vent: 3 frames (grate / smolder / erupting base), void_rift: 2-frame maw.
-// EMPTY BY DEFAULT: until art lands, the renderer draws each hazard in the same
-// primitive telegraph language as the boss slam marker (see game.ts renderHazards).
-export const HAZARD_SOURCES: Partial<Record<HazardKind, string>> = {};
+// Approved sheets (ship step: `cp /workspace/fal-art/hazards/*.png public/tiles/hazards/`).
+// Until the copy lands, the renderer draws each hazard in the same primitive telegraph
+// language as the boss slam marker (see game.ts renderHazards).
+export const HAZARD_SOURCES: Partial<Record<HazardKind, string>> = {
+  spikes: "/tiles/hazards/spikes_sheet.png",
+  fire_vent: "/tiles/hazards/fire_vent_sheet.png",
+  toxic_pool: "/tiles/hazards/toxic2_sheet.png",
+  void_rift: "/tiles/hazards/rift2_sheet.png",
+};
 
 export class TileSet {
   private images = new Map<TileName, HTMLImageElement>();
