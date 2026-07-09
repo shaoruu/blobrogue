@@ -129,7 +129,11 @@ export class HttpGameServerProbe implements GameServerProbe {
       ws.on("open", () => {
         if (secret !== null) {
           const ticket = mintGsTicket(secret, "synthetic-verify", 60);
-          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: 3 })); } catch { finish(false, "ws_liveness", "send_failed"); }
+          // Mirrors PROTOCOL_VERSION in src/net/protocol.ts (v4: depth-progression
+          // generator + hazards). The control plane is deliberately standalone (no
+          // cross-repo imports), so the pin is by-hand: bump it with every protocol rev
+          // or the synthetic join gets rejected and deploys mis-verify.
+          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: 4 })); } catch { finish(false, "ws_liveness", "send_failed"); }
         }
         // Without a secret, receiving ANY server frame (e.g. a heartbeat ping) proves the WS
         // server + tick/heartbeat loop are alive.

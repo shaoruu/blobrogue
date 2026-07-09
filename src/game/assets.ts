@@ -123,7 +123,8 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
-// without an entry falls back to the generic "gun" sprite in renderPickups.
+// without an entry falls back to the generic "gun" sprite in renderPickups. The HUD
+// hotbar reuses the same art as slot icons (see weaponIconSrc).
 const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   pistol: "/sprites/weapon_pistol.png",
   shotgun: "/sprites/weapon_shotgun.png",
@@ -142,6 +143,12 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   longsword: "/sprites/weapon_claymore.png",
   spear: "/sprites/weapon_pike.png",
 };
+
+// The weapon's icon art for DOM HUD surfaces (the hotbar): its pickup side profile.
+// Null for a weapon without pickup art; callers fall back to the generic pixel gun.
+export function weaponIconSrc(id: WeaponId): string | null {
+  return PICKUP_SOURCES[id] ?? null;
+}
 
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();

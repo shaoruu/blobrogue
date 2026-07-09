@@ -712,10 +712,11 @@ function chestWeaponTests(): void {
     devSpawnChest(w, cx, cy);
     const chest = w.chests[0];
     chest.weapon = "railgun";
-    // Barrels sat exactly on every eject candidate: no landing spot is standable, so the
-    // drop must degrade to the chest's own tile and still collect.
+    // Barrels sat exactly on every eject ray: every fan candidate is either inside a
+    // barrel's ring or has one astride its walk path, so the drop must degrade to the
+    // chest's own tile and still collect.
     for (const off of C.CHEST_EJECT_ANGLES) {
-      devSpawnProp(w, "barrel", cx + Math.cos(off) * C.CHEST_WEAPON_EJECT, cy + Math.sin(off) * C.CHEST_WEAPON_EJECT);
+      devSpawnProp(w, "barrel", cx + Math.cos(off) * C.CHEST_EJECT_RADII[0], cy + Math.sin(off) * C.CHEST_EJECT_RADII[0]);
     }
     a.x = cx + 1; a.y = cy;
     stepWorldPhase(w, 1 / 20, []);
@@ -723,6 +724,229 @@ function chestWeaponTests(): void {
     // right under the opener, who collects it the same tick. Reachable by construction.
     check("the boxed-in chest's weapon still reaches the opener", a.ownedWeapons.includes("railgun"), `owned=${a.ownedWeapons.join(",")}`);
     check("no weapon pickup left stranded on a prop", w.pickups.every((pk) => pk.kind !== "weapon"));
+  }
+}
+
+// Bug regression: "coins/hearts from chests sometimes land inside walls and can't be
+// collected." Coins used to spill in a fixed row (c.x + offset*14) and hearts dropped at
+// the chest's own center — beside a wall, half the row landed on wall tiles where the
+// collect range never triggers. Every chest drop (coin, heart, weapon; wood and boss) now
+// goes through the same deterministic safe-spot fan as weapons (ejectChestLoot), and the
+// coin magnet resolves each pull step against walls so it can't drag a coin through one.
+function chestLootPlacementTests(): void {
+  const DT = 1 / 20;
+
+  const tileAt = (w: WorldState, tx: number, ty: number) => w.dungeon.tiles[ty * w.dungeon.w + tx];
+  const findTile = (w: WorldState, pred: (tx: number, ty: number) => boolean): { tx: number; ty: number } | null => {
+    for (let ty = 1; ty < w.dungeon.h - 1; ty++) {
+      for (let tx = 1; tx < w.dungeon.w - 1; tx++) if (pred(tx, ty)) return { tx, ty };
+    }
+    return null;
+  };
+  // Mirrors the sim's landing rules: open floor with margin on all four sides (no wall
+  // clipping) and outside every live prop's collision ring.
+  const isSafeLootSpot = (w: WorldState, x: number, y: number, pr: number): boolean => {
+    const m = C.CHEST_LOOT_WALL_MARGIN;
+    for (const [ox, oy] of [[0, 0], [-m, 0], [m, 0], [0, -m], [0, m]]) {
+      const tx = Math.floor((x + ox) / TILE), ty = Math.floor((y + oy) / TILE);
+      if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h || tileAt(w, tx, ty) !== 0) return false;
+    }
+    for (const prop of w.props) {
+      if (!prop.dead && Math.hypot(x - prop.x, y - prop.y) < pr + prop.radius * 0.8) return false;
+    }
+    return true;
+  };
+  const collectAt = (w: WorldState, a: PlayerSim, id: number, x: number, y: number): boolean => {
+    a.x = x; a.y = y;
+    stepWorldPhase(w, DT, []);
+    return !w.pickups.some((q) => q.id === id);
+  };
+  // Opens the chest with a planted bullet owned by `a` while `a` stands far away, so the
+  // whole spill stays on the floor for validation instead of collecting the same tick.
+  const openByBullet = (w: WorldState, a: PlayerSim, x: number, y: number): void => {
+    w.bullets.push({
+      x, y, vx: 1, vy: 0, radius: 6, life: 1, friendly: true,
+      owner: a.id, damage: 1, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    });
+    stepWorldPhase(w, DT, []);
+  };
+
+  section("chest loot: a chest hugging a wall spills every drop onto standable, collectible floor");
+  {
+    let opens = 0, drops = 0, unsafe = 0, uncollected = 0, coinBatches = 0;
+    for (const seed of [0xA11CE, 0xB0B, 0xCAFE, 0xD00D, 0xE66, 0xFEED, 0x711, 0x8BADF00D]) {
+      const w = createWorld(seed, 1, { isSandbox: true, skipLocalPlayer: true });
+      const a = spawnPlayerInWorld(w, "pA");
+      w.enemies = [];
+      w.pendingSpawns = [];
+      // A floor tile with the wall directly to its LEFT: the old fixed coin row
+      // (offsets up to ±35px) landed inside that wall from here.
+      const t = findTile(w, (tx, ty) => tileAt(w, tx, ty) === 0 && tileAt(w, tx - 1, ty) === 1 && tileAt(w, tx + 1, ty) === 0);
+      if (!t) continue;
+      const cx = t.tx * TILE + 12, cy = t.ty * TILE + TILE / 2;
+      devSpawnChest(w, cx, cy);
+      const chest = w.chests[w.chests.length - 1];
+      a.x = cx + 400; a.y = cy + 300;
+      openByBullet(w, a, cx, cy);
+      if (!chest.opened) continue;
+      opens++;
+      const spilled = w.pickups.slice();
+      if (spilled.filter((pk) => pk.kind === "coin").length >= 3) coinBatches++;
+      for (const pk of spilled) {
+        drops++;
+        if (!isSafeLootSpot(w, pk.x, pk.y, a.pr)) unsafe++;
+        if (pk.kind === "weapon" && pk.weapon && a.ownedWeapons.includes(pk.weapon)) continue;
+        if (!collectAt(w, a, pk.id, pk.x, pk.y)) uncollected++;
+      }
+    }
+    check("wall-hugging chests opened across seeds", opens >= 6, `opens=${opens}`);
+    check("at least one opening rolled a coin batch (the bugged loot kind)", coinBatches >= 1, `coinBatches=${coinBatches}`);
+    check("every drop landed on standable floor, clear of walls and props", drops > 0 && unsafe === 0, `drops=${drops} unsafe=${unsafe}`);
+    check("every drop was collectible where it landed", uncollected === 0, `uncollected=${uncollected}`);
+  }
+
+  section("chest loot: a boss chest in a wall corner spreads heart + coins onto safe floor");
+  {
+    let corners = 0, drops = 0, unsafe = 0, underChest = 0, stacked = 0, uncollected = 0;
+    for (const seed of [0xA11CE, 0xB0B, 0xCAFE, 0xD00D, 0xE66, 0xFEED]) {
+      const w = createWorld(seed, 1, { isSandbox: true, skipLocalPlayer: true });
+      const a = spawnPlayerInWorld(w, "pA");
+      w.enemies = [];
+      w.pendingSpawns = [];
+      // A floor tile with walls to the LEFT and ABOVE: a proper corner pocket.
+      const t = findTile(w, (tx, ty) =>
+        tileAt(w, tx, ty) === 0 && tileAt(w, tx - 1, ty) === 1 && tileAt(w, tx, ty - 1) === 1
+        && tileAt(w, tx + 1, ty) === 0 && tileAt(w, tx, ty + 1) === 0);
+      if (!t) continue;
+      corners++;
+      const cx = t.tx * TILE + 14, cy = t.ty * TILE + 14;
+      w.chests.push({ id: w.nextChestId++, kind: "boss", x: cx, y: cy, radius: 18, opened: false });
+      const chest = w.chests[w.chests.length - 1];
+      a.x = cx + 400; a.y = cy + 300;
+      openByBullet(w, a, cx, cy);
+      const spilled = w.pickups.slice();
+      check(`boss chest opened and spilled heart + 5 coins (seed ${seed.toString(16)})`,
+        chest.opened && spilled.filter((pk) => pk.kind === "heart").length === 1 && spilled.filter((pk) => pk.kind === "coin").length === 5,
+        `pickups=${spilled.map((pk) => pk.kind).join(",")}`);
+      for (let i = 0; i < spilled.length; i++) {
+        const pk = spilled[i];
+        drops++;
+        if (!isSafeLootSpot(w, pk.x, pk.y, a.pr)) unsafe++;
+        if (Math.hypot(pk.x - chest.x, pk.y - chest.y) < chest.radius) underChest++;
+        for (let j = 0; j < i; j++) {
+          if (Math.hypot(pk.x - spilled[j].x, pk.y - spilled[j].y) < 8) stacked++;
+        }
+        if (!collectAt(w, a, pk.id, pk.x, pk.y)) uncollected++;
+      }
+    }
+    check("corner pockets found across seeds", corners >= 4, `corners=${corners}`);
+    check("every boss drop landed on standable floor, clear of walls and props", drops > 0 && unsafe === 0, `drops=${drops} unsafe=${unsafe}`);
+    check("no boss drop hides under the chest sprite", underChest === 0, `underChest=${underChest}`);
+    check("boss drops keep a visible spread (no stacked pickups)", stacked === 0, `stacked=${stacked}`);
+    check("every boss drop was collectible where it landed", uncollected === 0, `uncollected=${uncollected}`);
+  }
+
+  section("chest loot: identical seed + opener produce byte-identical landing spots");
+  {
+    const spill = (): string => {
+      const w = createWorld(0xD5EED, 1, { isSandbox: true, skipLocalPlayer: true });
+      const a = spawnPlayerInWorld(w, "pA");
+      w.enemies = [];
+      w.pendingSpawns = [];
+      const t = findTile(w, (tx, ty) => tileAt(w, tx, ty) === 0 && tileAt(w, tx - 1, ty) === 1 && tileAt(w, tx + 1, ty) === 0)!;
+      const cx = t.tx * TILE + 12, cy = t.ty * TILE + TILE / 2;
+      devSpawnChest(w, cx, cy);
+      a.x = cx + 30; a.y = cy;
+      stepWorldPhase(w, DT, []);
+      return JSON.stringify(w.pickups.map((pk) => [pk.kind, pk.x, pk.y]));
+    };
+    const first = spill();
+    check("two identical openings agree on every landing spot", first === spill() && first !== "[]", first);
+  }
+
+  section("chest loot: every drop across seeded floors (all kinds) lands safe and collectible");
+  {
+    let drops = 0, unsafe = 0, uncollected = 0;
+    for (const seed of [0xF100D, 0x1234, 0xBEEF]) {
+      for (let floor = 2; floor <= 5; floor++) {
+        const w = createWorld(seed, floor, { isShared: true, skipLocalPlayer: true });
+        const a = spawnPlayerInWorld(w, "pA");
+        w.enemies = [];
+        w.pendingSpawns = [];
+        for (const chest of w.chests) {
+          if (chest.opened) continue;
+          const before = new Set(w.pickups.map((pk) => pk.id));
+          a.x = chest.x + 30; a.y = chest.y;
+          stepWorldPhase(w, DT, []);
+          if (!chest.opened) continue;
+          for (const pk of w.pickups.filter((q) => !before.has(q.id))) {
+            drops++;
+            if (!isSafeLootSpot(w, pk.x, pk.y, a.pr)) unsafe++;
+            if (pk.kind === "weapon" && pk.weapon && a.ownedWeapons.includes(pk.weapon)) continue;
+            if (!collectAt(w, a, pk.id, pk.x, pk.y)) uncollected++;
+          }
+        }
+      }
+    }
+    check("chest drops observed across floors", drops >= 20, `drops=${drops}`);
+    check("no drop landed on a wall, in a prop ring, or clipping a wall", unsafe === 0, `unsafe=${unsafe}`);
+    check("every drop was collectible where it landed", uncollected === 0, `uncollected=${uncollected}`);
+  }
+
+  section("coin magnet: the pull never drags a coin through a wall");
+  {
+    let walls = 0, throughWall = 0, everInWall = 0;
+    const hasRunToFloor = (w: WorldState, tx: number, ty: number): boolean => {
+      if (tileAt(w, tx - 1, ty) !== 0 || tileAt(w, tx, ty) !== 1) return false;
+      for (let k = 1; k <= 6 && tx + k < w.dungeon.w - 1; k++) {
+        if (tileAt(w, tx + k, ty) === 0) return true;
+      }
+      return false;
+    };
+    for (const seed of [0xA11CE, 0xB0B, 0xCAFE, 0xD00D]) {
+      const w = createWorld(seed, 2, { isShared: true, skipLocalPlayer: true });
+      const a = spawnPlayerInWorld(w, "pA");
+      w.enemies = [];
+      w.pendingSpawns = [];
+      // A short wall run with floor on both sides; the player magnet sits on the left,
+      // the coin on the right, dead level so the whole pull points INTO the wall.
+      const t = findTile(w, (tx, ty) => hasRunToFloor(w, tx, ty));
+      if (!t) continue;
+      walls++;
+      let run = 1;
+      while (tileAt(w, t.tx + run, t.ty) === 1) run++;
+      a.x = (t.tx - 1) * TILE + TILE / 2; a.y = t.ty * TILE + TILE / 2;
+      a.mods.coinMagnet = 10000;
+      a.mods.coinMagnetPull = 600;
+      const coinX = (t.tx + run) * TILE + TILE / 2, coinY = a.y;
+      w.pickups.push({ id: w.nextPickupId++, kind: "coin", x: coinX, y: coinY, radius: 13, weapon: null });
+      const coin = w.pickups[w.pickups.length - 1];
+      for (let i = 0; i < 40; i++) {
+        stepWorldPhase(w, DT, []);
+        if (tileAt(w, Math.floor(coin.x / TILE), Math.floor(coin.y / TILE)) === 1) everInWall++;
+      }
+      if (coin.x < (t.tx + run) * TILE || !w.pickups.includes(coin)) throughWall++;
+    }
+    check("walled magnet setups found across seeds", walls >= 3, `walls=${walls}`);
+    check("the coin never entered a wall tile on any tick", everInWall === 0, `inWallTicks=${everInWall}`);
+    check("the coin stayed on its own side of the wall, uncollected", throughWall === 0, `throughWall=${throughWall}`);
+  }
+
+  section("coin magnet: open-floor pulls still work (the fix blocks walls, not the magnet)");
+  {
+    const w = createWorld(0xA11CE, 1, { isSandbox: true, skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "pA");
+    w.enemies = [];
+    w.pendingSpawns = [];
+    a.mods.coinMagnet = 10000;
+    a.mods.coinMagnetPull = 600;
+    // Two tiles of open floor to the player's right inside the spawn room.
+    const sx = Math.floor(a.x / TILE), sy = Math.floor(a.y / TILE);
+    check("spawn room has open floor for the pull", tileAt(w, sx + 1, sy) === 0 && tileAt(w, sx + 2, sy) === 0);
+    w.pickups.push({ id: w.nextPickupId++, kind: "coin", x: (sx + 2) * TILE + TILE / 2, y: a.y, radius: 13, weapon: null });
+    const coins = a.coins;
+    for (let i = 0; i < 20; i++) stepWorldPhase(w, DT, []);
+    check("the magnet pulled the coin in and collected it", a.coins > coins && w.pickups.length === 0, `coins=${a.coins} pickups=${w.pickups.length}`);
   }
 }
 
@@ -1075,6 +1299,7 @@ function main(): void {
   blessingSafetyTests();
   spawnGraceTests();
   chestWeaponTests();
+  chestLootPlacementTests();
   sweptBulletTests();
   propAvoidanceTests();
   lootOwnershipTests();
