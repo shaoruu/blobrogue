@@ -19,7 +19,7 @@ import type { RemotePlayer, WeaponId } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
-  propFromWire, pickupFromWire, chestFromWire,
+  propFromWire, pickupFromWire, chestFromWire, hazardFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
   type RosterWire, type ServerMsg, type WaitWire,
 } from "../net/protocol.js";
@@ -600,9 +600,11 @@ export class WSTransport implements Transport {
     // prediction collides with the same barrels/crates the server does (no rubber-band near
     // props). They only change on break, so rebuilding per snapshot is cheap. The obstacle
     // revision rides along so any local navigation cache (the dev flow inspector) never
-    // reads routes through a stale prop set.
+    // reads routes through a stale prop set. Hazards mirror for the same reason: the
+    // predicted walk must feel the web slow the server will apply.
     this.predState.props = snap.props.map(propFromWire);
     this.predState.obstacleRev++;
+    this.predState.hazards = snap.hzds.map(hazardFromWire);
 
     // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
     // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep only
@@ -757,6 +759,7 @@ export class WSTransport implements Transport {
     this.renderState.obstacleRev++; // keep the dev flow inspector's clearance fresh
     this.renderState.pickups = this.composePickups();
     this.renderState.chests = this.composeChests();
+    this.renderState.hazards = this.latestSnap ? this.latestSnap.hzds.map(hazardFromWire) : [];
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
 
     const events = this.events;

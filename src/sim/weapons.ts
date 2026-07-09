@@ -1,6 +1,7 @@
 import type { Bullet, WeaponId } from "./types.js";
 import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
+import { BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF } from "./balance.js";
 
 export interface MeleeSpec {
   arc: number;         // swing arc in radians (thrust uses a narrow forward cone)
@@ -29,6 +30,7 @@ export interface Weapon {
   homing?: number;     // homing: steering turn rate (rad/s)
   chain?: number;      // tesla: lightning jumps after the first hit
   chainRange?: number; // tesla: max px per chain jump
+  blast?: number;      // mortar: AoE radius — the shell detonates on impact/wall/expiry
   // Elemental status the weapon stamps on every round (seconds of the effect). The
   // flamethrower is the only base weapon that carries one; item blessings roll the
   // rest at hit time (see PlayerMods.burnChance etc.), so any weapon can go elemental.
@@ -106,7 +108,25 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 0.6, pellets: 2, spread: 0.5, bulletRadius: 7, color: "#ff8a3b", muzzle: 2,
     burn: 2,
   },
-  sword: {
+  // Tier B — carries the `blast` field: a lobbed shell that detonates where it lands
+  // (impact, wall or end-of-arc airburst). The room verb is AREA: convert a pack or a
+  // chokepoint into a blast zone, and detonate explosive barrels from safety — weak
+  // single-target on purpose (the blast is the whole payload; no pierce, no direct hit).
+  mortar: {
+    id: "mortar", name: "Thumper", fireCd: 0.75, speed: 380, life: 0.6,
+    damage: 6, pellets: 1, spread: 0, bulletRadius: 8, color: "#ffc46a", muzzle: 5,
+    blast: 64,
+  },
+  // Tier A — pure data. A sustained lance of light: near-instant thin rounds at a very
+  // fast cadence blur into a continuous beam (the render draws the streak). The room verb
+  // is TRACKING: hold the line on one target and melt it — no spread, no travel time to
+  // lead, but short range and it punches only one body deep (basePierce 1).
+  beam: {
+    id: "beam", name: "Sunlance", fireCd: 0.045, speed: 2000, life: 0.24,
+    damage: 0.75, pellets: 1, spread: 0, bulletRadius: 4, color: "#ffe6a0", muzzle: 1,
+    basePierce: 1,
+  },
+    sword: {
     id: "sword", name: "Cutlass", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
     melee: { arc: 1.25, reach: 48, swingDur: 0.2 },
@@ -128,7 +148,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer", "flamer",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
 ];
 
@@ -136,6 +156,9 @@ export const PICKUP_WEAPONS: readonly WeaponId[] = [
 // once per trigger-pull in the game core so fire() stays a pure geometry helper.
 export interface ShotSpec {
   pellets: number;
+  // The weapon's NATIVE pellet count (before Split Shot / Scattergun additions): added
+  // pellets hit boss-grade bodies at a reduced coefficient (balancer remediation).
+  basePellets: number;
   spread: number;
   speed: number;
   life: number;
@@ -152,6 +175,7 @@ export interface ShotSpec {
   homing?: number;
   chain?: number;
   chainRange?: number;
+  blast?: number;
   burn?: number;
   chill?: number;
   shock?: number;
@@ -164,6 +188,15 @@ const CRIT_COLOR = "#fff3c4";
 // firing player's id, stamped onto each bullet for authoritative kill/loot attribution.
 export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng, owner: PlayerId): Bullet[] {
   const shots: Bullet[] = [];
+  // Boss-facing shot coefficient, baked per bullet (rooms always take full damage):
+  // native pellets beyond the first count at BOSS_NATIVE_PELLET_COEF, ADDED pellets
+  // (Split Shot / Scattergun) at BOSS_EXTRA_PELLET_COEF, and a few weapons carry their
+  // own coefficient (WEAPON_BOSS_COEF). Spread uniformly over the volley so bullet
+  // order never matters (deterministic, replay-safe).
+  const extra = Math.max(0, spec.pellets - spec.basePellets);
+  const native = spec.pellets - extra;
+  const effective = 1 + Math.max(0, native - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
+  const pelletBossCoef = (effective / spec.pellets) * (spec.fx !== undefined ? WEAPON_BOSS_COEF[spec.fx] ?? 1 : 1);
   for (let i = 0; i < spec.pellets; i++) {
     const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
     const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
@@ -182,11 +215,14 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       pierce: spec.pierce,
       hitList: null,
       isCrit,
+      critX: isCrit ? spec.critMult : 1,
+      bossCoef: pelletBossCoef,
       fx: spec.fx,
       bounce: spec.bounce,
       homing: spec.homing,
       chain: spec.chain,
       chainRange: spec.chainRange,
+      blast: spec.blast,
       burn: spec.burn,
       chill: spec.chill,
       shock: spec.shock,

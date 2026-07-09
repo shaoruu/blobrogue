@@ -14,6 +14,22 @@ export const FLOW_REBUILD = 0.2;
 export const SLIME_HOP_FREQ = 3.4;
 export const SLIME_HOP_AMOUNT = 0.55;
 
+// Bat flock steering (deterministic boids): separation/alignment/cohesion + target
+// attraction, blended into a persistent heading (stored in the bat's `zig` scratch) that
+// turns at a capped rate — a readable flock, never a stack, never independent beelines.
+// The neighbor scan is BOUNDED: same-kind bodies inside FLOCK_RADIUS, first
+// FLOCK_MAX_NEIGHBORS in deterministic array order, so cost is O(n·k) with a small k.
+export const FLOCK_RADIUS = 90;
+export const FLOCK_SEP_RADIUS = 30;
+export const FLOCK_MAX_NEIGHBORS = 5;
+export const FLOCK_SEP_WEIGHT = 1.7;
+export const FLOCK_ALIGN_WEIGHT = 0.5;
+export const FLOCK_COHESION_WEIGHT = 0.35;
+export const FLOCK_TARGET_WEIGHT = 1.0;
+export const FLOCK_TURN_RATE = 7;   // rad/s cap on heading change
+export const FLOCK_MIN_SPEED = 0.5; // airspeed floor while the desired pull opposes the heading
+export const FLOCK_HARD_CORE = 18;  // px: inside this, separation overrides every other pull
+
 // Anti-stuck nudge for wedged chasers.
 export const STUCK_TIME = 0.12;
 export const STUCK_PROGRESS = 0.5;
@@ -62,7 +78,7 @@ export const MIN_MULTI_SPREAD = 0.26;
 export const WEAPON_KB: Record<WeaponId, number> = {
   pistol: 4, shotgun: 8, rapid: 2,
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
-  sawnoff: 10, railgun: 12, nailer: 3, flamer: 1,
+  sawnoff: 10, railgun: 12, nailer: 3, flamer: 1, mortar: 6, beam: 1,
   sword: 14, longsword: 20, spear: 16,
 };
 export const KB_LAMBDA = 16;
@@ -73,9 +89,10 @@ export const MELEE_THRUST_WIDTH = 18;
 export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
-  sawnoff: 26, railgun: 6, nailer: 0, flamer: 0,
+  sawnoff: 26, railgun: 6, nailer: 0, flamer: 0, mortar: 8, beam: 0,
   sword: 0, longsword: 0, spear: 8,
 };
+
 
 // Point-blank shotgun hit distance that triggers the (client-side) freeze.
 export const SHOTGUN_FREEZE_RANGE = 96;
@@ -120,6 +137,62 @@ export const GLOB_SPREAD = 0.18;
 export const GHOST_SOLID_RANGE = 120;
 export const GHOST_SOLID_TIME = 0.4;
 export const GHOST_SOLID_AT = 0.98;
+
+// Charger line rush. A much longer lane than the skeleton's hop-lunge (sidestep, don't
+// backpedal), and a wall crash self-stuns for CHARGER_CRASH_STUN — the authored punish
+// window. Same §4 guarantees: ≥0.30s post-lock dodge, ≥0.35s recovery.
+export const CHARGER_TRIGGER = 320;
+export const CHARGER_WINDUP = 0.75;
+export const CHARGER_LOCK = 0.4;
+export const CHARGER_RUSH_SPEED = 480;
+export const CHARGER_RUSH_DUR = 0.85;
+export const CHARGER_RECOVER = 0.5;
+export const CHARGER_CRASH_STUN = 1.4;
+export const CHARGER_CD = 3.0;
+
+// Burrower dive cycle: submerge (untargetable), tunnel to the target at a flat burst speed
+// (like the skeleton's flat lunge speed — the commitment, not the walk, is the threat),
+// then a marked, telegraphed eruption. Travel is hard-capped so the untargetable window is
+// bounded; the eruption marker is armed for the FULL windup (≥0.30s dodge by construction).
+export const BURROW_TRIGGER = 380;
+export const BURROW_DIVE_WINDUP = 0.45;
+// Slightly faster than the player's 200px/s run: walking away from the mound is not an
+// answer (that's the point) — dodging the eruption marker is.
+export const BURROW_TRAVEL_SPEED = 230;
+export const BURROW_MAX_TRAVEL = 1.5;
+export const BURROW_EMERGE_DIST = 52;
+export const BURROW_ERUPT_WINDUP = 0.6;
+export const BURROW_ERUPT_RADIUS = 52;
+export const BURROW_POP = 0.22;
+export const BURROW_RECOVER = 0.6;
+export const BURROW_CD = 3.2;
+
+// Orbiter: circles the target at ring distance, strafing sideways (rotational tracking —
+// a different aim problem from the spitter's radial kiting), and stops to fire a quick
+// telegraphed bolt. The orbit direction flips on its seeded zig clock.
+export const ORBITER_RING = 170;
+export const ORBITER_RING_SLACK = 30;
+export const ORBITER_FLIP_RATE = 0.45; // zig advance (rad/s); sign of sin(zig) picks the direction
+export const ORBITER_WINDUP = 0.6;
+export const ORBITER_LOCK = 0.3;
+export const ORBITER_RECOVER = 0.5;
+export const ORBITER_CD = 2.2;
+export const ORBITER_BOLT_SPEED = 380;
+export const ORBITER_BOLT_RADIUS = 5;
+export const ORBITER_BOLT_LIFE = 1.6;
+
+// Shielder: a walking wall. Bullets arriving inside its front arc are ABSORBED (the
+// answer is the flank, melee over the top, or splash) — the arc is anchored on the same
+// lockedAngle the wire already carries, so the client renders the exact authoritative
+// guard. Its bash is an ordinary short telegraphed lunge.
+export const SHIELDER_BLOCK_ARC = 2.1;   // radians of protected frontage (~120°)
+export const SHIELDER_TRIGGER = 150;
+export const SHIELDER_WINDUP = 0.6;
+export const SHIELDER_LOCK = 0.3;
+export const SHIELDER_BASH_DUR = 0.22;
+export const SHIELDER_BASH_SPEED = 420;
+export const SHIELDER_RECOVER = 0.55;
+export const SHIELDER_CD = 2.6;
 
 // Destructible props + chests.
 export const PROP_RADIUS = 15;
