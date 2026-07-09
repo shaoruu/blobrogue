@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { activePetOf } from "./players";
 
 // Rooms come in two kinds that never cross-match (see schema.ts):
 //   "coop"   — classic peer-synced co-op (the pre-authoritative path, fully preserved).
@@ -48,26 +49,28 @@ async function smallestFreeColor(ctx: MutationCtx, roomId: Id<"rooms">): Promise
 async function ensurePresence(
   ctx: MutationCtx,
   roomId: Id<"rooms">,
-  playerId: Id<"players">,
-  name: string,
+  player: Doc<"players">,
   floor: number,
   colorIndex: number,
 ) {
   const existing = await ctx.db
     .query("presence")
-    .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+    .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", player._id))
     .unique();
   const now = Date.now();
+  // The roster shows each member's equipped companion; stamped from the players row here
+  // (join) and refreshed by heartbeat, so an equip made on the title screen shows up.
+  const pet = activePetOf(player) ?? undefined;
   if (existing) {
-    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false });
+    await ctx.db.patch(existing._id, { name: player.name, colorIndex, floor, pet, updatedAt: now, isDown: false });
     return;
   }
   await ctx.db.insert("presence", {
-    roomId, playerId, name,
+    roomId, playerId: player._id, name: player.name,
     x: 0, y: 0, facing: 1,
     hp: 6, maxHp: 6, weapon: "pistol",
     floor, isDown: false, aimAngle: 0, shotSeq: 0, kills: 0,
-    colorIndex, reviveNonce: 0, updatedAt: now,
+    colorIndex, reviveNonce: 0, pet, updatedAt: now,
   });
 }
 
@@ -85,7 +88,7 @@ export const create = mutation({
       code, kind: kind ?? "coop", hostPlayerId: playerId, seed, floor: 1,
       status: "lobby", isPublic: false, createdAt: now, lastActivity: now,
     });
-    await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
+    await ensurePresence(ctx, roomId, player, 1, colorIndex ?? 0);
     return { roomId, code, seed, floor: 1 };
   },
 });
@@ -115,7 +118,7 @@ export const join = mutation({
       if (!isMember && members.length >= MAX_PLAYERS) throw new Error("that room is full");
     }
     const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
-    await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
+    await ensurePresence(ctx, room._id, player, room.floor, color);
     await ctx.db.patch(room._id, { lastActivity: Date.now() });
     return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status };
   },
@@ -152,7 +155,7 @@ export const quickPlay = mutation({
       if (players.length >= MAX_PLAYERS) continue;
       // Join this one.
       const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
-      await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
+      await ensurePresence(ctx, room._id, player, room.floor, color);
       await ctx.db.patch(room._id, { lastActivity: now });
       return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status, joined: true };
     }
@@ -165,7 +168,7 @@ export const quickPlay = mutation({
       code, kind: wantKind, hostPlayerId: playerId, seed, floor: 1,
       status, isPublic: true, createdAt: now, lastActivity: now,
     });
-    await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
+    await ensurePresence(ctx, roomId, player, 1, colorIndex ?? 0);
     return { roomId, code, seed, floor: 1, status, joined: false };
   },
 });
@@ -246,7 +249,11 @@ export const heartbeat = mutation({
       .unique();
     if (!row) return;
     const now = Date.now();
-    await ctx.db.patch(row._id, { updatedAt: now });
+    // Refresh the roster's pet chip too, so equipping a companion while sitting in the
+    // lobby propagates within one heartbeat.
+    const player = await ctx.db.get(playerId);
+    const pet = player ? activePetOf(player) ?? undefined : row.pet;
+    await ctx.db.patch(row._id, { updatedAt: now, pet });
     const room = await ctx.db.get(roomId);
     if (room && room.status !== "ended") await ctx.db.patch(roomId, { lastActivity: now });
   },

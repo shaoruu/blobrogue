@@ -34,6 +34,16 @@ export default defineSchema({
     totalCoins: v.number(),
     gamesPlayed: v.number(),
     unlocks: v.array(v.string()),
+    // Companion pets (additive migration: every field optional, absent on old rows).
+    // deepestBossKill — deepest floor whose boss this player's party ever defeated; the
+    // boss-kill milestone unlock requirements evaluate against it (src/sim/pets.ts).
+    deepestBossKill: v.optional(v.number()),
+    // unlockedPets — earned PetKind ids. Written ONLY for account-backed rows (signed in);
+    // guests accrue the underlying stats but never the unlocks, and inherit them the moment
+    // their row migrates onto an account (see players.ensureAccountRow).
+    unlockedPets: v.optional(v.array(v.string())),
+    // activePet — the one equipped companion (a PetKind in unlockedPets); absent = none.
+    activePet: v.optional(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
   })
@@ -80,6 +90,9 @@ export default defineSchema({
     kills: v.number(),
     colorIndex: v.number(),
     reviveNonce: v.number(),
+    // The member's equipped companion (a PetKind), so the lobby roster can show it.
+    // Refreshed from the players row on join + heartbeat; absent = none.
+    pet: v.optional(v.string()),
     updatedAt: v.number(),
   })
     .index("by_room", ["roomId"])

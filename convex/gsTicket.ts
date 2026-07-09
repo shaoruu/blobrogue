@@ -40,6 +40,10 @@ export const mint = action({
     if (profile) {
       claims.name = profile.name;
       if (profile.colorIndex !== null) claims.colorIndex = profile.colorIndex;
+      // The equipped companion rides as a verified claim. getProfile already enforces the
+      // invariant (activePet is null unless it sits in the account's unlockedPets), so a
+      // guest — who can never accrue unlocks — can never mint a pet.
+      if (profile.activePet !== null) claims.pet = profile.activePet;
     }
     if (roomCode !== undefined) {
       if (!profile) throw new Error("join the room before requesting a room ticket");
