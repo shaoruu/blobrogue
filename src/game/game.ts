@@ -44,6 +44,7 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
+import { WAVE_HAZARDS } from "./waveSpec.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -372,6 +373,8 @@ const POOL_STYLES: readonly PoolStyle[] = [
 const HAZARD_HIT_TINT: Record<FloorHazardKind, string> = {
   spikes: "#c9c9de", toxic_pool: "#3fbf5f", fire_vent: "#ff8a3b", void_rift: "#d9a6ff",
 };
+// Manifest §6: the toxic pool's surface loop sounds only while a player is this close.
+const TOXIC_LOOP_RADIUS = 120;
 
 // Stable per-tile hash -> 0..1. Salted so different features (variant vs. detail) draw
 // from independent streams, and identical every frame so tiles never shimmer.
@@ -884,7 +887,12 @@ export class Game {
     waveAudio.onFloorLoad();
     waveAudio.setAmbientZone(this.biomeIdx);
     const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
-    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null);
+    // First-trigger contract: decode every cue this floor can reach — the boss actually
+    // here plus every spawned archetype's tells — before any of them can fire.
+    const floorKinds = new Set<string>();
+    for (const e of this.world.enemies) floorKinds.add(e.kind);
+    for (const e of this.world.pendingSpawns) floorKinds.add(e.kind);
+    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null, floorKinds);
   }
 
   // Mount torches on the wall directly above each room (facing into it), at deterministic
@@ -1454,30 +1462,37 @@ export class Game {
       if (this.hazardPhases.size > 0) this.hazardPhases.clear();
       return;
     }
+    let poolNear = false;
     for (const h of hazards) {
+      // Manifest §6: the toxic pool has no phase edge — its quiet surface loop is
+      // proximity-gated instead (one mixed voice for the nearest body of liquid).
+      if (h.kind === "toxic_pool") {
+        const px = (h.tx + 0.5) * TILE, py = (h.ty + 0.5) * TILE;
+        if (Math.hypot(px - this.px, py - this.py) <= TOXIC_LOOP_RADIUS) poolNear = true;
+        continue;
+      }
       const phase = floorHazardPhaseAt(h, this.hazardVisClock);
       const prev = this.hazardPhases.get(h.id);
       this.hazardPhases.set(h.id, phase);
       if (prev === undefined || phase === prev) continue;
       const x = (h.tx + 0.5) * TILE, y = (h.ty + 0.5) * TILE;
       if (!this.isNearCamera(x, y)) continue;
+      // Phase-edge cues route through the wave manifest (authored hazard/* assets with
+      // safe library fallbacks) — never the old uiClick/meleeSwing/enemyAttack repitches.
+      const cues = WAVE_HAZARDS[h.kind];
       if (phase === "telegraph") {
-        if (h.kind === "spikes") this.sfxAt("uiClick", x, y, { rate: 1.6, gain: 0.5 });
-        else if (h.kind === "fire_vent") this.sfxAt("enemyAttack", x, y, { rate: 0.7, gain: 0.3 });
-        else if (h.kind === "void_rift") this.sfxAt("enemyAttack", x, y, { rate: 0.4, gain: 0.3 });
+        if (cues?.telegraph) waveAudio.play(cues.telegraph, { x, y, entityId: h.id });
       } else if (phase === "active") {
+        if (cues?.active) waveAudio.play(cues.active, { x, y, entityId: h.id });
         switch (h.kind) {
           case "spikes":
-            this.sfxAt("meleeSwing", x, y, { rate: 1.5, gain: 0.4 });
             this.spawnPuff(x, y, 3, "#c9c9de");
             break;
           case "fire_vent":
-            this.sfxAt("barrel", x, y, { rate: 1.3, gain: 0.35 });
             this.spawnEmberAt(x, y - 6, 8);
             this.spawnPuff(x, y - 10, 4, "#ff8a3b");
             break;
           case "void_rift":
-            this.sfxAt("tesla", x, y, { rate: 0.6, gain: 0.3 });
             this.spawnSparkleBurst(x, y, 6, this.currentBiome.accent);
             break;
           default:
@@ -1485,6 +1500,7 @@ export class Game {
         }
       }
     }
+    waveAudio.holdLoop("toxic_pool.loop", "near", poolNear);
     if (this.hazardPhases.size > hazards.length * 2) {
       // Floor changed underneath us: drop stale ids so the map stays bounded.
       const live = new Set<number>();
@@ -1733,7 +1749,9 @@ export class Game {
         break;
       case "hazardHit": {
         // The floor connected: kind-flavored burst on top of the ordinary playerHurt beat
-        // (which the sim raises separately for the shared hurt juice).
+        // (which the sim raises separately for the shared hurt juice). The toxic pool has
+        // no phase-edge cue, so contact is its manifest moment.
+        if (e.kind === "toxic_pool") waveAudio.play("toxic_pool.enter", { x: e.x, y: e.y });
         const tint = HAZARD_HIT_TINT[e.kind];
         this.spawnPuff(e.x, e.y, 8, tint);
         if (e.kind === "spikes") this.spawnSparks(e.x, e.y, 6, -Math.PI / 2);
@@ -1749,30 +1767,29 @@ export class Game {
       case "lungeTrail":
         this.spawnPuff(e.x, e.y, 1, ENEMY_ARCHETYPES.skeleton.tint);
         break;
+      // chargeCrash / burrowDive / burrowErupt / bossVolley / webPlaced keep their juice
+      // only: the wave-manifest tell watcher already sounds these exact edges
+      // (charger.crash, burrower.submerge/erupt, marrow.stompImpact / choir.strikeImpact,
+      // weaver.latticeFire) — the old repitched library doubles are gone.
       case "chargeCrash":
-        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.7, gain: 0.8 });
         this.spawnParticles(e.x, e.y, 10, "#c9a06a");
         this.spawnSparks(e.x, e.y, 6, 0);
         this.shockwaves.spawn(e.x, e.y, 10, 60, 0.3, "#ffd27a", 3);
         this.addTrauma(0.18);
         break;
       case "burrowDive":
-        this.sfxAt("enemyHit", e.x, e.y, { rate: 0.6, gain: 0.5 });
         this.spawnPuff(e.x, e.y, 8, "#c9a06a");
         break;
       case "burrowErupt":
-        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.85, gain: 0.8 });
         this.spawnParticles(e.x, e.y, 14, "#c9a06a");
         this.spawnDustRing(e.x, e.y, e.r * 0.7, 10, "#c9a06a");
         this.shockwaves.spawn(e.x, e.y, 10, e.r * 1.4, 0.32, "#ffd27a", 3);
         this.addTrauma(0.14);
         break;
       case "bossVolley":
-        this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.75, gain: 0.55 });
         this.spawnPuff(e.x, e.y, 6, "#dceef5");
         break;
       case "webPlaced":
-        this.sfxAt("enemyHit", e.x, e.y, { rate: 1.4, gain: 0.4 });
         this.spawnPuff(e.x, e.y, 7, "#c98bff");
         this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
         break;
