@@ -2165,7 +2165,10 @@ function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.hazardClock += dt;
   if (w.hazards.length === 0) return;
   for (const p of w.players.values()) {
-    if (p.isDown || p.hp <= 0) continue;
+    // A blessing-picking player is fully paused AND shielded (see stepPlayerPhase /
+    // damagePlayer); the rift drag must respect the same freeze — nothing may move a
+    // player who cannot answer.
+    if (p.isDown || p.hp <= 0 || w.pendingBlessings.has(p.id)) continue;
     // Rift drag: escapable pressure (85px/s against a 200px/s walk), through the normal
     // wall-aware move so it can never push a player into geometry, and line-of-sight
     // gated so a rift never pulls through a wall.
