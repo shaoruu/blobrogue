@@ -343,33 +343,58 @@ export class Menu {
   //                (sign-out lives in Profile, never here)
   private renderIdentityInto(wrap: HTMLElement) {
     wrap.replaceChildren();
-    if (this.auth && this.auth.isSignedIn) {
-      wrap.appendChild(this.accountChip());
-      wrap.appendChild(el("p", "id-value", "Progress saved across devices"));
+    const isSignedIn = this.auth?.isSignedIn ?? false;
+    const isPending = !isSignedIn && (this.auth?.isCompletingSignIn ?? false);
+    // The guest frame reads STRONGER than an ordinary panel (dun-4 keyline) but stays
+    // dark — it can never beat the amber Play stack at thumbnail scale.
+    wrap.classList.toggle("guest", !isSignedIn);
+
+    // One 42px+1fr, three-track grid for EVERY state (loading/guest/busy/error/account):
+    // the fixed 40px bright patch (Google mark / avatar), the title+value tracks, and the
+    // full-width action strip with its note. Content swaps; the grid never moves.
+    const patch = el("div", "id-patch");
+    const title = el("div", "id-title");
+    const value = el("p", "id-value");
+    const actions = el("div", "id-actions");
+    const note = el("p", "id-note");
+    wrap.append(patch, title, value, actions);
+
+    if (isSignedIn) {
+      const av = document.createElement("img");
+      av.className = "id-avatar";
+      av.alt = "";
+      av.width = 40;
+      av.height = 40;
+      patch.appendChild(av);
+      title.textContent = this.session.name || "signed in";
+      void this.hydrateAccount(av, title);
+      value.textContent = "Progress saved across devices";
       const view = el("button", "secondary id-view", "VIEW PROFILE ▸");
       view.type = "button";
       view.onclick = () => void this.showProfile();
-      wrap.appendChild(view);
-      wrap.appendChild(el("p", "id-note", "Signed in with Google"));
+      note.textContent = "Signed in with Google";
+      actions.append(view, note);
       return;
     }
-    if (this.auth && this.auth.isCompletingSignIn) {
-      wrap.appendChild(el("p", "id-note id-pending", "signing you in with Google…"));
-      return;
-    }
-    wrap.appendChild(el("div", "id-title", "SAVE YOUR BLOB"));
-    wrap.appendChild(el("p", "id-value", "Keep progress, cosmetics, and ranked runs across devices."));
-    const note = el("p", "id-note", "Optional · Play anytime as guest.");
+
+    patch.appendChild(googleMark(22));
+    title.textContent = "SAVE YOUR BLOB";
+    value.textContent = isPending
+      ? "signing you in with Google…"
+      : "Keep progress, cosmetics, and ranked runs across devices.";
+    note.textContent = isPending
+      ? "back from Google — finishing up."
+      : "Optional · Play anytime as guest.";
     if (this.auth) {
       const cta = el("button", "secondary btn-google");
       cta.type = "button";
-      cta.appendChild(googleMark());
-      const label = el("span", "", "SIGN IN WITH GOOGLE");
+      const label = el("span", "", isPending ? "SIGNING YOU IN…" : "SIGN IN WITH GOOGLE");
       cta.appendChild(label);
+      cta.disabled = isPending;
       cta.onclick = () => void this.doSignIn(cta, label, note);
-      wrap.appendChild(cta);
+      actions.appendChild(cta);
     }
-    wrap.appendChild(note);
+    actions.appendChild(note);
   }
 
   // The account chip is pure DISPLAY (avatar + name). Sign-out lives on the own-profile
@@ -1525,12 +1550,12 @@ export class Menu {
 }
 
 // The Google "G" mark, inline so it needs no network fetch and stays crisp at any DPI.
-function googleMark(): SVGElement {
+function googleMark(size = 16): SVGElement {
   const ns = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", "0 0 48 48");
-  svg.setAttribute("width", "16");
-  svg.setAttribute("height", "16");
+  svg.setAttribute("width", String(size));
+  svg.setAttribute("height", String(size));
   svg.setAttribute("aria-hidden", "true");
   const paths: Array<[string, string]> = [
     ["#EA4335", "M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"],

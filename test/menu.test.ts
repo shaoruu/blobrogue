@@ -493,7 +493,7 @@ async function main(): Promise<void> {
     auth.setSignedIn(true);
     auth.fire();
     const playAfter = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
-    check("the exchange settles into the account chip in place", byClass(overlay, "account").length === 1);
+    check("the exchange settles into the account state in place", textOf(overlay).includes("Progress saved across devices"));
     check("the shell around the identity card is NOT rebuilt (same play node)", playBefore === playAfter);
 
     // The failure path settles into the guest CTA instead — same box.
@@ -557,7 +557,7 @@ async function main(): Promise<void> {
 
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
-    check("signed-in shows the account chip (display only)", byClass(signed.overlay, "account").length === 1);
+    check("signed-in shows the avatar patch + account state (display only)", byClass(signed.overlay, "id-patch").length === 1 && textOf(signed.overlay).includes("Progress saved across devices"));
     check("sign-out does NOT live on the title (it belongs to the profile)", !buttonsOf(signed.overlay).some((b) => b === "sign out"));
     check("signed-in has NO sign-in CTA", !buttonsOf(signed.overlay).some((b) => b.includes("SIGN IN WITH GOOGLE")));
     check("signed-in value line", textOf(signed.overlay).includes("Progress saved across devices"));

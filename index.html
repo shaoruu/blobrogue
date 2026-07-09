@@ -503,11 +503,24 @@
       /* FINAL identity-card geometry: 112px desktop / 108px mobile, one reserved box for
          guest / busy / error / signed-in — content swaps only. Right grid = 112/82/82 with
          10px gaps. Junior to Play by construction: dark chrome, no amber fill/pulse/glow. */
-      .identity-card{ display:flex; flex-direction:column; gap:5px; align-items:stretch; height:112px; flex:0 0 112px; overflow:hidden;
+      /* The login card: one 42px+1fr, three-track grid for every state — the fixed 40px
+         bright icon patch (Google mark / avatar), title + value, then the full-width
+         action strip + note. Dark chrome, secondary purple CTA, no amber/glow/animation;
+         focus rings are EXTERNAL (the global button outline). */
+      .identity-card{ display:grid; grid-template-columns:42px 1fr; grid-template-rows:auto auto 1fr; gap:4px 8px;
+        height:112px; flex:0 0 112px; overflow:hidden;
         padding:9px 10px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
-      .id-title{ font-family:var(--f-ui); font-size:10px; letter-spacing:1px; color:var(--cream); text-transform:uppercase; text-align:left; height:12px; flex:0 0 12px; }
-      .menu p.id-value{ font-family:var(--f-ui); font-size:9px; letter-spacing:.2px; color:#8f87a8; text-transform:none; line-height:12px; margin:0; text-align:left; flex:0 0 24px; height:24px; overflow:hidden; }
-      .id-view{ min-width:0; width:100%; font-size:9px; padding:7px 8px; letter-spacing:1px; flex:0 0 28px; }
+      /* The guest frame reads stronger than an ordinary panel — still dark, never warm. */
+      .identity-card.guest{ box-shadow:inset 0 0 0 2px var(--dun-4); }
+      .id-patch{ grid-column:1; grid-row:1 / span 2; width:40px; height:40px; background:#f4f2ec;
+        display:flex; align-items:center; justify-content:center; box-shadow:inset 0 0 0 2px #05030b; }
+      .id-patch svg{ display:block; width:22px; height:22px; }
+      .id-avatar{ display:block; width:40px; height:40px; object-fit:cover; image-rendering:auto; }
+      .id-title{ grid-column:2; grid-row:1; font-family:var(--f-ui); font-size:10px; letter-spacing:1px; color:var(--cream); text-transform:uppercase; text-align:left;
+        height:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .menu p.id-value{ grid-column:2; grid-row:2; font-family:var(--f-ui); font-size:9px; letter-spacing:.2px; color:#8f87a8; text-transform:none; line-height:12px; margin:0; text-align:left; height:24px; overflow:hidden; }
+      .id-actions{ grid-column:1 / -1; grid-row:3; align-self:end; display:flex; flex-direction:column; gap:4px; min-width:0; }
+      .id-view{ min-width:0; width:100%; font-size:9px; padding:0 8px; height:28px; letter-spacing:1px; }
       .menu p.id-note{ font-family:var(--f-ui); font-size:8px; letter-spacing:.2px; color:var(--dun-4); text-transform:none; line-height:12px; height:12px; flex:0 0 12px; margin:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* Mid-OAuth placeholder: the identity card's "signing you in" state, centered in the
          same reserved box the chip/CTA occupy — it settles in place when the exchange ends. */
