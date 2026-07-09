@@ -53,10 +53,10 @@ export interface CosmeticSlotDef {
 }
 
 export const COSMETIC_SLOTS: readonly CosmeticSlotDef[] = [
-  { slot: "body", label: "blob color", noneLabel: "Amber (classic)" },
-  { slot: "hat", label: "hats", noneLabel: "Cowboy (classic)" },
-  { slot: "face", label: "face", noneLabel: "None" },
-  { slot: "title", label: "titles", noneLabel: "None" },
+  { slot: "hat", label: "Hats", noneLabel: "No Hat (Cowboy)" },
+  { slot: "face", label: "Glasses", noneLabel: "No Glasses" },
+  { slot: "body", label: "Blob Color", noneLabel: "Amber (classic)" },
+  { slot: "title", label: "Titles", noneLabel: "No Title" },
 ];
 
 // All-time stats an earned unlock can key on (mirrors the players-row aggregates).

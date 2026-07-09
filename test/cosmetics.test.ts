@@ -227,6 +227,14 @@ function renderContractTests(): void {
     if (f.endsWith(".ts") && readFileSync(join(uiDir, f), "utf8").includes("innerHTML")) offenders.push(f);
   }
   check("src/ui never uses innerHTML (names/titles/build labels are inert text)", offenders.length === 0, offenders.join(","));
+
+  // ONE shared loadout renderer: every surface that draws worn cosmetics goes through
+  // drawLoadoutOverlays — no surface keeps private overlay draw math to drift on.
+  const preview = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
+  check("the world renderer delegates to drawLoadoutOverlays", game.includes("drawLoadoutOverlays("));
+  check("the menu/profile/closet mirror delegates to drawLoadoutOverlays", preview.includes("drawLoadoutOverlays("));
+  check("no surface keeps private overlay resolution (game)", !game.includes("resolveOverlay("));
+  check("no surface keeps private overlay resolution (preview)", !preview.includes("resolveOverlay("));
 }
 
 // The public leaderboard projection is a whitelist: presentation fields only.

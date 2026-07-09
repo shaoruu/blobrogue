@@ -9,8 +9,8 @@
 // above and deliberately keeps the cowboy hat. Unknown ids return null and render nothing —
 // the defensive posture for ids minted by a newer catalog.
 
-import { COSMETIC_ASSET_SOURCES, socketFor } from "./cosmeticSockets.js";
-import type { CosmeticOrientation, SocketPoint } from "./cosmeticSockets.js";
+import { COSMETIC_ASSET_SOURCES, socketFor, capCosmeticXform } from "./cosmeticSockets.js";
+import type { CosmeticOrientation, SocketPoint, CosmeticXform } from "./cosmeticSockets.js";
 import { COSMETICS } from "../../convex/cosmeticsCore.js";
 
 const FRAME = 64;
@@ -214,4 +214,53 @@ export function resolveOverlay(
   }
   const painted = cosmeticOverlay(id);
   return painted ? { mode: "frame", source: painted } : null;
+}
+
+// ---- THE shared loadout renderer ----------------------------------------------------------
+// Every surface that draws a blob's worn cosmetics — the world (self + teammates), the menu
+// previews, the profile stages, the closet mirror — goes through THIS one function, so the
+// look can never drift between surfaces. It owns the capped transform, the orientation
+// resolution, and the frame/socket draw math.
+
+export interface LoadoutDrawOpts {
+  cx: number;
+  cy: number;
+  sizePx: number;               // the body sprite's drawn size (64px frame scaled)
+  facing: number;               // 1 right / -1 left (mirrors the side-authored orientation)
+  orientation: CosmeticOrientation;
+  xf: CosmeticXform;            // the BODY transform; capped internally for the cosmetic pass
+  isSheetPlaying: boolean;      // frame sheets bake the deform — neutralize procedural scale
+  frameIndex: number;           // the body sheet's current frame (socket anchors track it)
+  alpha: number;
+}
+
+export function drawLoadoutOverlays(
+  ctx: CanvasRenderingContext2D,
+  hat: string | null,
+  face: string | null,
+  o: LoadoutDrawOpts,
+): void {
+  if (hat === null && face === null) return;
+  const capped = capCosmeticXform(o.xf);
+  const half = o.sizePx / 2;
+  const scale = o.sizePx / 64; // frame space -> drawn px
+  ctx.save();
+  ctx.globalAlpha = o.alpha;
+  ctx.translate(o.cx + capped.ox, o.cy + capped.oy);
+  ctx.rotate(capped.rot);
+  ctx.scale(o.isSheetPlaying ? o.facing : o.facing * capped.sx, o.isSheetPlaying ? 1 : capped.sy);
+  for (const id of [face, hat]) {
+    if (id === null) continue;
+    const overlay = resolveOverlay(id, o.orientation, o.frameIndex);
+    if (!overlay) continue;
+    if (overlay.mode === "frame") {
+      ctx.drawImage(overlay.source, -half, -half, o.sizePx, o.sizePx);
+    } else {
+      const drawSize = overlay.sizePx * scale;
+      const sx = (overlay.socket.x - 32) * scale;
+      const sy = (overlay.socket.y - 32) * scale;
+      ctx.drawImage(overlay.source, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
+    }
+  }
+  ctx.restore();
 }

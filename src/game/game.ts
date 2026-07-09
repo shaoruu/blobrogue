@@ -17,8 +17,7 @@ import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
-import { resolveOverlay } from "./cosmeticArt.js";
-import { capCosmeticXform } from "./cosmeticSockets.js";
+import { drawLoadoutOverlays } from "./cosmeticArt.js";
 import { bodyPaletteIndex } from "./cosmetics.js";
 import type { CosmeticLoadout } from "./cosmetics.js";
 import { PartyGate } from "../net/partyGate.js";
@@ -4827,39 +4826,14 @@ export class Game {
     return idx > 0 ? playerColor(idx) : null;
   }
 
-  // Draw a blob's equipped cosmetic overlays (hat/face) on the body's transform, CAPPED
-  // per the layer spec (capCosmeticXform): cosmetics follow bob/lean/squash only up to the
-  // readability caps, never exaggerating the silhouette. `isSheetPlaying` mirrors
-  // drawChar's rule: frame sheets bake the deform, so the overlay neutralizes procedural
-  // scale with them. Resolution is asset-first per orientation (the hero renders the
-  // side-authored orientation, mirrored by the facing flip; up/down arrive with
-  // directional hero sheets) with graceful procedural fallback — unknown/absent ids draw
-  // nothing. Weapon, status, and name/team cues always draw AFTER this pass.
+  // Draw a blob's equipped cosmetic overlays (hat/face) through THE shared loadout renderer
+  // (drawLoadoutOverlays — the single path every surface uses, so world and menus can never
+  // drift). The hero renders the side-authored orientation, mirrored by the facing flip;
+  // weapon, status, and name/team cues always draw AFTER this pass.
   private drawCosmetics(hat: string | null, face: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean, frameIndex = 0) {
-    if (hat === null && face === null) return;
-    const { ctx } = this;
-    const half = size / 2;
-    const scale = size / 64; // frame space -> world px
-    const capped = capCosmeticXform(xf);
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(cx + capped.ox, cy + capped.oy);
-    ctx.rotate(capped.rot);
-    ctx.scale(isSheetPlaying ? facing : facing * capped.sx, isSheetPlaying ? 1 : capped.sy);
-    for (const id of [face, hat]) {
-      if (id === null) continue;
-      const overlay = resolveOverlay(id, "side", frameIndex);
-      if (!overlay) continue;
-      if (overlay.mode === "frame") {
-        ctx.drawImage(overlay.source, -half, -half, size, size);
-      } else {
-        const drawSize = overlay.sizePx * scale;
-        const sx = (overlay.socket.x - 32) * scale;
-        const sy = (overlay.socket.y - 32) * scale;
-        ctx.drawImage(overlay.source, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
-      }
-    }
-    ctx.restore();
+    drawLoadoutOverlays(this.ctx, hat, face, {
+      cx, cy, sizePx: size, facing, orientation: "side", xf, isSheetPlaying, frameIndex, alpha,
+    });
   }
 
   private renderPlayer() {

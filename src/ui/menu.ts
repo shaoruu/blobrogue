@@ -6,7 +6,7 @@ import { api } from "../net/api.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { LobbyPlayer } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
-import { playerColor, PLAYER_COLORS } from "../game/assets.js";
+import { playerColor } from "../game/assets.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
@@ -108,7 +108,6 @@ export class Menu {
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
   private menuKeys: ((e: KeyboardEvent) => void) | null = null;
-  private syncColorRow: (() => void) | null = null;
   // A leaderboard row index waiting to receive focus once the next fill enables it
   // (Back/Escape from a player profile restores focus to the exact row that opened it).
   private pendingLbRowFocus: number | null = null;
@@ -276,7 +275,6 @@ export class Menu {
       you.setProfile(null, true);
       return;
     }
-    this.syncColorRow?.();
     you.setProfile(profile);
   }
 
@@ -323,38 +321,6 @@ export class Menu {
     input.value = this.session.name;
     input.addEventListener("change", () => void this.session.login(input.value.trim() || "blob").catch(() => {}));
     row.append(label, input);
-    return row;
-  }
-
-  // The blob-color pick: one swatch per palette slot. Slot 0 (amber) is the natural
-  // sprite; any other pick tints your blob everywhere (solo + online) and is persisted
-  // (locally always, onto the profile when the backend is reachable).
-  private colorRow(onPick?: () => void): HTMLElement {
-    const row = el("div", "namerow");
-    row.appendChild(el("label", "", "blob color"));
-    const swatches = el("div", "swatches");
-    const buttons: HTMLButtonElement[] = [];
-    const sync = () => {
-      const current = this.session.colorIndex ?? 0;
-      buttons.forEach((b, i) => {
-        b.classList.toggle("sel", i === current);
-        b.setAttribute("aria-pressed", String(i === current));
-      });
-    };
-    for (let i = 0; i < PLAYER_COLORS.length; i++) {
-      const b = el("button", "swatch");
-      b.type = "button";
-      b.style.background = PLAYER_COLORS[i];
-      b.title = i === 0 ? "amber (classic)" : "";
-      // Icon-only button: the swatch has no text, so name it for screen readers.
-      b.setAttribute("aria-label", i === 0 ? "blob color amber (classic)" : `blob color ${i + 1}`);
-      b.addEventListener("click", () => { this.session.setColorIndex(i); sync(); onPick?.(); });
-      buttons.push(b);
-      swatches.appendChild(b);
-    }
-    sync();
-    this.syncColorRow = sync;
-    row.appendChild(swatches);
     return row;
   }
 
@@ -746,24 +712,28 @@ export class Menu {
     const wrap = el("div", "menu");
     const tabs = el("div", "pc-tabs");
     const overviewTab = el("button", `secondary pc-tab${view === "overview" ? " on" : ""}`, "OVERVIEW");
-    overviewTab.addEventListener("click", () => void this.showProfile("overview"));
     const closetTab = el("button", `secondary pc-tab${view === "closet" ? " on" : ""}`, "CLOSET");
-    closetTab.addEventListener("click", () => void this.showProfile("closet"));
     tabs.append(overviewTab, closetTab);
     wrap.appendChild(tabs);
 
     const goBack = () => void this.showTitle({ dest: "profile" });
 
+    // Every way OUT of the closet (back, Escape, the Overview tab) goes through the
+    // discard guard when unsaved preview picks exist; the Overview has no unsaved state.
+    let guard: (leave: () => void) => void = (leave) => leave();
     if (view === "overview") this.buildOwnOverview(wrap);
-    else this.buildCloset(wrap);
+    else guard = this.buildCloset(wrap).requestLeave;
+
+    overviewTab.onclick = () => { if (view !== "overview") guard(() => void this.showProfile("overview")); };
+    closetTab.onclick = () => { if (view !== "closet") void this.showProfile("closet"); };
 
     const row = el("div", "btnrow");
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", goBack);
+    back.addEventListener("click", () => guard(goBack));
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
-    this.bindEscape(goBack);
+    this.bindEscape(() => guard(goBack));
 
     if (view === "overview") void this.hydrateOwnOverview();
     else void this.hydrateCloset();
@@ -844,92 +814,98 @@ export class Menu {
     }
   }
 
-  // The Closet: every shipped slot with equipped/owned/locked states and the live mirror.
-  private closetSyncFns: Array<() => void> = [];
-  private closetSyncPreview: (() => void) | null = null;
+  // ---- THE CLOSET (own-profile-only, fixed panel) ------------------------------------
+  //
+  // Browse -> preview -> commit, with real state semantics:
+  //   - clicking an unlocked card writes a PENDING pick (temporary preview only, per slot;
+  //     pending picks survive category switches)
+  //   - EQUIP persists the ACTIVE category's pending pick only
+  //   - RESET restores the equipped look (discards all pending) without any write
+  //   - leaving (back / Escape / the Overview tab) with unsaved picks swaps the action
+  //     strip into an explicit discard confirmation — same fixed geometry
+  // Categories are REAL only: a slot renders a tab only while it has items (future slots
+  // stay hidden until populated). Locked cards are disabled (cannot focus or equip) and
+  // wear their exact configured condition — no mystery. Card states are distinguished by
+  // geometry + glyph + text, never hue alone. The mirror renders through the same shared
+  // loadout renderer as the world.
 
-  private buildCloset(wrap: HTMLElement) {
-    const top = el("div", "pp-top");
-    const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96);
-    top.appendChild(preview.el);
-    const ownTitle = el("p", "worn-title", titleTextOf(this.session.cosmetics.title));
-    const info = el("div", "you-info");
-    info.append(el("span", "you-name", this.session.name || "blob"), ownTitle);
-    top.appendChild(info);
-    wrap.appendChild(top);
+  private closetRefresh: (() => void) | null = null;
 
-    const note = el("p", "muted closet-note", "");
-    const syncPreview = () => {
-      preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
-      ownTitle.textContent = titleTextOf(this.session.cosmetics.title);
-    };
-    this.closetSyncPreview = syncPreview;
-    // A locked pick previews the TENTATIVE loadout on the mirror without ever equipping it.
-    const previewLoadout = (tentative: CosmeticLoadout) => preview.setLook(lookOf(tentative, this.session.colorIndex));
-
-    this.closetSyncFns = [];
-    for (const slotDef of COSMETIC_SLOTS) {
-      if (slotDef.slot === "body") {
-        // Body color renders as the swatch row (one pick drives the cosmetic body item
-        // AND the party color at launch — see Session.setColorIndex).
-        wrap.appendChild(this.colorRow(syncPreview));
-        continue;
-      }
-      wrap.appendChild(el("div", "col-h", slotDef.label));
-      const { rowEl, sync } = this.closetRow(slotDef.slot, slotDef.noneLabel, note, syncPreview, previewLoadout);
-      this.closetSyncFns.push(sync);
-      wrap.appendChild(rowEl);
-    }
-    wrap.appendChild(note);
-  }
-
-  private async hydrateCloset() {
-    // Refresh unlock states in place (fixed geometry; a dead backend just leaves the
-    // locked states standing, never an error screen).
-    if (!this.client) return;
+  private readSeenUnlocks(): string[] {
     try {
-      await this.session.login(this.session.name || "blob");
-      this.syncColorRow?.();
-      for (const sync of this.closetSyncFns) sync();
-      this.closetSyncPreview?.();
+      const raw = localStorage.getItem("blobrogue.closet.seenUnlocks");
+      const parsed: unknown = raw === null ? [] : JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === "string") : [];
     } catch {
-      // locked states stand
+      return [];
     }
   }
 
-  // One wardrobe row: the empty-slot tile plus a tile per catalog item, with explicit
-  // EQUIPPED / owned / LOCKED states. Locked tiles PREVIEW on the mirror (with the exact
-  // configured unlock condition in the reserved note line) but never equip.
-  private closetRow(
-    slot: CosmeticSlot,
-    noneLabel: string,
-    note: HTMLElement,
-    syncPreview: () => void,
-    previewLoadout: (tentative: CosmeticLoadout) => void,
-  ): { rowEl: HTMLElement; sync: () => void } {
-    const rowEl = el("div", "closet-row");
+  private markSeenUnlocks(unlocks: readonly string[]) {
+    try { localStorage.setItem("blobrogue.closet.seenUnlocks", JSON.stringify(unlocks)); } catch { /* ignore */ }
+  }
+
+  private buildCloset(wrap: HTMLElement): { requestLeave: (leave: () => void) => void } {
+    // Pending picks: slot -> id-or-null (null = the always-unlocked empty slot). A pick
+    // equal to the equipped value clears itself — no phantom "unsaved" state.
+    const pending = new Map<CosmeticSlot, string | null>();
+    const categories = COSMETIC_SLOTS.filter((slotDef) => cosmeticsForSlot(slotDef.slot).length > 0);
+    let active: CosmeticSlot = categories[0]?.slot ?? "hat";
+    // NEW badges: real unlocks earned since the last closet visit (marked seen on open).
+    const seenAtOpen = this.readSeenUnlocks();
+    const isNewUnlock = (id: string) =>
+      (this.session.profile?.unlocks ?? []).includes(id) && !seenAtOpen.includes(id);
+
+    const panel = el("div", "closet-panel");
+    const stage = el("div", "closet-stage");
+    const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 128);
+    stage.appendChild(preview.el);
+    const stageState = el("p", "closet-stage-state", "EQUIPPED");
+    stage.appendChild(stageState);
+    panel.appendChild(stage);
+
+    const rightCol = el("div", "closet-right");
+    const cats = el("div", "closet-cats");
+    const grid = el("div", "closet-grid");
+    const note = el("p", "muted closet-note", "");
+    const actions = el("div", "closet-actions");
+    rightCol.append(cats, grid, note, actions);
+    panel.appendChild(rightCol);
+    wrap.appendChild(panel);
+
     const unlocks = () => this.session.profile?.unlocks ?? [];
-    const equippedId = () => this.session.cosmetics[slot];
+    const equippedOf = (slot: CosmeticSlot) => this.session.cosmetics[slot];
+    const effectiveOf = (slot: CosmeticSlot) => (pending.has(slot) ? pending.get(slot) ?? null : equippedOf(slot));
+    const effectiveLoadout = (): CosmeticLoadout => ({
+      hat: effectiveOf("hat"),
+      face: effectiveOf("face"),
+      body: effectiveOf("body"),
+      title: effectiveOf("title"),
+    });
 
-    interface Tile { btn: HTMLButtonElement; state: HTMLElement; def: CosmeticDef | null }
-    const tiles: Tile[] = [];
+    const syncStage = () => {
+      preview.setLook(lookOf(effectiveLoadout(), this.session.colorIndex));
+      stageState.textContent = pending.size > 0 ? "PREVIEWING \u2014 unsaved" : "EQUIPPED";
+    };
 
-    const sync = () => {
-      for (const t of tiles) {
-        const id = t.def?.id ?? null;
-        const isEquipped = equippedId() === id;
-        const isLocked = t.def !== null && !isCosmeticOwned(t.def, unlocks());
-        t.btn.classList.toggle("sel", isEquipped);
-        t.btn.classList.toggle("locked", isLocked);
-        t.btn.setAttribute("aria-pressed", String(isEquipped));
-        t.state.textContent = isEquipped ? "EQUIPPED" : isLocked ? "LOCKED" : "";
+    const renderCats = () => {
+      cats.replaceChildren();
+      for (const slotDef of categories) {
+        const tab = el("button", `secondary closet-cat${slotDef.slot === active ? " on" : ""}`, slotDef.label);
+        tab.type = "button";
+        tab.onclick = () => { active = slotDef.slot; renderAll(); };
+        cats.appendChild(tab);
       }
     };
 
-    const addTile = (def: CosmeticDef | null, label: string) => {
-      const btn = el("button", "cos-tile");
-      btn.type = "button";
+    const cardIcon = (def: CosmeticDef | null): HTMLElement => {
       const icon = el("span", "cos-icon");
+      if (def?.slot === "body" || (def === null && active === "body")) {
+        const swatch = el("span", "cos-swatch");
+        swatch.style.background = playerColor(def?.paletteIndex ?? 0);
+        icon.appendChild(swatch);
+        return icon;
+      }
       const art = def ? cosmeticOverlay(def.id) : null;
       if (art) {
         const mini = document.createElement("canvas");
@@ -938,33 +914,108 @@ export class Menu {
         if (g) { g.imageSmoothingEnabled = false; g.drawImage(art, 0, 0, 40, 40); }
         icon.appendChild(mini);
       } else {
-        // Artless slots: titles wear the honor glyph, the empty slot a plain dot.
         icon.textContent = def?.slot === "title" ? "\u2726" : "\u25cf";
       }
-      const name = el("span", "cos-name", label);
-      const state = el("span", "cos-state", "");
-      btn.append(icon, name, state);
-      btn.setAttribute("aria-label", `${slot}: ${label}`);
-      btn.addEventListener("click", () => {
-        if (def && !isCosmeticOwned(def, unlocks())) {
-          // Locked: preview only, exposing the exact configured unlock condition.
-          note.textContent = `${def.name} is locked \u2014 ${def.hint ?? "earn it in the depths"} (preview only)`;
-          previewLoadout({ ...this.session.cosmetics, [slot]: def.id });
-          return;
-        }
-        note.textContent = "";
-        this.session.setCosmetic(slot, def?.id ?? null);
-        sync();
-        syncPreview();
-      });
-      tiles.push({ btn, state, def });
-      rowEl.appendChild(btn);
+      return icon;
     };
 
-    addTile(null, noneLabel);
-    for (const def of cosmeticsForSlot(slot)) addTile(def, def.name);
-    sync();
-    return { rowEl, sync };
+    const addCard = (def: CosmeticDef | null, label: string) => {
+      const id = def?.id ?? null;
+      const isLocked = def !== null && !isCosmeticOwned(def, unlocks());
+      const isEquipped = equippedOf(active) === id;
+      const isPreviewing = pending.has(active) && (pending.get(active) ?? null) === id;
+      const btn = el("button", "cos-tile");
+      btn.type = "button";
+      btn.classList.toggle("sel", isEquipped);
+      btn.classList.toggle("prev", isPreviewing);
+      btn.classList.toggle("locked", isLocked);
+      btn.setAttribute("aria-pressed", String(isEquipped));
+      // State semantics carried by geometry + glyph + text (never hue alone); locked cards
+      // are DISABLED — they cannot take focus or equip, and wear their exact condition.
+      btn.disabled = isLocked;
+      const glyph = isLocked ? "\u2716" : isPreviewing ? "\u25b8" : isEquipped ? "\u25c9" : isNewUnlock(id ?? "") ? "\u2605" : "";
+      const stateText = isLocked
+        ? `LOCKED \u2014 ${def?.hint ?? "secret"}`
+        : isPreviewing ? "PREVIEWING" : isEquipped ? "EQUIPPED" : isNewUnlock(id ?? "") ? "NEW" : "";
+      btn.append(el("span", "cos-glyph", glyph), cardIcon(def), el("span", "cos-name", label), el("span", "cos-state", stateText));
+      btn.setAttribute("aria-label", `${active}: ${label}${isLocked ? ` \u2014 locked, ${def?.hint ?? "secret"}` : ""}`);
+      btn.onclick = () => {
+        // Browsing updates the TEMPORARY preview only; equality with the equipped value
+        // clears the pending pick (nothing unsaved).
+        if (equippedOf(active) === id) pending.delete(active);
+        else pending.set(active, id);
+        renderAll();
+      };
+      grid.appendChild(btn);
+    };
+
+    const renderGrid = () => {
+      grid.replaceChildren();
+      const slotDef = categories.find((c) => c.slot === active);
+      addCard(null, slotDef?.noneLabel ?? "None");
+      for (const def of cosmeticsForSlot(active)) addCard(def, def.name);
+    };
+
+    const renderActions = () => {
+      actions.replaceChildren();
+      const equip = el("button", "closet-equip", "EQUIP");
+      equip.type = "button";
+      equip.disabled = !pending.has(active);
+      equip.onclick = () => {
+        if (!pending.has(active)) return;
+        const pick = pending.get(active) ?? null;
+        if (active === "body") {
+          // One pick drives the cosmetic body item AND the party color at launch.
+          const def = pick !== null ? cosmeticById(pick) : undefined;
+          this.session.setColorIndex(def?.paletteIndex ?? 0);
+        } else {
+          this.session.setCosmetic(active, pick);
+        }
+        pending.delete(active);
+        note.textContent = "equipped";
+        renderAll();
+      };
+      const reset = el("button", "secondary closet-reset", "RESET");
+      reset.type = "button";
+      reset.disabled = pending.size === 0;
+      reset.onclick = () => { pending.clear(); note.textContent = ""; renderAll(); };
+      actions.append(equip, reset);
+    };
+
+    const renderAll = () => { renderCats(); renderGrid(); renderActions(); syncStage(); };
+    renderAll();
+    this.closetRefresh = renderAll;
+    // This visit's NEW badges are computed — mark everything seen for the next visit.
+    this.markSeenUnlocks(unlocks());
+
+    // Leaving with unsaved picks needs an explicit decision; the confirmation swaps INSIDE
+    // the fixed action strip.
+    const requestLeave = (leave: () => void) => {
+      if (pending.size === 0) { leave(); return; }
+      actions.replaceChildren();
+      actions.appendChild(el("span", "closet-confirm-copy", "discard unsaved preview?"));
+      const discard = el("button", "secondary closet-discard", "DISCARD");
+      discard.type = "button";
+      discard.onclick = () => { pending.clear(); leave(); };
+      const keep = el("button", "secondary closet-keep", "KEEP BROWSING");
+      keep.type = "button";
+      keep.onclick = () => { renderActions(); };
+      actions.append(discard, keep);
+    };
+    return { requestLeave };
+  }
+
+  private async hydrateCloset() {
+    // Refresh unlock states in place (fixed geometry; a dead backend just leaves the
+    // locked states standing, never an error screen).
+    if (!this.client) return;
+    try {
+      await this.session.login(this.session.name || "blob");
+      this.closetRefresh?.();
+      this.markSeenUnlocks(this.session.profile?.unlocks ?? []);
+    } catch {
+      // locked states stand
+    }
   }
 
   // ---- SETTINGS -----------------------------------------------------------------------

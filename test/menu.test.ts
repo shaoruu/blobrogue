@@ -177,6 +177,7 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): { menu: M
   // previous section must never leak into a fresh session.
   localStorage.removeItem("blobrogue.cosmetics");
   localStorage.removeItem("blobrogue.color");
+  localStorage.removeItem("blobrogue.closet.seenUnlocks");
   const overlay = document.createElement("div") as unknown as ShimNode;
   const client = fakeConvex(opts);
   const session = new Session(client);
@@ -565,43 +566,83 @@ async function main(): Promise<void> {
     check("a failed top-run fetch stays honest in the same box", textOf(broken.overlay).includes("top run unavailable"));
   }
 
-  section("the wardrobe: every SHIPPED slot, equipped/locked states from real ownership");
+  section("the closet: browse previews, EQUIP commits per category, reset + discard guard");
   {
     const { menu, overlay, session } = makeMenu();
     await menu.showProfile("closet");
     await settle();
-    const states = byClass(overlay, "cos-state").map(textOf);
-    check("the default (none) slots read EQUIPPED (hat/face/title)", states.filter((s) => s === "EQUIPPED").length === 3, states.join("|"));
-    check("earned items read LOCKED with zero unlocks", states.filter((s) => s === "LOCKED").length === 5, states.join("|"));
-    const names = byClass(overlay, "cos-name").map(textOf);
-    check("starter hats offered", names.includes("Top Hat") && names.includes("Party Cone"));
-    check("earned items visible (aspirational, never hidden)", names.includes("Crown") && names.includes("Halo") && names.includes("Monocle"));
-    check("earned TITLES ship as locked honors", names.includes("Depth Diver") && names.includes("Blob Slayer"));
-    check("the authored body palette renders as swatches", byClass(overlay, "swatch").length > 0);
-    // One swatch pick drives BOTH color layers at launch (party color + body item),
-    // while the model keeps them separate for future party-assigned colors.
-    session.setColorIndex(3);
-    check("a swatch pick records the body cosmetic", session.cosmetics.body === "body_pink", String(session.cosmetics.body));
-    check("...and the party color", session.colorIndex === 3);
-    session.setColorIndex(0);
-    check("slot 0 (classic amber) clears the body slot", session.cosmetics.body === null);
+    const cats = () => byClass(overlay, "closet-cat");
+    const cards = () => byClass(overlay, "cos-tile");
+    const cardByName = (n: string) => cards().find((c) => textOf(c).includes(n));
+    const stageState = () => textOf(byClass(overlay, "closet-stage-state")[0]);
 
-    // Equipping a starter moves the EQUIPPED chip (the fake echoes the accepted pick, as
-    // the real backend does for owned items).
-    const echo = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", face: null, body: null, title: null } }) });
-    echo.session.setCosmetic("hat", "hat_top");
-    await echo.menu.showProfile("closet");
-    await settle();
-    const tiles = byClass(echo.overlay, "cos-tile");
-    const topHatTile = tiles.find((t) => textOf(t).includes("Top Hat"));
-    check("equipping a starter marks its tile EQUIPPED", topHatTile !== undefined && textOf(topHatTile!).includes("EQUIPPED"));
+    check("real categories only, in order", cats().map(textOf).join("|") === "Hats|Glasses|Blob Color|Titles", cats().map(textOf).join("|"));
+    check("the always-unlocked No Hat card exists and reads EQUIPPED", textOf(cardByName("No Hat") ?? {}).includes("EQUIPPED"));
+    const crown = cardByName("Crown");
+    check("locked cards are DISABLED (cannot focus/equip)", crown?.disabled === true);
+    check("locked cards wear their exact configured condition", textOf(crown ?? {}).includes("reach floor 10"));
+    check("stage starts in the EQUIPPED state", stageState() === "EQUIPPED");
 
-    // Ownership unlocks the earned tile.
-    const owned = makeMenu({ profile: makeProfile({ unlocks: ["hat_crown"] }) });
-    await owned.menu.showProfile("closet");
+    // Browsing writes the TEMPORARY preview only.
+    cardByName("Top Hat")?.onclick?.();
+    check("browsing flips the stage to PREVIEWING", stageState().includes("PREVIEWING"));
+    check("...but persists NOTHING", session.cosmetics.hat === null);
+    check("the browsed card reads PREVIEWING", textOf(cardByName("Top Hat") ?? {}).includes("PREVIEWING"));
+
+    // Pending picks survive category switches.
+    cats().find((c) => textOf(c) === "Glasses")?.onclick?.();
+    cardByName("Shades")?.onclick?.();
+    cats().find((c) => textOf(c) === "Hats")?.onclick?.();
+    check("the hat preview survived the category round-trip", textOf(cardByName("Top Hat") ?? {}).includes("PREVIEWING"));
+
+    // EQUIP persists the ACTIVE category only.
+    byClass(overlay, "closet-equip")[0]?.onclick?.();
+    check("EQUIP persisted the active category", session.cosmetics.hat === "hat_top");
+    check("...and ONLY the active category (glasses stay a preview)", session.cosmetics.face === null && stageState().includes("PREVIEWING"));
+
+    // RESET restores equipped without any write.
+    byClass(overlay, "closet-reset")[0]?.onclick?.();
+    check("RESET discards pending picks", stageState() === "EQUIPPED");
+    check("...without writing", session.cosmetics.face === null && session.cosmetics.hat === "hat_top");
+
+    // Leaving with unsaved picks demands an explicit decision (same fixed strip).
+    cats().find((c) => textOf(c) === "Glasses")?.onclick?.();
+    cardByName("Round Specs")?.onclick?.();
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("Escape with unsaved preview swaps in the discard confirmation", textOf(overlay).includes("discard unsaved preview?"));
+    byClass(overlay, "closet-keep")[0]?.onclick?.();
+    check("KEEP BROWSING stays in the closet with the preview intact", stageState().includes("PREVIEWING"));
+    fireWindowEvent("keydown", { key: "Escape" });
+    byClass(overlay, "closet-discard")[0]?.onclick?.();
     await settle();
-    const crownTile = byClass(owned.overlay, "cos-tile").find((t) => textOf(t).includes("Crown"));
-    check("a granted unlock stops reading LOCKED", crownTile !== undefined && !textOf(crownTile!).includes("LOCKED"));
+    check("DISCARD leaves to the title with nothing written", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")) && session.cosmetics.face === null);
+  }
+
+  section("closet: body color category, NEW badges, and clean-exit behavior");
+  {
+    const { menu, overlay, session } = makeMenu();
+    await menu.showProfile("closet");
+    await settle();
+    const cats = () => byClass(overlay, "closet-cat");
+    const cards = () => byClass(overlay, "cos-tile");
+    cats().find((c) => textOf(c) === "Blob Color")?.onclick?.();
+    check("body colors render as cards with the Amber default", cards().some((c) => textOf(c).includes("Amber (classic)")));
+    cards().find((c) => textOf(c).includes("Cyan"))?.onclick?.();
+    byClass(overlay, "closet-equip")[0]?.onclick?.();
+    check("equipping a body color drives BOTH color layers", session.colorIndex === 1 && session.cosmetics.body === "body_cyan");
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("leaving with nothing unsaved just closes (no confirmation)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+
+    // NEW badge: a real unlock earned since the last visit wears the star ONCE.
+    const fresh = makeMenu({ profile: makeProfile({ unlocks: ["hat_crown"] }) });
+    await fresh.menu.showProfile("closet");
+    await settle();
+    const crownCard = () => byClass(fresh.overlay, "cos-tile").find((c) => textOf(c).includes("Crown"));
+    check("a freshly earned unlock reads NEW (and is enabled)", textOf(crownCard() ?? {}).includes("NEW") && crownCard()?.disabled !== true);
+    await fresh.menu.showProfile("closet");
+    await settle();
+    check("the NEW badge clears on the next visit (marked seen)", !textOf(crownCard() ?? {}).includes("NEW"));
   }
 
   section("post-run sign-in nudge: guests once per session, cooldown-guarded, honest copy");
