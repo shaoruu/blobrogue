@@ -73,6 +73,7 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   // The bestiary wave: the seam faces its lane; the blink faces its dash; decoy planting,
   // stoking, harmonizing and the knell are body beats that keep the movement facing.
   decoy: false, blink: true, seam: true, stoke: false, harmonize: false, knell: false,
+  build: false, // a stationary raise: the body keeps its guard/travel facing
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)

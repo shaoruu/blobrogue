@@ -21,7 +21,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
@@ -307,6 +307,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   sweep: "#ffd166",   // Gilded Warden ring waves
   brace: "#9fb4a8",   // elite brace: braced steel-green slide
   decoy: "#d7b8ff",   // echojack planting its false noise: pale violet jangle
+  build: "#a8e07a",   // worker raise (bailiff divider / mason L-corner): living green footprint
   blink: "#d7b8ff",   // echojack's perpendicular relocation dash
   seam: "#e88fb1",    // seamcutter's previewed wall-to-wall lane
   stoke: "#ff8a3b",   // sinderling self-arming channel: gathering embers
@@ -355,14 +356,17 @@ const CHEST_OPEN_DUR = 0.4;      // seconds the 3-frame chest-open clip plays, t
 const PROP_INTACT_IMG: Record<PropKind, PropSpriteName> = {
   crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
   barrel_explosive: "barrel_explosive", brazier: "brazier",
+  root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
 };
 // Break sheet per destructible kind (frames 1-2 = breaking). Brazier never breaks.
 const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
   crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
   barrel_explosive: "barrel_explosive_break", brazier: null,
+  root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
 };
 const PROP_TINT: Record<PropKind, string> = {
   crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
+  root_wall: "#86c06c", silt_mound: "#b8a888", clinker_brick: "#c9743f",
 };
 // Subtle idle bob/flash for props + chests — a fraction of the character juice so a crate
 // reads as a solid object, not a jelly.
@@ -2074,6 +2078,20 @@ export class Game {
         this.spawnGibs(x, y, 10, "#8a5a2c");
         this.spawnPuff(x, y, 6, "#b07a3c");
         this.sfxAt("barrel", x, y, { rate: 1.1, gain: 0.7 });
+        break;
+      case "root_wall":
+        this.spawnGibs(x, y, 8, "#86c06c");
+        this.spawnPuff(x, y, 6, "#5f8f4c");
+        this.sfxAt("barrel", x, y, { rate: 0.9, gain: 0.6 });
+        break;
+      case "silt_mound":
+        this.spawnPuff(x, y, 10, "#b8a888");
+        this.sfxAt("dash", x, y, { rate: 0.6, gain: 0.5 });
+        break;
+      case "clinker_brick":
+        this.spawnGibs(x, y, 8, "#c9743f");
+        this.spawnPuff(x, y, 5, "#8a4a2c");
+        this.sfxAt("barrel", x, y, { rate: 1.2, gain: 0.6 });
         break;
       default:
         break;
@@ -4246,6 +4264,9 @@ export class Game {
         continue;
       }
 
+      // A worker's build tell previews the EXACT construction footprint (the sim's own
+      // site geometry): green rising markers where the divider / L-corner will stand.
+      if (a.move === "build" && isWindup) this.renderBuildFootprint(e);
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
       // The shrinking safe-ring of the boss arena squeeze.
@@ -4419,6 +4440,29 @@ export class Game {
 
   // A generic filled danger disc + bright rim (the burrower's eruption marker). Grows with
   // the telegraph so "leave this circle" needs no explanation.
+  // The worker tell's footprint preview: one soft rising marker per planned segment —
+  // the sim's OWN site geometry (workerBuildSites), so the preview never drifts from
+  // what lands. Escape-route standoffs may still skip a segment at raise time; the
+  // preview shows intent, the props are truth.
+  private renderBuildFootprint(e: Enemy) {
+    const { ctx, cam } = this;
+    const a = e.attack;
+    const pulse = 0.5 + 0.5 * Math.sin(this.animClock * 9);
+    ctx.save();
+    for (const site of workerBuildSites(e)) {
+      const sx = site.x - cam.x, sy = site.y - cam.y;
+      const r = 10 + 5 * a.windup;
+      ctx.globalAlpha = 0.14 + 0.2 * a.windup;
+      ctx.fillStyle = TELEGRAPH_COLOR.build;
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+      ctx.globalAlpha = (0.3 + 0.45 * a.windup) * (0.6 + 0.4 * pulse);
+      ctx.strokeStyle = TELEGRAPH_COLOR.build;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   private renderDangerDisc(x: number, y: number, radius: number, grow: number) {
     const { ctx, cam } = this;
     const sx = x - cam.x, sy = y - cam.y;

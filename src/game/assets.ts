@@ -131,8 +131,10 @@ registerDirectionalSet("ghost", { walkFps: 6 });
 registerDirectionalSet("spitter", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
 
 // Bestiary-wave directional hooks. Same drop-in contract; fps are starting points.
-// The rootward has NO attack (a walking wall): walk triplet only.
-registerDirectionalSet("rootward", { walkFps: 8 });
+// The bailiff (rootward) and the mason are WORKERS: their attack sheets are the raise —
+// arms up, construction rising — not a strike.
+registerDirectionalSet("rootward", { walkFps: 8, attackFps: 8, isDirectionalAttack: true });
+registerDirectionalSet("mason", { walkFps: 9, attackFps: 8, isDirectionalAttack: true });
 registerDirectionalSet("echojack", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
 registerDirectionalSet("seamcutter", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
 registerDirectionalSet("caskbellows", { walkFps: 8, attackFps: 12, isDirectionalAttack: true });
@@ -185,10 +187,15 @@ const FX_SOURCES: Record<FxName, string> = {
 // SpriteName/SheetClip unions are polluted and nothing extra is fetched if unused.
 export type PropSpriteName =
   | "crate_break" | "pot_break" | "barrel_break" | "barrel_explosive_break"
-  | "barrel_explosive" | "brazier" | "chest_open";
+  | "barrel_explosive" | "brazier" | "chest_open"
+  // Worker constructions (ecology gate): frame 0 = intact, frames 1-2 = breaking.
+  | "root_wall_break" | "silt_mound_break" | "clinker_brick_break";
 
 const PROP_SOURCES: Record<PropSpriteName, string> = {
   crate_break: "/sprites/crate_break.png",
+  root_wall_break: "/sprites/root_wall_break.png",
+  silt_mound_break: "/sprites/silt_mound_break.png",
+  clinker_brick_break: "/sprites/clinker_brick_break.png",
   pot_break: "/sprites/pot_break.png",
   barrel_break: "/sprites/barrel_break.png",
   barrel_explosive_break: "/sprites/barrel_explosive_break.png",
@@ -219,6 +226,7 @@ const SOURCES: Record<SpriteName, string> = {
   seamcutter: "/sprites/seamcutter.png",
   caskbellows: "/sprites/caskbellows.png",
   sinderling: "/sprites/sinderling.png",
+  mason: "/sprites/mason.png",
   fragment: "/sprites/fragment.png",
   echo: "/sprites/echo.png",
   knell: "/sprites/knell.png",

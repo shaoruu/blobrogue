@@ -972,6 +972,30 @@ export const WAVE_SOUNDS = {
     fallback: { sample: "barrel", rate: 1.1 },
     synth: { kind: "knock", freq: 210, count: 1 },
   },
+  "root.divider": {
+    stem: "mob/root_divider", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.55 },
+    synth: { kind: "impact", durMs: 600, depthHz: 60 },
+  },
+  "keel.berm": {
+    stem: "mob/keel_berm", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.5, lowpassHz: 1100 },
+    synth: { kind: "swell", durMs: 500, fromHz: 90, toHz: 220, mode: "noise" },
+  },
+  "mason.survey": {
+    stem: "mob/mason_survey", variants: 2, gain: 0.6, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 0.6 },
+    synth: { kind: "knock", freq: 260, count: 3 },
+  },
+  "mason.raise": {
+    stem: "mob/mason_raise", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "cannon", rate: 1.1 },
+    synth: { kind: "impact", durMs: 550, depthHz: 70 },
+  },
   "plate.block": {
     stem: "mob/plate_block", variants: 3, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 150,
@@ -1315,6 +1339,13 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
   },
   shielder: {
     lunge: { windup: "shielder.raise", active: "shielder.bash" },
+  },
+  // The workers: a long stationary tell, then the construction lands on the release.
+  rootward: {
+    build: { windup: "root.raise", release: "root.divider" },
+  },
+  mason: {
+    build: { windup: "mason.survey", release: "mason.raise" },
   },
   echojack: {
     decoy: { windup: "echojack.jangle" },

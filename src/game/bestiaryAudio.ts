@@ -39,6 +39,7 @@ export type AudioBehavior =
   | "trickster" // decoy + relocation (echojack)
   | "ember"     // heat-feeder: stoke/jet/burst (sinderling)
   | "voice"     // tether harmonics (fragment)
+  | "worker"    // topology mason: survey the site, raise the construction (mason)
   | "decoy"     // planted noise bodies (echo, knell)
   | "captain"   // miniboss grammar (marshal, toll)
   | "boss";     // full boss grammar (king, marrow, choir, weaver, gilded)
@@ -58,6 +59,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   seamcutter: "charge",
   caskbellows: "anchor",
   sinderling: "ember",
+  mason: "worker",
   fragment: "voice",
   echo: "decoy",
   knell: "decoy",
@@ -91,6 +93,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   seamcutter: "chitin",
   caskbellows: "brass",
   sinderling: "ember",
+  mason: "stone",
   fragment: "voice",
   echo: "mist",
   knell: "bell",
@@ -171,6 +174,7 @@ export const BEHAVIOR_HOOKS: Readonly<Record<AudioBehavior, readonly string[]>> 
   trickster: ["plant", "blink"],
   ember: ["stoke", "jet", "burst"],
   voice: ["windup", "active"],
+  worker: ["survey", "raise"],
   decoy: ["fuse", "toll"],
   captain: ["windup", "lock", "active", "impact", "recover", "entrance", "phase", "death"],
   boss: ["windup", "lock", "active", "impact", "recover", "entrance", "phase", "special", "death"],
@@ -193,11 +197,18 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   burrower: { dive: "burrower.submerge", emitter: "burrower.track", lock: "burrower.lock", erupt: "burrower.erupt", recover: "burrower.recover" },
   orbiter: { acquire: "orbiter.enterBand", loop: "orbit.loop", warn: "orbiter.diveWarn", lock: "orbiter.lock", fire: "orbiter.fire" },
   shielder: { raise: "shielder.raise", block: "shielder.block", bash: "shielder.bash", guardBreak: "guard.break", rearHurt: "shielder.rearHurt" },
-  rootward: { raise: "root.raise", block: "root.block", bash: "root.raise", guardBreak: "guard.break", rearHurt: "shielder.rearHurt" },
+  rootward: {
+    raise: "root.raise", block: "root.block", bash: "root.raise", guardBreak: "guard.break",
+    rearHurt: "shielder.rearHurt", divider: "root.divider", // the worker verb rides the shield chassis
+  },
   echojack: { plant: "echojack.jangle", blink: "echojack.blink" },
-  seamcutter: { plant: "seamcutter.preview", lock: "seamcutter.lock", rush: "seamcutter.cut", crash: "seamcutter.stop", dazed: "seamcutter.dazed" },
+  seamcutter: {
+    plant: "seamcutter.preview", lock: "seamcutter.lock", rush: "seamcutter.cut",
+    crash: "seamcutter.stop", dazed: "seamcutter.dazed", berm: "keel.berm", // the plow's worker payload
+  },
   caskbellows: { place: "anchor.place", laneWarn: "caskbellows.crank", lock: "caskbellows.lock", active: "caskbellows.fire", deflate: "caskbellows.stagger" },
   sinderling: { stoke: "sinderling.stoke", jet: "sinderling.jet", burst: "sinderling.burst" },
+  mason: { survey: "mason.survey", raise: "mason.raise" },
   fragment: { windup: "fragment.harmonize", active: "fragment.pulse" },
   echo: { fuse: "echojack.jangle", toll: "echojack.blink" }, // the echo IS the jack's noise
   knell: { fuse: "knell.fuse", toll: "toll.ring" },
