@@ -236,7 +236,7 @@ function marrowSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
 function marrowTests(): void {
   section("Marrow: identity, slotting, calibration anchors");
   check("marrow is a boss kind (chest/interest/death machinery)", isBossKind("marrow") && !isBossKind("charger"));
-  check("F10 Marrow HP matches its calibration anchor", marrowHpForFloor(10) === MARROW.baseHp, `hp=${marrowHpForFloor(10)}`);
+  check("F15 Marrow HP matches its calibration anchor", marrowHpForFloor(15) === MARROW.baseHp, `hp=${marrowHpForFloor(15)}`);
   {
     // The curriculum chain slots MARROW at F15: the natural floor spawns it with its
     // skeleton kin for every seed.

@@ -165,10 +165,11 @@ interface BossGateRow {
   beatCap: number;
 }
 
-// Gate §3 rows mapped onto the approved product roster (the F20 "Jet" slot ships the
-// Gilded Warden — see the PR's deviation report). Median builds model expected power at
-// each depth; high-roll = the representative aggressive build (smg + Deadeye Lv3 + the
-// depth's Glass Cannon stack).
+// Gate §3 rows at the curriculum's corrected first-clear chain (King F5 / Gauntlet F10 /
+// Marrow F15 / Weaver F20 / Warden F25 / Choir F30 — the Warden holds the armored slot;
+// Jet stays post-F30 content). Median builds model expected power at each depth;
+// high-roll = the representative aggressive build (smg + Deadeye Lv3 + the depth's
+// Glass Cannon stack).
 const BOSS_GATE_ROWS: readonly BossGateRow[] = [
   {
     kind: "boss", floor: 5, medianWeapon: "pistol", medianBuild: L3("hair_trigger"),
