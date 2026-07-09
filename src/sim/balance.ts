@@ -160,13 +160,19 @@ export const HAZARD_DIFFICULTY: Record<Difficulty, HazardModeRules> = {
   brutal: { budgetMult: 1.30, roomSimultaneousCap: 3, roomDenialCap: 0.45 },
 };
 
+// Rows follow the canonical curriculum bands (blobrogue_ENCOUNTER_CURRICULUM_spec.md §0):
+// Amberwild teaches with packs; Rootbound is formation/controlled density; Sunless leans
+// ranged cross-pressure; the Deep biases hazards; the Gilded Archive is claimed space
+// (complex share up); Emberreach reinforces relentlessly toward the F30 finale; the Null
+// (post-F30 expansion band) stacks everything.
 export const BIOME_PRESSURE: readonly BiomePressure[] = [
-  { budgetMult: 1.00, packBias: 1.15, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.00 }, // Verdant
-  { budgetMult: 0.95, packBias: 1.00, complexShare: 1.10, hazardMult: 1.00, reinforceRate: 1.00 }, // Sunless
-  { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // Deep
+  { budgetMult: 1.00, packBias: 1.15, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.00 }, // Amberwild
+  { budgetMult: 1.00, packBias: 1.20, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.05 }, // Rootbound Warrens
+  { budgetMult: 0.95, packBias: 1.00, complexShare: 1.10, hazardMult: 1.00, reinforceRate: 1.00 }, // Sunless Caves
+  { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // The Deep
+  { budgetMult: 1.00, packBias: 1.00, complexShare: 1.15, hazardMult: 1.10, reinforceRate: 1.00 }, // Gilded Archive
   { budgetMult: 1.05, packBias: 1.00, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.15 }, // Emberreach
-  { budgetMult: 1.00, packBias: 1.00, complexShare: 1.15, hazardMult: 1.10, reinforceRate: 1.05 }, // Fracture
-  { budgetMult: 1.05, packBias: 1.10, complexShare: 1.10, hazardMult: 1.15, reinforceRate: 1.10 }, // Null
+  { budgetMult: 1.05, packBias: 1.10, complexShare: 1.10, hazardMult: 1.15, reinforceRate: 1.10 }, // The Null
 ];
 
 // ---- §5 Slime King (calibrated to ~37.5s median solo, ≥20s absolute floor) ----

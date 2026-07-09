@@ -18,7 +18,7 @@ import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
 import type { Hazard, HazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor } from "../src/sim/biomes.js";
+import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, isGauntletFloor, floorBannerText } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
 import { spawnFloorEnemies, isBossFloor, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
 import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp, damagePropsInRadius } from "../src/sim/world.js";
@@ -44,7 +44,7 @@ function section(name: string): void {
 
 const DT = 1 / 60;
 const SEEDS = [0x1a2b3c, 0xbee5, 0x7777777, 0xdead10cc, 0x1359, 0xcafe42, 0x900d5eed, 0x31415926];
-const FLOORS = [1, 2, 3, 5, 7, 9, 10, 12, 15, 17, 20, 22, 25, 27, 30];
+const FLOORS = [1, 2, 3, 5, 7, 9, 10, 12, 15, 17, 20, 22, 25, 27, 30, 32, 35];
 
 function idle(seq: number): InputCmd {
   return { seq, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
@@ -163,7 +163,7 @@ function archetypeDepthTests(): void {
   section("boss floors stage a grand arena");
   let isArenaOk = true, isBossInArena = true, isApproachOk = true;
   for (const seed of SEEDS) {
-    for (const floor of [5, 10, 20, 25]) {
+    for (const floor of [5, 10, 15, 30]) {
       const d = generateDungeon(seed, floor);
       const last = d.rooms[d.rooms.length - 1];
       if (last.shape !== "arena" || last.w < 13 || last.h < 11) isArenaOk = false;
@@ -181,21 +181,81 @@ function archetypeDepthTests(): void {
   check("the exit sits at the arena center (beat the boss, descend the band)", isApproachOk);
 }
 
+// The curriculum's level-side cadence (blobrogue_ENCOUNTER_CURRICULUM_spec.md §2, §4):
+// within every band the architecture runs Arrive -> ... -> Synthesize -> Prove, and the
+// anti-repeat deck keeps pressure cards from stacking along the player's route.
+function curriculumCadenceTests(): void {
+  section("curriculum cadence: teaching/remix/breather architecture + anti-repeat deck");
+  {
+    // Synthesize floors (slot 3) stage more drama than their band's Arrive floor (slot 0).
+    let arriveDramatic = 0, arriveRooms = 0, synthDramatic = 0, synthRooms = 0;
+    for (const seed of SEEDS) {
+      for (const band of [2, 3, 4, 5, 6]) {
+        const arrive = band * 5 + 1;
+        const synth = band * 5 + 4;
+        const da = generateDungeon(seed, arrive);
+        const ds = generateDungeon(seed, synth);
+        arriveDramatic += da.rooms.filter((r) => DRAMATIC.includes(r.shape)).length;
+        arriveRooms += da.rooms.length;
+        synthDramatic += ds.rooms.filter((r) => DRAMATIC.includes(r.shape)).length;
+        synthRooms += ds.rooms.length;
+      }
+    }
+    const arriveShare = arriveDramatic / Math.max(1, arriveRooms);
+    const synthShare = synthDramatic / Math.max(1, synthRooms);
+    check("Synthesize floors out-stage their band's Arrive floors (breathe, then build)",
+      synthShare > arriveShare + 0.08,
+      `arrive=${(arriveShare * 100).toFixed(0)}% synth=${(synthShare * 100).toFixed(0)}%`);
+  }
+  {
+    // The anti-repeat deck, along the journey chain: dramatic archetypes never three in
+    // a row, a simple breather follows every mid-chain arena, and at least 30% of every
+    // floor stays simple/mastery ground (simple-room runs ARE the sanctioned fallback).
+    let isNoTriple = true, isBreatherOk = true, isSimpleShareOk = true;
+    const isSimple = (s: RoomShape) => s === "rect" || s === "cell" || s === "hall";
+    for (const seed of SEEDS) {
+      for (const floor of FLOORS) {
+        const d = generateDungeon(seed, floor);
+        const rooms = d.rooms;
+        for (let i = 2; i < rooms.length; i++) {
+          if (DRAMATIC.includes(rooms[i].shape)
+            && rooms[i].shape === rooms[i - 1].shape && rooms[i].shape === rooms[i - 2].shape) isNoTriple = false;
+        }
+        for (let i = 1; i < rooms.length; i++) {
+          if (rooms[i - 1].shape === "arena" && !isSimple(rooms[i].shape) && rooms[i].shape !== "vault") isBreatherOk = false;
+        }
+        const simple = rooms.filter((r) => isSimple(r.shape)).length;
+        if (simple < Math.ceil(rooms.length * 0.3) - 1) isSimpleShareOk = false;
+      }
+    }
+    check("no dramatic archetype three rooms in a row along the route", isNoTriple);
+    check("a simple breather always follows a mid-chain arena", isBreatherOk);
+    check("every floor keeps >=30% simple/mastery rooms", isSimpleShareOk);
+  }
+}
+
 function biomeLadderTests(): void {
-  section("biome ladder: six one-way bands, five floors each, capped by their boss");
-  check("six biomes exist", BIOMES.length === 6);
-  check("balance pressure covers every biome", BIOME_PRESSURE.length === BIOMES.length);
-  check("floors 1-5 are Verdant, 6-10 Sunless, 11-15 Deep, 16-20 Ember, 21-25 Fracture, 26+ Null",
+  section("biome ladder: the canonical 30-floor six-region spine + terminal Null band");
+  check("seven bands exist (six curriculum regions + the post-F30 Null)", BIOMES.length === 7);
+  check("balance pressure covers every band", BIOME_PRESSURE.length === BIOMES.length);
+  check("curriculum mapping: Amberwild 1-5, Rootbound 6-10, Sunless 11-15, Deep 16-20, Gilded 21-25, Ember 26-30, Null 31+",
     biomeIndexForFloor(1) === 0 && biomeIndexForFloor(5) === 0 &&
     biomeIndexForFloor(6) === 1 && biomeIndexForFloor(10) === 1 &&
     biomeIndexForFloor(11) === 2 && biomeIndexForFloor(15) === 2 &&
     biomeIndexForFloor(16) === 3 && biomeIndexForFloor(20) === 3 &&
     biomeIndexForFloor(21) === 4 && biomeIndexForFloor(25) === 4 &&
-    biomeIndexForFloor(26) === 5 && biomeIndexForFloor(99) === 5);
-  check("every biome band ends on its boss floor", [5, 10, 15, 20, 25].every((f) =>
+    biomeIndexForFloor(26) === 5 && biomeIndexForFloor(30) === 5 &&
+    biomeIndexForFloor(31) === 6 && biomeIndexForFloor(99) === 6);
+  check("curriculum names hold", BIOMES.map((b) => b.name).join("|") ===
+    "Amberwild|Rootbound Warrens|Sunless Caves|The Deep|Gilded Archive|Emberreach|The Null");
+  check("every band ends on its milestone floor", [5, 10, 15, 20, 25, 30].every((f) =>
     isBossFloor(f) && biomeIndexForFloor(f) === biomeIndexForFloor(f - 1)));
+  check("F10 is the Miniboss Gauntlet, announced as such (a non-boss milestone)",
+    isGauntletFloor(10) && !isGauntletFloor(5) && !isGauntletFloor(20)
+    && floorBannerText(10, { isBoss: true }) === "MINIBOSS GAUNTLET"
+    && floorBannerText(15, { isBoss: true }) === "BOSS FLOOR");
   check("band depth ramps 0..1 within each band", biomeDepthForFloor(6) === 0 && biomeDepthForFloor(10) === 1
-    && biomeDepthForFloor(26) === 0 && biomeDepthForFloor(30) === 1 && biomeDepthForFloor(300) === 1);
+    && biomeDepthForFloor(31) === 0 && biomeDepthForFloor(35) === 1 && biomeDepthForFloor(300) === 1);
   check("mood darkens and thickens with every band", BIOMES.every((b, i) =>
     i === 0 || (b.vignette > BIOMES[i - 1].vignette && b.lightLevel > BIOMES[i - 1].lightLevel
       && b.detailDensity > BIOMES[i - 1].detailDensity)));
@@ -737,6 +797,7 @@ function runFloor(seed: number, floor: number, ticks: number): string {
 function main(): void {
   generatorInvariantTests();
   archetypeDepthTests();
+  curriculumCadenceTests();
   biomeLadderTests();
   hazardPlacementTests();
   studioGateTests();

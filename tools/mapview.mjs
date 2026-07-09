@@ -12,7 +12,7 @@ const isLadder = args.includes("--ladder");
 const rest = args.filter((a) => a !== "--ladder");
 const floorArg = Number(rest[0] ?? 3);
 const seedArg = Number(rest[1] ?? 12345);
-const floors = isLadder ? [1, 3, 7, 12, 17, 22, 27] : [floorArg];
+const floors = isLadder ? [1, 3, 8, 13, 18, 23, 28, 33] : [floorArg];
 
 const script = `
 import { generateDungeon } from "../src/sim/dungeon.js";

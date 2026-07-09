@@ -208,7 +208,7 @@ function buildPanel(game: Game): void {
   // Real generated floors (full biome + architecture + hazards + enemies), one per band —
   // the depth-progression eyeball row. God mode flips on so deep floors are tourable.
   const realRow = h("div", "dev-row");
-  for (const [label, f] of [["Hollow 3", 3], ["Caves 8", 8], ["Deep 13", 13], ["Ember 18", 18], ["Fract 23", 23], ["Null 28", 28]] as const) {
+  for (const [label, f] of [["Amber 3", 3], ["Roots 8", 8], ["Caves 13", 13], ["Deep 18", 18], ["Gild 23", 23], ["Ember 28", 28], ["Null 33", 33]] as const) {
     realRow.appendChild(btn(label, () => { floor = f; game.devLoadRealFloor(f); }, "mini"));
   }
   realRow.appendChild(btn("Real here", () => game.devLoadRealFloor(floor), "mini"));

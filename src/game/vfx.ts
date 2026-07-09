@@ -119,11 +119,15 @@ interface MoteLayer {
   reactPush: number;   // impulse px/s (negative = drawn toward the player)
 }
 
-// Indexed by biome index (see src/sim/biomes.ts).
+// Indexed by biome index (see src/sim/biomes.ts) — one recipe per curriculum band.
 const AMBIENCE_STYLES: readonly MoteLayer[][] = [
-  [ // Verdant Hollow: drifting pollen the player scatters + lazy fireflies.
+  [ // Amberwild: drifting pollen the player scatters + lazy fireflies.
     { kind: "float", color: "#9fdc7a", count: 30, alpha: 0.32, rise: -13, sway: 11, swayFreq: 0.5, size: 1.8, reactRadius: 72, reactPush: 90 },
     { kind: "firefly", color: "#d8f27a", count: 8, alpha: 0.5, rise: -6, sway: 16, swayFreq: 0.22, size: 2.2, reactRadius: 90, reactPush: 60 },
+  ],
+  [ // Rootbound Warrens: falling spore-litter under the dense canopy + deep fireflies.
+    { kind: "float", color: "#9cbf3f", count: 32, alpha: 0.3, rise: 10, sway: 14, swayFreq: 0.4, size: 1.9, reactRadius: 78, reactPush: 85 },
+    { kind: "firefly", color: "#e8ffa0", count: 6, alpha: 0.45, rise: -5, sway: 12, swayFreq: 0.18, size: 2.0, reactRadius: 84, reactPush: 55 },
   ],
   [ // Sunless Caves: hanging dust + ceiling drips that streak down and vanish.
     { kind: "float", color: "#8fc2e8", count: 26, alpha: 0.26, rise: 8, sway: 7, swayFreq: 0.35, size: 1.6, reactRadius: 60, reactPush: 55 },
@@ -133,13 +137,13 @@ const AMBIENCE_STYLES: readonly MoteLayer[][] = [
     { kind: "float", color: "#b98aff", count: 30, alpha: 0.3, rise: -9, sway: 15, swayFreq: 0.28, size: 1.9, reactRadius: 84, reactPush: 70 },
     { kind: "firefly", color: "#7ae8ff", count: 6, alpha: 0.42, rise: -14, sway: 10, swayFreq: 0.16, size: 1.8, reactRadius: 70, reactPush: 50 },
   ],
+  [ // Gilded Archive: still golden dust hanging in lamplight + prism glints off the shelves.
+    { kind: "float", color: "#ffd166", count: 28, alpha: 0.24, rise: 3, sway: 5, swayFreq: 0.2, size: 1.6, reactRadius: 70, reactPush: 60 },
+    { kind: "shard", color: "#ffe9b0", count: 14, alpha: 0.38, rise: -2, sway: 8, swayFreq: 0.1, size: 2.2, reactRadius: 84, reactPush: 35 },
+  ],
   [ // Emberreach: hard-rising embers + broad heat-shimmer columns.
     { kind: "ember", color: "#ffb43b", count: 30, alpha: 0.38, rise: -26, sway: 9, swayFreq: 0.7, size: 1.8, reactRadius: 66, reactPush: 80 },
     { kind: "heat", color: "#ff6a2a", count: 6, alpha: 0.05, rise: -18, sway: 6, swayFreq: 0.18, size: 46, reactRadius: 0, reactPush: 0 },
-  ],
-  [ // The Fracture: slow lateral crystal glints that flare as you pass.
-    { kind: "shard", color: "#6ff0d8", count: 22, alpha: 0.4, rise: -4, sway: 26, swayFreq: 0.12, size: 2.6, reactRadius: 90, reactPush: 40 },
-    { kind: "float", color: "#2a8fa0", count: 18, alpha: 0.22, rise: 5, sway: 9, swayFreq: 0.3, size: 1.5, reactRadius: 60, reactPush: 45 },
   ],
   [ // The Null: void specks that drift toward the player. The world is watching.
     { kind: "voidspeck", color: "#ff4ad8", count: 24, alpha: 0.34, rise: 0, sway: 7, swayFreq: 0.2, size: 1.7, reactRadius: 240, reactPush: -26 },

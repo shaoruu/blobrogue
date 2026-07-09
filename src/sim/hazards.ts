@@ -135,20 +135,18 @@ interface BiomeHazardProfile {
   readonly ramp: number;  // extra tiles by the bottom of the band
 }
 
+// One row per curriculum band (§10 material grammar): Amberwild Snaproot thorns;
+// Rootbound's denser root traps over wet ground; Sunless bone spikes + murky pools;
+// the Deep's jet-resin basins and load-seam tears; the Gilded Archive's dead-prism
+// rifts and gilded spears; Emberreach pressure vents; the Null stacking everything.
 const BIOME_HAZARDS: readonly BiomeHazardProfile[] = [
-  // Verdant Hollow: safe-ish home. Nothing on floors 1-2 (see budget gate); a few root
-  // thorns after.
   { weights: [{ kind: "spikes", weight: 1 }], base: 2, ramp: 3 },
-  // Sunless Caves: bone-spike rows, first murky pools.
   { weights: [{ kind: "spikes", weight: 0.8 }, { kind: "toxic_pool", weight: 0.2 }], base: 4, ramp: 4 },
-  // The Deep: resin venom basins, fracture spikes.
-  { weights: [{ kind: "toxic_pool", weight: 0.55 }, { kind: "spikes", weight: 0.45 }], base: 6, ramp: 5 },
-  // Emberreach: vent channels under everything.
-  { weights: [{ kind: "fire_vent", weight: 0.65 }, { kind: "spikes", weight: 0.35 }], base: 8, ramp: 6 },
-  // The Fracture: reality tears open.
+  { weights: [{ kind: "spikes", weight: 0.55 }, { kind: "toxic_pool", weight: 0.45 }], base: 6, ramp: 5 },
+  { weights: [{ kind: "toxic_pool", weight: 0.45 }, { kind: "spikes", weight: 0.3 }, { kind: "void_rift", weight: 0.25 }], base: 8, ramp: 6 },
   { weights: [{ kind: "void_rift", weight: 0.4 }, { kind: "spikes", weight: 0.35 }, { kind: "toxic_pool", weight: 0.25 }], base: 10, ramp: 7 },
-  // The Null: everything at once.
-  { weights: [{ kind: "void_rift", weight: 0.35 }, { kind: "fire_vent", weight: 0.3 }, { kind: "spikes", weight: 0.2 }, { kind: "toxic_pool", weight: 0.15 }], base: 13, ramp: 8 },
+  { weights: [{ kind: "fire_vent", weight: 0.65 }, { kind: "spikes", weight: 0.35 }], base: 12, ramp: 8 },
+  { weights: [{ kind: "void_rift", weight: 0.3 }, { kind: "fire_vent", weight: 0.3 }, { kind: "spikes", weight: 0.2 }, { kind: "toxic_pool", weight: 0.2 }], base: 14, ramp: 8 },
 ];
 
 // Hazard-tile budget for a floor, scaled by the difficulty's gate multiplier (0.65x /

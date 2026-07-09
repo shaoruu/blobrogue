@@ -286,15 +286,16 @@ function hexToRgb(hex: string): [number, number, number] {
 // ---- hazard render tables (see renderHazards) ----
 // Spike socket centers within the 48px tile (a 2x2 trap plate).
 const SPIKE_SOCKETS: ReadonlyArray<[number, number]> = [[14, 15], [34, 15], [14, 35], [34, 35]];
-// Toxic-pool liquid palette per biome band (murk in the Caves, venom resin in the Deep,
-// cold glass in the Fracture, anti-light in the Null).
+// Toxic-pool liquid palette per curriculum band (wet roots, warren murk, cave water,
+// jet resin, gilded amber, slag, anti-light).
 interface PoolStyle { base: string; edge: string; sheen: string }
 const POOL_STYLES: readonly PoolStyle[] = [
   { base: "#14301e", edge: "#3fbf5f", sheen: "#8fffa8" },
+  { base: "#1a2a10", edge: "#6b8a2e", sheen: "#c8e86a" },
   { base: "#12262e", edge: "#2a5a6a", sheen: "#57b6ff" },
-  { base: "#1a3a26", edge: "#3fbf5f", sheen: "#8fffa8" },
+  { base: "#1a1430", edge: "#46356b", sheen: "#a24bff" },
+  { base: "#241c08", edge: "#8a6b1f", sheen: "#ffd166" },
   { base: "#20140e", edge: "#7a3d12", sheen: "#ffb43b" },
-  { base: "#0c2e2e", edge: "#1fa89a", sheen: "#6ff0d8" },
   { base: "#220c26", edge: "#6a2fb0", sheen: "#ff4ad8" },
 ];
 // Hazard impact tint for the hazardHit event juice.
@@ -2261,9 +2262,9 @@ export class Game {
         const rd = tileHash(tx, ty, 2);
         if (rd < detailDensity) {
           const t = rd / detailDensity;
-          // Built-dungeon grates only suit the built bands (the Hollow's masonry, the
-          // Ember works); caves and the deeper wrong places crack and grow instead.
-          const hasGrates = this.biomeIdx === 0 || this.biomeIdx === 3;
+          // Built-dungeon grates only suit the built bands (the Archive's order, the Ember
+          // works); the living and wrong places crack and grow instead.
+          const hasGrates = this.biomeIdx === 4 || this.biomeIdx === 5;
           const detail: TileName = t < 0.33 ? "floor_crack" : t < 0.66 ? (hasGrates ? "floor_grate" : "floor_crack") : "floor_moss";
           if (tiles.ready(detail)) {
             ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);

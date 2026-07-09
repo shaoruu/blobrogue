@@ -68,18 +68,33 @@ const SHAPE_SPECS: Record<RoomShape, ShapeSpec> = {
   gauntlet: { shape: "gauntlet", minW: 10, maxW: 16, minH: 4, maxH: 6 },
 };
 
-// Depth-weighted shape table: floor 1 is almost all plain rooms; by the Fracture/Null
-// bands most rooms are dramatic. Gate floors keep early runs readable.
+// Within-band curriculum slot (blobrogue_ENCOUNTER_CURRICULUM_spec.md §2): every band
+// runs Arrive(0) -> Discover(1) -> Decide(2) -> Synthesize(3) -> Prove(4, the milestone).
+// The LEVEL expresses the same cadence the encounters do: Arrive floors breathe after a
+// milestone, drama completes by the Synthesize floor, and the Prove floor stages its
+// arena. Repeats every band, including past floor 30.
+export function floorSlot(floor: number): number {
+  return (Math.max(1, Math.floor(floor)) - 1) % 5;
+}
+
+// How hard this floor's architecture leans dramatic: the curriculum cadence dial.
+const SLOT_DRAMA: readonly number[] = [0.65, 0.95, 1.1, 1.3, 0.8];
+
+// Depth-weighted shape table: floor 1 is almost all plain rooms; by the Gilded Archive
+// and Emberreach most rooms are dramatic. The within-band slot modulates the drama so an
+// Arrive floor reads calmer than its band's Synthesize floor. Gate floors keep early
+// runs readable.
 function rollShape(rand: Rng, floor: number): RoomShape {
   const d = depthFactor(floor);
+  const drama = SLOT_DRAMA[floorSlot(floor)];
   const weights: Array<{ shape: RoomShape; w: number }> = [
-    { shape: "rect", w: 3.0 - 1.8 * d },
-    { shape: "cell", w: 1.2 - 0.4 * d },
+    { shape: "rect", w: (3.0 - 1.8 * d) / drama },
+    { shape: "cell", w: (1.2 - 0.4 * d) / drama },
     { shape: "hall", w: 1.0 + 0.6 * d },
-    { shape: "pillars", w: floor >= 4 ? 0.7 + 1.3 * d : 0 },
-    { shape: "arena", w: floor >= 6 ? 0.4 + 1.2 * d : 0 },
-    { shape: "cavern", w: floor >= 8 ? 0.6 + 1.7 * d : 0 },
-    { shape: "gauntlet", w: floor >= 3 ? 0.5 + 0.9 * d : 0 },
+    { shape: "pillars", w: floor >= 4 ? (0.7 + 1.3 * d) * drama : 0 },
+    { shape: "arena", w: floor >= 6 ? (0.4 + 1.2 * d) * drama : 0 },
+    { shape: "cavern", w: floor >= 8 ? (0.6 + 1.7 * d) * drama : 0 },
+    { shape: "gauntlet", w: floor >= 3 ? (0.5 + 0.9 * d) * drama : 0 },
   ];
   const total = weights.reduce((s, x) => s + x.w, 0);
   let roll = rand.next() * total;
@@ -88,6 +103,44 @@ function rollShape(rand: Rng, floor: number): RoomShape {
     if (roll <= 0) return x.shape;
   }
   return "rect";
+}
+
+// ---- the anti-repeat deck (curriculum §4, level-architecture rows) ----
+
+const DRAMATIC_SHAPES: ReadonlySet<RoomShape> = new Set(["pillars", "arena", "cavern", "gauntlet"]);
+const MIN_SIMPLE_SHARE = 0.3;
+
+function isDemotable(room: Room): boolean {
+  return room.shape !== "vault" && DRAMATIC_SHAPES.has(room.shape);
+}
+
+function demote(room: Room): void {
+  room.shape = room.w >= 9 && room.h >= 8 ? "hall" : room.w >= 5 && room.h >= 5 ? "rect" : "cell";
+}
+
+// Walked along the JOURNEY chain (the order the player experiences rooms), before
+// carving: no archetype three times in a row, a simple breather always follows an
+// arena, and at least 30% of the floor stays simple/mastery ground. Deterministic —
+// pure demotions in fixed order, no rng.
+function applyAntiRepeatDeck(chain: Room[], protectedRoom: Room | null): void {
+  for (let i = 2; i < chain.length; i++) {
+    if (chain[i].shape !== chain[i - 1].shape || chain[i].shape !== chain[i - 2].shape || !DRAMATIC_SHAPES.has(chain[i].shape)) continue;
+    // Break the triple by demoting the newest card — or the middle one when the newest
+    // is the protected milestone arena (which is never touched).
+    if (chain[i] !== protectedRoom && isDemotable(chain[i])) demote(chain[i]);
+    else if (chain[i - 1] !== protectedRoom && isDemotable(chain[i - 1])) demote(chain[i - 1]);
+  }
+  for (let i = 1; i < chain.length; i++) {
+    if (chain[i] === protectedRoom) continue;
+    if (chain[i - 1].shape === "arena" && isDemotable(chain[i])) demote(chain[i]);
+  }
+  const isSimple = (r: Room) => r.shape === "rect" || r.shape === "cell" || r.shape === "hall";
+  let simple = chain.filter(isSimple).length;
+  for (let i = chain.length - 1; i >= 0 && simple < Math.ceil(chain.length * MIN_SIMPLE_SHARE); i--) {
+    if (chain[i] === protectedRoom || !isDemotable(chain[i])) continue;
+    demote(chain[i]);
+    simple++;
+  }
 }
 
 function rollSize(rand: Rng, shape: RoomShape): { w: number; h: number } {
@@ -467,7 +520,8 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
     }
   }
 
-  // ---- carve rooms ----
+  // ---- the anti-repeat deck, then carve ----
+  applyAntiRepeatDeck(chain, bossArena);
   for (const room of chain) carveRoom(c, rand, room);
   for (const room of chain) {
     if (room.shape === "pillars") carvePillars(c, rand, room, floor);
