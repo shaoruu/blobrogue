@@ -4,6 +4,7 @@
 // — nginx terminates wss on 443 and reverse-proxies to this loopback port. /healthz + /metrics
 // also bind loopback and are not proxied to the internet.
 
+import { RESUME_GRACE_MS } from "../../src/net/protocol.js";
 import { authConfigFromEnv, type AuthConfig } from "./auth.js";
 
 export interface ServerConfig {
@@ -36,6 +37,9 @@ export interface ServerConfig {
   maxStarveTicks: number;
   // blessing offers expire after this long unanswered (bounded server state; the run moves on)
   offerTtlMs: number;
+  // Reconnect grace: how long an unexpectedly-disconnected player's body/state is reserved
+  // (absent + safe) before the authoritative leave applies. 0 disables seats entirely.
+  resumeGraceMs: number;
   // interest management: per-client snapshot radius in px (0 disables filtering)
   interestRadius: number;
   // Measurement mode: build an OPEN arena world (no dungeon walls) so the load harness can move a
@@ -79,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     slowClientKickBytes: intEnv(env, "GS_SLOW_CLIENT_KICK_BYTES", 1024 * 1024, 1024, 1 << 30),
     maxStarveTicks: intEnv(env, "GS_MAX_STARVE_TICKS", 10, 0, 1000),
     offerTtlMs: intEnv(env, "GS_OFFER_TTL_MS", 60000, 1000, 3600000),
+    resumeGraceMs: intEnv(env, "GS_RESUME_GRACE_MS", RESUME_GRACE_MS, 0, 600000),
     // Interest filtering defaults OFF (full snapshots) after the Sev-0 room-divergence
     // incident: filtering may only be re-enabled explicitly (GS_INTEREST_RADIUS=1100, ~1.5x
     // viewport half-extent) once the coherence suite + the staged rollout criteria in

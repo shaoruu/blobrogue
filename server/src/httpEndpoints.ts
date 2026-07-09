@@ -9,13 +9,15 @@ import type { ServerConfig } from "./config.js";
 import type { HealthReport } from "./metrics.js";
 
 // One live world, as exposed to the control panel: which world exists, how many players it
-// holds, its tick, and WHO is in it (display names, ordered by join) — the ops-facing view
-// that answers "did both room members actually land in one world?" without log spelunking.
+// holds, its tick, WHO is connected (display names, ordered by join), and whose seats are
+// reserved for a reconnect — the ops-facing view that answers "did both room members
+// actually land in one world?" and "who is mid-outage?" without log spelunking.
 export interface WorldReport {
   id: string;
   players: number;
   tick: number;
   names: string[];
+  away: string[];
 }
 
 export interface HttpDeps {

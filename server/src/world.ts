@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -18,9 +18,10 @@ import { Rng, randomSeed } from "../../src/sim/rng.js";
 import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
 import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
+import { resumeTokensEqual } from "./auth.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
-import type { RoomRuntime, BlessingOfferRequest } from "./ports.js";
+import type { RoomRuntime, BlessingOfferRequest, Seat, TakeSeatResult } from "./ports.js";
 
 const BLESSING_CHOICES = 3;
 const TICK_MS = 1000 / TICK_HZ;
@@ -51,6 +52,11 @@ export class GameWorld implements RoomRuntime {
   readonly id: string;
   readonly state: WorldState;
   readonly conns = new Map<number, Conn>();
+
+  // Reserved reconnect seats, keyed by the VERIFIED ticket identity (one seat per identity —
+  // the same key the duplicate-connection takeover uses). The body itself stays in
+  // state.players (absent/paused); the seat holds the single-use token + conn continuity.
+  private seatMap = new Map<string, Seat>();
 
   // Reliable-event ring: every emitted event gets a monotonic id; the publisher sends per client
   // only the ids newer than that client's ack (dedupe + resend under loss).
@@ -88,6 +94,7 @@ export class GameWorld implements RoomRuntime {
     this.injectedEvents.length = 0;
     this.gameOverThisTick = [];
     this.offerThisTick = [];
+    this.seatMap.clear();
   }
 
   private seedArenaEnemies(): void {
@@ -109,6 +116,68 @@ export class GameWorld implements RoomRuntime {
 
   removePlayer(pid: PlayerId): void {
     removePlayerFromWorld(this.state, pid);
+  }
+
+  // ---- reconnect seats ----
+
+  reserveSeat(conn: Conn, nowMs: number, ttlMs: number): void {
+    if (conn.playerId === null || conn.authName === null || conn.resumeToken === null) return;
+    if (!this.state.players.has(conn.playerId)) return;
+    setPlayerAbsence(this.state, conn.playerId, true);
+    this.seatMap.set(conn.authName, {
+      pid: conn.playerId,
+      authName: conn.authName,
+      token: conn.resumeToken,
+      reservedAt: nowMs,
+      expiresAt: nowMs + ttlMs,
+      displayName: conn.displayName,
+      colorIndex: conn.colorIndex,
+      lastAppliedSeq: conn.lastAppliedSeq,
+      lastCseq: conn.lastCseq,
+      pendingOffer: conn.pendingOffer,
+      offerId: conn.offerId,
+      offerDeadline: conn.offerDeadline,
+    });
+  }
+
+  takeSeat(authName: string, token: string, nowMs: number): TakeSeatResult {
+    const seat = this.seatMap.get(authName);
+    if (!seat) return { ok: false, reason: "none" };
+    if (nowMs >= seat.expiresAt) {
+      // Overdue but not yet swept: apply the authoritative leave right here rather than
+      // letting a straggler resurrect a seat the lifecycle already gave up on.
+      this.dropSeat(seat);
+      return { ok: false, reason: "expired" };
+    }
+    if (!resumeTokensEqual(seat.token, token)) return { ok: false, reason: "token_mismatch" };
+    this.seatMap.delete(authName);
+    setPlayerAbsence(this.state, seat.pid, false);
+    return { ok: true, seat };
+  }
+
+  discardSeat(authName: string): boolean {
+    const seat = this.seatMap.get(authName);
+    if (!seat) return false;
+    this.dropSeat(seat);
+    return true;
+  }
+
+  expireSeats(nowMs: number): Seat[] {
+    const expired: Seat[] = [];
+    for (const seat of this.seatMap.values()) {
+      if (nowMs >= seat.expiresAt) expired.push(seat);
+    }
+    for (const seat of expired) this.dropSeat(seat);
+    return expired;
+  }
+
+  seats(): IterableIterator<Seat> {
+    return this.seatMap.values();
+  }
+
+  private dropSeat(seat: Seat): void {
+    this.seatMap.delete(seat.authName);
+    removePlayerFromWorld(this.state, seat.pid);
   }
 
   trySwitchWeapon(pid: PlayerId, weapon: WeaponId): boolean {

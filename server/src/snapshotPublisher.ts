@@ -48,9 +48,14 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
         continue;
       }
       const events = this.eventsFor(room, conn);
+      // The seat token rides EVERY per-connection snapshot, not only the join-time full one:
+      // under packet loss the full snapshot can drop, and a client without its current token
+      // would come back from the next outage as a stranger (fresh body) — the exact bug class
+      // this system exists to kill. Snapshots are per-connection already; ~40 bytes.
       const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
         worldId: room.id,
         roster,
+        resumeToken: conn.resumeToken ?? undefined,
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
         identities,
@@ -69,9 +74,11 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     return out;
   }
 
-  // Everyone actually CONNECTED to this world, with the verified ticket identity they joined
-  // as. Interest-independent by design: this is the readiness/roster truth the client veil
-  // and HUD key on — an interest filter must never be able to hide a party member's presence.
+  // Every seat in this world with the verified ticket identity it joined as: live
+  // connections ("on") plus bodies reserved for a reconnect ("away"). Interest-independent
+  // by design: this is the readiness/roster truth the client veil and HUD key on — an
+  // interest filter must never be able to hide a party member's presence, and a member
+  // mid-outage must read as RECONNECTING, not as gone.
   private rosterFor(room: RoomRuntime): RosterWire[] {
     const out: RosterWire[] = [];
     for (const conn of room.conns.values()) {
@@ -81,7 +88,11 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
         aid: conn.authName ?? conn.playerId,
         nm: conn.displayName ?? conn.playerId,
         cl: conn.colorIndex,
+        st: "on",
       });
+    }
+    for (const seat of room.seats()) {
+      out.push({ pid: seat.pid, aid: seat.authName, nm: seat.displayName ?? seat.pid, cl: seat.colorIndex, st: "away" });
     }
     return out;
   }
@@ -111,11 +122,13 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   sendFull(room: RoomRuntime, conn: Conn): void {
     // Start the reliable-event stream from "now": the full snapshot bootstraps state, so the client
-    // shouldn't replay the pre-join event backlog. Future events flow from here.
+    // shouldn't replay the pre-join event backlog (on a resume that means the outage window's
+    // one-shot FX are deliberately skipped, never replayed). Future events flow from here.
     conn.ackedEventId = room.latestEventId();
     const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
       worldId: room.id,
       roster: this.rosterFor(room),
+      resumeToken: conn.resumeToken ?? undefined,
       interestRadius: 0,
       identities: this.identitiesFor(room),
     });
