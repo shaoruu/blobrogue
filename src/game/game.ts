@@ -3163,8 +3163,27 @@ export class Game {
             }
           }
         }
+        // Walkability outline: trace the exact floor/wall collision boundary ON the floor
+        // side. This is structural navigation guidance, visible in grayscale and blur.
+        const wallN = ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 1;
+        const wallS = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 1;
+        const wallW = tx > 0 && d.tiles[ty * d.w + tx - 1] === 1;
+        const wallE = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 1;
+        if (wallN || wallS || wallW || wallE) {
+          ctx.save();
+          ctx.globalAlpha = 0.72;
+          ctx.strokeStyle = biome.accent;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          if (wallN) { ctx.moveTo(sx, sy + 1); ctx.lineTo(sx + TILE, sy + 1); }
+          if (wallS) { ctx.moveTo(sx, sy + TILE - 1); ctx.lineTo(sx + TILE, sy + TILE - 1); }
+          if (wallW) { ctx.moveTo(sx + 1, sy); ctx.lineTo(sx + 1, sy + TILE); }
+          if (wallE) { ctx.moveTo(sx + TILE - 1, sy); ctx.lineTo(sx + TILE - 1, sy + TILE); }
+          ctx.stroke();
+          ctx.restore();
+        }
         // A wall directly above casts a shadow onto this floor tile — sells the height.
-        if (ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 1 && tiles.ready("wall_shadow")) {
+        if (wallN && tiles.ready("wall_shadow")) {
           ctx.drawImage(tiles.get("wall_shadow"), sx, sy, TILE, TILE);
         }
       }
