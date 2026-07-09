@@ -14,7 +14,7 @@ import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
-import type { ShopSlot } from "../sim/shop.js";
+import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
 import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
 import { ShopPanel } from "../ui/shopPanel.js";
 import { LocalTransport } from "../client/transport.js";
@@ -1677,6 +1677,9 @@ export class Game {
         this.addTrauma(TRAUMA_HURT);
         this.hurtFlash = 1;
         this.hurtDir = this.findThreatDir(); // point the vignette at whatever just hit us
+        // Taking a hit closes the shop panel: browsing must never hold a player's inputs
+        // idle while something that chased them into the room is chewing on them.
+        this.shopPanel.close();
         break;
       case "itemPicked":
         // The pick SOUND (blessing vs levelup) plays at choice time in the blessing overlay,
@@ -3793,7 +3796,7 @@ export class Game {
     this.drawShopText("PATCH", sx, sy - 22, "#ffd27a");
   }
 
-  private drawShopStation(shop: NonNullable<WorldState["shop"]>, slot: ShopSlot, viewer: ReturnType<typeof shopViewerOf>, isFocused: boolean) {
+  private drawShopStation(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, isFocused: boolean) {
     const { ctx, cam } = this;
     const sx = slot.x - cam.x, sy = slot.y - cam.y;
     const status = shopSlotStatusFor(shop, slot, viewer);
