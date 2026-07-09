@@ -6,6 +6,10 @@
 
 const MUTE_KEY = "blobrogue.muted";
 const SHAKE_KEY = "blobrogue.shake";
+// The out-of-the-box screen-shake level for players who never touched the slider —
+// authored calm (live playtest feedback) while keeping game-feel. A stored choice,
+// whatever it is, always wins over this.
+const SHAKE_DEFAULT = 0.55;
 const AUTOFIRE_KEY = "blobrogue.autofire";
 const MASTER_KEY = "blobrogue.vol.master";
 const MUSIC_KEY = "blobrogue.vol.music";
@@ -109,7 +113,7 @@ class Settings {
 
   constructor() {
     this.muted = readBool(MUTE_KEY, false);
-    this.shake = clamp01(readNumber(SHAKE_KEY, 1));
+    this.shake = clamp01(readNumber(SHAKE_KEY, SHAKE_DEFAULT));
     this.autofire = readBool(AUTOFIRE_KEY, false) || readForceAutofire();
     this.master = clamp01(readNumber(MASTER_KEY, 0.7));
     this.music = clamp01(readNumber(MUSIC_KEY, 0.5));
