@@ -275,11 +275,11 @@ function placeRift(ctx: PlacementCtx, room: Room): number {
     const tx = room.x + 1 + rng.int(0, Math.max(0, room.w - 3));
     const ty = room.y + 1 + rng.int(0, Math.max(0, room.h - 3));
     if (!isPlaceable(ctx, tx, ty)) continue;
-    let clear = true;
+    let isClear = true;
     for (const h of ctx.list) {
-      if (Math.abs(h.tx - tx) <= 1 && Math.abs(h.ty - ty) <= 1) { clear = false; break; }
+      if (Math.abs(h.tx - tx) <= 1 && Math.abs(h.ty - ty) <= 1) { isClear = false; break; }
     }
-    if (!clear) continue;
+    if (!isClear) continue;
     claim(ctx, "void_rift", tx, ty, rng.range(0, hazardPeriod("void_rift")), ctx.nextGroup++);
     return 1;
   }

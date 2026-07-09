@@ -70,34 +70,34 @@ const DRAMATIC: readonly RoomShape[] = ["pillars", "arena", "cavern", "gauntlet"
 
 function generatorInvariantTests(): void {
   section("generator invariants: determinism, sealed border, open centers, full connectivity");
-  let deterministic = true, borderSealed = true, centersOpen = true, connected = true, exitFar = true;
+  let isDeterministic = true, isBorderSealed = true, areCentersOpen = true, isConnected = true, isExitFar = true;
   for (const seed of SEEDS) {
     for (const floor of FLOORS) {
       const d = generateDungeon(seed, floor);
       const again = generateDungeon(seed, floor);
-      if (JSON.stringify(d) !== JSON.stringify(again)) deterministic = false;
+      if (JSON.stringify(d) !== JSON.stringify(again)) isDeterministic = false;
       for (let x = 0; x < d.w; x++) {
-        if (d.tiles[x] !== 1 || d.tiles[(d.h - 1) * d.w + x] !== 1) borderSealed = false;
+        if (d.tiles[x] !== 1 || d.tiles[(d.h - 1) * d.w + x] !== 1) isBorderSealed = false;
       }
       for (let y = 0; y < d.h; y++) {
-        if (d.tiles[y * d.w] !== 1 || d.tiles[y * d.w + d.w - 1] !== 1) borderSealed = false;
+        if (d.tiles[y * d.w] !== 1 || d.tiles[y * d.w + d.w - 1] !== 1) isBorderSealed = false;
       }
       for (const r of d.rooms) {
-        if (d.tiles[r.cy * d.w + r.cx] !== 0) centersOpen = false;
+        if (d.tiles[r.cy * d.w + r.cx] !== 0) areCentersOpen = false;
       }
       const seen = reachableFrom(d, d.spawn.x, d.spawn.y);
       let openCount = 0;
       for (const t of d.tiles) if (t === 0) openCount++;
-      if (seen.size !== openCount) connected = false;
-      if (!seen.has(d.exit.y * d.w + d.exit.x)) connected = false;
-      if (Math.abs(d.exit.x - d.spawn.x) + Math.abs(d.exit.y - d.spawn.y) < 8) exitFar = false;
+      if (seen.size !== openCount) isConnected = false;
+      if (!seen.has(d.exit.y * d.w + d.exit.x)) isConnected = false;
+      if (Math.abs(d.exit.x - d.spawn.x) + Math.abs(d.exit.y - d.spawn.y) < 8) isExitFar = false;
     }
   }
-  check(`deterministic across ${SEEDS.length} seeds x ${FLOORS.length} floors`, deterministic);
-  check("map border ring stays solid wall", borderSealed);
-  check("every room center is open floor", centersOpen);
-  check("EVERY open tile is reachable from the spawn (no sealed pockets, exit included)", connected);
-  check("the exit lands far from the spawn (a journey, not a scatter)", exitFar);
+  check(`deterministic across ${SEEDS.length} seeds x ${FLOORS.length} floors`, isDeterministic);
+  check("map border ring stays solid wall", isBorderSealed);
+  check("every room center is open floor", areCentersOpen);
+  check("EVERY open tile is reachable from the spawn (no sealed pockets, exit included)", isConnected);
+  check("the exit lands far from the spawn (a journey, not a scatter)", isExitFar);
 }
 
 function archetypeDepthTests(): void {
@@ -130,7 +130,7 @@ function archetypeDepthTests(): void {
   check("every deep floor carries at least two dramatic rooms", deepDramaticFloors === deepFloorCount,
     `${deepDramaticFloors}/${deepFloorCount}`);
 
-  let vaultOk = true;
+  let isVaultOk = true;
   for (const seed of SEEDS) {
     const d = generateDungeon(seed, 4);
     const treasure = d.rooms.find((r) => r.kind === "treasure");
@@ -142,36 +142,36 @@ function archetypeDepthTests(): void {
         if (d.tiles[y * d.w + x] === 1) innerWalls++;
       }
     }
-    if (innerWalls < 8) vaultOk = false;
+    if (innerWalls < 8) isVaultOk = false;
   }
-  check("treasure vaults carry a real sealed ring", vaultOk);
+  check("treasure vaults carry a real sealed ring", isVaultOk);
 
-  let hazardRoomDeep = 0;
+  let hazardRoomFloors = 0;
   for (const seed of SEEDS) {
     const d = generateDungeon(seed, 18);
-    if (d.rooms.some((r) => r.kind === "hazard")) hazardRoomDeep++;
+    if (d.rooms.some((r) => r.kind === "hazard")) hazardRoomFloors++;
   }
-  check("deep floors author hazard set-piece rooms", hazardRoomDeep >= SEEDS.length - 1, `${hazardRoomDeep}/${SEEDS.length}`);
+  check("deep floors author hazard set-piece rooms", hazardRoomFloors >= SEEDS.length - 1, `${hazardRoomFloors}/${SEEDS.length}`);
 
   section("boss floors stage a grand arena");
-  let arenaOk = true, bossInArena = true, approachOk = true;
+  let isArenaOk = true, isBossInArena = true, isApproachOk = true;
   for (const seed of SEEDS) {
     for (const floor of [5, 10, 20, 25]) {
       const d = generateDungeon(seed, floor);
       const last = d.rooms[d.rooms.length - 1];
-      if (last.shape !== "arena" || last.w < 13 || last.h < 11) arenaOk = false;
+      if (last.shape !== "arena" || last.w < 13 || last.h < 11) isArenaOk = false;
       const spawns = spawnFloorEnemies(d, seed, floor);
       const boss = spawns.active.find((e) => e.kind === "boss");
-      if (!boss) { bossInArena = false; continue; }
+      if (!boss) { isBossInArena = false; continue; }
       const bx = Math.floor(boss.x / TILE), by = Math.floor(boss.y / TILE);
-      if (bx < last.x || bx >= last.x + last.w || by < last.y || by >= last.y + last.h) bossInArena = false;
-      if (d.tiles[by * d.w + bx] !== 0) bossInArena = false;
-      if (d.exit.x !== last.cx || d.exit.y !== last.cy) approachOk = false;
+      if (bx < last.x || bx >= last.x + last.w || by < last.y || by >= last.y + last.h) isBossInArena = false;
+      if (d.tiles[by * d.w + bx] !== 0) isBossInArena = false;
+      if (d.exit.x !== last.cx || d.exit.y !== last.cy) isApproachOk = false;
     }
   }
-  check("the final room of every boss floor is a 13x11+ arena", arenaOk);
-  check("the boss spawns on open floor inside its arena", bossInArena);
-  check("the exit sits at the arena center (beat the boss, descend the band)", approachOk);
+  check("the final room of every boss floor is a 13x11+ arena", isArenaOk);
+  check("the boss spawns on open floor inside its arena", isBossInArena);
+  check("the exit sits at the arena center (beat the boss, descend the band)", isApproachOk);
 }
 
 function biomeLadderTests(): void {
@@ -196,31 +196,31 @@ function biomeLadderTests(): void {
 
 function hazardPlacementTests(): void {
   section("hazard placement: fairness radii, budgets, escalation, determinism");
-  let noneShallow = true, budgetOk = true, radiiOk = true, onFloorOk = true, noDupes = true, deterministic = true;
-  let centersClear = true, bossRoomClear = true;
+  let isShallowClean = true, isBudgetOk = true, areRadiiOk = true, isOnFloor = true, hasNoDupes = true, isLayoutDeterministic = true;
+  let areCentersClear = true, isBossRoomClear = true;
   const bandTiles = new Map<number, { total: number; floors: number }>();
   for (const seed of SEEDS) {
     for (const floor of FLOORS) {
       const d = generateDungeon(seed, floor);
       const hz = placeHazards(d, seed, floor);
       const again = placeHazards(d, seed, floor);
-      if (JSON.stringify(hz) !== JSON.stringify(again)) deterministic = false;
-      if (floor <= 2 && hz.length > 0) noneShallow = false;
-      if (hz.length > hazardBudgetForFloor(floor)) budgetOk = false;
+      if (JSON.stringify(hz) !== JSON.stringify(again)) isLayoutDeterministic = false;
+      if (floor <= 2 && hz.length > 0) isShallowClean = false;
+      if (hz.length > hazardBudgetForFloor(floor)) isBudgetOk = false;
       const seenTiles = new Set<number>();
       for (const h of hz) {
         const key = h.ty * d.w + h.tx;
-        if (seenTiles.has(key)) noDupes = false;
+        if (seenTiles.has(key)) hasNoDupes = false;
         seenTiles.add(key);
-        if (d.tiles[key] !== 0) onFloorOk = false;
-        if (Math.max(Math.abs(h.tx - d.spawn.x), Math.abs(h.ty - d.spawn.y)) <= 3) radiiOk = false;
-        if (Math.max(Math.abs(h.tx - d.exit.x), Math.abs(h.ty - d.exit.y)) <= 2) radiiOk = false;
+        if (d.tiles[key] !== 0) isOnFloor = false;
+        if (Math.max(Math.abs(h.tx - d.spawn.x), Math.abs(h.ty - d.spawn.y)) <= 3) areRadiiOk = false;
+        if (Math.max(Math.abs(h.tx - d.exit.x), Math.abs(h.ty - d.exit.y)) <= 2) areRadiiOk = false;
         for (const r of d.rooms) {
-          if (Math.abs(h.tx - r.cx) + Math.abs(h.ty - r.cy) <= 1) centersClear = false;
+          if (Math.abs(h.tx - r.cx) + Math.abs(h.ty - r.cy) <= 1) areCentersClear = false;
         }
         if (isBossFloor(floor)) {
           const arena = d.rooms[d.rooms.length - 1];
-          if (h.tx >= arena.x - 1 && h.tx < arena.x + arena.w + 1 && h.ty >= arena.y - 1 && h.ty < arena.y + arena.h + 1) bossRoomClear = false;
+          if (h.tx >= arena.x - 1 && h.tx < arena.x + arena.w + 1 && h.ty >= arena.y - 1 && h.ty < arena.y + arena.h + 1) isBossRoomClear = false;
         }
       }
       if (!isBossFloor(floor)) {
@@ -232,13 +232,13 @@ function hazardPlacementTests(): void {
       }
     }
   }
-  check("floors 1-2 are hazard-free (the safe teaching band)", noneShallow);
-  check("hazard tile count never exceeds the floor budget", budgetOk);
-  check("layout is deterministic per (seed, floor)", deterministic);
-  check("hazards sit on open floor, one per tile", onFloorOk && noDupes);
-  check("safety radii hold: spawn (3), exit (2)", radiiOk);
-  check("room centers (chest/dealer ground) stay clear", centersClear);
-  check("boss arenas stay hazard-free (the boss IS the danger)", bossRoomClear);
+  check("floors 1-2 are hazard-free (the safe teaching band)", isShallowClean);
+  check("hazard tile count never exceeds the floor budget", isBudgetOk);
+  check("layout is deterministic per (seed, floor)", isLayoutDeterministic);
+  check("hazards sit on open floor, one per tile", isOnFloor && hasNoDupes);
+  check("safety radii hold: spawn (3), exit (2)", areRadiiOk);
+  check("room centers (chest/dealer ground) stay clear", areCentersClear);
+  check("boss arenas stay hazard-free (the boss IS the danger)", isBossRoomClear);
   const bandMeans: number[] = [];
   for (let band = 0; band < BIOMES.length; band++) {
     const agg = bandTiles.get(band);
@@ -248,7 +248,7 @@ function hazardPlacementTests(): void {
     bandMeans.map((m) => m.toFixed(1)).join(" -> "));
 
   section("static pools never seal a path");
-  let poolsFair = true;
+  let arePoolsFair = true;
   for (const seed of SEEDS) {
     for (const floor of FLOORS) {
       const d = generateDungeon(seed, floor);
@@ -259,11 +259,11 @@ function hazardPlacementTests(): void {
       // Damage-free traversal: spawn must still reach the exit and every room center
       // without ever standing in a pool (pulse hazards are crossable by timing).
       const seen = reachableFrom(d, d.spawn.x, d.spawn.y, pools);
-      if (!seen.has(d.exit.y * d.w + d.exit.x)) poolsFair = false;
-      for (const r of d.rooms) if (!seen.has(r.cy * d.w + r.cx)) poolsFair = false;
+      if (!seen.has(d.exit.y * d.w + d.exit.x)) arePoolsFair = false;
+      for (const r of d.rooms) if (!seen.has(r.cy * d.w + r.cx)) arePoolsFair = false;
     }
   }
-  check("spawn -> exit and every room center reachable without touching a pool", poolsFair);
+  check("spawn -> exit and every room center reachable without touching a pool", arePoolsFair);
 }
 
 function hazardTimingTests(): void {
@@ -318,24 +318,24 @@ function hazardDamageTests(): void {
     p.y = (h.ty + 0.5) * TILE;
     p.invuln = 0;
     const hp0 = p.hp;
-    let sawTelegraphBeforeHit = false;
-    let wasTelegraph = false;
+    let isTelegraphedBeforeHit = false;
+    let wasTelegraphSeen = false;
     let hitEvents = 0;
     let hitAt = -1;
     for (let t = 0; t < 60 * 8; t++) {
       const ph = hazardPhaseAt(h, w.hazardClock + DT);
-      if (ph === "telegraph") wasTelegraph = true;
+      if (ph === "telegraph") wasTelegraphSeen = true;
       const evs = step(w, t);
       for (const e of evs) {
         if (e.t === "hazardHit") {
           hitEvents++;
-          if (hitAt < 0) { hitAt = t; if (wasTelegraph) sawTelegraphBeforeHit = true; }
+          if (hitAt < 0) { hitAt = t; if (wasTelegraphSeen) isTelegraphedBeforeHit = true; }
         }
       }
       if (hitAt >= 0 && t > hitAt + 30) break;
     }
     check("standing on spikes takes damage when they fire", hitAt >= 0 && p.hp < hp0, `hp ${hp0}->${p.hp}`);
-    check("the hit was telegraphed first", sawTelegraphBeforeHit);
+    check("the hit was telegraphed first", isTelegraphedBeforeHit);
     check("post-hit protection prevents same-window melting", hitEvents === 1 && hp0 - p.hp === HAZARD_DAMAGE,
       `hits=${hitEvents}`);
   }
@@ -393,8 +393,8 @@ function riftPullTests(): void {
   const p = w.players.get(LOCAL_ID)!;
   const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
   p.invuln = 1e9; // isolate the pull from damage
-  let pulled = false;
-  let idlePhaseStill = true;
+  let isPulled = false;
+  let isIdleStill = true;
   for (let t = 0; t < 60 * 10; t++) {
     const ph = hazardPhaseAt(h, w.hazardClock + DT);
     p.x = cx - RIFT_PULL_RADIUS * 0.7;
@@ -402,11 +402,11 @@ function riftPullTests(): void {
     const before = Math.hypot(p.x - cx, p.y - cy);
     step(w, t);
     const after = Math.hypot(p.x - cx, p.y - cy);
-    if (ph === "active" && after < before - 0.1) pulled = true;
-    if (ph === "idle" && Math.abs(after - before) > 1e-6) idlePhaseStill = false;
+    if (ph === "active" && after < before - 0.1) isPulled = true;
+    if (ph === "idle" && Math.abs(after - before) > 1e-6) isIdleStill = false;
   }
-  check("an ACTIVE rift drags a nearby player toward its core", pulled);
-  check("a dormant rift never moves anyone", idlePhaseStill);
+  check("an ACTIVE rift drags a nearby player toward its core", isPulled);
+  check("a dormant rift never moves anyone", isIdleStill);
 }
 
 function wireTests(): void {

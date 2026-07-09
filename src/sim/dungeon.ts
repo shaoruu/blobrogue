@@ -434,19 +434,19 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   }
 
   const wantRooms = isBoss ? 4 + rand.int(0, 2) : 6 + rand.int(0, 3) + Math.min(floor, 6);
-  const wantVault = !isBoss && floor >= 2;
-  let vaultPlaced = false;
+  const isVaultWanted = !isBoss && floor >= 2;
+  let isVaultPlaced = false;
   let attempts = 0;
   while (rooms.length < wantRooms + (bossArena ? 1 : 0) && attempts < 400) {
     attempts++;
-    const isVaultTry = wantVault && !vaultPlaced && rooms.length >= 2;
+    const isVaultTry = isVaultWanted && !isVaultPlaced && rooms.length >= 2;
     const shape = isVaultTry ? "vault" : rollShape(rand, floor);
     const { w: rw, h: rh } = rollSize(rand, shape);
     const rx = 1 + rand.int(0, w - rw - 3);
     const ry = 1 + rand.int(0, h - rh - 3);
     if (overlaps(rooms, rx, ry, rw, rh)) continue;
     rooms.push(makeRoom(rx, ry, rw, rh, shape));
-    if (shape === "vault") vaultPlaced = true;
+    if (shape === "vault") isVaultPlaced = true;
   }
 
   // ---- order into a journey ----
