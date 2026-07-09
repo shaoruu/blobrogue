@@ -30,6 +30,11 @@ export interface HttpProbeConfig {
   logTailMax: number;
 }
 
+// Mirrors src/net/protocol.ts PROTOCOL_VERSION (control deliberately shares no game code —
+// see mintGsTicket below). The integration test boots the REAL gs and runs this synthetic
+// join, so a version drift fails the suite loudly instead of silently failing deploys.
+const GS_PROTOCOL_VERSION = 4;
+
 export interface TailReader {
   tail(path: string, maxLines: number): Promise<string[]>;
 }
@@ -129,7 +134,7 @@ export class HttpGameServerProbe implements GameServerProbe {
       ws.on("open", () => {
         if (secret !== null) {
           const ticket = mintGsTicket(secret, "synthetic-verify", 60);
-          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: 3 })); } catch { finish(false, "ws_liveness", "send_failed"); }
+          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: GS_PROTOCOL_VERSION })); } catch { finish(false, "ws_liveness", "send_failed"); }
         }
         // Without a secret, receiving ANY server frame (e.g. a heartbeat ping) proves the WS
         // server + tick/heartbeat loop are alive.

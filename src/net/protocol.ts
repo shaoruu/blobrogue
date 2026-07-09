@@ -13,7 +13,7 @@
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared } from "../sim/world.js";
 import type {
-  Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
+  Enemy, Bullet, Prop, Pickup, Chest, Pet, PetKind, EnemyKind, WeaponId, AttackPhase, AttackMove,
   PropKind, PickupKind, ChestKind,
 } from "../sim/types.js";
 import type { EnemyTier } from "../sim/balance.js";
@@ -21,6 +21,7 @@ import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { ENEMY_ARCHETYPES } from "../sim/enemies.js";
+import { isPetKind } from "../sim/pets.js";
 import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
@@ -38,7 +39,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-export const PROTOCOL_VERSION = 3;
+// v4: companion pets — snapshots carry `pets` (PetWire), EnemyWire carries the bonebird
+// mark timer (mk), and the petTeleport event joins EVENT_SPECS. A v3 client can't decode a
+// v4 snapshot (required pets field), so the strict join gate bumps.
+export const PROTOCOL_VERSION = 4;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -114,6 +118,23 @@ export interface EnemyWire {
   atk: AttackWire;
   bph: number;                 // boss phase (0 when not a boss)
   burn: number; chill: number; shock: number;
+  mk: number;                  // bonebird mark seconds left (0 = unmarked); drives the marker
+}
+
+// A bonebird peck in flight, embedded in its pet's wire struct (one at most per bird).
+// Clients dead-reckon it by velocity between snapshots, like bullets.
+export interface PetPeckWire { x: number; y: number; vx: number; vy: number }
+
+// A server-owned companion pet. `own` is the owner's world-scoped player id — the identity
+// link every client uses to color/label the pet; `at` is the action-pose timer (seconds left
+// of the attack pose) driving the client's typed PetPose hook.
+export interface PetWire {
+  id: number; kind: PetKind;
+  own: PlayerId;
+  x: number; y: number;
+  fac: number;
+  at: number;
+  pk: PetPeckWire | null;
 }
 
 export interface BulletWire {
@@ -173,6 +194,7 @@ export type ServerMsg =
                                  // when every pending event was interest-filtered away for it
       self: SelfWire | null;     // authoritative local player (null until spawned)
       players: PlayerWire[];     // OTHER players (interest-filtered)
+      pets: PetWire[];           // companion pets — ALL of them (incl. the client's own)
       enemies: EnemyWire[];
       bullets: BulletWire[];
       props: PropWire[];         // shared destructibles
@@ -313,6 +335,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
   bossTransition: { scope: "global", fields: { eid: "num", phase: "num", entering: "bool", queued: "num", hpFrac: "num" } },
   enemySpawn: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num" } },
+  petTeleport: { scope: "pos", fields: { kind: "str", ox: "num", oy: "num", x: "num", y: "num" } },
   descend: { scope: "global", fields: { toFloor: "num" } },
   reachExit: { scope: "global", fields: { toFloor: "num" } },
   gameOver: { scope: "pid", fields: { pid: "str" } },
@@ -499,6 +522,29 @@ function validateEnemyWire(v: unknown): EnemyWire {
     },
     bph: num(o, "bph", 0, 16),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
+    mk: num(o, "mk", 0, 1e4),
+  };
+}
+
+function validatePetWire(v: unknown): PetWire {
+  const o = obj(v, "pet");
+  const kind = o.kind;
+  if (!isPetKind(kind)) throw new ProtocolError("bad pet.kind");
+  let pk: PetPeckWire | null = null;
+  if (o.pk !== null && o.pk !== undefined) {
+    const p = obj(o.pk, "pet.pk");
+    pk = {
+      x: num(p, "x", -POS_LIMIT, POS_LIMIT), y: num(p, "y", -POS_LIMIT, POS_LIMIT),
+      vx: num(p, "vx", -1e6, 1e6), vy: num(p, "vy", -1e6, 1e6),
+    };
+  }
+  return {
+    id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER), kind,
+    own: shortStr(o, "own", 64),
+    x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
+    fac: num(o, "fac", -1, 1),
+    at: num(o, "at", 0, 1e4),
+    pk,
   };
 }
 
@@ -576,6 +622,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
         self: o.self === null ? null : validateSelfWire(o.self),
         players: arr(o.players, "players").map(validatePlayerWire),
+        pets: arr(o.pets, "pets").map(validatePetWire),
         enemies: arr(o.enemies, "enemies").map(validateEnemyWire),
         bullets: arr(o.bullets, "bullets").map(validateBulletWire),
         props: arr(o.props, "props").map(validatePropWire),
@@ -671,6 +718,24 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
     bph: e.boss ? e.boss.phase : 0,
     burn: e.burn, chill: e.chill, shock: e.shock,
+    mk: e.petMark,
+  };
+}
+
+export function toPetWire(p: Pet): PetWire {
+  return {
+    id: p.id, kind: p.kind, own: p.ownerId, x: p.x, y: p.y, fac: p.facing, at: p.attackAnim,
+    pk: p.peck ? { x: p.peck.x, y: p.peck.y, vx: p.peck.vx, vy: p.peck.vy } : null,
+  };
+}
+
+// Build a render-ready Pet from a wire struct at an (interpolated) position. Sim-internal
+// scratch the renderer never reads is defaulted, mirroring enemyFromWire.
+export function petFromWire(w: PetWire, x: number, y: number): Pet {
+  return {
+    id: w.id, kind: w.kind, ownerId: w.own, x, y, vx: 0, vy: 0,
+    facing: w.fac, attackCd: 0, attackAnim: w.at, stuckTime: 0,
+    peck: w.pk ? { x: w.pk.x, y: w.pk.y, vx: w.pk.vx, vy: w.pk.vy, life: 1 } : null,
   };
 }
 
@@ -687,6 +752,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
     burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
+    petMark: w.mk,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
@@ -742,6 +808,7 @@ export const INTEREST_EXIT_FACTOR = 1.15;
 export interface InterestView {
   rev: number;
   players: Set<PlayerId>;
+  pets: Set<number>;
   enemies: Set<number>;
   props: Set<number>;
   pickups: Set<number>;
@@ -749,7 +816,7 @@ export interface InterestView {
 }
 
 export function createInterestView(): InterestView {
-  return { rev: -1, players: new Set(), enemies: new Set(), props: new Set(), pickups: new Set(), chests: new Set() };
+  return { rev: -1, players: new Set(), pets: new Set(), enemies: new Set(), props: new Set(), pickups: new Set(), chests: new Set() };
 }
 
 // Snapshot the current server world into a full ServerMsg body for one client. The client's
@@ -791,7 +858,7 @@ export function buildSnapshot(
   const view = opts.view;
   if (view && view.rev !== w.rev) {
     view.rev = w.rev;
-    view.players.clear(); view.enemies.clear(); view.props.clear(); view.pickups.clear(); view.chests.clear();
+    view.players.clear(); view.pets.clear(); view.enemies.clear(); view.props.clear(); view.pickups.clear(); view.chests.clear();
   }
   // No radius, or we don't know where this client is yet -> send everything.
   const near = (x: number, y: number, wasKnown: boolean): boolean => {
@@ -806,6 +873,13 @@ export function buildSnapshot(
   for (const p of w.players.values()) {
     if (p.id === selfPid) continue;
     if (near(p.x, p.y, view?.players.has(p.id) ?? false)) { players.push(toPlayerWire(p, opts.identities?.get(p.id))); keepPlayers.add(p.id); }
+  }
+  // A client's OWN pet is always included (it follows them, but a teleport lag-beat must
+  // never blink it out of their snapshot); other pets ride the ordinary interest filter.
+  const pets: PetWire[] = [];
+  const keepPets = new Set<number>();
+  for (const t of w.pets.values()) {
+    if (t.ownerId === selfPid || near(t.x, t.y, view?.pets.has(t.id) ?? false)) { pets.push(toPetWire(t)); keepPets.add(t.id); }
   }
   const enemies: EnemyWire[] = [];
   const keepEnemies = new Set<number>();
@@ -831,6 +905,7 @@ export function buildSnapshot(
   }
   if (view) {
     view.players = keepPlayers;
+    view.pets = keepPets;
     view.enemies = keepEnemies;
     view.props = keepProps;
     view.pickups = keepPickups;
@@ -851,6 +926,7 @@ export function buildSnapshot(
     evTo,
     self: self ? toSelfWire(self) : null,
     players,
+    pets,
     enemies,
     bullets,
     props,

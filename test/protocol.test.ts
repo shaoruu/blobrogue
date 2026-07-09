@@ -9,11 +9,11 @@
 
 import {
   jsonCodec, ProtocolError, buildSnapshot, toSelfWire, applySelfWire, eventScope,
-  PROTOCOL_VERSION, INTEREST_EXIT_FACTOR,
+  createInterestView, PROTOCOL_VERSION, INTEREST_EXIT_FACTOR,
   type ClientMsg, type ServerMsg, type WireEvent,
 } from "../src/net/protocol.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "../src/net/playerSnapshot.js";
-import { createWorld, createPlayer, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world.js";
+import { createWorld, createPlayer, spawnPlayerInWorld, spawnPetInWorld, devSpawnEnemy } from "../src/sim/world.js";
 import type { PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import { createMods } from "../src/sim/items.js";
@@ -107,6 +107,9 @@ function serverRoundTripTests(): void {
   const other = spawnPlayerInWorld(w, "pOther");
   other.x = me.x + 40; other.y = me.y - 25;
   devSpawnEnemy(w, "boss", me.x + 200, me.y);
+  spawnPetInWorld(w, "pMe", "ember_pup");
+  const bird = spawnPetInWorld(w, "pOther", "bonebird")!;
+  bird.peck = { x: me.x + 60, y: me.y - 10, vx: 380, vy: 20, life: 0.5 }; // in-flight peck rides the wire
   w.bullets.push({ x: me.x + 10, y: me.y + 5, vx: 250, vy: -40, radius: 5, life: 1, friendly: true, owner: "pMe", damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false, fx: "pistol" });
   const events: WireEvent[] = [
     { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3 } },
@@ -134,6 +137,8 @@ function serverRoundTripTests(): void {
     { ...snapObj, self: { hp: 1 } },
     { ...snapObj, enemies: [{ id: 1 }] },
     { ...snapObj, events: [{ id: 0, e: { t: "enemyKill" } }] },
+    { ...snapObj, pets: [{ id: 0, kind: "dragon", own: "pMe", x: 0, y: 0, fac: 1, at: 0, pk: null }] },
+    { ...snapObj, pets: [{ id: 0, kind: "ember_pup", own: "pMe", x: 0, y: 0, fac: 1, at: 0, pk: { x: 1 } }] },
     { t: "snap" },
   ];
   for (let i = 0; i < corrupt.length; i++) {
@@ -195,6 +200,29 @@ function identityWireTests(): void {
     try { jsonCodec.decodeServer(JSON.stringify(bad)); } catch (err) { isRejected = err instanceof ProtocolError; }
     check(`${label} rejected`, isRejected);
   }
+}
+
+// PetWire: the owner link + kind ride every snapshot; a client's own pet is exempt from
+// interest filtering (it must never blink out of its owner's view during a teleport beat).
+function petWireTests(): void {
+  section("companion pets on the wire: owner identity, interest exemption, strict kinds");
+  const w = createWorld(0xFE71, 1, { isShared: true, skipLocalPlayer: true });
+  const me = spawnPlayerInWorld(w, "pMe");
+  const far = spawnPlayerInWorld(w, "pFar");
+  const mine = spawnPetInWorld(w, "pMe", "lantern_wisp")!;
+  const theirs = spawnPetInWorld(w, "pFar", "bonebird")!;
+  // Park the other player's pet far outside any interest radius.
+  far.x = me.x + 5000; far.y = me.y;
+  theirs.x = far.x; theirs.y = far.y;
+  mine.x = me.x + 5000; mine.y = me.y; // even a strayed OWN pet stays in the snapshot
+
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: 400, view: createInterestView() });
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  check("own pet is exempt from interest filtering", snap.pets.some((t) => t.own === "pMe"));
+  check("a far player's pet is interest-filtered", !snap.pets.some((t) => t.own === "pFar"));
+  const wMine = snap.pets.find((t) => t.own === "pMe");
+  check("pet wire carries kind + owner", wMine?.kind === "lantern_wisp" && wMine.own === "pMe");
+  check("pet wire round-trips deep-equal", deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(snap)), snap));
 }
 
 function fuzzTests(): void {
@@ -261,7 +289,7 @@ function interestHysteresisTests(): void {
   me.x = 300; me.y = 300;
   const R = 400;
   const e = devSpawnEnemy(w, "slime", me.x + R - 10, me.y); // just inside -> enters
-  const view = { rev: -1, players: new Set<string>(), enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
+  const view = createInterestView();
   const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
   check("entity inside R enters the view", snapIn.t === "snap" && snapIn.enemies.some((x) => x.id === e.id));
   // Drift just past R but inside the exit radius: hysteresis keeps it.
@@ -300,6 +328,7 @@ function main(): void {
   unknownFieldTests();
   serverRoundTripTests();
   identityWireTests();
+  petWireTests();
   fuzzTests();
   projectionTests();
   interestHysteresisTests();
