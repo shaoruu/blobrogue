@@ -7,9 +7,29 @@
 const MUTE_KEY = "blobrogue.muted";
 const SHAKE_KEY = "blobrogue.shake";
 const AUTOFIRE_KEY = "blobrogue.autofire";
-const MASTER_KEY = "blobrogue.vol.master";
-const MUSIC_KEY = "blobrogue.vol.music";
-const SFX_KEY = "blobrogue.vol.sfx";
+// Volume PERCEPTUAL CURVE: sliders store a position 0..1 and the audible gain is
+// position² (equal-ish loudness steps across the whole travel; 0 stays exactly 0).
+// The .v2 keys hold positions; the legacy keys held raw GAINS, so first boot after the
+// curve landed converts once via sqrt (same audible volume, new coordinate system).
+const MASTER_KEY = "blobrogue.vol.master.v2";
+const MUSIC_KEY = "blobrogue.vol.music.v2";
+const SFX_KEY = "blobrogue.vol.sfx.v2";
+const LEGACY_MASTER_KEY = "blobrogue.vol.master";
+const LEGACY_MUSIC_KEY = "blobrogue.vol.music";
+const LEGACY_SFX_KEY = "blobrogue.vol.sfx";
+
+// Shipped default mix as EFFECTIVE gains (master .7 / music .5 / sfx .9 — music sits
+// intentionally under sfx); stored as the equivalent slider positions.
+const DEFAULT_MASTER_POS = Math.sqrt(0.7);
+const DEFAULT_MUSIC_POS = Math.sqrt(0.5);
+const DEFAULT_SFX_POS = Math.sqrt(0.9);
+
+// The one place the curve lives: slider position -> audible gain. Everything on the
+// audio side (bus gains, duck bases) multiplies this value, never the raw position.
+export function volumeGain(position: number): number {
+  const p = clamp01(position);
+  return p * p;
+}
 const HINT_KEY = "blobrogue.controlsHintSeen"; // one-time controls onboarding hint
 const MOTION_KEY = "blobrogue.reducedMotion";
 const FLASH_KEY = "blobrogue.flashLevel";
@@ -90,15 +110,41 @@ function readNumber(key: string, fallback: number): number {
   }
 }
 
+// Volume slider position: the .v2 key wins; else a legacy raw-gain value converts once
+// (position = sqrt(gain) keeps the audible volume identical) and is persisted as .v2.
+function readVolumePos(key: string, legacyKey: string, fallbackPos: number): number {
+  try {
+    const v2 = localStorage.getItem(key);
+    if (v2 !== null) {
+      const n = Number(v2);
+      if (Number.isFinite(n)) return clamp01(n);
+    }
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy !== null) {
+      const gain = Number(legacy);
+      if (Number.isFinite(gain)) {
+        const pos = Math.sqrt(clamp01(gain));
+        localStorage.setItem(key, String(pos));
+        return pos;
+      }
+    }
+  } catch {
+    /* storage disabled — fall through to the default */
+  }
+  return fallbackPos;
+}
+
 type Listener = () => void;
 
-class Settings {
+// Exported for tests (curve/migration suites construct fresh instances against seeded
+// storage); the game only ever uses the `settings` singleton below.
+export class Settings {
   private muted: boolean;
   private shake: number; // 0..1, scales screen-shake magnitude
   private autofire: boolean; // click toggles continuous fire instead of hold-to-fire
-  private master: number; // 0..1 master volume (limiter catches peaks)
-  private music: number;  // 0..1 music bus
-  private sfx: number;    // 0..1 sfx bus
+  private master: number; // 0..1 master slider POSITION (audible gain = position²)
+  private music: number;  // 0..1 music slider position
+  private sfx: number;    // 0..1 sfx slider position
   private controlsHintSeen: boolean; // has the one-time controls onboarding hint shown?
   private reducedMotion: boolean;    // dampen camera motion (shake/kick/recoil) wholesale
   private flash: FlashLevel;         // full-screen flash washes: off / low / full
@@ -111,9 +157,9 @@ class Settings {
     this.muted = readBool(MUTE_KEY, false);
     this.shake = clamp01(readNumber(SHAKE_KEY, 1));
     this.autofire = readBool(AUTOFIRE_KEY, false) || readForceAutofire();
-    this.master = clamp01(readNumber(MASTER_KEY, 0.7));
-    this.music = clamp01(readNumber(MUSIC_KEY, 0.5));
-    this.sfx = clamp01(readNumber(SFX_KEY, 0.9));
+    this.master = readVolumePos(MASTER_KEY, LEGACY_MASTER_KEY, DEFAULT_MASTER_POS);
+    this.music = readVolumePos(MUSIC_KEY, LEGACY_MUSIC_KEY, DEFAULT_MUSIC_POS);
+    this.sfx = readVolumePos(SFX_KEY, LEGACY_SFX_KEY, DEFAULT_SFX_POS);
     this.controlsHintSeen = readBool(HINT_KEY, false);
     this.reducedMotion = readReducedMotion();
     this.flash = readFlashLevel();
@@ -235,9 +281,15 @@ class Settings {
     this.emit();
   }
 
+  // Raw slider positions — what the UI displays as NN%.
   get masterVol(): number { return this.master; }
   get musicVol(): number { return this.music; }
   get sfxVol(): number { return this.sfx; }
+
+  // Curved audible gains — the ONLY volume values the audio engine reads.
+  get masterGain(): number { return volumeGain(this.master); }
+  get musicGain(): number { return volumeGain(this.music); }
+  get sfxGain(): number { return volumeGain(this.sfx); }
 
   setMasterVol(v: number): void { v = clamp01(v); if (this.master === v) return; this.master = v; try { localStorage.setItem(MASTER_KEY, String(v)); } catch {} this.emit(); }
   setMusicVol(v: number): void { v = clamp01(v); if (this.music === v) return; this.music = v; try { localStorage.setItem(MUSIC_KEY, String(v)); } catch {} this.emit(); }
