@@ -345,6 +345,14 @@ function drawerTests(): void {
   check("no DROP action when the weapon can't drop", root.querySelector(".hd-drop") === null);
   check("plain gun still shows all five rows and no technique lines",
     [...root.querySelectorAll(".hd-stat")].length === 5 && root.querySelector(".hd-special") === null);
+  hud.closeDrawer();
+
+  section("UI Part4b: an effect-wave weapon flows through the SAME shared stats model");
+  hud.openWeaponDrawer({ id: "snapwire", name: "Snapwire", stats: wcard("snapwire"), onDrop: null });
+  check("the trap states its room-verb role from the shared model",
+    root.querySelector(".hd-role")?.textContent === weaponDisplayStats("snapwire", createMods(), 0).role);
+  check("the trap surfaces its authored technique line (ARMED TRAP)",
+    [...root.querySelectorAll(".hd-special")].some((n) => n.textContent === "ARMED LINE TRAP"));
 
   section("UI Part4: the scrim swallows the tap and closes the drawer");
   check("scrim shown while open", root.querySelector(".hb-scrim")!.classList.contains("show"));

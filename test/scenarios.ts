@@ -65,31 +65,39 @@ const movement: Scenario = {
 };
 
 // Full combat: a stationary gunner mowing down a refreshing line of enemies while
-// cycling through every weapon (ranged then the three melee weapons at the end).
+// cycling through every weapon (ranged, the three melee blades, then the effect wave).
 const WEAPON_CYCLE: WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing",
   "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
+  "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
 ];
+const COMBAT_TICKS = WEAPON_CYCLE.length * 44 + 48;
 const combat: Scenario = {
   name: "combat",
   seed: 0x2222,
   floor: 1,
-  ticks: 800,
+  ticks: COMBAT_TICKS,
   commands: (() => {
     const cmds: Command[] = [];
-    // Swap weapon every 44 ticks (18 weapons fit inside the 800-tick script).
+    // God mode: the gunner must SURVIVE the whole cycle — the point is exercising every
+    // weapon's full code path (the effect wave sits at the end of the cycle).
+    cmds.push({ t: "godmode", tick: 0 });
+    // Swap weapon every 44 ticks (the whole cycle fits inside the script).
     for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 44, weapon: WEAPON_CYCLE[i] });
     // Keep feeding the full regular-enemy roster to the right of the player.
-    for (let tick = 0; tick < 800; tick += 24) {
+    for (let tick = 0; tick < COMBAT_TICKS; tick += 24) {
       const kinds: EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder"];
       const kind = kinds[(tick / 24) % kinds.length];
       cmds.push({ t: "spawnEnemy", tick, kind, dx: 90 + ((tick / 24) % 3) * 22, dy: ((tick / 24) % 5) * 10 - 20 });
     }
     return cmds;
   })(),
-  input() {
-    return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+  input(tick) {
+    // The trigger PULSES (released for the last 8 ticks of each 44-tick weapon window)
+    // so hold-release mechanics get real coverage: the Breach charges then fires on the
+    // release, and the Crooked Chain's latch -> second-press sweep both execute.
+    return { moveX: 0, moveY: 0, aim: 0, firing: tick % 44 < 36, dash: false };
   },
 };
 

@@ -6,7 +6,7 @@
 //
 // Purity: sim-only imports (this module is part of the isomorphic core).
 
-import { WEAPONS } from "./weapons.js";
+import { WEAPONS, MAX_ORBIT_BLADES } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
 import type { WeaponId } from "./types.js";
 import type { PlayerMods } from "./items.js";
@@ -62,7 +62,9 @@ export interface WeaponMechanic {
 // compare as tighter/wider (behavior categories never rank against each other).
 export type CoverageKind =
   | "THRUST" | "SWEEP" | "AREA" | "CHAIN" | "TRACKING" | "RICOCHET"
-  | "WIDE" | "BURST" | "FOCUSED";
+  | "WIDE" | "BURST" | "FOCUSED"
+  // Effect-wave coverage kinds: what the placed/worn/charged output does to space.
+  | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND";
 
 export interface WeaponCoverage {
   kind: CoverageKind;
@@ -87,6 +89,14 @@ function roleOf(w: Weapon): string {
     if (w.melee.isThrust) return "HOLD A LANE";
     return w.melee.arc >= 1.5 ? "CLEAR YOUR FLANKS" : "DUEL UP CLOSE";
   }
+  // The effect wave's room verbs (each weapon's authored one-line job).
+  if (w.charge !== undefined) return "ERASE AN ANCHOR";
+  if (w.wire !== undefined) return "HOLD A DOORWAY";
+  if (w.orbit !== undefined) return "OWN YOUR SPACE";
+  if (w.sentry !== undefined) return "HOLD A SECOND LANE";
+  if (w.tether !== undefined) return "REPOSITION THE THREAT";
+  if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
+  if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
   if (w.homing !== undefined) return "SEEK TARGETS";
   if (w.chain !== undefined) return "ARC THE PACK";
   if (w.blast !== undefined) return "BLAST THE CHOKEPOINT";
@@ -132,6 +142,13 @@ function reachBand(px: number): BandedStat {
 // live shot pattern (a modded multi-pellet volley moves FOCUSED -> BURST/WIDE honestly).
 function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage {
   if (w.melee) return { kind: w.melee.isThrust ? "THRUST" : "SWEEP", patternOrder: null };
+  // Effect-wave families read by their authoring behavior, not their pellet pattern.
+  if (w.charge !== undefined) return { kind: "ARTILLERY", patternOrder: null };
+  if (w.wire !== undefined) return { kind: "TRAP", patternOrder: null };
+  if (w.orbit !== undefined) return { kind: "ORBIT", patternOrder: null };
+  if (w.sentry !== undefined) return { kind: "TURRET", patternOrder: null };
+  if (w.tether !== undefined) return { kind: "TETHER", patternOrder: null };
+  if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
   if (w.chain !== undefined) return { kind: "CHAIN", patternOrder: null };
   if (w.homing !== undefined) return { kind: "TRACKING", patternOrder: null };
@@ -150,6 +167,17 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
     const pierce = Math.min(4, (w.basePierce ?? 0) + mods.pierce);
     if (pierce > 0) m.push({ tag: "PIERCE", text: pierce === 1 ? "PIERCES 1 BODY" : `PIERCES ${pierce} BODIES`, mag: pierce });
   }
+  // Effect-wave technique/tradeoff lines (the authored special mechanics, priced by rule
+  // from canonical WeaponDef fields — never hand-written per weapon).
+  if (w.lowHpBonus !== undefined) m.push({ tag: "RISK", text: "HITS HARDER THE LOWER YOUR HP", mag: w.lowHpBonus });
+  if (w.charge !== undefined) m.push({ tag: "CHARGE", text: "HOLD TO CHARGE; FULL CHARGE WALKS A BLAST LINE", mag: 1 });
+  if (w.wire !== undefined) m.push({ tag: "WIRE", text: "ARMED LINE TRAP", mag: w.wire.max });
+  if (w.orbit !== undefined) {
+    const blades = Math.min(MAX_ORBIT_BLADES, w.orbit.blades + mods.extraPellets);
+    m.push({ tag: "ORBIT", text: `${blades} BLADES ORBIT YOU; FIRE FLARES THE RING`, mag: blades });
+  }
+  if (w.sentry !== undefined) m.push({ tag: "TURRET", text: "DEPLOYS A DESTRUCTIBLE TURRET", mag: w.sentry.hp });
+  if (w.tether !== undefined) m.push({ tag: "TETHER", text: "REELS A TARGET IN; HEAVIES REEL YOU", mag: 1 });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });
   if (w.bounce !== undefined) m.push({ tag: "RICOCHET", text: w.bounce === 1 ? "RICOCHETS ONCE" : `RICOCHETS \u00d7${w.bounce}`, mag: w.bounce });

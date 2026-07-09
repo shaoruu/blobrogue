@@ -67,8 +67,10 @@ export interface HotbarActions {
 
 // A weapon's stat sheet for the tap-to-inspect drawer. `stats` is the SAME live
 // WeaponDisplayStats the hotbar tooltip renders from — one source, so blessing/modifier
-// values can never drift between the two surfaces. onDrop backs the drawer's DROP button
-// (the touch path for Q); null when this weapon can't drop (unequipped or final weapon).
+// values can never drift between the two surfaces (the effect wave's weapons flow through
+// the same model: their room-verb roles, coverage, and special mechanics are authored in
+// weaponStats.ts, never a second copy). onDrop backs the drawer's DROP button (the touch
+// path for Q); null when this weapon can't drop (unequipped or final weapon).
 export interface WeaponDrawerData {
   id: WeaponId;
   name: string;

@@ -8,13 +8,19 @@ import type { EnemyTier } from "../sim/balance.js";
 import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
 import { ITEMS } from "../sim/items.js";
 import { WEAPONS } from "../sim/weapons.js";
+import { weaponDisplayStats } from "../sim/weaponStats.js";
+import { createMods } from "../sim/items.js";
 import { injectDevStyles } from "./styles.js";
 
 const ENEMY_KINDS: readonly EnemyKind[] = [
   "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
   "boss", "marrow", "choir", "weaver", "gilded",
 ];
-const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"];
+const WEAPON_IDS: readonly WeaponId[] = [
+  "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear",
+  "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+];
 const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
@@ -146,14 +152,20 @@ function buildPanel(game: Game): void {
   info.append(previewName, previewType, previewStats);
   weaponPreview.append(art, info);
   const showWeapon = (id: WeaponId) => {
-    const w = WEAPONS[id]; const artId = weaponArtId(id);
+    const artId = weaponArtId(id);
     pickupImg.src = `/sprites/weapon_${artId}.png`;
     heldImg.src = `/sprites/held_${artId}.png`;
-    previewName.textContent = w.name.toUpperCase();
-    previewType.textContent = w.melee ? (w.melee.isThrust ? "MELEE · THRUST" : "MELEE · SWEEP") : "RANGED";
-    const rate = (1 / w.fireCd).toFixed(1);
-    const range = w.melee ? `${Math.round(w.melee.reach)} PX` : `${Math.round(w.speed * w.life)} PX`;
-    previewStats.textContent = `DMG ${w.damage}  ·  RATE ${rate}/S  ·  RANGE ${range}`;
+    // Canonical live stats (src/sim/weaponStats.ts) — the SAME model the in-run drawer +
+    // hotbar tooltip render from, so the QA surface can never drift from the sim.
+    const card = weaponDisplayStats(id, createMods(), 0);
+    previewName.textContent = WEAPONS[id].name.toUpperCase();
+    previewType.textContent = card.role;
+    const rows = [
+      `POWER ${Math.round(card.power.perHit * 10) / 10}${card.power.count > 1 ? ` \u00d7${card.power.count}` : ""}`,
+      `IMPACT ${card.impact.band}`, `CADENCE ${card.cadence.band}`, `REACH ${card.reach.band}`,
+    ].join("  \u00b7  ");
+    const notes = card.mechanics.map((mech) => mech.text).join("  \u00b7  ");
+    previewStats.textContent = notes.length > 0 ? `${rows}\n${notes}` : rows;
   };
   showWeapon("pistol");
   weaponSec.appendChild(weaponPreview);

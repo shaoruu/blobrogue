@@ -26,6 +26,7 @@ export interface AuthoritativePlayerSnapshot {
   dashDx: number;
   dashDy: number;
   fireCd: number;
+  chargeT: number;
   fangCd: number;
   facing: number;
   weapon: WeaponId;
@@ -85,6 +86,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     dashDx: p.dashDx,
     dashDy: p.dashDy,
     fireCd: p.fireCd,
+    chargeT: p.chargeT,
     fangCd: p.fangCd,
     facing: p.facing,
     weapon: p.weapon,
@@ -115,6 +117,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.dashDx = s.dashDx;
   p.dashDy = s.dashDy;
   p.fireCd = s.fireCd;
+  p.chargeT = s.chargeT;
   p.fangCd = s.fangCd;
   p.facing = s.facing;
   p.weapon = s.weapon;

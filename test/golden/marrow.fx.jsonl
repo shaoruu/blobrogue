@@ -910,7 +910,7 @@
 ["puff 1583.18 972.35 1 #e8e0cf","puff 2219.79 1194.22 1 #e8e0cf"]
 ["puff 1590.21 977.42 1 #e8e0cf","puff 2226.17 1200.09 1 #e8e0cf","sparks 2505.92 1316.86 5"]
 ["puff 1597.24 982.5 1 #e8e0cf","puff 2232.55 1205.95 1 #e8e0cf"]
-["decal 1656 984 #ff7a2a 42 splat","freeze 0.06","gibs 1656 984 18 #ff8a3b","particles 1656 984 20 #ffb43b","particles 2345.92 1317.02 1 #ffe6a0","puff 1597.24 982.5 6 #bfd8e0","puff 1604.27 987.57 1 #e8e0cf","puff 2238.93 1211.81 1 #e8e0cf","sfx barrel 0.7 1","sfx smg 1 1","shell 2327.92 1311.02 0","sparks 1656 984 16","trauma 0.05","trauma 0.6"]
+["decal 1656 984 #ff7a2a 42 splat","freeze 0.06","gibs 1656 984 18 #ff8a3b","particles 1656 984 20 #ffb43b","particles 2345.92 1317.02 1 #ffe6a0","puff 1597.24 982.5 6 #bfd8e0","puff 1604.27 987.57 1 #e8e0cf","puff 2238.93 1211.81 1 #e8e0cf","sfx barrel 0.7 1","sfx smg 1 1","shell 2327.92 1311.02 0","sparks 1656 984 16","trauma 0.05","trauma 0.6","wavecue status.burnApply 1597.24 982.5"]
 ["puff 1611.29 992.64 1 #e8e0cf","puff 2245.32 1217.68 1 #e8e0cf"]
 ["puff 1618.32 997.71 1 #e8e0cf","puff 2251.7 1223.54 1 #e8e0cf","sparks 2505.92 1317.48 5"]
 ["puff 1625.35 1002.78 1 #e8e0cf","puff 2258.08 1229.4 1 #e8e0cf"]

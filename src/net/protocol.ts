@@ -15,7 +15,7 @@ import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
 import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
-  AttackMove, PropKind, PickupKind, ChestKind,
+  AttackMove, PropKind, PickupKind, ChestKind, Effect, EffectKind,
 } from "../sim/types.js";
 import type { EnemyTier } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
@@ -90,14 +90,22 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
 //     reject any snapshot carrying these as a ProtocolError; the strict join gate turns
 //     that skew into a clean "update your client".
-// v9 (intentional bump, the remote-dash sync): PlayerWire grows the dash/invuln readout
-//   block (dti/ddx/ddy/dnv/inv — the same authoritative PlayerSim fields SelfWire already
-//   carries for reconciliation), so OBSERVING clients can render a teammate's dash
-//   (afterimages/dust/sfx/i-frame flicker) and interpolate it as a crisp move instead of a
-//   smeared glide. dashStart/dashTrail stay pid-scoped: remote dash FX are driven off this
-//   snapshot STATE (interp-aligned), never off the dasher's own event stream. A v8 client
-//   would reject the grown PlayerWire as a ProtocolError; the strict join gate fences it.
-export const PROTOCOL_VERSION = 9;
+// v9 (the remote-dash sync): PlayerWire grows the dash/invuln readout block
+//   (dti/ddx/ddy/dnv/inv — the same authoritative PlayerSim fields SelfWire already carries
+//   for reconciliation), so OBSERVING clients can render a teammate's dash (afterimages/
+//   dust/sfx/i-frame flicker) and interpolate it as a crisp move instead of a smeared glide.
+//   dashStart/dashTrail stay pid-scoped: remote dash FX are driven off this snapshot STATE
+//   (interp-aligned), never off the dasher's own event stream.
+// v10 (the weapon effect wave): snapshots grow the `effs` list — the authoritative weapon
+//   effect entities (chill zones, snap wires, orbit blades, sentries, tethers) every client
+//   must render, riding alongside the shop's `shop` stall state on the one shared world list;
+//   SelfWire grows `chg` (the held Breach charge, a server-owned field prediction reconciles
+//   like fireCd); and the effect events (wirePlanted/wireArmed/wireSnap/wireExpired/
+//   wireRefused/haloFlare/sentryPlaced/sentryAcquire/sentryShot/sentryHit/sentryDown/
+//   tetherLatch/tetherHold/tetherSweep + the shared status apply/freeze tells) join the
+//   reliable channel. A client on an older version rejects every snapshot carrying these, so
+//   the strict equal-version join gate turns the skew into a clean "update your client".
+export const PROTOCOL_VERSION = 10;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -150,6 +158,7 @@ export interface SelfWire {
   dcd: number; dti: number;    // dashCd, dashTime
   ddx: number; ddy: number;    // dash direction
   fcd: number;                 // fireCd
+  chg: number;                 // held Breach charge seconds (reconciled like fireCd)
   fng: number;                 // Vampire Fang shared proc cooldown
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
@@ -265,6 +274,25 @@ export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; 
 // Authored ground hazards (webs): bounded (hard sim cap), gameplay-relevant everywhere
 // (they slow PREDICTED movement), so they ride every snapshot unfiltered.
 export interface HazardWire { id: number; k: HazardKind; x: number; y: number; r: number; life: number; max: number }
+// Weapon effect entities (the effect wave): one flat struct covers every kind — unused
+// geometry fields ride as 0/-1 defaults so the validator stays a single table. Bounded
+// by hard sim caps per family (like hazards), so they ride every snapshot unfiltered.
+export interface EffectWire {
+  id: number;
+  k: EffectKind;
+  o: string;              // owner player id ("" = departed owner)
+  fx: WeaponId;           // authoring weapon (render recipe)
+  x: number; y: number;
+  x2: number; y2: number; // wire span end (wires only)
+  r: number;              // zone radius / orbit ring / sentry body / tether sweep reach
+  n: number;              // orbit blade count
+  a: number;              // orbit blade phase (rad)
+  fl: number;             // orbit flare seconds left
+  arm: number;            // wire arm seconds left (0 = live)
+  hp: number; mhp: number;// sentry durability (-1 = not a sentry)
+  eid: number;            // tethered enemy id (-1 = none)
+  life: number; max: number;
+}
 
 // Patch's shop stall (shop floors only, ≤5 slots): the authoritative stock every client
 // renders and buys against. Global like hazards — the shop is a shared objective and its
@@ -372,6 +400,7 @@ export type ServerMsg =
       chests: ChestWire[];       // shared chests (incl. the boss chest)
       hzds: HazardWire[];        // shared ground hazards (the Weaver's webs)
       shop: ShopWire | null;     // Patch's stall (shop floors only) — stock + claim state
+      effs: EffectWire[];        // shared weapon effect entities (the effect wave)
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
@@ -459,6 +488,7 @@ const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon
 const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = { weapon: true, blessing: true, heart: true, reroll: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
+const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
@@ -487,7 +517,7 @@ export type EventScopeKind = "global" | "pid" | "pos";
 interface EventSpec { scope: EventScopeKind; fields: Record<string, FieldKind> }
 
 const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
-  shot: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num" } },
+  shot: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num", chg: "num" } },
   meleeSwing: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", bx: "num", by: "num" } },
   enemyHit: { scope: "pos", fields: { eid: "num", dmgX: "num", dmgY: "num", dmg: "num", crit: "bool", puffX: "num", puffY: "num", puffColor: "str", melee: "bool", closeShotgun: "bool", killed: "bool" } },
   thornsHit: { scope: "pos", fields: { eid: "num", x: "num", y: "num", radius: "num", dmg: "num", tint: "str" } },
@@ -511,13 +541,30 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   shopBuy: { scope: "pos", fields: { pid: "str", slot: "num", kind: "str", x: "num", y: "num" } },
   weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
+  wirePlanted: { scope: "pos", fields: { x: "num", y: "num", tx: "num", ty: "num" } },
+  wireArmed: { scope: "pos", fields: { x: "num", y: "num" } },
+  wireSnap: { scope: "pos", fields: { x: "num", y: "num", tx: "num", ty: "num" } },
+  wireExpired: { scope: "pos", fields: { x: "num", y: "num" } },
+  wireRefused: { scope: "pos", fields: { x: "num", y: "num" } },
+  haloFlare: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  sentryPlaced: { scope: "pos", fields: { x: "num", y: "num" } },
+  sentryAcquire: { scope: "pos", fields: { x: "num", y: "num" } },
+  sentryShot: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
+  sentryHit: { scope: "pos", fields: { x: "num", y: "num" } },
+  sentryDown: { scope: "pos", fields: { x: "num", y: "num", why: "str" } },
+  tetherLatch: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", inv: "bool" } },
+  tetherHold: { scope: "pos", fields: { x: "num", y: "num" } },
+  tetherSweep: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  statusApplied: { scope: "pos", fields: { eid: "num", x: "num", y: "num", kind: "str" } },
+  frozeSolid: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
+  freezeBroke: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   bulletBlocked: { scope: "pos", fields: { kind: "str", x: "num", y: "num", aim: "num" } },
   propHit: { scope: "pos", fields: { propId: "num", kind: "str", x: "num", y: "num" } },
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
-  explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num", src: "str" } },
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   hazardHit: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
@@ -705,6 +752,7 @@ function validateSelfWire(v: unknown): SelfWire {
     dcd: num(o, "dcd", 0, 1e4), dti: num(o, "dti", -1e4, 1e4),
     ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
     fcd: num(o, "fcd", 0, 1e4),
+    chg: num(o, "chg", 0, 1e4),
     fng: num(o, "fng", 0, 1e4),
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
@@ -865,6 +913,28 @@ function validateShopWire(v: unknown): ShopWire {
   };
 }
 
+function validateEffectWire(v: unknown): EffectWire {
+  const o = obj(v, "effect");
+  const owner = o.o;
+  if (typeof owner !== "string" || owner.length > 64) throw new ProtocolError("bad effect.o");
+  return {
+    id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER),
+    k: inSet(EFFECT_KINDS, o.k, "effect.k"),
+    o: owner,
+    fx: weaponOf(o, "fx"),
+    x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
+    x2: num(o, "x2", -POS_LIMIT, POS_LIMIT), y2: num(o, "y2", -POS_LIMIT, POS_LIMIT),
+    r: num(o, "r", 0, 1e4),
+    n: intOf(o, "n", 0, 64),
+    a: num(o, "a", -1000, 1000),
+    fl: num(o, "fl", 0, 1e4),
+    arm: num(o, "arm", 0, 1e4),
+    hp: num(o, "hp", -1, 1e6), mhp: num(o, "mhp", -1, 1e6),
+    eid: intOf(o, "eid", -1, Number.MAX_SAFE_INTEGER),
+    life: num(o, "life", 0, 1e4), max: num(o, "max", 0, 1e4),
+  };
+}
+
 function validateWireEvent(v: unknown): WireEvent {
   const o = obj(v, "wireEvent");
   return { id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), e: validateEvent(o.e) };
@@ -937,6 +1007,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         chests: arr(o.chests, "chests").map(validateChestWire),
         hzds: arr(o.hzds, "hzds").map(validateHazardWire),
         shop: o.shop === null ? null : validateShopWire(o.shop),
+        effs: arr(o.effs, "effs").map(validateEffectWire),
         events: arr(o.events, "events").map(validateWireEvent),
       };
     }
@@ -976,7 +1047,7 @@ export const jsonCodec: Codec = {
 export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
-    dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, fng: s.fangCd,
+    dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, chg: s.chargeT, fng: s.fangCd,
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
@@ -987,7 +1058,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
 export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
   return {
     x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv, dashInvuln: w.dnv,
-    dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, fangCd: w.fng,
+    dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, chargeT: w.chg, fangCd: w.fng,
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
@@ -1105,6 +1176,64 @@ export function toChestWire(c: Chest): ChestWire {
 }
 export function toHazardWire(h: Hazard): HazardWire {
   return { id: h.id, k: h.kind, x: h.x, y: h.y, r: h.radius, life: h.life, max: h.maxLife };
+}
+
+// Weapon effect entities: one flat wire struct, kind-relevant fields filled, the rest at
+// their defaults (0 / -1). Sim-internal scratch (rehit cooldowns, sentry fire cadence,
+// tether phase timers) stays OFF the wire — the client only renders.
+export function toEffectWire(e: Effect): EffectWire {
+  const base: EffectWire = {
+    id: e.id, k: e.kind, o: e.owner ?? "", fx: e.fx, x: e.x, y: e.y,
+    x2: 0, y2: 0, r: 0, n: 0, a: 0, fl: 0, arm: 0, hp: -1, mhp: -1, eid: -1,
+    life: e.life, max: e.maxLife,
+  };
+  switch (e.kind) {
+    case "zone":
+      base.r = e.radius;
+      break;
+    case "wire":
+      base.x2 = e.x2; base.y2 = e.y2; base.r = e.width; base.arm = e.arm;
+      break;
+    case "orbit":
+      base.r = e.ring; base.n = e.blades; base.a = e.angle; base.fl = e.flare;
+      base.x2 = e.bladeRadius; // blade contact radius rides the spare span slot
+      break;
+    case "sentry":
+      base.r = e.radius; base.hp = e.hp; base.mhp = e.maxHp;
+      break;
+    case "tether":
+      base.eid = e.eid; base.r = e.reach;
+      break;
+  }
+  return base;
+}
+
+// Build a render-ready Effect from the wire (scratch fields the renderer never reads are
+// defaulted; damage/cadence are authoritative-only and irrelevant client-side).
+export function effectFromWire(w: EffectWire): Effect {
+  const owner = w.o.length > 0 ? w.o : null;
+  const base = { id: w.id, owner, fx: w.fx, x: w.x, y: w.y, life: w.life, maxLife: w.max };
+  switch (w.k) {
+    case "zone":
+      return { ...base, kind: "zone", radius: w.r, chillRate: 0 };
+    case "wire":
+      return { ...base, kind: "wire", x2: w.x2, y2: w.y2, width: w.r, arm: w.arm, damage: 0 };
+    case "orbit":
+      return {
+        ...base, kind: "orbit", angle: w.a, ring: w.r, blades: w.n, bladeRadius: w.x2,
+        speed: 0, flare: w.fl, damage: 0, rehit: new Map(),
+      };
+    case "sentry":
+      return {
+        ...base, kind: "sentry", radius: w.r, hp: w.hp, maxHp: w.mhp, fireCd: 0, range: 0,
+        boltSpeed: 0, boltRadius: 0, boltDamage: 0, boltPierce: 0, contactCd: 0, targetEid: -1,
+      };
+    case "tether":
+      return {
+        ...base, kind: "tether", eid: w.eid, phase: "hold", isPlayerPulled: false,
+        pullSpeed: 0, holdDist: 0, holdTime: 0, pullTime: 0, damage: 0, reach: w.r,
+      };
+  }
 }
 
 // Radius reconstructed from kind so the wire stays tiny. Matches the sim's placement radii
@@ -1290,6 +1419,8 @@ export function buildSnapshot(
     // Unfiltered too: the stall is a shared objective (≤5 slots, shop floors only) whose
     // SOLD/claim state every client must agree on regardless of where they stand.
     shop: w.shop ? toShopWire(w.shop) : null,
+    // Effects share the hazard rule: hard sim caps per family, so the list stays small.
+    effs: w.effects.map(toEffectWire),
     events,
   };
 }

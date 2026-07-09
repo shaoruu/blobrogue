@@ -18,6 +18,7 @@ import { LOCAL_ID } from "../sim/input.js";
 import type { RemotePlayer, WeaponId } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
+  effectFromWire,
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire, hazardFromWire, shopFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
@@ -708,6 +709,9 @@ export class WSTransport implements Transport {
     // the world phase that would expire them — drop them so replayed fire can't grow the
     // hidden prediction world without bound (TD audit).
     if (this.predState.bullets.length > 0) this.predState.bullets.length = 0;
+    // Weapon effects are server-owned the same way: prediction only needs the trigger's
+    // cooldown/charge side effects, never the entities a replayed press would author.
+    if (this.predState.effects.length > 0) this.predState.effects.length = 0;
     // Periodic telemetry uplink (observability only): report client-side netcode signals the
     // server can't measure so /metrics can surface RTT/jitter/reconciliations/correction.
     if (this.isReady() && this.now() - this.lastStatAt > 2000) {
@@ -759,6 +763,16 @@ export class WSTransport implements Transport {
     // stock (its locally-rebuilt geometry still names the shop ROOM; the snapshot names
     // what is on the pedestals and who claimed what).
     this.renderState.shop = this.latestSnap?.shop ? shopFromWire(this.latestSnap.shop) : null;
+    // Self-owned effects re-key to LOCAL_ID so the render/audio layers recognize the
+    // local player's own ring/tether/charge exactly like solo (owner-anchored draws,
+    // the halo loop, the chain pull loop).
+    this.renderState.effects = this.latestSnap
+      ? this.latestSnap.effs.map((e) => {
+        const built = effectFromWire(e);
+        if (built.owner !== null && built.owner === this.selfServerId) built.owner = LOCAL_ID;
+        return built;
+      })
+      : [];
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
     // Hazard layout already lives in renderState (rebuilt from the authoritative seed);
     // the pulse clock is reconstructed from the authoritative tick — the server only ever

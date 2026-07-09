@@ -843,19 +843,47 @@ export const BOSS_DPS_CEILING: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: 53, marrow: 68, weaver: 87, gilded: 65, choir: 65,
 };
 
+// ---- the balancer envelope's canonical unit ----
+// 1 PU (Pistol Unit) = the pistol's practical single-target DPS: 2 dmg / 0.16s = 12.5.
+// Every arsenal power band is stated in PU (test/arsenal.test.ts envelope gates):
+// neutral boss sustained 0.85–1.15 PU, ideal specialist ≤1.35, 3s burst ≤1.60 (risk
+// archetypes ≤1.75), passive/unattended sources ≤0.55.
+export const PU_DPS = 12.5;
+
+// Persistent party sources (turret bolts, trap snaps — output that keeps running while
+// nobody aims it) may contribute at most this fraction of the party's practical boss
+// DPS budget (partySize × PU_DPS) in any rolling one-second window. Overflow is
+// deterministically truncated in strikeEnemy — a turret farm can never out-damage the
+// players standing in the fight.
+export const PERSISTENT_BOSS_DPS_FRAC = 0.25;
+
 // Boss-facing combat coefficients (rooms/multitarget are never touched).
 export const BOSS_VULN_CAP = 1.35;           // the crit channel's cap vs boss-grade bodies
 export const BOSS_NATIVE_PELLET_COEF = 0.75; // native pellets beyond the first
 export const BOSS_EXTRA_PELLET_COEF = 0;     // added pellets: room tools, zero vs bosses
 export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
-  beam: 0.75,     // sustained pin: 100% uptime on an arena-sized body
+  beam: 0.78,     // sustained pin: 100% uptime on an arena-sized body (envelope: 0.86 PU)
   sawnoff: 0.5,   // point-blank full-fan burst
-  flamer: 0.55,   // point-blank sustained hose
-  burst: 0.75,    // highest per-volley nuke of the precise family
+  flamer: 0.45,   // point-blank sustained hose (envelope: with the boss burn cap, a
+                  // parked hose peaks ~1.26 PU — inside the 1.35 specialist ceiling)
+  burst: 0.62,    // the fan volley is a ROOM tool: its boss coefficient is priced like
+                  // the other pack weapons (all-rounder remediation — it held the boss,
+                  // room and safety top quartiles at once at 0.75)
   cannon: 0.95,
   railgun: 0.9,
   sword: 0.7,     // the melee loop parks on the body with zero travel/spread loss
   longsword: 0.7,
+  spear: 0.7,     // same parked-uptime pricing as the other blades (arsenal QA gap fix)
+  // Effect wave. Lastlight's low-HP curve can be held at max indefinitely by a careful
+  // player, so its boss coefficient prices the uptime; the parked/planted families
+  // (sentry bolts, wire snaps, orbit contact) hit boss-grade bodies at room-tool rates.
+  lastlight: 0.8,
+  breach: 0.85,
+  snapwire: 0.6,
+  frostline: 0.6,
+  halo: 0.65,
+  sentry: 0.6,
+  crook: 0.75,
 };
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----

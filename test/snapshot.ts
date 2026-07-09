@@ -35,6 +35,12 @@ export interface BulletView {
   burn: number; chill: number; shock: number;
 }
 
+export interface EffectView {
+  kind: string; owner: string; fx: string; x: number; y: number; life: number;
+  x2: number; y2: number; r: number; arm: number; angle: number; ring: number;
+  blades: number; flare: number; hp: number; fireCd: number; eid: number; phase: string;
+}
+
 export interface PickupView { kind: string; x: number; y: number; value: number; weapon: string }
 export interface PropView { kind: string; x: number; y: number; dead: boolean; hp: number; breakT: number }
 export interface ChestView { kind: string; x: number; y: number; opened: boolean; openT: number; weapon: string }
@@ -44,6 +50,7 @@ export interface TickSnapshot {
   player: PlayerView;
   enemies: EnemyView[];
   bullets: BulletView[];
+  effects: EffectView[];
   pickups: PickupView[];
   props: PropView[];
   chests: ChestView[];
@@ -97,6 +104,18 @@ export function bulletView(b: Anyish): BulletView {
   };
 }
 
+export function effectView(e: Anyish): EffectView {
+  return {
+    kind: String(e.kind), owner: e.owner ? String(e.owner) : "", fx: String(e.fx),
+    x: r(num(e.x)), y: r(num(e.y)), life: r(num(e.life)),
+    x2: r(num(e.x2)), y2: r(num(e.y2)),
+    r: r(num(e.radius)) || r(num(e.ring)) || r(num(e.width)) || r(num(e.reach)),
+    arm: r(num(e.arm)), angle: r(num(e.angle)), ring: r(num(e.ring)),
+    blades: num(e.blades), flare: r(num(e.flare)), hp: r(num(e.hp)), fireCd: r(num(e.fireCd)),
+    eid: e.eid === undefined ? -1 : num(e.eid), phase: e.phase === undefined ? "" : String(e.phase),
+  };
+}
+
 export function pickupView(p: Anyish): PickupView {
   return { kind: String(p.kind), x: r(num(p.x)), y: r(num(p.y)), value: num(p.value), weapon: p.weapon ? String(p.weapon) : "" };
 }
@@ -127,6 +146,7 @@ function localizeDiff(a: TickSnapshot, b: TickSnapshot): string {
   if (pa !== pb) out.push(`  player: ${fieldDiff(a.player as Anyish, b.player as Anyish)}`);
   compareArr("enemies", a.enemies as Anyish[], b.enemies as Anyish[], out);
   compareArr("bullets", a.bullets as Anyish[], b.bullets as Anyish[], out);
+  compareArr("effects", a.effects as Anyish[], b.effects as Anyish[], out);
   compareArr("pickups", a.pickups as Anyish[], b.pickups as Anyish[], out);
   compareArr("props", a.props as Anyish[], b.props as Anyish[], out);
   compareArr("chests", a.chests as Anyish[], b.chests as Anyish[], out);
