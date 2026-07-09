@@ -141,6 +141,8 @@ export const api = {
   leaderboard: {
     // The global top-N best runs (deepest floor, kills tie-break), public fields only.
     top: makeFunctionReference<"query", { limit?: number }, LeaderboardEntryDoc[]>("leaderboard:top"),
+    // The caller's OWN charted standing (rank null = below the ranked window).
+    standing: makeFunctionReference<"query", { clientId: string }, { floor: number; kills: number; rank: number | null } | null>("leaderboard:standing"),
   },
   auth: {
     signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),

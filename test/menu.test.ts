@@ -122,6 +122,7 @@ const LB_ENTRIES: LeaderboardEntryDoc[] = [
 interface FakeOpts {
   profile?: ProfileDoc;
   lb?: LeaderboardEntryDoc[] | "fail";
+  standing?: { floor: number; kills: number; rank: number | null } | null | "fail";
 }
 
 // The menu's Convex surface, routed by function name: profile upserts/reads resolve to the
@@ -134,6 +135,9 @@ function fakeConvex(opts: FakeOpts = {}): ConvexClient {
       const name = getFunctionName(ref as Parameters<typeof getFunctionName>[0]);
       if (name === "leaderboard:top") {
         return opts.lb === "fail" ? Promise.reject(new Error("offline")) : Promise.resolve(opts.lb ?? []);
+      }
+      if (name === "leaderboard:standing") {
+        return opts.standing === "fail" ? Promise.reject(new Error("offline")) : Promise.resolve(opts.standing ?? null);
       }
       if (name === "players:getProfile") return Promise.resolve(profile);
       return Promise.resolve(null);
@@ -263,6 +267,7 @@ async function main(): Promise<void> {
     const navs = byClass(overlay, "nav-btn").map(textOf);
     check("the right side is about YOU: exactly PROFILE + SETTINGS", navs.join("|") === "PROFILE|SETTINGS", navs.join("|"));
     check("the leaderboard's explicit door is VIEW LEADERBOARD on the glance", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
+    check("the glance header is GLOBAL LEADERBOARD", textOf(overlay).includes("Global leaderboard"));
     const all = textOf(overlay);
     check("no inline settings controls on the title (sound/shake live behind SETTINGS)",
       !all.includes("sound:") && !all.includes("screen shake"), all.slice(0, 160));
@@ -288,6 +293,52 @@ async function main(): Promise<void> {
     check("a maximum-length name still rides its fixed row", textOf(after[1]).includes("MaximumLengthBlobXX!"));
     check("rows with entries are enabled", after[0].disabled === false && after[1].disabled === false);
     check("rows past the entries stay disabled placeholders", after[2].disabled === true && textOf(after[2]).includes("\u2014"));
+  }
+
+  section("the fixed own-rank state line: filled only when the player's best sits outside the rows");
+  {
+    // Present (reserved, empty) from first paint; hydration fills content only.
+    const outside = makeMenu({ lb: LB_ENTRIES.slice(0, 2), standing: { floor: 6, kills: 40, rank: 7 } });
+    await outside.menu.showTitle();
+    const lineAtPaint = byClass(outside.overlay, "lb-standing");
+    check("exactly one reserved state line in the panel", lineAtPaint.length === 1);
+    await settle();
+    check("a rank outside the rows fills the line", textOf(byClass(outside.overlay, "lb-standing")[0]).includes("rank #7"));
+    check("...with the player's own best floor", textOf(byClass(outside.overlay, "lb-standing")[0]).includes("FL 6"));
+
+    const onBoard = makeMenu({ lb: LB_ENTRIES.slice(0, 2), standing: { floor: 12, kills: 230, rank: 1 } });
+    await onBoard.menu.showTitle();
+    await settle();
+    check("a rank INSIDE the rows keeps the line empty (the name is already on the board)",
+      textOf(byClass(onBoard.overlay, "lb-standing")[0]) === "");
+
+    const deep = makeMenu({ lb: LB_ENTRIES.slice(0, 2), standing: { floor: 2, kills: 5, rank: null } });
+    await deep.menu.showTitle();
+    await settle();
+    check("below the ranked window reads honestly", textOf(byClass(deep.overlay, "lb-standing")[0]).includes("below the top 50"));
+
+    const none = makeMenu({ lb: LB_ENTRIES.slice(0, 2), standing: null });
+    await none.menu.showTitle();
+    await settle();
+    check("no charted run keeps the line empty", textOf(byClass(none.overlay, "lb-standing")[0]) === "");
+
+    const broken = makeMenu({ lb: LB_ENTRIES.slice(0, 2), standing: "fail" });
+    await broken.menu.showTitle();
+    await settle();
+    check("a failed standing fetch keeps the line empty (same geometry)", textOf(byClass(broken.overlay, "lb-standing")[0]) === "");
+  }
+
+  section("safe anonymized fallback: a blank name never renders empty or raw");
+  {
+    const blank: LeaderboardEntryDoc = { ...LB_ENTRIES[1], name: "   " };
+    const { menu, overlay } = makeMenu({ lb: [blank] });
+    await menu.showTitle();
+    await settle();
+    const row = byClass(overlay, "lb-row")[0];
+    check("the row shows an anonymous label", textOf(row).includes("anonymous blob"));
+    row.onclick?.();
+    check("the profile headline anonymizes too", textOf(overlay).includes("ANONYMOUS BLOB"));
+    await menu.showTitle();
   }
 
   section("top-runs glance failure: same geometry, honest note, no dead end");

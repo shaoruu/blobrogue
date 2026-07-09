@@ -453,6 +453,10 @@
       .lb-dot{ flex:0 0 9px; width:9px; height:9px; background:var(--dun-3); }
       .lb-name{ flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-height:12px; }
       .lb-floor{ flex:0 0 auto; font-family:var(--f-num); font-size:15px; color:#9a8fb5; min-width:48px; text-align:right; }
+      /* The fixed own-rank state line: filled only when the player's charted best sits
+         outside the preview rows; empty (but reserved) otherwise — never a layout change. */
+      .menu p.lb-standing{ min-height:14px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
+        color:#8f87a8; text-transform:none; line-height:1.5; margin:0; text-align:left; }
       /* Reserves two lines: the longest note wraps in the preview's column, and on narrow
          viewports the identity card stacks BELOW it — growth here must never push it.
          Selector carries `.menu p` so the generic `.menu p.muted` type sizing (12px/1.45)

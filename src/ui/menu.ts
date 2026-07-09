@@ -503,10 +503,13 @@ export class Menu {
       }
       rank.textContent = String(i + 1);
       dot.style.background = playerColor(entry.colorIndex ?? 0);
-      name.textContent = entry.name;
+      // Safe anonymized fallback: a blank/whitespace name (private or degenerate row)
+      // renders as an anonymous blob, never an empty or raw-data label.
+      const displayName = entry.name.trim() || "anonymous blob";
+      name.textContent = displayName;
       floor.textContent = `FL ${entry.floor}`;
       row.disabled = false;
-      row.setAttribute("aria-label", `${entry.name} \u2014 floor ${entry.floor} \u2014 view profile`);
+      row.setAttribute("aria-label", `${displayName} \u2014 floor ${entry.floor} \u2014 view profile`);
       row.onclick = () => this.showPlayerProfile(entry, () => backTo(i));
     }
     if (entries === null) note.textContent = "leaderboard unavailable \u2014 check your connection";
@@ -530,27 +533,47 @@ export class Menu {
     }
   }
 
-  // The title's compact preview: header + view action, then the fixed top-run rows. The
-  // VIEW LEADERBOARD action IS the leaderboard's explicit destination (registered as the
-  // Back/Escape focus-restore target for it).
+  // The title's compact preview — the accepted shape: fixed GLOBAL LEADERBOARD header with
+  // the explicit VIEW LEADERBOARD action (also the Back/Escape focus-restore target),
+  // exactly LB_PREVIEW_ROWS fixed rows, one fixed state line for the player's own rank
+  // when it sits outside those rows, and the reserved note line for empty/offline states.
+  // Skeletons hold every box from first paint; hydration replaces contents only.
   private leaderboardPreview(focusTargets?: Map<string, HTMLButtonElement>): HTMLElement {
     const panel = el("div", "lb-preview");
     const head = el("div", "lb-head");
-    head.appendChild(el("span", "col-h", "Top runs \u2014 global"));
+    head.appendChild(el("span", "col-h", "Global leaderboard"));
     const view = el("button", "secondary lb-view", "VIEW LEADERBOARD \u25b8");
     view.addEventListener("click", () => void this.showLeaderboard());
     focusTargets?.set("leaderboard", view);
     head.appendChild(view);
     panel.appendChild(head);
     const { box, rows, note } = this.leaderboardRows(LB_PREVIEW_ROWS);
-    panel.append(box, note);
+    const standingLine = el("p", "lb-standing", "");
+    panel.append(box, standingLine, note);
     const backTo = (rowIndex: number) => void this.showTitle({ lbRow: rowIndex });
     if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
     // A stalled fetch (backend unreachable — never rejects, just hangs) surfaces the
     // unavailable note in place unless a cached board is already showing.
     const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, note, null, backTo); };
     void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
+    void this.hydrateStanding(standingLine);
     return panel;
+  }
+
+  // Fill the reserved own-rank line: only when the caller's charted best sits OUTSIDE the
+  // preview rows (inside them, their name is already on the board). Every failure/absence
+  // path leaves the line empty — the box is fixed either way.
+  private async hydrateStanding(line: HTMLElement) {
+    if (!this.client) return;
+    try {
+      const s = await this.client.query(api.leaderboard.standing, { clientId: this.session.clientId });
+      if (!s || (s.rank !== null && s.rank <= LB_PREVIEW_ROWS)) { line.textContent = ""; return; }
+      line.textContent = s.rank !== null
+        ? `your best \u00b7 FL ${s.floor} \u00b7 rank #${s.rank}`
+        : `your best \u00b7 FL ${s.floor} \u00b7 below the top 50`;
+    } catch {
+      line.textContent = "";
+    }
   }
 
   // The full leaderboard destination. `focusRow` restores keyboard focus to the row a
@@ -582,7 +605,7 @@ export class Menu {
   // leaderboard-entry data renders here — name/appearance/run stats, nothing account-side.
   showPlayerProfile(entry: LeaderboardEntryDoc, onBack: () => void) {
     const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", entry.name.toUpperCase()));
+    wrap.appendChild(el("h1", "", (entry.name.trim() || "anonymous blob").toUpperCase()));
     // The worn title (a reserved line even when bare — the header never shifts between
     // titled and untitled players), then the context line.
     wrap.appendChild(el("p", "worn-title", titleTextOf(entry.title)));

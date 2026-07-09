@@ -1,6 +1,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import type { MutationCtx } from "./_generated/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 
 // Global best-run leaderboard. One row per player (their deepest run; kills break ties),
@@ -174,18 +175,44 @@ export async function mergeBestRun(
 
 const TOP_MAX = 50;
 
-// The public top-N (deepest floor, kills tie-break). Reads a fixed window off the by_floor
-// index then orders ties, so the query stays cheap regardless of table size.
+// The ranked top window (deepest floor, kills tie-break). Reads a fixed slice off the
+// by_floor index then orders ties, so queries stay cheap regardless of table size.
+async function rankedWindow(ctx: QueryCtx): Promise<Doc<"leaderboard">[]> {
+  const window = await ctx.db
+    .query("leaderboard")
+    .withIndex("by_floor")
+    .order("desc")
+    .take(TOP_MAX);
+  window.sort((a, b) => b.floor - a.floor || b.kills - a.kills || a.achievedAt - b.achievedAt);
+  return window;
+}
+
+// The public top-N.
 export const top = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }) => {
     const n = Math.max(1, Math.min(TOP_MAX, Math.round(limit ?? 10)));
-    const window = await ctx.db
+    return (await rankedWindow(ctx)).slice(0, n).map(toEntry);
+  },
+});
+
+// The CALLER's own charted standing (their data, nobody else's): best-run floor/kills plus
+// the rank inside the top window, or rank null when the run sits below it. Null when the
+// caller has no charted run. Powers the title glance's fixed "your best" state line.
+export const standing = query({
+  args: { clientId: v.string() },
+  handler: async (ctx, { clientId }) => {
+    const userId = await getAuthUserId(ctx);
+    const me = userId
+      ? await ctx.db.query("players").withIndex("by_userId", (q) => q.eq("userId", userId)).unique()
+      : await ctx.db.query("players").withIndex("by_clientId", (q) => q.eq("clientId", clientId)).unique();
+    if (!me) return null;
+    const mine = await ctx.db
       .query("leaderboard")
-      .withIndex("by_floor")
-      .order("desc")
-      .take(TOP_MAX);
-    window.sort((a, b) => b.floor - a.floor || b.kills - a.kills || a.achievedAt - b.achievedAt);
-    return window.slice(0, n).map(toEntry);
+      .withIndex("by_player", (q) => q.eq("playerId", me._id))
+      .unique();
+    if (!mine) return null;
+    const idx = (await rankedWindow(ctx)).findIndex((d) => d._id === mine._id);
+    return { floor: mine.floor, kills: mine.kills, rank: idx >= 0 ? idx + 1 : null };
   },
 });
