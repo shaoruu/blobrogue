@@ -501,8 +501,8 @@ export class Menu {
   // (also the Back/Escape focus-restore target), exactly LB_PREVIEW_ROWS 28px rows, and ONE
   // 18px state line shared by the board-level states (offline/empty — they win) and the
   // player's own rank when it sits outside the visible rows. Hydration replaces contents
-  // only — no node is ever inserted or removed. Under short viewports the panel collapses
-  // to its 48px header summary via CSS (see index.html) so Play never leaves the fold.
+  // only — no node is ever inserted or removed. The preview is NEVER collapsed or hidden:
+  // short viewports scroll the home in document order with Play first (see index.html).
   private leaderboardPreview(focusTargets?: Map<string, HTMLButtonElement>): HTMLElement {
     const panel = el("div", "lb-preview");
     const head = el("div", "lb-head");
