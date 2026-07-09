@@ -20,6 +20,7 @@
 // Run: npm run test:menu
 
 import "./harness/domShim.js";
+import { fireWindowEvent, lastFocused } from "./harness/domShim.js";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -297,6 +298,77 @@ async function main(): Promise<void> {
     check("build shows blessings with levels", itemName.length > 0 && all.includes(`${itemName} Lv2`));
     check("a back action exists", buttonsOf(overlay).some((b) => b === "back"));
     check("no account/private fields leak (name/appearance/run data only)", !all.includes("@") && !all.toLowerCase().includes("email"));
+    // Return to the title so this menu's Escape handler is torn down — the shim shares one
+    // window across sections (the real app only ever has one live menu).
+    await menu.showTitle();
+  }
+
+  section("destinations exist for BOTH auth states; Escape mirrors Back with named focus restore");
+  {
+    const signed = makeMenu({ auth: fakeAuth(true) });
+    await signed.menu.showTitle();
+    const navs = byClass(signed.overlay, "nav-btn").map(textOf);
+    check("signed-in title keeps the same three destinations", navs.join("|") === "LEADERBOARD|PROFILE|SETTINGS", navs.join("|"));
+
+    const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });
+    await menu.showSettings();
+    check("settings screen is open", textOf(overlay).includes("SETTINGS") && textOf(overlay).includes("everything saves instantly"));
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape returns to the title", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+    const focusedAfterSettings = lastFocused();
+    check("focus restored to the SETTINGS destination by name",
+      focusedAfterSettings?.className?.includes("nav-btn") === true && focusedAfterSettings?.textContent === "SETTINGS",
+      `${focusedAfterSettings?.className} / ${focusedAfterSettings?.textContent}`);
+
+    await menu.showProfile();
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape from profile restores the PROFILE destination", lastFocused()?.textContent === "PROFILE");
+
+    await menu.showLeaderboard();
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape from leaderboard restores the LEADERBOARD destination", lastFocused()?.textContent === "LEADERBOARD");
+
+    await menu.showOnlineHome();
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape from the online home lands back on PLAY ONLINE", lastFocused()?.className?.includes("btn-quick") === true, lastFocused()?.className);
+
+    // Player profile -> Escape restores focus to the exact leaderboard row it came from.
+    await menu.showLeaderboard();
+    await settle();
+    const row1 = byClass(overlay, "lb-row")[1];
+    row1.onclick?.();
+    check("player profile open", textOf(overlay).includes("best run on the global leaderboard"));
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape restores focus to the originating leaderboard row", lastFocused()?.className?.includes("lb-row") === true, lastFocused()?.className);
+
+    // A stale Escape handler must never fire on the title (teardown on every transition).
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape on the title is inert (no screen change)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+  }
+
+  section("failure/retry geometry: action-screen status lines are reserved boxes");
+  {
+    const { menu, overlay } = makeMenu();
+    await menu.showOnlineHome("finding a room\u2026");
+    check("the online home status is a reserved .status-line", byClass(overlay, "status-line").length === 1);
+    check("status copy renders inside it", textOf(byClass(overlay, "status-line")[0]).includes("finding a room"));
+  }
+
+  section("sign-out flushes prior-user data (no stale profile leaks into the guest render)");
+  {
+    const { session } = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", glasses: null }, deepestFloor: 9, unlocks: ["hat_crown"] }) });
+    await session.login("someone");
+    check("profile cached after login", session.profile !== null && session.profile.deepestFloor === 9);
+    check("profile cosmetics adopted while cached", session.cosmetics.hat === "hat_top");
+    session.clearProfile();
+    check("clearProfile drops the cached row", session.profile === null);
+    check("cosmetics fall back to this browser's own picks only", session.cosmetics.hat === null);
   }
 
   section("reserved identity card: guest CTA with benefits vs the account chip");

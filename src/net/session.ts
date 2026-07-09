@@ -82,6 +82,12 @@ export class Session {
     return this.profile?.playerId ?? null;
   }
 
+  // Drop the cached profile (called on sign-out) so no prior-user data — name, stats,
+  // adopted cosmetics — can leak into the next render; the guest hydrate refills it.
+  clearProfile(): void {
+    this.profile = null;
+  }
+
   // The equipped cosmetics as the renderer consumes them: local explicit picks win, the
   // saved profile fills never-picked slots, "none" resolves to the empty slot.
   get cosmetics(): EquippedCosmetics {

@@ -10,6 +10,23 @@
 
 const noop = (): void => {};
 
+// Window event listeners are REAL (registered + removable + dispatchable) so UI suites can
+// exercise keyboard contracts (Escape-to-back, game-over retry keys). Dispatch only happens
+// when a test calls fireWindowEvent — game/golden suites just accumulate inert handlers.
+const windowListeners = new Map<string, Set<(ev: unknown) => void>>();
+
+export function fireWindowEvent(type: string, ev: Record<string, unknown> = {}): void {
+  const event = { key: "", preventDefault: noop, stopPropagation: noop, ...ev };
+  for (const fn of [...(windowListeners.get(type) ?? [])]) fn(event);
+}
+
+// The last element that received .focus(), so tests can assert focus restore by NAME.
+let lastFocusedStore: unknown = null;
+
+export function lastFocused(): { tagName?: string; className?: string; textContent?: string } | null {
+  return lastFocusedStore as { tagName?: string; className?: string; textContent?: string } | null;
+}
+
 const ctxStub: any = new Proxy(
   {},
   {
@@ -84,7 +101,6 @@ function makeEl(tag = "div"): any {
         case "setAttributeNS":
         case "addEventListener":
         case "removeEventListener":
-        case "focus":
         case "blur":
         case "click":
         case "scrollIntoView":
@@ -93,6 +109,8 @@ function makeEl(tag = "div"): any {
         case "after":
         case "before":
           return noop;
+        case "focus":
+          return () => { lastFocusedStore = t; };
         case "getBoundingClientRect":
           return rectStub;
         case "width":
@@ -218,8 +236,14 @@ const windowStub: any = {
   innerWidth: 1280,
   innerHeight: 720,
   devicePixelRatio: 1,
-  addEventListener: noop,
-  removeEventListener: noop,
+  addEventListener: (type: string, fn: (ev: unknown) => void) => {
+    let set = windowListeners.get(type);
+    if (!set) { set = new Set(); windowListeners.set(type, set); }
+    set.add(fn);
+  },
+  removeEventListener: (type: string, fn: (ev: unknown) => void) => {
+    windowListeners.get(type)?.delete(fn);
+  },
   location: { search: "", href: "http://localhost/", hash: "", pathname: "/" },
   requestAnimationFrame: () => 0,
   cancelAnimationFrame: noop,

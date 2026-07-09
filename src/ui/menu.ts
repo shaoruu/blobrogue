@@ -47,10 +47,27 @@ const CONTROLS = "WASD move \u00b7 Mouse aim \u00b7 Click shoot \u00b7 Shift das
 // The title preview stays a GLANCE, not a dashboard: three quiet rows under Play.
 const LB_PREVIEW_ROWS = 3;
 const LB_FULL_ROWS = 10;
+// An unreachable backend never REJECTS (the Convex client retries forever) — it just never
+// resolves. After this long, hydrating regions surface their honest unavailable state (a
+// content swap inside the same reserved geometry); a late success still fills in place.
+const HYDRATE_TIMEOUT_MS = 8000;
+
+function onHydrateTimeout<T>(promise: Promise<T>, showUnavailable: () => void): Promise<T> {
+  const timer = setTimeout(showUnavailable, HYDRATE_TIMEOUT_MS);
+  return promise.finally(() => clearTimeout(timer));
+}
 
 function fmtClock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// Where keyboard focus should land after a Back/Escape return to the title: the exact
+// destination that opened the screen (screens are rebuilt on return, so restore is by NAME,
+// not by node — deterministic even though the original button no longer exists).
+export interface TitleFocus {
+  dest?: "online" | "leaderboard" | "profile" | "settings";
+  lbRow?: number;
 }
 
 function weaponName(id: string): string {
@@ -69,7 +86,11 @@ export class Menu {
   private unsub: (() => void) | null = null;
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
+  private menuKeys: ((e: KeyboardEvent) => void) | null = null;
   private syncColorRow: (() => void) | null = null;
+  // A leaderboard row index waiting to receive focus once the next fill enables it
+  // (Back/Escape from a player profile restores focus to the exact row that opened it).
+  private pendingLbRowFocus: number | null = null;
   // Last fetched leaderboard, kept for the session so revisits paint instantly (a background
   // refresh still runs) — the cached/uncached paths render the SAME fixed geometry.
   private lbCache: LeaderboardEntryDoc[] | null = null;
@@ -99,6 +120,19 @@ export class Menu {
     if (this.unsub) { this.unsub(); this.unsub = null; }
     if (this.countupRaf) { cancelAnimationFrame(this.countupRaf); this.countupRaf = 0; }
     if (this.gameOverKeys) { window.removeEventListener("keydown", this.gameOverKeys); this.gameOverKeys = null; }
+    if (this.menuKeys) { window.removeEventListener("keydown", this.menuKeys); this.menuKeys = null; }
+    this.pendingLbRowFocus = null;
+  }
+
+  // Escape mirrors the screen's Back action (registered per screen, cleared on every
+  // transition by teardownLobby). Only for non-destructive returns — the room lobby's
+  // "leave" stays an explicit click, never a stray keypress.
+  private bindEscape(onBack: () => void) {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); onBack(); }
+    };
+    this.menuKeys = handler;
+    window.addEventListener("keydown", handler);
   }
 
   // ---- TITLE ------------------------------------------------------------------------
@@ -114,8 +148,9 @@ export class Menu {
   // Every async-hydrated region (auth, stats, leaderboard) renders its FINAL geometry from
   // first paint — skeletons fill in place, so nothing below them ever moves.
 
-  async showTitle() {
+  async showTitle(focus?: TitleFocus) {
     const wrap = el("div", "menu title");
+    const focusTargets = new Map<string, HTMLButtonElement>();
 
     // Hero banner: logo + tagline, divider under it.
     const hero = el("div", "hero");
@@ -133,7 +168,11 @@ export class Menu {
       colA.appendChild(this.soloButton("\u25be  PLAY"));
       colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       const nav = el("div", "navrow");
-      nav.append(this.navButton("PROFILE", () => void this.showProfile()), this.navButton("SETTINGS", () => void this.showSettings()));
+      const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
+      const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
+      focusTargets.set("profile", profileBtn);
+      focusTargets.set("settings", settingsBtn);
+      nav.append(profileBtn, settingsBtn);
       colA.appendChild(nav);
       wrap.appendChild(colA);
     } else {
@@ -147,6 +186,7 @@ export class Menu {
       onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
       onlineBtn.appendChild(el("span", "sub", "rooms & quick play on the live server"));
       onlineBtn.addEventListener("click", () => void this.showOnlineHome());
+      focusTargets.set("online", onlineBtn);
       colA.appendChild(onlineBtn);
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
@@ -161,11 +201,13 @@ export class Menu {
       const you = this.youStrip();
       colB.appendChild(you.strip);
       const nav = el("div", "navrow");
-      nav.append(
-        this.navButton("LEADERBOARD", () => void this.showLeaderboard()),
-        this.navButton("PROFILE", () => void this.showProfile()),
-        this.navButton("SETTINGS", () => void this.showSettings()),
-      );
+      const lbBtn = this.navButton("LEADERBOARD", () => void this.showLeaderboard());
+      const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
+      const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
+      focusTargets.set("leaderboard", lbBtn);
+      focusTargets.set("profile", profileBtn);
+      focusTargets.set("settings", settingsBtn);
+      nav.append(lbBtn, profileBtn, settingsBtn);
       colB.appendChild(nav);
       body.appendChild(colB);
 
@@ -175,17 +217,23 @@ export class Menu {
 
     wrap.appendChild(el("p", "foot", CONTROLS));
     this.show(wrap);
+    // Back/Escape focus restore: land keyboard focus on the destination that was used
+    // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
+    if (focus?.dest) focusTargets.get(focus.dest)?.focus();
+    if (focus?.lbRow !== undefined) this.pendingLbRowFocus = focus.lbRow;
   }
 
   // One hydration pass for the title: login/refresh the profile (fills the you-card stats in
-  // place) — never lets an unreachable backend break the title screen.
+  // place) — never lets an unreachable backend break the title screen. A hang surfaces the
+  // unavailable state after the timeout; a late answer still fills the same box.
   private async hydrateTitle(you: { setProfile: (p: ProfileDoc | null, isError?: boolean) => void }) {
     let profile: ProfileDoc | null = null;
     try {
       const signedIn = this.auth?.isSignedIn ?? false;
-      profile = (this.session.name || signedIn)
-        ? await this.session.login(this.session.name || "blob")
-        : await this.session.refreshProfile();
+      const load = (this.session.name || signedIn)
+        ? this.session.login(this.session.name || "blob")
+        : this.session.refreshProfile();
+      profile = await onHydrateTimeout(load, () => you.setProfile(null, true));
     } catch {
       you.setProfile(null, true);
       return;
@@ -347,6 +395,9 @@ export class Menu {
   private async doSignOut() {
     if (!this.auth) return;
     await this.auth.signOut();
+    // Flush the cached profile so no prior-account data (name/stats/cosmetics/unlocks)
+    // survives into the guest render — the title hydrate refills from the guest row.
+    this.session.clearProfile();
     await this.showTitle();
   }
 
@@ -389,7 +440,7 @@ export class Menu {
     return { box, rows, note };
   }
 
-  private fillLeaderboardRows(rows: HTMLButtonElement[], note: HTMLElement, entries: LeaderboardEntryDoc[] | null, backTo: () => void) {
+  private fillLeaderboardRows(rows: HTMLButtonElement[], note: HTMLElement, entries: LeaderboardEntryDoc[] | null, backTo: (rowIndex: number) => void) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const [rank, dot, name, floor] = Array.from(row.children) as HTMLElement[];
@@ -409,17 +460,23 @@ export class Menu {
       floor.textContent = `FL ${entry.floor}`;
       row.disabled = false;
       row.setAttribute("aria-label", `${entry.name} \u2014 floor ${entry.floor} \u2014 view profile`);
-      row.onclick = () => this.showPlayerProfile(entry, backTo);
+      row.onclick = () => this.showPlayerProfile(entry, () => backTo(i));
     }
     if (entries === null) note.textContent = "leaderboard unavailable \u2014 check your connection";
     else if (entries.length === 0) note.textContent = "no runs on the board yet \u2014 yours could be first";
     else note.textContent = "";
+    // A pending Back/Escape restore lands on its row the moment the fill enables it.
+    const pending = this.pendingLbRowFocus;
+    if (pending !== null && rows[pending] !== undefined && !rows[pending].disabled) {
+      this.pendingLbRowFocus = null;
+      rows[pending].focus();
+    }
   }
 
-  private async fetchLeaderboard(): Promise<LeaderboardEntryDoc[] | null> {
+  private async fetchLeaderboard(onStall: () => void): Promise<LeaderboardEntryDoc[] | null> {
     if (!this.client) return null;
     try {
-      this.lbCache = await this.client.query(api.leaderboard.top, { limit: LB_FULL_ROWS });
+      this.lbCache = await onHydrateTimeout(this.client.query(api.leaderboard.top, { limit: LB_FULL_ROWS }), onStall);
       return this.lbCache;
     } catch {
       return this.lbCache; // a failed refresh keeps the cached board (or null -> error note)
@@ -437,14 +494,18 @@ export class Menu {
     panel.appendChild(head);
     const { box, rows, note } = this.leaderboardRows(LB_PREVIEW_ROWS);
     panel.append(box, note);
-    const backTo = () => void this.showTitle();
+    const backTo = (rowIndex: number) => void this.showTitle({ lbRow: rowIndex });
     if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
-    void this.fetchLeaderboard().then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
+    // A stalled fetch (backend unreachable — never rejects, just hangs) surfaces the
+    // unavailable note in place unless a cached board is already showing.
+    const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, note, null, backTo); };
+    void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
     return panel;
   }
 
-  // The full leaderboard destination.
-  async showLeaderboard() {
+  // The full leaderboard destination. `focusRow` restores keyboard focus to the row a
+  // player-profile visit came from.
+  async showLeaderboard(focusRow?: number) {
     if (!this.client) { await this.showTitle(); return; }
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "LEADERBOARD"));
@@ -453,14 +514,18 @@ export class Menu {
     box.classList.add("lb-rows-full");
     wrap.append(box, note);
     const row = el("div", "btnrow");
+    const goBack = () => void this.showTitle({ dest: "leaderboard" });
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => void this.showTitle());
+    back.addEventListener("click", goBack);
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
-    const backTo = () => void this.showLeaderboard();
+    this.bindEscape(goBack);
+    if (focusRow !== undefined) this.pendingLbRowFocus = focusRow;
+    const backTo = (rowIndex: number) => void this.showLeaderboard(rowIndex);
     if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
-    void this.fetchLeaderboard().then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
+    const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, note, null, backTo); };
+    void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
   }
 
   // A leaderboard player's public profile: their blob's look and that run's build. Only
@@ -509,6 +574,7 @@ export class Menu {
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
+    this.bindEscape(onBack);
   }
 
   // ---- OWN PROFILE + CLOSET -----------------------------------------------------------
@@ -567,11 +633,13 @@ export class Menu {
     wrap.appendChild(note);
 
     const row = el("div", "btnrow");
+    const goBack = () => void this.showTitle({ dest: "profile" });
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => void this.showTitle());
+    back.addEventListener("click", goBack);
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
+    this.bindEscape(goBack);
 
     // Hydrate stats + unlock states in place (fixed geometry; a dead backend just leaves
     // the placeholders and the locked states, never an error screen).
@@ -675,11 +743,13 @@ export class Menu {
     wrap.appendChild(el("p", "muted", "everything saves instantly \u2014 the pause menu carries the same controls"));
     wrap.appendChild(createSettingsControls());
     const row = el("div", "btnrow");
+    const goBack = () => void this.showTitle({ dest: "settings" });
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => void this.showTitle());
+    back.addEventListener("click", goBack);
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
+    this.bindEscape(goBack);
   }
 
   // ---- ONLINE (authoritative server): rooms + quick play -----------------------------
@@ -705,12 +775,15 @@ export class Menu {
     colA.appendChild(actrow);
     wrap.appendChild(colA);
 
-    const status = el("p", "muted", note);
+    // Status/failure line with reserved height: retries and errors swap text inside the
+    // same box, so the back button below never moves.
+    const status = el("p", "muted status-line", note);
     wrap.appendChild(status);
 
     const row = el("div", "btnrow");
+    const goBack = () => void this.showTitle({ dest: "online" });
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => void this.showTitle());
+    back.addEventListener("click", goBack);
     row.appendChild(back);
     wrap.appendChild(row);
 
@@ -729,6 +802,7 @@ export class Menu {
     }));
 
     this.show(wrap);
+    this.bindEscape(goBack);
   }
 
   private async doQuickPlayOnline(setBusy: (b: boolean, t: string) => void) {
@@ -927,7 +1001,7 @@ export class Menu {
     input.autocapitalize = "characters";
     input.addEventListener("input", () => (input.value = input.value.toUpperCase()));
     wrap.appendChild(input);
-    const status = el("p", "muted");
+    const status = el("p", "muted status-line");
     const row = el("div", "btnrow");
     const go = el("button", "", "join");
     go.addEventListener("click", () => opts.onJoin(input.value, status));
@@ -937,6 +1011,7 @@ export class Menu {
     row.append(go, back);
     wrap.append(row, status);
     this.show(wrap);
+    this.bindEscape(() => opts.onBack());
     input.focus();
   }
 

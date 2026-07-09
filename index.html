@@ -448,8 +448,10 @@
       .lb-name{ flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-height:12px; }
       .lb-floor{ flex:0 0 auto; font-family:var(--f-num); font-size:15px; color:#9a8fb5; min-width:48px; text-align:right; }
       /* Reserves two lines: the longest note wraps in the preview's column, and on narrow
-         viewports the identity card stacks BELOW it — growth here must never push it. */
-      .lb-note{ min-height:30px; font-size:10px; line-height:1.5; margin:0; text-align:left; }
+         viewports the identity card stacks BELOW it — growth here must never push it.
+         Selector carries `.menu p` so the generic `.menu p.muted` type sizing (12px/1.45)
+         can never out-specify the reserve and overflow it (the 2.4px title-shift bug). */
+      .menu p.lb-note{ min-height:30px; font-size:10px; line-height:1.5; margin:0; text-align:left; }
       /* The full LEADERBOARD destination keeps the readable panel treatment. */
       .lb-rows-full .lb-row{ height:38px; background:var(--dun-1); box-shadow:inset 0 0 0 1px var(--dun-3); color:var(--cream); }
       .lb-rows-full .lb-floor{ color:var(--amber-hi); }
@@ -465,6 +467,9 @@
       .btn-google{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; font-size:11px; padding:10px 12px; min-width:0; text-transform:none; letter-spacing:1px;
         --c:#ffe9b0; --c-hi:#fff; --c-lo:#cbb68a; --tx:#120a24; text-shadow:none; }
       .auth-status{ font-size:10px; color:var(--red); text-align:left; min-height:12px; margin:0; }
+      /* Reserved status/failure line on action screens (online home, join code): busy,
+         error, and retry copy swap INSIDE this box — the buttons around it never move. */
+      .status-line{ min-height:36px; margin:0; display:flex; align-items:center; justify-content:center; }
 
       /* --- the identity/progress strip: passive, fixed-height (the PROFILE destination
          below is the one door — no competing click target, no warm accent) --- */
