@@ -18,11 +18,16 @@ export type EnemyKind =
   // The bestiary expansion's first wave (see enemies.ts for each identity):
   //  - rootward: slow formation anchor with a slow-turning frontal guard (flank/melee/pierce);
   //  - echojack: fleeing trickster that plants a false-noise decoy, then blinks sideways;
-  //  - seamcutter: previews a wall-to-wall seam, then cuts it with timed perpendicular sweeps;
+  //  - seamcutter (the SILT KEEL): previews an oblique wall-to-wall seam, then plows it,
+  //    raising ONE persistent berm of destructible silt mounds beside the furrow;
   //  - caskbellows: stationary lane sentry — locked 3-shot volleys, rear-crank stagger;
   //  - sinderling: consumes environmental heat to arm a flame-jet dash + a death burst;
   //  - fragment: tethers to another enemy; the tether is the attack lane (kill/LOS-break defuses).
+  //  - mason (the CLINKER MASON, Emberreach worker): builds one handed L-corner of
+  //    destructible clinker bricks around a heat vent — persistent topology, replaced
+  //    whenever it builds anew.
   | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment"
+  | "mason"
   // Summon-only bodies (never in the floor planner):
   //  - echo: the echojack's 1-HP false-noise decoy — soaks homing/attention, expires quietly;
   //  - knell: The Toll's noise-lure bomb — shoot it before it tolls, or leave its radius.
@@ -61,7 +66,11 @@ export type AttackMove =
   | "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze"
   | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield"
   | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep" | "brace"
-  | "decoy" | "blink" | "seam" | "stoke" | "harmonize" | "knell";
+  | "decoy" | "blink" | "seam" | "stoke" | "harmonize" | "knell"
+  // The worker verb: a long stationary tell, then ONE persistent construction is raised
+  // (the bailiff's root divider, the mason's clinker L-corner). Never aimed at a body —
+  // the site is the mark.
+  | "build";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -259,7 +268,12 @@ export interface Pickup {
 // so co-op clients agree on layout; destruction resolves via bullets/explosions on the
 // shared floor state, exactly like enemies. `breakT` is set the moment a prop is
 // destroyed and drives its one-shot break animation before it's removed.
-export type PropKind = "crate" | "pot" | "barrel" | "barrel_explosive" | "brazier";
+// root_wall / silt_mound / clinker_brick are WORKER CONSTRUCTIONS (the ecology gate's
+// persistent topology edits): raised by living workers, destructible by either side,
+// replaced when their owner builds anew.
+export type PropKind =
+  | "crate" | "pot" | "barrel" | "barrel_explosive" | "brazier"
+  | "root_wall" | "silt_mound" | "clinker_brick";
 
 export interface Prop {
   id: number;      // stable per-world id (client keys its cosmetic anim map by this)
@@ -269,6 +283,9 @@ export interface Prop {
   hp: number;
   dead: boolean;
   breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
+  // Worker constructions carry their builder's enemy id (sim-internal, not on the wire):
+  // the replacement rule — a worker raising anew crumbles everything it owns first.
+  owner?: number;
 }
 
 // Authored ground hazards. Shared, authoritative floor state like props: placed by
@@ -390,7 +407,7 @@ export type TileKind = 0 | 1; // 0 = floor, 1 = wall
 export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
-  | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment"
+  | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment" | "mason"
   | "echo" | "knell" | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "heart" | "coin" | "gun" | "spit";

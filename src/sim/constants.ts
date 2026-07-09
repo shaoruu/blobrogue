@@ -201,6 +201,38 @@ export const SHIELDER_CD = 2.6;
 export const ROOTWARD_GUARD_ARC = 2.6;   // radians of protected frontage (~150°)
 export const ROOTWARD_GUARD_PAD = 12;    // px beyond the body the guard still blocks
 export const ROOTWARD_TURN_RATE = 1.4;   // rad/s the guard can track — flanking wins
+// The FORKROOT BAILIFF consolidation (the ecology gate's Rootbound worker): the anchor's
+// one commitment is raising an asymmetric root divider ACROSS its facing — 2 segments to
+// the handed side, 1 to the other, planted a short reach ahead. Raising anew crumbles the
+// old divider; wall standoff guarantees walkable gaps at both ends (the escape route).
+export const BAILIFF_BUILD_TRIGGER = 300; // px to target before it commits to a raise
+export const BAILIFF_BUILD_MIN_DIST = 120; // closer than this it walls with its body, not roots
+export const BAILIFF_BUILD_ALIGN = 0.3;    // rad the guard must face the target before raising
+export const BAILIFF_REBUILD_DIST = 260;   // px from its divider before it MOVES it (re-raise)
+export const BAILIFF_BUILD_WINDUP = 1.3;
+export const BAILIFF_BUILD_RECOVER = 0.7;
+export const BAILIFF_BUILD_CD = 9.0;
+export const BAILIFF_DIVIDER_DIST = 78;   // px ahead of the body the divider line sits
+export const BAILIFF_SEG_SPACING = 40;    // px between root-wall segment centers
+
+// The CLINKER MASON (the ecology gate's Emberreach worker): walks to the nearest heat
+// vent (the sinderling's feeding ground) and masons ONE handed L-corner of clinker
+// bricks around it — the corner points at the nearest player, the long arm is handed by
+// id parity. No vent in range: it builds the corner around itself. Old corner collapses
+// when a new one is raised.
+export const MASON_VENT_RANGE = 420;      // px it will travel to claim a vent site
+export const MASON_SITE_REACH = 96;       // px from the site before the tell may start
+export const MASON_BUILD_WINDUP = 1.4;    // the long masonry tell (kill it mid-course)
+export const MASON_BUILD_RECOVER = 0.8;
+export const MASON_BUILD_CD = 11.0;
+export const MASON_CORNER_DIST = 84;      // px from the vent the corner apex sits
+export const MASON_SEG_SPACING = 40;      // px between brick centers along each arm
+export const MASON_ARM_LONG = 3;          // bricks on the handed arm (incl. the apex)
+export const MASON_ARM_SHORT = 2;         // bricks on the off arm (excl. the apex)
+
+// Worker construction placement law (raiseConstruction): the escape-route gate.
+export const CONSTRUCT_WALL_STANDOFF = 1; // tiles of clearance to any wall (end gaps!)
+export const CONSTRUCT_EXIT_STANDOFF = 2; // tiles of clearance to the floor exit
 
 // Echojack: the fleeing trickster. Keeps its distance, plants a false-noise decoy on a
 // telegraphed beat, then BLINKS — a visible perpendicular relocation dash, never a
@@ -223,10 +255,12 @@ export const SEAM_WINDUP = 1.0;
 export const SEAM_LOCK = 0.55;           // long post-lock window: the lane is readable
 export const SEAM_SPEED = 300;
 export const SEAM_MAX_DUR = 2.2;
-export const SEAM_SWEEP_INTERVAL = 0.4;
-export const SEAM_SWEEP_SPEED = 240;
-export const SEAM_SWEEP_RADIUS = 6;
-export const SEAM_SWEEP_LIFE = 1.2;
+// The plow's berm (the SILT KEEL consolidation — the ecology gate's Deep worker): the
+// cut piles ONE persistent line of destructible silt mounds beside the furrow, handed by
+// id parity. The keel's next plow sinks its old berm (replacement rule).
+export const BERM_SEG_SPACING = 42;      // px between mound centers along the furrow
+export const BERM_MAX_SEGS = 6;          // capped length: a berm zones, it never seals
+export const BERM_SIDE_OFFSET = 34;      // px the mounds pile beside the furrow line
 export const SEAM_RECOVER = 0.9;
 export const SEAM_CD = 4.0;
 
@@ -288,6 +322,8 @@ export const FRAGMENT_BEAM_HALF_WIDTH = 14;
 export const PROP_RADIUS = 15;
 export const PROP_HP: Record<PropKind, number> = {
   crate: 4, pot: 1, barrel: 3, barrel_explosive: 3, brazier: 0,
+  // Worker constructions: cover for either side, breakable by either side.
+  root_wall: 3, silt_mound: 2, clinker_brick: 3,
 };
 // Physical world impacts (damagePropsInRadius): a committed charge or slam does not chip
 // cover, it obliterates it — one figure comfortably above every PROP_HP entry.

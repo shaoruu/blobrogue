@@ -376,7 +376,9 @@ export const MAX_BURROWERS_PER_ROOM = 1;
 export const MAX_SHIELDERS_PER_ROOM = 1;
 // The rootward is the same wall-verb readability problem as the shielder: one anchor per
 // room keeps a formation a formation, never a bullet-proof hedge.
-export const MAX_ROOTWARDS_PER_ROOM = 1;
+// The ecology gate: at most ONE topology worker (bailiff / keel / mason) per room —
+// one persistent topology edit per room, by construction.
+export const MAX_WORKERS_PER_ROOM = 1;
 export const FLOCK_THREAT_SHARE_MAX = 0.35;
 
 // Reinforcement release pacing: pending threat trickles in as waves whenever the living

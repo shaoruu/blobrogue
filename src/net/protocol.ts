@@ -404,7 +404,10 @@ function weaponOf(o: Record<string, unknown>, k: string): WeaponId {
 function isEnemyKind(v: unknown): v is EnemyKind {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ENEMY_ARCHETYPES, v);
 }
-const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
+const PROP_KINDS: Record<PropKind, true> = {
+  crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true,
+  root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
+};
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
@@ -415,6 +418,7 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   fade: true, wail: true, split: true, pounce: true, weave: true, slam: true, sweep: true,
   brace: true,
   decoy: true, blink: true, seam: true, stoke: true, harmonize: true, knell: true,
+  build: true, // the worker verb (bailiff divider, mason L-corner)
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {

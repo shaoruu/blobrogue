@@ -30,6 +30,7 @@ export const ENEMY_ROLE: Readonly<Partial<Record<EnemyKind, EnemyRole>>> = {
   rootward: "complex",
   seamcutter: "complex",
   sinderling: "complex",
+  mason: "complex",
   echojack: "controller",
   fragment: "controller",
 };
@@ -46,10 +47,45 @@ export function isControllerKind(kind: EnemyKind): boolean {
   return ENEMY_ROLE[kind] === "controller";
 }
 
+// ---- the two-wave ecology gate ----
+// Wave A: the common decks — predators, supports, and AT MOST ONE topology/material
+// WORKER per biome (the bailiff walls Rootbound, the keel plows the Deep, the mason
+// bricks Emberreach). Wave B: rare elites/lieutenants that SYNTHESIZE verbs Wave A
+// taught, and NEVER enter common decks (summon-only bodies and the seeded miniboss
+// cadence; the elite tier is a Wave-B layer over Wave-A chassis).
+export type EnemyWave = "A" | "B" | "boss";
+
+export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
+  slime: "A", bat: "A", skeleton: "A", ghost: "A", spitter: "A", charger: "A",
+  burrower: "A", orbiter: "A", shielder: "A",
+  rootward: "A", echojack: "A", seamcutter: "A", caskbellows: "A", sinderling: "A",
+  fragment: "A", mason: "A",
+  echo: "B", knell: "B", marshal: "B", toll: "B",
+  boss: "boss", marrow: "boss", choir: "boss", weaver: "boss", gilded: "boss",
+};
+
+// Topology workers: bodies whose commitment EDITS the room (persistent destructible
+// constructions). One per biome in the roster, one per room in the planner, one live
+// construction per worker in the sim (the replacement rule).
+export const WORKER_KINDS: readonly EnemyKind[] = ["rootward", "seamcutter", "mason"];
+
+export function isWorkerKind(kind: EnemyKind): boolean {
+  return WORKER_KINDS.indexOf(kind) !== -1;
+}
+
+// What each Wave-B body SYNTHESIZES (the ecology gate: learned verbs, never unrelated
+// spectacle). Recorded as data so the gate is reviewable and testable.
+export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly EnemyKind[]>>> = {
+  echo: ["echojack"],                  // the jack's own noise lesson, made a body
+  knell: ["echojack"],                 // the decoy verb retuned to the Toll's bronze
+  marshal: ["rootward", "shielder"],   // formation guard + the worker's cover verb, weaponized
+  toll: ["echojack", "caskbellows"],   // noise-lure misdirection + the locked-lane volley verb
+};
+
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity
 // is coupled to a band's ecology — the sinderling feeds on Emberreach's vents, the
 // fragment sings only in the Null after the Choir falls.
-export const BIOME_SPECIALISTS: readonly EnemyKind[] = ["sinderling", "fragment"];
+export const BIOME_SPECIALISTS: readonly EnemyKind[] = ["sinderling", "fragment", "mason"];
 
 // The movement/attack MODULE each archetype teaches. A module is the intro-cadence unit
 // (never the archetype): a kind that reuses an existing module is a REMIX and must land
@@ -67,9 +103,10 @@ export const ENEMY_MODULE: Readonly<Partial<Record<EnemyKind, string>>> = {
   rootward: "guard", // remix: the slow-turning formation guard over the snap arc
   caskbellows: "sentry_volley",
   echojack: "decoy_blink",
-  seamcutter: "seam_sweep",
+  seamcutter: "seam_berm", // the SILT KEEL: the plow raises one persistent berm
   sinderling: "heat_jet",
   fragment: "tether_lane",
+  mason: "vent_masonry",
 };
 
 // Every remix names the kind that TAUGHT its module (the teaching-room-before-remix
@@ -143,11 +180,13 @@ export const ENEMY_ACCEPTANCE: Readonly<Partial<Record<EnemyKind, EnemyAcceptanc
     favoredIn: "head-on firefights", weakTo: "flanks, melee, mortar splash",
   },
   rootward: {
-    silhouetteMs: 260, counterVerb: "out-turn the slow guard (pierce punches through)",
-    // Its commitment is the guard's turn itself: a quarter-turn takes ~1.1s at the
-    // capped rate — footwork always wins the angle race. No attack, no punish clock.
-    commitmentS: null, postLockS: null, punishS: null,
-    favoredIn: "corridors, anchoring formations", weakTo: "open flanks, pierce builds, melee",
+    // The FORKROOT BAILIFF consolidation: the anchor's one commitment is now the divider
+    // raise (a long stationary tell), and the divider's guaranteed end gaps are the
+    // authored escape route. The guard's slow turn stays its defense.
+    silhouetteMs: 260, counterVerb: "round the divider's open ends (pierce punches the guard)",
+    commitmentS: 1.3, postLockS: null, punishS: 0.7,
+    favoredIn: "corridors, anchoring formations behind its wall",
+    weakTo: "open flanks, pierce builds, breaking the divider",
   },
   caskbellows: {
     silhouetteMs: 240, counterVerb: "circle behind and crank-stagger it",
@@ -160,14 +199,23 @@ export const ENEMY_ACCEPTANCE: Readonly<Partial<Record<EnemyKind, EnemyAcceptanc
     favoredIn: "chaotic fights it can misdirect", weakTo: "target discipline, corners",
   },
   seamcutter: {
-    silhouetteMs: 240, counterVerb: "cross the seam early (or trail behind it)",
+    // The SILT KEEL consolidation: the previewed plow now PILES a berm instead of
+    // spraying sweep bolts — the zoning is the persistent ridge, not projectiles.
+    silhouetteMs: 240, counterVerb: "cross the lane early; round or break the berm",
     commitmentS: 1.0, postLockS: 0.45, punishS: 0.9,
-    favoredIn: "wide rooms it can bisect", weakTo: "early crossing, the far-wall recover",
+    favoredIn: "wide rooms it can bisect with silt", weakTo: "early crossing, the far-wall recover",
   },
   sinderling: {
     silhouetteMs: 220, counterVerb: "kill it unarmed — or armed, from range",
     commitmentS: 0.6, postLockS: 0.30, punishS: 0.5,
     favoredIn: "vent fields and brazier rooms", weakTo: "denial of heat, ranged finishing",
+  },
+  mason: {
+    // Ecology synthesis: it bricks the vents the sinderlings feed at — the L-corner
+    // denies your clean lane at the feeders while handing you cover to approach.
+    silhouetteMs: 250, counterVerb: "take the open side of the L (or kill the mason mid-tell)",
+    commitmentS: 1.4, postLockS: null, punishS: 0.8,
+    favoredIn: "vent fields it can fortify", weakTo: "the long tell, splash through bricks",
   },
   fragment: {
     silhouetteMs: 240, counterVerb: "cut the tether: kill its source or break sight",
@@ -195,9 +243,10 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   burrower: ["dive", "erupt"],
   orbiter: ["spit"],
   shielder: ["lunge"],
-  rootward: [],
+  rootward: ["build"],
   echojack: ["decoy", "blink"],
   seamcutter: ["seam"],
+  mason: ["build"],
   caskbellows: ["volley", "crash"],
   sinderling: ["stoke", "rush"],
   fragment: ["harmonize"],
@@ -238,11 +287,12 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   burrower: "directional",
   orbiter: "directional",
   shielder: "directional",
-  rootward: "directional_walk",
+  rootward: "directional", // the bailiff raise is its directional attack sheet
   echojack: "directional",
   seamcutter: "directional",
   caskbellows: "directional",
   sinderling: "directional",
+  mason: "directional", // the masonry raise is its directional attack sheet
   fragment: "mass",
   echo: "decoy",
   knell: "decoy",

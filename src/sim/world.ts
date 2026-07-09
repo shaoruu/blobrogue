@@ -14,7 +14,7 @@ import type { FlowField } from "./pathfind.js";
 import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind } from "./types.js";
+import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind, PropKind } from "./types.js";
 import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
 import { Rng } from "./rng.js";
 import {
@@ -2079,11 +2079,12 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "burrower": updateBurrower(w, e, dt, ev); return;
     case "orbiter": updateOrbiter(w, e, dt, ev); return;
     case "shielder": updateShielder(w, e, dt, ev); return;
-    case "rootward": updateRootward(w, e, dt); return;
+    case "rootward": updateRootward(w, e, dt, ev); return;
     case "echojack": updateEchojack(w, e, dt, ev); return;
     case "seamcutter": updateSeamcutter(w, e, dt, ev); return;
     case "caskbellows": updateCaskbellows(w, e, dt, ev); return;
     case "sinderling": updateSinderling(w, e, dt, ev); return;
+    case "mason": updateMason(w, e, dt, ev); return;
     case "fragment": updateFragment(w, e, dt, ev); return;
     case "echo": updateEcho(e, dt, ev); return;
     case "knell": updateKnell(w, e, dt, ev); return;
@@ -2604,13 +2605,196 @@ function maybeCrankStagger(e: Enemy, b: Bullet, ev: SimEvent[]): void {
 // The rootward: a walking wall with a SLOW-TURNING guard. No committed attack — it herds.
 // Its guard angle lives in lockedAngle (already on the wire), turning toward the chase
 // heading at a capped rate, so circling it opens the flank the shielder never gives.
-function updateRootward(w: WorldState, e: Enemy, dt: number): void {
+
+// ---- worker constructions (the ecology gate's persistent topology edits) ------------
+// Three workers, three materials, ONE shared law: a raise first crumbles everything the
+// worker already owns (the replacement rule), then segments land only where the
+// escape-route standoffs hold, and never while ANOTHER worker's construction stands in
+// the same room (one persistent topology edit per room). Everything raised is a plain
+// destructible prop: cover for either side, breakable by either side, navigated by the
+// same prop-aware flow fields as authored furniture.
+
+const WORKER_PROP: Readonly<Partial<Record<Enemy["kind"], PropKind>>> = {
+  rootward: "root_wall",
+  seamcutter: "silt_mound",
+  mason: "clinker_brick",
+};
+
+function roomIndexAt(w: WorldState, x: number, y: number): number {
+  const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+  const rooms = w.dungeon.rooms;
+  for (let i = 0; i < rooms.length; i++) {
+    const r = rooms[i];
+    if (tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h) return i;
+  }
+  return -1;
+}
+
+// The escape-route law: a segment may never sit against the wall grid (the guaranteed
+// walkable gaps at a construction's ends ARE the explicit escape route — a capped,
+// wall-free line can never partition a room), never near the floor exit, never stacked
+// on props, and never boxed onto a body.
+function isConstructionSiteClear(w: WorldState, x: number, y: number): boolean {
+  if (isWall(w, x, y)) return false;
+  const standoff = C.CONSTRUCT_WALL_STANDOFF * TILE;
+  for (let ox = -1; ox <= 1; ox++) {
+    for (let oy = -1; oy <= 1; oy++) {
+      if (ox === 0 && oy === 0) continue;
+      if (isWall(w, x + ox * standoff, y + oy * standoff)) return false;
+    }
+  }
+  const ex = (w.dungeon.exit.x + 0.5) * TILE, ey = (w.dungeon.exit.y + 0.5) * TILE;
+  if (Math.hypot(x - ex, y - ey) < C.CONSTRUCT_EXIT_STANDOFF * TILE) return false;
+  if (blockedByProp(w, x, y, C.PROP_RADIUS)) return false;
+  for (const pl of w.players.values()) {
+    if (Math.hypot(pl.x - x, pl.y - y) < pl.pr + C.PROP_RADIUS + 6) return false;
+  }
+  for (const en of w.enemies) {
+    if (en.dead) continue;
+    if (Math.hypot(en.x - x, en.y - y) < en.radius + C.PROP_RADIUS + 2) return false;
+  }
+  return true;
+}
+
+function raiseConstruction(w: WorldState, e: Enemy, sites: readonly { x: number; y: number }[], ev: SimEvent[]): number {
+  const kind = WORKER_PROP[e.kind];
+  if (kind === undefined) return 0;
+  const room = roomIndexAt(w, e.x, e.y);
+  for (const p of w.props) {
+    if (p.dead || p.breakT !== undefined || p.owner === undefined || p.owner === e.id) continue;
+    if (room !== -1 && roomIndexAt(w, p.x, p.y) === room) return 0; // the room's one edit stands
+  }
+  for (const p of w.props) {
+    if (p.breakT === undefined && !p.dead && p.owner === e.id) destroyProp(w, p, ev);
+  }
+  let placed = 0;
+  for (const site of sites) {
+    if (!isConstructionSiteClear(w, site.x, site.y)) continue;
+    w.props.push({
+      id: w.nextPropId++, kind, x: site.x, y: site.y,
+      radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false, owner: e.id,
+    });
+    ev.push({ t: "puff", x: site.x, y: site.y, n: 5, color: ENEMY_ARCHETYPES[e.kind].tint });
+    placed++;
+  }
+  if (placed > 0) w.obstacleRev++;
+  return placed;
+}
+
+// The authoritative build footprint, pure over the attack state — the sim raises on it
+// and the client previews EXACTLY it (one geometry, no drift):
+//  - bailiff: an asymmetric divider across the guard facing — two segments to the
+//    handed side (id parity), one to the other, a reach ahead of the body;
+//  - mason: a handed L-corner whose apex points down the locked angle (at the nearest
+//    player when the tell started), long arm on the handed side.
+export function workerBuildSites(e: Pick<Enemy, "kind" | "id" | "attack">): { x: number; y: number }[] {
+  const a = e.attack;
+  const hand = e.id % 2 === 0 ? 1 : -1;
+  const sites: { x: number; y: number }[] = [];
+  if (e.kind === "rootward") {
+    const perp = a.lockedAngle + C.HALF_PI;
+    for (const k of [0, hand, -hand, 2 * hand]) {
+      sites.push({
+        x: a.markX + Math.cos(perp) * k * C.BAILIFF_SEG_SPACING,
+        y: a.markY + Math.sin(perp) * k * C.BAILIFF_SEG_SPACING,
+      });
+    }
+    return sites;
+  }
+  if (e.kind === "mason") {
+    const apexX = a.markX + Math.cos(a.lockedAngle) * C.MASON_CORNER_DIST;
+    const apexY = a.markY + Math.sin(a.lockedAngle) * C.MASON_CORNER_DIST;
+    const longDir = a.lockedAngle + hand * (Math.PI * 0.75);
+    const shortDir = a.lockedAngle - hand * (Math.PI * 0.75);
+    sites.push({ x: apexX, y: apexY });
+    for (let k = 1; k < C.MASON_ARM_LONG; k++) {
+      sites.push({ x: apexX + Math.cos(longDir) * k * C.MASON_SEG_SPACING, y: apexY + Math.sin(longDir) * k * C.MASON_SEG_SPACING });
+    }
+    for (let k = 1; k <= C.MASON_ARM_SHORT; k++) {
+      sites.push({ x: apexX + Math.cos(shortDir) * k * C.MASON_SEG_SPACING, y: apexY + Math.sin(shortDir) * k * C.MASON_SEG_SPACING });
+    }
+    return sites;
+  }
+  return sites;
+}
+
+function bailiffRaiseDivider(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  raiseConstruction(w, e, workerBuildSites(e), ev);
+}
+
+// The SILT KEEL's berm: the plowed material piles beside the furrow — a capped line
+// marching back from where the cut ended, offset to the handed side.
+function keelRaiseBerm(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const segs = Math.min(C.BERM_MAX_SEGS, Math.floor(e.aux / C.BERM_SEG_SPACING));
+  if (segs <= 0) { e.aux = 0; return; }
+  const back = a.lockedAngle + Math.PI;
+  const perp = a.lockedAngle + C.HALF_PI;
+  const hand = e.id % 2 === 0 ? 1 : -1;
+  const ox = Math.cos(perp) * C.BERM_SIDE_OFFSET * hand;
+  const oy = Math.sin(perp) * C.BERM_SIDE_OFFSET * hand;
+  const sites: { x: number; y: number }[] = [];
+  for (let k = 1; k <= segs; k++) {
+    sites.push({
+      x: e.x + Math.cos(back) * k * C.BERM_SEG_SPACING + ox,
+      y: e.y + Math.sin(back) * k * C.BERM_SEG_SPACING + oy,
+    });
+  }
+  if (raiseConstruction(w, e, sites, ev) > 0) {
+    ev.push({ t: "cue", name: "keel.berm", x: e.x + ox, y: e.y + oy, rate: 1, gain: 0.7, trauma: 0.03 });
+  }
+  e.aux = 0;
+}
+
+function updateRootward(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    // The raise is a STATIONARY tell: the guard facing freezes with it, so the divider
+    // footprint previewed at the mark is exactly what lands.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.BAILIFF_BUILD_WINDUP);
+    if (a.time >= C.BAILIFF_BUILD_WINDUP) {
+      bailiffRaiseDivider(w, e, ev);
+      a.cooldown = C.BAILIFF_BUILD_CD * attackCdMultOf(e);
+      enterRecover(e);
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.BAILIFF_BUILD_RECOVER) enterIdle(e);
+    return;
+  }
   if (!findTarget(w, e.x, e.y)) return;
   const chase = chaseAngle(w, e);
-  const d = angleDiff(chase, e.attack.lockedAngle);
+  const d = angleDiff(chase, a.lockedAngle);
   const maxTurn = C.ROOTWARD_TURN_RATE * dt;
-  e.attack.lockedAngle += d > maxTurn ? maxTurn : d < -maxTurn ? -maxTurn : d;
+  a.lockedAngle += d > maxTurn ? maxTurn : d < -maxTurn ? -maxTurn : d;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y);
+  // It raises (or MOVES) the divider only when the guard faces the fight, at wall-raising
+  // range, and its standing divider is gone or left behind — so the anchor advances with
+  // its wall instead of bricking its own approach forever.
+  if (dist <= C.BAILIFF_BUILD_TRIGGER && dist > C.BAILIFF_BUILD_MIN_DIST
+    && Math.abs(angleDiff(chase, a.lockedAngle)) < C.BAILIFF_BUILD_ALIGN
+    && a.cooldown === 0 && e.spawnTimer === 0 && bailiffWantsDivider(w, e)) {
+    beginWindup(e, "build");
+    a.markX = e.x + Math.cos(a.lockedAngle) * C.BAILIFF_DIVIDER_DIST;
+    a.markY = e.y + Math.sin(a.lockedAngle) * C.BAILIFF_DIVIDER_DIST;
+    return;
+  }
   applyChaseStep(w, e, dt, chase, e.speed * surgeMult(e) * dt);
+}
+
+// "Raises/MOVES one divider": a re-raise happens only once the old wall is broken or the
+// fight has moved past it — never a wall spammed into its own path.
+function bailiffWantsDivider(w: WorldState, e: Enemy): boolean {
+  let nearest = Infinity;
+  for (const p of w.props) {
+    if (p.dead || p.breakT !== undefined || p.owner !== e.id) continue;
+    const dd = Math.hypot(p.x - e.x, p.y - e.y);
+    if (dd < nearest) nearest = dd;
+  }
+  return nearest > C.BAILIFF_REBUILD_DIST;
 }
 
 function countLiveKind(w: WorldState, kind: Enemy["kind"]): number {
@@ -2720,7 +2904,7 @@ function updateSeamcutter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
     if (a.time >= C.SEAM_WINDUP
       && tryReleaseLane(w, e, a.lockedAngle, Math.hypot(a.markX - e.x, a.markY - e.y))) {
       a.phase = "active"; a.time = 0; a.windup = 0;
-      e.seq = 0;
+      e.aux = 0; // the furrow odometer: how much berm the plow has earned
       a.cooldown = C.SEAM_CD * attackCdMultOf(e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.7, gain: 0.85, trauma: 0.06 });
     }
@@ -2730,18 +2914,15 @@ function updateSeamcutter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
     a.time += dt;
     const step = C.SEAM_SPEED * dt;
     const x0 = e.x, y0 = e.y;
-    rushSmashEnvironment(w, e, ev); // the seam splinters its furrow — furniture never wedges the cut
+    rushSmashEnvironment(w, e, ev); // the plow splinters its furrow — old construction is replaced
     moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
     ev.push({ t: "lungeTrail", x: e.x, y: e.y });
-    // The timed sweeps: a perpendicular bolt pair every interval along the cut.
-    while (e.seq < Math.floor(a.time / C.SEAM_SWEEP_INTERVAL)) {
-      e.seq++;
-      spawnEnemyBullet(w, e.x, e.y, a.lockedAngle + C.HALF_PI, C.SEAM_SWEEP_SPEED, C.SEAM_SWEEP_RADIUS, 1, ENEMY_ARCHETYPES.seamcutter.tint, C.SEAM_SWEEP_LIFE);
-      spawnEnemyBullet(w, e.x, e.y, a.lockedAngle - C.HALF_PI, C.SEAM_SWEEP_SPEED, C.SEAM_SWEEP_RADIUS, 1, ENEMY_ARCHETYPES.seamcutter.tint, C.SEAM_SWEEP_LIFE);
-      ev.push({ t: "spitMuzzle", x: e.x, y: e.y });
-    }
     const moved = Math.hypot(e.x - x0, e.y - y0);
+    e.aux += moved;
     if (moved < step * chillMoveScale(e) * 0.5 || a.time >= C.SEAM_MAX_DUR) {
+      // The plow ends (wall or wedge): the piled silt RISES — one persistent berm
+      // beside the furrow, superseding the old sweep-bolt payload.
+      keelRaiseBerm(w, e, ev);
       enterRecover(e);
       ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.6, gain: 0.6, trauma: 0.04 });
     }
@@ -2991,6 +3172,73 @@ function sinderlingBurst(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEv
 // tether); on cadence the tether HARMONIZES — the segment between the two bodies becomes
 // a damaging lane for a short pulse. Kill the source or break line of sight and the
 // pattern simplifies to a slow contact drifter.
+
+// The CLINKER MASON (Emberreach's topology worker): claims the nearest heat vent or
+// brazier — the sinderling's feeding ground — walks to it, and masons ONE handed
+// L-corner of clinker bricks around it on a long stationary tell. The corner apex
+// points at the nearest player (the denial face); the long arm is handed by id parity;
+// the open back side is the authored approach lane. Building anew collapses the old
+// corner. No vent in reach: it fortifies its own position instead.
+const masonSite = { x: 0, y: 0 };
+
+function masonSitePoint(w: WorldState, e: Enemy): { x: number; y: number } {
+  let bestD = C.MASON_VENT_RANGE * C.MASON_VENT_RANGE;
+  let found = false;
+  for (const h of w.floorHazards) {
+    if (h.kind !== "fire_vent") continue;
+    const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
+    const dx = cx - e.x, dy = cy - e.y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; masonSite.x = cx; masonSite.y = cy; found = true; }
+  }
+  for (const p of w.props) {
+    if (p.dead || p.kind !== "brazier") continue;
+    const dx = p.x - e.x, dy = p.y - e.y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; masonSite.x = p.x; masonSite.y = p.y; found = true; }
+  }
+  if (!found) { masonSite.x = e.x; masonSite.y = e.y; }
+  return masonSite;
+}
+
+function masonRaiseCorner(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  raiseConstruction(w, e, workerBuildSites(e), ev);
+}
+
+function updateMason(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.MASON_BUILD_WINDUP);
+    if (a.time >= C.MASON_BUILD_WINDUP) {
+      masonRaiseCorner(w, e, ev);
+      a.cooldown = C.MASON_BUILD_CD * attackCdMultOf(e);
+      enterRecover(e);
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.MASON_BUILD_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const site = masonSitePoint(w, e);
+  const siteDist = Math.hypot(site.x - e.x, site.y - e.y);
+  if (siteDist > C.MASON_SITE_REACH) {
+    applyChaseStep(w, e, dt, Math.atan2(site.y - e.y, site.x - e.x), e.speed * surgeMult(e) * dt);
+    return;
+  }
+  if (a.cooldown === 0 && e.spawnTimer === 0) {
+    beginWindup(e, "build");
+    a.markX = site.x;
+    a.markY = site.y;
+    // The corner apex faces the nearest player at tell start — frozen for the whole
+    // masonry, so the previewed footprint is exactly what lands.
+    a.lockedAngle = Math.atan2(w.targetY - site.y, w.targetX - site.x);
+    a.isAimLocked = true;
+  }
+  // Site claimed and cooling: the mason holds its ground by its work.
+}
+
 function updateFragment(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   let src = fragmentSourceOf(w, e);
@@ -4626,6 +4874,11 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
       break;
     case "barrel_explosive":
       explodeBarrel(w, by ?? null, p, ev);
+      break;
+    // Worker constructions: cover either side spends, never loot (a rebuilding worker
+    // must not be a coin farm) and never RNG (the stream stays untouched).
+    case "root_wall": case "silt_mound": case "clinker_brick":
+      ev.push({ t: "propBreak", kind: p.kind, x: p.x, y: p.y });
       break;
   }
 }

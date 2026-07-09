@@ -10,11 +10,11 @@ import {
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
-  MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_ROOTWARDS_PER_ROOM,
+  MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
   FLOCK_THREAT_SHARE_MAX,
 } from "./balance.js";
 import type { EnemyTier, EliteAffix } from "./balance.js";
-import { isControllerKind, ENEMY_MODULE } from "./bestiary.js";
+import { isControllerKind, isWorkerKind, ENEMY_MODULE } from "./bestiary.js";
 
 export type Movement = "chase" | "flock" | "drift" | "kite" | "charge" | "burrow" | "orbit" | "boss";
 
@@ -111,10 +111,12 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 16, drawSize: 46, alpha: 1, tint: "#9fb4a8", kbResist: 2.2,
     baseHp: 5, baseSpeed: 50, touchDamage: 1, threat: 2.0,
   },
-  // Formation anchor: a slow moving wall whose frontal guard eats non-piercing bullets
-  // and turns SLOWLY (unlike the shielder's snap guard) — flanking is a real answer, so
-  // are melee, pierce, and splash. No committed attack: the body IS the pressure, and
-  // the pack that walks in its shadow is the fight.
+  // The FORKROOT BAILIFF (Rootbound's topology worker — ecology-gate consolidation of
+  // the wave-1 walking wall): the slow-turning frontal guard stays its defense, and its
+  // ONE commitment is now the worker verb — a long stationary tell, then it RAISES an
+  // asymmetric root divider across its facing. Raising anew crumbles the old divider;
+  // wall standoff guarantees walkable gaps at both ends. Flank the guard, break or
+  // round the divider — or use the divider as YOUR cover (props block either side).
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: rootward).
   rootward: {
     kind: "rootward", sprite: "rootward", movement: "chase", isPhasing: false,
@@ -130,9 +132,12 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 13, drawSize: 42, alpha: 1, tint: "#d7b8ff", kbResist: 0.9,
     baseHp: 4, baseSpeed: 95, touchDamage: 1, threat: 2.25,
   },
-  // The lane: previews a wall-to-wall seam, then cuts along it at a flat speed, throwing
-  // timed PERPENDICULAR sweep bolts as it travels. Cross the seam early (post-lock the
-  // lane never turns) or trail behind it; the far-wall recover is the punish window.
+  // The SILT KEEL (the Deep's topology worker — ecology-gate consolidation of the wave-1
+  // seamcutter): previews an oblique wall-to-wall seam, then PLOWS it at a flat speed,
+  // piling ONE persistent berm of destructible silt mounds beside the furrow (the old
+  // sweep-bolt payload is superseded — the zoning is the ridge, not projectiles). Its
+  // next plow sinks the old berm. Cross the lane early (post-lock it never turns), round
+  // or break the berm; the far-wall recover is the punish window.
   // Movement verb "charge" so the complex-mover cap governs it like the charger.
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: seamcutter).
   seamcutter: {
@@ -158,6 +163,18 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     kind: "sinderling", sprite: "sinderling", movement: "chase", isPhasing: false,
     radius: 13, drawSize: 40, alpha: 1, tint: "#ff8a3b", kbResist: 0.9,
     baseHp: 4, baseSpeed: 80, touchDamage: 1, threat: 2.0,
+  },
+
+  // The CLINKER MASON (Emberreach's topology worker): walks to the nearest heat vent —
+  // the sinderling's feeding ground — and masons ONE handed L-corner of destructible
+  // clinker bricks around it (corner apex toward the nearest player, long arm handed by
+  // id parity). The bricks deny your clean lane at the feeders and hand you cover to
+  // approach. Old corner collapses when it builds anew; kill it during the long tell.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: mason).
+  mason: {
+    kind: "mason", sprite: "mason", movement: "chase", isPhasing: false,
+    radius: 14, drawSize: 44, alpha: 1, tint: "#c9743f", kbResist: 1.8,
+    baseHp: 6, baseSpeed: 46, touchDamage: 1, threat: 2.0,
   },
   // The tethered voice (the Null's echo of the F30 Choir): binds to the nearest other
   // enemy in line of sight and, on cadence, HARMONIZES — the tether line becomes a
@@ -271,6 +288,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   rootward: "commander",// the formation anchor rallies its formation
   echojack: "volatile", // the trickster's last trick
   seamcutter: "brace",
+  mason: "brace",       // the worker's wall is already its loud mechanic
   caskbellows: "bulwark", // frontal plate + rear crank = a strongly directional sentry
   sinderling: "brace",  // its armed death burst is already its loud exit
   fragment: "volatile",
@@ -491,7 +509,7 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
 export const FAMILY_INTRO_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = {
   slime: 1, bat: 2, skeleton: 2, spitter: 2, ghost: 3, charger: 3,
   burrower: 4, orbiter: 6, shielder: 7,
-  rootward: 8, caskbellows: 11, echojack: 13, seamcutter: 16, sinderling: 26, fragment: 31,
+  rootward: 8, caskbellows: 11, echojack: 13, seamcutter: 16, sinderling: 26, mason: 28, fragment: 31,
 };
 
 function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
@@ -514,6 +532,8 @@ function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKi
   if (has("seamcutter")) roster.push({ kind: "seamcutter", weight: 2 });
   // Ember native: heavier weight in its home band, where the vents it feeds on live.
   if (has("sinderling")) roster.push({ kind: "sinderling", weight: 2.5 });
+  // The worker is texture, never the fight: one mason fortifying the vents is ecology.
+  if (has("mason")) roster.push({ kind: "mason", weight: 1.5 * complexShare });
   if (has("fragment")) roster.push({ kind: "fragment", weight: 2 * complexShare });
   return roster;
 }
@@ -552,7 +572,7 @@ function cardOfKind(kind: EnemyKind): EncounterCard | null {
       return "ranged";
     case "charger": case "burrower": case "seamcutter": case "sinderling":
       return "mover";
-    case "shielder": case "rootward":
+    case "shielder": case "rootward": case "mason":
       return "wall";
     default: return null;
   }
@@ -667,7 +687,7 @@ interface RoomLoad {
   complex: number;
   burrowers: number;
   shielders: number;
-  rootwards: number;
+  workers: number; // topology workers (ecology gate: one persistent edit per room)
   controllers: number;
   hasDenial: boolean; // a guard-module wall (shielder/rootward) holds this room
   kinds: Set<EnemyKind>;
@@ -730,7 +750,7 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   const load = new Map<number, RoomLoad>();
   for (let i = 0; i < combatRooms.length; i++) {
     load.set(combatRooms[i], {
-      card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, rootwards: 0,
+      card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, workers: 0,
       controllers: 0, hasDenial: false, kinds: new Set<EnemyKind>(), hasBrute: false, hasElite: false,
     });
   }
@@ -766,7 +786,8 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     }
     if (unit.kind === "burrower" && l.burrowers >= MAX_BURROWERS_PER_ROOM) return false;
     if (unit.kind === "shielder" && l.shielders >= MAX_SHIELDERS_PER_ROOM) return false;
-    if (unit.kind === "rootward" && l.rootwards >= MAX_ROOTWARDS_PER_ROOM) return false;
+    // The ecology gate: at most ONE topology worker per room — one persistent edit.
+    if (isWorkerKind(unit.kind) && l.workers >= MAX_WORKERS_PER_ROOM) return false;
     // Envelope exposure caps: ≤ roomArchetypeCap distinct kinds per room, ≤ 7 per
     // floor; ≤ 1 controller per room; a controller NEVER shares a room with a
     // guard-module wall (the banned control+denial pairing — a room that both lies to
@@ -802,7 +823,7 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     }
     if (unit.kind === "burrower") l.burrowers++;
     if (unit.kind === "shielder") l.shielders++;
-    if (unit.kind === "rootward") l.rootwards++;
+    if (isWorkerKind(unit.kind)) l.workers++;
     if (isControllerKind(unit.kind)) l.controllers++;
     if (ENEMY_MODULE[unit.kind] === "guard") l.hasDenial = true;
     l.kinds.add(unit.kind);
