@@ -544,6 +544,9 @@ export class Game {
   // owns key/mouse/autofire state and only lets actions/samples through in the contexts
   // where they're legal, so overlays/pause/reconnect can never leak gameplay input.
   private input = new InputController((a) => this.onInputAction(a));
+  // Sim-rate camera: eased toward the focus once per fixed sim step (tickCosmetics). The
+  // renderer never subtracts this directly — draws use renderCam, this camera resampled on
+  // the render clock (see render()). Input/audio/sim-side gating keeps reading this one.
   private cam = { x: 0, y: 0 };
 
   // Read-only bridge to the local player + world so the render code reads state exactly as
@@ -582,6 +585,14 @@ export class Game {
   private renderPrevX = 0; private renderPrevY = 0; // player pos before the last sim step (render interpolation)
   private hasRenderPrev = false;
   private renderAlpha = 0; // 0..1 interpolation factor within the current sim step (set each frame)
+  private camPrevX = 0; private camPrevY = 0; // camera before the last sim step (render interpolation)
+  // The one camera every world-space draw subtracts this frame: `cam` sampled on the render
+  // clock (interpolated between its last two sim steps by renderAlpha — the SAME time base the
+  // player body is drawn on). The sim-rate `cam` advances only inside fixed sim steps, so
+  // subtracting it directly makes the world hold-then-jump while the interpolated player
+  // glides (Ian's "props jitter against the player" playtest bug). Rounding policy: fractional
+  // everywhere, matching the player draw — no layer may re-snap its own coordinates.
+  private renderCam = { x: 0, y: 0 };
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
@@ -838,8 +849,7 @@ export class Game {
       this.minimap.clear();
     } else {
       this.loadFloorClient();
-      this.cam.x = this.px - this.canvas.width / 2;
-      this.cam.y = this.py - this.canvas.height / 2;
+      this.snapCameraTo(this.px - this.canvas.width / 2, this.py - this.canvas.height / 2);
       this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
     }
     this.hud.setVisible(true);
@@ -1178,8 +1188,7 @@ export class Game {
     this.pendingWorld = null;
     if (world) this.seed = world.seed;
     this.loadFloorClient();
-    this.cam.x = this.px - this.canvas.width / 2;
-    this.cam.y = this.py - this.canvas.height / 2;
+    this.snapCameraTo(this.px - this.canvas.width / 2, this.py - this.canvas.height / 2);
     this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
     this.runStart = performance.now();
   }
@@ -1191,9 +1200,12 @@ export class Game {
     // Keep the input context tracking run state (reconnect veil lifting, going down /
     // being revived) so samples/actions are always gated against the current surface.
     this.syncInputContext();
-    // Snapshot player pos BEFORE this sim step so the renderer can interpolate between the
-    // last two sim positions (smooth motion at any frame rate vs the fixed sim rate).
+    // Snapshot player pos AND camera BEFORE this sim step so the renderer can interpolate
+    // both between the last two sim states (smooth motion at any frame rate vs the fixed sim
+    // rate). They must share one snapshot point: the camera is what every world-space draw
+    // subtracts, so it has to ride the exact same render clock as the player body.
     this.renderPrevX = this.px; this.renderPrevY = this.py; this.hasRenderPrev = true;
+    this.camPrevX = this.cam.x; this.camPrevY = this.cam.y;
     // Behind the readiness veil: no gameplay runs and nothing of the world shows.
     if (this.isAwaitingOnlineWorld()) {
       this.tickOnlineVeil(dt);
@@ -1356,6 +1368,14 @@ export class Game {
     return { x: this.px, y: this.py };
   }
 
+  // Hard camera cut (run start, floor load): clear the interpolation history too, so the
+  // first rendered frame sits exactly on the new camera instead of sliding from the old one.
+  private snapCameraTo(x: number, y: number) {
+    this.cam.x = x; this.cam.y = y;
+    this.camPrevX = x; this.camPrevY = y;
+    this.renderCam.x = x; this.renderCam.y = y;
+  }
+
   // Other players to render, from whichever remote source is active: co-op presence (Convex)
   // or the authoritative server (WSTransport). Solo returns none.
   private remotes(): RemotePlayer[] {
@@ -1448,7 +1468,8 @@ export class Game {
     // per-frame movement variance (variable-dt sim step) doesn't read as jitter. High factor
     // = still tight tracking, just enough smoothing to absorb frame-time noise. The focus is
     // the local player — or, while down and spectating, the watched teammate; the same ease
-    // glides the hand-off out and back (revive returns the camera home).
+    // glides the hand-off out and back (revive returns the camera home). This runs at the
+    // fixed sim rate; render() interpolates between the last two eased states per frame.
     {
       const focus = this.cameraFocus();
       const tx = focus.x - this.canvas.width / 2;
@@ -3100,6 +3121,16 @@ export class Game {
   private render() {
     const { ctx, canvas } = this;
     if (this.isAwaitingOnlineWorld()) { this.renderConnectingVeil(); return; }
+    // Sample the camera on the render clock ONCE for the whole frame: the sim-rate `cam`
+    // interpolated between its last two steps by the same alpha the player body uses. Every
+    // world-space pass below (tiles, props, pickups, hazards, enemies, fx, player) subtracts
+    // this single fractional value and nothing re-rounds it, so the whole scene translates
+    // together — zero relative jitter as the camera pans, at any display refresh rate.
+    {
+      const a = this.hasRenderPrev ? this.renderAlpha : 1;
+      this.renderCam.x = this.camPrevX + (this.cam.x - this.camPrevX) * a;
+      this.renderCam.y = this.camPrevY + (this.cam.y - this.camPrevY) * a;
+    }
     ctx.fillStyle = this.currentBiome.bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     // trauma² shake, scaled by the player's intensity setting (zeroed under reduced
@@ -3116,7 +3147,7 @@ export class Game {
     this.renderDecals();
     this.renderFloorHazards(); // floor-level danger: over decals, under the ambient air + entities
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
-    this.motes.render(ctx, this.cam.x, this.cam.y); // ambient biome air, over the floor, under entities
+    this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
     this.renderPropEntities();
@@ -3124,7 +3155,7 @@ export class Game {
     this.renderChests();
     this.renderPickups();
     this.renderParticles();
-    this.shockwaves.render(ctx, this.cam.x, this.cam.y);
+    this.shockwaves.render(ctx, this.renderCam.x, this.renderCam.y);
     this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
@@ -3319,8 +3350,8 @@ export class Game {
       dungeon: this.dungeon,
       biome: this.currentBiome,
       biomeIdx: this.biomeIdx,
-      camX: this.cam.x,
-      camY: this.cam.y,
+      camX: this.renderCam.x,
+      camY: this.renderCam.y,
       viewW: this.canvas.width,
       viewH: this.canvas.height,
       art: this.tiles,
@@ -3338,7 +3369,7 @@ export class Game {
   private renderFloorHazards() {
     const hazards = this.world.floorHazards;
     if (hazards.length === 0) return;
-    const { cam, tiles } = this;
+    const { renderCam: cam, tiles } = this;
     const clock = this.hazardVisClock;
     for (const h of hazards) {
       const wx = (h.tx + 0.5) * TILE, wy = (h.ty + 0.5) * TILE;
@@ -3584,7 +3615,7 @@ export class Game {
   // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
   // to the visible window; per-torch phase offset keeps them from flickering in sync.
   private renderProps() {
-    const { ctx, cam, canvas, tiles } = this;
+    const { ctx, renderCam: cam, canvas, tiles } = this;
     const clock = this.animClock;
     const flame = TORCH_FRAMES[frameIndex(TORCH_FRAMES.length, 8, clock)];
     const hasGlow = tiles.ready("torch_glow");
@@ -3609,7 +3640,7 @@ export class Game {
   }
 
   private renderExit() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2 - cam.x, ey = d.exit.y * TILE + TILE / 2 - cam.y;
     // Use the SAME authoritative/objective clear predicate as the HUD + descend gate. Online
@@ -3667,7 +3698,7 @@ export class Game {
   }
 
   private renderShadows() {
-    const { cam } = this;
+    const { renderCam: cam } = this;
     // props + chests
     for (const p of this.props) {
       if (p.dead || p.kind === "brazier") continue;
@@ -3696,7 +3727,7 @@ export class Game {
     if (this.props.length === 0) return;
     for (const p of this.props) {
       if (!this.isNearCamera(p.x, p.y, TILE)) continue;
-      const sx = p.x - this.cam.x, sy = p.y - this.cam.y;
+      const sx = p.x - this.renderCam.x, sy = p.y - this.renderCam.y;
       const anim = this.animForProp(p);
       const xf = characterXform(anim, PROP_STYLE);
       if (p.kind === "brazier") { this.renderBrazier(p, sx, sy, xf); continue; }
@@ -3732,7 +3763,7 @@ export class Game {
 
   private renderChests() {
     if (this.chests.length === 0) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const c of this.chests) {
       if (!this.isNearCamera(c.x, c.y, TILE)) continue;
       const sx = c.x - cam.x, sy = c.y - cam.y;
@@ -3836,7 +3867,7 @@ export class Game {
   private renderShop() {
     const shop = this.world.shop;
     if (!shop) return;
-    const { cam } = this;
+    const { renderCam: cam } = this;
     if (this.isNearCamera(shop.keeperX, shop.keeperY, 140)) {
       this.drawShopStall(shop.keeperX - cam.x, shop.keeperY - cam.y);
       this.drawPatch(shop.keeperX - cam.x, shop.keeperY - cam.y - 22);
@@ -3891,7 +3922,7 @@ export class Game {
   }
 
   private drawShopStation(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, isFocused: boolean) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const sx = slot.x - cam.x, sy = slot.y - cam.y;
     const status = shopSlotStatusFor(shop, slot, viewer);
     // The walk-near highlight: an interact affordance ring, never a buy trigger.
@@ -3998,7 +4029,7 @@ export class Game {
   }
 
   private renderPickups() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
@@ -4049,7 +4080,7 @@ export class Game {
   }
 
   private renderCorpses() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const c of this.corpses) {
       const p = c.t; // 0..1
       // A registered death sheet plays once over the corpse's lifetime (frame from elapsed
@@ -4090,7 +4121,7 @@ export class Game {
 
   private renderMuzzle() {
     if (this.muzzle.t <= 0) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const k = this.muzzle.t / MUZZLE_DUR; // 1..0
     const mx = this.muzzle.x - cam.x, my = this.muzzle.y - cam.y;
     const sz = this.muzzle.size;
@@ -4128,7 +4159,7 @@ export class Game {
   }
 
   private renderParticles() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const p of this.particles) {
       const a = p.life / p.maxLife;
       if (a <= 0) continue;
@@ -4163,7 +4194,7 @@ export class Game {
   // Floating damage numbers, drawn in world space over the particles. Pixel font with a
   // dark outline so they read on any background; crits are bigger + gold + a "!".
   private renderDmgNumbers() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -4190,7 +4221,7 @@ export class Game {
 
   private renderWorldLabels() {
     if (this.worldLabels.length === 0) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     ctx.save();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -4210,7 +4241,7 @@ export class Game {
   }
 
   private renderDecals() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const d of this.decals) {
       const k = d.t / d.life; // 0..1
       const sx = d.x - cam.x, sy = d.y - cam.y;
@@ -4242,7 +4273,7 @@ export class Game {
   }
 
   private renderEnemies() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const e of this.enemies) {
       const arch = ENEMY_ARCHETYPES[e.kind];
       const a = e.attack;
@@ -4378,7 +4409,7 @@ export class Game {
   // FX like the danger markers — the hazards themselves are authoritative sim state.
   private renderHazards() {
     if (this.hazards.length === 0) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     ctx.save();
     for (const h of this.hazards) {
       const sx = h.x - cam.x, sy = h.y - cam.y;
@@ -4457,7 +4488,7 @@ export class Game {
   // what lands. Escape-route standoffs may still skip a segment at raise time; the
   // preview shows intent, the props are truth.
   private renderBuildFootprint(e: Enemy) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const a = e.attack;
     const pulse = 0.5 + 0.5 * Math.sin(this.animClock * 9);
     ctx.save();
@@ -4476,7 +4507,7 @@ export class Game {
   }
 
   private renderDangerDisc(x: number, y: number, radius: number, grow: number) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const sx = x - cam.x, sy = y - cam.y;
     const r = radius * Math.max(0.2, grow);
     ctx.save();
@@ -4513,7 +4544,7 @@ export class Game {
   // The airborne Weaver's falling shadow: a blob that swells over the landing mark as it
   // drops — the classic "get out from under it" read.
   private renderPounceShadow(x: number, y: number, size: number, t: number) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const sx = x - cam.x, sy = y - cam.y;
     ctx.save();
     ctx.globalAlpha = 0.3 + 0.35 * t;
@@ -4609,7 +4640,7 @@ export class Game {
   private renderFragmentTether(e: Enemy) {
     const src = this.enemies.find((other) => other.id === e.aux - 1 && !other.dead);
     if (!src) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const a = e.attack;
     const isPulsing = a.move === "harmonize" && a.phase === "active";
     const charge = a.move === "harmonize" && a.phase === "windup" ? a.windup : 0;
@@ -4679,7 +4710,7 @@ export class Game {
   // The arena squeeze: outside the safe ring is danger. During the 1s telegraph the ring
   // fades in at its start radius; during the 3s hold it shrinks toward the boss.
   private renderSqueeze(e: Enemy) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const a = e.attack;
     const t = a.phase === "active" ? a.windup : 0;
     const safeR = BOSS.squeezeStartRadius + (BOSS.squeezeEndRadius - BOSS.squeezeStartRadius) * t;
@@ -4770,7 +4801,7 @@ export class Game {
   // The boss hop-slam's growing footprint: a filled danger disc + bright rim. It tracks
   // the target while charging, then freezes at aim-lock so you can simply walk off it.
   private renderSlamMarker(e: Enemy) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const a = e.attack;
     const sx = a.markX - cam.x, sy = a.markY - cam.y;
     const grow = a.phase === "windup" ? a.windup : 1;
@@ -4833,7 +4864,7 @@ export class Game {
   }
 
   private renderBullets() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const b of this.bullets) {
       const bx = b.x - cam.x, by = b.y - cam.y;
       if (b.friendly) {
@@ -4971,7 +5002,7 @@ export class Game {
   }
 
   private renderTracers() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const tr of this.remoteTracers) {
       const len = tr.len ?? 42;
       const x = tr.x - cam.x, y = tr.y - cam.y;
@@ -5007,7 +5038,7 @@ export class Game {
   private renderRemotePlayers() {
     const remotes = this.remotes();
     if (remotes.length === 0) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     for (const r of remotes) {
       const sx = r.x - cam.x, sy = r.y - cam.y;
       // Identity still unresolved (no verified color claim yet): an explicit NEUTRAL
@@ -5094,7 +5125,7 @@ export class Game {
   }
 
   private renderPlayer() {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     // Interpolate the render position between the last two sim steps for smooth motion.
     const a = this.hasRenderPrev ? this.renderAlpha : 1;
     const ipx = this.renderPrevX + (this.px - this.renderPrevX) * a;
@@ -5146,7 +5177,7 @@ export class Game {
   // teammate's). For a living player in range: the HOLD E prompt / REVIVING label.
   private renderReviveRings() {
     if (this.mode === "solo" || !this.isRunning) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const drawStandRing = (sx: number, sy: number) => {
       ctx.save();
       ctx.globalAlpha = 0.22 + 0.08 * Math.sin(this.animClock * 3);
@@ -5228,7 +5259,7 @@ export class Game {
     const selfId = this.wsTransport.getSelfServerId();
     const isSelfAt = selfId !== null && exr.includes(selfId);
     const chevron = (fromX: number, fromY: number, angle: number, color: string) => {
-      const { ctx, cam } = this;
+      const { ctx, renderCam: cam } = this;
       const pulse = 2.5 * Math.sin(this.animClock * 5);
       const cx = fromX + Math.cos(angle) * (58 + pulse) - cam.x;
       const cy = fromY + Math.sin(angle) * (58 + pulse) - cam.y;
@@ -5338,7 +5369,7 @@ export class Game {
     const living = this.remotes().filter((r) => !r.isDown && !isReconnectingTeammate(r)).slice(0, 3);
     ctx.font = '700 10px "Silkscreen", monospace';
     for (const mate of living) {
-      const sx = mate.x - this.cam.x, sy = mate.y - this.cam.y;
+      const sx = mate.x - this.renderCam.x, sy = mate.y - this.renderCam.y;
       const isOnScreen = sx > 40 && sx < canvas.width - 40 && sy > 40 && sy < canvas.height - 40;
       if (isOnScreen) continue; // visible teammates need no arrow
       const ang = Math.atan2(mate.y - this.py, mate.x - this.px);
@@ -5386,7 +5417,7 @@ export class Game {
   }
 
   private renderSlashArc(swing: MeleeSwing, t: number) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const sx = this.px - cam.x;
     const sy = this.py - cam.y;
     const inner = 12;
@@ -5435,7 +5466,7 @@ export class Game {
   }
 
   private renderThrustFx(swing: MeleeSwing, t: number) {
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const sx = this.px - cam.x;
     const sy = this.py - cam.y;
     const ext = Math.sin(t * Math.PI); // 0 -> full extension -> 0
@@ -5554,7 +5585,7 @@ export class Game {
 
   private renderAfterimages() {
     if (this.afterimages.length === 0) return;
-    const { ctx, cam } = this;
+    const { ctx, renderCam: cam } = this;
     const isReady = this.sprites.ready("hero");
     const tint = this.selfTint();
     const heroImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
@@ -5779,7 +5810,7 @@ export class Game {
   private renderFlowDebug(): void {
     const flow = navDebugField(this.world);
     if (!flow.isReady()) return;
-    const { ctx, cam, canvas } = this;
+    const { ctx, renderCam: cam, canvas } = this;
     const d = this.dungeon;
     const x0 = Math.max(0, Math.floor(cam.x / TILE));
     const y0 = Math.max(0, Math.floor(cam.y / TILE));
