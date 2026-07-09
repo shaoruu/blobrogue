@@ -19,7 +19,7 @@ import {
   bossWaveEvents, PET_SIDECHAIN, BOSS_LOCK_AMBIENT_MUTE_MS, WAVE_PRIORITY,
   WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_WEAPON_FIRE, AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS,
   ALWAYS_REACHABLE_EVENTS, BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS,
-  BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, pickDeepCategory, emitterRand,
+  BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, takeStemsOf, emitterRand,
 } from "./waveSpec.js";
 import type { WaveEventId, WaveSoundSpec, TellSnapshot } from "./waveSpec.js";
 
@@ -98,9 +98,10 @@ interface BurrowEmitterState {
 }
 
 // The Deep's sparse ambience scheduler (one per director; active only in the Deep zone).
+// One opportunity clock per channel; recent starts are shared (the max-overlap cap).
 interface DeepEmitterState {
   rngState: number;
-  nextAtMs: number;
+  nextAtMs: number[];
   recentAtMs: number[]; // recent event starts, pruned to the overlap window
 }
 
@@ -221,7 +222,7 @@ class WaveAudioDirector {
     // The Deep has no bed (authored silence): entering it arms the sparse positional
     // scheduler from a fixed seed, so every visit produces the same pattern.
     this.deepEmitter = zoneIndex !== null && AMBIENT_ZONE_EVENTS[zoneIndex] === "ambient.deep"
-      ? { rngState: 0x0DEE9 | 0, nextAtMs: -1, recentAtMs: [] }
+      ? { rngState: 0x0DEE9 | 0, nextAtMs: DEEP_EMITTER.channels.map(() => -1), recentAtMs: [] }
       : null;
   }
 
@@ -397,33 +398,48 @@ class WaveAudioDirector {
     }
   }
 
-  // The Deep's sparse ambience: one authored event every 1.5–3.5s from the weighted
-  // category table, placed on a deterministic ring around the listener, never more than
-  // two sounding together, and held (not rescheduled) through the ±250ms combat-lock
-  // mute window so a lock tell is never crowded.
+  // The Deep's near-silent sparse ambience: each SELECTED channel runs its own
+  // deterministic opportunity clock (mineral 2–4s @35%, architecture 5–9s @15%); an
+  // opportunity that misses its chance is authored silence, never rerolled. Events land
+  // on a deterministic ring around the listener at a deterministic gain inside the
+  // channel's range; at most ONE event sounds at a time, and a due channel holds (not
+  // rescheduled) through the ±250ms combat-lock mute window so a lock tell is never
+  // crowded. Channels with an empty take selection never schedule — the others never
+  // speed up to fill the gap.
   private stepDeepEmitter(nowMs: number, l: WaveListener): void {
     const st = this.deepEmitter;
     if (!st) return;
-    if (st.nextAtMs < 0) st.nextAtMs = nowMs + this.drawGapMs(st, DEEP_EMITTER.minGapSec, DEEP_EMITTER.maxGapSec);
-    if (nowMs < st.nextAtMs) return;
-    if (nowMs - this.lastCombatLockAtMs < DEEP_EMITTER.lockMuteMs) return;
-    st.recentAtMs = st.recentAtMs.filter((t) => nowMs - t < DEEP_EMITTER.overlapWindowSec * 1000);
-    if (st.recentAtMs.length >= DEEP_EMITTER.maxOverlap) return;
-    const cat = emitterRand(st.rngState);
-    const ang = emitterRand(cat.state);
-    const dist = emitterRand(ang.state);
-    const variant = emitterRand(dist.state);
-    st.rngState = variant.state;
-    const event = pickDeepCategory(cat.value);
-    const angle = ang.value * Math.PI * 2;
-    const distance = DEEP_EMITTER.minDistPx + dist.value * (DEEP_EMITTER.maxDistPx - DEEP_EMITTER.minDistPx);
-    const isPlayed = this.play(event, {
-      x: l.x + Math.cos(angle) * distance,
-      y: l.y + Math.sin(angle) * distance,
-      variantRoll: variant.value,
-    });
-    if (isPlayed) st.recentAtMs.push(nowMs);
-    st.nextAtMs = nowMs + this.drawGapMs(st, DEEP_EMITTER.minGapSec, DEEP_EMITTER.maxGapSec);
+    for (let i = 0; i < DEEP_EMITTER.channels.length; i++) {
+      const ch = DEEP_EMITTER.channels[i];
+      const spec = waveSpecOf(ch.event);
+      if (takeStemsOf(spec).length === 0) continue; // awaiting selection: silent
+      if (st.nextAtMs[i] < 0) st.nextAtMs[i] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
+      if (nowMs < st.nextAtMs[i]) continue;
+      if (nowMs - this.lastCombatLockAtMs < DEEP_EMITTER.lockMuteMs) continue; // hold
+      st.recentAtMs = st.recentAtMs.filter((t) => nowMs - t < DEEP_EMITTER.overlapWindowSec * 1000);
+      if (st.recentAtMs.length >= DEEP_EMITTER.maxOverlap) continue; // hold
+      const chanceRoll = emitterRand(st.rngState);
+      const ang = emitterRand(chanceRoll.state);
+      const dist = emitterRand(ang.state);
+      const gainRoll = emitterRand(dist.state);
+      const variant = emitterRand(gainRoll.state);
+      st.rngState = variant.state;
+      if (chanceRoll.value < ch.chance) {
+        const angle = ang.value * Math.PI * 2;
+        const distance = DEEP_EMITTER.minDistPx + dist.value * (DEEP_EMITTER.maxDistPx - DEEP_EMITTER.minDistPx);
+        // The row's gain is the channel max; scale this play down into the authored
+        // range (deterministic), before the ordinary distance attenuation.
+        const target = ch.gainMin + gainRoll.value * (ch.gainMax - ch.gainMin);
+        const isPlayed = this.play(ch.event, {
+          x: l.x + Math.cos(angle) * distance,
+          y: l.y + Math.sin(angle) * distance,
+          gain: target / spec.gain,
+          variantRoll: variant.value,
+        });
+        if (isPlayed) st.recentAtMs.push(nowMs);
+      }
+      st.nextAtMs[i] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
+    }
   }
 
   private drawGapMs(st: { rngState: number }, minSec: number, maxSec: number): number {
@@ -474,8 +490,9 @@ class WaveAudioDirector {
     };
     const zoneEvent = AMBIENT_ZONE_EVENTS[zoneIndex];
     if (zoneEvent) collect(zoneEvent);
-    // The Deep's bed is authored silence — its sparse emitter categories load instead.
-    if (zoneEvent === "ambient.deep") for (const cat of DEEP_EMITTER.categories) collect(cat.event);
+    // The Deep's bed is authored silence — its sparse emitter channels load instead
+    // (channels awaiting selection contribute no stems).
+    if (zoneEvent === "ambient.deep") for (const ch of DEEP_EMITTER.channels) collect(ch.event);
     for (const event of HAZARD_WAVE_EVENTS) collect(event);
     for (const event of ALWAYS_REACHABLE_EVENTS) collect(event);
     if (bossKind) for (const event of bossWaveEvents(bossKind)) collect(event);
@@ -513,30 +530,25 @@ class WaveAudioDirector {
     this.reviveChannels.clear();
   }
 
-  // Variant selection: seeded emitters pass their own deterministic roll; everything else
-  // rides Math.random. Either way the same take never repeats back-to-back.
+  // Variant selection over the event's SELECTED take set: seeded emitters pass their own
+  // deterministic roll; everything else rides Math.random. Either way the same take never
+  // repeats back-to-back (single-take selections necessarily repeat).
   private pickVariant(event: WaveEventId, spec: WaveSoundSpec, roll?: number): number {
-    if (spec.variants <= 1) return 0;
+    const count = takeStemsOf(spec).length;
+    if (count <= 1) return 0;
     const last = this.lastVariant.get(event);
-    let index = Math.floor((roll ?? Math.random()) * spec.variants) % spec.variants;
-    if (index === last) index = (index + 1) % spec.variants; // never the same take twice
+    let index = Math.floor((roll ?? Math.random()) * count) % count;
+    if (index === last) index = (index + 1) % count; // never the same take twice
     return index;
   }
 
   private stemForVariant(spec: WaveSoundSpec, variantIndex: number): string | null {
-    if (spec.stem === null) return null;
-    if (spec.variants <= 1) return spec.stem;
-    return `${spec.stem}_v${variantIndex + 1}`;
+    const takes = takeStemsOf(spec);
+    return takes[variantIndex] ?? null;
   }
 
   private collectStems(event: WaveEventId, out: string[]): void {
-    const spec = waveSpecOf(event);
-    if (spec.stem === null) return;
-    if (spec.variants <= 1) {
-      out.push(spec.stem);
-      return;
-    }
-    for (let v = 1; v <= spec.variants; v++) out.push(`${spec.stem}_v${v}`);
+    out.push(...takeStemsOf(waveSpecOf(event)));
   }
 
   private loopKey(event: WaveEventId, key: string): string {

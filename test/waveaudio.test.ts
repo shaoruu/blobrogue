@@ -34,7 +34,8 @@ const {
   WAVE_SOUNDS, WAVE_TELLS, WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_PRIORITY,
   AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS, ALWAYS_REACHABLE_EVENTS,
   SAFE_DERIVE_RATE_MIN, SAFE_DERIVE_RATE_MAX,
-  BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, pickDeepCategory,
+  BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER,
+  SELECTED_BURROW_TAKES, SELECTED_DEEP_TAKES, takeStemsOf,
   tellCuesFor, isBurrowUnderground, spatialGainFor, isWaveEventId,
 } = await import("../src/game/waveSpec.js");
 type WaveSoundSpec = import("../src/game/waveSpec.js").WaveSoundSpec;
@@ -101,13 +102,9 @@ function enemyAt(id: number, kind: string, snap: TellSnapshot, x = 0, y = 0): Wa
 
 const snap = (phase: string, move: string, isAimLocked = false): TellSnapshot => ({ phase, move, isAimLocked });
 
-// Variant file stems of a wave spec, matching the engine's naming contract.
-function stemsOf(spec: WaveSoundSpec): string[] {
-  if (spec.stem === null) return [];
-  if (spec.variants <= 1) return [spec.stem];
-  const out: string[] = [];
-  for (let v = 1; v <= spec.variants; v++) out.push(`${spec.stem}_v${v}`);
-  return out;
+// Variant file stems of a wave spec (selection-driven takes, else derived _vN naming).
+function stemsOf(spec: WaveSoundSpec): readonly string[] {
+  return takeStemsOf(spec);
 }
 
 function sampleStemsOf(spec: SampleSpec): string[] {
@@ -136,10 +133,10 @@ section("registry contract");
       isAllSane = false;
       console.log(`    bad row: ${event}`);
     }
-    if (spec.stem !== null) {
-      if (!/^[a-z]+\/[a-z0-9_]+$/.test(spec.stem)) { isStemFormatOk = false; console.log(`    bad stem: ${event} ${spec.stem}`); }
-      if (stems.has(spec.stem)) { hasDuplicateStem = true; console.log(`    duplicate stem: ${spec.stem}`); }
-      stems.add(spec.stem);
+    for (const file of stemsOf(spec)) {
+      if (!/^[a-z]+\/[a-z0-9_]+$/.test(file)) { isStemFormatOk = false; console.log(`    bad stem: ${event} ${file}`); }
+      if (stems.has(file)) { hasDuplicateStem = true; console.log(`    duplicate stem: ${file}`); }
+      stems.add(file);
     }
     if (spec.priority >= WAVE_PRIORITY.bossLock && !(spec.jitter === 0 && spec.isOffCameraUncapped === true)) isLockLawOk = false;
   }
@@ -245,15 +242,43 @@ section("authored-only registry laws (safe rates, shipped variants, shipped fall
   reachable.add("orbiter.enterBand");
   for (const ch of BURROW_EMITTER) reachable.add(ch.event);
   reachable.add(BURROW_THUD_EVENT);
-  for (const cat of DEEP_EMITTER.categories) reachable.add(cat.event);
-  const stemlessReachable = [...reachable].filter((ev) => WAVE_SOUNDS[ev].stem === null && WAVE_SOUNDS[ev].isAuthoredSilence !== true);
-  check("no reachable event is stem:null (every live cue has an asset hook or authored silence)",
+  for (const ch of DEEP_EMITTER.channels) reachable.add(ch.event);
+  const stemlessReachable = [...reachable].filter((ev) => WAVE_SOUNDS[ev].stem === null
+    && WAVE_SOUNDS[ev].takes === undefined && WAVE_SOUNDS[ev].isAuthoredSilence !== true);
+  check("no reachable event is hookless (asset hook, take selection, or authored silence)",
     stemlessReachable.length === 0, stemlessReachable.join(","));
   check("the Deep's continuous bed is authored silence (director-decided, no file)",
     WAVE_SOUNDS["ambient.deep"].stem === null && WAVE_SOUNDS["ambient.deep"].isAuthoredSilence === true);
-  check("rejected burrow_track / deep_loop files are gone from the registry and disk",
-    !Object.values<WaveSoundSpec>(WAVE_SOUNDS).some((s) => s.stem === "enemy/burrow_track" || s.stem === "amb/deep_loop")
-    && !existsSync(join(AUDIO_ROOT, "enemy", "burrow_track.ogg")) && !existsSync(join(AUDIO_ROOT, "amb", "deep_loop.ogg")));
+
+  // Selection manifest law (audio-gen-p0-components/selected_components.json): only
+  // SELECTED takes are referenced anywhere; rejected takes and superseded files never.
+  const registryText = JSON.stringify(WAVE_SOUNDS);
+  const rejected = [
+    "burrow_dirt_grind_v1", "burrow_pebble_v3", "burrow_underground_thud_v1",
+    "burrow_track", "deep_loop",
+  ];
+  check("rejected takes are referenced nowhere in the registry",
+    rejected.every((r) => !registryText.includes(r)), rejected.filter((r) => registryText.includes(r)).join(","));
+  check("rejected takes are not on disk",
+    !existsSync(join(AUDIO_ROOT, "enemy", "burrow_dirt_grind_v1.ogg"))
+    && !existsSync(join(AUDIO_ROOT, "enemy", "burrow_pebble_v3.ogg"))
+    && !existsSync(join(AUDIO_ROOT, "enemy", "burrow_underground_thud_v1.ogg"))
+    && !existsSync(join(AUDIO_ROOT, "enemy", "burrow_track.ogg"))
+    && !existsSync(join(AUDIO_ROOT, "amb", "deep_loop.ogg")));
+  check("burrow selection: dirt v2 only, pebble v1+v2, shell v1+v2, thud underground_v2 only",
+    stemsOf(WAVE_SOUNDS["burrow.dirtGrind"]).join() === "enemy/burrow_dirt_grind_v2"
+    && stemsOf(WAVE_SOUNDS["burrow.pebble"]).join() === "enemy/burrow_pebble_v1,enemy/burrow_pebble_v2"
+    && stemsOf(WAVE_SOUNDS["burrow.shellScrape"]).join() === "enemy/burrow_shell_v1,enemy/burrow_shell_v2"
+    && stemsOf(WAVE_SOUNDS["burrow.thud"]).join() === "enemy/burrow_underground_thud_v2");
+  check("deep selection: mineral v1+v2 + architecture_shift v1; resin selections EMPTY",
+    stemsOf(WAVE_SOUNDS["deep.mineralTick"]).join() === "amb/deep_mineral_tick_v1,amb/deep_mineral_tick_v2"
+    && stemsOf(WAVE_SOUNDS["deep.architectureShift"]).join() === "amb/deep_architecture_shift_v1"
+    && SELECTED_DEEP_TAKES.resinCreak.length === 0 && SELECTED_DEEP_TAKES.resinDrip.length === 0
+    && stemsOf(WAVE_SOUNDS["deep.resinCreak"]).length === 0 && stemsOf(WAVE_SOUNDS["deep.resinDrip"]).length === 0);
+  check("burrow rows ride the selection arrays verbatim",
+    WAVE_SOUNDS["burrow.dirtGrind"].takes === SELECTED_BURROW_TAKES.dirtGrind
+    && WAVE_SOUNDS["burrow.pebble"].takes === SELECTED_BURROW_TAKES.pebble
+    && WAVE_SOUNDS["burrow.thud"].takes === SELECTED_BURROW_TAKES.thud);
 }
 
 // ---- 2. trigger mapping (authoritative attack-state edges -> manifest events) ----
@@ -495,11 +520,18 @@ section("burrow underground emitter (deterministic authored components, no loop)
   check("pebble ticks faster than dirt, dirt faster than shell scrape",
     counts["burrow.pebble"] > counts["burrow.dirtGrind"] && counts["burrow.dirtGrind"] > counts["burrow.shellScrape"]);
   let hasVariantRepeat = false;
+  let isSelectionOnly = true;
   for (const ch of BURROW_EMITTER) {
-    const stems = eng.playsFor(ch.event).map((p) => p.stem ?? "");
-    for (let i = 1; i < stems.length; i++) if (stems[i] === stems[i - 1] && WAVE_SOUNDS[ch.event].variants > 1) hasVariantRepeat = true;
+    const played = eng.playsFor(ch.event).map((p) => p.stem ?? "");
+    const allowed = new Set(stemsOf(WAVE_SOUNDS[ch.event]));
+    if (!played.every((s) => allowed.has(s))) isSelectionOnly = false;
+    for (let i = 1; i < played.length; i++) if (played[i] === played[i - 1] && allowed.size > 1) hasVariantRepeat = true;
   }
-  check("deterministic variants never repeat back-to-back", !hasVariantRepeat);
+  check("deterministic variants never repeat back-to-back (multi-take selections)", !hasVariantRepeat);
+  check("only SELECTED takes ever play", isSelectionOnly);
+  check("burrow jitter capped at ±3%", BURROW_EMITTER.every((ch) => WAVE_SOUNDS[ch.event].jitter <= 0.03)
+    && WAVE_SOUNDS[BURROW_THUD_EVENT].jitter <= 0.03
+    && eng.plays.filter((p) => p.event.startsWith("burrow.")).every((p) => p.rate >= 0.97 && p.rate <= 1.03));
   check("no thud while tunnelling (thud is edge-only)", eng.playsFor("burrow.thud").length === 0);
 
   const eng2 = runDig();
@@ -545,57 +577,81 @@ section("burrow underground emitter (deterministic authored components, no loop)
   check("despawn stops the emitter (no orphaned scheduling)", eng4.plays.length === beforeDespawn && beforeDespawn > 0);
 }
 
-// ---- 7c. the Deep's sparse positional ambience (authored scheduling, silent bed) ----
-section("the Deep: silent bed + sparse deterministic positional emitter");
+// ---- 7c. the Deep's near-silent positional ambience (selection-driven channels) ----
+section("the Deep: silent bed + near-silent selection-driven channels");
 {
-  check("category table: weights 35/35/15/15 summing to 1, gains inside .08–.16",
-    Math.abs(DEEP_EMITTER.categories.reduce((s, c) => s + c.weight, 0) - 1) < 1e-9
-    && DEEP_EMITTER.categories[0].weight === 0.35 && DEEP_EMITTER.categories[3].weight === 0.15
-    && DEEP_EMITTER.categories.every((c) => WAVE_SOUNDS[c.event].gain >= 0.08 && WAVE_SOUNDS[c.event].gain <= 0.16));
-  check("weighted picker maps rolls to the authored shares",
-    pickDeepCategory(0.1) === "deep.resinCreak" && pickDeepCategory(0.5) === "deep.mineralTick"
-    && pickDeepCategory(0.75) === "deep.architectureShift" && pickDeepCategory(0.99) === "deep.resinDrip");
+  const mineral = DEEP_EMITTER.channels.find((c) => c.event === "deep.mineralTick")!;
+  const arch = DEEP_EMITTER.channels.find((c) => c.event === "deep.architectureShift")!;
+  check("mineral channel: every 2–4s at 35% chance, gain .08–.12",
+    mineral.minGapSec === 2 && mineral.maxGapSec === 4 && mineral.chance === 0.35
+    && mineral.gainMin === 0.08 && mineral.gainMax === 0.12);
+  check("architecture channel: every 5–9s at 15% chance, gain .10–.13",
+    arch.minGapSec === 5 && arch.maxGapSec === 9 && arch.chance === 0.15
+    && arch.gainMin === 0.10 && arch.gainMax === 0.13);
+  check("max ONE Deep emitter voice at a time", DEEP_EMITTER.maxOverlap === 1);
 
-  const runDeep = (withLocks: boolean): { eng: ScriptEngine; deepPlays: WavePlayRequest[]; playTimes: number[] } => {
+  const runDeep = (withLocks: boolean, seconds = 60): { eng: ScriptEngine; deepPlays: WavePlayRequest[]; playTimes: number[]; timesByEvent: Map<string, number[]> } => {
     const eng = new ScriptEngine();
     const dir = new WaveAudioDirector(eng);
     dir.setAmbientZone(2); // the Deep
     const playTimes: number[] = [];
-    for (let t = 0; t <= 60000; t += 50) {
+    const timesByEvent = new Map<string, number[]>();
+    for (let t = 0; t <= seconds * 1000; t += 50) {
       eng.nowMs = t;
-      const before = eng.plays.filter((p) => p.event.startsWith("deep.")).length;
+      const before = eng.plays.length;
       if (withLocks && t >= 20000 && t < 25000 && t % 100 === 0) {
         dir.play("marrow.aimLock", { entityId: t, x: 100, y: 0 }); // fresh entity: no cooldown gate
       }
       dir.frame(frameInput([]));
-      if (eng.plays.filter((p) => p.event.startsWith("deep.")).length > before) playTimes.push(t);
+      for (let i = before; i < eng.plays.length; i++) {
+        const p = eng.plays[i];
+        if (!p.event.startsWith("deep.")) continue;
+        playTimes.push(t);
+        const arr = timesByEvent.get(p.event) ?? [];
+        arr.push(t);
+        timesByEvent.set(p.event, arr);
+      }
     }
-    return { eng, deepPlays: eng.plays.filter((p) => p.event.startsWith("deep.")), playTimes };
+    return { eng, deepPlays: eng.plays.filter((p) => p.event.startsWith("deep.")), playTimes, timesByEvent };
   };
 
   const quiet = runDeep(false);
   check("the Deep never starts a bed loop (authored silence)",
     quiet.eng.loopStarts.every((l) => !l.key.startsWith("ambient.deep")));
-  let isGapOk = true;
-  for (let i = 1; i < quiet.playTimes.length; i++) {
-    const gap = (quiet.playTimes[i] - quiet.playTimes[i - 1]) / 1000;
-    if (gap < DEEP_EMITTER.minGapSec - 1e-9 || gap > DEEP_EMITTER.maxGapSec + 0.1) isGapOk = false;
+  check("the minute is NEAR-SILENT: a handful of events, never a stream",
+    quiet.deepPlays.length >= 2 && quiet.deepPlays.length <= 15, `${quiet.deepPlays.length} events in 60s`);
+  check("only the SELECTED channels sound (mineral/architecture; resin awaits selection)",
+    quiet.deepPlays.every((p) => p.event === "deep.mineralTick" || p.event === "deep.architectureShift")
+    && (quiet.timesByEvent.get("deep.mineralTick") ?? []).length > 0);
+  // "Do not increase tick rate to fill missing categories": each channel's own cadence
+  // floor holds — consecutive plays of one channel are never closer than its min gap.
+  let isChannelGapOk = true;
+  for (const ch of DEEP_EMITTER.channels) {
+    const times = quiet.timesByEvent.get(ch.event) ?? [];
+    for (let i = 1; i < times.length; i++) {
+      if (times[i] - times[i - 1] < ch.minGapSec * 1000 - 1e-9) isChannelGapOk = false;
+    }
   }
-  check("one sparse event every 1.5–3.5s over a quiet minute", isGapOk && quiet.deepPlays.length >= 17 && quiet.deepPlays.length <= 41,
-    `${quiet.deepPlays.length} events`);
+  check("selected channels hold their own cadence floors (no rate fill-in)", isChannelGapOk);
   let isOverlapOk = true;
-  for (let i = 2; i < quiet.playTimes.length; i++) {
-    if (quiet.playTimes[i] - quiet.playTimes[i - 2] < DEEP_EMITTER.overlapWindowSec * 1000) isOverlapOk = false;
+  for (let i = 1; i < quiet.playTimes.length; i++) {
+    if (quiet.playTimes[i] - quiet.playTimes[i - 1] < DEEP_EMITTER.overlapWindowSec * 1000) isOverlapOk = false;
   }
-  check("never more than two events inside the overlap window", isOverlapOk);
-  const kinds = new Set(quiet.deepPlays.map((p) => p.event));
-  check("the minute draws from the authored palette (creak/tick present, ≥3 kinds)",
-    kinds.has("deep.resinCreak") && kinds.has("deep.mineralTick") && kinds.size >= 3, [...kinds].join(","));
-  check("every event is positional (spatialized off the listener ring)",
-    quiet.deepPlays.every((p) => p.gain > 0 && p.gain <= 0.16));
+  check("never two Deep events inside the overlap window (max 1)", isOverlapOk);
+  let isGainOk = true;
+  for (const p of quiet.deepPlays) {
+    const ch = DEEP_EMITTER.channels.find((c) => c.event === p.event)!;
+    // Engine gain = channel-target × distance attenuation, so the ceiling is exact and
+    // the floor is the range floor scaled by the ring's worst-case falloff.
+    if (p.gain > ch.gainMax + 1e-9 || p.gain < ch.gainMin * spatialGainFor(DEEP_EMITTER.maxDistPx, false, false) - 1e-9) isGainOk = false;
+  }
+  check("every play lands inside its channel's authored gain range (pre-attenuation)", isGainOk);
+  check("takes come from the selection only",
+    quiet.deepPlays.every((p) => p.stem === "amb/deep_mineral_tick_v1" || p.stem === "amb/deep_mineral_tick_v2"
+      || p.stem === "amb/deep_architecture_shift_v1"));
 
   const quiet2 = runDeep(false);
-  check("the Deep's minute is fully deterministic (identical sequences)",
+  check("the Deep's minute is fully deterministic (identical sequences incl. gains)",
     JSON.stringify(quiet.deepPlays.map((p) => [p.event, p.stem, p.gain]))
     === JSON.stringify(quiet2.deepPlays.map((p) => [p.event, p.stem, p.gain])));
 
@@ -604,16 +660,16 @@ section("the Deep: silent bed + sparse deterministic positional emitter");
   // LAST lock (24.9s), i.e. from 25.15s.
   const inLockWindow = locked.playTimes.filter((t) => t >= 20000 && t < 25150).length;
   check("combat locks mute the emitter (±250ms law, zero events through a 5s lock storm)",
-    inLockWindow === 0 && locked.playTimes.some((t) => t >= 26000), `${inLockWindow} events in the storm`);
+    inLockWindow === 0 && locked.playTimes.some((t) => t >= 25150), `${inLockWindow} events in the storm`);
 
   // Leaving the zone tears the scheduler down.
   const eng = new ScriptEngine();
   const dir = new WaveAudioDirector(eng);
   dir.setAmbientZone(2);
-  for (let t = 0; t <= 8000; t += 50) { eng.nowMs = t; dir.frame(frameInput([])); }
+  for (let t = 0; t <= 30000; t += 50) { eng.nowMs = t; dir.frame(frameInput([])); }
   const beforeLeave = eng.plays.filter((p) => p.event.startsWith("deep.")).length;
   dir.setAmbientZone(3);
-  for (let t = 8050; t <= 16000; t += 50) { eng.nowMs = t; dir.frame(frameInput([])); }
+  for (let t = 30050; t <= 60000; t += 50) { eng.nowMs = t; dir.frame(frameInput([])); }
   check("leaving the Deep stops the emitter", beforeLeave > 0
     && eng.plays.filter((p) => p.event.startsWith("deep.")).length === beforeLeave);
 }
@@ -835,10 +891,12 @@ section("preload plan");
   check("the floor's boss kit preloaded", stems.has("boss/marrow_lock") && stems.has("boss/marrow_death") && stems.has("boss/marrow_wall_v3"));
   check("the floor's spawned archetype tells preloaded", stems.has("enemy/charger_warn_v1")
     && stems.has("enemy/charger_crash"));
-  check("the burrow emitter components preloaded (never the rejected track loop)",
-    stems.has("enemy/burrow_dirt_v1") && stems.has("enemy/burrow_pebble_v3")
-    && stems.has("enemy/burrow_scrape_v2") && stems.has("enemy/burrow_thud")
-    && !stems.has("enemy/burrow_track"));
+  check("the burrow emitter's SELECTED takes preloaded (never rejected takes or the track loop)",
+    stems.has("enemy/burrow_dirt_grind_v2") && stems.has("enemy/burrow_pebble_v1")
+    && stems.has("enemy/burrow_pebble_v2") && stems.has("enemy/burrow_shell_v1")
+    && stems.has("enemy/burrow_underground_thud_v2")
+    && !stems.has("enemy/burrow_dirt_grind_v1") && !stems.has("enemy/burrow_pebble_v3")
+    && !stems.has("enemy/burrow_underground_thud_v1") && !stems.has("enemy/burrow_track"));
   check("player-driven weapon/co-op cues always preloaded", stems.has("sfx/thumper_fire_v1")
     && stems.has("sfx/sunlance_loop") && stems.has("coop/revive_loop"));
   check("authored fallback samples decoded ahead of the first trigger", samples.has("meleeHit")
@@ -849,10 +907,10 @@ section("preload plan");
   const deepDir = new WaveAudioDirector(deepEng);
   deepDir.preloadForFloor(2, null); // zone 2 = the Deep
   const deepStems = new Set(deepEng.preloaded);
-  check("the Deep preloads its sparse emitter categories, never a bed loop",
-    deepStems.has("amb/deep_resin_creak_v1") && deepStems.has("amb/deep_mineral_tick_v3")
-    && deepStems.has("amb/deep_arch_shift_v2") && deepStems.has("amb/deep_resin_drip_v1")
-    && !deepStems.has("amb/deep_loop"));
+  check("the Deep preloads exactly its SELECTED emitter takes, never a bed loop",
+    deepStems.has("amb/deep_mineral_tick_v1") && deepStems.has("amb/deep_mineral_tick_v2")
+    && deepStems.has("amb/deep_architecture_shift_v1")
+    && ![...deepStems].some((s) => s.includes("deep_resin")) && !deepStems.has("amb/deep_loop"));
 }
 
 // ---- 14. manifest §11 stress acceptance: 30s, two players, locks never masked ----

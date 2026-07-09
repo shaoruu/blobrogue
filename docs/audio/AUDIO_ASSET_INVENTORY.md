@@ -36,44 +36,55 @@ the generation box's work order; the machine-readable source of truth is
 
 These were the two oscillator-only events; the square-wave recipes are deleted.
 
-## 2. Superseded / rejected (do NOT generate or ship)
+## 2. Superseded / rejected (do NOT generate, ship, or reference)
 
 - `enemy/burrow_track` (continuous underground loop) — REJECTED. Replaced by the
   deterministic keyed positional burrow emitter (§3).
 - `amb/deep_loop` (continuous Deep bed) — REJECTED. The Deep's continuous bed is
   authored SILENCE (`ambient.deep` is `isAuthoredSilence`); its ambience is the sparse
   positional emitter (§4).
+- Rejected takes from the selection manifest
+  (`audio-gen-p0-components/selected_components.json`): burrow `dirt_grind_v1`,
+  `pebble_v3`, `underground_thud_v1`. Registry-tested to be referenced nowhere.
 - The procedural dungeon/boss oscillator scores in audio.ts — deleted. A music file
   that fails to load now yields silence, never MIDI-like synthesis.
 
-## 3. Burrow underground emitter components (NEW, replaces the loop)
+## 3. Burrow underground emitter components (selection-driven)
 
 Deterministic keyed positional emitter (`stepBurrowEmitter` in waveAudio.ts), seeded by
 entity id; runs only while a burrower tunnels; stops on eruption lock or despawn.
+Takes mirror the selection manifest verbatim (`SELECTED_BURROW_TAKES` in waveSpec.ts) —
+never "every generated file". Pitch jitter ±3% max; deterministic variants with no
+immediate repeat (single-take selections necessarily repeat).
 
-| file(s) | channel | cadence | gain |
+| selected take(s) | channel | cadence | gain |
 |---|---|---|---|
-| `enemy/burrow_dirt_v1..v3` | dirt grind | every 1.0–1.4s | .22 |
-| `enemy/burrow_pebble_v1..v3` | pebble chatter | every 0.35–0.75s | .14 |
-| `enemy/burrow_scrape_v1..v2` | shell scrape | every 1.3–2.0s | .18 |
-| `enemy/burrow_thud` | underground thud | ONLY on direction-lock (once per commitment) | .28 |
+| `enemy/burrow_dirt_grind_v2` (v1 REJECTED) | dirt grind | every 1.0–1.4s | .22 |
+| `enemy/burrow_pebble_v1`, `_v2` (v3 REJECTED) | pebble chatter | every 0.35–0.75s | .14 |
+| `enemy/burrow_shell_v1`, `_v2` | shell scrape | every 1.3–2.0s | .18 |
+| `enemy/burrow_underground_thud_v2` (v1 REJECTED) | underground thud | ONLY on direction-lock (once per commitment) | .28 |
 
 Authoring: dry mono one-shots ≤0.5s, immediate transient, no tail — they overlap by
-design. Variants deterministic, never the same take back-to-back.
+design.
 
-## 4. The Deep's sparse ambience components (NEW, replaces the bed)
+## 4. The Deep's sparse ambience components (selection-driven, near-silent)
 
-Deterministic scheduler (`stepDeepEmitter`): one authored event every 1.5–3.5s on a
-140–380px ring around the listener; max 2 sounding together; suppressed ±250ms around
-combat locks (enemy/boss lock tells, hazard warnings).
+Deterministic per-channel scheduler (`stepDeepEmitter`): each SELECTED channel keeps its
+own opportunity clock; an opportunity sounds with the channel's chance and is authored
+silence otherwise. Max ONE event sounding at a time; 140–380px listener ring; deterministic
+per-play gain inside the channel range; suppressed ±250ms around combat locks. Channels
+with empty take selections never schedule, and the selected channels NEVER speed up to
+fill missing categories.
 
-| file(s) | category | weight | gain |
-|---|---|---|---|
-| `amb/deep_resin_creak_v1..v2` | resin creak | 35% | .14 |
-| `amb/deep_mineral_tick_v1..v3` | mineral tick | 35% | .12 |
-| `amb/deep_arch_shift_v1..v2` | architecture shift | 15% | .16 |
-| `amb/deep_resin_drip_v1..v2` | resin drip | 15% | .10 |
+| selected take(s) | channel | opportunity cadence | chance | gain |
+|---|---|---|---|---|
+| `amb/deep_mineral_tick_v1`, `_v2` | mineral tick | every 2–4s | 35% | .08–.12 |
+| `amb/deep_architecture_shift_v1` | architecture shift | every 5–9s | 15% | .10–.13 |
+| (EMPTY — awaiting the 8 replacement analogues) | resin creak | 1.5–3.5s (retune with replacements) | 35% | .10–.14 |
+| (EMPTY — awaiting the 8 replacement analogues) | resin drip | 1.5–3.5s (retune with replacements) | 15% | .08–.10 |
 
+When the replacement resin/architecture analogues are selected, extend
+`SELECTED_DEEP_TAKES` in waveSpec.ts — the channels arm themselves automatically.
 Authoring: mono, ≤1.2s, no melody, no reverb tail past the sample.
 
 ## 5. Pending wave-manifest files (asset hooks already wired + preloaded)

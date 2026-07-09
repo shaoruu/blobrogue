@@ -55,6 +55,12 @@ export interface WaveSampleFallback {
 export interface WaveSoundSpec {
   readonly stem: string | null;
   readonly variants: number;
+  // Selection-driven take list (audio-gen selection manifest): the EXPLICIT file stems
+  // this event may play, overriding the stem/variants naming derivation. Only selected
+  // takes are ever referenced or preloaded — never "every generated file". An EMPTY
+  // array is a registered hook awaiting selection: the event stays silent and its
+  // emitter channel never schedules.
+  readonly takes?: readonly string[];
   readonly gain: number;
   readonly bus: WaveBusId;
   readonly priority: number;
@@ -112,6 +118,28 @@ export const BOSS_LOCK_RESERVED_VOICES = 3;
 
 const dM = (to: number, hold: number, recover: number): WaveDuck => ({ bus: "music", to, hold, recover });
 const dA = (to: number, hold: number, recover: number): WaveDuck => ({ bus: "ambient", to, hold, recover });
+
+// ---- audio-gen take selection (mirrors audio-gen-p0-components/selected_components.json) --
+// The audio director's per-component selection: only these takes ship / are referenced.
+// REJECTED takes (burrow dirt_grind_v1, pebble_v3, underground_thud_v1) and the
+// superseded burrow_track/deep_loop files must never appear anywhere.
+export const SELECTED_BURROW_TAKES = {
+  dirtGrind: ["enemy/burrow_dirt_grind_v2"],
+  pebble: ["enemy/burrow_pebble_v1", "enemy/burrow_pebble_v2"],
+  shellScrape: ["enemy/burrow_shell_v1", "enemy/burrow_shell_v2"],
+  thud: ["enemy/burrow_underground_thud_v2"],
+} as const;
+
+// Deep core selection: mineral tick + architecture shift only. The resin arrays stay
+// EMPTY until the main agent's eight replacement resin/architecture analogues are
+// selected — their channels simply never schedule (the Deep stays near-silent; the
+// selected channels never speed up to fill the gap).
+export const SELECTED_DEEP_TAKES = {
+  resinCreak: [] as readonly string[],
+  mineralTick: ["amb/deep_mineral_tick_v1", "amb/deep_mineral_tick_v2"],
+  architectureShift: ["amb/deep_architecture_shift_v1"],
+  resinDrip: [] as readonly string[],
+} as const;
 
 export const WAVE_SOUNDS = {
   // ---- §2 MARROW — bone/shale + sub impact ------------------------------------------
@@ -338,22 +366,23 @@ export const WAVE_SOUNDS = {
   // Burrow underground presence (audio director FINAL): NO continuous loop. A
   // deterministic keyed positional emitter (director, stepBurrowEmitter) schedules these
   // authored component one-shots while the burrower tunnels; the thud fires exactly once
-  // per commitment, on the direction-lock edge. All four are pending component assets.
+  // per commitment, on the direction-lock edge. Takes are SELECTION-DRIVEN (see
+  // SELECTED_BURROW_TAKES): ±3% jitter max, deterministic variants, no immediate repeat.
   "burrow.dirtGrind": {
-    stem: "enemy/burrow_dirt", variants: 3, gain: 0.22, bus: "sfx", priority: WAVE_PRIORITY.pet,
-    jitter: 0, spatial: true,
+    stem: null, takes: SELECTED_BURROW_TAKES.dirtGrind, variants: 1, gain: 0.22, bus: "sfx", priority: WAVE_PRIORITY.pet,
+    jitter: 0.03, spatial: true,
   },
   "burrow.pebble": {
-    stem: "enemy/burrow_pebble", variants: 3, gain: 0.14, bus: "sfx", priority: WAVE_PRIORITY.pet,
-    jitter: 0, spatial: true,
+    stem: null, takes: SELECTED_BURROW_TAKES.pebble, variants: 2, gain: 0.14, bus: "sfx", priority: WAVE_PRIORITY.pet,
+    jitter: 0.03, spatial: true,
   },
   "burrow.shellScrape": {
-    stem: "enemy/burrow_scrape", variants: 2, gain: 0.18, bus: "sfx", priority: WAVE_PRIORITY.pet,
-    jitter: 0, spatial: true,
+    stem: null, takes: SELECTED_BURROW_TAKES.shellScrape, variants: 2, gain: 0.18, bus: "sfx", priority: WAVE_PRIORITY.pet,
+    jitter: 0.03, spatial: true,
   },
   "burrow.thud": {
-    stem: "enemy/burrow_thud", variants: 1, gain: 0.28, bus: "sfx", priority: WAVE_PRIORITY.impact,
-    jitter: 0, spatial: true,
+    stem: null, takes: SELECTED_BURROW_TAKES.thud, variants: 1, gain: 0.28, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.03, spatial: true,
   },
   "burrower.lock": {
     stem: "enemy/burrow_lock", variants: 1, gain: 0.86, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
@@ -449,24 +478,25 @@ export const WAVE_SOUNDS = {
     stem: "amb/fracture_loop", variants: 1, gain: 0.2, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true,
   },
-  // The Deep's sparse positional ambience (audio director FINAL): scheduled authored
-  // one-shots — resin creak 35% / mineral tick 35% / architecture shift 15% / resin
-  // drip 15% — every 1.5–3.5s, max 2 overlapping, gains inside .08–.16, suppressed
-  // ±250ms around combat locks. Component assets pending generation.
+  // The Deep's sparse positional ambience (audio director FINAL + selection manifest):
+  // per-channel scheduled authored one-shots, near-silent by design — cadence, chance
+  // and gain ranges live in DEEP_EMITTER below. Row gain = the channel's max gain (the
+  // emitter scales each play down into its range deterministically). The resin rows are
+  // registered hooks with EMPTY take selections until the replacement analogues land.
   "deep.resinCreak": {
-    stem: "amb/deep_resin_creak", variants: 2, gain: 0.14, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    stem: null, takes: SELECTED_DEEP_TAKES.resinCreak, variants: 1, gain: 0.14, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, spatial: true,
   },
   "deep.mineralTick": {
-    stem: "amb/deep_mineral_tick", variants: 3, gain: 0.12, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    stem: null, takes: SELECTED_DEEP_TAKES.mineralTick, variants: 2, gain: 0.12, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, spatial: true,
   },
   "deep.architectureShift": {
-    stem: "amb/deep_arch_shift", variants: 2, gain: 0.16, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    stem: null, takes: SELECTED_DEEP_TAKES.architectureShift, variants: 1, gain: 0.13, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, spatial: true,
   },
   "deep.resinDrip": {
-    stem: "amb/deep_resin_drip", variants: 2, gain: 0.1, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    stem: null, takes: SELECTED_DEEP_TAKES.resinDrip, variants: 1, gain: 0.1, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, spatial: true,
   },
   "ambient.null": {
@@ -914,24 +944,33 @@ export const BURROW_EMITTER: readonly BurrowEmitterChannel[] = [
 
 export const BURROW_THUD_EVENT: WaveEventId = "burrow.thud";
 
-// The Deep's sparse positional ambience scheduler.
-export interface DeepEmitterCategory {
+// The Deep's sparse positional ambience scheduler — near-silent by design. Each channel
+// runs its own deterministic opportunity clock; an opportunity SOUNDS with the channel's
+// chance and stays silent otherwise (a miss is authored silence, never rerolled). A
+// channel whose take selection is empty never schedules, and the remaining channels
+// never speed up to fill the gap.
+export interface DeepEmitterChannel {
   readonly event: WaveEventId;
-  readonly weight: number;
+  readonly minGapSec: number;
+  readonly maxGapSec: number;
+  readonly chance: number;
+  readonly gainMin: number;
+  readonly gainMax: number;
 }
 
 export const DEEP_EMITTER = {
-  categories: [
-    { event: "deep.resinCreak", weight: 0.35 },
-    { event: "deep.mineralTick", weight: 0.35 },
-    { event: "deep.architectureShift", weight: 0.15 },
-    { event: "deep.resinDrip", weight: 0.15 },
-  ] as readonly DeepEmitterCategory[],
-  minGapSec: 1.5,
-  maxGapSec: 3.5,
-  // Never more than two events sounding together: a third draw inside the overlap
-  // window holds until the window clears.
-  maxOverlap: 2,
+  channels: [
+    { event: "deep.mineralTick", minGapSec: 2, maxGapSec: 4, chance: 0.35, gainMin: 0.08, gainMax: 0.12 },
+    { event: "deep.architectureShift", minGapSec: 5, maxGapSec: 9, chance: 0.15, gainMin: 0.10, gainMax: 0.13 },
+    // Resin channels: registered hooks, EMPTY take selections — silent until the eight
+    // replacement resin/architecture analogues are selected. Cadences are the original
+    // manifest values, to be re-tuned with the replacements.
+    { event: "deep.resinCreak", minGapSec: 1.5, maxGapSec: 3.5, chance: 0.35, gainMin: 0.10, gainMax: 0.14 },
+    { event: "deep.resinDrip", minGapSec: 1.5, maxGapSec: 3.5, chance: 0.15, gainMin: 0.08, gainMax: 0.10 },
+  ] as readonly DeepEmitterChannel[],
+  // Never more than ONE Deep event sounding at a time: a due channel holds through the
+  // overlap window until the previous event has faded.
+  maxOverlap: 1,
   overlapWindowSec: 1.2,
   // Suppress ambience around combat locks (enemy/boss lock tells and hazard warnings,
   // priority ≥ enemyLock); we enforce the trailing ±250ms side — the leading side is
@@ -942,11 +981,12 @@ export const DEEP_EMITTER = {
   maxDistPx: 380,
 } as const;
 
-export function pickDeepCategory(roll: number): WaveEventId {
-  let r = roll * DEEP_EMITTER.categories.reduce((s, c) => s + c.weight, 0);
-  for (const c of DEEP_EMITTER.categories) {
-    r -= c.weight;
-    if (r <= 0) return c.event;
-  }
-  return DEEP_EMITTER.categories[DEEP_EMITTER.categories.length - 1].event;
+// The explicit take stems an event may play (selection-driven when `takes` is present).
+export function takeStemsOf(spec: WaveSoundSpec): readonly string[] {
+  if (spec.takes !== undefined) return spec.takes;
+  if (spec.stem === null) return [];
+  if (spec.variants <= 1) return [spec.stem];
+  const out: string[] = [];
+  for (let v = 1; v <= spec.variants; v++) out.push(`${spec.stem}_v${v}`);
+  return out;
 }
