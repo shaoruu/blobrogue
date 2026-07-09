@@ -57,7 +57,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SPECCED` Visible threat ladder: normal→large/brute→elite→miniboss, mechanical size/mass/attacks/loot; no HP sponge.
 - `SHIPPED` Slime King current boss bar/stat buff, but `FAILED PLAYTEST`: still killed in ~3s.
 - `SHIPPED` Balance reset (#25, live): Slime King F5 900 HP, measured ~20-45s TTK (was ~3s), phase floors enforced, threat-budget floors w/ swarm/brute/elite tiers, heart economy halved, leveled blessings w/ raw caps, co-op scaling. `docs/specs/blobrogue_BALANCE_FINAL_impl.md`.
-- `SPECCED` Boss roster: Slime King, Marrow blind charger, Hollow Choir, Weaver, Jet, Gilded Warden. Only Slime King currently implemented.
+- `SHIPPED` Boss roster (#31, weaver has a golden): Slime King (F5), Marrow blind charger (F15), Weaver (F20), Gilded Warden (F25), Hollow Choir (F30) implemented in `src/sim/enemies.ts`. `SPECCED` remaining: Jet (later adaptive endgame boss).
 - `SPECCED` Arena floors: rare sealed center; boss+lieutenant first, duo, gauntlet, survival; overlap scheduler/fairness budget.
 - `LOCKED` Mobs/boss difficulty via techniques/movement/room pressure/scarcity, not only HP.
 
