@@ -31,7 +31,7 @@ export const AVOID_SIDE_PROBE = 20;  // px beyond the body the side-clearance pr
 export const BLESSING_OFFER_TTL = 60;
 
 // The mercy window on spawning into a freshly BUILT floor (run start, every descend, run
-// reset) is now a DIFFICULTY knob: DIFFICULTIES[difficulty].playerSpawnGrace in balance.ts.
+// reset) is a DIFFICULTY knob: DIFFICULTIES[difficulty].playerSpawnGrace in balance.ts.
 // It rides the ordinary post-hit invuln timer, on top of the enemies' own SPAWN_GRACE and
 // the boss's entranceGrace — every foe begins idle and must telegraph its first attack.
 

@@ -143,10 +143,10 @@ function serverRoundTripTests(): void {
   }
 }
 
-// Snapshot difficulty (dif): the room's authoritative mode rides every snapshot, decoded
-// defensively (absent -> the STANDARD default) so an old server's frames still decode, and
-// rejected when present-but-junk — the same additive rule as PlayerWire nm/cl.
 function difficultyWireTests(): void {
+  // Snapshot difficulty (dif): the room's authoritative mode rides every snapshot, decoded
+  // defensively (absent -> the STANDARD default) so an old server's frames still decode, and
+  // rejected when present-but-junk — the same additive rule as PlayerWire nm/cl.
   section("difficulty on the wire: encodes the world's mode, defaults, and validates");
   const w = createWorld(0xD1F, 1, { isShared: true, skipLocalPlayer: true, difficulty: "casual" });
   spawnPlayerInWorld(w, "pMe");
