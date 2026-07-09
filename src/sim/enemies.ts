@@ -4,8 +4,7 @@ import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
-  TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET, ELITE_BASE_HP,
-  bossIntakeEnvelopeSeconds, BOSS_INTAKE_BANK_SECONDS,
+  TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
@@ -257,13 +256,9 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const tierDef = TIERS[tier];
   const players = opts.players ?? 1;
   const isBoss = isBossKind(kind);
-  // Elites carry the uniform captain-grade pool (gate §1's 3–6s band); every other tier
-  // scales its archetype base.
   const hp = isBoss
     ? Math.round((enemyHpForFloor(kind, floor) * coopBossHpMult(players)) / 10) * 10
-    : tier === "elite"
-      ? Math.max(1, roundHalfToEven(ELITE_BASE_HP * floorHpMult(floor) * coopMobHpMult(players)))
-      : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players)));
+    : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players)));
   const speed = isBoss
     ? a.baseSpeed
     : roundHalfToEven(a.baseSpeed * floorSpeedMult(floor) * tierDef.speedMult);
@@ -271,15 +266,9 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   // reads it, so it must be deterministic. Drawn BEFORE zig to match the historical rng
   // stream order. Still desyncs each enemy, but reproducibly.
   const hopClock = rng.next() * 10;
-  // Bosses accept damage through the intake envelope (gate: no legal build below the
-  // high-roll minimum); the rate rides the co-op-scaled pool so the floor holds at any P.
-  const intake = isBoss
-    ? { rate: hp / bossIntakeEnvelopeSeconds(kind), budget: (hp / bossIntakeEnvelopeSeconds(kind)) * BOSS_INTAKE_BANK_SECONDS, queue: 0, by: null }
-    : undefined;
   return {
     id,
     kind, x, y, vx: 0, vy: 0,
-    intake,
     tier,
     isSummoned: opts.isSummoned ?? false,
     radius: a.radius * tierDef.radiusMult,

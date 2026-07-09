@@ -28,9 +28,9 @@ import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
-  BOSS_INTAKE_BANK_SECONDS, CAPTAIN_INTAKE_ENVELOPE_SECONDS,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
-  REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
+  REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
+  WEAPON_BOSS_COEF,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
@@ -46,6 +46,8 @@ export interface MeleeSwing {
   color: string;
   damage: number;
   isCrit: boolean;
+  // The blade's boss coefficient (WEAPON_BOSS_COEF), baked when the swing starts.
+  bossCoef: number;
   hitList: Array<Enemy | number> | null; // enemies + negative prop-id markers
   burn?: number;
   chill?: number;
@@ -65,6 +67,11 @@ export interface MeleeSwing {
 interface StrikeInfo {
   damage: number;
   isCrit: boolean;
+  // The crit multiplier baked into damage when isCrit (1 otherwise) — the boss
+  // vulnerability channel divides it out and re-applies it capped.
+  critX: number;
+  // Boss-facing pellet/weapon coefficient baked at fire time. 1 for melee.
+  bossCoef: number;
   puffX: number;
   puffY: number;
   kbDirX: number;
@@ -756,6 +763,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
   const spread = pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + p.mods.spreadAdd : wep.spread;
   return {
     pellets,
+    basePellets: wep.pellets,
     spread,
     speed: wep.speed * p.mods.bulletSpeedMult,
     life: wep.life * p.mods.bulletLifeMult,
@@ -1092,26 +1100,9 @@ function bossBeatOf(e: Enemy): BossBeatDef {
 // `isOverflow` marks a transition beat's queued damage being released: it already passed
 // every reduction when it first landed, so it must not be chipped a second time.
 function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[], isOverflow = false): void {
-  if (!isOverflow) {
-    // The Gilded Warden's plate: chip damage while closed, full damage through the EXPOSED
-    // recover after its commitments — tempo, never immunity (see isGildedExposed). The chip
-    // lands BEFORE the governor so the intake envelope stays HP-true.
-    if (e.kind === "gilded" && !isGildedExposed(e)) dmg *= GILDED.armorChip;
-    // The intake governor (gate: no legal build below the high-roll minimum): damage past
-    // the envelope QUEUES and drains at the envelope rate — see tickIntakeGovernor.
-    if (e.intake) {
-      const allowed = Math.min(dmg, e.intake.budget);
-      e.intake.budget -= allowed;
-      const excess = dmg - allowed;
-      if (excess > 0) {
-        e.intake.queue += excess;
-        e.intake.by = by;
-      }
-      if (allowed <= 0) return;
-      dmg = allowed;
-    }
-  }
   if (!e.boss) {
+    // The elite's brace: ≤25% reduction through its 0.9s defensive slide — never immunity.
+    if (e.attack.move === "brace" && e.attack.phase === "windup") dmg *= 1 - ELITE_BRACE.damageReduction;
     e.hp -= dmg;
     return;
   }
@@ -1130,31 +1121,16 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
     }
     return;
   }
+  // The Gilded Warden's plate: chip damage while closed, full damage through the EXPOSED
+  // recover after its commitments — tempo, never immunity (see isGildedExposed).
+  if (!isOverflow && e.kind === "gilded" && !isGildedExposed(e)) dmg *= GILDED.armorChip;
   e.hp -= dmg;
   checkBossTransition(w, e, ev);
 }
 
-// Drain the governor: replenish the envelope, then release queued damage through the
-// ordinary post-mitigation path (beat reductions/floors still apply). Attribution keeps
-// the last governed striker so kills stay credited.
-function tickIntakeGovernor(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
-  const g = e.intake;
-  if (!g) return;
-  // Frozen through transition beats: their forced time is strictly additive to the
-  // envelope, which is exactly how the minimum-TTK math is sized.
-  if (e.boss && e.boss.roar) return;
-  g.budget = Math.min(g.budget + g.rate * dt, g.rate * BOSS_INTAKE_BANK_SECONDS);
-  if (g.queue <= 0 || g.budget <= 0) return;
-  const release = Math.min(g.queue, g.budget);
-  g.queue -= release;
-  g.budget -= release;
-  damageEnemy(w, g.by, e, release, ev, true);
-  if (e.hp <= 0 && !e.dead) killEnemy(w, ownerOf(w, g.by), e, ev);
-}
-
 // The Warden's plate hangs open through the long recover after each committed quake or
 // sweep — the authored full-damage window the whole fight is paced around.
-function isGildedExposed(e: Enemy): boolean {
+export function isGildedExposed(e: Enemy): boolean {
   const a = e.attack;
   return a.phase === "recover" && (a.move === "slam" || a.move === "sweep");
 }
@@ -1217,7 +1193,18 @@ function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 // credited to any player.
 function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
   const frozen = isFrozen(e);
-  const dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
+  const isBossGrade = isBossKind(e.kind) || e.captainPhase !== undefined;
+  let dmg: number;
+  if (isBossGrade) {
+    // The boss vulnerability CHANNEL (balancer remediation): statuses keep their utility
+    // (arc, slow, DoT) but amplify NOTHING here, and the crit multiplier counts at most
+    // BOSS_VULN_CAP — combined vulnerability ≤1.35, non-multiplicative by construction.
+    // hit.damage carries the crit multiplier baked in, so it is divided back out before
+    // the capped channel applies. The fire-time pellet/weapon coefficient rides on top.
+    dmg = (hit.damage / hit.critX) * Math.min(BOSS_VULN_CAP, hit.critX) * hit.bossCoef;
+  } else {
+    dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
+  }
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit);
@@ -1251,30 +1238,6 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.hp++;
     p.fangCd = FANG_PROC_COOLDOWN;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
-  }
-  // The shipped elite affix: SPLIT — on death the elite breaks into swarm units (readable,
-  // summoned, so they feed no hearts/Fang). Each child settles onto a validated point
-  // (body-clear + reachable); when the rolled rim point has none (the elite died wedged
-  // against a full corner), the child takes the parent's own center — a spot the parent's
-  // larger body just proved out — so every split always yields its full count.
-  if (e.tier === "elite" && !w.isRunOver) {
-    for (let i = 0; i < ELITE_SPLIT_COUNT; i++) {
-      const a = w.rng.next() * Math.PI * 2;
-      const sx = e.x + Math.cos(a) * (e.radius + 6);
-      const sy = e.y + Math.sin(a) * (e.radius + 6);
-      const child = createEnemy(e.kind, sx, sy, w.floor, w.rng, w.nextEnemyId++, {
-        tier: "swarm", isSummoned: true, players: w.encounterPlayers,
-      });
-      if (settleSpawnPoint(w, sx, sy, child.radius)) {
-        child.x = settlePoint.x;
-        child.y = settlePoint.y;
-      } else {
-        child.x = e.x;
-        child.y = e.y;
-      }
-      w.enemies.push(child);
-      ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: child.x, y: child.y });
-    }
   }
   dropLoot(w, p, e, ev);
 }
@@ -1407,6 +1370,7 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     color: wep.color,
     damage: isCrit ? baseDmg * p.mods.critMult : baseDmg,
     isCrit,
+    bossCoef: WEAPON_BOSS_COEF[wep.id] ?? 1,
     hitList: null,
     burn: wep.burn,
     chill: wep.chill,
@@ -1516,7 +1480,7 @@ function detonateBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimE
     if (Math.hypot(e.x - x, e.y - y) > r + e.radius) continue;
     const kbX = e.x - x, kbY = e.y - y;
     strikeEnemy(w, shooter, e, {
-      damage: b.damage, isCrit: b.isCrit, puffX: e.x, puffY: e.y,
+      damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: e.x, puffY: e.y,
       kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
       burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
       ownerId: b.owner, fxWeapon: b.fx ?? null,
@@ -1703,9 +1667,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
     if (e.captainPhase !== undefined) tickCaptainPhase(e, ev);
-    if (e.intake) tickIntakeGovernor(w, e, dt, ev);
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
+    if (e.braceCd !== undefined && e.braceCd > 0) e.braceCd = e.braceCd > dt ? e.braceCd - dt : 0;
     // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
     if (e.surgeDelay > 0) {
       e.surgeDelay -= dt;
@@ -1770,7 +1734,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           continue;
         }
         strikeEnemy(w, shooter, e, {
-          damage: b.damage, isCrit: b.isCrit, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
@@ -1799,6 +1763,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
         strikeEnemy(w, player, e, {
           damage: swing.damage, isCrit: swing.isCrit,
+          critX: swing.isCrit ? player.mods.critMult : 1, bossCoef: swing.bossCoef,
           puffX: player.x + kbDirX * puffDist, puffY: player.y + kbDirY * puffDist,
           kbDirX, kbDirY, burn: swing.burn, chill: swing.chill, shock: swing.shock, isMelee: true,
           ownerId: player.id, fxWeapon: null,
@@ -1875,7 +1840,47 @@ function applyThorns(w: WorldState, src: PlayerSim, victim: PlayerSim, e: Enemy,
 
 // ---- enemy AI ----
 
+// The elite's one visible affix COMMITMENT (balancer final): the first time it is
+// bloodied (≤70% HP) — and again off a cooldown that keeps the duty cycle ≤35% — it
+// BRACES: a 0.9s defensive slide away from its target at ≤25% damage reduction (never
+// immunity), then a ≥0.5s recover. Gauntlet captains run their own two-phase contract
+// and never brace.
+function updateEliteBrace(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): boolean {
+  const a = e.attack;
+  if (a.move === "brace") {
+    a.time += dt;
+    if (a.phase === "windup") {
+      a.windup = Math.min(1, a.time / ELITE_BRACE.duration);
+      // The reposition: strafe PERPENDICULAR to the fire line (deterministic side by id
+      // parity) — in-flight bullets aimed at the old position miss, which is the visible
+      // payoff of the commitment.
+      if (findTarget(w, e.x, e.y)) {
+        const toward = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+        const strafe = toward + (e.id % 2 === 0 ? Math.PI / 2 : -Math.PI / 2);
+        moveEnemyBy(w, e, Math.cos(strafe) * ELITE_BRACE.slideSpeed * dt, Math.sin(strafe) * ELITE_BRACE.slideSpeed * dt);
+      }
+      if (a.time >= ELITE_BRACE.duration) enterRecover(e);
+      return true;
+    }
+    if (a.phase === "recover") {
+      if (a.time >= ELITE_BRACE.recover) {
+        enterIdle(e);
+        e.braceCd = ELITE_BRACE.cooldown;
+      }
+      return true;
+    }
+  }
+  // Trigger only from idle (a brace never cancels a committed telegraph).
+  if (a.phase === "none" && (e.braceCd ?? 0) <= 0 && e.hp <= e.maxHp * ELITE_BRACE.triggerHpFrac) {
+    beginWindup(e, "brace");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 1.3, gain: 0.45, trauma: 0 });
+    return true;
+  }
+  return false;
+}
+
 function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  if (e.tier === "elite" && e.captainPhase === undefined && updateEliteBrace(w, e, dt, ev)) return;
   switch (e.kind) {
     case "spitter": updateSpitter(w, e, dt, ev); return;
     case "bat": updateFlocker(w, e, dt); return;
@@ -3381,8 +3386,6 @@ function spawnGauntletRound(w: WorldState, round: (typeof GAUNTLET.rounds)[numbe
     const hp = Math.round((gauntletCaptainHp(round) * coopBossHpMult(w.encounterPlayers)) / 10) * 10;
     captain.hp = captain.maxHp = hp;
     captain.captainPhase = 1;
-    const rate = hp / CAPTAIN_INTAKE_ENVELOPE_SECONDS;
-    captain.intake = { rate, budget: rate * BOSS_INTAKE_BANK_SECONDS, queue: 0, by: null };
     ev.push({ t: "cue", name: "bossSpawn", x: captain.x, y: captain.y, rate: 0.8, gain: 0.9, trauma: 0.15 });
   }
   for (let i = 0; i < round.addCount; i++) {

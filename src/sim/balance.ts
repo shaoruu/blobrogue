@@ -11,7 +11,7 @@
 
 import type { EnemyKind, WeaponId } from "./types.js";
 
-export const BALANCE_VERSION = 3;
+export const BALANCE_VERSION = 4;
 
 // ---- §1 player constants ----
 
@@ -138,20 +138,25 @@ export const TIERS: Record<EnemyTier, TierDef> = {
   swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.55, minFloor: 1, attackCdMult: 1 },
   standard: { hpMult: 1.00, speedMult: 1.00, radiusMult: 1.00, drawMult: 1.00, threatCost: 1.0, minFloor: 1, attackCdMult: 1 },
   brute: { hpMult: 2.40, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 2.2, minFloor: 4, attackCdMult: 1 },
-  // The elite's hpMult is nominal: elite HP is a UNIFORM captain-grade pool (see
-  // ELITE_BASE_HP below), not a chassis multiple — the gate's 3–6s focused band cannot
-  // hold across 4-HP and 6-HP archetypes with one multiplier.
-  elite: { hpMult: 1.70, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 2.8, minFloor: 6, attackCdMult: 0.8 },
+  // Balancer final: elites are 2.0× their chassis (retired: the 1.7× multiple AND the
+  // interim uniform pool). The elite identity is the visible BRACE commitment (below),
+  // not an HP wall: focused 1.5–2.5s, aggro→death 2.5–5.5s.
+  elite: { hpMult: 2.0, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 2.8, minFloor: 6, attackCdMult: 0.8 },
 };
 
-// The corrected gate §1 pins elite focused TTK at 3–6s in every mode — a mini-captain
-// fight, not a tinted mob. One multiplier over per-kind bases can't deliver that band
-// (a 3-HP orbiter and a 6-HP skeleton diverge 2×), so elites carry one uniform HP pool
-// scaled by the same §3 floor curve: rhte(48 × floorMult) lands 102 at F6 and 125 at F9 —
-// measured in the 3–6s band at the depth-representative median builds (see balance
-// tests). The visible modifier set (speed, 20% faster commits, death-split) is unchanged;
-// damage is never touched (no blanket damage).
-export const ELITE_BASE_HP = 48;
+// The elite's one visible affix COMMITMENT (balancer final): a braced defensive
+// reposition — 0.9s slide away from the attacker at ≤25% damage reduction (never
+// immunity), a ≥0.5s recover, and a cooldown that keeps the duty cycle ≤35%. Triggered
+// the first time the elite is bloodied (and again off cooldown), so any elite that
+// survives >1.5s shows its affix.
+export const ELITE_BRACE = {
+  triggerHpFrac: 0.85,
+  duration: 1.1,
+  recover: 0.5,
+  cooldown: 4.0,
+  damageReduction: 0.25,
+  slideSpeed: 230,
+} as const;
 
 // Brute damage rule: only its authored, clearly telegraphed commitment (the skeleton lunge)
 // deals 2 — ordinary contact stays 1. No tier ever blanket-multiplies damage.
@@ -532,45 +537,51 @@ export function gauntletCaptainHp(round: GauntletRound): number {
   return Math.round((round.hpFrac * MARROW.baseHp) / 10) * 10;
 }
 
-// ---- §3/§7.4 the boss damage-intake governor ("no legal build below high-roll minimum") ----
-// The corrected gate demands a HARD floor: no legal build may kill a boss under its
-// high-roll minimum. Blessing stacking makes that unreachable by HP alone (a 9-pick god
-// build triples the median build's DPS), so the anti-burst contract that already governs
-// transition beats (hard floors + queued overflow, never immunity) extends to the whole
-// fight: a boss accepts damage through a per-second intake envelope sized so that even
-// unbounded DPS cannot finish faster than the minimum; excess damage QUEUES and drains
-// through the same envelope (every point still lands — reduction of RATE, never of
-// damage). Median and representative high-roll builds sit far below the envelope and
-// never touch it (verified in the balance tests).
+// ---- §3 the boss-facing damage model ("no legal build below high-roll minimum") ----
+// The balancer's remediation path, implemented WITHOUT any runtime clamp: repeat-hit
+// bugs are gone (the spent-round rule, regression-gated), raw caps hold across 100k
+// generated builds, and the two offending interactions are re-coefficiented AGAINST
+// BOSSES/CAPTAINS ONLY — room/multitarget power is untouched:
+//   1. Boss VULNERABILITY is one capped channel and status amps are OUT of it: against
+//      a boss-grade body, shock/frozen deal their utility (arcs, slow, DoT) but no
+//      damage amplification, and the crit multiplier counts at most 1.35× — combined
+//      vulnerability ≤1.35, non-multiplicative by construction. Rooms keep the full
+//      multiplicative behavior (Deadeye Lv3 crits at 3.0×, statuses amplify).
+//   2. Pellet boss coefficient: a big body soaking every stacked pellet was the
+//      single-target exploit. Native pellets beyond the first count at 75% against
+//      boss-grade bodies; ADDED pellets (Split Shot / Scattergun) count 0 — they stay
+//      full-power room tools. Rooms always take full pellet damage.
+//   3. Per-family boss coefficients for the measured offenders (full-arsenal god-stack
+//      sweep): the point-blank hoses (flamer, sawnoff), the sustained pin (beam), the
+//      burst/cannon/railgun nukes and the melee blade loop — each sized so its 12-pick
+//      god stack lands ≥ the minimum, with room damage untouched.
+// The 100k practical-DPS estimator gate (balance tests) proves the strongest legal build
+// stays under every per-boss DPS ceiling: King 53 / Marrow 68 / Weaver 87 / Warden 65 /
+// Choir 65 — each ceiling = HP over (minimum TTK − forced transition time).
 
 export const BOSS_MIN_LEGAL_TTK: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: 20, marrow: 20, weaver: 20, gilded: 22, choir: 22,
 };
 
-// A small burst bank so openers land with full weight; the envelope math below repays it.
-export const BOSS_INTAKE_BANK_SECONDS = 1.0;
+// Per-boss practical-DPS ceilings from the balancer (HP / (minTtk − forced downtime)).
+export const BOSS_DPS_CEILING: Readonly<Partial<Record<EnemyKind, number>>> = {
+  boss: 53, marrow: 68, weaver: 87, gilded: 65, choir: 65,
+};
 
-// Seconds of pure damage the envelope allows. The governor FREEZES during transition
-// beats (their time is strictly additive), so the worst-case kill is
-//   bank + envelope + forced-beat time ≥ minTtk:
-// envelope = minTtk − forced + bank + a half-second guard for tick rounding.
-export function bossIntakeEnvelopeSeconds(kind: EnemyKind): number {
-  const minTtk = BOSS_MIN_LEGAL_TTK[kind] ?? 20;
-  const forced =
-    kind === "boss" ? 2 * BOSS.roarDuration
-    : kind === "marrow" ? 2 * MARROW.shieldMinDuration
-    : kind === "weaver" ? 2 * WEAVER.moltDuration
-    : kind === "gilded" ? 2 * GILDED.sanctifyDuration
-    : kind === "choir" ? 2 * CHOIR.splitMinDuration
-    : 0;
-  return minTtk - forced + BOSS_INTAKE_BANK_SECONDS + 0.5;
-}
-
-// Gauntlet captains ride the same governor against §7.4's "each round ≥10s": damage can
-// start the moment a captain enters (grace gates commits, not intake), so the envelope
-// covers the full ten seconds plus the bank and rounding guard; the median build only
-// grazes it on R1.
-export const CAPTAIN_INTAKE_ENVELOPE_SECONDS = 11.5;
+// Boss-facing combat coefficients (rooms/multitarget are never touched).
+export const BOSS_VULN_CAP = 1.35;           // the crit channel's cap vs boss-grade bodies
+export const BOSS_NATIVE_PELLET_COEF = 0.75; // native pellets beyond the first
+export const BOSS_EXTRA_PELLET_COEF = 0;     // added pellets: room tools, zero vs bosses
+export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
+  beam: 0.75,     // sustained pin: 100% uptime on an arena-sized body
+  sawnoff: 0.5,   // point-blank full-fan burst
+  flamer: 0.55,   // point-blank sustained hose
+  burst: 0.75,    // highest per-volley nuke of the precise family
+  cannon: 0.95,
+  railgun: 0.9,
+  sword: 0.7,     // the melee loop parks on the body with zero travel/spread loss
+  longsword: 0.7,
+};
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----
 // The 4–6× strong-run fantasy is EXPRESSIVE capability (pellets/pierce/status/crit/

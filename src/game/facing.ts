@@ -69,6 +69,7 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   lunge: true, spit: true, hopslam: true, radial: false, roar: false, squeeze: false,
   rush: true, crash: false, dive: false, erupt: false, volley: true, spin: false, shield: false,
   fade: false, wail: true, split: false, pounce: true, weave: true, slam: true, sweep: false,
+  brace: false,
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)

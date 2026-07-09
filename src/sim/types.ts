@@ -34,7 +34,7 @@ export type AttackPhase = "none" | "windup" | "active" | "recover";
 export type AttackMove =
   | "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze"
   | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield"
-  | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep";
+  | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep" | "brace";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -99,6 +99,8 @@ export interface Enemy extends Entity {
   // Gauntlet captains (corrected gate §3): 1 before the 50% split, 2 after. Undefined on
   // every ordinary enemy — the two-phase check runs only on captains.
   captainPhase?: number;
+  // The elite brace affix's cooldown (keeps its duty cycle ≤35%). Only elites tick it.
+  braceCd?: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   // Deterministic slime hop-cadence clock. The slime pulses its speed off sin(hopClock);
@@ -127,11 +129,6 @@ export interface Enemy extends Entity {
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
   // tick that finishes a kill credits the correct player's combo/loot. null before any burn.
   burnOwner: PlayerId | null;
-  // The damage-intake governor (corrected gate: "no legal build below high-roll minimum").
-  // Bosses and gauntlet captains accept damage through a per-second envelope; the excess
-  // QUEUES here and drains at the same rate — rate reduction, never lost damage. Absent on
-  // ordinary enemies.
-  intake?: { rate: number; budget: number; queue: number; by: PlayerId | null };
   attack: AttackState;
   boss: BossState | null; // set only on the boss
 }
@@ -156,6 +153,12 @@ export interface Bullet {
   pierce: number;          // remaining enemies this bullet can punch through
   hitList: Enemy[] | null; // enemies already struck (only allocated for piercing shots)
   isCrit: boolean;         // rolled at fire time; drives the brighter hit feedback
+  // The crit multiplier baked into damage when isCrit (the boss vulnerability channel
+  // divides it back out at strike time). Undefined = 1.
+  critX?: number;
+  // Boss-facing pellet/weapon coefficient baked at fire time (rooms take full damage).
+  // Undefined = 1.
+  bossCoef?: number;
   // Optional per-weapon behaviors. Undefined for the base weapons, so their bullets
   // take the exact same paths they always did.
   bounce?: number;         // ricochet: wall reflections left before the bullet dies

@@ -8,7 +8,7 @@
 
 import {
   createWorld, stepWorld, descend, devSpawnEnemy, applyItemToWorld, acquireWeaponInWorld,
-  spawnPlayerInWorld, isFloorCleared,
+  spawnPlayerInWorld, isFloorCleared, isGildedExposed,
 } from "../src/sim/world.js";
 import type { WorldState } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -21,7 +21,7 @@ import {
   threatCostOf, isBossFloor, isComplexMover,
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
-import { WEAPONS } from "../src/sim/weapons.js";
+import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS,
@@ -29,7 +29,8 @@ import {
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
   pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock, BOSS_MIN_LEGAL_TTK,
-  bossIntakeEnvelopeSeconds, BOSS_INTAKE_BANK_SECONDS,
+  BOSS_DPS_CEILING, BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
+  BOSS_VULN_CAP, ELITE_BRACE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import type { EnemyTier } from "../src/sim/balance.js";
@@ -139,7 +140,14 @@ function enemyTableGates(): void {
 // HP-sponging the median band — that deviation is reported in the PR, and these tests pin
 // the representative high-roll builds instead.
 
-interface TtkResult { seconds: number; killed: boolean; transitions: Array<{ entering: boolean; at: number; queued: number }> }
+interface TtkResult {
+  seconds: number;
+  killed: boolean;
+  transitions: Array<{ entering: boolean; at: number; queued: number }>;
+  // Balancer report channels: total forced-transition time and (Warden) closed-plate time.
+  transitionSeconds: number;
+  closedArmorSeconds: number;
+}
 
 function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKind; floor: number } = { kind: "boss", floor: 5 }): TtkResult {
   const w = createWorld(0xBA1A4CE, boss.floor, { isSandbox: true });
@@ -151,9 +159,11 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
   const transitions: TtkResult["transitions"] = [];
   let ticks = 0;
   let killed = false;
+  let closedArmorSeconds = 0;
   const maxTicks = 60 * 120;
   while (!killed && ticks < maxTicks) {
     const aim = Math.atan2(target.y - p.y, target.x - p.x);
+    if (boss.kind === "gilded" && !target.dead && !isGildedExposed(target)) closedArmorSeconds += DT;
     const evs = step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
     for (const e of evs) {
       if (e.t === "bossTransition") transitions.push({ entering: e.entering, at: ticks * DT, queued: e.queued });
@@ -161,7 +171,11 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
     }
     ticks++;
   }
-  return { seconds: ticks * DT, killed, transitions };
+  let transitionSeconds = 0;
+  const enterAts = transitions.filter((x) => x.entering).map((x) => x.at);
+  const exitAts = transitions.filter((x) => !x.entering).map((x) => x.at);
+  for (let i = 0; i < Math.min(enterAts.length, exitAts.length); i++) transitionSeconds += exitAts[i] - enterAts[i];
+  return { seconds: ticks * DT, killed, transitions, transitionSeconds, closedArmorSeconds };
 }
 
 interface BossGateRow {
@@ -224,6 +238,12 @@ function bossLadderGates(): void {
     choirHpForFloor(30) === CHOIR.baseHp, `hp=${choirHpForFloor(30)}`);
   check("every boss deals 2 contact damage (authored integer, never scales)",
     (["boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[]).every((k) => ENEMY_ARCHETYPES[k].touchDamage === 2));
+  // "Equal HP all modes": the sim ships one difficulty; boss HP is a single authored
+  // anchor — solo createEnemy must land the anchor EXACTLY (party scaling is a separate,
+  // documented co-op multiplier).
+  check("boss HP at the anchor is mode-independent (solo spawn = the authored anchor)",
+    ([["boss", 5, 950], ["marrow", 15, 1250], ["weaver", 20, 1500], ["gilded", 25, 1280], ["choir", 30, 1450]] as Array<[EnemyKind, number, number]>)
+      .every(([k, f, hp]) => createEnemy(k, 0, 0, f, new Rng(1), 0, {}).hp === hp));
   check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
     bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= MARROW.baseHp * 1.5,
     `king@35=${bossHpForFloor(35)} marrow@35=${marrowHpForFloor(35)}`);
@@ -239,6 +259,37 @@ function bossLadderGates(): void {
     record(`${row.kind}.highRoll`, highRoll.seconds);
     check(`representative high-roll stays ≥${row.highRollMin}s`,
       highRoll.killed && highRoll.seconds >= row.highRollMin, `ttk=${highRoll.seconds.toFixed(1)}s`);
+
+    // The balancer's percentile report: a nine-build deterministic ladder from
+    // under-median to the 12-pick god build. P10 (fastest decile) must respect the
+    // high-roll minimum; P50 must sit in the median band. Transition time (and the
+    // Warden's closed-plate time) are logged as separate channels, per the directive.
+    const ladder: Array<[WeaponId, string[]]> = [
+      ["pistol", row.medianBuild.slice(0, -1)],
+      ["pistol", row.medianBuild],
+      ["pistol", [...row.medianBuild, "deadeye"]],
+      ["smg", row.medianBuild],
+      ["smg", [...row.medianBuild, "deadeye"]],
+      ["smg", row.highRollBuild],
+      ["smg", [...row.highRollBuild, ...L3("hair_trigger")]],
+      ["beam", row.highRollBuild],
+      ["smg", [...L3("glass_cannon"), ...L3("hair_trigger"), ...L3("deadeye"), ...L3("split_shot")]],
+    ];
+    const runs = ladder.map(([wpn, picks]) => measureBossTtk(wpn, picks, { kind: row.kind, floor: row.floor }));
+    const sortedTtk = runs.map((r) => (r.killed ? r.seconds : Infinity)).sort((a, b) => a - b);
+    const p10 = sortedTtk[0];
+    const p50 = sortedTtk[4];
+    const p90 = sortedTtk[8];
+    record(`${row.kind}.p10`, p10);
+    record(`${row.kind}.p50`, Number.isFinite(p50) ? p50 : -1);
+    record(`${row.kind}.p90`, Number.isFinite(p90) ? p90 : -1);
+    record(`${row.kind}.transitionSeconds`, Math.round(median.transitionSeconds * 1000) / 1000);
+    if (row.kind === "gilded") record(`${row.kind}.closedArmorSeconds`, Math.round(median.closedArmorSeconds * 1000) / 1000);
+    check(`P50 of the ladder sits in the ${row.medianBand[0]}–${row.medianBand[1]}s median band`,
+      Number.isFinite(p50) && p50 >= row.medianBand[0] && p50 <= row.medianBand[1], `P50=${Number.isFinite(p50) ? p50.toFixed(1) : "unkilled"}s`);
+    check(`P10 (fastest decile) stays ≥ the ${row.highRollMin}s high-roll minimum`,
+      p10 >= row.highRollMin, `P10=${p10.toFixed(1)}s`);
+    process.stdout.write(`  info: ${row.kind} P10/P50/P90 = ${p10.toFixed(1)}/${Number.isFinite(p50) ? p50.toFixed(1) : "∞"}/${Number.isFinite(p90) ? p90.toFixed(1) : "∞"}s, transition=${median.transitionSeconds.toFixed(1)}s${row.kind === "gilded" ? `, closedArmor=${median.closedArmorSeconds.toFixed(1)}s` : ""}\n`);
 
     const enters = median.transitions.filter((t) => t.entering);
     const exits = median.transitions.filter((t) => !t.entering);
@@ -276,46 +327,33 @@ function bossLadderGates(): void {
     && CHOIR.fadeRecover === 0.8 && CHOIR.splitMinDuration === 1.0 && CHOIR.splitDuration === 3.2);
 }
 
-// The anti-burst stack as a hard mechanism: an absurd single hit banks one second of
-// intake, QUEUES the rest in the governor, walks BOTH phase floors (62%/27% with their
-// queued overflow + full roars) as the drain crosses them, and cannot finish before the
-// 20s legal minimum. No damage is ever lost — the kill still resolves.
+// The anti-burst floor as a hard mechanism: even an absurd single hit cannot delete the
+// boss — damage floors at 62%/27%, the overflow queues, and applies only after each full
+// 1.2s roar. Kill time under an extreme hit is still ≥ 2×1.2s.
 function bossOverflowGates(): void {
-  section("gate 2 mechanism: governor + phase floors + queued overflow under extreme burst");
+  section("gate 2 mechanism: phase floors + queued overflow under extreme burst");
   const w = createWorld(0x0DDBA11, 5, { isSandbox: true });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
   const boss = devSpawnEnemy(w, "boss", p.x + 100, p.y);
 
   plantBullet(w, boss.x, boss.y, 1e6, 40);
-  step(w, idle(1));
-  const bank = (boss.maxHp / bossIntakeEnvelopeSeconds("boss")) * BOSS_INTAKE_BANK_SECONDS;
-  check("a million-damage hit lands at most the banked second of intake",
-    boss.hp >= boss.maxHp - bank - 1e-6 && boss.hp < boss.maxHp, `hp=${boss.hp.toFixed(0)}`);
-  check("the rest is queued in the governor (never lost)",
-    boss.intake !== undefined && boss.intake.queue > 1e5, `queued=${boss.intake?.queue.toFixed(0)}`);
+  let events = step(w, idle(1));
+  const enter1 = events.find((e) => e.t === "bossTransition" && e.entering);
+  check("a million-damage hit floors the boss at 62%", Math.abs(boss.hp - 0.62 * boss.maxHp) < 1e-6, `hp=${boss.hp}`);
+  check("the overflow is queued and logged", enter1 !== undefined && enter1.t === "bossTransition" && enter1.queued > 0,
+    enter1 && enter1.t === "bossTransition" ? `queued=${enter1.queued.toFixed(0)}` : "no event");
 
   let ticks = 1;
   let dead = false;
-  let enters = 0;
-  let exits = 0;
-  while (!dead && ticks < 60 * 40) {
-    const events = step(w, idle(ticks + 1));
-    for (const e of events) {
-      if (e.t === "bossTransition" && e.entering) enters++;
-      if (e.t === "bossTransition" && !e.entering) exits++;
-      if (e.t === "enemyKill" && e.kind === "boss") dead = true;
-    }
+  while (!dead && ticks < 60 * 10) {
+    events = step(w, idle(ticks + 1));
+    if (events.some((e) => e.t === "enemyKill" && e.kind === "boss")) dead = true;
     ticks++;
   }
   const seconds = ticks * DT;
-  // The governor subsumes the burst BEFORE the floors see it (the drain approaches each
-  // threshold at envelope rate), so the beats walk with near-zero beat-level overflow —
-  // the six-figure queue asserted above IS the overflow ledger now.
-  check("the drain walks BOTH transition beats (full roars, in order)",
-    enters === 2 && exits === 2, `enters=${enters} exits=${exits}`);
-  check("death cannot beat the 20s legal minimum, and the queued damage does finish the kill",
-    dead && seconds >= (BOSS_MIN_LEGAL_TTK.boss ?? 20) - 2 * DT, `death at ${seconds.toFixed(2)}s`);
+  check("boss dies only after BOTH full roars resolve the queued overflow", dead && seconds >= 2 * BOSS.roarDuration,
+    `death at ${seconds.toFixed(2)}s (was ~1 tick pre-reset)`);
   check("boss death ends danger: all adds despawn and the exit opens", isFloorCleared(w),
     `enemies=${w.enemies.length} pending=${w.pendingSpawns.length}`);
 }
@@ -362,19 +400,13 @@ function normalTtkGates(): void {
   record("brute.f4", bruteTtk);
   check("F4 brute focused TTK sits in the 1.8-3.2s band (starter build)",
     bruteTtk >= 1.8 && bruteTtk <= 3.2, `ttk=${bruteTtk.toFixed(2)}s`);
-  // §1 elite band: elites carry the uniform captain-grade pool (rhte(48 x floorMult)) —
-  // one multiplier over 3-6 HP chassis can't hold a single band, a uniform pool can.
-  const eliteHp = createEnemy("spitter", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp;
-  check("elite = the uniform captain-grade pool (rhte(48 x 2.12) -> 102, any chassis)",
-    eliteHp === 102 && createEnemy("skeleton", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp === 102, `hp=${eliteHp}`);
+  // Balancer final: elite = 2.0x chassis; the identity is the visible BRACE commitment.
+  const eliteHp = createEnemy("skeleton", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp;
+  check("elite = 2.0x scaled HP (6 x 2.12 x 2.0 -> 25)", eliteHp === 25, `hp=${eliteHp}`);
   const eliteEntry = measureFocusedTtk("skeleton", 6, "pistol", L3("hair_trigger"), "elite");
-  record("elite.f6", eliteEntry);
-  check("F6 elite focused TTK sits in the 3-6s band (F6 median build)",
-    eliteEntry >= 3 && eliteEntry <= 6, `ttk=${eliteEntry.toFixed(2)}s`);
-  const eliteLate = measureFocusedTtk("skeleton", 9, "pistol", [...L3("hair_trigger"), "glass_cannon", "glass_cannon"], "elite");
-  record("elite.f9", eliteLate);
-  check("F9 elite focused TTK stays in the 3-6s band (late median build)",
-    eliteLate >= 3 && eliteLate <= 6, `ttk=${eliteLate.toFixed(2)}s`);
+  record("elite.f6.focused", eliteEntry);
+  check("F6 elite focused TTK sits in the balancer's 1.5-2.5s band (F6 median build)",
+    eliteEntry >= 1.5 && eliteEntry <= 2.5, `ttk=${eliteEntry.toFixed(2)}s`);
   const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm" });
   check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 3 && swarm.speed === 48
     && Math.abs(swarm.radius - 16 * 0.78) < 1e-9, `hp=${swarm.hp} speed=${swarm.speed}`);
@@ -681,7 +713,6 @@ function powerBudgetGates(): void {
     w.isGodMode = true;
     const p = w.players.get(LOCAL_ID)!;
     const boss = devSpawnEnemy(w, "boss", p.x + 120, p.y);
-    boss.intake = undefined; // reward cadence under test; the governor has its own gates
     for (let t = 1; t <= 60 * 8 && !boss.dead; t++) {
       plantBullet(w, boss.x, boss.y, 1000, 30);
       step(w, idle(t));
@@ -949,7 +980,6 @@ function partyRewardGates(): void {
     w.encounterPlayers = 2; // the encounter snapshot (a real run sets this at floor build)
     b.x = 60; b.y = 60;
     const boss = devSpawnEnemy(w, "boss", a.x + 130, a.y);
-    boss.intake = undefined; // reward mechanics under test; the governor has its own gates
     for (let t = 1; t <= 60 * 10 && !boss.dead; t++) {
       plantBullet(w, boss.x, boss.y, 1000, 30);
       step(w, idle(t));
@@ -1077,36 +1107,213 @@ function gauntletGates(): void {
   process.stdout.write(`  info: gauntlet median=${median.total.toFixed(1)}s (${median.rounds.map((r) => r.toFixed(1)).join("/")}), high-roll=${highRoll.total.toFixed(1)}s\n`);
 }
 
-// ---- the intake governor: "no legal build below high-roll minimum", now a HARD floor ----
-// An unbounded planted stream (~30,000 DPS) stands in for ANY legal god build: the
-// governor's envelope + frozen-beat math guarantees the §3 minimums regardless of
-// stacking, while median/high-roll builds sit under the envelope untouched (their band
-// tests above run on the same governed sim).
+// ---- the balancer's elite contract: brace commitment, encounter band, room-clear cost ----
 
-function governorGates(): void {
-  section("§3 hard floor: even an unbounded damage stream cannot beat the high-roll minimum");
-  for (const [kind, floor] of [["boss", 5], ["marrow", 15], ["weaver", 20], ["gilded", 25], ["choir", 30]] as Array<[EnemyKind, number]>) {
-    const w = createWorld(0x60D, floor, { isSandbox: true });
-    w.isGodMode = true;
-    const boss = devSpawnEnemy(w, kind, 900, 600);
-    let ticks = 0;
-    while (!boss.dead && ticks < 60 * 60) {
-      plantBullet(w, boss.x, boss.y, 500, 24);
-      stepWorld(w, new Map(), DT);
-      ticks++;
-    }
-    const seconds = ticks * DT;
-    const min = BOSS_MIN_LEGAL_TTK[kind] ?? 20;
-    record(`${kind}.godFloor`, seconds);
-    check(`${kind} under ~30k DPS still lives ≥ its ${min}s minimum (all damage queues, none is lost)`,
-      boss.dead && seconds >= min - 2 * DT, `ttk=${seconds.toFixed(1)}s`);
-  }
-  section("§7.4 hard floor: a god-build gauntlet still meets total ≥35s and rounds ≥10s");
+function eliteContractGates(): void {
+  section("balancer elite contract: the visible BRACE commitment");
+  check("brace numbers: 0.6-1.2s duration, DR ≤25%, recover ≥0.5s, duty ≤35%",
+    ELITE_BRACE.duration >= 0.6 && ELITE_BRACE.duration <= 1.2
+    && ELITE_BRACE.damageReduction <= 0.25
+    && ELITE_BRACE.recover >= 0.5
+    && ELITE_BRACE.duration / (ELITE_BRACE.duration + ELITE_BRACE.recover + ELITE_BRACE.cooldown) <= 0.35);
   {
-    const god = measureGauntlet("smg", [...L3("deadeye"), ...L3("glass_cannon"), ...L3("split_shot")]);
-    check("god-build gauntlet total stays ≥35s", god.total >= 35, `total=${god.total.toFixed(1)}s`);
-    check("every god-build round runs ≥10s", god.rounds.every((r) => r >= 10),
-      god.rounds.map((r) => r.toFixed(1)).join("/"));
+    // The DR window is a reduction, never immunity — measured through a live brace.
+    const w = createWorld(0xE11B, 6, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const elite = createEnemy("skeleton", p.x + 200, p.y, 6, new Rng(3), w.nextEnemyId++, { tier: "elite" });
+    w.enemies.push(elite);
+    elite.hp = elite.maxHp * 0.6; // bloodied: the next idle tick commits the brace
+    step(w, idle(1));
+    check("a bloodied idle elite commits the brace", elite.attack.move === "brace" && elite.attack.phase === "windup");
+    const hp0 = elite.hp;
+    plantBullet(w, elite.x, elite.y, 10, 24);
+    for (let i = 0; i < 6; i++) step(w, idle(i + 2));
+    const taken = hp0 - elite.hp;
+    check("braced damage lands at exactly 75% (reduction, never immunity)",
+      Math.abs(taken - 10 * (1 - ELITE_BRACE.damageReduction)) < 1e-6, `took ${taken.toFixed(2)}`);
+  }
+  {
+    // Encounter band (aggro → death) + ≥70% commitment execution across seeds.
+    let commits = 0;
+    let survivors = 0;
+    const times: number[] = [];
+    for (let s = 0; s < 10; s++) {
+      const w = createWorld(0xE17E + s * 131, 6, { isSandbox: true });
+      w.isGodMode = true;
+      const p = w.players.get(LOCAL_ID)!;
+      acquireWeaponInWorld(w, LOCAL_ID, "pistol");
+      grant(w, LOCAL_ID, L3("hair_trigger"));
+      const elite = createEnemy("skeleton", p.x + 400, p.y + (s % 3) * 40 - 40, 6, new Rng(s + 1), w.nextEnemyId++, { tier: "elite" });
+      elite.spawnTimer = 0;
+      w.enemies.push(elite);
+      let braced = false;
+      let ticks = 0;
+      while (!elite.dead && ticks < 60 * 10) {
+        const aim = Math.atan2(elite.y - p.y, elite.x - p.x);
+        step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+        if (elite.attack.move === "brace") braced = true;
+        ticks++;
+      }
+      const seconds = ticks * DT;
+      times.push(seconds);
+      if (seconds > 1.5) { survivors++; if (braced) commits++; }
+    }
+    const worst = Math.max(...times);
+    const best = Math.min(...times);
+    record("elite.f6.aggroToDeath.min", best);
+    record("elite.f6.aggroToDeath.max", worst);
+    check("elite aggro→death sits in the balancer's 2.5-5.5s band across 10 seeds",
+      best >= 2.5 && worst <= 5.5, `range=${best.toFixed(2)}-${worst.toFixed(2)}s`);
+    check("≥70% of elites surviving >1.5s execute the brace commitment",
+      survivors > 0 && commits / survivors >= 0.7, `${commits}/${survivors}`);
+  }
+  {
+    // Room-clear cost at EQUAL THREAT (the elite costs 2.8 threat = it replaces nearly
+    // three standard bodies in the director's budget): an elite-led room may cost at
+    // most 20% more clear time than the same threat spent on standard bodies.
+    const clearTime = (isEliteRoom: boolean): number => {
+      const w = createWorld(0xE17F, 6, { isSandbox: true });
+      w.isGodMode = true;
+      const p = w.players.get(LOCAL_ID)!;
+      acquireWeaponInWorld(w, LOCAL_ID, "pistol");
+      grant(w, LOCAL_ID, L3("hair_trigger"));
+      // Elite room: skeleton elite (2.8) + 3 slimes = 5.8 threat.
+      // Standard room: skeleton + 4 slimes + bat ≈ 6.0 threat.
+      const pack = isEliteRoom
+        ? [
+          createEnemy("skeleton", p.x + 300, p.y - 60, 6, new Rng(5), w.nextEnemyId++, { tier: "elite" }),
+          createEnemy("slime", p.x + 340, p.y, 6, new Rng(6), w.nextEnemyId++, {}),
+          createEnemy("slime", p.x + 300, p.y + 60, 6, new Rng(7), w.nextEnemyId++, {}),
+          createEnemy("slime", p.x + 380, p.y + 30, 6, new Rng(8), w.nextEnemyId++, {}),
+        ]
+        : [
+          createEnemy("skeleton", p.x + 300, p.y - 60, 6, new Rng(5), w.nextEnemyId++, {}),
+          createEnemy("slime", p.x + 340, p.y, 6, new Rng(6), w.nextEnemyId++, {}),
+          createEnemy("slime", p.x + 300, p.y + 60, 6, new Rng(7), w.nextEnemyId++, {}),
+          createEnemy("slime", p.x + 380, p.y + 30, 6, new Rng(8), w.nextEnemyId++, {}),
+          createEnemy("slime", p.x + 260, p.y + 90, 6, new Rng(9), w.nextEnemyId++, {}),
+          createEnemy("bat", p.x + 380, p.y - 30, 6, new Rng(10), w.nextEnemyId++, {}),
+        ];
+      for (const e of pack) { e.spawnTimer = 0; w.enemies.push(e); }
+      let ticks = 0;
+      while (w.enemies.some((e) => !e.dead) && ticks < 60 * 30) {
+        const target = w.enemies.find((e) => !e.dead)!;
+        const aim = Math.atan2(target.y - p.y, target.x - p.x);
+        step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+        ticks++;
+      }
+      return ticks * DT;
+    };
+    const standard = clearTime(false);
+    const withElite = clearTime(true);
+    record("elite.roomClear.standardThreat", standard);
+    record("elite.roomClear.eliteThreat", withElite);
+    check("an elite-led room costs ≤20% extra clear time at equal threat",
+      withElite <= standard * 1.2, `${standard.toFixed(2)}s -> ${withElite.toFixed(2)}s (${(((withElite / standard) - 1) * 100).toFixed(0)}%)`);
+  }
+}
+
+// ---- the balancer's god-build gate: 100k-build practical-DPS ceilings + sim floors ----
+// A deterministic PRACTICAL-DPS ESTIMATOR (documented model, not live telemetry) scores
+// every generated legal build against a 12s moving-target window: per-weapon accuracy
+// (spread/projectile-speed/family), the boss-facing coefficients (added pellets at 5%,
+// crit capped 1.6×, status vulnerability additive-capped 1.35), damage/fire-rate mods.
+// 100,000 seeded builds × the pickup arsenal must stay under every per-boss DPS ceiling
+// (King 53 binds), the top-100 builds are attributed to fixtures, and the single
+// strongest build is then run in the REAL sim against every boss to prove the absolute
+// high-roll minimum — no runtime clamp anywhere.
+
+// Moving-target accuracy factors per weapon family (the documented estimator model):
+// base hit fraction × spread penalty × projectile-speed penalty.
+function practicalAccuracy(id: WeaponId, spreadTotal: number, speed: number): number {
+  const MELEE: Record<string, number> = { sword: 0.65, longsword: 0.65, spear: 0.7 };
+  if (MELEE[id] !== undefined) return MELEE[id];
+  const base =
+    id === "homing" ? 0.95
+    : id === "beam" ? 0.9
+    : id === "tesla" ? 0.8
+    : id === "mortar" ? 0.7
+    : id === "ricochet" ? 0.75
+    : id === "flamer" ? 0.6
+    : id === "shotgun" || id === "sawnoff" ? 0.55
+    : 0.85;
+  const spreadPenalty = Math.max(0.35, 1 - spreadTotal * 0.55);
+  const speedPenalty = speed > 0 ? Math.min(1, Math.max(0.6, speed / 420)) : 1;
+  return base * spreadPenalty * speedPenalty;
+}
+
+function practicalBossDps(id: WeaponId, mods: ReturnType<typeof createMods>): number {
+  const wep = WEAPONS[id];
+  const isMelee = wep.melee !== undefined;
+  const pellets = isMelee ? 1 : wep.pellets + mods.extraPellets;
+  const extra = Math.max(0, pellets - wep.pellets);
+  // The fire-time pellet/weapon coefficients, exactly as fire() bakes them.
+  const effPellets = isMelee ? 1 : 1 + Math.max(0, wep.pellets - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
+  const wepCoef = isMelee ? 1 : WEAPON_BOSS_COEF[id] ?? 1;
+  const spreadTotal = isMelee ? 0 : (pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + mods.spreadAdd : wep.spread);
+  // The boss vulnerability channel: statuses amplify NOTHING against boss-grade bodies
+  // (utility only), and the crit multiplier counts at most BOSS_VULN_CAP.
+  const vuln = (1 - mods.critChance) + mods.critChance * Math.min(BOSS_VULN_CAP, mods.critMult);
+  const rate = (1 / wep.fireCd) * mods.fireRateMult;
+  // Burn is a flat DoT (never an amp): bounded at +3 practical DPS when present.
+  const burnDot = mods.burnChance > 0 ? 3 : 0;
+  return wep.damage * mods.damageMult * effPellets * wepCoef * rate * vuln
+    * practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult) + burnDot;
+}
+
+function godBuildGates(): void {
+  section("balancer god-build gate: 100k legal builds under the per-boss practical-DPS ceilings");
+  const rng = new Rng(0x60D5EED);
+  const BUILD_COUNT = 100_000;
+  const PICK_COUNTS = [4, 8, 9, 12];
+  let maxDps = 0;
+  let maxBuild = "";
+  const top: Array<{ dps: number; build: string }> = [];
+  const arsenal: WeaponId[] = [...PICKUP_WEAPONS, "pistol"];
+  for (let i = 0; i < BUILD_COUNT; i++) {
+    const owned: string[] = [];
+    const picks = PICK_COUNTS[i % PICK_COUNTS.length];
+    for (let n = 0; n < picks; n++) {
+      const choices = rollItemChoicesWith(3, () => rng.next(), owned);
+      if (choices.length === 0) break;
+      owned.push(choices[rng.int(0, choices.length - 1)].id);
+    }
+    const mods = createMods();
+    recomputeMods(mods, owned);
+    const weapon = arsenal[i % arsenal.length];
+    const dps = practicalBossDps(weapon, mods);
+    if (dps > maxDps) { maxDps = dps; maxBuild = `${weapon} + [${owned.join(",")}]`; }
+    if (top.length < 100 || dps > top[top.length - 1].dps) {
+      top.push({ dps, build: `${weapon} + [${owned.sort().join(",")}]` });
+      top.sort((a, b) => b.dps - a.dps);
+      if (top.length > 100) top.pop();
+    }
+  }
+  record("godBuild.maxPracticalDps", maxDps);
+  for (const [kind, ceiling] of Object.entries(BOSS_DPS_CEILING) as Array<[EnemyKind, number]>) {
+    check(`100k-build max practical DPS ${maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
+      maxDps <= ceiling, maxBuild);
+  }
+  writeFileSync(new URL("./fixtures/god_build_report.json", import.meta.url), JSON.stringify({
+    note: "Top-100 legal builds by ESTIMATED practical boss DPS (deterministic 12s moving-target model — documented in test/balance.test.ts practicalBossDps — not live telemetry).",
+    ceilings: BOSS_DPS_CEILING,
+    maxPracticalDps: Math.round(maxDps * 100) / 100,
+    top100: top.map((x) => ({ dps: Math.round(x.dps * 100) / 100, build: x.build })),
+  }, null, 2) + "\n");
+  check("top-100 attribution written to test/fixtures/god_build_report.json", top.length === 100);
+
+  section("balancer god-build gate: the strongest estimator build proves every sim floor");
+  // The top family from the report: smg carrying max fire-rate/damage/crit stacking.
+  const godPicks = [...L3("hair_trigger"), ...L3("glass_cannon"), ...L3("deadeye"), ...L3("split_shot")];
+  for (const [kind, floor] of [["boss", 5], ["marrow", 15], ["weaver", 20], ["gilded", 25], ["choir", 30]] as Array<[EnemyKind, number]>) {
+    const r = measureBossTtk("smg", godPicks, { kind, floor });
+    record(`${kind}.godBuild`, r.seconds);
+    const min = BOSS_MIN_LEGAL_TTK[kind] ?? 20;
+    // Outlasting the harness window without a kill proves the floor a fortiori (the
+    // Warden's plate walks the god build far past the cap).
+    check(`the 12-pick god build cannot kill the ${kind} under its ${min}s minimum`,
+      !(r.killed && r.seconds < min), r.killed ? `ttk=${r.seconds.toFixed(1)}s` : `unkilled after ${r.seconds.toFixed(0)}s`);
   }
 }
 
@@ -1173,7 +1380,8 @@ function fixtureGates(): void {
       builds: {
         median: "pistol + Hair Trigger Lv3 (+ Glass Cannon stack at depth)",
         highRoll: "smg + Deadeye Lv3 + Glass Cannon stack",
-        godFloor: "unbounded planted stream (~30,000 DPS) — the governor's hard-floor proof",
+        percentiles: "nine-build deterministic ladder per boss (see percentile ladder in bossLadderGates); P10 = fastest decile",
+        godBuild: "smg + Glass Cannon/Hair Trigger/Deadeye/Split Shot all Lv3 (12 picks) through the remediated boss-facing damage model",
       },
       measurements: MEASURED,
     };
@@ -1204,7 +1412,8 @@ function main(): void {
   threatBudgetGates();
   compositionCapGates();
   gauntletGates();
-  governorGates();
+  eliteContractGates();
+  godBuildGates();
   partyRewardGates();
   arbiterGates();
   sustainGates();

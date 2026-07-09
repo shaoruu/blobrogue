@@ -230,7 +230,7 @@ function marrowSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
   const p = w.players.get(LOCAL_ID)!;
   p.invuln = 0;
   const boss = devSpawnEnemy(w, "marrow", p.x + 200, p.y);
-  boss.intake = undefined; // beat machinery under test; the governor has its own gates
+
   return { w, p, boss };
 }
 
@@ -486,7 +486,7 @@ function choirSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy } 
   const p = w.players.get(LOCAL_ID)!;
   p.invuln = 0;
   const boss = devSpawnEnemy(w, "choir", p.x + 220, p.y);
-  boss.intake = undefined; // beat machinery under test; the governor has its own gates
+
   return { w, p, boss };
 }
 
@@ -585,7 +585,7 @@ function weaverSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
   const p = w.players.get(LOCAL_ID)!;
   p.invuln = 0;
   const boss = devSpawnEnemy(w, "weaver", p.x + 220, p.y);
-  boss.intake = undefined; // beat machinery under test; the governor has its own gates
+
   return { w, p, boss };
 }
 
@@ -689,7 +689,7 @@ function gildedSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
   const p = w.players.get(LOCAL_ID)!;
   p.invuln = 0;
   const boss = devSpawnEnemy(w, "gilded", p.x + 200, p.y);
-  boss.intake = undefined; // beat machinery under test; the governor has its own gates
+
   return { w, p, boss };
 }
 
@@ -890,7 +890,7 @@ function curriculumTests(): void {
     const p = w.players.get(LOCAL_ID)!;
     const captain = devSpawnEnemy(w, "charger", p.x + 200, p.y);
     captain.hp = captain.maxHp = 350;
-    captain.captainPhase = 1; // no governor here: the two-phase contract is under test
+    captain.captainPhase = 1;
     // Chip to just above the split, then land a huge hit: no floor may catch it.
     plantBullet(w, captain.x, captain.y, 170, 18);
     stepFor(w, 0.1);
@@ -981,7 +981,7 @@ function bossChestTests(): void {
     w.isGodMode = true;
     const p = w.players.get(LOCAL_ID)!;
     const boss = devSpawnEnemy(w, kind, p.x + 150, p.y);
-    boss.intake = undefined; // signature baking under test; the governor has its own gates
+
     for (let t = 1; t <= 60 * 20 && !boss.dead; t++) {
       plantBullet(w, boss.x, boss.y, 5000, 30);
       step(w, idle(w.tick + 1));

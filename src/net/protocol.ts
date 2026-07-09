@@ -371,6 +371,7 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
   rush: true, crash: true, dive: true, erupt: true, volley: true, spin: true, shield: true,
   fade: true, wail: true, split: true, pounce: true, weave: true, slam: true, sweep: true,
+  brace: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {

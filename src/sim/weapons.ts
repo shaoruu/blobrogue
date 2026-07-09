@@ -1,6 +1,7 @@
 import type { Bullet, WeaponId } from "./types.js";
 import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
+import { BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF } from "./balance.js";
 
 export interface MeleeSpec {
   arc: number;         // swing arc in radians (thrust uses a narrow forward cone)
@@ -155,6 +156,9 @@ export const PICKUP_WEAPONS: readonly WeaponId[] = [
 // once per trigger-pull in the game core so fire() stays a pure geometry helper.
 export interface ShotSpec {
   pellets: number;
+  // The weapon's NATIVE pellet count (before Split Shot / Scattergun additions): added
+  // pellets hit boss-grade bodies at a reduced coefficient (balancer remediation).
+  basePellets: number;
   spread: number;
   speed: number;
   life: number;
@@ -184,6 +188,15 @@ const CRIT_COLOR = "#fff3c4";
 // firing player's id, stamped onto each bullet for authoritative kill/loot attribution.
 export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng, owner: PlayerId): Bullet[] {
   const shots: Bullet[] = [];
+  // Boss-facing shot coefficient, baked per bullet (rooms always take full damage):
+  // native pellets beyond the first count at BOSS_NATIVE_PELLET_COEF, ADDED pellets
+  // (Split Shot / Scattergun) at BOSS_EXTRA_PELLET_COEF, and a few weapons carry their
+  // own coefficient (WEAPON_BOSS_COEF). Spread uniformly over the volley so bullet
+  // order never matters (deterministic, replay-safe).
+  const extra = Math.max(0, spec.pellets - spec.basePellets);
+  const native = spec.pellets - extra;
+  const effective = 1 + Math.max(0, native - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
+  const pelletBossCoef = (effective / spec.pellets) * (spec.fx !== undefined ? WEAPON_BOSS_COEF[spec.fx] ?? 1 : 1);
   for (let i = 0; i < spec.pellets; i++) {
     const t = spec.pellets === 1 ? 0 : (i / (spec.pellets - 1)) - 0.5;
     const jitter = (rng.next() - 0.5) * (spec.spread * 0.3);
@@ -202,6 +215,8 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       pierce: spec.pierce,
       hitList: null,
       isCrit,
+      critX: isCrit ? spec.critMult : 1,
+      bossCoef: pelletBossCoef,
       fx: spec.fx,
       bounce: spec.bounce,
       homing: spec.homing,

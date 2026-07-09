@@ -289,6 +289,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   weave: "#c98bff",   // Weaver web planting
   slam: "#ffd166",    // Gilded Warden anvil quake: gold
   sweep: "#ffd166",   // Gilded Warden ring waves
+  brace: "#9fb4a8",   // elite brace: braced steel-green slide
 };
 
 // Fallback disc tint per sprite while its PNG streams in (or before generated art lands):
