@@ -10,6 +10,9 @@ export interface NetConditions {
   rttMs: number;   // round-trip time; each direction gets rttMs/2
   jitterMs: number;// +/- uniform jitter added per direction
   loss: number;    // 0..1 probability a frame is dropped (each direction)
+  // Randomness source for jitter + loss rolls. Injectable so stress tests can run SEEDED,
+  // reproducible adversity schedules (a flake is re-runnable by seed). Default Math.random.
+  random?: () => number;
 }
 
 export const PERFECT_NET: NetConditions = { rttMs: 0, jitterMs: 0, loss: 0 };
@@ -37,13 +40,15 @@ export class LatencySocket implements SocketLike {
   }
 
   private oneWayDelay(): number {
+    const random = this.net.random ?? Math.random;
     const half = this.net.rttMs / 2;
-    const j = this.net.jitterMs > 0 ? (Math.random() * 2 - 1) * this.net.jitterMs : 0;
+    const j = this.net.jitterMs > 0 ? (random() * 2 - 1) * this.net.jitterMs : 0;
     return Math.max(0, half + j);
   }
 
   private afterDelay(fn: () => void): void {
-    if (this.net.loss > 0 && Math.random() < this.net.loss) return; // dropped
+    const random = this.net.random ?? Math.random;
+    if (this.net.loss > 0 && random() < this.net.loss) return; // dropped
     const d = this.oneWayDelay();
     if (d <= 0) fn();
     else setTimeout(fn, d);

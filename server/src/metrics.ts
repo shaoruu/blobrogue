@@ -44,11 +44,15 @@ export interface Counters {
   // grace window; resumesOk successful reclaims; seatsExpired graces that ran out (the
   // authoritative leave); resumesRejected replayed/forged tokens (security signal);
   // resumesExpired resume attempts after the seat was gone (late client / server restart);
-  // seatsDiscarded plain rejoins that abandoned a reserved body.
+  // seatsDiscarded plain rejoins that abandoned a reserved body; resumesPrevToken resumes
+  // accepted via the armed PREVIOUS token (the connection died inside the token-rotation ack
+  // window, so the rotated token never reached the client — expected under flaky networks,
+  // a sustained spike means clients keep dying mid-handshake).
   seatsReserved: number;
   seatsExpired: number;
   seatsDiscarded: number;
   resumesOk: number;
+  resumesPrevToken: number;
   resumesRejected: number;
   resumesExpired: number;
   // Blessing offers that ran out their TTL unanswered (pick forfeited, descend gate
@@ -64,7 +68,7 @@ export function newCounters(): Counters {
   return {
     msgsIn: 0, msgsOut: 0, bytesOut: 0, connsOpened: 0, connsClosed: 0,
     joinsOk: 0, joinsRejected: 0, duplicateIdentityKicks: 0,
-    seatsReserved: 0, seatsExpired: 0, seatsDiscarded: 0, resumesOk: 0, resumesRejected: 0, resumesExpired: 0,
+    seatsReserved: 0, seatsExpired: 0, seatsDiscarded: 0, resumesOk: 0, resumesPrevToken: 0, resumesRejected: 0, resumesExpired: 0,
     offersExpired: 0,
     malformed: 0, rateLimited: 0, droppedSnaps: 0, rejectedInputs: 0,
   };
