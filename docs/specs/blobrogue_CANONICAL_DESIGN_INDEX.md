@@ -2,16 +2,15 @@
 Last consolidated after Stage A merged and Stage B green/integration.
 
 ## Hard execution priority
-**Only authoritative multiplayer/server coding until Stage A→B→C production-green.** Freeze gameplay-feature implementation. Documents below may be prepared/reviewed; no post-server feature code routes early.
+**Authoritative multiplayer foundation is production-green, but a Sev-0 party coherence/reconnect patch is active.** Freeze curriculum/gameplay feature implementation until the runner closes that patch. Continue design/review only. Documents below may be prepared/reviewed; no post-server feature code routes early.
 
 ## Foundation / build-now
 1. `blobrogue_STAGE_A_extraction_spec.md` — merged shared sim foundation.
 2. `blobrogue_STAGE_B_spec.md` — authoritative WS POC/prediction/reconciliation; green/integration.
 3. `blobrogue_AUTHORITATIVE_SERVER_spec.md` + `blobrogue_PRODUCTION_server_spec.md` — Stage C/end-to-end authoritative players/enemies/bullets/hits/loot, reconnect/adversity/load/wss/ops.
-4. `blobrogue_POST_SERVER_CONTROL_PLANE_spec.md` — post–Stage-C production deploy/control plane (`blobrogue-control`) + immutable Hetzner release pipeline. Isolated ops path (own package/port/app/credentials); no gameplay/sim change; mergeable independently.
-5. `blobrogue_BALANCE_RESET_spec.md` — current balance targets; co-op section applies only after authoritative shared combat.
+4. `blobrogue_BALANCE_RESET_spec.md` — current balance targets; co-op section applies only after authoritative shared combat.
 
-## Canonical design prep (implementation frozen until Stage C)
+## Canonical design prep (implementation frozen until Sev-0 party/reconnect patch closes)
 - `blobrogue_PROGRESSION_spec.md` — progression curve, boss unlock graph, Amber/Camp, Lv1–3 blessings, floor objectives/cadence, Dealer economy, duplicate/melee discovery, mode resets.
 - `blobrogue_WEAPONS_spec_2.md` — Wisp/Thunderbolt benchmarks, universal weapon room verbs, charge/infinite-reserve policy.
 - `blobrogue_SCHOOLS_spec.md` — Resonance / The Hollow / Fracture / High Noon mechanics. Creative source: `blobrogue_CREATIVE_VISION.md`, `blobrogue_DARK_FAMILY_RETHESIS.md`.
@@ -32,7 +31,13 @@ Last consolidated after Stage A merged and Stage B green/integration.
 - Persistent power 20–30% ceiling, temporary expressive 4–6×, sidegrade gear, horizontal boss unlocks.
 - One universal Resonance meter; max four statuses (burn/chill/shock/Fracture).
 - Difficulty via movement/composition/techniques/material ecology, not HP/hue alone.
-- Server is sole truth; no gameplay system built client-authoritative while waiting.
+- Server is sole truth; no gameplay system built client-authoritative.
+- Three explicit difficulty modes remain: Casual / Standard / Brutal; composition/recovery only, same HP/damage/progression.
+- Pets remain scheduled horizontal account unlocks under one-slot/one-utility/readability/network caps; cosmetic-first, combat utility acceptance-gated.
+- Approved first-clear chain: Slime King F5 → Gauntlet F10 → Marrow F15 → Weaver F20 → Gilded Warden F25 → Hollow Choir F30. Jet later endgame.
+- Authoritative normalized global boards remain approved after scoring/anti-cheat; recognition rewards only.
 
 ## Supersession
 Explicit `*.pre-coherence.md` files and old standalone notes are historical only. If conflict: this index → named canonical active spec → latest Balance Reset for numerical tuning. Progression §10+ overrides old item/chest/economy language.
+- `blobrogue_POST_SERVER_CONTROL_PLANE_spec.md` — post-Stage-C admin.create.town status/metrics/logs + allowlisted safe deploy/drain/restart/rollback control plane; no shell.
+- `blobrogue_ENCOUNTER_CURRICULUM_spec.md` — post-server 30-floor/six-biome mob-family curriculum, encounter deck, rare/miniboss/boss cadence, difficulty/co-op/pet gates.

@@ -117,11 +117,9 @@ export class Menu {
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
       colA.appendChild(solo);
-      const actrow = el("div", "actrow");
-      const classicBtn = el("button", "secondary", "CLASSIC CO-OP");
-      classicBtn.addEventListener("click", () => void this.showClassicCoop());
-      actrow.append(classicBtn);
-      colA.appendChild(actrow);
+      // One multiplayer product path only: authoritative PLAY ONLINE. The legacy peer-synced
+      // path produced separate enemy/drop simulations and confused players into thinking they
+      // shared a world, so it is intentionally removed from the front door.
       body.appendChild(colA);
 
       // RIGHT column: identity (name, blob color, account) + profile + settings.
@@ -170,13 +168,18 @@ export class Menu {
     const buttons: HTMLButtonElement[] = [];
     const sync = () => {
       const current = this.session.colorIndex ?? 0;
-      buttons.forEach((b, i) => b.classList.toggle("sel", i === current));
+      buttons.forEach((b, i) => {
+        b.classList.toggle("sel", i === current);
+        b.setAttribute("aria-pressed", String(i === current));
+      });
     };
     for (let i = 0; i < PLAYER_COLORS.length; i++) {
       const b = el("button", "swatch");
       b.type = "button";
       b.style.background = PLAYER_COLORS[i];
       b.title = i === 0 ? "amber (classic)" : "";
+      // Icon-only button: the swatch has no text, so name it for screen readers.
+      b.setAttribute("aria-label", i === 0 ? "blob color amber (classic)" : `blob color ${i + 1}`);
       b.addEventListener("click", () => { this.session.setColorIndex(i); sync(); });
       buttons.push(b);
       swatches.appendChild(b);

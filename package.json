@@ -15,11 +15,12 @@
     "test:floorrun": "tsx test/floorrun.test.ts",
     "test:purity": "tsx test/purity.test.ts",
     "test:balance": "tsx test/balance.test.ts",
+    "test:input": "tsx test/input.test.ts",
     "test:runstats": "tsx test/runstats.test.ts",
     "test:weaponstats": "tsx test/weaponstats.test.ts",
     "test:statscore": "tsx test/statscore.test.ts",
     "test:convex": "vitest run",
-    "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/protocol.test.ts && tsx test/netcode.test.ts && tsx test/floorrun.test.ts && tsx test/purity.test.ts && tsx test/anim.test.ts && tsx test/balance.test.ts && tsx test/runstats.test.ts && tsx test/weaponstats.test.ts && tsx test/statscore.test.ts && npm run test:tools",
+    "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/protocol.test.ts && tsx test/netcode.test.ts && tsx test/floorrun.test.ts && tsx test/purity.test.ts && tsx test/anim.test.ts && tsx test/balance.test.ts && tsx test/input.test.ts && tsx test/runstats.test.ts && tsx test/weaponstats.test.ts && tsx test/statscore.test.ts && npm run test:tools",
     "test:tools": "python3 tools/test_pixelize.py",
     "harness": "npm --prefix server run harness",
     "test:anim": "tsx test/anim.test.ts"

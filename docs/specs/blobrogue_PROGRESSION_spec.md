@@ -47,37 +47,40 @@ Draft rule: every 1-of-3 guarantees at least 2 different buckets; never show 3 e
 ===============================================================
 Boss first-kills unlock OPTIONS/REGIONS, not +damage. Store in existing `players.unlocks[]` (or shared-world boss flags for open world); one canonical unlock id per node.
 
-**Start (no boss):** Verdant Hollow / floors 1–5; core weapons; 8 starter blessings; 1 primary weapon + 1 trinket slot; basic Camp.
+**Start (no boss):** Amberwild / floors 1–5; core weapons; 8 starter blessings; 1 primary weapon + 1 trinket slot; basic Camp.
 
-**The Slime King (First of the Fallen):**
-- Unlock Sunless Caves / next floor-biome band.
-- Unlock SECOND weapon slot (weapon swap; horizontal versatility, not passive DPS).
-- Add status blessings (burn/chill/shock) to pool.
+**The Slime King (F5):**
+- Unlock Rootbound Warrens region/band.
+- Unlock SECOND weapon slot + status blessings (burn/chill/shock).
 
-**Marrow:**
-- Unlock The Deep region/band.
-- Unlock second trinket slot.
-- Unlock The Hollow family (final CD name), including Fracture bank/snap + low-HP sidegrades.
+**F10 Gauntlet clear (non-boss milestone):**
+- Unlock Sunless Caves.
+- Unlock tougher Dealer/rare option pool; no new currency/system.
 
-**The Weaver:**
-- Unlock advanced mobility/precision gear and the first family mastery challenges.
-- Unlock Rare blessing pool expansion (not higher base rarity chance — more options).
+**Marrow (F15):**
+- Unlock The Deep.
+- Unlock second addon/trinket + The Hollow family/Fracture.
 
-**Jet:**
-- Unlock family FUSIONS/endgame mastery (§7), not a raw-stat tier.
-- Unlock adaptive/challenge variants (bosses borrow one equipped-family technique).
+**The Weaver (F20):**
+- Unlock Gilded Archive.
+- Unlock precision/mobility sidegrades, first family mastery, broader Rare OPTIONS.
 
-**The Hollow Choir:**
-- Unlock Emberreach endgame events + Choir family gear.
-- Unlock repeatable boss contracts / mastery cosmetics.
-
-**The Gilded Warden (optional branch):**
+**The Gilded Warden (F25):**
+- Unlock Emberreach.
 - Unlock Goldwork/deployable family + Camp construction cosmetics/functions.
 
-Floor mode: bosses at floor milestones set account unlocks after the run. Open world: defeating the arena boss opens the next biome gate immediately and persists the world flag. Same graph, different presentation.
+**The Hollow Choir (F30):**
+- Complete first-clear chain.
+- Unlock Choir family gear, Archive Contracts/mastery/authoritative normalized global boards, and later Jet endgame path.
+- Add Camp Listening Hall/Memorial.
+
+**Jet (later endgame):**
+- Unlock family Fusions/adaptive mastery (§7), not raw stats.
+- Visibly evolves the Amber Heart / post-clear Archive research.
+Floor mode: approved bosses plus the F10 Gauntlet milestone set canonical account unlocks after the run. Open world: corresponding gates persist immediately. Same graph, different presentation.
 
 ===============================================================
-# 4. AMBER ECONOMY + BLOB CAMP TREE
+# 4. AMBER ECONOMY + AMBER CAMP TREE
 ===============================================================
 ## One persistent currency only: Amber
 Add to `players`: `amber:number`, `equippedFoundation:string[]`, `gearInventory:string[]`, `loadout` (ids). Keep `unlocks[]`. Coins remain the temporary shop currency; no XP/dust/shards/keys-as-currencies.
@@ -158,11 +161,11 @@ Boss/enemy difficulty scales through new techniques, phase combinations, speed/r
 This is the guardrail against "piecing together a shit ton of weird stuff."
 - **Visible currencies: max 2:** Coins (temporary shops) + Amber (persistent Camp). No XP, dust, shards, souls, family tokens.
 - **Combat HUD meters: max 3:** HP, combo, ONE universal Resonance meter. Weapon-local cylinder/reload is shown inside the weapon widget, not another global meter. No separate meter per family.
-- **Statuses: max 4 universal named statuses in v1:** burn, chill, shock, bank/detonate. Future families must reuse/reskin/combine these before adding one. Never one status per family.
+- **Statuses: max 4 universal named statuses in v1:** burn, chill, shock, Fracture. Future families must reuse/reskin/combine these before adding one. Never one status per family.
 - **Simultaneous temporary blessings: floor target 8–10 by boss 2; open world max 6 slots.** Owned list can be long, active presentation cannot.
 - **Gear slots: max 4** (2 weapons + 2 trinkets), Boss Relic consumes a trinket slot.
 - **One family signature at a time; one optional fusion.** Families are content tags/playstyles on universal systems, not independent progression games.
-- **Onboarding rule:** introduce ONE new system per biome: Verdant = movement/combo/blessings; Sunless = statuses + weapon swap; Deep = trinkets/risk family; Emberreach = mastery/fusion. Every tutorial is playable, one sentence, and tied to an immediate reward.
+- **Onboarding rule:** introduce ONE new system per biome: Amberwild = movement/combo/blessings; Rootbound = pack roles + shields; Sunless = statuses/sound commitment; Deep = trinkets/risk family; Gilded Archive = addons/sidegrade control; Emberreach = pressure/raid coordination. Every tutorial is playable, one sentence, and tied to an immediate reward.
 - **Choice-card rule:** every item card states one verb + one number; lore is secondary. If an effect needs a paragraph, simplify it.
 
 ===============================================================
@@ -278,24 +281,5 @@ Menu-on-launch is replaced AFTER authoritative Stage C by the shared walkable Am
 Wisp and Thunderbolt are locked blind-identifiable benchmarks in `blobrogue_WEAPONS_spec_2.md`. Infinite reserve is universal; weapon identity comes from per-weapon movement/commitment/charge/cylinder/heat constraints, never a shared ammo scarcity layer.
 
 ---
-## FLOOR PURPOSE CADENCE (locked; floors cannot feel like filler)
-Every floor has ONE primary purpose communicated by objective, room grammar, reward, or new threat—not merely more HP/bodies or a hue swap.
-
-### First 10-floor authored cadence
-- **F1 — Establish:** simplest clear-floor loop, ranged baseline, Verdant material/elastic movement. Short/readable.
-- **F2 — Discover:** guaranteed first melee; introduce one new movement verb safely.
-- **F3 — Choose:** first Dealer + second-wave pressure; spend temporary coins, commit toward a build.
-- **F4 — Synthesize:** composition test using learned verbs/status/positioning; no brand-new system and no Arena directly before boss.
-- **F5 — Prove:** milestone boss + horizontal unlock + premium reward.
-- **F6 — Recover / Arrive:** new biome material/ecology grammar, Dealer, lower body count but one new contextual tell; breath after boss.
-- **F7 — Adapt:** first smart/complex movement composition (Knellbat/Rattleback band), authored environment interaction.
-- **F8 — Risk:** first Arena-floor eligibility / elite challenge / premium optional pressure.
-- **F9 — Prepare:** Dealer + late-build upgrade decision; clear preview/tell of next boss grammar.
-- **F10 — Master:** second milestone boss tests the biome’s verbs; unlocks next region/options.
-Then repeat the five-beat macro (`arrive/discover → choose → synthesize/risk → prepare → boss`) with new material/ecology/movement, not new currencies.
-
-### Floor-content rules
-- At most ONE new mechanic/verb per floor; next floor remixes before adding another.
-- New biome changes at least room shapes/material props/ecology/light grammar, not palette alone (see post-server World/Lighting specs).
-- Non-event normal floors still get a purpose via composition or environment interaction; threat budgets obey Balance Reset TTK/readability.
-- Arena floors are rare authored substitutions, not extra filler rooms; Dealer/boss/Arena never stack into one overloaded floor.
+## FLOOR PURPOSE CADENCE (canonical pointer)
+Floors cannot feel like filler. The authoritative 30-floor / six-region teaching→remix→prove curriculum, Dealer/Arena placement, anti-repetition deck, approved boss/Gauntlet cadence and Emberreach finale live in `blobrogue_ENCOUNTER_CURRICULUM_spec.md`. It supersedes the older ten-floor sketch. Progression math/caps in this document remain unchanged; the curriculum owns floor sequencing/content purpose.
