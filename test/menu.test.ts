@@ -268,10 +268,11 @@ async function main(): Promise<void> {
     const { menu, overlay } = makeMenu();
     await menu.showTitle();
     const buttons = buttonsOf(overlay);
-    check("PROFILE destination", buttons.some((b) => b === "PROFILE"));
-    check("SETTINGS destination", buttons.some((b) => b === "SETTINGS"));
+    check("PROFILE destination", buttons.some((b) => b.startsWith("PROFILE")));
+    check("SETTINGS destination", buttons.some((b) => b.startsWith("SETTINGS")));
     const navs = byClass(overlay, "nav-btn").map(textOf);
-    check("the right side is about YOU: exactly PROFILE + SETTINGS", navs.join("|") === "PROFILE|SETTINGS", navs.join("|"));
+    check("the right side is about YOU: exactly PROFILE + SETTINGS (90px destination cards)",
+      navs.length === 2 && navs[0].startsWith("PROFILE") && navs[1].startsWith("SETTINGS"), navs.join("|"));
     check("the leaderboard's explicit door is VIEW LEADERBOARD on the glance", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
     check("the glance header is GLOBAL LEADERBOARD", textOf(overlay).includes("Global leaderboard"));
     const all = textOf(overlay);
@@ -286,7 +287,7 @@ async function main(): Promise<void> {
     check("the reserved identity card exists", byClass(overlay, "identity-card").length === 1);
     check("the fixed home-status line exists (reserved, empty)", byClass(overlay, "home-status").length === 1 && textOf(byClass(overlay, "home-status")[0]) === "");
     check("no home footer", byClass(overlay, "foot").length === 0);
-    check("no Controls button", !buttonsOf(overlay).some((b) => /controls/i.test(b)));
+    check("no Controls DESTINATION (the settings card may describe controls)", !buttonsOf(overlay).some((b) => /^controls\b/i.test(b.trim())));
   }
 
   section("top-runs glance: FINAL geometry from first paint; hydration fills in place");
@@ -432,7 +433,7 @@ async function main(): Promise<void> {
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
     const navs = byClass(signed.overlay, "nav-btn").map(textOf);
-    check("signed-in title keeps the same destinations", navs.join("|") === "PROFILE|SETTINGS", navs.join("|"));
+    check("signed-in title keeps the same destinations", navs.length === 2 && navs[0].startsWith("PROFILE") && navs[1].startsWith("SETTINGS"), navs.join("|"));
     check("...and the same leaderboard door", buttonsOf(signed.overlay).some((b) => b.includes("VIEW LEADERBOARD")));
 
     const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });

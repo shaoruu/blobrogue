@@ -362,16 +362,27 @@
          below carries explicit dimensions: the desktop shell is min(820px,94vw), the hero/
          body/foot own fixed heights, and hydration only ever swaps content INSIDE them. */
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
-        padding:22px 26px 20px; width:min(820px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
+        padding:22px 26px 20px; width:min(840px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
         display:flex; flex-direction:column; gap:16px; align-items:stretch; }
-      .hero{ display:flex; flex-direction:column; align-items:center; gap:8px; text-align:center; min-height:104px; padding-bottom:14px; border-bottom:2px solid var(--dun-3); }
+      /* CANONICAL HOME GEOMETRY: 840x520 shell, 86px hero, 1.22fr/0.78fr body; left rows
+         16/82/54/16/154 (heading / PLAY ONLINE / PLAY SOLO / status / glance); right 176px
+         identity card + two 90px destinations. Fixed on desktop; media queries below relax
+         it for narrow/short viewports. */
+      .menu-home{ height:520px; }
+      .hero{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; height:86px; flex:0 0 86px; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
       /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
          attributes so the space is reserved before the file streams in). */
-      .logo-img{ image-rendering:pixelated; height:56px; width:329px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
-      .hero .tag{ font-family:var(--f-ui); font-size:11px; line-height:1.5; letter-spacing:.5px; color:var(--dun-4); max-width:540px; min-height:33px; text-transform:none; margin:0; }
-      .home-body{ min-height:352px; }
-      .body, .home-body{ display:flex; gap:20px; align-items:stretch; }
-      .col-actions, .home-left{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
+      .logo-img{ image-rendering:pixelated; height:40px; width:235px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
+      .hero .tag{ font-family:var(--f-ui); font-size:10px; line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
+      .body{ display:flex; gap:20px; align-items:stretch; }
+      .home-body{ display:grid; grid-template-columns:1.22fr 0.78fr; gap:20px; flex:1; min-height:0; }
+      .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
+      /* Exact left rows: 16 heading / 82 online / 54 solo / 16 status / 154 glance. */
+      .home-left{ display:flex; flex-direction:column; gap:12px; min-width:0; }
+      .home-left .col-h{ height:16px; flex:0 0 16px; }
+      .home-left .btn-quick{ height:82px; flex:0 0 82px; padding:0 22px; }
+      .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; }
+      .home-left .lb-preview{ margin-top:0; }
       .home-right{ flex:1; display:flex; flex-direction:column; gap:12px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
       .col-h{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
       .btn-quick{ width:100%; flex-direction:column; gap:5px; padding:17px 22px; font-size:17px; min-width:0; }
@@ -415,7 +426,13 @@
       .settings-shake .lab{ display:flex; justify-content:space-between; } .settings-val{ color:var(--amber); }
       .menu input[type=range]{ -webkit-appearance:none; appearance:none; width:160px; width:100%; height:6px; background:rgba(255,180,59,.22); cursor:pointer; border-radius:0; }
       .foot{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); text-align:center; text-transform:none; min-height:20px; padding-top:6px; border-top:2px solid var(--dun-3); margin:0; }
-      @media (max-width:640px){ .body, .home-body{ flex-direction:column; } .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; } }
+      @media (max-width:640px){
+        .menu-home{ height:auto; }
+        .body{ flex-direction:column; }
+        .home-body{ grid-template-columns:1fr; }
+        .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; }
+        .identity-card{ height:auto; flex:0 0 auto; }
+      }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===
          Attention order is explicit: (1) the amber PLAY actions, (2) the identity card +
@@ -434,6 +451,7 @@
       .lb-preview{ display:flex; flex-direction:column; gap:6px; margin-top:7px; height:154px; padding:9px 10px;
         box-shadow:inset 0 0 0 1px var(--dun-3); }
       .lb-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; height:18px; flex:0 0 18px; }
+      .lb-head .col-h{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The view action is an explicit but link-quiet affordance, not a chunky button. */
       .lb-view{ min-width:0; width:auto; font-size:8px; padding:4px 6px; letter-spacing:1px;
         background:transparent; color:#8f87a8; clip-path:none; box-shadow:none; text-shadow:none; }
@@ -468,14 +486,15 @@
       /* Short viewports: the glance collapses to its 48px header summary (the destination
          stays reachable) so Play and the identity stack never leave the fold. */
       @media (max-height:680px){
+        .menu-home{ height:auto; }
         .lb-preview{ height:48px; padding:0 10px; justify-content:center; }
         .lb-preview .lb-rows, .lb-preview .lb-standing{ display:none; }
-        .home-body{ min-height:0; }
+        .home-dest{ height:48px; flex:0 0 48px; }
       }
 
       /* --- reserved identity card (right column): guest CTA and account chip share ONE
          geometry so signed-in/out/loading/error never move anything below --- */
-      .identity-card{ display:flex; flex-direction:column; gap:9px; align-items:stretch; min-height:158px;
+      .identity-card{ display:flex; flex-direction:column; gap:9px; align-items:stretch; height:176px; flex:0 0 176px; overflow:hidden;
         padding:11px 12px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
       .id-note{ font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:var(--dun-4); text-transform:none; line-height:1.5; margin:0; text-align:left; }
       /* Mid-OAuth placeholder: the identity card's "signing you in" state, centered in the
@@ -495,11 +514,14 @@
       .you-stats{ font-family:var(--f-ui); font-size:9px; color:#8f87a8; min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The fixed home status line: reserved from first paint (boot/exit notes swap
          content inside it; single line, ellipsized). */
-      .menu p.home-status{ height:18px; flex:0 0 18px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
-        color:#8f87a8; text-transform:none; line-height:18px; margin:0; text-align:left;
+      .menu p.home-status{ height:16px; flex:0 0 16px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
+        color:#8f87a8; text-transform:none; line-height:16px; margin:0; text-align:left;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .navrow{ display:flex; gap:8px; }
-      .navrow .nav-btn{ flex:1; min-width:0; font-size:9px; padding:10px 4px; letter-spacing:1px; }
+      /* The two 90px home destinations, stacked. */
+      .navrow{ display:flex; flex-direction:column; gap:12px; }
+      .home-dest{ height:90px; flex:0 0 90px; min-width:0; width:100%; flex-direction:column; gap:6px; justify-content:center;
+        font-size:12px; letter-spacing:1px; padding:0 16px; }
+      .home-dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:8px; letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; }
 
       /* --- profile screens (the shared fixed card + the own wardrobe) --- */
       /* Worn title under the name: reserved line, so titled and untitled render at the

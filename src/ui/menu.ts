@@ -228,8 +228,8 @@ export class Menu {
       left.appendChild(this.soloButton("\u25be  PLAY"));
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       const nav = el("div", "navrow");
-      const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
-      const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
+      const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
+      const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());
       focusTargets.set("profile", profileBtn);
       focusTargets.set("settings", settingsBtn);
       nav.append(profileBtn, settingsBtn);
@@ -267,8 +267,8 @@ export class Menu {
     const identity = this.identitySection();
     right.appendChild(identity);
     const nav = el("div", "navrow");
-    const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
-    const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
+    const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
+    const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());
     focusTargets.set("profile", profileBtn);
     focusTargets.set("settings", settingsBtn);
     nav.append(profileBtn, settingsBtn);
@@ -299,8 +299,11 @@ export class Menu {
     }
   }
 
-  private navButton(label: string, go: () => void): HTMLButtonElement {
-    const btn = el("button", "secondary nav-btn", label);
+  // A 90px home destination card: the label leads (and IS the button's own text, so focus
+  // tooling reads it plainly), the sub-copy rides underneath.
+  private navButton(label: string, sub: string, go: () => void): HTMLButtonElement {
+    const btn = el("button", "secondary nav-btn home-dest", label);
+    btn.appendChild(el("span", "dest-sub", sub));
     btn.addEventListener("click", go);
     return btn;
   }
