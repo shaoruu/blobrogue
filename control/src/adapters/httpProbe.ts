@@ -29,7 +29,8 @@ import type {
 // joins a REAL gs, so drift fails loudly.
 // v7: the depth-progression world (new shared dungeon generator + seeded floor hazards
 // + hazardHit event) on top of the co-op experience pass (v6).
-export const SYNTHETIC_JOIN_PROTOCOL = 7;
+// v8: the bestiary wave (new enemy kinds/moves/hazard kinds + the EnemyWire aux channel).
+export const SYNTHETIC_JOIN_PROTOCOL = 8;
 
 export interface HttpProbeConfig {
   baseUrl: string;

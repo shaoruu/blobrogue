@@ -73,7 +73,15 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // snapshot seed), so a v6 client would silently render a DIFFERENT map than the server
 // simulates — the join gate fences the skew into a clean version mismatch. Also adds the
 // hazardHit event for floor-hazard damage juice.
-export const PROTOCOL_VERSION = 7;
+// v8 (intentional bump, the bestiary wave): the enemy wire's closed kind set grew (the
+// six new commons + echo/knell decoys + the marshal/toll miniboss templates), the move
+// set grew (decoy/blink/seam/stoke/harmonize/knell), the hazard kind set grew
+// (cinder/charge — both slow/damage PREDICTED play, so clients must decode them), and
+// EnemyWire carries `aux` — the one per-kind auxiliary channel (sinderling armed state,
+// decoy fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
+// reject any snapshot carrying these as a ProtocolError; the strict join gate turns that
+// skew into a clean "update your client".
+export const PROTOCOL_VERSION = 8;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -207,6 +215,9 @@ export interface EnemyWire {
   tr: EnemyTier;               // variety tier (drives the client's draw scale + markers)
   atk: AttackWire;
   bph: number;                 // boss phase (0 when not a boss)
+  // The per-kind auxiliary channel (see Enemy.aux): sinderling armed flag, echo/knell
+  // fuse, fragment tether id + 1, bulwark plate HP. 0 for everyone else.
+  aux: number;
   burn: number; chill: number; shock: number;
 }
 
@@ -396,13 +407,14 @@ function isEnemyKind(v: unknown): v is EnemyKind {
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
   rush: true, crash: true, dive: true, erupt: true, volley: true, spin: true, shield: true,
   fade: true, wail: true, split: true, pounce: true, weave: true, slam: true, sweep: true,
   brace: true,
+  decoy: true, blink: true, seam: true, stoke: true, harmonize: true, knell: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
@@ -686,6 +698,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
       mx: num(a, "mx", -POS_LIMIT, POS_LIMIT), my: num(a, "my", -POS_LIMIT, POS_LIMIT),
     },
     bph: num(o, "bph", 0, 16),
+    aux: num(o, "aux", -1e9, 1e9),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
   };
 }
@@ -915,6 +928,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     id: e.id, kind: e.kind, x: e.x, y: e.y, hp: e.hp, mhp: e.maxHp, r: e.radius, tr: e.tier,
     atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
     bph: e.boss ? e.boss.phase : 0,
+    aux: e.aux,
     burn: e.burn, chill: e.chill, shock: e.shock,
   };
 }
@@ -929,6 +943,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
   return {
     id: w.id, kind: w.kind, x, y, vx: 0, vy: 0, radius: w.r, hp: w.hp, maxHp: w.mhp, dead: false,
     tier: w.tr, isSummoned: false, kbResist: 1, surgeDelay: 0, surgeTime: 0,
+    aux: w.aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
     burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
