@@ -34,6 +34,8 @@ import {
 import type { Anim, Xform, XformStyle } from "./anim.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
+import { waveAudio } from "./waveAudio.js";
+import type { WaveFramePlayer } from "./waveAudio.js";
 import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -633,6 +635,7 @@ export class Game {
     this.pause.hide();
     this.blessing.hide();
     audio.unlock();
+    waveAudio.reset();
     resetAnim(this.playerAnim);
     this.isPlayerMoving = false;
     this.playerLean = 0;
@@ -700,6 +703,12 @@ export class Game {
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
     if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
+    // Wave layer: sweep entity-keyed loops/tells from the old floor, crossfade the biome's
+    // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually here).
+    waveAudio.onFloorLoad();
+    waveAudio.setAmbientZone(this.biomeIdx);
+    const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
+    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null);
   }
 
   // Mount a torch on the wall directly above each room (facing into it), at a
@@ -780,6 +789,7 @@ export class Game {
     this.stop();
     this.syncInputContext();
     audio.setMusic(null);
+    waveAudio.reset();
     this.hud.hideStats();
     this.hud.clear();
     this.onExit(reason);
@@ -1060,6 +1070,30 @@ export class Game {
       this.cam.y += (ty - this.cam.y) * k;
     }
     this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height);
+
+    // Wave-audio observation pass: authoritative attack-state tells (windup/lock/active/
+    // recover edges), revive-channel lifecycle, beam stop hysteresis, entity loop sweep.
+    waveAudio.frame({
+      listener: {
+        x: this.px, y: this.py,
+        camLeft: this.cam.x - 160, camTop: this.cam.y - 160,
+        camRight: this.cam.x + this.canvas.width + 160, camBottom: this.cam.y + this.canvas.height + 160,
+      },
+      enemies: this.world.enemies,
+      players: this.waveFramePlayers(),
+    });
+  }
+
+  // Every body the revive-channel audio watches: the local sim player(s) plus — online —
+  // the interpolated teammates, whose authoritative channel progress rides PlayerWire.rv.
+  // Without the remotes, a teammate being revived beside you would be silent online.
+  private *waveFramePlayers(): Generator<WaveFramePlayer> {
+    for (const p of this.world.players.values()) {
+      yield { id: p.id, x: p.x, y: p.y, isDown: p.isDown, reviveProgress: p.reviveProgress };
+    }
+    for (const r of this.remotes()) {
+      yield { id: r.playerId, x: r.x, y: r.y, isDown: r.isDown, reviveProgress: r.reviveProgress };
+    }
   }
 
   // Little dust kicks at the feet while running — the floor reacts to movement. Direct
@@ -1113,7 +1147,11 @@ export class Game {
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
-        sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+        // Manifest-bound weapons (Thumper lob, Sunlance held-beam lifecycle) own their
+        // sound through the wave layer; every other weapon keeps its exact legacy sample.
+        if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
+          sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+        }
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
         this.kickX += -Math.cos(e.aim) * kick;
@@ -1148,7 +1186,12 @@ export class Game {
         }
         if (e.closeShotgun) this.addFreeze(FREEZE_SHOTGUN);
         if (e.melee) this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
-        if (!e.killed) sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
+        // Sunlance hits tick through the wave layer's 120ms-per-target limiter — a held
+        // beam at 22Hz must never machine-gun the generic hit sample.
+        if (!e.killed) {
+          if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
+          else sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
+        }
         break;
       }
       case "thornsHit":
@@ -1183,7 +1226,10 @@ export class Game {
         const size = arch.drawSize * (TIERS[e.tier as EnemyTier]?.drawMult ?? 1);
         this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
         const comboRate = 1 + Math.min(e.combo - 1, 20) * 0.015;
-        sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+        // Wave-roster bosses die on their authored identity cue, never the generic splat.
+        if (!waveAudio.bossDeath(e.kind, e.x, e.y)) {
+          sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+        }
         this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
         const mult = comboTierFor(e.combo).mult;
         const comboTrauma = big ? 0 : COMBO_TRAUMA * ((mult - 1) / (COMBO_MAX_MULT - 1));
@@ -1310,13 +1356,17 @@ export class Game {
           if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
         }
         break;
-      case "bossPhase":
+      case "bossPhase": {
         triggerFlash(this.animForId(e.eid));
-        this.sfxAt("bossSpawn", e.x, e.y);
+        const phaseKind = this.world.enemies.find((en) => en.id === e.eid)?.kind;
+        if (!(phaseKind !== undefined && waveAudio.bossPhase(phaseKind, e.x, e.y, e.eid))) {
+          this.sfxAt("bossSpawn", e.x, e.y);
+        }
         this.addTrauma(TRAUMA_BOSS_FLOOR);
         this.shockwaves.spawn(e.x, e.y, 30, 190, 0.55, "#ffb43b", 4);
         this.flashScreen(255, 180, 59, 0.12, 2.8);
         break;
+      }
       case "bossTransition":
         // Telemetry-bearing beat (enter/exit + queued overflow); the juice rides bossPhase.
         break;
@@ -1342,6 +1392,7 @@ export class Game {
       case "revive":
         // Authoritative (online) revive: the server brought a downed player back. The revived
         // player's own client replays the juice (wsTransport only forwards its own pid events).
+        waveAudio.reviveComplete(e.pid); // channel loop ends; the manifest duck frames the sting
         sfx("revive");
         this.spawnParticles(e.x, e.y, 14, "#8affe0");
         this.shockwaves.spawn(e.x, e.y, 8, 46, 0.4, "#8affe0", 3);
@@ -1358,12 +1409,17 @@ export class Game {
       case "trauma":
         this.addTrauma(e.amount);
         break;
-      case "cue":
+      case "cue": {
+        // Manifest ids on the cue channel route to the wave layer (its own attenuation +
+        // off-camera law — boss locks must stay audible); legacy names keep the near-camera
+        // gate and exact SfxName replay.
+        const isWaveCue = waveAudio.cueAt(e.name, e.x, e.y);
         if (this.isNearCamera(e.x, e.y)) {
-          sfx(e.name as SfxName, { rate: e.rate, gain: e.gain });
+          if (!isWaveCue) sfx(e.name as SfxName, { rate: e.rate, gain: e.gain });
           if (e.trauma > 0) this.addTrauma(e.trauma);
         }
         break;
+      }
     }
   }
 
@@ -1851,7 +1907,10 @@ export class Game {
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
         const entry = this.remoteAnims.get(r.playerId);
         if (entry) triggerRecoil(entry.anim);
-        if (this.isNearCamera(r.x, r.y)) sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
+        if (this.isNearCamera(r.x, r.y)
+          && !waveAudio.weaponFired(r.weapon, { x: r.x, y: r.y, gain: 0.4, beamKey: r.playerId })) {
+          sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
+        }
       }
       this.remoteShotSeen.set(r.playerId, r.shotSeq);
     }
@@ -2032,6 +2091,7 @@ export class Game {
     // no-op, so solo behavior is unchanged.
     this.transport.stop();
     audio.setMusic(null);
+    waveAudio.reset();
     sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();

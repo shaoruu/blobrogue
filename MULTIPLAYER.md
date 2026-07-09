@@ -286,6 +286,49 @@ The mint/verify byte agreement (now including the `wld`/`nm`/`cl` claims) is loc
 `server/test/ticket.test.ts`; the room isolation + identity flow end-to-end by
 `server/test/rooms.test.ts`.
 
+### Same-world proof (the Sev-0 guard)
+
+A live playtest incident had one player NOT bound to the party's room — two clients played
+visually-similar but separate simulations. Three layers now make that structurally
+impossible to miss:
+
+1. **`wid` on every snapshot.** The server stamps the authoritative world id it bound the
+   connection to. The client compares it against `worldIdForRoom(lobbyCode)` (the same
+   mapping the Convex minter uses — agreement locked by test) and, on any mismatch, ends
+   the run and returns to the lobby with an explanation instead of playing on.
+2. **The HUD shows the AUTHORITATIVE room code** (parsed from `wid`, not the local lobby
+   string) — two screens reading the same code IS the shared-world proof — plus a
+   per-player `CONNECTING: <name>` status for lobby members whose socket has not produced
+   a body in the world yet.
+3. **Two-real-client integration** (`server/test/coop.test.ts`) asserts both wires agree
+   on seed/floor/rev/world id, enemy ids+positions, pickup ids/positions, chest ids/state,
+   and each other's verified ticket names/colors — under production-default full snapshots
+   AND with interest filtering re-enabled.
+
+### Down, revive, spectate (authoritative)
+
+At 0 HP with a living teammate you go **down**, not dead. A teammate stands inside your
+revive ring and **holds E** for the 1.5s channel — the interact intent rides the input
+stream (`act`), and the server validates radius/liveness/pause state, so the bit alone can
+never conjure a revive. Both sides watch the SAME authoritative progress (SelfWire `rev` /
+PlayerWire `rv`) as a world-space ring; damage to the reviver cancels, walking away or
+releasing decays. Revive returns you at 2 HP with 1.0s protection and a 0.35s attack
+lockout; a party descend rescues any downed member at the same partial HP.
+
+While down you **spectate**: the camera rides a living teammate (`SPECTATING <NAME>`),
+Q/E, the arrows, or the wheel cycle targets, and a semantic `spec` message tells the
+server which teammate to center your interest view on. The spectate input context samples
+idle at the source, and the server ignores gameplay inputs from downed players — a
+spectator cannot affect the sim. Game over only lands when the whole party is wiped.
+
+### The party blessing gate
+
+Cleared-floor offers (and the boss chest's Rare offers) go to EVERY member — downed
+players included — and the descend holds until each pick resolves. Snapshots carry the
+pending set (`pnd`), so everyone sees `WAITING FOR N/M PLAYERS…` with the names still
+picking. Choosers are paused and damage-shielded; a disconnect releases their hold
+immediately and an unanswered offer expires after 60s on the sim clock.
+
 ### Ticket sources
 
 - **Production / menu flow:** the trusted Convex action above — an HMAC-SHA256
