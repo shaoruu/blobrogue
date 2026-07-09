@@ -40,6 +40,10 @@ export const mint = action({
     if (profile) {
       claims.name = profile.name;
       if (profile.colorIndex !== null) claims.colorIndex = profile.colorIndex;
+      // Equipped cosmetics ride as verified claims too (visual-only labels; the profile
+      // system already validated ownership at equip time).
+      if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
+      if (profile.cosmetics.glasses !== null) claims.glasses = profile.cosmetics.glasses;
     }
     if (roomCode !== undefined) {
       if (!profile) throw new Error("join the room before requesting a room ticket");

@@ -122,6 +122,8 @@ export class MessageRouter {
     conn.authName = auth.playerId;
     conn.displayName = auth.name ?? null;
     conn.colorIndex = auth.colorIndex ?? null;
+    conn.hat = auth.hat ?? null;
+    conn.glasses = auth.glasses ?? null;
     // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
     // player proved membership in that room, so friends sharing a code land in the same
     // isolated world and a client can never assert a world id. No claim -> the public default.
