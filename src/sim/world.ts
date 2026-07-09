@@ -18,8 +18,8 @@ import type { Enemy, Bullet, Pickup, Prop, Chest, Pet, PetKind, WeaponId, Attack
 import { PETS, PET_BALANCE } from "./pets.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
-import { MODES, modeActiveCap, modeBossAddCap } from "./difficulty.js";
-import type { DifficultyMode } from "./difficulty.js";
+import { DIFFICULTIES, DEFAULT_DIFFICULTY, difficultyActiveCap, difficultyBossAddCap } from "./difficulty.js";
+import type { Difficulty } from "./difficulty.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -207,11 +207,11 @@ export interface WorldState {
   // (one offer per cleared non-boss floor; reset on every floor build).
   isBlessingOfferedThisFloor: boolean;
   remoteTargets: RemoteTarget[];
-  // Difficulty mode (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1): concurrent pressure +
-  // recovery knobs only, never HP/damage/telegraphs. "standard" — the only mode any shipped
-  // path creates — is exactly the authored sim (every multiplier 1, every helper identity);
-  // casual/brutal exist for the mandatory balance gates until modes pass their ship gates.
-  mode: DifficultyMode;
+  // Run difficulty (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1): concurrent pressure +
+  // recovery knobs only, never HP/damage/telegraphs. Owner-facing selection ships via the
+  // difficulty PR (#34), whose sim field this mirrors exactly; until it lands every shipped
+  // path creates "standard", which is bit-identical to the authored sim.
+  difficulty: Difficulty;
   // Balance-gate damage ledger: null in every real run (zero cost); the studio gates enable
   // it to attribute pet vs player output honestly (pets credit their OWNER everywhere else,
   // so attribution must be recorded at the damage SOURCE, not derived from credit).
@@ -250,7 +250,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
 // skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
 // spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
 // Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean; mode?: DifficultyMode }
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean; difficulty?: Difficulty }
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
@@ -291,7 +291,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     pendingBlessings: new Map(),
     isBlessingOfferedThisFloor: false,
     remoteTargets: [],
-    mode: opts.mode ?? "standard",
+    difficulty: opts.difficulty ?? DEFAULT_DIFFICULTY,
     ledger: null,
     isCoop: opts.isCoop ?? false,
     isShared: opts.isShared ?? false,
@@ -323,11 +323,13 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
   return p;
 }
 
-// Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
-// no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
-// Their pending blessing offer (if any) dies with them so the descend gate can't be held
-// by a player who is no longer in the world, and their companion pet leaves with them
-// (a rejoin spawns a fresh one from the new join's verified ticket claim).
+// Remove a player from a live world (authoritative server: on a real leave). Returns
+// whether a player was actually removed. Their pending blessing offer (if any) dies with
+// them so the descend gate can't be held by a player who is no longer in the world, and
+// their companion pet leaves with them. RECONNECT SEAM: the reservation system (PR #39)
+// holds the seat instead of calling this during its 90s grace — the pet then rides
+// isPetOwnerGone dormancy (exact frozen state, proven across a 90s window in the tests)
+// and resumes on rejoin; only reservation EXPIRY lands here and removes the pet for real.
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   w.pendingBlessings.delete(id);
   w.pets.delete(id);
@@ -406,7 +408,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.mode);
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.difficulty);
   w.enemies = spawns.active;
   w.pendingSpawns = spawns.pending;
   w.spawnReleaseCd = 0;
@@ -528,7 +530,7 @@ function rollPropKind(rng: Rng, hazardMult: number): Prop["kind"] {
 function placeProps(w: WorldState): Prop[] {
   const d = w.dungeon;
   const rng = new Rng((w.seed ^ 0x2f6a35c1) + w.floor * 26417);
-  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult * MODES[w.mode].hazardMult;
+  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult * DIFFICULTIES[w.difficulty].hazardMult;
   const list: Prop[] = [];
   const occupied = new Set<number>();
   for (const room of d.rooms) {
@@ -743,10 +745,10 @@ function dashCooldown(p: PlayerSim): number {
 function isProtected(p: PlayerSim): boolean {
   return p.invuln > 0 || p.dashInvuln > 0;
 }
-// The ambient heart economy scales by party size (co-op §8) and by difficulty mode (gate
-// spec §1 recovery knob) — one multiplier used by every ambient heart roll.
+// The ambient heart economy scales by party size (co-op §8) and by the run difficulty
+// (gate spec §1 recovery knob) — one multiplier used by every ambient heart roll.
 function heartRateMult(w: WorldState): number {
-  return coopHeartRateMult(w.encounterPlayers) * MODES[w.mode].heartRateMult;
+  return coopHeartRateMult(w.encounterPlayers) * DIFFICULTIES[w.difficulty].heartMult;
 }
 
 function coinGain(p: PlayerSim): number {
@@ -1166,10 +1168,11 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
 
 // `p` null = the killing actor has left: the kill still resolves (death, loot, boss chest) but
 // grants no personal reward (kills/combo/lifesteal) and never credits another live player.
-// isPetKill: the finishing damage came from the owner's COMPANION (nip or pet-lit burn) — the
-// kill still credits the owner's kills/combo/loot, but never Vampire Fang: pets share the
-// global sustain budget at exactly zero (gate spec §5 healing cap), so pet output can't be
-// laundered into hearts.
+// isPetKill: the finishing damage came from the owner's COMPANION (nip or pet-lit burn).
+// Studio ruling on pet kills: OWNER KILL CREDIT ONLY — kills/combo count for the owner, but
+// there is NO pet loot path (a pet-finished enemy drops nothing; pets are damage assists,
+// never a coin/heart farm) and never Vampire Fang (pets share the global sustain budget at
+// exactly zero — gate spec §5).
 function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[], isPetKill = false): void {
   e.dead = true;
   if (p) {
@@ -1219,7 +1222,7 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[],
       ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: child.x, y: child.y });
     }
   }
-  dropLoot(w, p, e, ev);
+  if (!isPetKill) dropLoot(w, p, e, ev);
 }
 
 // Boss death ends danger immediately (spec §5): every remaining enemy and queued
@@ -1533,13 +1536,13 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   for (const e of w.enemies) {
     if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
   }
-  const cap = modeActiveCap(w.mode, activeThreatCap(w.floor)) * coopThreatMult(w.encounterPlayers);
+  const cap = difficultyActiveCap(activeThreatCap(w.floor), w.difficulty) * coopThreatMult(w.encounterPlayers);
   const next = w.pendingSpawns[0];
   if (living + threatCostOf(next.kind, next.tier) > cap) return;
   // Its spawn grace never ticked while pending, so it activates with the full grace window.
   w.pendingSpawns.shift();
   w.enemies.push(next);
-  w.spawnReleaseCd = REINFORCE_STAGGER * MODES[w.mode].reinforceMult / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
+  w.spawnReleaseCd = REINFORCE_STAGGER * DIFFICULTIES[w.difficulty].reinforceIntervalMult / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
   ev.push({ t: "enemySpawn", eid: next.id, kind: next.kind, tier: next.tier, x: next.x, y: next.y });
 }
 
@@ -1779,10 +1782,10 @@ function spitterFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 }
 
 // Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier. The
-// difficulty mode scales the same idle cooldown (gate spec §1): opportunity frequency moves,
+// run difficulty scales the same idle cooldown (gate spec §1): opportunity frequency moves,
 // telegraph/lock/recovery timings never do.
 function attackCdMultOf(w: WorldState, e: Enemy): number {
-  return TIERS[e.tier].attackCdMult * MODES[w.mode].attackCdMult;
+  return TIERS[e.tier].attackCdMult * DIFFICULTIES[w.difficulty].attackCdMult;
 }
 
 // The Slime King (spec §5, calibrated to ~37.5s median / ≥20s absolute solo TTK). Phase
@@ -1801,8 +1804,8 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (!boss.roar) {
     boss.addTimer -= dt;
     if (boss.addTimer <= 0) {
-      boss.addTimer = BOSS.addInterval[boss.phase] * MODES[w.mode].bossAddIntervalMult;
-      const cap = modeBossAddCap(w.mode, BOSS.addCap[boss.phase]);
+      boss.addTimer = BOSS.addInterval[boss.phase] * DIFFICULTIES[w.difficulty].bossAddIntervalMult;
+      const cap = difficultyBossAddCap(BOSS.addCap[boss.phase], w.difficulty);
       for (let i = 0; i < BOSS.addBatch[boss.phase]; i++) {
         if (countBossAdds(w) >= cap) break;
         spawnBossAdd(w, e, w.rng.next() * Math.PI * 2, ev);
@@ -1833,7 +1836,7 @@ function countBossAdds(w: WorldState): number {
 function bossBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
-  e.attack.cooldown = BOSS.attackCd[boss.phase] * MODES[w.mode].attackCdMult;
+  e.attack.cooldown = BOSS.attackCd[boss.phase] * DIFFICULTIES[w.difficulty].attackCdMult;
   // P3: every 3rd attack is the arena squeeze (1.0s telegraph, 3.0s hold).
   if (boss.phase >= 3 && boss.attackCount % BOSS.squeezeEvery === 0) {
     beginWindup(e, "squeeze");
@@ -2209,8 +2212,8 @@ function moveEnemyBy(w: WorldState, e: Enemy, dx: number, dy: number): void {
 }
 
 function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, speed: number, radius: number, damage: number, color: string, life: number): void {
-  // Difficulty modes scale ENEMY projectile speed only (gate spec §1); standard is exactly 1.
-  const sp = speed * MODES[w.mode].projectileSpeedMult;
+  // The run difficulty scales ENEMY projectile speed only (gate spec §1); standard is 1.
+  const sp = speed * DIFFICULTIES[w.difficulty].projectileSpeedMult;
   w.bullets.push({
     x, y,
     vx: Math.cos(angle) * sp, vy: Math.sin(angle) * sp,
@@ -2229,10 +2232,20 @@ function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, sp
 
 // A passive owner (down, dead, mid-blessing-pick, or a finished run) pauses the pet: it
 // keeps following/returning but starts no attacks. It resumes the moment the owner does
-// (revive, pick resolved). A DISCONNECTED owner removes the pet outright
-// (removePlayerFromWorld); a reconnect spawns a fresh one from the new join ticket.
+// (revive, pick resolved).
 function isPetOwnerActive(w: WorldState, owner: PlayerSim): boolean {
   return !owner.isDown && owner.hp > 0 && !w.isRunOver && !w.pendingBlessings.has(owner.id);
+}
+
+// A GONE owner makes the pet disappear whole (dormant: state frozen as an exact snapshot,
+// off every wire) until they return. Today that means down/dead. RECONNECT SEAM: the
+// reservation system (PR #39, `PlayerSim.isAbsent` / setPlayerAbsence) joins this ONE
+// predicate on integration — a reserved absent body then keeps its pet dormant through the
+// 90s window and resumes the exact cooldown/state snapshot on rejoin, which the dormancy
+// tests already prove across a 90s freeze. Only a real leave (removePlayerFromWorld, after
+// the reservation expires) removes the pet.
+function isPetOwnerGone(owner: PlayerSim): boolean {
+  return owner.isDown || owner.hp <= 0;
 }
 
 // Pets never target bosses (gate spec §5: a pet cannot trigger boss phases, and boss HP is
@@ -2457,10 +2470,10 @@ function updatePets(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const pet of w.pets.values()) {
     const owner = w.players.get(pet.ownerId);
     if (!owner) continue; // unreachable: removePlayerFromWorld removes the pet with its owner
-    // Gate spec §5: the pet DISAPPEARS while its owner is down. Its state freezes as a
+    // Gate spec §5: the pet DISAPPEARS while its owner is gone. Its state freezes as a
     // snapshot (cooldowns don't tick — a down is never a free cooldown reset) and any loosed
-    // peck fizzles with it; the revive brings it back beside the owner as a visible teleport.
-    if (owner.isDown || owner.hp <= 0) {
+    // peck fizzles with it; the return brings it back beside the owner as a visible teleport.
+    if (isPetOwnerGone(owner)) {
       if (!pet.isDormant) {
         pet.isDormant = true;
         pet.peck = null;
@@ -2649,7 +2662,7 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   // exactly as they always did per chest opened.
   const loot: ChestLoot[] = [];
   if (c.kind === "boss") {
-    for (let i = 0; i < MODES[w.mode].bossChestHearts; i++) loot.push({ kind: "heart" });
+    for (let i = 0; i < DIFFICULTIES[w.difficulty].bossChestHearts; i++) loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
     if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
@@ -2892,9 +2905,9 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (reviver) {
       downed.reviveProgress += dt;
-      if (downed.reviveProgress >= MODES[w.mode].reviveChannel) {
+      if (downed.reviveProgress >= DIFFICULTIES[w.difficulty].reviveChannel) {
         downed.isDown = false;
-        downed.hp = Math.min(downed.maxHp, MODES[w.mode].reviveHp);
+        downed.hp = Math.min(downed.maxHp, DIFFICULTIES[w.difficulty].reviveHp);
         downed.invuln = Math.max(downed.invuln, REVIVE.invuln);
         downed.fireCd = Math.max(downed.fireCd, REVIVE.fireLockout);
         downed.reviveProgress = 0;
