@@ -23,7 +23,7 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ITEMS, itemDesc } = await import("../src/sim/items.js");
 type HudModule = typeof import("../src/game/hud.js");
@@ -47,8 +47,8 @@ function mkState(over: Partial<HudState> = {}): HudState {
       { id: "shotgun", name: "Shotgun", isCurrent: true },
       { id: "tesla", name: "Tesla", isCurrent: false },
     ],
-    isCleared: false, enemiesLeft: 3, isBossActive: false, bossHpFrac: 0,
-    coopLabel: null, waitLabel: null, dashFill: 1,
+    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isBossActive: false, bossHpFrac: 0,
+    coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
     ...over,
@@ -238,6 +238,70 @@ function hudIntegrationTests(): void {
   check("equipped highlight follows the weapon id", root.querySelectorAll(".hb-slot")[2].classList.contains("on"));
 }
 
+function hierarchyTests(): void {
+  section("UI Director hierarchy: ONE top-center objective lane (boss wins; combo yields)");
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  const hud = new Hud(root);
+  const lane = root.querySelector<HTMLElement>("[data-objlane]")!;
+  const objective = root.querySelector<HTMLElement>("[data-objective]")!;
+  const waitline = root.querySelector<HTMLElement>("[data-waitline]")!;
+
+  check("the lane stacks bossbar -> objective -> waitline -> combo in ONE container",
+    [...lane.children].map((c) => c.getAttribute("data-bossbar") !== null ? "boss"
+      : c.getAttribute("data-objective") !== null ? "obj"
+      : c.getAttribute("data-waitline") !== null ? "wait"
+      : c.getAttribute("data-combo") !== null ? "combo" : "?").join(",") === "boss,obj,wait,combo");
+
+  hud.update(mkState({ enemiesLeft: 3 }));
+  check("fighting floor reads the enemies-left copy", objective.textContent === "3 ENEMIES LEFT" && objective.classList.contains("show"));
+  hud.update(mkState({ enemiesLeft: 1 }));
+  check("singular enemy copy", objective.textContent === "1 ENEMY LEFT");
+  hud.update(mkState({ enemiesLeft: 0 }));
+  check("uncleared with an empty board reads INCOMING (never a lying zero)", objective.textContent === "ENEMIES INCOMING\u2026");
+  hud.update(mkState({ isCleared: true, enemiesLeft: 0 }));
+  check("cleared floor flips to FLOOR CLEAR \u00b7 GO DOWN with the clear accent",
+    objective.textContent === "FLOOR CLEAR \u00b7 GO DOWN" && objective.classList.contains("clear"));
+
+  hud.update(mkState({ isBossActive: true, bossHpFrac: 0.8, combo: 4, comboMult: 1.5, comboFrac: 0.5 }));
+  check("a boss WINS the lane: bar shown, normal objective hidden",
+    root.querySelector("[data-bossbar]")!.classList.contains("show") && !objective.classList.contains("show"));
+  check("the lane marks boss so the combo yields at 70%", lane.classList.contains("boss"));
+  hud.update(mkState({ isBossActive: false, combo: 4, comboMult: 1.5, comboFrac: 0.5 }));
+  check("boss down: the lane releases and the objective returns",
+    !lane.classList.contains("boss") && objective.classList.contains("show"));
+
+  hud.update(mkState({ isObjectiveHidden: true }));
+  check("the sandbox has no objective line", !objective.classList.contains("show"));
+
+  section("UI Director hierarchy: the co-op wait line rides the lane; BL carries the prompt");
+  hud.update(mkState({ waitLabel: "WAITING AT EXIT \u00b7 1/2 \u2014 WAITING FOR GF" }));
+  check("the coordination copy shows in the lane's wait slot",
+    waitline.classList.contains("show") && waitline.textContent!.includes("WAITING AT EXIT"));
+  hud.update(mkState());
+  check("no coordination owed -> the wait slot fades (fixed height, no shift)", !waitline.classList.contains("show"));
+
+  const prompt = root.querySelector<HTMLElement>("[data-prompt]")!;
+  check("BL prompt hidden with no context", !prompt.classList.contains("show"));
+  hud.update(mkState({ prompt: { key: "E", label: "HOLD \u2014 REVIVE GF", isActive: false } }));
+  check("the revive affordance shows key cap + label in the BL cluster",
+    prompt.classList.contains("show") && !prompt.classList.contains("active")
+    && prompt.textContent!.includes("E") && prompt.textContent!.includes("REVIVE GF"));
+  hud.update(mkState({ prompt: { key: "E", label: "REVIVING GF\u2026 62%", isActive: true } }));
+  check("a running channel lights the prompt", prompt.classList.contains("active") && prompt.textContent!.includes("62%"));
+  const bl = root.querySelector(".hud-corner.bl")!;
+  check("the prompt lives WITH the dash in the BL cluster", bl.querySelector(".dash") !== null && bl.querySelector("[data-prompt]") !== null);
+
+  hud.clear();
+  check("clear() resets lane + prompt states",
+    !objective.classList.contains("show") && !lane.classList.contains("boss") && !prompt.classList.contains("show"));
+
+  section("objectiveCopy: the canonical strings");
+  check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");
+  check("FLOOR CLEAR \u00b7 GO DOWN", objectiveCopy(true, 0) === "FLOOR CLEAR \u00b7 GO DOWN");
+  check("cleared wins regardless of a stale count", objectiveCopy(true, 3) === "FLOOR CLEAR \u00b7 GO DOWN");
+}
+
 function main(): void {
   weaponSlotTests();
   buffChipTests();
@@ -245,6 +309,7 @@ function main(): void {
   blessingCardTests();
   drawerTests();
   hudIntegrationTests();
+  hierarchyTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll HUD DOM assertions passed.\n");

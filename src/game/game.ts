@@ -1132,7 +1132,7 @@ export class Game {
     sfx("floorClear");
     this.addTrauma(0.1);
     this.flashScreen(140, 255, 190, 0.08, 2.5);
-    this.hud.showBanner("FLOOR CLEARED \u00b7 \u25be TAKE THE STAIRS");
+    this.hud.showBanner("FLOOR CLEAR \u00b7 \u25be GO DOWN");
     const d = this.dungeon;
     this.spawnSparkleBurst(d.exit.x * TILE + TILE / 2, d.exit.y * TILE + TILE / 2, 14, "#8affc0");
   }
@@ -1995,14 +1995,13 @@ export class Game {
     const boss = this.enemies.find((e) => e.kind === "boss");
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
+    // TL co-op status strip: ONLINE ONLY (UI Director hierarchy) — the authoritative
+    // shared world is the one place the party status is load-bearing mid-run. The verified
+    // world-id echo + per-member connected/reconnecting readiness readout belong to the
+    // Sev-0 coherence system (PR #39); until it lands this keeps the plain lobby label,
+    // and integration swaps in its authoritative roster line.
     let coopLabel: string | null = null;
-    if (this.coop) {
-      const count = this.coop.remotePlayers().length + 1;
-      coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
-    } else if (this.mode === "online" && this.wsTransport) {
-      // The verified world-id echo + per-member connected/reconnecting readiness readout
-      // belong to the Sev-0 coherence system (PR #39); until it lands this keeps the plain
-      // lobby label, and integration swaps in its authoritative roster line.
+    if (this.mode === "online" && this.wsTransport) {
       const count = this.wsTransport.remotePlayers().length + 1;
       const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
       // Surface the room code mid-run so a friend can still be invited into this world.
@@ -2018,9 +2017,11 @@ export class Game {
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
       enemiesLeft: this.enemies.length,
+      isObjectiveHidden: this.isSandbox,
       isBossActive,
       bossHpFrac,
       coopLabel,
+      prompt: this.hudPrompt(),
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,
       comboMult: comboTier.mult,
@@ -2031,6 +2032,27 @@ export class Game {
       // resolve before the descend, so the messages can never both apply).
       waitLabel: this.blessingWaitLabel() ?? this.exitWaitLabel(),
     });
+  }
+
+  // The bottom-left contextual action prompt (UI Director: BL = dash + contextual
+  // revive/interact): the revive affordance while a living local player stands inside a
+  // revivable downed teammate's ring — `E | REVIVE GF`, flipping to the channeling readout
+  // while the hold runs. OUT bodies (down limit spent) never prompt: the sim would refuse
+  // the channel, and the world label already says the rescue is the stairs.
+  private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
+    if (this.mode === "solo" || this.isSandbox || !this.isRunning || this.isDown || this.hp <= 0) return null;
+    let near: RemotePlayer | null = null;
+    for (const r of this.remotes()) {
+      if (!r.isDown || r.isOut) continue;
+      if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
+      if (near === null || r.reviveProgress > near.reviveProgress) near = r;
+    }
+    if (near === null) return null;
+    const name = near.name.toUpperCase();
+    if (near.reviveProgress > 0 && this.input.isInteractHeld) {
+      return { key: "E", label: `REVIVING ${name}\u2026 ${Math.round((near.reviveProgress / REVIVE.channel) * 100)}%`, isActive: true };
+    }
+    return { key: "E", label: `HOLD \u2014 REVIVE ${name}`, isActive: false };
   }
 
   // The party blessing gate readout: which members still owe their pick (the descend holds
@@ -3525,13 +3547,12 @@ export class Game {
         label(sx, sy, `${r.name.toUpperCase()} IS OUT \u2014 DESCEND TO RESCUE`, "#ff8a7a");
         continue;
       }
-      const isNear = !this.isDown && this.hp > 0 && Math.hypot(this.px - r.x, this.py - r.y) <= REVIVE.radius;
+      // World space carries the SPATIAL guidance only — the stand-here ring and the
+      // authoritative progress arc at the body; the input affordance (`E | REVIVE GF`)
+      // lives in the bottom-left prompt cluster (UI Director hierarchy), so the copy
+      // never doubles up over the fight.
       if (!this.isDown) drawStandRing(sx, sy);
       if (r.reviveProgress > 0) drawProgress(sx, sy, r.reviveProgress / REVIVE.channel);
-      if (isNear) {
-        const isHolding = this.input.isInteractHeld;
-        label(sx, sy, isHolding ? `REVIVING ${r.name.toUpperCase()}\u2026` : `HOLD E \u2014 REVIVE ${r.name.toUpperCase()}`, "#8affc0");
-      }
     }
     // The local downed body: the authoritative channel a teammate holds on us.
     if (this.isDown && this.p.reviveProgress > 0) {

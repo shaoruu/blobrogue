@@ -170,11 +170,40 @@
       .dash.ready{ box-shadow:inset 0 0 0 2px var(--grn); }
       .dash.ready .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
       .dash.ready .bar i{ background:var(--grn); box-shadow:0 0 8px var(--grn); }
-      /* boss health bar (top-center, above the combo widget). Shown only during a boss fight. */
-      .bossbar{ position:absolute; top:16px; left:50%; transform:translateX(-50%) translateY(-10px); width:min(560px,60vw);
-        display:flex; flex-direction:column; align-items:center; gap:4px; pointer-events:none;
-        opacity:0; transition:opacity .3s ease, transform .3s ease; }
-      .bossbar.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+      /* Contextual action prompt (bottom-left, under the dash): the revive/interact
+         affordance. Same chrome family as the dash; a fixed min-height + opacity toggle so
+         appearing never shifts the corner. `.active` = the hold is channeling right now. */
+      .ctx-prompt{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72);
+        box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; min-height:29px;
+        opacity:0; transition:opacity .2s ease; }
+      .ctx-prompt.show{ opacity:1; }
+      .ctx-prompt .key{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--cream);
+        background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); padding:2px 4px; }
+      .ctx-prompt .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--grn); text-transform:uppercase; }
+      .ctx-prompt.active{ box-shadow:inset 0 0 0 2px var(--grn); }
+      .ctx-prompt.active .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
+      /* --- the ONE top-center objective lane (UI Director hierarchy) ---
+         A single vertical stack owns the top-center: the boss bar OR the normal objective
+         line (never both — boss wins), the co-op coordination line, then the combo. Every
+         occupant toggles via opacity/transform only, and the combo sits LAST in the stack,
+         so its show/hide can never shift a line above it. */
+      .objlane{ position:absolute; top:14px; left:50%; transform:translateX(-50%); width:min(560px,60vw);
+        display:flex; flex-direction:column; align-items:center; gap:5px; pointer-events:none; }
+      .objective{ min-height:14px; font-family:var(--f-ui); font-size:10px; letter-spacing:3px; text-transform:uppercase;
+        color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6);
+        opacity:0; transition:opacity .3s ease; }
+      .objective.show{ opacity:1; }
+      .objective.clear{ color:var(--grn); text-shadow:0 2px 0 var(--dun-0),0 0 12px rgba(138,255,192,.35); }
+      .waitline{ min-height:12px; font-family:var(--f-ui); font-size:9px; letter-spacing:2px; text-transform:uppercase;
+        color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6); text-align:center;
+        opacity:0; transition:opacity .3s ease; }
+      .waitline.show{ opacity:1; }
+      /* boss health bar: the lane's first slot while a boss is on the board (the normal
+         objective line hides for it). */
+      .bossbar{ width:100%; display:flex; flex-direction:column; align-items:center; gap:4px; pointer-events:none;
+        transform:translateY(-10px); opacity:0; transition:opacity .3s ease, transform .3s ease; }
+      .bossbar.show{ opacity:1; transform:translateY(0); }
+      .bossbar:not(.show){ display:none; } /* free the lane's slot (the objective line replaces it) */
       .bossbar-label{ font-family:var(--f-ui); font-size:10px; letter-spacing:4px; color:#ff8a8a;
         text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,80,80,0.5); }
       .bossbar-track{ width:100%; height:16px; background:var(--dun-0); box-shadow:inset 0 0 0 2px #5a2030, 0 0 12px rgba(255,60,60,0.35); position:relative; overflow:hidden; }
@@ -183,12 +212,13 @@
         transition:transform .18s ease; }
       .bossbar.low .bossbar-track i{ animation:bossLow .4s steps(2,jump-none) infinite; }
       @keyframes bossLow{ 0%{opacity:1;} 100%{opacity:.45;} }
-      /* kill-chain combo (top-center). Fixed + transform/opacity only so it never shifts layout;
-         --combo-c is the tier accent set per-frame from the game. Hidden at combo 0. */
-      .combo{ position:absolute; top:14px; left:50%; transform:translateX(-50%) translateY(-8px) scale(.9); transform-origin:top center;
+      /* kill-chain combo: the lane's LAST slot. Opacity/transform only; hidden at combo 0.
+         While the boss bar owns the lane the combo yields the spotlight at 70% scale. */
+      .combo{ transform:translateY(-8px) scale(.9); transform-origin:top center;
         display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; pointer-events:none;
         opacity:0; transition:opacity .18s ease, transform .18s ease; }
-      .combo.show{ opacity:1; transform:translateX(-50%) translateY(0) scale(1); }
+      .combo.show{ opacity:1; transform:translateY(0) scale(1); }
+      .objlane.boss .combo.show{ transform:translateY(0) scale(.7); }
       /* Badge: the AD's stamped-plate white mask, tinted per-tier via mask-image (the DOM
          equivalent of the fxTinted trick — alpha carries the rim+fill, color fills it). */
       .combo-badge{ position:relative; width:120px; height:60px; display:flex; align-items:center; justify-content:center; }
