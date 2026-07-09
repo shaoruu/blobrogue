@@ -34,18 +34,19 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v3: balance reset (dash-iframe/fang fields on SelfWire, enemy tier on EnemyWire,
 // dealer_heart pickups, squeeze attack move, offerBlessing{rare} + bossTransition/
 // enemySpawn events). Joins must carry EXACTLY this version.
-// v4: the room-correctness + reconnect-resume surface (one migration; strict decode).
-//   wid    — the authoritative world id this connection is bound to, on EVERY snap, so the
-//            client can ASSERT it landed in the room it expected (mismatch = close, never play)
-//   roster — every seat in the world (verified identity + on/away state), independent of
-//            interest filtering, so readiness/HUD show who actually joined and who is
-//            reconnecting
-//   tok    — the single-use resume token for THIS connection (full snapshots), presented on
-//            reconnect to reclaim the reserved body; join gains optional `resume`, and a
-//            deliberate disconnect says `leave` so no seat is reserved for it
-//   ab     — PlayerWire absence flag (a reserved body renders as a reconnecting ghost)
-// The strict equal-version join gate makes any skew explicit instead of silently
-// interoperating on a Sev-0 surface.
+// v4 (ONE migration, strict equal-version join gate — skew is explicit, never silently
+// interoperated on a Sev-0 surface):
+//   - hotbar inventory commands: client->server `reorder` (move an inventory slot) and
+//     `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event
+//   - room correctness: `wid` — the authoritative world id this connection is bound to, on
+//     EVERY snap, so the client can ASSERT it landed in the room it expected (mismatch =
+//     close, never play); `roster` — every seat in the world (verified identity + on/away
+//     state), independent of interest filtering, so readiness/HUD show who actually joined
+//     and who is reconnecting
+//   - reconnect resume: `tok` — the single-use seat token for THIS connection (rides every
+//     per-connection snapshot), presented via join's optional `resume` to reclaim the
+//     reserved body; a deliberate disconnect says `leave` so no seat is reserved; PlayerWire
+//     `ab` marks an absent body (rendered as a reconnecting ghost)
 export const PROTOCOL_VERSION = 4;
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -201,6 +202,16 @@ export type ClientMsg =
   // the server ignores stale/duplicate commands so a resent equip can never double-apply or
   // regress a newer choice. Never carries any outcome.
   | { t: "equip"; weapon: WeaponId; cseq: number }
+  // Authoritative inventory reorder: move the hotbar slot at `from` to position `to` (all
+  // other slots keep relative order). The server validates both indices against the CURRENT
+  // authoritative inventory — a stale index (inventory changed in flight) rejects, never
+  // misplaces. Same cseq idempotency as equip. Never carries weapon ids or any outcome.
+  | { t: "reorder"; from: number; to: number; cseq: number }
+  // Authoritative weapon drop: request dropping an OWNED weapon into the world. Named by id
+  // (not slot index) so a drop racing a reorder can never discard the wrong weapon. The
+  // server validates ownership + player state and picks the spawn spot itself; the pickup
+  // and the updated inventory flow back via snapshot. Same cseq idempotency as equip.
+  | { t: "drop"; weapon: WeaponId; cseq: number }
   // Authoritative blessing choice: names the server offer it answers (offerId) + the chosen
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
@@ -359,6 +370,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
@@ -472,6 +484,23 @@ function decodeClientMsg(raw: string): ClientMsg {
       // The weapon id must be a KNOWN weapon; the server further validates it is actually owned.
       exactKeys(o, ["t", "weapon", "cseq"]);
       return { t: "equip", weapon: weaponOf(o, "weapon"), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
+    }
+    case "reorder": {
+      // Slot indices are small non-negative integers; the server further validates them
+      // against the player's actual inventory length.
+      exactKeys(o, ["t", "from", "to", "cseq"]);
+      return {
+        t: "reorder",
+        from: intOf(o, "from", 0, 63),
+        to: intOf(o, "to", 0, 63),
+        cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER),
+      };
+    }
+    case "drop": {
+      // The weapon id must be a KNOWN weapon; the server further validates ownership, player
+      // state (not downed/pending/terminal), and the never-drop-the-last-weapon rule.
+      exactKeys(o, ["t", "weapon", "cseq"]);
+      return { t: "drop", weapon: weaponOf(o, "weapon"), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
     }
     case "chooseBlessing": {
       exactKeys(o, ["t", "offerId", "choiceId"]);

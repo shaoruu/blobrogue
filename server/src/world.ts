@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -182,6 +182,19 @@ export class GameWorld implements RoomRuntime {
 
   trySwitchWeapon(pid: PlayerId, weapon: WeaponId): boolean {
     return switchWeaponInWorld(this.state, pid, weapon);
+  }
+
+  tryReorderWeapons(pid: PlayerId, from: number, to: number): boolean {
+    return reorderWeaponsInWorld(this.state, pid, from, to);
+  }
+
+  tryDropWeapon(pid: PlayerId, weapon: WeaponId): boolean {
+    // The drop runs outside the tick (message handler), so its event merges into the next
+    // tick's reliable stream — same path async blessing applies already use.
+    const ev: SimEvent[] = [];
+    const ok = dropWeaponInWorld(this.state, pid, weapon, ev);
+    for (const e of ev) this.injectedEvents.push(e);
+    return ok;
   }
 
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[] {

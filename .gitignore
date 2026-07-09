@@ -26,3 +26,6 @@ __pycache__/
 *.sw?
 .vercel
 .env*
+
+# Python bytecode (tools/ scripts)
+__pycache__/
