@@ -7,6 +7,7 @@
 
 import { Game } from "../../src/game/game.js";
 import { audio } from "../../src/game/audio.js";
+import { waveAudio } from "../../src/game/waveAudio.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -44,6 +45,16 @@ export function installFxCapture(): void {
   wrap("addDecal", (a) => `decal ${r(a[0])} ${r(a[1])} ${a[2]} ${r(a[3])} ${a[4]}`);
   wrap("addTrauma", (a) => `trauma ${r3(a[0])}`);
   wrap("addFreeze", (a) => `freeze ${r3(a[0])}`);
+
+  // Wave-routed semantic cues (the bestiary audio contract's hurt/death/block/tell
+  // channel) are FX atoms too: record the deterministic routing decision (event + spot),
+  // then let the real cueAt run (inert against the shimmed AudioContext).
+  const origCueAt = (waveAudio as any).cueAt.bind(waveAudio);
+  (waveAudio as any).cueAt = (name: string, x: number, y: number, entityId?: number) => {
+    const isRouted = origCueAt(name, x, y, entityId);
+    if (isRouted) sink.push(`wavecue ${name} ${r(x)} ${r(y)}`);
+    return isRouted;
+  };
 
   // sfx is a module-level sink on the audio singleton; record instead of playing.
   (audio as any).unlock = () => {};
