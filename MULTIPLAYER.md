@@ -343,6 +343,64 @@ snapshots for two real same-room clients (enemies/pickups/chests/props + exact r
 the host cannot enter a separate run), the wrong-world close, and the duplicate-identity
 takeover. `test/partygate.test.ts` locks the timeout/leave semantics.
 
+### Reconnect grace / session resume — a Wi-Fi blip is never a death
+
+A brief network drop used to read as YOU DIED: the server removed the body on disconnect and
+the client turned a dead socket into a game over. Resume correctness is now first-class:
+
+- **Seats.** On an UNEXPECTED disconnect (network death, heartbeat timeout, backpressure
+  kick — anything that is not a join reject, game over, superseded connection, or an explicit
+  client `leave`), the server reserves the player's seat for `GS_RESUME_GRACE_MS` (default
+  25s): the authoritative body stays in the world with its full state — HP, inventory,
+  blessings, coins, floor, down state, pending blessing offer — plus the connection's
+  command/offer continuity (input ack watermark, command sequence).
+- **Absent bodies are paused and safe.** A reserved body cannot act, take damage, attract
+  enemies, collect loot, open chests, or channel revives; it is excluded from the exit and
+  blessing gates on BOTH sides (it can neither trigger a descend nor hold the party hostage —
+  the party can descend and the body is carried along), and it counts as ALIVE for wipe
+  checks — a disconnect can never cause a false party wipe inside the grace. Teammates see an
+  explicit reconnecting ghost (`PlayerWire.ab`) and an `away` roster seat, never a corpse.
+  Returning from absence grants the spawn-grace mercy window.
+- **Resume tokens.** Every join answer carries a single-use, server-minted random seat token
+  (`tok`, 192 bits, on every per-connection snapshot so packet loss cannot strand a stale
+  token). Reconnecting presents a FRESH ticket (identity/room re-proved through the normal
+  trusted mint) plus the token (session continuity). A token mismatch on an existing seat or
+  live connection is a hard reject (`resume` — the replay/forgery signal, counted in
+  `resumesRejected`); tokens rotate on every successful join, so a captured token replays
+  exactly zero times. A matching token against a still-live connection (half-dead socket the
+  server has not noticed) takes the body over in place.
+- **Client auto-reconnect.** The transport reconnects with exponential backoff (0.4s -> 5s
+  steps) inside the grace window, re-minting tickets as needed, and retries IMMEDIATELY when
+  the browser announces connectivity returned (`online` event) — which is what lets an outage
+  lasting almost the whole window still resume in time. The game freezes on the last
+  authoritative frame under a `CONNECTION LOST · RECONNECTING (n)` overlay with the grace
+  countdown — explicitly not a game-over screen. A resumed session KEEPS the same player id,
+  body, and world; the fresh full snapshot re-anchors state (bootstrap event ack semantics:
+  the outage window's one-shot FX are skipped, never replayed; a preserved blessing offer
+  re-prompts and stays answerable).
+- **Expiry semantics.** When the grace runs out, the authoritative leave lifecycle applies:
+  the body is removed (tick-precise sweep), the stranded-wipe check runs against the
+  post-leave party, emptied worlds reset + release, and a late resume gets an explicit
+  `resume_expired` — the client lands on the room lobby with a `connection lost` note (REJOIN
+  RUN joins the live run fresh). The only close that ever reads as a death is the server's
+  own game-over close.
+- **Server restart (documented behavior).** Seats and worlds are in-memory BY DESIGN: a
+  game-server restart drops them all. Reconnecting clients resolve as `resume_expired` ->
+  `connection lost` on the lobby; the party regroups and starts fresh (room codes re-bind
+  through Convex tickets as always). Runs do not survive a server restart — that is the
+  accepted trade until worlds get durable state.
+- **Readiness integration.** The party gate treats an `away` member as RECONNECTING — still
+  expected (their return is imminent or the gate deadline names them), shown amber on the
+  veil; the HUD label appends `· n reconnecting`; `/worlds` lists `away` occupants for ops.
+
+`server/test/resume.test.ts` locks all of it with real reconnecting clients: exact-state
+resumes at 4%/20%/96% of the grace window (the 1s/5s/24s-of-25s production pattern, scaled),
+expiry -> authoritative leave -> explicit `resume_expired`, replayed-token rejection with an
+undisturbed victim, drops while downed / mid-blessing / standing on the exit (no false
+descend, no deadlock, offer survives), teammates playing through an outage with no false
+wipe, a flaky-network convergence run (latency + jitter + 25% loss + repeated kills), and a
+real server-restart round trip.
+
 ### Interest filtering: temporarily OFF in production, and the re-enable plan
 
 `GS_INTEREST_RADIUS` now DEFAULTS to `0` (full-world snapshots, no filtering) — set

@@ -38,8 +38,9 @@ Clear a floor of enemies, then step into the glowing exit to descend. See how de
   in the same **authoritative server world** (isolated per room, verified end-to-end), with
   names above blobs and a pickable blob color. A party start waits behind a readiness veil
   until every room member has actually joined the world — nobody ever plays a separate run
-  by accident. Accounts + saved stats persist across sessions; guest play never requires
-  sign-in.
+  by accident. A Wi-Fi blip is never a death: the server holds your blob safe for a 25s
+  reconnect grace and the client resumes the exact same body, inventory, and floor.
+  Accounts + saved stats persist across sessions; guest play never requires sign-in.
 
 ## Stack
 - Vite + TypeScript, HTML5 canvas rendering (no engine)
