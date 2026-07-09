@@ -71,6 +71,8 @@ function clientRoundTripTests(): void {
     { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ackEv: 17 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
+    { t: "reorder", from: 0, to: 3, cseq: 6 },
+    { t: "drop", weapon: "railgun", cseq: 7 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
     { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
@@ -101,11 +103,29 @@ function unknownFieldTests(): void {
   let legacyInput = false;
   try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 })); }
   catch (err) { legacyInput = err instanceof ProtocolError; }
-  check("a v3 input (no act) is a protocol error — the interact intent is mandatory", legacyInput);
+  check("a v4 input (no act) is a protocol error — the interact intent is mandatory", legacyInput);
   let specExtra = false;
   try { jsonCodec.decodeClient(JSON.stringify({ t: "spec", target: "p1", x: 5 })); }
   catch (err) { specExtra = err instanceof ProtocolError; }
   check("spec with a smuggled extra field is a protocol error", specExtra);
+
+  // Inventory commands are strict too: unknown fields, out-of-range/float indices, and
+  // unknown weapon ids are protocol errors, never silently coerced.
+  const badInventoryFrames: Array<[string, Record<string, unknown>]> = [
+    ["reorder with a smuggled extra field", { t: "reorder", from: 0, to: 1, cseq: 1, order: ["railgun"] }],
+    ["reorder with a negative index", { t: "reorder", from: -1, to: 1, cseq: 1 }],
+    ["reorder with a float index", { t: "reorder", from: 0.5, to: 1, cseq: 1 }],
+    ["reorder with an oversized index", { t: "reorder", from: 0, to: 999, cseq: 1 }],
+    ["reorder without cseq", { t: "reorder", from: 0, to: 1 }],
+    ["drop with an unknown weapon id", { t: "drop", weapon: "bfg9000", cseq: 1 }],
+    ["drop with a smuggled extra field", { t: "drop", weapon: "pistol", cseq: 1, x: 10 }],
+    ["drop without cseq", { t: "drop", weapon: "pistol" }],
+  ];
+  for (const [label, frame] of badInventoryFrames) {
+    let isRejected = false;
+    try { jsonCodec.decodeClient(JSON.stringify(frame)); } catch (err) { isRejected = err instanceof ProtocolError; }
+    check(`${label} is a protocol error`, isRejected);
+  }
 }
 
 function serverRoundTripTests(): void {
@@ -121,6 +141,7 @@ function serverRoundTripTests(): void {
     { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3 } },
     { id: 8, e: { t: "descend", toFloor: 3 } },
     { id: 9, e: { t: "gameOver", pid: "pMe" } },
+    { id: 10, e: { t: "weaponDrop", weapon: "railgun", x: 33, y: 44 } },
   ];
   const snap = buildSnapshot(w, "pMe", 12, events, 9, false, {});
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
@@ -298,6 +319,7 @@ function eventScopeTests(): void {
     [{ t: "bossPhase", eid: 3, x: 5, y: 6 }, "global"],
     [{ t: "gameOver", pid: "p1" }, "pid"],
     [{ t: "enemyKill", eid: 1, kind: "slime", tier: "standard", x: 3, y: 4, combo: 0 }, "pos"],
+    [{ t: "weaponDrop", weapon: "railgun", x: 5, y: 6 }, "pos"],
   ];
   for (const [e, kind] of cases) {
     check(`${e.t} -> ${kind}`, eventScope(e).kind === kind, `got=${eventScope(e).kind}`);

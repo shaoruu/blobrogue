@@ -214,34 +214,36 @@ async function headlessClientSpectateTests(): Promise<void> {
   check("world revealed from the authoritative snapshot", game.isWorldRevealed === true);
   check("alive: no spectate target", game.spectateId === null);
 
-  // Interact intent rides the input stream while alive.
-  game.keys.add("e");
+  // Interact intent rides the input stream while alive (context-gated controller path).
+  game.input.keyDown("e");
   const heldInput: InputCmd = game.buildInput();
   check("held E maps to the interact input bit", heldInput.interact === true && heldInput.firing === false);
-  game.keys.delete("e");
+  game.input.keyUp("e");
 
   // Down the local player authoritatively.
   self.isDown = true; self.hp = 0;
   deliverSnap();
   for (let i = 0; i < 3; i++) game.tick(1 / 60);
+  check("down flips the input context to spectate", game.input.context === "spectate", `ctx=${game.input.context}`);
   check("down acquires the first living teammate (stable order)", game.spectateId === "s1", `target=${game.spectateId}`);
   check("the spec uplink named the target", sock.sentOfType("spec").some((m) => m.target === "s1"));
 
-  // Gameplay inputs are zeroed at the source while down.
-  game.keys.add("w"); game.keys.add("d"); game.mouse.isDown = true;
+  // Gameplay inputs are zeroed at the source while down (the spectate context samples idle).
+  game.input.keyDown("w"); game.input.keyDown("d"); game.input.mouseDown(0);
   const downInput: InputCmd = game.buildInput();
   check("downed input carries no movement/fire/dash/interact",
     downInput.moveX === 0 && downInput.moveY === 0 && !downInput.firing && !downInput.dash && downInput.interact !== true);
-  game.keys.clear(); game.mouse.isDown = false;
+  game.input.releaseAll();
 
   // The camera eases toward the watched teammate.
   for (let i = 0; i < 90; i++) game.tick(1 / 60);
   const wantX = mateA.x - (domCanvas as any).width / 2;
   check("camera focus reached the spectated teammate", Math.abs(game.cam.x - wantX) < 24, `cam.x=${game.cam.x.toFixed(0)} want=${wantX.toFixed(0)}`);
 
-  // Cycling (Q/E, arrows, scroll — all land on cycleSpectate) steps the living ring and
-  // re-informs the server for interest centering.
-  game.cycleSpectate(1);
+  // Cycling: the E key lands on cycleSpectate through the context-gated controller (the
+  // same action Q/arrows/wheel — and a controller's bumpers — dispatch).
+  game.input.keyDown("e");
+  game.input.keyUp("e");
   for (let i = 0; i < 2; i++) game.tick(1 / 60);
   check("cycle advanced to the next living teammate", game.spectateId === "s2", `target=${game.spectateId}`);
   check("the new target rode the spec uplink", sock.sentOfType("spec").some((m) => m.target === "s2"));
@@ -257,9 +259,10 @@ async function headlessClientSpectateTests(): Promise<void> {
   deliverSnap();
   for (let i = 0; i < 2; i++) game.tick(1 / 60);
   check("revive releases the spectate target", game.spectateId === null);
-  game.keys.add("d");
+  check("revive returns the input context to gameplay", game.input.context === "gameplay", `ctx=${game.input.context}`);
+  game.input.keyDown("d");
   check("movement input returns after the revive", (game.buildInput() as InputCmd).moveX === 1);
-  game.keys.clear();
+  game.input.releaseAll();
   for (let i = 0; i < 120; i++) game.tick(1 / 60);
   check("camera returned to the local player", Math.abs(game.cam.x - (self.x - (domCanvas as any).width / 2)) < 24, `cam.x=${game.cam.x.toFixed(0)}`);
 

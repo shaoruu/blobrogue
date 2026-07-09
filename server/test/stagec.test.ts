@@ -285,6 +285,97 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
+  // ---- authoritative hotbar inventory: reorder + drop over the wire ----
+  await test("inventory reorder + drop: authoritative, idempotent, shared, exploit-hardened", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "inv-a", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "inv-b", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+      const world = s.server.getWorld()!;
+      world.state.isGodMode = true;
+      const aid = a.serverId()!, bid = b.serverId()!;
+      acquireWeaponInWorld(world.state, aid, "shotgun");
+      acquireWeaponInWorld(world.state, aid, "railgun"); // A: [pistol, shotgun, railgun], railgun equipped
+      await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns.length ?? 0) === 3, 2000);
+
+      // Reorder over the wire: slot 0 (pistol) to the end; snapshot must echo the new order.
+      a.transport.requestReorder(0, 2);
+      const isReordered = await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns.join(",") ?? "") === "shotgun,railgun,pistol", 2000);
+      check("authoritative order mutated + snapshotted back", isReordered, `wpns=${a.transport.getLatestSnapshot()?.self?.wpns.join(",")}`);
+      check("server inventory matches the snapshot", world.state.players.get(aid)!.ownedWeapons.join(",") === "shotgun,railgun,pistol");
+      check("equipped weapon survived the reorder by ID", world.state.players.get(aid)!.weapon === "railgun");
+
+      // Drop the equipped railgun: ONE authoritative pickup; the adjacent slot equips.
+      a.transport.requestDrop("railgun");
+      const isDropped = await waitUntil(() => world.state.pickups.some((p) => p.kind === "weapon" && p.weapon === "railgun"), 2000);
+      check("drop spawned an authoritative pickup", isDropped);
+      const pk = world.state.pickups.find((p) => p.kind === "weapon" && p.weapon === "railgun")!;
+      check("exactly one pickup spawned", world.state.pickups.filter((p) => p.weapon === "railgun").length === 1);
+      check("dropper's inventory shrank", world.state.players.get(aid)!.ownedWeapons.join(",") === "shotgun,pistol");
+      check("adjacent slot equipped after the active drop", world.state.players.get(aid)!.weapon === "pistol");
+
+      // Same-room clients see the IDENTICAL pickup (stable id, same spot, same weapon).
+      const isShared = await waitUntil(() => {
+        const pa = a.transport.getLatestSnapshot()?.pickups.find((p) => p.id === pk.id);
+        const pb = b.transport.getLatestSnapshot()?.pickups.find((p) => p.id === pk.id);
+        return !!pa && !!pb && pa.x === pb.x && pa.y === pb.y && pa.wpn === "railgun" && pb.wpn === "railgun";
+      }, 2000);
+      check("both clients see the identical pickup (id/pos/weapon)", isShared);
+
+      // First-come collection: B reaches it first and it vanishes for everyone.
+      const bp = world.state.players.get(bid)!;
+      bp.x = pk.x; bp.y = pk.y;
+      const isTaken = await waitUntil(() => world.state.players.get(bid)!.ownedWeapons.includes("railgun"), 2000);
+      check("first-come collection by the other client", isTaken);
+      check("pickup consumed exactly once (server)", !world.state.pickups.some((p) => p.id === pk.id));
+      const isGoneForA = await waitUntil(() => !(a.transport.getLatestSnapshot()?.pickups.some((p) => p.id === pk.id) ?? true), 2000);
+      check("collected pickup vanishes from the dropper's snapshot too", isGoneForA);
+
+      // Raw socket: replayed cseq is dropped (NO duplicate pickup — the dupe exploit), the
+      // final weapon can't drop, unowned drops reject, hostile reorder indices reject.
+      const raw = await rawSocket(s.url);
+      raw.on("message", () => {});
+      raw.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "inv-cheat"), protocol: PROTOCOL_VERSION }));
+      await waitUntil(() => world.playerCount >= 3, 1500);
+      const cheatId = [...world.state.players.keys()].find((k) => k !== aid && k !== bid)!;
+      // Park the cheater at the exit tile (walkable by construction, far from spawn) so its
+      // drops land where no bot is standing — otherwise first-come collection scoops them.
+      const exit = world.state.dungeon.exit;
+      const cheatP = world.state.players.get(cheatId)!;
+      cheatP.x = exit.x * TILE + TILE / 2;
+      cheatP.y = exit.y * TILE + TILE / 2;
+      acquireWeaponInWorld(world.state, cheatId, "smg");
+      const rej0 = s.server.health().counters.rejectedInputs;
+
+      raw.send(jsonCodec.encodeClient({ t: "drop", weapon: "smg", cseq: 1 }));
+      await sleep(200);
+      raw.send(jsonCodec.encodeClient({ t: "drop", weapon: "smg", cseq: 1 })); // exact replay
+      await sleep(200);
+      check("replayed drop cseq ignored — exactly one smg pickup (no dupe)", world.state.pickups.filter((p) => p.weapon === "smg").length === 1);
+      check("dropper no longer owns the dropped weapon", !world.state.players.get(cheatId)!.ownedWeapons.includes("smg"));
+
+      raw.send(jsonCodec.encodeClient({ t: "drop", weapon: "pistol", cseq: 2 })); // final weapon
+      await sleep(200);
+      check("final weapon cannot be dropped over the wire", world.state.players.get(cheatId)!.ownedWeapons.length === 1);
+      raw.send(jsonCodec.encodeClient({ t: "drop", weapon: "railgun", cseq: 3 })); // never owned
+      await sleep(200);
+      check("unowned drop rejected (nothing spawned)", world.state.pickups.filter((p) => p.weapon === "railgun").length === 0);
+      raw.send(jsonCodec.encodeClient({ t: "reorder", from: 5, to: 0, cseq: 4 })); // stale index
+      await sleep(200);
+      check("out-of-range reorder rejected, inventory intact", world.state.players.get(cheatId)!.ownedWeapons.join(",") === "pistol");
+      check("rejected inventory commands counted", s.server.health().counters.rejectedInputs > rej0);
+
+      // A dropped pickup is world state: it survives its dropper's disconnect.
+      raw.close();
+      await waitUntil(() => world.playerCount === 2, 1500);
+      check("dropped pickup survives the dropper's disconnect", world.state.pickups.some((p) => p.weapon === "smg"));
+
+      a.stop(); b.stop();
+    } finally { await s.close(); }
+  });
+
   // ---- authoritative blessings: server offers, validates the pick, applies mods server-side ----
   await test("blessing offer/pick is authoritative; off-pool pick rejected", async () => {
     const s = await startTestServer();
