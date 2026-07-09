@@ -13,9 +13,12 @@ export interface LocalPlayerState {
   kills: number;
 }
 
-// The contract the game core uses to talk to a co-op session. The Convex-backed
-// implementation lives in src/net; the game itself never imports Convex, so solo
-// play works with zero network code in the graph.
+// The contract the game core uses to talk to a peer-synced co-op session. NO product
+// implementation exists anymore: the Convex-backed classic co-op client was removed after
+// the Sev-0 room divergence (each client simulated its own enemies/drops while players
+// believed they shared a world) — PLAY ONLINE (authoritative server) is the one multiplayer
+// path. The seam stays only for tests/dev tooling; nothing reachable from the menu can
+// construct a bridge.
 export interface CoopBridge {
   readonly selfId: string;
   readonly roomCode: string;

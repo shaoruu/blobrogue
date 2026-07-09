@@ -6,7 +6,6 @@ import { CONVEX_URL, resolveGsUrl, defaultGsUrl, devTicketUrl, isExplicitGsOverr
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
-import type { Multiplayer } from "./net/multiplayer.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -32,12 +31,9 @@ async function bootNormal() {
   const auth = client && CONVEX_URL ? new AuthClient(client, CONVEX_URL) : null;
   const session = new Session(client);
 
-  let activeCoop: Multiplayer | null = null;
   let activeOnline: OnlineLobby | null = null;
 
   async function onGameOver(result: RunResult) {
-    const wasCoop = activeCoop !== null;
-    if (activeCoop) { activeCoop.leave(); activeCoop = null; }
     // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
     // game-over screen offers "back to lobby" / "play again" and owns leaving the room).
     const online = activeOnline;
@@ -45,16 +41,25 @@ async function bootNormal() {
     const prevBest = session.profile?.deepestFloor ?? 0;
     const saved = await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
-    menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online });
+    menu.showGameOver(result, saved ?? session.profile, { isNewBest, online });
   }
 
-  function onExit(reason?: ExitReason) {
-    if (activeCoop) { activeCoop.leave(); activeCoop = null; }
-    // Stepping out of an online run (Esc, or the server was unreachable) lands back in the
-    // room lobby, not the title — the run may still be live for friends (REJOIN RUN).
+  // The explicit, human-readable reason a run ended without a game over — shown on the room
+  // lobby so a failed start is never silent (the Sev-0 was exactly a silent divergence).
+  function exitNote(reason?: ExitReason, detail?: string): string {
+    switch (reason) {
+      case "connect_failed": return "couldn't reach the game server \u2014 try again in a moment";
+      case "world_mismatch": return `joined the wrong world \u2014 left for safety (${detail ?? "world mismatch"})`;
+      case "party_incomplete": return `the party never assembled${detail ? ` \u2014 still waiting on ${detail}` : ""} \u2014 regroup and start again`;
+      default: return "";
+    }
+  }
+
+  function onExit(reason?: ExitReason, detail?: string) {
+    // Stepping out of an online run (Esc, a failed start, or an unreachable server) lands
+    // back in the room lobby, not the title — the run may still be live for friends.
     if (activeOnline && activeOnline.isActive) {
-      const note = reason === "connect_failed" ? "couldn't reach the game server \u2014 try again in a moment" : "";
-      menu.showOnlineLobby(activeOnline, session.profile, note);
+      menu.showOnlineLobby(activeOnline, session.profile, exitNote(reason, detail));
       return;
     }
     activeOnline = null;
@@ -69,19 +74,11 @@ async function bootNormal() {
 
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
-      activeCoop = null;
       leaveOnlineIfAny();
       menu.hide();
       game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex });
     },
-    startCoop(mp: Multiplayer, profile: ProfileDoc | null) {
-      activeCoop = mp;
-      leaveOnlineIfAny();
-      menu.hide();
-      game.start({ mode: "coop", coop: mp, profile });
-    },
-    startOnline(lobby: OnlineLobby, profile: ProfileDoc | null) {
-      activeCoop = null;
+    startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       if (activeOnline && activeOnline !== lobby) activeOnline.leave();
       activeOnline = lobby;
       menu.hide();
@@ -93,6 +90,14 @@ async function bootNormal() {
           // room membership server-side) — that binding is what puts the party in one world.
           getTicket: () => lobby.mintTicket(),
           roomCode: lobby.code,
+          // ...and the client ASSERTS the server honored it: every snapshot's world id must
+          // equal the room's world or the run refuses to play (close + explicit lobby error).
+          expectedWorldId: lobby.expectedWorldId(),
+          selfPlayerId: lobby.selfId || null,
+          // A lobby START gates gameplay behind the readiness veil until every current room
+          // member is connected to the world; drop-ins/rejoins/quick play join a live run.
+          party: isPartyStart ? () => lobby.players() : null,
+          onWorldPresence: (worldId) => lobby.reportWorld(worldId),
         },
         profile,
         selfColorIndex: session.colorIndex,
@@ -132,7 +137,14 @@ async function bootNormal() {
       return data.ticket;
     };
     menu.hide();
-    game.start({ mode: "online", online: { url: gsOverride, getTicket, roomCode: null }, profile: null, selfColorIndex: session.colorIndex });
+    game.start({
+      mode: "online",
+      // Direct dev join: no room, so no expected world / party gate — the dev world is
+      // whatever the dev ticket names.
+      online: { url: gsOverride, getTicket, roomCode: null, expectedWorldId: null, selfPlayerId: null, party: null },
+      profile: null,
+      selfColorIndex: session.colorIndex,
+    });
     return;
   }
 
