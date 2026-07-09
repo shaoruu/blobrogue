@@ -23,7 +23,7 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, weaponTipNotes, fmtStat } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
 const { weaponCard } = await import("../src/sim/weaponStats.js");
@@ -80,21 +80,28 @@ function weaponSlotTests(): void {
   check("slot keeps its select-key badge", slot.querySelector(".hb-key")?.textContent === "2");
   check("slot keeps its weapon-name label", slot.querySelector(".hb-name")?.textContent === "SHOTGUN");
   check("slot is a tabbable button", slot.tabIndex === 0 && slot.getAttribute("role") === "button");
-  check("slot aria-label names weapon + slot + equipped state + the full card",
-    slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped. SHRED UP CLOSE. POWER 1.7 \u00d75, CADENCE SLOW, REACH SHORT, COVERAGE WIDE FAN, IMPACT SHOVES FOES. KICKS YOU BACK",
-    slot.getAttribute("aria-label") ?? "");
+  check("slot aria-label stays concise (the card rides the linked tooltip on focus)",
+    slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped", slot.getAttribute("aria-label") ?? "");
+  check("slot carries no native title and no embedded tooltip (the floating singleton owns it)",
+    slot.getAttribute("title") === null && slot.querySelector(".tip, .hb-tip") === null);
   check("equipped slot is lit", slot.classList.contains("on"));
   const tenth = buildSlot(wslot("tesla", "Tesla", false), 9);
   check("slots past 9 carry no key badge", tenth.querySelector(".hb-key") === null);
 }
 
+// Render the floating tooltip's content for one weapon (the pure builder the Hud
+// singleton uses), against an optional equipped card.
+function tipFor(id: WeaponId, name: string, isCurrent = false, vs: ReturnType<typeof wcard> | null = null): HTMLElement {
+  const tip = document.createElement("div");
+  renderTipInto(tip, wslot(id, name, isCurrent), isCurrent ? null : vs);
+  return tip;
+}
+
 function weaponTooltipTests(): void {
-  section("weapon card tooltip: room-job verb leads, then core rows in the pixel tip chrome");
-  const slot = buildSlot(wslot("shotgun", "Shotgun", true), 1);
-  const tip = slot.querySelector(".tip")!;
-  check("slot carries a tooltip element", tip !== null && tip.getAttribute("role") === "tooltip");
-  check("no native title attribute (would double the custom tip)", slot.getAttribute("title") === null);
-  check("tooltip names the weapon", tip.querySelector(".tn")?.textContent === "SHOTGUN");
+  section("weapon card tooltip: pixel icon + name header, room-job verb, core rows");
+  const tip = tipFor("shotgun", "Shotgun", true);
+  check("header carries the pixel-rendered weapon icon", tip.querySelector(".th .ti img, .th .ti .glyphfb") !== null);
+  check("header names the weapon", tip.querySelector(".th .tn")?.textContent === "SHOTGUN");
   check("the room job leads the card", tip.querySelector(".tj")?.textContent === "SHRED UP CLOSE");
   const rows = [...tip.querySelectorAll(".tr")].map((r) =>
     `${r.querySelector(".tk")?.textContent}=${r.querySelector(".tv")?.textContent}`);
@@ -105,22 +112,22 @@ function weaponTooltipTests(): void {
     tip.querySelector(".tx")?.textContent === "EQUIPPED" && tip.querySelector(".td") === null);
 
   section("weapon card tooltip: irrelevant/default rows are omitted, never nonsense");
-  const pistol = buildSlot(wslot("pistol", "Pistol", false), 0);
+  const pistol = tipFor("pistol", "Pistol");
   const pistolRows = [...pistol.querySelectorAll(".tr .tk")].map((k) => k.textContent);
   check("tight single shot has no COVERAGE row; ordinary hits no IMPACT row",
     pistolRows.join(",") === "POWER,CADENCE,REACH", pistolRows.join(","));
   check("plain pistol carries zero technique lines", pistol.querySelectorAll(".tm").length === 0);
-  const sword = buildSlot(wslot("sword", "Cutlass", false), 0);
+  const sword = tipFor("sword", "Cutlass");
   const swordRows = [...sword.querySelectorAll(".tr .tk")].map((k) => k.textContent);
   check("melee shows SWEEP (never COVERAGE)", swordRows.join(",") === "POWER,CADENCE,REACH,SWEEP,IMPACT", swordRows.join(","));
-  const spear = buildSlot(wslot("spear", "Pike", false), 3);
+  const spear = tipFor("spear", "Pike");
   check("a thrust has no SWEEP row — the technique line carries it",
     [...spear.querySelectorAll(".tr .tk")].every((k) => k.textContent !== "SWEEP")
     && [...spear.querySelectorAll(".tm")].some((n) => n.textContent === "PIERCING THRUST"));
   check("row budget holds: never more than five stat rows + three technique lines",
     (["shotgun", "sawnoff", "mortar", "tesla", "longsword", "flamer"] as WeaponId[]).every((id) => {
-      const s = buildSlot(wslot(id, id, false), 0, wcard("shotgun"));
-      return s.querySelectorAll(".tr").length <= 5 && s.querySelectorAll(".tm").length <= 3;
+      const t = tipFor(id, id, false, wcard("shotgun"));
+      return t.querySelectorAll(".tr").length <= 5 && t.querySelectorAll(".tm").length <= 3;
     }));
 
   section("weapon card tooltip: sidegrade arrows only where honest");
@@ -137,8 +144,8 @@ function weaponTooltipTests(): void {
     weaponTipRows(wcard("sawnoff"), equipped).slice(3).every((r) => r.delta === null)
     && weaponTipRows(wcard("longsword"), wcard("sword")).slice(3).every((r) => r.delta === null));
   check("no-equipped comparison yields null deltas", weaponTipRows(wcard("pistol"), null).every((r) => r.delta === null));
-  const slotVs = buildSlot(wslot("cannon", "Thunderbolt", false), 0, equipped);
-  const arrows = [...slotVs.querySelectorAll(".td")].map((d) => `${d.textContent}${d.classList.contains("up") ? "+" : "-"}`);
+  const tipVs = tipFor("cannon", "Thunderbolt", false, equipped);
+  const arrows = [...tipVs.querySelectorAll(".td")].map((d) => `${d.textContent}${d.classList.contains("up") ? "+" : "-"}`);
   check("arrows render with up/down classes (POWER up, REACH up)", arrows.join(",") === "\u25b2+,\u25b2+", arrows.join(","));
 
   section("weapon card tooltip: mechanics diff as GAINS / LOSES / CHANGES");
@@ -152,8 +159,8 @@ function weaponTooltipTests(): void {
   const flamerVsFlamer = weaponTipNotes(wcard("flamer"), wcard("flamer"));
   check("shared mechanics stay unmarked", flamerVsFlamer.every((n) => n.marker === null));
   check("no comparison = plain technique lines", weaponTipNotes(wcard("mortar"), null).every((n) => n.marker === null));
-  const teslaSlot = buildSlot(wslot("tesla", "Tesla", false), 2, equipped);
-  const noteLines = [...teslaSlot.querySelectorAll(".tm")].map((n) => `${n.className}:${n.textContent}`);
+  const teslaTip = tipFor("tesla", "Tesla", false, equipped);
+  const noteLines = [...teslaTip.querySelectorAll(".tm")].map((n) => `${n.className}:${n.textContent}`);
   check("diff lines render marked with the prefix", noteLines.join("|") === "tm gains:GAINS \u00b7 CHAINS TO 3 MORE|tm loses:LOSES \u00b7 KICKS YOU BACK", noteLines.join("|"));
 
   section("weapon card tooltip: live mod-adjusted values (never raw balance constants)");
@@ -175,10 +182,11 @@ function weaponTooltipTests(): void {
   section("weapon card tooltip: QA gates — rendered content is never nonsense, arrows stay semantic");
   const allIds = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
     "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"] as WeaponId[];
-  check("no slot ever renders NaN / undefined / N/A (all weapons, with and without comparison)",
+  check("no tooltip ever renders NaN / undefined / N/A (all weapons, with and without comparison)",
     allIds.every((id) => {
-      const text = buildSlot(wslot(id, id, false), 0, wcard("shotgun")).textContent ?? "";
-      return !text.includes("NaN") && !text.includes("undefined") && !text.includes("N/A");
+      const text = tipFor(id, id, false, wcard("shotgun")).textContent ?? "";
+      const plain = tipFor(id, id, false, null).textContent ?? "";
+      return [text, plain].every((t) => !t.includes("NaN") && !t.includes("undefined") && !t.includes("N/A"));
     }));
   // CADENCE derives from fireCd, a lower-is-better raw stat: the arrow must follow the
   // semantic direction (faster = up), never the raw number's direction.

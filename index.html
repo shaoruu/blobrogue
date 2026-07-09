@@ -65,29 +65,30 @@
       .hb-slot.on{ width:84px; background:rgba(23,18,39,.92); transform:translateY(-4px);
         box-shadow:inset 0 0 0 2px var(--amber),0 0 14px rgba(255,180,59,.4),0 3px 0 rgba(0,0,0,.4); }
       .hb-slot.on .hb-icon, .hb-slot.on .hb-icon img{ width:40px; height:40px; }
-      /* weapon stat tooltip: same pixel chrome as the blessing tips, anchored above the
-         card. --tip-shift is the JS viewport clamp (edge slots shift inward, never off
-         screen), and .no-tips suppresses every tip while a drag is live. */
-      .hb-slot .tip{ position:absolute; bottom:calc(100% + 7px); left:50%;
-        transform:translate(calc(-50% + var(--tip-shift,0px)), var(--tip-shift-y,0px)); z-index:7; display:none;
-        flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:250px; overflow-wrap:anywhere;
+      /* THE weapon-card tooltip: one root-level floating element (never a slot child, so
+         no hotbar/drawer clipping and no per-slot duplicates), position:fixed and
+         pointer-events:none, populated + anchored ~10px above the hovered/focused slot by
+         Hud.showTipFor with 12px viewport clamps. Carries the HUD zoom so it scales with
+         the bar; z 7 sits above the hotbar chrome and below scrim(8)/drawer(9)/menus(10). */
+      .hb-tip{ position:fixed; left:0; top:0; z-index:7; display:none; pointer-events:none; zoom:var(--ui-scale,1);
+        flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:266px; overflow-wrap:anywhere;
         font-family:var(--f-num); font-size:14px; line-height:1.15; color:var(--bone); background:var(--dun-1);
-        box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:6px 9px; pointer-events:none; }
-      .hb-slot:hover .tip, .hb-slot:focus-visible .tip{ display:flex; }
-      /* one tip at a time across input modes: while the keyboard/controller is driving
-         (.kb-tips, set on focus), a mouse merely RESTING on another slot shows nothing;
-         pointer movement takes the row back (the class drops on pointerenter). */
-      .hb-slots.kb-tips .hb-slot:hover:not(:focus-visible) .tip{ display:none; }
-      .hb-slots.no-tips .hb-slot .tip{ display:none !important; }
-      .hb-slot .tip .tn{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--amber); }
-      .hb-slot .tip .tj{ font-family:var(--f-ui); font-size:7px; letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }
-      .hb-slot .tip .tr{ display:flex; align-items:baseline; gap:7px; }
-      .hb-slot .tip .tk{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); min-width:52px; }
-      .hb-slot .tip .tv{ color:var(--cream); }
-      .hb-slot .tip .td{ font-size:10px; } .hb-slot .tip .td.up{ color:var(--grn); } .hb-slot .tip .td.down{ color:var(--red); }
-      .hb-slot .tip .tm{ color:var(--blu); }
-      .hb-slot .tip .tm.gains{ color:var(--grn); } .hb-slot .tip .tm.loses{ color:var(--red); } .hb-slot .tip .tm.changes{ color:var(--amber); }
-      .hb-slot .tip .tx{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--amber); }
+        box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:6px 9px; }
+      .hb-tip.show{ display:flex; }
+      .hb-tip .th{ display:flex; align-items:center; gap:6px; }
+      .hb-tip .ti{ flex:none; width:20px; height:20px; display:flex; align-items:center; justify-content:center;
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .hb-tip .ti img{ width:16px; height:16px; image-rendering:pixelated; }
+      .hb-tip .ti .glyphfb{ font-family:var(--f-num); font-size:12px; line-height:1; color:var(--cream); }
+      .hb-tip .tn{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--amber); }
+      .hb-tip .tj{ font-family:var(--f-ui); font-size:7px; letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }
+      .hb-tip .tr{ display:flex; align-items:baseline; gap:7px; }
+      .hb-tip .tk{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); min-width:52px; }
+      .hb-tip .tv{ color:var(--cream); }
+      .hb-tip .td{ font-size:10px; } .hb-tip .td.up{ color:var(--grn); } .hb-tip .td.down{ color:var(--red); }
+      .hb-tip .tm{ color:var(--blu); }
+      .hb-tip .tm.gains{ color:var(--grn); } .hb-tip .tm.loses{ color:var(--red); } .hb-tip .tm.changes{ color:var(--amber); }
+      .hb-tip .tx{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--amber); }
       /* drag/drop feedback: dimmed source slot, floating ghost under the cursor, and an
          amber insertion bar at the drop gap. Ghost + bar are overlays — zero layout shift.
          The ghost positions purely via its inline translate3d (transition:none so it never
