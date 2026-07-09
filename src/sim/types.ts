@@ -391,7 +391,10 @@ export interface RemotePlayer {
   isAbsent: boolean;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
-  colorIndex: number; // stable palette slot for this player
+  // The player's AUTHORITATIVE identity color (verified ticket claim / presence row).
+  // null = not resolved yet (claimless legacy/dev ticket) — renderers show an explicit
+  // neutral placeholder, NEVER a locally-guessed color that would pop to the real one.
+  colorIndex: number | null;
   // Equipped visual-only cosmetics from the verified ticket identity (plain id labels here —
   // the sim never interprets them; the renderer maps ids to overlay art). null = none.
   hat: string | null;

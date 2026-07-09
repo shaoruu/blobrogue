@@ -726,6 +726,18 @@ export function playerColor(index: number): string {
   return PLAYER_COLORS[index % PLAYER_COLORS.length];
 }
 
+// The explicit "identity not resolved yet" grey for teammate surfaces (dots, rings, labels).
+// Deliberately OUTSIDE the player palette: an unresolved color must read as unresolved,
+// never as somebody's actual pick.
+export const NEUTRAL_PLAYER_COLOR = "#8f87a8";
+
+// A teammate's identity color, or the neutral placeholder while it is unresolved (null).
+// The one nullable-color entry point every roster/minimap/label surface goes through, so a
+// missing claim can never fall back to a guessed palette slot.
+export function playerColorOr(index: number | null): string {
+  return index === null ? NEUTRAL_PLAYER_COLOR : playerColor(index);
+}
+
 // ---- dev sprite-viewer manifest (?dev=sprites) ----
 // A read-only listing of the registered art, used only by the dev sprite/anim viewer.
 // Nothing in a normal run calls these; they just re-expose the private source maps above

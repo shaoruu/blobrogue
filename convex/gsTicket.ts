@@ -39,7 +39,12 @@ export const mint = action({
     const claims: GsTicketClaims = {};
     if (profile) {
       claims.name = profile.name;
-      if (profile.colorIndex !== null) claims.colorIndex = profile.colorIndex;
+      // The color claim is ALWAYS minted for a known profile: the pick when one exists,
+      // else 0 — the amber default the player's own screen shows. Teammates therefore
+      // always render an authoritative color, never a client-side guess; a wire null is
+      // reserved for genuinely claimless (legacy/dev) tickets, which clients render as an
+      // explicit neutral placeholder.
+      claims.colorIndex = profile.colorIndex ?? 0;
       // Equipped overlay cosmetics ride as verified claims too (visual-only labels; the
       // profile system already validated ownership + slot at equip time). Body renders
       // from the party color at launch and titles stay off the wire, so neither claims.

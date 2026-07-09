@@ -135,13 +135,6 @@ function pidOf(e: SimEvent): PlayerId | undefined {
   return (e as { pid?: PlayerId }).pid;
 }
 
-// A stable palette slot from a "p<connId>" world id, so each remote blob keeps its color.
-function colorIndexFor(id: string): number {
-  let h = 0;
-  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
-  return Math.abs(h) % 8;
-}
-
 export class WSTransport implements Transport {
   private opts: WSTransportOptions;
   private now: () => number;
@@ -823,7 +816,8 @@ export class WSTransport implements Transport {
 
   // Other players for the client's remote-player renderer (interpolated, never predicted).
   // Name + color come from each player's verified ticket identity when present (nm/cl on the
-  // wire); a player with no chosen color keeps the stable id-hash palette slot.
+  // wire). A missing color claim stays null — the renderer shows a neutral placeholder; the
+  // client NEVER invents a color for someone else (the stale-tint Sev).
   remotePlayers(): RemotePlayer[] {
     const snap = this.latestSnap;
     if (!snap) return [];
@@ -843,7 +837,7 @@ export class WSTransport implements Transport {
         isAbsent: p.ab,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
-        colorIndex: p.cl ?? colorIndexFor(p.id),
+        colorIndex: p.cl,
         hat: p.ht,
         face: p.fc,
         updatedAt: now,

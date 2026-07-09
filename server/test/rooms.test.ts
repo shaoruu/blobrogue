@@ -65,8 +65,41 @@ async function main(): Promise<void> {
       const remote = b.transport.remotePlayers()[0];
       check("client surfaces the name for rendering (name label above the blob)", remote?.name === "Ada");
       check("client surfaces the chosen color for tinting", remote?.colorIndex === 2, `color=${remote?.colorIndex}`);
+      const guestRemote = a.transport.remotePlayers()[0];
+      check("a claimless teammate surfaces NO color — the renderer's neutral placeholder, never a client-side guess",
+        guestRemote !== undefined && guestRemote.colorIndex === null, `color=${guestRemote?.colorIndex}`);
 
       a.stop(); b.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("late join: the newcomer's verified color reaches the room and the room's reaches the newcomer", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "late-a", world: "room:LATE", name: "Ada", colorIndex: 2, script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "late-b", world: "room:LATE", name: "Bob", colorIndex: 5, script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+
+      // The room is already live when Cye joins (the drop-in / rejoin shape).
+      const cye = new Bot({ url: s.url, secret: s.secret, playerId: "late-c", world: "room:LATE", name: "Cye", colorIndex: 3, script: () => idle() });
+      cye.start();
+      await waitUntil(() => cye.transport.isReady(), 3000);
+      await waitUntil(() => a.transport.remotePlayers().length === 2 && cye.transport.remotePlayers().length === 2, 3000);
+
+      const cyeSeenByA = a.transport.remotePlayers().find((r) => r.name === "Cye");
+      check("existing members see the late joiner's ACTUAL color", cyeSeenByA?.colorIndex === 3, `color=${cyeSeenByA?.colorIndex}`);
+      const seenByCye = new Map(cye.transport.remotePlayers().map((r) => [r.name, r.colorIndex]));
+      check("the late joiner sees everyone's ACTUAL colors", seenByCye.get("Ada") === 2 && seenByCye.get("Bob") === 5,
+        JSON.stringify([...seenByCye]));
+      const roster = cye.transport.getWorldRoster();
+      check("the authoritative roster agrees for all three members",
+        roster.find((r) => r.aid === "late-a")?.cl === 2
+        && roster.find((r) => r.aid === "late-b")?.cl === 5
+        && roster.find((r) => r.aid === "late-c")?.cl === 3,
+        JSON.stringify(roster.map((r) => [r.aid, r.cl])));
+
+      a.stop(); b.stop(); cye.stop();
     } finally { await s.close(); }
   });
 
