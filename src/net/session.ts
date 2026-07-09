@@ -2,10 +2,12 @@ import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { ProfileDoc } from "./api.js";
 import type { RunResult } from "../game/game.js";
+import type { CosmeticSlot, EquippedCosmetics } from "../game/cosmetics.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
 const NAME_KEY = "blobrogue.name";
 const COLOR_KEY = "blobrogue.color";
+const COSMETICS_KEY = "blobrogue.cosmetics";
 
 function readOrMintClientId(): string {
   try {
@@ -31,8 +33,30 @@ function readStoredColor(): number | null {
   }
 }
 
-// Owns the persistent player identity (name + chosen blob color) and their saved stats.
-// Works with or without a Convex client: with none, it just remembers everything locally.
+// Locally-picked cosmetics. Per slot: undefined = never picked (adopt the profile's saved
+// value), "none" = explicitly cleared, else an equipped id. Mirrors the colorIndex rule:
+// only explicit picks are ever written to the backend.
+type StoredCosmetics = { hat?: string; glasses?: string };
+
+function readStoredCosmetics(): StoredCosmetics {
+  try {
+    const raw = localStorage.getItem(COSMETICS_KEY);
+    if (raw === null) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const rec = parsed as Record<string, unknown>;
+    const out: StoredCosmetics = {};
+    if (typeof rec.hat === "string") out.hat = rec.hat.slice(0, 24);
+    if (typeof rec.glasses === "string") out.glasses = rec.glasses.slice(0, 24);
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+// Owns the persistent player identity (name + chosen blob color + equipped cosmetics) and
+// their saved stats. Works with or without a Convex client: with none, it just remembers
+// everything locally.
 export class Session {
   readonly clientId: string;
   name: string;
@@ -40,6 +64,7 @@ export class Session {
   // amber hero). Persisted locally always, and onto the Convex profile at login so
   // signed-in players keep it across devices.
   colorIndex: number | null;
+  private cosmeticPicks: StoredCosmetics;
   profile: ProfileDoc | null = null;
   private client: ConvexClient | null;
 
@@ -50,10 +75,22 @@ export class Session {
     try { stored = localStorage.getItem(NAME_KEY) ?? ""; } catch { stored = ""; }
     this.name = stored;
     this.colorIndex = readStoredColor();
+    this.cosmeticPicks = readStoredCosmetics();
   }
 
   get playerId(): string | null {
     return this.profile?.playerId ?? null;
+  }
+
+  // The equipped cosmetics as the renderer consumes them: local explicit picks win, the
+  // saved profile fills never-picked slots, "none" resolves to the empty slot.
+  get cosmetics(): EquippedCosmetics {
+    const resolve = (slot: CosmeticSlot): string | null => {
+      const local = this.cosmeticPicks[slot];
+      if (local !== undefined) return local === "none" ? null : local;
+      return this.profile?.cosmetics[slot] ?? null;
+    };
+    return { hat: resolve("hat"), glasses: resolve("glasses") };
   }
 
   private persistName(name: string) {
@@ -68,16 +105,26 @@ export class Session {
     if (this.client) void this.login(this.name || "blob").catch(() => {});
   }
 
+  // Equip a cosmetic (or clear the slot with null). Applies locally immediately; persisted
+  // onto the profile in the background exactly like the color pick.
+  setCosmetic(slot: CosmeticSlot, id: string | null) {
+    this.cosmeticPicks = { ...this.cosmeticPicks, [slot]: id ?? "none" };
+    try { localStorage.setItem(COSMETICS_KEY, JSON.stringify(this.cosmeticPicks)); } catch { /* ignore */ }
+    if (this.client) void this.login(this.name || "blob").catch(() => {});
+  }
+
   async login(name: string): Promise<ProfileDoc | null> {
     this.persistName(name);
     if (!this.client) return null;
+    const picks: StoredCosmetics = { ...this.cosmeticPicks };
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
       name,
-      // Only an explicit local pick is sent — undefined never overwrites a saved pick.
+      // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
+      ...(picks.hat !== undefined || picks.glasses !== undefined ? { cosmetics: picks } : {}),
     });
-    // A signed-in account may carry a pick made on another device; adopt it locally.
+    // A signed-in account may carry picks made on another device; adopt them locally.
     if (this.colorIndex === null && this.profile.colorIndex !== null) {
       this.colorIndex = this.profile.colorIndex;
       try { localStorage.setItem(COLOR_KEY, String(this.profile.colorIndex)); } catch { /* ignore */ }
@@ -99,6 +146,13 @@ export class Session {
         floor: result.floor,
         kills: result.kills,
         coins: result.coins,
+        durationMs: Math.round(result.durationMs),
+        // The run's final build rides along for the player's leaderboard entry (ids only —
+        // display names resolve client-side from the weapon/item catalogs).
+        build: {
+          weapons: (result.build?.weapons ?? []).map((w) => w.id),
+          items: (result.build?.items ?? []).map((it) => ({ id: it.id, count: it.count })),
+        },
       });
     } catch {
       // Never let a stats-save failure interrupt the play loop.

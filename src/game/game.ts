@@ -17,6 +17,8 @@ import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
+import { cosmeticOverlay } from "./cosmeticArt.js";
+import type { EquippedCosmetics } from "./cosmetics.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
@@ -55,8 +57,9 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult {
   floor: number; kills: number; coins: number; durationMs: number;
-  // The run's final build for the results screen (weapons carried + blessings with
-  // levels) — display-only, never persisted.
+  // The run's final build (weapons carried + blessings with levels) for the results screen.
+  // Display-only for gameplay; the id/count subset also rides recordRun so a personal-best
+  // run's build shows on the player's leaderboard profile.
   build?: {
     weapons: { id: WeaponId; name: string }[];
     items: { id: string; name: string; glyph: string; tint: string; count: number }[];
@@ -102,6 +105,9 @@ export interface StartOptions {
   // The player's chosen blob tint (client palette index). Applies to solo + online; classic
   // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
   selfColorIndex?: number | null;
+  // The player's equipped visual-only cosmetics (hat/glasses overlay ids). Solo + online;
+  // never touches the sim — teammates see them via the verified ticket identity instead.
+  selfCosmetics?: EquippedCosmetics | null;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -445,6 +451,7 @@ export class Game {
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
+  private selfCosmetics: EquippedCosmetics | null = null; // equipped hat/glasses overlays (visual-only)
   private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
@@ -734,6 +741,7 @@ export class Game {
     this.profile = opts.profile ?? null;
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
+    this.selfCosmetics = this.mode === "coop" ? null : opts.selfCosmetics ?? null;
     this.online = this.mode === "online" ? opts.online ?? null : null;
     this.spectateId = null;
     this.sentSpectateId = null;
@@ -4788,6 +4796,9 @@ export class Game {
         ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill();
       }
       ctx.restore();
+      // Teammates' verified cosmetic overlays (same transform as their body draw above,
+      // which never uses frame sheets — the procedural xf carries the full deform).
+      this.drawCosmetics(r.hat, r.glasses, sx, sy, 52, r.facing, xf, r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1, false);
 
       if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
@@ -4810,6 +4821,27 @@ export class Game {
     return this.selfColorIndex !== null && this.selfColorIndex > 0 ? playerColor(this.selfColorIndex) : null;
   }
 
+  // Draw a blob's equipped cosmetic overlays (hat/glasses) with EXACTLY the body sprite's
+  // transform so they ride its squash/stretch/bob. `isSheetPlaying` mirrors drawChar's rule:
+  // frame sheets bake the deform, so the overlay neutralizes the procedural scale with them.
+  // Unknown/absent ids draw nothing — cosmetics are labels, never load-bearing.
+  private drawCosmetics(hat: string | null, glasses: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean) {
+    if (hat === null && glasses === null) return;
+    const { ctx } = this;
+    const half = size / 2;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(cx + xf.ox, cy + xf.oy);
+    ctx.rotate(xf.rot);
+    ctx.scale(isSheetPlaying ? facing : facing * xf.sx, isSheetPlaying ? 1 : xf.sy);
+    for (const id of [glasses, hat]) {
+      if (id === null) continue;
+      const overlay = cosmeticOverlay(id);
+      if (overlay) ctx.drawImage(overlay, -half, -half, size, size);
+    }
+    ctx.restore();
+  }
+
   private renderPlayer() {
     const { ctx, cam } = this;
     // Interpolate the render position between the last two sim steps for smooth motion.
@@ -4827,6 +4859,9 @@ export class Game {
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
+    if (this.selfCosmetics) {
+      this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.glasses, psx, psy, 52, this.facing, xf, alpha, !!this.sprites.sheet("hero", clip));
+    }
     if (!this.isDown) {
       // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)
       // so the gun stays glued to the body while moving. The bullet/muzzle ORIGIN stays at the
