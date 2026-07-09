@@ -39,8 +39,36 @@ import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
+import { weaponCard } from "../sim/weaponStats.js";
 
-export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
+// Per-run stat details riding along with the classic summary (all sim-accumulated; see
+// RunStats in src/sim/world.ts). For online runs these client-side numbers are prediction
+// artifacts — the SERVER reports the authoritative copy through the signed run-result path,
+// and the client submits nothing (see main.ts onGameOver).
+export interface RunResultStats {
+  damageDealt: number;
+  damageTaken: number;
+  bestCombo: number;
+  coinsEarned: number;
+  coinsSpent: number;
+  bossKills: number;
+  bossKillFloors: number[];
+  firstBossKillMs: number | null;
+  killsByWeapon: Partial<Record<WeaponId, number>>;
+  startFloor: number;
+}
+
+export interface RunResult {
+  floor: number;
+  kills: number;
+  coins: number;
+  durationMs: number;
+  mode: "solo" | "coop" | "online";
+  result: "death";
+  stats: RunResultStats;
+  weapons: WeaponId[];   // final inventory
+  blessings: string[];   // final pick history (an id's count = its level)
+}
 
 // Why a run exited without a game over: the player quit, or an online connection never came
 // up (lets the menu land back on the lobby with an explanation instead of silence).
@@ -446,6 +474,14 @@ export class Game {
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
+    // Weapon tooltip data: live stats for the LOCAL player, so hovering a hotbar slot shows
+    // the true effective values under the current blessings (and low-HP scalers). Online the
+    // local player's mods/hp are server-reconciled, so the card still reflects server truth.
+    this.hud.setWeaponCardProvider((id) => {
+      if (!this.isRunning || !this.world) return null;
+      const p = this.world.players.get(LOCAL_ID);
+      return p ? weaponCard(id, p) : null;
+    });
     this.buildWallGradients();
     this.bindInput();
     this.resize();
@@ -1794,7 +1830,27 @@ export class Game {
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
+    const rs = this.p.runStats;
+    this.onGameOver({
+      floor: this.floor, kills: this.kills, coins: this.coins,
+      durationMs: performance.now() - this.runStart,
+      mode: this.mode,
+      result: "death",
+      stats: {
+        damageDealt: rs.damageDealt,
+        damageTaken: rs.damageTaken,
+        bestCombo: rs.bestCombo,
+        coinsEarned: rs.coinsEarned,
+        coinsSpent: rs.coinsSpent,
+        bossKills: rs.bossKills,
+        bossKillFloors: rs.bossKillFloors.slice(),
+        firstBossKillMs: rs.firstBossKillSecs >= 0 ? Math.round(rs.firstBossKillSecs * 1000) : null,
+        killsByWeapon: { ...rs.killsByWeapon },
+        startFloor: rs.startFloor,
+      },
+      weapons: this.p.ownedWeapons.slice(),
+      blessings: this.p.ownedItemIds.slice(),
+    });
   }
 
   // Online transport terminal states end the run cleanly instead of freezing the last frame:

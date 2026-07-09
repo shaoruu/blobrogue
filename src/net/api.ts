@@ -33,6 +33,110 @@ export interface CurrentUserDoc {
   image: string | null;
 }
 
+// ---- stats / leaderboards (mirrors convex/statsCore.ts + convex/stats.ts) ----
+
+export type Difficulty = "casual" | "standard" | "brutal";
+export type RunMode = "solo" | "coop" | "online";
+export type RunOutcome = "death" | "victory" | "abandon";
+export type RunSource = "server" | "local";
+export type LeaderboardCategory = "deepestFloor" | "fastestBoss" | "bossKills" | "score" | "combo";
+
+// The client-submitted local-run payload (solo/co-op sim results; never leaderboard-eligible).
+export type LocalRunArgs = {
+  clientId: string;
+  submissionId: string;
+  mode: RunMode;
+  result: RunOutcome;
+  difficulty?: Difficulty;
+  floor: number;
+  startFloor: number;
+  kills: number;
+  coins: number;
+  coinsEarned: number;
+  coinsSpent: number;
+  durationMs: number;
+  damageDealt: number;
+  damageTaken: number;
+  bestCombo: number;
+  bossKills: number;
+  bossKillFloors: number[];
+  firstBossKillMs?: number;
+  killsByWeapon: Record<string, number>;
+  weapons: string[];
+  blessings: string[];
+};
+
+export interface PlayerAggregatesDoc {
+  gamesPlayed: number;
+  totalKills: number;
+  totalCoins: number;
+  deepestFloor: number;
+  wins: number;
+  deaths: number;
+  playtimeMs: number;
+  bestCombo: number;
+  coinsEarned: number;
+  coinsSpent: number;
+  damageDealt: number;
+  damageTaken: number;
+  bossKills: number;
+  fastestBossMs: number | null;
+  bossKillsByBoss: Record<string, number>;
+  killsByWeapon: Record<string, number>;
+}
+
+export interface PlayerStatsDoc {
+  playerId: string;
+  name: string;
+  isAccount: boolean;
+  aggregates: PlayerAggregatesDoc;
+  favoriteWeapon: string | null;
+}
+
+export interface RunHistoryEntryDoc {
+  runId: string;
+  source: RunSource;
+  mode: RunMode;
+  difficulty: Difficulty;
+  result: RunOutcome;
+  floor: number;
+  startFloor: number;
+  kills: number;
+  coins: number;
+  durationMs: number;
+  damageDealt: number;
+  damageTaken: number;
+  bestCombo: number;
+  bossKills: number;
+  bossKillFloors: number[];
+  firstBossKillMs: number | null;
+  weapons: string[];
+  blessings: string[];
+  score: number;
+  endedAt: number;
+}
+
+export interface RunHistoryPageDoc {
+  page: RunHistoryEntryDoc[];
+  isDone: boolean;
+  continueCursor: string | null;
+}
+
+export interface LeaderboardEntryDoc {
+  playerId: string;
+  name: string;
+  colorIndex: number | null;
+  value: number;
+  achievedAt: number | null;
+}
+
+export interface LeaderboardPageDoc {
+  entries: LeaderboardEntryDoc[];
+  me: LeaderboardEntryDoc | null;
+  isDone: boolean;
+  continueCursor: string | null;
+}
+
 // Convex Auth's sign-in/out actions live at the string references "auth:signIn" /
 // "auth:signOut" once the backend (convex/auth.ts + http.ts) is deployed. Typed here
 // so the vanilla auth client (src/net/auth.ts) can call them without importing the
@@ -102,6 +206,14 @@ export const api = {
   auth: {
     signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),
     signOut: makeFunctionReference<"action", Record<string, never>, null>("auth:signOut"),
+  },
+  stats: {
+    recordLocalRun: makeFunctionReference<"mutation", LocalRunArgs, PlayerStatsDoc | null>("stats:recordLocalRun"),
+    getMyStats: makeFunctionReference<"query", { clientId: string }, PlayerStatsDoc | null>("stats:getMyStats"),
+    listMyRuns: makeFunctionReference<"query", { clientId: string; cursor: string | null; numItems: number }, RunHistoryPageDoc>("stats:listMyRuns"),
+  },
+  leaderboard: {
+    top: makeFunctionReference<"query", { category: LeaderboardCategory; difficulty: Difficulty; cursor: string | null; numItems: number; clientId?: string }, LeaderboardPageDoc>("leaderboard:top"),
   },
   gsTicket: {
     // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).

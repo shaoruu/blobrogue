@@ -1,13 +1,16 @@
 import type { ConvexClient } from "convex/browser";
 import type { Session } from "../net/session.js";
 import type { AuthClient } from "../net/auth.js";
-import type { ProfileDoc } from "../net/api.js";
+import type { ProfileDoc, PlayerStatsDoc, RunHistoryEntryDoc, LeaderboardCategory, Difficulty, LeaderboardEntryDoc } from "../net/api.js";
 import { api } from "../net/api.js";
 import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { createSettingsControls } from "./settings.js";
+import { WEAPONS } from "../sim/weapons.js";
+import { itemById } from "../sim/items.js";
+import { BOSS_NAMES, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../../convex/statsCore.js";
 
 export interface MenuHost {
   startSolo(profile: ProfileDoc | null): void;
@@ -88,9 +91,13 @@ export class Menu {
     wrap.appendChild(hero);
 
     if (!this.client) {
-      // Offline build: no profile/multiplayer — single centered actions column, no split.
+      // Offline build: no multiplayer — single centered actions column. Local stats still
+      // exist (the localStorage mirror), so the profile panel stays reachable.
       const colA = el("div", "col-actions");
       colA.appendChild(this.soloButton("\u25be  PLAY"));
+      const offlineProfile = el("button", "secondary", "PROFILE & STATS");
+      offlineProfile.addEventListener("click", () => void this.showProfilePanel());
+      colA.appendChild(offlineProfile);
       colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       wrap.appendChild(colA);
       wrap.appendChild(createSettingsControls());
@@ -121,6 +128,13 @@ export class Menu {
       colB.appendChild(this.identitySection());
       const profileBox = el("div", "profile");
       colB.appendChild(profileBox);
+      const statsRow = el("div", "actrow");
+      const profileBtn = el("button", "secondary", "PROFILE & STATS");
+      profileBtn.addEventListener("click", () => void this.showProfilePanel());
+      const boardsBtn = el("button", "secondary", "LEADERBOARDS");
+      boardsBtn.addEventListener("click", () => void this.showLeaderboardPanel());
+      statsRow.append(profileBtn, boardsBtn);
+      colB.appendChild(statsRow);
       colB.appendChild(createSettingsControls());
       body.appendChild(colB);
 
@@ -604,6 +618,221 @@ export class Menu {
     render();
   }
 
+  // ---- PROFILE / STATS panel -----------------------------------------------------------
+
+  // Lifetime aggregates + run history. Backend-first (account or guest row), with the
+  // localStorage mirror as the offline fallback — a guest always sees THEIR stats.
+  async showProfilePanel() {
+    const busy = this.busy("loading profile\u2026");
+    let stats: PlayerStatsDoc | null = null;
+    let runs: RunHistoryEntryDoc[] = [];
+    let runsCursor: string | null = null;
+    let isRunsDone = true;
+    let isLocalFallback = false;
+    if (this.client) {
+      try {
+        const signedIn = this.auth?.isSignedIn ?? false;
+        if (this.session.name || signedIn) await this.session.login(this.session.name || "blob");
+        stats = await this.client.query(api.stats.getMyStats, { clientId: this.session.clientId });
+        const first = await this.client.query(api.stats.listMyRuns, { clientId: this.session.clientId, cursor: null, numItems: 10 });
+        runs = first.page;
+        runsCursor = first.continueCursor;
+        isRunsDone = first.isDone;
+      } catch {
+        stats = null;
+      }
+    }
+    if (!stats) {
+      const local = this.session.localStatsSnapshot();
+      stats = local.stats;
+      runs = local.runs;
+      isLocalFallback = true;
+    }
+    void busy;
+
+    const wrap = el("div", "menu");
+    const head = el("div", "panel-h");
+    head.appendChild(el("h1", "", stats.name.toUpperCase()));
+    head.appendChild(el("span", "panel-sub", isLocalFallback
+      ? "this browser only"
+      : stats.isAccount ? "account \u00b7 global" : "guest \u00b7 this browser"));
+    wrap.appendChild(head);
+
+    const a = stats.aggregates;
+    const grid = el("div", "profile-grid wide");
+    const stat = (label: string, value: string, isAmber = false) => {
+      const cell = el("div", "stat");
+      const v = el("span", "stat-value", value);
+      if (isAmber) v.classList.add("amber");
+      cell.append(v, el("span", "stat-label", label));
+      grid.appendChild(cell);
+    };
+    stat("deepest floor", String(a.deepestFloor), true);
+    stat("runs", String(a.gamesPlayed));
+    stat("wins", String(a.wins));
+    stat("deaths", String(a.deaths));
+    stat("total kills", String(a.totalKills));
+    stat("bosses slain", String(a.bossKills));
+    stat("best combo", a.bestCombo > 0 ? `x${a.bestCombo}` : "\u2014");
+    stat("playtime", fmtPlaytime(a.playtimeMs));
+    stat("damage dealt", fmtBig(a.damageDealt));
+    stat("damage taken", fmtBig(a.damageTaken));
+    stat("coins earned", fmtBig(a.coinsEarned));
+    stat("coins spent", fmtBig(a.coinsSpent));
+    wrap.appendChild(grid);
+
+    const details: string[] = [];
+    if (stats.favoriteWeapon) details.push(`favorite weapon \u2014 ${weaponName(stats.favoriteWeapon)}`);
+    if (a.fastestBossMs !== null) details.push(`fastest boss \u2014 ${fmtClock(a.fastestBossMs / 1000)}`);
+    const bossBits = Object.entries(a.bossKillsByBoss).map(([id, n]) => `${BOSS_NAMES[id] ?? id} \u00d7${n}`);
+    if (bossBits.length) details.push(bossBits.join(" \u00b7 "));
+    if (details.length) {
+      const line = el("p", "bossline");
+      line.innerHTML = "";
+      line.append(...details.map((d, i) => {
+        const s = el("span", "", (i > 0 ? "  \u00b7  " : "") + d);
+        return s;
+      }));
+      wrap.appendChild(line);
+    }
+
+    wrap.appendChild(el("div", "col-h", "RUN HISTORY"));
+    const list = el("div", "scrolly");
+    if (runs.length === 0) list.appendChild(el("p", "lb-empty", "no runs yet \u2014 go get eaten by something"));
+    for (const r of runs) list.appendChild(runRow(r));
+    wrap.appendChild(list);
+
+    const row = el("div", "btnrow");
+    if (!isRunsDone && this.client) {
+      const more = el("button", "secondary", "load more");
+      more.addEventListener("click", () => void (async () => {
+        if (!this.client) return;
+        more.disabled = true;
+        try {
+          const next = await this.client.query(api.stats.listMyRuns, { clientId: this.session.clientId, cursor: runsCursor, numItems: 10 });
+          for (const r of next.page) list.appendChild(runRow(r));
+          runsCursor = next.continueCursor;
+          if (next.isDone) more.remove();
+        } finally {
+          more.disabled = false;
+        }
+      })());
+      row.appendChild(more);
+    }
+    if (this.client) {
+      const boards = el("button", "secondary", "leaderboards");
+      boards.addEventListener("click", () => void this.showLeaderboardPanel());
+      row.appendChild(boards);
+    }
+    const back = el("button", "", "back \u21b5");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+
+    if (!isLocalFallback && !stats.isAccount && this.auth) {
+      wrap.appendChild(this.signInCta("Guest stats live in this browser. Sign in with Google to compete on the global leaderboards."));
+    }
+
+    this.show(wrap);
+  }
+
+  // ---- GLOBAL LEADERBOARDS panel ---------------------------------------------------------
+
+  async showLeaderboardPanel(category: LeaderboardCategory = "deepestFloor", difficulty: Difficulty = DEFAULT_DIFFICULTY) {
+    if (!this.client) { await this.showTitle(); return; }
+    const client = this.client;
+    const wrap = el("div", "menu");
+    const head = el("div", "panel-h");
+    head.appendChild(el("h1", "", "LEADERBOARDS"));
+    head.appendChild(el("span", "panel-sub", "authoritative server runs \u00b7 signed-in players"));
+    wrap.appendChild(head);
+
+    const tabs = el("div", "tabrow");
+    const tabDefs: Array<{ id: LeaderboardCategory; label: string }> = [
+      { id: "deepestFloor", label: "DEEPEST" },
+      { id: "fastestBoss", label: "FASTEST BOSS" },
+      { id: "bossKills", label: "BOSS KILLS" },
+      { id: "score", label: "SCORE" },
+      { id: "combo", label: "COMBO" },
+    ];
+    for (const t of tabDefs) {
+      const b = el("button", "secondary tab" + (t.id === category ? " on" : ""), t.label);
+      b.addEventListener("click", () => void this.showLeaderboardPanel(t.id, difficulty));
+      tabs.appendChild(b);
+    }
+    wrap.appendChild(tabs);
+
+    const diffRow = el("div", "diffrow");
+    diffRow.appendChild(el("span", "lab", "difficulty"));
+    for (const d of DIFFICULTIES) {
+      const b = el("button", "secondary tab" + (d === difficulty ? " on" : ""), d.toUpperCase());
+      b.addEventListener("click", () => void this.showLeaderboardPanel(category, d));
+      diffRow.appendChild(b);
+    }
+    wrap.appendChild(diffRow);
+
+    const list = el("div", "lb-list");
+    const status = el("p", "muted", "loading\u2026");
+    wrap.appendChild(list);
+    wrap.appendChild(status);
+
+    const row = el("div", "btnrow");
+    const more = el("button", "secondary", "load more");
+    more.style.display = "none";
+    row.appendChild(more);
+    const back = el("button", "", "back \u21b5");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+
+    if (this.auth && !this.auth.isSignedIn) {
+      wrap.appendChild(this.signInCta("Playing as a guest \u2014 your stats stay in this browser. Sign in with Google and your online runs count here."));
+    }
+
+    this.show(wrap);
+
+    let cursor: string | null = null;
+    let rank = 0;
+    const selfId = this.session.playerId;
+    const loadPage = async () => {
+      more.disabled = true;
+      status.textContent = rank === 0 ? "loading\u2026" : "";
+      try {
+        const page = await client.query(api.leaderboard.top, {
+          category, difficulty, cursor, numItems: 25,
+          clientId: this.session.clientId,
+        });
+        for (const e of page.entries) list.appendChild(lbRow(++rank, e, category, e.playerId === selfId));
+        cursor = page.continueCursor;
+        more.style.display = page.isDone ? "none" : "";
+        if (rank === 0) {
+          list.appendChild(el("p", "lb-empty", "no entries yet \u2014 be the first: sign in and clear a run online"));
+        }
+        status.textContent = page.me && !page.entries.some((e) => e.playerId === selfId)
+          ? `your best \u2014 ${fmtBoardValue(page.me.value, category)}`
+          : "";
+      } catch {
+        status.textContent = "leaderboards unavailable \u2014 try again in a moment";
+      } finally {
+        more.disabled = false;
+      }
+    };
+    more.addEventListener("click", () => void loadPage());
+    await loadPage();
+  }
+
+  private signInCta(text: string): HTMLElement {
+    const box = el("div", "cta-box");
+    box.appendChild(el("p", "", text));
+    const btn = el("button", "secondary btn-google");
+    btn.appendChild(googleMark());
+    btn.appendChild(el("span", "", "Sign in with Google"));
+    const status = el("p", "muted auth-status");
+    btn.addEventListener("click", () => void this.doSignIn(status));
+    box.append(btn, status);
+    return box;
+  }
+
   showGameOver(result: RunResult, profile: ProfileDoc | null, ctx: GameOverContext) {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "died", "YOU DIED"));
@@ -739,6 +968,81 @@ export class Menu {
   private cleanErr(msg: string): string {
     return msg.replace(/^\[.*?\]\s*/, "").replace(/^Uncaught Error:\s*/, "");
   }
+}
+
+function weaponName(id: string): string {
+  return (WEAPONS as Partial<Record<string, { name: string }>>)[id]?.name ?? id;
+}
+
+function fmtPlaytime(ms: number): string {
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return ms > 0 ? "<1m" : "0m";
+  const h = Math.floor(mins / 60);
+  return h > 0 ? `${h}h ${mins % 60}m` : `${mins}m`;
+}
+
+function fmtBig(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}m`;
+  if (n >= 10000) return `${(n / 1000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function fmtWhen(ts: number | null): string {
+  if (ts === null || ts <= 0) return "";
+  const d = new Date(ts);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+
+function fmtBoardValue(value: number, category: LeaderboardCategory): string {
+  switch (category) {
+    case "deepestFloor": return `FL ${value}`;
+    case "fastestBoss": return fmtClock(value / 1000);
+    case "bossKills": return `\u00d7${value}`;
+    case "score": return fmtBig(value);
+    case "combo": return `x${value}`;
+  }
+}
+
+// One run-history row: outcome + depth at a glance, combat detail underneath, final
+// build (weapons + blessings) on the fine-print line.
+function runRow(r: RunHistoryEntryDoc): HTMLElement {
+  const row = el("div", "runrow");
+  const r1 = el("div", "r1");
+  const fl = el("span", "fl", `FL ${r.floor}`);
+  const res = el("span", `res ${r.result}`, r.result);
+  const meta = el("span", "", `${fmtClock(r.durationMs / 1000)} \u00b7 ${r.difficulty}`);
+  const src = el("span", `src ${r.source}`, r.source === "server" ? "server" : "local");
+  src.title = r.source === "server"
+    ? "authoritative online run \u2014 counts toward global leaderboards"
+    : "locally simulated run \u2014 personal stats only";
+  r1.append(fl, res, meta, src);
+  row.appendChild(r1);
+  const bossBit = r.bossKills > 0 ? ` \u00b7 ${r.bossKills} boss${r.bossKills > 1 ? "es" : ""}` : "";
+  const comboBit = r.bestCombo > 0 ? ` \u00b7 x${r.bestCombo} combo` : "";
+  row.appendChild(el("div", "r2",
+    `${r.kills} kills${bossBit}${comboBit} \u00b7 ${fmtBig(r.damageDealt)} dealt / ${fmtBig(r.damageTaken)} taken \u00b7 ${r.coins} coins`));
+  const build: string[] = r.weapons.map(weaponName);
+  const blessingCounts = new Map<string, number>();
+  for (const id of r.blessings) blessingCounts.set(id, (blessingCounts.get(id) ?? 0) + 1);
+  for (const [id, lv] of blessingCounts) {
+    const def = itemById(id);
+    build.push(`${def?.name ?? id}${lv > 1 ? ` Lv${lv}` : ""}`);
+  }
+  row.appendChild(el("div", "r3", `${fmtWhen(r.endedAt)}${build.length ? " \u00b7 " + build.join(", ") : ""}`));
+  return row;
+}
+
+function lbRow(rank: number, e: LeaderboardEntryDoc, category: LeaderboardCategory, isYou: boolean): HTMLElement {
+  const row = el("div", "lb-row" + (isYou ? " you" : ""));
+  row.appendChild(el("span", "rank", `#${rank}`));
+  const dot = el("span", "dot");
+  dot.style.background = playerColor(e.colorIndex ?? 0);
+  row.appendChild(dot);
+  row.appendChild(el("span", "nm", e.name + (isYou ? " (you)" : "")));
+  row.appendChild(el("span", "val", fmtBoardValue(e.value, category)));
+  row.appendChild(el("span", "when", fmtWhen(e.achievedAt)));
+  return row;
 }
 
 // The Google "G" mark, inline so it needs no network fetch and stays crisp at any DPI.

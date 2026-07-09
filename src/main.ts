@@ -43,7 +43,13 @@ async function bootNormal() {
     const online = activeOnline;
     // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
     const prevBest = session.profile?.deepestFloor ?? 0;
-    const saved = await session.recordRun(result);
+    // Trust split: ONLINE runs are recorded by the authoritative game server itself
+    // (signed run-result -> Convex), so the client submits nothing and only refreshes.
+    // Solo/co-op ran the local sim, so the client reports its own result down the
+    // local-only path (personal stats + history, never leaderboards).
+    const saved = result.mode === "online"
+      ? await session.refreshProfile().catch(() => null)
+      : await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
     menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online });
   }
