@@ -75,25 +75,28 @@ function findWallGap(w: WorldState): { tx: number; ty: number } {
 }
 
 function unlockTests(): void {
-  section("unlock requirements: exact milestones, pure + idempotent evaluation");
+  section("unlock requirements: the approved spine (King F5 / gauntlet F10 / Marrow F15), idempotent");
   const none = { deepestFloor: 0, deepestBossKill: 0 };
   check("fresh account unlocks nothing", petUnlocksFor(none).length === 0);
-  check("floor 7 alone unlocks nothing (wisp needs 8, pup/bird need boss kills)",
-    petUnlocksFor({ deepestFloor: 7, deepestBossKill: 0 }).length === 0);
+  check("floor 9 alone unlocks nothing (wisp needs the F10 gauntlet milestone)",
+    petUnlocksFor({ deepestFloor: 9, deepestBossKill: 0 }).length === 0);
   const firstBoss = petUnlocksFor({ deepestFloor: 5, deepestBossKill: 5 });
   check("defeating the Slime King (floor 5) unlocks EXACTLY the Ember Pup",
     firstBoss.length === 1 && firstBoss[0] === "ember_pup", JSON.stringify(firstBoss));
   check("dying ON the boss floor after the kill still counts (kill != descend)",
     isPetUnlocked("ember_pup", { deepestFloor: 5, deepestBossKill: 5 }));
-  const deep = petUnlocksFor({ deepestFloor: 8, deepestBossKill: 5 });
-  check("reaching floor 8 (The Deep) adds the Lantern Wisp", deep.includes("lantern_wisp") && deep.length === 2);
-  const all = petUnlocksFor({ deepestFloor: 11, deepestBossKill: 10 });
-  check("the floor-10 Slime King completes the roster", all.length === PET_KINDS.length);
-  check("boss kill at 10 without floor 8?? impossible in play, but evaluation stays per-requirement",
-    petUnlocksFor({ deepestFloor: 0, deepestBossKill: 10 }).includes("bonebird"));
+  const gauntlet = petUnlocksFor({ deepestFloor: 10, deepestBossKill: 5 });
+  check("reaching floor 10 (the Rootbound gauntlet) adds the Lantern Wisp",
+    gauntlet.includes("lantern_wisp") && gauntlet.length === 2);
+  check("the F10 gauntlet is a DEPTH milestone, never a boss-kill one (F10 is not a boss)",
+    PETS.lantern_wisp.requirement.deepestFloor === 10 && PETS.lantern_wisp.requirement.deepestBossKill === undefined);
+  const all = petUnlocksFor({ deepestFloor: 15, deepestBossKill: 15 });
+  check("the floor-15 boss (Marrow) completes the roster", all.length === PET_KINDS.length);
+  check("the bonebird milestone is per-requirement (boss kill at 15 suffices alone)",
+    petUnlocksFor({ deepestFloor: 0, deepestBossKill: 15 }).includes("bonebird"));
   check("evaluation is idempotent (same stats -> same set)",
-    JSON.stringify(petUnlocksFor(all.length ? { deepestFloor: 11, deepestBossKill: 10 } : none))
-    === JSON.stringify(petUnlocksFor({ deepestFloor: 11, deepestBossKill: 10 })));
+    JSON.stringify(petUnlocksFor({ deepestFloor: 15, deepestBossKill: 15 }))
+    === JSON.stringify(petUnlocksFor({ deepestFloor: 15, deepestBossKill: 15 })));
   check("isPetKind accepts the roster and rejects junk",
     PET_KINDS.every(isPetKind) && !isPetKind("dragon") && !isPetKind(42) && !isPetKind(null));
 }
@@ -216,13 +219,17 @@ function emberPupTests(): void {
   check("the nip applied its burn", e.burn > 0 || e.burnDmg > 0 || ev.some((x) => x.t === "burnTick"));
   check("burn attribution is the owner", e.burnOwner === "pA");
 
-  // Kill credit: a lethal nip credits the owner's kills/combo exactly like their own shot.
+  // Kill credit: OWNER CREDIT ONLY (studio ruling) — a lethal nip credits the owner's
+  // kills/combo exactly like their own shot, but a pet-finished enemy drops NOTHING
+  // (pets are damage assists, never a loot path).
   const { w: w2, p: p2 } = arenaWithPet("ember_pup");
   const weak = devSpawnEnemy(w2, "slime", p2.x + 60, p2.y);
   weak.hp = 1;
   const ev2 = run(w2, Math.ceil(2 / FIXED_DT));
   check("lethal nip credits the owner's kill + combo", p2.kills === 1 && p2.combo >= 1, `kills=${p2.kills}`);
   check("the kill resolved through the standard event", ev2.some((x) => x.t === "enemyKill"));
+  check("a pet-finished kill drops NO loot (no coin/heart path)",
+    w2.pickups.length === 0 && !ev2.some((x) => x.t === "lootDrop"), `pickups=${w2.pickups.length}`);
 
   // Leash: an enemy beyond the owner's engage range is ignored.
   const { w: w3, p: p3 } = arenaWithPet("ember_pup");
@@ -391,6 +398,8 @@ function fangSuppressionTests(): void {
   check("the pet's burn finished the kill without a Fang heart",
     ev3.some((x) => x.t === "enemyKill") && w3.ledger.petKills === 1 && p3.hp === 3 && w3.ledger.petHealing === 0,
     `hp=${p3.hp} petKills=${w3.ledger.petKills}`);
+  check("a pet-burn kill drops no loot either (the skip follows the kill source)",
+    w3.pickups.length === 0, `pickups=${w3.pickups.length}`);
 }
 
 function wispTests(): void {
@@ -481,11 +490,22 @@ function ownerStateTests(): void {
 
   a.isDown = true; a.hp = 0; // downed with a standing ally (B): run continues
   pet.attackCd = 2.5;        // a mid-cooldown snapshot to prove the freeze
-  const downEv = run(w, Math.ceil(5 / FIXED_DT));
-  check("the pet vanished (spec §5: disappears while owner downed)", pet.isDormant);
+  // Hold the dormancy for a FULL 90s — the reconnect PR's reservation window. The pet must
+  // stay gone the whole time with its state frozen as an exact snapshot: this is the seam
+  // the reservation system joins (isPetOwnerGone), so dormant-through-reservation + exact
+  // resume are already proven semantics, not future work.
+  let dormantTicks = 0;
+  const downEv: SimEvent[] = [];
+  for (let i = 0; i < Math.ceil(90 / FIXED_DT); i++) {
+    downEv.push(...run(w, 1));
+    if (pet.isDormant) dormantTicks++;
+  }
+  check("the pet vanished (spec §5: disappears while owner gone)", pet.isDormant);
+  check("…and stayed gone for the entire 90s reservation-length window",
+    dormantTicks === Math.ceil(90 / FIXED_DT), `dormant ${dormantTicks}/${Math.ceil(90 / FIXED_DT)} ticks`);
   check("the disappearance puffed", downEv.some((x) => x.t === "puff"));
   check("a dormant pet starts no attacks", e.hp === 500, `hp=${e.hp}`);
-  check("dormancy froze its cooldown snapshot (a down is never a cooldown reset)", pet.attackCd === 2.5);
+  check("90s of dormancy froze the exact cooldown snapshot (never a reset, never a tick)", pet.attackCd === 2.5);
   const snap = buildSnapshot(w, "pA", 0, [], 0, false, {});
   check("a dormant pet is on nobody's wire — not even its owner's", snap.t === "snap" && snap.pets.length === 0);
 

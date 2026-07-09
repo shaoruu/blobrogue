@@ -52,10 +52,14 @@ export interface PetDef {
   requirement: PetRequirement;
 }
 
-// Unlock graph, grounded in the LIVE roster: the Slime King guards every 5th floor
-// (enemies.ts BOSS_EVERY), and biome bands run 3 floors each (biomes.ts — floor 8 sits in
-// The Deep). Boss-kill milestones use deepestBossKill (killing the boss counts even if the
-// run ends before the descend); the depth milestone uses deepestFloor.
+// Unlock graph, on the APPROVED first-clear spine (docs/specs/
+// blobrogue_ENCOUNTER_CURRICULUM_spec.md: Slime King F5 → authored miniboss Gauntlet F10,
+// a non-boss milestone → Marrow F15 → …). Boss-kill milestones use deepestBossKill
+// (killing the boss counts even if the run ends before the descend); the gauntlet
+// milestone uses deepestFloor — reaching F10 — so it stays true both today and once the
+// authored gauntlet ships. F15's boss is Marrow in canon; the current sim seats its
+// stand-in on the same every-5th boss slot, so the milestone mechanism already works and
+// Marrow slots in without a data change.
 export const PETS: Record<PetKind, PetDef> = {
   ember_pup: {
     kind: "ember_pup",
@@ -69,14 +73,14 @@ export const PETS: Record<PetKind, PetDef> = {
     name: "Lantern Wisp",
     role: "Support light — reveals nearby loot and nudges coins to you.",
     tint: "#8fd8ff",
-    requirement: { deepestFloor: 8, label: "Reach floor 8 — The Deep" },
+    requirement: { deepestFloor: 10, label: "Reach floor 10 — the Rootbound gauntlet" },
   },
   bonebird: {
     kind: "bonebird",
     name: "Bonebird",
     role: "Ranged peck — its mark makes one foe take extra damage from players.",
     tint: "#e8e0cf",
-    requirement: { deepestBossKill: 10, label: "Defeat the Slime King at floor 10" },
+    requirement: { deepestBossKill: 15, label: "Defeat the floor-15 boss (Marrow)" },
   },
 };
 
