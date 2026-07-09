@@ -7,7 +7,7 @@
 // new enemy cannot land without declaring its identity — an HP/speed/damage-only
 // variant has nothing to declare and fails the acceptance gates by construction.
 
-import type { EnemyKind } from "./types.js";
+import type { EnemyKind, AttackMove } from "./types.js";
 
 // Role classes (the envelope's threat-cost ladder): simple bodies price 1, ranged 1.5,
 // complex verbs 2, controllers (support / decoys / space control) 2.25. Summon-only
@@ -175,6 +175,84 @@ export const ENEMY_ACCEPTANCE: Readonly<Partial<Record<EnemyKind, EnemyAcceptanc
     commitmentS: 0.9, postLockS: 0.9, punishS: 0.5,
     favoredIn: "mixed packs it can harmonize with", weakTo: "target priority, walls",
   },
+};
+
+// ---- the committed-move set (QA authority manifest) ----
+// Every attack move each kind may COMMIT, over ALL kinds (compile-exhaustive: a new
+// kind, or a new move on an old kind, does not build until declared here). This is the
+// QA gates' authority record: telegraphs, aim-lock facing, projectile origins and the
+// direction matrix are all validated against exactly this set. Contact bodies (slime,
+// bat, rootward, the decoys) commit nothing — their pressure is the body itself; the
+// ghost's solidify is a windup CHANNEL, not a move. Elite affixes add their own moves
+// on top (brace on every brace-kind; the commander's rally rides "roar").
+export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> = {
+  slime: [],
+  bat: [],
+  skeleton: ["lunge"],
+  ghost: [],
+  spitter: ["spit"],
+  charger: ["rush", "crash"],
+  burrower: ["dive", "erupt"],
+  orbiter: ["spit"],
+  shielder: ["lunge"],
+  rootward: [],
+  echojack: ["decoy", "blink"],
+  seamcutter: ["seam"],
+  caskbellows: ["volley", "crash"],
+  sinderling: ["stoke", "rush"],
+  fragment: ["harmonize"],
+  echo: [],
+  knell: [],
+  marshal: ["sweep", "volley"],
+  toll: ["knell", "volley"],
+  boss: ["hopslam", "radial", "roar", "squeeze"],
+  marrow: ["rush", "crash", "volley", "spin", "shield"],
+  choir: ["fade", "wail", "split"],
+  weaver: ["pounce", "weave", "roar"],
+  gilded: ["slam", "sweep", "roar"],
+};
+
+// ---- the directional-art contract (QA render manifest) ----
+// Which sheet contract each kind's sprite ships under — the QA gates cross-check the
+// asset registrations against this declaration, so a kind cannot silently miss its
+// directional states:
+//  - directional:      walk_{down,up,side} + attack_{down,up,side} (side mirrors left)
+//  - directional_walk: walk triplet only (contact bodies with no attack strip)
+//  - vertical_hold:    approved down/up sets only; horizontal movement holds the
+//                      nearest vertical (the Gilded Warden's blocked-side contract)
+//  - mass:             drifting/stationary mass — idle loop + omni attack, no triplet
+//  - decoy:            idle loop only
+//  - legacy:           single-strip walk (+ optional idle/death) — today's shipped art
+// The 4-dir projection (down/up/side + mirror) is the DOCUMENTED direction matrix:
+// 8-way velocity resolves through the deadzone + axis-hysteresis tracker in
+// src/game/facing.ts; no kind ships 8-way sheets.
+export type SpriteContract = "directional" | "directional_walk" | "vertical_hold" | "mass" | "decoy" | "legacy";
+
+export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
+  slime: "directional_walk",
+  bat: "directional_walk",
+  skeleton: "directional",
+  ghost: "directional_walk",
+  spitter: "directional",
+  charger: "directional",
+  burrower: "directional",
+  orbiter: "directional",
+  shielder: "directional",
+  rootward: "directional_walk",
+  echojack: "directional",
+  seamcutter: "directional",
+  caskbellows: "directional",
+  sinderling: "directional",
+  fragment: "mass",
+  echo: "decoy",
+  knell: "decoy",
+  marshal: "directional",
+  toll: "mass",
+  boss: "legacy",
+  marrow: "directional",
+  choir: "mass",
+  weaver: "directional",
+  gilded: "vertical_hold",
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----
