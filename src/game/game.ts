@@ -6,7 +6,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName, PetPose } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { PETS, PET_BALANCE } from "../sim/pets.js";
-import { drawPetBody } from "./petArt.js";
+import { drawPetPlaceholder } from "./petArt.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
@@ -3060,15 +3060,15 @@ export class Game {
     }
   }
 
-  // Procedural pet bodies until the authored sprites land (assets.ts PET_SOURCES). The
-  // shapes live in petArt.ts — one body shared with the companion panel's previews, so
-  // the pet a player equips is exactly the pet that follows them.
+  // Placeholder silhouette until the authored sprites land (assets.ts PET_SOURCES; the art
+  // rule bans procedural character bodies — petArt.ts is a marker, not a creature). Shared
+  // with the companion panel previews so neither surface invents its own body art.
   private renderPetBody(pet: Pet, sx: number, sy: number, pose: PetPose, xf: Xform, tint: string) {
     const { ctx } = this;
     ctx.save();
     ctx.translate(sx + xf.ox, sy + xf.oy);
     ctx.scale(pose.facing * xf.sx, xf.sy);
-    drawPetBody(ctx, pet.kind, tint, this.animClock);
+    drawPetPlaceholder(ctx, pet.kind, tint);
     ctx.restore();
   }
 

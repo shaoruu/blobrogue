@@ -6,8 +6,10 @@
 //
 // Director contract, in full:
 //   - "CHOOSE A COMPANION" header; a grid of every roster pet
-//   - 64px ANIMATED preview per pet (the same procedural body the game renders — petArt.ts —
-//     so what you pick is what follows you; authored art takes over when it lands)
+//   - 64px ANIMATED preview per pet: the AUTHORED sprite the moment it is registered in
+//     assets.ts PET_SOURCES (FAL-generated, AD-approved — the art rule bans procedural
+//     character bodies), and until then the shared neutral silhouette placeholder
+//     (petArt.ts) — a position marker, never fake art
 //   - name + behavior line; EXACT bounded stats straight from PET_BALANCE (petStats — power
 //     is never hidden in flavor copy)
 //   - Equip / Equipped states, server-validated by the host
@@ -16,8 +18,9 @@
 //   - controller/mobile-sized targets (≥44px equip buttons; the whole card is a target)
 
 import { PETS, PET_KINDS, PET_CAPS, petStats } from "../sim/pets.js";
+import { PET_SOURCES } from "../game/assets.js";
 import type { PetKind } from "../sim/types.js";
-import { drawPetBody } from "../game/petArt.js";
+import { drawPetPlaceholder } from "../game/petArt.js";
 
 export interface CompanionPanelState {
   isAccount: boolean;
@@ -39,8 +42,24 @@ export interface CompanionPanel {
 }
 
 const PREVIEW_PX = 64;
-// The body art is authored at sim scale (~26px across); scale it into the 64px stage.
+// Bodies are authored at sim scale (~20-26px across); scale into the 64px stage.
 const PREVIEW_SCALE = 2;
+
+// The registered pet sprites (assets.ts PET_SOURCES), loaded lazily the first time a
+// preview needs one. Empty registry today -> every entry stays undefined and the preview
+// draws the shared silhouette placeholder instead.
+const spriteCache = new Map<PetKind, HTMLImageElement>();
+function petSprite(kind: PetKind): HTMLImageElement | null {
+  const src = PET_SOURCES[kind];
+  if (!src) return null;
+  let img = spriteCache.get(kind);
+  if (!img) {
+    img = new Image();
+    img.src = src;
+    spriteCache.set(kind, img);
+  }
+  return img.complete && img.naturalWidth > 0 ? img : null;
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -121,9 +140,10 @@ export function createCompanionPanel(host: CompanionPanelHost): CompanionPanel {
     drawPreviews(performance.now());
   };
 
-  // One animation loop for every preview: the same idle bob the game gives a resting pet.
-  // A locked preview renders as a dark silhouette (composite over the drawn body). jsdom
-  // (the DOM test) has no canvas backend — a null context simply skips drawing.
+  // One animation loop for every preview: an idle bob over the AUTHORED sprite when it is
+  // registered, else the shared neutral silhouette placeholder (never fake art). A locked
+  // preview darkens to a full silhouette (composite over whatever was drawn). jsdom (the
+  // DOM test) has no canvas backend — a null context simply skips drawing.
   const drawPreviews = (nowMs: number) => {
     const clock = nowMs / 1000;
     for (const [kind, p] of previews) {
@@ -131,7 +151,7 @@ export function createCompanionPanel(host: CompanionPanelHost): CompanionPanel {
       if (!g) continue;
       g.clearRect(0, 0, PREVIEW_PX, PREVIEW_PX);
       const bob = Math.sin(clock * 3 + PET_KINDS.indexOf(kind)) * 2;
-      // Grounding shadow (the wisp floats on its glow instead).
+      // Grounding shadow (the wisp floats instead).
       if (kind !== "lantern_wisp") {
         g.save();
         g.globalAlpha = 0.3;
@@ -141,11 +161,16 @@ export function createCompanionPanel(host: CompanionPanelHost): CompanionPanel {
         g.fill();
         g.restore();
       }
-      g.save();
-      g.translate(PREVIEW_PX / 2, PREVIEW_PX / 2 + bob);
-      g.scale(PREVIEW_SCALE, PREVIEW_SCALE);
-      drawPetBody(g, kind, PETS[kind].tint, clock);
-      g.restore();
+      const sprite = petSprite(kind);
+      if (sprite) {
+        g.drawImage(sprite, 0, bob, PREVIEW_PX, PREVIEW_PX);
+      } else {
+        g.save();
+        g.translate(PREVIEW_PX / 2, PREVIEW_PX / 2 + bob);
+        g.scale(PREVIEW_SCALE, PREVIEW_SCALE);
+        drawPetPlaceholder(g, kind, PETS[kind].tint);
+        g.restore();
+      }
       if (p.isLocked) {
         g.save();
         g.globalCompositeOperation = "source-atop";

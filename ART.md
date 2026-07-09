@@ -46,11 +46,14 @@ falls back to the procedural animation above whenever a sheet is absent (the cur
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.
 
-## Companion pets (art contract — no art shipped yet)
-The three companions (Ember Pup, Lantern Wisp, Bonebird) render **fully procedurally**
-today (distinct code-drawn silhouettes — the muzzle-flash philosophy, never placeholder
-PNGs). The sprite hooks are wired and typed; dropping the art in requires **no code
-changes beyond registering the files** in `src/game/assets.ts`.
+## Companion pets (art contract — REAL SPRITES REQUIRED, none shipped yet)
+Character art in blobrogue is **authored sprites only — procedural code-drawn bodies are
+banned**. Until the FAL-generated, AD-approved pet sprites land, the three companions
+(Ember Pup, Lantern Wisp, Bonebird) render as a minimal tinted **silhouette placeholder**
+(`src/game/petArt.ts`): a position/ownership marker, explicitly not final art, and the
+pets PR does not merge as ready until the real sprites below are wired. The sprite hooks
+are typed and live; dropping the art in requires **no code changes beyond registering the
+files** in `src/game/assets.ts`.
 
 **Pose contract** (`PetPose` in `assets.ts`): every frame the renderer derives
 `clip: "idle" | "walk" | "action"` (`action` plays for ~0.3s after a nip/peck, driven by
@@ -77,6 +80,6 @@ export const PET_SHEETS: Partial<Record<`${PetKind}.${PetClip}`, SheetDef>> = {
 };
 ```
 
-Missing clips fall back `action -> walk -> base -> procedural body`, so partial drops are
-fine. Pets draw at 30px (about half a hero) over an owner-colored accent ring; accent
-tints live in `src/sim/pets.ts` (`PETS[kind].tint`).
+Missing clips fall back `action -> walk -> base -> silhouette placeholder`, so partial
+drops are fine. Pets draw at 30px (about half a hero); accent tints live in
+`src/sim/pets.ts` (`PETS[kind].tint`).

@@ -97,9 +97,11 @@ export interface PetPose {
 //   /sprites/pet_ember_pup.png      /sprites/pet_ember_pup_walk.png    /sprites/pet_ember_pup_action.png
 //   /sprites/pet_lantern_wisp.png   /sprites/pet_lantern_wisp_walk.png /sprites/pet_lantern_wisp_action.png
 //   /sprites/pet_bonebird.png       /sprites/pet_bonebird_walk.png     /sprites/pet_bonebird_action.png
-// Registries are EMPTY until the art lands (the SHEETS pattern: nothing is fetched, no
-// 404s); the renderer draws a fully procedural body per kind until then. To light a pet
-// up, add its entries here — no other code changes.
+// Registries are EMPTY until the FAL-generated, AD-approved art lands (the SHEETS pattern:
+// nothing is fetched, no 404s). Until then pets render as the minimal tinted silhouette
+// placeholder (src/game/petArt.ts) — a position marker, NOT art (the art rule bans
+// procedural character bodies). To light a pet up, add its entries here — no other code
+// changes anywhere.
 export const PET_SOURCES: Partial<Record<PetKind, string>> = {};
 export const PET_SHEETS: Partial<Record<`${PetKind}.${PetClip}`, SheetDef>> = {};
 
