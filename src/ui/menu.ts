@@ -109,11 +109,9 @@ export class Menu {
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
       colA.appendChild(solo);
-      const actrow = el("div", "actrow");
-      const classicBtn = el("button", "secondary", "CLASSIC CO-OP");
-      classicBtn.addEventListener("click", () => void this.showClassicCoop());
-      actrow.append(classicBtn);
-      colA.appendChild(actrow);
+      // One multiplayer product path only: authoritative PLAY ONLINE. The legacy peer-synced
+      // path produced separate enemy/drop simulations and confused players into thinking they
+      // shared a world, so it is intentionally removed from the front door.
       body.appendChild(colA);
 
       // RIGHT column: identity (name, blob color, account) + profile + settings.
