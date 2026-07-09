@@ -199,8 +199,13 @@ interface DuckState {
 class AudioEngine implements WaveEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
+  // Each duckable category is TWO series gain nodes: the user node (slider, curved gain)
+  // feeding a duck node (automation, rests at 1.0, dips during ducks). Sliders write the
+  // user node and ducks write the duck node, so they multiply instead of clobbering each
+  // other's scheduled ramps — a slider move mid-duck lands on the NEW volume.
   private sfxBus: GainNode | null = null;
   private musicBus: GainNode | null = null;
+  private musicDuck: GainNode | null = null;
 
   // Sample cache: buffers keyed by file stem ("pistol_v2", "coin"); loading/failed keyed
   // by SampleSpec.id so a sound is loaded once and, on failure, routes to its safe reuse
@@ -227,8 +232,10 @@ class AudioEngine implements WaveEngine {
   // ---- wave layer state (manifest voices, loops, buses, ducking) ----
   private voiceTellBus: GainNode | null = null;
   private ambientBus: GainNode | null = null;
+  private ambientDuck: GainNode | null = null;
   private uiBus: GainNode | null = null;
   private petBus: GainNode | null = null;
+  private petDuck: GainNode | null = null;
   private waveVoices: WaveVoice[] = [];
   private waveLoops = new Map<string, WaveLoopVoice>();
   private waveBuffers = new Map<string, AudioBuffer>();
@@ -291,10 +298,8 @@ class AudioEngine implements WaveEngine {
 
     // Loud impacts briefly duck the music so they punch through — applied regardless of
     // whether the primary or its safe reuse ends up sounding.
-    if (this.musicBus) {
-      if (name === "playerHurt") this.duck(this.musicBus, settings.musicVol * 0.5, 0.12, 0.5);
-      else if (name === "bossSpawn") this.duck(this.musicBus, settings.musicVol * 0.3, 0.2, 0.8);
-    }
+    if (name === "playerHurt") this.duckMusic(0.5, 0.12, 0.5);
+    else if (name === "bossSpawn") this.duckMusic(0.3, 0.2, 0.8);
 
     const spec = SAMPLES[name];
     if (spec) this.playSample(spec, rate, gain);
@@ -496,6 +501,15 @@ class AudioEngine implements WaveEngine {
     }
   }
 
+  // The automation node of a duckable category (in series after its user node).
+  duckNode(bus: DuckBusId): GainNode | null {
+    switch (bus) {
+      case "music": return this.musicDuck;
+      case "ambient": return this.ambientDuck;
+      case "pet": return this.petDuck;
+    }
+  }
+
   waveVoiceCount(): number {
     return this.waveVoices.length;
   }
@@ -600,22 +614,22 @@ class AudioEngine implements WaveEngine {
     for (const key of [...this.waveLoops.keys()]) this.stopWaveLoop(key, fadeSec);
   }
 
-  // Manifest §1 duck notation: bus gain to base×to, hold, then recover. A deeper duck in
+  // Manifest §1 duck notation: bus to base×to, hold, then recover. A deeper duck in
   // flight wins over a shallower one until it expires — locks never lose their headroom.
+  // Ducks only ever write the category's DUCK node (a multiplier resting at 1.0), so the
+  // user's slider node is untouched and a mid-duck slider move still lands.
   duckWaveBus(duck: WaveDuck): void {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== "running") return;
-    const bus = this.busNode(duck.bus);
-    if (!bus) return;
-    const base = this.waveBusBase(duck.bus);
-    const target = base * duck.to;
+    const node = this.duckNode(duck.bus);
+    if (!node) return;
     const now = ctx.currentTime;
     const active = this.duckStates.get(duck.bus);
-    if (active && now < active.until && active.target <= target) return;
-    bus.gain.cancelScheduledValues(now);
-    bus.gain.setTargetAtTime(target, now, 0.02);
-    bus.gain.setTargetAtTime(base, now + duck.hold, Math.max(0.01, duck.recover) / 3);
-    this.duckStates.set(duck.bus, { target, until: now + duck.hold + duck.recover });
+    if (active && now < active.until && active.target <= duck.to) return;
+    node.gain.cancelScheduledValues(now);
+    node.gain.setTargetAtTime(duck.to, now, 0.02);
+    node.gain.setTargetAtTime(1, now + duck.hold, Math.max(0.01, duck.recover) / 3);
+    this.duckStates.set(duck.bus, { target: duck.to, until: now + duck.hold + duck.recover });
   }
 
   preloadWave(stems: string[]): void {
@@ -645,11 +659,6 @@ class AudioEngine implements WaveEngine {
 
   waveFetchFailures(): number {
     return this.failedWave.size;
-  }
-
-  private waveBusBase(bus: DuckBusId): number {
-    if (bus === "music") return settings.musicVol;
-    return WAVE_BUS_GAIN[bus] * settings.sfxVol;
   }
 
   // Voice budget (§10): 24 global, 4 per event, 3 reserved so a bossLock can ALWAYS get a
@@ -777,17 +786,20 @@ class AudioEngine implements WaveEngine {
     }
   }
 
+  // Slider writes go ONLY to the user nodes (curved gains). Duck automation lives on its
+  // own series nodes, so a mid-duck slider move needs no reset: the duck recovers to 1.0
+  // and the product lands on the new user gain.
   private applyVolumes(): void {
     const ctx = this.ctx;
     const now = ctx?.currentTime ?? 0;
     if (ctx && this.master) {
-      this.master.gain.setTargetAtTime(settings.isMuted ? 0 : settings.masterVol, now, 0.02);
+      this.master.gain.setTargetAtTime(settings.isMuted ? 0 : settings.masterGain, now, 0.02);
     }
     if (ctx && this.sfxBus) {
-      this.sfxBus.gain.setTargetAtTime(settings.sfxVol, now, 0.02);
+      this.sfxBus.gain.setTargetAtTime(settings.sfxGain, now, 0.02);
     }
     if (ctx && this.musicBus) {
-      this.musicBus.gain.setTargetAtTime(settings.musicVol, now, 0.02);
+      this.musicBus.gain.setTargetAtTime(settings.musicGain, now, 0.02);
     }
     if (ctx) {
       const waveBuses: [GainNode | null, number][] = [
@@ -797,22 +809,23 @@ class AudioEngine implements WaveEngine {
         [this.petBus, WAVE_BUS_GAIN.pet],
       ];
       for (const [bus, base] of waveBuses) {
-        if (bus) bus.gain.setTargetAtTime(base * settings.sfxVol, now, 0.02);
+        if (bus) bus.gain.setTargetAtTime(base * settings.sfxGain, now, 0.02);
       }
-      this.duckStates.clear(); // a slider move resets any in-flight duck to the new base
     }
     if (settings.isMuted) this.stopMusic();
     else this.applyMusic();
   }
 
-  private duck(bus: GainNode, toGain: number, holdSec: number, recoverSec: number): void {
+  // Legacy hardcoded music duck (playerHurt/bossSpawn): a relative dip on the music duck
+  // node — never the slider node — recovering to unity.
+  private duckMusic(toRatio: number, holdSec: number, recoverSec: number): void {
     const ctx = this.ctx;
-    if (!ctx) return;
+    const node = this.musicDuck;
+    if (!ctx || !node) return;
     const now = ctx.currentTime;
-    const baseGain = bus === this.musicBus ? settings.musicVol : settings.sfxVol;
-    bus.gain.cancelScheduledValues(now);
-    bus.gain.setTargetAtTime(toGain, now, 0.02);
-    bus.gain.setTargetAtTime(baseGain, now + holdSec, recoverSec / 3);
+    node.gain.cancelScheduledValues(now);
+    node.gain.setTargetAtTime(toRatio, now, 0.02);
+    node.gain.setTargetAtTime(1, now + holdSec, recoverSec / 3);
   }
 
   private ensureContext(): void {
@@ -823,7 +836,9 @@ class AudioEngine implements WaveEngine {
     const ctx = new Ctor();
     this.ctx = ctx;
     const master = ctx.createGain();
-    master.gain.value = settings.isMuted ? 0 : settings.masterVol;
+    master.gain.value = settings.isMuted ? 0 : settings.masterGain;
+    // The compressor sits post-master with no makeup gain, so a low master never pumps
+    // the mix back up.
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -6;
     comp.ratio.value = 12;
@@ -833,26 +848,30 @@ class AudioEngine implements WaveEngine {
     master.connect(comp);
     comp.connect(ctx.destination);
     this.master = master;
-    const sfxBus = ctx.createGain();
-    sfxBus.gain.value = settings.sfxVol;
-    sfxBus.connect(master);
-    this.sfxBus = sfxBus;
-    const musicBus = ctx.createGain();
-    musicBus.gain.value = settings.musicVol;
-    musicBus.connect(master);
-    this.musicBus = musicBus;
-    // Wave-manifest buses (§1). All scale with the SFX slider — one "sound effects"
-    // control governs everything that is not music, preserving the two-slider model.
-    const makeBus = (base: number): GainNode => {
+    // Duckable categories route user node -> duck node -> master; the duck node rests
+    // at 1.0 and only duck automation ever writes it.
+    const makeDuck = (): GainNode => {
+      const duck = ctx.createGain();
+      duck.connect(master);
+      return duck;
+    };
+    const makeBus = (gain: number, parent: GainNode): GainNode => {
       const bus = ctx.createGain();
-      bus.gain.value = base * settings.sfxVol;
-      bus.connect(master);
+      bus.gain.value = gain;
+      bus.connect(parent);
       return bus;
     };
-    this.voiceTellBus = makeBus(WAVE_BUS_GAIN.voiceTell);
-    this.ambientBus = makeBus(WAVE_BUS_GAIN.ambient);
-    this.uiBus = makeBus(WAVE_BUS_GAIN.ui);
-    this.petBus = makeBus(WAVE_BUS_GAIN.pet);
+    this.sfxBus = makeBus(settings.sfxGain, master);
+    this.musicDuck = makeDuck();
+    this.musicBus = makeBus(settings.musicGain, this.musicDuck);
+    // Wave-manifest buses (§1). All scale with the SFX slider — one "sound effects"
+    // control governs everything that is not music, preserving the two-slider model.
+    this.voiceTellBus = makeBus(WAVE_BUS_GAIN.voiceTell * settings.sfxGain, master);
+    this.ambientDuck = makeDuck();
+    this.ambientBus = makeBus(WAVE_BUS_GAIN.ambient * settings.sfxGain, this.ambientDuck);
+    this.uiBus = makeBus(WAVE_BUS_GAIN.ui * settings.sfxGain, master);
+    this.petDuck = makeDuck();
+    this.petBus = makeBus(WAVE_BUS_GAIN.pet * settings.sfxGain, this.petDuck);
   }
 
   private sfxMaxDur(name: SfxName): number {
