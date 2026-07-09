@@ -52,13 +52,10 @@ async function bootNormal() {
 
   function onExit(reason?: ExitReason) {
     if (activeCoop) { activeCoop.leave(); activeCoop = null; }
-    // Stepping out of an online run (Esc, the server was unreachable, or the world-binding
-    // guard tripped) lands back in the room lobby, not the title — the run may still be
-    // live for friends (REJOIN RUN).
+    // Stepping out of an online run (Esc, or the server was unreachable) lands back in the
+    // room lobby, not the title — the run may still be live for friends (REJOIN RUN).
     if (activeOnline && activeOnline.isActive) {
-      const note = reason === "connect_failed" ? "couldn't reach the game server \u2014 try again in a moment"
-        : reason === "world_mismatch" ? "you landed in a different world than your party \u2014 rejoin from this lobby so everyone shares one run"
-        : "";
+      const note = reason === "connect_failed" ? "couldn't reach the game server \u2014 try again in a moment" : "";
       menu.showOnlineLobby(activeOnline, session.profile, note);
       return;
     }
@@ -96,13 +93,8 @@ async function bootNormal() {
           url: defaultGsUrl(),
           // The lobby mints a Convex ticket bound to THIS room's world id (verified against
           // room membership server-side) — that binding is what puts the party in one world.
-          // The game additionally VERIFIES every snapshot's world id against this room code
-          // and bails back here on a mismatch (never a separate simulation).
           getTicket: () => lobby.mintTicket(),
           roomCode: lobby.code,
-          // The live lobby roster, so the HUD can flag expected members whose authoritative
-          // socket hasn't produced a body in the world yet (per-player CONNECTING status).
-          getPartyNames: () => lobby.players().map((p) => p.name),
         },
         profile,
         selfColorIndex: session.colorIndex,

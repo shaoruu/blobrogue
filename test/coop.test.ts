@@ -1,8 +1,7 @@
 // Dedicated co-op experience suite (post-playtest hardening):
 //   1. spectate — pure target selection/cycling + a HEADLESS CLIENT integration that boots
 //      the real Game over WSTransport with a scripted socket: camera hand-off on down,
-//      cycling, the spec uplink, zeroed gameplay inputs while down, camera return on
-//      revive, and the Sev-0 world-mismatch bail-to-lobby
+//      cycling, the spec uplink, zeroed gameplay inputs while down, camera return on revive
 //   2. the party blessing gate at 2-4 players — every member (downed included) gets and
 //      answers its OWN offer; early picks don't descend; disconnect + the 60s sim-clock
 //      timeout release the gate; nobody can be damaged while choosing
@@ -10,10 +9,12 @@
 //      early guarantee (>= P before the first boss), determinism, anti-junk distinctness +
 //      melee/ranged mix, prefer-unowned rolls, dealer party stock + buy flow, the boss
 //      chest arsenal, placement safety, and preserved scarcity per person
-//   4. same-world wire coherence — snapshots carry the authoritative world id + the pending
-//      blessing party; teammates always ride snapshots; revive progress reaches the
-//      reviver; spectate-centered interest keeps a downed player's view coherent; the
-//      client's expected room->world mapping agrees byte-for-byte with the Convex minter
+//   4. same-world wire coherence for THIS branch's fields — the pending blessing party +
+//      exit readiness ride every snapshot identically for every client; teammates always
+//      ride snapshots; revive progress reaches the reviver; spectate-centered interest
+//      keeps a downed player's view coherent. (The world-id echo / lobby-to-world
+//      readiness infrastructure is the Sev-0 coherence system's — PR #39 — not duplicated
+//      here.)
 //
 // Run: npm run test:coop
 
@@ -37,12 +38,10 @@ import { ITEMS } from "../src/sim/items.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import * as C from "../src/sim/constants.js";
 import {
-  buildSnapshot, jsonCodec, eventScope, worldIdForRoom, type ServerMsg,
+  buildSnapshot, jsonCodec, eventScope, type ServerMsg,
 } from "../src/net/protocol.js";
-import { worldIdForRoomCode } from "../convex/gsTicketCore.js";
 import { livingTeammates, resolveSpectateTarget, cycleSpectateTarget } from "../src/game/spectate.js";
 import { Game } from "../src/game/game.js";
-import type { ExitReason } from "../src/game/game.js";
 import { Hud } from "../src/game/hud.js";
 import { Minimap } from "../src/game/minimap.js";
 import { BlessingOverlay } from "../src/ui/blessing.js";
@@ -190,9 +189,8 @@ async function headlessClientSpectateTests(): Promise<void> {
   mateA.x = self.x + 500; mateA.y = self.y + 60;
   mateB.x = self.x - 380; mateB.y = self.y + 220;
 
-  let exitReason: ExitReason | undefined;
   let exits = 0;
-  const game: any = new Game(domCanvas as any, domMinimap as any, domOverlay as any, noop, (reason?: ExitReason) => { exits++; exitReason = reason; });
+  const game: any = new Game(domCanvas as any, domMinimap as any, domOverlay as any, noop, () => { exits++; });
   game.start({
     mode: "online",
     online: { url: "ws://scripted", getTicket: () => Promise.resolve("dev:test"), roomCode: "ABCD" },
@@ -203,11 +201,11 @@ async function headlessClientSpectateTests(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
   const sock = ScriptedSocket.latest!;
   sock.onopen?.();
-  check("client sent the v4 join", sock.sentOfType("join").length === 1);
+  check("client sent the versioned join", sock.sentOfType("join").length === 1);
 
   const deliverSnap = (full = false): void => {
     world.tick++;
-    sock.deliver(buildSnapshot(world, "s0", 0, [], 0, full, { worldId: worldIdForRoom("ABCD") }));
+    sock.deliver(buildSnapshot(world, "s0", 0, [], 0, full, {}));
   };
   deliverSnap(true);
   for (let i = 0; i < 3; i++) game.tick(1 / 60);
@@ -298,14 +296,8 @@ async function headlessClientSpectateTests(): Promise<void> {
   game.tick(1 / 60);
   check("a satisfied gate clears the exit readout (the blessing gate takes over)", game.exitWaitLabel() === null);
 
-  check("no exit fired during the whole down/spectate/revive pass", exits === 0);
-
-  section("headless client: a snapshot from the WRONG world bails to the lobby (Sev-0 guard)");
-  world.tick++;
-  sock.deliver(buildSnapshot(world, "s0", 0, [], 0, false, { worldId: worldIdForRoom("ZZZZ") }));
-  game.tick(1 / 60);
-  check("mismatched world id exits the run", exits === 1);
-  check("the exit names the mismatch (the lobby explains and regroups)", exitReason === "world_mismatch", `reason=${exitReason}`);
+  check("no exit fired during the whole down/spectate/revive/exit pass", exits === 0);
+  game.stop();
 }
 
 // ---- 2. the party blessing gate at 2-4 players ----
@@ -693,27 +685,20 @@ function weaponEconomyTests(): void {
   }
 }
 
-// ---- 4. same-world wire coherence ----
+// ---- 4. same-world wire coherence (this branch's fields; the world-id echo is PR #39's) ----
 
 function wireCoherenceTests(): void {
-  section("wire: the client's expected room->world mapping agrees with the Convex minter");
-  for (const code of ["ABCD", "abcd", " kLmN "]) {
-    check(`worldIdForRoom(${JSON.stringify(code)}) matches the minted claim`,
-      worldIdForRoom(code) === worldIdForRoomCode(code), `${worldIdForRoom(code)} vs ${worldIdForRoomCode(code)}`);
-  }
-
-  section("wire: snapshots carry the authoritative world id + the pending blessing party");
+  section("wire: the pending blessing party rides every snapshot identically");
   {
     const { w, ps } = partyAtExit(0x51D0, 2);
     stepWorldPhase(w, DT, []); // raises both exit-gate offers
-    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, { worldId: "room:ABCD" });
-    const snapB = buildSnapshot(w, ps[1].id, 0, [], 0, false, { worldId: "room:ABCD" });
+    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
+    const snapB = buildSnapshot(w, ps[1].id, 0, [], 0, false, {});
     if (snapA.t !== "snap" || snapB.t !== "snap") { check("snapshots built", false); return; }
-    check("world id rides every snapshot", snapA.wid === "room:ABCD" && snapB.wid === snapA.wid);
     check("both clients read the same pending party",
       snapA.pnd.slice().sort().join(",") === snapB.pnd.slice().sort().join(",") && snapA.pnd.length === 2, snapA.pnd.join(","));
     const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snapA));
-    check("wid + pnd survive the codec round trip", decoded.t === "snap" && decoded.wid === "room:ABCD" && decoded.pnd.length === 2);
+    check("pnd survives the codec round trip", decoded.t === "snap" && decoded.pnd.length === 2);
     chooseBlessingInWorld(w, ps[0].id, ITEMS[0]);
     const after = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
     check("a resolved pick leaves the pending set", after.t === "snap" && after.pnd.length === 1 && after.pnd[0] === ps[1].id);

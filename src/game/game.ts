@@ -13,7 +13,7 @@ import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR, worldIdForRoom } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget } from "./spectate.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
@@ -47,11 +47,12 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
-// Why a run exited without a game over: the player quit, an online connection never came
-// up, or the authoritative server bound this client to a DIFFERENT world than its lobby
-// room (the Sev-0 separate-simulation guard). Each lands back on the lobby/menu with an
-// explanation instead of silence.
-export type ExitReason = "quit" | "connect_failed" | "world_mismatch";
+// Why a run exited without a game over: the player quit, or an online connection never came
+// up (lets the menu land back on the lobby with an explanation instead of silence). The
+// wrong-world assertion (bailing when the server bound a different world than the lobby
+// room) lives in the Sev-0 coherence system (PR #39), which owns the lobby-to-authoritative
+// trust chain; this branch consumes it at integration.
+export type ExitReason = "quit" | "connect_failed";
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -59,12 +60,8 @@ export interface OnlineOptions {
   url: string;
   getTicket: () => Promise<string>;
   // The lobby room code this run belongs to (shown in the HUD so friends can be invited
-  // mid-run, and VERIFIED against the snapshot's authoritative world id); null for direct
-  // dev joins.
+  // mid-run); null for direct dev joins.
   roomCode: string | null;
-  // The live lobby roster (display names), so the HUD can show which expected party members
-  // have no body in the authoritative world yet (per-player CONNECTING status).
-  getPartyNames?: () => string[];
 }
 
 export interface StartOptions {
@@ -349,7 +346,6 @@ export class Game {
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
   private onlineRoomCode: string | null = null; // lobby room code for the HUD label (online only)
-  private onlineOpts: OnlineOptions | null = null; // live online config (roster provider, room code)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
   // one path; sentSpectateId tracks what the server was last told (interest centering).
@@ -596,7 +592,6 @@ export class Game {
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
     this.onlineRoomCode = opts.online?.roomCode ?? null;
-    this.onlineOpts = opts.online ?? null;
     this.spectateId = null;
     this.sentSpectateId = null;
     let floor: number;
@@ -883,17 +878,6 @@ export class Game {
         this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor) }));
         // The run properly begins at the first reveal (the connect veil isn't run time).
         if (isFirstReveal) this.runStart = performance.now();
-      }
-    }
-
-    // Sev-0 guard: every snapshot names the authoritative world this socket is bound to. If
-    // it is NOT this lobby room's world, playing on would be a separate simulation dressed
-    // up as co-op (the live incident) — bail to the lobby with an explanation instead.
-    if (this.mode === "online" && this.wsTransport && this.onlineRoomCode !== null) {
-      const wid = this.wsTransport.worldId();
-      if (wid !== null && wid !== worldIdForRoom(this.onlineRoomCode)) {
-        this.quitToMenu("world_mismatch");
-        return;
       }
     }
 
@@ -1975,26 +1959,14 @@ export class Game {
       const count = this.coop.remotePlayers().length + 1;
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     } else if (this.mode === "online" && this.wsTransport) {
-      const remotes = this.wsTransport.remotePlayers();
-      const count = remotes.length + 1;
+      // The verified world-id echo + per-member connected/reconnecting readiness readout
+      // belong to the Sev-0 coherence system (PR #39); until it lands this keeps the plain
+      // lobby label, and integration swaps in its authoritative roster line.
+      const count = this.wsTransport.remotePlayers().length + 1;
       const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
-      // The AUTHORITATIVE room code — parsed from the snapshot's world id — trumps the
-      // lobby's local string: what the HUD shows is what the server actually bound, so two
-      // screens reading the same code PROVES one shared world. (It also lets a friend be
-      // invited mid-run.) Falls back to the lobby code until the first snapshot.
-      const wid = this.wsTransport.worldId();
-      const code = wid !== null && wid.startsWith("room:") ? wid.slice(5) : this.onlineRoomCode;
-      const room = code ? ` \u00b7 ${code}` : "";
-      // Per-player CONNECTING status: lobby members with no body in the authoritative world
-      // yet (names are the verified ticket identities, so the match is honest).
-      const expected = this.onlineOpts?.getPartyNames?.() ?? [];
-      const present = new Set(remotes.map((r) => r.name));
-      if (this.profile?.name) present.add(this.profile.name);
-      const missing = expected.filter((n) => !present.has(n));
-      const party = expected.length > count && missing.length > 0
-        ? ` \u00b7 ${count}/${expected.length} \u2014 CONNECTING: ${missing.join(", ")}`
-        : ` \u00b7 ${count} player${count === 1 ? "" : "s"}`;
-      coopLabel = `${live}${room}${party}`;
+      // Surface the room code mid-run so a friend can still be invited into this world.
+      const room = this.onlineRoomCode ? ` \u00b7 ${this.onlineRoomCode}` : "";
+      coopLabel = `${live}${room} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     }
     const comboTier = this.comboTier();
     this.hud.update({

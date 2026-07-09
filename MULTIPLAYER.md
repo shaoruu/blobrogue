@@ -286,24 +286,19 @@ The mint/verify byte agreement (now including the `wld`/`nm`/`cl` claims) is loc
 `server/test/ticket.test.ts`; the room isolation + identity flow end-to-end by
 `server/test/rooms.test.ts`.
 
-### Same-world proof (the Sev-0 guard)
+### Same-world coherence (division of labor)
 
 A live playtest incident had one player NOT bound to the party's room — two clients played
-visually-similar but separate simulations. Three layers now make that structurally
-impossible to miss:
-
-1. **`wid` on every snapshot.** The server stamps the authoritative world id it bound the
-   connection to. The client compares it against `worldIdForRoom(lobbyCode)` (the same
-   mapping the Convex minter uses — agreement locked by test) and, on any mismatch, ends
-   the run and returns to the lobby with an explanation instead of playing on.
-2. **The HUD shows the AUTHORITATIVE room code** (parsed from `wid`, not the local lobby
-   string) — two screens reading the same code IS the shared-world proof — plus a
-   per-player `CONNECTING: <name>` status for lobby members whose socket has not produced
-   a body in the world yet.
-3. **Two-real-client integration** (`server/test/coop.test.ts`) asserts both wires agree
-   on seed/floor/rev/world id, enemy ids+positions, pickup ids/positions, chest ids/state,
-   and each other's verified ticket names/colors — under production-default full snapshots
-   AND with interest filtering re-enabled.
+visually-similar but separate simulations. The permanent lobby-to-authoritative trust
+chain — the world-id snapshot echo + client assertion, the verified per-member readiness
+veil at START, reconnect grace/resume, and the one-multiplayer-path cleanup — is the
+**Sev-0 coherence system** (PR #39); this branch consumes its interfaces rather than
+duplicating them. What THIS branch adds on top is experience-level coherence: the party
+gates (`pnd`, `exr`) ride every snapshot as server-derived state, party members are never
+interest-filtered out, and `server/test/coop.test.ts` asserts both wires agree on
+seed/floor/rev, enemy ids+positions, pickup ids/positions, chest ids/state, and each
+other's verified ticket names/colors — under production-default full snapshots AND with
+interest filtering re-enabled.
 
 ### Down, revive, spectate (authoritative)
 

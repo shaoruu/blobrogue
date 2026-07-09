@@ -52,7 +52,6 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
         identities,
-        worldId: room.id,
         ...(center !== null ? { viewCenter: center } : {}),
       });
       this.sendRaw(conn, this.codec.encodeServer(msg), false);
@@ -118,7 +117,6 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
       interestRadius: 0,
       identities: this.identitiesFor(room),
-      worldId: room.id,
     });
     this.sendRaw(conn, this.codec.encodeServer(msg), true);
   }

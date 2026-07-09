@@ -687,14 +687,6 @@ export class WSTransport implements Transport {
     return this.latestSnap?.over ?? false;
   }
 
-  // The authoritative world id this connection is bound to ("room:CODE" for lobby rooms).
-  // The game compares it against the lobby's expected code and bails to the lobby on a
-  // mismatch — nobody ever plays a separate simulation believing it is shared. null until
-  // the first snapshot.
-  worldId(): string | null {
-    return this.latestSnap?.wid ?? null;
-  }
-
   // Party members whose blessing picks currently hold the descend gate (authoritative;
   // drives the "WAITING FOR N PLAYERS…" readout).
   pendingBlessingParty(): PlayerId[] {

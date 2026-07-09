@@ -54,7 +54,7 @@ const { Hud } = await import("../src/game/hud.js");
 const { Minimap } = await import("../src/game/minimap.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { createWorld, spawnPlayerInWorld, loadFloorIntoWorld, stepWorldPhase, devSpawnEnemy } = await import("../src/sim/world.js");
-const { buildSnapshot, jsonCodec, worldIdForRoom } = await import("../src/net/protocol.js");
+const { buildSnapshot, jsonCodec } = await import("../src/net/protocol.js");
 const { REVIVE } = await import("../src/sim/balance.js");
 const { TILE } = await import("../src/sim/types.js");
 type ServerMsg = import("../src/net/protocol.js").ServerMsg;
@@ -107,7 +107,6 @@ async function capture(scene: Scene): Promise<void> {
   const deliver = (full: boolean) => {
     scene.world.tick++;
     sock.deliver(buildSnapshot(scene.world, scene.selfId, 0, [], 0, full, {
-      worldId: worldIdForRoom("LOVE"),
       identities: scene.identities,
     }));
   };

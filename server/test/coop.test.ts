@@ -1,15 +1,17 @@
-// Same-world co-op correctness over REAL sockets (the Sev-0 regression suite). The live
-// incident: one player wasn't bound to the party's authoritative room and the two clients
-// played visually-similar but SEPARATE simulations (different enemies, different drops).
-// Two real WSTransport clients join through room-scoped tickets and the suite asserts:
-//   1. identical world identity on both wires — wid, seed, floor, rev
-//   2. identical entity truth on both wires — enemy ids/positions, pickup ids/positions,
-//      chest ids/state — under production-default FULL snapshots (interest off)
-//   3. verified ticket colors/names reach the OTHER client's wire (remote tint sync)
-//   4. the interact intent rides input frames into the sim, and a held E revives a downed
+// Same-world co-op correctness over REAL sockets for THIS branch's semantics. (The full
+// lobby-to-authoritative trust chain — world-id echo, readiness veil, resume — is the
+// Sev-0 coherence system's own suite, PR #39; this file asserts the co-op EXPERIENCE
+// features against real clients.) Two real WSTransport clients join through room-scoped
+// tickets and the suite asserts:
+//   1. identical world truth on both wires — seed, floor, rev, enemy ids/positions,
+//      pickup ids/positions, chest ids/state — under production-default FULL snapshots
+//   2. verified ticket colors/names reach the OTHER client's wire (remote tint sync)
+//   3. the interact intent rides input frames into the sim, and a held E revives a downed
 //      teammate end-to-end over the socket
-//   5. the spec message sets the server-side spectate target (view centering) and is
+//   4. the spec message sets the server-side spectate target (view centering) and is
 //      ignored for junk targets
+//   5. wipe -> replay rounds each host a FRESH shared world, and exit readiness (exr)
+//      mirrors the descend gate identically for every client
 //   6. coherent interest filtering when re-enabled: co-located clients agree on the nearby
 //      set, far non-boss entities drop for both, and the party always rides the snapshot
 // Run: npm run test:coop (in server/).
@@ -49,8 +51,7 @@ async function main(): Promise<void> {
       const sa = a.transport.getLatestSnapshot()!;
       const sb = b.transport.getLatestSnapshot()!;
 
-      check("both wires name the SAME authoritative world", sa.wid === "room:LOVE" && sb.wid === "room:LOVE", `a=${sa.wid} b=${sb.wid}`);
-      check("client transport surfaces the world id (HUD room-code source)", a.transport.worldId() === "room:LOVE");
+      check("both clients bound to the room's one world", s.server.getWorld("room:LOVE")?.playerCount === 2);
       check("same seed on both wires", sa.seed === sb.seed);
       check("same floor on both wires", sa.floor === sb.floor && sa.floor === 1);
       check("same world revision on both wires", sa.rev === sb.rev);
@@ -248,7 +249,6 @@ async function main(): Promise<void> {
         !sa.enemies.some((e) => e.id === farEnemy.id) && !sb.enemies.some((e) => e.id === farEnemy.id));
       check("the teammate still rides both snapshots (party never filtered)",
         sa.players.length === 1 && sb.players.length === 1);
-      check("world identity rides filtered snapshots too", sa.wid === "room:INTR" && sb.wid === sa.wid);
 
       a.stop(); b.stop();
     } finally { await s.close(); }

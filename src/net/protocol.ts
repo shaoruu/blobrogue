@@ -44,12 +44,12 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // v5: the co-op experience pass — input carries the interact intent (`act`, the explicit
 // revive-channel key), a semantic `spec` message names a downed player's spectate target
 // (the server centers that client's interest view on it), PlayerWire carries `rv`
-// (authoritative revive progress for the reviver-side ring), snapshots carry `wid` (the
-// authoritative world id, so a client can PROVE it shares its party's room), `pnd` (the
+// (authoritative revive progress for the reviver-side ring), snapshots carry `pnd` (the
 // players whose blessing picks currently hold the descend gate) and `exr` (the living
 // players standing at the cleared exit — the descend gate's own readiness predicate), and
 // dealer_weapon pickups stock the party shop. Client->server messages changed, so the
-// version bumps.
+// version bumps. (The world-id echo + verified party roster ride the parallel Sev-0
+// coherence work — see PR #39 — which this branch consumes at integration, not duplicates.)
 export const PROTOCOL_VERSION = 5;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
@@ -64,15 +64,6 @@ export const INTERP_DELAY_MAX_MS = 300;
 // snapshot's authoritative seed/floor/rev.
 export const STAGE_B_SEED = 0x51a9e_b0b;
 export const STAGE_B_FLOOR = 1;
-
-// The world id a lobby room code maps to — what the client EXPECTS in every snapshot's `wid`
-// once it joined through that room. MUST agree with convex/gsTicketCore.worldIdForRoomCode
-// (the minter that binds the verified claim); the agreement is locked by test. A mismatch at
-// runtime means this client is NOT in its party's world, and the game bails to the lobby
-// rather than play a separate simulation.
-export function worldIdForRoom(code: string): string {
-  return "room:" + code.trim().toUpperCase();
-}
 
 // ---- wire structs (tight plain-data; short keys keep JSON small + debuggable) ----
 
@@ -206,10 +197,6 @@ export type ServerMsg =
       over: boolean;             // terminal run state (party wiped) — derivable from STATE
       selfId: PlayerId;          // this client's server-assigned id (on every snap so a dropped
                                  // join snapshot never loses identity)
-      wid: string;               // authoritative world id ("room:CODE" / the public default) —
-                                 // the client PROVES it shares its party's room from this, and
-                                 // bails to the lobby on a mismatch instead of playing a
-                                 // separate simulation ("" from direct/test snapshot builds)
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
@@ -639,8 +626,6 @@ function decodeServerMsg(raw: string): ServerMsg {
   const o = obj(parsed, "frame");
   switch (o.t) {
     case "snap": {
-      const wid = o.wid;
-      if (typeof wid !== "string" || wid.length > 64) throw new ProtocolError("bad wid");
       const pidList = (k: "pnd" | "exr"): PlayerId[] => arr(o[k], k).map((p) => {
         if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError(`bad ${k} entry`);
         return p;
@@ -655,7 +640,6 @@ function decodeServerMsg(raw: string): ServerMsg {
         full: boolOf(o, "full"),
         over: boolOf(o, "over"),
         selfId: shortStr(o, "selfId", 64),
-        wid,
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
@@ -859,9 +843,6 @@ export interface SnapshotOpts {
   // view follows the teammate they are watching, so their snapshots stay coherent with what
   // their camera shows. Omitted => centered on self (the ordinary case).
   viewCenter?: { x: number; y: number };
-  // The authoritative world id this snapshot belongs to (room binding proof on the wire).
-  // Omitted (direct/test builds) encodes as "".
-  worldId?: string;
 }
 
 // Interest management: a client always receives its OWN player, EVERY party member (the
@@ -939,7 +920,6 @@ export function buildSnapshot(
     full,
     over: w.isRunOver,
     selfId: selfPid,
-    wid: opts.worldId ?? "",
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),
