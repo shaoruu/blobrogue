@@ -12,7 +12,7 @@ import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, EnemyKind, WeaponId } from "../src/sim/types.js";
 import { DIFFICULTIES, DIFFICULTY_IDS, bossHpForFloor, floorThreat, activeThreatCap, BIOME_PRESSURE } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
-import { createEnemy, spawnFloorEnemies, threatCostOf, isBossFloor, enemyHpForFloor } from "../src/sim/enemies.js";
+import { createEnemy, spawnFloorEnemies, threatCostOf, enemyHpForFloor } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import { itemById } from "../src/sim/items.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
@@ -85,7 +85,6 @@ function measureHearts(difficulty: Difficulty, kills: number): number {
   const w = createWorld(0x5EED5, 2, { isSandbox: true, difficulty });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
-  let hearts = 0;
   for (let i = 0; i < kills; i++) {
     const e = devSpawnEnemy(w, "slime", p.x + 300, p.y);
     const b: Bullet = {
@@ -93,11 +92,9 @@ function measureHearts(difficulty: Difficulty, kills: number): number {
       damage: 999, color: "#fff", pierce: 0, hitList: null, isCrit: false,
     };
     w.bullets.push(b);
-    const evs = step(w, { seq: i, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false });
-    for (const ev of evs) if (ev.t === "pickup" || ev.t === "lootDrop") { /* pickups counted below */ }
-    hearts = w.pickups.filter((k) => k.kind === "heart").length;
+    step(w, { seq: i, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false });
   }
-  return hearts;
+  return w.pickups.filter((k) => k.kind === "heart").length;
 }
 
 function fmt(n: number, digits = 1): string {
