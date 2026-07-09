@@ -29,6 +29,7 @@ const { ShopPanel } = await import("../src/ui/shopPanel.js");
 const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView, shopFooterCopy, isResolvedShopStatus } = await import("../src/ui/shopCopy.js");
 const { buildShopState, shopViewerOf } = await import("../src/sim/shop.js");
 const { generateDungeon } = await import("../src/sim/dungeon.js");
+const { bossDisplayName } = await import("../src/sim/enemies.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
 const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
@@ -61,7 +62,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
       wslot("shotgun", "Shotgun", true),
       wslot("tesla", "Tesla", false),
     ],
-    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
+    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
@@ -415,6 +416,24 @@ function hierarchyTests(): void {
   check("a boss WINS the lane: bar shown, normal objective hidden",
     root.querySelector("[data-bossbar]")!.classList.contains("show") && !objective.classList.contains("show"));
   check("the lane marks boss so the combo yields at 70%", lane.classList.contains("boss"));
+
+  section("boss bar label: the tracked boss's authored name (flavor-spec canon)");
+  const bossLabel = root.querySelector<HTMLElement>("[data-bossname]")!;
+  const rosterNames = {
+    boss: "The Slime King",
+    marrow: "Marrow",
+    weaver: "The Weaver",
+    gilded: "The Gilded Warden",
+    choir: "The Hollow Choir",
+  } as const;
+  for (const kind of Object.keys(rosterNames) as (keyof typeof rosterNames)[]) {
+    check(`kind "${kind}" resolves to its authored name`, bossDisplayName(kind) === rosterNames[kind], bossDisplayName(kind));
+    hud.update(mkState({ isBossActive: true, bossHpFrac: 0.6, bossName: bossDisplayName(kind) }));
+    check(`the bar titles the ${kind} fight with its real name`,
+      bossLabel.textContent === rosterNames[kind], bossLabel.textContent ?? "");
+  }
+  hud.update(mkState({ isBossActive: true, bossHpFrac: 0.6, bossName: "" }));
+  check("an unauthored kind falls back to the generic BOSS label", bossLabel.textContent === "BOSS");
   hud.update(mkState({ isBossActive: false, combo: 4, comboMult: 1.5, comboFrac: 0.5 }));
   check("boss down: the lane releases and the objective returns",
     !lane.classList.contains("boss") && objective.classList.contains("show"));
