@@ -103,9 +103,13 @@ export function buildSlot(w: HudState["weapons"][number], index: number): HTMLEl
   return slot;
 }
 
-// One blessing slot: a compact icon-only square with the blessing's tint as its border and
-// LV1-3 shown as pips under the icon — no text in the row itself, so many blessings stay one
-// tidy strip. The full name, the current effect, and the exact next-level delta live in the
+// UI Director gate: the main-HUD blessing row shows at most this many icon slots; the rest
+// collapse into one "+N" overflow chip and the FULL build list lives in the hold-Tab panel.
+export const MAX_BUFF_SLOTS = 8;
+
+// One blessing slot: a compact 24px icon-only square with the blessing's tint as its border
+// and a small LV badge in the corner — no text in the row itself, so many blessings stay one
+// tidy strip. The full name, the exact current effect, and the next-level delta live in the
 // hover/focus tooltip (and in the aria-label for screen readers). Exported for the DOM suite.
 export function buildBuffChip(it: HudState["items"][number]): HTMLElement {
   const chip = el("span", "");
@@ -117,14 +121,9 @@ export function buildBuffChip(it: HudState["items"][number]): HTMLElement {
     `${it.name}, level ${it.count}: ${it.desc}` + (it.nextDesc ? ` Next level: ${it.nextDesc}` : ""));
   chip.appendChild(itemIconEl(it.id, it.glyph));
 
-  const pips = el("span", "");
-  pips.className = "pips";
-  for (let lv = 1; lv <= MAX_ITEM_LEVEL; lv++) {
-    const pip = el("span", "");
-    pip.className = "pip" + (lv <= it.count ? " lit" : "");
-    pips.appendChild(pip);
-  }
-  chip.appendChild(pips);
+  const lv = el("span", "", String(it.count));
+  lv.className = "lv" + (it.count >= MAX_ITEM_LEVEL ? " max" : "");
+  chip.appendChild(lv);
 
   const tip = el("span", "");
   tip.className = "tip";
@@ -142,6 +141,25 @@ export function buildBuffChip(it: HudState["items"][number]): HTMLElement {
     tipMax.className = "tx max";
     tip.appendChild(tipMax);
   }
+  chip.appendChild(tip);
+  return chip;
+}
+
+// The "+N" overflow chip when the build outgrows the row: points at the hold-Tab panel,
+// which always lists the complete build. Exported for the DOM suite.
+export function buildMoreChip(hiddenCount: number): HTMLElement {
+  const chip = el("span", "", `+${hiddenCount}`);
+  chip.className = "hb-buff more";
+  chip.tabIndex = 0;
+  chip.setAttribute("role", "img");
+  chip.setAttribute("aria-label", `${hiddenCount} more blessings. Hold Tab for the full build.`);
+  const tip = el("span", "");
+  tip.className = "tip";
+  const tipName = el("span", "", `${hiddenCount} MORE`);
+  tipName.className = "tn";
+  const tipHint = el("span", "", "HOLD TAB FOR THE FULL BUILD");
+  tipHint.className = "tx";
+  tip.append(tipName, tipHint);
   chip.appendChild(tip);
   return chip;
 }
@@ -280,7 +298,7 @@ export class Hud {
     card.appendChild(el("h2", "color:var(--amber);font:14px var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
     this.statsBody = el("div", "display:flex;flex-direction:column;gap:6px;");
     card.appendChild(this.statsBody);
-    card.appendChild(el("p", "margin-top:16px;font:8px var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "HOLD TAB TO VIEW \u00b7 RELEASE TO RESUME"));
+    card.appendChild(el("p", "margin-top:16px;font:8px var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "RELEASE TAB TO CLOSE"));
     this.statsPanel.appendChild(card);
     root.appendChild(this.statsPanel);
 
@@ -475,12 +493,16 @@ export class Hud {
     this.updateCombo(s);
 
     // Rebuild the blessing chips only when a blessing is picked. Gated on total picks
-    // (sum of levels) so a repeat pick that just levels a chip still refreshes it.
+    // (sum of levels) so a repeat pick that just levels a chip still refreshes it. The row
+    // is capped at MAX_BUFF_SLOTS: past that, the last slot becomes a "+N" overflow chip
+    // and the hold-Tab panel carries the full build.
     const totalPicks = s.items.reduce((n, it) => n + it.count, 0);
     if (totalPicks !== this.prevItemsCount) {
       this.prevItemsCount = totalPicks;
       this.buffsEl.replaceChildren();
-      for (const it of s.items) this.buffsEl.appendChild(buildBuffChip(it));
+      const shownCount = s.items.length > MAX_BUFF_SLOTS ? MAX_BUFF_SLOTS - 1 : s.items.length;
+      for (const it of s.items.slice(0, shownCount)) this.buffsEl.appendChild(buildBuffChip(it));
+      if (s.items.length > shownCount) this.buffsEl.appendChild(buildMoreChip(s.items.length - shownCount));
       this.buffsEl.classList.toggle("show", s.items.length > 0);
     }
   }

@@ -50,15 +50,19 @@
         display:flex; flex-direction:column; align-items:center; gap:7px; max-width:min(94vw,940px); }
       /* The slots row is pointer-enabled: click equips, drag reorders. Everything outside
          the slots/chips stays pointer-transparent so gameplay aim/fire is never blocked. */
-      .hb-slots{ position:relative; display:flex; flex-wrap:wrap; justify-content:center; gap:6px; pointer-events:auto; }
-      .hb-slot{ position:relative; width:84px; padding:9px 4px 7px; display:flex; flex-direction:column; align-items:center; gap:5px;
+      .hb-slots{ position:relative; display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-end; gap:6px; pointer-events:auto; }
+      /* UI Director gate: the EQUIPPED slot is the dominant one — unequipped slots are the
+         compact base size, the lit slot grows and lifts. */
+      .hb-slot{ position:relative; width:66px; padding:9px 4px 7px; display:flex; flex-direction:column; align-items:center; gap:5px;
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4);
-        transition:transform .06s steps(2),box-shadow .06s steps(2);
+        transition:transform .06s steps(2),box-shadow .06s steps(2),width .06s steps(2);
         cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none; }
       .hb-slot:hover{ box-shadow:inset 0 0 0 2px var(--dun-4),0 3px 0 rgba(0,0,0,.4); }
       .hb-slot:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:2px; }
-      .hb-slot.on{ background:rgba(23,18,39,.92); transform:translateY(-4px);
+      .hb-slot .hb-icon, .hb-slot .hb-icon img{ width:30px; height:30px; }
+      .hb-slot.on{ width:84px; background:rgba(23,18,39,.92); transform:translateY(-4px);
         box-shadow:inset 0 0 0 2px var(--amber),0 0 14px rgba(255,180,59,.4),0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.on .hb-icon, .hb-slot.on .hb-icon img{ width:40px; height:40px; }
       /* drag/drop feedback: dimmed source slot, floating ghost under the cursor, and an
          amber insertion bar at the drop gap. Ghost + bar are overlays — zero layout shift. */
       .hb-slot.dragging{ opacity:.35; }
@@ -70,6 +74,12 @@
         font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); pointer-events:none;
         text-shadow:0 1px 0 var(--dun-0); opacity:0; transition:opacity .3s ease; }
       .hb-hint.show{ opacity:1; }
+      /* UI Director gate: narrow viewports drop the weapon-name labels but keep icons + keys. */
+      @media (max-width:900px){
+        .hb-name{ display:none; }
+        .hb-slot{ width:44px; }
+        .hb-slot.on{ width:56px; }
+      }
       .hb-key{ position:absolute; top:3px; left:3px; min-width:14px; height:14px; display:flex; align-items:center; justify-content:center;
         font-family:var(--f-logo); font-size:8px; line-height:1; color:var(--dun-4); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
       .hb-slot.on .hb-key{ color:var(--dun-0); background:var(--amber); box-shadow:inset 0 0 0 1px var(--amber-hi); }
@@ -77,21 +87,25 @@
       .hb-icon img{ width:40px; height:40px; image-rendering:pixelated; }
       .hb-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; line-height:1; color:var(--bone); opacity:.8; max-width:100%; overflow:hidden; white-space:nowrap; }
       .hb-slot.on .hb-name{ color:var(--amber-hi); opacity:1; }
-      /* blessing slots on the row above the weapon slots: compact icon-only squares (tint
-         border + Lv1-3 pips), so many blessings never wrap into a wall of text. Full name,
-         current effect, and the next-level delta live in the hover/focus tooltip. */
+      /* blessing slots on the row above the weapon slots (UI Director gate): max 8 compact
+         24px icon-only squares — tint border + a small LV badge — plus a "+N" overflow chip;
+         the hold-Tab panel lists the full build. Full name, exact current effect, and the
+         next-level delta live in the hover/focus tooltip. */
       .hb-buffs{ display:none; flex-wrap:wrap; justify-content:center; gap:4px; pointer-events:auto; }
       .hb-buffs.show{ display:flex; }
-      .hb-buff{ position:relative; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center;
+      .hb-buff{ position:relative; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center;
         background:rgba(5,3,11,.72); cursor:help;
         box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)),0 2px 0 rgba(0,0,0,.35); }
       .hb-buff.rare{ box-shadow:inset 0 0 0 1px var(--t),0 0 8px color-mix(in srgb, var(--t) 35%, transparent),0 2px 0 rgba(0,0,0,.35); }
+      .hb-buff.more{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; color:var(--cream);
+        box-shadow:inset 0 0 0 1px var(--dun-4),0 2px 0 rgba(0,0,0,.35); }
       .hb-buff:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
-      .hb-buff img{ width:16px; height:16px; margin-bottom:4px; image-rendering:pixelated; }
-      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:14px; line-height:1; margin-bottom:4px; color:var(--t,var(--cream)); }
-      .hb-buff .pips{ position:absolute; bottom:3px; left:50%; transform:translateX(-50%); display:flex; gap:2px; }
-      .hb-buff .pip{ width:4px; height:4px; background:var(--dun-3); }
-      .hb-buff .pip.lit{ background:var(--t,var(--amber)); box-shadow:0 0 3px color-mix(in srgb, var(--t,var(--amber)) 60%, transparent); }
+      .hb-buff img{ width:14px; height:14px; image-rendering:pixelated; }
+      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:13px; line-height:1; color:var(--t,var(--cream)); }
+      .hb-buff .lv{ position:absolute; right:-3px; bottom:-3px; min-width:9px; height:9px; padding:0 1px;
+        display:flex; align-items:center; justify-content:center; font-family:var(--f-logo); font-size:6px; line-height:1;
+        color:var(--dun-0); background:color-mix(in srgb, var(--t,var(--amber)) 80%, #fff); box-shadow:0 0 0 1px var(--ink); }
+      .hb-buff .lv.max{ background:var(--amber-hi); }
       .hb-buff .tip{ position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); z-index:5; display:none;
         flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:250px;
         font-family:var(--f-num); font-size:14px; line-height:1.15; color:var(--bone); background:var(--dun-1);
@@ -238,6 +252,9 @@
       .bc-icon img { width: 48px; height: 48px; image-rendering: pixelated; }
       .bc-icon .glyphfb { font-size: 30px; line-height: 1; color: var(--cream); }
       .bc-name { font-family: var(--f-logo), monospace; font-size: 12px; color: var(--amber-hi); letter-spacing: 1px; line-height: 1.4; }
+      .bc-tag { font-family: var(--f-ui), monospace; font-size: 8px; letter-spacing: 2px; padding: 2px 6px; }
+      .bc-tag.new { color: var(--grn); box-shadow: inset 0 0 0 1px var(--grn); }
+      .bc-tag.up { color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
       .bc-rarity { font-size: 9px; letter-spacing: 2px; color: var(--dun-4); }
       .bc-rarity.uncommon { color: var(--blu); }
       .bc-rarity.rare { color: var(--pur); }

@@ -1,8 +1,11 @@
-// HUD DOM suite: the hotbar chrome rendered into a real (jsdom) document. Asserts the
-// weapon slots keep their labeled, keyboard-accessible shape (key badge + name + button
-// semantics), and the blessing row is compact ICON-ONLY slots — tint border, Lv1-3 pips,
-// no long chip text in the row — with the full name / current effect / exact next-level
-// delta living in the hover-focus tooltip and the aria-label.
+// HUD DOM suite: the hotbar chrome rendered into a real (jsdom) document, pinned to the
+// UI Director gate. Weapon slots keep their labeled, keyboard-accessible shape (key badge
+// + name + button semantics, equipped slot dominant); the blessing row is at most
+// MAX_BUFF_SLOTS compact ICON-ONLY slots — tint border, LV badge, "+N" overflow chip, no
+// long chip text in the row — with the full name / exact current effect / next-level delta
+// in the hover-focus tooltip and aria-label; the hold-Tab panel carries the full build and
+// the RELEASE TAB TO CLOSE footer; blessing CHOICE cards stay fully labeled (never
+// icon-only): icon + name + NEW/UPGRADE LVn tag + rarity + exact effect + input glyph.
 //
 // Run: npm run test:hud
 
@@ -17,9 +20,12 @@ Object.assign(globalThis, {
   HTMLElement: dom.window.HTMLElement,
   HTMLImageElement: dom.window.HTMLImageElement,
   HTMLCanvasElement: dom.window.HTMLCanvasElement,
+  KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS } = await import("../src/game/hud.js");
+const { BlessingOverlay } = await import("../src/ui/blessing.js");
+const { ITEMS, itemDesc } = await import("../src/sim/items.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
 
@@ -71,26 +77,24 @@ function weaponSlotTests(): void {
 }
 
 function buffChipTests(): void {
-  section("blessing slots are ICON-ONLY: tint border, Lv pips, zero row text");
+  section("blessing slots are ICON-ONLY: tint border, LV badge, zero name text in the row");
   const chip = buildBuffChip(ITEM_LV2);
   check("legacy name/level text nodes are gone", chip.querySelector(".bn") === null && chip.querySelector(".bl") === null);
   const rowText = [...chip.childNodes]
-    .filter((n) => !(n instanceof dom.window.HTMLElement && (n.classList.contains("tip") || n.classList.contains("pips"))))
+    .filter((n) => !(n instanceof dom.window.HTMLElement && (n.classList.contains("tip") || n.classList.contains("lv"))))
     .map((n) => n.textContent).join("").trim();
-  check("no visible text in the chip row (icon only)", rowText === "", `text="${rowText}"`);
+  check("no name text in the chip row (icon only)", rowText === "", `text="${rowText}"`);
   check("tint border variable set from the blessing", chip.style.getPropertyValue("--t") === "#ff5a5a");
   check("rare blessing keeps its rare glow class", chip.classList.contains("rare"));
   check("icon element present", chip.querySelector("img, .glyphfb") !== null);
 
-  section("level pips: one per possible level, lit up to the current level");
-  const pips = [...chip.querySelectorAll(".pips .pip")];
-  check("exactly three pips", pips.length === 3);
-  check("Lv2 lights exactly two pips", pips.filter((p) => p.classList.contains("lit")).length === 2);
-  check("pips light in order", pips[0].classList.contains("lit") && pips[1].classList.contains("lit") && !pips[2].classList.contains("lit"));
-  const maxPips = [...buildBuffChip(ITEM_MAX).querySelectorAll(".pips .pip.lit")];
-  check("Lv3 lights all three pips", maxPips.length === 3);
+  section("LV badge: current level in the corner, max state marked");
+  check("badge shows the current level", chip.querySelector(".lv")?.textContent === "2");
+  check("non-maxed badge carries no max class", chip.querySelector(".lv.max") === null);
+  const maxChipBadge = buildBuffChip(ITEM_MAX).querySelector(".lv");
+  check("maxed badge shows LV3 with the max class", maxChipBadge?.textContent === "3" && maxChipBadge.classList.contains("max"));
 
-  section("tooltip: full name + current effect + exact next-level delta");
+  section("tooltip: full name + exact current effect + next-level delta");
   check("tooltip names the blessing", chip.querySelector(".tip .tn")?.textContent === "SHARPENED FANGS");
   check("tooltip carries the current level's effect", chip.querySelector(".tip .tc")?.textContent === "LV2 — +85% damage, but -2 max hearts.");
   check("tooltip carries the exact next-level delta", chip.querySelector(".tip .tx")?.textContent === "NEXT LV3 — +100% damage, but -2 max hearts.");
@@ -105,11 +109,61 @@ function buffChipTests(): void {
     buildBuffChip(ITEM_MAX).getAttribute("aria-label") === "Swift Boots, level 3: +35% move speed.");
 }
 
+function buffOverflowTests(): void {
+  section("blessing row caps at MAX_BUFF_SLOTS with a +N overflow chip");
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  const hud = new Hud(root);
+  const many = Array.from({ length: 11 }, (_, i) => ({
+    ...ITEM_LV2, id: `it_${i}`, name: `Blessing ${i}`, rarity: "common", count: 1, nextDesc: "more.",
+  }));
+  hud.update(mkState({ items: many }));
+  const chips = [...root.querySelectorAll(".hb-buffs .hb-buff")];
+  check(`row renders exactly ${MAX_BUFF_SLOTS} slots for 11 blessings`, chips.length === MAX_BUFF_SLOTS, `n=${chips.length}`);
+  const more = chips[chips.length - 1];
+  check("last slot is the overflow chip", more.classList.contains("more"));
+  check("overflow chip counts the hidden blessings", more.childNodes[0].textContent === "+4");
+  check("overflow chip is tabbable and points at the Tab panel",
+    (more as HTMLElement).tabIndex === 0 && more.getAttribute("aria-label") === "4 more blessings. Hold Tab for the full build.");
+  check("overflow tooltip names the Tab panel", more.querySelector(".tip .tx")?.textContent === "HOLD TAB FOR THE FULL BUILD");
+
+  const exactly8 = many.slice(0, MAX_BUFF_SLOTS);
+  hud.update(mkState({ items: exactly8 }));
+  check("exactly 8 blessings render 8 real slots, no overflow chip",
+    root.querySelectorAll(".hb-buffs .hb-buff").length === MAX_BUFF_SLOTS && root.querySelector(".hb-buff.more") === null);
+  root.remove();
+
+  const standalone = buildMoreChip(7);
+  check("overflow chip builder is pure of the row state", standalone.childNodes[0].textContent === "+7");
+}
+
+function blessingCardTests(): void {
+  section("blessing CHOICE cards stay fully labeled (never icon-only)");
+  const overlay = new BlessingOverlay();
+  const fresh = ITEMS[0];
+  const owned = ITEMS[1];
+  overlay.show([{ item: fresh, nextLevel: 1 }, { item: owned, nextLevel: 2 }], () => {});
+  const cards = [...document.querySelectorAll(".blessing-card")];
+  check("one card per choice", cards.length === 2);
+  const [cNew, cUp] = cards;
+  check("card keeps its 56px icon frame", cNew.querySelector(".bc-icon") !== null);
+  check("card keeps the full blessing name", cNew.querySelector(".bc-name")?.textContent === fresh.name);
+  check("fresh pick carries the NEW tag", cNew.querySelector(".bc-tag.new")?.textContent === "NEW");
+  check("upgrade pick carries UPGRADE LVn", cUp.querySelector(".bc-tag.up")?.textContent === "UPGRADE LV2");
+  check("rarity label always present (upgrades included)",
+    cNew.querySelector(".bc-rarity")?.textContent === fresh.rarity.toUpperCase() && cUp.querySelector(".bc-rarity")?.textContent === owned.rarity.toUpperCase());
+  check("card shows the exact effect the pick would grant",
+    cNew.querySelector(".bc-desc")?.textContent === itemDesc(fresh, 1) && cUp.querySelector(".bc-desc")?.textContent === itemDesc(owned, 2));
+  check("input glyphs 1/2 on the cards", cNew.querySelector(".bc-key")?.textContent === "1" && cUp.querySelector(".bc-key")?.textContent === "2");
+  overlay.hide();
+}
+
 function hudIntegrationTests(): void {
   section("Hud.update wires slots + blessing row + hint into the live DOM");
   const root = document.createElement("div");
   document.body.appendChild(root);
   const hud = new Hud(root);
+  check("Tab panel footer reads RELEASE TAB TO CLOSE", root.textContent!.includes("RELEASE TAB TO CLOSE"));
   hud.update(mkState());
   check("one labeled slot per owned weapon", root.querySelectorAll(".hb-slots .hb-slot").length === 3);
   check("slot order follows inventory order", [...root.querySelectorAll(".hb-slot .hb-name")].map((n) => n.textContent).join(",") === "PISTOL,SHOTGUN,TESLA");
@@ -137,6 +191,8 @@ function hudIntegrationTests(): void {
 function main(): void {
   weaponSlotTests();
   buffChipTests();
+  buffOverflowTests();
+  blessingCardTests();
   hudIntegrationTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
