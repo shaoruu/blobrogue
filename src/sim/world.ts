@@ -34,6 +34,7 @@ import {
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
+import type { EnemyTier } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
@@ -4338,8 +4339,8 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
 
 // ---- dev sandbox helpers (client dev tools mutate the world through these) ----
 
-export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: number): Enemy {
-  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers });
+export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: number, tier?: EnemyTier): Enemy {
+  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers, tier });
   w.enemies.push(e);
   return e;
 }

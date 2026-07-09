@@ -5371,10 +5371,10 @@ export class Game {
     return { x: this.px, y: this.py };
   }
 
-  devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean): void {
+  devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean, tier?: EnemyTier): void {
     for (let i = 0; i < count; i++) {
       const p = this.devPlacePoint(atCursor);
-      devSpawnEnemy(this.world, kind, p.x, p.y);
+      devSpawnEnemy(this.world, kind, p.x, p.y, tier);
       this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
     }
   }
