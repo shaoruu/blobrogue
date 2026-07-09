@@ -482,7 +482,7 @@
 ["decal 213.67 101.33 #ffd27a 16 ring","particles 213.67 101.33 1 #ffd27a","particles 213.67 101.33 10 #ffd27a","sfx dash 1 1"]
 ["particles 224 101.33 1 #ffd27a"]
 ["particles 234.33 101.33 1 #ffd27a"]
-["decal 264 72 #ffd27a 10 ring","decal 264 72 #ffd27a 15 ring","gibs 264 72 10 #b07a3c","particles 244.67 101.33 1 #ffd27a","particles 264 72 6 #ffd27a","puff 264 72 5 #ffd27a","puff 264 72 6 #c9a06a","sfx barrel 1.4 0.6","sfx coin 1 1"]
+["decal 264 72 #ffd27a 10 ring","decal 264 72 #ffd27a 15 ring","gibs 264 72 10 #b07a3c","particles 244.67 101.33 1 #ffd27a","particles 264 72 6 #ffd27a","puff 264 72 3 #5fbf7a","puff 264 72 5 #ffd27a","puff 264 72 6 #c9a06a","sfx barrel 1.4 0.6","sfx coin 1 1"]
 ["particles 255 101.33 1 #ffd27a"]
 ["particles 265.33 101.33 1 #ffd27a"]
 ["particles 275.67 101.33 1 #ffd27a"]

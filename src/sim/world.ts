@@ -14,6 +14,7 @@ import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, WeaponId, AttackMove, TileKind } from "./types.js";
 import { placeHazards, isHazardDamaging, hazardPhaseAt, HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
+import { flockSteer, flockOut, BAT_FLOCK } from "./flock.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
@@ -446,8 +447,38 @@ function placeProps(w: WorldState): Prop[] {
   const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult;
   const list: Prop[] = [];
   const occupied = new Set<number>();
+  const addProp = (kind: Prop["kind"], tx: number, ty: number) => {
+    occupied.add(ty * d.w + tx);
+    list.push({ id: w.nextPropId++, kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+  };
+
+  // Boss arenas stage an AUTHORED ring of destructible cover just outside the squeeze's
+  // final safe radius: real cover to fight from, and real physics when the boss's slams,
+  // charges and body smash through it (damagePropsInRadius). Explosive barrels in the
+  // ring make slamming a fuel cluster the boss's own problem.
+  const arena = isBossFloor(w.floor) ? d.rooms[d.rooms.length - 1] : null;
+  if (arena) {
+    const ringR = Math.min(arena.w, arena.h) * TILE * 0.3;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + rng.range(-0.25, 0.25);
+      const tx = Math.floor(((arena.cx + 0.5) * TILE + Math.cos(a) * ringR) / TILE);
+      const ty = Math.floor(((arena.cy + 0.5) * TILE + Math.sin(a) * ringR) / TILE);
+      const idx = ty * d.w + tx;
+      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasHazardOnTile(w, tx, ty)) continue;
+      if (Math.abs(tx - arena.cx) + Math.abs(ty - arena.cy) <= 1) continue; // exit tile ground
+      const r = rng.next();
+      addProp(r < 0.5 ? "crate" : r < 0.8 ? "barrel" : "barrel_explosive", tx, ty);
+    }
+  }
+
   for (const room of d.rooms) {
-    const target = rng.int(3, 6);
+    if (room === arena) continue; // the arena's cover is authored above
+    // Room-aware density: pillared halls and fighting pits carry more cover; hazard
+    // set-piece rooms stay lean — their floor is the obstacle, and flocks/dodges need
+    // the open lanes.
+    const target = room.kind === "hazard" ? rng.int(1, 2)
+      : (room.shape === "pillars" || room.shape === "arena") ? rng.int(4, 7)
+      : rng.int(3, 6);
     for (let i = 0; i < target; i++) {
       const tx = room.x + rng.int(0, room.w - 1);
       const ty = room.y + rng.int(0, room.h - 1);
@@ -458,9 +489,7 @@ function placeProps(w: WorldState): Prop[] {
       if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
-      occupied.add(idx);
-      const kind = rollPropKind(rng, hazardMult);
-      list.push({ id: w.nextPropId++, kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+      addProp(rollPropKind(rng, hazardMult), tx, ty);
     }
   }
   return list;
@@ -1400,6 +1429,9 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
     a.time += dt;
     const step = C.SKELETON_LUNGE_SPEED * dt;
     moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    // A committed charge is a physical object: crates and barrels in its path shatter.
+    // Cover absorbs the telegraphed hit — and is spent doing it.
+    damagePropsInRadius(w, e.x, e.y, e.radius + 4, C.CHARGE_PROP_DAMAGE, ev);
     ev.push({ t: "lungeTrail", x: e.x, y: e.y });
     if (a.time >= C.SKELETON_LUNGE_DUR) enterRecover(e);
     return;
@@ -1426,7 +1458,19 @@ function updateChaser(w: WorldState, e: Enemy, dt: number): void {
   const arch = ENEMY_ARCHETYPES[e.kind];
   if (!findTarget(w, e.x, e.y)) return;
   let angle = chaseAngle(w, e);
-  if (arch.movement === "zigzag") { e.zig += dt * 5; angle += Math.sin(e.zig) * 0.9; }
+  if (arch.movement === "zigzag") {
+    e.zig += dt * 5;
+    angle += Math.sin(e.zig) * 0.9;
+    // Swarm-tier fliers move as a FLOCK (boids — see flock.ts): separation keeps the
+    // pack from stacking into one blob, cohesion holds it together, and the Kuramoto
+    // wander coupling makes the cave swarm bank and weave as one animal. Standard-tier
+    // bats keep their lone erratic drift untouched.
+    if (e.tier === "swarm") {
+      flockSteer(e, w.enemies, angle, BAT_FLOCK);
+      angle = flockOut.heading;
+      e.zig += flockOut.zigNudge * dt;
+    }
+  }
   let step = e.speed * dt;
   if (e.kind === "slime") step *= slimeHopPulse(e);
   if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
@@ -1532,7 +1576,7 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   }
 
   if (a.cooldown === 0 && e.spawnTimer === 0) { bossBeginAttack(e, ev); return; }
-  bossChase(w, e, dt);
+  bossChase(w, e, dt, ev);
 }
 
 // Living boss-summoned adds (the cadence cap counts only summons, never floor enemies).
@@ -1628,6 +1672,9 @@ function bossLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev);
     else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev);
   }
+  // The slam is a physical impact: every prop under the shockwave ring shatters
+  // (explosive barrels chain — slamming a fuel cluster is the boss's own problem).
+  damagePropsInRadius(w, x, y, BOSS.slamRadius, C.SLAM_PROP_DAMAGE, ev);
   ev.push({ t: "bossSlam", x, y });
   if (boss && boss.phase >= 3) {
     for (let i = 0; i < 4; i++) spawnEnemyBullet(w, x, y, (i / 4) * 6.28, 220, 7, BOSS.globDamage, "#a24bff", 2.5);
@@ -1653,12 +1700,16 @@ function bossRadialFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   }
 }
 
-function bossChase(w: WorldState, e: Enemy, dt: number): void {
+function bossChase(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (!findTarget(w, e.x, e.y)) return;
   const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
   const mult = e.boss && e.boss.phase >= 3 ? BOSS.p3ChaseMult : 1;
   const step = e.speed * mult * dt;
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
+  // The boss does not walk around cover — it walks THROUGH it. The crush reach extends
+  // just past moveCircle's prop-block ring (prop.radius * 0.8 off the body), so a crate
+  // can never body-block the boss: whatever stops its step is destroyed by it.
+  damagePropsInRadius(w, e.x, e.y, e.radius + 2, C.CHARGE_PROP_DAMAGE, ev);
 }
 
 // Spawn one summoned slime at `angle` off the boss's edge. Summons are excluded from
@@ -1908,8 +1959,18 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (p.kind === "brazier") continue;
     for (const b of w.bullets) {
-      if (!b.friendly || b.life <= 0) continue;
+      if (b.life <= 0) continue;
       if (!sweptBulletHit(b, p.x, p.y, b.radius + p.radius)) continue;
+      if (!b.friendly) {
+        // Standing props are COVER: enemy fire is stopped by them — and spends them.
+        // Ducking behind a crate against a spitter volley is a real play, with a real
+        // cost. An enemy-detonated explosive barrel credits no one (destroyProp rules).
+        p.hp -= b.damage;
+        ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: sweptHit.x, y: sweptHit.y });
+        b.life = 0;
+        if (p.hp <= 0) { destroyProp(w, p, ev); break; }
+        continue;
+      }
       p.hp -= b.damage;
       ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: sweptHit.x, y: sweptHit.y });
       if (b.pierce <= 0) b.life = 0;
@@ -1942,6 +2003,25 @@ function dashBreakProps(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   for (const prop of w.props) {
     if (prop.breakT !== undefined || prop.kind === "brazier") continue;
     if (Math.hypot(p.x - prop.x, p.y - prop.y) < p.pr + prop.radius) destroyProp(w, prop, ev, p);
+  }
+}
+
+// The physical-interaction hook: damage every live destructible prop within `radius` of
+// (x, y). This is the ONE way heavy world impacts break the environment — the boss's
+// slam and body, the skeleton's charge, and any NEW enemy/boss content should route
+// through here rather than reimplementing prop damage. Braziers and already-breaking
+// props are skipped (destroyProp's own rules). `by` carries player attribution for
+// chain credit; enemy-caused breaks pass undefined — barrels still detonate, crediting
+// no one, exactly like a departed player's leftovers.
+export function damagePropsInRadius(w: WorldState, x: number, y: number, radius: number, dmg: number, ev: SimEvent[], by?: PlayerSim): void {
+  for (const p of w.props) {
+    if (p.breakT !== undefined || p.kind === "brazier") continue;
+    const rr = radius + p.radius;
+    const dx = p.x - x, dy = p.y - y;
+    if (dx * dx + dy * dy > rr * rr) continue;
+    p.hp -= dmg;
+    ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: p.x, y: p.y });
+    if (p.hp <= 0) destroyProp(w, p, ev, by);
   }
 }
 
@@ -2431,8 +2511,10 @@ export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: 
   w.enemies.push(e);
   return e;
 }
-export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: number): void {
-  w.props.push({ id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: number): Prop {
+  const p: Prop = { id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false };
+  w.props.push(p);
+  return p;
 }
 export function devSpawnChest(w: WorldState, x: number, y: number): void {
   w.chests.push({ id: w.nextChestId++, kind: "wood", x, y, radius: 16, opened: false });

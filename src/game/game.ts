@@ -1467,6 +1467,9 @@ export class Game {
       default:
         break;
     }
+    // Biome-flavored debris: a thin accent haze rides every break, so smashed cover
+    // kicks up spores in the Hollow, ember dust in Emberreach, void light in the Null.
+    if (kind !== "barrel_explosive") this.spawnPuff(x, y, 3, this.currentBiome.accent);
   }
 
   // Present three blessings and freeze until the player picks one (per client; items are
@@ -2259,7 +2262,10 @@ export class Game {
         const rd = tileHash(tx, ty, 2);
         if (rd < detailDensity) {
           const t = rd / detailDensity;
-          const detail: TileName = t < 0.33 ? "floor_crack" : t < 0.66 ? "floor_grate" : "floor_moss";
+          // Built-dungeon grates only suit the built bands (the Hollow's masonry, the
+          // Ember works); caves and the deeper wrong places crack and grow instead.
+          const hasGrates = this.biomeIdx === 0 || this.biomeIdx === 3;
+          const detail: TileName = t < 0.33 ? "floor_crack" : t < 0.66 ? (hasGrates ? "floor_grate" : "floor_crack") : "floor_moss";
           if (tiles.ready(detail)) {
             ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
             // Deep biomes recolor their growth dressing (frost lichen, ember-lit cracks,

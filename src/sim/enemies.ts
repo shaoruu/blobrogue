@@ -209,10 +209,27 @@ interface RoomLoad {
   hasElite: boolean;
 }
 
+// Flock spacing: swarm-tier units (the boid packs — see flock.ts) need open air to move
+// as a flock, so their placement prefers rooms with at least this many open floor tiles.
+// Exported so the depth suite can assert the invariant.
+export const SWARM_ROOM_MIN_AREA = 30;
+
+function roomOpenArea(dungeon: Dungeon, roomIndex: number): number {
+  const room = dungeon.rooms[roomIndex];
+  let open = 0;
+  for (let ty = room.y; ty < room.y + room.h; ty++) {
+    for (let tx = room.x; tx < room.x + room.w; tx++) {
+      if (dungeon.tiles[ty * dungeon.w + tx] === 0) open++;
+    }
+  }
+  return open;
+}
+
 // Deterministic threat-budget floor composition (§4): spend FloorThreat on a tiered unit
 // mix instead of counting bodies. Elites/brutes are planned first (they anchor the opening
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
-function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number): PlannedUnit[] {
+function planFloorUnits(rng: Rng, dungeon: Dungeon, floor: number, players: number): PlannedUnit[] {
+  const roomCount = dungeon.rooms.length;
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
   let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
   const roster = floorRoster(floor, pressure.complexShare);
@@ -228,6 +245,14 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
   }
   const load = new Map<number, RoomLoad>();
   for (const r of combatRooms) load.set(r, { complex: 0, hasBrute: false, hasElite: false });
+
+  // Swarm placement (flock spacing): a boid pack in a cramped cell just grinds the walls.
+  // Prefer combat rooms with real open air; fall back to ANY roomy non-spawn room, and
+  // only then to the ordinary draw. Room shapes get roomier with depth (halls, arenas,
+  // caverns), so deep flocks reliably get their theater.
+  const roomyCombat = combatRooms.filter((r) => roomOpenArea(dungeon, r) >= SWARM_ROOM_MIN_AREA);
+  const roomyAny: number[] = [];
+  for (let i = 1; i < roomCount; i++) if (roomOpenArea(dungeon, i) >= SWARM_ROOM_MIN_AREA) roomyAny.push(i);
 
   const pickRoom = (unit: { kind: EnemyKind; tier: EnemyTier }): number => {
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -247,11 +272,17 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
     return combatRooms[rng.int(0, combatRooms.length - 1)];
   };
 
+  const swarmRoom = (): number => {
+    if (roomyCombat.length > 0) return roomyCombat[rng.int(0, roomyCombat.length - 1)];
+    if (roomyAny.length > 0) return roomyAny[rng.int(0, roomyAny.length - 1)];
+    return combatRooms[rng.int(0, combatRooms.length - 1)];
+  };
+
   const add = (kind: EnemyKind, tier: EnemyTier): boolean => {
     const cost = threatCostOf(kind, tier);
     if (cost > budget) return false;
     budget -= cost;
-    plan.push({ kind, tier, room: pickRoom({ kind, tier }) });
+    plan.push({ kind, tier, room: tier === "swarm" ? swarmRoom() : pickRoom({ kind, tier }) });
     return true;
   };
 
@@ -271,7 +302,7 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
     const isSwarmable = SWARM_KINDS.includes(kind);
     if (isSwarmable && rng.chance(0.3 * pressure.packBias)) {
       const pack = rng.int(2, 3);
-      const room = pickRoom({ kind, tier: "swarm" });
+      const room = swarmRoom();
       for (let i = 0; i < pack; i++) {
         const cost = threatCostOf(kind, "swarm");
         if (cost > budget) break;
@@ -306,7 +337,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     return { active, pending: [] };
   }
 
-  const plan = planFloorUnits(rng, floor, roomCount, players);
+  const plan = planFloorUnits(rng, dungeon, floor, players);
   const cap = activeThreatCap(floor) * coopThreatMult(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];

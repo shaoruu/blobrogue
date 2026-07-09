@@ -78,7 +78,7 @@ export const BIOMES: readonly Biome[] = [
     vignetteColor: "#04070c",
     pulse: 0,
     detailDensity: 0.11,
-    detailTint: "#7aa8c8",
+    detailTint: "#3e6a8a",
     torchesPerRoom: 1,
   },
   {
@@ -148,7 +148,7 @@ export const BIOMES: readonly Biome[] = [
     vignetteColor: "#020608",
     pulse: 0.08,
     detailDensity: 0.20,
-    detailTint: "#57e8d0",
+    detailTint: "#1fa892",
     torchesPerRoom: 2,
   },
   {
