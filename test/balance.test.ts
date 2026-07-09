@@ -382,8 +382,12 @@ function measureFocusedTtk(kind: EnemyKind, floor: number, weapon: WeaponId, pic
   return ticks * DT;
 }
 
+// Playtest durability finding: fodder melts (unchanged bands below), but the visually
+// tougher classes must demand SUSTAINED focus with a legible tier ladder — no
+// indiscriminate HP inflation (swarm/standard untouched; tough tiers repriced in threat
+// so floor totals stay budget-shaped).
 function normalTtkGates(): void {
-  section("gate 3: focused TTK bands (normals fast, brutes 1.8–3.2s, elites 3–6s)");
+  section("gate 3 + durability pass: focused TTK bands (normals fast, elite ~2.8s, brute ~3.2s)");
   const f1 = measureFocusedTtk("slime", 1, "pistol", []);
   check("F1 slime focused TTK ≤ 0.9s (no picks)", f1 <= 0.9, `ttk=${f1.toFixed(2)}s`);
   const f2 = measureFocusedTtk("skeleton", 2, "pistol", []);
@@ -394,22 +398,39 @@ function normalTtkGates(): void {
 
   // Tier bands, measured against the same late median build on their first-eligible floors.
   const bruteHp = createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute" }).hp;
-  check("brute = 2.40x scaled HP (6 x 1.72 x 2.4 -> 25)", bruteHp === 25, `hp=${bruteHp}`);
-  // §1 brute band, measured live at the first guaranteed floor with the starter pistol.
+  check("brute = 3.80x scaled HP (6 x 1.72 x 3.8 -> 39)", bruteHp === 39, `hp=${bruteHp}`);
+  // Durability pass: the brute is the floor's committed fight — starter-pistol focused
+  // TTK ~3.2s at its F4 debut, roughly 4x a standard body and above every other tier.
   const bruteTtk = measureFocusedTtk("skeleton", 4, "pistol", [], "brute");
   record("brute.f4", bruteTtk);
-  check("F4 brute focused TTK sits in the 1.8-3.2s band (starter build)",
-    bruteTtk >= 1.8 && bruteTtk <= 3.2, `ttk=${bruteTtk.toFixed(2)}s`);
-  // Balancer final: elite = 2.0x chassis; the identity is the visible BRACE commitment.
+  check("F4 brute focused TTK sits in the 2.6-4.2s sustained-focus band (starter build)",
+    bruteTtk >= 2.6 && bruteTtk <= 4.2, `ttk=${bruteTtk.toFixed(2)}s`);
+  // Elite = 2.6x chassis: ~3.4x a standard body's focused burn at the F6 median build,
+  // deliberately UNDER the brute so the two tough tiers stay distinguishable; the elite
+  // identity is still the visible BRACE commitment, not an HP wall.
   const eliteHp = createEnemy("skeleton", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp;
-  check("elite = 2.0x scaled HP (6 x 2.12 x 2.0 -> 25)", eliteHp === 25, `hp=${eliteHp}`);
+  check("elite = 2.6x scaled HP (6 x 2.12 x 2.6 -> 33)", eliteHp === 33, `hp=${eliteHp}`);
   const eliteEntry = measureFocusedTtk("skeleton", 6, "pistol", L3("hair_trigger"), "elite");
   record("elite.f6.focused", eliteEntry);
-  check("F6 elite focused TTK sits in the balancer's 1.5-2.5s band (F6 median build)",
-    eliteEntry >= 1.5 && eliteEntry <= 2.5, `ttk=${eliteEntry.toFixed(2)}s`);
+  check("F6 elite focused TTK sits in the 2.4-4.0s sustained-focus band (F6 median build)",
+    eliteEntry >= 2.4 && eliteEntry <= 4.0, `ttk=${eliteEntry.toFixed(2)}s`);
   const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm" });
   check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 3 && swarm.speed === 48
     && Math.abs(swarm.radius - 16 * 0.78) < 1e-9, `hp=${swarm.hp} speed=${swarm.speed}`);
+
+  // The legible durability ladder itself, on a floor where every tier is legal (F8):
+  // swarm << standard < elite < brute, with real separation between the tough tiers —
+  // and the toughness is PRICED (threat cost rises with the multiplier) so raising
+  // durability never inflated the floor's budgeted total.
+  const at8 = (tier: EnemyTier) => createEnemy("skeleton", 0, 0, 8, new Rng(1), 0, { tier }).hp;
+  check("tier durability ladder at F8: swarm < standard < elite < brute",
+    at8("swarm") < at8("standard") && at8("standard") < at8("elite") && at8("elite") < at8("brute"),
+    `${at8("swarm")}/${at8("standard")}/${at8("elite")}/${at8("brute")}`);
+  check("tough tiers are clearly separated (elite ≥ 2.4x standard, brute ≥ 1.3x elite)",
+    at8("elite") >= at8("standard") * 2.4 && at8("brute") >= at8("elite") * 1.3);
+  check("tier threat costs track durability (swarm .55 < std 1 < brute 2.8 < elite 3.0)",
+    TIERS.swarm.threatCost === 0.55 && TIERS.standard.threatCost === 1.0
+    && TIERS.brute.threatCost === 2.8 && TIERS.elite.threatCost === 3.0);
 }
 
 // ---- base-pistol reality check: the tables must actually hold up in live autofire ----
@@ -1165,23 +1186,25 @@ function eliteContractGates(): void {
     const best = Math.min(...times);
     record("elite.f6.aggroToDeath.min", best);
     record("elite.f6.aggroToDeath.max", worst);
-    check("elite aggro→death sits in the balancer's 2.5-5.5s band across 10 seeds",
-      best >= 2.5 && worst <= 5.5, `range=${best.toFixed(2)}-${worst.toFixed(2)}s`);
+    check("elite aggro→death sits in the durability pass's 3.0-7.0s band across 10 seeds",
+      best >= 3.0 && worst <= 7.0, `range=${best.toFixed(2)}-${worst.toFixed(2)}s`);
     check("≥70% of elites surviving >1.5s execute the brace commitment",
       survivors > 0 && commits / survivors >= 0.7, `${commits}/${survivors}`);
   }
   {
-    // Room-clear cost at EQUAL THREAT (the elite costs 2.8 threat = it replaces nearly
-    // three standard bodies in the director's budget): an elite-led room may cost at
-    // most 20% more clear time than the same threat spent on standard bodies.
+    // Room-clear cost at EQUAL THREAT (the elite costs 3.0 threat = it replaces three
+    // standard bodies in the director's budget): an elite-led room may cost at most a
+    // third more clear time than the same threat spent on standard bodies — the
+    // durability pass explicitly buys "sustained focus" on the big silhouettes, and the
+    // higher threat price is what keeps the floor's TOTAL pressure budget-shaped.
     const clearTime = (isEliteRoom: boolean): number => {
       const w = createWorld(0xE17F, 6, { isSandbox: true });
       w.isGodMode = true;
       const p = w.players.get(LOCAL_ID)!;
       acquireWeaponInWorld(w, LOCAL_ID, "pistol");
       grant(w, LOCAL_ID, L3("hair_trigger"));
-      // Elite room: skeleton elite (2.8) + 3 slimes = 5.8 threat.
-      // Standard room: skeleton + 4 slimes + bat ≈ 6.0 threat.
+      // Elite room: skeleton elite (3.0) + 3 slimes = 6.0 threat.
+      // Standard room: skeleton + 4 slimes + bat = 6.0 threat.
       const pack = isEliteRoom
         ? [
           createEnemy("skeleton", p.x + 300, p.y - 60, 6, new Rng(5), w.nextEnemyId++, { tier: "elite" }),
@@ -1211,8 +1234,8 @@ function eliteContractGates(): void {
     const withElite = clearTime(true);
     record("elite.roomClear.standardThreat", standard);
     record("elite.roomClear.eliteThreat", withElite);
-    check("an elite-led room costs ≤20% extra clear time at equal threat",
-      withElite <= standard * 1.2, `${standard.toFixed(2)}s -> ${withElite.toFixed(2)}s (${(((withElite / standard) - 1) * 100).toFixed(0)}%)`);
+    check("an elite-led room costs ≤35% extra clear time at equal threat (never a sponge room)",
+      withElite <= standard * 1.35, `${standard.toFixed(2)}s -> ${withElite.toFixed(2)}s (${(((withElite / standard) - 1) * 100).toFixed(0)}%)`);
   }
 }
 

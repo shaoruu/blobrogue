@@ -146,14 +146,25 @@ export interface TierDef {
   attackCdMult: number; // elite: one affix + 20% shorter commit cooldowns
 }
 
+// Playtest finding (durability pass): enemy toughness read as uniformly low — the big
+// bodies died as fast as the chaff. The fix is TIER-SHAPED, never a blanket raise:
+// swarm/standard keep their exact melt/beat numbers (fodder must stay deletable, the
+// §7.1 early-melt gates are untouched), while the two VISUALLY tougher silhouettes now
+// demand sustained focus with a legible durability ladder — standard 1.0× << elite 2.6×
+// < brute 3.2× (the brute's 1.35× draw is the biggest body, so it holds the most).
+// Threat costs rise with the HP so the floor budget buys FEWER tough bodies instead of
+// inflating the floor's total effective health: pressure composition, not sponge.
 export const TIERS: Record<EnemyTier, TierDef> = {
   swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.55, minFloor: 1, attackCdMult: 1 },
   standard: { hpMult: 1.00, speedMult: 1.00, radiusMult: 1.00, drawMult: 1.00, threatCost: 1.0, minFloor: 1, attackCdMult: 1 },
-  brute: { hpMult: 2.40, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 2.2, minFloor: 4, attackCdMult: 1 },
-  // Balancer final: elites are 2.0× their chassis (retired: the 1.7× multiple AND the
-  // interim uniform pool). The elite identity is the visible BRACE commitment (below),
-  // not an HP wall: focused 1.5–2.5s, aggro→death 2.5–5.5s.
-  elite: { hpMult: 2.0, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 2.8, minFloor: 6, attackCdMult: 0.8 },
+  // Brute: the slow anchor you must commit to — starter-pistol focused TTK ~3.2s at its
+  // F4 debut (band measured in balance tests), roughly 4× a standard body and clearly
+  // the toughest silhouette on the floor.
+  brute: { hpMult: 3.80, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 2.8, minFloor: 4, attackCdMult: 1 },
+  // Elite: fast + affix, durable but always under the brute — the identity is still the
+  // visible BRACE commitment (below), not an HP wall: focused ~2.8s at the F6 median
+  // build (~3.4× a standard body), aggro→death ~3.6s (bands measured in balance tests).
+  elite: { hpMult: 2.6, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 3.0, minFloor: 6, attackCdMult: 0.8 },
 };
 
 // The elite's one visible affix COMMITMENT (balancer final): a braced defensive
@@ -557,7 +568,7 @@ export const GAUNTLET = {
   captainPhaseAt: 0.5,      // two phases split at 50%…
   captainTransition: 0.8,   // …one short stagger, non-invulnerable, no floor
   // Round threat stays inside the gate caps (≤8/≤8/≤6 counting the captain's elite/brute
-  // pricing): R1 4.2 + 3×1.0 = 7.2, R2 4.2 + 3×0.825 ≈ 6.7, R3 3.3 alone.
+  // pricing): R1 4.5 + 3×1.0 = 7.5, R2 4.5 + 3×0.825 ≈ 7.0, R3 4.2 alone.
   rounds: [
     { kind: "charger", tier: "elite", hpFrac: 0.28, addKind: "slime", addTier: "standard", addCount: 3 },
     { kind: "shielder", tier: "elite", hpFrac: 0.32, addKind: "spitter", addTier: "swarm", addCount: 3 },
