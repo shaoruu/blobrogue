@@ -17,9 +17,9 @@ import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
 import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, isGauntletFloor, floorBannerText } from "../src/sim/biomes.js";
+import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
-import { spawnFloorEnemies, isBossFloor, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
+import { spawnFloorEnemies, isBossFloor, isGauntletFloor, isBossKind, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
 import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp } from "../src/sim/world.js";
 import { Rng } from "../src/sim/rng.js";
 import type { Bullet } from "../src/sim/types.js";
@@ -167,16 +167,23 @@ function archetypeDepthTests(): void {
       const last = d.rooms[d.rooms.length - 1];
       if (last.shape !== "arena" || last.w < 13 || last.h < 11) isArenaOk = false;
       const spawns = spawnFloorEnemies(d, seed, floor);
-      const boss = spawns.active.find((e) => e.kind === "boss");
-      if (!boss) { isBossInArena = false; continue; }
-      const bx = Math.floor(boss.x / TILE), by = Math.floor(boss.y / TILE);
-      if (bx < last.x || bx >= last.x + last.w || by < last.y || by >= last.y + last.h) isBossInArena = false;
-      if (d.tiles[by * d.w + bx] !== 0) isBossInArena = false;
+      if (isGauntletFloor(floor)) {
+        // The F10 gauntlet arena starts EMPTY: the stage machine spawns its captains.
+        const isOccupied = spawns.active.some((e) =>
+          e.x >= last.x * TILE && e.x < (last.x + last.w) * TILE && e.y >= last.y * TILE && e.y < (last.y + last.h) * TILE);
+        if (isOccupied) isBossInArena = false;
+      } else {
+        const boss = spawns.active.find((e) => isBossKind(e.kind));
+        if (!boss) { isBossInArena = false; continue; }
+        const bx = Math.floor(boss.x / TILE), by = Math.floor(boss.y / TILE);
+        if (bx < last.x || bx >= last.x + last.w || by < last.y || by >= last.y + last.h) isBossInArena = false;
+        if (d.tiles[by * d.w + bx] !== 0) isBossInArena = false;
+      }
       if (d.exit.x !== last.cx || d.exit.y !== last.cy) isApproachOk = false;
     }
   }
   check("the final room of every boss floor is a 13x11+ arena", isArenaOk);
-  check("the boss spawns on open floor inside its arena", isBossInArena);
+  check("bosses spawn on open floor inside their arena; the gauntlet arena starts empty", isBossInArena);
   check("the exit sits at the arena center (beat the boss, descend the band)", isApproachOk);
 }
 
@@ -251,7 +258,7 @@ function biomeLadderTests(): void {
     isBossFloor(f) && biomeIndexForFloor(f) === biomeIndexForFloor(f - 1)));
   check("F10 is the Miniboss Gauntlet, announced as such (a non-boss milestone)",
     isGauntletFloor(10) && !isGauntletFloor(5) && !isGauntletFloor(20)
-    && floorBannerText(10, { isBoss: true }) === "MINIBOSS GAUNTLET"
+    && floorBannerText(10, { isBoss: true, isGauntlet: true }) === "MINIBOSS GAUNTLET"
     && floorBannerText(15, { isBoss: true }) === "BOSS FLOOR");
   check("band depth ramps 0..1 within each band", biomeDepthForFloor(6) === 0 && biomeDepthForFloor(10) === 1
     && biomeDepthForFloor(31) === 0 && biomeDepthForFloor(35) === 1 && biomeDepthForFloor(300) === 1);
@@ -747,7 +754,7 @@ function wireTests(): void {
   section("hazardHit rides the reliable event wire");
   const w = createWorld(0xbee5, 8);
   const ev: SimEvent = { t: "hazardHit", pid: LOCAL_ID, kind: "spikes", x: 100, y: 200 };
-  const msg = buildSnapshot(w, LOCAL_ID, 0, [{ id: 1, e: ev }], 1, false, {});
+  const msg = buildSnapshot(w, LOCAL_ID, 0, [{ id: 1, e: ev }], 1, false, { worldId: "w-depth-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(msg)) as Extract<ServerMsg, { t: "snap" }>;
   check("hazardHit round-trips the strict server->client decoder",
     decoded.events.length === 1 && decoded.events[0].e.t === "hazardHit"
