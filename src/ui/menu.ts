@@ -1,13 +1,20 @@
 import type { ConvexClient } from "convex/browser";
 import type { Session } from "../net/session.js";
 import type { AuthClient } from "../net/auth.js";
-import type { ProfileDoc } from "../net/api.js";
+import type { ProfileDoc, LeaderboardEntryDoc } from "../net/api.js";
 import { api } from "../net/api.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { LobbyPlayer } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
+import { WEAPONS } from "../sim/weapons.js";
+import { itemById } from "../sim/items.js";
+import { cosmeticsForSlot, cosmeticById, isCosmeticOwned } from "../game/cosmetics.js";
+import type { CosmeticSlot, CosmeticDef } from "../game/cosmetics.js";
+import { cosmeticOverlay } from "../game/cosmeticArt.js";
+import { createBlobPreview } from "./blobPreview.js";
 import { createSettingsControls } from "./settings.js";
+import { shouldShowSigninNudge, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
@@ -24,6 +31,9 @@ export interface MenuHost {
 export interface GameOverContext {
   isNewBest: boolean;
   online: OnlineLobby | null;
+  // Cosmetic ids this run just earned (unlocks diff before/after recordRun) — celebrated on
+  // the results screen and folded into the guest sign-in nudge's pitch.
+  newUnlocks?: string[];
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -34,14 +44,21 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?
 }
 
 const CONTROLS = "WASD move \u00b7 Mouse aim \u00b7 Click shoot \u00b7 Shift dash \u00b7 hold TAB for stats";
+const LB_PREVIEW_ROWS = 5;
+const LB_FULL_ROWS = 10;
 
 function fmtClock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// Drives everything shown in #overlay: the title/menu, the online lobby, the classic co-op
-// lobby, and the game-over screen. It is the only place that knows whether multiplayer exists.
+function weaponName(id: string): string {
+  return (WEAPONS as Record<string, { name: string } | undefined>)[id]?.name ?? id;
+}
+
+// Drives everything shown in #overlay: the title/menu, the settings/leaderboard/profile
+// destinations, the online lobby, and the game-over screen. It is the only place that knows
+// whether multiplayer exists.
 export class Menu {
   private overlay: HTMLElement;
   private session: Session;
@@ -52,6 +69,11 @@ export class Menu {
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
   private syncColorRow: (() => void) | null = null;
+  // Last fetched leaderboard, kept for the session so revisits paint instantly (a background
+  // refresh still runs) — the cached/uncached paths render the SAME fixed geometry.
+  private lbCache: LeaderboardEntryDoc[] | null = null;
+  // The per-session latch of the post-run sign-in nudge (never nag twice in one sitting).
+  private isNudgeShownThisSession = false;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -78,8 +100,19 @@ export class Menu {
     if (this.gameOverKeys) { window.removeEventListener("keydown", this.gameOverKeys); this.gameOverKeys = null; }
   }
 
+  // ---- TITLE ------------------------------------------------------------------------
+  //
+  // Attention hierarchy (explicit, in order):
+  //   1. PLAY ONLINE / PLAY SOLO — the big amber actions, top-left, first in tab order.
+  //   2. The identity card (guest sign-in CTA or account chip) and the compact top-runs
+  //      preview — supporting context, visually quieter.
+  //   3. The destination row (profile & closet / leaderboard / settings) and the controls
+  //      footline.
+  // Every async-hydrated region (auth, stats, leaderboard) renders its FINAL geometry from
+  // first paint — skeletons fill in place, so nothing below them ever moves.
+
   async showTitle() {
-    const wrap = el("div", "menu");
+    const wrap = el("div", "menu title");
 
     // Hero banner: logo + tagline, divider under it.
     const hero = el("div", "hero");
@@ -96,13 +129,15 @@ export class Menu {
       const colA = el("div", "col-actions");
       colA.appendChild(this.soloButton("\u25be  PLAY"));
       colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
+      const nav = el("div", "navrow");
+      nav.append(this.navButton("PROFILE & CLOSET", () => void this.showProfile()), this.navButton("SETTINGS", () => void this.showSettings()));
+      colA.appendChild(nav);
       wrap.appendChild(colA);
-      wrap.appendChild(createSettingsControls());
     } else {
       const body = el("div", "body");
 
-      // LEFT column: play actions. Online (the authoritative server) is the headline;
-      // solo below it; the classic peer-synced co-op keeps its own door underneath.
+      // LEFT column: the play actions own the top; the compact global top-runs preview
+      // fills the space under them (subordinate contrast, fixed row geometry).
       const colA = el("div", "col-actions");
       colA.appendChild(el("div", "col-h", "Play"));
       const onlineBtn = el("button", "btn-quick primary");
@@ -113,25 +148,81 @@ export class Menu {
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
       colA.appendChild(solo);
-      // One multiplayer product path only: authoritative PLAY ONLINE. The legacy peer-synced
-      // path produced separate enemy/drop simulations and confused players into thinking they
-      // shared a world, so it is intentionally removed from the front door.
+      colA.appendChild(this.leaderboardPreview());
       body.appendChild(colA);
 
-      // RIGHT column: identity (name, blob color, account) + profile + settings.
+      // RIGHT column: reserved identity card, the compact "you" card (the Profile & Closet
+      // door), then the remaining destinations.
       const colB = el("div", "col-side");
       colB.appendChild(this.identitySection());
-      const profileBox = el("div", "profile");
-      colB.appendChild(profileBox);
-      colB.appendChild(createSettingsControls());
+      const you = this.youCard();
+      colB.appendChild(you.card);
+      const nav = el("div", "navrow");
+      nav.append(
+        this.navButton("LEADERBOARD", () => void this.showLeaderboard()),
+        this.navButton("SETTINGS", () => void this.showSettings()),
+      );
+      colB.appendChild(nav);
       body.appendChild(colB);
 
       wrap.appendChild(body);
-      void this.hydrateProfile(profileBox);
+      void this.hydrateTitle(you);
     }
 
     wrap.appendChild(el("p", "foot", CONTROLS));
     this.show(wrap);
+  }
+
+  // One hydration pass for the title: login/refresh the profile (fills the you-card stats in
+  // place) — never lets an unreachable backend break the title screen.
+  private async hydrateTitle(you: { setProfile: (p: ProfileDoc | null, isError?: boolean) => void }) {
+    let profile: ProfileDoc | null = null;
+    try {
+      const signedIn = this.auth?.isSignedIn ?? false;
+      profile = (this.session.name || signedIn)
+        ? await this.session.login(this.session.name || "blob")
+        : await this.session.refreshProfile();
+    } catch {
+      you.setProfile(null, true);
+      return;
+    }
+    this.syncColorRow?.();
+    you.setProfile(profile);
+  }
+
+  private navButton(label: string, go: () => void): HTMLButtonElement {
+    const btn = el("button", "secondary nav-btn", label);
+    btn.addEventListener("click", go);
+    return btn;
+  }
+
+  // The compact "you" card: live blob preview + name + a one-line stat readout, doubling as
+  // the explicit PROFILE & CLOSET destination. Fixed height; the stat line hydrates in place.
+  private youCard(): { card: HTMLButtonElement; setProfile: (p: ProfileDoc | null, isError?: boolean) => void } {
+    const card = el("button", "secondary you-card");
+    card.setAttribute("aria-label", "profile and closet");
+    const preview = createBlobPreview({ colorIndex: this.session.colorIndex, ...this.session.cosmetics }, 48);
+    const info = el("div", "you-info");
+    const name = el("span", "you-name", this.session.name || "blob");
+    const stats = el("span", "you-stats skel", "\u2014");
+    info.append(name, stats);
+    const go = el("span", "you-go", "PROFILE & CLOSET \u25b8");
+    card.append(preview.el, info, go);
+    card.addEventListener("click", () => void this.showProfile());
+    const setProfile = (p: ProfileDoc | null, isError = false) => {
+      stats.classList.remove("skel");
+      if (p) {
+        name.textContent = p.name;
+        stats.textContent = p.gamesPlayed > 0
+          ? `deepest ${p.deepestFloor} \u00b7 ${p.gamesPlayed} runs`
+          : "no runs yet";
+        preview.setLook({ colorIndex: p.colorIndex ?? this.session.colorIndex, hat: p.cosmetics.hat, glasses: p.cosmetics.glasses });
+      } else {
+        // No profile row yet is a fresh blob, not a failure; only a thrown fetch is.
+        stats.textContent = isError ? "stats unavailable" : "no runs yet";
+      }
+    };
+    return { card, setProfile };
   }
 
   private nameRow(): HTMLElement {
@@ -150,7 +241,7 @@ export class Menu {
   // The blob-color pick: one swatch per palette slot. Slot 0 (amber) is the natural
   // sprite; any other pick tints your blob everywhere (solo + online) and is persisted
   // (locally always, onto the profile when the backend is reachable).
-  private colorRow(): HTMLElement {
+  private colorRow(onPick?: () => void): HTMLElement {
     const row = el("div", "namerow");
     row.appendChild(el("label", "", "blob color"));
     const swatches = el("div", "swatches");
@@ -169,7 +260,7 @@ export class Menu {
       b.title = i === 0 ? "amber (classic)" : "";
       // Icon-only button: the swatch has no text, so name it for screen readers.
       b.setAttribute("aria-label", i === 0 ? "blob color amber (classic)" : `blob color ${i + 1}`);
-      b.addEventListener("click", () => { this.session.setColorIndex(i); sync(); });
+      b.addEventListener("click", () => { this.session.setColorIndex(i); sync(); onPick?.(); });
       buttons.push(b);
       swatches.appendChild(b);
     }
@@ -179,19 +270,19 @@ export class Menu {
     return row;
   }
 
-  // The right-column identity block. Signed in: a Google account chip (avatar + name
-  // + sign out). Signed out: the guest name input plus an optional "Sign in with
-  // Google" button. Guest play is always available either way; the blob-color pick
-  // shows for both.
+  // The right-column identity card. Signed in: the Google account chip + a quiet
+  // confirmation of what the account holds. Signed out: the guest name input plus the
+  // sign-in CTA with its concrete benefits. Both states render inside the SAME reserved
+  // geometry (.identity min-height), and guest play is never gated on signing in.
   private identitySection(): HTMLElement {
     const wrap = el("div", "identity");
     if (this.auth && this.auth.isSignedIn) {
       wrap.appendChild(this.accountChip());
+      wrap.appendChild(el("p", "id-note", "progress, cosmetics & leaderboard runs are saved to this account"));
     } else {
       wrap.appendChild(this.nameRow());
+      if (this.auth) wrap.appendChild(this.googleCta());
     }
-    wrap.appendChild(this.colorRow());
-    if (this.auth && !this.auth.isSignedIn) wrap.appendChild(this.googleRow());
     return wrap;
   }
 
@@ -225,14 +316,17 @@ export class Menu {
     }
   }
 
-  private googleRow(): HTMLElement {
-    const wrap = el("div", "authrow");
+  // The guest sign-in CTA: one strong, honest pitch in the identity card. The error line
+  // reserves its height so a failed attempt never shifts the card.
+  private googleCta(): HTMLElement {
+    const wrap = el("div", "gcta");
     const btn = el("button", "secondary btn-google");
     btn.appendChild(googleMark());
     btn.appendChild(el("span", "", "Sign in with Google"));
+    const benefits = el("p", "gcta-benefits", SIGNIN_BENEFITS);
     const status = el("p", "muted auth-status");
     btn.addEventListener("click", () => void this.doSignIn(status));
-    wrap.append(btn, status);
+    wrap.append(btn, benefits, status);
     return wrap;
   }
 
@@ -254,42 +348,6 @@ export class Menu {
     await this.showTitle();
   }
 
-  private async hydrateProfile(box: HTMLElement) {
-    // Signed in: always run the upsert so the account row exists (and any unowned
-    // guest stats migrate) before the first run is recorded. Guest: unchanged.
-    // Never let an unreachable backend break the title screen.
-    let profile: ProfileDoc | null = null;
-    try {
-      const signedIn = this.auth?.isSignedIn ?? false;
-      profile = (this.session.name || signedIn)
-        ? await this.session.login(this.session.name || "blob")
-        : await this.session.refreshProfile();
-    } catch {
-      return;
-    }
-    // Login may have adopted an account's saved color pick; reflect it in the swatches.
-    this.syncColorRow?.();
-    if (!profile || profile.gamesPlayed === 0) return;
-    box.replaceChildren();
-    box.appendChild(el("div", "col-h", `${profile.name} \u2014 all time`));
-    const grid = el("div", "profile-grid");
-    const stat = (label: string, value: number) => {
-      const cell = el("div", "stat");
-      const v = el("span", "stat-value", String(value));
-      if (label === "deepest") v.classList.add("amber");
-      cell.appendChild(v);
-      cell.appendChild(el("span", "stat-label", label));
-      return cell;
-    };
-    grid.append(
-      stat("deepest", profile.deepestFloor),
-      stat("kills", profile.totalKills),
-      stat("coins", profile.totalCoins),
-      stat("runs", profile.gamesPlayed),
-    );
-    box.appendChild(grid);
-  }
-
   private soloButton(label: string): HTMLButtonElement {
     const btn = el("button", "", label);
     btn.addEventListener("click", () => this.doSolo());
@@ -301,6 +359,325 @@ export class Menu {
     // upsert in the background and start immediately with whatever profile we have.
     if (this.client) void this.session.login(this.session.name || "blob").catch(() => {});
     this.host.startSolo(this.session.profile);
+  }
+
+  // ---- LEADERBOARD ------------------------------------------------------------------
+  //
+  // Both surfaces (the title preview and the full screen) build their FINAL row geometry
+  // up front — fixed-height skeleton rows that fill in place — so hydration can never move
+  // the play buttons or steal focus. Rows are disabled until they hold a real entry.
+
+  private leaderboardRows(count: number): { box: HTMLElement; rows: HTMLButtonElement[]; note: HTMLElement } {
+    const box = el("div", "lb-rows");
+    const rows: HTMLButtonElement[] = [];
+    for (let i = 0; i < count; i++) {
+      const row = el("button", "lb-row");
+      row.type = "button";
+      row.disabled = true;
+      row.append(
+        el("span", "lb-rank", String(i + 1)),
+        el("span", "lb-dot"),
+        el("span", "lb-name skel", "\u2014"),
+        el("span", "lb-floor", ""),
+      );
+      rows.push(row);
+      box.appendChild(row);
+    }
+    const note = el("p", "muted lb-note", "");
+    return { box, rows, note };
+  }
+
+  private fillLeaderboardRows(rows: HTMLButtonElement[], note: HTMLElement, entries: LeaderboardEntryDoc[] | null, backTo: () => void) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const [rank, dot, name, floor] = Array.from(row.children) as HTMLElement[];
+      name.classList.remove("skel");
+      const entry = entries?.[i];
+      if (!entry) {
+        rank.textContent = String(i + 1);
+        dot.style.background = "";
+        name.textContent = "\u2014";
+        floor.textContent = "";
+        row.disabled = true;
+        continue;
+      }
+      rank.textContent = String(i + 1);
+      dot.style.background = playerColor(entry.colorIndex ?? 0);
+      name.textContent = entry.name;
+      floor.textContent = `FL ${entry.floor}`;
+      row.disabled = false;
+      row.setAttribute("aria-label", `${entry.name} \u2014 floor ${entry.floor} \u2014 view profile`);
+      row.onclick = () => this.showPlayerProfile(entry, backTo);
+    }
+    if (entries === null) note.textContent = "leaderboard unavailable \u2014 check your connection";
+    else if (entries.length === 0) note.textContent = "no runs on the board yet \u2014 yours could be first";
+    else note.textContent = "";
+  }
+
+  private async fetchLeaderboard(): Promise<LeaderboardEntryDoc[] | null> {
+    if (!this.client) return null;
+    try {
+      this.lbCache = await this.client.query(api.leaderboard.top, { limit: LB_FULL_ROWS });
+      return this.lbCache;
+    } catch {
+      return this.lbCache; // a failed refresh keeps the cached board (or null -> error note)
+    }
+  }
+
+  // The title's compact preview: header + view action, then the fixed top-run rows.
+  private leaderboardPreview(): HTMLElement {
+    const panel = el("div", "lb-preview");
+    const head = el("div", "lb-head");
+    head.appendChild(el("span", "col-h", "Top runs \u2014 global"));
+    const view = el("button", "secondary lb-view", "VIEW LEADERBOARD \u25b8");
+    view.addEventListener("click", () => void this.showLeaderboard());
+    head.appendChild(view);
+    panel.appendChild(head);
+    const { box, rows, note } = this.leaderboardRows(LB_PREVIEW_ROWS);
+    panel.append(box, note);
+    const backTo = () => void this.showTitle();
+    if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
+    void this.fetchLeaderboard().then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
+    return panel;
+  }
+
+  // The full leaderboard destination.
+  async showLeaderboard() {
+    if (!this.client) { await this.showTitle(); return; }
+    const wrap = el("div", "menu");
+    wrap.appendChild(el("h1", "", "LEADERBOARD"));
+    wrap.appendChild(el("p", "", "The deepest runs on record. Pick a blob to see their look and their run's build."));
+    const { box, rows, note } = this.leaderboardRows(LB_FULL_ROWS);
+    box.classList.add("lb-rows-full");
+    wrap.append(box, note);
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+    this.show(wrap);
+    const backTo = () => void this.showLeaderboard();
+    if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
+    void this.fetchLeaderboard().then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
+  }
+
+  // A leaderboard player's public profile: their blob's look and that run's build. Only
+  // leaderboard-entry data renders here — name/appearance/run stats, nothing account-side.
+  showPlayerProfile(entry: LeaderboardEntryDoc, onBack: () => void) {
+    const wrap = el("div", "menu");
+    wrap.appendChild(el("h1", "", entry.name.toUpperCase()));
+    wrap.appendChild(el("p", "muted", "best run on the global leaderboard"));
+
+    const top = el("div", "pp-top");
+    const preview = createBlobPreview({ colorIndex: entry.colorIndex, hat: entry.hat, glasses: entry.glasses }, 96);
+    top.appendChild(preview.el);
+    const grid = el("div", "profile-grid");
+    const stat = (label: string, value: string, isAmber = false) => {
+      const cell = el("div", "stat");
+      const v = el("span", "stat-value", value);
+      if (isAmber) v.classList.add("amber");
+      cell.append(v, el("span", "stat-label", label));
+      grid.appendChild(cell);
+    };
+    stat("floor", String(entry.floor), true);
+    stat("kills", String(entry.kills));
+    stat("coins", String(entry.coins));
+    stat("time", entry.durationMs > 0 ? fmtClock(entry.durationMs / 1000) : "\u2014");
+    top.appendChild(grid);
+    wrap.appendChild(top);
+
+    wrap.appendChild(el("div", "col-h", "that run's build"));
+    const build = el("div", "build-strip");
+    for (const id of entry.weapons) build.appendChild(el("span", "build-chip weapon", weaponName(id)));
+    for (const it of entry.items) {
+      const def = itemById(it.id);
+      const label = def ? (it.count > 1 ? `${def.name} Lv${it.count}` : def.name) : it.id;
+      const chip = el("span", "build-chip", label);
+      if (def) chip.style.setProperty("--t", def.tint);
+      build.appendChild(chip);
+    }
+    if (entry.weapons.length === 0 && entry.items.length === 0) {
+      build.appendChild(el("span", "muted", "no build recorded for this run"));
+    }
+    wrap.appendChild(build);
+
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", () => onBack());
+    row.appendChild(back);
+    wrap.appendChild(row);
+    this.show(wrap);
+  }
+
+  // ---- OWN PROFILE + CLOSET -----------------------------------------------------------
+  //
+  // The player's own destination: all-time stats plus the character closet — blob color and
+  // the cosmetic slots (hats, glasses) with explicit equipped/owned/locked states. Cosmetics
+  // are visual-only; equipping persists locally at once and onto the profile in the
+  // background (multiplayer identity picks it up at the next ticket mint).
+
+  async showProfile() {
+    const wrap = el("div", "menu");
+    wrap.appendChild(el("h1", "", "YOUR BLOB"));
+
+    const top = el("div", "pp-top");
+    const preview = createBlobPreview({ colorIndex: this.session.colorIndex, ...this.session.cosmetics }, 96);
+    top.appendChild(preview.el);
+    const grid = el("div", "profile-grid");
+    const cells = new Map<string, HTMLElement>();
+    for (const label of ["deepest", "kills", "coins", "runs"]) {
+      const cell = el("div", "stat");
+      const v = el("span", "stat-value skel", "\u2014");
+      if (label === "deepest") v.classList.add("amber");
+      cell.append(v, el("span", "stat-label", label));
+      cells.set(label, v);
+      grid.appendChild(cell);
+    }
+    top.appendChild(grid);
+    wrap.appendChild(top);
+
+    const accountLine = el("p", "muted id-note",
+      this.auth?.isSignedIn
+        ? "saved to your google account \u2014 every device sees this blob"
+        : this.client
+          ? "playing as guest \u2014 sign in from the title screen to keep this blob across devices"
+          : "offline build \u2014 your closet is saved on this device");
+    wrap.appendChild(accountLine);
+
+    // ---- the closet ----
+    const note = el("p", "muted closet-note", "");
+    const syncPreview = () => preview.setLook({ colorIndex: this.session.colorIndex, ...this.session.cosmetics });
+    const previewLook = (look: { colorIndex: number | null; hat: string | null; glasses: string | null }) => preview.setLook(look);
+
+    wrap.appendChild(this.colorRow(syncPreview));
+
+    const closets: Array<{ slot: CosmeticSlot; title: string; noneLabel: string }> = [
+      { slot: "hat", title: "hats", noneLabel: "Cowboy (classic)" },
+      { slot: "glasses", title: "glasses", noneLabel: "None" },
+    ];
+    const syncFns: Array<() => void> = [];
+    for (const c of closets) {
+      wrap.appendChild(el("div", "col-h", c.title));
+      const { rowEl, sync } = this.closetRow(c.slot, c.noneLabel, note, syncPreview, previewLook);
+      syncFns.push(sync);
+      wrap.appendChild(rowEl);
+    }
+    wrap.appendChild(note);
+
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+    this.show(wrap);
+
+    // Hydrate stats + unlock states in place (fixed geometry; a dead backend just leaves
+    // the placeholders and the locked states, never an error screen).
+    if (this.client) {
+      try {
+        const profile = await this.session.login(this.session.name || "blob");
+        if (profile) {
+          cells.forEach((v) => v.classList.remove("skel"));
+          cells.get("deepest")!.textContent = String(profile.deepestFloor);
+          cells.get("kills")!.textContent = String(profile.totalKills);
+          cells.get("coins")!.textContent = String(profile.totalCoins);
+          cells.get("runs")!.textContent = String(profile.gamesPlayed);
+        }
+        this.syncColorRow?.();
+        for (const sync of syncFns) sync();
+        syncPreview();
+      } catch {
+        // placeholders stand
+      }
+    }
+  }
+
+  // One closet row: the empty-slot tile plus a tile per catalog item, with explicit
+  // EQUIPPED / owned / LOCKED states. Locked tiles PREVIEW on the mirror (with the unlock
+  // hint in the reserved note line) but never equip.
+  private closetRow(
+    slot: CosmeticSlot,
+    noneLabel: string,
+    note: HTMLElement,
+    syncPreview: () => void,
+    previewLook: (look: { colorIndex: number | null; hat: string | null; glasses: string | null }) => void,
+  ): { rowEl: HTMLElement; sync: () => void } {
+    const rowEl = el("div", "closet-row");
+    const unlocks = () => this.session.profile?.unlocks ?? [];
+    const equippedId = () => this.session.cosmetics[slot];
+
+    interface Tile { btn: HTMLButtonElement; state: HTMLElement; def: CosmeticDef | null }
+    const tiles: Tile[] = [];
+
+    const sync = () => {
+      for (const t of tiles) {
+        const id = t.def?.id ?? null;
+        const isEquipped = equippedId() === id;
+        const isLocked = t.def !== null && !isCosmeticOwned(t.def, unlocks());
+        t.btn.classList.toggle("sel", isEquipped);
+        t.btn.classList.toggle("locked", isLocked);
+        t.btn.setAttribute("aria-pressed", String(isEquipped));
+        t.state.textContent = isEquipped ? "EQUIPPED" : isLocked ? "LOCKED" : "";
+      }
+    };
+
+    const addTile = (def: CosmeticDef | null, label: string) => {
+      const btn = el("button", "cos-tile");
+      btn.type = "button";
+      const icon = el("span", "cos-icon");
+      if (def) {
+        const art = cosmeticOverlay(def.id);
+        if (art) {
+          const mini = document.createElement("canvas");
+          mini.width = 40; mini.height = 40;
+          const g = mini.getContext("2d");
+          if (g) { g.imageSmoothingEnabled = false; g.drawImage(art, 0, 0, 40, 40); }
+          icon.appendChild(mini);
+        }
+      } else {
+        icon.textContent = "\u25cf";
+      }
+      const name = el("span", "cos-name", label);
+      const state = el("span", "cos-state", "");
+      btn.append(icon, name, state);
+      btn.setAttribute("aria-label", `${slot}: ${label}`);
+      btn.addEventListener("click", () => {
+        if (def && !isCosmeticOwned(def, unlocks())) {
+          // Locked: preview only, with the honest unlock criterion.
+          note.textContent = `${def.name} is locked \u2014 ${def.hint ?? "earn it in the depths"} (preview only)`;
+          previewLook({ colorIndex: this.session.colorIndex, ...this.session.cosmetics, [slot]: def.id });
+          return;
+        }
+        note.textContent = "";
+        this.session.setCosmetic(slot, def?.id ?? null);
+        sync();
+        syncPreview();
+      });
+      tiles.push({ btn, state, def });
+      rowEl.appendChild(btn);
+    };
+
+    addTile(null, noneLabel);
+    for (const def of cosmeticsForSlot(slot)) addTile(def, def.name);
+    sync();
+    return { rowEl, sync };
+  }
+
+  // ---- SETTINGS -----------------------------------------------------------------------
+
+  // The full settings destination (also reachable mid-run via pause, which embeds the same
+  // controls — one source of truth in src/game/settings.ts).
+  async showSettings() {
+    const wrap = el("div", "menu settings-screen");
+    wrap.appendChild(el("h1", "", "SETTINGS"));
+    wrap.appendChild(el("p", "muted", "everything saves instantly \u2014 the pause menu carries the same controls"));
+    wrap.appendChild(createSettingsControls());
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", () => void this.showTitle());
+    row.appendChild(back);
+    wrap.appendChild(row);
+    this.show(wrap);
   }
 
   // ---- ONLINE (authoritative server): rooms + quick play -----------------------------
@@ -595,6 +972,12 @@ export class Menu {
       best.style.letterSpacing = "1px";
       wrap.appendChild(best);
     }
+    for (const id of ctx.newUnlocks ?? []) {
+      const def = cosmeticById(id);
+      if (!def) continue;
+      const line = el("p", "unlock-line", `\u2726 NEW COSMETIC UNLOCKED \u2014 ${def.name} (equip it in your closet)`);
+      wrap.appendChild(line);
+    }
     if (profile) {
       wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins \u00b7 ${profile.gamesPlayed} runs`));
     }
@@ -632,6 +1015,13 @@ export class Menu {
       hint = "press ENTER or R to play again";
     }
     wrap.appendChild(row);
+
+    // Contextual sign-in nudge: guests who just banked meaningful progress (a saved run —
+    // extra pull when it earned a cosmetic) get ONE quiet pitch, session-latched and
+    // cooldown-guarded. It renders with the screen (zero shift) and never takes focus.
+    const nudge = this.signinNudgeBlock(profile, ctx);
+    if (nudge) wrap.appendChild(nudge);
+
     wrap.appendChild(el("p", "hint", hint));
 
     this.show(wrap);
@@ -644,6 +1034,42 @@ export class Menu {
     };
     this.gameOverKeys = onKey;
     window.addEventListener("keydown", onKey);
+  }
+
+  // The post-run guest nudge block, or null when the policy says stay quiet. Dismissing
+  // swaps the content INSIDE the reserved block (no shift) and starts the persistent
+  // cooldown; the buttons never receive focus automatically.
+  private signinNudgeBlock(profile: ProfileDoc | null, ctx: GameOverContext): HTMLElement | null {
+    const isEligible = shouldShowSigninNudge(localStorage, {
+      isSignInAvailable: this.auth !== null,
+      isSignedIn: this.auth?.isSignedIn ?? false,
+      // Meaningful progress = the run actually saved (a dead backend makes the pitch hollow).
+      hasMeaningfulProgress: profile !== null,
+      isShownThisSession: this.isNudgeShownThisSession,
+    });
+    if (!isEligible) return null;
+    this.isNudgeShownThisSession = true;
+
+    const box = el("div", "nudge");
+    const earned = (ctx.newUnlocks ?? []).map((id) => cosmeticById(id)?.name).filter((n): n is string => n !== undefined);
+    const pitch = earned.length > 0
+      ? `that ${earned[0]} you just earned only lives in this browser \u2014 ${SIGNIN_BENEFITS}`
+      : `this run only lives in this browser \u2014 ${SIGNIN_BENEFITS}`;
+    box.appendChild(el("p", "nudge-copy", pitch));
+    const row = el("div", "nudge-row");
+    const status = el("p", "muted auth-status");
+    const signin = el("button", "secondary btn-google");
+    signin.appendChild(googleMark());
+    signin.appendChild(el("span", "", "Sign in with Google"));
+    signin.addEventListener("click", () => void this.doSignIn(status));
+    const later = el("button", "secondary nudge-later", "not now");
+    later.addEventListener("click", () => {
+      recordNudgeDismissed(localStorage);
+      box.replaceChildren(el("p", "nudge-copy", "no problem \u2014 you can sign in anytime from the title screen"));
+    });
+    row.append(signin, later);
+    box.append(row, status);
+    return box;
   }
 
   // Leave the finished quick-play room and matchmake a fresh one in one motion.
