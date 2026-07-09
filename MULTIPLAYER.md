@@ -316,6 +316,18 @@ server which teammate to center your interest view on. The spectate input contex
 idle at the source, and the server ignores gameplay inputs from downed players — a
 spectator cannot affect the sim. Game over only lands when the whole party is wiped.
 
+**Reconnecting teammates** (the coherence system's reconnect grace, PR #39) are neither
+dead nor departed: every experience surface here consumes its roster status
+(`RemotePlayer.isAbsent`) rather than reimplementing any of it. The spectate ring prefers
+teammates who are actually playing, falls back to watching a reconnecting ghost only when
+the whole party is mid-outage (no wipe can fire inside the grace), and the banner reads
+`<NAME> IS RECONNECTING…`; the exit gate readout never counts or points a chevron at a
+reserved body (`… GF RECONNECTING…` instead of "waiting for"); a pending blessing pick
+held by a dropped member reads `RECONNECTING…` (their offer survives the grace and stays
+answerable); and the hold-Tab roster marks them `reconnecting…`. Replay is untouched by
+the grace: a party wipe closes sockets deliberately (no seat is reserved), so the regroup
+lifecycle only ever runs on truly-ended runs.
+
 ### The party blessing gate
 
 Cleared-floor offers (and the boss chest's Rare offers) go to EVERY member — downed

@@ -14,7 +14,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { resolveSpectateTarget, cycleSpectateTarget } from "./spectate.js";
+import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
@@ -1994,7 +1994,9 @@ export class Game {
 
   // The party blessing gate readout: which members still owe their pick (the descend holds
   // for them, authoritatively — snapshots carry the pending set). Null when nobody is owed
-  // or when solo/classic (their gate is the local overlay itself).
+  // or when solo/classic (their gate is the local overlay itself). A pending member whose
+  // connection dropped reads RECONNECTING (their offer survives the reconnect grace — the
+  // coherence system, PR #39 — so "picking" would be a lie while they can't see the cards).
   private blessingWaitLabel(): string | null {
     if (this.mode !== "online" || !this.wsTransport) return null;
     const pending = this.wsTransport.pendingBlessingParty();
@@ -2003,29 +2005,44 @@ export class Game {
     const others = pending.filter((id) => id !== selfId);
     if (others.length === 0) return null;
     const remotes = this.wsTransport.remotePlayers();
-    const names = others.map((id) => (remotes.find((r) => r.playerId === id)?.name ?? "teammate").toUpperCase());
+    const picking: string[] = [];
+    const reconnecting: string[] = [];
+    for (const id of others) {
+      const r = remotes.find((x) => x.playerId === id);
+      const name = (r?.name ?? "teammate").toUpperCase();
+      if (r !== undefined && isReconnectingTeammate(r)) reconnecting.push(name);
+      else picking.push(name);
+    }
     const total = remotes.length + 1;
-    return `WAITING FOR ${others.length}/${total} PLAYER${others.length === 1 ? "" : "S"}\u2026 ${names.join(" \u00b7 ")} PICKING A BLESSING`;
+    const parts: string[] = [];
+    if (picking.length > 0) parts.push(`${picking.join(" \u00b7 ")} PICKING A BLESSING`);
+    if (reconnecting.length > 0) parts.push(`${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026`);
+    return `WAITING FOR ${others.length}/${total} PLAYER${others.length === 1 ? "" : "S"}\u2026 ${parts.join(" \u00b7 ")}`;
   }
 
   // The party exit-coordination readout, mirroring the authoritative descend gate exactly
   // (the snapshot's exr IS playersAtExit). Shows only while coordination is actually owed:
   // a cleared party floor, somebody staged on the stairs, somebody required still missing.
-  // Downed members aren't required (the descend rescues them) — same rule as the gate.
+  // Downed members aren't required (the descend rescues them), and neither are RECONNECTING
+  // members — the coherence system (PR #39) reserves their body and excludes it from the
+  // gate on both sides, so the party is never asked to wait on a ghost; they read as
+  // RECONNECTING instead of "waiting for".
   private exitWaitLabel(): string | null {
     if (this.mode !== "online" || !this.wsTransport || !this.wsTransport.isFloorCleared()) return null;
     const remotes = this.wsTransport.remotePlayers();
-    const livingRemotes = remotes.filter((r) => !r.isDown);
-    const required = livingRemotes.length + (this.isDown ? 0 : 1);
+    const presentLiving = remotes.filter((r) => !r.isDown && !isReconnectingTeammate(r));
+    const required = presentLiving.length + (this.isDown ? 0 : 1);
     if (required <= 1) return null;
     const exr = this.wsTransport.exitReadyParty();
     if (exr.length === 0 || exr.length >= required) return null;
+    const reconnecting = remotes.filter((r) => !r.isDown && isReconnectingTeammate(r)).map((r) => r.name.toUpperCase());
+    const suffix = reconnecting.length > 0 ? ` \u00b7 ${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026` : "";
     const selfId = this.wsTransport.getSelfServerId();
     if (!this.isDown && (selfId === null || !exr.includes(selfId))) {
-      return `WAITING AT EXIT \u00b7 ${exr.length}/${required} \u2014 STAND ON THE STAIRS`;
+      return `WAITING AT EXIT \u00b7 ${exr.length}/${required} \u2014 STAND ON THE STAIRS${suffix}`;
     }
-    const missing = livingRemotes.filter((r) => !exr.includes(r.playerId)).map((r) => r.name.toUpperCase());
-    return `WAITING AT EXIT \u00b7 ${exr.length}/${required}${missing.length > 0 ? ` \u2014 WAITING FOR ${missing.join(" \u00b7 ")}` : ""}`;
+    const missing = presentLiving.filter((r) => !exr.includes(r.playerId)).map((r) => r.name.toUpperCase());
+    return `WAITING AT EXIT \u00b7 ${exr.length}/${required}${missing.length > 0 ? ` \u2014 WAITING FOR ${missing.join(" \u00b7 ")}` : ""}${suffix}`;
   }
 
   // The player's owned blessing defs from the authoritative source: online that is the server's
@@ -2056,18 +2073,21 @@ export class Game {
   }
 
   private openStats() {
-    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean }> | null = null;
+    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean; isReconnecting: boolean }> | null = null;
     if (this.coop) {
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isAtExit: false },
-        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isAtExit: false })),
+        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isAtExit: false, isReconnecting: false },
+        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isAtExit: false, isReconnecting: false })),
       ];
     } else if (this.mode === "online" && this.wsTransport) {
       const exr = this.wsTransport.exitReadyParty();
       const selfId = this.wsTransport.getSelfServerId();
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isAtExit: selfId !== null && exr.includes(selfId) },
-        ...this.wsTransport.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isAtExit: exr.includes(r.playerId) })),
+        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isAtExit: selfId !== null && exr.includes(selfId), isReconnecting: false },
+        ...this.wsTransport.remotePlayers().map((r) => ({
+          name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown,
+          isAtExit: exr.includes(r.playerId), isReconnecting: isReconnectingTeammate(r),
+        })),
       ];
     }
     this.hud.showStats({
@@ -3482,7 +3502,9 @@ export class Game {
     if (this.mode !== "online" || !this.wsTransport || this.isDown || !this.isRunning) return;
     if (!this.wsTransport.isFloorCleared()) return;
     const remotes = this.remotes();
-    const livingRemotes = remotes.filter((r) => !r.isDown);
+    // Only PRESENT living teammates are required at the stairs (a reconnecting member's
+    // reserved body is excluded from the gate — PR #39 — so no chevron ever points at it).
+    const livingRemotes = remotes.filter((r) => !r.isDown && !isReconnectingTeammate(r));
     if (livingRemotes.length === 0) return;
     const exr = this.wsTransport.exitReadyParty();
     const required = livingRemotes.length + 1;
@@ -3533,6 +3555,7 @@ export class Game {
     const cx = canvas.width / 2;
     const y = canvas.height - 168;
     const isBeingRevived = this.p.reviveProgress > 0;
+    const isTargetReconnecting = isReconnectingTeammate(target);
     const living = this.remotes().filter((r) => !r.isDown).length;
     ctx.save();
     ctx.textAlign = "center";
@@ -3547,7 +3570,9 @@ export class Game {
     ctx.fillText(
       isBeingRevived
         ? `A TEAMMATE IS REVIVING YOU\u2026 ${Math.round((this.p.reviveProgress / REVIVE.channel) * 100)}%`
-        : `${hint}A TEAMMATE CAN HOLD E ON YOUR BODY TO REVIVE YOU`,
+        : isTargetReconnecting
+          ? `${target.name.toUpperCase()} IS RECONNECTING\u2026 THE RUN RESUMES WHEN THEY RETURN`
+          : `${hint}A TEAMMATE CAN HOLD E ON YOUR BODY TO REVIVE YOU`,
       cx, y + 18,
     );
     ctx.restore();

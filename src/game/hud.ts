@@ -65,7 +65,7 @@ export interface ProfileStats {
   gamesPlayed: number;
 }
 
-export interface RosterEntry { name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean; }
+export interface RosterEntry { name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean; isReconnecting: boolean; }
 
 export interface StatsPanelData {
   floor: number;
@@ -737,9 +737,11 @@ export class Hud {
       for (const r of d.roster) {
         const row = el("div", "display:flex;align-items:center;gap:8px;");
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
-        const state = r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
+        // A reconnecting member is neither dead nor departed — their body is reserved for
+        // the reconnect grace (the Sev-0 coherence system); the roster says so explicitly.
+        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isDown ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "#9a8fb5" : r.isDown ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
         this.statsBody.appendChild(row);
       }
     }

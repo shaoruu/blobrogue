@@ -145,6 +145,29 @@ function spectateSelectionTests(): void {
   check("cycle -1 wraps at the start", cycleSpectateTarget("p3", remotes, -1) === "p9");
   check("cycling from a stale target lands on the ring's first", cycleSpectateTarget("p2", remotes, 1) === "p3");
   check("cycling with nobody living -> null", cycleSpectateTarget("p3", [], 1) === null);
+
+  section("spectate: a RECONNECTING teammate (coherence-system roster status) is neither dead nor gone");
+  // isAbsent is PR #39's reconnect-grace roster bit; this module consumes it the moment it
+  // rides RemotePlayer. A ghost is skippable while anyone present plays; it becomes the
+  // last-resort watch target when the whole party is mid-outage (no wipe fires in grace).
+  const withGhost = [
+    { playerId: "p9", isDown: false },
+    { playerId: "p5", isDown: false, isAbsent: true },
+    { playerId: "p3", isDown: false },
+  ];
+  check("the ring prefers PRESENT living teammates (ghost excluded)",
+    livingTeammates(withGhost).map((r) => r.playerId).join(",") === "p3,p9");
+  check("a watched teammate dropping into the grace hands the camera off", resolveSpectateTarget("p5", withGhost) === "p3");
+  check("cycling skips the reconnecting ghost", cycleSpectateTarget("p3", withGhost, 1) === "p9" && cycleSpectateTarget("p9", withGhost, 1) === "p3");
+  const allGhosts = [
+    { playerId: "p9", isDown: false, isAbsent: true },
+    { playerId: "p3", isDown: false, isAbsent: true },
+    { playerId: "p2", isDown: true },
+  ];
+  check("everyone mid-outage: the ghosts become the watchable ring (never a dead screen)",
+    resolveSpectateTarget(null, allGhosts) === "p3" && cycleSpectateTarget("p3", allGhosts, 1) === "p9");
+  check("a downed reconnecting body is still never a target",
+    resolveSpectateTarget(null, [{ playerId: "p1", isDown: true, isAbsent: true }]) === null);
 }
 
 // ---- 1b. spectate + revive + mismatch: the REAL client, headless ----
