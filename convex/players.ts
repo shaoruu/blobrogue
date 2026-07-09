@@ -45,14 +45,14 @@ function cleanColor(colorIndex: number | undefined): number | undefined {
   return Math.min(15, Math.max(0, colorIndex));
 }
 
-async function findByClientId(ctx: QueryCtx, clientId: string): Promise<Doc<"players"> | null> {
+export async function findByClientId(ctx: QueryCtx, clientId: string): Promise<Doc<"players"> | null> {
   return await ctx.db
     .query("players")
     .withIndex("by_clientId", (q) => q.eq("clientId", clientId))
     .unique();
 }
 
-async function findByUserId(ctx: QueryCtx, userId: Id<"users">): Promise<Doc<"players"> | null> {
+export async function findByUserId(ctx: QueryCtx, userId: Id<"users">): Promise<Doc<"players"> | null> {
   return await ctx.db
     .query("players")
     .withIndex("by_userId", (q) => q.eq("userId", userId))
@@ -61,8 +61,9 @@ async function findByUserId(ctx: QueryCtx, userId: Id<"users">): Promise<Doc<"pl
 
 // Resolve the stats row for the caller: the account row when signed in, else the
 // guest row for this browser's clientId. Returns the matching `users` doc too so
-// callers can surface the account's display name / avatar.
-async function resolveRow(
+// callers can surface the account's display name / avatar. (Exported for the stats
+// module — one identity resolution, every read path.)
+export async function resolveRow(
   ctx: QueryCtx,
   clientId: string,
 ): Promise<{ row: Doc<"players"> | null; user: Doc<"users"> | null }> {
@@ -89,7 +90,7 @@ const ZERO_STATS = {
 // all-time stats onto the account); a guest row owned by someone else is never
 // hijacked, and the unique `by_clientId` invariant is preserved by not re-claiming an
 // already-owned clientId.
-async function ensureAccountRow(
+export async function ensureAccountRow(
   ctx: MutationCtx,
   userId: Id<"users">,
   clientId: string,

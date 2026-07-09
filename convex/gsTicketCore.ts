@@ -42,7 +42,9 @@ export function worldIdForRoomCode(code: string): string {
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-function b64urlFromBytes(bytes: Uint8Array): string {
+// Exported for gsSignCore (the run-result body signer) so both HMAC producers share one
+// base64url implementation.
+export function b64urlFromBytes(bytes: Uint8Array): string {
   let out = "";
   for (let i = 0; i < bytes.length; i += 3) {
     const b0 = bytes[i];

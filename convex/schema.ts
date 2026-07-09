@@ -36,9 +36,88 @@ export default defineSchema({
     unlocks: v.array(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
+    // Extended lifetime aggregates (see convex/statsCore.ts). ALL optional so every
+    // pre-existing row stays valid untouched — absent reads as 0 / empty / null.
+    wins: v.optional(v.number()),
+    deaths: v.optional(v.number()),
+    playtimeMs: v.optional(v.number()),
+    bestCombo: v.optional(v.number()),
+    coinsEarned: v.optional(v.number()),
+    coinsSpent: v.optional(v.number()),
+    damageDealt: v.optional(v.number()),
+    damageTaken: v.optional(v.number()),
+    bossKills: v.optional(v.number()),
+    fastestBossMs: v.optional(v.number()),
+    bossKillsByBoss: v.optional(v.record(v.string(), v.number())),
+    killsByWeapon: v.optional(v.record(v.string(), v.number())),
   })
     .index("by_clientId", ["clientId"])
     .index("by_userId", ["userId"]),
+
+  // One row per finished run (the profile panel's run history). Written by exactly two
+  // paths with an explicit trust label:
+  //   source "server" — the authoritative game server's HMAC-signed POST (convex/http.ts
+  //                     /gs/run-result). The only rows eligible for global leaderboards.
+  //   source "local"  — the client's own solo/co-op sim via stats:recordLocalRun. Folds
+  //                     into the caller's personal stats/history only; NEVER the boards.
+  // submissionId dedupes retries (a resend of the same result is a no-op).
+  runs: defineTable({
+    playerId: v.id("players"),
+    submissionId: v.string(),
+    source: v.union(v.literal("server"), v.literal("local")),
+    mode: v.union(v.literal("solo"), v.literal("coop"), v.literal("online")),
+    difficulty: v.union(v.literal("casual"), v.literal("standard"), v.literal("brutal")),
+    result: v.union(v.literal("death"), v.literal("victory"), v.literal("abandon")),
+    floor: v.number(),
+    startFloor: v.number(),
+    kills: v.number(),
+    coins: v.number(),
+    coinsEarned: v.number(),
+    coinsSpent: v.number(),
+    durationMs: v.number(),
+    damageDealt: v.number(),
+    damageTaken: v.number(),
+    bestCombo: v.number(),
+    bossKills: v.number(),
+    bossKillFloors: v.array(v.number()),
+    firstBossKillMs: v.optional(v.number()),
+    killsByWeapon: v.record(v.string(), v.number()),
+    weapons: v.array(v.string()),
+    blessings: v.array(v.string()),
+    // Derived by statsCore.scoreForRun from the validated fields — never submitted.
+    score: v.number(),
+    endedAt: v.number(),
+  })
+    .index("by_submission", ["submissionId"])
+    .index("by_player", ["playerId"]),
+
+  // One row per (signed-in player, difficulty): their best-ever value per leaderboard
+  // category. Written ONLY from validated server submissions of full runs (startFloor 1)
+  // on account-backed player rows — guests and local/solo-sim results never appear here.
+  // Each category has its own index so every board reads straight off an index scan:
+  // ties share the value and fall back to the row's _creationTime (the first submission
+  // that put the player on the board), which keeps pagination stable and total.
+  leaderboardBest: defineTable({
+    playerId: v.id("players"),
+    difficulty: v.union(v.literal("casual"), v.literal("standard"), v.literal("brutal")),
+    deepestFloor: v.number(),
+    deepestFloorAt: v.optional(v.number()),
+    fastestBossMs: v.optional(v.number()),
+    fastestBossAt: v.optional(v.number()),
+    mostBossKills: v.number(),
+    mostBossKillsAt: v.optional(v.number()),
+    bestScore: v.number(),
+    bestScoreAt: v.optional(v.number()),
+    bestCombo: v.number(),
+    bestComboAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_player_difficulty", ["playerId", "difficulty"])
+    .index("by_deepest", ["difficulty", "deepestFloor"])
+    .index("by_fastest_boss", ["difficulty", "fastestBossMs"])
+    .index("by_boss_kills", ["difficulty", "mostBossKills"])
+    .index("by_score", ["difficulty", "bestScore"])
+    .index("by_combo", ["difficulty", "bestCombo"]),
 
   // A lobby / running game. The two kinds NEVER cross-match:
   //   "coop"   — classic peer-synced co-op (each client simulates from the shared seed/floor;
