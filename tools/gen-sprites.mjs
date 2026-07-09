@@ -13,9 +13,14 @@ const SUBJECTS = {
   skeleton: "a small angry skeleton warrior holding a rusty short sword",
   ghost: "a translucent pale-blue floating ghost with a wispy tail and hollow eyes",
   boss: "a huge menacing purple slime KING with a golden crown, glowing red eyes and a big fanged grin",
+  charger: "a stocky angular bone-plated boar beast monster with a lowered ram head and heavy shoulders, dull copper and bone colors, small furious red eyes",
+  burrower: "a pale dirt-crusted mole-grub monster with oversized digging claws and a segmented earthen back, beady dark eyes",
+  marrow: "a huge menacing eyeless bone golem brute of fused pale rock and exposed bone, angular bull-like silhouette, empty eye sockets glowing faint red",
   heart: "a single glossy bright-red heart health pickup icon",
   coin: "a single shiny gold coin with a star engraved, pickup icon",
   gun: "a single small golden six-shooter revolver pickup icon",
+  held_mortar: "a single small chunky bronze grenade launcher with a fat stubby barrel, side profile pointing right, game weapon icon",
+  held_boomerang: "a single curved pale-green crescent boomerang blade with a leather grip, side profile, game weapon icon",
 };
 
 async function upload(p){ const buf=readFileSync(p); return await fal.storage.upload(new Blob([buf],{type:"image/png"})); }

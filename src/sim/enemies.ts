@@ -4,14 +4,14 @@ import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
-  TIERS, BIOME_PRESSURE, BOSS,
+  TIERS, BIOME_PRESSURE, BOSS, MARROW,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
-  bossHpForFloor, coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
+  bossHpForFloor, marrowHpForFloor, coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 
-export type Movement = "chase" | "zigzag" | "drift" | "kite" | "boss";
+export type Movement = "chase" | "zigzag" | "drift" | "kite" | "charge" | "burrow" | "boss";
 
 // Seconds a freshly-spawned enemy stays passive before it may start a windup, so
 // boss-spat adds (or a room's mob on entry) never telegraph-and-hit on frame one.
@@ -63,27 +63,68 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 15, drawSize: 42, alpha: 1, tint: "#ff5a7a", kbResist: 0.8,
     baseHp: 3, baseSpeed: 30, touchDamage: 1, threat: 1.5,
   },
+  // Line-rush bruiser: a slow stalker whose telegraphed straight charge crosses most of a
+  // room — sidestep it, then punish the wall-crash stun. Heavy on its feet (high kbResist),
+  // so the answer is footwork, not knockback.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: charger).
+  charger: {
+    kind: "charger", sprite: "charger", movement: "charge", isPhasing: false,
+    radius: 17, drawSize: 48, alpha: 1, tint: "#d9a066", kbResist: 1.8,
+    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 1.5,
+  },
+  // Kite-denial: dives underground (untargetable, bounded), tunnels to the target, and
+  // erupts on a marked, telegraphed circle. You cannot outrange it — you dodge its marker
+  // and punish the surfaced recover window.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: burrower).
+  burrower: {
+    kind: "burrower", sprite: "burrower", movement: "burrow", isPhasing: false,
+    radius: 15, drawSize: 44, alpha: 1, tint: "#caa27e", kbResist: 1.2,
+    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 1.5,
+  },
   boss: {
     kind: "boss", sprite: "boss", movement: "boss", isPhasing: false,
     radius: 34, drawSize: 100, alpha: 1, tint: "#ffb43b", kbResist: 6,
     baseHp: BOSS.baseHp, baseSpeed: 40, touchDamage: BOSS.contactDamage, threat: 0,
   },
+  // MARROW (the boss-roster spec's blind charger, slotted as the alternating deep boss on
+  // floors 10/20/…): line charges with a wall-crash daze, bone-shard volleys, a P3 spiral
+  // barrage, and an interactive shield transition beat (§5b). Eyeless — it commits to
+  // where it HEARD you (the aim lock), which is why the last stretch of every windup is
+  // un-tracked and sidesteppable.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: marrow).
+  marrow: {
+    kind: "marrow", sprite: "marrow", movement: "boss", isPhasing: false,
+    radius: 30, drawSize: 92, alpha: 1, tint: "#bfd8e0", kbResist: 6,
+    baseHp: MARROW.baseHp, baseSpeed: 46, touchDamage: MARROW.contactDamage, threat: 0,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
-// bulky telegraph-hitters (only the skeleton's authored lunge carries the heavy +1).
+// bulky telegraph-hitters (only an authored commitment — the skeleton's lunge or the
+// charger's rush — carries the heavy +1).
 const SWARM_KINDS: readonly EnemyKind[] = ["slime", "bat"];
-const BRUTE_KINDS: readonly EnemyKind[] = ["slime", "skeleton"];
+const BRUTE_KINDS: readonly EnemyKind[] = ["slime", "skeleton", "charger"];
 
 export const BOSS_EVERY = 5;
 export function isBossFloor(floor: number): boolean {
   return floor % BOSS_EVERY === 0;
 }
 
+export function isBossKind(kind: EnemyKind): boolean {
+  return kind === "boss" || kind === "marrow";
+}
+
+// The boss roster alternates by depth: odd boss floors (5, 15, …) belong to the Slime
+// King; every second boss floor (10, 20, …) goes deeper — MARROW.
+export function bossKindForFloor(floor: number): EnemyKind {
+  return floor % (BOSS_EVERY * 2) === 0 ? "marrow" : "boss";
+}
+
 // §3 exact tables: HP(f) = roundHalfToEven(baseHP × HPmult(f)), same for speed. Damage
 // never scales with floor.
 export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
   if (kind === "boss") return bossHpForFloor(floor);
+  if (kind === "marrow") return marrowHpForFloor(floor);
   return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
 }
 
@@ -110,9 +151,9 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const tier = opts.tier ?? "standard";
   const tierDef = TIERS[tier];
   const players = opts.players ?? 1;
-  const isBoss = kind === "boss";
+  const isBoss = isBossKind(kind);
   const hp = isBoss
-    ? Math.round((bossHpForFloor(floor) * coopBossHpMult(players)) / 10) * 10
+    ? Math.round((enemyHpForFloor(kind, floor) * coopBossHpMult(players)) / 10) * 10
     : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players)));
   const speed = isBoss
     ? a.baseSpeed
@@ -141,12 +182,17 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0, burnOwner: null,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
-      // The boss waits a beat after its dramatic entrance before its first slam.
-      cooldown: isBoss ? BOSS.entranceGrace : 0,
+      // Bosses wait a beat after their dramatic entrance before the first commitment.
+      cooldown: kind === "boss" ? BOSS.entranceGrace : kind === "marrow" ? MARROW.entranceGrace : 0,
       lockedAngle: 0, isAimLocked: false, markX: 0, markY: 0,
     },
     boss: isBoss
-      ? { phase: 1, transitionsDone: 0, roar: null, addTimer: BOSS.addFirstAt, attackCount: 0, isNextRadial: false, burstParity: 0 }
+      ? {
+        phase: 1, transitionsDone: 0, roar: null,
+        addTimer: kind === "marrow" ? MARROW.addFirstAt : BOSS.addFirstAt,
+        attackCount: 0, isNextRadial: false, burstParity: 0,
+        shieldHuskIds: [], spinCount: 0,
+      }
       : null,
   };
 }
@@ -160,7 +206,15 @@ function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKi
     // once the player has learned to dodge the melee lunge. Sunless raises the complex share.
     roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
   }
-  if (floor >= 3) roster.push({ kind: "ghost", weight: 2 * complexShare });
+  if (floor >= 3) {
+    roster.push({ kind: "ghost", weight: 2 * complexShare });
+    // The charger arrives once the skeleton has taught the short lunge — its long lane is
+    // the graduate version of the same read.
+    roster.push({ kind: "charger", weight: 2 });
+  }
+  // The burrower lands after the ranged/kite lessons: it exists to deny the "stand at
+  // range" answer, so it enters once that answer has formed.
+  if (floor >= 4) roster.push({ kind: "burrower", weight: 2 * complexShare });
   return roster;
 }
 
@@ -284,16 +338,19 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
   if (roomCount <= 1) return { active: [], pending: [] };
 
   if (isBossFloor(floor)) {
-    // Boss lives in the last room (next to the exit). A few slimes for company.
+    // The floor's boss lives in the last room (next to the exit), with a few of its own
+    // kin for company: slimes under the King, skeletons under MARROW.
     const active: Enemy[] = [];
+    const bossKind = bossKindForFloor(floor);
+    const minionKind: EnemyKind = bossKind === "marrow" ? "skeleton" : "slime";
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
-    active.push(createEnemy("boss", b.x, b.y, floor, rng, active.length, { players }));
+    active.push(createEnemy(bossKind, b.x, b.y, floor, rng, active.length, { players }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);
       const p = pointInRoom(rng, dungeon, roomIndex);
-      active.push(createEnemy("slime", p.x, p.y, floor, rng, active.length, { players }));
+      active.push(createEnemy(minionKind, p.x, p.y, floor, rng, active.length, { players }));
     }
     return { active, pending: [] };
   }

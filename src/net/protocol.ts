@@ -20,7 +20,7 @@ import type { EnemyTier } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { ENEMY_ARCHETYPES } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossKind } from "../sim/enemies.js";
 import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
@@ -261,7 +261,10 @@ const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: tru
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
-const ATTACK_MOVES: Record<AttackMove, true> = { none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true };
+const ATTACK_MOVES: Record<AttackMove, true> = {
+  none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
+  rush: true, crash: true, dive: true, erupt: true, volley: true, spin: true, shield: true,
+};
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
   if (typeof v !== "string" || !Object.prototype.hasOwnProperty.call(set, v)) throw new ProtocolError(`bad ${what}`);
@@ -306,8 +309,12 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
   lungeTrail: { scope: "pos", fields: { x: "num", y: "num" } },
+  chargeCrash: { scope: "pos", fields: { x: "num", y: "num" } },
+  burrowDive: { scope: "pos", fields: { x: "num", y: "num" } },
+  burrowErupt: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   bossSlam: { scope: "pos", fields: { x: "num", y: "num" } },
   radialBurst: { scope: "pos", fields: { x: "num", y: "num" } },
+  bossVolley: { scope: "pos", fields: { x: "num", y: "num" } },
   bossAddSpawn: { scope: "pos", fields: { eid: "num", x: "num", y: "num", mx: "num", my: "num", spawned: "bool" } },
   // Global: shared-objective transitions every client must see regardless of distance.
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
@@ -692,7 +699,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0 }
+      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, shieldHuskIds: [], spinCount: 0 }
       : null,
   };
 }
@@ -810,7 +817,7 @@ export function buildSnapshot(
   const enemies: EnemyWire[] = [];
   const keepEnemies = new Set<number>();
   for (const e of w.enemies) {
-    if (e.kind === "boss" || near(e.x, e.y, view?.enemies.has(e.id) ?? false)) { enemies.push(toEnemyWire(e)); keepEnemies.add(e.id); }
+    if (isBossKind(e.kind) || near(e.x, e.y, view?.enemies.has(e.id) ?? false)) { enemies.push(toEnemyWire(e)); keepEnemies.add(e.id); }
   }
   const bullets: BulletWire[] = [];
   for (const b of w.bullets) if (near(b.x, b.y, false)) bullets.push(toBulletWire(b));

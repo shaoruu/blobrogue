@@ -43,8 +43,15 @@ export type SimEvent =
   // enemies / boss
   | { t: "spitMuzzle"; x: number; y: number }
   | { t: "lungeTrail"; x: number; y: number }
+  // A rushing enemy (charger / Marrow) slammed into a wall and stunned itself.
+  | { t: "chargeCrash"; x: number; y: number }
+  // Burrower cycle: the submerge puff, then the marked eruption burst.
+  | { t: "burrowDive"; x: number; y: number }
+  | { t: "burrowErupt"; x: number; y: number; r: number }
   | { t: "bossSlam"; x: number; y: number }
   | { t: "radialBurst"; x: number; y: number }
+  // The Marrow released a bone-shard fan (volley) from this point.
+  | { t: "bossVolley"; x: number; y: number }
   | { t: "bossAddSpawn"; eid: number; x: number; y: number; mx: number; my: number; spawned: boolean }
   | { t: "bossPhase"; eid: number; x: number; y: number }
   // Transition telemetry (§5/§7 gate 2): enter/exit of each 1.2s roar beat with the queued

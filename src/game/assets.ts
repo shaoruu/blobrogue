@@ -89,7 +89,13 @@ const SOURCES: Record<SpriteName, string> = {
   skeleton: "/sprites/skeleton.png",
   ghost: "/sprites/ghost.png",
   spitter: "/sprites/spitter.png",
+  // Sprite hooks for the content-wave enemies: generate via the locked fal recipe
+  // (tools/gen-sprites.mjs charger burrower marrow) and drop the cutouts here. Until the
+  // art lands, drawChar's tinted-circle fallback keeps them rendering.
+  charger: "/sprites/charger.png",
+  burrower: "/sprites/burrower.png",
   boss: "/sprites/boss.png",
+  marrow: "/sprites/marrow.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",

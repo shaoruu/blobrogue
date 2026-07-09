@@ -14,7 +14,7 @@ import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
-import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
+import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -24,7 +24,7 @@ import type { InputCmd, PlayerId } from "./input.js";
 import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
+  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CAPS, TIERS,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
 } from "./balance.js";
@@ -582,6 +582,8 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     homing: wep.homing,
     chain: wep.chain,
     chainRange: wep.chainRange,
+    blast: wep.blast,
+    boomerang: wep.boomerang,
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
@@ -709,7 +711,7 @@ function applyKnockbackDecay(w: WorldState, e: Enemy, dt: number): void {
 // ---- elemental status ----
 
 function isFrozen(e: Enemy): boolean {
-  return e.kind !== "boss" && e.chill >= C.FREEZE_AT;
+  return !isBossKind(e.kind) && e.chill >= C.FREEZE_AT;
 }
 function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
@@ -769,7 +771,7 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
     let best: Enemy | null = null;
     let bestD = range * range;
     for (const e of w.enemies) {
-      if (e.dead || list.indexOf(e) !== -1) continue;
+      if (e.dead || isUntargetable(e) || list.indexOf(e) !== -1) continue;
       const dx = e.x - cur.x, dy = e.y - cur.y, d = dx * dx + dy * dy;
       if (d < bestD) { bestD = d; best = e; }
     }
@@ -785,9 +787,37 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
 
 // ---- strikes / kills ----
 
-// EVERY authoritative point of enemy damage funnels through here, so the boss's phase
+// The shared anti-burst transition contract, per boss kind: the Slime King's roar and the
+// MARROW's shield are ONE mechanism (damage reduction + hard HP floor + queued overflow)
+// with different thresholds, presentation moves and add kinds.
+interface BossBeatDef {
+  phaseAt: readonly number[];
+  phaseFloor: readonly number[];
+  move: AttackMove;              // the beat's presentation: "roar" (King) / "shield" (MARROW)
+  damageReduction: number;
+  bulletClearRadius: number;
+  addCount: number;
+}
+
+const KING_BEAT: BossBeatDef = {
+  phaseAt: BOSS.phaseAt, phaseFloor: BOSS.phaseFloor, move: "roar",
+  damageReduction: BOSS.roarDamageReduction, bulletClearRadius: BOSS.roarBulletClearRadius,
+  addCount: BOSS.transitionAddCount,
+};
+
+const MARROW_BEAT: BossBeatDef = {
+  phaseAt: MARROW.phaseAt, phaseFloor: MARROW.phaseFloor, move: "shield",
+  damageReduction: MARROW.shieldDamageReduction, bulletClearRadius: MARROW.shieldBulletClearRadius,
+  addCount: MARROW.shieldHusks,
+};
+
+function bossBeatOf(e: Enemy): BossBeatDef {
+  return e.kind === "marrow" ? MARROW_BEAT : KING_BEAT;
+}
+
+// EVERY authoritative point of enemy damage funnels through here, so a boss's phase
 // thresholds are evaluated after every damage event (spec §5) — bullets, melee, burn ticks,
-// arcs, thorns and barrels alike — and its transition roar can reduce/floor/queue uniformly.
+// arcs, thorns and barrels alike — and its transition beat can reduce/floor/queue uniformly.
 function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[]): void {
   if (!e.boss) {
     e.hp -= dmg;
@@ -796,8 +826,8 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
   const boss = e.boss;
   if (boss.roar) {
     // Transition beat: 35% damage reduction (not immunity) + a hard phase floor. Damage
-    // that would cross the floor is QUEUED and applies only after the roar exits.
-    const reduced = dmg * (1 - BOSS.roarDamageReduction);
+    // that would cross the floor is QUEUED and applies only after the beat exits.
+    const reduced = dmg * (1 - bossBeatOf(e).damageReduction);
     const target = e.hp - reduced;
     if (target < boss.roar.floorHp) {
       boss.roar.queued += boss.roar.floorHp - target;
@@ -812,18 +842,20 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
   checkBossTransition(w, e, ev);
 }
 
-// Crossing 70% / 35% starts a 1.2s transition roar immediately (mid-attack included): the
-// HP floors at 62% / 27% (overflow queued), nearby bullets clear, and two slimes spawn at
-// opposite marked edges. Total forced downtime across the fight is exactly 2×1.2s. The
-// floor is the HARD anti-burst: even an arbitrarily large hit lands on the floor and its
-// excess waits out the full roar — the boss can never be deleted through a threshold.
+// Crossing a phase threshold starts the transition beat immediately (mid-attack included):
+// the HP floors (overflow queued), nearby bullets clear, and the beat's adds spawn at
+// opposite marked edges. The floor is the HARD anti-burst: even an arbitrarily large hit
+// lands on the floor and its excess waits out the beat — a boss can never be deleted
+// through a threshold. King: 70%/35% → floors 62%/27%, fixed 1.2s roars. MARROW: 65%/30%
+// → floors 57%/22%, a shield that holds up to 2.6s but BREAKS EARLY once both husks die.
 function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss || boss.roar) return;
-  if (boss.transitionsDone >= BOSS.phaseAt.length) return;
-  const threshold = BOSS.phaseAt[boss.transitionsDone] * e.maxHp;
+  const def = bossBeatOf(e);
+  if (boss.transitionsDone >= def.phaseAt.length) return;
+  const threshold = def.phaseAt[boss.transitionsDone] * e.maxHp;
   if (e.hp > threshold) return;
-  const floorHp = BOSS.phaseFloor[boss.transitionsDone] * e.maxHp;
+  const floorHp = def.phaseFloor[boss.transitionsDone] * e.maxHp;
   const queued = Math.max(0, floorHp - e.hp);
   if (e.hp < floorHp) e.hp = floorHp;
   boss.transitionsDone++;
@@ -831,23 +863,26 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   boss.attackCount = 0;
   boss.isNextRadial = true;
   boss.roar = { floorHp, queued, queuedBy: null };
-  beginWindup(e, "roar");
-  // The roar shockwave dissipates every projectile near the boss — a readable reset beat.
+  beginWindup(e, def.move);
+  // The beat's shockwave dissipates every projectile near the boss — a readable reset.
   for (const b of w.bullets) {
-    if (Math.hypot(b.x - e.x, b.y - e.y) <= BOSS.roarBulletClearRadius) b.life = 0;
+    if (Math.hypot(b.x - e.x, b.y - e.y) <= def.bulletClearRadius) b.life = 0;
   }
-  // Two slimes at opposite marked edges of the boss.
+  // The beat's adds at opposite marked edges. The Marrow REMEMBERS its husks: killing
+  // them all collapses the shield early (see marrowShieldTick).
+  boss.shieldHuskIds.length = 0;
   const edgeAngle = w.rng.next() * Math.PI * 2;
-  for (let i = 0; i < BOSS.transitionAddCount; i++) {
-    spawnBossAdd(w, e, edgeAngle + i * Math.PI, ev);
+  for (let i = 0; i < def.addCount; i++) {
+    const add = spawnBossAdd(w, e, edgeAngle + i * Math.PI, ev);
+    if (add && e.kind === "marrow") boss.shieldHuskIds.push(add.id);
   }
   ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
   ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: true, queued: boss.roar.queued, hpFrac: e.hp / e.maxHp });
 }
 
-// Roar over: apply the queued overflow as a fresh damage event (it may immediately trigger
-// the next transition — the 70%→35% double-cross case resolves as two full beats) and log
-// the exit so the ≥20s anti-burst gate stays observable.
+// Beat over (roar elapsed / shield elapsed or broken): apply the queued overflow as a
+// fresh damage event (it may immediately trigger the next transition — the double-cross
+// case resolves as two full beats) and log the exit so the anti-burst gate stays observable.
 function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss || !boss.roar) return;
@@ -889,7 +924,7 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.combo++;
     p.comboTimer = C.COMBO_WINDOW;
   }
-  const big = e.kind === "boss";
+  const big = isBossKind(e.kind);
   ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
   if (big) endBossDanger(w, e, ev);
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
@@ -931,7 +966,7 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
 }
 
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
-  if (e.kind === "boss") {
+  if (isBossKind(e.kind)) {
     w.chests.push({ id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false });
     return;
   }
@@ -1094,8 +1129,26 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
     b.prevX = b.x;
     b.prevY = b.y;
     if (b.friendly && b.homing !== undefined) steerHoming(w, b, dt);
+    if (b.friendly && b.boomerang !== undefined) steerBoomerang(w, b, dt, ev);
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    // A mortar shell that reaches the end of its arc airbursts instead of vanishing.
+    if (b.life <= 0 && b.friendly && b.blast !== undefined) { detonateBullet(w, b, b.x, b.y, ev); continue; }
     if (isWall(w, b.x, b.y)) {
+      // Outbound boomerangs clink off the wall into their return; returning ones already
+      // fly over geometry (their wall test is skipped below).
+      if (b.friendly && b.boomerang !== undefined) {
+        if (b.boomerang > 0) {
+          b.x = b.prevX ?? b.x; b.y = b.prevY ?? b.y;
+          beginBoomerangReturn(b);
+          ev.push({ t: "bulletBounce", x: b.x, y: b.y, aim: Math.atan2(-b.vy, -b.vx), color: b.color });
+        }
+        continue;
+      }
+      if (b.friendly && b.blast !== undefined) {
+        // Shells burst ON the wall face (the last in-bounds point), not inside it.
+        detonateBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
+        continue;
+      }
       if (b.bounce !== undefined && b.bounce > 0) { bounceOffWall(w, b, dt, ev); continue; }
       b.life = 0; ev.push({ t: "bulletWall", x: b.x, y: b.y, aim: Math.atan2(-b.vy, -b.vx) }); continue;
     }
@@ -1113,6 +1166,71 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.bullets = w.bullets.filter((b) => b.life > 0);
 }
 
+// Boomerang flight: `boomerang` counts down the outbound leg; at zero (or a wall clink)
+// the blade turns and homes on its OWNER's current hand at constant speed, arcing over all
+// geometry, and despawns on the catch. The hitList re-arms at the turn so the return pass
+// hits each body once more. A departed owner has no hand to return to — the blade expires
+// at the turn point (immutable attribution: never redirected to another live player).
+function steerBoomerang(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): void {
+  if (b.boomerang !== undefined && b.boomerang > 0) {
+    b.boomerang -= dt;
+    if (b.boomerang > 0) return;
+    beginBoomerangReturn(b);
+  }
+  const owner = ownerOf(w, b.owner);
+  if (!owner) {
+    b.life = 0;
+    ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color });
+    return;
+  }
+  const dx = owner.x - b.x, dy = owner.y - b.y;
+  const dist = Math.hypot(dx, dy);
+  const speed = Math.hypot(b.vx, b.vy) || 1;
+  if (dist < owner.pr + b.radius + speed * dt) {
+    b.life = 0;
+    ev.push({ t: "bulletExpire", x: owner.x, y: owner.y, color: b.color });
+    return;
+  }
+  b.vx = (dx / dist) * speed;
+  b.vy = (dy / dist) * speed;
+}
+
+function beginBoomerangReturn(b: Bullet): void {
+  b.boomerang = 0;
+  b.hitList = null;
+}
+
+// Mortar detonation: the shell's ONE payload, applied as an ordinary strike (attribution,
+// crits, elemental blessings, knockback radially out of the blast) to every targetable
+// enemy in the radius, plus prop destruction — explosive barrels chain, exactly like §prop
+// explosions. The bullet collapses onto the blast point so its spent segment can never
+// also plain-hit something later this tick.
+function detonateBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEvent[]): void {
+  const r = b.blast;
+  if (r === undefined) return;
+  b.blast = undefined;
+  b.life = 0;
+  b.x = x; b.y = y; b.prevX = x; b.prevY = y;
+  ev.push({ t: "explosion", x, y, r });
+  const shooter = ownerOf(w, b.owner);
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e)) continue;
+    if (Math.hypot(e.x - x, e.y - y) > r + e.radius) continue;
+    const kbX = e.x - x, kbY = e.y - y;
+    strikeEnemy(w, shooter, e, {
+      damage: b.damage, isCrit: b.isCrit, puffX: e.x, puffY: e.y,
+      kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
+      burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
+      ownerId: b.owner, fxWeapon: b.fx ?? null,
+    }, ev);
+    (b.hitList ??= []).push(e);
+  }
+  for (const prop of w.props) {
+    if (prop.breakT !== undefined || prop.kind === "brazier") continue;
+    if (Math.hypot(prop.x - x, prop.y - y) <= r + prop.radius) destroyProp(w, prop, ev, shooter ?? undefined);
+  }
+}
+
 function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   const rate = b.homing;
   if (rate === undefined || rate <= 0) return;
@@ -1120,7 +1238,7 @@ function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   let best: Enemy | null = null;
   let bestD = RANGE * RANGE;
   for (const e of w.enemies) {
-    if (e.dead) continue;
+    if (e.dead || isUntargetable(e)) continue;
     const dx = e.x - b.x, dy = e.y - b.y, d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; best = e; }
   }
@@ -1226,7 +1344,7 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   if (w.spawnReleaseCd > 0) return;
   let living = 0;
   for (const e of w.enemies) {
-    if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
+    if (!e.dead && !isBossKind(e.kind)) living += threatCostOf(e.kind, e.tier);
   }
   const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
   const next = w.pendingSpawns[0];
@@ -1260,7 +1378,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     updateEnemyAI(w, e, dt, ev);
     applyKnockbackDecay(w, e, dt);
 
-    const isMoving = e.attack.phase === "none" || (e.attack.phase === "active" && e.attack.move === "lunge");
+    const isMoving = e.attack.phase === "none" || (e.attack.phase === "active" && isRushMove(e.attack.move));
     e.hopMove += ((isMoving ? 1 : 0) - e.hopMove) * Math.min(1, dt * 9);
     e.hopClock += dt * (1 + e.hopMove * 1.5);
 
@@ -1268,7 +1386,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (!isProtected(victim) && !victim.isDown && victim.hp > 0
         && Math.hypot(victim.x - e.x, victim.y - e.y) < victim.pr + e.radius && canTouchDamage(e)) {
         damagePlayer(w, victim, contactDamageOf(e), ev);
-        if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
+        // A connecting line commitment (skeleton lunge, charger/MARROW rush) shoves the
+        // victim along the committed angle — the hit reads as impact, not overlap.
+        if (isRushMove(e.attack.move) && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
         applyThorns(w, victim, victim, e, ev);
         // Solo aborts the enemy loop on death (game over). Co-op and the authoritative shared
         // world keep processing — a downed player doesn't stop the world.
@@ -1276,8 +1396,11 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
 
+    // Underground: every round and swing passes over it (see isUntargetable).
+    const isBelowGround = isUntargetable(e);
+
     for (const b of w.bullets) {
-      if (!b.friendly) continue;
+      if (isBelowGround || !b.friendly) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       // Immutable attribution: the bullet keeps flying and dealing damage after its owner leaves
       // (shooter null) — it just credits no one. Never re-attributed to another live player.
@@ -1286,12 +1409,21 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
       const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
       if (sweptBulletHit(b, btx, bty, b.radius + e.radius)) {
+        // Mortar shells never strike directly — the blast IS the payload (the direct
+        // target is inside the radius and takes exactly one blast hit).
+        if (b.blast !== undefined) {
+          detonateBullet(w, b, sweptHit.x, sweptHit.y, ev);
+          continue;
+        }
         strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
-        if (b.chain !== undefined && b.chain > 0) {
+        if (b.boomerang !== undefined) {
+          // The blade flies on through — each pass hits once (the hitList re-arms at the turn).
+          (b.hitList ??= []).push(e);
+        } else if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);
           arcLightning(w, shooter, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
           b.life = 0;
@@ -1302,6 +1434,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 
     // Each player resolves their own melee swing against this enemy (solo: one player).
     for (const player of w.players.values()) {
+      if (isBelowGround) break;
       const swing = player.meleeSwing;
       if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
@@ -1327,15 +1460,40 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 }
 
 function canTouchDamage(e: Enemy): boolean {
+  if (isUntargetable(e)) return false; // an underground burrower neither deals nor takes touch
   if (e.kind === "ghost") return e.attack.windup >= C.GHOST_SOLID_AT;
   if (e.kind === "boss" && e.attack.move === "hopslam" && e.attack.phase === "active") return false;
   return true;
 }
 
+// A burrower below ground (tunneling, or armed under its eruption marker) is out of play:
+// bullets, swings, arcs, blasts and barrel explosions all pass over it until it surfaces.
+// Bounded by construction — travel is hard-capped and the eruption windup is fixed.
+function isUntargetable(e: Enemy): boolean {
+  if (e.kind !== "burrower") return false;
+  const a = e.attack;
+  return (a.move === "dive" && a.phase === "active") || (a.move === "erupt" && a.phase === "windup");
+}
+
+// The straight-line commitments that shove on impact (skeleton lunge, charger/MARROW rush).
+function isRushMove(move: AttackMove): boolean {
+  return move === "lunge" || move === "rush";
+}
+
+// Whether a rusher is overlapping any standing player (the connect test that ends a rush).
+function isTouchingAnyPlayer(w: WorldState, e: Enemy): boolean {
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    if (Math.hypot(p.x - e.x, p.y - e.y) < p.pr + e.radius) return true;
+  }
+  return false;
+}
+
 // Damage tiers (§3): light/contact stays 1 at every floor; only a brute's authored,
-// clearly telegraphed commitment (the skeleton's lunge, mid-active) deals the heavy 2.
+// clearly telegraphed commitment (the skeleton's lunge or the charger's rush, mid-active)
+// deals the heavy 2.
 function contactDamageOf(e: Enemy): number {
-  if (e.tier === "brute" && e.kind === "skeleton" && e.attack.phase === "active") return BRUTE_HEAVY_DAMAGE;
+  if (e.tier === "brute" && (e.kind === "skeleton" || e.kind === "charger") && e.attack.phase === "active") return BRUTE_HEAVY_DAMAGE;
   return e.touchDamage;
 }
 
@@ -1360,7 +1518,10 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "spitter": updateSpitter(w, e, dt, ev); return;
     case "skeleton": updateSkeleton(w, e, dt, ev); return;
     case "ghost": updateGhost(w, e, dt, ev); return;
+    case "charger": updateCharger(w, e, dt, ev); return;
+    case "burrower": updateBurrower(w, e, dt, ev); return;
     case "boss": updateBoss(w, e, dt, ev); return;
+    case "marrow": updateMarrow(w, e, dt, ev); return;
     default: updateChaser(w, e, dt); return;
   }
 }
@@ -1409,6 +1570,121 @@ function updateChaser(w: WorldState, e: Enemy, dt: number): void {
   if (e.kind === "slime") step *= slimeHopPulse(e);
   if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
   applyChaseStep(w, e, dt, angle, step);
+}
+
+// The charger: a slow stalker whose whole threat is one long, telegraphed straight rush.
+// The lane is authored to be SIDESTEPPED (backpedaling loses — it outruns you on a line),
+// and a wall crash swaps the move to "crash": a long self-stun, the authored punish window.
+function updateCharger(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (stepWindupTimer(w, e, dt, C.CHARGER_WINDUP, C.CHARGER_LOCK, false)) {
+      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.CHARGER_CD * attackCdMultOf(e);
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.8, gain: 0.85, trauma: 0.08 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    // A connect ends the rush BEFORE the next step (hit-and-stop, never a drag): the
+    // contact pass already landed the damage + shove on the tick the bodies met.
+    if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
+    const step = C.CHARGER_RUSH_SPEED * dt;
+    const x0 = e.x, y0 = e.y;
+    moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+    // Wall crash: barely progressing at full commitment = it hit something solid.
+    // (chill scales the intended step too, so a slowed rush is not a false crash.)
+    const moved = Math.hypot(e.x - x0, e.y - y0);
+    if (moved < step * chillMoveScale(e) * 0.5) {
+      a.move = "crash";
+      enterRecover(e);
+      ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+      return;
+    }
+    if (a.time >= C.CHARGER_RUSH_DUR) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "crash" ? C.CHARGER_CRASH_STUN : C.CHARGER_RECOVER)) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (dist <= C.CHARGER_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "rush");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.45, gain: 0.65, trauma: 0 });
+    return;
+  }
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+// The burrower: kite-denial. It dives (telegraph), tunnels toward the target at a speed
+// multiple while untargetable (bounded), then arms a marked eruption where it stopped —
+// the marker holds for the FULL windup, so the dodge is always readable. Surfacing leaves
+// it exposed through the pop + recover: the punish window for holding your ground.
+function updateBurrower(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (a.move === "dive") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / C.BURROW_DIVE_WINDUP);
+      if (a.time >= C.BURROW_DIVE_WINDUP) {
+        a.phase = "active"; a.time = 0; a.windup = 0;
+        ev.push({ t: "burrowDive", x: e.x, y: e.y });
+      }
+      return;
+    }
+    // erupt: stationary underground, marker armed — the player's reaction window.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.BURROW_ERUPT_WINDUP);
+    if (a.time >= C.BURROW_ERUPT_WINDUP) burrowerErupt(w, e, ev);
+    return;
+  }
+  if (a.phase === "active") {
+    if (a.move === "dive") {
+      a.time += dt;
+      const has = findTarget(w, e.x, e.y);
+      const dist = has ? Math.hypot(w.targetX - e.x, w.targetY - e.y) : Infinity;
+      if (a.time >= C.BURROW_MAX_TRAVEL || dist <= C.BURROW_EMERGE_DIST) {
+        beginWindup(e, "erupt");
+        a.markX = e.x; a.markY = e.y; a.isAimLocked = true;
+        return;
+      }
+      applyChaseStep(w, e, dt, chaseAngle(w, e), C.BURROW_TRAVEL_SPEED * dt);
+      return;
+    }
+    // The surfacing pop itself.
+    a.time += dt;
+    if (a.time >= C.BURROW_POP) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.BURROW_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (dist <= C.BURROW_TRIGGER && dist > C.BURROW_EMERGE_DIST && a.cooldown === 0 && e.spawnTimer === 0) {
+    beginWindup(e, "dive");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.7, gain: 0.55, trauma: 0 });
+    return;
+  }
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+function burrowerErupt(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  a.phase = "active"; a.time = 0; a.windup = 0;
+  a.cooldown = C.BURROW_CD * attackCdMultOf(e);
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (Math.hypot(p.x - a.markX, p.y - a.markY) < C.BURROW_ERUPT_RADIUS) damagePlayer(w, p, e.touchDamage, ev);
+  }
+  ev.push({ t: "burrowErupt", x: a.markX, y: a.markY, r: C.BURROW_ERUPT_RADIUS });
 }
 
 function updateGhost(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -1516,7 +1792,7 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
 // Living boss-summoned adds (the cadence cap counts only summons, never floor enemies).
 function countBossAdds(w: WorldState): number {
   let n = 0;
-  for (const e of w.enemies) if (!e.dead && e.isSummoned && e.kind !== "boss") n++;
+  for (const e of w.enemies) if (!e.dead && e.isSummoned && !isBossKind(e.kind)) n++;
   return n;
 }
 
@@ -1639,16 +1915,206 @@ function bossChase(w: WorldState, e: Enemy, dt: number): void {
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
 }
 
-// Spawn one summoned slime at `angle` off the boss's edge. Summons are excluded from
-// hearts/Fang (isSummoned) so add pressure never becomes a sustain farm.
-function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): void {
+// Spawn one summoned add at `angle` off the boss's edge — the King raises standard slimes,
+// MARROW fragile swarm-skeleton husks (they must be killable inside a shield beat).
+// Summons are excluded from hearts/Fang (isSummoned) so add pressure never becomes a
+// sustain farm. Returns the add (MARROW tracks its shield husks by id), or null when
+// the marked edge was inside a wall.
+function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): Enemy | null {
   const mx = e.x + Math.cos(angle) * (e.radius + 20);
   const my = e.y + Math.sin(angle) * (e.radius + 20);
-  if (isWall(w, mx, my)) { ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false }); return; }
-  w.enemies.push(createEnemy("slime", mx, my, w.floor, w.rng, w.nextEnemyId++, {
-    isSummoned: true, players: w.encounterPlayers,
-  }));
+  if (isWall(w, mx, my)) { ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false }); return null; }
+  const isMarrow = e.kind === "marrow";
+  const add = createEnemy(isMarrow ? "skeleton" : "slime", mx, my, w.floor, w.rng, w.nextEnemyId++, {
+    tier: isMarrow ? "swarm" : "standard", isSummoned: true, players: w.encounterPlayers,
+  });
+  w.enemies.push(add);
   ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx, my, spawned: true });
+  return add;
+}
+
+// MARROW (spec §5b, calibrated like §5 to the same 30–45s TTK band at F10).
+// A LINE boss: everything it does is an angle you read and step off, and its biggest
+// opening is self-inflicted (the wall-crash stun). Phase changes ride damage events
+// (checkBossTransition) exactly like the King; this machine owns the cadence:
+//   P1 (100–65%): alternating line charge / 3-shard volley every 3.0s; husk adds on cadence.
+//   P2 (65–30%):  2.6s cadence; 5-shard volley; a wall crash bursts a 6-shard ring.
+//   P3 (30–0%):   2.2s cadence; 7 shards, 8-ring crash; every 3rd attack is the rotating
+//                 spiral barrage; stalk +10%.
+// Transitions (65%/30%) raise the SHIELD beat: reduction + floors + queued overflow, and
+// two husks whose deaths break the shield early — read the beat, switch targets, profit.
+function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  // Add pacing pauses during the shield beat (the beat spawned its own marked husks).
+  if (!boss.roar) {
+    boss.addTimer -= dt;
+    if (boss.addTimer <= 0) {
+      boss.addTimer = MARROW.addInterval[boss.phase];
+      const cap = MARROW.addCap[boss.phase];
+      for (let i = 0; i < MARROW.addBatch[boss.phase]; i++) {
+        if (countBossAdds(w) >= cap) break;
+        spawnBossAdd(w, e, w.rng.next() * Math.PI * 2, ev);
+      }
+    }
+  }
+
+  if (a.phase === "windup") { marrowWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { marrowActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    const recDur = a.move === "crash" ? MARROW.crashStun
+      : a.move === "rush" ? MARROW.chargeRecover
+      : a.move === "spin" ? MARROW.spinRecover
+      : MARROW.volleyRecover;
+    if (a.time >= recDur) enterIdle(e);
+    return;
+  }
+
+  if (a.cooldown === 0 && e.spawnTimer === 0) { marrowBeginAttack(e, ev); return; }
+  marrowChase(w, e, dt);
+}
+
+function marrowBeginAttack(e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  e.attack.cooldown = MARROW.attackCd[boss.phase];
+  // P3: every 3rd attack is the stationary spiral barrage (0.8s telegraph, 2.2s weave).
+  if (boss.phase >= 3 && boss.attackCount % MARROW.spinEvery === 0) {
+    beginWindup(e, "spin");
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.9, gain: 0.7, trauma: 0.1 });
+    return;
+  }
+  const isVolley = boss.isNextRadial;
+  boss.isNextRadial = !boss.isNextRadial;
+  beginWindup(e, isVolley ? "volley" : "rush");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isVolley ? 0.55 : 0.4, gain: 0.7, trauma: 0 });
+}
+
+function marrowWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "shield") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / MARROW.shieldDuration);
+    // The interactive break: past the minimum readable beat, the shield holds only while
+    // a marked husk still stands (or until its hard cap elapses).
+    const isBreakable = a.time >= MARROW.shieldMinDuration;
+    if (a.time >= MARROW.shieldDuration || (isBreakable && countLiveShieldHusks(w, e) === 0)) {
+      e.boss!.shieldHuskIds.length = 0;
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
+    return;
+  }
+  if (a.move === "spin") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / MARROW.spinWindup);
+    if (a.time >= MARROW.spinWindup) {
+      // Anchor the spiral on the target's bearing at release, and flip its rotation
+      // direction each barrage so the weave never becomes muscle memory.
+      if (findTarget(w, e.x, e.y)) a.lockedAngle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+      const boss = e.boss!;
+      boss.spinCount = 0;
+      boss.burstParity ^= 1;
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      ev.push({ t: "radialBurst", x: e.x, y: e.y });
+    }
+    return;
+  }
+  if (a.move === "volley") {
+    if (stepWindupTimer(w, e, dt, MARROW.volleyWindup, MARROW.volleyLock, false)) {
+      marrowVolleyFire(w, e, ev);
+      enterRecover(e);
+    }
+    return;
+  }
+  // rush
+  if (stepWindupTimer(w, e, dt, MARROW.chargeWindup, MARROW.chargeLock, false)) {
+    a.phase = "active"; a.time = 0; a.windup = 0;
+    ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.55, gain: 0.9, trauma: 0.05 });
+  }
+}
+
+function marrowActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "spin") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / MARROW.spinDuration);
+    const boss = e.boss!;
+    const dir = boss.burstParity === 0 ? 1 : -1;
+    // Deterministic pair emitter: shard pair k fires as elapsed time crosses k×interval.
+    while (boss.spinCount < Math.floor(a.time / MARROW.spinInterval)) {
+      const ang = a.lockedAngle + dir * boss.spinCount * MARROW.spinStep;
+      spawnMarrowShard(w, e, ang);
+      spawnMarrowShard(w, e, ang + Math.PI);
+      boss.spinCount++;
+    }
+    if (a.time >= MARROW.spinDuration) enterRecover(e);
+    return;
+  }
+  // rush
+  a.time += dt;
+  // A connect ends the rush BEFORE the next step (the contact pass already landed the
+  // hit + shove last tick, while the rush was active) — hit-and-stop, never a drag.
+  if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
+  const step = MARROW.chargeSpeed * dt;
+  const x0 = e.x, y0 = e.y;
+  moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+  ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+  const moved = Math.hypot(e.x - x0, e.y - y0);
+  if (moved < step * chillMoveScale(e) * 0.5) {
+    marrowCrash(w, e, ev);
+    return;
+  }
+  if (a.time >= MARROW.chargeDur) enterRecover(e);
+}
+
+// The wall crash: MARROW's authored weakness. A long self-stun ("crash" recover), and
+// from P2 the impact bursts a radial shard ring — punishing, but only around the crash point.
+function marrowCrash(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const shards = MARROW.crashShards[boss.phase];
+  for (let i = 0; i < shards; i++) spawnMarrowShard(w, e, (i / shards) * Math.PI * 2);
+  a.move = "crash";
+  enterRecover(e);
+  ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+}
+
+function marrowVolleyFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const n = MARROW.volleyShards[boss.phase];
+  for (let i = 0; i < n; i++) {
+    spawnMarrowShard(w, e, a.lockedAngle + (i - (n - 1) / 2) * MARROW.volleySpread);
+  }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
+}
+
+function spawnMarrowShard(w: WorldState, e: Enemy, angle: number): void {
+  const mx = e.x + Math.cos(angle) * (e.radius + 6);
+  const my = e.y + Math.sin(angle) * (e.radius + 6);
+  spawnEnemyBullet(w, mx, my, angle, MARROW.shardSpeed, MARROW.shardRadius, MARROW.shardDamage, "#dceef5", MARROW.shardLife);
+}
+
+function countLiveShieldHusks(w: WorldState, e: Enemy): number {
+  const ids = e.boss!.shieldHuskIds;
+  if (ids.length === 0) return 0;
+  let n = 0;
+  for (const other of w.enemies) {
+    if (!other.dead && ids.indexOf(other.id) !== -1) n++;
+  }
+  return n;
+}
+
+function marrowChase(w: WorldState, e: Enemy, dt: number): void {
+  if (!findTarget(w, e.x, e.y)) return;
+  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  const mult = e.boss && e.boss.phase >= 3 ? MARROW.p3ChaseMult : 1;
+  const step = e.speed * mult * dt;
+  moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
 }
 
 // ---- shared attack helpers ----
@@ -1956,7 +2422,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
   const r = C.BARREL_EXPLOSION_RADIUS;
   ev.push({ t: "explosion", x: source.x, y: source.y, r });
   for (const e of w.enemies) {
-    if (e.dead) continue;
+    if (e.dead || isUntargetable(e)) continue;
     if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
     damageEnemy(w, p ? p.id : null, e, C.BARREL_EXPLOSION_DAMAGE, ev);
     ev.push({ t: "flash", eid: e.id });

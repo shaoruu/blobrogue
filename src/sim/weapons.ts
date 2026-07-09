@@ -29,6 +29,8 @@ export interface Weapon {
   homing?: number;     // homing: steering turn rate (rad/s)
   chain?: number;      // tesla: lightning jumps after the first hit
   chainRange?: number; // tesla: max px per chain jump
+  blast?: number;      // mortar: AoE radius — the shell detonates on impact/wall/expiry
+  boomerang?: number;  // boomerang: outbound seconds before the blade arcs back to the thrower
   // Elemental status the weapon stamps on every round (seconds of the effect). The
   // flamethrower is the only base weapon that carries one; item blessings roll the
   // rest at hit time (see PlayerMods.burnChance etc.), so any weapon can go elemental.
@@ -106,6 +108,24 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 0.6, pellets: 2, spread: 0.5, bulletRadius: 7, color: "#ff8a3b", muzzle: 2,
     burn: 2,
   },
+  // Tier B — carries the `blast` field: a lobbed shell that detonates where it lands
+  // (impact, wall or end-of-arc airburst). The room verb is AREA: convert a pack or a
+  // chokepoint into a blast zone, and detonate explosive barrels from safety — weak
+  // single-target on purpose (the blast is the whole payload; no pierce, no direct hit).
+  mortar: {
+    id: "mortar", name: "Thumper", fireCd: 0.75, speed: 380, life: 0.6,
+    damage: 6, pellets: 1, spread: 0, bulletRadius: 8, color: "#ffc46a", muzzle: 5,
+    blast: 64,
+  },
+  // Tier B — carries the `boomerang` field: a thrown blade that flies out, turns (or
+  // clinks off a wall), and arcs back to your hand over all geometry, hitting on BOTH
+  // passes. The room verb is the LINE, twice: reposition while it's out so the return
+  // sweep rakes a second rank. Never dies on a hit.
+  boomerang: {
+    id: "boomerang", name: "Swallow", fireCd: 0.6, speed: 540, life: 2.6,
+    damage: 3.5, pellets: 1, spread: 0, bulletRadius: 9, color: "#7fe0b8", muzzle: 3,
+    boomerang: 0.4,
+  },
   sword: {
     id: "sword", name: "Cutlass", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
@@ -128,7 +148,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer", "flamer",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar", "boomerang",
   "sword", "longsword", "spear",
 ];
 
@@ -152,6 +172,8 @@ export interface ShotSpec {
   homing?: number;
   chain?: number;
   chainRange?: number;
+  blast?: number;
+  boomerang?: number;
   burn?: number;
   chill?: number;
   shock?: number;
@@ -187,6 +209,8 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       homing: spec.homing,
       chain: spec.chain,
       chainRange: spec.chainRange,
+      blast: spec.blast,
+      boomerang: spec.boomerang,
       burn: spec.burn,
       chill: spec.chill,
       shock: spec.shock,

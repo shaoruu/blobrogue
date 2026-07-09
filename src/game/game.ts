@@ -4,11 +4,11 @@ import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, A
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
@@ -19,7 +19,7 @@ import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/wor
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
-import { comboTierFor } from "../sim/constants.js";
+import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
@@ -108,6 +108,8 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   sawnoff: "shootShotgun",
   railgun: "cannon",
   nailer: "shootRapid",
+  mortar: "cannon",
+  boomerang: "meleeSwing",
   flamer: "shootRapid",
   sword: "meleeSwing",
   longsword: "meleeSwing",
@@ -177,7 +179,7 @@ const SHAKE_MAX_PX = 26;
 const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
-  sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04,
+  sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04, mortar: 0.45, boomerang: 0.1,
   sword: 0.08, longsword: 0.16, spear: 0.07,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
@@ -185,13 +187,13 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
 const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
-  sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3,
+  sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3, mortar: 1.4, boomerang: 0.8,
   sword: 0.7, longsword: 1.1, spear: 0.6,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
-  sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5,
+  sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5, mortar: 7, boomerang: 2,
   sword: 1.5, longsword: 2.5, spear: 1,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
@@ -238,7 +240,22 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   radial: "#c98bff",  // boss burst: violet
   roar: "#ffb43b",    // boss phase change: gold
   squeeze: "#ff5a5a", // boss arena squeeze: closing red ring
+  rush: "#ff8a3b",    // charger / Marrow line charge: hot orange lane
+  crash: "#ffd27a",   // post-crash stun (no windup renders; the dizzy wobble carries it)
+  dive: "#c9a06a",    // burrower submerge: earthen shudder
+  erupt: "#ff5a5a",   // burrower eruption marker: red danger disc
+  volley: "#dceef5",  // Marrow bone fan: pale bone
+  spin: "#dceef5",    // Marrow spiral barrage
+  shield: "#7fd6ff",  // Marrow transition shield: cold blue
 };
+
+// Fallback disc tint per sprite while its PNG streams in (or before generated art lands):
+// each enemy keeps its identity color instead of everything reading as a purple slime.
+const SPRITE_FALLBACK_TINT: Partial<Record<SpriteName, string>> = (() => {
+  const tints: Partial<Record<SpriteName, string>> = {};
+  for (const arch of Object.values(ENEMY_ARCHETYPES)) tints[arch.sprite] = arch.tint;
+  return tints;
+})();
 
 // Ground-ring accents that make brutes/elites read at a glance (tier is also on the wire).
 const TIER_RING_COLOR: Partial<Record<EnemyTier, string>> = {
@@ -1028,13 +1045,13 @@ export class Game {
       }
       case "enemyKill": {
         const arch = ENEMY_ARCHETYPES[e.kind];
-        const big = e.kind === "boss";
+        const big = isBossKind(e.kind);
         if (big) audio.setMusic("dungeon"); // the intense boss track relaxes after the kill
         this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
         this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
         this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
         this.replayDeathBurst(e.kind, e.x, e.y);
-        const dur = e.kind === "boss" ? DEATH_DUR_BOSS
+        const dur = big ? DEATH_DUR_BOSS
           : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
           : DEATH_DUR;
         const size = arch.drawSize * (TIERS[e.tier as EnemyTier]?.drawMult ?? 1);
@@ -1135,6 +1152,28 @@ export class Game {
         break;
       case "lungeTrail":
         this.spawnPuff(e.x, e.y, 1, ENEMY_ARCHETYPES.skeleton.tint);
+        break;
+      case "chargeCrash":
+        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.7, gain: 0.8 });
+        this.spawnParticles(e.x, e.y, 10, "#c9a06a");
+        this.spawnSparks(e.x, e.y, 6, 0);
+        this.shockwaves.spawn(e.x, e.y, 10, 60, 0.3, "#ffd27a", 3);
+        this.addTrauma(0.18);
+        break;
+      case "burrowDive":
+        this.sfxAt("enemyHit", e.x, e.y, { rate: 0.6, gain: 0.5 });
+        this.spawnPuff(e.x, e.y, 8, "#c9a06a");
+        break;
+      case "burrowErupt":
+        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.85, gain: 0.8 });
+        this.spawnParticles(e.x, e.y, 14, "#c9a06a");
+        this.spawnDustRing(e.x, e.y, e.r * 0.7, 10, "#c9a06a");
+        this.shockwaves.spawn(e.x, e.y, 10, e.r * 1.4, 0.32, "#ffd27a", 3);
+        this.addTrauma(0.14);
+        break;
+      case "bossVolley":
+        this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.75, gain: 0.55 });
+        this.spawnPuff(e.x, e.y, 6, "#dceef5");
         break;
       case "bossSlam":
         this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
@@ -1281,11 +1320,26 @@ export class Game {
       case "spitter":
         this.spawnPuff(x, y, 9, "#ff9ab8");
         break;
+      case "charger":
+        this.spawnGibs(x, y, 7, ENEMY_ARCHETYPES.charger.tint);
+        this.spawnSparks(x, y, 5, 0);
+        break;
+      case "burrower":
+        this.spawnPuff(x, y, 10, ENEMY_ARCHETYPES.burrower.tint);
+        this.spawnDustRing(x, y, 26, 8, "#c9a06a");
+        break;
       case "boss":
         this.screenFlash.flash(255, 214, 120, 0.4, 1.4);
         this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd27a", 5);
         this.shockwaves.spawn(x, y, 12, 260, 0.8, "#ffb43b", 3);
         this.spawnSparkleBurst(x, y, 26, "#ffd27a");
+        break;
+      case "marrow":
+        this.screenFlash.flash(191, 216, 224, 0.4, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#dceef5", 5);
+        this.shockwaves.spawn(x, y, 12, 260, 0.8, "#bfd8e0", 3);
+        this.spawnGibs(x, y, 14, "#e8e4d8");
+        this.spawnSparkleBurst(x, y, 26, "#dceef5");
         break;
     }
   }
@@ -1700,7 +1754,7 @@ export class Game {
   }
 
   private updateHud() {
-    const boss = this.enemies.find((e) => e.kind === "boss");
+    const boss = this.enemies.find((e) => isBossKind(e.kind));
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
     let coopLabel: string | null = null;
@@ -2368,7 +2422,8 @@ export class Game {
     const { ctx } = this;
     const sheet = this.sprites.sheet(name, clip);
     if (!sheet && !this.sprites.ready(name)) {
-      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = "#a855f7";
+      // Streaming/absent sprite: a plain disc in the character's own tint keeps it readable.
+      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = SPRITE_FALLBACK_TINT[name] ?? "#a855f7";
       ctx.beginPath(); ctx.arc(cx, cy, size * 0.34, 0, 6.28); ctx.fill(); ctx.restore();
       return;
     }
@@ -2635,13 +2690,27 @@ export class Game {
       const sx = e.x - cam.x, sy = e.y - cam.y;
       const facing = this.enemyFacing.get(e.id) ?? (this.px >= e.x ? 1 : -1);
       const isWindup = a.phase === "windup";
+      const isBoss = isBossKind(e.kind);
       const isHopSlam = e.kind === "boss" && a.move === "hopslam";
       const drawSize = this.enemyDrawSize(e);
+
+      // An underground burrower (tunneling, or armed under its marker — the sim's
+      // untargetable window) renders as a traveling mound, never a body: nothing to shoot
+      // until it surfaces.
+      const isUnderground = e.kind === "burrower"
+        && ((a.move === "dive" && a.phase === "active") || (a.move === "erupt" && isWindup));
+      if (isUnderground) {
+        if (a.move === "erupt") this.renderDangerDisc(a.markX, a.markY, BURROW_ERUPT_RADIUS, a.windup);
+        this.renderBurrowMound(e, sx, sy, drawSize, anim.clock);
+        continue;
+      }
 
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
       // The shrinking safe-ring of the boss arena squeeze.
       if (e.kind === "boss" && a.move === "squeeze") this.renderSqueeze(e);
+      // The Marrow's transition shield bubble (the interactive beat: kill the husks).
+      if (e.kind === "marrow" && a.move === "shield" && isWindup) this.renderMarrowShield(e, sx, sy, drawSize);
       // Brutes/elites carry a colored ground ring so the tier reads before the first hit.
       const ring = TIER_RING_COLOR[e.tier];
       if (ring) this.renderTierRing(sx, sy, drawSize, ring);
@@ -2650,16 +2719,21 @@ export class Game {
       const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup : arch.alpha;
 
       const clip: SheetClip = anim.move > 0.5 ? "walk" : "idle";
-      const xf = characterXform(anim, e.kind === "boss" ? BOSS_STYLE : CHARACTER_STYLE);
+      const xf = characterXform(anim, isBoss ? BOSS_STYLE : CHARACTER_STYLE);
       let extra = 1;
-      // Skeleton coils down (squash) as its lunge charges.
-      if (e.kind === "skeleton" && isWindup) { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
+      // Skeleton and charger coil down (squash) as their line commitments charge.
+      if ((e.kind === "skeleton" || e.kind === "charger") && isWindup && a.move !== "none") { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
+      // Mid-rush stretch along the lane; post-crash dizzy wobble (the punish window tell).
+      if (a.move === "rush" && a.phase === "active") { xf.sx += 0.18; xf.sy -= 0.12; }
+      if (a.move === "crash" && a.phase === "recover") { xf.rot += Math.sin(anim.clock * 11) * 0.14; xf.sy -= 0.08; }
       // Boss inflates for radial/roar/squeeze telegraphs and lifts off the ground mid-slam.
       if (e.kind === "boss") {
         if (isWindup && (a.move === "radial" || a.move === "roar" || a.move === "squeeze")) extra = 1 + a.windup * 0.16;
         if (isHopSlam && a.phase === "windup") xf.sy -= 0.18 * a.windup; // crouch before the leap
         if (isHopSlam && a.phase === "active") { xf.oy -= Math.sin(a.windup * Math.PI) * BOSS_JUMP_HEIGHT; extra = 1.08; }
       }
+      // The Marrow inflates for its spiral/shield telegraphs.
+      if (e.kind === "marrow" && isWindup && (a.move === "spin" || a.move === "shield")) extra = 1 + a.windup * 0.14;
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
@@ -2673,12 +2747,66 @@ export class Game {
       // Aura + aim line for a charging attack.
       if (isWindup) this.renderTelegraph(e, sx, sy);
 
-      const barW = e.kind === "boss" ? 64 : 32;
+      const barW = isBoss ? 64 : 32;
       const barY = sy - drawSize / 2 - 8;
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
-      ctx.fillStyle = e.kind === "boss" ? "#ffb43b" : "#ff5a5a";
+      ctx.fillStyle = isBoss ? "#ffb43b" : "#ff5a5a";
       ctx.fillRect(sx - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), 4);
     }
+  }
+
+  // The traveling dirt mound of a tunneling burrower: a low earthen bump + kicked specks.
+  // A ground effect, not a body — the sprite returns at the eruption.
+  private renderBurrowMound(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const tint = ENEMY_ARCHETYPES[e.kind].tint;
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = tint;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy + size * 0.18, size * 0.34, size * 0.14, 0, 0, 6.28);
+    ctx.fill();
+    ctx.globalAlpha = 0.85;
+    for (let i = 0; i < 5; i++) {
+      const ang = clock * 6 + (i / 5) * 6.28;
+      const rad = size * (0.2 + 0.14 * Math.sin(clock * 9 + i * 1.7));
+      ctx.fillRect(sx + Math.cos(ang) * rad - 1.5, sy + size * 0.12 + Math.sin(ang) * rad * 0.4 - 1.5, 3, 3);
+    }
+    ctx.restore();
+  }
+
+  // A generic filled danger disc + bright rim (the burrower's eruption marker). Grows with
+  // the telegraph so "leave this circle" needs no explanation.
+  private renderDangerDisc(x: number, y: number, radius: number, grow: number) {
+    const { ctx, cam } = this;
+    const sx = x - cam.x, sy = y - cam.y;
+    const r = radius * Math.max(0.2, grow);
+    ctx.save();
+    ctx.globalAlpha = 0.16 + 0.16 * grow;
+    ctx.fillStyle = "#ff5a5a";
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+    ctx.globalAlpha = 0.45 + 0.35 * grow;
+    ctx.strokeStyle = "#ffd27a";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The Marrow's bone shield: a cold ring that thins as the beat runs out. Husk deaths
+  // collapse it early — the ring is the "switch targets" prompt.
+  private renderMarrowShield(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const t = e.attack.windup;
+    const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 7);
+    ctx.save();
+    ctx.globalAlpha = (0.5 - 0.25 * t) * pulse + 0.2;
+    ctx.strokeStyle = TELEGRAPH_COLOR.shield;
+    ctx.lineWidth = 4 - 2 * t;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.62, 0, 6.28); ctx.stroke();
+    ctx.globalAlpha = 0.12 * pulse;
+    ctx.fillStyle = TELEGRAPH_COLOR.shield;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.62, 0, 6.28); ctx.fill();
+    ctx.restore();
   }
 
   // A thin pulsing ellipse under a brute/elite — the tier tell.
@@ -2732,8 +2860,14 @@ export class Game {
     ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
     ctx.restore();
 
-    if (a.move === "lunge" || a.move === "spit") {
-      const len = a.move === "lunge" ? 150 : 300;
+    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley") {
+      // Line commitments draw their whole lane: the rush lengths match the sim's actual
+      // travel, so where the line ends is where the rusher stops (or crashes).
+      const len = a.move === "lunge" ? 150
+        : a.move === "spit" ? 300
+        : a.move === "volley" ? 260
+        : e.kind === "marrow" ? MARROW.chargeSpeed * MARROW.chargeDur
+        : CHARGER_RUSH_SPEED * CHARGER_RUSH_DUR;
       ctx.save();
       ctx.globalAlpha = (a.isAimLocked ? 0.9 : 0.4) * (0.55 + 0.45 * a.windup);
       ctx.strokeStyle = color;
@@ -2932,6 +3066,17 @@ export class Game {
         this.fxLayer("flame_puff", color, bx, by, R * 4.5, R * 4.5, 0.75, angle);
         this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.5, 0);
         return this.fxLayer("core_dot", "#ffe6a0", bx, by, R * 2.4, R * 2.4, 0.9, 0);
+      case "mortar":
+        // A heavy lobbed shell: smoke billowing off the tail, warm glow, fat slug head.
+        this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.4, by - Math.sin(angle) * R * 2.4, R * 4.5, R * 4.5, 0.45, 0);
+        this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
+        return this.fxLayer("slug", color, bx, by, R * 4.2, R * 4.2, 1, angle);
+      case "boomerang":
+        // The whirling blade: a bright spinning slug under a cool glow — the spin sells the
+        // "it's coming back" read at a glance.
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.45, 0);
+        this.fxLayer("slug", color, bx, by, R * 4, R * 4, 0.9, this.animClock * 22);
+        return this.fxLayer("core_dot", color, bx, by, R * 2, R * 2, 0.9, 0);
       default:
         return false;
     }
@@ -3283,7 +3428,7 @@ export class Game {
   private renderMinimap() {
     const dots: MinimapDot[] = [];
     for (const e of this.enemies) {
-      dots.push({ x: e.x, y: e.y, color: e.kind === "boss" ? "#ffb43b" : "#ff6a6a", size: e.kind === "boss" ? 3 : 2 });
+      dots.push({ x: e.x, y: e.y, color: isBossKind(e.kind) ? "#ffb43b" : "#ff6a6a", size: isBossKind(e.kind) ? 3 : 2 });
     }
     for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
     this.minimap.render({

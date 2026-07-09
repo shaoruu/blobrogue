@@ -12,13 +12,20 @@ export interface Entity {
   dead: boolean;
 }
 
-export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss";
+export type EnemyKind =
+  | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
+  | "boss" | "marrow";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
 export type AttackPhase = "none" | "windup" | "active" | "recover";
-// Which move an attacker is mid-executing. The boss owns several; others own one.
-export type AttackMove = "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze";
+// Which move an attacker is mid-executing. The bosses own several; others own one or two.
+// "rush"/"crash" are shared line-charge grammar (charger + Marrow): a telegraphed straight
+// rush whose wall impact swaps the move to "crash" for the longer, punishable stun recover.
+// "dive"/"erupt" are the burrower's underground cycle; "volley"/"spin"/"shield" are Marrow.
+export type AttackMove =
+  | "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze"
+  | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -43,16 +50,23 @@ export interface BossRoar {
   queuedBy: PlayerId | null;
 }
 
-// Boss-only extra state (HP-phase tracking + add/attack pacing). Phase transitions are
-// driven by damage events (checked after every authoritative hit), never idle polling.
+// Boss-only extra state (HP-phase tracking + add/attack pacing), shared by both bosses.
+// Phase transitions are driven by damage events (checked after every authoritative hit),
+// never idle polling. The transition beat is the Slime King's roar or MARROW's shield —
+// one anti-burst mechanism (reduction + HP floor + queued overflow), two presentations.
 export interface BossState {
   phase: number;           // 1..3
-  transitionsDone: number; // 0..2 — which of the 70%/35% transition beats have fired
-  roar: BossRoar | null;   // non-null while the 1.2s transition roar is active
+  transitionsDone: number; // 0..2 — which of the two transition beats have fired
+  roar: BossRoar | null;   // non-null while a transition beat (roar/shield) is active
   addTimer: number;        // countdown until the next cadence add spawn
-  attackCount: number;     // attacks committed in the current phase (radial/squeeze cadence)
-  isNextRadial: boolean;   // alternates hop-slam / radial-burst in phase 2
-  burstParity: number;     // flips the radial ring offset each burst (0/1)
+  attackCount: number;     // attacks committed in the current phase (special-move cadence)
+  isNextRadial: boolean;   // King: alternates hop/radial in P2. Marrow: alternates rush/volley.
+  burstParity: number;     // King: radial ring offset. Marrow: spiral spin direction.
+  // Marrow shield beat: the summoned husks' enemy ids — killing them ALL drops the shield
+  // early (the interactive break). Always empty on the Slime King.
+  shieldHuskIds: number[];
+  // Marrow spiral barrage: shard pairs already fired this active window.
+  spinCount: number;
 }
 
 export interface Enemy extends Entity {
@@ -106,7 +120,7 @@ export interface Enemy extends Entity {
 export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
-  | "sawnoff" | "railgun" | "nailer" | "flamer"
+  | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "boomerang"
   | "sword" | "longsword" | "spear";
 
 export interface Bullet {
@@ -129,6 +143,10 @@ export interface Bullet {
   homing?: number;         // homing: steering turn rate (rad/s) toward the nearest enemy
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
+  blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
+  // boomerang: outbound seconds left before the turn; <= 0 means it is flying back to its
+  // owner (phasing over geometry). It never dies on a hit — each pass re-arms via hitList.
+  boomerang?: number;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies
@@ -253,5 +271,6 @@ export type TileKind = 0 | 1; // 0 = floor, 1 = wall
 // src/sim free of any import into src/game (which pulls in DOM types). The client re-exports
 // this from assets.ts for its render call sites.
 export type SpriteName =
-  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
+  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
+  | "boss" | "marrow"
   | "heart" | "coin" | "gun" | "spit";

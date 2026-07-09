@@ -199,6 +199,69 @@ export function bossHpForFloor(floor: number): number {
   return Math.round(scaled / 10) * 10;
 }
 
+// ---- §5b MARROW (the alternating deep boss: floors 10, 20, …) ----
+// Same design contract as the Slime King — difficulty via telegraphed commitments, TTK in
+// the same 30–45s median band at that depth's median build — but a LINE fight, not an area
+// fight: sidestep the charge lanes, weave the volleys/spiral, and punish the wall crash.
+// Its transition beat is a bone SHIELD instead of a roar: identical anti-burst plumbing
+// (damage reduction + hard HP floor + queued overflow), but INTERACTIVE — killing both
+// summoned husks drops the shield early, so a read converts downtime into target play.
+
+export const MARROW = {
+  // Calibrated at the F10 encounter against the F10 median build (Hair Trigger Lv3 +
+  // Glass Cannon Lv2 pistol ≈ 34 sustained DPS) for a ~37s median TTK — see balance tests.
+  baseHp: 1250,
+  baseHpFloor: 10,
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // indexed by phase 1..3
+  // Line charge: long windup, long lane, and a wall crash that self-stuns (the punish window).
+  chargeWindup: 0.9,
+  chargeLock: 0.5,
+  chargeSpeed: 520,
+  chargeDur: 1.1,
+  chargeRecover: 0.7,
+  crashStun: 1.6,
+  crashShards: [0, 0, 6, 8] as readonly number[],    // ring size on a wall crash, per phase
+  // Bone-shard volley: an aimed fan that widens with the phase.
+  volleyWindup: 0.7,
+  volleyLock: 0.4,
+  volleyRecover: 0.6,
+  volleyShards: [0, 3, 5, 7] as readonly number[],   // fan size per phase 1..3
+  volleySpread: 0.22,                                // radians between fan shards
+  shardSpeed: 300,
+  shardRadius: 7,
+  shardDamage: 1,
+  shardLife: 2.4,
+  // P3 spiral barrage: every 3rd attack, a stationary rotating pair-emitter you weave through.
+  spinEvery: 3,
+  spinWindup: 0.8,
+  spinDuration: 2.2,
+  spinInterval: 0.22,   // seconds between shard pairs
+  spinStep: 0.55,       // radians the spiral advances per pair
+  spinRecover: 0.8,
+  // Phase thresholds/floors, evaluated after EVERY authoritative damage event (like §5).
+  phaseAt: [0.65, 0.30] as readonly number[],
+  phaseFloor: [0.57, 0.22] as readonly number[],
+  shieldDuration: 2.6,        // max beat length when the husks are ignored
+  shieldMinDuration: 0.9,     // the beat always reads, even if the husks die instantly
+  shieldDamageReduction: 0.35, // reduction, not immunity — same principle as the roar
+  shieldBulletClearRadius: 70,
+  shieldHusks: 2,             // summoned at opposite marked edges; killing both breaks early
+  addFirstAt: 5,
+  addInterval: [0, 7, 7, 7] as readonly number[],
+  addBatch: [0, 1, 1, 2] as readonly number[],
+  addCap: [0, 4, 4, 6] as readonly number[],
+  p3ChaseMult: 1.10,
+} as const;
+
+// Alternate boss floors (F20, …) ride the same clamped §3 curve, anchored at the F10
+// calibration (beyond F10 the envelope is flat, so deeper MARROWs stay at the anchor).
+export function marrowHpForFloor(floor: number): number {
+  const scaled = MARROW.baseHp * (floorHpMult(floor) / floorHpMult(MARROW.baseHpFloor));
+  return Math.round(scaled / 10) * 10;
+}
+
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----
 // The 4–6× strong-run fantasy is EXPRESSIVE capability (pellets/pierce/status/crit/
 // positioning), never a product of raw flat stats. Enforced in the authoritative sim
