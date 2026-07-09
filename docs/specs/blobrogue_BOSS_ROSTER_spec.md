@@ -1,5 +1,5 @@
 # blobrogue — BOSS ROSTER (build-ready, data-driven on the existing framework)
-6 distinct bosses, each a DATA-DRIVEN set of telegraphed techniques on the shipped enemy attack-state system (windup → aim-lock → active → recover) + the 3-phase BossState. No two share a fight pattern. Grounded in the REAL code (exact current boss stats + move timings below) AND aligned to the Creative Director's vision (biomes Verdant Hollow → Sunless Caves → The Deep → Emberreach; the Mirror Blob + Hollow Choir hero-bosses are specced here). Mechanics are primary; themes match the CD doc so nothing blocks — retheme freely, the movesets stand.
+Five approved first-clear bosses + Jet as later endgame,, each a DATA-DRIVEN set of telegraphed techniques on the shipped enemy attack-state system (windup → aim-lock → active → recover) + the 3-phase BossState. No two share a fight pattern. Grounded in the REAL code (exact current boss stats + move timings below) AND aligned to the Creative Director's vision (approved first-clear regions Amberwild → Rootbound Warrens → Sunless Caves → The Deep → Gilded Archive → Emberreach; Jet + Hollow Choir hero-bosses are specced here). Mechanics are primary; themes match the CD doc so nothing blocks — retheme freely, the movesets stand.
 
 ## The framework we're extending (from the real code)
 - **AttackMove** union today: "none"|"lunge"|"spit"|"hopslam"|"radial"|"roar". Each new boss technique = a new AttackMove enum value + a handler in the boss update, following the EXACT pattern the Slime King already uses (windup ramps 0..1 driving the telegraph tint/marker; aim locks partway; active fires; recover is the punish window).
@@ -13,7 +13,7 @@
 - Boss HP bar (just shipped) + post-boss music calm (just shipped) apply to all.
 
 ===============================================================
-# BOSS 1 — THE SLIME KING (existing) → keep as the "summoner" archetype, Verdant Hollow
+# BOSS 1 — THE SLIME KING (existing) → keep as the "summoner" archetype, Amberwild
 ===============================================================
 Already built. Reclassify it as the SUMMONER archetype and the first-biome boss (the tutorial boss — teaches telegraph-reading). No rework; it's the baseline. Its identity in the roster: adds + AoE zoning. Leave it; the roster grows AROUND it.
 
@@ -26,7 +26,7 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 **BossState extra:** { chargeChain: number } (consecutive charges this combo).
 **Signature moves:**
 - **GORE-CHARGE** (new AttackMove "charge"): WINDUP 0.7s — Marrow plants, lowers its head, empty sockets FLARE RED (it's "listening"), and a RED CHARGE-LINE telegraph extends toward the player's current sound (reuse the skeleton lunge aim-line tech, longer). Aim LOCKS at 0.4s = the instant it commits to where it HEARD you; last 0.3s un-tracked = now deaf, so sidestep the locked line. If the player is holding STILL at lock-time, it fails to pin you (locks on your last-moving pos / a random offset) — silence breaks the charge. ACTIVE 0.6s: barrels along the locked line at ~520px/s until it hits a wall, then EMBEDS (stuck) for a RECOVER of 1.0s (the big punish window — bait it into a wall). Contact during charge = touchDamage + heavy knockback. Wall-impact spawns a small debris AoE (reuse explosion FX, no chain).
-- **SHOCKWAVE STOMP** (reuse hopslam tech): a radial ground-slam at close range if you hug it too long — punishes turtling under it during recover. Windup 0.6s, ring marker r90.
+- **BONEBREAK STOMP** (reuse internal hop-slam radius90): close-range punish. Windup0.6s; shale/bone stress fractures point outward and debris lifts along the coming footprint. No visible ring; internal radius remains90.
 - **Phase 2 (66%):** charges come in pairs (chargeChain up to 2) — a feint then a real one; the telegraph flickers on the feint. Reads as a juke war.
 - **Phase 3 (33%):** speed +20%, charge leaves a lingering RUBBLE hazard along its path (reuse a decal + area DoT) so the arena shrinks — forces movement.
 **Art/VFX brief:** a big angular quadruped/bull silhouette (contrast the round blob), rocky-bone texture, EMPTY EYE-SOCKETS that flare red ONLY mid-charge windup as it "listens" (it's blind). VFX: red charge-line (reuse aim-line mask tinted #ff5a5a), dust plume on charge start (reuse smoke_puff), debris gibs on wall-impact (reuse gibs), rubble decal (Phase 3). Drawsize ~110.
@@ -34,16 +34,16 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 ===============================================================
 # BOSS 3 — THE HOLLOW CHOIR  (ZONER / ARTILLERY)  · Emberreach world-boss
 ===============================================================
-**Identity/fantasy:** the CD's named Emberreach world-boss — a colossal fused mass of dead blobs, half-sunk in lava, that SINGS death from range. The "keep moving, the floor is lava" artillery fight; screen-filling, multi-phase, the co-op raid moment. Weaponizes the Choir (storm) school against you.
+**Identity/fantasy:** the CD’s named Emberreach world-boss — a colossal fused mass of dead blobs, half-sunk in lava, that SINGS death from range. The "keep moving, the floor is lava" artillery fight; screen-filling, multi-phase, the co-op raid moment. Weaponizes the Choir (storm) school against you.
 **Profile:** hp ~140 (+22/fl) — a raid boss, mostly STATIONARY (speed ~15, it's half-sunk), radius 48 (huge), touchDamage 3. It zones instead of chasing.
 **BossState extra:** { strikeTimer: number, chargeField: number }.
 **Signature moves:**
-- **STRIKE RAIN** (new AttackMove "strikerain"): telegraphed lightning from above — 3-5 GROUND MARKERS bloom on/near player positions (reuse the hop-slam shadow-ring marker, cyan), WINDUP 0.9s (generous, it's ranged AoE), then bolts hit those tiles. Markers target current positions and LOCK at 0.5s → walk off them. In co-op it marks multiple players (interest: everyone dances).
-- **CHOIR SWELL** (reuse radial, reflavored): a full-ring bolt burst (8→12 bolts) from its body, alternating offset (existing burstParity), for when players get close. Windup 0.8s, cyan.
-- **CHARGE FLOOR** (new AttackMove "chargefloor"): telegraphs the WHOLE arena floor with a rising cyan pulse over 1.2s, then a room-wide discharge that ONLY spares tiles near the boss's body (invert the danger — forces players to run TOWARD the scary thing). The signature "learn the safe spot" mechanic.
-- **ADDS:** periodically births swarm blobs from its body (reuse minion drip) — the co-op crowd to clear.
-- **Phases:** P1 strike rain + adds. P2 (66%) adds choir swell + faster strikes. P3 (33%) charge-floor enters the rotation + strike rain doubles. A real endurance/positioning test.
-**Art/VFX brief:** a massive, tragic, screen-edge silhouette of fused sad-eyed blobs (warm-dark whimsy: tragic AND terrifying), half-submerged, glowing cyan mouths when it sings. VFX: cyan strike markers + bolts (reuse arc_chain/crackle + the slam marker), floor-pulse overlay (reuse a big tinted mask — same tech as the Resonance overlays), ember/lava ambiance. Big bespoke art piece — the trailer boss. Drawsize ~200 (multi-tile).
+- **STRIKE RAIN** (new AttackMove "strikerain"): 3–5 fulgurite cracks fork toward player positions; stress cores brighten directionally over WINDUP0.9s and LOCK0.5s, then lightning follows the authored cracks. No circles/rings. Co-op assigns distinct crack paths per player with overlap arbitration.
+- **CHOIR SWELL** (reuses radial projectile logic, not radial art): uneven sung pressure wedges open from different mouths; visible mouth sequence gives gaps. 8→12 bolts in asymmetric authored fans, alternating orientation; windup0.8s.
+- **VITRIFY FLOOR** (new AttackMove "chargefloor"): cyan-white stress cores spread through existing heat seams over1.2s; seams vitrify outward while the quiet material pocket beside the Choir remains safe. The actual floor geometry communicates the safe approach—no full-screen pulse/ring.
+- **VOICE FRAGMENTS:** a few song-linked fragile fragments answer specific mouths/attacks; killing one silences/removes its linked pressure lane briefly. No generic swarm/minion drip.
+- **Phases:** P1 strike rain + voice fragments. P2 (66%) adds choir swell + faster strikes. P3 (33%) charge-floor enters the rotation + strike rain doubles. A real endurance/positioning test.
+**Art/VFX brief:** a massive, tragic, screen-edge silhouette of fused sad-eyed blobs (warm-dark whimsy: tragic AND terrifying), half-submerged, glowing cyan mouths when it sings. VFX: fulgurite crack masks + bolts, uneven sung pressure wedges, vitrifying heat seams, glowing cyan mouths, ember/slag ambiance. Big bespoke art piece — the trailer boss. Drawsize ~200 (multi-tile).
 
 ===============================================================
 # BOSS 4 — THE WEAVER  (MOBILE DUELIST / DODGER)  · The Deep
@@ -59,7 +59,7 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 **Art/VFX brief:** a sleek angular multi-limbed blob-spider, cold indigo/black, glinting eyes. VFX: blink shimmer (reuse afterimage + a tinted flash at destination), thread-lines (reuse bullet + comet_trail mask, indigo), feint after-images (reuse the dash afterimage system). Drawsize ~80. Fast, readable, deadly.
 
 ===============================================================
-# BOSS 5 — JET  (ADAPTIVE / YOU — the Mirror Blob)  · bottom of The Deep — the thematic climax
+# BOSS 5 — JET  (ADAPTIVE / YOU — the Mirror Blob)  · LATER ENDGAME
 ===============================================================
 **Identity/fantasy:** JET (the CD's flagship, now named) — jet is BLACK FOSSIL RESIN, the dark cousin of amber: the hero is amber, its reflection is jet, the same material gone cold and hollow. A hostile blob that has learned the SAME schools you have and turns them against you — what the blob BECOMES if it takes every forbidden school and ignores the cost. The "power corrupts" thesis given a body; the eeriest, most meaningful fight. Intro card (CD voice): "You've come this far. Look what it costs."
 **Profile:** hp ~120 (+18/fl), speed 100 (matches the player's read/feel), radius 30 (player-sized), touchDamage 2. It plays like a PLAYER, not a monster.
@@ -73,41 +73,41 @@ Already built. Reclassify it as the SUMMONER archetype and the first-biome boss 
 **Art/VFX brief:** a near-exact copy of the hero blob but BLACK AMBER with hollow eyes (the CD's "eyes go hollow" detail), violet cursed aura. VFX: reuse the player's own weapon VFX (tinted soot/cold blue/dead amber) + the Resonance overlay mask. Cheapest bespoke art (it's a recolored hero) for the highest thematic payoff. Drawsize ~64 (player-sized). Audio: the CD's dry black-resin / falling amber-hum palette.
 
 ===============================================================
-# BOSS 6 — THE GILDED WARDEN  (ZONER / TRAP-SETTER)  · Goldwork guardian (optional / stretch)
+# BOSS 6 — THE GILDED WARDEN  (ZONER / TRAP-SETTER)  · GILDED ARCHIVE
 ===============================================================
-**Identity/fantasy:** an ancient amber construct of sacred geometry — the orderly orderly opposite of The Hollow. It doesn't chase; it BUILDS a killbox around you: crystal turrets, binding glyphs, encasing you in amber. The tactician boss — control the space or die. (Goldwork theme; the only angular-but-warm boss, per the CD rule that amber is friendly-angular.)
+**Identity/fantasy:** an ancient amber construct of rigid geometry—order and preservation turned into imprisonment. It is the Gilded Archive’s mandatory gate and tests killbox dismantling. It doesn't chase; it BUILDS a killbox around you: crystal turrets, binding glyphs, encasing you in amber. The tactician boss — control the space or die. (Goldwork theme; the only angular-but-warm boss, per the CD rule that amber is friendly-angular.)
 **Profile:** hp ~130 (+20/fl), speed 25 (stately), radius 40, touchDamage 3. Stationary-ish; it wins by zoning.
 **BossState extra:** { turretTimer, glyphTimer }.
 **Signature moves:**
-- **CRYSTAL TURRET** (new AttackMove "turret" — reuses the Goldwork deployable if built, else a simple auto-fire sub-entity): plants 1-2 amber turrets that telegraph then auto-fire slow aimed bolts. You must destroy them or juke their lines — the arena fills with crossfire.
-- **BINDING GLYPH** (new AttackMove "glyph"): lays telegraphed rune-rings on the floor (reuse the enemy-telegraph ring) that, after a windup, SET you (gold freeze-variant — rooted + take bonus damage) if you're standing in one. Forces constant repositioning.
-- **AMBER PRISON** (P3): telegraphs a shrinking ring of amber walls (reuse crystallize/cover tech from the Goldwork school) that boxes you into a small kill-zone with the turrets — escape the closing box. The signature "the room becomes the weapon" climax.
-- **Phases:** P1 turrets. P2 (66%) + glyphs. P3 (33%) + amber prison, turrets fire faster.
-**Art/VFX brief:** a geometric amber-crystal guardian, honey-gold, clean angular facets (warm-angular). VFX: reuse the Goldwork/freeze gold-tinted masks (freeze_shell for SET, glyph rings, crystal cover). Ties to the Amber economy theme. Drawsize ~100. Build LAST — it leans on the Goldwork school's deployable/crystallize tech, so it's cheapest AFTER that school ships.
+- **CRYSTAL SENTRY** (AttackMove "turret"): unfolds 1–2 embedded relic silhouettes from fossil shelving; each points a material firing lane before slow bolts. Destroy or redirect via Dead Prism.
+- **ARCHIVE LOCK** (AttackMove "glyph" internally): interlocking fossil shelves rise along visible resin seams after windup; being caught between them briefly SETs/roots. Boundary is shelf silhouette/seam direction, never glyph/ring.
+- **AMBER PRISON WALLS** (P3): two unequal fossil shelf fronts close along authored seams, leaving a readable offset escape lane; the room becomes a rigid archive. No shrinking ring/prison iconography.
+- **Phases:** P1 sentries. P2 + shelf locks. P3 + filing walls, turrets fire faster.
+**Art/VFX brief:** a rigid fossilized amber officer, dead honey/tarnished brass/cold mineral; embedded relic silhouettes and interlocking shelves. Reuse SET mechanics but materialize through fossil plates/resin seams, never glyph/ring art. Defeat unlocks Emberreach + Goldwork family/Camp construction cosmetics/functions. Drawsize ~100. Build LAST — it leans on the Goldwork school's deployable/crystallize tech, so it's cheapest AFTER that school ships.
 
 ===============================================================
 # ROSTER SUMMARY — genuinely distinct fight patterns
 ===============================================================
 | Boss | Archetype | The fight is about | Biome | New AttackMoves | Art cost |
 |------|-----------|--------------------|-------|-----------------|----------|
-| Slime King | Summoner | adds + AoE zoning | Verdant Hollow | (exists) | none |
+| Slime King | Summoner | adds + AoE zoning | Amberwild | (exists) | none |
 | Marrow (blind) | Charger | bait the rush; go silent to juke | Sunless Caves | charge (sound-commit) (+stomp reuse) | med (eyeless brute) |
-| Hollow Choir | Artillery/zoner | keep moving, find safe tiles | Emberreach | strikerain, chargefloor | HIGH (raid boss) |
+| Hollow Choir | Artillery/zoner | read cracks/wedges, approach quiet grief | Emberreach | strikerain, chargefloor | HIGH (raid boss) |
 | Weaver | Mobile duelist | read blinks, catch recover | The Deep | blinkstrike, lattice | med (spider-blob) |
-| Jet (Mirror Blob) | Adaptive (you) | dodge your own arsenal + a Resonance | The Deep (bottom) | mirrorfire (+reuse dash/Resonance) | LOW (recolored hero) |
-| Gilded Warden | Trap-setter | control the killbox | Goldwork | turret, glyph, prison | med (reuses Goldwork VFX) |
+| Jet (Mirror Blob) | Adaptive (you) | dodge/master your own arsenal | Later endgame | mirrorfire (+reuse dash/Resonance) | LOW (recolored hero) |
+| Gilded Warden | Trap-setter | dismantle rigid amber killbox | Gilded Archive | turret, glyph, prison | med (reuses Goldwork VFX) |
 
-Six bosses, six different verbs: summon / charge / bombard / duel / mirror / zone. None is a reskin.
+Approved first-clear bosses cover summon / charge / duel / zone / artillery; F10 Gauntlet breaks cadence. Jet adds mirror/adaptive endgame later. None is a reskin.
 
-## Build order (my ranking — additive, each is data + a handler or two)
-1. **Marrow** — the clearest new fight (charge is one new AttackMove reusing lunge tech), immediate variety, med art. Ships the "BossDef table" scaffolding (the one structural piece) with a simple second boss.
-2. **Weaver** — high skill-expression, mostly reuses lunge/dash/afterimage + bullets. Great difficulty-ceiling boss.
-3. **Jet** — LOWEST art cost (recolored hero), HIGHEST thematic payoff; but sequence it AFTER the weapon schools exist (it fires them), and it wants the Resonance overlay tech. Slot it once The Hollow/High Noon/Choir are in.
-4. **Hollow Choir** — the raid/world-boss; biggest art + the co-op showpiece. Do when multiplayer (authoritative server) is landing so the raid moment has an audience.
-5. **Gilded Warden** — build AFTER the Goldwork school (shares its deployable/crystallize/freeze tech), so it's cheap by then.
-
+## Content order (after authoritative multiplayer green / Sev-0 close)
+1. Slime King baseline / BossDef scaffolding.
+2. Marrow (F15 Sunless sound/charge).
+3. Weaver (F20 Deep seam-duelist).
+4. Gilded Warden (F25 Archive armor/zone).
+5. Hollow Choir (F30 Ember raid/artillery).
+6. Jet later endgame after approved first-clear chain and weapon families/Resonance exist.
 ## Coordination note (CD alignment)
-The creative-vision doc HAD landed, so I themed the roster to it directly (biomes + the Mirror Blob & Hollow Choir are the CD's own named ideas, specced here mechanically). Mechanics are the contract; themes match the CD and can be re-skinned without touching the movesets. NAMES NOW LOCKED with the CD: Marrow (Gore-Hulk), Jet (Mirror Blob); The Slime King / The Weaver / The Hollow Choir / The Gilded Warden kept. Naming logic (CD): single haunting nouns (Marrow, Jet) = intimate/eerie/personal fights; "The ___" titles = grand/mythic ones. Intro/death-card lines live in blobrogue_BOSS_NAMES_flavor.md. The fight designs are unchanged; Marrow's blindness is the one mechanic ADD (it enriches, doesn't alter, the timings). Every boss reuses the shipped telegraph system + existing FX masks (tinted per palette), so — like the CD said of the schools — no boss needs new engine architecture beyond its one signature AttackMove handler. All ride stepWorld, so they're authoritative-server-ready for co-op boss fights from day one.
+The creative-vision doc HAD landed, so I themed the roster to it directly (biomes + the Mirror Blob & Hollow Choir are the CD's own named ideas, specced here mechanically). Mechanics are the contract; themes match the CD and can be re-skinned without touching the movesets. NAMES NOW LOCKED with the CD: Marrow (Gore-Hulk), Jet (Mirror Blob); The Slime King / The Weaver / The Hollow Choir / The Gilded Warden remain approved. Naming logic (CD): single haunting nouns (Marrow, Jet) = intimate/eerie/personal fights; "The ___" titles = grand/mythic ones. Intro/death-card lines live in blobrogue_BOSS_NAMES_flavor.md. The fight designs are unchanged; Marrow's blindness is the one mechanic ADD (it enriches, doesn't alter, the timings). Every boss reuses the shipped telegraph system + existing FX masks (tinted per palette), so — like the CD said of the schools — no boss needs new engine architecture beyond its one signature AttackMove handler. All ride stepWorld, so they're authoritative-server-ready for co-op boss fights from day one.
 
 ---
 ## POST-SERVER ARENA-FLOOR USE (canonical pointer)

@@ -3,12 +3,12 @@ Companion to blobrogue_BOSS_ROSTER_spec.md. **The mechanics are the contract and
 
 | Boss (spec id) | NEW NAME | Archetype | Biome |
 |---|---|---|---|
-| Slime King | **The Slime King** (keep) | Summoner | Verdant Hollow |
+| Slime King | **The Slime King** (keep) | Summoner | Amberwild |
 | Gore-Hulk | **MARROW** | Charger | Sunless Caves |
 | Weaver | **The Weaver** (keep, blessed) | Duelist | The Deep |
-| Mirror Blob | **JET** | Adaptive / you | The Deep (bottom) |
-| Hollow Choir | **The Hollow Choir** (keep) | Artillery/zoner | Emberreach |
-| Gilded Warden | **The Gilded Warden** (keep, blessed) | Trap-setter | Goldwork guardian |
+| Mirror Blob | **JET** | Adaptive / you | Later endgame |
+| Hollow Choir | **The Hollow Choir** | Artillery/zoner | Emberreach |
+| Gilded Warden | **The Gilded Warden** | Mandatory trap-setter/guardian | Gilded Archive |
 
 ---
 
@@ -32,15 +32,12 @@ This is my flagship boss and it deserves a real name, not a description. **JET**
 **One idea for free:** have Jet's equipped schools *mirror the schools the player is actually carrying that run* if that's ever cheap — fighting your own build is the dream version. Not required; the fixed 2-3 school cycle is already great.
 *Alt: "The Other." I strongly prefer Jet.*
 
-## 5. HOLLOW CHOIR → **The Hollow Choir** (keep — my name, blessing it)
-Keep exactly. It's the Emberreach world-boss and the name already lands: hundreds of dead blobs fused and *singing.* 
+## 5. THE HOLLOW CHOIR — approved Emberreach boss
+Hollow Choir is the approved current content name; Ashen Choir remains a held candidate only. It is Emberreach’s mandatory boss: hundreds of dead blobs fused and *singing.* 
 **Flavor hook to lean into:** it's not evil, it's *grieving* — a choir of everyone who fell in the deep, still trying to sing their way home, and the song is what kills you. That's the warm-dark whimsy at full volume: tragic AND terrifying. The cyan mouths glow when it sings; between phases it should *hum,* mournful. The safe tiles being *near its body* (the charge-floor invert) reads as "the eye of the grief is calm." Intro card: *"They only wanted to go home."*
 
-## 6. GILDED WARDEN → **The Gilded Warden** (keep — blessing it)
-Keep. It's a strong, on-theme name for the Goldwork guardian — "gilded" nails the sacred-amber material and "warden" nails the orderly jailer role. It's the *only warm-angular* boss (amber is our one friendly-angular thing), so it should feel less like a monster and more like a *ritual you're intruding on.* 
-**Flavor hook:** the Warden isn't angry — it's *doing its job,* sealing away what shouldn't leave the deep (which is now you). Perfectly serene while it boxes you into a kill-cathedral. Amber prison at P3 = it "filing you away." Intro card: *"Be still. Be kept."* Honey-gold, humming, unhurried. 
-*Alt if you want a proper name: "Aureus." But "The Gilded Warden" is doing its job — keep it.*
-
+## 6. THE GILDED WARDEN — approved mandatory boss
+The Gilded Warden is the approved Gilded Archive mandatory boss. It is order and preservation made imprisoning: rigid amber shelves, embedded relics, and controlled firing lanes. It is not angry—it is filing the player away because that is its remaining function. Intro: *"Be still. Be kept."* Critique/rename only from implementation evidence (readability, overlap, identity, progression), not role theory.
 ---
 ## Naming coherence note
-The mix is intentional: **Marrow** and **Jet** (single haunting nouns) are the intimate, eerie, "this one's personal" fights; **The Slime King / The Weaver / The Hollow Choir / The Gilded Warden** (ceremonial titles) are the grand, mythic ones. That contrast itself tells the player which kind of dread they're walking into. All six sit comfortably in the warm-dark-whimsy voice, and every intro/death card line above is written in that voice — funny-adjacent, genuinely sad or eerie underneath, never edgelord.
+The mix is intentional: **Marrow** and **Jet** (single haunting nouns) are the intimate, eerie, "this one's personal" fights; **The Slime King / The Weaver / The Hollow Choir / The Gilded Warden** (ceremonial titles) are the grand, mythic ones. That contrast itself tells the player which kind of dread they're walking into. All approved bosses plus later Jet sit comfortably in the warm-dark-whimsy voice, and every intro/death card line above is written in that voice — funny-adjacent, genuinely sad or eerie underneath, never edgelord.
