@@ -68,8 +68,16 @@ export class OnlineLobby {
     return this.session.colorIndex !== null ? { colorIndex: this.session.colorIndex } : {};
   }
 
+  // Ticket identity is read server-side from the persisted profile. Color picks persist in the
+  // background, so a fast CREATE/JOIN -> START could mint before that write finished and other
+  // clients would see the old/default tint. Flush identity before room/ticket operations.
+  private async flushIdentity(): Promise<void> {
+    await this.session.login(this.session.name || "blob");
+  }
+
   // Create a private room and get a shareable code.
   async create(): Promise<void> {
+    await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.create, { playerId, kind: "online", ...this.colorArg() });
     this.roomId = res.roomId;
@@ -83,6 +91,7 @@ export class OnlineLobby {
   // Join a friend's room by its code. If their run is already live, status arrives as
   // "playing" and the caller drops straight in.
   async join(code: string): Promise<void> {
+    await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.join, {
       code: code.trim().toUpperCase(), playerId, kind: "online", ...this.colorArg(),
@@ -97,6 +106,7 @@ export class OnlineLobby {
   // Matchmake into the public pool: an open online room with space, or a fresh one (born
   // "playing" — the pool has no start gate; players drop in and out).
   async quickPlay(): Promise<void> {
+    await this.flushIdentity();
     const playerId = this.requirePlayerId();
     const res = await this.client.mutation(api.rooms.quickPlay, { playerId, kind: "online", ...this.colorArg() });
     this.roomId = res.roomId;
@@ -185,10 +195,10 @@ export class OnlineLobby {
   // The bridge to the authoritative server: a Convex-minted ticket that embeds THIS room's
   // world id (verified against membership server-side). Called by WSTransport at connect
   // time, so the short TTL is always fresh.
-  mintTicket(): Promise<string> {
-    return this.client
-      .action(api.gsTicket.mint, { clientId: this.session.clientId, roomCode: this.code })
-      .then((res) => res.ticket);
+  async mintTicket(): Promise<string> {
+    await this.flushIdentity();
+    const res = await this.client.action(api.gsTicket.mint, { clientId: this.session.clientId, roomCode: this.code });
+    return res.ticket;
   }
 
   leave(): void {

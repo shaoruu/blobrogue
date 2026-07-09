@@ -67,7 +67,7 @@ async function ensurePresence(
     .unique();
   const now = Date.now();
   if (existing) {
-    await ctx.db.patch(existing._id, { name, floor, updatedAt: now, isDown: false });
+    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false });
     return;
   }
   await ctx.db.insert("presence", {
