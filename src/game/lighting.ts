@@ -42,14 +42,18 @@ const DARK_SCALE = 2;
 const AO_REACH = 34;
 const AO_MAX = 0.42;
 const AO_INK = { r: 5, g: 3, b: 11 }; // the palette's shadow ink (#05030b)
-const DYNAMIC_CAP = 24; // pooled dynamic lights per frame (hero/muzzle/projectiles/...)
+// Pooled dynamic lights per frame. Sized for the worst authored scene: hero + 3
+// teammates + muzzle + a bullet volley + a vent channel + the sinderling's full cinder
+// wake (12, sim-capped) + the exit, with slack. Push order is priority order — identity
+// glows first — so a saturated pool sheds ground dressing, never the readability floor.
+const DYNAMIC_CAP = 32;
 const PULSE_CAP = 8;    // pooled transient pulses (explosions)
 const GLOW_SPRITE_PX = 128;
 // Occlusion-shaping scratch: the largest pulse (explosion, 240px radius) at buffer
 // resolution. Allocated once, reused for every shaped light.
 const OCC_SCRATCH_PX = 256;
 
-export type StaticLightKind = "torch" | "brazier" | "vent" | "rift";
+export type StaticLightKind = "torch" | "brazier" | "vent" | "rift" | "stall";
 
 export interface StaticLightSpec {
   x: number;
@@ -259,6 +263,10 @@ export class LightingRenderer {
       // The rift's resting anti-light takes the biome accent (void violet in the Deep,
       // wrong pink in the Null) — the same channel its body art already speaks.
       case "rift": return { radius: 85, intensity: 0.35, color: this.biome ? this.biome.accent : "#c98bff" };
+      // Patch's stall: a broad ALWAYS-warm hearth pool over the waystation, deliberately
+      // off the biome grammar — the shop reads as shelter in every band (spec §5, "no
+      // combat-readability tax at home").
+      case "stall": return { radius: 230, intensity: 0.95, color: "#ffd166" };
     }
   }
 

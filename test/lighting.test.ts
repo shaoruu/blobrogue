@@ -471,7 +471,7 @@ function perfTest(game: HarnessGame, canvas: Canvas): void {
     `layer EMA ${lighting.stats.frameMs.toFixed(2)}ms/frame (software raster)`);
   check("perf-render-overhead", overheadMs < 4,
     `full-render overhead ${overheadMs.toFixed(2)}ms/frame on node-canvas (on ${(totalMs / 120).toFixed(2)}ms, off ${(offMs / 120).toFixed(2)}ms)`);
-  check("perf-dynamic-pool-bounded", lighting.stats.dynamicPeak <= 24, `dynamic peak ${lighting.stats.dynamicPeak}`);
+  check("perf-dynamic-pool-bounded", lighting.stats.dynamicPeak <= 32, `dynamic peak ${lighting.stats.dynamicPeak}`);
   process.stdout.write(`  perf: bake ${lighting.stats.bakeMs.toFixed(1)}ms/floor, ${lighting.staticLights().length} static sources\n`);
 }
 

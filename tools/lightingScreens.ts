@@ -119,6 +119,36 @@ async function main(): Promise<void> {
     save("deep-sunlance-light", canvas);
   }
 
+  // Patch's waystation: the stall's warm hearth pool over the shop room (shops land on
+  // every 3rd non-boss floor — 12 sits in the cold Sunless band, where the warmth reads).
+  {
+    loadDeterministicFloor(game, SEED, 12);
+    const w = game.devWorld();
+    if (w.shop) {
+      settleAt(game, w.shop.keeperX, w.shop.keeperY + 120, VIEW_W, VIEW_H);
+      game.render();
+      save("shop-waystation-light", canvas);
+    }
+  }
+
+  // The sinderling's cinder wake: burning ground casting real light (staged: the wake
+  // hazards are placed directly, exactly as the sim lays them along a flame jet).
+  {
+    loadDeterministicFloor(game, SEED, 28);
+    const w = game.devWorld();
+    const stand = findStand(game);
+    for (let i = 0; i < 7; i++) {
+      w.hazards.push({
+        id: w.nextHazardId++, kind: "cinder",
+        x: stand.x - 130 + i * 44, y: stand.y + 46 + Math.sin(i * 1.7) * 18,
+        radius: 24, life: 3 - i * 0.25, maxLife: 3,
+      });
+    }
+    settleAt(game, stand.x, stand.y, VIEW_W, VIEW_H, 6);
+    game.render();
+    save("ember-cinder-wake", canvas);
+  }
+
   game.stop();
   process.stdout.write("lighting screenshots complete\n");
 }

@@ -1039,8 +1039,9 @@ export class Game {
   }
 
   // Bake this floor's static light set: torches (emitting from the wall FACE into their
-  // room, so the pool can never leak behind the mounting wall), standing braziers, and
-  // the ember-resting hazards. Deterministic from the same floor state on every client.
+  // room, so the pool can never leak behind the mounting wall), standing braziers, the
+  // ember-resting hazards, and Patch's stall (the waystation's warm hearth pool).
+  // Deterministic from the same floor state on every client.
   private rebakeLighting() {
     const specs: StaticLightSpec[] = [];
     for (const t of this.torches) {
@@ -1053,6 +1054,8 @@ export class Game {
       if (h.kind === "fire_vent") specs.push({ x: (h.tx + 0.5) * TILE, y: (h.ty + 0.5) * TILE, kind: "vent" });
       else if (h.kind === "void_rift") specs.push({ x: (h.tx + 0.5) * TILE, y: (h.ty + 0.5) * TILE, kind: "rift" });
     }
+    const shop = this.world.shop;
+    if (shop) specs.push({ x: shop.keeperX, y: shop.keeperY + 12, kind: "stall" });
     this.lighting.loadFloor(this.dungeon, this.biomeIdx, this.currentBiome, specs);
   }
 
@@ -3588,6 +3591,18 @@ export class Game {
       } else if (phase === "active") {
         this.lighting.pushDynamic(wx, wy, 100, 0.45, this.currentBiome.accent, 0.55);
       }
+    }
+    // Burning cinders (the sinderling's flame-jet wake): each live cinder is real fire
+    // on the ground — a small warm cut + stain that fades with its life. Sim-capped at
+    // 12 live cinders, pushed after the vent tells so a saturated pool sheds wake
+    // dressing first. Volatile "charge" fuses stay UNLIT on purpose: a fuse is a tell,
+    // not a fire — its blinking ring renders above the grade, and the eventual burst
+    // arrives through the shared explosion light pulse.
+    for (const h of this.hazards) {
+      if (h.kind !== "cinder" || !this.isNearCamera(h.x, h.y, 90)) continue;
+      const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3);
+      const flicker = settings.isReducedMotion ? 0.85 : 0.7 + 0.3 * Math.sin(this.animClock * 11 + h.id * 1.9);
+      this.lighting.pushDynamic(h.x, h.y, 58, 0.5 * fade * flicker, "#ff8a3b", 0.5);
     }
     if (this.isCurrentFloorCleared()) {
       const ex = (this.dungeon.exit.x + 0.5) * TILE, ey = (this.dungeon.exit.y + 0.5) * TILE;

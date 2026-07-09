@@ -94,6 +94,9 @@ export interface HarnessGame {
     enemies: { x: number; y: number; dead: boolean }[];
     floorHazards: { id: number; kind: string; tx: number; ty: number; phase: number; group: number }[];
     floorHazardClock: number;
+    hazards: { id: number; kind: string; x: number; y: number; radius: number; life: number; maxLife: number }[];
+    nextHazardId: number;
+    shop: { keeperX: number; keeperY: number } | null;
     dungeon: { w: number; h: number; tiles: number[]; spawn: { x: number; y: number }; exit: { x: number; y: number }; rooms: { x: number; y: number; w: number; h: number; cx: number; cy: number }[] };
   };
   devLighting(): import("../../src/game/lighting.js").LightingRenderer;
