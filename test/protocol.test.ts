@@ -157,15 +157,16 @@ function worldBindingWireTests(): void {
   spawnPlayerInWorld(w, "pMe");
   spawnPlayerInWorld(w, "pOther");
   const roster: RosterWire[] = [
-    { pid: "pMe", aid: "player-1", nm: "Ada", cl: 2 },
-    { pid: "pOther", aid: "guest:abc", nm: "Bob", cl: null },
+    { pid: "pMe", aid: "player-1", nm: "Ada", cl: 2, st: "on" },
+    { pid: "pOther", aid: "guest:abc", nm: "Bob", cl: null, st: "away" },
   ];
-  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: worldIdForRoomCode("ABCD"), roster });
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: worldIdForRoomCode("ABCD"), roster, resumeToken: "tok-abc123" });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   check("snapshot carries the world id", snap.wid === "room:ABCD");
-  check("snapshot carries the full roster (interest-independent identities)", deepEqual(snap.roster, roster));
+  check("snapshot carries the full roster (interest-independent identities + on/away)", deepEqual(snap.roster, roster));
+  check("snapshot carries the resume token when supplied", snap.tok === "tok-abc123");
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
-  check("wid/roster round-trip deep-equal", deepEqual(decoded, snap));
+  check("wid/roster/tok round-trip deep-equal", deepEqual(decoded, snap));
 
   const base = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
   const bad: Array<[string, Record<string, unknown>]> = [
@@ -174,14 +175,28 @@ function worldBindingWireTests(): void {
     ["junk-charset wid", { ...base, wid: "room:../../etc" }],
     ["missing roster", (() => { const o = { ...base }; delete o.roster; return o; })()],
     ["non-array roster", { ...base, roster: {} }],
-    ["roster entry missing aid", { ...base, roster: [{ pid: "p1", nm: "x", cl: null }] }],
-    ["roster entry with junk color", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: 99999 }] }],
+    ["roster entry missing aid", { ...base, roster: [{ pid: "p1", nm: "x", cl: null, st: "on" }] }],
+    ["roster entry with junk color", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: 99999, st: "on" }] }],
+    ["roster entry with junk seat state", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: null, st: "zombie" }] }],
+    ["non-string resume token", { ...base, tok: 42 }],
   ];
   for (const [label, frame] of bad) {
     let rejected = false;
     try { jsonCodec.decodeServer(JSON.stringify(frame)); } catch (err) { rejected = err instanceof ProtocolError; }
     check(`${label} is a protocol error`, rejected);
   }
+
+  // The reconnect handshake frames themselves.
+  const joinResume: ClientMsg = { t: "join", ticket: "v1.a.b", protocol: PROTOCOL_VERSION, resume: "tok-xyz" };
+  check("join with a resume token round-trips", deepEqual(jsonCodec.decodeClient(jsonCodec.encodeClient(joinResume)), joinResume));
+  const leave: ClientMsg = { t: "leave" };
+  check("leave round-trips", deepEqual(jsonCodec.decodeClient(jsonCodec.encodeClient(leave)), leave));
+  let extraOnLeave = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "leave", pid: "hax" })); } catch (err) { extraOnLeave = err instanceof ProtocolError; }
+  check("leave with a smuggled field is a protocol error", extraOnLeave);
+  let junkResume = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "join", ticket: "x", protocol: PROTOCOL_VERSION, resume: 42 })); } catch (err) { junkResume = err instanceof ProtocolError; }
+  check("join with a non-string resume token is a protocol error", junkResume);
 }
 
 // PlayerWire identity (nm/cl): decorated from the verified per-connection identities at
