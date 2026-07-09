@@ -1027,13 +1027,16 @@ export function toShopWire(s: ShopState): ShopWire {
   };
 }
 export function shopFromWire(w: ShopWire): ShopState {
+  // Field order mirrors buildShopState so a decoded shop is BYTE-identical to the sim's
+  // (the shop suite locks the round-trip with a stringify compare).
   return {
-    keeperX: w.kx, keeperY: w.ky, rerollsUsed: w.ru,
+    keeperX: w.kx, keeperY: w.ky,
     slots: w.slots.map((s): ShopSlot => ({
       id: s.id, kind: s.k, isShared: s.sh,
       weapon: s.wpn, itemId: s.it, price: s.pr,
       x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
     })),
+    rerollsUsed: w.ru,
   };
 }
 export function toPickupWire(p: Pickup): PickupWire {

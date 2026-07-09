@@ -541,6 +541,44 @@ function rollPropKind(rng: Rng, hazardMult: number): Prop["kind"] {
   return "brazier";
 }
 
+// A prop tile is class-blocked for EVERY body (its own center sits inside the collision
+// ring), so a prop chain can sever the floor's navigable graph even where raw tiles stay
+// connected — observed live: a crate + barrel pocketing a room's door mouth one tile
+// behind it (each individually passing the corridor-mouth guard) cut half the map off
+// the spawn for every clearance class. Same local articulation test the toxic pools use
+// (hazards.ts poolKeepsPathOpen): with the candidate placed, its open neighbors must
+// remain mutually connected within a local window, treating existing prop tiles as
+// blocked. Conservative-local like the pool test: a false reject just skips one prop.
+function propKeepsPathOpen(d: Dungeon, occupied: ReadonlySet<number>, tx: number, ty: number): boolean {
+  const blocked = (x: number, y: number): boolean => {
+    if (x < 0 || y < 0 || x >= d.w || y >= d.h || d.tiles[y * d.w + x] !== 0) return true;
+    if (x === tx && y === ty) return true;
+    return occupied.has(y * d.w + x);
+  };
+  const neighbors: Array<[number, number]> = [];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+    if (!blocked(tx + dx, ty + dy)) neighbors.push([tx + dx, ty + dy]);
+  }
+  if (neighbors.length <= 1) return true;
+  const R = 3;
+  const seen = new Set<number>();
+  const queue: Array<[number, number]> = [neighbors[0]];
+  seen.add(neighbors[0][1] * d.w + neighbors[0][0]);
+  while (queue.length > 0) {
+    const [cx, cy] = queue.pop()!;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+      const nx = cx + dx, ny = cy + dy;
+      if (Math.abs(nx - tx) > R || Math.abs(ny - ty) > R) continue;
+      if (blocked(nx, ny)) continue;
+      const key = ny * d.w + nx;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      queue.push([nx, ny]);
+    }
+  }
+  return neighbors.every(([nx, ny]) => seen.has(ny * d.w + nx));
+}
+
 function placeProps(w: WorldState): Prop[] {
   const d = w.dungeon;
   const rng = new Rng((w.seed ^ 0x2f6a35c1) + w.floor * 26417);
@@ -591,6 +629,7 @@ function placeProps(w: WorldState): Prop[] {
       if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
+      if (!propKeepsPathOpen(d, occupied, tx, ty)) continue;
       addProp(rollPropKind(rng, hazardMult), tx, ty);
     }
   }

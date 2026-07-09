@@ -8,7 +8,7 @@
 
 import {
   createWorld, stepWorld, descend, devSpawnEnemy, applyItemToWorld, acquireWeaponInWorld,
-  spawnPlayerInWorld, isFloorCleared, isGildedExposed,
+  spawnPlayerInWorld, isFloorCleared, isGildedExposed, buyFromShopInWorld,
 } from "../src/sim/world.js";
 import type { WorldState } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -23,12 +23,12 @@ import {
 import { generateDungeon } from "../src/sim/dungeon.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
+  PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS,
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, choirHpForFloor,
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
-  pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock, BOSS_MIN_LEGAL_TTK,
+  pedestalWeaponRolls, bossWeaponChoices, BOSS_MIN_LEGAL_TTK,
   BOSS_DPS_CEILING, BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
   BOSS_VULN_CAP, ELITE_BRACE,
 } from "../src/sim/balance.js";
@@ -648,22 +648,24 @@ function sustainGates(): void {
     }
   }
 
-  // Dealer: floors 3/6/9 stock a +1 heart at 6 coins; never a full heal, never free.
+  // Patch's heart station (the Dealer's heart, now behind the explicit shop buy): floors
+  // 3/6/9 sell +1 HP at 6 coins — never a full heal, never free, and NEVER by touch.
   {
     const w = createWorld(0xDEA1, 3);
-    const dealer = w.pickups.find((k) => k.kind === "dealer_heart");
-    check("floor 3 stocks a dealer heart priced at 6 coins", dealer !== undefined && dealer.value === DEALER.price);
-    if (dealer) {
+    const heart = w.shop?.slots.find((s) => s.kind === "heart");
+    check("floor 3's shop stocks the heart station at 6 coins", heart !== undefined && heart.price === SHOP.heartPrice);
+    if (heart) {
       const p = w.players.get(LOCAL_ID)!;
       p.hp = 3; p.coins = 5;
-      p.x = dealer.x; p.y = dealer.y;
+      p.x = heart.x; p.y = heart.y;
       step(w, idle(1));
-      check("a broke player cannot buy", p.hp === 3 && w.pickups.includes(dealer));
+      check("standing on the station never buys (the touch-purchase is gone)", p.hp === 3 && p.coins === 5);
+      check("a broke buy command is rejected without consuming", buyFromShopInWorld(w, LOCAL_ID, heart.id, []) === "broke" && p.coins === 5 && p.hp === 3);
       p.coins = 7;
-      step(w, idle(2));
-      check("6 coins buys exactly +1 HP", p.hp === 4 && p.coins === 1 && !w.pickups.includes(dealer));
+      check("6 coins buys exactly +1 HP through the explicit command",
+        buyFromShopInWorld(w, LOCAL_ID, heart.id, []) === "ok" && p.hp === 4 && p.coins === 1);
     }
-    check("no dealer on non-interval floors", createWorld(0xDEA1, 4).pickups.every((k) => k.kind !== "dealer_heart"));
+    check("no shop on non-interval floors", createWorld(0xDEA1, 4).shop === null);
   }
 }
 
@@ -949,10 +951,9 @@ function compositionCapGates(): void {
 
 function partyRewardGates(): void {
   section("studio gate §4: pedestal rolls max(1, ceil(P/2)), distinct ids");
-  check("formulas: pedestals 1/1/2/2, boss choices 2/3/4/5, dealer stock 2/2/3/4",
+  check("formulas: pedestals 1/1/2/2, boss choices 2/3/4/5",
     [1, 2, 3, 4].every((p) => pedestalWeaponRolls(p) === Math.max(1, Math.ceil(p / 2)))
-    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, p + 1))
-    && [1, 2, 3, 4].every((p) => dealerWeaponStock(p) === Math.max(2, p)));
+    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, p + 1)));
   for (let players = 1; players <= 4; players++) {
     const w = createWorld(0x9ED5, 1, { skipLocalPlayer: true });
     for (let i = 0; i < players; i++) spawnPlayerInWorld(w, `p${i}`);
@@ -961,37 +962,40 @@ function partyRewardGates(): void {
     check(`P${players} floor stocks exactly ${pedestalWeaponRolls(players)} pedestal weapon(s), distinct`,
       stocked.length === pedestalWeaponRolls(players) && new Set(stocked).size === stocked.length,
       stocked.join(","));
-    const dealer = w.pickups.filter((k) => k.kind === "dealer_weapon");
-    const prices = dealer.map((k) => k.value ?? 0);
-    check(`P${players} dealer stocks ${dealerWeaponStock(players)} distinct weapons on the 12/18/24 ladder`,
-      dealer.length === dealerWeaponStock(players)
-      && new Set(dealer.map((k) => k.weapon)).size === dealer.length
-      && prices.every((v, i) => v === DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)]),
+    const shopWeapons = w.shop?.slots.filter((s) => s.kind === "weapon") ?? [];
+    const prices = shopWeapons.map((s) => s.price);
+    check(`P${players} shop stalls two DISTINCT weapons on the unchanged ladder`,
+      shopWeapons.length === SHOP.weaponPedestals
+      && new Set(shopWeapons.map((s) => s.weapon)).size === shopWeapons.length
+      && prices.every((v, i) => v === SHOP.pedestalPrices[i]),
       `prices=${prices.join("/")}`);
   }
 
-  section("studio gate §4: dealer purchases are personal and never deplete the stock");
+  section("shop ownership (accepted studio UX call): shared weapons claim once; personal slots never deplete");
   {
     const w = createWorld(0x9ED6, 1, { skipLocalPlayer: true });
     const a = spawnPlayerInWorld(w, "a");
     const b = spawnPlayerInWorld(w, "b");
     descend(w, 3, []);
-    const item = w.pickups.find((k) => k.kind === "dealer_weapon")!;
-    check("dealer weapon pedestal exists", item !== undefined);
-    const price = item.value ?? 0;
-    a.coins = price - 1; a.x = item.x; a.y = item.y; b.x = 40; b.y = 40;
-    step(w, idle(1));
-    check("a broke player cannot buy (walks past)", !a.ownedWeapons.includes(item.weapon!) && w.pickups.includes(item));
-    a.coins = price;
-    step(w, idle(2));
-    check("a funded buy is personal: weapon granted, coins paid, stock NOT depleted",
-      a.ownedWeapons.includes(item.weapon!) && a.coins === 0 && w.pickups.includes(item));
-    step(w, idle(3));
-    check("an owner walks past their own purchase (no double-buy)", a.coins === 0);
-    b.coins = price; b.x = item.x; b.y = item.y;
-    step(w, idle(4));
-    check("a teammate buys the SAME stock slot for themselves", b.ownedWeapons.includes(item.weapon!) && b.coins === 0
-      && w.pickups.includes(item));
+    w.pendingBlessings.clear(); // the descend's blessing offers pause players; resolve them
+    const weapon = w.shop!.slots.find((s) => s.kind === "weapon")!;
+    a.coins = weapon.price - 1; a.x = weapon.x; a.y = weapon.y;
+    check("a broke buy is rejected without consuming",
+      buyFromShopInWorld(w, "a", weapon.id, []) === "broke" && a.coins === weapon.price - 1 && weapon.soldTo === null);
+    a.coins = weapon.price;
+    check("a funded buy claims the SHARED pedestal: weapon granted, coins paid, slot SOLD",
+      buyFromShopInWorld(w, "a", weapon.id, []) === "ok" && a.ownedWeapons.includes(weapon.weapon!) && a.coins === 0
+      && weapon.soldTo === "a");
+    b.coins = weapon.price; b.x = weapon.x; b.y = weapon.y;
+    check("the teammate's late buy reads the honest SOLD and consumes nothing",
+      buyFromShopInWorld(w, "b", weapon.id, []) === "sold" && b.coins === weapon.price
+      && !b.ownedWeapons.includes(weapon.weapon!));
+    const blessing = w.shop!.slots.find((s) => s.kind === "blessing")!;
+    a.coins = blessing.price; b.coins = blessing.price;
+    a.x = blessing.x; a.y = blessing.y; b.x = blessing.x; b.y = blessing.y;
+    check("the FOR-YOU blessing pedestal serves BOTH buyers (personal, never depletes)",
+      buyFromShopInWorld(w, "a", blessing.id, []) === "ok" && buyFromShopInWorld(w, "b", blessing.id, []) === "ok"
+      && a.ownedItemIds.includes(blessing.itemId!) && b.ownedItemIds.includes(blessing.itemId!));
   }
 
   section("studio gate §4: boss reward = P+1 personal choices; claims never starve teammates");

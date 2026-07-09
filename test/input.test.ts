@@ -32,7 +32,7 @@ function isIdle(input: InputController): boolean {
   return s.moveX === 0 && s.moveY === 0 && !s.firing && !s.dash;
 }
 
-const NON_GAMEPLAY: InputContext[] = ["menu", "hud", "pause", "blessing", "reconnect", "spectate"];
+const NON_GAMEPLAY: InputContext[] = ["menu", "hud", "pause", "blessing", "shop", "reconnect", "spectate"];
 const WEAPON_ACTIONS: readonly GameAction["kind"][] = ["selectWeapon", "cycleWeapon", "dropWeapon", "activateSlot", "reorderSlots"];
 
 function overlayLeakageTests(): void {
@@ -63,9 +63,9 @@ function overlayLeakageTests(): void {
   }
   {
     const { input, actions } = harness();
-    // "hud" allows togglePause too: the game routes it to close-the-drawer first, so
-    // Escape always dismisses the topmost surface.
-    for (const ctx of ["gameplay", "hud", "pause", "spectate", "reconnect"] as InputContext[]) {
+    // "hud"/"shop" allow togglePause too: the game routes it to close-the-surface first,
+    // so Escape always dismisses the topmost surface.
+    for (const ctx of ["gameplay", "hud", "pause", "spectate", "reconnect", "shop"] as InputContext[]) {
       actions.length = 0;
       input.setContext(ctx);
       input.keyDown("Escape");
@@ -294,6 +294,57 @@ function spectateTests(): void {
   }
 }
 
+function interactPressTests(): void {
+  section("interact press (the shop affordance): E edge fires only in live gameplay");
+  {
+    const { input, actions } = harness();
+    input.setContext("gameplay");
+    input.keyDown("e");
+    check("gameplay: E press emits exactly one interact", actions.filter((a) => a.kind === "interact").length === 1);
+    input.keyDown("e", true);
+    input.keyDown("e", true);
+    check("held E auto-repeat never re-fires interact (a hold is the revive channel, not a click storm)",
+      actions.filter((a) => a.kind === "interact").length === 1);
+    input.keyUp("e");
+    input.keyDown("e");
+    check("a fresh press re-arms it", actions.filter((a) => a.kind === "interact").length === 2);
+  }
+  for (const ctx of NON_GAMEPLAY) {
+    const { input, actions } = harness();
+    input.setContext(ctx);
+    input.keyDown("e");
+    check(`${ctx}: E press never emits interact`, !actions.some((a) => a.kind === "interact"));
+  }
+}
+
+function shopContextTests(): void {
+  section("shop context: browsing the panel can never leak gameplay");
+  {
+    const { input, actions } = harness();
+    input.setContext("shop");
+    input.keyDown("w");
+    input.keyDown("shift");
+    input.mouseDown(0);
+    input.keyDown("2");
+    input.keyDown("q");
+    input.wheel(120);
+    check("shop: movement/dash/fire sample is idle", isIdle(input));
+    check("shop: no weapon action leaked", !actions.some((a) => WEAPON_ACTIONS.includes(a.kind)));
+    check("shop: the revive-channel bit samples released", !input.sample().interact);
+  }
+  {
+    settings.setAutofire(true);
+    const { input } = harness();
+    input.setContext("gameplay");
+    input.mouseDown(0); input.mouseUp(0);
+    check("autofire latched before opening the panel", input.sample().firing);
+    input.setContext("shop");
+    input.setContext("gameplay");
+    check("a shop round-trip clears the autofire latch (fresh click required)", !input.sample().firing);
+    settings.setAutofire(false);
+  }
+}
+
 interface FakeFocusable { focus(): void; isConnected: boolean; focusCount: number }
 function fakeEl(isConnected = true): FakeFocusable {
   const el: FakeFocusable = { isConnected, focusCount: 0, focus() { el.focusCount++; } };
@@ -329,6 +380,8 @@ autofireContextTests();
 edgeTriggerTests();
 uiDispatchTests();
 spectateTests();
+interactPressTests();
+shopContextTests();
 focusScopeTests();
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);

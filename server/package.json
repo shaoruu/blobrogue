@@ -9,7 +9,7 @@
     "start": "node dist/server/src/main.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx test/server.test.ts && tsx test/stagec.test.ts && tsx test/stagec.hardening.test.ts && tsx test/ticket.test.ts && tsx test/rooms.test.ts && tsx test/coherence.test.ts && tsx test/resume.test.ts && tsx test/offerexpiry.test.ts && tsx test/coop.test.ts",
+    "test": "tsx test/server.test.ts && tsx test/stagec.test.ts && tsx test/stagec.hardening.test.ts && tsx test/ticket.test.ts && tsx test/rooms.test.ts && tsx test/coherence.test.ts && tsx test/resume.test.ts && tsx test/offerexpiry.test.ts && tsx test/coop.test.ts && tsx test/shop.test.ts",
     "test:coherence": "tsx test/coherence.test.ts",
     "test:resume": "tsx test/resume.test.ts",
     "test:offerexpiry": "tsx test/offerexpiry.test.ts",
@@ -19,7 +19,8 @@
     "test:ticket": "tsx test/ticket.test.ts",
     "test:rooms": "tsx test/rooms.test.ts",
     "harness": "tsx harness/loadtest.ts",
-    "test:coop": "tsx test/coop.test.ts"
+    "test:coop": "tsx test/coop.test.ts",
+    "test:shop": "tsx test/shop.test.ts"
   },
   "dependencies": {
     "ws": "^8.18.0"

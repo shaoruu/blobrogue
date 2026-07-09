@@ -14,7 +14,6 @@
 import type { ShopPanelView } from "./shopCopy.js";
 import { itemIconEl } from "../game/hudIcons.js";
 import { weaponIconSrc } from "../game/assets.js";
-import type { WeaponId } from "../sim/types.js";
 import { FocusScope, currentFocus } from "./focus.js";
 
 export class ShopPanel {
@@ -157,7 +156,7 @@ export class ShopPanel {
     this.iconEl.replaceChildren();
     this.iconEl.style.removeProperty("--t");
     if (view.icon.kind === "weapon") {
-      const src = weaponIconSrc(view.icon.weapon as WeaponId);
+      const src = weaponIconSrc(view.icon.weapon);
       if (src) {
         const img = document.createElement("img");
         img.src = src;

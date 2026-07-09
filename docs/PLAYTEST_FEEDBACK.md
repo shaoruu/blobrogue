@@ -48,6 +48,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SPECCED` Guaranteed melee discovery floor2/floor3 retry + dealer melee until discovered.
 - `SPECCED` Blessing duplicate = explicit LV2/LV3 max3, exact delta; max leaves pool. Coin Magnet L1/L2/L3 meaningful radius/pull acceleration. Current duplicate chooser UX is wrong.
 - `SPECCED` Coins = temporary dealer currency; Amber = persistent. Dealers floors 3/6/9; trade/sell/reroll/heal/blessing/weapons; rarity = authored sidegrades, not huge raw damage.
+- `SHIPPED` **Dealer = Patch's authored shop room** (owner rejected loose walk-over stock + floating tags outright). Dedicated safe `shop` RoomKind on 3/6/9…; 2 shared weapon pedestals (FIRST BUY CLAIMS) + 1 personal blessing on 12/18/24, per-player heart station (6c, +1 HP), shared reroll post (8c ×2); explicit E-interact panel with BUY — touch never purchases; protocol v8 `shopBuy` (authoritative, idempotent, one winner on races). Patch/stall art gated behind typed hooks (ART.md).
 - `LOCKED` Progression: ~4–6× temporary expressive capability; permanent raw-stat ceiling ~20–30%; horizontal boss unlocks; sidegrade gear; mastery/fusion, no level-999 deletion.
 
 ## Enemies / bosses / difficulty

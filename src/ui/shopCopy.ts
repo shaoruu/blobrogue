@@ -8,6 +8,7 @@ import type { ShopSlot, ShopSlotStatus, ShopState, ShopViewer } from "../sim/sho
 import { shopSlotStatusFor } from "../sim/shop.js";
 import { SHOP } from "../sim/balance.js";
 import { WEAPONS } from "../sim/weapons.js";
+import type { WeaponId } from "../sim/types.js";
 import { itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods } from "../sim/items.js";
 
@@ -49,7 +50,7 @@ export function shopChipCopy(status: ShopSlotStatus, price: number): string {
 // What the panel's icon should draw (the panel reuses real art: the weapon's pickup
 // side profile, the blessing's glyph chip, the heart sprite).
 export type ShopPanelIcon =
-  | { kind: "weapon"; weapon: string }
+  | { kind: "weapon"; weapon: WeaponId }
   | { kind: "glyph"; itemId: string; glyph: string; tint: string }
   | { kind: "heart" }
   | { kind: "reroll" };
