@@ -22,8 +22,10 @@ import {
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CAPS, TIERS,
-  PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, floorThreat, activeThreatCap,
+  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
+  CAPS, TIERS,
+  PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, choirHpForFloor,
+  weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
@@ -75,7 +77,7 @@ function step(w: WorldState, cmd: InputCmd): SimEvent[] {
 
 function enemyTableGates(): void {
   section("§3 exact enemy tables (HP + speed per floor, round-half-to-even)");
-  type RegularKind = Exclude<EnemyKind, "boss" | "marrow">;
+  type RegularKind = Exclude<EnemyKind, "boss" | "marrow" | "choir" | "weaver" | "gilded">;
   const HP: Record<RegularKind, number[]> = {
     slime: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
     bat: [2, 2, 3, 3, 4, 4, 5, 5, 5, 5],
@@ -84,6 +86,8 @@ function enemyTableGates(): void {
     spitter: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
     charger: [5, 6, 8, 9, 10, 11, 12, 12, 13, 14],
     burrower: [4, 5, 6, 7, 8, 8, 9, 10, 10, 11],
+    orbiter: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
+    shielder: [5, 6, 8, 9, 10, 11, 12, 12, 13, 14],
   };
   const SPEED: Record<RegularKind, number[]> = {
     slime: [42, 43, 44, 45, 45, 46, 47, 47, 48, 49],
@@ -93,6 +97,8 @@ function enemyTableGates(): void {
     spitter: [30, 31, 31, 32, 32, 33, 33, 34, 34, 35],
     charger: [46, 47, 48, 49, 49, 50, 51, 52, 52, 53],
     burrower: [40, 41, 42, 42, 43, 44, 44, 45, 46, 46],
+    orbiter: [95, 97, 99, 101, 102, 104, 105, 107, 108, 110],
+    shielder: [50, 51, 52, 53, 54, 55, 56, 56, 57, 58],
   };
   for (const kind of Object.keys(HP) as RegularKind[]) {
     let hpOk = true, spOk = true;
@@ -208,6 +214,48 @@ function marrowGates(): void {
   check("the beat always reads: minimum duration under the cap",
     MARROW.shieldMinDuration > 0 && MARROW.shieldMinDuration < MARROW.shieldDuration);
   check("shield is reduction, not immunity", MARROW.shieldDamageReduction < 1 && MARROW.shieldDamageReduction === BOSS.roarDamageReduction);
+}
+
+// ---- §5c–§5e the deep roster: every boss lands in the same F10 TTK band ----
+
+function deepRosterGates(): void {
+  section("§5c–§5e deep-roster TTK (Hollow Choir / Weaver / Gilded Warden, 30–45s median band)");
+  check("F10 anchors match", choirHpForFloor(10) === CHOIR.baseHp && weaverHpForFloor(10) === WEAVER.baseHp
+    && gildedHpForFloor(10) === GILDED.baseHp,
+    `choir=${choirHpForFloor(10)} weaver=${weaverHpForFloor(10)} gilded=${gildedHpForFloor(10)}`);
+  check("every deep boss deals 2 contact (never scales)",
+    ENEMY_ARCHETYPES.choir.touchDamage === 2 && ENEMY_ARCHETYPES.weaver.touchDamage === 2 && ENEMY_ARCHETYPES.gilded.touchDamage === 2);
+
+  const build = [...L3("hair_trigger"), "glass_cannon", "glass_cannon"];
+  const bands: Array<[EnemyKind, TtkResult]> = [
+    ["choir", measureBossTtk("pistol", build, { kind: "choir", floor: 10 })],
+    ["weaver", measureBossTtk("pistol", build, { kind: "weaver", floor: 10 })],
+    ["gilded", measureBossTtk("pistol", build, { kind: "gilded", floor: 10 })],
+  ];
+  for (const [kind, r] of bands) {
+    check(`F10 median build kills the ${kind} in 30–45s`, r.killed && r.seconds >= 30 && r.seconds <= 45,
+      `ttk=${r.seconds.toFixed(1)}s`);
+    const enters = r.transitions.filter((t) => t.entering).length;
+    const exits = r.transitions.filter((t) => !t.entering).length;
+    check(`the ${kind} fight walks both transition beats`, enters === 2 && exits === 2,
+      `enters=${enters} exits=${exits}`);
+  }
+  process.stdout.write(`  info: ${bands.map(([k, r]) => `${k}=${r.seconds.toFixed(1)}s`).join(", ")}\n`);
+
+  // Beat caps per boss: the Choir's split (its longest allowed beat) still caps under 3.2s
+  // each; the Weaver's molt and Warden's sanctify are fixed short beats.
+  for (const [kind, r] of bands) {
+    const enters = r.transitions.filter((t) => t.entering);
+    const exits = r.transitions.filter((t) => !t.entering);
+    const cap = kind === "choir" ? CHOIR.splitDuration : kind === "weaver" ? WEAVER.moltDuration : GILDED.sanctifyDuration;
+    let ok = true;
+    for (let i = 0; i < Math.min(enters.length, exits.length); i++) {
+      if (exits[i].at - enters[i].at > cap + 2 * DT) ok = false;
+    }
+    check(`no ${kind} beat exceeds its ${cap}s cap`, ok);
+  }
+  check("the Warden's plate is tempo, never immunity (chip is 30%, exposed windows ≥2s)",
+    GILDED.armorChip > 0 && GILDED.slamRecover >= 2 && GILDED.sweepRecover >= 2);
 }
 
 // The anti-burst floor as a hard mechanism: even an absurd single hit cannot delete the
@@ -636,6 +684,7 @@ function main(): void {
   enemyTableGates();
   bossTtkGates();
   marrowGates();
+  deepRosterGates();
   bossOverflowGates();
   normalTtkGates();
   threatBudgetGates();

@@ -14,9 +14,12 @@ import type { InputCmd } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { createEnemy, spawnFloorEnemies, isBossKind, bossKindForFloor, ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
+import { createEnemy, spawnFloorEnemies, isBossKind, bossKindForFloor, ENEMY_ARCHETYPES, BOSS_KIN } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
-import { MARROW, marrowHpForFloor } from "../src/sim/balance.js";
+import {
+  MARROW, CHOIR, WEAVER, GILDED,
+  marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
+} from "../src/sim/balance.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
@@ -226,13 +229,18 @@ function marrowSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
 
 function marrowTests(): void {
   section("Marrow: identity, slotting, calibration anchors");
-  check("floor 10 slots MARROW (and 15 goes back to the King)",
-    bossKindForFloor(10) === "marrow" && bossKindForFloor(15) === "boss" && bossKindForFloor(20) === "marrow");
   check("marrow is a boss kind (chest/interest/death machinery)", isBossKind("marrow") && !isBossKind("charger"));
   check("F10 Marrow HP matches its calibration anchor", marrowHpForFloor(10) === MARROW.baseHp, `hp=${marrowHpForFloor(10)}`);
   {
-    const d = generateDungeon(0x51ED, 10);
-    const spawns = spawnFloorEnemies(d, 0x51ED, 10);
+    // Find a seed whose F10 rolls MARROW, then confirm the natural floor spawns it with
+    // its skeleton kin (the seeded deep roster is covered in its own section).
+    let seed = 0;
+    for (let s = 1; s < 200 && seed === 0; s++) {
+      if (bossKindForFloor(s, 10) === "marrow") seed = s;
+    }
+    check("some seed rolls MARROW on floor 10", seed !== 0, `seed=${seed}`);
+    const d = generateDungeon(seed, 10);
+    const spawns = spawnFloorEnemies(d, seed, 10);
     const boss = spawns.active.find((e) => isBossKind(e.kind));
     check("the natural floor-10 boss room holds a Marrow with skeleton kin",
       boss !== undefined && boss.kind === "marrow" && spawns.active.some((e) => e.kind === "skeleton"),
@@ -365,6 +373,507 @@ function marrowTests(): void {
       fired >= 16 && w.bullets.filter((b) => !b.friendly).length > before,
       `${fired} shards over ${MARROW.spinDuration}s`);
   }
+}
+
+// ---- the orbiter: ring strafe + stop-to-fire ----
+
+function orbiterTests(): void {
+  section("orbiter: holds the ring, stops to fire");
+  {
+    const { w, p } = arena(0x0B17);
+    p.x = 840; p.y = 600;
+    const e = spawnReady(w, "orbiter", 840 + C.ORBITER_RING, 600);
+    e.attack.cooldown = 3; // hold fire so the ring behavior is isolated first
+    let minD = Infinity, maxD = -Infinity;
+    for (let t = 0; t < 90; t++) {
+      step(w, idle(w.tick + 1));
+      const d = Math.hypot(e.x - p.x, e.y - p.y);
+      minD = Math.min(minD, d); maxD = Math.max(maxD, d);
+    }
+    check("it strafes the ring without collapsing in or fleeing out",
+      minD > C.ORBITER_RING - C.ORBITER_RING_SLACK * 2.2 && maxD < C.ORBITER_RING + C.ORBITER_RING_SLACK * 2.2,
+      `ring ${minD.toFixed(0)}–${maxD.toFixed(0)}px around ${C.ORBITER_RING}`);
+    // Sideways coverage: it should sweep a real arc around the player, not sit still.
+    e.attack.cooldown = 3;
+    const a0 = Math.atan2(e.y - p.y, e.x - p.x);
+    for (let t = 0; t < 60; t++) step(w, idle(w.tick + 1));
+    const a1 = Math.atan2(e.y - p.y, e.x - p.x);
+    let swept = Math.abs(a1 - a0);
+    if (swept > Math.PI) swept = 2 * Math.PI - swept;
+    check("the strafe sweeps a real arc around the target", swept > 0.35, `${swept.toFixed(2)} rad in 1s`);
+  }
+  {
+    const { w, p } = arena(0x0B18);
+    p.x = 840; p.y = 600;
+    const e = spawnReady(w, "orbiter", 840 + C.ORBITER_RING, 600);
+    let guard = 0;
+    while (e.attack.move !== "spit" && guard++ < 300) step(w, idle(w.tick + 1));
+    check("in-ring orbiter telegraphs its bolt", e.attack.move === "spit" && e.attack.phase === "windup");
+    const x0 = e.x, y0 = e.y;
+    stepFor(w, C.ORBITER_WINDUP * 0.8);
+    check("the windup is stationary (stillness is the tell)", Math.hypot(e.x - x0, e.y - y0) < 2);
+    stepFor(w, C.ORBITER_WINDUP * 0.3);
+    check("the bolt is away and the orbiter recovers", w.bullets.some((b) => !b.friendly) && e.attack.phase === "recover");
+  }
+}
+
+// ---- the shielder: the walking wall ----
+
+function shielderTests(): void {
+  section("shielder: front arc eats bullets; flanks, melee and blasts do not");
+  {
+    const { w, p } = arena(0x51E1);
+    p.x = 700; p.y = 600;
+    const e = spawnReady(w, "shielder", 900, 600);
+    stepFor(w, 0.15); // let it face its chase direction (west, toward the player)
+    const hp0 = e.hp;
+    // A frontal shot: flies east, into the guard.
+    w.bullets.push({ x: 830, y: 600, vx: 400, vy: 0, radius: 5, life: 1, friendly: true, owner: LOCAL_ID, damage: 3, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    const ev: SimEvent[] = [];
+    stepFor(w, 0.3, ev);
+    check("the frontal round is absorbed (blocked event, no damage, round spent)",
+      e.hp === hp0 && ev.some((x) => x.t === "bulletBlocked") && !w.bullets.some((b) => b.friendly));
+    // The flank: a shot from behind connects.
+    w.bullets.push({ x: e.x + 60, y: e.y, vx: -400, vy: 0, radius: 5, life: 1, friendly: true, owner: LOCAL_ID, damage: 3, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    stepFor(w, 0.3);
+    check("the flank shot lands full damage", e.hp === hp0 - 3, `hp ${hp0} -> ${e.hp}`);
+  }
+  {
+    const { w, p } = arena(0x51E2);
+    p.x = 760; p.y = 600;
+    const e = spawnReady(w, "shielder", 812, 600); // inside sword reach (48 + its radius)
+    e.attack.cooldown = 5; // hold the bash so the swing test is isolated
+    stepFor(w, 0.1);
+    const hp0 = e.hp;
+    // Melee chops over the guard.
+    acquireWeaponInWorld(w, LOCAL_ID, "sword");
+    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
+    stepFor(w, 0.25);
+    check("melee ignores the guard entirely", e.hp < hp0, `hp ${hp0} -> ${e.hp}`);
+  }
+  {
+    const { w, p } = arena(0x51E3);
+    p.x = 700; p.y = 600;
+    const e = spawnReady(w, "shielder", 940, 600);
+    e.hp = e.maxHp = 40;
+    stepFor(w, 0.15);
+    acquireWeaponInWorld(w, LOCAL_ID, "mortar");
+    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
+    stepFor(w, 0.8);
+    check("a mortar blast splashes straight past the guard", e.hp < 40, `hp=${e.hp}`);
+  }
+  {
+    // The boomerang: an outbound blade thrown into the guard clinks off it into an early
+    // return — spent against THIS body, but never lost like a plain bullet.
+    const { w, p } = arena(0x51E4);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "boomerang");
+    const e = spawnReady(w, "shielder", 880, 600);
+    e.attack.cooldown = 9; // hold the bash: the guard geometry is what's under test
+    e.hp = e.maxHp = 40;
+    stepFor(w, 0.15);
+    const ev: SimEvent[] = [];
+    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
+    stepFor(w, 1.2, ev);
+    // The guard eats the outbound pass; the TURNED blade leaves past its back, where the
+    // flank rule applies — so at most the single return slice ever lands.
+    check("the outbound blade clinks off the guard (never a full punch-through)",
+      ev.some((x) => x.t === "bulletBlocked") && e.hp >= 40 - WEAPONS.boomerang.damage,
+      `hp=${e.hp}`);
+    check("the clinked blade still came home (turned, not eaten)", w.bullets.length === 0);
+  }
+}
+
+// ---- THE HOLLOW CHOIR ----
+
+function choirSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy } {
+  const w = createWorld(seed, 10, { isSandbox: true });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  p.invuln = 0;
+  const boss = devSpawnEnemy(w, "choir", p.x + 220, p.y);
+  return { w, p, boss };
+}
+
+function choirTests(): void {
+  section("Hollow Choir: identity + anchors");
+  check("choir is a boss kind", isBossKind("choir"));
+  check("F10 Choir HP matches its calibration anchor", choirHpForFloor(10) === CHOIR.baseHp, `hp=${choirHpForFloor(10)}`);
+
+  section("Hollow Choir: homing wails you juke by turning");
+  {
+    const { w, p, boss } = choirSetup(0xC401);
+    let guard = 0;
+    while (boss.attack.move !== "wail" && guard++ < 600) step(w, idle(w.tick + 1));
+    check("the Choir telegraphs the wail volley", boss.attack.move === "wail" && boss.attack.phase === "windup");
+    let released = false;
+    let wails = 0;
+    for (let i = 0; i < Math.round((CHOIR.wailWindup + 0.2) / DT) && !released; i++) {
+      const out = step(w, idle(w.tick + 1));
+      if (out.some((x) => x.t === "bossVolley")) {
+        released = true;
+        wails = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
+      }
+    }
+    check("P1 releases a 2-wail volley of seekers", released && wails === CHOIR.wailCount[1], `wails=${wails}`);
+    // The homing: move the player sideways; the wail's velocity must bend toward them.
+    const wail = w.bullets.find((b) => !b.friendly && b.homing !== undefined);
+    check("a wail exists to track", wail !== undefined);
+    if (wail) {
+      p.x = boss.x - 60; p.y = boss.y + 260;
+      const dir0 = Math.atan2(wail.vy, wail.vx);
+      stepFor(w, 0.5);
+      const dir1 = Math.atan2(wail.vy, wail.vx);
+      check("the wail bends toward the standing player (capped turn)", Math.abs(dir1 - dir0) > 0.2,
+        `turned ${(dir1 - dir0).toFixed(2)} rad`);
+    }
+  }
+
+  section("Hollow Choir: the fade — intangible, drifting, punishable on re-form");
+  {
+    const { w, p, boss } = choirSetup(0xC402);
+    let guard = 0;
+    while (!(boss.attack.move === "fade" && boss.attack.phase === "active") && guard++ < 1200) step(w, idle(w.tick + 1));
+    check("the Choir fades on cadence", guard < 1200);
+    const hp0 = boss.hp;
+    plantBullet(w, boss.x, boss.y, 99);
+    stepFor(w, 0.1);
+    check("mid-fade it cannot be hit", boss.hp === hp0);
+    const d0 = Math.hypot(p.x - boss.x, p.y - boss.y);
+    stepFor(w, 0.6);
+    const d1 = Math.hypot(p.x - boss.x, p.y - boss.y);
+    check("the fade drifts through your position (keep moving)", d1 < d0 + 1, `${d0.toFixed(0)} -> ${d1.toFixed(0)}px`);
+    stepFor(w, CHOIR.fadeDuration);
+    check("it re-forms into a punishable recover", boss.attack.phase === "recover");
+    const hp1 = boss.hp;
+    plantBullet(w, boss.x, boss.y, 5);
+    stepFor(w, 0.1);
+    check("the re-formed Choir takes hits again", boss.hp === hp1 - 5);
+  }
+
+  section("Hollow Choir: the split beat — kill the wisps to force it back together");
+  {
+    const { w, boss } = choirSetup(0xC403);
+    stepFor(w, 0.2);
+    plantBullet(w, boss.x, boss.y, 1e6);
+    stepFor(w, 0.1);
+    check("a million-damage hit floors the Choir at 57%", Math.abs(boss.hp - CHOIR.phaseFloor[0] * boss.maxHp) < 1e-6,
+      `hp=${boss.hp}/${boss.maxHp}`);
+    check("the Choir scatters (split beat, boss out of play)", boss.attack.move === "split");
+    const wisps = w.enemies.filter((e) => e.isSummoned && e.kind === "ghost" && !e.dead);
+    check("three swarm ghost-wisps carry the beat", wisps.length === CHOIR.splitWisps && wisps.every((x) => x.tier === "swarm"));
+    const hpMid = boss.hp;
+    plantBullet(w, boss.x, boss.y, 500);
+    stepFor(w, 0.1);
+    check("the scattered Choir itself cannot be damaged", boss.hp === hpMid);
+    stepFor(w, CHOIR.splitMinDuration);
+    for (const wsp of wisps) plantBullet(w, wsp.x, wsp.y, 999, 2);
+    stepFor(w, 0.3);
+    // The overflow lands at the early re-form and double-crosses 30% — beat two begins
+    // immediately with FRESH wisps (the machine resolved beat one well under its cap).
+    const wisps2 = w.enemies.filter((e) => e.isSummoned && e.kind === "ghost" && !e.dead);
+    check("killing every wisp re-forms it early (overflow lands: phase 3, fresh beat)",
+      boss.boss !== null && boss.boss.phase === 3 && wisps2.length === CHOIR.splitWisps
+      && wisps2.every((x) => wisps.indexOf(x) === -1),
+      `phase=${boss.boss?.phase} wisps=${wisps2.length}`);
+  }
+}
+
+// ---- THE WEAVER ----
+
+function weaverSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy } {
+  const w = createWorld(seed, 10, { isSandbox: true });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  p.invuln = 0;
+  const boss = devSpawnEnemy(w, "weaver", p.x + 220, p.y);
+  return { w, p, boss };
+}
+
+function weaverTests(): void {
+  section("Weaver: identity + anchors");
+  check("weaver is a boss kind", isBossKind("weaver"));
+  check("F10 Weaver HP matches its calibration anchor", weaverHpForFloor(10) === WEAVER.baseHp, `hp=${weaverHpForFloor(10)}`);
+
+  section("Weaver: webs — persistent slow-zones, never damage");
+  {
+    const { w, p, boss } = weaverSetup(0x3EA1);
+    let guard = 0;
+    while (boss.attack.move !== "weave" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
+    check("the Weaver telegraphs the weave", boss.attack.move === "weave");
+    const websBefore = w.hazards.length;
+    stepFor(w, WEAVER.weaveWindup + 0.1);
+    check("the weave plants its P1 web pattern", w.hazards.length === websBefore + WEAVER.webCount[1],
+      `webs=${w.hazards.length - websBefore}`);
+    const web = w.hazards[w.hazards.length - 1];
+    check("webs are authored hazards with a real lifetime", web.kind === "web" && web.life > WEAVER.webLife - 1);
+    // The slow: walk the player through the web center and measure the stride.
+    w.isGodMode = false;
+    const hp0 = p.hp;
+    p.invuln = 999; // webs must not damage on their own; enemy contact stays out of the reading
+    p.x = web.x; p.y = web.y;
+    const x0 = p.x;
+    for (let t = 0; t < 30; t++) step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false });
+    const snared = p.x - x0;
+    p.x = 200; p.y = 200; // clear floor far from any web
+    const x1 = p.x;
+    for (let t = 0; t < 30; t++) step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false });
+    const free = p.x - x1;
+    check("a web slows the walk to ~55%", snared < free * (WEAVER.webSlow + 0.12) && snared > free * (WEAVER.webSlow - 0.12),
+      `${snared.toFixed(0)}px vs ${free.toFixed(0)}px`);
+    check("webs never damage (routing pressure only)", p.hp === hp0);
+  }
+
+  section("Weaver: the pounce — marked, airborne, web at the crater");
+  {
+    const { w, p, boss } = weaverSetup(0x3EA2);
+    let guard = 0;
+    while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
+    check("the Weaver telegraphs the pounce", boss.attack.move === "pounce" && boss.attack.phase === "windup");
+    stepFor(w, WEAVER.pounceLock + 0.05);
+    const markX = boss.attack.markX, markY = boss.attack.markY;
+    check("the mark locks on the target's position", Math.hypot(markX - p.x, markY - p.y) < 40);
+    stepFor(w, WEAVER.pounceWindup - WEAVER.pounceLock);
+    // Airborne now: untargetable, lerping onto the mark.
+    const hpAir = boss.hp;
+    plantBullet(w, boss.x, boss.y, 99);
+    stepFor(w, 0.1);
+    check("the airborne Weaver cannot be shot", boss.hp === hpAir);
+    const websBefore = w.hazards.length;
+    p.x = markX + 200; p.y = markY; // step off the mark
+    p.invuln = 0;
+    stepFor(w, WEAVER.pounceAir + 0.1);
+    check("it lands ON the mark and leaves a web at the crater",
+      Math.hypot(boss.x - markX, boss.y - markY) < 30 && w.hazards.length === websBefore + 1);
+    check("stepping off the mark dodges the landing", p.hp === p.maxHp);
+  }
+  {
+    // The landing hits when you hold your ground.
+    const { w, p, boss } = weaverSetup(0x3EA3);
+    let guard = 0;
+    while (!(boss.attack.move === "pounce" && boss.attack.phase === "active") && guard++ < 900 && !boss.dead) {
+      step(w, idle(w.tick + 1));
+      p.invuln = 0;
+    }
+    w.isGodMode = false;
+    p.invuln = 0;
+    const hp0 = p.hp;
+    p.x = boss.attack.markX; p.y = boss.attack.markY;
+    stepFor(w, WEAVER.pounceAir + 0.1);
+    check("holding the mark eats the landing hit", p.hp <= hp0 - WEAVER.pounceOuterDamage, `hp ${hp0} -> ${p.hp}`);
+  }
+
+  section("Weaver: the molt beat — fixed cocoon, web-bolt ring, broodlings");
+  {
+    const { w, boss } = weaverSetup(0x3EA4);
+    stepFor(w, 0.2);
+    const ev: SimEvent[] = [];
+    plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
+    stepFor(w, 0.15, ev);
+    check("a 65% cross raises the molt (roar semantics)", boss.attack.move === "roar");
+    const brood = w.enemies.filter((e) => e.isSummoned && e.kind === "bat" && !e.dead);
+    check("two swarm broodling bats spawn with the beat", brood.length === WEAVER.moltAdds && brood.every((x) => x.tier === "swarm"));
+    const shotsBefore = w.bullets.filter((b) => !b.friendly).length;
+    stepFor(w, WEAVER.moltDuration + 0.1, ev);
+    const shotsAfter = w.bullets.filter((b) => !b.friendly).length;
+    check("the molt bursts into the web-bolt ring on exit",
+      shotsAfter >= shotsBefore + WEAVER.moltBoltCount - 2 && boss.boss !== null && boss.boss.phase === 2,
+      `bolts=${shotsAfter - shotsBefore} phase=${boss.boss?.phase}`);
+  }
+}
+
+// ---- THE GILDED WARDEN ----
+
+function gildedSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy } {
+  const w = createWorld(seed, 10, { isSandbox: true });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  p.invuln = 0;
+  const boss = devSpawnEnemy(w, "gilded", p.x + 200, p.y);
+  return { w, p, boss };
+}
+
+function gildedTests(): void {
+  section("Gilded Warden: identity + anchors");
+  check("gilded is a boss kind", isBossKind("gilded"));
+  check("F10 Warden HP matches its calibration anchor", gildedHpForFloor(10) === GILDED.baseHp, `hp=${gildedHpForFloor(10)}`);
+
+  section("Gilded Warden: the plate — chip while closed, full while EXPOSED");
+  {
+    const { w, boss } = gildedSetup(0x91D1);
+    stepFor(w, 0.2);
+    const hp0 = boss.hp;
+    plantBullet(w, boss.x, boss.y, 10);
+    stepFor(w, 0.1);
+    check("closed plate chips a 10 hit to 3", Math.abs(hp0 - boss.hp - 10 * GILDED.armorChip) < 1e-6,
+      `took ${(hp0 - boss.hp).toFixed(1)}`);
+    // Ride to the exposed window: after the slam resolves it recovers, plate open.
+    let guard = 0;
+    while (!(boss.attack.phase === "recover" && (boss.attack.move === "slam" || boss.attack.move === "sweep")) && guard++ < 900) {
+      step(w, idle(w.tick + 1));
+    }
+    check("the commitment resolves into the exposed recover", guard < 900, `move=${boss.attack.move}`);
+    const hp1 = boss.hp;
+    plantBullet(w, boss.x, boss.y, 10);
+    stepFor(w, 0.1);
+    check("the EXPOSED window takes the full 10", Math.abs(hp1 - boss.hp - 10) < 1e-6, `took ${(hp1 - boss.hp).toFixed(1)}`);
+    check("the exposed window is long enough to matter", GILDED.slamRecover >= 2 && GILDED.sweepRecover >= 2);
+  }
+
+  section("Gilded Warden: quake marker + aftershock line; P3 double sweep");
+  {
+    const { w, p, boss } = gildedSetup(0x91D2);
+    let guard = 0;
+    while (boss.attack.move !== "slam" && guard++ < 900) step(w, idle(w.tick + 1));
+    check("the Warden telegraphs the anvil slam", boss.attack.move === "slam" && boss.attack.phase === "windup");
+    stepFor(w, 0.1);
+    check("the quake is marked on its own feet", Math.hypot(boss.attack.markX - boss.x, boss.attack.markY - boss.y) < 4);
+    // Hold inside the ring (outside the body, inside the 66px inner radius): it connects.
+    w.isGodMode = false;
+    p.x = boss.x + GILDED.slamInnerRadius - 5; p.y = boss.y;
+    p.invuln = 0;
+    const hp0 = p.hp;
+    stepFor(w, GILDED.slamWindup + GILDED.slamActive + 0.1);
+    check("standing in the ring eats a slam hit", p.hp < hp0, `hp ${hp0} -> ${p.hp}`);
+    check("the aftershock line is away", w.bullets.filter((b) => !b.friendly).length >= GILDED.slamLineShards);
+  }
+  {
+    const { w, boss } = gildedSetup(0x91D3);
+    stepFor(w, 0.2);
+    // Drive to P3 through both sanctify beats (the closed plate chips the hit, so it
+    // must be heavy enough to cross 70% at 30% effect).
+    plantBullet(w, boss.x, boss.y, boss.maxHp * 3);
+    stepFor(w, GILDED.sanctifyDuration + 0.2);
+    stepFor(w, GILDED.sanctifyDuration + 0.2);
+    check("both sanctify beats resolve into phase 3", boss.boss !== null && boss.boss.phase === 3, `phase=${boss.boss?.phase}`);
+    let guard = 0;
+    while (boss.attack.move !== "sweep" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
+    // Ride the whole commitment (windup + active) and count everything it released.
+    const before = w.bullets.filter((b) => !b.friendly).length;
+    guard = 0;
+    while (boss.attack.move === "sweep" && boss.attack.phase !== "recover" && guard++ < 300) step(w, idle(w.tick + 1));
+    const released = w.bullets.filter((b) => !b.friendly).length - before;
+    check("the P3 sweep releases both offset waves", released >= GILDED.sweepCount * 2 - 2,
+      `released=${released} (2 waves of ${GILDED.sweepCount})`);
+  }
+}
+
+// ---- the boss ladder: seeded rotation ----
+
+function rotationTests(): void {
+  section("boss ladder: F5 is the King; deeper floors rotate the seeded roster");
+  {
+    let f5Ok = true;
+    for (let s = 0; s < 40; s++) {
+      if (bossKindForFloor(0xAAA + s * 131, 5) !== "boss") f5Ok = false;
+    }
+    check("floor 5 is ALWAYS the Slime King (the telegraph tutor)", f5Ok);
+  }
+  {
+    // Determinism + variety + no immediate repeats across the ladder.
+    const seen = new Set<EnemyKind>();
+    let deterministic = true;
+    let noRepeats = true;
+    for (let s = 0; s < 60; s++) {
+      const seed = 0x5EED + s * 977;
+      let prev: EnemyKind | null = null;
+      for (let floor = 10; floor <= 40; floor += 5) {
+        const a = bossKindForFloor(seed, floor);
+        if (a !== bossKindForFloor(seed, floor)) deterministic = false;
+        if (prev !== null && a === prev) noRepeats = false;
+        seen.add(a);
+        prev = a;
+      }
+    }
+    check("the pick is a pure function of (seed, floor)", deterministic);
+    check("no boss repeats back-to-back within a run", noRepeats);
+    check("all five bosses appear across seeds", seen.size === 5, [...seen].join(","));
+  }
+  {
+    // Every deep boss floor spawns its boss with the matching kin.
+    let kinOk = true;
+    for (let s = 0; s < 6; s++) {
+      const seed = 0xFACE + s * 313;
+      const d = generateDungeon(seed, 10);
+      const spawns = spawnFloorEnemies(d, seed, 10);
+      const boss = spawns.active.find((e) => isBossKind(e.kind));
+      if (!boss) { kinOk = false; break; }
+      const minions = spawns.active.filter((e) => !isBossKind(e.kind));
+      if (minions.length === 0 || !minions.every((m) => m.kind === BOSS_KIN[boss.kind])) kinOk = false;
+    }
+    check("each deep floor spawns the rolled boss with its own kin", kinOk);
+  }
+}
+
+// ---- the authored boss chests ----
+
+function bossChestTests(): void {
+  section("boss chests: each boss bakes its signature weapon");
+  const expected: Array<[EnemyKind, string]> = [
+    ["boss", "mortar"], ["marrow", "boomerang"], ["choir", "beam"], ["weaver", "vortex"], ["gilded", "cannon"],
+  ];
+  for (const [kind, weapon] of expected) {
+    const w = createWorld(0xC4E57 ^ kind.length, 10, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const boss = devSpawnEnemy(w, kind, p.x + 150, p.y);
+    for (let t = 1; t <= 60 * 20 && !boss.dead; t++) {
+      plantBullet(w, boss.x, boss.y, 5000, 30);
+      step(w, idle(w.tick + 1));
+    }
+    const chest = w.chests.find((c) => c.kind === "boss");
+    check(`${kind} chest carries ${weapon}`, boss.dead && chest !== undefined && chest.weapon === weapon,
+      chest ? `weapon=${chest.weapon}` : "no chest");
+  }
+}
+
+// ---- the weapons: Sunlance (beam) and Undertow (vortex) ----
+
+function beamVortexTests(): void {
+  section("Sunlance: a sustained melt with a hard range edge");
+  {
+    const { w, p } = arena(0x5311);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "beam");
+    const near = spawnReady(w, "slime", 1050, 600); // ~350px: inside the ~480px lance
+    near.hp = near.maxHp = 30;
+    const start = w.tick;
+    while (!near.dead && w.tick - start < 60 * 4) {
+      step(w, { seq: w.tick + 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
+    }
+    const seconds = (w.tick - start) * DT;
+    check("the lance melts a 30 HP body in a sustained hold (~2s)", near.dead && seconds > 1 && seconds < 3.2,
+      `${seconds.toFixed(2)}s`);
+  }
+  {
+    const { w, p } = arena(0x5312);
+    p.x = TILE * 3; p.y = 600; // west side, room for a 700px lane
+    acquireWeaponInWorld(w, LOCAL_ID, "beam");
+    const far = spawnReady(w, "slime", p.x + 700, 600); // beyond the ~480px range
+    far.hp = far.maxHp = 10;
+    for (let t = 0; t < 90; t++) step(w, { seq: w.tick + 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
+    check("beyond the lance's reach nothing lands (range is the trade)", far.hp === 10);
+  }
+
+  section("Undertow: gathers a scattered room into one clump");
+  {
+    const { w, p } = arena(0x5313);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "vortex");
+    // Two flankers off the orb's line, one body dead ahead on its path.
+    const a = spawnReady(w, "slime", 940, 510);
+    const b = spawnReady(w, "slime", 940, 690);
+    const c = spawnReady(w, "slime", 900, 600);
+    a.hp = a.maxHp = 40; b.hp = b.maxHp = 40; c.hp = c.maxHp = 40;
+    const gap0 = Math.hypot(a.x - b.x, a.y - b.y);
+    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
+    stepFor(w, 1.3);
+    const gap1 = Math.hypot(a.x - b.x, a.y - b.y);
+    check("the orb drags the flankers together", gap1 < gap0 - 60, `${gap0.toFixed(0)} -> ${gap1.toFixed(0)}px`);
+    check("a body on the orb's path is tapped once (pass-through)",
+      c.hp < 40 && c.hp >= 40 - WEAPONS.vortex.damage - 1, `c=${c.hp}`);
+  }
+  check("beam and vortex sit in the pickup pool", PICKUP_WEAPONS.includes("beam") && PICKUP_WEAPONS.includes("vortex"));
 }
 
 // ---- the weapons: Thumper (AoE mortar) and Swallow (returning boomerang) ----
@@ -503,8 +1012,16 @@ function stabilityTests(): void {
 function main(): void {
   chargerTests();
   burrowerTests();
+  orbiterTests();
+  shielderTests();
   marrowTests();
+  choirTests();
+  weaverTests();
+  gildedTests();
+  rotationTests();
+  bossChestTests();
   weaponTests();
+  beamVortexTests();
   rosterTests();
   stabilityTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
