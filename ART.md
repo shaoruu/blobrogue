@@ -79,6 +79,29 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 - Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`, plus the `fx/beam_ray.png`
   pure-white alpha mask (code-tinted per shot; `trail_streak` fallback until it lands).
 
+**Bestiary-wave hooks (registered, awaiting generated art — the tinted-disc fallback
+carries each identity color until the base PNGs land, and the ladder holds every body on
+its best available tier).** Generate via the locked FAL flux/dev → birefnet → pixelize
+pipeline (`tools/gen-sprites.mjs`) and drop the cutouts on these exact stems:
+- Base 64×64 PNGs: `rootward.png`, `echojack.png`, `seamcutter.png`, `caskbellows.png`,
+  `sinderling.png`, `fragment.png`, `echo.png`, `knell.png`, `marshal.png`, `toll.png`.
+- Directional walk + attack sets (`<stem>_walk_{down,up,side}.png` +
+  `<stem>_attack_{down,up,side}.png`) for **echojack, seamcutter, caskbellows,
+  sinderling, marshal**.
+- **rootward** — walk triplet only (`rootward_walk_{down,up,side}.png`): a walking wall
+  has no attack strip; its guard arc is a code overlay off the authoritative angle.
+- Drifting masses (the Choir's contract — idle loop + omni attack, no walk triplet):
+  `fragment_idle.png` + `fragment_attack.png`, `toll_idle.png` + `toll_attack.png`.
+- Decoys (idle loop only): `echo_idle.png`, `knell_idle.png`.
+- The LEGACY roster's directional sets are also pre-registered off their own stems
+  (`slime`, `bat`, `skeleton`, `ghost`, `spitter` — walk triplets; skeleton/spitter also
+  directional attacks). Their current single-strip walks stay registered and keep
+  playing until the new sheets actually load — approved directional finals become pure
+  file drops with zero code changes, and today's look is preserved byte-for-byte.
+- Sim-side visual state the art can key on: `EnemyWire.aux` carries the sinderling's
+  armed flag (stoked glow), the echo/knell fuse (fade / blink-out), the fragment's
+  tether source (the line render), and a bulwark elite's plate HP.
+
 
 **Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
 MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored

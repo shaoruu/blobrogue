@@ -199,3 +199,25 @@ type WaveSoundSpec = {
 ## 12. Generation count / ship order
 New generation budget (not counting variants): bosses 33 logical / ~48 takes; roles 10 / 20 takes; weapons 6 / 12; zones 6 loops; hazards 8 / 16; pets 6 / 10; co-op 10 / 10; UI 10 / 10. **Reuse/derive saves ~18 logical generations.**
 Ship order: (1) boss lock/windup/impact + Charger/Burrower/Orbiter/Shielder, (2) Thumper/Sunlance, (3) hazards + co-op revive/reconnect, (4) ambient zones, (5) pets/UI/profile/leaderboard. Readability-critical wave must land before ambience polish.
+
+## 13. Bestiary wave (typed rows shipped in `src/game/waveSpec.ts`; stems queued for generation)
+All rows follow §1 hygiene (spatial, per-entity 200ms cooldowns, jitter lanes) and play their
+declared fallback/synth until files land. Trigger source is the authoritative attack state
+(`WAVE_TELLS`), never animation frames.
+
+|event|stem|role|
+|---|---|---|
+|`echojack.jangle`|`enemy/echojack_jangle_vN`|decoy-plant telegraph (the false noise, foregrounded)|
+|`echojack.blink`|`enemy/echojack_blink_vN`|perpendicular relocation whoosh|
+|`seamcutter.preview`|`enemy/seam_preview_vN`|wall-to-wall lane arming|
+|`seamcutter.lock`|`enemy/seam_lock`|lane lock click (the dodge window opens)|
+|`seamcutter.cut`|`enemy/seam_cut_vN`|the traveling cut|
+|`caskbellows.crank`|`enemy/cask_crank_vN`|volley windup (ratcheting crank — the weak point, audible)|
+|`caskbellows.stagger`|`enemy/cask_stagger`|rear-crank stagger impact (the punish window)|
+|`sinderling.stoke`|`enemy/sinder_stoke_vN`|self-arming channel (gathering embers)|
+|`sinderling.jet`|`enemy/sinder_jet_vN`|flame-jet dash|
+|`fragment.harmonize`|`enemy/fragment_harmonize_vN`|tether pulse windup (nonverbal choir voice, Choir kin)|
+|`marshal.order`|`mini/marshal_order_vN`|P2 sweep/fan windup (a commander's bark)|
+|`marshal.shatter`|`mini/marshal_shatter`|the 50% shield-to-cover shatter|
+|`toll.ringWarn`|`mini/toll_ring_warn_vN`|bell draw-back before the knell|
+|`toll.ring`|`mini/toll_ring_vN`|the knell itself (descending bronze triad)|
