@@ -432,6 +432,12 @@ reconciled with the studio balance gate's reconnect contract
 - **No infinite veils:** the connect handshake has a hard 15s deadline (explicit failure),
   the party gate its 20s deadline, and ESC cancels either veil (and an in-progress
   reconnect) back to the lobby at any time.
+- **Input during an outage:** the veils AND a mid-run outage run under the input-context
+  system's `reconnect` context — gameplay actions and fire samples are blocked at the
+  controller, and the loss edge drops everything held (keys, mouse, the autofire latch,
+  the stats hold) exactly like a window blur, so resuming always requires fresh input.
+  Prompts stay neutral (key names + plain verbs); controller glyphs wait for real
+  controller support (enforced by the copy suite).
 
 `server/test/resume.test.ts` locks all of it with real reconnecting clients: exact-state
 resumes at 4%/20%/96% of the grace window (early blip / mid outage / near-edge return,

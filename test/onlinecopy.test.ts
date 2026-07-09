@@ -72,6 +72,23 @@ function main(): void {
   check("holding counts down and offers the out", startAnywayHoldLabel(0) === "STARTING IN 3\u2026 release to cancel"
     && startAnywayHoldLabel(2100) === "STARTING IN 1\u2026 release to cancel");
 
+  section("neutral prompts only: controller glyphs wait for real controller support");
+  {
+    // Enclosed-letter button art (Ⓐ…Ⓩ, 🅐…, 🅰…) and "(A)"-style prompts are banned until a
+    // controller actually exists; prompts stay key names + plain verbs.
+    const GLYPH_RE = /[\u24B6-\u24CF\u{1F150}-\u{1F169}\u{1F170}-\u{1F189}]|\((?:A|B|X|Y)\)/u;
+    const allCopy = [
+      WORLD_MISMATCH_NOTE, RUN_ENDED_AWAY_NOTE, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT,
+      READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, startAnywayHoldLabel(0),
+      onlineHudLabel({ phase: "connected", roomCode: "ABCD", worldId: null, connected: 2, away: 1 }),
+      reconnectOverlayCopy(t0 + 5000, info(t0, 2, t0 + 90000)).hint ?? "",
+      exitNoteFor("connection_lost"), exitNoteFor("world_mismatch"), exitNoteFor("party_incomplete", "Bob"),
+      exitNoteFor("superseded"), exitNoteFor("connect_failed"), exitNoteFor("run_ended_away"),
+    ];
+    check("every contract string is controller-glyph free", allCopy.every((s) => !GLYPH_RE.test(s)));
+    check("the cancel prompt names the key, not a pad button", CONNECT_CANCEL_HINT === "ESC \u2014 cancel");
+  }
+
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll UI copy contract assertions passed.\n");

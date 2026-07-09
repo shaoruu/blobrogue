@@ -567,8 +567,7 @@ export class Game {
         if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
         // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
         // connection attempt and return to the lobby — never a pause menu over a dead world.
-        if (this.mode === "online" && this.wsTransport
-          && (this.isAwaitingOnlineWorld() || this.wsTransport.getReconnectInfo().isReconnecting)) {
+        if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
           this.quitToMenu("quit");
           break;
         }
@@ -607,11 +606,19 @@ export class Game {
     if (!this.isRunning) return "menu";
     if (this.isChoosing) return "blessing";
     if (this.isPaused) return "pause";
-    if (this.isAwaitingOnlineWorld()) return "reconnect";
+    // Both no-world-yet (connecting/readiness veil) AND a mid-run outage are the reconnect
+    // context: gameplay actions and fire samples are blocked at the controller, so a dead
+    // connection can never accumulate inputs or keep an autofire latch alive.
+    if (this.isAwaitingOnlineWorld() || this.isOnlineOutage()) return "reconnect";
     if (this.isDown) return "spectate";
     // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
     if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
+  }
+
+  // Mid-run connection outage: the transport is auto-resuming with its seat token.
+  private isOnlineOutage(): boolean {
+    return this.mode === "online" && this.wsTransport !== null && this.wsTransport.getReconnectInfo().isReconnecting;
   }
 
   start(opts: StartOptions) {
@@ -976,7 +983,14 @@ export class Game {
     // our body safe. Freeze gameplay on the last authoritative frame — no inputs, no local
     // prediction drift — and let the CONNECTION LOST overlay carry the state. Never a game
     // over; the terminal paths route through onOnlineStatus if the window runs out.
-    if (this.mode === "online" && this.wsTransport?.getReconnectInfo().isReconnecting) {
+    if (this.isOnlineOutage()) {
+      if (!this.isOutageSeen) {
+        // Loss edge: same policy as window blur — drop everything held (keys, mouse, the
+        // autofire latch, the stats hold) so nothing carries across the outage and resuming
+        // always requires fresh input. The context flip to "reconnect" (above) blocks any
+        // new gameplay action for the duration.
+        this.input.releaseAll();
+      }
       this.isOutageSeen = true;
       this.updateHud();
       return;

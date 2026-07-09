@@ -1,6 +1,11 @@
 // The UI Director's P0 reconnect/readiness copy contract — every player-facing string for
 // online connection states lives HERE, exactly as specced, so the game/menu/main surfaces
 // can never drift apart and the copy itself is unit-testable (test/onlinecopy.test.ts).
+//
+// Input-prompt policy (coordinated with the input-context work): controller glyphs (A/B/X/Y
+// button art) appear ONLY once real controller support exists. Until then every prompt uses
+// neutral copy — key names (ESC) and plain verbs (hold, tap, release) — and the copy suite
+// enforces glyph-free strings.
 
 import type { ReconnectInfo } from "../client/wsTransport.js";
 
