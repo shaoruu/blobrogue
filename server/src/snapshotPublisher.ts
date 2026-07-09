@@ -12,7 +12,7 @@
 // additionally advances its ack to the snapshot's evTo, so filtered-out ids never wedge the
 // stream. Delivery is effectively-once (no missing, no double kill/loot/FX).
 
-import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type WireEvent } from "../../src/net/protocol.js";
+import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type RosterWire, type WireEvent } from "../../src/net/protocol.js";
 import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
@@ -35,6 +35,7 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   publish(room: RoomRuntime): void {
     const identities = this.identitiesFor(room);
+    const roster = this.rosterFor(room);
     for (const conn of room.conns.values()) {
       if (conn.playerId === null || conn.closing) continue;
       const buffered = conn.ws.bufferedAmount;
@@ -48,6 +49,8 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
       }
       const events = this.eventsFor(room, conn);
       const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
+        worldId: room.id,
+        roster,
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
         identities,
@@ -62,6 +65,23 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     const out = new Map<string, PlayerIdentity>();
     for (const conn of room.conns.values()) {
       if (conn.playerId !== null) out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex });
+    }
+    return out;
+  }
+
+  // Everyone actually CONNECTED to this world, with the verified ticket identity they joined
+  // as. Interest-independent by design: this is the readiness/roster truth the client veil
+  // and HUD key on — an interest filter must never be able to hide a party member's presence.
+  private rosterFor(room: RoomRuntime): RosterWire[] {
+    const out: RosterWire[] = [];
+    for (const conn of room.conns.values()) {
+      if (conn.playerId === null || conn.closing) continue;
+      out.push({
+        pid: conn.playerId,
+        aid: conn.authName ?? conn.playerId,
+        nm: conn.displayName ?? conn.playerId,
+        cl: conn.colorIndex,
+      });
     }
     return out;
   }
@@ -94,6 +114,8 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     // shouldn't replay the pre-join event backlog. Future events flow from here.
     conn.ackedEventId = room.latestEventId();
     const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
+      worldId: room.id,
+      roster: this.rosterFor(room),
       interestRadius: 0,
       identities: this.identitiesFor(room),
     });

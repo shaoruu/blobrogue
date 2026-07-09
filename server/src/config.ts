@@ -79,7 +79,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     slowClientKickBytes: intEnv(env, "GS_SLOW_CLIENT_KICK_BYTES", 1024 * 1024, 1024, 1 << 30),
     maxStarveTicks: intEnv(env, "GS_MAX_STARVE_TICKS", 10, 0, 1000),
     offerTtlMs: intEnv(env, "GS_OFFER_TTL_MS", 60000, 1000, 3600000),
-    interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 1100, 0, 100000), // ~1.5x viewport half-extent; 0 = off
+    // Interest filtering defaults OFF (full snapshots) after the Sev-0 room-divergence
+    // incident: filtering may only be re-enabled explicitly (GS_INTEREST_RADIUS=1100, ~1.5x
+    // viewport half-extent) once the coherence suite + the staged rollout criteria in
+    // MULTIPLAYER.md §7 have been verified against the deployed build.
+    interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 0, 0, 100000),
     arena: env.GS_ARENA === "1",
   };
 }

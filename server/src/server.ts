@@ -19,7 +19,7 @@ import { parseCidrList, clientIpFrom } from "./net.js";
 import { WorldRegistry } from "./worldRegistry.js";
 import { WsSnapshotPublisher } from "./snapshotPublisher.js";
 import { MessageRouter, DEFAULT_WORLD_ID, OFFER_RESENDS } from "./messageRouter.js";
-import { createHttpHandler } from "./httpEndpoints.js";
+import { createHttpHandler, type WorldReport } from "./httpEndpoints.js";
 import type { SessionStore, SnapshotPublisher, RoomRuntime } from "./ports.js";
 
 const TICK_MS = 1000 / TICK_HZ;
@@ -80,7 +80,7 @@ export class GameServer {
       close: (conn, code, reason) => this.closeConn(conn, code, reason),
     });
 
-    this.http = createServer(createHttpHandler({ config: cfg, health: () => this.health() }));
+    this.http = createServer(createHttpHandler({ config: cfg, health: () => this.health(), worlds: () => this.worldReports() }));
     this.wss = new WebSocketServer({ server: this.http, path: cfg.wsPath, maxPayload: 8 * 1024 });
     this.wss.on("connection", (ws, req) => this.onConnection(ws, req));
   }
@@ -275,6 +275,20 @@ export class GameServer {
       rttMs: c.rttMs, cliJitterMs: c.cliJitterMs, cliReconciliations: c.cliReconciliations, cliCorrectionMaxPx: c.cliCorrectionMaxPx,
     }));
     return this.metrics.report(this.startedAt, this.clock.now(), this.sessions.roomCount(), this.sessions.totalPlayers(), this.conns.size, nets);
+  }
+
+  // Per-world occupancy for /worlds (control panel): which worlds exist and who is actually
+  // connected to each — the ops answer to "did the whole room land in one world?".
+  private worldReports(): WorldReport[] {
+    const out: WorldReport[] = [];
+    for (const room of this.sessions.rooms()) {
+      const names: string[] = [];
+      for (const conn of room.conns.values()) {
+        if (!conn.closing && conn.playerId !== null) names.push(conn.displayName ?? conn.playerId);
+      }
+      out.push({ id: room.id, players: room.playerCount, tick: room.state.tick, names });
+    }
+    return out;
   }
 
   // Test/introspection helpers.

@@ -37,6 +37,9 @@ export interface Counters {
   connsClosed: number;
   joinsOk: number;
   joinsRejected: number;
+  // An older connection closed because the SAME verified identity joined the same world again
+  // (two tabs / zombie socket). Growth here means players are running duplicate sessions.
+  duplicateIdentityKicks: number;
   malformed: number;
   rateLimited: number;
   droppedSnaps: number;
@@ -46,7 +49,7 @@ export interface Counters {
 export function newCounters(): Counters {
   return {
     msgsIn: 0, msgsOut: 0, bytesOut: 0, connsOpened: 0, connsClosed: 0,
-    joinsOk: 0, joinsRejected: 0, malformed: 0, rateLimited: 0, droppedSnaps: 0, rejectedInputs: 0,
+    joinsOk: 0, joinsRejected: 0, duplicateIdentityKicks: 0, malformed: 0, rateLimited: 0, droppedSnaps: 0, rejectedInputs: 0,
   };
 }
 

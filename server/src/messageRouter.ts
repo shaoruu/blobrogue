@@ -15,10 +15,17 @@ import type { Clock } from "./clock.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
 import { inputToIntent } from "./connection.js";
-import type { SessionStore, SnapshotPublisher } from "./ports.js";
+import type { RoomRuntime, SessionStore, SnapshotPublisher } from "./ports.js";
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
+const ROOM_WORLD_PREFIX = "room:";
+
+// The room code a world id was minted from (worldIdForRoomCode), or null for non-room worlds
+// (the public default, dev worlds). Log/ops-facing only — binding always uses the full id.
+export function roomCodeOfWorldId(worldId: string): string | null {
+  return worldId.startsWith(ROOM_WORLD_PREFIX) ? worldId.slice(ROOM_WORLD_PREFIX.length) : null;
+}
 
 // assertNever makes the dispatch exhaustive: a new ClientMsg variant is a COMPILE error until it
 // is handled here.
@@ -114,9 +121,33 @@ export class MessageRouter {
     const room = this.ctx.sessions.bind(conn, auth.worldId ?? DEFAULT_WORLD_ID);
     conn.lastPongAt = this.ctx.clock.now();
     this.ctx.metrics.counters.joinsOk++;
-    conn.log.info("join ok", { authName: conn.authName, playerId: conn.playerId, worldId: room.id, name: conn.displayName ?? "" });
+    // The identity/room diagnostic line for the Sev-0 trust chain: which verified identity
+    // landed in which world (with the room code when this is a room world), and how many
+    // players that world now holds — production greps pivot on these fields.
+    conn.log.info("join ok", {
+      authName: conn.authName, playerId: conn.playerId, worldId: room.id,
+      roomCode: roomCodeOfWorldId(room.id) ?? "", ticketWorld: auth.worldId ?? "",
+      name: conn.displayName ?? "", worldPlayers: room.playerCount,
+    });
+    this.supersedeDuplicateIdentity(room, conn);
     // Immediate FULL snapshot (carries selfId + authoritative spawn) — don't wait a tick.
     this.ctx.publisher.sendFull(room, conn);
+  }
+
+  // Two live connections with the SAME verified identity in the SAME world (two tabs, a
+  // zombie socket after a refresh, a stolen guest id) must never coexist silently: they
+  // would render as two blobs of one lobby member and desync every roster/readiness read.
+  // Newest wins — the older connection is closed explicitly. Bind-then-kick order matters:
+  // the room never empties in between, so the run is not reset by a tab takeover.
+  private supersedeDuplicateIdentity(room: RoomRuntime, conn: Conn): void {
+    for (const other of room.conns.values()) {
+      if (other.id === conn.id || other.closing || other.authName !== conn.authName) continue;
+      this.ctx.metrics.counters.duplicateIdentityKicks++;
+      other.log.warn("superseded by a newer connection with the same identity", {
+        authName: other.authName ?? "", worldId: room.id, oldPlayerId: other.playerId ?? "", newPlayerId: conn.playerId ?? "",
+      });
+      this.ctx.close(other, 4009, "superseded");
+    }
   }
 
   private onInput(conn: Conn, msg: Extract<ClientMsg, { t: "input" }>): void {
