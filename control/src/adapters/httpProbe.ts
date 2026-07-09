@@ -35,11 +35,6 @@ export interface HttpProbeConfig {
   logTailMax: number;
 }
 
-// Mirrors src/net/protocol.ts PROTOCOL_VERSION (control deliberately shares no game code —
-// see mintGsTicket below). The integration test boots the REAL gs and runs this synthetic
-// join, so a version drift fails the suite loudly instead of silently failing deploys.
-const GS_PROTOCOL_VERSION = 4;
-
 export interface TailReader {
   tail(path: string, maxLines: number): Promise<string[]>;
 }
