@@ -467,7 +467,7 @@ export class Menu {
   // up front — fixed-height skeleton rows that fill in place — so hydration can never move
   // the play buttons or steal focus. Rows are disabled until they hold a real entry.
 
-  private leaderboardRows(count: number): { box: HTMLElement; rows: HTMLButtonElement[]; note: HTMLElement } {
+  private leaderboardRows(count: number): { box: HTMLElement; rows: HTMLButtonElement[] } {
     const box = el("div", "lb-rows");
     const rows: HTMLButtonElement[] = [];
     for (let i = 0; i < count; i++) {
@@ -483,11 +483,10 @@ export class Menu {
       rows.push(row);
       box.appendChild(row);
     }
-    const note = el("p", "muted lb-note", "");
-    return { box, rows, note };
+    return { box, rows };
   }
 
-  private fillLeaderboardRows(rows: HTMLButtonElement[], note: HTMLElement, entries: LeaderboardEntryDoc[] | null, backTo: (rowIndex: number) => void) {
+  private fillLeaderboardRows(rows: HTMLButtonElement[], setNote: (text: string) => void, entries: LeaderboardEntryDoc[] | null, backTo: (rowIndex: number) => void) {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       const [rank, dot, name, floor] = Array.from(row.children) as HTMLElement[];
@@ -512,9 +511,9 @@ export class Menu {
       row.setAttribute("aria-label", `${displayName} \u2014 floor ${entry.floor} \u2014 view profile`);
       row.onclick = () => this.showPlayerProfile(entry, () => backTo(i));
     }
-    if (entries === null) note.textContent = "leaderboard unavailable \u2014 check your connection";
-    else if (entries.length === 0) note.textContent = "no runs on the board yet \u2014 yours could be first";
-    else note.textContent = "";
+    if (entries === null) setNote("leaderboard unavailable \u2014 check your connection");
+    else if (entries.length === 0) setNote("no runs on the board yet \u2014 yours could be first");
+    else setNote("");
     // A pending Back/Escape restore lands on its row the moment the fill enables it.
     const pending = this.pendingLbRowFocus;
     if (pending !== null && rows[pending] !== undefined && !rows[pending].disabled) {
@@ -533,11 +532,13 @@ export class Menu {
     }
   }
 
-  // The title's compact preview — the accepted shape: fixed GLOBAL LEADERBOARD header with
-  // the explicit VIEW LEADERBOARD action (also the Back/Escape focus-restore target),
-  // exactly LB_PREVIEW_ROWS fixed rows, one fixed state line for the player's own rank
-  // when it sits outside those rows, and the reserved note line for empty/offline states.
-  // Skeletons hold every box from first paint; hydration replaces contents only.
+  // The title's compact preview — the accepted FIXED shape (154px total, reserved from
+  // first paint): the GLOBAL LEADERBOARD header with the explicit VIEW LEADERBOARD action
+  // (also the Back/Escape focus-restore target), exactly LB_PREVIEW_ROWS 28px rows, and ONE
+  // 18px state line shared by the board-level states (offline/empty — they win) and the
+  // player's own rank when it sits outside the visible rows. Hydration replaces contents
+  // only — no node is ever inserted or removed. Under short viewports the panel collapses
+  // to its 48px header summary via CSS (see index.html) so Play never leaves the fold.
   private leaderboardPreview(focusTargets?: Map<string, HTMLButtonElement>): HTMLElement {
     const panel = el("div", "lb-preview");
     const head = el("div", "lb-head");
@@ -547,32 +548,40 @@ export class Menu {
     focusTargets?.set("leaderboard", view);
     head.appendChild(view);
     panel.appendChild(head);
-    const { box, rows, note } = this.leaderboardRows(LB_PREVIEW_ROWS);
-    const standingLine = el("p", "lb-standing", "");
-    panel.append(box, standingLine, note);
+    const { box, rows } = this.leaderboardRows(LB_PREVIEW_ROWS);
+    const stateLine = el("p", "lb-standing", "");
+    panel.append(box, stateLine);
+
+    // The shared state line: a board-level message (offline/empty) always outranks the
+    // own-rank readout; both write through here so the single 18px box never fights.
+    const line = { board: "", rank: "" };
+    const renderLine = () => { stateLine.textContent = line.board || line.rank; };
+    const setBoardNote = (text: string) => { line.board = text; renderLine(); };
+    const setRank = (text: string) => { line.rank = text; renderLine(); };
+
     const backTo = (rowIndex: number) => void this.showTitle({ lbRow: rowIndex });
-    if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
+    if (this.lbCache) this.fillLeaderboardRows(rows, setBoardNote, this.lbCache, backTo);
     // A stalled fetch (backend unreachable — never rejects, just hangs) surfaces the
     // unavailable note in place unless a cached board is already showing.
-    const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, note, null, backTo); };
-    void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
-    void this.hydrateStanding(standingLine);
+    const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, setBoardNote, null, backTo); };
+    void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, setBoardNote, entries, backTo));
+    void this.hydrateStanding(setRank);
     return panel;
   }
 
-  // Fill the reserved own-rank line: only when the caller's charted best sits OUTSIDE the
-  // preview rows (inside them, their name is already on the board). Every failure/absence
-  // path leaves the line empty — the box is fixed either way.
-  private async hydrateStanding(line: HTMLElement) {
+  // Fill the reserved own-rank readout: only when the caller's charted best sits OUTSIDE
+  // the preview rows (inside them, their name is already on the board). Every failure/
+  // absence path leaves it empty — the box is fixed either way.
+  private async hydrateStanding(setRank: (text: string) => void) {
     if (!this.client) return;
     try {
       const s = await this.client.query(api.leaderboard.standing, { clientId: this.session.clientId });
-      if (!s || (s.rank !== null && s.rank <= LB_PREVIEW_ROWS)) { line.textContent = ""; return; }
-      line.textContent = s.rank !== null
+      if (!s || (s.rank !== null && s.rank <= LB_PREVIEW_ROWS)) { setRank(""); return; }
+      setRank(s.rank !== null
         ? `your best \u00b7 FL ${s.floor} \u00b7 rank #${s.rank}`
-        : `your best \u00b7 FL ${s.floor} \u00b7 below the top 50`;
+        : `your best \u00b7 FL ${s.floor} \u00b7 below the top 50`);
     } catch {
-      line.textContent = "";
+      setRank("");
     }
   }
 
@@ -583,8 +592,9 @@ export class Menu {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "LEADERBOARD"));
     wrap.appendChild(el("p", "", "The deepest runs on record. Pick a blob to see their look and their run's build."));
-    const { box, rows, note } = this.leaderboardRows(LB_FULL_ROWS);
+    const { box, rows } = this.leaderboardRows(LB_FULL_ROWS);
     box.classList.add("lb-rows-full");
+    const note = el("p", "muted lb-note", "");
     wrap.append(box, note);
     const row = el("div", "btnrow");
     const goBack = () => void this.showTitle({ dest: "leaderboard" });
@@ -595,10 +605,11 @@ export class Menu {
     this.show(wrap);
     this.bindEscape(goBack);
     if (focusRow !== undefined) this.pendingLbRowFocus = focusRow;
+    const setNote = (text: string) => { note.textContent = text; };
     const backTo = (rowIndex: number) => void this.showLeaderboard(rowIndex);
-    if (this.lbCache) this.fillLeaderboardRows(rows, note, this.lbCache, backTo);
-    const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, note, null, backTo); };
-    void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, note, entries, backTo));
+    if (this.lbCache) this.fillLeaderboardRows(rows, setNote, this.lbCache, backTo);
+    const onStall = () => { if (!this.lbCache) this.fillLeaderboardRows(rows, setNote, null, backTo); };
+    void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, setNote, entries, backTo));
   }
 
   // A leaderboard player's public profile: their blob's look and that run's build. Only

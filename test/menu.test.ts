@@ -326,6 +326,14 @@ async function main(): Promise<void> {
     await broken.menu.showTitle();
     await settle();
     check("a failed standing fetch keeps the line empty (same geometry)", textOf(byClass(broken.overlay, "lb-standing")[0]) === "");
+
+    // The line is SHARED: a board-level state (offline) always outranks the rank readout.
+    const offline = makeMenu({ lb: "fail", standing: { floor: 6, kills: 40, rank: 7 } });
+    await offline.menu.showTitle();
+    await settle();
+    const sharedLine = textOf(byClass(offline.overlay, "lb-standing")[0]);
+    check("an offline board outranks the rank readout in the shared line",
+      sharedLine.includes("leaderboard unavailable") && !sharedLine.includes("rank #7"), sharedLine);
   }
 
   section("safe anonymized fallback: a blank name never renders empty or raw");
