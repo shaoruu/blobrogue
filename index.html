@@ -589,10 +589,30 @@
       .closet-equip{ min-width:0; flex:1; font-size:11px; padding:11px 8px; letter-spacing:1px; }
       .closet-reset, .closet-discard, .closet-keep{ min-width:0; flex:1; font-size:9px; padding:11px 8px; letter-spacing:1px; }
       .closet-confirm-copy{ flex:1.2; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:var(--cream); }
+      /* The always-visible close affordance on the profile surfaces (48px touch target),
+         pinned to the shell corner; routes through the same guard as Back/Escape/B. */
+      .panel-close{ position:absolute; top:8px; right:8px; z-index:2; min-width:48px; min-height:48px; width:48px; height:48px;
+        padding:0; font-size:14px; letter-spacing:0; }
+      /* Mobile closet: PINNED preview stage, horizontal category rail, 2-col grid, and a
+         sticky action strip — the commit controls never scroll out of reach. */
       @media (max-width:640px){
-        .closet-panel{ height:auto; flex-direction:column; align-items:center; }
+        .closet-panel{ height:auto; max-height:calc(100vh - 150px); overflow-y:auto; flex-direction:column; align-items:stretch; }
+        .closet-stage{ position:sticky; top:0; z-index:2; flex-direction:row; justify-content:center; align-items:center;
+          background:#0d0819; padding:6px 0; box-shadow:0 2px 0 var(--dun-3); }
+        .closet-stage .blob-preview{ width:96px; height:96px; }
         .closet-right{ width:100%; }
-        .closet-grid{ max-height:300px; }
+        .closet-cats{ overflow-x:auto; flex:0 0 44px; }
+        .closet-cat{ flex:0 0 auto; min-width:96px; min-height:44px; white-space:nowrap; }
+        .closet-grid{ overflow-y:visible; min-height:0; }
+        .cos-tile{ width:calc(50% - 4px); height:104px; }
+        .closet-actions{ position:sticky; bottom:0; z-index:2; background:#0d0819; box-shadow:0 -2px 0 var(--dun-3); padding:4px 0; flex:0 0 52px; }
+        .closet-equip, .closet-reset, .closet-discard, .closet-keep{ min-height:48px; }
+      }
+      /* Touch: full-leaderboard rows and closet cards keep >=48px targets. */
+      @media (pointer:coarse){
+        .lb-rows-full .lb-row{ height:48px; flex:0 0 48px; }
+        .closet-cat{ min-height:44px; }
+        .closet-equip, .closet-reset, .closet-discard, .closet-keep{ min-height:48px; }
       }
 
       /* --- post-run sign-in nudge: renders WITH the screen, dismiss swaps in place --- */
@@ -611,7 +631,7 @@
       /* Touch-friendly rows on the FULL leaderboard screen for narrow/coarse-pointer
          devices (the title glance keeps its fixed 28px rows — its 154px reserve is exact). */
       @media (max-width:640px), (pointer:coarse){
-        .lb-rows-full .lb-row{ height:44px; flex:0 0 44px; }
+        .lb-rows-full .lb-row{ height:48px; flex:0 0 48px; }
         .lb-view{ min-height:32px; }
       }
 

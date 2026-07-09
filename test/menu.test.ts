@@ -37,6 +37,7 @@ import { worldIdForRoomCode } from "../src/net/protocol.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
 import { NUDGE_DISMISSED_AT_KEY } from "../src/ui/signinNudge.js";
+import { padActions } from "../src/ui/menuGamepad.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -616,6 +617,52 @@ async function main(): Promise<void> {
     byClass(overlay, "closet-discard")[0]?.onclick?.();
     await settle();
     check("DISCARD leaves to the title with nothing written", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")) && session.cosmetics.face === null);
+  }
+
+  section("controller parity: pure pad mapping + LB/RB category cycling + guarded close");
+  {
+    // Edge detection: a held button fires exactly once.
+    const idle = new Array<boolean>(16).fill(false);
+    const aDown = idle.slice(); aDown[0] = true;
+    check("A press maps to activate", padActions(idle, aDown).join(",") === "activate");
+    check("A held fires nothing further", padActions(aDown, aDown).length === 0);
+    const bDown = idle.slice(); bDown[1] = true;
+    check("B maps to back (the guarded Escape path)", padActions(idle, bDown).join(",") === "back");
+    const dpad = idle.slice(); dpad[13] = true;
+    check("D-pad down maps to focusNext", padActions(idle, dpad).join(",") === "focusNext");
+    const lb = idle.slice(); lb[4] = true;
+    const rb = idle.slice(); rb[5] = true;
+    check("LB/RB map to tab cycling", padActions(idle, lb).join(",") === "tabPrev" && padActions(idle, rb).join(",") === "tabNext");
+
+    // LB/RB cycles the closet's REAL categories through the menu's tab hook.
+    const { menu, overlay, session } = makeMenu();
+    await menu.showProfile("closet");
+    await settle();
+    menu.cycleTabs(1);
+    const cards = () => byClass(overlay, "cos-tile").map(textOf);
+    check("RB cycles to the next real category (Glasses)", cards().some((c) => c.includes("No Glasses")), cards().join("|").slice(0, 80));
+    menu.cycleTabs(-1);
+    check("LB cycles back (Hats)", cards().some((c) => c.includes("No Hat")));
+
+    // The visible close routes through the SAME discard guard.
+    byClass(overlay, "cos-tile").find((c) => textOf(c).includes("Top Hat"))?.onclick?.();
+    byClass(overlay, "panel-close")[0]?.onclick?.();
+    check("close with unsaved preview raises the discard confirmation", textOf(overlay).includes("discard unsaved preview?"));
+    byClass(overlay, "closet-discard")[0]?.onclick?.();
+    await settle();
+    check("discard via close leaves cleanly with nothing written", session.cosmetics.hat === null);
+  }
+
+  section("run build is the trusted HISTORICAL snapshot — absent says so honestly");
+  {
+    const noBuild: LeaderboardEntryDoc = { ...LB_ENTRIES[0], weapons: [], items: [] };
+    const { menu, overlay } = makeMenu({ lb: [noBuild] });
+    await menu.showTitle();
+    await settle();
+    byClass(overlay, "lb-row")[0]?.onclick?.();
+    check("an entry recorded without a build reads RUN BUILD NOT SAVED", textOf(overlay).includes("RUN BUILD NOT SAVED"));
+    check("...and never falls back to a current loadout", !textOf(overlay).includes(WEAPONS.pistol.name));
+    await menu.showTitle();
   }
 
   section("closet: body color category, NEW badges, and clean-exit behavior");

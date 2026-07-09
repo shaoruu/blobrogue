@@ -6,6 +6,7 @@ import { CONVEX_URL, resolveGsUrl, defaultGsUrl, devTicketUrl, isExplicitGsOverr
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
+import { bindMenuGamepad } from "./ui/menuGamepad.js";
 import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor } from "./ui/onlineCopy.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
@@ -111,6 +112,10 @@ async function bootNormal() {
       });
     },
   });
+
+  // Controller parity for the menu surfaces: D-pad focus, A activate, B = the guarded
+  // Escape path, LB/RB tab/category cycling. Inert while the overlay is hidden (in-run).
+  bindMenuGamepad(overlay, { onTab: (dir) => menu.cycleTabs(dir) });
 
   // Preload the pixel fonts before any canvas draw — canvas ctx.font silently falls back
   // to a system font if the web font isn't loaded yet at draw time (DOM text reflows on

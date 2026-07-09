@@ -119,6 +119,8 @@ export class Menu {
   // The title's live identity region: auth settling (an OAuth exchange finishing after the
   // shell painted) re-renders CONTENT inside this reserved box — never the shell around it.
   private identityMount: HTMLElement | null = null;
+  // The current screen's tab group for controller LB/RB (closet categories, profile views).
+  private tabCycle: ((dir: 1 | -1) => void) | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -141,8 +143,24 @@ export class Menu {
   private show(...nodes: HTMLElement[]) {
     this.teardownLobby();
     this.identityMount = null; // the title re-arms it after its own show()
+    this.tabCycle = null;      // screens with tab groups re-arm after their own show()
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
+  }
+
+  // Controller LB/RB entry point (bound by main.ts through the menu gamepad adapter).
+  cycleTabs(dir: 1 | -1): void {
+    this.tabCycle?.(dir);
+  }
+
+  // The always-visible close affordance on the profile surfaces (the mobile-friendly \u2715
+  // in the shell corner). Routes through the SAME guard as Back/Escape.
+  private closeButton(onClose: () => void): HTMLButtonElement {
+    const btn = el("button", "secondary panel-close", "\u2715");
+    btn.type = "button";
+    btn.setAttribute("aria-label", "close");
+    btn.onclick = onClose;
+    return btn;
   }
 
   private teardownLobby() {
@@ -681,12 +699,15 @@ export class Menu {
   // account-side, and no edit controls of any kind.
   showPlayerProfile(entry: LeaderboardEntryDoc, rank: number, onBack: () => void) {
     const wrap = el("div", "menu");
+    wrap.appendChild(this.closeButton(() => onBack()));
     wrap.appendChild(el("div", "col-h pc-context", "player profile \u2014 read only"));
     const look = lookOf({ hat: entry.hat, face: entry.face, body: entry.body, title: entry.title }, entry.colorIndex);
     const card = this.profileCard(look, entry.name, entry.title);
     card.rankEl.textContent = `rank #${rank} \u00b7 best FL ${entry.floor}`;
     card.setTopRun(entry);
-    card.setBuild(entry, "no build recorded for this run");
+    // The build is ALWAYS the trusted historical snapshot from the charted run — never the
+    // player's current loadout. An old row recorded before build capture says so honestly.
+    card.setBuild(entry, "RUN BUILD NOT SAVED");
     // Lifetime stats are each blob's own business — the public schema carries run data only.
     card.setLifetime({ note: "lifetime stats are private to each blob" });
     wrap.appendChild(card.card);
@@ -718,11 +739,18 @@ export class Menu {
 
     const goBack = () => void this.showTitle({ dest: "profile" });
 
-    // Every way OUT of the closet (back, Escape, the Overview tab) goes through the
-    // discard guard when unsaved preview picks exist; the Overview has no unsaved state.
+    // Every way OUT of the closet (back, Escape/B, the Overview tab, the close \u2715)
+    // goes through the discard guard when unsaved preview picks exist; the Overview has no
+    // unsaved state.
     let guard: (leave: () => void) => void = (leave) => leave();
+    let closetTabCycle: ((dir: 1 | -1) => void) | null = null;
     if (view === "overview") this.buildOwnOverview(wrap);
-    else guard = this.buildCloset(wrap).requestLeave;
+    else {
+      const closet = this.buildCloset(wrap);
+      guard = closet.requestLeave;
+      closetTabCycle = closet.cycleCategory;
+    }
+    wrap.prepend(this.closeButton(() => guard(goBack)));
 
     overviewTab.onclick = () => { if (view !== "overview") guard(() => void this.showProfile("overview")); };
     closetTab.onclick = () => { if (view !== "closet") void this.showProfile("closet"); };
@@ -734,6 +762,11 @@ export class Menu {
     wrap.appendChild(row);
     this.show(wrap);
     this.bindEscape(() => guard(goBack));
+    // Controller LB/RB: closet cycles its categories; the Overview toggles the views.
+    this.tabCycle = closetTabCycle ?? ((dir) => {
+      void dir;
+      guard(() => void this.showProfile("closet"));
+    });
 
     if (view === "overview") void this.hydrateOwnOverview();
     else void this.hydrateCloset();
@@ -802,7 +835,7 @@ export class Menu {
           ? `rank #${mine.rank} \u00b7 best FL ${mine.entry.floor}`
           : `best FL ${mine.entry.floor} \u00b7 below the top 50`;
         card.setTopRun(mine.entry);
-        card.setBuild(mine.entry, "no build recorded for this run");
+        card.setBuild(mine.entry, "RUN BUILD NOT SAVED");
       } else {
         card.rankEl.textContent = "no charted run yet";
         card.setTopRun(null);
@@ -845,7 +878,7 @@ export class Menu {
     try { localStorage.setItem("blobrogue.closet.seenUnlocks", JSON.stringify(unlocks)); } catch { /* ignore */ }
   }
 
-  private buildCloset(wrap: HTMLElement): { requestLeave: (leave: () => void) => void } {
+  private buildCloset(wrap: HTMLElement): { requestLeave: (leave: () => void) => void; cycleCategory: (dir: 1 | -1) => void } {
     // Pending picks: slot -> id-or-null (null = the always-unlocked empty slot). A pick
     // equal to the equipped value clears itself — no phantom "unsaved" state.
     const pending = new Map<CosmeticSlot, string | null>();
@@ -988,6 +1021,13 @@ export class Menu {
     // This visit's NEW badges are computed — mark everything seen for the next visit.
     this.markSeenUnlocks(unlocks());
 
+    // Controller LB/RB parity: cycle the real categories.
+    const cycleCategory = (dir: 1 | -1) => {
+      const idx = categories.findIndex((c) => c.slot === active);
+      const next = categories[(idx + dir + categories.length) % categories.length];
+      if (next) { active = next.slot; renderAll(); }
+    };
+
     // Leaving with unsaved picks needs an explicit decision; the confirmation swaps INSIDE
     // the fixed action strip.
     const requestLeave = (leave: () => void) => {
@@ -1002,7 +1042,7 @@ export class Menu {
       keep.onclick = () => { renderActions(); };
       actions.append(discard, keep);
     };
-    return { requestLeave };
+    return { requestLeave, cycleCategory };
   }
 
   private async hydrateCloset() {
