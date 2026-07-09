@@ -61,8 +61,7 @@ export const MIN_MULTI_SPREAD = 0.26;
 export const WEAPON_KB: Record<WeaponId, number> = {
   pistol: 4, shotgun: 8, rapid: 2,
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
-  sawnoff: 10, railgun: 12, nailer: 3, flamer: 1, mortar: 6,
-  beam: 1, vortex: 0,
+  sawnoff: 10, railgun: 12, nailer: 3, flamer: 1, mortar: 6, beam: 1,
   sword: 14, longsword: 20, spear: 16,
 };
 export const KB_LAMBDA = 16;
@@ -73,15 +72,10 @@ export const MELEE_THRUST_WIDTH = 18;
 export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
-  sawnoff: 26, railgun: 6, nailer: 0, flamer: 0, mortar: 8,
-  beam: 0, vortex: 0,
+  sawnoff: 26, railgun: 6, nailer: 0, flamer: 0, mortar: 8, beam: 0,
   sword: 0, longsword: 0, spear: 8,
 };
 
-// Vortex (Undertow) pull field: px/s of drag at the orb's center, fading linearly to zero
-// at the pull radius, divided by each body's kbResist (bosses barely drift). Stronger than
-// any swarm/standard walk speed, so the gather decisively beats the chase.
-export const VORTEX_PULL_SPEED = 170;
 
 // Point-blank shotgun hit distance that triggers the (client-side) freeze.
 export const SHOTGUN_FREEZE_RANGE = 96;

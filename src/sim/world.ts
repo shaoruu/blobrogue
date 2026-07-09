@@ -592,7 +592,6 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     chain: wep.chain,
     chainRange: wep.chainRange,
     blast: wep.blast,
-    pull: wep.pull,
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
@@ -1009,10 +1008,11 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
 
 // Each boss's authored chest weapon: its fight's answer, handed to you for the road.
 // The King's zoning begets the Thumper; blind MARROW yields the Longshot (its own line,
-// straightened into a slug); the Choir leaves a lance of light; the Weaver's pull becomes
-// yours; the Warden gives up the heavy Thunderbolt its plate shrugged off.
+// straightened into a slug); the Choir leaves a lance of light; the Weaver leaves the
+// Tesla — its web of threads recast as chained arcs between bodies; the Warden gives up
+// the heavy Thunderbolt its plate shrugged off.
 const BOSS_SIGNATURE_WEAPON: Readonly<Partial<Record<Enemy["kind"], WeaponId>>> = {
-  boss: "mortar", marrow: "railgun", choir: "beam", weaver: "vortex", gilded: "cannon",
+  boss: "mortar", marrow: "railgun", choir: "beam", weaver: "tesla", gilded: "cannon",
 };
 
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
@@ -1187,7 +1187,6 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.friendly) steerHoming(w, b, dt);
       else steerEnemyHoming(w, b, dt); // the Choir's wails seek the nearest standing player
     }
-    if (b.friendly && b.pull !== undefined) applyVortexPull(w, b, dt);
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
     // A mortar shell that reaches the end of its arc airbursts instead of vanishing.
     if (b.life <= 0 && b.friendly && b.blast !== undefined) { detonateBullet(w, b, b.x, b.y, ev); continue; }
@@ -1291,23 +1290,6 @@ function steerEnemyHoming(w: WorldState, b: Bullet, dt: number): void {
   const a = cur + turn;
   b.vx = Math.cos(a) * speed;
   b.vy = Math.sin(a) * speed;
-}
-
-// The Undertow's drag field: every targetable enemy inside the radius drifts toward the
-// orb, divided by kbResist (heavies and bosses barely notice). The falloff is shallow —
-// full drag at the center, still half at the rim — so the field reads as one decisive
-// current rather than a weak fringe.
-function applyVortexPull(w: WorldState, b: Bullet, dt: number): void {
-  const r = b.pull;
-  if (r === undefined) return;
-  for (const e of w.enemies) {
-    if (e.dead || isUntargetable(e)) continue;
-    const dx = b.x - e.x, dy = b.y - e.y;
-    const d = Math.hypot(dx, dy);
-    if (d >= r + e.radius || d < 1) continue;
-    const strength = (C.VORTEX_PULL_SPEED * (1 - 0.5 * (d / (r + e.radius)))) / e.kbResist;
-    moveEnemyBy(w, e, (dx / d) * strength * dt, (dy / d) * strength * dt);
-  }
 }
 
 function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): void {
@@ -1461,9 +1443,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // next updateBullets pass, so without this guard a pierce-0 round that just died on
       // one body could strike every other body overlapping its final segment in the same
       // tick — phantom pierce that quietly inflated pack damage (~50% on tight clumps)
-      // past everything the balance tables authorize. Pierce/vortex rounds keep
-      // life > 0 by design, so legitimate multi-hits are untouched (chests already apply
-      // this same spent-round rule).
+      // past everything the balance tables authorize. Piercing rounds keep life > 0
+      // by design, so legitimate multi-hits are untouched (chests already apply this
+      // same spent-round rule).
       if (b.life <= 0) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       // Immutable attribution: the bullet keeps flying and dealing damage after its owner leaves
@@ -1491,10 +1473,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
-        if (b.pull !== undefined) {
-          // Vortex orbs fly on through — each body is tapped once.
-          (b.hitList ??= []).push(e);
-        } else if (b.chain !== undefined && b.chain > 0) {
+        if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);
           arcLightning(w, shooter, e, b.chain ?? 0, b.chainRange ?? 130, b.damage * 0.7, b.color, (b.hitList ??= []), ev);
           b.life = 0;

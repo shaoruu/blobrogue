@@ -203,8 +203,7 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/held_railgun.png",
   nailer: "/sprites/held_nailer.png",
   flamer: "/sprites/held_flamer.png",
-  // AD-approved finals (content manifest) — drop-in exact filenames. The Undertow's
-  // pair stays unregistered pending the AD's final decision (pistol/gun fallbacks hold).
+  // AD-approved finals (content manifest) — drop-in exact filenames.
   mortar: "/sprites/held_thumper.png",
   beam: "/sprites/held_beam2_px.png",
   // Melee (WeaponId -> AD's blade art: cutlass/claymore/pike).
@@ -230,7 +229,7 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/weapon_railgun.png",
   nailer: "/sprites/weapon_nailer.png",
   flamer: "/sprites/weapon_flamer.png",
-  // AD-approved finals (content manifest) — drop-in exact filenames (Undertow pending).
+  // AD-approved finals (content manifest) — drop-in exact filenames.
   mortar: "/sprites/weapon_thumper.png",
   beam: "/sprites/beam2_px.png",
   sword: "/sprites/weapon_cutlass.png",

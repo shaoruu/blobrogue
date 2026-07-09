@@ -68,7 +68,7 @@ const movement: Scenario = {
 // cycling through every weapon (ranged then the three melee weapons at the end).
 const WEAPON_CYCLE: WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing",
-  "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "vortex",
+  "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
 ];
 const combat: Scenario = {
@@ -78,8 +78,8 @@ const combat: Scenario = {
   ticks: 800,
   commands: (() => {
     const cmds: Command[] = [];
-    // Swap weapon every 42 ticks (19 weapons fit inside the 800-tick script).
-    for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 42, weapon: WEAPON_CYCLE[i] });
+    // Swap weapon every 44 ticks (18 weapons fit inside the 800-tick script).
+    for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 44, weapon: WEAPON_CYCLE[i] });
     // Keep feeding the full regular-enemy roster to the right of the player.
     for (let tick = 0; tick < 800; tick += 24) {
       const kinds: EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder"];

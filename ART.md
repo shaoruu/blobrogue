@@ -72,8 +72,8 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 - Thumper pair: pickup `weapon_thumper.png`, held `held_thumper.png`.
 - Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`, plus the `fx/beam_ray.png`
   pure-white alpha mask (code-tinted per shot; `trail_streak` fallback until it lands).
-- Pending gates keep their fallbacks: Undertow pair and the shielder set are deliberately
-  unregistered until the AD's final call.
+- The shielder set stays deliberately unregistered (gate pending) — its base sprite
+  fallback holds.
 
 **Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
 MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored

@@ -26,7 +26,6 @@ const SUBJECTS = {
   gun: "a single small golden six-shooter revolver pickup icon",
   held_mortar: "a single small chunky bronze grenade launcher with a fat stubby barrel, side profile pointing right, game weapon icon",
   held_beam: "a single slender golden lance-rifle with a glowing amber crystal at the muzzle, side profile pointing right, game weapon icon",
-  held_vortex: "a single deep-blue orb caster gun with a swirling glass sphere chamber, side profile pointing right, game weapon icon",
 };
 
 async function upload(p){ const buf=readFileSync(p); return await fal.storage.upload(new Blob([buf],{type:"image/png"})); }

@@ -282,9 +282,10 @@ function approvedHookTests(): void {
     devSpriteManifest().some((a) => a.group === "held weapons" && a.label === "held beam" && a.src === "/sprites/held_beam2_px.png"));
   check("the beam's dedicated ray is a registered code-tinted white mask (beam_ray)",
     devSpriteManifest().some((a) => a.group === "bullet fx" && a.label === "beam_ray" && a.src === "/sprites/fx/beam_ray.png"));
-  // Pending gates stay honest: no vortex pair, no shielder set, no boomerang anything.
-  check("the Undertow keeps its fallback hooks (AD decision pending — nothing registered)",
-    !devSpriteManifest().some((a) => a.label === "pickup vortex" || a.label === "held vortex"));
+  // Cut and pending content stays honest: nothing registered for removed weapons
+  // (boomerang, vortex) and the gate-pending shielder keeps its base-sprite fallback.
+  check("no hooks exist for cut weapons (boomerang/vortex removed at the gate)",
+    !devSpriteManifest().some((a) => a.label.includes("boomerang") || a.label.includes("vortex")));
   check("the shielder stays on its base-sprite fallback (gate pending — no directional set)",
     SHEETS["shielder.walk_down"] === undefined && SHEETS["shielder.attack"] === undefined);
 }

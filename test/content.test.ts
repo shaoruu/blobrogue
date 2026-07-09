@@ -1,8 +1,7 @@
 // Content-wave sim assertions: the new regular enemies (charger, burrower, orbiter,
 // shielder), the boss roster (MARROW, Hollow Choir, Weaver, Gilded Warden) and the new
-// weapons (Thumper mortar, Sunlance beam, Undertow vortex), all exercised headlessly on
-// the pure sim — behavior grammar, telegraphs, untargetable windows, phase machinery,
-// and weapon room-verbs.
+// weapons (Thumper mortar, Sunlance beam), all exercised headlessly on the pure sim —
+// behavior grammar, telegraphs, untargetable windows, phase machinery, weapon room-verbs.
 //
 // Run: npm run test:content
 
@@ -807,7 +806,7 @@ function rotationTests(): void {
 function bossChestTests(): void {
   section("boss chests: each boss bakes its signature weapon");
   const expected: Array<[EnemyKind, string]> = [
-    ["boss", "mortar"], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "vortex"], ["gilded", "cannon"],
+    ["boss", "mortar"], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "tesla"], ["gilded", "cannon"],
   ];
   for (const [kind, weapon] of expected) {
     const w = createWorld(0xC4E57 ^ kind.length, 10, { isSandbox: true });
@@ -824,9 +823,9 @@ function bossChestTests(): void {
   }
 }
 
-// ---- the weapons: Sunlance (beam) and Undertow (vortex) ----
+// ---- the weapon: Sunlance (beam) ----
 
-function beamVortexTests(): void {
+function beamTests(): void {
   section("Sunlance: a sustained melt with a hard range edge");
   {
     const { w, p } = arena(0x5311);
@@ -852,25 +851,7 @@ function beamVortexTests(): void {
     check("beyond the lance's reach nothing lands (range is the trade)", far.hp === 10);
   }
 
-  section("Undertow: gathers a scattered room into one clump");
-  {
-    const { w, p } = arena(0x5313);
-    p.x = 700; p.y = 600;
-    acquireWeaponInWorld(w, LOCAL_ID, "vortex");
-    // Two flankers off the orb's line, one body dead ahead on its path.
-    const a = spawnReady(w, "slime", 940, 510);
-    const b = spawnReady(w, "slime", 940, 690);
-    const c = spawnReady(w, "slime", 900, 600);
-    a.hp = a.maxHp = 40; b.hp = b.maxHp = 40; c.hp = c.maxHp = 40;
-    const gap0 = Math.hypot(a.x - b.x, a.y - b.y);
-    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
-    stepFor(w, 1.3);
-    const gap1 = Math.hypot(a.x - b.x, a.y - b.y);
-    check("the orb drags the flankers together", gap1 < gap0 - 60, `${gap0.toFixed(0)} -> ${gap1.toFixed(0)}px`);
-    check("a body on the orb's path is tapped once (pass-through)",
-      c.hp < 40 && c.hp >= 40 - WEAPONS.vortex.damage - 1, `c=${c.hp}`);
-  }
-  check("beam and vortex sit in the pickup pool", PICKUP_WEAPONS.includes("beam") && PICKUP_WEAPONS.includes("vortex"));
+  check("the Sunlance sits in the pickup pool", PICKUP_WEAPONS.includes("beam"));
 }
 
 // ---- the weapon: Thumper (AoE mortar) ----
@@ -1110,7 +1091,7 @@ function main(): void {
   rotationTests();
   bossChestTests();
   weaponTests();
-  beamVortexTests();
+  beamTests();
   environmentTests();
   flockTests();
   rosterTests();

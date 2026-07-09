@@ -112,7 +112,6 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   nailer: "shootRapid",
   mortar: "cannon",
   beam: "tesla",
-  vortex: "homing",
   flamer: "shootRapid",
   sword: "meleeSwing",
   longsword: "meleeSwing",
@@ -183,7 +182,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
   sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04, mortar: 0.45,
-  beam: 0.02, vortex: 0.2,
+  beam: 0.02,
   sword: 0.08, longsword: 0.16, spear: 0.07,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
@@ -192,14 +191,14 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
   sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3, mortar: 1.4,
-  beam: 0.15, vortex: 0.9,
+  beam: 0.15,
   sword: 0.7, longsword: 1.1, spear: 0.6,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
   sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5, mortar: 7,
-  beam: 0.3, vortex: 2,
+  beam: 0.3,
   sword: 1.5, longsword: 2.5, spear: 1,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
@@ -3290,12 +3289,6 @@ export class Game {
           this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 14), R * 2.4, 0.85, angle);
         }
         return this.fxLayer("core_dot", "#fff7dd", bx, by, R * 2, R * 2, 1, 0);
-      case "vortex":
-        // The undertow orb: a slow swirl of cold light with a rotating crackle — reads as
-        // a current, not a projectile.
-        this.fxLayer("glow_round", color, bx, by, R * 9, R * 9, 0.4, 0);
-        this.fxLayer("smoke_puff", color, bx, by, R * 6, R * 6, 0.35, -this.animClock * 5);
-        return this.fxLayer("crackle", color, bx, by, R * 4, R * 4, 0.7, -this.animClock * 8);
       default:
         return false;
     }

@@ -131,7 +131,7 @@ export interface Enemy extends Entity {
 export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
-  | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "beam" | "vortex"
+  | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "beam"
   | "sword" | "longsword" | "spear";
 
 export interface Bullet {
@@ -155,10 +155,6 @@ export interface Bullet {
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
   blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
-  // vortex: pull radius in px — while the orb lives, enemies inside are dragged toward it
-  // (scaled down by their kbResist, so heavies and bosses barely drift). Pull orbs pass
-  // through bodies, damaging each once via hitList.
-  pull?: number;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies

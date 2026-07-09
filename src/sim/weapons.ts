@@ -30,7 +30,6 @@ export interface Weapon {
   chain?: number;      // tesla: lightning jumps after the first hit
   chainRange?: number; // tesla: max px per chain jump
   blast?: number;      // mortar: AoE radius — the shell detonates on impact/wall/expiry
-  pull?: number;       // vortex: drag-field radius — enemies inside drift toward the orb
   // Elemental status the weapon stamps on every round (seconds of the effect). The
   // flamethrower is the only base weapon that carries one; item blessings roll the
   // rest at hit time (see PlayerMods.burnChance etc.), so any weapon can go elemental.
@@ -126,16 +125,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 0.75, pellets: 1, spread: 0, bulletRadius: 4, color: "#ffe6a0", muzzle: 1,
     basePierce: 1,
   },
-  // Tier B — carries the `pull` field: a slow drifting orb that DRAGS enemies toward
-  // itself (kbResist-scaled, so heavies barely drift) and passes through bodies, tapping
-  // each once. The room verb is CONTROL: gather a scattered room into one clump, then
-  // spend the clump (shotgun wall, mortar shell, melee sweep).
-  vortex: {
-    id: "vortex", name: "Undertow", fireCd: 0.9, speed: 240, life: 1.5,
-    damage: 1.2, pellets: 1, spread: 0, bulletRadius: 10, color: "#7fb8ff", muzzle: 2,
-    pull: 140,
-  },
-  sword: {
+    sword: {
     id: "sword", name: "Cutlass", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
     melee: { arc: 1.25, reach: 48, swingDur: 0.2 },
@@ -157,7 +147,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "vortex",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
 ];
 
@@ -182,7 +172,6 @@ export interface ShotSpec {
   chain?: number;
   chainRange?: number;
   blast?: number;
-  pull?: number;
   burn?: number;
   chill?: number;
   shock?: number;
@@ -219,7 +208,6 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       chain: spec.chain,
       chainRange: spec.chainRange,
       blast: spec.blast,
-      pull: spec.pull,
       burn: spec.burn,
       chill: spec.chill,
       shock: spec.shock,
