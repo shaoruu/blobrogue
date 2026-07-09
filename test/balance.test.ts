@@ -869,9 +869,9 @@ function earlyMeltGates(): void {
 
 function compositionCapGates(): void {
   section("studio gate §1/§2: ≤2 complex movers live, ≤1 burrower/room, flock spend ≤35%");
-  check("charge/burrow are the complex movers; the corrected gate pins their in-flight 1.5 cost",
+  check("charge/burrow are the complex movers; the bestiary envelope prices them at 2.0",
     isComplexMover("charger") && isComplexMover("burrower") && !isComplexMover("orbiter")
-    && ENEMY_ARCHETYPES.charger.threat === 1.5 && ENEMY_ARCHETYPES.burrower.threat === 1.5);
+    && ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
 
   // Static plans across seeds and the F11–24 late band: burrower room cap + pack spend.
   let burrowRoomOk = true;
@@ -1171,9 +1171,9 @@ function eliteContractGates(): void {
       survivors > 0 && commits / survivors >= 0.7, `${commits}/${survivors}`);
   }
   {
-    // Room-clear cost at EQUAL THREAT (the elite costs 2.8 threat = it replaces nearly
-    // three standard bodies in the director's budget): an elite-led room may cost at
-    // most 20% more clear time than the same threat spent on standard bodies.
+    // Room-clear cost at EQUAL THREAT (the envelope prices an elite at 4 threat — it
+    // replaces several standard bodies in the director's budget): an elite-led room may
+    // cost at most 20% more clear time than comparable threat spent on standard bodies.
     const clearTime = (isEliteRoom: boolean): number => {
       const w = createWorld(0xE17F, 6, { isSandbox: true });
       w.isGodMode = true;
