@@ -285,7 +285,7 @@ function interestTests(): void {
     devSpawnProp(w, "crate", 380, 320);                       // near -> in
     devSpawnProp(w, "crate", 1450, 980);                      // far -> out
 
-    const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: 400 });
+    const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: 400 });
     if (snap.t !== "snap") { check("snapshot built", false); return; }
     const ids = new Set(snap.enemies.map((e) => e.id));
     check("own player is always included", snap.self !== null);
@@ -295,7 +295,7 @@ function interestTests(): void {
     check("nearby prop included, distant prop excluded", snap.props.length === 1, `props=${snap.props.length}`);
 
     // No filter (radius 0) -> everything is sent (full-snapshot / bootstrap path).
-    const fullSnap = buildSnapshot(w, "pMe", 0, [], 0, true, { interestRadius: 0 });
+    const fullSnap = buildSnapshot(w, "pMe", 0, [], 0, true, { worldId: "w-test", interestRadius: 0 });
     if (fullSnap.t === "snap") check("radius 0 sends all enemies", fullSnap.enemies.length === 3, `enemies=${fullSnap.enemies.length}`);
   }
 }
@@ -403,8 +403,8 @@ function descendTests(): void {
     chooseBlessingInWorld(w, "pA", ITEMS[0]);
     chooseBlessingInWorld(w, "pB", ITEMS[0]);
     stepWorldPhase(w, 1 / 20, []); // descends
-    const snapA = buildSnapshot(w, "pA", 0, [], 0, false, {});
-    const snapB = buildSnapshot(w, "pB", 0, [], 0, false, {});
+    const snapA = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-test" });
+    const snapB = buildSnapshot(w, "pB", 0, [], 0, false, { worldId: "w-test" });
     if (snapA.t === "snap" && snapB.t === "snap") {
       check("both snapshots carry the same seed", snapA.seed === snapB.seed && snapA.seed === seed);
       check("both snapshots carry the same next floor", snapA.floor === snapB.floor && snapA.floor === 2);

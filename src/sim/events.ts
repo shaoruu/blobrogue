@@ -8,7 +8,7 @@
 // remote-hurt) are presence-driven CLIENT-only and are NOT SimEvents in Stage A.
 
 import type { PlayerId } from "./input.js";
-import type { WeaponId, EnemyKind, PickupKind, PropKind, HazardKind } from "./types.js";
+import type { WeaponId, EnemyKind, PickupKind, PropKind, FloorHazardKind } from "./types.js";
 
 export type SimEvent =
   // combat — player
@@ -28,25 +28,45 @@ export type SimEvent =
   | { t: "itemPicked"; pid: PlayerId; x: number; y: number; tint: string }
   // rare: the boss-chest reward replaces the floor's pick with a Rare-pool offer.
   | { t: "offerBlessing"; pid: PlayerId; rare: boolean }
+  // The offer's TTL ran out unanswered: the pick is forfeited, the player's pause/shield
+  // lifts, and the party's descend gate releases. The server clears the matching
+  // connection/seat offer on this event; the owning client closes its overlay.
+  | { t: "blessingExpired"; pid: PlayerId }
   | { t: "revive"; pid: PlayerId; by: PlayerId; x: number; y: number } // downed player brought back by a teammate
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }
+  // a player deliberately dropped an owned weapon back into the world (Q / inventory UI);
+  // clients near the spot play a small pop + a weapon-name label over the new pickup.
+  // Positional like lootDrop — no pid, so EVERY nearby client (not just the dropper) sees it
+  | { t: "weaponDrop"; weapon: WeaponId; x: number; y: number }
   // bullets / world
   | { t: "bulletWall"; x: number; y: number; aim: number }
   | { t: "bulletBounce"; x: number; y: number; aim: number; color: string }
   | { t: "bulletExpire"; x: number; y: number; color: string }
+  // A shielder's front arc swallowed a round (aim = the direction the shot came from).
+  | { t: "bulletBlocked"; x: number; y: number; aim: number }
   | { t: "propHit"; propId: number; kind: PropKind; x: number; y: number }
   | { t: "propBreak"; kind: PropKind; x: number; y: number }
   | { t: "explosion"; x: number; y: number; r: number }
   | { t: "chestOpen"; kind: string; x: number; y: number }
   // A floor hazard damaged a player (kind selects the client's impact FX flavor).
-  | { t: "hazardHit"; pid: PlayerId; kind: HazardKind; x: number; y: number }
+  | { t: "hazardHit"; pid: PlayerId; kind: FloorHazardKind; x: number; y: number }
   // enemies / boss
   | { t: "spitMuzzle"; x: number; y: number }
   | { t: "lungeTrail"; x: number; y: number }
+  // A rushing enemy (charger / Marrow) slammed into a wall and stunned itself.
+  | { t: "chargeCrash"; x: number; y: number }
+  // Burrower cycle: the submerge puff, then the marked eruption burst.
+  | { t: "burrowDive"; x: number; y: number }
+  | { t: "burrowErupt"; x: number; y: number; r: number }
   | { t: "bossSlam"; x: number; y: number }
   | { t: "radialBurst"; x: number; y: number }
+  // A boss released an aimed fan/volley from this point (MARROW's bone shards, the
+  // Choir's wails).
+  | { t: "bossVolley"; x: number; y: number }
+  // The Weaver planted a web slow-zone (the hazard itself rides world/snapshot state).
+  | { t: "webPlaced"; x: number; y: number; r: number }
   | { t: "bossAddSpawn"; eid: number; x: number; y: number; mx: number; my: number; spawned: boolean }
   | { t: "bossPhase"; eid: number; x: number; y: number }
   // Transition telemetry (§5/§7 gate 2): enter/exit of each 1.2s roar beat with the queued

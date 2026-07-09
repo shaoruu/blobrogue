@@ -81,6 +81,18 @@ export default defineSchema({
     colorIndex: v.number(),
     reviveNonce: v.number(),
     updatedAt: v.number(),
+    // ONLINE rooms only: the authoritative game-server world this member is actually
+    // CONNECTED to (self-reported from the server's own snapshot after a verified join;
+    // absent while in the lobby / after leaving the world). This is what lets the lobby
+    // roster show LOBBY / CONNECTING / CONNECTED TO WORLD per member instead of pretending
+    // Convex presence alone means "playing together".
+    gsWorldId: v.optional(v.string()),
+    gsJoinedAt: v.optional(v.number()),
+    // ONLINE lobby readiness: the member's explicit READY toggle (reset on every lobby
+    // (re)entry and on reopen after a wipe) and their measured lobby round-trip in ms
+    // (reported by their own heartbeat) — the roster's READY/NOT READY + ping readout.
+    isReady: v.optional(v.boolean()),
+    pingMs: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_player", ["roomId", "playerId"]),

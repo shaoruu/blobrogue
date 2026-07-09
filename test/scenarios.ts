@@ -68,7 +68,8 @@ const movement: Scenario = {
 // cycling through every weapon (ranged then the three melee weapons at the end).
 const WEAPON_CYCLE: WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing",
-  "tesla", "sawnoff", "railgun", "nailer", "flamer", "sword", "longsword", "spear",
+  "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
+  "sword", "longsword", "spear",
 ];
 const combat: Scenario = {
   name: "combat",
@@ -77,11 +78,11 @@ const combat: Scenario = {
   ticks: 800,
   commands: (() => {
     const cmds: Command[] = [];
-    // Swap weapon every 48 ticks.
-    for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 48, weapon: WEAPON_CYCLE[i] });
-    // Keep feeding slimes/bats/skeletons to the right of the player.
+    // Swap weapon every 44 ticks (18 weapons fit inside the 800-tick script).
+    for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 44, weapon: WEAPON_CYCLE[i] });
+    // Keep feeding the full regular-enemy roster to the right of the player.
     for (let tick = 0; tick < 800; tick += 24) {
-      const kinds: EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter"];
+      const kinds: EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder"];
       const kind = kinds[(tick / 24) % kinds.length];
       cmds.push({ t: "spawnEnemy", tick, kind, dx: 90 + ((tick / 24) % 3) * 22, dy: ((tick / 24) % 5) * 10 - 20 });
     }
@@ -114,6 +115,89 @@ const boss: Scenario = {
   input() {
     // Stationary gunner: fire steadily so the boss walks its full phase machine.
     return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+  },
+};
+
+// Deep boss floor: spawn MARROW point-blank and hose it down with the same
+// strong Lv3 build so the golden walks ITS full phase machine: P1 line charges (incl. the
+// wall-crash stun) + volleys, both interactive shield beats (floors + queued overflow +
+// husk adds), P2 crash rings, the P3 spiral barrage, and death.
+const marrow: Scenario = {
+  name: "marrow",
+  seed: 0x7777,
+  floor: 15,
+  ticks: 2400,
+  commands: (() => {
+    const cmds: Command[] = [];
+    cmds.push({ t: "godmode", tick: 0 });
+    for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
+      for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+    }
+    cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
+    cmds.push({ t: "spawnEnemy", tick: 2, kind: "marrow", dx: 190, dy: 0 });
+    return cmds;
+  })(),
+  input() {
+    return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+  },
+};
+
+// The rest of the boss roster, each hosed down by the same strong Lv3 build so the
+// goldens walk every phase machine tick-for-tick: the Choir's wails/fades/wisp-splits,
+// the Weaver's webs/pounces/molt, the Gilded Warden's plate/quakes/sweeps/sanctifies.
+function bossGolden(name: string, seed: number, kind: EnemyKind, floor: number): Scenario {
+  return {
+    name,
+    seed,
+    floor,
+    ticks: 2400,
+    commands: (() => {
+      const cmds: Command[] = [];
+      cmds.push({ t: "godmode", tick: 0 });
+      for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
+        for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+      }
+      cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
+      cmds.push({ t: "spawnEnemy", tick: 2, kind, dx: 190, dy: 0 });
+      return cmds;
+    })(),
+    input() {
+      return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    },
+  };
+}
+
+// Each deep boss is exercised at its curriculum floor (Marrow F15 / Weaver F20 /
+// Warden F25 / Choir F30); the marrow scenario itself pins F15 below.
+const choir = bossGolden("choir", 0x8888, "choir", 30);
+const weaverScenario = bossGolden("weaver", 0x9999, "weaver", 20);
+const gilded = bossGolden("gilded", 0xAAAA, "gilded", 25);
+
+// The F10 Miniboss Gauntlet: a NATURAL floor-10 world (no sandbox, no spawn command) —
+// the stage machine itself is the scenario. A god-mode player hoses everything down and
+// the golden locks the machine's cadence: the approach clear, the Flock Commander stage,
+// the authored breath, and the Orbiter elite's entrance + burn-down. (The full
+// three-stage arc incl. the premium chest is proven in test:content; the golden pins the
+// deterministic replay of the plumbing.)
+const gauntlet: Scenario = {
+  name: "gauntlet",
+  seed: 0x6A07,
+  floor: 10,
+  ticks: 2800,
+  commands: (() => {
+    const cmds: Command[] = [];
+    cmds.push({ t: "godmode", tick: 0 });
+    for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal", "glass_cannon"]) {
+      for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+    }
+    // Seekers track the wheeling commander and the ring-holding orbiter without any
+    // aim scripting.
+    cmds.push({ t: "weapon", tick: 0, weapon: "homing" });
+    return cmds;
+  })(),
+  input(tick) {
+    // A slow sweep spreads the seekers (and lobs shells) across the whole approach.
+    return { moveX: 0, moveY: 0, aim: (tick / 240) * Math.PI * 2, firing: true, dash: false };
   },
 };
 
@@ -192,7 +276,7 @@ const status: Scenario = {
   },
 };
 
-export const SCENARIOS: Scenario[] = [movement, combat, boss, items, props, status];
+export const SCENARIOS: Scenario[] = [movement, combat, boss, marrow, gauntlet, choir, weaverScenario, gilded, items, props, status];
 
 export const DT = 1 / 60;
 

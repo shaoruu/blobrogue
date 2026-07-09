@@ -17,7 +17,7 @@
 //     cycle, so the schedule that holds for one cycle holds forever — the arbitration is
 //     provable by sampling a single period (test/depth.test.ts does exactly that). Mob
 //     commitments join the same arbiter after the content integration via
-//     hazardOnsetsInRoom().
+//     floorHazardOnsetsInRoom().
 //   - Boss floors carry NO generator hazards (gate: boss-authored only); floor 1 carries
 //     none, floor 2 a half-unit taste.
 //   - Placement keeps a clean radius around the spawn, the exit, and every room center
@@ -29,7 +29,7 @@
 // module is placement + cycle math + data, mirroring the enemies.ts split.
 
 import type { Dungeon, Room } from "./dungeon.js";
-import type { Hazard, HazardKind } from "./types.js";
+import type { FloorHazard, FloorHazardKind } from "./types.js";
 import { Rng } from "./rng.js";
 import { biomeIndexForFloor, biomeDepthForFloor } from "./biomes.js";
 import { HAZARD_DIFFICULTY } from "./balance.js";
@@ -50,14 +50,14 @@ export interface HazardTiming {
 export const HAZARD_PERIOD = 4.8;
 
 // Pools are static (always dangerous, always visible): timing is null.
-export const HAZARD_TIMING: Record<HazardKind, HazardTiming | null> = {
+export const HAZARD_TIMING: Record<FloorHazardKind, HazardTiming | null> = {
   spikes: { idle: 3.2, telegraph: 0.9, active: 0.7 },
   toxic_pool: null,
   fire_vent: { idle: 2.4, telegraph: 1.0, active: 1.4 },
   void_rift: { idle: 2.1, telegraph: 1.1, active: 1.6 },
 };
 
-export const HAZARD_DAMAGE = 1;
+export const FLOOR_HAZARD_DAMAGE = 1;
 
 // The gate's release-spacing rule: no two damage releases within 0.30s on the same
 // escape lane. Room-scoped groups are conservatively treated as sharing lanes.
@@ -68,15 +68,15 @@ export const HAZARD_RELEASE_GAP = 0.30;
 export const RIFT_PULL_RADIUS = 92;   // px
 export const RIFT_PULL_SPEED = 85;    // px/s
 
-export type HazardPhase = "idle" | "telegraph" | "active";
+export type FloorHazardPhase = "idle" | "telegraph" | "active";
 
-export function hazardPeriod(kind: HazardKind): number {
+export function floorHazardPeriod(kind: FloorHazardKind): number {
   const t = HAZARD_TIMING[kind];
   return t ? t.idle + t.telegraph + t.active : 0;
 }
 
 // Where hazard `h` sits in its cycle at sim-time `clock`. Pools are always active.
-export function hazardPhaseAt(h: Hazard, clock: number): HazardPhase {
+export function floorHazardPhaseAt(h: FloorHazard, clock: number): FloorHazardPhase {
   const t = HAZARD_TIMING[h.kind];
   if (!t) return "active";
   const period = t.idle + t.telegraph + t.active;
@@ -87,7 +87,7 @@ export function hazardPhaseAt(h: Hazard, clock: number): HazardPhase {
 }
 
 // Progress 0..1 through the current phase (client telegraph/eruption animation curve).
-export function hazardPhaseFrac(h: Hazard, clock: number): number {
+export function floorHazardPhaseFrac(h: FloorHazard, clock: number): number {
   const t = HAZARD_TIMING[h.kind];
   if (!t) return 1;
   const period = t.idle + t.telegraph + t.active;
@@ -97,12 +97,12 @@ export function hazardPhaseFrac(h: Hazard, clock: number): number {
   return (c - t.idle - t.telegraph) / t.active;
 }
 
-export function isHazardDamaging(h: Hazard, clock: number): boolean {
-  return hazardPhaseAt(h, clock) === "active";
+export function isFloorHazardDamaging(h: FloorHazard, clock: number): boolean {
+  return floorHazardPhaseAt(h, clock) === "active";
 }
 
 // A pulse hazard's release instant (active-window start) within the shared cycle.
-export function hazardOnset(h: Hazard): number {
+export function floorHazardOnset(h: FloorHazard): number {
   const t = HAZARD_TIMING[h.kind];
   if (!t) return 0;
   return (((t.idle + t.telegraph - h.phase) % HAZARD_PERIOD) + HAZARD_PERIOD) % HAZARD_PERIOD;
@@ -113,12 +113,12 @@ export function hazardOnset(h: Hazard): number {
 // system lands, mob commitment schedulers read this to keep their own damage releases
 // >= 0.30s away from the floor's (same rule the placement arbiter already enforces
 // among hazards themselves).
-export function hazardOnsetsInRoom(hazards: readonly Hazard[], room: { x: number; y: number; w: number; h: number }): number[] {
+export function floorHazardOnsetsInRoom(hazards: readonly FloorHazard[], room: { x: number; y: number; w: number; h: number }): number[] {
   const out: number[] = [];
   for (const h of hazards) {
     if (HAZARD_TIMING[h.kind] === null) continue;
     if (h.tx < room.x || h.tx >= room.x + room.w || h.ty < room.y || h.ty >= room.y + room.h) continue;
-    const r = hazardOnset(h);
+    const r = floorHazardOnset(h);
     if (!out.some((x) => Math.abs(x - r) < 1e-6)) out.push(r);
   }
   return out.sort((a, b) => a - b);
@@ -130,7 +130,7 @@ export function hazardOnsetsInRoom(hazards: readonly Hazard[], room: { x: number
 // the depth ramp (timing stays fixed for learnable rhythm): the budget grows both across
 // biomes and within a biome band as its boss floor approaches.
 interface BiomeHazardProfile {
-  readonly weights: ReadonlyArray<{ kind: HazardKind; weight: number }>;
+  readonly weights: ReadonlyArray<{ kind: FloorHazardKind; weight: number }>;
   readonly base: number;  // hazard tiles at the top of the band
   readonly ramp: number;  // extra tiles by the bottom of the band
 }
@@ -153,7 +153,7 @@ const BIOME_HAZARDS: readonly BiomeHazardProfile[] = [
 // 1.00x / 1.30x). Cadence per the studio gate §2: floor 1 teaches with zero hazards,
 // floor 2 carries the half-unit taste, boss floors are boss-authored ONLY (the generator
 // places nothing), and everything else ramps band over band toward the Ember/Null peak.
-export function hazardBudgetForFloor(floor: number, difficulty: Difficulty = "standard"): number {
+export function floorHazardBudgetFor(floor: number, difficulty: Difficulty = "standard"): number {
   const f = Math.max(1, Math.floor(floor));
   const mult = HAZARD_DIFFICULTY[difficulty].budgetMult;
   if (f <= 1 || isBossFloor(f)) return 0;
@@ -162,7 +162,7 @@ export function hazardBudgetForFloor(floor: number, difficulty: Difficulty = "st
   return Math.round((profile.base + profile.ramp * biomeDepthForFloor(f)) * mult);
 }
 
-function pickKind(rng: Rng, profile: BiomeHazardProfile): HazardKind {
+function pickKind(rng: Rng, profile: BiomeHazardProfile): FloorHazardKind {
   const total = profile.weights.reduce((s, w) => s + w.weight, 0);
   let roll = rng.next() * total;
   for (const w of profile.weights) {
@@ -192,7 +192,7 @@ interface PlacementCtx {
   d: Dungeon;
   rng: Rng;
   taken: Set<number>;    // tile index -> hazard already there
-  list: Hazard[];
+  list: FloorHazard[];
   nextId: number;
   nextGroup: number;
   simultaneousCap: number;  // mode cap on concurrently-active pulse groups per room
@@ -268,8 +268,8 @@ function scheduleGroup(ctx: PlacementCtx, room: Room, envelope: number, offsets:
 }
 
 // The cycle phase that makes `kind`'s ACTIVE window open exactly at time `start`
-// (hazardPhaseAt computes (clock + phase) % period against idle -> telegraph -> active).
-function phaseForActiveStart(kind: HazardKind, start: number): number {
+// (floorHazardPhaseAt computes (clock + phase) % period against idle -> telegraph -> active).
+function phaseForActiveStart(kind: FloorHazardKind, start: number): number {
   const t = HAZARD_TIMING[kind];
   if (!t) return 0;
   const activeAt = t.idle + t.telegraph;
@@ -335,12 +335,12 @@ function poolKeepsPathOpen(ctx: PlacementCtx, tx: number, ty: number): boolean {
   return neighbors.every(([nx, ny]) => seen.has(tileIdx(d, nx, ny)));
 }
 
-function hazardAtTile(list: Hazard[], tx: number, ty: number): Hazard | null {
+function hazardAtTile(list: FloorHazard[], tx: number, ty: number): FloorHazard | null {
   for (const h of list) if (h.tx === tx && h.ty === ty) return h;
   return null;
 }
 
-function claim(ctx: PlacementCtx, room: Room, kind: HazardKind, tx: number, ty: number, phase: number, group: number): void {
+function claim(ctx: PlacementCtx, room: Room, kind: FloorHazardKind, tx: number, ty: number, phase: number, group: number): void {
   ctx.taken.add(tileIdx(ctx.d, tx, ty));
   chargeDenial(ctx, room, 1);
   ctx.list.push({ id: ctx.nextId++, kind, tx, ty, phase, group });
@@ -350,7 +350,7 @@ function claim(ctx: PlacementCtx, room: Room, kind: HazardKind, tx: number, ty: 
 // The row's release slot comes from the room's overlap arbiter; the wave's internal
 // releases (ROW_WAVE_STEP apart, wider than the 0.30s rule) register with it too, so
 // no OTHER group may release between two ripple steps on the shared escape lanes.
-function placeRow(ctx: PlacementCtx, kind: HazardKind, room: Room, maxLen: number): number {
+function placeRow(ctx: PlacementCtx, kind: FloorHazardKind, room: Room, maxLen: number): number {
   const { rng } = ctx;
   const isHorizontal = rng.chance(0.5);
   const len = Math.min(maxLen, 3 + rng.int(0, 3));
@@ -442,8 +442,8 @@ function placeRift(ctx: PlacementCtx, room: Room): number {
 // in shape: the mode changes budgets and caps, never the draw pattern semantics. Rooms
 // marked "hazard" by the generator are dressed first and densest — authored set pieces;
 // the remaining budget scatters smaller formations through ordinary combat rooms.
-export function placeHazards(d: Dungeon, seed: number, floor: number, difficulty: Difficulty = "standard"): Hazard[] {
-  let budget = hazardBudgetForFloor(floor, difficulty);
+export function placeFloorHazards(d: Dungeon, seed: number, floor: number, difficulty: Difficulty = "standard"): FloorHazard[] {
+  let budget = floorHazardBudgetFor(floor, difficulty);
   if (budget <= 0 || d.rooms.length < 2) return [];
   const rng = new Rng((seed ^ 0x6a2d9b4f) + floor * 79241);
   const profile = BIOME_HAZARDS[biomeIndexForFloor(floor)];
@@ -459,7 +459,7 @@ export function placeHazards(d: Dungeon, seed: number, floor: number, difficulty
     schedules: new Map<Room, RoomSchedule>(),
   };
 
-  const place = (kind: HazardKind, room: Room, cap: number): number => {
+  const place = (kind: FloorHazardKind, room: Room, cap: number): number => {
     if (kind === "toxic_pool") return placeBlob(ctx, room, cap);
     if (kind === "void_rift") return placeRift(ctx, room);
     return placeRow(ctx, kind, room, cap);

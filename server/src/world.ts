@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -18,9 +18,10 @@ import { Rng, randomSeed } from "../../src/sim/rng.js";
 import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
 import { FIXED_DT, TICK_HZ, INTERP_BASE_DELAY_MS, type WireEvent } from "../../src/net/protocol.js";
+import { resumeTokensEqual } from "./auth.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
-import type { RoomRuntime, BlessingOfferRequest } from "./ports.js";
+import type { RoomRuntime, BlessingOfferRequest, Seat, TakeSeatResult } from "./ports.js";
 
 const BLESSING_CHOICES = 3;
 const TICK_MS = 1000 / TICK_HZ;
@@ -52,6 +53,11 @@ export class GameWorld implements RoomRuntime {
   readonly state: WorldState;
   readonly conns = new Map<number, Conn>();
 
+  // Reserved reconnect seats, keyed by the VERIFIED ticket identity (one seat per identity —
+  // the same key the duplicate-connection takeover uses). The body itself stays in
+  // state.players (absent/paused); the seat holds the single-use token + conn continuity.
+  private seatMap = new Map<string, Seat>();
+
   // Reliable-event ring: every emitted event gets a monotonic id; the publisher sends per client
   // only the ids newer than that client's ack (dedupe + resend under loss).
   private eventLog: WireEvent[] = [];
@@ -63,6 +69,9 @@ export class GameWorld implements RoomRuntime {
   // Blessing offers raised this tick (descend/boss chest) — the server turns each into a
   // server-decided, validated offer message.
   private offerThisTick: BlessingOfferRequest[] = [];
+  // Offers whose TTL expired this tick (already resolved on BOTH sides here) — surfaced for
+  // the server's logging/metrics.
+  private expiredOffersThisTick: PlayerId[] = [];
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
@@ -88,6 +97,7 @@ export class GameWorld implements RoomRuntime {
     this.injectedEvents.length = 0;
     this.gameOverThisTick = [];
     this.offerThisTick = [];
+    this.seatMap.clear();
   }
 
   private seedArenaEnemies(): void {
@@ -111,8 +121,93 @@ export class GameWorld implements RoomRuntime {
     removePlayerFromWorld(this.state, pid);
   }
 
+  setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void {
+    setPlayerAbsence(this.state, pid, isAbsent);
+  }
+
+  // ---- reconnect seats ----
+
+  reserveSeat(conn: Conn, nowMs: number, ttlMs: number): void {
+    if (conn.playerId === null || conn.authName === null || conn.resumeToken === null) return;
+    if (!this.state.players.has(conn.playerId)) return;
+    setPlayerAbsence(this.state, conn.playerId, true);
+    this.seatMap.set(conn.authName, {
+      pid: conn.playerId,
+      authName: conn.authName,
+      token: conn.resumeToken,
+      // Rotation-ack ordering: if this connection died before the client confirmed receipt of
+      // the rotated token, the token it PRESENTED stays armed as the fallback credential —
+      // otherwise the client would be locked out of its own seat by a rotation it never saw.
+      prevToken: conn.isResumeTokenConfirmed ? null : conn.presentedResumeToken,
+      reservedAt: nowMs,
+      expiresAt: nowMs + ttlMs,
+      displayName: conn.displayName,
+      colorIndex: conn.colorIndex,
+      lastAppliedSeq: conn.lastAppliedSeq,
+      lastCseq: conn.lastCseq,
+      pendingOffer: conn.pendingOffer,
+      offerId: conn.offerId,
+      offerDeadline: conn.offerDeadline,
+    });
+  }
+
+  takeSeat(authName: string, token: string, nowMs: number): TakeSeatResult {
+    const seat = this.seatMap.get(authName);
+    if (!seat) return { ok: false, reason: "none" };
+    if (nowMs >= seat.expiresAt) {
+      // Overdue but not yet swept: apply the authoritative leave right here rather than
+      // letting a straggler resurrect a seat the lifecycle already gave up on.
+      this.dropSeat(seat);
+      return { ok: false, reason: "expired" };
+    }
+    const isCurrent = resumeTokensEqual(seat.token, token);
+    const isPrev = !isCurrent && seat.prevToken !== null && resumeTokensEqual(seat.prevToken, token);
+    if (!isCurrent && !isPrev) return { ok: false, reason: "token_mismatch" };
+    this.seatMap.delete(authName);
+    setPlayerAbsence(this.state, seat.pid, false);
+    return { ok: true, seat, isViaPrevToken: isPrev };
+  }
+
+  discardSeat(authName: string): boolean {
+    const seat = this.seatMap.get(authName);
+    if (!seat) return false;
+    this.dropSeat(seat);
+    return true;
+  }
+
+  expireSeats(nowMs: number): Seat[] {
+    const expired: Seat[] = [];
+    for (const seat of this.seatMap.values()) {
+      if (nowMs >= seat.expiresAt) expired.push(seat);
+    }
+    for (const seat of expired) this.dropSeat(seat);
+    return expired;
+  }
+
+  seats(): IterableIterator<Seat> {
+    return this.seatMap.values();
+  }
+
+  private dropSeat(seat: Seat): void {
+    this.seatMap.delete(seat.authName);
+    removePlayerFromWorld(this.state, seat.pid);
+  }
+
   trySwitchWeapon(pid: PlayerId, weapon: WeaponId): boolean {
     return switchWeaponInWorld(this.state, pid, weapon);
+  }
+
+  tryReorderWeapons(pid: PlayerId, from: number, to: number): boolean {
+    return reorderWeaponsInWorld(this.state, pid, from, to);
+  }
+
+  tryDropWeapon(pid: PlayerId, weapon: WeaponId): boolean {
+    // The drop runs outside the tick (message handler), so its event merges into the next
+    // tick's reliable stream — same path async blessing applies already use.
+    const ev: SimEvent[] = [];
+    const ok = dropWeaponInWorld(this.state, pid, weapon, ev);
+    for (const e of ev) this.injectedEvents.push(e);
+    return ok;
   }
 
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[] {
@@ -121,6 +216,10 @@ export class GameWorld implements RoomRuntime {
   }
 
   applyBlessing(pid: PlayerId, itemId: string): boolean {
+    // The sim's pending entry is THE offer's liveness: once it expired (or was never
+    // raised), a late choice is REJECTED outright — the gate already released, the pause
+    // already lifted, and applying now would grant a blessing the run moved past.
+    if (!this.state.pendingBlessings.has(pid)) return false;
     const def = itemById(itemId);
     if (!def) return false;
     // Resolves the sim's pending offer too: the pick ends the player's pause/damage shield
@@ -158,6 +257,9 @@ export class GameWorld implements RoomRuntime {
   }
   offerPlayers(): BlessingOfferRequest[] {
     return this.offerThisTick;
+  }
+  expiredOfferPlayers(): PlayerId[] {
+    return this.expiredOffersThisTick;
   }
 
   // Advance ONE authoritative tick. The server tick owns simulation time: each connected player
@@ -205,15 +307,39 @@ export class GameWorld implements RoomRuntime {
   }
 
   // Tag this tick's events with monotonic ids, append to the bounded ring, and record any
-  // game-over (full-wipe) players so the server can drive a deterministic leave.
+  // game-over (full-wipe) players so the server can drive a deterministic leave. An expired
+  // blessing offer is resolved on BOTH sides on the SAME tick it expired: the sim map entry
+  // is already gone (tickPendingBlessings emitted the event), and here the matching
+  // connection/seat offer is cleared — no half-expired state can survive a disconnect, a
+  // reconnect, or a late choice, and the descend gate can never be held past the TTL.
   private commitEvents(ev: SimEvent[]): void {
     this.gameOverThisTick = [];
     this.offerThisTick = [];
+    this.expiredOffersThisTick = [];
     for (const e of ev) {
       this.eventLog.push({ id: this.nextEventId++, e });
       if (e.t === "gameOver") this.gameOverThisTick.push(e.pid);
       else if (e.t === "offerBlessing") this.offerThisTick.push({ pid: e.pid, rare: e.rare });
+      else if (e.t === "blessingExpired") {
+        this.clearOfferFor(e.pid);
+        this.expiredOffersThisTick.push(e.pid);
+      }
     }
     if (this.eventLog.length > EVENT_RING) this.eventLog.splice(0, this.eventLog.length - EVENT_RING);
+  }
+
+  // Idempotently drop the server-side offer state for a player whose offer resolved without
+  // them (TTL expiry): the live connection's pending offer, and — for a player mid-outage —
+  // the reserved seat's copy, so a resume can never resurrect an expired offer.
+  private clearOfferFor(pid: PlayerId): void {
+    for (const conn of this.conns.values()) {
+      if (conn.playerId !== pid) continue;
+      conn.pendingOffer = null;
+      conn.offerResendsLeft = 0;
+    }
+    for (const seat of this.seatMap.values()) {
+      if (seat.pid !== pid) continue;
+      seat.pendingOffer = null;
+    }
   }
 }

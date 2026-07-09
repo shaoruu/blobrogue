@@ -74,6 +74,14 @@ export interface PresenceDoc {
   colorIndex: number;
   reviveNonce: number;
   updatedAt: number;
+  // ONLINE rooms: the authoritative world this member is actually connected to (mirrored
+  // from the game server's snapshot after a verified join; null while in the lobby). The
+  // lobby roster derives LOBBY / CONNECTING / CONNECTED TO WORLD from it.
+  gsWorldId: string | null;
+  gsJoinedAt: number | null;
+  // ONLINE lobby readiness: the member's READY toggle + their heartbeat-measured ping.
+  isReady: boolean;
+  pingMs: number | null;
 }
 
 // A type alias (not an interface) so it satisfies Convex's `DefaultFunctionArgs`
@@ -116,7 +124,7 @@ export const api = {
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
     reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:reopen"),
-    heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:heartbeat"),
+    heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string; name?: string; colorIndex?: number; pingMs?: number }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),
     leave: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:leave"),
   },
@@ -124,5 +132,10 @@ export const api = {
     update: makeFunctionReference<"mutation", PresenceUpdateArgs, null>("presence:update"),
     list: makeFunctionReference<"query", { roomId: string }, PresenceDoc[]>("presence:list"),
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
+    // Mirror of the authoritative game-server connection state (ONLINE rooms): worldId after
+    // a verified world join, null on leaving. Powers the lobby's per-member readiness readout.
+    reportWorld: makeFunctionReference<"mutation", { roomId: string; playerId: string; worldId: string | null }, null>("presence:reportWorld"),
+    // The lobby READY toggle (roster READY/NOT READY; gates the host's START).
+    setReady: makeFunctionReference<"mutation", { roomId: string; playerId: string; isReady: boolean }, null>("presence:setReady"),
   },
 };

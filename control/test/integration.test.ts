@@ -4,8 +4,13 @@
 // hits the live server. The pm2 reload is faked (we don't restart the in-process gs), but VERIFY
 // exercises the live socket + tick loop, which is the property that matters.
 
-import { HttpGameServerProbe } from "../src/adapters/httpProbe.js";
+import { WebSocket } from "ws";
+
+import { HttpGameServerProbe, SYNTHETIC_JOIN_PROTOCOL } from "../src/adapters/httpProbe.js";
 import { NodeTailReader } from "../src/adapters/tail.js";
+import type { WorldSummary } from "../src/types.js";
+import { PROTOCOL_VERSION } from "../../src/net/protocol.js";
+import { mintTicket as mintGsTicket } from "../../server/src/auth.js";
 import { ChecksumArtifactVerifier } from "../src/artifactVerifier.js";
 import { DeployController, type OperationContext } from "../src/deployController.js";
 import { DeployLock } from "../src/deployLock.js";
@@ -31,6 +36,8 @@ async function bootGs(heartbeatMs: number): Promise<{ port: number; close: () =>
 
 export async function suite(t: TestRunner): Promise<void> {
   await t.suite("integration: real gs status + synthetic-join verify", async () => {
+    t.check("synthetic join speaks the current game protocol", SYNTHETIC_JOIN_PROTOCOL === PROTOCOL_VERSION,
+      `probe=${SYNTHETIC_JOIN_PROTOCOL} game=${PROTOCOL_VERSION}`);
     const gs = await bootGs(200);
     try {
       const probe = new HttpGameServerProbe(
@@ -43,6 +50,20 @@ export async function suite(t: TestRunner): Promise<void> {
       t.check("real gs ready", readiness.live && readiness.ready);
       const verify = await probe.verify();
       t.check("full synthetic join verifies against real gs", verify.ok && verify.depth === "synthetic_join", `ok=${verify.ok} depth=${verify.depth} detail=${verify.detail ?? ""}`);
+      // Per-world occupancy over the live /worlds endpoint: hold a real join open in a room
+      // world and the panel read shows exactly that world with its occupant — the ops view
+      // that answers "did the room's members land in one world?".
+      const socket = new WebSocket(`ws://127.0.0.1:${gs.port}/ws`);
+      await new Promise<void>((resolve) => socket.on("open", () => resolve()));
+      socket.send(JSON.stringify({ t: "join", ticket: mintGsTicket(GS_SECRET, "panel-player", 60, Date.now(), { worldId: "room:OPSX", name: "PanelPlayer" }), protocol: SYNTHETIC_JOIN_PROTOCOL }));
+      let room: WorldSummary | undefined;
+      for (let i = 0; i < 100 && room === undefined; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+        room = (await probe.worlds()).find((w) => w.id === "room:OPSX");
+      }
+      t.check("live /worlds lists the room world with its occupant", room !== undefined && room.players === 1 && room.names[0] === "PanelPlayer",
+        `world=${JSON.stringify(room ?? null)}`);
+      socket.close();
     } finally {
       await gs.close();
     }

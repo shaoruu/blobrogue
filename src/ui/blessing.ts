@@ -23,6 +23,7 @@ const RARITY_LABEL: Record<ItemRarity, string> = {
 export class BlessingOverlay {
   private root: HTMLElement;
   private cardsEl: HTMLElement;
+  private countdownEl!: HTMLElement;
   private cards: HTMLElement[] = [];
   private choices: BlessingChoice[] = [];
   private selected = 0;
@@ -45,6 +46,14 @@ export class BlessingOverlay {
     sub.className = "muted";
     sub.textContent = "one pick, stacks for the rest of the run";
     card.appendChild(sub);
+
+    // Online offers have an authoritative TTL; the countdown keeps the deadline honest.
+    // Always present (nbsp when unused) so showing it never shifts the card's layout.
+    const countdown = document.createElement("p");
+    countdown.className = "muted";
+    countdown.textContent = "\u00a0";
+    card.appendChild(countdown);
+    this.countdownEl = countdown;
 
     this.cardsEl = document.createElement("div");
     this.cardsEl.className = "blessing-cards";
@@ -72,9 +81,16 @@ export class BlessingOverlay {
     window.addEventListener("keydown", this.keyHandler, true);
   }
 
+  // The authoritative seconds left on an online offer (null hides the readout — solo picks
+  // have no server deadline while the overlay freezes the sim). Layout is stable either way.
+  setCountdown(seconds: number | null): void {
+    this.countdownEl.textContent = seconds !== null ? `offer expires in ${Math.max(0, Math.ceil(seconds))}s` : "\u00a0";
+  }
+
   hide(): void {
     const wasOpen = this.keyHandler !== null;
     this.root.classList.add("hidden");
+    this.setCountdown(null);
     if (this.keyHandler) {
       window.removeEventListener("keydown", this.keyHandler, true);
       this.keyHandler = null;
@@ -102,14 +118,22 @@ export class BlessingOverlay {
       icon.appendChild(itemIconEl(item.id, item.glyph));
       el.appendChild(icon);
 
+      // UI Director gate: choice cards stay FULLY labeled (never icon-only, unlike the HUD
+      // strip) — 56px icon, name, an explicit NEW / UPGRADE LVn tag, the rarity, the exact
+      // effect the pick would grant, and the 1/2/3 input glyph.
       const name = document.createElement("span");
       name.className = "bc-name";
-      name.textContent = nextLevel > 1 ? `${item.name} Lv${nextLevel}` : item.name;
+      name.textContent = item.name;
       el.appendChild(name);
+
+      const tag = document.createElement("span");
+      tag.className = "bc-tag" + (nextLevel > 1 ? " up" : " new");
+      tag.textContent = nextLevel > 1 ? `UPGRADE LV${nextLevel}` : "NEW";
+      el.appendChild(tag);
 
       const rarity = document.createElement("span");
       rarity.className = `bc-rarity ${item.rarity}`;
-      rarity.textContent = nextLevel > 1 ? "UPGRADE" : RARITY_LABEL[item.rarity];
+      rarity.textContent = RARITY_LABEL[item.rarity];
       el.appendChild(rarity);
 
       const desc = document.createElement("span");

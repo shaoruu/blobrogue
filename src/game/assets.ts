@@ -1,16 +1,20 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId, SpriteName, HazardKind } from "../sim/types.js";
+import type { WeaponId, SpriteName, FloorHazardKind } from "../sim/types.js";
+import { resolveClip } from "./facing.js";
+import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice, Facing4 } from "./facing.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
 // imports into src/game.
 export type { SpriteName };
 
-// Animation clip an entity can request. When a matching sheet is registered below
-// it plays frame-by-frame; otherwise the draw path falls back to procedural juice.
-// "death" is a one-shot clip played over a corpse (see game.ts renderCorpses).
-export type SheetClip = "idle" | "walk" | "death";
+// Animation clip an entity can request. When a matching sheet is registered below it
+// plays frame-by-frame; otherwise the draw path falls back to procedural juice.
+// SelectableClip is the render-contract set (legacy idle/walk + directional walk_* /
+// attack_* — see src/game/facing.ts for the resolution ladder); "death" is a one-shot
+// clip played over a corpse (see game.ts renderCorpses).
+export type SheetClip = SelectableClip | "death";
 
 export const FRAME = 64; // px per frame in a horizontal strip spritesheet
 
@@ -37,6 +41,85 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   "boss.death": { src: "/sprites/boss_death.png", fps: 12 },
 };
 
+// One-line registration for an AD directional set (the art/render contract convention).
+// Side sheets are authored facing RIGHT (the renderer mirrors for left); frame 0 of each
+// walk sheet doubles as that facing's idle pose. Registration happens once the PNGs are
+// approved with exact names — the clip-selection ladder (facing.ts resolveClip) routes
+// around any sheet that has not landed/loaded yet, so a set can ship file-by-file.
+export interface DirectionalSetDef {
+  walkFps: number;
+  // Registers the attack sheet(s) when set: the `<base>_attack_<facing>.png` variants
+  // with isDirectionalAttack, or one omni `<base>_attack.png` without it.
+  attackFps?: number;
+  isDirectionalAttack?: boolean;
+  // AD-versioned finals whose file stem differs from the sprite name (e.g. weaver2_px).
+  fileBase?: string;
+  // The APPROVED facings only (defaults to all three). A body whose side profile is
+  // blocked at the art gate registers ["down", "up"]; the selection ladder's vertical
+  // hold covers its horizontal movement (facing.ts — never a mirrored side fake).
+  facings?: readonly Facing4[];
+}
+
+const ALL_FACINGS: readonly Facing4[] = ["down", "up", "side"];
+
+export function registerDirectionalSet(name: SpriteName, def: DirectionalSetDef): void {
+  const base = def.fileBase ?? name;
+  const facings = def.facings ?? ALL_FACINGS;
+  for (const facing of facings) {
+    SHEETS[`${name}.walk_${facing}`] = { src: `/sprites/${base}_walk_${facing}.png`, fps: def.walkFps };
+  }
+  if (def.attackFps === undefined) return;
+  if (def.isDirectionalAttack) {
+    for (const facing of facings) {
+      SHEETS[`${name}.attack_${facing}`] = { src: `/sprites/${base}_attack_${facing}.png`, fps: def.attackFps };
+    }
+  } else {
+    SHEETS[`${name}.attack`] = { src: `/sprites/${base}_attack.png`, fps: def.attackFps };
+  }
+}
+
+// Move-specific telegraph sheets (the multi-move boss contract): registers
+// `<sprite>.<move>_<phase>[_<facing>]` -> `/sprites/<base>_<move>_<phase>[_<facing>].png`,
+// which OUTRANKS the generic attack tiers in the selection ladder (facing.ts). Entirely
+// optional and per-sheet: author only the beats that need bespoke poses (a charge windup,
+// a quake active, a crash-stun recover) and everything else keeps resolving through the
+// generic set. `phase` spans windup/active/recover.
+export function registerMoveSheet(
+  name: SpriteName,
+  clip: MovePhaseClip,
+  fps: number,
+  opts: { isDirectional?: boolean; fileBase?: string } = {},
+): void {
+  const base = opts.fileBase ?? name;
+  if (opts.isDirectional) {
+    SHEETS[`${name}.${clip}_down`] = { src: `/sprites/${base}_${clip}_down.png`, fps };
+    SHEETS[`${name}.${clip}_up`] = { src: `/sprites/${base}_${clip}_up.png`, fps };
+    SHEETS[`${name}.${clip}_side`] = { src: `/sprites/${base}_${clip}_side.png`, fps };
+  } else {
+    SHEETS[`${name}.${clip}`] = { src: `/sprites/${base}_${clip}.png`, fps };
+  }
+}
+
+// AD-approved directional sets (final art gate): exact file stems per the content
+// manifest — Ian copies the approved box files onto these names, no code changes.
+// Fps values are start points the AD can tune per line.
+registerDirectionalSet("charger", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("burrower", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("orbiter", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("shielder", { walkFps: 8, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("marrow", { walkFps: 8, attackFps: 10, isDirectionalAttack: true });
+registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAttack: true, fileBase: "weaver2_px" });
+// THE GILDED WARDEN's side profile is BLOCKED at the art gate (failed twice — stop):
+// approved DOWN+UP sets only, plus the approved generic attack strip as the side-facing
+// attack catch-all. Its horizontal movement holds the nearest vertical sheet via the
+// ladder's vertical hold — no gilded_*_side file is ever requested.
+registerDirectionalSet("gilded", { walkFps: 6, attackFps: 10, isDirectionalAttack: true, facings: ["down", "up"] });
+SHEETS["gilded.attack"] = { src: "/sprites/gilded_attack.png", fps: 10 };
+// The Hollow Choir is the stationary drifting mass: one breathing idle loop + one omni
+// attack sheet (no walk triplet — the selection ladder falls from walk to idle for it).
+SHEETS["choir.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
+SHEETS["choir.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
+
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
 // composite additively. Sizes are baked into the art; the renderer scales per bullet.
@@ -45,7 +128,10 @@ export type FxName =
   | "comet_trail" | "crackle" | "arc_chain" | "smoke_puff"
   // Elemental status masks (public/sprites/fx). Authored by the AD; until the PNGs land
   // fxTinted returns null and the status/flame render falls back to glow_round + tint.
-  | "ember" | "frost" | "freeze_shell" | "flame_puff" | "shock_ring";
+  | "ember" | "frost" | "freeze_shell" | "flame_puff" | "shock_ring"
+  // The Sunlance's dedicated ray mask (pure white, code-tinted like every fx primitive);
+  // the beam recipe falls back to trail_streak until it lands.
+  | "beam_ray";
 
 const FX_SOURCES: Record<FxName, string> = {
   glow_round: "/sprites/fx/glow_round.png",
@@ -62,6 +148,7 @@ const FX_SOURCES: Record<FxName, string> = {
   freeze_shell: "/sprites/fx/freeze_shell.png",
   flame_puff: "/sprites/fx/flame_puff.png",
   shock_ring: "/sprites/fx/shock_ring.png",
+  beam_ray: "/sprites/fx/beam_ray.png",
 };
 
 // World props (destructibles + atmosphere) and the treasure chest, all in /public/sprites.
@@ -89,7 +176,20 @@ const SOURCES: Record<SpriteName, string> = {
   skeleton: "/sprites/skeleton.png",
   ghost: "/sprites/ghost.png",
   spitter: "/sprites/spitter.png",
+  // Sprite hooks for the content-wave enemies + boss roster: generate via the locked fal
+  // recipe (tools/gen-sprites.mjs charger burrower orbiter shielder marrow choir weaver
+  // gilded) and drop the cutouts here. Until the art lands, drawChar's tinted-disc
+  // fallback keeps every one of them rendering in its identity color.
+  charger: "/sprites/charger.png",
+  burrower: "/sprites/burrower.png",
+  orbiter: "/sprites/orbiter.png",
+  shielder: "/sprites/shielder.png",
   boss: "/sprites/boss.png",
+  marrow: "/sprites/marrow.png",
+  choir: "/sprites/choir.png",
+  // AD-approved final base (content manifest: weaver2_px) — drop-in exact filename.
+  weaver: "/sprites/weaver2_px.png",
+  gilded: "/sprites/gilded.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",
@@ -116,6 +216,9 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/held_railgun.png",
   nailer: "/sprites/held_nailer.png",
   flamer: "/sprites/held_flamer.png",
+  // AD-approved finals (content manifest) — drop-in exact filenames.
+  mortar: "/sprites/held_thumper.png",
+  beam: "/sprites/held_beam2_px.png",
   // Melee (WeaponId -> AD's blade art: cutlass/claymore/pike).
   sword: "/sprites/held_cutlass.png",
   longsword: "/sprites/held_claymore.png",
@@ -139,6 +242,9 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/weapon_railgun.png",
   nailer: "/sprites/weapon_nailer.png",
   flamer: "/sprites/weapon_flamer.png",
+  // AD-approved finals (content manifest) — drop-in exact filenames.
+  mortar: "/sprites/weapon_thumper.png",
+  beam: "/sprites/beam2_px.png",
   sword: "/sprites/weapon_cutlass.png",
   longsword: "/sprites/weapon_claymore.png",
   spear: "/sprites/weapon_pike.png",
@@ -277,6 +383,13 @@ export class Sprites {
     const s = this.sheets.get(`${name}.${clip}`);
     if (s && s.img.complete && s.img.naturalWidth > 0) return s;
     return null;
+  }
+
+  // The render-contract clip pick for a body's pose this frame (see facing.ts for the
+  // fallback ladder). Availability is LOADED sheets, so a registered-but-streaming
+  // directional set degrades to the legacy tier until its pixels arrive.
+  selectClip(name: SpriteName, pose: EnemyPose): ClipChoice {
+    return resolveClip((clip) => this.sheet(name, clip) !== null, pose);
   }
 
   // A cached fully-white silhouette of a sprite, used to flash it on hit.
@@ -435,7 +548,7 @@ export const BIOME_TILE_SOURCES: Partial<Record<string, BiomeTileArt>> = {
 // Approved sheets (ship step: `cp /workspace/fal-art/hazards/*.png public/tiles/hazards/`).
 // Until the copy lands, the renderer draws each hazard in the same primitive telegraph
 // language as the boss slam marker (see game.ts renderHazards).
-export const HAZARD_SOURCES: Partial<Record<HazardKind, string>> = {
+export const HAZARD_SOURCES: Partial<Record<FloorHazardKind, string>> = {
   spikes: "/tiles/hazards/spikes_sheet.png",
   fire_vent: "/tiles/hazards/fire_vent_sheet.png",
   toxic_pool: "/tiles/hazards/toxic2_sheet.png",
@@ -446,7 +559,7 @@ export class TileSet {
   private images = new Map<TileName, HTMLImageElement>();
   private biomeFloors = new Map<string, HTMLImageElement[]>();
   private biomeWallTops = new Map<string, HTMLImageElement>();
-  private hazardImages = new Map<HazardKind, HTMLImageElement>();
+  private hazardImages = new Map<FloorHazardKind, HTMLImageElement>();
   private tintCache = new Map<string, HTMLCanvasElement>();
 
   constructor() {
@@ -469,7 +582,7 @@ export class TileSet {
         this.biomeWallTops.set(key, img);
       }
     }
-    for (const kind of Object.keys(HAZARD_SOURCES) as HazardKind[]) {
+    for (const kind of Object.keys(HAZARD_SOURCES) as FloorHazardKind[]) {
       const src = HAZARD_SOURCES[kind];
       if (!src) continue;
       const img = new Image();
@@ -501,7 +614,7 @@ export class TileSet {
   }
 
   // A loaded hazard body sheet for this kind, or null for the primitive fallback.
-  hazard(kind: HazardKind): HTMLImageElement | null {
+  hazard(kind: FloorHazardKind): HTMLImageElement | null {
     const img = this.hazardImages.get(kind);
     return img && img.complete && img.naturalWidth > 0 ? img : null;
   }
@@ -555,6 +668,10 @@ export function devSpriteManifest(): DevAssetEntry[] {
   for (const id of Object.keys(HELD_SOURCES) as WeaponId[]) {
     const src = HELD_SOURCES[id];
     if (src) out.push({ label: `held ${id}`, src, group: "held weapons" });
+  }
+  for (const id of Object.keys(PICKUP_SOURCES) as WeaponId[]) {
+    const src = PICKUP_SOURCES[id];
+    if (src) out.push({ label: `pickup ${id}`, src, group: "weapon pickups" });
   }
   for (const name of Object.keys(PROP_SOURCES) as PropSpriteName[]) out.push({ label: name, src: PROP_SOURCES[name], group: "props" });
   for (const name of Object.keys(FX_SOURCES) as FxName[]) out.push({ label: name, src: FX_SOURCES[name], group: "bullet fx" });

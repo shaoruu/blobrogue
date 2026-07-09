@@ -51,22 +51,51 @@ export class WorldRegistry implements SessionStore {
     return room;
   }
 
-  // Unbind on disconnect: remove the player + the conn from its room. When the LAST player
-  // leaves (wipe or exodus), reset the room to a fresh run AND release it from the registry —
-  // runs are party-scoped (a new group must never inherit a half-played dungeon), and with
-  // room-scoped worlds (one per lobby code) an emptied world must not stay resident forever.
-  // ensureRoom recreates on the next join, so releasing is invisible to rejoining parties.
-  unbind(conn: Conn): void {
+  // Register a RESUMED connection: the seat already owns the player body, so nothing spawns.
+  attach(conn: Conn, room: RoomRuntime): void {
+    room.conns.set(conn.id, conn);
+    conn.worldId = room.id;
+  }
+
+  // Unbind on disconnect. An UNEXPECTED socket death passes `seat`: the body is reserved
+  // (absent/paused) for the reconnect grace instead of removed, and the world stays resident
+  // (a reserved body counts toward playerCount). A deliberate leave / game over / superseded
+  // connection removes the player as before. When the LAST player leaves, reset the room to a
+  // fresh run AND release it from the registry — runs are party-scoped (a new group must
+  // never inherit a half-played dungeon), and with room-scoped worlds an emptied world must
+  // not stay resident forever. ensureRoom recreates on the next join.
+  unbind(conn: Conn, seat?: { nowMs: number; ttlMs: number }): void {
     if (!conn.worldId) return;
     const room = this.worlds.get(conn.worldId);
-    if (room && conn.playerId) {
-      room.removePlayer(conn.playerId);
-      room.conns.delete(conn.id);
-      if (room.playerCount === 0) {
-        room.resetRun();
-        this.worlds.delete(room.id);
-        this.log.info("world released (room emptied)", { worldId: room.id });
-      }
+    if (!room) return;
+    room.conns.delete(conn.id);
+    if (conn.playerId) {
+      if (seat) room.reserveSeat(conn, seat.nowMs, seat.ttlMs);
+      else room.removePlayer(conn.playerId);
     }
+    this.releaseIfEmpty(room);
+  }
+
+  // Expire overdue seats (the authoritative leave after the grace window) and release any
+  // world that emptied because of it. Called every server tick — expiry is tick-precise.
+  sweep(nowMs: number): number {
+    let expired = 0;
+    for (const room of [...this.worlds.values()]) {
+      for (const seat of room.expireSeats(nowMs)) {
+        expired++;
+        this.log.info("seat expired (reconnect grace over) — authoritative leave", {
+          worldId: room.id, authName: seat.authName, playerId: seat.pid, reservedMs: nowMs - seat.reservedAt,
+        });
+      }
+      this.releaseIfEmpty(room);
+    }
+    return expired;
+  }
+
+  private releaseIfEmpty(room: RoomRuntime): void {
+    if (room.playerCount !== 0 || room.conns.size !== 0) return;
+    room.resetRun();
+    this.worlds.delete(room.id);
+    this.log.info("world released (room emptied)", { worldId: room.id });
   }
 }

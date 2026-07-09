@@ -3,21 +3,25 @@ import type { Session } from "../net/session.js";
 import type { AuthClient } from "../net/auth.js";
 import type { ProfileDoc } from "../net/api.js";
 import { api } from "../net/api.js";
-import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
+import type { LobbyPlayer } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { createSettingsControls } from "./settings.js";
+import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
 
+// ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
+// co-op ran a separate simulation per client (different enemies/drops while players believed
+// they shared a room — the Sev-0), so the menu deliberately has NO way to start it.
 export interface MenuHost {
   startSolo(profile: ProfileDoc | null): void;
-  startCoop(mp: Multiplayer, profile: ProfileDoc | null): void;
-  startOnline(lobby: OnlineLobby, profile: ProfileDoc | null): void;
+  // isPartyStart: the run begins from a lobby START (gate gameplay on the whole party
+  // joining the world) vs dropping into an already-live run (no gate).
+  startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean): void;
 }
 
 // Context for the game-over screen: which flow the run came from decides the retry action.
 export interface GameOverContext {
-  wasCoop: boolean;
   isNewBest: boolean;
   online: OnlineLobby | null;
 }
@@ -356,7 +360,7 @@ export class Menu {
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.quickPlay();
       // The public pool has no start gate: the room is live, drop straight in.
-      this.launchOnline(lobby, profile);
+      this.launchOnline(lobby, profile, false);
     } catch (err) {
       setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not find a room"));
     }
@@ -383,27 +387,30 @@ export class Menu {
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.join(code);
       // A live room means the run is on — drop straight in; otherwise wait in the lobby.
-      if (lobby.status === "playing") this.launchOnline(lobby, profile);
+      if (lobby.status === "playing") this.launchOnline(lobby, profile, false);
       else this.showOnlineLobby(lobby, profile);
     } catch (err) {
       status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not join");
     }
   }
 
-  private launchOnline(lobby: OnlineLobby, profile: ProfileDoc | null) {
+  private launchOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
     this.teardownLobby();
-    this.host.startOnline(lobby, profile);
+    this.host.startOnline(lobby, profile, isPartyStart);
   }
 
-  // The room lobby: the shareable code, who's here (names + colors, host tag), and the
-  // start/waiting/rejoin control. Re-renders on every roster/status change.
+  // The room lobby: the shareable code, who's here (names + colors, host tag) with each
+  // member's live readiness (LOBBY / CONNECTING\u2026 / CONNECTED TO WORLD — mirrored from the
+  // authoritative server, not assumed), and the start/waiting/rejoin control. Re-renders on
+  // every roster/status change.
   showOnlineLobby(lobby: OnlineLobby, profile: ProfileDoc | null, note = "") {
     let prevStatus = lobby.status;
     const render = () => {
       if (lobby.status === "ended") { lobby.leave(); void this.showTitle(); return; }
-      // The host pressing START flips the room live; everyone waiting launches together.
+      // The host pressing START flips the room live; everyone waiting launches together —
+      // into the readiness veil, which reveals gameplay only once the whole party joined.
       // (Only on the transition — re-opening this screen mid-run shows REJOIN instead.)
-      if (lobby.status === "playing" && prevStatus === "lobby") { this.launchOnline(lobby, profile); return; }
+      if (lobby.status === "playing" && prevStatus === "lobby") { this.launchOnline(lobby, profile, true); return; }
       prevStatus = lobby.status;
 
       const wrap = el("div", "menu");
@@ -419,6 +426,7 @@ export class Menu {
         dot.style.background = playerColor(p.colorIndex);
         const you = p.playerId === lobby.selfId ? " (you)" : "";
         rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
+        rowEl.appendChild(this.memberStatusChip(lobby, p));
         list.appendChild(rowEl);
       }
       wrap.appendChild(list);
@@ -428,13 +436,12 @@ export class Menu {
       if (lobby.status === "playing") {
         // A run is live in this room (e.g. you stepped out mid-run) — jump back in.
         const rejoin = el("button", "", "\u25be  REJOIN RUN");
-        rejoin.addEventListener("click", () => this.launchOnline(lobby, profile));
+        rejoin.addEventListener("click", () => this.launchOnline(lobby, profile, false));
         row.appendChild(rejoin);
       } else if (lobby.isHost) {
-        const start = el("button", "", "\u25be  START RUN");
-        start.addEventListener("click", () => void lobby.start().catch(() => {}));
-        row.appendChild(start);
+        row.appendChild(this.hostStartButton(lobby));
       } else {
+        row.appendChild(this.readyToggleButton(lobby));
         wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
       }
       const leave = el("button", "secondary", "leave");
@@ -453,70 +460,78 @@ export class Menu {
     render();
   }
 
-  // ---- CLASSIC CO-OP (peer-synced, the original path — fully preserved) --------------
-
-  async showClassicCoop() {
-    if (!this.client) { await this.showTitle(); return; }
-    const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", "CLASSIC CO-OP"));
-    wrap.appendChild(el("p", "", "The original peer-synced co-op \u2014 everyone runs the same dungeon side by side."));
-
-    const colA = el("div", "col-actions");
-    const quickBtn = el("button", "btn-quick primary");
-    quickBtn.appendChild(el("span", "", "\u25b6 QUICK PLAY (CO-OP)"));
-    quickBtn.appendChild(el("span", "sub", "jump into an open game \u2014 no code needed"));
-    quickBtn.addEventListener("click", () => void this.doQuickPlay());
-    colA.appendChild(quickBtn);
-    const actrow = el("div", "actrow");
-    const hostBtn = el("button", "secondary", "PRIVATE ROOM");
-    hostBtn.addEventListener("click", () => void this.doHost());
-    const joinBtn = el("button", "secondary", "JOIN CODE");
-    joinBtn.addEventListener("click", () => void this.showJoinScreen({
-      title: "JOIN GAME",
-      hint: "Enter the 4-letter code your host shared.",
-      onBack: () => void this.showClassicCoop(),
-      onJoin: (code, status) => void this.doJoin(code, status),
-    }));
-    actrow.append(hostBtn, joinBtn);
-    colA.appendChild(actrow);
-    wrap.appendChild(colA);
-
-    const row = el("div", "btnrow");
-    const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => void this.showTitle());
-    row.appendChild(back);
-    wrap.appendChild(row);
-
-    this.show(wrap);
-  }
-
-  private async doQuickPlay() {
-    if (!this.client) return;
-    const status = this.busy("finding a game\u2026");
-    try {
-      const profile = await this.session.login(this.session.name || "blob");
-      const mp = new Multiplayer(this.client, this.session);
-      await mp.quickPlay();
-      this.showLobby(mp, profile);
-    } catch (err) {
-      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not find a game");
+  // A member's roster chip. In the lobby it is the readiness consent (READY / NOT READY,
+  // host implicit) + their measured ping; while the run is live it is their state against
+  // the AUTHORITATIVE world (CONNECTED TO WORLD / CONNECTING…), mirrored from the server's
+  // own snapshot.
+  private memberStatusChip(lobby: OnlineLobby, p: LobbyPlayer): HTMLElement {
+    const ping = p.pingMs !== null ? ` \u00b7 ${p.pingMs}ms` : "";
+    let label: string;
+    let color: string;
+    if (lobby.status === "playing") {
+      const isConnected = p.gsWorldId === lobby.expectedWorldId();
+      label = isConnected ? "CONNECTED TO WORLD" : "CONNECTING\u2026";
+      color = isConnected ? "#7CFC98" : "#ffb43b";
+    } else if (p.isHost) {
+      label = "HOST";
+      color = "#8f87a8";
+    } else {
+      label = p.isReady ? READY_LABEL : NOT_READY_LABEL;
+      color = p.isReady ? "#7CFC98" : "#ffb43b";
     }
+    const chip = el("span", "member-status", `${label}${ping}`);
+    chip.style.marginLeft = "auto";
+    chip.style.fontSize = "10px";
+    chip.style.letterSpacing = "1px";
+    chip.style.color = color;
+    return chip;
   }
 
-  private async doHost() {
-    if (!this.client) return;
-    const status = this.busy("creating room\u2026");
-    try {
-      const profile = await this.session.login(this.session.name || "blob");
-      const mp = new Multiplayer(this.client, this.session);
-      await mp.host();
-      this.showLobby(mp, profile);
-    } catch (err) {
-      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not create room");
+  // A non-host member's readiness consent toggle.
+  private readyToggleButton(lobby: OnlineLobby): HTMLButtonElement {
+    const isReady = lobby.isSelfReady;
+    const btn = el("button", isReady ? "secondary" : "", isReady ? "\u2713 READY \u2014 tap to unready" : "\u25be  READY UP");
+    btn.addEventListener("click", () => lobby.setReady(!lobby.isSelfReady));
+    return btn;
+  }
+
+  // The host's start control. All members ready -> plain START RUN. Someone not ready ->
+  // START ANYWAY, armed only by a full 3s HOLD (releasing cancels) so a party can never be
+  // yanked into a run by a slipped click.
+  private hostStartButton(lobby: OnlineLobby): HTMLButtonElement {
+    if (lobby.isPartyReady) {
+      const start = el("button", "", "\u25be  START RUN");
+      start.addEventListener("click", () => void lobby.start().catch(() => {}));
+      return start;
     }
+    const btn = el("button", "secondary", START_ANYWAY_IDLE);
+    let holdTimer: ReturnType<typeof setInterval> | null = null;
+    let holdStartedAt = 0;
+    const cancelHold = () => {
+      if (holdTimer !== null) clearInterval(holdTimer);
+      holdTimer = null;
+      btn.textContent = START_ANYWAY_IDLE;
+    };
+    btn.addEventListener("pointerdown", () => {
+      holdStartedAt = Date.now();
+      cancelHold();
+      holdTimer = setInterval(() => {
+        const heldMs = Date.now() - holdStartedAt;
+        if (heldMs >= START_ANYWAY_HOLD_MS) {
+          cancelHold();
+          void lobby.start().catch(() => {});
+          return;
+        }
+        btn.textContent = startAnywayHoldLabel(heldMs);
+      }, 100);
+    });
+    btn.addEventListener("pointerup", cancelHold);
+    btn.addEventListener("pointerleave", cancelHold);
+    btn.addEventListener("pointercancel", cancelHold);
+    return btn;
   }
 
-  // Shared join-by-code screen (classic co-op and online rooms use the same 4-letter codes).
+  // The join-by-code screen for online rooms.
   private showJoinScreen(opts: {
     title: string;
     hint: string;
@@ -546,73 +561,12 @@ export class Menu {
     input.focus();
   }
 
-  private async doJoin(code: string, status: HTMLElement) {
-    if (!this.client || code.trim().length < 4) { status.textContent = "enter a valid code"; return; }
-    status.textContent = "joining\u2026";
-    try {
-      const profile = await this.session.login(this.session.name || "blob");
-      const mp = new Multiplayer(this.client, this.session);
-      await mp.join(code);
-      this.showLobby(mp, profile);
-    } catch (err) {
-      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not join");
-    }
-  }
-
-  private showLobby(mp: Multiplayer, profile: ProfileDoc | null) {
-    const render = () => {
-      // The host clicking "start" flips status to playing; everyone launches here.
-      if (mp.status === "playing") {
-        this.teardownLobby();
-        this.host.startCoop(mp, profile);
-        return;
-      }
-      if (mp.status === "ended") { void this.showTitle(); return; }
-
-      const wrap = el("div", "menu");
-      wrap.appendChild(el("h1", "", "CO-OP LOBBY"));
-      wrap.appendChild(el("p", "", "Share this code with friends on the same build:"));
-      wrap.appendChild(el("div", "code-badge", mp.code));
-
-      const list = el("div", "playerlist");
-      for (const p of mp.lobbyPlayers()) {
-        const rowEl = el("div", "playerrow");
-        const dot = el("span", "dot");
-        dot.style.background = playerColor(p.colorIndex);
-        rowEl.append(dot, el("span", "", `${p.name}${p.isHost ? " (host)" : ""}`));
-        list.appendChild(rowEl);
-      }
-      wrap.appendChild(list);
-
-      const row = el("div", "btnrow");
-      if (mp.isHost) {
-        const start = el("button", "", "\u25be  START RUN");
-        start.addEventListener("click", () => void mp.startGame());
-        row.appendChild(start);
-      } else {
-        wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
-      }
-      const leave = el("button", "secondary", "leave");
-      leave.addEventListener("click", () => { mp.leave(); void this.showTitle(); });
-      row.appendChild(leave);
-      wrap.appendChild(row);
-      wrap.appendChild(el("p", "hint", CONTROLS));
-
-      this.overlay.classList.remove("hidden");
-      this.overlay.replaceChildren(wrap);
-    };
-
-    this.teardownLobby();
-    this.unsub = mp.onChange(render);
-    render();
-  }
-
   showGameOver(result: RunResult, profile: ProfileDoc | null, ctx: GameOverContext) {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "died", "YOU DIED"));
     const flavor = ctx.online
       ? "The run is over \u2014 regroup and go again."
-      : ctx.wasCoop ? "The party fights on without you." : "The depths claim another blob.";
+      : "The depths claim another blob.";
     wrap.appendChild(el("p", "", flavor));
 
     // A run summary that counts its numbers up. Each cell reserves width so the
@@ -667,16 +621,6 @@ export class Menu {
       back.addEventListener("click", () => { online.leave(); void this.showTitle(); });
       row.append(again, back);
       hint = "press ENTER to play again";
-    } else if (ctx.wasCoop) {
-      // Co-op: the party already ended, so restarting to a lone solo run would silently
-      // yank the player out of co-op — instead offer a clear "back to menu" as primary.
-      primary = () => void this.showTitle();
-      const menuBtn = el("button", "", "back to menu \u21b5");
-      menuBtn.addEventListener("click", () => primary());
-      const soloAgain = el("button", "secondary", "play solo");
-      soloAgain.addEventListener("click", () => this.doSolo());
-      row.append(menuBtn, soloAgain);
-      hint = "press ENTER for menu";
     } else {
       // Solo: "play again" restarts a fresh solo run (the one-key retention loop).
       primary = () => this.doSolo();
@@ -696,7 +640,7 @@ export class Menu {
     // One-key retention loop: ENTER always triggers the primary action (R also, solo only).
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (k === "enter" || (k === "r" && !ctx.wasCoop && !ctx.online)) { e.preventDefault(); primary(); }
+      if (k === "enter" || (k === "r" && !ctx.online)) { e.preventDefault(); primary(); }
     };
     this.gameOverKeys = onKey;
     window.addEventListener("keydown", onKey);
@@ -711,7 +655,7 @@ export class Menu {
       const profile = await this.session.login(this.session.name || "blob");
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.quickPlay();
-      this.launchOnline(lobby, profile);
+      this.launchOnline(lobby, profile, false);
     } catch (err) {
       await this.showOnlineHome(this.cleanErr(err instanceof Error ? err.message : "could not find a room"));
     }
@@ -728,15 +672,6 @@ export class Menu {
       else this.countupRaf = 0;
     };
     this.countupRaf = requestAnimationFrame(tick);
-  }
-
-  private busy(text: string): HTMLElement {
-    const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", "\u2026"));
-    const status = el("p", "muted", text);
-    wrap.appendChild(status);
-    this.show(wrap);
-    return status;
   }
 
   private cleanErr(msg: string): string {

@@ -126,8 +126,8 @@ const AMBIENCE_STYLES: readonly MoteLayer[][] = [
     { kind: "firefly", color: "#d8f27a", count: 8, alpha: 0.5, rise: -6, sway: 16, swayFreq: 0.22, size: 2.2, reactRadius: 90, reactPush: 60 },
   ],
   [ // Rootbound Warrens: falling spore-litter under the dense canopy + deep fireflies.
-    { kind: "float", color: "#9cbf3f", count: 32, alpha: 0.3, rise: 10, sway: 14, swayFreq: 0.4, size: 1.9, reactRadius: 78, reactPush: 85 },
-    { kind: "firefly", color: "#e8ffa0", count: 6, alpha: 0.45, rise: -5, sway: 12, swayFreq: 0.18, size: 2.0, reactRadius: 84, reactPush: 55 },
+    { kind: "float", color: "#a8a05a", count: 32, alpha: 0.3, rise: 10, sway: 14, swayFreq: 0.4, size: 1.9, reactRadius: 78, reactPush: 85 },
+    { kind: "firefly", color: "#d9a24a", count: 6, alpha: 0.45, rise: -5, sway: 12, swayFreq: 0.18, size: 2.0, reactRadius: 84, reactPush: 55 },
   ],
   [ // Sunless Caves: hanging dust + ceiling drips that streak down and vanish.
     { kind: "float", color: "#8fc2e8", count: 26, alpha: 0.26, rise: 8, sway: 7, swayFreq: 0.35, size: 1.6, reactRadius: 60, reactPush: 55 },
@@ -138,7 +138,7 @@ const AMBIENCE_STYLES: readonly MoteLayer[][] = [
     { kind: "firefly", color: "#7ae8ff", count: 6, alpha: 0.42, rise: -14, sway: 10, swayFreq: 0.16, size: 1.8, reactRadius: 70, reactPush: 50 },
   ],
   [ // Gilded Archive: still golden dust hanging in lamplight + prism glints off the shelves.
-    { kind: "float", color: "#ffd166", count: 28, alpha: 0.24, rise: 3, sway: 5, swayFreq: 0.2, size: 1.6, reactRadius: 70, reactPush: 60 },
+    { kind: "float", color: "#e8c265", count: 28, alpha: 0.24, rise: 3, sway: 5, swayFreq: 0.2, size: 1.6, reactRadius: 70, reactPush: 60 },
     { kind: "shard", color: "#ffe9b0", count: 14, alpha: 0.38, rise: -2, sway: 8, swayFreq: 0.1, size: 2.2, reactRadius: 84, reactPush: 35 },
   ],
   [ // Emberreach: hard-rising embers + broad heat-shimmer columns.

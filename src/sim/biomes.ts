@@ -62,20 +62,21 @@ export const BIOMES: readonly Biome[] = [
     torchesPerRoom: 1,
   },
   {
-    // Floors 6-10 — the same living ecology grown DENSE: branching root warrens,
-    // formation corridors, bark and old amber. Capped by the F10 Miniboss Gauntlet.
+    // Floors 6-10 — the same living ecology as Amberwild grown DENSE and darker; the
+    // accepted lane is deep GREEN-BROWN braided roots threaded with amber channels (the
+    // accent). Capped by the F10 Miniboss Gauntlet.
     name: "Rootbound Warrens",
     tileKey: "rootbound",
-    bgColor: "#0b0e08",
-    floorA: "#151a10",
-    floorB: "#191e13",
-    wallFront: "#232b18",
-    wallCap: "#334022",
-    wallSideRgb: "28,34,20",
-    wallCorner: "rgba(10,12,7,0.5)",
-    tint: "#4d5a26",
-    tintAlpha: 0.26,
-    accent: "#9cbf3f",
+    bgColor: "#0d0e09",
+    floorA: "#171a10",
+    floorB: "#1c1e12",
+    wallFront: "#242718",
+    wallCap: "#383a22",
+    wallSideRgb: "30,31,19",
+    wallCorner: "rgba(10,11,7,0.5)",
+    tint: "#565232",
+    tintAlpha: 0.24,
+    accent: "#d9a24a",
     glow: "#ffd166",
     lightLevel: 0.06,
     vignette: 0.14,
@@ -134,20 +135,21 @@ export const BIOMES: readonly Biome[] = [
     torchesPerRoom: 2,
   },
   {
-    // Floors 21-25 — order, armor, claimed space: the Gilded Archive. Dead-prism amber,
-    // columned shelves, lamplight on gold. Capped by the Gilded Warden.
+    // Floors 21-25 — order, armor, claimed space. The accepted lane: RIGID amber/brass
+    // + cold mineral — dead honey and tarnished metal, order turned to imprisonment
+    // (never the Camp's warm gold). Capped by the Gilded Warden.
     name: "Gilded Archive",
     tileKey: "gilded",
-    bgColor: "#120e05",
-    floorA: "#221b0d",
-    floorB: "#282010",
-    wallFront: "#33290f",
-    wallCap: "#4d3d16",
-    wallSideRgb: "42,33,13",
-    wallCorner: "rgba(14,11,4,0.55)",
-    tint: "#8a6b1f",
-    tintAlpha: 0.32,
-    accent: "#ffd166",
+    bgColor: "#100e09",
+    floorA: "#1d1a11",
+    floorB: "#222016",
+    wallFront: "#2d2819",
+    wallCap: "#453c24",
+    wallSideRgb: "38,33,22",
+    wallCorner: "rgba(13,11,7,0.5)",
+    tint: "#7d6a3a",
+    tintAlpha: 0.24,
+    accent: "#e8c265",
     glow: "#ffe9b0",
     lightLevel: 0.24,
     vignette: 0.34,
@@ -231,16 +233,10 @@ export function biomeDepthForFloor(floor: number): number {
   return ((f - 1) % FLOORS_PER_BIOME) / (FLOORS_PER_BIOME - 1);
 }
 
-// The F10 milestone is the curriculum's authored Miniboss Gauntlet — a non-boss beat
-// that breaks the boss cadence without replacing named content. It shares the %5
-// milestone machinery (grand arena, zero generator hazards, banner) but announces
-// itself as what it is.
-export function isGauntletFloor(floor: number): boolean {
-  return Math.floor(floor) === 10;
-}
 
-export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isDescend?: boolean }): string {
-  if (opts?.isBoss) return isGauntletFloor(floor) ? "MINIBOSS GAUNTLET" : "BOSS FLOOR";
+export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
+  if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";
+  if (opts?.isBoss) return "BOSS FLOOR";
   const name = biomeForFloor(floor).name.toUpperCase();
   if (opts?.isDescend) return `${name} · DOWN TO FLOOR ${floor}`;
   return `${name} · FLOOR ${floor}`;

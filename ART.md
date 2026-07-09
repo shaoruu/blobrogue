@@ -43,5 +43,60 @@ falls back to the procedural animation above whenever a sheet is absent (the cur
 
 `SHEETS` is empty by default, so nothing extra is fetched (no 404s) until you opt in.
 
+## Directional facing + attack sheets (the mob/boss render contract)
+Every mob/boss carries persistent **4-way facing** (down / up / side; side authored facing
+RIGHT and mirrored for left) derived from its movement with a deadzone + axis hysteresis,
+and an **aimed attack overrides facing** while the move telegraphs (the body turns onto its
+locked angle). The pose — facing, motion, move, phase, 0..1 windup, aim — is a typed hook
+(`EnemyPose` in `src/game/facing.ts`) the draw pass and dev tools both consume.
+
+**Directional set convention** (all optional, per sprite):
+- `<name>_walk_down.png`, `<name>_walk_up.png`, `<name>_walk_side.png` — walk strips;
+  **frame 0 doubles as that facing's idle pose** (held while standing).
+- `<name>_attack.png` — omni windup/strike strip, or `<name>_attack_{down,up,side}.png`
+  for full directional attacks.
+
+**Enable a whole set with one line** in `src/game/assets.ts` (once the filenames are
+approved); `fileBase` covers AD-versioned finals whose stem differs from the sprite name:
+```ts
+registerDirectionalSet("charger", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAttack: true, fileBase: "weaver2_px" });
+```
+
+**Approved finals already wired (drop the files in, no code changes):**
+- Directional walk + attack sets (`<stem>_walk_{down,up,side}.png` +
+  `<stem>_attack_{down,up,side}.png`) for **marrow, burrower, weaver2_px, charger,
+  orbiter, shielder**.
+- **Gilded Warden — side profile BLOCKED** (failed twice; stop): approved DOWN+UP sets
+  only (`gilded_{walk,attack}_{down,up}.png`) plus the generic `gilded_attack.png`
+  catch-all. The ladder's **vertical hold** keeps its horizontal movement on the nearest
+  approved down/up sheet (unmirrored) — no `gilded_*_side` file is registered or ever
+  requested, and there is no fake side slide. Register partial facings via
+  `facings: ["down", "up"]` on `registerDirectionalSet`.
+- The stationary Hollow Choir: `choir_idle.png` (breathing loop, plays even while it
+  drifts) + `choir_attack.png` (omni).
+- Thumper pair: pickup `weapon_thumper.png`, held `held_thumper.png`.
+- Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`, plus the `fx/beam_ray.png`
+  pure-white alpha mask (code-tinted per shot; `trail_streak` fallback until it lands).
+
+
+**Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
+MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored
+move+phase sheet outranks the generic tiers. Convention:
+`<stem>_<move>_<phase>[_<facing>].png` with phase ∈ windup/active/recover (recover means
+authored punish poses — a crash-stun dizzy sheet — are first-class). Register per beat:
+```ts
+registerMoveSheet("marrow", "rush_windup", 12, { isDirectional: true });
+registerMoveSheet("gilded", "slam_active", 10);
+registerMoveSheet("weaver", "pounce_active", 12, { fileBase: "weaver2_px" });
+```
+
+Selection degrades one deliberate step at a time —
+`<move>_<phase>_<facing>` → `<move>_<phase>` → `attack_<facing>` → `attack` →
+`walk_<facing>` → legacy `walk`/`idle` → static PNG + procedural juice — so partial sets
+ship safely: author only the beats that need bespoke poses and every other state keeps
+resolving through the generic set. Every existing sprite keeps today's exact look until
+its art lands. Contract locked by `npm run test:facing`.
+
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.

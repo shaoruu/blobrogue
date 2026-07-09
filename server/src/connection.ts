@@ -36,16 +36,41 @@ export interface Conn {
   log: import("./logger.js").Logger;
 
   authed: boolean;
-  playerId: PlayerId | null; // world-scoped id ("p<connId>"); unique per connection
+  playerId: PlayerId | null; // world-scoped id ("p<connId>"; a resume adopts the seat's id)
   authName: string | null;   // the verified identity from the ticket (for logs)
   worldId: string | null;
   // Verified cosmetic identity from the ticket (broadcast to other clients via PlayerWire):
   // the display name shown above this player's blob, and their chosen blob color.
   displayName: string | null;
   colorIndex: number | null;
+  // Single-use seat token for THIS connection (minted at join, rotated at resume, delivered
+  // on the full snapshot). If the socket dies unexpectedly it moves onto the reserved seat,
+  // and presenting it with a fresh ticket reclaims the exact body.
+  resumeToken: string | null;
+  // The token the client PRESENTED to claim this connection's seat (null for a fresh join).
+  // Rotation-ack ordering: the server rotates the token the moment a resume is processed, but
+  // the client only learns the new one from a snapshot — if this socket dies inside that
+  // window (the exact flaky-network race), the client's only credential is still this one.
+  // It stays honored as a resume fallback until receipt of the rotated token is confirmed.
+  presentedResumeToken: string | null;
+  // The client has demonstrably RECEIVED this connection's rotated resume token: set on the
+  // first input frame, which a conforming client sends only after ingesting a snapshot on
+  // this socket (and every per-connection snapshot carries the token). Once confirmed, the
+  // presented (previous) token is dead — replay protection is fully restored.
+  isResumeTokenConfirmed: boolean;
+  // The client said `leave` (deliberate goodbye): the close that follows must NOT reserve a
+  // reconnect seat.
+  isLeaving: boolean;
   malformed: number;         // count of malformed messages (kick threshold)
 
   connectedAt: number;
+  // Wall-clock of the last inbound frame of ANY kind. Drives silent-drop detection (studio
+  // balance gate §6): a link that goes quiet for absenceDetectMs marks the body absent/safe
+  // long before the heartbeat timeout closes the socket, and the next frame restores it.
+  lastInboundAt: number;
+  // The body is currently soft-absent (silent link, socket still open). Distinct from a
+  // reserved seat — the connection is alive and recovers by simply speaking again.
+  isSoftAbsent: boolean;
   // inbound message rate limiting (sliding 1s window, per class + aggregate)
   rate: RateWindows;
 
@@ -103,8 +128,9 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "malformed"
-  | "connectedAt" | "rate"
+  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "resumeToken"
+  | "presentedResumeToken" | "isResumeTokenConfirmed" | "isLeaving" | "malformed"
+  | "connectedAt" | "lastInboundAt" | "isSoftAbsent" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
   | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline" | "gameOver"
@@ -112,8 +138,9 @@ export function newConnState(now: number): Pick<Conn,
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
-    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, malformed: 0,
-    connectedAt: now, rate: newRateWindows(now),
+    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null,
+    resumeToken: null, presentedResumeToken: null, isResumeTokenConfirmed: false, isLeaving: false, malformed: 0,
+    connectedAt: now, lastInboundAt: now, isSoftAbsent: false, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,
     closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0, gameOver: false,

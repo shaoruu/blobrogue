@@ -10,13 +10,14 @@
 
 import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
-import { FlowField } from "./pathfind.js";
+import type { FlowField } from "./pathfind.js";
+import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
+import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, WeaponId, AttackMove, TileKind } from "./types.js";
-import { placeHazards, isHazardDamaging, hazardPhaseAt, HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
-import { flockSteer, flockOut, BAT_FLOCK } from "./flock.js";
+import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind } from "./types.js";
+import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
 import { Rng } from "./rng.js";
-import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
+import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover, isGauntletFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -26,9 +27,12 @@ import type { InputCmd, PlayerId } from "./input.js";
 import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
+  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
+  GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
-  REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
+  REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
+  WEAPON_BOSS_COEF,
+  MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
 
@@ -43,6 +47,8 @@ export interface MeleeSwing {
   color: string;
   damage: number;
   isCrit: boolean;
+  // The blade's boss coefficient (WEAPON_BOSS_COEF), baked when the swing starts.
+  bossCoef: number;
   hitList: Array<Enemy | number> | null; // enemies + negative prop-id markers
   burn?: number;
   chill?: number;
@@ -62,6 +68,11 @@ export interface MeleeSwing {
 interface StrikeInfo {
   damage: number;
   isCrit: boolean;
+  // The crit multiplier baked into damage when isCrit (1 otherwise) — the boss
+  // vulnerability channel divides it out and re-applies it capped.
+  critX: number;
+  // Boss-facing pellet/weapon coefficient baked at fire time. 1 for melee.
+  bossCoef: number;
   puffX: number;
   puffY: number;
   kbDirX: number;
@@ -95,6 +106,14 @@ export interface PlayerSim {
   facing: number; aimAngle: number; weapon: WeaponId;
   ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
   shotSeq: number; isDown: boolean;
+  // Network-absent (authoritative server only): the player's connection dropped and their body
+  // is RESERVED for the reconnect grace window. An absent body is paused and safe — it cannot
+  // act, take damage, attract enemies, collect loot, or open chests — and it is excluded from
+  // the exit/blessing gates so it can neither trigger nor deadlock a party transition. It
+  // still counts as ALIVE for the wipe checks (a resumed player can revive the party), which
+  // is exactly what keeps a brief Wi-Fi drop from reading as a death. Solo/co-op/prediction
+  // never set this.
+  isAbsent: boolean;
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
@@ -105,6 +124,9 @@ export interface PlayerSim {
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
   meleeSwing: MeleeSwing | null;
+  // Studio gate §4: the boss chest offers P+1 weapon CHOICES and each player claims exactly
+  // one per boss floor. Reset on every floor build.
+  hasClaimedBossChoice: boolean;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -132,16 +154,36 @@ export interface WorldState {
   pickups: Pickup[];
   props: Prop[];
   chests: Chest[];
-  // Environmental hazards (depth escalation): layout is derived per floor from the seed
-  // (never on the wire); pulse timing keys off hazardClock — accumulated SIM seconds,
-  // monotonic across floors like tick, so solo (60Hz) and the server (20Hz) agree on
-  // cycles in real time and an online client can reconstruct it as tick x FIXED_DT.
+  // Authored ground hazards (the Weaver's webs): shared authoritative floor state, capped
+  // and self-expiring; rebuilt empty on every floor load.
   hazards: Hazard[];
-  hazardClock: number;
+  // Environmental FLOOR hazards (depth escalation) — distinct from the boss webs above:
+  // layout is derived per floor from the seed (never on the wire); pulse timing keys off
+  // floorHazardClock — accumulated SIM seconds, monotonic across floors like tick, so
+  // solo (60Hz) and the server (20Hz) agree on cycles in real time and an online client
+  // can reconstruct it as tick x FIXED_DT.
+  floorHazards: FloorHazard[];
+  floorHazardClock: number;
+  // Overlap arbiter (studio gate §2): damage releases mobs committed in the last 0.30s.
+  // A new mob release whose area overlaps a recent one HOLDS until the window clears — no
+  // two releases may pincer the same escape lane inside one reaction window. (Seeded
+  // floor-hazard groups arbitrate the same rule at placement time — see hazards.ts.)
+  recentReleases: Array<{ x: number; y: number; radius: number; t: number }>;
+  // The F10 Arena Gauntlet stage machine (curriculum §2): `stage` counts spawned stages,
+  // `breath` is the authored 1.2s beat between a clear and the next entrance, and
+  // `isRewarded` latches once the premium chest has dropped. Null on ordinary floors.
+  gauntlet: { stage: number; breath: number; isRewarded: boolean } | null;
   dungeon: Dungeon;
-  flow: FlowField;
+  // Dynamic-obstacle navigation caches (prop clearance grid + per-class flow fields).
+  // Derived data only — never on the wire; every consumer rebuilds lazily off
+  // (obstacleRev, flowKey), so server and clients always agree.
+  nav: NavRuntime;
+  // Obstacle revision: increments whenever the blocking prop set changes (floor build,
+  // prop destroyed, dev spawn). Keys every navigation cache; content systems that
+  // destroy cover (charges, slams) bump it implicitly through destroyProp.
+  obstacleRev: number;
   flowCd: number;
-  // Combined hash of every living source tile; the flow field rebuilds when it changes.
+  // Combined hash of every living source tile; the chase fields rebuild when it changes.
   flowKey: number;
   flowSources: number[];
   rng: Rng;
@@ -162,6 +204,7 @@ export interface WorldState {
   nextPropId: number;
   nextPickupId: number;
   nextChestId: number;
+  nextHazardId: number;
   // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
   // recent record). histHead is the ring slot of the most recent record; histCount is how many
   // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
@@ -202,10 +245,11 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
+    shotSeq: 0, isDown: false, isAbsent: false, reviveProgress: 0, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
+    hasClaimedBossChoice: false,
   };
 }
 
@@ -228,9 +272,13 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     props: [],
     chests: [],
     hazards: [],
-    hazardClock: 0,
+    floorHazards: [],
+    floorHazardClock: 0,
+    recentReleases: [],
+    gauntlet: null,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
-    flow: new FlowField(),
+    nav: createNav(),
+    obstacleRev: 0,
     flowCd: 0,
     flowKey: -1,
     flowSources: [],
@@ -246,6 +294,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     nextPropId: 0,
     nextPickupId: 0,
     nextChestId: 0,
+    nextHazardId: 0,
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
@@ -282,13 +331,24 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
   return p;
 }
 
-// Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
-// no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
-// Their pending blessing offer (if any) dies with them so the descend gate can't be held
-// by a player who is no longer in the world.
+// Remove a player from a live world (authoritative server: deliberate leave, or the reconnect
+// grace expiring). Returns whether a player was actually removed. Their pending blessing offer
+// (if any) dies with them so the descend gate can't be held by a player who is no longer in
+// the world.
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   w.pendingBlessings.delete(id);
   return w.players.delete(id);
+}
+
+// Flip a player's network-absence (authoritative server: socket dropped -> reserved seat;
+// resume -> back). Returning from absence grants the spawn-grace mercy window: the world kept
+// moving while they were gone, and materializing into a surrounding pack un-hittable-for-a-
+// beat beats materializing already dying.
+export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean): void {
+  const p = w.players.get(id);
+  if (!p || p.isAbsent === isAbsent) return;
+  p.isAbsent = isAbsent;
+  if (!isAbsent) p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
 }
 
 // A single open walled rectangle for the dev sandbox — reuses the Dungeon/Room shape so
@@ -316,17 +376,14 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.encounterPlayers = clampPlayers(Math.max(1, w.players.size));
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
+  w.hazards = [];
+  w.recentReleases = [];
+  w.gauntlet = !w.isSandbox && isGauntletFloor(floor) ? { stage: 0, breath: 0, isRewarded: false } : null;
   w.nextEnemyId = 0;
   w.nextPropId = 0;
   w.nextPickupId = 0;
   w.nextChestId = 0;
-  const spawns = w.isSandbox
-    ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
-  w.enemies = spawns.active;
-  w.pendingSpawns = spawns.pending;
-  w.spawnReleaseCd = 0;
-  w.nextEnemyId = spawns.active.length + spawns.pending.length;
+  w.nextHazardId = 0;
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.pendingBlessings.clear();
@@ -334,16 +391,34 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.flowCd = 0;
   w.flowKey = -1;
   w.pickups = [];
-  // Hazards place FIRST: props/chests/dealer stock then avoid hazard tiles (a barrel on
-  // spikes reads as a bug). hazardClock is NOT reset — it is monotonic sim time (phases
-  // are per-hazard), so an online client can always reconstruct it from the tick.
-  w.hazards = w.isSandbox ? [] : placeHazards(w.dungeon, w.seed, floor);
+  for (const p of w.players.values()) p.hasClaimedBossChoice = false;
+  // Floor hazards place FIRST: props/chests/dealer stock then avoid hazard tiles (a
+  // barrel on spikes reads as a bug). floorHazardClock is NOT reset — it is monotonic
+  // sim time (phases are per-hazard), so an online client reconstructs it from the tick.
+  w.floorHazards = w.isSandbox ? [] : placeFloorHazards(w.dungeon, w.seed, floor);
+  // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
+  // footprint, and the obstacle revision must already name this floor's layout. The
+  // ordering is free — every placement draws from its own seeded stream.
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) {
     stockWeaponChests(w);
-    placeDealerHearts(w);
+    placeDealerStock(w);
   }
+  w.obstacleRev++;
+  const spawns = w.isSandbox
+    ? { active: [], pending: [] }
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
+  w.enemies = spawns.active;
+  w.pendingSpawns = spawns.pending;
+  w.spawnReleaseCd = 0;
+  w.nextEnemyId = spawns.active.length + spawns.pending.length;
+  // Every planned unit — the active wave AND the queued reinforcements — settles onto a
+  // spawn point with full body clearance and a route to the playable region now, at
+  // build time. Props only ever VANISH mid-floor, so a point valid here is still valid
+  // when a reinforcement releases.
+  for (const e of w.enemies) settleEnemySpawn(w, e);
+  for (const e of w.pendingSpawns) settleEnemySpawn(w, e);
   // Reposition living players to the new spawn, each under the spawn-grace mercy window:
   // nobody loads into a fresh floor (a boss floor especially) already taking damage.
   const spawn = w.dungeon.spawn;
@@ -357,6 +432,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
 // Floor cleared = every active enemy dead AND no reinforcements still queued. The exit,
 // the snapshot `cleared` flag, and the client HUD/minimap all read this one predicate.
 export function isFloorCleared(w: WorldState): boolean {
+  if (w.gauntlet !== null && (w.gauntlet.stage < GAUNTLET.rounds.length || !w.gauntlet.isRewarded)) return false;
   return w.enemies.length === 0 && w.pendingSpawns.length === 0;
 }
 
@@ -396,8 +472,13 @@ function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
   if (w.floor < 2 || d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
-  const kinds: WeaponId[] = [rng.pick(PICKUP_WEAPONS)];
-  if (w.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
+  // Studio gate §4 pedestal rolls: max(1, ceil(P/2)) physical weapons per floor (P1–2
+  // roll 1, P3–4 roll 2), DISTINCT ids when the pool permits. Party size buys options,
+  // never rarity — the roll table is identical solo and co-op.
+  const kinds: WeaponId[] = [];
+  for (let i = 0; i < pedestalWeaponRolls(w.encounterPlayers); i++) {
+    kinds.push(rollDistinctWeapon(rng, kinds));
+  }
   const used = new Set<number>();
   for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
   for (const weapon of kinds) {
@@ -412,9 +493,20 @@ function stockWeaponChests(w: WorldState): void {
   }
 }
 
-// The Dealer's stock (§2): on every third floor, P purchasable hearts near a mid-run room
-// center. Walking over one with enough coins buys exactly +1 HP — never a full heal.
-function placeDealerHearts(w: WorldState): void {
+// A weapon roll that avoids the ids already taken this batch (distinct while the pool
+// permits — with a 17-weapon pool the retry loop is a formality, but bounded regardless).
+function rollDistinctWeapon(rng: Rng, taken: readonly WeaponId[]): WeaponId {
+  let pick = rng.pick(PICKUP_WEAPONS);
+  for (let i = 0; i < PICKUP_WEAPONS.length && taken.includes(pick); i++) pick = rng.pick(PICKUP_WEAPONS);
+  return pick;
+}
+
+// The Dealer's stock (§2 + studio gate §4): on every third floor, P purchasable hearts
+// plus max(2, P) DISTINCT weapons at the fixed 12/18/24 price ladder, near a mid-run room
+// center. Hearts buy exactly +1 HP — never a full heal. Weapon purchases are PERSONAL:
+// buying one never depletes a teammate's stock (see updatePickups), and prices/stats are
+// identical solo and co-op.
+function placeDealerStock(w: WorldState): void {
   if (w.floor % DEALER.floorInterval !== 0 || isBossFloor(w.floor)) return;
   const d = w.dungeon;
   if (d.rooms.length < 3) return;
@@ -426,6 +518,17 @@ function placeDealerHearts(w: WorldState): void {
       id: w.nextPickupId++, kind: "dealer_heart",
       x: (room.cx + 0.5) * TILE + (i - (stock - 1) / 2) * 30, y: (room.cy + 0.5) * TILE - 26,
       radius: 13, weapon: null, value: DEALER.price,
+    });
+  }
+  const weapons: WeaponId[] = [];
+  const weaponStock = dealerWeaponStock(w.encounterPlayers);
+  for (let i = 0; i < weaponStock; i++) {
+    const weapon = rollDistinctWeapon(rng, weapons);
+    weapons.push(weapon);
+    w.pickups.push({
+      id: w.nextPickupId++, kind: "dealer_weapon",
+      x: (room.cx + 0.5) * TILE + (i - (weaponStock - 1) / 2) * 34, y: (room.cy + 0.5) * TILE + 14,
+      radius: 15, weapon, value: DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)],
     });
   }
 }
@@ -454,7 +557,7 @@ function placeProps(w: WorldState): Prop[] {
 
   // Boss arenas stage an AUTHORED ring of destructible cover just outside the squeeze's
   // final safe radius: real cover to fight from, and real physics when the boss's slams,
-  // charges and body smash through it (damagePropsInRadius). Explosive barrels in the
+  // charges and body smash through it (enemySmashEnvironment). Explosive barrels in the
   // ring make slamming a fuel cluster the boss's own problem.
   const arena = isBossFloor(w.floor) ? d.rooms[d.rooms.length - 1] : null;
   if (arena) {
@@ -464,7 +567,7 @@ function placeProps(w: WorldState): Prop[] {
       const tx = Math.floor(((arena.cx + 0.5) * TILE + Math.cos(a) * ringR) / TILE);
       const ty = Math.floor(((arena.cy + 0.5) * TILE + Math.sin(a) * ringR) / TILE);
       const idx = ty * d.w + tx;
-      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasHazardOnTile(w, tx, ty)) continue;
+      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasFloorHazardOnTile(w, tx, ty)) continue;
       if (Math.abs(tx - arena.cx) + Math.abs(ty - arena.cy) <= 1) continue; // exit tile ground
       const r = rng.next();
       addProp(r < 0.5 ? "crate" : r < 0.8 ? "barrel" : "barrel_explosive", tx, ty);
@@ -483,7 +586,8 @@ function placeProps(w: WorldState): Prop[] {
       const tx = room.x + rng.int(0, room.w - 1);
       const ty = room.y + rng.int(0, room.h - 1);
       const idx = ty * d.w + tx;
-      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasHazardOnTile(w, tx, ty)) continue;
+      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasFloorHazardOnTile(w, tx, ty)) continue;
+      if (isCorridorMouth(d, tx, ty)) continue;
       // Room centers are reserved ground: chests and dealer stock land there (a vault's
       // chest belongs INSIDE its ring, not wherever a crate left space).
       if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) continue;
@@ -493,6 +597,25 @@ function placeProps(w: WorldState): Prop[] {
     }
   }
   return list;
+}
+
+function isRoomTile(d: Dungeon, tx: number, ty: number): boolean {
+  for (const r of d.rooms) {
+    if (tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h) return true;
+  }
+  return false;
+}
+
+// A room tile with corridor floor beside it is a DOOR MOUTH: a prop there can seal a
+// room's only connection to the rest of the floor (observed in a live-seed audit — two
+// barrels stacked across a 2-wide corridor mouth cut half the map off the spawn, and
+// with braziers the barricade isn't even breakable). Props are placed per-room so
+// corridors themselves never take one; guarding the mouths keeps the whole floor graph
+// connected for every clearance class.
+function isCorridorMouth(d: Dungeon, tx: number, ty: number): boolean {
+  const isCorridorFloor = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < d.w && y < d.h && d.tiles[y * d.w + x] === 0 && !isRoomTile(d, x, y);
+  return isCorridorFloor(tx + 1, ty) || isCorridorFloor(tx - 1, ty) || isCorridorFloor(tx, ty + 1) || isCorridorFloor(tx, ty - 1);
 }
 
 function placeChests(w: WorldState): Chest[] {
@@ -535,7 +658,7 @@ function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; 
     d.tiles[ty * d.w + tx] !== 0 ||
     used.has(ty * d.w + tx) ||
     hasLivePropOnTile(w, tx, ty) ||
-    hasHazardOnTile(w, tx, ty) ||
+    hasFloorHazardOnTile(w, tx, ty) ||
     (tx === d.spawn.x && ty === d.spawn.y) ||
     (tx === d.exit.x && ty === d.exit.y);
   if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
@@ -552,8 +675,8 @@ function hasLivePropOnTile(w: WorldState, tx: number, ty: number): boolean {
   return false;
 }
 
-function hasHazardOnTile(w: WorldState, tx: number, ty: number): boolean {
-  for (const h of w.hazards) if (h.tx === tx && h.ty === ty) return true;
+function hasFloorHazardOnTile(w: WorldState, tx: number, ty: number): boolean {
+  for (const h of w.floorHazards) if (h.tx === tx && h.ty === ty) return true;
   return false;
 }
 
@@ -575,11 +698,84 @@ function moveCircle(w: WorldState, x: number, y: number, r: number, dx: number, 
 function blockedByProp(w: WorldState, x: number, y: number, r: number): boolean {
   for (const p of w.props) {
     if (p.dead) continue;
-    const rr = r + p.radius * 0.8;
+    const rr = r + p.radius * C.PROP_BLOCK_RING;
     const ddx = x - p.x, ddy = y - p.y;
     if (ddx * ddx + ddy * ddy < rr * rr) return true;
   }
   return false;
+}
+
+// ---- dynamic-obstacle navigation (see nav.ts for the module rationale) ----
+
+// The prop-aware chase field for a body of this radius (lazily rebuilt off the current
+// targets + obstacle revision — see refreshNav / nav.ts).
+function chaseFieldFor(w: WorldState, radius: number): FlowField {
+  return navChaseField(w.nav, w.dungeon, w.props, w.obstacleRev, navClassFor(radius));
+}
+
+// Reachability from the floor spawn tile (where players enter — and the only region a
+// player can ever walk, since obstacles only OPEN mid-floor). The oracle behind every
+// spawn-position validation.
+function reachFieldFor(w: WorldState, radius: number): FlowField {
+  const d = w.dungeon;
+  return navReachField(w.nav, d, w.props, w.obstacleRev, navClassFor(radius), d.spawn.y * d.w + d.spawn.x);
+}
+
+// Whether a body of radius `r` can physically exist at (x, y): the same wall probes
+// movement uses, outside every live prop's collision ring, and off every chest footprint
+// (chests never block movement, but a body materializing ON one reads as a bug).
+function isBodyClear(w: WorldState, x: number, y: number, r: number): boolean {
+  if (isWall(w, x, y) || isWall(w, x - r, y) || isWall(w, x + r, y) || isWall(w, x, y - r) || isWall(w, x, y + r)) return false;
+  if (blockedByProp(w, x, y, r)) return false;
+  for (const c of w.chests) {
+    const rr = r + c.radius;
+    const dx = x - c.x, dy = y - c.y;
+    if (dx * dx + dy * dy < rr * rr) return false;
+  }
+  return true;
+}
+
+// Shared scratch for settleSpawnPoint (read immediately by callers).
+const settlePoint = { x: 0, y: 0 };
+
+// Validate a spawn point for a body of radius `r`, or deterministically relocate it: the
+// intended point stands when it is body-clear AND its tile has a route to the playable
+// region; otherwise the scan walks outward over Chebyshev tile rings (fixed order — no
+// RNG, so spawn placement never shifts any seeded stream) and takes the first reachable,
+// body-clear tile center. Returns false when even the bounded scan finds nothing.
+function settleSpawnPoint(w: WorldState, x: number, y: number, r: number): boolean {
+  const reach = reachFieldFor(w, r);
+  const tx0 = Math.floor(x / TILE), ty0 = Math.floor(y / TILE);
+  if (isBodyClear(w, x, y, r) && reach.distAt(tx0, ty0) >= 0) {
+    settlePoint.x = x;
+    settlePoint.y = y;
+    return true;
+  }
+  for (let ring = 1; ring <= C.SPAWN_SCAN_RINGS; ring++) {
+    for (let dy = -ring; dy <= ring; dy++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        const tx = tx0 + dx, ty = ty0 + dy;
+        if (reach.distAt(tx, ty) < 0) continue; // wall / prop-blocked / unreachable pocket
+        const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
+        if (!isBodyClear(w, cx, cy, r)) continue; // off-center prop ring / chest footprint
+        settlePoint.x = cx;
+        settlePoint.y = cy;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Settle a freshly created floor enemy onto its validated spawn point. Falls back to the
+// intended point when the bounded scan finds nothing (never worse than the old behavior;
+// practically unreachable — a scan ring covers any generatable room).
+function settleEnemySpawn(w: WorldState, e: Enemy): void {
+  if (settleSpawnPoint(w, e.x, e.y, e.radius)) {
+    e.x = settlePoint.x;
+    e.y = settlePoint.y;
+  }
 }
 
 // ---- item mods ----
@@ -619,6 +815,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
   const spread = pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + p.mods.spreadAdd : wep.spread;
   return {
     pellets,
+    basePellets: wep.pellets,
     spread,
     speed: wep.speed * p.mods.bulletSpeedMult,
     life: wep.life * p.mods.bulletLifeMult,
@@ -633,6 +830,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     homing: wep.homing,
     chain: wep.chain,
     chainRange: wep.chainRange,
+    blast: wep.blast,
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
@@ -658,22 +856,17 @@ function equipWeapon(p: PlayerSim, id: WeaponId): void {
 }
 
 // Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
-// and by dev/grant. The client's keyboard/scroll switching calls equipWeaponInWorld.
+// and by dev/grant. Manual switching (1-9 / scroll / hotbar) goes through the validated
+// switchWeaponInWorld below on every path (LocalTransport and the server).
 function acquireWeapon(p: PlayerSim, id: WeaponId): void {
   if (!p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
   equipWeapon(p, id);
 }
 
-// Client-driven weapon switch (1-9 / Q / scroll). Equips an already-owned slot.
-export function equipWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
-  const p = w.players.get(pid);
-  if (p) equipWeapon(p, id);
-}
-
-// Authoritative, validated weapon switch (the server's switch-input handler). Equips only a
-// slot the player actually owns; an unowned id is ignored (a tampered client can't equip a
-// weapon it never picked up). Returns whether the switch was accepted. equipWeapon resets the
-// fire cooldown and cancels any in-progress melee swing server-side.
+// Authoritative, validated weapon switch (LocalTransport + the server's equip handler).
+// Equips only a slot the player actually owns; an unowned id is ignored (a tampered client
+// can't equip a weapon it never picked up). Returns whether the switch was accepted.
+// equipWeapon resets the fire cooldown and cancels any in-progress melee swing.
 export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): boolean {
   const p = w.players.get(pid);
   if (!p || !p.ownedWeapons.includes(id)) return false;
@@ -685,6 +878,68 @@ export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId):
 export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
   if (p) acquireWeapon(p, id);
+}
+
+export function reorderWeaponsInWorld(w: WorldState, pid: PlayerId, from: number, to: number): boolean {
+  // Authoritative inventory reorder (drag/drop on the hotbar). Moves the slot at `from` to
+  // position `to`; every other slot keeps its relative order. The equipped weapon is tracked
+  // by ID (p.weapon), so it survives any reorder — only the 1-9 key mapping changes. Both
+  // indices must name real slots; a stale index (inventory changed in flight) is rejected.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  const n = p.ownedWeapons.length;
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return false;
+  if (from < 0 || from >= n || to < 0 || to >= n) return false;
+  if (from === to) return true; // no-op reorder is valid (idempotent)
+  const [moved] = p.ownedWeapons.splice(from, 1);
+  p.ownedWeapons.splice(to, 0, moved);
+  return true;
+}
+
+export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev: SimEvent[]): boolean {
+  // Authoritative weapon drop (Q / inventory UI): remove an OWNED weapon from the player's
+  // inventory and spawn it as a shared world pickup on a safe, reachable spot. Gates:
+  //  - never while the run is over, the player is downed, or a blessing pick is pending
+  //    (those states pause the player; a drop there would be a free action or a dupe window);
+  //  - never the final weapon — the player always keeps at least one (the default pistol
+  //    if that is all they own). Any weapon may be dropped while another remains.
+  // If the dropped weapon was equipped, the adjacent slot (same index, else the new last)
+  // is equipped so the hand is never empty. Rejected drops mutate nothing.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  if (w.isRunOver || p.isDown || w.pendingBlessings.has(pid)) return false;
+  if (p.ownedWeapons.length <= 1) return false;
+  const idx = p.ownedWeapons.indexOf(id);
+  if (idx < 0) return false;
+  const spot = weaponDropSpot(w, p);
+  if (!spot) return false; // fully boxed in: keep the weapon rather than spawn it unreachable
+  p.ownedWeapons.splice(idx, 1);
+  if (p.weapon === id) equipWeapon(p, p.ownedWeapons[Math.min(idx, p.ownedWeapons.length - 1)]);
+  const [x, y] = spot;
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
+  ev.push({ t: "weaponDrop", weapon: id, x, y });
+  return true;
+}
+
+function weaponDropSpot(w: WorldState, p: PlayerSim): [number, number] | null {
+  // Deterministic candidate scan for a player-initiated drop, sharing the chest-loot safety
+  // rules: the spot must be standable (walkable floor with wall margin, prop-free,
+  // chest-free) AND straight-line reachable from the dropper, so the pickup is always
+  // collectible. Candidates prefer the aim direction (drop lands where the player faces),
+  // then fan out; radii walk inner-to-outer starting past pickup range (no instant
+  // re-collect). Null when everything nearby is blocked — the caller keeps the weapon.
+  const angles = C.CHEST_EJECT_ANGLES;
+  for (const radius of C.WEAPON_DROP_RADII) {
+    for (const da of angles) {
+      const a = p.aimAngle + da;
+      const x = p.x + Math.cos(a) * radius;
+      const y = p.y + Math.sin(a) * radius;
+      if (!isStandableSpot(w, x, y, p.pr)) continue;
+      if (!isPathOpen(w, p.x, p.y, x, y, p.pr)) continue;
+      return [x, y];
+    }
+  }
+  return null;
 }
 
 // Apply a picked blessing to a player: append the pick to the level history, RECOMPUTE the
@@ -728,12 +983,18 @@ export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void 
 
 // Tick pending offers on the SIM clock: an unanswered offer expires after BLESSING_OFFER_TTL
 // and the run moves on without the pick, so an AFK/hostile client can never hold the party's
-// descend gate (or their own damage shield) forever.
-function tickPendingBlessings(w: WorldState, dt: number): void {
+// descend gate (or their own damage shield) forever. Expiry is EMITTED, not silent — the
+// authoritative server clears the matching connection/seat offer off the event (both sides
+// resolve on the same tick) and the owning client closes its overlay.
+function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.pendingBlessings.size === 0) return;
   for (const [pid, left] of w.pendingBlessings) {
-    if (left <= dt) w.pendingBlessings.delete(pid);
-    else w.pendingBlessings.set(pid, left - dt);
+    if (left <= dt) {
+      w.pendingBlessings.delete(pid);
+      ev.push({ t: "blessingExpired", pid });
+    } else {
+      w.pendingBlessings.set(pid, left - dt);
+    }
   }
 }
 
@@ -760,7 +1021,7 @@ function applyKnockbackDecay(w: WorldState, e: Enemy, dt: number): void {
 // ---- elemental status ----
 
 function isFrozen(e: Enemy): boolean {
-  return e.kind !== "boss" && e.chill >= C.FREEZE_AT;
+  return !isBossKind(e.kind) && e.chill >= C.FREEZE_AT;
 }
 function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
@@ -820,7 +1081,7 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
     let best: Enemy | null = null;
     let bestD = range * range;
     for (const e of w.enemies) {
-      if (e.dead || list.indexOf(e) !== -1) continue;
+      if (e.dead || isUntargetable(e) || list.indexOf(e) !== -1) continue;
       const dx = e.x - cur.x, dy = e.y - cur.y, d = dx * dx + dy * dy;
       if (d < bestD) { bestD = d; best = e; }
     }
@@ -836,19 +1097,72 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
 
 // ---- strikes / kills ----
 
-// EVERY authoritative point of enemy damage funnels through here, so the boss's phase
+// The shared anti-burst transition contract, per boss kind: the King's roar, MARROW's
+// shield, the Choir's split, the Weaver's molt and the Warden's sanctify are ONE mechanism
+// (damage reduction + hard HP floor + queued overflow) with different thresholds,
+// presentation moves and add kinds. Interactive beats (`isBreakable`) track their adds in
+// boss.beatAddIds and collapse early once every one of them dies.
+interface BossBeatDef {
+  phaseAt: readonly number[];
+  phaseFloor: readonly number[];
+  move: AttackMove;
+  damageReduction: number;
+  bulletClearRadius: number;
+  addCount: number;
+  isBreakable: boolean;
+}
+
+const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
+  boss: {
+    phaseAt: BOSS.phaseAt, phaseFloor: BOSS.phaseFloor, move: "roar",
+    damageReduction: BOSS.roarDamageReduction, bulletClearRadius: BOSS.roarBulletClearRadius,
+    addCount: BOSS.transitionAddCount, isBreakable: false,
+  },
+  marrow: {
+    phaseAt: MARROW.phaseAt, phaseFloor: MARROW.phaseFloor, move: "shield",
+    damageReduction: MARROW.shieldDamageReduction, bulletClearRadius: MARROW.shieldBulletClearRadius,
+    addCount: MARROW.shieldHusks, isBreakable: true,
+  },
+  // The Choir's split: the boss itself is GONE (untargetable) for the beat, so its
+  // reduction never applies — your damage goes into the wisps that end the beat early.
+  choir: {
+    phaseAt: CHOIR.phaseAt, phaseFloor: CHOIR.phaseFloor, move: "split",
+    damageReduction: 1, bulletClearRadius: CHOIR.splitBulletClearRadius,
+    addCount: CHOIR.splitWisps, isBreakable: true,
+  },
+  weaver: {
+    phaseAt: WEAVER.phaseAt, phaseFloor: WEAVER.phaseFloor, move: "roar",
+    damageReduction: WEAVER.moltDamageReduction, bulletClearRadius: WEAVER.moltBulletClearRadius,
+    addCount: WEAVER.moltAdds, isBreakable: false,
+  },
+  gilded: {
+    phaseAt: GILDED.phaseAt, phaseFloor: GILDED.phaseFloor, move: "roar",
+    damageReduction: GILDED.sanctifyDamageReduction, bulletClearRadius: GILDED.sanctifyBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
+};
+
+function bossBeatOf(e: Enemy): BossBeatDef {
+  return BOSS_BEATS[e.kind] ?? BOSS_BEATS.boss!;
+}
+
+// EVERY authoritative point of enemy damage funnels through here, so a boss's phase
 // thresholds are evaluated after every damage event (spec §5) — bullets, melee, burn ticks,
-// arcs, thorns and barrels alike — and its transition roar can reduce/floor/queue uniformly.
-function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[]): void {
+// arcs, thorns and barrels alike — and its transition beat can reduce/floor/queue uniformly.
+// `isOverflow` marks a transition beat's queued damage being released: it already passed
+// every reduction when it first landed, so it must not be chipped a second time.
+function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[], isOverflow = false): void {
   if (!e.boss) {
+    // The elite's brace: ≤25% reduction through its 0.9s defensive slide — never immunity.
+    if (e.attack.move === "brace" && e.attack.phase === "windup") dmg *= 1 - ELITE_BRACE.damageReduction;
     e.hp -= dmg;
     return;
   }
   const boss = e.boss;
   if (boss.roar) {
-    // Transition beat: 35% damage reduction (not immunity) + a hard phase floor. Damage
-    // that would cross the floor is QUEUED and applies only after the roar exits.
-    const reduced = dmg * (1 - BOSS.roarDamageReduction);
+    // Transition beat: damage reduction (not immunity) + a hard phase floor. Damage
+    // that would cross the floor is QUEUED and applies only after the beat exits.
+    const reduced = dmg * (1 - bossBeatOf(e).damageReduction);
     const target = e.hp - reduced;
     if (target < boss.roar.floorHp) {
       boss.roar.queued += boss.roar.floorHp - target;
@@ -859,22 +1173,34 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
     }
     return;
   }
+  // The Gilded Warden's plate: chip damage while closed, full damage through the EXPOSED
+  // recover after its commitments — tempo, never immunity (see isGildedExposed).
+  if (!isOverflow && e.kind === "gilded" && !isGildedExposed(e)) dmg *= GILDED.armorChip;
   e.hp -= dmg;
   checkBossTransition(w, e, ev);
 }
 
-// Crossing 70% / 35% starts a 1.2s transition roar immediately (mid-attack included): the
-// HP floors at 62% / 27% (overflow queued), nearby bullets clear, and two slimes spawn at
-// opposite marked edges. Total forced downtime across the fight is exactly 2×1.2s. The
-// floor is the HARD anti-burst: even an arbitrarily large hit lands on the floor and its
-// excess waits out the full roar — the boss can never be deleted through a threshold.
+// The Warden's plate hangs open through the long recover after each committed quake or
+// sweep — the authored full-damage window the whole fight is paced around.
+export function isGildedExposed(e: Enemy): boolean {
+  const a = e.attack;
+  return a.phase === "recover" && (a.move === "slam" || a.move === "sweep");
+}
+
+// Crossing a phase threshold starts the transition beat immediately (mid-attack included):
+// the HP floors (overflow queued), nearby bullets clear, and the beat's adds spawn at
+// opposite marked edges. The floor is the HARD anti-burst: even an arbitrarily large hit
+// lands on the floor and its excess waits out the beat — a boss can never be deleted
+// through a threshold. King: 70%/35% → floors 62%/27%, fixed 1.2s roars. MARROW: 65%/30%
+// → floors 57%/22%, a shield that holds up to 2.6s but BREAKS EARLY once both husks die.
 function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss || boss.roar) return;
-  if (boss.transitionsDone >= BOSS.phaseAt.length) return;
-  const threshold = BOSS.phaseAt[boss.transitionsDone] * e.maxHp;
+  const def = bossBeatOf(e);
+  if (boss.transitionsDone >= def.phaseAt.length) return;
+  const threshold = def.phaseAt[boss.transitionsDone] * e.maxHp;
   if (e.hp > threshold) return;
-  const floorHp = BOSS.phaseFloor[boss.transitionsDone] * e.maxHp;
+  const floorHp = def.phaseFloor[boss.transitionsDone] * e.maxHp;
   const queued = Math.max(0, floorHp - e.hp);
   if (e.hp < floorHp) e.hp = floorHp;
   boss.transitionsDone++;
@@ -882,23 +1208,26 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   boss.attackCount = 0;
   boss.isNextRadial = true;
   boss.roar = { floorHp, queued, queuedBy: null };
-  beginWindup(e, "roar");
-  // The roar shockwave dissipates every projectile near the boss — a readable reset beat.
+  beginWindup(e, def.move);
+  // The beat's shockwave dissipates every projectile near the boss — a readable reset.
   for (const b of w.bullets) {
-    if (Math.hypot(b.x - e.x, b.y - e.y) <= BOSS.roarBulletClearRadius) b.life = 0;
+    if (Math.hypot(b.x - e.x, b.y - e.y) <= def.bulletClearRadius) b.life = 0;
   }
-  // Two slimes at opposite marked edges of the boss.
+  // The beat's adds at evenly marked edges. Interactive beats (MARROW's husks, the
+  // Choir's wisps) remember them: killing every one collapses the beat early.
+  boss.beatAddIds.length = 0;
   const edgeAngle = w.rng.next() * Math.PI * 2;
-  for (let i = 0; i < BOSS.transitionAddCount; i++) {
-    spawnBossAdd(w, e, edgeAngle + i * Math.PI, ev);
+  for (let i = 0; i < def.addCount; i++) {
+    const add = spawnBossAdd(w, e, edgeAngle + (i / Math.max(1, def.addCount)) * Math.PI * 2, ev);
+    if (add && def.isBreakable) boss.beatAddIds.push(add.id);
   }
   ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
   ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: true, queued: boss.roar.queued, hpFrac: e.hp / e.maxHp });
 }
 
-// Roar over: apply the queued overflow as a fresh damage event (it may immediately trigger
-// the next transition — the 70%→35% double-cross case resolves as two full beats) and log
-// the exit so the ≥20s anti-burst gate stays observable.
+// Beat over (roar elapsed / shield elapsed or broken): apply the queued overflow as a
+// fresh damage event (it may immediately trigger the next transition — the double-cross
+// case resolves as two full beats) and log the exit so the anti-burst gate stays observable.
 function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss || !boss.roar) return;
@@ -906,7 +1235,7 @@ function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   boss.roar = null;
   ev.push({ t: "bossTransition", eid: e.id, phase: boss.phase, entering: false, queued, hpFrac: e.hp / e.maxHp });
   if (queued > 0) {
-    damageEnemy(w, queuedBy, e, queued, ev);
+    damageEnemy(w, queuedBy, e, queued, ev, true);
     if (e.hp <= 0 && !e.dead) killEnemy(w, ownerOf(w, queuedBy), e, ev);
   }
 }
@@ -916,7 +1245,18 @@ function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 // credited to any player.
 function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
   const frozen = isFrozen(e);
-  const dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
+  const isBossGrade = isBossKind(e.kind) || e.captainPhase !== undefined;
+  let dmg: number;
+  if (isBossGrade) {
+    // The boss vulnerability CHANNEL (balancer remediation): statuses keep their utility
+    // (arc, slow, DoT) but amplify NOTHING here, and the crit multiplier counts at most
+    // BOSS_VULN_CAP — combined vulnerability ≤1.35, non-multiplicative by construction.
+    // hit.damage carries the crit multiplier baked in, so it is divided back out before
+    // the capped channel applies. The fire-time pellet/weapon coefficient rides on top.
+    dmg = (hit.damage / hit.critX) * Math.min(BOSS_VULN_CAP, hit.critX) * hit.bossCoef;
+  } else {
+    dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
+  }
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit);
@@ -940,7 +1280,7 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.combo++;
     p.comboTimer = C.COMBO_WINDOW;
   }
-  const big = e.kind === "boss";
+  const big = isBossKind(e.kind);
   ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
   if (big) endBossDanger(w, e, ev);
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
@@ -950,21 +1290,6 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.hp++;
     p.fangCd = FANG_PROC_COOLDOWN;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
-  }
-  // The shipped elite affix: SPLIT — on death the elite breaks into swarm units (readable,
-  // summoned, so they feed no hearts/Fang).
-  if (e.tier === "elite" && !w.isRunOver) {
-    for (let i = 0; i < ELITE_SPLIT_COUNT; i++) {
-      const a = w.rng.next() * Math.PI * 2;
-      const sx = e.x + Math.cos(a) * (e.radius + 6);
-      const sy = e.y + Math.sin(a) * (e.radius + 6);
-      if (isWall(w, sx, sy)) continue;
-      const child = createEnemy(e.kind, sx, sy, w.floor, w.rng, w.nextEnemyId++, {
-        tier: "swarm", isSummoned: true, players: w.encounterPlayers,
-      });
-      w.enemies.push(child);
-      ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: sx, y: sy });
-    }
   }
   dropLoot(w, p, e, ev);
 }
@@ -981,9 +1306,21 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
   }
 }
 
+// Each boss's authored chest weapon: its fight's answer, handed to you for the road.
+// The King's zoning begets the Thumper; blind MARROW yields the Longshot (its own line,
+// straightened into a slug); the Choir leaves a lance of light; the Weaver leaves the
+// Tesla — its web of threads recast as chained arcs between bodies; the Warden gives up
+// the heavy Thunderbolt its plate shrugged off.
+const BOSS_SIGNATURE_WEAPON: Readonly<Partial<Record<Enemy["kind"], WeaponId>>> = {
+  boss: "mortar", marrow: "railgun", choir: "beam", weaver: "tesla", gilded: "cannon",
+};
+
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
-  if (e.kind === "boss") {
-    w.chests.push({ id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false });
+  if (isBossKind(e.kind)) {
+    w.chests.push({
+      id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false,
+      weapon: BOSS_SIGNATURE_WEAPON[e.kind],
+    });
     return;
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
@@ -1010,7 +1347,9 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   ix /= len; iy /= len;
   if (ix !== 0) p.facing = ix > 0 ? 1 : -1;
 
-  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult;
+  // Webs slow the WALK only — the dash (below) rips through at full speed, so a snared
+  // player always has an out; it just costs the dash.
+  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * webSlowMult(w, p.x, p.y);
   // Snap accumulated float dust to zero so a cooldown that is an exact multiple of the
   // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
   p.dashCd = Math.max(0, p.dashCd - dt);
@@ -1083,6 +1422,7 @@ function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     color: wep.color,
     damage: isCrit ? baseDmg * p.mods.critMult : baseDmg,
     isCrit,
+    bossCoef: WEAPON_BOSS_COEF[wep.id] ?? 1,
     hitList: null,
     burn: wep.burn,
     chill: wep.chill,
@@ -1144,15 +1484,25 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
     // a reflected round never sweeps backward through the wall it hit.
     b.prevX = b.x;
     b.prevY = b.y;
-    if (b.friendly && b.homing !== undefined) steerHoming(w, b, dt);
+    if (b.homing !== undefined) {
+      if (b.friendly) steerHoming(w, b, dt);
+      else steerEnemyHoming(w, b, dt); // the Choir's wails seek the nearest standing player
+    }
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    // A mortar shell that reaches the end of its arc airbursts instead of vanishing.
+    if (b.life <= 0 && b.friendly && b.blast !== undefined) { detonateBullet(w, b, b.x, b.y, ev); continue; }
     if (isWall(w, b.x, b.y)) {
+      if (b.friendly && b.blast !== undefined) {
+        // Shells burst ON the wall face (the last in-bounds point), not inside it.
+        detonateBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
+        continue;
+      }
       if (b.bounce !== undefined && b.bounce > 0) { bounceOffWall(w, b, dt, ev); continue; }
       b.life = 0; ev.push({ t: "bulletWall", x: b.x, y: b.y, aim: Math.atan2(-b.vy, -b.vx) }); continue;
     }
     if (!b.friendly) {
       for (const p of w.players.values()) {
-        if (!isProtected(p) && !p.isDown && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
+        if (!isProtected(p) && !p.isDown && !p.isAbsent && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
           b.life = 0;
           ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color });
           damagePlayer(w, p, b.damage, ev);
@@ -1164,6 +1514,37 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.bullets = w.bullets.filter((b) => b.life > 0);
 }
 
+// Mortar detonation: the shell's ONE payload, applied as an ordinary strike (attribution,
+// crits, elemental blessings, knockback radially out of the blast) to every targetable
+// enemy in the radius, plus prop destruction — explosive barrels chain, exactly like §prop
+// explosions. The bullet collapses onto the blast point so its spent segment can never
+// also plain-hit something later this tick.
+function detonateBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEvent[]): void {
+  const r = b.blast;
+  if (r === undefined) return;
+  b.blast = undefined;
+  b.life = 0;
+  b.x = x; b.y = y; b.prevX = x; b.prevY = y;
+  ev.push({ t: "explosion", x, y, r });
+  const shooter = ownerOf(w, b.owner);
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e)) continue;
+    if (Math.hypot(e.x - x, e.y - y) > r + e.radius) continue;
+    const kbX = e.x - x, kbY = e.y - y;
+    strikeEnemy(w, shooter, e, {
+      damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: e.x, puffY: e.y,
+      kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
+      burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
+      ownerId: b.owner, fxWeapon: b.fx ?? null,
+    }, ev);
+    (b.hitList ??= []).push(e);
+  }
+  for (const prop of w.props) {
+    if (prop.breakT !== undefined || prop.kind === "brazier") continue;
+    if (Math.hypot(prop.x - x, prop.y - y) <= r + prop.radius) destroyProp(w, prop, ev, shooter ?? undefined);
+  }
+}
+
 function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   const rate = b.homing;
   if (rate === undefined || rate <= 0) return;
@@ -1171,7 +1552,7 @@ function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   let best: Enemy | null = null;
   let bestD = RANGE * RANGE;
   for (const e of w.enemies) {
-    if (e.dead) continue;
+    if (e.dead || isUntargetable(e)) continue;
     const dx = e.x - b.x, dy = e.y - b.y, d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; best = e; }
   }
@@ -1185,6 +1566,31 @@ function steerHoming(w: WorldState, b: Bullet, dt: number): void {
   const turn = delta > maxTurn ? maxTurn : delta < -maxTurn ? -maxTurn : delta;
   const a = cur + turn;
   b.vx = Math.cos(a) * speed; b.vy = Math.sin(a) * speed;
+}
+
+// Enemy seekers (the Choir's wails): a capped turn toward the nearest standing player.
+// The cap is the counterplay — hold a curve and the wail overshoots.
+function steerEnemyHoming(w: WorldState, b: Bullet, dt: number): void {
+  const rate = b.homing;
+  if (rate === undefined || rate <= 0) return;
+  let best: PlayerSim | null = null;
+  let bestD = Infinity;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    const dx = p.x - b.x, dy = p.y - b.y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  if (!best) return;
+  const speed = Math.hypot(b.vx, b.vy) || 1;
+  const cur = Math.atan2(b.vy, b.vx);
+  let delta = Math.atan2(best.y - b.y, best.x - b.x) - cur;
+  while (delta > Math.PI) delta -= Math.PI * 2;
+  while (delta < -Math.PI) delta += Math.PI * 2;
+  const maxTurn = rate * dt;
+  const turn = delta > maxTurn ? maxTurn : delta < -maxTurn ? -maxTurn : delta;
+  const a = cur + turn;
+  b.vx = Math.cos(a) * speed;
+  b.vy = Math.sin(a) * speed;
 }
 
 function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): void {
@@ -1276,14 +1682,27 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   w.spawnReleaseCd -= dt;
   if (w.spawnReleaseCd > 0) return;
   let living = 0;
+  let livingMovers = 0;
   for (const e of w.enemies) {
-    if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
+    if (e.dead || isBossKind(e.kind)) continue;
+    living += threatCostOf(e.kind, e.tier);
+    if (isComplexMover(e.kind)) livingMovers++;
   }
   const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
-  const next = w.pendingSpawns[0];
-  if (living + threatCostOf(next.kind, next.tier) > cap) return;
+  // The head of the queue releases when it fits BOTH budgets (threat cap + the gate's
+  // complex-mover cap). A blocked complex mover never head-blocks the queue: the first
+  // releasable unit behind it goes instead, preserving order otherwise.
+  let idx = -1;
+  for (let i = 0; i < w.pendingSpawns.length; i++) {
+    const cand = w.pendingSpawns[i];
+    if (living + threatCostOf(cand.kind, cand.tier) > cap) continue;
+    if (isComplexMover(cand.kind) && livingMovers >= MAX_COMPLEX_MOVERS_ACTIVE) continue;
+    idx = i;
+    break;
+  }
+  if (idx === -1) return;
   // Its spawn grace never ticked while pending, so it activates with the full grace window.
-  w.pendingSpawns.shift();
+  const next = w.pendingSpawns.splice(idx, 1)[0];
   w.enemies.push(next);
   w.spawnReleaseCd = REINFORCE_STAGGER / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
   ev.push({ t: "enemySpawn", eid: next.id, kind: next.kind, tier: next.tier, x: next.x, y: next.y });
@@ -1293,13 +1712,16 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   // Stage C: every strike is attributed to the player who caused it (bullet.owner / swing owner
   // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
   // authoritative player. Solo resolves to the one player, so behavior is unchanged.
+  tickReleaseArbiter(w, dt);
   releaseReinforcements(w, dt, ev);
-  refreshFlowField(w, dt);
+  refreshNav(w, dt);
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
+    if (e.captainPhase !== undefined) tickCaptainPhase(e, ev);
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
+    if (e.braceCd !== undefined && e.braceCd > 0) e.braceCd = e.braceCd > dt ? e.braceCd - dt : 0;
     // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
     if (e.surgeDelay > 0) {
       e.surgeDelay -= dt;
@@ -1311,15 +1733,17 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     updateEnemyAI(w, e, dt, ev);
     applyKnockbackDecay(w, e, dt);
 
-    const isMoving = e.attack.phase === "none" || (e.attack.phase === "active" && e.attack.move === "lunge");
+    const isMoving = e.attack.phase === "none" || (e.attack.phase === "active" && isRushMove(e.attack.move));
     e.hopMove += ((isMoving ? 1 : 0) - e.hopMove) * Math.min(1, dt * 9);
     e.hopClock += dt * (1 + e.hopMove * 1.5);
 
     for (const victim of w.players.values()) {
-      if (!isProtected(victim) && !victim.isDown && victim.hp > 0
+      if (!isProtected(victim) && !victim.isDown && !victim.isAbsent && victim.hp > 0
         && Math.hypot(victim.x - e.x, victim.y - e.y) < victim.pr + e.radius && canTouchDamage(e)) {
         damagePlayer(w, victim, contactDamageOf(e), ev);
-        if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
+        // A connecting line commitment (skeleton lunge, charger/MARROW rush) shoves the
+        // victim along the committed angle — the hit reads as impact, not overlap.
+        if (isRushMove(e.attack.move) && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
         applyThorns(w, victim, victim, e, ev);
         // Solo aborts the enemy loop on death (game over). Co-op and the authoritative shared
         // world keep processing — a downed player doesn't stop the world.
@@ -1327,8 +1751,19 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
 
+    // Underground: every round and swing passes over it (see isUntargetable).
+    const isBelowGround = isUntargetable(e);
+
     for (const b of w.bullets) {
-      if (!b.friendly) continue;
+      if (isBelowGround || !b.friendly) continue;
+      // A SPENT round stops mattering the instant it lands. Bullets are only culled at the
+      // next updateBullets pass, so without this guard a pierce-0 round that just died on
+      // one body could strike every other body overlapping its final segment in the same
+      // tick — phantom pierce that quietly inflated pack damage (~50% on tight clumps)
+      // past everything the balance tables authorize. Piercing rounds keep life > 0
+      // by design, so legitimate multi-hits are untouched (chests already apply this
+      // same spent-round rule).
+      if (b.life <= 0) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       // Immutable attribution: the bullet keeps flying and dealing damage after its owner leaves
       // (shooter null) — it just credits no one. Never re-attributed to another live player.
@@ -1337,8 +1772,21 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // the shooter's fire-time view; a slow projectile tests present positions. 0 in solo.
       const [btx, bty] = rewoundEnemyPos(w, e, fireTimeRewind(w, b.bornTick, b.lagRewind));
       if (sweptBulletHit(b, btx, bty, b.radius + e.radius)) {
+        // Mortar shells never strike directly — the blast IS the payload (the direct
+        // target is inside the radius and takes exactly one blast hit; explosions are
+        // the one ranged answer a shielder's guard cannot eat).
+        if (b.blast !== undefined) {
+          detonateBullet(w, b, sweptHit.x, sweptHit.y, ev);
+          continue;
+        }
+        // The shielder's front arc swallows the shot: no damage, the round is spent.
+        if (isShieldBlocked(e, b.vx, b.vy)) {
+          b.life = 0;
+          ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
+          continue;
+        }
         strikeEnemy(w, shooter, e, {
-          damage: b.damage, isCrit: b.isCrit, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
+          damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
@@ -1353,6 +1801,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 
     // Each player resolves their own melee swing against this enemy (solo: one player).
     for (const player of w.players.values()) {
+      if (isBelowGround) break;
       const swing = player.meleeSwing;
       if (!swing || swing.timer <= 0) continue;
       if (swing.hitList && swing.hitList.indexOf(e) !== -1) continue;
@@ -1366,6 +1815,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         const puffDist = swing.isThrust ? swing.reach * 0.65 : swing.reach * 0.55;
         strikeEnemy(w, player, e, {
           damage: swing.damage, isCrit: swing.isCrit,
+          critX: swing.isCrit ? player.mods.critMult : 1, bossCoef: swing.bossCoef,
           puffX: player.x + kbDirX * puffDist, puffY: player.y + kbDirY * puffDist,
           kbDirX, kbDirY, burn: swing.burn, chill: swing.chill, shock: swing.shock, isMelee: true,
           ownerId: player.id, fxWeapon: null,
@@ -1378,15 +1828,51 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 }
 
 function canTouchDamage(e: Enemy): boolean {
+  if (isUntargetable(e)) return false; // an underground burrower neither deals nor takes touch
   if (e.kind === "ghost") return e.attack.windup >= C.GHOST_SOLID_AT;
   if (e.kind === "boss" && e.attack.move === "hopslam" && e.attack.phase === "active") return false;
   return true;
 }
 
+// A body that is temporarily OUT OF PLAY: bullets, swings, arcs, blasts and barrel
+// explosions all pass over it, and it neither deals nor takes touch. Every window is
+// bounded by construction (hard caps on travel/fade/air-time/beat duration):
+//  - burrower: underground (tunneling, or armed under its eruption marker);
+//  - Hollow Choir: mid-fade drift, or scattered into wisps for its split beat;
+//  - Weaver: airborne during the pounce.
+function isUntargetable(e: Enemy): boolean {
+  const a = e.attack;
+  switch (e.kind) {
+    case "burrower":
+      return (a.move === "dive" && a.phase === "active") || (a.move === "erupt" && a.phase === "windup");
+    case "choir":
+      return (a.move === "fade" && a.phase === "active") || a.move === "split";
+    case "weaver":
+      return a.move === "pounce" && a.phase === "active";
+    default:
+      return false;
+  }
+}
+
+// The straight-line commitments that shove on impact (skeleton lunge, charger/MARROW rush).
+function isRushMove(move: AttackMove): boolean {
+  return move === "lunge" || move === "rush";
+}
+
+// Whether a rusher is overlapping any standing player (the connect test that ends a rush).
+function isTouchingAnyPlayer(w: WorldState, e: Enemy): boolean {
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    if (Math.hypot(p.x - e.x, p.y - e.y) < p.pr + e.radius) return true;
+  }
+  return false;
+}
+
 // Damage tiers (§3): light/contact stays 1 at every floor; only a brute's authored,
-// clearly telegraphed commitment (the skeleton's lunge, mid-active) deals the heavy 2.
+// clearly telegraphed commitment (the skeleton's lunge or the charger's rush, mid-active)
+// deals the heavy 2.
 function contactDamageOf(e: Enemy): number {
-  if (e.tier === "brute" && e.kind === "skeleton" && e.attack.phase === "active") return BRUTE_HEAVY_DAMAGE;
+  if (e.tier === "brute" && (e.kind === "skeleton" || e.kind === "charger") && e.attack.phase === "active") return BRUTE_HEAVY_DAMAGE;
   return e.touchDamage;
 }
 
@@ -1406,12 +1892,61 @@ function applyThorns(w: WorldState, src: PlayerSim, victim: PlayerSim, e: Enemy,
 
 // ---- enemy AI ----
 
+// The elite's one visible affix COMMITMENT (balancer final): the first time it is
+// bloodied (≤70% HP) — and again off a cooldown that keeps the duty cycle ≤35% — it
+// BRACES: a 0.9s defensive slide away from its target at ≤25% damage reduction (never
+// immunity), then a ≥0.5s recover. Gauntlet captains run their own two-phase contract
+// and never brace.
+function updateEliteBrace(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): boolean {
+  const a = e.attack;
+  if (a.move === "brace") {
+    a.time += dt;
+    if (a.phase === "windup") {
+      a.windup = Math.min(1, a.time / ELITE_BRACE.duration);
+      // The reposition: strafe PERPENDICULAR to the fire line (deterministic side by id
+      // parity) — in-flight bullets aimed at the old position miss, which is the visible
+      // payoff of the commitment.
+      if (findTarget(w, e.x, e.y)) {
+        const toward = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+        const strafe = toward + (e.id % 2 === 0 ? Math.PI / 2 : -Math.PI / 2);
+        moveEnemyBy(w, e, Math.cos(strafe) * ELITE_BRACE.slideSpeed * dt, Math.sin(strafe) * ELITE_BRACE.slideSpeed * dt);
+      }
+      if (a.time >= ELITE_BRACE.duration) enterRecover(e);
+      return true;
+    }
+    if (a.phase === "recover") {
+      if (a.time >= ELITE_BRACE.recover) {
+        enterIdle(e);
+        e.braceCd = ELITE_BRACE.cooldown;
+      }
+      return true;
+    }
+  }
+  // Trigger only from idle (a brace never cancels a committed telegraph).
+  if (a.phase === "none" && (e.braceCd ?? 0) <= 0 && e.hp <= e.maxHp * ELITE_BRACE.triggerHpFrac) {
+    beginWindup(e, "brace");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 1.3, gain: 0.45, trauma: 0 });
+    return true;
+  }
+  return false;
+}
+
 function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  if (e.tier === "elite" && e.captainPhase === undefined && updateEliteBrace(w, e, dt, ev)) return;
   switch (e.kind) {
     case "spitter": updateSpitter(w, e, dt, ev); return;
+    case "bat": updateFlocker(w, e, dt); return;
     case "skeleton": updateSkeleton(w, e, dt, ev); return;
     case "ghost": updateGhost(w, e, dt, ev); return;
+    case "charger": updateCharger(w, e, dt, ev); return;
+    case "burrower": updateBurrower(w, e, dt, ev); return;
+    case "orbiter": updateOrbiter(w, e, dt, ev); return;
+    case "shielder": updateShielder(w, e, dt, ev); return;
     case "boss": updateBoss(w, e, dt, ev); return;
+    case "marrow": updateMarrow(w, e, dt, ev); return;
+    case "choir": updateChoir(w, e, dt, ev); return;
+    case "weaver": updateWeaver(w, e, dt, ev); return;
+    case "gilded": updateGilded(w, e, dt, ev); return;
     default: updateChaser(w, e, dt); return;
   }
 }
@@ -1419,7 +1954,8 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
 function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   if (a.phase === "windup") {
-    if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)) {
+    if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.SKELETON_LUNGE_SPEED * C.SKELETON_LUNGE_DUR)) {
       a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.12 });
     }
@@ -1431,7 +1967,7 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
     moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
     // A committed charge is a physical object: crates and barrels in its path shatter.
     // Cover absorbs the telegraphed hit — and is spent doing it.
-    damagePropsInRadius(w, e.x, e.y, e.radius + 4, C.CHARGE_PROP_DAMAGE, ev);
+    enemySmashEnvironment(w, e.x, e.y, e.radius + 4, ev);
     ev.push({ t: "lungeTrail", x: e.x, y: e.y });
     if (a.time >= C.SKELETON_LUNGE_DUR) enterRecover(e);
     return;
@@ -1455,26 +1991,306 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
 }
 
 function updateChaser(w: WorldState, e: Enemy, dt: number): void {
-  const arch = ENEMY_ARCHETYPES[e.kind];
   if (!findTarget(w, e.x, e.y)) return;
-  let angle = chaseAngle(w, e);
-  if (arch.movement === "zigzag") {
-    e.zig += dt * 5;
-    angle += Math.sin(e.zig) * 0.9;
-    // Swarm-tier fliers move as a FLOCK (boids — see flock.ts): separation keeps the
-    // pack from stacking into one blob, cohesion holds it together, and the Kuramoto
-    // wander coupling makes the cave swarm bank and weave as one animal. Standard-tier
-    // bats keep their lone erratic drift untouched.
-    if (e.tier === "swarm") {
-      flockSteer(e, w.enemies, angle, BAT_FLOCK);
-      angle = flockOut.heading;
-      e.zig += flockOut.zigNudge * dt;
-    }
-  }
+  const angle = chaseAngle(w, e);
   let step = e.speed * dt;
   if (e.kind === "slime") step *= slimeHopPulse(e);
   if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
   applyChaseStep(w, e, dt, angle, step);
+}
+
+// Deterministic boids for the bat family. Each bat carries a persistent heading in its
+// `zig` scratch (seeded at spawn, so a fresh flock fans out reproducibly) and blends four
+// steering pulls into it under a capped turn rate:
+//   separation (strong, inside FLOCK_SEP_RADIUS)  — never stack;
+//   alignment + cohesion (with capped, deterministic array-order neighbors) — move as ONE
+//   wheeling body;
+//   target attraction (the flow-field chase bearing) — the flock still hunts.
+// Pure state math, no RNG, bounded O(n·FLOCK_MAX_NEIGHBORS): replay-identical every run.
+function updateFlocker(w: WorldState, e: Enemy, dt: number): void {
+  const hasTarget = findTarget(w, e.x, e.y);
+  let sepX = 0, sepY = 0;
+  let aliX = 0, aliY = 0;
+  let cohX = 0, cohY = 0;
+  let social = 0;
+  let closest = Infinity;
+  // One pass over the enemy list (the same per-enemy scan shape every AI routine here
+  // uses). The SOCIAL terms (alignment/cohesion) cap at FLOCK_MAX_NEIGHBORS in
+  // deterministic array order; SEPARATION must instead see every body inside its small
+  // radius — a capped-by-array-order pick can starve exactly the stacked pair it exists
+  // to split (two late-array bats never scanning each other).
+  for (const other of w.enemies) {
+    if (other === e || other.dead || other.kind !== e.kind) continue;
+    const dx = other.x - e.x, dy = other.y - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= C.FLOCK_RADIUS) continue;
+    if (d < closest) closest = d;
+    if (d < C.FLOCK_SEP_RADIUS) {
+      // A fully co-located pair has no separation axis — break the tie along each bat's
+      // own id-derived bearing (golden-angle spread: stable, deterministic, never shared),
+      // so an exactly-stacked pair can never become a fixed point.
+      if (d < 1) {
+        const tie = e.id * 2.399963;
+        sepX -= Math.cos(tie);
+        sepY -= Math.sin(tie);
+      } else {
+        const push = (C.FLOCK_SEP_RADIUS - d) / C.FLOCK_SEP_RADIUS;
+        sepX -= (dx / d) * push;
+        sepY -= (dy / d) * push;
+      }
+    }
+    if (social < C.FLOCK_MAX_NEIGHBORS) {
+      social++;
+      aliX += Math.cos(other.zig);
+      aliY += Math.sin(other.zig);
+      cohX += dx;
+      cohY += dy;
+    }
+  }
+  let desX = sepX * C.FLOCK_SEP_WEIGHT;
+  let desY = sepY * C.FLOCK_SEP_WEIGHT;
+  // Priority arbitration: inside the hard core, separation is the ONLY voice. The shared
+  // target pull focuses converging bats onto one point like rays — without this override
+  // it laterally re-compresses any pair it likes back into a stack.
+  const isCrowded = closest < C.FLOCK_HARD_CORE;
+  if (!isCrowded && social > 0) {
+    const aliLen = Math.hypot(aliX, aliY) || 1;
+    desX += (aliX / aliLen) * C.FLOCK_ALIGN_WEIGHT;
+    desY += (aliY / aliLen) * C.FLOCK_ALIGN_WEIGHT;
+    const cohLen = Math.hypot(cohX, cohY) || 1;
+    desX += (cohX / cohLen) * C.FLOCK_COHESION_WEIGHT;
+    desY += (cohY / cohLen) * C.FLOCK_COHESION_WEIGHT;
+  }
+  if (!isCrowded && hasTarget) {
+    const hunt = chaseAngle(w, e);
+    desX += Math.cos(hunt) * C.FLOCK_TARGET_WEIGHT;
+    desY += Math.sin(hunt) * C.FLOCK_TARGET_WEIGHT;
+  }
+  // No pulls at all (lone bat, no target): glide on the current heading at full speed.
+  let brake = 1;
+  if (desX !== 0 || desY !== 0) {
+    let delta = Math.atan2(desY, desX) - e.zig;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    const maxTurn = C.FLOCK_TURN_RATE * dt;
+    e.zig += delta > maxTurn ? maxTurn : delta < -maxTurn ? -maxTurn : delta;
+    // Variable airspeed: a bat whose desired pull opposes its heading BRAKES (a trailing
+    // bat glued to a leader's tail can fall back and slide out) — turning alone can never
+    // unstack a pair flying the same axis at the same speed.
+    brake = C.FLOCK_MIN_SPEED + (1 - C.FLOCK_MIN_SPEED) * Math.max(0, Math.cos(delta));
+  }
+  let step = e.speed * brake * dt;
+  if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
+  applyChaseStep(w, e, dt, e.zig, step);
+}
+
+// The charger: a slow stalker whose whole threat is one long, telegraphed straight rush.
+// The lane is authored to be SIDESTEPPED (backpedaling loses — it outruns you on a line),
+// and a wall crash swaps the move to "crash": a long self-stun, the authored punish window.
+function updateCharger(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (stepWindupTimer(w, e, dt, C.CHARGER_WINDUP, C.CHARGER_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.CHARGER_RUSH_SPEED * C.CHARGER_RUSH_DUR)) {
+      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.CHARGER_CD * attackCdMultOf(e);
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.8, gain: 0.85, trauma: 0.08 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    // A connect ends the rush BEFORE the next step (hit-and-stop, never a drag): the
+    // contact pass already landed the damage + shove on the tick the bodies met.
+    if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
+    const step = C.CHARGER_RUSH_SPEED * dt;
+    const x0 = e.x, y0 = e.y;
+    rushSmashEnvironment(w, e, ev); // the lane splinters FIRST — furniture never wedges a rush
+    moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+    // Wall crash: barely progressing at full commitment = it hit something solid.
+    // (chill scales the intended step too, so a slowed rush is not a false crash.)
+    const moved = Math.hypot(e.x - x0, e.y - y0);
+    if (moved < step * chillMoveScale(e) * 0.5) {
+      a.move = "crash";
+      enterRecover(e);
+      ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+      return;
+    }
+    if (a.time >= C.CHARGER_RUSH_DUR) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "crash" ? C.CHARGER_CRASH_STUN : C.CHARGER_RECOVER)) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (dist <= C.CHARGER_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "rush");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.45, gain: 0.65, trauma: 0 });
+    return;
+  }
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+// The burrower: kite-denial. It dives (telegraph), tunnels toward the target at a speed
+// multiple while untargetable (bounded), then arms a marked eruption where it stopped —
+// the marker holds for the FULL windup, so the dodge is always readable. Surfacing leaves
+// it exposed through the pop + recover: the punish window for holding your ground.
+function updateBurrower(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (a.move === "dive") {
+      a.time += dt;
+      a.windup = Math.min(1, a.time / C.BURROW_DIVE_WINDUP);
+      if (a.time >= C.BURROW_DIVE_WINDUP) {
+        a.phase = "active"; a.time = 0; a.windup = 0;
+        ev.push({ t: "burrowDive", x: e.x, y: e.y });
+      }
+      return;
+    }
+    // erupt: stationary underground, marker armed — the player's reaction window.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / C.BURROW_ERUPT_WINDUP);
+    if (a.time >= C.BURROW_ERUPT_WINDUP && tryRelease(w, a.markX, a.markY, C.BURROW_ERUPT_RADIUS)) {
+      burrowerErupt(w, e, ev);
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    if (a.move === "dive") {
+      a.time += dt;
+      const has = findTarget(w, e.x, e.y);
+      const dist = has ? Math.hypot(w.targetX - e.x, w.targetY - e.y) : Infinity;
+      if (a.time >= C.BURROW_MAX_TRAVEL || dist <= C.BURROW_EMERGE_DIST) {
+        beginWindup(e, "erupt");
+        a.markX = e.x; a.markY = e.y; a.isAimLocked = true;
+        return;
+      }
+      applyChaseStep(w, e, dt, chaseAngle(w, e), C.BURROW_TRAVEL_SPEED * dt);
+      return;
+    }
+    // The surfacing pop itself.
+    a.time += dt;
+    if (a.time >= C.BURROW_POP) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.BURROW_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (dist <= C.BURROW_TRIGGER && dist > C.BURROW_EMERGE_DIST && a.cooldown === 0 && e.spawnTimer === 0) {
+    beginWindup(e, "dive");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.7, gain: 0.55, trauma: 0 });
+    return;
+  }
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+function burrowerErupt(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  a.phase = "active"; a.time = 0; a.windup = 0;
+  a.cooldown = C.BURROW_CD * attackCdMultOf(e);
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (Math.hypot(p.x - a.markX, p.y - a.markY) < C.BURROW_ERUPT_RADIUS) damagePlayer(w, p, e.touchDamage, ev);
+  }
+  enemySmashEnvironment(w, a.markX, a.markY, C.BURROW_ERUPT_RADIUS, ev);
+  ev.push({ t: "burrowErupt", x: a.markX, y: a.markY, r: C.BURROW_ERUPT_RADIUS });
+}
+
+// The orbiter: holds a strafing ring around the target (rotational tracking, not radial
+// kiting), then STOPS to fire a quick telegraphed bolt — the stillness is the tell.
+function updateOrbiter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (stepWindupTimer(w, e, dt, C.ORBITER_WINDUP, C.ORBITER_LOCK, false)) {
+      const mx = e.x + Math.cos(a.lockedAngle) * (e.radius + 4);
+      const my = e.y + Math.sin(a.lockedAngle) * (e.radius + 4);
+      spawnEnemyBullet(w, mx, my, a.lockedAngle, C.ORBITER_BOLT_SPEED, C.ORBITER_BOLT_RADIUS, 1, "#8fb8ff", C.ORBITER_BOLT_LIFE);
+      ev.push({ t: "spitMuzzle", x: mx, y: my });
+      a.cooldown = C.ORBITER_CD * attackCdMultOf(e);
+      enterRecover(e);
+    }
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.ORBITER_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dx = w.targetX - e.x, dy = w.targetY - e.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const toTarget = Math.atan2(dy, dx);
+  if (a.cooldown === 0 && e.spawnTimer === 0 && dist <= C.ORBITER_RING + C.ORBITER_RING_SLACK * 2
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "spit");
+    ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.5, gain: 0.45, trauma: 0 });
+    return;
+  }
+  // Ring hold: strafe tangentially (seeded flip direction), blending inward/outward when
+  // outside the ring's slack band.
+  e.zig += dt * C.ORBITER_FLIP_RATE;
+  const side = Math.sin(e.zig) >= 0 ? 1 : -1;
+  let angle = toTarget + side * C.HALF_PI;
+  if (dist > C.ORBITER_RING + C.ORBITER_RING_SLACK) angle = toTarget + side * (Math.PI * 0.3);
+  else if (dist < C.ORBITER_RING - C.ORBITER_RING_SLACK) angle = toTarget + Math.PI - side * (Math.PI * 0.3);
+  applyChaseStep(w, e, dt, angle, e.speed * dt);
+}
+
+// The shielder: an ordinary chaser whose front arc EATS bullets (see the bullet pass in
+// updateEnemies) — the fight is a positioning question. Its guard angle is stored in
+// lockedAngle (already on the wire), so the client draws exactly what the sim blocks.
+function updateShielder(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.phase === "windup") {
+    if (stepWindupTimer(w, e, dt, C.SHIELDER_WINDUP, C.SHIELDER_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.SHIELDER_BASH_SPEED * C.SHIELDER_BASH_DUR)) {
+      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SHIELDER_CD * attackCdMultOf(e);
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.9, gain: 0.7, trauma: 0.05 });
+    }
+    return;
+  }
+  if (a.phase === "active") {
+    a.time += dt;
+    const step = C.SHIELDER_BASH_SPEED * dt;
+    moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    if (a.time >= C.SHIELDER_BASH_DUR) enterRecover(e);
+    return;
+  }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= C.SHIELDER_RECOVER) enterIdle(e);
+    return;
+  }
+  if (!findTarget(w, e.x, e.y)) return;
+  const dist = Math.hypot(w.targetX - e.x, w.targetY - e.y) || 1;
+  if (dist <= C.SHIELDER_TRIGGER && a.cooldown === 0 && e.spawnTimer === 0
+    && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    beginWindup(e, "lunge");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.6, gain: 0.6, trauma: 0 });
+    return;
+  }
+  const chase = chaseAngle(w, e);
+  // The guard tracks the walk (and holds through windup/recover via lockedAngle's last value).
+  a.lockedAngle = chase;
+  applyChaseStep(w, e, dt, chase, e.speed * dt);
+}
+
+// Whether the shielder's front arc swallows a shot arriving along `vx/vy`.
+function isShieldBlocked(e: Enemy, vx: number, vy: number): boolean {
+  if (e.kind !== "shielder") return false;
+  const incoming = Math.atan2(-vy, -vx); // the direction the shot came FROM
+  let diff = incoming - e.attack.lockedAngle;
+  while (diff > Math.PI) diff -= 2 * Math.PI;
+  while (diff < -Math.PI) diff += 2 * Math.PI;
+  return Math.abs(diff) <= C.SHIELDER_BLOCK_ARC / 2;
 }
 
 function updateGhost(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -1514,12 +2330,14 @@ function updateSpitter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.4, gain: 0.5, trauma: 0 });
     return;
   }
-  let dir = 0;
-  if (dist < C.SPITTER_FLEE) dir = -1;
-  else if (dist > C.SPITTER_APPROACH) dir = 1;
-  if (dir !== 0) {
-    const step = e.speed * dt * dir;
-    moveEnemyBy(w, e, Math.cos(toTarget) * step, Math.sin(toTarget) * step);
+  if (dist < C.SPITTER_FLEE) {
+    // Retreat stays a direct backpedal: a cornered spitter is the player's reward.
+    const step = e.speed * dt;
+    moveEnemyBy(w, e, -Math.cos(toTarget) * step, -Math.sin(toTarget) * step);
+  } else if (dist > C.SPITTER_APPROACH) {
+    // The approach routes like every other ground enemy (prop-aware + anti-stuck):
+    // a kiter that wedges on a barrel forever out of range never becomes a fight.
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
   }
 }
 
@@ -1582,7 +2400,7 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
 // Living boss-summoned adds (the cadence cap counts only summons, never floor enemies).
 function countBossAdds(w: WorldState): number {
   let n = 0;
-  for (const e of w.enemies) if (!e.dead && e.isSummoned && e.kind !== "boss") n++;
+  for (const e of w.enemies) if (!e.dead && e.isSummoned && !isBossKind(e.kind)) n++;
   return n;
 }
 
@@ -1656,7 +2474,7 @@ function bossSqueezeActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]):
   a.windup = t;
   const safeR = BOSS.squeezeStartRadius + (BOSS.squeezeEndRadius - BOSS.squeezeStartRadius) * t;
   for (const p of w.players.values()) {
-    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
     if (Math.hypot(p.x - e.x, p.y - e.y) > safeR) damagePlayer(w, p, BOSS.squeezeDamage, ev);
   }
   if (a.time >= BOSS.squeezeDuration) enterIdle(e);
@@ -1667,14 +2485,12 @@ function bossLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const x = a.markX, y = a.markY;
   // Slam center hits for 2; the outer shockwave ring for 1 (spec §5 damage table).
   for (const p of w.players.values()) {
-    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
     const d = Math.hypot(p.x - x, p.y - y);
     if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev);
     else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev);
   }
-  // The slam is a physical impact: every prop under the shockwave ring shatters
-  // (explosive barrels chain — slamming a fuel cluster is the boss's own problem).
-  damagePropsInRadius(w, x, y, BOSS.slamRadius, C.SLAM_PROP_DAMAGE, ev);
+  enemySmashEnvironment(w, x, y, BOSS.slamRadius, ev);
   ev.push({ t: "bossSlam", x, y });
   if (boss && boss.phase >= 3) {
     for (let i = 0; i < 4; i++) spawnEnemyBullet(w, x, y, (i / 4) * 6.28, 220, 7, BOSS.globDamage, "#a24bff", 2.5);
@@ -1709,19 +2525,583 @@ function bossChase(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   // The boss does not walk around cover — it walks THROUGH it. The crush reach extends
   // just past moveCircle's prop-block ring (prop.radius * 0.8 off the body), so a crate
   // can never body-block the boss: whatever stops its step is destroyed by it.
-  damagePropsInRadius(w, e.x, e.y, e.radius + 2, C.CHARGE_PROP_DAMAGE, ev);
+  enemySmashEnvironment(w, e.x, e.y, e.radius + 2, ev);
 }
 
-// Spawn one summoned slime at `angle` off the boss's edge. Summons are excluded from
-// hearts/Fang (isSummoned) so add pressure never becomes a sustain farm.
-function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): void {
+// Spawn one summoned add at `angle` off the boss's edge — each boss raises its own kin
+// (the King standard slimes; the deep bosses fragile SWARM bodies, killable inside an
+// interactive beat). Summons are excluded from hearts/Fang (isSummoned) so add pressure
+// never becomes a sustain farm. The point settles like every other spawn (body-clear +
+// reachable — never inside a wall or a sealed cover pocket); a rim point with no valid
+// neighborhood skips the add. Returns the add (interactive beats track ids), or null.
+function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): Enemy | null {
+  const kin = BOSS_KIN[e.kind] ?? "slime";
   const mx = e.x + Math.cos(angle) * (e.radius + 20);
   const my = e.y + Math.sin(angle) * (e.radius + 20);
-  if (isWall(w, mx, my)) { ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false }); return; }
-  w.enemies.push(createEnemy("slime", mx, my, w.floor, w.rng, w.nextEnemyId++, {
-    isSummoned: true, players: w.encounterPlayers,
-  }));
-  ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx, my, spawned: true });
+  if (!settleSpawnPoint(w, mx, my, ENEMY_ARCHETYPES[kin].radius)) {
+    ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false });
+    return null;
+  }
+  const add = createEnemy(kin, settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+    tier: e.kind === "boss" ? "standard" : "swarm", isSummoned: true, players: w.encounterPlayers,
+  });
+  w.enemies.push(add);
+  ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: add.x, my: add.y, spawned: true });
+  return add;
+}
+
+// MARROW (spec §5b, calibrated like §5 to the same 30–45s TTK band at F10).
+// A LINE boss: everything it does is an angle you read and step off, and its biggest
+// opening is self-inflicted (the wall-crash stun). Phase changes ride damage events
+// (checkBossTransition) exactly like the King; this machine owns the cadence:
+//   P1 (100–65%): alternating line charge / 3-shard volley every 3.0s; husk adds on cadence.
+//   P2 (65–30%):  2.6s cadence; 5-shard volley; a wall crash bursts a 6-shard ring.
+//   P3 (30–0%):   2.2s cadence; 7 shards, 8-ring crash; every 3rd attack is the rotating
+//                 spiral barrage; stalk +10%.
+// Transitions (65%/30%) raise the SHIELD beat: reduction + floors + queued overflow, and
+// two husks whose deaths break the shield early — read the beat, switch targets, profit.
+function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  // Add pacing pauses during the shield beat (the beat spawned its own marked husks).
+  if (!boss.roar) {
+    boss.addTimer -= dt;
+    if (boss.addTimer <= 0) {
+      boss.addTimer = MARROW.addInterval[boss.phase];
+      const cap = MARROW.addCap[boss.phase];
+      for (let i = 0; i < MARROW.addBatch[boss.phase]; i++) {
+        if (countBossAdds(w) >= cap) break;
+        spawnBossAdd(w, e, w.rng.next() * Math.PI * 2, ev);
+      }
+    }
+  }
+
+  if (a.phase === "windup") { marrowWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { marrowActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    const recDur = a.move === "crash" ? MARROW.crashStun
+      : a.move === "rush" ? MARROW.chargeRecover
+      : a.move === "spin" ? MARROW.spinRecover
+      : MARROW.volleyRecover;
+    if (a.time >= recDur) enterIdle(e);
+    return;
+  }
+
+  if (a.cooldown === 0 && e.spawnTimer === 0) { marrowBeginAttack(e, ev); return; }
+  marrowChase(w, e, dt);
+}
+
+function marrowBeginAttack(e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  e.attack.cooldown = MARROW.attackCd[boss.phase];
+  // P3: every 3rd attack is the stationary spiral barrage (0.8s telegraph, 2.2s weave).
+  if (boss.phase >= 3 && boss.attackCount % MARROW.spinEvery === 0) {
+    beginWindup(e, "spin");
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.9, gain: 0.7, trauma: 0.1 });
+    return;
+  }
+  const isVolley = boss.isNextRadial;
+  boss.isNextRadial = !boss.isNextRadial;
+  beginWindup(e, isVolley ? "volley" : "rush");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isVolley ? 0.55 : 0.4, gain: 0.7, trauma: 0 });
+}
+
+function marrowWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "shield") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / MARROW.shieldDuration);
+    // The interactive break: past the minimum readable beat, the shield holds only while
+    // a marked husk still stands (or until its hard cap elapses).
+    const isBreakable = a.time >= MARROW.shieldMinDuration;
+    if (a.time >= MARROW.shieldDuration || (isBreakable && countLiveBeatAdds(w, e) === 0)) {
+      e.boss!.beatAddIds.length = 0;
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
+    return;
+  }
+  if (a.move === "spin") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / MARROW.spinWindup);
+    if (a.time >= MARROW.spinWindup) {
+      // Anchor the spiral on the target's bearing at release, and flip its rotation
+      // direction each barrage so the weave never becomes muscle memory.
+      if (findTarget(w, e.x, e.y)) a.lockedAngle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+      const boss = e.boss!;
+      boss.spinCount = 0;
+      boss.burstParity ^= 1;
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      ev.push({ t: "radialBurst", x: e.x, y: e.y });
+    }
+    return;
+  }
+  if (a.move === "volley") {
+    if (stepWindupTimer(w, e, dt, MARROW.volleyWindup, MARROW.volleyLock, false)) {
+      marrowVolleyFire(w, e, ev);
+      enterRecover(e);
+    }
+    return;
+  }
+  // rush
+  if (stepWindupTimer(w, e, dt, MARROW.chargeWindup, MARROW.chargeLock, false)) {
+    a.phase = "active"; a.time = 0; a.windup = 0;
+    ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.55, gain: 0.9, trauma: 0.05 });
+  }
+}
+
+function marrowActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  if (a.move === "spin") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / MARROW.spinDuration);
+    const dir = boss.burstParity === 0 ? 1 : -1;
+    // Deterministic pair emitter: shard pair k fires as elapsed time crosses k×interval.
+    while (boss.spinCount < Math.floor(a.time / MARROW.spinInterval)) {
+      const ang = a.lockedAngle + dir * boss.spinCount * MARROW.spinStep;
+      spawnMarrowShard(w, e, ang);
+      spawnMarrowShard(w, e, ang + Math.PI);
+      boss.spinCount++;
+    }
+    if (a.time >= MARROW.spinDuration) enterRecover(e);
+    return;
+  }
+  // rush
+  a.time += dt;
+  // A connect ends the rush BEFORE the next step (the contact pass already landed the
+  // hit + shove last tick, while the rush was active) — hit-and-stop, never a drag.
+  if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
+  const step = MARROW.chargeSpeed * dt;
+  const x0 = e.x, y0 = e.y;
+  rushSmashEnvironment(w, e, ev); // the blind bull clears its furrow FIRST — no furniture wedge
+  moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+  ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+  const moved = Math.hypot(e.x - x0, e.y - y0);
+  if (moved < step * chillMoveScale(e) * 0.5) {
+    marrowCrash(w, e, ev);
+    return;
+  }
+  if (a.time >= MARROW.chargeDur) enterRecover(e);
+}
+
+// The wall crash: MARROW's authored weakness. A long self-stun ("crash" recover), and
+// from P2 the impact bursts a radial shard ring — punishing, but only around the crash point.
+function marrowCrash(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const shards = MARROW.crashShards[boss.phase];
+  for (let i = 0; i < shards; i++) spawnMarrowShard(w, e, (i / shards) * Math.PI * 2);
+  a.move = "crash";
+  enterRecover(e);
+  ev.push({ t: "chargeCrash", x: e.x, y: e.y });
+}
+
+function marrowVolleyFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const n = MARROW.volleyShards[boss.phase];
+  for (let i = 0; i < n; i++) {
+    spawnMarrowShard(w, e, a.lockedAngle + (i - (n - 1) / 2) * MARROW.volleySpread);
+  }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
+}
+
+function spawnMarrowShard(w: WorldState, e: Enemy, angle: number): void {
+  const mx = e.x + Math.cos(angle) * (e.radius + 6);
+  const my = e.y + Math.sin(angle) * (e.radius + 6);
+  spawnEnemyBullet(w, mx, my, angle, MARROW.shardSpeed, MARROW.shardRadius, MARROW.shardDamage, "#dceef5", MARROW.shardLife);
+}
+
+function countLiveBeatAdds(w: WorldState, e: Enemy): number {
+  const ids = e.boss!.beatAddIds;
+  if (ids.length === 0) return 0;
+  let n = 0;
+  for (const other of w.enemies) {
+    if (!other.dead && ids.indexOf(other.id) !== -1) n++;
+  }
+  return n;
+}
+
+function marrowChase(w: WorldState, e: Enemy, dt: number): void {
+  if (!findTarget(w, e.x, e.y)) return;
+  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  const mult = e.boss && e.boss.phase >= 3 ? MARROW.p3ChaseMult : 1;
+  const step = e.speed * mult * dt;
+  moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
+}
+
+// THE HOLLOW CHOIR (spec §5c). The grieving ghost mass — the fight is about TRACKING and
+// TURNING, never cover: its wails home (juke them on a curve), and on cadence it fades
+// intangible and drifts through you before rematerializing into a burst + long recover
+// (the punish window). Transition beats SPLIT it into three wisps: the boss is gone until
+// they die or the cap elapses — your beat DPS goes into the wisps, by design.
+//   P1 (100–65%): 2-wail volleys; every 3rd attack is the fade.
+//   P2 (65–30%):  3 wails; the fade now rematerializes into an 8-shard ring.
+//   P3 (30–0%):   2.4s cadence, 4 wails, 10-shard rematerialize ring.
+function updateChoir(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  if (a.phase === "windup") { choirWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { choirActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "fade" ? CHOIR.fadeRecover : CHOIR.wailRecover)) enterIdle(e);
+    return;
+  }
+
+  if (a.cooldown === 0 && e.spawnTimer === 0) { choirBeginAttack(e, ev); return; }
+  // Idle drift toward the target (it floats through geometry like its kin).
+  if (!findTarget(w, e.x, e.y)) return;
+  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  moveEnemyBy(w, e, Math.cos(angle) * e.speed * dt, Math.sin(angle) * e.speed * dt);
+}
+
+function choirBeginAttack(e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  e.attack.cooldown = CHOIR.attackCd[boss.phase];
+  if (boss.attackCount % CHOIR.fadeEvery === 0) {
+    beginWindup(e, "fade");
+    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 1.6, gain: 0.5, trauma: 0 });
+    return;
+  }
+  beginWindup(e, "wail");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
+}
+
+function choirWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "split") {
+    // The split beat: the Choir is scattered into its wisps. Reforms when they all die
+    // (past the minimum readable beat) or at the hard cap; the queued overflow lands then.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / CHOIR.splitDuration);
+    const isBreakable = a.time >= CHOIR.splitMinDuration;
+    if (a.time >= CHOIR.splitDuration || (isBreakable && countLiveBeatAdds(w, e) === 0)) {
+      e.boss!.beatAddIds.length = 0;
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
+    return;
+  }
+  if (a.move === "fade") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / CHOIR.fadeWindup);
+    if (a.time >= CHOIR.fadeWindup) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.8, gain: 0.5, trauma: 0 });
+    }
+    return;
+  }
+  // wail
+  if (stepWindupTimer(w, e, dt, CHOIR.wailWindup, CHOIR.wailLock, false)) {
+    choirWailFire(w, e, ev);
+    enterRecover(e);
+  }
+}
+
+function choirActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  // The fade: intangible, drifting through the target's position — keep moving.
+  a.time += dt;
+  a.windup = Math.min(1, a.time / CHOIR.fadeDuration);
+  if (findTarget(w, e.x, e.y)) {
+    const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+    const step = e.speed * CHOIR.fadeSpeedMult * dt;
+    moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
+  }
+  if (a.time >= CHOIR.fadeDuration) {
+    choirRematerialize(w, e, ev);
+    enterRecover(e);
+  }
+}
+
+// Re-forming is loud: from P2 a ring of shards blooms out of the reassembly point.
+function choirRematerialize(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const n = CHOIR.burstShards[boss.phase];
+  const base = (boss.burstParity ^= 1) ? Math.PI / Math.max(1, n) : 0;
+  for (let i = 0; i < n; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / n) * Math.PI * 2, CHOIR.burstSpeed, CHOIR.shardRadius, CHOIR.shardDamage, "#bfe9ff", CHOIR.shardLife);
+  }
+  if (n > 0) ev.push({ t: "radialBurst", x: e.x, y: e.y });
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.8, gain: 0.7, trauma: 0.08 });
+}
+
+// The wail volley: slow seekers with a capped turn rate, fanned around the locked bearing.
+function choirWailFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const n = CHOIR.wailCount[boss.phase];
+  for (let i = 0; i < n; i++) {
+    const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * CHOIR.wailSpread;
+    const ang = a.lockedAngle + off;
+    w.bullets.push({
+      x: e.x + Math.cos(ang) * (e.radius + 6), y: e.y + Math.sin(ang) * (e.radius + 6),
+      vx: Math.cos(ang) * CHOIR.wailSpeed, vy: Math.sin(ang) * CHOIR.wailSpeed,
+      radius: CHOIR.wailRadius, life: CHOIR.wailLife, friendly: false, owner: null,
+      damage: CHOIR.wailDamage, color: "#9fd8ff", pierce: 0, hitList: null, isCrit: false,
+      homing: CHOIR.wailTurnRate,
+    });
+  }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
+}
+
+// THE WEAVER (spec §5d). The duelist that fights the FLOOR: its webs are persistent
+// slow-zones that shrink your dance space, and its pounce is a marked drop from above —
+// airborne (untargetable) for a beat, center-heavy on the landing, a fresh web at the
+// crater. Phase changes ride the shared beat plumbing (a fixed 0.8s molt that bursts into
+// a web-bolt ring + two broodlings).
+//   P1 (100–66%): alternating weave (3 webs) / single pounce every 3.0s.
+//   P2 (66–33%):  2.7s cadence; the gate's 2-hit — a chained second leap, .45s land-to-land.
+//   P3 (33–0%):   2.3s cadence; 4-web weave; one REAL pounce dressed with two afterimage feints.
+function updateWeaver(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  if (a.phase === "windup") { weaverWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { weaverActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "pounce" ? WEAVER.pounceRecover : WEAVER.weaveRecover)) enterIdle(e);
+    return;
+  }
+
+  if (a.cooldown === 0 && e.spawnTimer === 0) { weaverBeginAttack(e, ev); return; }
+  if (!findTarget(w, e.x, e.y)) return;
+  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  moveEnemyBy(w, e, Math.cos(angle) * e.speed * dt, Math.sin(angle) * e.speed * dt);
+}
+
+function weaverBeginAttack(e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  boss.spinCount = 0; // pounce-chain counter for this commitment
+  e.attack.cooldown = WEAVER.attackCd[boss.phase];
+  const isWeave = boss.isNextRadial;
+  boss.isNextRadial = !boss.isNextRadial;
+  beginWindup(e, isWeave ? "weave" : "pounce");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isWeave ? 0.7 : 0.45, gain: 0.65, trauma: 0 });
+}
+
+function weaverWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "roar") {
+    // The molt: a fixed cocoon beat that bursts into a ring of web-bolts on exit.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / WEAVER.moltDuration);
+    if (a.time >= WEAVER.moltDuration) {
+      for (let i = 0; i < WEAVER.moltBoltCount; i++) {
+        spawnEnemyBullet(w, e.x, e.y, (i / WEAVER.moltBoltCount) * Math.PI * 2, WEAVER.moltBoltSpeed, WEAVER.shardRadius, WEAVER.shardDamage, "#c98bff", WEAVER.shardLife);
+      }
+      ev.push({ t: "radialBurst", x: e.x, y: e.y });
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
+    return;
+  }
+  if (a.move === "weave") {
+    if (stepWindupTimer(w, e, dt, WEAVER.weaveWindup, WEAVER.weaveLock, true)) {
+      weaverPlantWebs(w, e, ev);
+      enterRecover(e);
+    }
+    return;
+  }
+  // pounce: the marker tracks then locks; chained pounces re-telegraph faster.
+  const isChained = e.boss!.spinCount > 0;
+  const windup = isChained ? WEAVER.pounceChainWindup : WEAVER.pounceWindup;
+  const lockAt = isChained ? WEAVER.pounceChainLock : WEAVER.pounceLock;
+  if (stepWindupTimer(w, e, dt, windup, lockAt, true)) {
+    a.phase = "active"; a.time = 0; a.windup = 0;
+    ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.1, gain: 0.8, trauma: 0.05 });
+  }
+}
+
+function weaverActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  // Airborne: lerp to the locked mark exactly like the King's hop, but untargetable.
+  a.time += dt;
+  const prev = a.windup;
+  a.windup = Math.min(1, a.time / WEAVER.pounceAir);
+  const rem = 1 - prev;
+  if (rem > 0.0001) {
+    const f = Math.min(1, (a.windup - prev) / rem);
+    e.x += (a.markX - e.x) * f;
+    e.y += (a.markY - e.y) * f;
+  }
+  if (a.time >= WEAVER.pounceAir) {
+    weaverLand(w, e, ev);
+    const boss = e.boss!;
+    boss.spinCount++;
+    // P2+: chain straight into the next leap off the landing (shorter telegraph).
+    if (boss.spinCount < WEAVER.pounceChains[boss.phase] + 1 && boss.phase >= 2) {
+      beginWindup(e, "pounce");
+      return;
+    }
+    a.move = "pounce";
+    enterRecover(e);
+  }
+}
+
+function weaverLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    const d = Math.hypot(p.x - a.markX, p.y - a.markY);
+    if (d < WEAVER.pounceInnerRadius) damagePlayer(w, p, WEAVER.pounceCenterDamage, ev);
+    else if (d < WEAVER.pounceRadius) damagePlayer(w, p, WEAVER.pounceOuterDamage, ev);
+  }
+  enemySmashEnvironment(w, a.markX, a.markY, WEAVER.pounceRadius, ev);
+  plantWeb(w, a.markX, a.markY, WEAVER.pounceWebRadius, ev);
+  ev.push({ t: "bossSlam", x: a.markX, y: a.markY });
+}
+
+// The weave: a locked pattern — one web ON the mark, the rest ringed around it across
+// the likely escape lanes.
+function weaverPlantWebs(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  const n = WEAVER.webCount[boss.phase];
+  plantWeb(w, a.markX, a.markY, WEAVER.webRadius, ev);
+  for (let i = 1; i < n; i++) {
+    const ang = a.lockedAngle + ((i - 1) / Math.max(1, n - 1)) * Math.PI * 2;
+    plantWeb(w, a.markX + Math.cos(ang) * WEAVER.webRingDist, a.markY + Math.sin(ang) * WEAVER.webRingDist, WEAVER.webRadius, ev);
+  }
+}
+
+function plantWeb(w: WorldState, x: number, y: number, radius: number, ev: SimEvent[]): void {
+  if (w.hazards.length >= WEAVER.maxWebs) return; // hard cap: squeeze, never fill
+  if (isWall(w, x, y)) return;
+  w.hazards.push({ id: w.nextHazardId++, kind: "web", x, y, radius, life: WEAVER.webLife, maxLife: WEAVER.webLife });
+  ev.push({ t: "webPlaced", x, y, r: radius });
+}
+
+// THE GILDED WARDEN (spec §5e). The armored tempo boss: the plate chips damage to 30%
+// at all times EXCEPT the exposed recover after each committed quake/sweep (see
+// isGildedExposed in the damage funnel) — you dodge the commitment, then unload.
+//   P1 (100–70%): alternating anvil slam / gold sweep every 3.6s.
+//   P2 (70–35%):  3.2s cadence (sanctify beats at 70%/35%, King-style fixed roars).
+//   P3 (35–0%):   2.8s cadence; the sweep releases a second offset wave.
+function updateGilded(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  if (a.phase === "windup") { gildedWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { gildedActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= (a.move === "slam" ? GILDED.slamRecover : GILDED.sweepRecover)) enterIdle(e);
+    return;
+  }
+
+  if (a.cooldown === 0 && e.spawnTimer === 0) { gildedBeginAttack(e, ev); return; }
+  // A stately advance — the Warden walks, it never chases.
+  if (!findTarget(w, e.x, e.y)) return;
+  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  moveEnemyBy(w, e, Math.cos(angle) * e.speed * dt, Math.sin(angle) * e.speed * dt);
+}
+
+function gildedBeginAttack(e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  boss.spinCount = 0; // sweep-wave counter
+  e.attack.cooldown = GILDED.attackCd[boss.phase];
+  const isSlam = !boss.isNextRadial;
+  boss.isNextRadial = !boss.isNextRadial;
+  beginWindup(e, isSlam ? "slam" : "sweep");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isSlam ? 0.35 : 0.55, gain: 0.75, trauma: 0 });
+}
+
+function gildedWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "roar") {
+    // Sanctify: the King's fixed transition-roar semantics in gold.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / GILDED.sanctifyDuration);
+    if (a.time >= GILDED.sanctifyDuration) {
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
+    return;
+  }
+  if (a.move === "slam") {
+    // The quake is centered on the Warden itself — the mark is its own feet.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / GILDED.slamWindup);
+    a.markX = e.x; a.markY = e.y;
+    if (!a.isAimLocked) {
+      if (findTarget(w, e.x, e.y)) a.lockedAngle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+      if (a.time >= GILDED.slamLock) a.isAimLocked = true;
+    }
+    if (a.time >= GILDED.slamWindup) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+      ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.5, gain: 0.9, trauma: 0.05 });
+    }
+    return;
+  }
+  // sweep
+  a.time += dt;
+  a.windup = Math.min(1, a.time / GILDED.sweepWindup);
+  if (a.time >= GILDED.sweepWindup) {
+    a.phase = "active"; a.time = 0; a.windup = 0;
+    gildedSweepWave(w, e, ev);
+  }
+}
+
+function gildedActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  a.time += dt;
+  if (a.move === "slam") {
+    if (a.time >= GILDED.slamActive) {
+      gildedSlamResolve(w, e, ev);
+      enterRecover(e); // the plate hangs open — EXPOSED
+    }
+    return;
+  }
+  // sweep: wave one fired at release; P3's offset second wave follows after the gap.
+  // spinCount counts the EXTRA waves already released this commitment.
+  const boss = e.boss!;
+  const extraWaves = GILDED.sweepWaves[boss.phase] - 1;
+  if (boss.spinCount < extraWaves && a.time >= (boss.spinCount + 1) * GILDED.sweepWaveGap) {
+    gildedSweepWave(w, e, ev);
+    boss.spinCount++;
+  }
+  if (a.time >= extraWaves * GILDED.sweepWaveGap + 0.2) enterRecover(e); // EXPOSED
+}
+
+function gildedSlamResolve(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const a = e.attack;
+  for (const p of w.players.values()) {
+    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    const d = Math.hypot(p.x - a.markX, p.y - a.markY);
+    if (d < GILDED.slamInnerRadius) damagePlayer(w, p, GILDED.slamCenterDamage, ev);
+    else if (d < GILDED.slamRadius) damagePlayer(w, p, GILDED.slamOuterDamage, ev);
+  }
+  // The aftershock: a tight line of shards down the locked bearing.
+  for (let i = 0; i < GILDED.slamLineShards; i++) {
+    const off = (i - (GILDED.slamLineShards - 1) / 2) * GILDED.slamLineGap;
+    spawnEnemyBullet(w, a.markX, a.markY, a.lockedAngle + off, GILDED.slamLineSpeed, GILDED.shardRadius, GILDED.shardDamage, "#ffd166", GILDED.shardLife);
+  }
+  enemySmashEnvironment(w, a.markX, a.markY, GILDED.slamRadius, ev);
+  ev.push({ t: "bossSlam", x: a.markX, y: a.markY });
+}
+
+function gildedSweepWave(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const base = (boss.burstParity ^= 1) ? Math.PI / GILDED.sweepCount : 0;
+  for (let i = 0; i < GILDED.sweepCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / GILDED.sweepCount) * Math.PI * 2, GILDED.sweepSpeed, GILDED.shardRadius, GILDED.shardDamage, "#ffd166", GILDED.shardLife);
+  }
+  ev.push({ t: "radialBurst", x: e.x, y: e.y });
 }
 
 // ---- shared attack helpers ----
@@ -1729,7 +3109,7 @@ function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): v
 function findTarget(w: WorldState, x: number, y: number): boolean {
   let bestD = Infinity, found = false;
   for (const p of w.players.values()) {
-    if (p.isDown || p.hp <= 0) continue;
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
     const dx = p.x - x, dy = p.y - y, d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; w.targetX = p.x; w.targetY = p.y; found = true; }
   }
@@ -1754,18 +3134,18 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
   return true;
 }
 
-function refreshFlowField(w: WorldState, dt: number): void {
+function refreshNav(w: WorldState, dt: number): void {
   w.flowCd -= dt;
   const d = w.dungeon;
-  // Rebuild trigger keys off a combined hash of EVERY living source tile (players + legacy
-  // remote targets), so ANY player crossing a tile refreshes multi-source paths — not only the
-  // primary. Solo has exactly one player, so the hash changes precisely when that player's
-  // tile changes: identical rebuild ticks, goldens unchanged. The field itself is sourced from
-  // every living player, so enemies flow toward whichever player is nearest.
+  // Retarget trigger keys off a combined hash of EVERY living source tile (players + legacy
+  // remote targets), so ANY player crossing a tile refreshes multi-source paths — not only
+  // the primary. The chase fields themselves rebuild LAZILY per clearance class (see
+  // nav.ts) — this only records the target tiles and invalidates; obstacle-revision
+  // invalidation (a prop broke) rides the same lazy path inside the field queries.
   let keyHash = 0;
   let anyUp = false;
   for (const pl of w.players.values()) {
-    if (pl.isDown || pl.hp <= 0) continue;
+    if (pl.isDown || pl.isAbsent || pl.hp <= 0) continue;
     anyUp = true;
     keyHash = (Math.imul(keyHash, 31) + Math.floor(pl.y / TILE) * d.w + Math.floor(pl.x / TILE)) | 0;
   }
@@ -1775,14 +3155,14 @@ function refreshFlowField(w: WorldState, dt: number): void {
     keyHash = (Math.imul(keyHash, 31) + Math.floor(r.y / TILE) * d.w + Math.floor(r.x / TILE)) | 0;
   }
   const tileChanged = anyUp && keyHash !== w.flowKey;
-  if (w.flowCd > 0 && !tileChanged && w.flow.isReady()) return;
+  if (w.flowCd > 0 && !tileChanged) return;
   w.flowCd = C.FLOW_REBUILD;
   w.flowKey = keyHash;
 
   const srcs = w.flowSources;
   srcs.length = 0;
   for (const pl of w.players.values()) {
-    if (pl.isDown || pl.hp <= 0) continue;
+    if (pl.isDown || pl.isAbsent || pl.hp <= 0) continue;
     const tx = Math.floor(pl.x / TILE), ty = Math.floor(pl.y / TILE);
     if (tx < 0 || ty < 0 || tx >= d.w || ty >= d.h) continue;
     srcs.push(ty * d.w + tx);
@@ -1793,16 +3173,44 @@ function refreshFlowField(w: WorldState, dt: number): void {
     if (rtx < 0 || rty < 0 || rtx >= d.w || rty >= d.h) continue;
     srcs.push(rty * d.w + rtx);
   }
-  w.flow.build(d, srcs);
+  markNavTargets(w.nav, srcs);
 }
 
-function chaseAngle(w: WorldState, e: Enemy): number {
-  if (hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
-    return Math.atan2(w.targetY - e.y, w.targetX - e.x);
+// Does any live prop's collision ring cut the straight corridor from (x0,y0) to (x1,y1)
+// for a body of radius `r`? The full radius sum keeps the same conservative margin the
+// local steering uses, so "corridor clear" always means "actually walkable".
+function propOnSegment(w: WorldState, x0: number, y0: number, x1: number, y1: number, r: number): boolean {
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return false;
+  const ux = dx / len, uy = dy / len;
+  for (const p of w.props) {
+    if (p.dead) continue;
+    const rr = r + p.radius;
+    const t = Math.max(0, Math.min(len, (p.x - x0) * ux + (p.y - y0) * uy));
+    const cx = x0 + ux * t - p.x, cy = y0 + uy * t - p.y;
+    if (cx * cx + cy * cy < rr * rr) return true;
   }
-  const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
-  if (w.flow.sampleStep(tx, ty)) return Math.atan2(w.flow.step.dy, w.flow.step.dx);
-  return Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  return false;
+}
+
+// The chase heading: direct when the straight corridor is genuinely walkable (wall LOS
+// AND no prop ring across it), otherwise the next waypoint of the prop-aware flow route
+// for this body's clearance class. Close range always commits to the direct line — the
+// finishing layer (avoidPropAhead + the stuck net in applyChaseStep) rounds a final
+// single prop far better than tile-resolution routing, and contact must never stall on
+// grid quantization. The route is what fixes the live wedge: rows, corners and concave
+// pockets are simply not part of the field, so steering can no longer be lured into them.
+function chaseAngle(w: WorldState, e: Enemy): number {
+  const direct = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  if (hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    const dx = w.targetX - e.x, dy = w.targetY - e.y;
+    if (dx * dx + dy * dy <= C.NAV_DIRECT_RANGE * C.NAV_DIRECT_RANGE) return direct;
+    if (!propOnSegment(w, e.x, e.y, w.targetX, w.targetY, e.radius)) return direct;
+  }
+  const field = chaseFieldFor(w, e.radius);
+  if (navStepPoint(field, e.x, e.y)) return Math.atan2(navPoint.y - e.y, navPoint.x - e.x);
+  return direct;
 }
 
 function slimeHopPulse(e: Enemy): number {
@@ -1946,6 +3354,164 @@ function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, sp
   });
 }
 
+// ---- enemy -> environment destruction ----
+
+// The authoritative environment-damage path for enemy commitments (charges, slams,
+// pounces, eruptions — every caller is a fully telegraphed move, so the wreckage is
+// as dodge-readable as the hit itself). Props splinter through the ordinary destroyProp
+// pipeline WITHOUT an owner: chained explosive barrels hurt everything but their kills
+// credit NO player (the departed-actor ownership contract), and crate/pot spills stay
+// ordinary first-come world loot. Wood chests burst open and eject their contents away
+// from the impact onto standable floor.
+function enemySmashEnvironment(w: WorldState, x: number, y: number, radius: number, ev: SimEvent[]): void {
+  for (const p of w.props) {
+    if (p.breakT !== undefined || p.kind === "brazier") continue;
+    if (Math.hypot(p.x - x, p.y - y) <= radius + p.radius) destroyProp(w, p, ev);
+  }
+  for (const c of w.chests) {
+    if (c.opened || c.kind !== "wood") continue;
+    if (Math.hypot(c.x - x, c.y - y) <= radius + c.radius) smashOpenChest(w, c, x, y, ev);
+  }
+}
+
+// A rusher plows THROUGH the furniture: splinter everything at the body's leading edge,
+// BEFORE the move resolves (called per active-rush tick — the lane telegraph already drew
+// exactly this corridor). The pad must clear moveCircle's prop-collision ring
+// (prop radius × 0.8 ≈ 12px), or the rush would wedge against the crate it was about to
+// smash and read the stall as a wall crash.
+const RUSH_SMASH_PAD = 16;
+function rushSmashEnvironment(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  enemySmashEnvironment(w, e.x, e.y, e.radius + RUSH_SMASH_PAD, ev);
+}
+
+// ---- the F10 Miniboss Gauntlet (corrected gate §3, exact formula) ----
+// A stage machine, not a boss: once the floor's living pressure, its summons AND its
+// hazards are all cleared, the authored 5s intermission passes and the next CAPTAIN
+// enters the arena — the Charger commander with simple adds, the Shielder elite with
+// ranged adds, then the brute Burrower alone — strictly sequential, never simultaneous.
+// Captains carry round10(.28/.32/.40 × calibrated Marrow HP), party-scaled independently
+// at each spawn, and run two phases split at 50% with one 0.8s non-invulnerable
+// transition (no floor, no overflow — see the captain check in updateEnemies). +1 heart
+// drops only after round 2; the full clear drops the premium boss chest (P+1 weapon
+// choices led by the gauntlet's signature + the rare blessing offer).
+
+function updateGauntlet(w: WorldState, dt: number, ev: SimEvent[]): void {
+  const g = w.gauntlet;
+  if (!g || w.isRunOver || g.isRewarded) return;
+  if (w.enemies.some((e) => !e.dead) || w.pendingSpawns.length > 0 || w.hazards.length > 0) {
+    // The intermission runs only after R1/R2 (the first captain enters as soon as the
+    // approach is down; the reward follows the final kill on the same beat).
+    g.breath = g.stage > 0 && g.stage < GAUNTLET.rounds.length ? GAUNTLET.intermission : 0;
+    return;
+  }
+  g.breath -= dt;
+  if (g.breath > 0) return;
+  if (g.stage < GAUNTLET.rounds.length) {
+    spawnGauntletRound(w, GAUNTLET.rounds[g.stage], ev);
+    g.stage++;
+    // The gate's +1 heart lands only after round 2 clears — i.e. alongside R3's entrance.
+    if (g.stage - 1 === GAUNTLET.heartAfterRound) {
+      const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
+      w.pickups.push(makePickup(w, "heart", (arena.cx + 0.5) * TILE + 40, (arena.cy + 0.5) * TILE, ev));
+    }
+    return;
+  }
+  // Sequence complete: the premium reward stands where the last captain fell.
+  g.isRewarded = true;
+  const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
+  w.chests.push({
+    id: w.nextChestId++, kind: "boss",
+    x: (arena.cx + 0.5) * TILE, y: (arena.cy + 0.5) * TILE,
+    radius: 18, opened: false, weapon: GAUNTLET.chestWeapon,
+  });
+  ev.push({ t: "cue", name: "bossSpawn", x: (arena.cx + 0.5) * TILE, y: (arena.cy + 0.5) * TILE, rate: 1.3, gain: 0.8, trauma: 0.1 });
+}
+
+function spawnGauntletRound(w: WorldState, round: (typeof GAUNTLET.rounds)[number], ev: SimEvent[]): void {
+  const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
+  const cx = (arena.cx + 0.5) * TILE, cy = (arena.cy + 0.5) * TILE;
+  const spawnAt = (kind: Enemy["kind"], tier: Enemy["tier"], x: number, y: number, isSummoned: boolean): Enemy | null => {
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[kind].radius)) return null;
+    const e = createEnemy(kind, settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      tier, isSummoned, players: w.encounterPlayers,
+    });
+    w.enemies.push(e);
+    ev.push({ t: "enemySpawn", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y });
+    return e;
+  };
+  const captain = spawnAt(round.kind, round.tier, cx, cy, false);
+  if (captain) {
+    // Gate formula: round10(hpFrac × calibrated Marrow HP), party-scaled at THIS spawn.
+    const hp = Math.round((gauntletCaptainHp(round) * coopBossHpMult(w.encounterPlayers)) / 10) * 10;
+    captain.hp = captain.maxHp = hp;
+    captain.captainPhase = 1;
+    ev.push({ t: "cue", name: "bossSpawn", x: captain.x, y: captain.y, rate: 0.8, gain: 0.9, trauma: 0.15 });
+  }
+  for (let i = 0; i < round.addCount; i++) {
+    const ang = (i / round.addCount) * Math.PI * 2;
+    spawnAt(round.addKind ?? "slime", round.addTier, cx + Math.cos(ang) * 70, cy + Math.sin(ang) * 70, true);
+  }
+}
+
+// The captain's two-phase contract: crossing 50% triggers ONE 0.8s stagger — the current
+// windup drops and the next commitment waits — with no invulnerability, no damage
+// reduction, and no HP floor (a big hit may carry straight through the threshold).
+function tickCaptainPhase(e: Enemy, ev: SimEvent[]): void {
+  if (e.captainPhase !== 1 || e.dead || e.hp > e.maxHp * GAUNTLET.captainPhaseAt) return;
+  e.captainPhase = 2;
+  if (e.attack.phase === "windup") enterIdle(e);
+  e.spawnTimer = Math.max(e.spawnTimer, GAUNTLET.captainTransition);
+  e.attack.cooldown = Math.max(e.attack.cooldown, GAUNTLET.captainTransition);
+  ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.1, gain: 0.7, trauma: 0.08 });
+}
+
+// ---- hazards (the Weaver's webs) ----
+
+function webSlowMult(w: WorldState, x: number, y: number): number {
+  for (const h of w.hazards) {
+    if (Math.hypot(x - h.x, y - h.y) < h.radius) return WEAVER.webSlow;
+  }
+  return 1;
+}
+
+function updateHazards(w: WorldState, dt: number): void {
+  if (w.hazards.length === 0) return;
+  for (const h of w.hazards) h.life -= dt;
+  w.hazards = w.hazards.filter((h) => h.life > 0);
+}
+
+// ---- the mob overlap arbiter (studio gate §2) ----
+// "No two damage releases within 0.30s covering the same escape lane": before a REGULAR
+// mob's committed windup may flip into its damage release, its release area must be clear
+// of every release from the last 0.30s. Blocked commitments HOLD at full windup (telegraph
+// stays up, no damage) and re-check each tick — the stagger is at most the window itself.
+// Bosses are exempt: boss floors are authored end-to-end by their own §3 contracts.
+
+const RELEASE_ARBITER_WINDOW = 0.30;
+const RELEASE_LANE_CLEARANCE = 36; // a player body's diameter — the escape lane itself
+
+function tickReleaseArbiter(w: WorldState, dt: number): void {
+  if (w.recentReleases.length === 0) return;
+  for (const r of w.recentReleases) r.t -= dt;
+  w.recentReleases = w.recentReleases.filter((r) => r.t > 0);
+}
+
+function tryRelease(w: WorldState, x: number, y: number, radius: number): boolean {
+  for (const r of w.recentReleases) {
+    if (Math.hypot(x - r.x, y - r.y) < radius + r.radius + RELEASE_LANE_CLEARANCE) return false;
+  }
+  w.recentReleases.push({ x, y, radius, t: RELEASE_ARBITER_WINDOW });
+  return true;
+}
+
+// The release area of a straight commitment (lunge/rush/bash): the swept lane,
+// approximated as a circle over its middle.
+function tryReleaseLane(w: WorldState, e: Enemy, angle: number, reach: number): boolean {
+  const half = reach / 2;
+  return tryRelease(w, e.x + Math.cos(angle) * half, e.y + Math.sin(angle) * half, half + e.radius);
+}
+
 // ---- props / chests / pickups ----
 
 function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -2006,24 +3572,6 @@ function dashBreakProps(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   }
 }
 
-// The physical-interaction hook: damage every live destructible prop within `radius` of
-// (x, y). This is the ONE way heavy world impacts break the environment — the boss's
-// slam and body, the skeleton's charge, and any NEW enemy/boss content should route
-// through here rather than reimplementing prop damage. Braziers and already-breaking
-// props are skipped (destroyProp's own rules). `by` carries player attribution for
-// chain credit; enemy-caused breaks pass undefined — barrels still detonate, crediting
-// no one, exactly like a departed player's leftovers.
-export function damagePropsInRadius(w: WorldState, x: number, y: number, radius: number, dmg: number, ev: SimEvent[], by?: PlayerSim): void {
-  for (const p of w.props) {
-    if (p.breakT !== undefined || p.kind === "brazier") continue;
-    const rr = radius + p.radius;
-    const dx = p.x - x, dy = p.y - y;
-    if (dx * dx + dy * dy > rr * rr) continue;
-    p.hp -= dmg;
-    ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: p.x, y: p.y });
-    if (p.hp <= 0) destroyProp(w, p, ev, by);
-  }
-}
 
 // `by` is the player who destroyed the prop (bullet owner / melee / dash / chain source), so an
 // explosive barrel credits its kills to the right player. A departed destroyer (undefined)
@@ -2032,6 +3580,10 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
   if (p.breakT !== undefined || p.kind === "brazier") return;
   p.dead = true;
   p.breakT = 0;
+  // The blocking set changed: invalidate every navigation cache so routes flow through
+  // the fresh gap on their next rebuild. Any future system that destroys cover (charges,
+  // slams, environmental chains) goes through this same door and inherits the bump.
+  w.obstacleRev++;
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
@@ -2058,7 +3610,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
   const r = C.BARREL_EXPLOSION_RADIUS;
   ev.push({ t: "explosion", x: source.x, y: source.y, r });
   for (const e of w.enemies) {
-    if (e.dead) continue;
+    if (e.dead || isUntargetable(e)) continue;
     if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
     damageEnemy(w, p ? p.id : null, e, C.BARREL_EXPLOSION_DAMAGE, ev);
     ev.push({ t: "flash", eid: e.id });
@@ -2067,7 +3619,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
     if (e.hp <= 0 && !e.dead) killEnemy(w, p, e, ev);
   }
   for (const victim of w.players.values()) {
-    if (!isProtected(victim) && !victim.isDown && victim.hp > 0
+    if (!isProtected(victim) && !victim.isDown && !victim.isAbsent && victim.hp > 0
       && Math.hypot(victim.x - source.x, victim.y - source.y) <= r) {
       damagePlayer(w, victim, C.BARREL_EXPLOSION_SELF_DMG, ev);
     }
@@ -2110,7 +3662,7 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
       continue;
     }
     for (const p of w.players.values()) {
-      if (!p.isDown && p.hp > 0 && Math.hypot(p.x - c.x, p.y - c.y) < p.pr + c.radius) {
+      if (!p.isDown && !p.isAbsent && p.hp > 0 && Math.hypot(p.x - c.x, p.y - c.y) < p.pr + c.radius) {
         openChest(w, p, c, ev);
         break;
       }
@@ -2124,41 +3676,75 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
   // The full loot of the opening is decided first, then placed as ONE batch, so the fan
   // spreads coins, hearts and weapons together without stacking. Boss completion recovery
-  // is the chest's +1 heart ONLY (no descent heal); its blessing offer is the floor's
+  // is the chest's +1 heart ONLY (no descent heal) plus the boss's authored SIGNATURE
+  // weapon (see BOSS_SIGNATURE_WEAPON, baked at drop); its blessing offer is the floor's
   // reward — a Rare pick (see raiseBlessingOffer). Wood chests eject baked contents first
   // (the floor's weapon drop lives in this chest — see stockWeaponChests), then the
   // ordinary roll: the weapon replaces nothing, so the heart economy and pity behave
   // exactly as they always did per chest opened.
   const loot: ChestLoot[] = [];
   if (c.kind === "boss") {
+    // Studio gate §4 boss weapon reward: P+1 DISTINCT personal choices (capped 5) — the
+    // boss's authored signature weapon plus seeded distinct alternatives. Every player
+    // claims exactly one (see updatePickups); a claim never removes a teammate's options.
+    // (Only signature-bearing chests — every real boss drop — carry the choice set.)
+    if (c.weapon !== undefined) {
+      const choices: WeaponId[] = [c.weapon];
+      while (choices.length < bossWeaponChoices(w.encounterPlayers)) {
+        choices.push(rollDistinctWeapon(w.rng, choices));
+      }
+      for (const weapon of choices) loot.push({ kind: "weapon", weapon, isBossChoice: true });
+    }
     loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
     if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
     loot.push(...rollWoodChest(w));
   }
-  ejectChestLoot(w, p, c, loot, ev);
+  ejectChestLoot(w, c, loot, openerAngle(p, c), p.pr, ev);
   if (c.kind === "boss") raiseBlessingOffer(w, p.id, true, ev);
+}
+
+// An enemy commitment bursts a wood chest open: the same deterministic contents, spilled
+// through the same safe-spot fan but AWAY from the impact, with NO opener — everything it
+// drops is ordinary first-come world loot, and no blessing machinery is touched (wood
+// chests never carried one). Boss chests are the cleared floor's pedestal and are never
+// smashable (see enemySmashEnvironment).
+function smashOpenChest(w: WorldState, c: Chest, fromX: number, fromY: number, ev: SimEvent[]): void {
+  c.opened = true;
+  c.openT = 0;
+  ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
+  const loot: ChestLoot[] = [];
+  if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+  loot.push(...rollWoodChest(w));
+  const away = Math.atan2(c.y - fromY, c.x - fromX);
+  ejectChestLoot(w, c, loot, away, 18, ev);
+}
+
+// The eject bearing for a player-opened chest: out toward the opener.
+function openerAngle(p: PlayerSim, c: Chest): number {
+  const dx = p.x - c.x, dy = p.y - c.y;
+  return Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
 }
 
 type ChestLoot =
   | { kind: "coin" | "heart" }
-  | { kind: "weapon"; weapon: WeaponId };
+  | { kind: "weapon"; weapon: WeaponId; isBossChoice?: boolean };
 
-function ejectChestLoot(w: WorldState, p: PlayerSim, c: Chest, loot: ChestLoot[], ev: SimEvent[]): void {
-  // Every drop a chest produces lands somewhere the opener can actually STAND — the old
-  // loose offsets (coins in a row, heart under the chest) could put loot inside a wall or
-  // a prop ring where the collect range never triggered: the unreachable coins of the
-  // playtest. Slots fan out from the opener direction so the batch reads as spilled loot.
-  const dx = p.x - c.x, dy = p.y - c.y;
-  const base = Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
+// Every drop a chest produces lands somewhere the collector can actually STAND — the old
+// loose offsets (coins in a row, heart under the chest) could put loot inside a wall or
+// a prop ring where the collect range never triggered: the unreachable coins of the
+// playtest. Slots fan out from `base` (toward the opener, or away from whatever smashed
+// the chest) so the batch reads as spilled loot. `pr` is the collector's clearance —
+// the opener's own radius, or the standard 18px body for ownerless bursts.
+function ejectChestLoot(w: WorldState, c: Chest, loot: ChestLoot[], base: number, pr: number, ev: SimEvent[]): void {
   const placed: { x: number; y: number }[] = [];
   for (let slot = 0; slot < loot.length; slot++) {
     const item = loot[slot];
-    const [x, y] = chestLootSpot(w, c, base, slot, p.pr, placed);
+    const [x, y] = chestLootSpot(w, c, base, slot, pr, placed);
     placed.push({ x, y });
     if (item.kind === "weapon") {
-      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon });
+      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon, isBossChoice: item.isBossChoice });
       ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
     } else {
       w.pickups.push(makePickup(w, item.kind, x, y, ev));
@@ -2256,6 +3842,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const p of w.pickups) {
     let collected = false;
     for (const player of w.players.values()) {
+      if (player.isAbsent) continue; // a reserved body neither magnets nor collects loot
       if (player.mods.coinMagnet > 0 && p.kind === "coin" && !player.isDown) {
         const dx = player.x - p.x, dy = player.y - p.y;
         const d = Math.hypot(dx, dy);
@@ -2288,12 +3875,50 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           }
           continue;
         }
-        if (p.kind === "weapon" && p.weapon && !player.ownedWeapons.includes(p.weapon)) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "dealer_weapon") {
+          // Gate §4: purchases are PERSONAL and never deplete the stock — an owner (or a
+          // broke player) walks past; a buyer pays and the pedestal stays for teammates.
+          if (p.weapon && !player.ownedWeapons.includes(p.weapon) && player.coins >= (p.value ?? 0)) {
+            player.coins -= p.value ?? 0;
+            acquireWeapon(player, p.weapon);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+          }
+          continue;
+        }
+        if (p.kind === "weapon" && p.weapon) {
+          if (p.isBossChoice) {
+            // Gate §4 boss reward: one personal CLAIM per player per boss chest. Claiming a
+            // weapon the player already owns grants one seeded REROLL (never coins/raw
+            // damage); the pedestal itself persists for teammates either way.
+            if (player.hasClaimedBossChoice) continue;
+            player.hasClaimedBossChoice = true;
+            const grant = player.ownedWeapons.includes(p.weapon)
+              ? rollDistinctWeapon(w.rng, player.ownedWeapons)
+              : p.weapon;
+            acquireWeapon(player, grant);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+            continue;
+          }
+          if (!player.ownedWeapons.includes(p.weapon)) {
+            acquireWeapon(player, p.weapon);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+            collected = true; break;
+          }
+        }
       }
     }
     if (!collected) remaining.push(p);
   }
   w.pickups = remaining;
+  // Boss-choice pedestals clear only once every living player has claimed — until then a
+  // claim leaves every remaining option standing for the others.
+  if (w.pickups.some((p) => p.isBossChoice)) {
+    let allClaimed = true;
+    for (const player of w.players.values()) {
+      if (!player.isDown && player.hp > 0 && !player.hasClaimedBossChoice) { allClaimed = false; break; }
+    }
+    if (allClaimed) w.pickups = w.pickups.filter((p) => !p.isBossChoice);
+  }
 }
 
 // Environmental hazards (depth escalation): advance the shared pulse clock, drag players
@@ -2303,9 +3928,9 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
 // 1, and both the dash iframe and post-hit protection gate it — the exact protection
 // rules enemy contact obeys. Hazards never touch enemies: bodies are the encounter
 // designer's pressure, the floor is the player's problem.
-function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
-  w.hazardClock += dt;
-  if (w.hazards.length === 0) return;
+function updateFloorHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
+  w.floorHazardClock += dt;
+  if (w.floorHazards.length === 0) return;
   for (const p of w.players.values()) {
     // A blessing-picking player is fully paused AND shielded (see stepPlayerPhase /
     // damagePlayer); the rift drag must respect the same freeze — nothing may move a
@@ -2314,8 +3939,8 @@ function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
     // Rift drag: escapable pressure (85px/s against a 200px/s walk), through the normal
     // wall-aware move so it can never push a player into geometry, and line-of-sight
     // gated so a rift never pulls through a wall.
-    for (const h of w.hazards) {
-      if (h.kind !== "void_rift" || hazardPhaseAt(h, w.hazardClock) !== "active") continue;
+    for (const h of w.floorHazards) {
+      if (h.kind !== "void_rift" || floorHazardPhaseAt(h, w.floorHazardClock) !== "active") continue;
       const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
       const dx = cx - p.x, dy = cy - p.y;
       const dist = Math.hypot(dx, dy);
@@ -2328,20 +3953,24 @@ function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (isProtected(p)) continue;
     const tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
-    for (const h of w.hazards) {
-      if (h.tx !== tx || h.ty !== ty || !isHazardDamaging(h, w.hazardClock)) continue;
+    for (const h of w.floorHazards) {
+      if (h.tx !== tx || h.ty !== ty || !isFloorHazardDamaging(h, w.floorHazardClock)) continue;
       ev.push({ t: "hazardHit", pid: p.id, kind: h.kind, x: p.x, y: p.y });
-      damagePlayer(w, p, HAZARD_DAMAGE, ev);
+      damagePlayer(w, p, FLOOR_HAZARD_DAMAGE, ev);
       break;
     }
   }
 }
 
 // Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
-// could revive `p`? Drives the authoritative down-vs-gameover decision.
+// could revive `p`? Drives the authoritative down-vs-gameover decision. Network-absent bodies
+// are EXCLUDED from the wipe calculus entirely (studio balance gate §6: "pending reconnect
+// reservations do not block wipe"): an absent teammate can neither be counted dead (their
+// disconnect never causes a wipe) nor counted standing (a reservation cannot keep a fully
+// downed connected party alive — nobody absent can channel a revive).
 function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
   for (const other of w.players.values()) {
-    if (other === p) continue;
+    if (other === p || other.isAbsent) continue;
     if (!other.isDown && other.hp > 0) return true;
   }
   return w.isCoop && w.remoteTargets.some((r) => !r.isDown);
@@ -2349,6 +3978,10 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
 
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
+  // A network-absent body is reserved, not playing: it cannot be hurt while its player has
+  // no way to react (the reconnect-grace contract). Collision paths skip absent bodies too;
+  // this is the belt-and-suspenders gate on the one damage funnel.
+  if (p.isAbsent) return;
   // A player mid-blessing-pick cannot be hurt. Offers are only raised on the safe side of a
   // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
   // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
@@ -2386,14 +4019,20 @@ function endRun(w: WorldState, ev: SimEvent[]): void {
   for (const other of w.players.values()) ev.push({ t: "gameOver", pid: other.id });
 }
 
-// Shared-world safety net: if the last STANDING player leaves (disconnect, not death), the
-// remaining downed players have no possible revive — end the run for them instead of stranding
-// them on the floor forever. damagePlayer covers the death path; this covers the leave path.
+// Shared-world safety net: if the last STANDING player leaves (an expired seat or a deliberate
+// leave, not death), the remaining downed players have no possible revive — end the run for
+// them instead of stranding them on the floor forever. damagePlayer covers the death path;
+// this covers the leave path. Network-absent bodies are excluded from the calculus entirely
+// (studio balance gate §6): a reservation neither blocks a wipe (an absent ally cannot be
+// waited on while the whole CONNECTED party lies downed) nor causes one (a body that merely
+// disconnected is not "down" — with every connected player absent and nobody downed, the
+// world simply idles until the seats resolve).
 function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
   if (!w.isShared || w.isRunOver || w.players.size === 0) return;
   let anyUp = false;
   let anyDown = false;
   for (const p of w.players.values()) {
+    if (p.isAbsent) continue;
     if (!p.isDown && p.hp > 0) anyUp = true;
     else anyDown = true;
   }
@@ -2410,7 +4049,9 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (!downed.isDown) continue;
     let reviver: PlayerSim | undefined;
     for (const other of w.players.values()) {
-      if (other === downed || other.isDown || other.hp <= 0) continue;
+      // An absent body cannot channel a revive; an absent DOWNED body can still be revived
+      // (a kindness that survives the reconnect — they resume upright).
+      if (other === downed || other.isDown || other.isAbsent || other.hp <= 0) continue;
       if (Math.hypot(other.x - downed.x, other.y - downed.y) <= REVIVE.radius) { reviver = other; break; }
     }
     if (reviver) {
@@ -2439,10 +4080,15 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
   // player, so this is identical to the old single-player check. The authoritative server owns
   // this decision entirely off server positions — no client triggers the transition.
+  // Network-absent bodies are excluded on BOTH sides of the gate: they can neither hold the
+  // party hostage for the whole grace window (they cannot walk to the exit) nor stand in as a
+  // phantom "player at the exit". At least one PRESENT living player must be at the exit, so an
+  // all-absent world never descends by itself; a reserved body is carried down with the party
+  // (descend repositions every player) and resumes on the new floor.
   let anyLiving = false;
   let allAtExit = true;
   for (const p of w.players.values()) {
-    if (p.isDown || p.hp <= 0) continue;
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
     anyLiving = true;
     if (Math.hypot(p.x - ex, p.y - ey) >= TILE) { allAtExit = false; break; }
   }
@@ -2460,7 +4106,10 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   // A boss floor's reward was its chest (the Rare pick), so leaving it offers nothing.
   if (!w.isBlessingOfferedThisFloor && !isBossFloor(w.floor)) {
     w.isBlessingOfferedThisFloor = true;
-    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
+    // No offer for a network-absent body: it cannot answer, and its pending entry would hold
+    // the party's descend for the full offer TTL. The trade (documented) is that a player
+    // absent across the exit gate misses that floor's pick.
+    for (const p of w.players.values()) if (!p.isAbsent) raiseBlessingOffer(w, p.id, false, ev);
     return;
   }
   if (w.pendingBlessings.size > 0) return;
@@ -2501,7 +4150,7 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
   if (isOfferDue) {
-    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
+    for (const p of w.players.values()) if (!p.isAbsent) raiseBlessingOffer(w, p.id, false, ev);
   }
 }
 
@@ -2535,13 +4184,15 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   recordHistory(w);
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
+  updateGauntlet(w, dt, ev);
+  updateHazards(w, dt);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
-  updateHazards(w, dt, ev);
+  updateFloorHazards(w, dt, ev);
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
   checkStrandedWipe(w, ev);
-  tickPendingBlessings(w, dt);
+  tickPendingBlessings(w, dt, ev);
   updateExit(w, ev);
 
   for (const p of w.players.values()) {
@@ -2576,8 +4227,16 @@ export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: 
 export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: number): Prop {
   const p: Prop = { id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false };
   w.props.push(p);
+  w.obstacleRev++;
   return p;
 }
 export function devSpawnChest(w: WorldState, x: number, y: number): void {
   w.chests.push({ id: w.nextChestId++, kind: "wood", x, y, radius: 16, opened: false });
+}
+
+// Dev flow inspector: the standard-class prop-aware chase field, lazily built off the
+// current targets. Diagnostics only — reading it never changes game outcomes (the same
+// cached build would happen on the next enemy query anyway).
+export function navDebugField(w: WorldState): FlowField {
+  return chaseFieldFor(w, ENEMY_ARCHETYPES.slime.radius);
 }

@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 
+__pycache__/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -25,6 +27,6 @@ dist-ssr
 .vercel
 .env*
 
-# Python tool caches
+# Python bytecode (tools/ scripts)
 __pycache__/
 *.pyc

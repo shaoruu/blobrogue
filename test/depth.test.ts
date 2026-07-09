@@ -8,20 +8,19 @@
 
 import { generateDungeon } from "../src/sim/dungeon.js";
 import type { Dungeon, RoomShape } from "../src/sim/dungeon.js";
-import { flockSteer, flockOut, BAT_FLOCK } from "../src/sim/flock.js";
 import {
-  placeHazards, hazardBudgetForFloor, hazardPhaseAt, hazardPhaseFrac, isHazardDamaging,
-  HAZARD_TIMING, HAZARD_DAMAGE, RIFT_PULL_SPEED, RIFT_PULL_RADIUS, hazardPeriod,
-  HAZARD_PERIOD, HAZARD_RELEASE_GAP, hazardOnset, hazardOnsetsInRoom,
+  placeFloorHazards, floorHazardBudgetFor, floorHazardPhaseAt, floorHazardPhaseFrac, isFloorHazardDamaging,
+  HAZARD_TIMING, FLOOR_HAZARD_DAMAGE, RIFT_PULL_SPEED, RIFT_PULL_RADIUS, floorHazardPeriod,
+  HAZARD_PERIOD, HAZARD_RELEASE_GAP, floorHazardOnset, floorHazardOnsetsInRoom,
 } from "../src/sim/hazards.js";
 import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
-import type { Hazard, HazardKind } from "../src/sim/types.js";
+import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, isGauntletFloor, floorBannerText } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
 import { spawnFloorEnemies, isBossFloor, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
-import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp, damagePropsInRadius } from "../src/sim/world.js";
+import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp } from "../src/sim/world.js";
 import { Rng } from "../src/sim/rng.js";
 import type { Bullet } from "../src/sim/types.js";
 import * as C from "../src/sim/constants.js";
@@ -269,14 +268,14 @@ function hazardPlacementTests(): void {
   for (const seed of SEEDS) {
     for (const floor of FLOORS) {
       const d = generateDungeon(seed, floor);
-      const hz = placeHazards(d, seed, floor);
-      const again = placeHazards(d, seed, floor);
+      const hz = placeFloorHazards(d, seed, floor);
+      const again = placeFloorHazards(d, seed, floor);
       if (JSON.stringify(hz) !== JSON.stringify(again)) isLayoutDeterministic = false;
       // Studio-gate cadence: floor 1 teaches with zero hazards; floor 2 carries only the
       // half-unit spikes taste; boss floors are boss-authored ONLY (generator places none).
       if (floor === 1 && hz.length > 0) isShallowClean = false;
       if (floor === 2 && (hz.length > 2 || hz.some((h) => h.kind !== "spikes"))) isShallowClean = false;
-      if (hz.length > hazardBudgetForFloor(floor)) isBudgetOk = false;
+      if (hz.length > floorHazardBudgetFor(floor)) isBudgetOk = false;
       const seenTiles = new Set<number>();
       for (const h of hz) {
         const key = h.ty * d.w + h.tx;
@@ -319,7 +318,7 @@ function hazardPlacementTests(): void {
   for (const seed of SEEDS) {
     for (const floor of FLOORS) {
       const d = generateDungeon(seed, floor);
-      const hz = placeHazards(d, seed, floor);
+      const hz = placeFloorHazards(d, seed, floor);
       const pools = new Set<number>();
       for (const h of hz) if (h.kind === "toxic_pool") pools.add(h.ty * d.w + h.tx);
       if (pools.size === 0) continue;
@@ -347,14 +346,14 @@ function studioGateTests(): void {
     && HAZARD_DIFFICULTY.casual.roomDenialCap === 0.25 && HAZARD_DIFFICULTY.standard.roomDenialCap === 0.35
     && HAZARD_DIFFICULTY.brutal.roomDenialCap === 0.45);
   check("every pulse kind shares the arbiter's cycle period", (["spikes", "fire_vent", "void_rift"] as const)
-    .every((k) => Math.abs(hazardPeriod(k) - HAZARD_PERIOD) < 1e-9));
+    .every((k) => Math.abs(floorHazardPeriod(k) - HAZARD_PERIOD) < 1e-9));
   {
     let isOrdered = true;
     for (let f = 3; f <= 30; f++) {
       if (isBossFloor(f)) continue;
-      const c = hazardBudgetForFloor(f, "casual");
-      const s = hazardBudgetForFloor(f, "standard");
-      const b = hazardBudgetForFloor(f, "brutal");
+      const c = floorHazardBudgetFor(f, "casual");
+      const s = floorHazardBudgetFor(f, "standard");
+      const b = floorHazardBudgetFor(f, "brutal");
       if (!(c <= s && s <= b)) isOrdered = false;
       if (Math.abs(c - Math.round(0.65 * s)) > 1 || Math.abs(b - Math.round(1.3 * s)) > 1) isOrdered = false;
     }
@@ -373,8 +372,8 @@ function studioGateTests(): void {
     for (const seed of SEEDS) {
       for (const floor of FLOORS) {
         const d = generateDungeon(seed, floor);
-        const hz = placeHazards(d, seed, floor, mode);
-        if (JSON.stringify(hz) !== JSON.stringify(placeHazards(d, seed, floor, mode))) isModeDeterministic = false;
+        const hz = placeFloorHazards(d, seed, floor, mode);
+        if (JSON.stringify(hz) !== JSON.stringify(placeFloorHazards(d, seed, floor, mode))) isModeDeterministic = false;
         if (hz.length === 0) continue;
         for (let ri = 0; ri < d.rooms.length; ri++) {
           const room = d.rooms[ri];
@@ -397,21 +396,21 @@ function studioGateTests(): void {
           const pulses = inRoom.filter((h) => h.kind !== "toxic_pool");
           for (let t = 0; t < HAZARD_PERIOD; t += 0.05) {
             const active = new Set<number>();
-            for (const h of pulses) if (isHazardDamaging(h, t)) active.add(h.group);
+            for (const h of pulses) if (isFloorHazardDamaging(h, t)) active.add(h.group);
             if (active.size > cap) { isConcurrencyOk = false; break; }
           }
           // Release spacing: distinct release instants in this room stay >= 0.30s apart
           // (circular — the schedule repeats every period). Same-instant releases belong
           // to one group erupting as one unit (vent channels). Read through the SAME
           // hook (hazardOnsetsInRoom) the future mob-commitment scheduler will use.
-          const releases = hazardOnsetsInRoom(hz, room);
+          const releases = floorHazardOnsetsInRoom(hz, room);
           for (let i = 0; i < releases.length; i++) {
             for (let j = i + 1; j < releases.length; j++) {
               if (circGap(releases[i], releases[j]) < HAZARD_RELEASE_GAP - 1e-6) isSpacingOk = false;
             }
           }
           for (const h of pulses) {
-            if (!releases.some((r) => Math.abs(r - hazardOnset(h)) < 1e-6)) isSpacingOk = false;
+            if (!releases.some((r) => Math.abs(r - floorHazardOnset(h)) < 1e-6)) isSpacingOk = false;
           }
         }
       }
@@ -429,21 +428,21 @@ function hazardTimingTests(): void {
   for (const kind of ["spikes", "fire_vent", "void_rift"] as const) {
     const t = HAZARD_TIMING[kind]!;
     check(`${kind}: telegraph >= 0.9s and idle >= 2s (never a surprise)`, t.telegraph >= 0.9 && t.idle >= 2);
-    const h: Hazard = { id: 0, kind, tx: 0, ty: 0, phase: 0, group: 0 };
+    const h: FloorHazard = { id: 0, kind, tx: 0, ty: 0, phase: 0, group: 0 };
     let order = "";
-    for (let c = 0; c < hazardPeriod(kind); c += 0.05) {
-      const ph = hazardPhaseAt(h, c);
+    for (let c = 0; c < floorHazardPeriod(kind); c += 0.05) {
+      const ph = floorHazardPhaseAt(h, c);
       const ch = ph === "idle" ? "i" : ph === "telegraph" ? "t" : "a";
       if (!order.endsWith(ch)) order += ch;
     }
     check(`${kind}: cycle runs idle -> telegraph -> active`, order === "ita", order);
     check(`${kind}: phase fraction stays 0..1`, [0.1, 1.3, 2.9, 4.4].every((c) => {
-      const f = hazardPhaseFrac(h, c);
+      const f = floorHazardPhaseFrac(h, c);
       return f >= 0 && f <= 1;
     }));
   }
   check("pools are permanently active (and permanently visible)",
-    isHazardDamaging({ id: 0, kind: "toxic_pool", tx: 0, ty: 0, phase: 0, group: 0 }, 0.123));
+    isFloorHazardDamaging({ id: 0, kind: "toxic_pool", tx: 0, ty: 0, phase: 0, group: 0 }, 0.123));
 }
 
 // A world at `floor` with combat stripped so only the floor itself can act.
@@ -454,10 +453,10 @@ function quietWorld(seed: number, floor: number): WorldState {
   return w;
 }
 
-function findHazardWorld(kind: HazardKind, floor: number): { w: WorldState; h: Hazard } {
+function findHazardWorld(kind: FloorHazardKind, floor: number): { w: WorldState; h: FloorHazard } {
   for (const seed of SEEDS) {
     const w = quietWorld(seed, floor);
-    const h = w.hazards.find((x) => x.kind === kind);
+    const h = w.floorHazards.find((x) => x.kind === kind);
     if (h) return { w, h };
   }
   throw new Error(`no ${kind} found at floor ${floor} across seeds`);
@@ -481,7 +480,7 @@ function hazardDamageTests(): void {
     let hitEvents = 0;
     let hitAt = -1;
     for (let t = 0; t < 60 * 8; t++) {
-      const ph = hazardPhaseAt(h, w.hazardClock + DT);
+      const ph = floorHazardPhaseAt(h, w.floorHazardClock + DT);
       if (ph === "telegraph") wasTelegraphSeen = true;
       const evs = step(w, t);
       for (const e of evs) {
@@ -494,7 +493,7 @@ function hazardDamageTests(): void {
     }
     check("standing on spikes takes damage when they fire", hitAt >= 0 && p.hp < hp0, `hp ${hp0}->${p.hp}`);
     check("the hit was telegraphed first", isTelegraphedBeforeHit);
-    check("post-hit protection prevents same-window melting", hitEvents === 1 && hp0 - p.hp === HAZARD_DAMAGE,
+    check("post-hit protection prevents same-window melting", hitEvents === 1 && hp0 - p.hp === FLOOR_HAZARD_DAMAGE,
       `hits=${hitEvents}`);
   }
   {
@@ -554,7 +553,7 @@ function riftPullTests(): void {
   let isPulled = false;
   let isIdleStill = true;
   for (let t = 0; t < 60 * 10; t++) {
-    const ph = hazardPhaseAt(h, w.hazardClock + DT);
+    const ph = floorHazardPhaseAt(h, w.floorHazardClock + DT);
     p.x = cx - RIFT_PULL_RADIUS * 0.7;
     p.y = cy;
     const before = Math.hypot(p.x - cx, p.y - cy);
@@ -577,29 +576,22 @@ function quietArena(seed: number): WorldState {
 function propInteractionTests(): void {
   section("physical interaction hook: attacks break environment props");
   {
-    const w = quietArena(0x9a11);
-    const p = w.players.get(LOCAL_ID)!;
-    devSpawnProp(w, "crate", p.x + 200, p.y);
-    devSpawnProp(w, "crate", p.x + 600, p.y);
-    const ev: SimEvent[] = [];
-    damagePropsInRadius(w, p.x + 200, p.y, 40, 100, ev);
-    check("hook breaks props inside the radius", w.props[0].dead && ev.some((e) => e.t === "propBreak"));
-    check("hook leaves props outside the radius", !w.props[1].dead);
-  }
-  {
-    // Boss hop-slam obliterates the cover it lands on.
+    // Boss hop-slam obliterates the cover it lands on (routed through the canonical
+    // enemySmashEnvironment path — radius semantics proven by the far crate surviving).
     const w = quietArena(0xb055);
     const p = w.players.get(LOCAL_ID)!;
     const boss = devSpawnEnemy(w, "boss", p.x + 150, p.y);
     boss.attack.cooldown = 0;
     boss.spawnTimer = 0;
     const crate = devSpawnProp(w, "crate", p.x + 20, p.y);
+    const farCrate = devSpawnProp(w, "crate", p.x + 600, p.y + 200);
     let isSlammed = false;
     for (let t = 0; t < 60 * 8 && !isSlammed; t++) {
       if (step(w, t).some((e) => e.t === "bossSlam")) isSlammed = true;
     }
     check("boss slam fired", isSlammed);
     check("cover under the slam shattered", crate.dead);
+    check("cover outside the slam radius survived", !farCrate.dead);
   }
   {
     // The boss's body crushes cover it walks through (it does not politely path around).
@@ -665,18 +657,19 @@ function propInteractionTests(): void {
 }
 
 function flockTests(): void {
-  section("flocking (boids): swarm bats move as one animal");
+  section("flocking: the canonical bat flock (content module) moves as one animal");
   {
-    // Three swarm bats spawned STACKED: separation must un-stack them, cohesion must
-    // keep them a flock, and the chase must still progress toward the player.
+    // Three bats spawned STACKED: the world's flock steering must un-stack them, keep
+    // them a loose pack, and still close on the player. Behavioral, implementation-
+    // agnostic — the content module in world.ts is the single canonical flock.
     const w = quietArena(0xf10c);
     const p = w.players.get(LOCAL_ID)!;
-    const bats = [0, 1, 2].map((i) =>
+    const bats = [0, 1, 2].map(() =>
       createEnemy("bat", p.x + 400, p.y + 200, 1, w.rng, w.nextEnemyId++, { tier: "swarm" }));
     for (const b of bats) { b.spawnTimer = 0; w.enemies.push(b); }
     const centroidDist = () => {
-      const cx = bats.reduce((s, b) => s + b.x, 0) / 3;
-      const cy = bats.reduce((s, b) => s + b.y, 0) / 3;
+      const cx = bats.reduce((s2, b) => s2 + b.x, 0) / 3;
+      const cy = bats.reduce((s2, b) => s2 + b.y, 0) / 3;
       return Math.hypot(cx - p.x, cy - p.y);
     };
     const d0 = centroidDist();
@@ -690,7 +683,7 @@ function flockTests(): void {
       }
     }
     check("separation un-stacks the pack", minPair > 12, `minPair=${minPair.toFixed(1)}`);
-    check("cohesion holds the flock together", maxSpread < BAT_FLOCK.neighborRadius * 2, `spread=${maxSpread.toFixed(1)}`);
+    check("cohesion holds the flock together", maxSpread < 320, `spread=${maxSpread.toFixed(1)}`);
     check("the flock still hunts (centroid closed distance)", centroidDist() < d0 - 40,
       `${d0.toFixed(0)} -> ${centroidDist().toFixed(0)}`);
   }
@@ -708,18 +701,6 @@ function flockTests(): void {
       return JSON.stringify(w.enemies.map((e) => [e.x, e.y, e.zig]));
     };
     check("flock movement is deterministic", run() === run());
-  }
-  {
-    // The pure steer function: a lone bat is untouched; standard-tier bats never flock
-    // (their movement stays byte-identical for the content agent's tuning).
-    const rng = new Rng(5);
-    const solo = createEnemy("bat", 100, 100, 1, rng, 0, { tier: "swarm" });
-    flockSteer(solo, [solo], 1.25, BAT_FLOCK);
-    check("a bat with no flockmates keeps its heading", flockOut.heading === 1.25 && flockOut.zigNudge === 0);
-    const std = createEnemy("bat", 100, 100, 1, rng, 1);
-    const other = createEnemy("bat", 120, 100, 1, rng, 2, { tier: "swarm" });
-    flockSteer(std, [std, other], 0.5, BAT_FLOCK);
-    check("tiers never cross-flock (standard ignores swarm neighbors)", flockOut.heading === 0.5);
   }
 }
 
@@ -785,8 +766,8 @@ function runFloor(seed: number, floor: number, ticks: number): string {
   for (let t = 0; t < ticks; t++) step(w, t);
   const p = w.players.get(LOCAL_ID)!;
   return JSON.stringify({
-    clock: w.hazardClock,
-    hz: w.hazards,
+    clock: w.floorHazardClock,
+    hz: w.floorHazards,
     p: [p.x, p.y, p.hp],
     e: w.enemies.map((e) => [e.id, Math.round(e.x), Math.round(e.y), e.hp]),
     cleared: isFloorCleared(w),

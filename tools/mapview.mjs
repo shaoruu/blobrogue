@@ -16,18 +16,18 @@ const floors = isLadder ? [1, 3, 8, 13, 18, 23, 28, 33] : [floorArg];
 
 const script = `
 import { generateDungeon } from "../src/sim/dungeon.js";
-import { placeHazards, hazardBudgetForFloor } from "../src/sim/hazards.js";
+import { placeFloorHazards, floorHazardBudgetFor } from "../src/sim/hazards.js";
 import { biomeForFloor } from "../src/sim/biomes.js";
 import type { RoomShape } from "../src/sim/dungeon.js";
-import type { HazardKind } from "../src/sim/types.js";
+import type { FloorHazardKind } from "../src/sim/types.js";
 
 const SHAPE_CH: Record<RoomShape, string> = { rect: ".", cell: ".", hall: ".", pillars: ",", arena: "_", cavern: "~", vault: "'", gauntlet: "=" };
-const HAZ_CH: Record<HazardKind, string> = { spikes: "^", toxic_pool: "o", fire_vent: "v", void_rift: "@" };
+const HAZ_CH: Record<FloorHazardKind, string> = { spikes: "^", toxic_pool: "o", fire_vent: "v", void_rift: "@" };
 
 for (const floor of ${JSON.stringify(floors)}) {
   const seed = ${seedArg};
   const d = generateDungeon(seed, floor);
-  const hz = placeHazards(d, seed, floor);
+  const hz = placeFloorHazards(d, seed, floor);
   const grid: string[][] = [];
   for (let y = 0; y < d.h; y++) {
     const row: string[] = [];
@@ -43,7 +43,7 @@ for (const floor of ${JSON.stringify(floors)}) {
   grid[d.spawn.y][d.spawn.x] = "S";
   grid[d.exit.y][d.exit.x] = "E";
   const b = biomeForFloor(floor);
-  console.log("\\n=== floor " + floor + " — " + b.name + " (seed " + seed + ") — " + d.rooms.length + " rooms, " + hz.length + " hazard tiles (budget " + hazardBudgetForFloor(floor) + ") ===");
+  console.log("\\n=== floor " + floor + " — " + b.name + " (seed " + seed + ") — " + d.rooms.length + " rooms, " + hz.length + " hazard tiles (budget " + floorHazardBudgetFor(floor) + ") ===");
   console.log("shapes: " + d.rooms.map((r) => r.shape + (r.kind === "hazard" ? "!" : r.kind === "treasure" ? "$" : r.kind === "spawn" ? "+S" : r.kind === "exit" ? "+E" : "")).join(" "));
   console.log(grid.map((row) => row.join("")).join("\\n"));
 }
