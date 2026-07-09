@@ -5,9 +5,13 @@
 // and the client UI (picker labels + lock requirements). Keeping requirement EVALUATION here
 // means the persistence layer can never drift from what the UI advertises.
 //
-// Power philosophy (mirrors balance.ts §0): a pet is flavor + a modest utility lane, never a
-// second weapon. Every combat number below is bounded by PET_CAPS, asserted in test/pets.test.ts,
-// so no future tuning pass can quietly turn a companion into a turret. Pets consume NO sim RNG —
+// Power philosophy (mirrors balance.ts §0, hardened by the owner's ship decision after GD
+// review): a pet is flavor + a modest utility lane, never a second weapon. One pet per player;
+// no collision, no enemy aggro, no blocking, no loot interference; combat ≤10% of the owner's
+// measured DPS and ≤25% of the party's combined; triggered utility on a ≥6s cadence. Every
+// number below is bounded by PET_CAPS — the static suite (test/pets.test.ts) checks the
+// authored table and the mandatory studio gate (test/petgate.test.ts) checks MEASURED play —
+// so no tuning pass can quietly turn a companion into a turret. Pets consume NO sim RNG —
 // their behavior is a pure function of world state — so adding one to a world can never perturb
 // loot/spawn streams (the golden-master suite stays byte-identical with pets absent).
 //
@@ -125,32 +129,36 @@ export const PET_BALANCE = {
   },
   bonebird: {
     range: 280,        // target acquisition range around the OWNER
-    peckCd: 4.5,
+    // The peck is the bird's triggered utility (it applies the mark), so its cadence obeys
+    // the ≥6s utility-cooldown floor; with the 1.0s mark that is ≈17% worst-case
+    // single-target uptime, well under the 25% cap.
+    peckCd: 6,
     peckSpeed: 400,
     peckRadius: 5,
     peckDamage: 1,
     peckLife: 0.8,     // seconds of flight (~320 px) before the peck fizzles
-    // Mark window / cadence author the §5 utility budget: 1.0s per 4.5s peck ≈ 22% worst-
-    // case single-target uptime, under the 25% cap with margin.
     markSecs: 1.0,
     markDamageMult: 1.08, // marked enemies take +8% damage from PLAYER strikes (§5 ceiling)
   },
 } as const;
 
 // Hard ceilings on pet contribution — the §5 table of
-// docs/specs/blobrogue_STUDIO_BALANCE_GATE.md, the same pattern as balance.ts CAPS: tuning
-// may move PET_BALANCE, never past these. The static suite (test/pets.test.ts) checks the
-// authored numbers; the MANDATORY studio gate (test/petgate.test.ts) checks the same caps
-// against MEASURED play across Casual/Standard/Brutal and party sizes 1–4.
+// docs/specs/blobrogue_STUDIO_BALANCE_GATE.md, tightened to the severe end of the owner's
+// ship decision (≤10% owner DPS within the spec's ≤12% allowance; utility cadence ≥6s).
+// Same pattern as balance.ts CAPS: tuning may move PET_BALANCE, never past these. The static
+// suite (test/pets.test.ts) checks the authored numbers; the MANDATORY studio gate
+// (test/petgate.test.ts) checks the same caps against MEASURED play across
+// Casual/Standard/Brutal and party sizes 1–4.
 export const PET_CAPS = {
-  sustainedDps: 1.25,    // absolute ceiling on one pet's steady-state damage/second
-  ownerDpsShare: 0.12,   // one pet's sustained DPS vs its owner's measured median weapon DPS
-  ownerBurstShare: 0.18, // pet damage in ANY 3s window vs the owner baseline over 3s
-  partyDpsShare: 0.25,   // all party pets combined vs the party's measured player DPS
-  killShare: 0.15,       // pet-finished kills vs the owner's total credited kills
-  markDamageMult: 1.08,  // the team-utility mark may never exceed +8% (§5 vulnerability cap)
-  markUptime: 0.25,      // worst-case single-target mark uptime
-  healingPerFloor: 0.25, // expected HP/floor a pet may restore (ours restore exactly 0)
-  healingPer90s: 1,      // absolute HP per rolling 90s (ours: 0 — Fang never procs off pets)
-  coinPullSpeed: 240,    // wisp assist stays at-or-under Coin Magnet Lv1 pull
+  sustainedDps: 1.0,      // absolute ceiling on one pet's steady-state damage/second
+  ownerDpsShare: 0.10,    // one pet's sustained DPS vs its owner's measured median weapon DPS
+  ownerBurstShare: 0.18,  // pet damage in ANY 3s window vs the owner baseline over 3s
+  partyDpsShare: 0.25,    // all party pets combined vs the party's measured player DPS
+  killShare: 0.15,        // pet-finished kills vs the owner's total credited kills
+  utilityCooldownMin: 6,  // triggered utility (the mark's peck) may never cycle faster
+  markDamageMult: 1.08,   // the team-utility mark may never exceed +8% (§5 vulnerability cap)
+  markUptime: 0.25,       // worst-case single-target mark uptime
+  healingPerFloor: 0.25,  // expected HP/floor a pet may restore (ours restore exactly 0)
+  healingPer90s: 1,       // absolute HP per rolling 90s (ours: 0 — Fang never procs off pets)
+  coinPullSpeed: 240,     // wisp assist stays at-or-under Coin Magnet Lv1 pull
 } as const;

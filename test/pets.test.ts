@@ -113,6 +113,8 @@ function capTests(): void {
     bird.markDamageMult <= PET_CAPS.markDamageMult, `${bird.markDamageMult} <= ${PET_CAPS.markDamageMult}`);
   check("authored worst-case mark uptime under the 25% cap",
     bird.markSecs / bird.peckCd <= PET_CAPS.markUptime, `${(bird.markSecs / bird.peckCd).toFixed(3)}`);
+  check("triggered utility honors the ≥6s cooldown floor (owner ship decision)",
+    bird.peckCd >= PET_CAPS.utilityCooldownMin, `peckCd=${bird.peckCd}`);
   const magnetLv1 = createMods();
   recomputeMods(magnetLv1, ["coin_magnet"]);
   check("wisp coin pull at-or-under the cap AND weaker than Coin Magnet Lv1",
@@ -184,13 +186,23 @@ function separationTests(): void {
 }
 
 function nonBlockingTests(): void {
-  section("pets block nothing: players walk straight through them");
+  section("pets block nothing and draw no aggro (readability contract)");
   const { w, p, pet } = arenaWithPet("ember_pup");
   pet.x = p.x + 24; pet.y = p.y; // parked dead ahead
   const x0 = p.x;
   run(w, 20, new Map([["pA", { ...IDLE, moveX: 1 }]]));
   // 20 ticks at base 200 px/s = 200px; any pet collision would have cost distance.
   check("owner's path is unimpeded by the pet", p.x - x0 > 195, `moved=${(p.x - x0).toFixed(1)}`);
+
+  // Enemies never target pets: with a pet parked far closer than any player, the chaser
+  // still walks at the PLAYER — pets are invisible to enemy AI by construction.
+  const { w: w2, p: p2, pet: bait } = arenaWithPet("ember_pup");
+  const chaser = devSpawnEnemy(w2, "slime", p2.x + 400, p2.y + 200);
+  bait.x = chaser.x + 30; bait.y = chaser.y; // pet right beside the enemy
+  const d0 = Math.hypot(chaser.x - p2.x, chaser.y - p2.y);
+  run(w2, 30);
+  const d1 = Math.hypot(chaser.x - p2.x, chaser.y - p2.y);
+  check("enemies ignore pets and close on the player", d1 < d0 - 30, `d ${d0.toFixed(0)} -> ${d1.toFixed(0)}`);
 }
 
 function emberPupTests(): void {

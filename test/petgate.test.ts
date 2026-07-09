@@ -214,6 +214,8 @@ function petBench(kind: PetKind, ownerMedianDps: number): void {
     check("mark uptime on a focused target ≤ 25% (control budget)",
       uptime > 0 && uptime <= PET_CAPS.markUptime, `${(uptime * 100).toFixed(1)}%`);
     check("mark multiplier ≤ +8% (vulnerability budget)", PET_BALANCE.bonebird.markDamageMult <= PET_CAPS.markDamageMult);
+    check("triggered utility cadence ≥ 6s (owner ship decision)",
+      PET_BALANCE.bonebird.peckCd >= PET_CAPS.utilityCooldownMin, `peckCd=${PET_BALANCE.bonebird.peckCd}`);
   }
 }
 

@@ -221,12 +221,16 @@ export class Menu {
       const isActive = this.session.activePet === kind;
       const b = el("button", "secondary pet-btn" + (isUnlocked ? "" : " locked") + (isActive ? " sel" : ""));
       b.type = "button";
+      const row = el("span", "pet-row");
       const dot = el("span", "pet-dot");
       dot.style.background = def.tint;
-      b.appendChild(dot);
-      b.appendChild(el("span", "pet-name", def.name));
-      b.appendChild(el("span", "pet-state", isActive ? "equipped" : isUnlocked ? "equip" : "locked"));
-      b.title = def.role;
+      row.appendChild(dot);
+      row.appendChild(el("span", "pet-name", def.name));
+      row.appendChild(el("span", "pet-state", isActive ? "equipped" : isUnlocked ? "equip" : "locked"));
+      b.appendChild(row);
+      // First-class unlock/equip: the row always SHOWS what it is (role) or what it takes
+      // (the exact milestone) — never a hidden tooltip or a click-to-discover.
+      b.appendChild(el("span", "pet-sub", isUnlocked ? def.role : def.requirement.label));
       b.addEventListener("click", () => {
         if (!isAccount) { note.textContent = "sign in with Google to unlock companions"; return; }
         if (!isUnlocked) { note.textContent = def.requirement.label; return; }
