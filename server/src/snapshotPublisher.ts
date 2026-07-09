@@ -88,7 +88,9 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
         aid: conn.authName ?? conn.playerId,
         nm: conn.displayName ?? conn.playerId,
         cl: conn.colorIndex,
-        st: "on",
+        // A silent-but-open link reads as away too: teammates should see RECONNECTING the
+        // moment the body goes safe (3s), not only once the socket finally dies.
+        st: conn.isSoftAbsent ? "away" : "on",
       });
     }
     for (const seat of room.seats()) {

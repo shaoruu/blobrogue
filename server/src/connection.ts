@@ -53,6 +53,13 @@ export interface Conn {
   malformed: number;         // count of malformed messages (kick threshold)
 
   connectedAt: number;
+  // Wall-clock of the last inbound frame of ANY kind. Drives silent-drop detection (studio
+  // balance gate §6): a link that goes quiet for absenceDetectMs marks the body absent/safe
+  // long before the heartbeat timeout closes the socket, and the next frame restores it.
+  lastInboundAt: number;
+  // The body is currently soft-absent (silent link, socket still open). Distinct from a
+  // reserved seat — the connection is alive and recovers by simply speaking again.
+  isSoftAbsent: boolean;
   // inbound message rate limiting (sliding 1s window, per class + aggregate)
   rate: RateWindows;
 
@@ -111,7 +118,7 @@ export function newRateWindows(now: number): RateWindows {
 
 export function newConnState(now: number): Pick<Conn,
   "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "resumeToken" | "isLeaving" | "malformed"
-  | "connectedAt" | "rate"
+  | "connectedAt" | "lastInboundAt" | "isSoftAbsent" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
   | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline" | "gameOver"
@@ -121,7 +128,7 @@ export function newConnState(now: number): Pick<Conn,
   return {
     authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null,
     resumeToken: null, isLeaving: false, malformed: 0,
-    connectedAt: now, rate: newRateWindows(now),
+    connectedAt: now, lastInboundAt: now, isSoftAbsent: false, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,
     closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0, gameOver: false,

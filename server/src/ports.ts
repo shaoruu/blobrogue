@@ -46,6 +46,8 @@ export interface RoomRuntime {
 
   addPlayer(pid: PlayerId): void;
   removePlayer(pid: PlayerId): void;
+  // Flip a player's network-absence (silent-link soft absence, seat reservation, resume).
+  setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void;
 
   // ---- reconnect seats (grace/resume) ----
   // Reserve the dropped connection's body + continuity state until expiresAt.

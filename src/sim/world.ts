@@ -2434,14 +2434,14 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
 }
 
 // Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
-// could revive `p`? Drives the authoritative down-vs-gameover decision. A network-absent body
-// DELIBERATELY counts as standing while it is alive: its player may resume within the grace
-// window and channel the revive — treating them as gone here is exactly the false-wipe the
-// reconnect grace exists to prevent. If they never return, the seat expiry removes them and
-// checkStrandedWipe ends the run then.
+// could revive `p`? Drives the authoritative down-vs-gameover decision. Network-absent bodies
+// are EXCLUDED from the wipe calculus entirely (studio balance gate §6: "pending reconnect
+// reservations do not block wipe"): an absent teammate can neither be counted dead (their
+// disconnect never causes a wipe) nor counted standing (a reservation cannot keep a fully
+// downed connected party alive — nobody absent can channel a revive).
 function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
   for (const other of w.players.values()) {
-    if (other === p) continue;
+    if (other === p || other.isAbsent) continue;
     if (!other.isDown && other.hp > 0) return true;
   }
   return w.isCoop && w.remoteTargets.some((r) => !r.isDown);
@@ -2493,13 +2493,17 @@ function endRun(w: WorldState, ev: SimEvent[]): void {
 // Shared-world safety net: if the last STANDING player leaves (an expired seat or a deliberate
 // leave, not death), the remaining downed players have no possible revive — end the run for
 // them instead of stranding them on the floor forever. damagePlayer covers the death path;
-// this covers the leave path. An absent-but-alive body counts as up (same reasoning as
-// hasStandingAlly), so a mere disconnect can never wipe the party inside the grace window.
+// this covers the leave path. Network-absent bodies are excluded from the calculus entirely
+// (studio balance gate §6): a reservation neither blocks a wipe (an absent ally cannot be
+// waited on while the whole CONNECTED party lies downed) nor causes one (a body that merely
+// disconnected is not "down" — with every connected player absent and nobody downed, the
+// world simply idles until the seats resolve).
 function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
   if (!w.isShared || w.isRunOver || w.players.size === 0) return;
   let anyUp = false;
   let anyDown = false;
   for (const p of w.players.values()) {
+    if (p.isAbsent) continue;
     if (!p.isDown && p.hp > 0) anyUp = true;
     else anyDown = true;
   }

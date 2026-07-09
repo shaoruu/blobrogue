@@ -40,6 +40,11 @@ export interface ServerConfig {
   // Reconnect grace: how long an unexpectedly-disconnected player's body/state is reserved
   // (absent + safe) before the authoritative leave applies. 0 disables seats entirely.
   resumeGraceMs: number;
+  // Silent-drop detection (studio balance gate §6: "invulnerable/non-targeting after 3s
+  // disconnect detection"): a connection that delivers NO inbound traffic for this long has
+  // its body marked absent/safe immediately — without waiting for the heartbeat timeout to
+  // close the socket — and restored the moment traffic resumes. 0 disables the fast path.
+  absenceDetectMs: number;
   // interest management: per-client snapshot radius in px (0 disables filtering)
   interestRadius: number;
   // Measurement mode: build an OPEN arena world (no dungeon walls) so the load harness can move a
@@ -77,13 +82,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxPongPerSec: intEnv(env, "GS_MAX_PONG_PER_SEC", 12, 1, 10000),
     maxInputQueue: intEnv(env, "GS_MAX_INPUT_QUEUE", 32, 1, 4096),
     joinTimeoutMs: intEnv(env, "GS_JOIN_TIMEOUT_MS", 5000, 100, 600000),
-    heartbeatMs: intEnv(env, "GS_HEARTBEAT_MS", 5000, 50, 600000),
+    // 2s pings keep a healthy connection's inbound gap under the 3s absence-detection window
+    // (a paused/backgrounded tab still pongs), so soft absence can never flicker on a live
+    // link; 3 misses still close a truly dead socket in ~6s -> seat reservation.
+    heartbeatMs: intEnv(env, "GS_HEARTBEAT_MS", 2000, 50, 600000),
     heartbeatMisses: intEnv(env, "GS_HEARTBEAT_MISSES", 3, 1, 100),
     sendBufferLimit: intEnv(env, "GS_SEND_BUFFER_LIMIT", 256 * 1024, 1024, 1 << 30),
     slowClientKickBytes: intEnv(env, "GS_SLOW_CLIENT_KICK_BYTES", 1024 * 1024, 1024, 1 << 30),
     maxStarveTicks: intEnv(env, "GS_MAX_STARVE_TICKS", 10, 0, 1000),
     offerTtlMs: intEnv(env, "GS_OFFER_TTL_MS", 60000, 1000, 3600000),
     resumeGraceMs: intEnv(env, "GS_RESUME_GRACE_MS", RESUME_GRACE_MS, 0, 600000),
+    absenceDetectMs: intEnv(env, "GS_ABSENCE_DETECT_MS", 3000, 0, 60000),
     // Interest filtering defaults OFF (full snapshots) after the Sev-0 room-divergence
     // incident: filtering may only be re-enabled explicitly (GS_INTEREST_RADIUS=1100, ~1.5x
     // viewport half-extent) once the coherence suite + the staged rollout criteria in

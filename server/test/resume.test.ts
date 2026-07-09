@@ -24,11 +24,14 @@
 // Run: npm run test:resume (in server/).
 
 import { startTestServer, Bot, idle, waitUntil, sleep } from "../harness/lib.js";
+import { LatencySocket, PERFECT_NET } from "../harness/latencySocket.js";
 import { GameServer } from "../src/server.js";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { mintTicket } from "../src/auth.js";
+import { WSTransport } from "../../src/client/wsTransport.js";
 import { jsonCodec, PROTOCOL_VERSION, RESUME_GRACE_MS } from "../../src/net/protocol.js";
+import { devSpawnEnemy } from "../../src/sim/world.js";
 import { TILE } from "../../src/sim/types.js";
 import { WebSocket as WsClient } from "ws";
 
@@ -56,7 +59,11 @@ function isResumed(bot: Bot, sinceTick: number): boolean {
 }
 
 async function main(): Promise<void> {
-  check("production grace default is 25s (the deployed window)", RESUME_GRACE_MS === 25000 && loadConfig({}).resumeGraceMs === 25000);
+  // The studio balance gate's reconnect contract (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md
+  // §6): 90s reservation, absent bodies safe within 3s of disconnect detection.
+  check("production grace default is 90s (balance gate §6)", RESUME_GRACE_MS === 90000 && loadConfig({}).resumeGraceMs === 90000);
+  check("silent-drop detection defaults to 3s, under a 2s heartbeat cadence",
+    loadConfig({}).absenceDetectMs === 3000 && loadConfig({}).heartbeatMs === 2000);
 
   await test("drops early / mid / at the grace edge resume the exact body (scaled 1s/5s/24s-of-25s)", async () => {
     const graceMs = 2500;
@@ -68,10 +75,11 @@ async function main(): Promise<void> {
       const world = s.server.getWorld("room:RSME")!;
       const pid = bot.transport.getSelfServerId()!;
 
-      // A run worth losing: coins, damage taken, an extra weapon, stacked blessings, and a
-      // position away from spawn — every field must survive every outage below exactly.
+      // A run worth losing: coins, FRACTIONAL damage taken (an exact-state resume proves no
+      // heal and no rounding), an extra weapon, stacked blessings, and a position away from
+      // spawn — every field must survive every outage below exactly.
       const p = world.state.players.get(pid)!;
-      p.coins = 137; p.hp = 2; p.x += TILE; p.y += TILE / 2;
+      p.coins = 137; p.hp = 1.5; p.x += TILE; p.y += TILE / 2;
       p.ownedWeapons.push("tesla");
       p.ownedItemIds.push("it_dmg", "it_dmg");
       const wantX = p.x, wantY = p.y;
@@ -96,9 +104,9 @@ async function main(): Promise<void> {
         const self = bot.transport.getLatestSnapshot()?.self;
         check(`[${outageMs}ms] SAME player id (no duplicate body)`, bot.transport.getSelfServerId() === pid && world.playerCount === 1,
           `pid=${bot.transport.getSelfServerId()} players=${world.playerCount}`);
-        check(`[${outageMs}ms] exact state: hp/coins/weapons/blessings/floor/position`,
+        check(`[${outageMs}ms] exact state: fractional hp (no heal/rounding)/coins/weapons/blessings/floor/position`,
           self !== null && self !== undefined
-          && self.hp === 2 && self.coins === 137
+          && self.hp === 1.5 && self.coins === 137
           && self.wpns.includes("tesla")
           && self.items.filter((it) => it === "it_dmg").length === 2
           && bot.transport.getLatestSnapshot()!.floor === 1
@@ -287,8 +295,8 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
-  await test("teammates play on: ticks advance, the ghost is explicit, and no false wipe — until the grace truly expires", async () => {
-    const graceMs = 1500;
+  await test("teammates play on: ticks advance, the ghost is explicit — and a reservation never blocks the wipe (gate §6)", async () => {
+    const graceMs = 8000; // long on purpose: the wipe below must NOT wait for it
     const s = await startTestServer({ resumeGraceMs: graceMs });
     try {
       const ada = new Bot({ url: s.url, secret: s.secret, playerId: "wipe-a", world: "room:WIPE", name: "Ada", script: () => idle() });
@@ -299,7 +307,7 @@ async function main(): Promise<void> {
       const adaPid = ada.transport.getSelfServerId()!;
       const bobPid = bob.transport.getSelfServerId()!;
 
-      // Bob drops (stays dark past his grace). Ada keeps playing.
+      // Bob drops (network stays dark). Ada keeps playing.
       bob.dropConnection(true);
       await waitUntil(() => world.state.players.get(bobPid)?.isAbsent === true, 2000);
       const tickAtDrop = world.state.tick;
@@ -310,24 +318,95 @@ async function main(): Promise<void> {
       check("Ada sees Bob as an explicit reconnecting ghost (ab on the wire)", isGhostSeen);
       const rosterAway = ada.transport.getWorldRoster().find((r) => r.aid === "wipe-b");
       check("the roster shows Bob AWAY (readiness integrates the outage)", rosterAway?.st === "away", `st=${rosterAway?.st}`);
+      check("Bob's mere disconnect wiped nothing (an absent body is not a death)", world.state.isRunOver === false);
+      await sleep(200);
+      check("world kept simulating through the outage", world.state.tick > tickAtDrop);
 
-      // Ada goes down while Bob is absent-but-alive: DOWN, not a wipe — Bob could return.
+      // Ada — the whole CONNECTED party — dies. Balance gate §6: pending reconnect
+      // reservations do NOT block the wipe; the run ends NOW, not after Bob's 8s grace.
       const pa = world.state.players.get(adaPid)!;
       pa.hp = 0.5;
       pa.invuln = 0;
       const slime = world.state.enemies.find(() => true);
       if (slime) { slime.x = pa.x; slime.y = pa.y; }
-      await waitUntil(() => world.state.players.get(adaPid)?.isDown === true, 4000);
-      check("last connected player went DOWN, not game over (absent ally counts as standing)",
-        world.state.players.get(adaPid)?.isDown === true && world.state.isRunOver === false);
-      check("world kept simulating through the outage", world.state.tick > tickAtDrop);
+      const isWiped = await waitUntil(() => ada.transport.getCloseKind() === "game_over", 5000);
+      check("all connected players down -> the wipe applies immediately (reservation does not block it)", isWiped, `kind=${ada.transport.getCloseKind()}`);
 
-      // Bob's grace expires -> authoritative leave -> NOW the stranded wipe applies. The
-      // client-observable proof is Ada's REAL game-over close (the world itself is reset +
-      // released moments later, so poll the transport, not the released world object).
-      const isWiped = await waitUntil(() => ada.transport.getCloseKind() === "game_over", graceMs + 3000);
-      check("after the grace expires the leave lifecycle applies and the stranded wipe ends the run", isWiped, `kind=${ada.transport.getCloseKind()}`);
-      check("the expired member was removed (teammates saw the explicit disconnect)", !world.state.players.has(bobPid));
+      // Bob comes back INSIDE his grace — into the truth: the run is over. He sees the wipe
+      // (over-state snapshot), never a resurrected private run.
+      bob.restoreNetwork();
+      const isBackToOver = await waitUntil(() => bob.transport.getLatestSnapshot()?.over === true, 5000);
+      check("the reserved member resumes into the over-state (sees the wipe, no divergent run)", isBackToOver);
+      ada.stop(); bob.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("silent link (gate §6: safe within 3s of detection): body pauses without a socket close and traffic restores it", async () => {
+    // No server pings (huge heartbeat) so the ONLY inbound traffic is what this test sends.
+    const s = await startTestServer({ absenceDetectMs: 250, heartbeatMs: 60000 });
+    try {
+      const transport = new WSTransport({
+        url: s.url,
+        getTicket: () => Promise.resolve(mintTicket(s.secret, "quiet-id", 120, Date.now(), { worldId: "room:QUIE" })),
+        socketFactory: (url) => new LatencySocket(url, PERFECT_NET),
+      });
+      transport.start();
+      await waitUntil(() => transport.isReady(), 3000);
+      const world = s.server.getWorld("room:QUIE")!;
+      const pid = transport.getSelfServerId()!;
+      const conn = [...world.conns.values()][0];
+
+      // Drive a few input frames (inbound traffic), then go COMPLETELY silent — the socket
+      // stays open the whole time.
+      for (let i = 0; i < 4; i++) { transport.sendInput(idle()); transport.advance(0.06); await sleep(30); }
+      check("body present while the link talks", world.state.players.get(pid)?.isAbsent === false);
+
+      const isPaused = await waitUntil(() => world.state.players.get(pid)?.isAbsent === true, 2000);
+      check("silence past the window pauses the body (safe) with the socket still OPEN", isPaused && world.conns.size === 1 && conn.isSoftAbsent);
+      check("no seat was reserved (the connection is alive, just quiet)", s.server.health().counters.seatsReserved === 0);
+      // Snapshots keep flowing to the quiet client; its roster seat reads away for everyone.
+      const isAwayOnRoster = await waitUntil(() => transport.getWorldRoster().find((r) => r.aid === "quiet-id")?.st === "away", 1000);
+      check("the roster seat reads AWAY while the link is silent", isAwayOnRoster);
+
+      // One frame of traffic restores the body instantly.
+      transport.sendInput(idle());
+      transport.advance(0.06);
+      const isRestored = await waitUntil(() => world.state.players.get(pid)?.isAbsent === false, 1000);
+      check("the next inbound frame restores the body", isRestored && !conn.isSoftAbsent);
+      transport.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("no boss/party rescale during a reservation (gate §6): boss HP and encounter scaling are untouched", async () => {
+    const graceMs = 700;
+    const s = await startTestServer({ resumeGraceMs: graceMs });
+    try {
+      const ada = new Bot({ url: s.url, secret: s.secret, playerId: "boss-a", world: "room:BOSS", name: "Ada", script: () => idle(), reconnect: { ...FAST, graceMs } });
+      const bob = new Bot({ url: s.url, secret: s.secret, playerId: "boss-b", world: "room:BOSS", name: "Bob", script: () => idle() });
+      ada.start(); bob.start();
+      await waitUntil(() => ada.transport.isReady() && bob.transport.isReady(), 3000);
+      const world = s.server.getWorld("room:BOSS")!;
+      const adaPid = ada.transport.getSelfServerId()!;
+      const pa = world.state.players.get(adaPid)!;
+      const boss = devSpawnEnemy(world.state, "boss", pa.x + 400, pa.y);
+      const bossMaxHp = boss.maxHp;
+      const bossHp = boss.hp;
+      const encounterBefore = world.state.encounterPlayers;
+
+      // Mid-pull disconnect: the reservation must rescale NOTHING.
+      ada.dropConnection(true);
+      await waitUntil(() => world.state.players.get(adaPid)?.isAbsent === true, 2000);
+      await sleep(250);
+      check("boss HP untouched by the disconnect (no rescale, no heal)", boss.hp === bossHp && boss.maxHp === bossMaxHp,
+        `hp=${boss.hp}/${boss.maxHp}`);
+      check("encounter scaling untouched during the reservation", world.state.encounterPlayers === encounterBefore);
+
+      // Even the EXPIRY mid-floor rescales nothing — floor scaling is snapshotted at build
+      // and never re-rolls living enemies (the next floor build is the rescale point).
+      const isExpired = await waitUntil(() => !world.state.players.has(adaPid), graceMs + 1500);
+      check("seat expired (authoritative leave mid-pull)", isExpired);
+      check("boss STILL untouched after the expiry (no mid-floor rescale)", boss.hp === bossHp && boss.maxHp === bossMaxHp);
+      check("encounter scaling STILL untouched mid-floor", world.state.encounterPlayers === encounterBefore);
       ada.stop(); bob.stop();
     } finally { await s.close(); }
   });

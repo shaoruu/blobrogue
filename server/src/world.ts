@@ -118,6 +118,10 @@ export class GameWorld implements RoomRuntime {
     removePlayerFromWorld(this.state, pid);
   }
 
+  setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void {
+    setPlayerAbsence(this.state, pid, isAbsent);
+  }
+
   // ---- reconnect seats ----
 
   reserveSeat(conn: Conn, nowMs: number, ttlMs: number): void {

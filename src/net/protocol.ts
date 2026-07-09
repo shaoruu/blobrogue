@@ -50,10 +50,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 export const PROTOCOL_VERSION = 4;
 
 // How long the server reserves a disconnected player's body (their seat) before the
-// authoritative leave lifecycle applies. Shared so the client's reconnect loop and grace
-// countdown agree with the server default (GS_RESUME_GRACE_MS can override server-side; the
-// countdown is display-only).
-export const RESUME_GRACE_MS = 25000;
+// authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
+// contract (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §6) — a reserved body is paused,
+// safe, gate-neutral, and never blocks a wipe, so the long window costs teammates nothing
+// while covering real-world outages (router resets, elevator rides). Shared so the client's
+// reconnect loop and grace countdown agree with the server default (GS_RESUME_GRACE_MS can
+// override server-side; the countdown is display-only).
+export const RESUME_GRACE_MS = 90000;
 
 // World ids are minter-controlled but still bounded/charset-checked so a compromised minter
 // can't inject log-breaking or unbounded ids ("room:ABCD", "arena-1", ...). Shared by the

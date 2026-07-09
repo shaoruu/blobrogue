@@ -346,21 +346,38 @@ takeover. `test/partygate.test.ts` locks the timeout/leave semantics.
 ### Reconnect grace / session resume — a Wi-Fi blip is never a death
 
 A brief network drop used to read as YOU DIED: the server removed the body on disconnect and
-the client turned a dead socket into a game over. Resume correctness is now first-class:
+the client turned a dead socket into a game over. Resume correctness is now first-class,
+reconciled with the studio balance gate's reconnect contract
+([`docs/specs/blobrogue_STUDIO_BALANCE_GATE.md`](docs/specs/blobrogue_STUDIO_BALANCE_GATE.md) §6):
 
-- **Seats.** On an UNEXPECTED disconnect (network death, heartbeat timeout, backpressure
-  kick — anything that is not a join reject, game over, superseded connection, or an explicit
-  client `leave`), the server reserves the player's seat for `GS_RESUME_GRACE_MS` (default
-  25s): the authoritative body stays in the world with its full state — HP, inventory,
+- **Seats (90s reservation, per the balance gate).** On an UNEXPECTED disconnect (network
+  death, heartbeat timeout, backpressure kick — anything that is not a join reject, game
+  over, superseded connection, or an explicit client `leave`), the server reserves the
+  player's seat for `GS_RESUME_GRACE_MS` (default 90s): the authoritative body stays in the
+  world with its full state — HP (exact, fractional — no heal, no rounding), inventory,
   blessings, coins, floor, down state, pending blessing offer — plus the connection's
-  command/offer continuity (input ack watermark, command sequence).
+  command/offer continuity (input ack watermark, command sequence). A reserved body is
+  paused, safe, and gate-neutral, so the long window costs teammates nothing.
+- **3s silent-drop detection.** The body goes safe BEFORE the socket dies: a connection
+  whose link delivers nothing for `GS_ABSENCE_DETECT_MS` (default 3s; heartbeat pongs arrive
+  every 2s, so a healthy link can never trip it) is marked absent immediately and reads
+  `away` on the roster; the very next inbound frame restores it. The heartbeat close (~6-8s)
+  then converts the soft absence into a reserved seat.
 - **Absent bodies are paused and safe.** A reserved body cannot act, take damage, attract
   enemies, collect loot, open chests, or channel revives; it is excluded from the exit and
   blessing gates on BOTH sides (it can neither trigger a descend nor hold the party hostage —
-  the party can descend and the body is carried along), and it counts as ALIVE for wipe
-  checks — a disconnect can never cause a false party wipe inside the grace. Teammates see an
-  explicit reconnecting ghost (`PlayerWire.ab`) and an `away` roster seat, never a corpse.
-  Returning from absence grants the spawn-grace mercy window.
+  the party can descend and the body is carried along). Nothing rescales during a
+  reservation: encounter scaling is snapshotted at floor build and boss HP is never
+  re-rolled, so a mid-pull disconnect (or even a mid-floor expiry) changes no enemy numbers.
+  Teammates see an explicit reconnecting ghost (`PlayerWire.ab`) and an `away` roster seat,
+  never a corpse. Returning from absence grants the spawn-grace mercy window (an
+  invulnerability beat, not a heal).
+- **Reservations and the wipe (balance gate §6: "pending reconnect reservations do not block
+  wipe").** Absent bodies are excluded from the wipe calculus entirely: a mere disconnect is
+  never treated as a death (it cannot cause a wipe — with every connected player absent the
+  world simply idles), but a reservation cannot keep a run alive either — when the whole
+  CONNECTED party is down, the run ends immediately, and a member resuming afterwards lands
+  in the over-state (they see the wipe, never a resurrected private run).
 - **Resume tokens.** Every join answer carries a single-use, server-minted random seat token
   (`tok`, 192 bits, on every per-connection snapshot so packet loss cannot strand a stale
   token). Reconnecting presents a FRESH ticket (identity/room re-proved through the normal
@@ -394,12 +411,24 @@ the client turned a dead socket into a game over. Resume correctness is now firs
   veil; the HUD label appends `· n reconnecting`; `/worlds` lists `away` occupants for ops.
 
 `server/test/resume.test.ts` locks all of it with real reconnecting clients: exact-state
-resumes at 4%/20%/96% of the grace window (the 1s/5s/24s-of-25s production pattern, scaled),
-expiry -> authoritative leave -> explicit `resume_expired`, replayed-token rejection with an
-undisturbed victim, drops while downed / mid-blessing / standing on the exit (no false
-descend, no deadlock, offer survives), teammates playing through an outage with no false
-wipe, a flaky-network convergence run (latency + jitter + 25% loss + repeated kills), and a
-real server-restart round trip.
+resumes at 4%/20%/96% of the grace window (early blip / mid outage / near-edge return,
+scaled), expiry -> authoritative leave -> explicit `resume_expired`, replayed-token rejection
+with an undisturbed victim, drops while downed / mid-blessing / standing on the exit (no
+false descend, no deadlock, offer survives), the silent-link pause + restore, the
+no-boss/party-rescale invariants, teammates playing through an outage with the wipe applying
+immediately once every connected player is down (reservations never block it), a
+flaky-network convergence run (latency + jitter + 25% loss + repeated kills), and a real
+server-restart round trip.
+
+**Balance-gate items deliberately NOT in this PR** (they depend on systems blobrogue does not
+have yet, and belong to those features): post-expiry *spectator mode* (today: lobby with a
+`connection lost` note; REJOIN enters the live run fresh), boss *reward eligibility*
+accounting (≥50% fight time / ≥5% boss damage — there is no per-player boss reward split to
+gate yet), the *4.0s simultaneous-down wipe window* (the wipe is currently instant when the
+last connected player falls; changing it moves solo game-over timing and the golden masters,
+so it ships with the difficulty-modes work), and per-difficulty *down limits* (no
+Casual/Standard/Brutal modes exist). Each keeps the current authoritative behavior described
+above until its owning feature lands.
 
 ### Interest filtering: temporarily OFF in production, and the re-enable plan
 

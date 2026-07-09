@@ -136,6 +136,7 @@ export class GameServer {
     // tick simulates, so wipe/exit gates see the post-leave party the same tick it happens.
     this.metrics.counters.seatsExpired += this.sessions.sweep(this.clock.now());
     for (const room of this.sessions.rooms()) {
+      this.detectSoftAbsence(room);
       try { room.step(this.cfg); } catch (err) { this.log.error("world step failed", { worldId: room.id, err: String(err) }); }
     }
     for (const room of this.sessions.rooms()) {
@@ -147,6 +148,27 @@ export class GameServer {
     const dur = this.clock.mono() - t0;
     this.metrics.recordTick(dur);
     if (dur > TICK_MS) this.log.warn("tick over budget", { ms: Number(dur.toFixed(2)), budget: TICK_MS });
+  }
+
+  // Silent-drop detection (balance gate §6: bodies go invulnerable/non-targeting within 3s of
+  // a disconnect, not only when the heartbeat finally closes the socket): a connection whose
+  // link has delivered NOTHING for absenceDetectMs gets its body marked absent/safe while the
+  // socket lingers; the very next inbound frame restores it. A healthy link can never trip
+  // this — pongs alone arrive every heartbeatMs (< the window), even from a background tab.
+  private detectSoftAbsence(room: RoomRuntime): void {
+    const windowMs = this.cfg.absenceDetectMs;
+    if (windowMs <= 0) return;
+    const now = this.clock.now();
+    for (const conn of room.conns.values()) {
+      if (conn.closing || conn.playerId === null) continue;
+      const isSilent = now - conn.lastInboundAt >= windowMs;
+      if (isSilent === conn.isSoftAbsent) continue;
+      conn.isSoftAbsent = isSilent;
+      room.setPlayerAbsent(conn.playerId, isSilent);
+      conn.log.info(isSilent ? "soft absence (silent link — body paused/safe)" : "soft absence lifted (traffic resumed)", {
+        authName: conn.authName ?? "", worldId: room.id, silentMs: now - conn.lastInboundAt,
+      });
+    }
   }
 
   // Turn this tick's per-player offerBlessing events into server-decided, validated offers.
@@ -232,6 +254,7 @@ export class GameServer {
     // Aggregate rate limit BEFORE parsing (cheap sliding 1s window); per-CLASS limits apply
     // after decode in the router (segmented buckets for input/control/stat/pong).
     const now = this.clock.now();
+    conn.lastInboundAt = now; // any frame proves the link is alive (silent-drop detection)
     if (now - conn.rate.start >= 1000) { conn.rate.start = now; conn.rate.total = 0; conn.rate.input = 0; conn.rate.control = 0; conn.rate.stat = 0; conn.rate.pong = 0; }
     conn.rate.total++;
     this.metrics.counters.msgsIn++;
