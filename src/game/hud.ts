@@ -24,6 +24,8 @@ export interface HudState {
   isCleared: boolean;
   enemiesLeft: number;
   isObjectiveHidden: boolean;
+  // Party context: the cleared copy reads MEET AT EXIT instead of GO DOWN.
+  isParty: boolean;
   isBossActive: boolean;
   bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
   coopLabel: string | null;
@@ -101,9 +103,11 @@ function fmtTime(seconds: number): string {
 
 // The one normal-objective copy (UI Director): the authoritative cleared flag decides the
 // line, and an uncleared floor with nothing visible on the board reads as the incoming
-// reinforcement wave rather than a lying "0 ENEMIES LEFT". Exported for the DOM suite.
-export function objectiveCopy(isCleared: boolean, enemiesLeft: number): string {
-  if (isCleared) return "FLOOR CLEAR \u00b7 GO DOWN";
+// reinforcement wave rather than a lying "0 ENEMIES LEFT". A party's cleared floor is a
+// coordination moment, so its copy points at the MEET, not the descend (the descend fires
+// itself once everyone stages). Exported for the DOM suite.
+export function objectiveCopy(isCleared: boolean, enemiesLeft: number, isParty = false): string {
+  if (isCleared) return isParty ? "FLOOR CLEAR \u00b7 MEET AT EXIT" : "FLOOR CLEAR \u00b7 GO DOWN";
   if (enemiesLeft <= 0) return "ENEMIES INCOMING\u2026";
   return `${enemiesLeft} ${enemiesLeft === 1 ? "ENEMY" : "ENEMIES"} LEFT`;
 }
@@ -673,7 +677,7 @@ export class Hud {
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
     }
-    const objective = s.isBossActive || s.isObjectiveHidden ? "" : objectiveCopy(s.isCleared, s.enemiesLeft);
+    const objective = s.isBossActive || s.isObjectiveHidden ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
     if (objective !== this.prevObjective) {
       this.prevObjective = objective;
       this.objectiveEl.textContent = objective;

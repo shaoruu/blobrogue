@@ -31,6 +31,8 @@ export type GameAction =
   | { kind: "activateSlot"; index: number }
   | { kind: "reorderSlots"; from: number; to: number }
   | { kind: "cycleSpectate"; dir: 1 | -1 }
+  // Spectate follow toggle (F): watched teammate <-> your own body (see who's coming).
+  | { kind: "spectateFollow" }
   | { kind: "stats"; isHeld: boolean };
 
 // Per-action context allow-list. togglePause stays available while paused (Esc resumes),
@@ -46,6 +48,7 @@ const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   activateSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
   cycleSpectate: ["spectate"],
+  spectateFollow: ["spectate"],
   stats: ["gameplay", "spectate"],
 };
 
@@ -134,6 +137,7 @@ export class InputController {
       // bumpers would dispatch the same action.
       if (k === "q" || k === "arrowleft") this.emit({ kind: "cycleSpectate", dir: -1 });
       if (k === "e" || k === "arrowright") this.emit({ kind: "cycleSpectate", dir: 1 });
+      if (k === "f") this.emit({ kind: "spectateFollow" });
     }
     return isPlaying && (k === " " || k === "shift");
   }

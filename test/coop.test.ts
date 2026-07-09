@@ -270,6 +270,17 @@ async function headlessClientSpectateTests(): Promise<void> {
   check("cycle advanced to the next living teammate", game.spectateId === "s2", `target=${game.spectateId}`);
   check("the new target rode the spec uplink", sock.sentOfType("spec").some((m) => m.target === "s2"));
 
+  // F toggles follow mode: watch the teammate <-> watch your own body (see who's coming).
+  game.input.keyDown("f");
+  game.input.keyUp("f");
+  game.tick(1 / 60);
+  const focusBody: { x: number; y: number } = game.cameraFocus();
+  check("F flips the camera focus to your own body", game.isSpectatingBody === true && Math.abs(focusBody.x - self.x) < 1);
+  game.input.keyDown("f");
+  game.input.keyUp("f");
+  game.tick(1 / 60);
+  check("F again returns to the watched teammate", game.isSpectatingBody === false);
+
   // The watched teammate goes down: the camera hands off to whoever still lives.
   mateB.isDown = true; mateB.hp = 0;
   deliverSnap();
@@ -288,15 +299,17 @@ async function headlessClientSpectateTests(): Promise<void> {
   for (let i = 0; i < 120; i++) game.tick(1 / 60);
   check("camera returned to the local player", Math.abs(game.cam.x - (self.x - (domCanvas as any).width / 2)) < 24, `cam.x=${game.cam.x.toFixed(0)}`);
 
-  // The party blessing readout reads from the authoritative pending set.
+  // The party blessing readout reads from the authoritative pending set (UI Director copy).
   world.pendingBlessings.set("s1", 30);
   deliverSnap();
   game.tick(1 / 60);
   const wait: string | null = game.blessingWaitLabel();
-  check("WAITING readout names the still-picking teammate", wait !== null && wait.includes("WAITING FOR 1/3 PLAYER"), wait ?? "null");
+  check("WAITING FOR NAME TO CHOOSE names the still-picking teammate",
+    wait !== null && wait.includes("WAITING FOR S1 TO CHOOSE"), wait ?? "null");
   world.pendingBlessings.clear();
 
-  // Exit coordination readout: authoritative exr drives both perspectives of the label.
+  // Exit coordination readout (UI Director copy): the authoritative exr drives the ready
+  // count, and the checklist names each missing member WITH their distance to the stairs.
   world.enemies = [];
   world.pendingSpawns = [];
   const exitX = world.dungeon.exit.x * 48 + 24, exitY = world.dungeon.exit.y * 48 + 24;
@@ -304,16 +317,16 @@ async function headlessClientSpectateTests(): Promise<void> {
   deliverSnap();
   game.tick(1 / 60);
   const stragglerLabel: string | null = game.exitWaitLabel();
-  check("straggler reads STAND ON THE STAIRS with the staged count",
-    stragglerLabel !== null && stragglerLabel.includes("WAITING AT EXIT \u00b7 1/2") && stragglerLabel.includes("STAND ON THE STAIRS"),
+  check("straggler reads the ready count + YOU with a distance",
+    stragglerLabel !== null && stragglerLabel.includes("1/2 READY TO GO DOWN") && /YOU \d+m/.test(stragglerLabel),
     stragglerLabel ?? "null");
   self.x = exitX; self.y = exitY;
   mateA.x = exitX - 400; mateA.y = exitY;
   deliverSnap();
   game.tick(1 / 60);
   const stagedLabel: string | null = game.exitWaitLabel();
-  check("staged player reads WAITING FOR the missing teammate",
-    stagedLabel !== null && stagedLabel.includes("WAITING AT EXIT \u00b7 1/2") && stagedLabel.includes("WAITING FOR"),
+  check("staged player reads the missing teammate + distance in the checklist",
+    stagedLabel !== null && stagedLabel.includes("1/2 READY TO GO DOWN") && /S1 \d+m/.test(stagedLabel),
     stagedLabel ?? "null");
   mateA.x = exitX; mateA.y = exitY;
   deliverSnap();

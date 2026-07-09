@@ -47,7 +47,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
       { id: "shotgun", name: "Shotgun", isCurrent: true },
       { id: "tesla", name: "Tesla", isCurrent: false },
     ],
-    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isBossActive: false, bossHpFrac: 0,
+    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
@@ -262,6 +262,9 @@ function hierarchyTests(): void {
   hud.update(mkState({ isCleared: true, enemiesLeft: 0 }));
   check("cleared floor flips to FLOOR CLEAR \u00b7 GO DOWN with the clear accent",
     objective.textContent === "FLOOR CLEAR \u00b7 GO DOWN" && objective.classList.contains("clear"));
+  hud.update(mkState({ isCleared: true, enemiesLeft: 0, isParty: true }));
+  check("a party's cleared floor reads MEET AT EXIT (the coordination moment)",
+    objective.textContent === "FLOOR CLEAR \u00b7 MEET AT EXIT");
 
   hud.update(mkState({ isBossActive: true, bossHpFrac: 0.8, combo: 4, comboMult: 1.5, comboFrac: 0.5 }));
   check("a boss WINS the lane: bar shown, normal objective hidden",
@@ -300,6 +303,7 @@ function hierarchyTests(): void {
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");
   check("FLOOR CLEAR \u00b7 GO DOWN", objectiveCopy(true, 0) === "FLOOR CLEAR \u00b7 GO DOWN");
   check("cleared wins regardless of a stale count", objectiveCopy(true, 3) === "FLOOR CLEAR \u00b7 GO DOWN");
+  check("party cleared copy points at the MEET", objectiveCopy(true, 0, true) === "FLOOR CLEAR \u00b7 MEET AT EXIT");
 }
 
 function main(): void {

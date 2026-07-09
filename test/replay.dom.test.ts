@@ -154,10 +154,22 @@ async function makeRig(selfId = "pl_self"): Promise<Rig> {
   return { convex, lobby, menu, overlay, launches };
 }
 
-const RESULT: RunResult = { floor: 3, kills: 12, coins: 30, durationMs: 61000 };
+const RESULT: RunResult = {
+  floor: 3, kills: 12, coins: 30, durationMs: 61000,
+  build: {
+    weapons: [{ id: "pistol", name: "Pistol" }, { id: "railgun", name: "Railgun" }],
+    items: [{ id: "it_dmg", name: "Sharpened Fangs", glyph: "!", tint: "#ff5a5a", count: 2 }],
+  },
+};
 
 async function flush(): Promise<void> {
   await new Promise((r) => setTimeout(r, 0));
+}
+
+// End-of-run screens lock their actions for 500ms (combat-mash protection); tests that
+// drive the buttons wait the lock out first.
+async function waitActionLock(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 520));
 }
 
 async function main(): Promise<void> {
@@ -170,15 +182,28 @@ async function main(): Promise<void> {
     check("the wipe reopened the room (idempotent, any member)", convex.countOf("rooms:reopen") === 1);
     check("the member marked its lifecycle phase 'over'", convex.lastPhase() === "over");
     check("the results screen is showing", overlay.textContent!.includes("YOU DIED"));
+    check("the results screen carries the run's build (arsenal + blessings)",
+      overlay.textContent!.includes("ARSENAL") && overlay.textContent!.includes("BLESSINGS"));
+    check("actions are LOCKED for the first 500ms (combat-mash protection)",
+      [...overlay.querySelectorAll("button")].every((b) => b.disabled));
+    await waitActionLock();
+    check("the lock releases the actions", [...overlay.querySelectorAll("button")].some((b) => !b.disabled));
     lobby.leave();
   }
 
-  section("lost connection: the room is left alone (the run may still be live for the party)");
+  section("lost connection: a SEPARATE screen — never a game over, the room left alone");
   {
-    const { convex, lobby, menu } = await makeRig();
-    menu.showGameOver(RESULT, null, { wasCoop: false, isNewBest: false, online: lobby, isPartyWiped: false });
+    const { convex, lobby, menu, overlay } = await makeRig();
+    menu.showConnectionLost(lobby, null);
     await flush();
     check("no reopen on a mere disconnect", convex.countOf("rooms:reopen") === 0);
+    check("the connection-lost screen is distinct (no YOU DIED framing)",
+      overlay.textContent!.includes("CONNECTION LOST") && !overlay.textContent!.includes("YOU DIED"));
+    check("REJOIN RUN is the primary action",
+      [...overlay.querySelectorAll("button")].some((b) => b.textContent!.includes("rejoin run")));
+    check("the member marked its phase 'over' (the host's gate must not wait on us)", convex.lastPhase() === "over");
+    check("connection-lost actions carry the same 500ms lock",
+      [...overlay.querySelectorAll("button")].every((b) => b.disabled));
     lobby.leave();
   }
 
@@ -208,6 +233,7 @@ async function main(): Promise<void> {
     const primaryBtn = [...overlay.querySelectorAll("button")].find((b) => b.textContent!.includes("back to lobby"));
     check("non-host primary reads 'back to lobby' (never a separate run)", primaryBtn !== undefined);
     convex.pushRoom({ status: "lobby", hostPlayerId: "pl_host" });
+    await waitActionLock();
     primaryBtn!.click();
     await flush();
     convex.pushPresence([

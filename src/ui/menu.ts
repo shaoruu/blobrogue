@@ -7,6 +7,7 @@ import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
+import { weaponIconEl, itemIconEl } from "../game/hudIcons.js";
 import { createSettingsControls } from "./settings.js";
 
 export interface MenuHost {
@@ -660,6 +661,8 @@ export class Menu {
       best.style.letterSpacing = "1px";
       wrap.appendChild(best);
     }
+    const build = this.buildSummary(result);
+    if (build) wrap.appendChild(build);
     if (profile) {
       wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins \u00b7 ${profile.gamesPlayed} runs`));
     }
@@ -678,7 +681,7 @@ export class Menu {
       if (ctx.isPartyWiped) void online.reopen();
       online.setPhase("over");
       primary = () => this.showOnlineLobby(online, profile);
-      const backBtn = el("button", "", online.isHost ? "play again \u21b5" : "back to lobby \u21b5");
+      const backBtn = el("button", "", "back to lobby \u21b5");
       backBtn.addEventListener("click", () => primary());
       const leaveBtn = el("button", "secondary", "leave room");
       leaveBtn.addEventListener("click", () => { online.leave(); void this.showTitle(); });
@@ -689,12 +692,12 @@ export class Menu {
     } else if (online) {
       // Quick play (or a room that ended underneath us): matchmake again.
       primary = () => void this.retryQuickPlayOnline(online);
-      const again = el("button", "", "play again \u21b5");
+      const again = el("button", "", "find another \u21b5");
       again.addEventListener("click", () => primary());
       const back = el("button", "secondary", "back to menu \u25b8");
       back.addEventListener("click", () => { online.leave(); void this.showTitle(); });
       row.append(again, back);
-      hint = "press ENTER to play again";
+      hint = "press ENTER to find another room";
     } else if (ctx.wasCoop) {
       // Co-op: the party already ended, so restarting to a lone solo run would silently
       // yank the player out of co-op — instead offer a clear "back to menu" as primary.
@@ -720,6 +723,7 @@ export class Menu {
 
     this.show(wrap);
     this.runCountups(counts);
+    const lock = this.lockActions(row);
 
     // Never strand a member on this screen: the room subscription keeps following the
     // lifecycle, and a host starting the next run pulls everyone here straight into it.
@@ -733,13 +737,105 @@ export class Menu {
       });
     }
 
-    // One-key retention loop: ENTER always triggers the primary action (R also, solo only).
+    // One-key retention loop: ENTER always triggers the primary action (R also, solo only)
+    // — behind the same 500ms lock as the buttons (combat mashing must not skip the screen).
     const onKey = (e: KeyboardEvent) => {
+      if (lock.isLocked()) return;
       const k = e.key.toLowerCase();
       if (k === "enter" || (k === "r" && !ctx.wasCoop && !ctx.online)) { e.preventDefault(); primary(); }
     };
     this.gameOverKeys = onKey;
     window.addEventListener("keydown", onKey);
+  }
+
+  // A lost connection is NOT a game over (UI Director): the run may still be live for the
+  // party and the world holds your body (under the coherence system's grace, the client
+  // auto-reconnects before this screen can even appear). Distinct copy, distinct actions —
+  // REJOIN first — and the same 500ms action lock as the results screen.
+  showConnectionLost(online: OnlineLobby, profile: ProfileDoc | null) {
+    // The lobby's replay readiness must not wait on us: this client is OUT of the run.
+    online.setPhase("over");
+    const wrap = el("div", "menu");
+    const title = el("h1", "", "CONNECTION LOST");
+    title.style.color = "#ffb43b";
+    wrap.appendChild(title);
+    wrap.appendChild(el("p", "", "You lost the game server \u2014 the run may still be live for your party."));
+    wrap.appendChild(el("p", "muted", "Your progress rides the server: rejoin to pick the fight back up."));
+
+    const row = el("div", "btnrow");
+    const primary = () => {
+      if (online.status === "playing") this.launchOnline(online, profile);
+      else this.showOnlineLobby(online, profile);
+    };
+    const rejoin = el("button", "", "\u25be  rejoin run \u21b5");
+    rejoin.addEventListener("click", () => primary());
+    const lobbyBtn = el("button", "secondary", "back to lobby");
+    lobbyBtn.addEventListener("click", () => this.showOnlineLobby(online, profile));
+    const leaveBtn = el("button", "secondary", "leave room");
+    leaveBtn.addEventListener("click", () => { online.leave(); void this.showTitle(); });
+    row.append(rejoin, lobbyBtn, leaveBtn);
+    wrap.appendChild(row);
+    wrap.appendChild(el("p", "hint", "press ENTER to rejoin"));
+
+    this.show(wrap);
+    const lock = this.lockActions(row);
+    const onKey = (e: KeyboardEvent) => {
+      if (lock.isLocked()) return;
+      if (e.key.toLowerCase() === "enter") { e.preventDefault(); primary(); }
+    };
+    this.gameOverKeys = onKey;
+    window.addEventListener("keydown", onKey);
+  }
+
+  // The run's final build on the results screen (UI Director): the weapons carried and the
+  // blessing icons with levels — the same visual language as the HUD's strips, read-only.
+  private buildSummary(result: RunResult): HTMLElement | null {
+    const build = result.build;
+    if (!build || (build.weapons.length === 0 && build.items.length === 0)) return null;
+    const wrap = el("div", "");
+    wrap.style.cssText = "display:flex;flex-direction:column;gap:6px;align-items:center;margin:2px 0 4px;";
+    const row = (label: string): HTMLElement => {
+      const r = el("div", "");
+      r.style.cssText = "display:flex;gap:6px;align-items:center;justify-content:center;flex-wrap:wrap;";
+      const k = el("span", "muted", label);
+      k.style.cssText = "font-size:9px;letter-spacing:2px;";
+      r.appendChild(k);
+      return r;
+    };
+    const iconBox = (child: HTMLElement, title: string, tint?: string): HTMLElement => {
+      const box = el("span", "");
+      box.style.cssText = "width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;"
+        + `background:rgba(5,3,11,.72);box-shadow:inset 0 0 0 2px ${tint ?? "var(--dun-3)"};padding:2px;`;
+      box.title = title;
+      child.style.maxWidth = "20px";
+      child.style.maxHeight = "20px";
+      box.appendChild(child);
+      return box;
+    };
+    const weapons = row("ARSENAL");
+    for (const w of build.weapons) weapons.appendChild(iconBox(weaponIconEl(w.id, w.name), w.name));
+    wrap.appendChild(weapons);
+    if (build.items.length > 0) {
+      const items = row("BLESSINGS");
+      for (const it of build.items) {
+        items.appendChild(iconBox(itemIconEl(it.id, it.glyph), `${it.name} Lv${it.count}`, it.tint));
+      }
+      wrap.appendChild(items);
+    }
+    return wrap;
+  }
+
+  // A 500ms action lock on end-of-run screens: players arrive mid-combat, often mashing —
+  // the lock swallows the stray click/Enter that would otherwise skip the screen.
+  private lockActions(row: HTMLElement, ms = 500): { isLocked: () => boolean } {
+    const buttons = [...row.querySelectorAll("button")];
+    for (const b of buttons) b.disabled = true;
+    let isLocked = true;
+    window.setTimeout(() => {
+      isLocked = false;
+      for (const b of buttons) b.disabled = false;
+    }, ms);
+    return { isLocked: () => isLocked };
   }
 
   // Leave the finished quick-play room and matchmake a fresh one in one motion.

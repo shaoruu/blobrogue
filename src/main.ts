@@ -43,6 +43,12 @@ async function bootNormal() {
     // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
     // game-over screen reopens the room on a wipe and owns leaving it).
     const online = activeOnline;
+    // A lost connection is NOT a game over (UI Director): the run may still be live and
+    // this wasn't a run END — no stats recorded, a distinct screen with REJOIN first.
+    if (!isPartyWiped && online && online.isActive) {
+      menu.showConnectionLost(online, session.profile);
+      return;
+    }
     // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
     const prevBest = session.profile?.deepestFloor ?? 0;
     const saved = await session.recordRun(result);

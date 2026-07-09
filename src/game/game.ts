@@ -46,7 +46,15 @@ import { WeaponClaimOverlay } from "../ui/weaponClaim.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 
-export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
+export interface RunResult {
+  floor: number; kills: number; coins: number; durationMs: number;
+  // The run's final build for the results screen (weapons carried + blessings with
+  // levels) — display-only, never persisted.
+  build?: {
+    weapons: { id: WeaponId; name: string }[];
+    items: { id: string; name: string; glyph: string; tint: string; count: number }[];
+  };
+}
 
 // Why a run exited without a game over: the player quit, or an online connection never came
 // up (lets the menu land back on the lobby with an explanation instead of silence). The
@@ -352,6 +360,12 @@ export class Game {
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
   // one path; sentSpectateId tracks what the server was last told (interest centering).
   private spectateId: string | null = null;
+  // Spectate follow mode (F): watch the teammate, or your own body (see who's coming).
+  private isSpectatingBody = false;
+  // Client-side revive-interrupt read: the last authoritative self progress, and a short
+  // flash timer when it snaps back to zero mid-channel (the gate's hard reset).
+  private lastSelfRevive = 0;
+  private reviveInterruptT = 0;
   private sentSpectateId: string | null = null;
 
   private particles: Particle[] = [];
@@ -562,6 +576,9 @@ export class Game {
         break;
       case "cycleSpectate":
         if (this.isRunning) this.cycleSpectate(a.dir);
+        break;
+      case "spectateFollow":
+        if (this.isRunning) this.toggleSpectateFollow();
         break;
       case "stats":
         this.isStatsHeld = a.isHeld;
@@ -899,6 +916,16 @@ export class Game {
     // (game over only lands on a full wipe — the check above). Revive releases it.
     this.updateSpectate();
 
+    // The revive-interrupt read (gate §6 hard reset): authoritative progress snapping back
+    // to zero while still down = the channel broke — flash the interrupted copy briefly.
+    if (this.isDown) {
+      if (this.p.reviveProgress === 0 && this.lastSelfRevive > 0.15) this.reviveInterruptT = 1.6;
+      if (this.reviveInterruptT > 0) this.reviveInterruptT = Math.max(0, this.reviveInterruptT - dt);
+    } else {
+      this.reviveInterruptT = 0;
+    }
+    this.lastSelfRevive = this.isDown ? this.p.reviveProgress : 0;
+
     // Online: surface any server-decided reward pick (choice authority is server-side).
     // Blessing offers drain first, then the boss weapon claim (gate §4) — sequential
     // overlays, one decision at a time. A claim that resolved/expired server-side while
@@ -962,6 +989,7 @@ export class Game {
     this.spectateId = this.isDown ? resolveSpectateTarget(this.spectateId, this.remotes()) : null;
     if (this.spectateId === null) {
       this.sentSpectateId = null;
+      this.isSpectatingBody = false; // revive/hand-off releases the body toggle too
       return;
     }
     if (this.mode === "online" && this.wsTransport && this.spectateId !== this.sentSpectateId) {
@@ -971,15 +999,25 @@ export class Game {
   }
 
   // Every spectate input source lands here (Q/E, arrows, scroll — and a controller's bumpers
-  // when pads arrive): step the watched teammate through the stable living ring.
+  // when pads arrive): step the watched teammate through the stable living ring. Cycling
+  // also snaps out of body-follow — picking a teammate means you want to watch them.
   private cycleSpectate(dir: 1 | -1) {
     if (!this.isDown) return;
     this.spectateId = cycleSpectateTarget(this.spectateId, this.remotes(), dir);
+    this.isSpectatingBody = false;
   }
 
-  // Where the camera looks: the local player, or the spectated teammate while down.
+  // F while down: flip the camera between the watched teammate and your own body (the
+  // UI Director's FOLLOW control — see who's coming for the revive).
+  private toggleSpectateFollow() {
+    if (!this.isDown) return;
+    this.isSpectatingBody = !this.isSpectatingBody;
+  }
+
+  // Where the camera looks: the local player, or the spectated teammate while down (unless
+  // the body toggle holds the camera home).
   private cameraFocus(): { x: number; y: number } {
-    if (this.spectateId !== null) {
+    if (this.spectateId !== null && !this.isSpectatingBody) {
       const target = this.remotes().find((r) => r.playerId === this.spectateId);
       if (target) return { x: target.x, y: target.y };
     }
@@ -1132,7 +1170,8 @@ export class Game {
     sfx("floorClear");
     this.addTrauma(0.1);
     this.flashScreen(140, 255, 190, 0.08, 2.5);
-    this.hud.showBanner("FLOOR CLEAR \u00b7 \u25be GO DOWN");
+    const isParty = this.mode !== "solo" && this.remotes().length > 0;
+    this.hud.showBanner(isParty ? "FLOOR CLEAR \u00b7 MEET AT EXIT" : "FLOOR CLEAR \u00b7 \u25be GO DOWN");
     const d = this.dungeon;
     this.spawnSparkleBurst(d.exit.x * TILE + TILE / 2, d.exit.y * TILE + TILE / 2, 14, "#8affc0");
   }
@@ -2018,6 +2057,7 @@ export class Game {
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
       enemiesLeft: this.enemies.length,
       isObjectiveHidden: this.isSandbox,
+      isParty: this.mode !== "solo" && this.remotes().length > 0,
       isBossActive,
       bossHpFrac,
       coopLabel,
@@ -2050,9 +2090,9 @@ export class Game {
     if (near === null) return null;
     const name = near.name.toUpperCase();
     if (near.reviveProgress > 0 && this.input.isInteractHeld) {
-      return { key: "E", label: `REVIVING ${name}\u2026 ${Math.round((near.reviveProgress / REVIVE.channel) * 100)}%`, isActive: true };
+      return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round((near.reviveProgress / REVIVE.channel) * 100)}%`, isActive: true };
     }
-    return { key: "E", label: `HOLD \u2014 REVIVE ${name}`, isActive: false };
+    return { key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
   }
 
   // The party blessing gate readout: which members still owe their pick (the descend holds
@@ -2076,21 +2116,21 @@ export class Game {
       if (r !== undefined && isReconnectingTeammate(r)) reconnecting.push(name);
       else picking.push(name);
     }
-    const total = remotes.length + 1;
+    // UI Director copy: name who the party is waiting on. pnd is the union of blessing
+    // picks and boss weapon claims, so "choose" covers both reward kinds.
     const parts: string[] = [];
-    // pnd is the union of blessing picks and boss weapon claims — "reward" covers both.
-    if (picking.length > 0) parts.push(`${picking.join(" \u00b7 ")} CHOOSING A REWARD`);
+    if (picking.length > 0) parts.push(`WAITING FOR ${picking.join(" \u00b7 ")} TO CHOOSE`);
     if (reconnecting.length > 0) parts.push(`${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026`);
-    return `WAITING FOR ${others.length}/${total} PLAYER${others.length === 1 ? "" : "S"}\u2026 ${parts.join(" \u00b7 ")}`;
+    return parts.join(" \u00b7 ");
   }
 
-  // The party exit-coordination readout, mirroring the authoritative descend gate exactly
-  // (the snapshot's exr IS playersAtExit). Shows only while coordination is actually owed:
-  // a cleared party floor, somebody staged on the stairs, somebody required still missing.
-  // Downed members aren't required (the descend rescues them), and neither are RECONNECTING
-  // members — the coherence system (PR #39) reserves their body and excludes it from the
-  // gate on both sides, so the party is never asked to wait on a ghost; they read as
-  // RECONNECTING instead of "waiting for".
+  // The party exit-coordination readout (UI Director copy: `2/3 READY TO GO DOWN` plus a
+  // checklist of who is still missing WITH their distance to the stairs), mirroring the
+  // authoritative descend gate exactly (the snapshot's exr IS playersAtExit). Shows only
+  // while coordination is actually owed: a cleared party floor, somebody staged, somebody
+  // required still missing. Downed members aren't required (the descend rescues them), and
+  // neither are RECONNECTING members — the coherence system (PR #39) reserves their body
+  // and excludes it from the gate on both sides, so the party never waits on a ghost.
   private exitWaitLabel(): string | null {
     if (this.mode !== "online" || !this.wsTransport || !this.wsTransport.isFloorCleared()) return null;
     const remotes = this.wsTransport.remotePlayers();
@@ -2099,14 +2139,18 @@ export class Game {
     if (required <= 1) return null;
     const exr = this.wsTransport.exitReadyParty();
     if (exr.length === 0 || exr.length >= required) return null;
+    const d = this.world.dungeon;
+    const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
+    const meters = (x: number, y: number): string => `${Math.max(1, Math.round(Math.hypot(x - ex, y - ey) / TILE))}m`;
+    const selfId = this.wsTransport.getSelfServerId();
+    const checklist: string[] = [];
+    if (!this.isDown && (selfId === null || !exr.includes(selfId))) checklist.push(`YOU ${meters(this.px, this.py)}`);
+    for (const r of presentLiving) {
+      if (!exr.includes(r.playerId)) checklist.push(`${r.name.toUpperCase()} ${meters(r.x, r.y)}`);
+    }
     const reconnecting = remotes.filter((r) => !r.isDown && isReconnectingTeammate(r)).map((r) => r.name.toUpperCase());
     const suffix = reconnecting.length > 0 ? ` \u00b7 ${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026` : "";
-    const selfId = this.wsTransport.getSelfServerId();
-    if (!this.isDown && (selfId === null || !exr.includes(selfId))) {
-      return `WAITING AT EXIT \u00b7 ${exr.length}/${required} \u2014 STAND ON THE STAIRS${suffix}`;
-    }
-    const missing = presentLiving.filter((r) => !exr.includes(r.playerId)).map((r) => r.name.toUpperCase());
-    return `WAITING AT EXIT \u00b7 ${exr.length}/${required}${missing.length > 0 ? ` \u2014 WAITING FOR ${missing.join(" \u00b7 ")}` : ""}${suffix}`;
+    return `${exr.length}/${required} READY TO GO DOWN${checklist.length > 0 ? ` \u2014 ${checklist.join(" \u00b7 ")}` : ""}${suffix}`;
   }
 
   // The player's owned blessing defs from the authoritative source: online that is the server's
@@ -2180,7 +2224,13 @@ export class Game {
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart }, isPartyWiped);
+    this.onGameOver({
+      floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart,
+      build: {
+        weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name })),
+        items: this.collapsedItems().map((it) => ({ id: it.id, name: it.name, glyph: it.glyph, tint: it.tint, count: it.count })),
+      },
+    }, isPartyWiped);
   }
 
   // Online transport terminal states end the run cleanly instead of freezing the last frame:
@@ -2394,6 +2444,7 @@ export class Game {
     ctx.restore();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
+    this.renderDownOverlay();
     this.renderSpectateBanner();
     this.renderReticle();
     this.renderMinimap();
@@ -3617,6 +3668,9 @@ export class Game {
 
   // Screen-space spectator chrome: who the camera follows and how to switch. Fixed position
   // and opacity-only, so it can never shift the layout.
+  // The spectator's control bar (UI Director: SPECTATING NAME + prev/next/follow/menu).
+  // The DOWN state itself — YOU'RE DOWN, revive progress, interrupts, teammate arrows —
+  // lives in renderDownOverlay; this bar is purely "what am I watching and how do I drive".
   private renderSpectateBanner() {
     if (!this.isSpectating() || this.spectateId === null) return;
     const target = this.remotes().find((r) => r.playerId === this.spectateId);
@@ -3624,30 +3678,92 @@ export class Game {
     const { ctx, canvas } = this;
     const cx = canvas.width / 2;
     const y = canvas.height - 168;
-    const isBeingRevived = this.p.reviveProgress > 0;
     const isTargetReconnecting = isReconnectingTeammate(target);
-    const isSelfOut = this.wsTransport?.getLatestSnapshot()?.self?.out === true;
     const living = this.remotes().filter((r) => !r.isDown).length;
     ctx.save();
     ctx.textAlign = "center";
     ctx.fillStyle = "#ffb43b";
     ctx.font = '700 16px "Silkscreen", monospace';
     ctx.globalAlpha = 0.85 + 0.15 * Math.sin(this.animClock * 3);
-    ctx.fillText(`SPECTATING ${target.name.toUpperCase()}`, cx, y);
+    ctx.fillText(this.isSpectatingBody ? "WATCHING YOUR BODY" : `SPECTATING ${target.name.toUpperCase()}`, cx, y);
     ctx.globalAlpha = 0.8;
-    ctx.fillStyle = isBeingRevived ? "#8affc0" : isSelfOut ? "#ff8a7a" : "#d9d2c0";
     ctx.font = '700 10px "Silkscreen", monospace';
-    const hint = living > 1 ? "Q / E \u2014 SWITCH TEAMMATE \u00b7 " : "";
-    ctx.fillText(
-      isBeingRevived
-        ? `A TEAMMATE IS REVIVING YOU\u2026 ${Math.round((this.p.reviveProgress / REVIVE.channel) * 100)}%`
-        : isSelfOut
-          ? `${hint}NO REVIVES LEFT THIS FLOOR \u2014 THE PARTY'S DESCENT RESCUES YOU`
-          : isTargetReconnecting
-            ? `${target.name.toUpperCase()} IS RECONNECTING\u2026 THE RUN RESUMES WHEN THEY RETURN`
-            : `${hint}A TEAMMATE CAN HOLD E ON YOUR BODY TO REVIVE YOU`,
-      cx, y + 18,
-    );
+    if (isTargetReconnecting && !this.isSpectatingBody) {
+      ctx.fillStyle = "#9a8fb5";
+      ctx.fillText(`${target.name.toUpperCase()} IS RECONNECTING\u2026 THE RUN RESUMES WHEN THEY RETURN`, cx, y + 18);
+    }
+    ctx.fillStyle = "#d9d2c0";
+    const controls = [
+      ...(living > 1 ? ["Q \u25c0 PREV", "NEXT \u25b6 E"] : []),
+      this.isSpectatingBody ? `F FOLLOW ${target.name.toUpperCase()}` : "F YOUR BODY",
+      "ESC MENU",
+    ];
+    ctx.fillText(controls.join(" \u00b7 "), cx, y + (isTargetReconnecting && !this.isSpectatingBody ? 34 : 18));
+    ctx.restore();
+    ctx.textAlign = "left";
+  }
+
+  // The downed player's own state overlay (UI Director): YOU'RE DOWN, the authoritative
+  // revive readout (`NAME REVIVING · N%`), the hard-reset interrupt flash, the OUT state,
+  // and screen-edge arrows with distances toward every living teammate (the people who can
+  // come channel you). Drawn while down regardless of what the camera watches.
+  private renderDownOverlay() {
+    if (!this.isDown || !this.isRunning || this.mode === "solo") return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const y = 118;
+    const reviver = this.remotes().find((r) => !r.isDown && !isReconnectingTeammate(r)
+      && Math.hypot(r.x - this.px, r.y - this.py) <= REVIVE.radius);
+    const isSelfOut = this.wsTransport?.getLatestSnapshot()?.self?.out === true;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ff6a6a";
+    ctx.font = '700 22px "Silkscreen", monospace';
+    ctx.globalAlpha = 0.8 + 0.2 * Math.sin(this.animClock * 2.4);
+    ctx.fillText("YOU'RE DOWN", cx, y);
+    ctx.globalAlpha = 0.9;
+    ctx.font = '700 11px "Silkscreen", monospace';
+    if (this.p.reviveProgress > 0) {
+      ctx.fillStyle = "#8affc0";
+      const by = reviver ? reviver.name.toUpperCase() : "A TEAMMATE";
+      ctx.fillText(`${by} REVIVING \u00b7 ${Math.round((this.p.reviveProgress / REVIVE.channel) * 100)}%`, cx, y + 20);
+    } else if (this.reviveInterruptT > 0) {
+      ctx.fillStyle = "#ffb43b";
+      ctx.globalAlpha = Math.min(1, this.reviveInterruptT * 2);
+      ctx.fillText("REVIVE INTERRUPTED \u2014 THE CHANNEL RESTARTS FROM ZERO", cx, y + 20);
+    } else if (isSelfOut) {
+      ctx.fillStyle = "#ff8a7a";
+      ctx.fillText("NO REVIVES LEFT THIS FLOOR \u2014 THE PARTY'S DESCENT RESCUES YOU", cx, y + 20);
+    } else {
+      ctx.fillStyle = "#d9d2c0";
+      ctx.fillText("A TEAMMATE CAN HOLD E ON YOUR BODY", cx, y + 20);
+    }
+    // Screen-edge arrows toward every living teammate + their distance to your body —
+    // the downed player's answer to "is anyone coming?".
+    const living = this.remotes().filter((r) => !r.isDown && !isReconnectingTeammate(r)).slice(0, 3);
+    ctx.font = '700 10px "Silkscreen", monospace';
+    for (const mate of living) {
+      const sx = mate.x - this.cam.x, sy = mate.y - this.cam.y;
+      const isOnScreen = sx > 40 && sx < canvas.width - 40 && sy > 40 && sy < canvas.height - 40;
+      if (isOnScreen) continue; // visible teammates need no arrow
+      const ang = Math.atan2(mate.y - this.py, mate.x - this.px);
+      const ax = cx + Math.cos(ang) * 150;
+      const ay = y + 64 + Math.sin(ang) * 34;
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(ang);
+      ctx.fillStyle = "#8affc0";
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(10, 0); ctx.lineTo(-6, -7); ctx.lineTo(-6, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = "#8affc0";
+      ctx.globalAlpha = 0.85;
+      const dist = Math.max(1, Math.round(Math.hypot(mate.x - this.px, mate.y - this.py) / TILE));
+      ctx.fillText(`${mate.name.toUpperCase()} ${dist}m`, ax, ay + 22);
+    }
     ctx.restore();
     ctx.textAlign = "left";
   }
