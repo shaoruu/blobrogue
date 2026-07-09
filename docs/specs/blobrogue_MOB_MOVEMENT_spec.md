@@ -13,7 +13,7 @@ Every mob has **ONE primary movement verb** and at most one escalation modifier.
 Wave-1 mapping: Bat = ORBIT→HUNT; Slime = FLOCK→HUNT; Rattleback = BURROW; Crookleg = HUNT with a wall-launch modifier. This framework is the lasting contract: future mobs should reuse these modules and add at most one genuine hook.
 
 ## Biome movement grammar (CD spine — adopted)
-- **Verdant Hollow = elastic/alive:** coil, hop, flock, recoil. Telegraph through squash, leaves, roots. Wave-1 Pack Slime teaches FLOCK safely.
+- **Amberwild = elastic/alive:** coil, hop, flock, recoil. Telegraph through squash, leaves, roots. Wave-1 Pack Slime teaches FLOCK safely.
 - **Sunless Caves = sound/momentum:** pause/listen, commit to last-heard position, wall impacts matter. Telegraph with head/ear tilt, falling dust, hearing flare. Wave-1 Orbit-Dive Bat and Rattleback fit here; later add a FLEE/BAIT Knellbat.
 - **The Deep = fracture/wrong geometry:** fixed-beat orbit radius changes, visible seams, angular blinks (never unreadable teleport spam). Wave-1 Crookleg introduces wall geometry; later Seamwalker becomes the pure biome thesis.
 - **Emberreach = convection/pressure:** anchor, vent, jet-dash, fissure eruption; bursts separated by visible cooling/recovery. Re-skin existing verbs before inventing new ones.
@@ -113,7 +113,71 @@ Staggered deterministic cooldowns prevent unavoidable simultaneous dogpiles. Aim
 No new sprite. Existing squash/stretch is ideal: exaggerated flat windup, long forward stretch active, pancake recovery. VFX only: a wet skid-shadow / stretched amber smear aligned to the hop + 1 puff on takeoff/landing; no geometric arrow.
 
 ===============================================================
-# 3. KNELLBAT — SMART BAIT → RALLY → PACK COMMIT (build THIRD)
+# 3. RATTLEBACK — BURROW → TRACK → ERUPT (build THIRD)
+===============================================================
+**Read:** Rattleback presses its floor-jaw down, disappears, a moving chevron of three lifted shale chips and a narrow seam track it, then an asymmetric rupture scar locks before it erupts. Ambush/area-denial unlike every current mob.
+**Biome:** Sunless Caves (rare intro, 1 max/room) → The Deep (2 max). Never Amberwild/tutorial.
+**Stats:** baseHP5 (+0.7/floor), surface speed55, radius16, drawSize46, touch1, kbResist1.3. Movement="burrow".
+
+## State machine
+**SURFACE (none):** normal flow-field chase at speed55. Trigger if target distance 120–300px, LOS not required, cooldown=0, spawn grace done.
+
+**BURROW WINDUP 0.50s:** stationary; squash down/fade, jagged split-stone scar under the jaw; three back plates collapse downward in sequence. Cannot damage player. Still targetable until it fully submerges (reward interrupt/kill).
+
+**ACTIVE SUBMERGED 0.90s:** set SUBMERGED flag. Invisible body; render ONLY the authored moving chevron of three lifted shale chips plus a narrow disturbed seam (never a ripple/ring). Collision/damage rules while submerged: cannot be hit by bullets/melee, cannot contact player, ignores walls/props via `moveEnemyFree`, but clamps bounds.
+- Tracks current target for first 0.50s at 170px/s.
+- At t=0.50 locks `markX/Y` to target's position; for final 0.40s moves toward mark and displays an asymmetric rupture seam there; three tooth-shaped stones lift along one side to communicate the radius (no more tracking → walk off it).
+- At t=0.90: erupt at current/mark point, radial hit radius55, damage1 + knockback. Emit dirt/gib burst.
+
+**RECOVER 0.60s:** fully visible, stunned, stationary punish window. cooldown 3.0s.
+
+## Fairness / anti-stuck
+The ripple NEVER disappears; ground marker visible ≥0.4s. No tracking after lock. Eruption dodgeable by walking (player covers 80px in 0.4s > r55). Submerged timeout guarantees return even if path weird; `moveEnemyFree` avoids wedge. Never spawn more than 2 in active interest region; stagger with moveSeed.
+## Art/VFX
+One new sprite (low angular mole/beetle form). Use a simple low-wedge silhouette placeholder until final art; do not substitute a generic circle. VFX/art required: authored moving chevron of lifted shale chips, asymmetric rupture-seam mask with three raised stone teeth, soil/rock gibs. 3 visual poses: surface crawl, sink, erupt. Movement sells it more than detail.
+
+===============================================================
+# 4. CROOKLEG — SEEK WALL → CLING → LEAP (build FOURTH)
+===============================================================
+**Read:** Crookleg retreats SIDEWAYS to a wall, visibly refolds/clings, converging claw-scores plus its displaced body-shadow reveal the landing, then it snaps across the room. Vertical-feeling movement in a top-down game.
+**Biome:** The Deep first; Emberreach variant later. Max 1–2/room.
+**Stats:** baseHP7 (+0.9/floor), ground speed70, radius15, drawSize48, touch1, kbResist1.2. Movement="wallPounce".
+
+## State machine
+**SEEK/CHASE (none):**
+- If target distance <110px, retreat via reverse target angle using `applyChaseStep`.
+- If 110–300px and cooldown=0, scan nearest wall point within 3 tiles (`nearestWallPoint`). Store in moveTargetX/Y and path toward it (use flow field for coarse route, direct final approach).
+- Otherwise ordinary flow chase.
+
+**CLING WINDUP 0.65s; landing lock 0.35s:** once within radius+8 of wall, stop, rotate/press into wall; body compresses. Three long CLAW-SCORES converge at player position and an offset body-shadow hangs between them; the marker tracks until 0.35, then locks for final 0.30. Telegraph includes 2–3 displaced after-silhouettes of Crookleg’s actual folded body along the future route (client render only); no generic trajectory arc.
+
+**ACTIVE AIRBORNE 0.45s:** set AIRBORNE. Move along a quadratic arc in world-space from wall start to mark using `moveEnemyFree`; cannot touch-damage mid-air and cannot be hit by ground melee (bullets CAN hit it — skill shot). At landing: AoE radius48 damage1 + small knockback.
+
+**RECOVER 0.55s:** sprawled/stunned at landing, stationary punish. cooldown 2.8s.
+
+## Fairness / collision / anti-stuck
+Landing locks ≥0.30s; player walks 60px, clears r48. Wall scan is local/deterministic. If no wall found within 3 tiles, fall back to chase for 1s. If wall approach stuck, existing `applyChaseStep` escape handles it; timeout seek after 1.2s and choose another wall. AIRBORNE ignores geometry but clamps to floor tiles; if mark is invalid/wall, snap it to nearest walkable tile before launch (spiral scan radius2).
+## Art/VFX
+New angular crawler sprite with long legs or compressed spring-body. Needs wall-cling pose and airborne stretched pose; shadow separates from body during leap (existing drop-shadow can scale/offset). VFX: 2–3 crooked-body after-silhouettes, converging claw-score landing mask + offset body shadow, small debris puff.
+
+===============================================================
+# ROSTER / REGION PLACEMENT + COMPOSITION RULES
+===============================================================
+- Amberwild F1–5: Pack Slimes + Orbit-Dive Bats.
+- Rootbound F6–10: Knellbat (Wave2) leader packs + root-shell Shielder/formations.
+- Sunless F11–15: Rattleback + authored Charger; Knellbat recurs as elite leader.
+- The Deep F16–20: Crookleg + Seamwalker; Rattleback recurs sparingly.
+- Gilded Archive F21–25: SHIELD/ANCHOR expressions, no new movement engine.
+- Emberreach F26–30: Bellows ANCHOR + Cinderjack jet-HUNT; reuse modules.
+
+Composition budget per room (coherence/fairness): max **2 complex movement archetypes** at once, plus simple chasers. Never combine >1 Rattleback + >1 Crookleg in a small room. Complex movement threat weights count double in spawn budget. This keeps variety readable rather than chaotic.
+
+===============================================================
+# WAVE 2 (creative pipeline — after Wave 1 proves modules)
+===============================================================
+The remaining CD seeds slot cleanly into the grammar without displacing the cheaper Wave-1 rollout:
+===============================================================
+# WAVE 2 FIRST — KNELLBAT: SMART BAIT → RALLY → PACK COMMIT
 ===============================================================
 **First locked SMART archetype.** A Sunless-Caves bat variant with oversized ears. It does not become clairvoyant: it reacts only to own HP, nearby allies, player distance/LOS, and recent damage. The decision is readable: alone/wounded it flees while clicking; with support it turns and rallies flanking bats.
 **Stats:** baseHP4 (+0.5/floor), speed104, radius14, touch1, kbResist0.8. Movement=`fleeBait`; max1 leader per pack/room. Biome Sunless floor3+; never tutorial floor1–2.
@@ -139,70 +203,9 @@ Leader locks current position at0.32s and never reads subsequent movement input.
 ## Art/VFX
 Use Bat body initially with oversized ear silhouette/tint variant. Essential read: ears point toward support while fleeing; leader ear flare + authored sound chevron on rally; broken-click/panic wing flare on leader death. No invisible buff aura.
 
-===============================================================
-# 4. RATTLEBACK — BURROW → TRACK → ERUPT (build FOURTH)
-===============================================================
-**Read:** Rattleback presses its floor-jaw down, disappears, a moving chevron of three lifted shale chips and a narrow seam track it, then an asymmetric rupture scar locks before it erupts. Ambush/area-denial unlike every current mob.
-**Biome:** Sunless Caves (rare intro, 1 max/room) → The Deep (2 max). Never Verdant/tutorial.
-**Stats:** baseHP5 (+0.7/floor), surface speed55, radius16, drawSize46, touch1, kbResist1.3. Movement="burrow".
 
-## State machine
-**SURFACE (none):** normal flow-field chase at speed55. Trigger if target distance 120–300px, LOS not required, cooldown=0, spawn grace done.
-
-**BURROW WINDUP 0.50s:** stationary; squash down/fade, jagged split-stone scar under the jaw; three back plates collapse downward in sequence. Cannot damage player. Still targetable until it fully submerges (reward interrupt/kill).
-
-**ACTIVE SUBMERGED 0.90s:** set SUBMERGED flag. Invisible body; render ONLY the authored moving chevron of three lifted shale chips plus a narrow disturbed seam (never a ripple/ring). Collision/damage rules while submerged: cannot be hit by bullets/melee, cannot contact player, ignores walls/props via `moveEnemyFree`, but clamps bounds.
-- Tracks current target for first 0.50s at 170px/s.
-- At t=0.50 locks `markX/Y` to target's position; for final 0.40s moves toward mark and displays an asymmetric rupture seam there; three tooth-shaped stones lift along one side to communicate the radius (no more tracking → walk off it).
-- At t=0.90: erupt at current/mark point, radial hit radius55, damage1 + knockback. Emit dirt/gib burst.
-
-**RECOVER 0.60s:** fully visible, stunned, stationary punish window. cooldown 3.0s.
-
-## Fairness / anti-stuck
-The ripple NEVER disappears; ground marker visible ≥0.4s. No tracking after lock. Eruption dodgeable by walking (player covers 80px in 0.4s > r55). Submerged timeout guarantees return even if path weird; `moveEnemyFree` avoids wedge. Never spawn more than 2 in active interest region; stagger with moveSeed.
-## Art/VFX
-One new sprite (low angular mole/beetle form). Use a simple low-wedge silhouette placeholder until final art; do not substitute a generic circle. VFX/art required: authored moving chevron of lifted shale chips, asymmetric rupture-seam mask with three raised stone teeth, soil/rock gibs. 3 visual poses: surface crawl, sink, erupt. Movement sells it more than detail.
-
-===============================================================
-# 5. CROOKLEG — SEEK WALL → CLING → LEAP (build FIFTH)
-===============================================================
-**Read:** Crookleg retreats SIDEWAYS to a wall, visibly refolds/clings, converging claw-scores plus its displaced body-shadow reveal the landing, then it snaps across the room. Vertical-feeling movement in a top-down game.
-**Biome:** The Deep first; Emberreach variant later. Max 1–2/room.
-**Stats:** baseHP7 (+0.9/floor), ground speed70, radius15, drawSize48, touch1, kbResist1.2. Movement="wallPounce".
-
-## State machine
-**SEEK/CHASE (none):**
-- If target distance <110px, retreat via reverse target angle using `applyChaseStep`.
-- If 110–300px and cooldown=0, scan nearest wall point within 3 tiles (`nearestWallPoint`). Store in moveTargetX/Y and path toward it (use flow field for coarse route, direct final approach).
-- Otherwise ordinary flow chase.
-
-**CLING WINDUP 0.65s; landing lock 0.35s:** once within radius+8 of wall, stop, rotate/press into wall; body compresses. Three long CLAW-SCORES converge at player position and an offset body-shadow hangs between them; the marker tracks until 0.35, then locks for final 0.30. Telegraph includes 2–3 displaced after-silhouettes of Crookleg’s actual folded body along the future route (client render only); no generic trajectory arc.
-
-**ACTIVE AIRBORNE 0.45s:** set AIRBORNE. Move along a quadratic arc in world-space from wall start to mark using `moveEnemyFree`; cannot touch-damage mid-air and cannot be hit by ground melee (bullets CAN hit it — skill shot). At landing: AoE radius48 damage1 + small knockback.
-
-**RECOVER 0.55s:** sprawled/stunned at landing, stationary punish. cooldown 2.8s.
-
-## Fairness / collision / anti-stuck
-Landing locks ≥0.30s; player walks 60px, clears r48. Wall scan is local/deterministic. If no wall found within 3 tiles, fall back to chase for 1s. If wall approach stuck, existing `applyChaseStep` escape handles it; timeout seek after 1.2s and choose another wall. AIRBORNE ignores geometry but clamps to floor tiles; if mark is invalid/wall, snap it to nearest walkable tile before launch (spiral scan radius2).
-## Art/VFX
-New angular crawler sprite with long legs or compressed spring-body. Needs wall-cling pose and airborne stretched pose; shadow separates from body during leap (existing drop-shadow can scale/offset). VFX: 2–3 crooked-body after-silhouettes, converging claw-score landing mask + offset body shadow, small debris puff.
-
-===============================================================
-# ROSTER / BIOME PLACEMENT + COMPOSITION RULES
-===============================================================
-- Verdant Hollow / floors1–2: Pack Slimes (encircle; surge only in groups3+) + current simple enemies. Teach spacing.
-- Sunless Caves / floors2–5: Orbit-Dive Bats; floor3+ introduces one Knellbat-led smart pack + rare Rattleback. Teach flank, bait/support decisions, then ground tells.
-- The Deep / floors6+: Crookleg + more Rattlebacks + Weaver boss. Teach vertical/ambush reads.
-- Emberreach: later elemental variants of these MOVEMENTS, not new movement systems (burning burrow trail, shock leap landing).
-
-Composition budget per room (coherence/fairness): max **2 complex movement archetypes** at once, plus simple chasers. Never combine >1 Rattleback + >1 Crookleg in a small room. Complex movement threat weights count double in spawn budget. This keeps variety readable rather than chaotic.
-
-===============================================================
-# WAVE 2 (creative pipeline — after Wave 1 proves modules)
-===============================================================
-The remaining CD seeds slot cleanly into the grammar without displacing the cheaper Wave-1 rollout:
 - **Seamwalker (Deep, ORBIT):** lays 3–4 visible fracture segments and moves only along them; pauses at junctions before switching. Reuses orbit but adds path-preview geometry. Strong biome thesis, moderate hook.
-- **Rootkite (Verdant, FLOCK):** 3 leaf-backed blobs share formation; shooting one breaks formation, survivors panic outward then re-form. Uses the FLOCK/separation module but requires group identity + formation state.
+- **Rootkite (Amberwild, FLOCK):** 3 leaf-backed blobs share formation; shooting one breaks formation, survivors panic outward then re-form. Uses the FLOCK/separation module but requires group identity + formation state.
 - **Bellows / Cinderjack (Emberreach):** ANCHOR thermal lane / jet HUNT; ship once hazards/projectile push exist.
 
 Why Wave 1 remains first: Bat+Slime prove ORBIT/FLOCK with existing art; Knellbat adds contextual pack roles after the shared nearby-count helper; Rattleback adds free-motion/material destination tells; Crookleg reuses that foundation. Wave 2 then expresses the remaining biome grammars through more bespoke path-preview/formation/hazard hooks.
@@ -219,11 +222,11 @@ Why Wave 1 remains first: Bat+Slime prove ORBIT/FLOCK with existing art; Knellba
 ===============================================================
 # BUILD ORDER + ACCEPTANCE
 ===============================================================
-1. **Bat Orbit→Dive** — no new sprite/kind, reuses AttackState/lunge/flow; fastest maximum-visible win.
-2. **Slime Pack Encircle→Surge** — upgrades tutorial mob with no art; adds the shared nearby-count/separation helper.
-3. **Knellbat Smart Pack** — reuses Bat movement + nearbyCount; adds deterministic roles, flee/rally, and leader-break. First proof of contextual AI.
-4. **Rattleback** — adds `moveEnemyFree` + SUBMERGED flag + material destination lock.
-5. **Crookleg** — reuses free-motion/marker state, adds local wall scan + airborne arc; cheapest after #4.
+1. **Bat Orbit→Dive** — existing art, reuses lunge/flow.
+2. **Slime Pack Encircle→Surge** — existing art, adds nearby-count/separation.
+3. **Rattleback** — adds `moveEnemyFree` + SUBMERGED + material destination lock.
+4. **Crookleg** — reuses free-motion state, adds wall scan + airborne arc.
+**Wave 2 begins with Knellbat Smart Pack** — contextual roles/flee/rally/leader-break after core modules/readability are proven.
 
 Acceptance per archetype:
 - Readable with simple silhouette placeholders: a blind playtester can name "orbit-dive / surround-surge / bait-rally / underground-erupt / wall-leap" from movement alone.
@@ -234,4 +237,4 @@ Acceptance per archetype:
 - 50-enemy stress: new nearby/separation scans keep server tick well under budget (if not, replace O(n²) nearbyCount with the Stage-E spatial grid; API unchanged).
 
 ## Bottom line
-Wave 1 deliberately changes where danger comes from, not just speed or damage: bats FLANK, slimes SURROUND, Knellbats BAIT THEN RALLY, Rattlebacks AMBUSH FROM BELOW, and Crooklegs LEAP FROM WALLS. Two existing enemies become new fights before new art arrives; one Bat-derived smart leader proves contextual AI; two new mobs reuse the same AttackState/flow/movement helpers. Five high-contrast reads, a few small shared helpers, zero new combat architecture.
+Wave 1 deliberately changes where danger comes from, not just speed or damage: bats FLANK, slimes SURROUND, Rattlebacks AMBUSH FROM BELOW, and Crooklegs LEAP FROM WALLS; Wave 2 adds Knellbats that BAIT THEN RALLY. Two existing enemies become new fights before new art arrives; two new mobs reuse the same AttackState/flow/movement helpers. Five high-contrast reads, a few small shared helpers, zero new combat architecture.

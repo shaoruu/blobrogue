@@ -294,3 +294,37 @@ Future critique question: does the board compare skill under equivalent rules, o
 3. Bring implementation evidence: unreadable combat, duplicated player decision, technical infeasibility, measured engagement/retention issue, progression dead-end, or failed playtest.
 4. Prefer reshape within the approved system before cut/rename/removal.
 5. Main runner owns any exception or reopening.
+
+## FINAL CURRENT-WAVE CADENCE — MAIN RUNNER LOCK (LATEST, HIGHEST PRECEDENCE)
+**This subsection is the definitive current-wave cadence. It supersedes every conflicting recommendation or intermediate reconciliation anywhere in this document or related specs.**
+
+### Six-band first-clear chain
+1. **F1–5 — Verdant first band** → **Slime King at F5**
+2. **F6–10 — second authored band** → **authored Gauntlet at F10** (non-boss milestone)
+3. **F11–15 — Sunless band** → **Marrow at F15**
+4. **F16–20 — Deep band** → **The Weaver at F20**
+5. **F21–25 — full Gilded band** → **The Gilded Warden at F25**
+6. **F26–30 — Emberreach band** → **The Hollow Choir at F30**
+
+Canonical current-wave cadence:
+`Slime King F5 → Gauntlet F10 → Marrow F15 → Weaver F20 → Gilded Warden F25 → Hollow Choir F30`
+
+### Protected current-wave content
+- **Gilded remains a full band.** Do not demote it to a threshold, side area, or optional lieutenant space.
+- **The Gilded Warden remains the mandatory F25 boss.** Do not demote, remove, or rename based on conceptual overlap alone.
+- **The Hollow Choir remains the mandatory F30 boss and current first-clear finale.** Do not replace it with Jet or canonically rename it without the main runner reopening integration.
+- **Jet is not injected into the current 30-floor wave.** Jet belongs to later endgame content.
+- **Null is preserved as a post-F30/endgame expansion**, with Jet later. Do not count Null among the current six first-clear bands or use it to displace committed F1–30 content.
+
+### What remains adopted from the creative audit
+- Strong authored material/hazard identity per band.
+- One universal hazard/telegraph foundation; biome expression on top.
+- Circle/ring/ellipse shorthand sweep: mechanical radii may exist internally; visible tells use authored material evidence.
+- Amber Camp consolidation, Patch world hook, Heartwork, and no-system-pile.
+- Original Resonance/Hollow/Fracture vocabulary; no derivative/JJK-native shell.
+- Pets remain strict capped account utility under owner constraints.
+- Casual / Standard / Brutal remain.
+- Authoritative normalized global boards remain.
+
+### Change-control rule
+No future creative document may demote/remove Warden or Choir, move Jet into F1–30, convert Gilded into a bossless band, or count Null inside the current six-band first-clear chain unless the main runner explicitly reopens that decision. Implementation/playtest evidence may be reported, but never silently canonicalized over this lock.
