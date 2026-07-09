@@ -37,13 +37,17 @@ Universal AI may query coarse light context at low frequency (4–6Hz), never pi
 - Players are always detectable inside their hero glow; no binary stealth system in v1. Darkness alters approach/pressure, not "enemy loses aggro forever."
 
 ## 5. Biome light grammar
-**Verdant Hollow — filtered life:** dappled green daylight / warm sap and campfire pockets. Broad soft pools, leaf occlusion, low contrast danger. Darkness teaches safely; flock mobs silhouette against openings.
+**Amberwild — filtered life:** dappled green daylight / warm sap and fire pockets. Broad soft pools, leaf occlusion, low contrast danger.
 
-**Sunless Caves — sparse sound beacons:** warm torches against cold shale; long dark gaps. Falling dust/hearing flares/material seams remain readable. Eyeless creatures use vibration/sound context, not sight cheating. Player can relight/activate fixtures later.
+**Rootbound Warrens — root-filtered enclosure:** amber sap channels and narrow canopy cracks create layered strips of warm light; dense roots cast authored occlusion but formation silhouettes remain clear.
 
-**The Deep — swallowed warmth:** cold mineral seams and dead-amber glints; light breaks along fracture geometry. Sources feel thin/directional; The Hollow Resonance visibly drains remaining warmth from EXISTING light sources. Wrong geometry, not purple darkness alone.
+**Sunless Caves — sparse sound beacons:** warm torches against cold shale; long dark gaps. Dust/hearing flares/material seams stay readable.
 
-**Emberreach — pressure pulses:** vents/lava/embers are strong localized sources that brighten before pressure events and cool afterward. Safe-space information comes from vent glow/heat seams. Frequent warm sources offset heavier ambient shadow.
+**The Deep — swallowed warmth:** cold mineral seams/dead amber; thin directional sources; The Hollow Resonance drains existing warmth.
+
+**Gilded Archive — rigid reflection:** amber shelves/brass catch hard narrow highlights but emit no living pulse; sentries/lane tells reflect cold-white along geometry.
+
+**Emberreach — pressure pulses:** vents/lava brighten before pressure events and cool after; cold stress cores preserve hostile tells against red/orange surfaces.
 
 **Amber Camp — home:** warm layered pools radiating from the Amber Heart + inhabited stations. Camp growth physically increases lit area/detail. No combat-readability tax at home.
 

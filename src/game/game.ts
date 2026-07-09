@@ -35,6 +35,8 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
 import { settings } from "./settings.js";
+import { InputController } from "./input.js";
+import type { GameAction, InputContext } from "./input.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
@@ -333,7 +335,6 @@ export class Game {
 
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
-  private isAutoFiring = false; // autofire mode only: click toggles continuous fire (settings.isAutofire)
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
   private onlineRoomCode: string | null = null; // lobby room code for the HUD label (online only)
 
@@ -375,8 +376,10 @@ export class Game {
   private pickupAnims = new Map<number, Anim>();
   private chestAnims = new Map<number, Anim>();
 
-  private keys = new Set<string>();
-  private mouse = { x: 0, y: 0, isDown: false };
+  // All raw input funnels through the context-gated controller (src/game/input.ts): it
+  // owns key/mouse/autofire state and only lets actions/samples through in the contexts
+  // where they're legal, so overlays/pause/reconnect can never leak gameplay input.
+  private input = new InputController((a) => this.onInputAction(a));
   private cam = { x: 0, y: 0 };
 
   // Read-only bridge to the local player + world so the render code reads state exactly as
@@ -445,12 +448,12 @@ export class Game {
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
-    // Hotbar UI -> the same public inventory handlers keyboard input uses (and a future
-    // controller/touch layer would use): click/Enter/Space equips (or inspects when the
-    // slot is already equipped — the touch-safe path to weapon info), drag/drop reorders.
+    // Hotbar UI injects into the SAME context-gated InputController the keyboard uses —
+    // one action gate for every input surface. Context is re-synced first because these
+    // callbacks fire between ticks (right after a drag tears down or a drawer closes).
     this.hud.setHotbarActions({
-      onSlotActivate: (index) => this.activateSlot(index),
-      onSlotReorder: (from, to) => this.reorderSlots(from, to),
+      onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
+      onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
@@ -484,44 +487,85 @@ export class Game {
     this.canvas.height = Math.min(window.innerHeight, 1440);
   }
 
+  // Thin DOM binding: every listener just forwards plain data into the InputController,
+  // which owns all gating (see src/game/input.ts). Blur / tab-hidden drop everything held
+  // (keyup/mouseup are lost while unfocused, so a key or autofire could otherwise stick).
   private bindInput() {
     window.addEventListener("keydown", (e) => {
-      const k = e.key.toLowerCase();
-      if (k === "escape") {
-        e.preventDefault();
-        // An open HUD drawer owns Escape (close it); pause is the next Escape.
-        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
-        else if (!this.keys.has("escape")) this.togglePause(); // ignore key auto-repeat
-        this.keys.add(k);
-        return;
-      }
-      this.keys.add(k);
-      if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
-      if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
-      // Weapon switch: number keys 1-9 select that inventory slot directly.
-      if (k >= "1" && k <= "9") this.equipSlot(parseInt(k, 10) - 1);
-      if (k === "q") this.dropEquippedWeapon(); // Q drops the equipped weapon into the world
+      // Refresh the context first: a drawer/drag can open and a key can land within the
+      // same tick, and the gate must see the CURRENT surface, never last tick's.
+      this.syncInputContext();
+      if (this.input.keyDown(e.key, e.repeat)) e.preventDefault();
     });
-    window.addEventListener("keyup", (e) => {
-      const k = e.key.toLowerCase();
-      this.keys.delete(k);
-      if (k === "tab") { this.isStatsHeld = false; this.hud.hideStats(); }
-    });
+    window.addEventListener("keyup", (e) => this.input.keyUp(e.key));
     this.canvas.addEventListener("mousemove", (e) => {
       const r = this.canvas.getBoundingClientRect();
-      this.mouse.x = e.clientX - r.left;
-      this.mouse.y = e.clientY - r.top;
+      this.input.mouseMove(e.clientX - r.left, e.clientY - r.top);
     });
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (this.isRunning && !this.hud.isInteractionActive()) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
+      this.syncInputContext();
+      this.input.wheel(e.deltaY); // scroll to cycle weapons (gameplay context only)
     }, { passive: false });
-    this.canvas.addEventListener("mousedown", (e) => {
-      this.mouse.isDown = true;
-      // Autofire: a left-click toggles continuous fire instead of requiring a hold.
-      if (settings.isAutofire && !this.isDown && e.button === 0) this.isAutoFiring = !this.isAutoFiring;
+    this.canvas.addEventListener("mousedown", (e) => { this.syncInputContext(); this.input.mouseDown(e.button); });
+    window.addEventListener("mouseup", (e) => this.input.mouseUp(e.button));
+    // Right-click is not a gameplay input; only suppress the browser menu over the
+    // canvas while actually playing, never on overlays or the menu.
+    this.canvas.addEventListener("contextmenu", (e) => {
+      if (this.input.context === "gameplay" || this.input.context === "spectate") e.preventDefault();
     });
-    window.addEventListener("mouseup", () => (this.mouse.isDown = false));
+    window.addEventListener("blur", () => this.input.releaseAll());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.input.releaseAll();
+    });
+  }
+
+  // Gameplay actions arrive already context-filtered by the InputController.
+  private onInputAction(a: GameAction) {
+    switch (a.kind) {
+      case "togglePause":
+        // Under the hud context Escape means "dismiss the drawer"; pause is next.
+        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
+        else this.togglePause();
+        break;
+      case "selectWeapon":
+        if (this.isRunning) this.equipSlot(a.index);
+        break;
+      case "cycleWeapon":
+        if (this.isRunning) this.cycleWeapon(a.dir);
+        break;
+      case "dropWeapon":
+        if (this.isRunning) this.dropEquippedWeapon();
+        break;
+      case "activateSlot":
+        if (this.isRunning) this.activateSlot(a.index);
+        break;
+      case "reorderSlots":
+        if (this.isRunning) this.reorderSlots(a.from, a.to);
+        break;
+      case "stats":
+        this.isStatsHeld = a.isHeld;
+        if (a.isHeld) this.openStats();
+        else this.hud.hideStats();
+        break;
+    }
+  }
+
+  // Derive the current input context from run state. Called at every transition point and
+  // once per tick; the controller clears its edge/latch state whenever it changes.
+  private syncInputContext() {
+    this.input.setContext(this.currentInputContext());
+  }
+
+  private currentInputContext(): InputContext {
+    if (!this.isRunning) return "menu";
+    if (this.isChoosing) return "blessing";
+    if (this.isPaused) return "pause";
+    if (this.isAwaitingOnlineWorld()) return "reconnect";
+    if (this.isDown) return "spectate";
+    // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
+    if (this.hud.isInteractionActive()) return "hud";
+    return "gameplay";
   }
 
   start(opts: StartOptions) {
@@ -555,7 +599,6 @@ export class Game {
     this.inputSeq = 0;
     this.blessingRng = new Rng(this.seed ^ 0x0b1e55);
     this.ownedItemDefs = [];
-    this.isAutoFiring = false;
     this.remoteShotSeen.clear();
     this.remoteDownSeen.clear();
     this.remoteAnims.clear();
@@ -595,6 +638,7 @@ export class Game {
       settings.markControlsHintSeen();
     }
     this.isRunning = true;
+    this.syncInputContext(); // entering the run drops any latched menu-era input
     this.last = performance.now();
     cancelAnimationFrame(this.raf);
     this.raf = requestAnimationFrame(this.loop);
@@ -701,8 +745,10 @@ export class Game {
 
   private setPaused(paused: boolean) {
     this.isPaused = paused;
+    // The context switch drops held fire + the autofire latch, so nothing resumes firing
+    // without fresh input after the pause.
+    this.syncInputContext();
     if (paused) {
-      this.mouse.isDown = false; // don't let a held click fire on resume
       this.pause.show();
     } else {
       this.pause.hide();
@@ -713,6 +759,7 @@ export class Game {
   private quitToMenu(reason?: ExitReason) {
     this.setPaused(false);
     this.stop();
+    this.syncInputContext();
     audio.setMusic(null);
     this.hud.hideStats();
     this.hud.clear();
@@ -720,12 +767,21 @@ export class Game {
   }
 
   private addFreeze(seconds: number) {
+    if (!settings.isHitstop) return; // accessibility: impact frames can be turned off
     this.freeze = Math.min(FREEZE_MAX, Math.max(this.freeze, seconds));
   }
 
   private addTrauma(amount: number) {
     const t = this.trauma + amount;
     this.trauma = t > 1 ? 1 : t;
+  }
+
+  // Every full-screen flash wash goes through here so the player's flash-level setting
+  // (off / low / full) scales all of them in one place (photosensitivity control).
+  private flashScreen(r: number, g: number, b: number, strength: number, decay = 3) {
+    const f = settings.flashFactor;
+    if (f <= 0) return;
+    this.screenFlash.flash(r, g, b, strength * f, decay);
   }
 
   // Lazily create/fetch the client-side cosmetic anim for a sim entity. The sim no longer
@@ -762,6 +818,9 @@ export class Game {
   // returned events into FX -> advance client-only cosmetics -> render (caller). Solo runs
   // stepWorld in-process (LocalTransport), so this IS the old update loop, just seam'd.
   private tick(dt: number) {
+    // Keep the input context tracking run state (reconnect veil lifting, going down /
+    // being revived) so samples/actions are always gated against the current surface.
+    this.syncInputContext();
     // Snapshot player pos BEFORE this sim step so the renderer can interpolate between the
     // last two sim positions (smooth motion at any frame rate vs the fixed sim rate).
     this.renderPrevX = this.px; this.renderPrevY = this.py; this.hasRenderPrev = true;
@@ -821,23 +880,14 @@ export class Game {
     if (this.isStatsHeld) this.openStats();
   }
 
-  // Build this tick's InputCmd from keys/mouse/settings. Autofire + the mouse->world aim
-  // are resolved here; the sim only sees moveX/moveY/aim/firing/dash. While the HUD owns
-  // the input context (hotbar drag or an open drawer), combat actions are suppressed so a
-  // UI gesture can never leak into firing/dashing — movement/aim stay live.
+  // Build this tick's InputCmd from the context-gated controller sample plus the
+  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash. The "hud" context
+  // (hotbar drag / open drawer) samples idle, so HUD interaction never leaks into combat.
   private buildInput(): InputCmd {
-    let moveX = 0, moveY = 0;
-    if (this.keys.has("w") || this.keys.has("arrowup")) moveY -= 1;
-    if (this.keys.has("s") || this.keys.has("arrowdown")) moveY += 1;
-    if (this.keys.has("a") || this.keys.has("arrowleft")) moveX -= 1;
-    if (this.keys.has("d") || this.keys.has("arrowright")) moveX += 1;
-    const wx = this.mouse.x + this.cam.x, wy = this.mouse.y + this.cam.y;
+    const s = this.input.sample();
+    const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
-    const isHudBusy = this.hud.isInteractionActive();
-    if (!settings.isAutofire) this.isAutoFiring = false;
-    const firing = !isHudBusy && (settings.isAutofire ? this.isAutoFiring : this.mouse.isDown);
-    const dash = !isHudBusy && this.keys.has("shift");
-    return { seq: ++this.inputSeq, moveX, moveY, aim, firing, dash };
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -965,7 +1015,7 @@ export class Game {
     this.isClearCelebrated = true;
     sfx("floorClear");
     this.addTrauma(0.1);
-    this.screenFlash.flash(140, 255, 190, 0.08, 2.5);
+    this.flashScreen(140, 255, 190, 0.08, 2.5);
     this.hud.showBanner("FLOOR CLEARED \u00b7 \u25be TAKE THE STAIRS");
     const d = this.dungeon;
     this.spawnSparkleBurst(d.exit.x * TILE + TILE / 2, d.exit.y * TILE + TILE / 2, 14, "#8affc0");
@@ -982,14 +1032,14 @@ export class Game {
     switch (e.t) {
       case "shot": {
         const w = WEAPONS[e.weapon];
-        triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon]);
+        triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim; this.muzzle.size = w.muzzle; this.muzzle.color = w.color;
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
         sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
-        const kick = FIRE_KICK[e.weapon];
+        const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
         this.kickX += -Math.cos(e.aim) * kick;
         this.kickY += -Math.sin(e.aim) * kick;
         break;
@@ -998,14 +1048,14 @@ export class Game {
         const w = WEAPONS[e.weapon];
         const m = w.melee;
         this.meleeFlipDir = -this.meleeFlipDir; // alternate the visual sweep; the hitbox wedge is symmetric
-        triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon]);
+        triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
         const feel = MELEE_FEEL[e.weapon];
         if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
         else sfx(SHOOT_SFX[e.weapon]);
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         // Melee kicks the camera INTO the strike (a lunge), not back like gun recoil.
-        const kick = FIRE_KICK[e.weapon];
+        const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
         this.kickX += Math.cos(e.aim) * kick * 1.6;
         this.kickY += Math.sin(e.aim) * kick * 1.6;
         this.spawnParticles(e.bx + Math.cos(e.aim) * 14, e.by + Math.sin(e.aim) * 14, 4, w.color);
@@ -1092,7 +1142,7 @@ export class Game {
         // where the reached level is known; this event carries the world-space glow.
         this.spawnParticles(e.x, e.y, 20, e.tint);
         this.spawnSparkleBurst(e.x, e.y, 14, e.tint);
-        this.screenFlash.flash(255, 210, 122, 0.1, 2.5);
+        this.flashScreen(255, 210, 122, 0.1, 2.5);
         this.addTrauma(0.12);
         break;
       case "offerBlessing":
@@ -1145,7 +1195,7 @@ export class Game {
         this.addDecal(e.x, e.y, "#ff7a2a", e.r * 0.6, "splat");
         this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.6, 0.38, "#ffb43b", 5);
         this.spawnSparkleBurst(e.x, e.y, 10, "#ff8a3b");
-        if (this.isNearCamera(e.x, e.y)) this.screenFlash.flash(255, 150, 60, 0.13, 3.2);
+        if (this.isNearCamera(e.x, e.y)) this.flashScreen(255, 150, 60, 0.13, 3.2);
         break;
       case "chestOpen":
         sfx("chest");
@@ -1189,7 +1239,7 @@ export class Game {
         this.sfxAt("bossSpawn", e.x, e.y);
         this.addTrauma(TRAUMA_BOSS_FLOOR);
         this.shockwaves.spawn(e.x, e.y, 30, 190, 0.55, "#ffb43b", 4);
-        this.screenFlash.flash(255, 180, 59, 0.12, 2.8);
+        this.flashScreen(255, 180, 59, 0.12, 2.8);
         break;
       case "bossTransition":
         // Telemetry-bearing beat (enter/exit + queued overflow); the juice rides bossPhase.
@@ -1307,7 +1357,7 @@ export class Game {
         this.spawnPuff(x, y, 9, "#ff9ab8");
         break;
       case "boss":
-        this.screenFlash.flash(255, 214, 120, 0.4, 1.4);
+        this.flashScreen(255, 214, 120, 0.4, 1.4);
         this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd27a", 5);
         this.shockwaves.spawn(x, y, 12, 260, 0.8, "#ffb43b", 3);
         this.spawnSparkleBurst(x, y, 26, "#ffd27a");
@@ -1370,13 +1420,14 @@ export class Game {
     if (choices.length === 0) { dismissBlessingOfferInWorld(this.world, LOCAL_ID); return; }
     this.isChoosing = true;
     this.isPaused = false;
-    this.mouse.isDown = false;
+    this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
       const events = chooseBlessingInWorld(this.world, LOCAL_ID, item);
       if (events.length > 0) this.ownedItemDefs.push(item);
       this.handleSimEvents(events);
       this.isChoosing = false;
+      this.syncInputContext();
       this.last = performance.now();
     });
   }
@@ -1397,11 +1448,12 @@ export class Game {
     if (choices.length === 0 || !this.wsTransport) return;
     this.isChoosing = true;
     this.isPaused = false;
-    this.mouse.isDown = false;
+    this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
       this.wsTransport?.sendChooseBlessing(offer.id, item.id);
       this.isChoosing = false;
+      this.syncInputContext();
       this.last = performance.now();
     });
   }
@@ -1425,15 +1477,16 @@ export class Game {
     return e.kind !== "boss" && e.chill >= FREEZE_AT;
   }
 
-  // ---- inventory action handlers (keyboard, mouse wheel, hotbar UI; a future controller/
-  // mobile layer calls the same three public methods). All of them route through the ONE
-  // transport seam: solo/co-op apply through the validated sim mutators in LocalTransport;
-  // online sends the authoritative command and the snapshot confirms — there is NO
-  // client-local inventory mutation on the online path.
+  // ---- inventory action handlers ----
+  // Reached ONLY through the context-gated InputController (keyboard keys, wheel, and the
+  // hotbar UI all dispatch GameActions into it), so context legality lives in one place.
+  // These bodies keep just the structural rules, and route through the ONE transport seam:
+  // solo/co-op apply through the validated sim mutators in LocalTransport; online sends
+  // the authoritative command and the snapshot confirms — there is NO client-local
+  // inventory mutation on the online path.
 
-  // Equip the weapon in hotbar slot `index` (number keys 1-9, hotbar click/Enter/Space).
-  equipSlot(index: number) {
-    if (!this.canActOnInventory()) return;
+  // Equip the weapon in hotbar slot `index` (number keys 1-9 via the selectWeapon action).
+  private equipSlot(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
     this.transport.requestEquip(owned[index]);
@@ -1441,9 +1494,10 @@ export class Game {
 
   // Hotbar activation (tap/click/Enter/Space): an unequipped slot equips; the already-
   // equipped slot opens its stat drawer instead — weapon info is never hover-only, so
-  // touch and keyboard users reach it too. Number keys keep pure-equip semantics.
-  activateSlot(index: number) {
-    if (!this.canActOnInventory()) return;
+  // touch and keyboard users reach it too. Number keys keep pure-equip semantics. The
+  // drawer's DROP button re-enters the controller as a dropWeapon action (context is
+  // re-synced after the drawer closes, so it passes the same gate as the Q key).
+  private activateSlot(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
     if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
@@ -1455,32 +1509,26 @@ export class Game {
       rate: 1 / w.fireCd,
       range: w.melee ? w.melee.reach : w.speed * w.life,
       isMelee: w.melee !== undefined,
-      onDrop: owned.length > 1 ? () => this.dropEquippedWeapon() : null,
+      onDrop: owned.length > 1
+        ? () => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeapon" }); }
+        : null,
     });
   }
 
   // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
   // the resulting order, because they index the same authoritative ownedWeapons array.
-  reorderSlots(from: number, to: number) {
-    if (!this.canActOnInventory()) return;
+  private reorderSlots(from: number, to: number) {
     const n = this.p.ownedWeapons.length;
     if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
     this.transport.requestReorder(from, to);
   }
 
-  // Drop the currently equipped weapon into the world (Q). The final weapon never drops;
-  // the authority (sim or server) additionally rejects downed/pending/terminal states.
-  dropEquippedWeapon() {
-    if (!this.canActOnInventory()) return;
-    if (this.isDown || this.p.ownedWeapons.length < 2) return;
+  // Drop the currently equipped weapon into the world (Q / drawer DROP). The final weapon
+  // never drops; the authority (sim or server) additionally rejects downed/pending/terminal
+  // states server-side even if a tampered client bypasses the context gate.
+  private dropEquippedWeapon() {
+    if (this.p.ownedWeapons.length < 2) return;
     this.transport.requestDrop(this.weapon);
-  }
-
-  private canActOnInventory(): boolean {
-    // isInteractionActive also covers a live hotbar drag; slot callbacks fire after the
-    // drag tears down, so legitimate click/drop-end actions always pass this gate.
-    return this.isRunning && !this.isPaused && !this.isChoosing && !this.isAwaitingOnlineWorld()
-      && !this.hud.isInteractionActive();
   }
 
   private cycleWeapon(dir: number) {
@@ -1869,7 +1917,7 @@ export class Game {
   private gameOver() {
     if (!this.isRunning) return;
     this.isRunning = false;
-    this.isAutoFiring = false;
+    this.syncInputContext();
     cancelAnimationFrame(this.raf);
     // Terminal exit STOPS the transport: online this closes the socket and leaves the
     // authoritative world (no lingering post-run connection); solo LocalTransport.stop is a
@@ -2055,9 +2103,10 @@ export class Game {
     if (this.isAwaitingOnlineWorld()) { this.renderConnectingVeil(); return; }
     ctx.fillStyle = this.currentBiome.bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    // trauma² shake, scaled by the player's intensity setting. New random offset per
-    // frame; the background fill above stays put so edges never flash the void.
-    const mag = this.trauma * this.trauma * SHAKE_MAX_PX * settings.shakeIntensity;
+    // trauma² shake, scaled by the player's intensity setting (zeroed under reduced
+    // motion). New random offset per frame; the background fill above stays put so
+    // edges never flash the void.
+    const mag = this.trauma * this.trauma * SHAKE_MAX_PX * settings.effectiveShake;
     const shakeX = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
     const shakeY = mag > 0.05 ? (Math.random() * 2 - 1) * mag : 0;
     ctx.save();
@@ -3397,7 +3446,7 @@ export class Game {
   // so the aim point reads clearly against a busy floor. Screen-space, drawn last.
   private renderReticle() {
     const { ctx } = this;
-    const cx = this.mouse.x, cy = this.mouse.y;
+    const cx = this.input.mouseX, cy = this.input.mouseY;
     const r = 8, tick = 4, gap = 3;
     ctx.save();
     ctx.strokeStyle = "rgba(255,210,122,0.85)";
@@ -3459,7 +3508,7 @@ export class Game {
   // otherwise a random open spot a short walk from the player (so bulk spawns spread out).
   private devPlacePoint(atCursor: boolean): { x: number; y: number } {
     if (atCursor) {
-      const wx = this.mouse.x + this.cam.x, wy = this.mouse.y + this.cam.y;
+      const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
       if (!this.isWallAt(wx, wy)) return { x: wx, y: wy };
     }
     for (let i = 0; i < 32; i++) {

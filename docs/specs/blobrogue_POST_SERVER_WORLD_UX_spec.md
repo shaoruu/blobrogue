@@ -69,25 +69,35 @@ Before seal: `ENTER THE ARENA`. Sealed: event-specific objective (`DEFEAT THE DU
 ## 4. Depth escalation: material / ecology / room grammar, not hue-only
 Biome color lanes remain support, never the identity by themselves. Each depth band must change three visible layers:
 
-### Verdant Hollow — elastic / living
-- Materials: roots, damp wood, leaf mats, soft amber sap.
-- Ecology: flocking/hopping soft creatures, root seams, living props.
-- Room grammar: round/branching rooms, soft obstacles, clear escape loops; teaches universal movement verbs safely.
+### Amberwild — elastic / living
+- Materials: wet roots, leaf mats, damp wood, soft amber sap.
+- Ecology: flocking/hopping soft creatures, Snaproots, living props.
+- Room grammar: round/open rooms and escape loops; teaches verbs safely.
+
+### Rootbound Warrens — formation / controlled density
+- Materials: denser root vaults, braided wood, packed loam, amber sap channels.
+- Ecology: Knellbat-led packs, root-shell Shielders, mature flock formations.
+- Room grammar: branching formation corridors + large gauntlet center rooms; always two exits/flank routes around shields.
 
 ### Sunless Caves — sound / momentum
-- Materials: shale, exposed bone, resonant stone, falling dust.
-- Ecology: eyeless listeners (Marrow/Rattleback/Knellbat), ceiling/wall commitment, sound tells.
-- Room grammar: long charge lanes, echo chambers, hard impact walls, pockets of darkness with material tells—never invisible attacks.
+- Materials: shale, bone, resonant stone, dust.
+- Ecology: Chargers, Rattleback, sound/bait tells.
+- Room grammar: long impact lanes, echo chambers, hard walls; no invisible gotchas.
 
 ### The Deep — fracture / wrong geometry
-- Materials: jet-black resin, cold mineral seams, broken architecture, dead amber.
-- Ecology: seam-followers, angular orbiters, wall logic, precise feints.
-- Room grammar: offset/T-shaped spaces, visible fracture paths, staggered elevations suggested by wall faces; navigable/readable despite wrongness.
+- Materials: jet resin, cold mineral seams, broken structure, dead amber.
+- Ecology: Crookleg/Seamwalker/precise Shielders.
+- Room grammar: offset/T shapes, visible future paths, staggered wall faces; readable despite wrongness.
+
+### Gilded Archive — order / armor / claimed space
+- Materials: rigid amber shelving, brass, fossil plates, cold mineral seams.
+- Ecology: frontal Shielders, Anchors/turrets, Gilded Warden.
+- Room grammar: columns, controlled firing lanes, destructible/redirectable cover, mandatory flank routes.
 
 ### Emberreach — convection / pressure
-- Materials: clinker, glassy slag, vents, flowing heat seams.
-- Ecology: anchored venters, jet movement, fissure eruption, cooling recoveries.
-- Room grammar: pressure lanes and safe pockets that change over time; hazards change space, not merely recolor walls or inflate HP.
+- Materials: clinker, slag, vents, heat seams.
+- Ecology: Bellows Anchors, Cinderjack jet-HUNT, Hollow Choir voice fragments.
+- Room grammar: pressure lanes + cooling safe pockets; hazards change routes, not HP.
 
 ### Escalation acceptance
 At grayscale/low saturation, a screenshot of room silhouette/material/props should still identify biome. A player should name the biome from room grammar and creature movement before reading the banner. Every new biome supplies at least: 2 structural room shapes, 2 prop/material families, 1 environmental interaction, and 2 weighted movement verbs.

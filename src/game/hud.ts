@@ -7,6 +7,7 @@
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
+import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
 
 export interface HudState {
@@ -243,6 +244,7 @@ export class Hud {
   private drawerEl: HTMLElement;
   private lastItems: HudState["items"] = [];
   private hotbarActions: HotbarActions | null = null;
+  private drawerFocus = new FocusScope(); // modal focus capture/restore (same pattern as overlays)
   private drag: SlotDrag | null = null;
   private prevSlotsKey = "";
   private dashEl: HTMLElement;
@@ -496,9 +498,11 @@ export class Hud {
   }
 
   closeDrawer() {
+    const wasOpen = this.isDrawerOpen();
     this.drawerEl.classList.remove("open");
     this.scrimEl.classList.remove("show");
     this.drawerEl.replaceChildren();
+    if (wasOpen) this.drawerFocus.close(); // return focus to the pill/slot that opened it
   }
 
   private openDrawer(title: string, fill: (body: HTMLElement) => void) {
@@ -518,7 +522,7 @@ export class Hud {
     this.drawerEl.appendChild(body);
     this.drawerEl.classList.add("open");
     this.scrimEl.classList.add("show");
-    close.focus();
+    this.drawerFocus.open(close, currentFocus());
   }
 
   // The full build list as a bottom drawer — what the collapsed BUILD·N pill taps open
