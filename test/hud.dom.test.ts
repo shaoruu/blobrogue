@@ -23,7 +23,7 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ITEMS, itemDesc } = await import("../src/sim/items.js");
 type HudModule = typeof import("../src/game/hud.js");
@@ -298,6 +298,19 @@ function hierarchyTests(): void {
   hud.clear();
   check("clear() resets lane + prompt states",
     !objective.classList.contains("show") && !lane.classList.contains("boss") && !prompt.classList.contains("show"));
+
+  section("dealerTagCopy: the Dealer's at-a-glance state matrix (UI gate)");
+  const buyer = { coins: 10, hp: 3, maxHp: 6, isOwned: false };
+  check("affordable heart reads HEART \u00b7 6 COINS",
+    JSON.stringify(dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, buyer)) === JSON.stringify({ text: "HEART \u00b7 6 COINS", state: "buy" }));
+  check("affordable stall reads NAME \u00b7 PRICE COINS",
+    dealerTagCopy({ kind: "weapon", name: "Railgun", price: 12 }, { ...buyer, coins: 12 }).text === "RAILGUN \u00b7 12 COINS");
+  check("broke reads NEED N MORE (the exact shortfall)",
+    JSON.stringify(dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, { ...buyer, coins: 4 })) === JSON.stringify({ text: "NEED 2 MORE", state: "broke" }));
+  check("full health outranks coins (the touch would be pointless)",
+    dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, { ...buyer, hp: 6 }).text === "FULL HEALTH");
+  check("an owned stall reads OWNED (party ownership explicit)",
+    dealerTagCopy({ kind: "weapon", name: "Railgun", price: 12 }, { ...buyer, coins: 50, isOwned: true }).text === "OWNED");
 
   section("objectiveCopy: the canonical strings");
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");

@@ -32,7 +32,7 @@ import type { Bullet, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 import {
-  REVIVE, WEAPON_ECONOMY,
+  REVIVE, WEAPON_ECONOMY, DEALER,
   pedestalWeaponsFor, dealerWeaponStockFor, dealerWeaponPriceFor, bossWeaponChoicesFor,
 } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
@@ -698,6 +698,30 @@ function weaponEconomyTests(): void {
     stepWorldPhase(w, DT, []);
     check("a teammate buys the SAME stall (no depletion race)",
       w.pickups.includes(stall) && b.ownedWeapons.includes(merch) && b.coins === 0);
+  }
+
+  section("economy: the Dealer heart — an INVALID touch never consumes (UI gate)");
+  {
+    const { w, ps } = partyWorld(0xDEA1, 3, 2);
+    w.enemies = []; w.pendingSpawns = [];
+    const heart = w.pickups.find((p) => p.kind === "dealer_heart")!;
+    const [a] = ps;
+    // Full health with plenty of coins: the touch must neither heal, charge, nor consume
+    // (the loose-heart full-HP coin conversion must NOT apply to the Dealer's stock).
+    a.coins = 50;
+    a.x = heart.x; a.y = heart.y;
+    stepWorldPhase(w, DT, []);
+    check("FULL HEALTH touch consumes nothing", w.pickups.includes(heart) && a.coins === 50 && a.hp === a.maxHp);
+    // Broke and hurt: still nothing.
+    a.hp = 1;
+    a.coins = DEALER.price - 1;
+    stepWorldPhase(w, DT, []);
+    check("broke touch consumes nothing", w.pickups.includes(heart) && a.coins === DEALER.price - 1 && a.hp === 1);
+    // Hurt and funded: the touch buys exactly +1 HP for the price and the heart is gone.
+    a.coins = DEALER.price;
+    stepWorldPhase(w, DT, []);
+    check("a valid touch pays the price for exactly +1 HP",
+      !w.pickups.includes(heart) && a.coins === 0 && a.hp === 2);
   }
 
   section("economy: the boss reward is min(P+1,5) CHOICES, claimed personally (gate §4)");

@@ -8,7 +8,7 @@ import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, TIERS, DEALER } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
@@ -24,7 +24,7 @@ import { comboTierFor } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
-import { Hud } from "./hud.js";
+import { Hud, dealerTagCopy } from "./hud.js";
 import type { ProfileStats } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
@@ -2849,8 +2849,22 @@ export class Game {
     ctx.restore();
   }
 
+  // The one dealer item whose full state copy the player is reading right now: the nearest
+  // within approach range. Null when nothing is close (everything wears its compact tag).
+  private focusedDealerId(): number | null {
+    let best: number | null = null;
+    let bestD = 90;
+    for (const p of this.pickups) {
+      if (p.kind !== "dealer_heart" && p.kind !== "dealer_weapon") continue;
+      const d = Math.hypot(this.px - p.x, this.py - p.y);
+      if (d < bestD) { bestD = d; best = p.id; }
+    }
+    return best;
+  }
+
   private renderPickups() {
     const { ctx, cam } = this;
+    const focusedDealer = this.focusedDealerId();
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
@@ -2863,17 +2877,37 @@ export class Game {
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      // The Dealer's stock wears its coin price; gray if this player can't afford it.
+      // The Dealer's stock wears its state tag (UI gate): the item the player is ABOUT TO
+      // TOUCH carries the full copy — `HEART · 6 COINS`, `NEED N MORE`, `FULL HEALTH`,
+      // `OWNED` — matching the sim, which never consumes on an invalid touch; its shelf
+      // neighbors wear compact tags (price, or the short blocked word) so a row of stalls
+      // never collides into soup.
       if (p.kind === "dealer_heart" || p.kind === "dealer_weapon") {
-        const price = p.value ?? 6;
-        ctx.save();
-        ctx.font = '700 10px "Silkscreen", monospace';
-        ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(8,6,16,0.9)";
-        ctx.fillText(`${price}c`, sx + 1, sy - 17);
-        ctx.fillStyle = this.coins >= price ? "#ffd27a" : "#8a8378";
-        ctx.fillText(`${price}c`, sx, sy - 18);
-        ctx.restore();
+        const tag = dealerTagCopy(
+          p.kind === "dealer_heart"
+            ? { kind: "heart", name: "Heart", price: p.value ?? DEALER.price }
+            : { kind: "weapon", name: p.weapon ? WEAPONS[p.weapon].name : "Weapon", price: p.value ?? 12 },
+          { coins: this.coins, hp: this.hp, maxHp: this.maxHp, isOwned: p.weapon !== null && this.p.ownedWeapons.includes(p.weapon) },
+        );
+        const isFocused = focusedDealer === p.id;
+        // A neighbor of the focused item yields its tag entirely — the focused full copy
+        // owns the shelf line (compact tags return the moment the player steps away).
+        const focused = focusedDealer !== null ? this.pickups.find((d) => d.id === focusedDealer) : undefined;
+        const isYielding = !isFocused && focused !== undefined
+          && Math.abs(focused.y - p.y) < 14 && Math.abs(focused.x - p.x) < 72;
+        if (!isYielding) {
+          const text = isFocused ? tag.text
+            : tag.state === "blocked" ? (p.kind === "dealer_heart" ? "FULL" : "OWNED")
+            : `${p.value ?? DEALER.price}c`;
+          ctx.save();
+          ctx.font = '700 9px "Silkscreen", monospace';
+          ctx.textAlign = "center";
+          ctx.fillStyle = "rgba(8,6,16,0.9)";
+          ctx.fillText(text, sx + 1, sy - 17);
+          ctx.fillStyle = tag.state === "buy" ? "#ffd27a" : tag.state === "broke" ? "#ff8a7a" : "#9a8fb5";
+          ctx.fillText(text, sx, sy - 18);
+          ctx.restore();
+        }
       }
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
       const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;

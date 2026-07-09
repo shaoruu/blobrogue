@@ -166,7 +166,9 @@ async function main(): Promise<void> {
     await capture({ name: "spectating", world: w, selfId: "s0", identities, ticks: 150 });
   }
 
-  // 3. The Dealer's party stock (P2): hearts on the top row, priced weapons below.
+  // 3. The Dealer's party stock (P2): hearts on the top row, priced stalls below — the
+  // full at-a-glance tag matrix (UI gate): a buyable heart, a buyable stall, and a
+  // NEED N MORE stall, all for a hurt player carrying 14 coins.
   {
     const { w, identities } = partyScene(0xDEA1, 3, ["s0", "s1"]);
     const stall = w.pickups.find((p) => p.kind === "dealer_weapon");
@@ -174,6 +176,7 @@ async function main(): Promise<void> {
     const mate = w.players.get("s1")!;
     if (stall) { me.x = stall.x - 70; me.y = stall.y + 40; mate.x = stall.x + 80; mate.y = stall.y + 46; }
     me.coins = 14;
+    me.hp = 3;
     await capture({
       name: "dealer-party-stock", world: w, selfId: "s0", identities, ticks: 40,
       setup: (game) => game.input.mouseMove(700, 340),
