@@ -2,6 +2,8 @@ import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { PresenceDoc, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
+import { DEFAULT_DIFFICULTY } from "../sim/balance.js";
+import type { Difficulty } from "../sim/balance.js";
 
 // One room session for AUTHORITATIVE online play. Convex hosts only the social handshake —
 // the room code, who is in it (roster), and the lobby/playing status; ALL gameplay state
@@ -30,6 +32,9 @@ export class OnlineLobby {
   code = "";
   status: RoomStatus = "lobby";
   hostPlayerId = "";
+  // The room's difficulty as Convex reports it (host-selected; standard for quick play).
+  // Display state only — the binding that matters is minted into the join ticket.
+  difficulty: Difficulty = DEFAULT_DIFFICULTY;
   // Entered via quick play (public drop-in pool): no start gate, and game over offers
   // "play again" instead of a return to a private lobby.
   isQuickPlay = false;
@@ -107,6 +112,7 @@ export class OnlineLobby {
       if (!room) return;
       this.status = room.status;
       this.hostPlayerId = room.hostPlayerId;
+      this.difficulty = room.difficulty;
       this.emit();
     });
     this.unsubPresence = this.client.onUpdate(api.presence.list, { roomId }, (rows) => {
@@ -147,6 +153,16 @@ export class OnlineLobby {
       .slice()
       .sort((a, b) => (a.playerId === this.hostPlayerId ? -1 : b.playerId === this.hostPlayerId ? 1 : a.name.localeCompare(b.name)))
       .map((r) => ({ playerId: r.playerId, name: r.name, colorIndex: r.colorIndex, isHost: r.playerId === this.hostPlayerId }));
+  }
+
+  // Host picks the room's run difficulty from the lobby (server-enforced: host only, lobby
+  // only, never public rooms). Every member's subscription re-renders with the new mode; the
+  // authoritative binding happens at START RUN via the minted ticket.
+  async setDifficulty(difficulty: Difficulty): Promise<void> {
+    const playerId = this.requirePlayerId();
+    this.difficulty = difficulty; // optimistic; the room subscription confirms it
+    this.emit();
+    await this.client.mutation(api.rooms.setDifficulty, { roomId: this.roomId, playerId, difficulty });
   }
 
   // Host flips the lobby live; every subscribed member sees status "playing" and connects.

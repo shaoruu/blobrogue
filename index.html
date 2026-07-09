@@ -41,6 +41,7 @@
       .chip .v{ font-family:var(--f-num); font-size:19px; line-height:1; margin-top:2px; color:var(--cream); }
       .chip .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
       .chip.floor .v{ color:var(--amber); } .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
+      .chip.diff .v{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; margin-top:0; align-self:center; }
       .coopstrip{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--blu); background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3); padding:4px 9px; text-transform:uppercase; }
       .minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
       .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
@@ -236,6 +237,19 @@
       .namerow label{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
       .menu input[type=text]{ font-family:var(--f-num); font-size:20px; letter-spacing:1px; padding:8px 12px; background:#0d0819; color:var(--cream); border:0; box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 3px 6px rgba(0,0,0,.5); text-align:left; outline:none; width:100%; }
       .menu input::placeholder{ color:var(--dun-4); }
+      /* --- Difficulty picker (title solo setup + online lobby, host-editable) --- */
+      .diffrow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; text-align:left; width:100%; max-width:430px; }
+      .diffrow label{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
+      .diffseg{ display:flex; gap:7px; }
+      .diffbtn{ flex:1; min-width:0; padding:10px 6px; font-size:11px; letter-spacing:1px;
+        --c:#1a1330; --c-hi:#2a2140; --c-lo:#0d0819; --tx:#8579a0; text-shadow:none; }
+      .diffbtn:hover{ --c:#241a3d; --c-hi:#392d5c; --c-lo:#120c22; --tx:#cbb6d6; }
+      .diffbtn:disabled{ cursor:default; transform:none; }
+      .diffbtn.casual.sel, .diffbtn.casual.sel:hover{ --c:#7dd87d; --c-hi:#a8e8a8; --c-lo:#3f8f4a; --tx:#0c2410; }
+      .diffbtn.standard.sel, .diffbtn.standard.sel:hover{ --c:#ffd166; --c-hi:#ffe9b0; --c-lo:#c9942e; --tx:#241a06; }
+      .diffbtn.brutal.sel, .diffbtn.brutal.sel:hover{ --c:#ff6a6a; --c-hi:#ff9a9a; --c-lo:#b23a3a; --tx:#2a0a0a; }
+      /* Reserves two lines so swapping the one-sentence blurb never shifts the layout. */
+      .diffblurb{ font-family:var(--f-ui); font-size:9px; letter-spacing:.4px; line-height:1.5; color:var(--dun-4); min-height:27px; margin:0; text-transform:none; }
       /* --- Blob-color pick (right column identity) --- */
       .swatches{ display:flex; gap:7px; }
       .swatch{ flex:0 0 auto; width:26px; height:26px; min-width:0; padding:0; border:0; cursor:pointer; box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }

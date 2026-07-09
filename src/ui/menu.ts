@@ -7,6 +7,9 @@ import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
+import { settings } from "../game/settings.js";
+import { DIFFICULTIES, DIFFICULTY_IDS } from "../sim/balance.js";
+import type { Difficulty } from "../sim/balance.js";
 import { createSettingsControls } from "./settings.js";
 
 export interface MenuHost {
@@ -91,6 +94,7 @@ export class Menu {
       // Offline build: no profile/multiplayer — single centered actions column, no split.
       const colA = el("div", "col-actions");
       colA.appendChild(this.soloButton("\u25be  PLAY"));
+      colA.appendChild(this.soloDifficultyRow());
       colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       wrap.appendChild(colA);
       wrap.appendChild(createSettingsControls());
@@ -109,6 +113,7 @@ export class Menu {
       const solo = this.soloButton("PLAY SOLO");
       solo.classList.add("play-solo");
       colA.appendChild(solo);
+      colA.appendChild(this.soloDifficultyRow());
       const actrow = el("div", "actrow");
       const classicBtn = el("button", "secondary", "CLASSIC CO-OP");
       classicBtn.addEventListener("click", () => void this.showClassicCoop());
@@ -283,6 +288,42 @@ export class Menu {
     box.appendChild(grid);
   }
 
+  private difficultyRow(opts: { selected: () => Difficulty; isEditable: boolean; onPick: (d: Difficulty) => void }): HTMLElement {
+    // The three-mode difficulty row (CASUAL / STANDARD / BRUTAL + the selected mode's
+    // one-sentence description). One component, two homes: the title's solo run setup
+    // (persisted preference) and the online room lobby (host-selected room state — members
+    // see the same control read-only, so the whole party always knows the mode).
+    const row = el("div", "diffrow");
+    row.appendChild(el("label", "", "difficulty"));
+    const seg = el("div", "diffseg");
+    const blurb = el("p", "diffblurb");
+    const buttons = new Map<Difficulty, HTMLButtonElement>();
+    const sync = () => {
+      const current = opts.selected();
+      for (const [id, b] of buttons) b.classList.toggle("sel", id === current);
+      blurb.textContent = DIFFICULTIES[current].blurb;
+    };
+    for (const id of DIFFICULTY_IDS) {
+      const b = el("button", `diffbtn ${id}`, id.toUpperCase());
+      b.type = "button";
+      b.disabled = !opts.isEditable;
+      if (opts.isEditable) b.addEventListener("click", () => { opts.onPick(id); sync(); });
+      buttons.set(id, b);
+      seg.appendChild(b);
+    }
+    sync();
+    row.append(seg, blurb);
+    return row;
+  }
+
+  private soloDifficultyRow(): HTMLElement {
+    return this.difficultyRow({
+      selected: () => settings.preferredDifficulty,
+      isEditable: true,
+      onPick: (d) => settings.setPreferredDifficulty(d),
+    });
+  }
+
   private soloButton(label: string): HTMLButtonElement {
     const btn = el("button", "", label);
     btn.addEventListener("click", () => this.doSolo());
@@ -420,6 +461,15 @@ export class Menu {
       }
       wrap.appendChild(list);
       wrap.appendChild(el("p", "muted", `${players.length} player${players.length === 1 ? "" : "s"} in the room`));
+
+      // The room's difficulty is host-selected ROOM state: the host picks here in the lobby
+      // (locked once a run is live), everyone else sees the same control read-only. The pick
+      // is bound into every member's join ticket at START RUN — never a per-client choice.
+      wrap.appendChild(this.difficultyRow({
+        selected: () => lobby.difficulty,
+        isEditable: lobby.isHost && lobby.status === "lobby" && !lobby.isQuickPlay,
+        onPick: (d) => void lobby.setDifficulty(d).catch(() => {}),
+      }));
 
       const row = el("div", "btnrow");
       if (lobby.status === "playing") {

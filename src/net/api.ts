@@ -1,4 +1,5 @@
 import { makeFunctionReference } from "convex/server";
+import type { Difficulty } from "../sim/balance.js";
 
 // Typed references to the Convex functions in /convex, built with
 // makeFunctionReference so the client never depends on the generated `convex/_generated`
@@ -58,6 +59,8 @@ export interface RoomDoc {
   seed: number;
   floor: number;
   status: RoomStatus;
+  // Host-selected run difficulty ("online" rooms; defaulted server-side to standard).
+  difficulty: Difficulty;
 }
 
 export interface PresenceDoc {
@@ -114,6 +117,8 @@ export const api = {
     quickPlay: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),
     join: makeFunctionReference<"mutation", { code: string; playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
+    // Host-only, lobby-only, private-online-rooms-only (enforced server-side in convex/rooms.ts).
+    setDifficulty: makeFunctionReference<"mutation", { roomId: string; playerId: string; difficulty: Difficulty }, null>("rooms:setDifficulty"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
     reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:reopen"),
     heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:heartbeat"),

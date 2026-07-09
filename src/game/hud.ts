@@ -6,11 +6,15 @@
 // mid-run.
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
+import { DIFFICULTIES } from "../sim/balance.js";
+import type { Difficulty } from "../sim/balance.js";
 import type { WeaponId } from "../sim/types.js";
 
 export interface HudState {
   hp: number;
   maxHp: number;
+  // Run difficulty readout (solo pick / authoritative room state online).
+  difficulty: Difficulty;
   floor: number;
   kills: number;
   coins: number;
@@ -115,6 +119,7 @@ const HUD_MARKUP = `
       <span class="chip floor"><span class="k">FL</span><span class="v" data-floor>1</span></span>
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
+      <span class="chip diff"><span class="v" data-diff>STANDARD</span></span>
     </div>
   </div><div class="coopstrip" data-coop></div></div>
   <div class="bossbar" data-bossbar>
@@ -143,6 +148,8 @@ export class Hud {
   private floorEl: HTMLElement;
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
+  private diffEl: HTMLElement;
+  private prevDifficulty: Difficulty | null = null;
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
   private prevSlotsKey = "";
@@ -184,6 +191,7 @@ export class Hud {
     this.floorEl = hud.querySelector("[data-floor]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
+    this.diffEl = hud.querySelector("[data-diff]")!;
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
     this.dashEl = hud.querySelector(".dash")!;
@@ -250,6 +258,11 @@ export class Hud {
     this.floorEl.textContent = String(s.floor);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
+    if (s.difficulty !== this.prevDifficulty) {
+      this.prevDifficulty = s.difficulty;
+      this.diffEl.textContent = s.difficulty.toUpperCase();
+      this.diffEl.style.color = DIFFICULTIES[s.difficulty].tint;
+    }
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
     // Only rebuild when the set or selection changes (cheap string key).
     const slotsKey = s.weapons.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|");
@@ -407,6 +420,7 @@ export class Hud {
   clear() {
     this.coopEl.textContent = "";
     this.coopEl.style.display = "none";
+    this.prevDifficulty = null;
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;

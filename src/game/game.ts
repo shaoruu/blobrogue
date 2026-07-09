@@ -8,8 +8,8 @@ import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
-import type { EnemyTier } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, TIERS, DEFAULT_DIFFICULTY } from "../sim/balance.js";
+import type { Difficulty, EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
@@ -64,6 +64,10 @@ export interface StartOptions {
   // The player's chosen blob tint (client palette index). Applies to solo + online; classic
   // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
   selfColorIndex?: number | null;
+  // Run difficulty for SOLO (the menu passes the persisted preference). Online ignores it —
+  // the server's room state is authoritative and arrives on every snapshot; classic co-op
+  // stays on the shared STANDARD so peers simulating the same seed can never diverge.
+  difficulty?: Difficulty;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -315,6 +319,9 @@ export class Game {
   // authoritative server). The client reads the world for rendering + camera and drives it via
   // InputCmds; it never mutates sim state directly outside dev tools + blessing picks.
   private mode: "solo" | "coop" | "online" = "solo";
+  // The run difficulty the HUD shows. Solo/co-op: fixed at start. Online: refreshed from the
+  // authoritative snapshot each frame (the client never decides it).
+  private difficulty: Difficulty = DEFAULT_DIFFICULTY;
   private localTransport = new LocalTransport();
   private wsTransport: WSTransport | null = null;
   private get transport(): Transport {
@@ -532,12 +539,16 @@ export class Game {
       });
       this.seed = STAGE_B_SEED;
       floor = STAGE_B_FLOOR;
+      this.difficulty = DEFAULT_DIFFICULTY; // placeholder until the first authoritative snapshot
       this.transport.start(this.seed, floor, { isSandbox: true, isCoop: false });
     } else {
       this.wsTransport = null;
       floor = this.coop ? this.coop.getFloor() : 1;
       this.seed = this.coop ? this.coop.getSeed() : randomSeed();
-      this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
+      // Classic co-op pins STANDARD: every peer simulates the shared seed with identical
+      // balance, so a personal preference can never desync the party.
+      this.difficulty = this.coop ? DEFAULT_DIFFICULTY : opts.difficulty ?? DEFAULT_DIFFICULTY;
+      this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null, difficulty: this.difficulty });
     }
     this.world = this.transport.poll().state;
     this.inputSeq = 0;
@@ -1703,6 +1714,8 @@ export class Game {
     const boss = this.enemies.find((e) => e.kind === "boss");
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
+    // Online: the room's difficulty is authoritative snapshot state, never a local pick.
+    if (this.mode === "online" && this.wsTransport) this.difficulty = this.wsTransport.getDifficulty();
     let coopLabel: string | null = null;
     if (this.coop) {
       const count = this.coop.remotePlayers().length + 1;
@@ -1717,6 +1730,7 @@ export class Game {
     const comboTier = this.comboTier();
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
+      difficulty: this.difficulty,
       floor: this.floor, kills: this.kills, coins: this.coins,
       weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name, isCurrent: id === this.weapon })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered

@@ -3,6 +3,7 @@ import { Game } from "./game/game.js";
 import type { RunResult, ExitReason } from "./game/game.js";
 import type { ProfileDoc } from "./net/api.js";
 import { CONVEX_URL, resolveGsUrl, defaultGsUrl, devTicketUrl, isExplicitGsOverride } from "./net/config.js";
+import { settings } from "./game/settings.js";
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
@@ -72,7 +73,8 @@ async function bootNormal() {
       activeCoop = null;
       leaveOnlineIfAny();
       menu.hide();
-      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex });
+      // Solo runs at the locally persisted preferred difficulty (the title-screen pick).
+      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, difficulty: settings.preferredDifficulty });
     },
     startCoop(mp: Multiplayer, profile: ProfileDoc | null) {
       activeCoop = mp;
