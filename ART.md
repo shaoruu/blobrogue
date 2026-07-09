@@ -45,3 +45,38 @@ falls back to the procedural animation above whenever a sheet is absent (the cur
 
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.
+
+## Companion pets (art contract — no art shipped yet)
+The three companions (Ember Pup, Lantern Wisp, Bonebird) render **fully procedurally**
+today (distinct code-drawn silhouettes — the muzzle-flash philosophy, never placeholder
+PNGs). The sprite hooks are wired and typed; dropping the art in requires **no code
+changes beyond registering the files** in `src/game/assets.ts`.
+
+**Pose contract** (`PetPose` in `assets.ts`): every frame the renderer derives
+`clip: "idle" | "walk" | "action"` (`action` plays for ~0.3s after a nip/peck, driven by
+the authoritative wire timer) and `facing: -1 | 1`. Author art **facing right**; the
+renderer mirrors for left.
+
+**Exact expected filenames** — one 64×64 base PNG per pet, plus optional horizontal strip
+sheets (64×64 frames, count inferred from width) per clip:
+
+| pet | base | walk | action |
+|---|---|---|---|
+| Ember Pup | `/sprites/pet_ember_pup.png` | `/sprites/pet_ember_pup_walk.png` | `/sprites/pet_ember_pup_action.png` |
+| Lantern Wisp | `/sprites/pet_lantern_wisp.png` | `/sprites/pet_lantern_wisp_walk.png` | `/sprites/pet_lantern_wisp_action.png` |
+| Bonebird | `/sprites/pet_bonebird.png` | `/sprites/pet_bonebird_walk.png` | `/sprites/pet_bonebird_action.png` |
+
+**Enable** (mirrors `SHEETS` — registries are empty by default so nothing 404s):
+
+```ts
+export const PET_SOURCES: Partial<Record<PetKind, string>> = {
+  ember_pup: "/sprites/pet_ember_pup.png",
+};
+export const PET_SHEETS: Partial<Record<`${PetKind}.${PetClip}`, SheetDef>> = {
+  "ember_pup.walk": { src: "/sprites/pet_ember_pup_walk.png", fps: 10 },
+};
+```
+
+Missing clips fall back `action -> walk -> base -> procedural body`, so partial drops are
+fine. Pets draw at 30px (about half a hero) over an owner-colored accent ring; accent
+tints live in `src/sim/pets.ts` (`PETS[kind].tint`).
