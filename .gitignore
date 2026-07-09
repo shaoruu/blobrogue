@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 .vercel
 .env*
+
+# Python bytecode (tools/ tests)
+__pycache__/
