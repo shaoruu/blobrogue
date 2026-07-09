@@ -90,7 +90,7 @@ export class ManualClock implements Clock {
 // ---- in-memory filesystem ----
 
 export class InMemoryFileSystem implements FileSystemPort {
-  files = new Map<string, string>();
+  files = new Map<string, Uint8Array>();
   symlinks = new Map<string, string>();
   dirs = new Set<string>();
 
@@ -104,15 +104,25 @@ export class InMemoryFileSystem implements FileSystemPort {
     }
   }
 
+  setFile(path: string, data: string | Uint8Array): void {
+    this.files.set(path, typeof data === "string" ? Buffer.from(data, "utf8") : data);
+    this.addParents(path);
+  }
+
   async readFile(path: string): Promise<string | null> {
+    const bytes = this.files.get(path);
+    // utf8-decodes like the real adapter — lossy for binary content, by design.
+    return bytes === undefined ? null : Buffer.from(bytes).toString("utf8");
+  }
+  async readFileBytes(path: string): Promise<Uint8Array | null> {
     return this.files.get(path) ?? null;
   }
   async writeFileAtomic(path: string, data: string): Promise<void> {
-    this.files.set(path, data);
-    this.addParents(path);
+    this.setFile(path, data);
   }
   async appendFile(path: string, data: string): Promise<void> {
-    this.files.set(path, (this.files.get(path) ?? "") + data);
+    const prev = this.files.get(path) ?? Buffer.alloc(0);
+    this.files.set(path, Buffer.concat([prev, Buffer.from(data, "utf8")]));
     this.addParents(path);
   }
   async ensureDir(path: string): Promise<void> {
@@ -208,19 +218,24 @@ export interface StageReleaseOpts {
   commit?: string;
   version?: string;
   gates?: ReleaseGates;
-  extraFiles?: Record<string, string>;
+  extraFiles?: Record<string, string | Uint8Array>;
   tamperChecksum?: string; // write a WRONG checksum into the manifest
   dropFile?: string; // omit a file that the manifest lists (missing-file case)
 }
+
+// A real packaged tree always contains binary files (sprite PNGs, native addons), so the default
+// staged release includes one: PNG magic + bytes that do NOT survive a utf8 decode/re-encode.
+export const BINARY_SPRITE_BYTES: Uint8Array = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0xc3, 0x28, 0x80]);
 
 export function stageRelease(fs: InMemoryFileSystem, root: string, opts: StageReleaseOpts = {}): string {
   const commit = opts.commit ?? "abc123def456";
   const version = opts.version ?? "1.2.3";
   const gates = opts.gates ?? { typecheck: "pass", unitTests: "pass", goldens: "pass" };
-  const content: Record<string, string> = {
+  const content: Record<string, string | Uint8Array> = {
     "server/dist/server/src/main.js": "console.log('gs');\n",
     "control/dist/src/main.js": "console.log('control');\n",
     "client/dist/index.html": "<!doctype html>\n",
+    "client/dist/assets/sprites.png": BINARY_SPRITE_BYTES,
     ...(opts.extraFiles ?? {}),
   };
   const files = Object.keys(content).sort();
@@ -231,7 +246,7 @@ export function stageRelease(fs: InMemoryFileSystem, root: string, opts: StageRe
 
   for (const p of files) {
     if (opts.dropFile === p) continue;
-    fs.files.set(`${dir}/${p}`, content[p]);
+    fs.setFile(`${dir}/${p}`, content[p]);
   }
   fs.dirs.add(dir);
   const manifest = {
@@ -243,7 +258,7 @@ export function stageRelease(fs: InMemoryFileSystem, root: string, opts: StageRe
     gates,
     files,
   };
-  fs.files.set(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
+  fs.setFile(`${dir}/manifest.json`, JSON.stringify(manifest, null, 2) + "\n");
   return releaseId;
 }
 

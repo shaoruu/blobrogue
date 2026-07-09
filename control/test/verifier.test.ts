@@ -4,14 +4,17 @@
 // packer relies on.
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
+import { NodeFileSystem } from "../src/adapters/nodeFs.js";
 import { ChecksumArtifactVerifier } from "../src/artifactVerifier.js";
 import { sha256Hex, treeChecksum } from "../src/checksum.js";
+import { deriveReleaseId } from "../src/ids.js";
 import { FsReleaseStore } from "../src/stores/releaseStore.js";
-import { InMemoryFileSystem, TestRunner, stageRelease } from "./harness.js";
+import { BINARY_SPRITE_BYTES, InMemoryFileSystem, TestRunner, stageRelease } from "./harness.js";
 
 function sha256sumCli(path: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -33,14 +36,78 @@ export async function suite(t: TestRunner): Promise<void> {
       const file = join(dir, "sample.txt");
       const content = "hello blobrogue\n";
       await writeFile(file, content);
+      const binFile = join(dir, "sample.png");
+      await writeFile(binFile, BINARY_SPRITE_BYTES);
       const cli = await sha256sumCli(file);
-      if (cli === null) {
+      const binCli = await sha256sumCli(binFile);
+      if (cli === null || binCli === null) {
         t.check("sha256sum unavailable — parity check skipped", true);
       } else {
-        t.check("node sha256 matches sha256sum for a file", sha256Hex(content) === cli, `node=${sha256Hex(content).slice(0, 12)} cli=${cli.slice(0, 12)}`);
+        t.check("node sha256 matches sha256sum for a text file", sha256Hex(content) === cli, `node=${sha256Hex(content).slice(0, 12)} cli=${cli.slice(0, 12)}`);
+        t.check("node sha256 matches sha256sum for a BINARY file", sha256Hex(BINARY_SPRITE_BYTES) === binCli, `node=${sha256Hex(BINARY_SPRITE_BYTES).slice(0, 12)} cli=${binCli.slice(0, 12)}`);
       }
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Pack + verify round trip over a REAL tree on the REAL filesystem, with per-file hashes
+  // computed the way the bash packer computes them (`sha256sum` over raw bytes). The tree
+  // includes binary files (a sprite PNG, a fake native .node addon) whose bytes do not survive
+  // a utf8 decode — the exact drift that once rejected every real release with
+  // checksum_mismatch.
+  await t.suite("verifier: packs + verifies a real tree containing binary files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "brc-pack-"));
+    try {
+      const tree: Record<string, string | Uint8Array> = {
+        "server/dist/server/src/main.js": "console.log('gs');\n",
+        "client/dist/index.html": "<!doctype html>\n",
+        "client/dist/assets/sprites.png": BINARY_SPRITE_BYTES,
+        "server/node_modules/native/build/addon.node": Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00, 0xff, 0x80, 0xc0, 0xee]),
+      };
+      const commit = "abc123def456";
+      const version = "1.2.3";
+      // Stage first, then hash the on-disk files — like the packer, which hashes what it staged.
+      const stage = join(root, "stage");
+      for (const [rel, data] of Object.entries(tree)) {
+        const abs = join(stage, rel);
+        await mkdir(dirname(abs), { recursive: true });
+        await writeFile(abs, data);
+      }
+      const files = Object.keys(tree).sort();
+      const digests: { path: string; sha256: string }[] = [];
+      let isCliUsed = true;
+      for (const rel of files) {
+        const cli = await sha256sumCli(join(stage, rel));
+        if (cli === null) isCliUsed = false;
+        digests.push({ path: rel, sha256: cli ?? createHash("sha256").update(await readFile(join(stage, rel))).digest("hex") });
+      }
+      t.check(isCliUsed ? "per-file hashes computed by the real sha256sum CLI" : "sha256sum unavailable — packed with node raw-byte hashes", true);
+      const checksum = treeChecksum(digests);
+      const releaseId = deriveReleaseId(commit, version, checksum);
+      const dir = join(root, "releases", releaseId);
+      for (const rel of files) {
+        const abs = join(dir, rel);
+        await mkdir(dirname(abs), { recursive: true });
+        await writeFile(abs, tree[rel]);
+      }
+      const manifest = { releaseId, version, commit, builtAt: "2026-01-01T00:00:00Z", checksum, gates: { typecheck: "pass", unitTests: "pass", goldens: "pass" }, files };
+      await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+
+      const verifier = new ChecksumArtifactVerifier(new NodeFileSystem(), root);
+      const res = await verifier.verify(releaseId);
+      t.check("packed tree with binaries verifies byte-for-byte", res.ok, res.ok ? releaseId : res.reason);
+
+      // Integrity is not weakened: flip one byte inside the binary sprite and the release
+      // must be rejected.
+      const spritePath = join(dir, "client/dist/assets/sprites.png");
+      const spriteBytes = Buffer.from(await readFile(spritePath));
+      spriteBytes[spriteBytes.length - 1] ^= 0xff;
+      await writeFile(spritePath, spriteBytes);
+      const tampered = await verifier.verify(releaseId);
+      t.check("tampered binary file rejected", !tampered.ok && (tampered.ok || tampered.reason === "checksum_mismatch"), tampered.ok ? "accepted" : tampered.reason);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 
