@@ -3279,6 +3279,26 @@ export class Game {
           if (leftFloor) ctx.fillRect(sx, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
           if (rightFloor) ctx.fillRect(sx + TILE - WALL_SIDE_W, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
         }
+        // Isolated in-room wall cells are pillars/cover, not floor patches. Give them a
+        // compact raised-block silhouette: dark cast shadow/face, inset lit cap, hard outline.
+        if (aboveFloor && belowFloor && leftFloor && rightFloor) {
+          ctx.save();
+          ctx.globalAlpha = 0.55;
+          ctx.fillStyle = "#05030b";
+          ctx.fillRect(sx + 5, sy + 8, TILE - 4, TILE - 3);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = biome.wallFront;
+          ctx.fillRect(sx + 3, sy + 3, TILE - 8, TILE - 9);
+          ctx.strokeStyle = "#05030b";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(sx + 2.5, sy + 2.5, TILE - 7, TILE - 8);
+          ctx.fillStyle = biome.wallCap;
+          ctx.fillRect(sx + 5, sy + 5, TILE - 12, 4);
+          ctx.globalAlpha = 0.5;
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(sx + 7, sy + 5, TILE - 16, 1);
+          ctx.restore();
+        }
       }
     }
 
