@@ -181,7 +181,7 @@ export class FakeGameServerProbe implements GameServerProbe {
   statusValue: GameServerStatus = { status: "ok", uptimeSec: 10, worlds: 1, players: 0, connections: 0, tickMs_p50: 1, tickMs_p95: 2, tickMs_max: 3 };
   readyValue: Readiness = { live: true, ready: true, detail: null };
   metricsValue: MetricsSnapshot = { msgsIn: 0, msgsOut: 0 };
-  worldsValue: WorldSummary[] = [{ id: "arena-1", players: 0, tick: 0 }];
+  worldsValue: WorldSummary[] = [{ id: "arena-1", players: 0, tick: 0, names: [] }];
   logsValue: LogRecord[] = [];
   verifyValue: VerifyResult = { ok: true, depth: "synthetic_join", detail: null };
   verifyDelayMs = 0; // hold the deploy across a real timer (makes lock contention deterministic)

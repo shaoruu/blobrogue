@@ -125,6 +125,9 @@ export interface WorldSummary {
   id: string;
   players: number;
   tick: number;
+  // Who is actually connected to this world (display names) — the ops answer to "did the
+  // whole room land in ONE world?" during a multiplayer incident.
+  names: string[];
 }
 
 // A single redacted structured log line. Values are primitives only (already sanitized).
