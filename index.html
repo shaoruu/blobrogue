@@ -306,8 +306,13 @@
       .lb-list{ display:flex; flex-direction:column; gap:4px; width:100%; }
       .lb-row{ display:flex; align-items:center; gap:10px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 10px; }
       .lb-row.you{ box-shadow:inset 0 0 0 2px var(--amber); background:#171027; }
-      .lb-row .rank{ font-family:var(--f-logo); font-size:10px; color:var(--dun-4); min-width:34px; }
-      .lb-row.you .rank, .lb-row:nth-child(1) .rank{ color:var(--amber); }
+      .lb-row .rank{ display:inline-flex; align-items:center; gap:4px; font-family:var(--f-logo); font-size:10px; color:var(--dun-4); min-width:44px; }
+      .lb-row.you .rank{ color:var(--amber); }
+      /* Cosmetic-ONLY top-rank recognition (owner directive): crown + podium tints. */
+      .lb-row .rank.r1{ color:var(--amber-hi); } .lb-row.r1{ box-shadow:inset 0 0 0 2px var(--amber-lo); }
+      .lb-row .rank.r2{ color:var(--bone); }
+      .lb-row .rank.r3{ color:var(--lea-2); }
+      .lb-row .rank canvas{ image-rendering:pixelated; }
       .lb-row .dot{ width:10px; height:10px; border-radius:0; flex:0 0 auto; }
       .lb-row .nm{ font-family:var(--f-ui); font-size:11px; color:var(--cream); flex:1; min-width:0; text-align:left;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

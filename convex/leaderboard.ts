@@ -1,6 +1,10 @@
 // Global leaderboard reads. Every board is a straight index scan over leaderboardBest
 // (one row per signed-in player per difficulty; see schema.ts for the write rules), so
 // ordering is total and pagination is cursor-stable:
+//
+// REWARD POLICY (owner directive): leaderboard standing grants COSMETIC recognition only
+// (rank markers, crowns, titles) — never gameplay power, currency, or unlocks. Anything
+// consuming these reads must keep to that line.
 //   - value ordering per category (desc, except fastest-boss which is asc),
 //   - ties fall back to the row's _creationTime (Convex appends it to every index):
 //     ascending boards break ties toward the earlier row; descending boards toward the

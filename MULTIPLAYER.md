@@ -334,6 +334,19 @@ client payload at all (the server reports from its own sim), and the local path 
 lie to itself. Signed-in solo runs are intentionally **excluded** from the boards (marked
 `local` in the history) until solo goes through an authoritative path.
 
+Product guardrails (owner directive):
+
+- **Personal proof first.** The profile/run-history panel is the primary stats surface —
+  it works for everyone (accounts, guests, offline) and every run lands there with its
+  trust label. The boards are the trusted, signed-in, authoritative-only layer on top.
+- **Normalized scoring.** The derived score is difficulty-normalized at the authoritative
+  source (`statsCore.DIFFICULTY_SCORE_WEIGHT`: casual ×3/4, standard ×1, brutal ×5/4) so
+  values stay comparable across difficulty filters and the difficulty feature has one
+  tuning knob. Weights apply only where the score is derived — never submitted.
+- **Cosmetic-only leaderboard rewards.** Standing on a board grants recognition
+  (rank markers/crown, podium tints) and nothing else — no gameplay power, currency, or
+  unlocks may ever hang off leaderboard rank.
+
 Duplicate protection: every submission carries a `submissionId`; retries settle
 idempotently on the `by_submission` index. Signed submissions also carry `sentAt` and are
 rejected outside a ±10-minute freshness window (defense-in-depth on top of the dedupe).

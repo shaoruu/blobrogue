@@ -320,6 +320,19 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
       category: "deepestFloor", difficulty: "brutal", cursor: null, numItems: 10,
     });
     expect(brutal.entries.map((e) => e.name)).toEqual(["brutalbee"]);
+
+    // Stored scores are difficulty-NORMALIZED at the authoritative source (statsCore
+    // weights: casual 3/4, standard 1, brutal 5/4) — never submitted, always derived.
+    const brutalBase = 5 * 1000 + 1 * 500 + 20 * 10 + 12 * 20 + 60;
+    const brutalScore = await t.query(api.leaderboard.top, {
+      category: "score", difficulty: "brutal", cursor: null, numItems: 10,
+    });
+    expect(brutalScore.entries[0].value).toBe(Math.round((brutalBase * 5) / 4));
+    const casualBase = 30 * 1000 + 1 * 500 + 20 * 10 + 12 * 20 + 60;
+    const casualScore = await t.query(api.leaderboard.top, {
+      category: "score", difficulty: "casual", cursor: null, numItems: 10,
+    });
+    expect(casualScore.entries[0].value).toBe(Math.round((casualBase * 3) / 4));
   });
 
   test("unearned categories never chart (zero boss kills / combo)", async () => {

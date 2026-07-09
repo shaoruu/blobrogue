@@ -91,14 +91,21 @@ section("validation: incoherent boss time is dropped, lists are bounded");
   check("non-string weapon entries reject", !validateRun(baseRun({ weapons: [7] })).ok);
 }
 
-section("score: derived, deterministic, and floor-dominated");
+section("score: derived, deterministic, floor-dominated, difficulty-normalized");
 {
   const run = mustValidate(baseRun());
   const again = mustValidate(baseRun());
   check("same run -> same score", scoreForRun(run) === scoreForRun(again), `score=${scoreForRun(run)}`);
   const deeper = mustValidate(baseRun({ floor: 8 }));
   check("a deeper floor always outranks its shallower twin", scoreForRun(deeper) > scoreForRun(run));
-  check("score formula exact", scoreForRun(run) === 7 * 1000 + 1 * 500 + 42 * 10 + 18 * 20 + 200);
+  const base = 7 * 1000 + 1 * 500 + 42 * 10 + 18 * 20 + 200;
+  check("standard weight is identity", scoreForRun(run) === base);
+  const casual = mustValidate(baseRun({ difficulty: "casual" }));
+  const brutal = mustValidate(baseRun({ difficulty: "brutal" }));
+  check("casual normalizes down (3/4)", scoreForRun(casual) === Math.round((base * 3) / 4), `score=${scoreForRun(casual)}`);
+  check("brutal normalizes up (5/4)", scoreForRun(brutal) === Math.round((base * 5) / 4), `score=${scoreForRun(brutal)}`);
+  check("identical play orders casual < standard < brutal",
+    scoreForRun(casual) < scoreForRun(run) && scoreForRun(run) < scoreForRun(brutal));
 }
 
 section("aggregation: one run folds into every lifetime counter");

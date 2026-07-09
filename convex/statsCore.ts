@@ -162,14 +162,29 @@ export function validateRun(raw: Record<string, JsonValue | undefined>): Validat
   };
 }
 
+// Difficulty normalization for the derived score, as an integer ratio so the arithmetic
+// stays exact and deterministic. Boards are filtered per difficulty (ordering within one
+// board is unaffected by a shared weight); the weight makes the score VALUE comparable
+// across difficulties for any cross-difficulty surface, and gives the authoritative
+// difficulty feature one knob to tune. Weights are authoritative-side only — no submitter
+// ever sends a score, normalized or otherwise.
+export const DIFFICULTY_SCORE_WEIGHT: Record<Difficulty, { num: number; den: number }> = {
+  casual: { num: 3, den: 4 },
+  standard: { num: 1, den: 1 },
+  brutal: { num: 5, den: 4 },
+};
+
 // The derived run score — computed HERE from validated fields, never submitted, so no
-// client (or compromised reporter) can assert a score directly. Integer arithmetic only.
+// client (or compromised reporter) can assert a score directly. Integer arithmetic only,
+// normalized by the run's difficulty weight.
 export function scoreForRun(run: CleanRun): number {
-  return run.floor * 1000
+  const base = run.floor * 1000
     + run.bossKills * 500
     + run.kills * 10
     + run.bestCombo * 20
     + Math.min(run.coinsEarned, 100000);
+  const w = DIFFICULTY_SCORE_WEIGHT[run.difficulty];
+  return Math.round((base * w.num) / w.den);
 }
 
 // Boss identity per kill floor. The current roster fields one boss (The Slime King) on

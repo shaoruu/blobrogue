@@ -10,6 +10,7 @@ import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { createSettingsControls } from "./settings.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
+import { pxIcon } from "../game/hudIcons.js";
 import { BOSS_NAMES, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../../convex/statsCore.js";
 
 export interface MenuHost {
@@ -915,6 +916,13 @@ export class Menu {
       row.append(again, back);
       hint = "press ENTER or R to play again";
     }
+    // Personal proof first: the run just landed in the caller's history, so offer the
+    // profile directly. Online stays lobby-focused (its buttons own the room lifecycle).
+    if (!ctx.online) {
+      const profileBtn = el("button", "secondary", "profile & stats");
+      profileBtn.addEventListener("click", () => void this.showProfilePanel());
+      row.appendChild(profileBtn);
+    }
     wrap.appendChild(row);
     wrap.appendChild(el("p", "hint", hint));
 
@@ -1035,9 +1043,16 @@ function runRow(r: RunHistoryEntryDoc): HTMLElement {
   return row;
 }
 
+// The pixel crown for rank #1 — leaderboard recognition is COSMETIC ONLY by directive
+// (markers/titles on the boards, never gameplay power), so this is the whole reward.
+const CROWN_MAP = ["X..X..X", "X.XXX.X", "XXXXXXX", "XXXXXXX"] as const;
+
 function lbRow(rank: number, e: LeaderboardEntryDoc, category: LeaderboardCategory, isYou: boolean): HTMLElement {
-  const row = el("div", "lb-row" + (isYou ? " you" : ""));
-  row.appendChild(el("span", "rank", `#${rank}`));
+  const row = el("div", "lb-row" + (isYou ? " you" : "") + (rank === 1 ? " r1" : ""));
+  const rankEl = el("span", "rank" + (rank <= 3 ? ` r${rank}` : ""));
+  if (rank === 1) rankEl.appendChild(pxIcon(CROWN_MAP, { X: "#ffd166" }, 2));
+  rankEl.appendChild(el("span", "", `#${rank}`));
+  row.appendChild(rankEl);
   const dot = el("span", "dot");
   dot.style.background = playerColor(e.colorIndex ?? 0);
   row.appendChild(dot);
