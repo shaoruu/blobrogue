@@ -276,7 +276,10 @@
       .bossbar.show{ opacity:1; transform:translateY(0); }
       .bossbar:not(.show){ display:none; } /* free the lane's slot (the objective line replaces it) */
       .bossbar-label{ font-family:var(--f-ui); font-size:10px; letter-spacing:4px; color:#ff8a8a;
-        text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,80,80,0.5); }
+        text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,80,80,0.5);
+        /* Authored boss names replace the generic label: always ONE line inside the lane's
+           fixed width — a too-long name clips to an ellipsis, never wraps or shifts. */
+        text-transform:uppercase; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .bossbar-track{ width:100%; height:16px; background:var(--dun-0); box-shadow:inset 0 0 0 2px #5a2030, 0 0 12px rgba(255,60,60,0.35); position:relative; overflow:hidden; }
       .bossbar-track i{ position:absolute; inset:0; transform-origin:left center; transform:scaleX(1);
         background:linear-gradient(180deg,#ff5a5f 0%,#c81e2e 100%); box-shadow:0 0 10px rgba(255,60,60,0.6);

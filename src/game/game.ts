@@ -6,7 +6,7 @@ import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
@@ -2629,6 +2629,7 @@ export class Game {
       isParty: this.mode !== "solo" && this.remotes().length > 0,
       isBossActive,
       bossHpFrac,
+      bossName: boss ? bossDisplayName(boss.kind) : "",
       coopLabel,
       prompt: this.hudPrompt(),
       dashFill: 1 - this.dashCd / this.dashCooldown(),

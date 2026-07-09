@@ -32,6 +32,9 @@ export interface HudState {
   isParty: boolean;
   isBossActive: boolean;
   bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
+  // The tracked boss's authored display name ("The Slime King", "Marrow", …) for the
+  // bar's title; empty falls back to the generic BOSS label.
+  bossName: string;
   coopLabel: string | null;
   // Party coordination readout in the objective lane ("WAITING FOR 1/2 PLAYERS…" /
   // "WAITING AT EXIT…"); null hides it.
@@ -388,7 +391,7 @@ const HUD_MARKUP = `
   </div><div class="coopstrip" data-coop></div></div>
   <div class="objlane" data-objlane>
     <div class="bossbar" data-bossbar>
-      <div class="bossbar-label">BOSS</div>
+      <div class="bossbar-label" data-bossname>BOSS</div>
       <div class="bossbar-track"><i data-bossfill></i></div>
     </div>
     <div class="objective" data-objective></div>
@@ -505,6 +508,8 @@ export class Hud {
   private comboBurstEl: HTMLElement;
   private bossbarEl!: HTMLElement;
   private bossFillEl!: HTMLElement;
+  private bossNameEl!: HTMLElement;
+  private prevBossName = "";
   private prevMult = 1;
   private prevCombo = -1;
   private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
@@ -580,6 +585,7 @@ export class Hud {
     this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
     this.bossbarEl = hud.querySelector("[data-bossbar]")!;
     this.bossFillEl = hud.querySelector("[data-bossfill]")!;
+    this.bossNameEl = hud.querySelector("[data-bossname]")!;
     this.objLaneEl = hud.querySelector("[data-objlane]")!;
     this.objectiveEl = hud.querySelector("[data-objective]")!;
     this.waitLine = hud.querySelector("[data-waitline]")!;
@@ -1166,6 +1172,13 @@ export class Hud {
     this.objLaneEl.classList.toggle("boss", s.isBossActive);
     this.bossbarEl.classList.toggle("show", s.isBossActive);
     if (s.isBossActive) {
+      // The bar titles the fight with the boss's authored name (CSS uppercases it);
+      // an unauthored kind keeps the generic label rather than an empty line.
+      const bossName = s.bossName !== "" ? s.bossName : "BOSS";
+      if (bossName !== this.prevBossName) {
+        this.prevBossName = bossName;
+        this.bossNameEl.textContent = bossName;
+      }
       const bf = s.bossHpFrac < 0 ? 0 : s.bossHpFrac > 1 ? 1 : s.bossHpFrac;
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
