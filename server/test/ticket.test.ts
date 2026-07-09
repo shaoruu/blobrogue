@@ -44,7 +44,7 @@ async function main(): Promise<void> {
       check(`byte equality for pid=${JSON.stringify(pid.slice(0, 24))}`, fromConvex === fromServer);
     }
     // Every optional-claim combination must serialize identically on both sides (the fixed
-    // pid,exp,wld,nm,cl key order is the byte contract).
+    // pid,exp,wld,nm,cl,df key order is the byte contract).
     const claimVariants: Array<[string, GsTicketClaims]> = [
       ["world only", { worldId: "room:ABCD" }],
       ["world+name", { worldId: "room:ABCD", name: "Ada" }],
@@ -52,6 +52,9 @@ async function main(): Promise<void> {
       ["name only (quick play identity)", { name: "blob" }],
       ["unicode name", { worldId: "room:WXYZ", name: "\u00e9\u00e8-bl\u00f6b \u2764", colorIndex: 5 }],
       ["color 0 (explicit amber)", { name: "amber", colorIndex: 0 }],
+      ["world+difficulty (room mode binding)", { worldId: "room:ABCD", difficulty: "brutal" }],
+      ["every claim (world+name+color+difficulty)", { worldId: "room:ABCD", name: "Ada", colorIndex: 3, difficulty: "casual" }],
+      ["difficulty standard (explicit quick-play mint)", { worldId: "room:QIKP", difficulty: "standard" }],
     ];
     for (const [label, claims] of claimVariants) {
       const fromConvex = await mintGsTicket(secret, "player-1", 120, now, claims);
@@ -75,6 +78,15 @@ async function main(): Promise<void> {
     const bareRes = verifyTicket(cfg, bare, now);
     check("claimless ticket verifies with NO world (old-format compat -> default world)",
       bareRes.ok === true && bareRes.worldId === undefined && bareRes.name === undefined && bareRes.colorIndex === undefined);
+    check("claimless ticket carries NO difficulty (server defaults it to standard)",
+      bareRes.ok === true && bareRes.difficulty === undefined);
+
+    // The df claim round-trips exactly, for each of the three modes.
+    for (const mode of ["casual", "standard", "brutal"] as const) {
+      const modeTicket = await mintGsTicket(secret, "player-1", 120, now, { worldId: "room:ABCD", difficulty: mode });
+      const modeRes = verifyTicket(cfg, modeTicket, now);
+      check(`difficulty claim round-trips (${mode})`, modeRes.ok === true && modeRes.difficulty === mode, `got=${modeRes.difficulty}`);
+    }
 
     // The verifier sanitizes names (they render on other players' screens).
     const messy = await mintGsTicket(secret, "player-1", 120, now, { name: "  A\u0000da\n  the   Blob  " });
@@ -88,6 +100,13 @@ async function main(): Promise<void> {
     check("oversized world id rejects", verifyTicket(cfg, longWorld, now).ok === false);
     const badColor = await mintGsTicket(secret, "player-1", 120, now, { colorIndex: 99 });
     check("out-of-range color rejects (bad_color)", verifyTicket(cfg, badColor, now).reason === "bad_color");
+    // The mint types forbid junk modes; widen first to forge what a buggy minter could emit.
+    const junkDf: { difficulty: string } = { difficulty: "nightmare" };
+    const badDifficulty = await mintGsTicket(secret, "player-1", 120, now, junkDf as GsTicketClaims);
+    check("unknown difficulty rejects (bad_difficulty)", verifyTicket(cfg, badDifficulty, now).reason === "bad_difficulty");
+    const casedDf: { difficulty: string } = { difficulty: "BRUTAL" };
+    const casedDifficulty = await mintGsTicket(secret, "player-1", 120, now, casedDf as GsTicketClaims);
+    check("difficulty is case-exact (BRUTAL rejects)", verifyTicket(cfg, casedDifficulty, now).ok === false);
 
     // Tampering with the world claim (world-hop attempt) breaks the signature.
     const [head, payload] = ticket.split(".");

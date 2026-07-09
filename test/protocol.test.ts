@@ -143,6 +143,34 @@ function serverRoundTripTests(): void {
   }
 }
 
+// Snapshot difficulty (dif): the room's authoritative mode rides every snapshot, decoded
+// defensively (absent -> the STANDARD default) so an old server's frames still decode, and
+// rejected when present-but-junk — the same additive rule as PlayerWire nm/cl.
+function difficultyWireTests(): void {
+  section("difficulty on the wire: encodes the world's mode, defaults, and validates");
+  const w = createWorld(0xD1F, 1, { isShared: true, skipLocalPlayer: true, difficulty: "casual" });
+  spawnPlayerInWorld(w, "pMe");
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, {});
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  check("snapshot carries the world's difficulty", snap.dif === "casual", `dif=${snap.dif}`);
+  const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
+  check("difficulty round-trips deep-equal", decoded.t === "snap" && decoded.dif === "casual");
+
+  // An OLD server's snapshot (no dif field) still decodes, as the STANDARD default.
+  const legacy = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
+  delete legacy.dif;
+  const fromLegacy = jsonCodec.decodeServer(JSON.stringify(legacy));
+  check("dif absent decodes as standard (old-server compat)", fromLegacy.t === "snap" && fromLegacy.dif === "standard");
+
+  for (const junk of ["extreme", "CASUAL", "", 2, null]) {
+    const bad = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
+    bad.dif = junk;
+    let isRejected = false;
+    try { jsonCodec.decodeServer(JSON.stringify(bad)); } catch (err) { isRejected = err instanceof ProtocolError; }
+    check(`present-but-junk dif ${JSON.stringify(junk)} rejected`, isRejected);
+  }
+}
+
 // PlayerWire identity (nm/cl): decorated from the verified per-connection identities at
 // snapshot build, decoded defensively (absent -> id-as-name / no color) so an old server's
 // frames still decode, and rejected when present-but-malformed.
@@ -299,6 +327,7 @@ function main(): void {
   clientRoundTripTests();
   unknownFieldTests();
   serverRoundTripTests();
+  difficultyWireTests();
   identityWireTests();
   fuzzTests();
   projectionTests();

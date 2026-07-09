@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import type { GsDifficulty } from "./gsTicketCore";
 
 // Rooms come in two kinds that never cross-match (see schema.ts):
 //   "coop"   — classic peer-synced co-op (the pre-authoritative path, fully preserved).
@@ -18,8 +19,15 @@ const QUICKPLAY_STALE_MS = 45_000;     // ignore rooms with no activity for this
 const kindArg = v.optional(v.union(v.literal("coop"), v.literal("online")));
 type RoomKind = "coop" | "online";
 
+const difficultyArg = v.union(v.literal("casual"), v.literal("standard"), v.literal("brutal"));
+
 function kindOf(room: Doc<"rooms">): RoomKind {
   return room.kind ?? "coop";
+}
+
+function difficultyOf(room: Doc<"rooms">): GsDifficulty {
+  // Absent = STANDARD: pre-difficulty rows and every quick-play public room stay standard.
+  return room.difficulty ?? "standard";
 }
 
 function randomCode(): string {
@@ -182,26 +190,44 @@ export const get = query({
       seed: room.seed,
       floor: room.floor,
       status: room.status,
+      difficulty: difficultyOf(room),
     };
   },
 });
 
 // Membership check backing the game-server ticket mint (gsTicket.mint): a `wld` claim is
 // minted ONLY for a player who actually sits in that online room. This is what turns "I know
-// a code" into a verified, signed world authorization.
+// a code" into a verified, signed world authorization. The room's host-selected difficulty
+// rides along so the mint can bind it as the `df` claim — room state, never a client choice.
 export const membership = query({
   args: { code: v.string(), playerId: v.id("players") },
-  handler: async (ctx, { code, playerId }) => {
+  handler: async (ctx, { code, playerId }): Promise<{ isMember: boolean; difficulty: GsDifficulty }> => {
     const room = await ctx.db
       .query("rooms")
       .withIndex("by_code", (q) => q.eq("code", code.trim().toUpperCase()))
       .unique();
-    if (!room || kindOf(room) !== "online" || room.status === "ended") return { isMember: false };
+    if (!room || kindOf(room) !== "online" || room.status === "ended") return { isMember: false, difficulty: "standard" };
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", room._id).eq("playerId", playerId))
       .unique();
-    return { isMember: row !== null };
+    return { isMember: row !== null, difficulty: difficultyOf(room) };
+  },
+});
+
+// Host picks the room's difficulty while everyone waits in the lobby. Locked down on every
+// axis: online rooms only, host only, lobby status only (a live run's mode is immutable),
+// and never public quick-play rooms (the pool is always STANDARD). The pick persists on the
+// room row, so it survives wipes/regroups until the host changes it again.
+export const setDifficulty = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), difficulty: difficultyArg },
+  handler: async (ctx, { roomId, playerId, difficulty }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || kindOf(room) !== "online") throw new Error("no such room");
+    if (room.hostPlayerId !== playerId) throw new Error("only the host can set difficulty");
+    if (room.status !== "lobby") throw new Error("difficulty can only change in the lobby");
+    if (room.isPublic === true) throw new Error("public rooms always play standard");
+    await ctx.db.patch(roomId, { difficulty, lastActivity: Date.now() });
   },
 });
 

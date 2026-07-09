@@ -24,6 +24,8 @@ import {
   type ServerMsg,
 } from "../net/protocol.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
+import { DEFAULT_DIFFICULTY } from "../sim/balance.js";
+import type { Difficulty } from "../sim/balance.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
 
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
@@ -151,6 +153,7 @@ export class WSTransport implements Transport {
   // the game to refresh its cosmetic floor state (biome/torches/music) off the new world.
   private curSeed = -1;
   private curFloor = -1;
+  private curDifficulty: Difficulty = DEFAULT_DIFFICULTY;
   private isWorldRebuilt = false;
   // A server-decided blessing offer waiting to be shown (consumed by the game each frame).
   private pendingOffer: BlessingOffer | null = null;
@@ -180,6 +183,7 @@ export class WSTransport implements Transport {
     // rebuilds it to match the authoritative geometry (see maybeRebuildWorld).
     this.curSeed = STAGE_B_SEED;
     this.curFloor = STAGE_B_FLOOR;
+    this.curDifficulty = DEFAULT_DIFFICULTY;
     this.predState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {});
     this.renderState = createWorld(STAGE_B_SEED, STAGE_B_FLOOR, {});
     this.pendingOffer = null;
@@ -302,12 +306,15 @@ export class WSTransport implements Transport {
   // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
   // floor (initial join and every party-wide descend). Enemies/bullets/props ride the snapshot,
   // so only the walls + a local player need to exist; the next reconcile snaps self to truth.
-  private maybeRebuildWorld(seed: number, floor: number): void {
-    if (seed === this.curSeed && floor === this.curFloor) return;
+  private maybeRebuildWorld(seed: number, floor: number, difficulty: Difficulty): void {
+    if (seed === this.curSeed && floor === this.curFloor && difficulty === this.curDifficulty) return;
     this.curSeed = seed;
     this.curFloor = floor;
+    this.curDifficulty = difficulty;
     this.predState.seed = seed;
     this.renderState.seed = seed;
+    this.predState.difficulty = difficulty;
+    this.renderState.difficulty = difficulty;
     loadFloorIntoWorld(this.predState, floor);
     loadFloorIntoWorld(this.renderState, floor);
     // A fresh floor is a hard teleport for every remote entity; drop stale interp history so
@@ -334,7 +341,7 @@ export class WSTransport implements Transport {
     }
     this.lastSnapRev = snap.rev;
     this.lastSnapTick = snap.tick;
-    this.maybeRebuildWorld(snap.seed, snap.floor);
+    this.maybeRebuildWorld(snap.seed, snap.floor, snap.dif);
     this.latestSnap = snap;
     const prevSnapAt = this.lastSnapAtForJitter;
     this.snapRecvAt = this.now();
@@ -641,6 +648,12 @@ export class WSTransport implements Transport {
   // filtering, unlike deriving it from the possibly-filtered enemy list).
   isFloorCleared(): boolean {
     return this.latestSnap?.cleared ?? false;
+  }
+
+  getDifficulty(): Difficulty {
+    // The room's authoritative difficulty (from the latest snapshot; the pre-join default
+    // until one arrives). Drives the HUD readout — a client can never set it.
+    return this.latestSnap?.dif ?? DEFAULT_DIFFICULTY;
   }
 
   // Terminal run state from authoritative SNAPSHOT state (not just the transient gameOver

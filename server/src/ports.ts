@@ -7,6 +7,7 @@
 // reconciliation/interp/lag-comp stays untouched.
 
 import type { WorldState } from "../../src/sim/world.js";
+import type { Difficulty } from "../../src/sim/balance.js";
 import type { WeaponId } from "../../src/sim/types.js";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { WireEvent } from "../../src/net/protocol.js";
@@ -60,13 +61,15 @@ export interface BlessingOfferRequest {
 
 // Session / lifecycle store: which room a connection belongs to, room creation + teardown. In
 // memory now; a Colyseus/matchmaking backend or Convex-backed store slots behind this later.
+// `difficulty` (the joiner's verified ticket claim) applies ONLY when the room's world is
+// first created; an existing room's difficulty always wins, so a run's mode is immutable.
 export interface SessionStore {
-  ensureRoom(id: string): RoomRuntime;
+  ensureRoom(id: string, difficulty: Difficulty): RoomRuntime;
   room(id: string): RoomRuntime | undefined;
   rooms(): IterableIterator<RoomRuntime>;
   roomCount(): number;
   totalPlayers(): number;
-  bind(conn: Conn, roomId: string): RoomRuntime;
+  bind(conn: Conn, roomId: string, difficulty: Difficulty): RoomRuntime;
   unbind(conn: Conn): void;
 }
 

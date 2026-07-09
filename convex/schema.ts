@@ -55,6 +55,11 @@ export default defineSchema({
     seed: v.number(),
     floor: v.number(),
     status: v.union(v.literal("lobby"), v.literal("playing"), v.literal("ended")),
+    // Host-selected run difficulty for "online" rooms, minted into every member's game-server
+    // ticket as the `df` claim. Optional: absent (all pre-existing rows, and every quick-play
+    // public room) means the STANDARD default. Only rooms.setDifficulty (host, in lobby,
+    // private rooms) can change it — it survives run resets until the host picks again.
+    difficulty: v.optional(v.union(v.literal("casual"), v.literal("standard"), v.literal("brutal"))),
     isPublic: v.optional(v.boolean()),
     createdAt: v.number(),
     lastActivity: v.number(),

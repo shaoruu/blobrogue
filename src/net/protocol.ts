@@ -16,7 +16,8 @@ import type {
   Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
   PropKind, PickupKind, ChestKind,
 } from "../sim/types.js";
-import type { EnemyTier } from "../sim/balance.js";
+import { DEFAULT_DIFFICULTY } from "../sim/balance.js";
+import type { Difficulty, EnemyTier } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
@@ -38,6 +39,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
+// v3-additive (difficulty, same rule — no client->server change): the ticket may carry a
+// verified `df` room-difficulty claim, and snapshots carry `dif` (the room's authoritative
+// difficulty) which the client decodes with a STANDARD fallback, so old<->new pairs keep
+// interoperating: an old server reads as standard, an old client ignores the field.
 export const PROTOCOL_VERSION = 3;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
@@ -168,6 +173,7 @@ export type ServerMsg =
                                  // join snapshot never loses identity)
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
+      dif: Difficulty;           // authoritative room/run difficulty (HUD + client floor rebuild)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
       evTo: number;              // highest committed event id — the client acks up to here even
                                  // when every pending event was interest-filtered away for it
@@ -263,6 +269,7 @@ const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = { none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
+const DIFFICULTY_SET: Record<Difficulty, true> = { casual: true, standard: true, brutal: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
   if (typeof v !== "string" || !Object.prototype.hasOwnProperty.call(set, v)) throw new ProtocolError(`bad ${what}`);
   return v as T;
@@ -572,6 +579,9 @@ function decodeServerMsg(raw: string): ServerMsg {
         selfId: shortStr(o, "selfId", 64),
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
+        // Decode-OPTIONAL (older servers omit it): validate strictly WHEN present, fall
+        // back to the STANDARD default when absent — never a failure across version skew.
+        dif: o.dif === undefined ? DEFAULT_DIFFICULTY : inSet(DIFFICULTY_SET, o.dif, "dif"),
         cleared: boolOf(o, "cleared"),
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
         self: o.self === null ? null : validateSelfWire(o.self),
@@ -847,6 +857,7 @@ export function buildSnapshot(
     selfId: selfPid,
     seed: w.seed,
     floor: w.floor,
+    dif: w.difficulty,
     cleared: isFloorCleared(w),
     evTo,
     self: self ? toSelfWire(self) : null,

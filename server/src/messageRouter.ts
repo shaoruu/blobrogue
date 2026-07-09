@@ -9,6 +9,7 @@
 // stays far below every cap.
 
 import { jsonCodec, PROTOCOL_VERSION, ProtocolError, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, type ClientMsg, type Codec } from "../../src/net/protocol.js";
+import { DEFAULT_DIFFICULTY } from "../../src/sim/balance.js";
 import { verifyTicket } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { Clock } from "./clock.js";
@@ -111,7 +112,9 @@ export class MessageRouter {
     // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
     // player proved membership in that room, so friends sharing a code land in the same
     // isolated world and a client can never assert a world id. No claim -> the public default.
-    const room = this.ctx.sessions.bind(conn, auth.worldId ?? DEFAULT_WORLD_ID);
+    // The `df` claim is the room's host-selected difficulty, applied only if this join
+    // CREATES the world (an existing room's difficulty wins). No claim -> STANDARD.
+    const room = this.ctx.sessions.bind(conn, auth.worldId ?? DEFAULT_WORLD_ID, auth.difficulty ?? DEFAULT_DIFFICULTY);
     conn.lastPongAt = this.ctx.clock.now();
     this.ctx.metrics.counters.joinsOk++;
     conn.log.info("join ok", { authName: conn.authName, playerId: conn.playerId, worldId: room.id, name: conn.displayName ?? "" });

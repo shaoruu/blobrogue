@@ -13,7 +13,7 @@
 // Run: npm run test:rooms (in server/).
 
 import { startTestServer, Bot, idle, waitUntil, sleep } from "../harness/lib.js";
-import { mintTicket } from "../src/auth.js";
+import { mintTicket, type TicketClaims } from "../src/auth.js";
 import { DEFAULT_WORLD_ID } from "../src/messageRouter.js";
 import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { WebSocket as WsClient } from "ws";
@@ -98,6 +98,64 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
+  await test("room difficulty: the df claim binds the world's mode; every member shares it", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "hard-a", world: "room:HARD", difficulty: "brutal", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "hard-b", world: "room:HARD", difficulty: "brutal", script: () => idle() });
+      const c = new Bot({ url: s.url, secret: s.secret, playerId: "soft-c", world: "room:SOFT", difficulty: "casual", script: () => idle() });
+      const d = new Bot({ url: s.url, secret: s.secret, playerId: "plain-d", script: () => idle() }); // claimless -> default world
+      a.start(); b.start(); c.start(); d.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady() && c.transport.isReady() && d.transport.isReady(), 3000);
+
+      check("room HARD runs brutal (from the verified df claim)", s.server.getWorld("room:HARD")?.state.difficulty === "brutal");
+      check("room SOFT runs casual — rooms are mode-isolated", s.server.getWorld("room:SOFT")?.state.difficulty === "casual");
+      check("a claimless ticket lands on the STANDARD default", s.server.getWorld(DEFAULT_WORLD_ID)?.state.difficulty === "standard");
+      check("both HARD members share ONE world at the room's mode", s.server.getWorld("room:HARD")?.playerCount === 2);
+      check("A's snapshots carry the room difficulty (HUD source)", a.transport.getLatestSnapshot()?.dif === "brutal");
+      check("B's snapshots agree", b.transport.getLatestSnapshot()?.dif === "brutal");
+      check("C's snapshots carry ITS room's difficulty", c.transport.getLatestSnapshot()?.dif === "casual");
+      check("the client transport surfaces the mode", a.transport.getDifficulty() === "brutal" && c.transport.getDifficulty() === "casual");
+
+      // A LATE joiner whose ticket somehow claims a different mode can never flip a live
+      // room: the existing world's difficulty wins (room state is immutable mid-run).
+      const late = new Bot({ url: s.url, secret: s.secret, playerId: "late-e", world: "room:HARD", difficulty: "casual", script: () => idle() });
+      late.start();
+      await waitUntil(() => late.transport.isReady(), 3000);
+      check("a stale/mismatched claim cannot flip a live room", s.server.getWorld("room:HARD")?.state.difficulty === "brutal");
+      check("the late joiner is told the ROOM's mode", late.transport.getDifficulty() === "brutal");
+
+      // Run reset (room emptied elsewhere) retains the difficulty for the same live world.
+      const soft = s.server.getWorld("room:SOFT");
+      soft?.resetRun();
+      check("a run reset retains the room's difficulty", soft?.state.difficulty === "casual");
+
+      a.stop(); b.stop(); c.stop(); d.stop(); late.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("a signed ticket with a junk difficulty claim is REJECTED (never defaulted)", async () => {
+    const s = await startTestServer();
+    try {
+      const before = s.server.health().counters.joinsRejected;
+      const ws = await rawSocket(s.url);
+      let isRejected = false;
+      ws.on("message", (data: Buffer) => {
+        const msg = JSON.parse(data.toString("utf8")) as { t?: string; code?: string };
+        if (msg.t === "error" && msg.code === "auth") isRejected = true;
+      });
+      // mintTicket doesn't validate claims (the verifier does) — forge an unknown mode. A
+      // signed-but-junk df must reject outright, not silently fall back to standard.
+      const junkClaims: { worldId: string; difficulty: string } = { worldId: "room:ABCD", difficulty: "nightmare" };
+      const forged = mintTicket(s.secret, "sneaky", 120, Date.now(), junkClaims as TicketClaims);
+      ws.send(jsonCodec.encodeClient({ t: "join", ticket: forged, protocol: PROTOCOL_VERSION }));
+      await waitUntil(() => isRejected, 2000);
+      check("join rejected with an auth error", isRejected);
+      check("rejection counted", s.server.health().counters.joinsRejected === before + 1);
+      check("no world was created", s.server.health().worlds === 0);
+    } finally { await s.close(); }
+  });
+
   await test("a signed ticket with a junk world claim is REJECTED (never misrouted)", async () => {
     const s = await startTestServer();
     try {
@@ -143,7 +201,7 @@ async function main(): Promise<void> {
     const s = await startTestServer();
     try {
       const httpBase = s.url.replace(/^ws/, "http").replace(/\/ws$/, "");
-      const res = await fetch(`${httpBase}/dev-ticket?playerId=devgal&world=room:DEVX&name=DevGal&color=4`);
+      const res = await fetch(`${httpBase}/dev-ticket?playerId=devgal&world=room:DEVX&name=DevGal&color=4&df=casual`);
       check("dev-ticket endpoint responds", res.ok);
       const { ticket } = (await res.json()) as { ticket: string };
 
@@ -163,7 +221,15 @@ async function main(): Promise<void> {
       const conn = world ? [...world.conns.values()][0] : undefined;
       check("dev ticket carried the display name", conn?.displayName === "DevGal", `name=${conn?.displayName}`);
       check("dev ticket carried the color", conn?.colorIndex === 4, `color=${conn?.colorIndex}`);
+      check("dev ticket carried the difficulty", world?.state.difficulty === "casual", `difficulty=${world?.state.difficulty}`);
+      const plain = await fetch(`${httpBase}/dev-ticket?playerId=plainpal&world=room:DEVY`);
+      const { ticket: plainTicket } = (await plain.json()) as { ticket: string };
+      const ws2 = await rawSocket(s.url);
+      ws2.send(jsonCodec.encodeClient({ t: "join", ticket: plainTicket, protocol: PROTOCOL_VERSION }));
+      await waitUntil(() => s.server.getWorld("room:DEVY") !== undefined, 2000);
+      check("a df-less dev ticket keeps the STANDARD default", s.server.getWorld("room:DEVY")?.state.difficulty === "standard");
       ws.close();
+      ws2.close();
     } finally { await s.close(); }
   });
 

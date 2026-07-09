@@ -11,6 +11,8 @@
 
 import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
+import { DEFAULT_DIFFICULTY } from "../../src/sim/balance.js";
+import type { Difficulty } from "../../src/sim/balance.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
 import { TILE, type WeaponId } from "../../src/sim/types.js";
@@ -66,21 +68,24 @@ export class GameWorld implements RoomRuntime {
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
-  constructor(id: string, seed: number = randomSeed(), arena = false) {
+  constructor(id: string, seed: number = randomSeed(), arena = false, difficulty: Difficulty = DEFAULT_DIFFICULTY) {
     this.id = id;
     // Production: a REAL generated dungeon (isShared) with a FRESH random run seed — the server
     // alone owns the seed; clients rebuild geometry from the snapshot's authoritative seed/floor.
+    // Difficulty is room state, fixed here at creation (from the creating join's verified
+    // ticket claim) and consumed by the deterministic floor build/sim.
     // Measurement (arena=true): an OPEN sandbox arena so the load harness can move a probe in a
     // straight monotonic line — same stepWorld, tick, and netcode, only different geometry.
     // Arena seeds a few enemies for bandwidth realism.
-    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena });
+    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena, difficulty });
     this.offerRng = new Rng(seed ^ 0x0ffe4);
     if (arena) this.seedArenaEnemies();
   }
 
-  // Reset to a FRESH run (new seed/floor 1/cleared terminal state). Called by the session store
-  // when the room empties — the next party starts a new dungeon, not a half-played one. The
-  // world revision increments (stale-snapshot guard) and tick stays monotonic.
+  // Reset to a FRESH run (new seed/floor 1/cleared terminal state) — RETAINING the room's
+  // difficulty (resetRunInWorld never touches it). Called by the session store when the room
+  // empties — the next party starts a new dungeon, not a half-played one. The world revision
+  // increments (stale-snapshot guard) and tick stays monotonic.
   resetRun(): void {
     const seed = randomSeed();
     resetRunInWorld(this.state, seed);

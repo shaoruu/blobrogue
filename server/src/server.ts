@@ -66,7 +66,7 @@ export class GameServer {
     this.log = deps.logger ?? createLogger({ app: "blobrogue-gs" });
     this.clock = deps.clock ?? systemClock;
     this.trustedProxies = parseCidrList(cfg.trustedProxies);
-    this.sessions = deps.sessions ?? new WorldRegistry((id) => new GameWorld(id, undefined, cfg.arena), this.log);
+    this.sessions = deps.sessions ?? new WorldRegistry((id, difficulty) => new GameWorld(id, undefined, cfg.arena, difficulty), this.log);
     this.publisher = deps.publisher ?? new WsSnapshotPublisher({
       config: cfg,
       metrics: this.metrics,

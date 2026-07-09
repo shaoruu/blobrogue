@@ -54,7 +54,9 @@ The Stage-B world is a fixed arena; both clients see the same server-owned enemi
    movement), and renders the same authoritative enemies plus the other player (interpolated,
    name above the blob). To prove ROOM isolation without Convex, mint per-tab tickets with a
    world claim: `curl "http://127.0.0.1:8090/dev-ticket?world=room:ABCD&name=Ada&color=2"` —
-   tabs whose tickets share a `world` share a world; different worlds never meet.
+   tabs whose tickets share a `world` share a world; different worlds never meet. Add
+   `&df=casual|standard|brutal` to bind that room's difficulty (omitted = standard, exactly
+   like a claimless production ticket).
 
 The production player flow (`PLAY ONLINE` in the menu, or the `?online=1` deep link) goes
 through the Convex-backed room lobby instead: create/join/quick-play a room, then the ticket

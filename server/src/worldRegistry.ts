@@ -3,23 +3,27 @@
 // Colyseus/matchmaking backend) can supply a different RoomRuntime without touching the server.
 // Multi-world from day one (production spec §5): v1 runs one room, but nothing here assumes it.
 
+import type { Difficulty } from "../../src/sim/balance.js";
 import type { Logger } from "./logger.js";
 import type { RoomRuntime, SessionStore } from "./ports.js";
 import type { Conn } from "./connection.js";
 
-export type RoomFactory = (id: string) => RoomRuntime;
+export type RoomFactory = (id: string, difficulty: Difficulty) => RoomRuntime;
 
 export class WorldRegistry implements SessionStore {
   private worlds = new Map<string, RoomRuntime>();
 
   constructor(private factory: RoomFactory, private log: Logger) {}
 
-  ensureRoom(id: string): RoomRuntime {
+  ensureRoom(id: string, difficulty: Difficulty): RoomRuntime {
+    // Difficulty binds at world CREATION only: the first verified joiner's room claim sets
+    // it (all members' tickets carry the same room state), and a live room never re-reads
+    // it — a late/stale ticket can never flip a run in progress.
     let room = this.worlds.get(id);
     if (!room) {
-      room = this.factory(id);
+      room = this.factory(id, difficulty);
       this.worlds.set(id, room);
-      this.log.info("world created", { worldId: id });
+      this.log.info("world created", { worldId: id, difficulty });
     }
     return room;
   }
@@ -43,8 +47,8 @@ export class WorldRegistry implements SessionStore {
   }
 
   // Bind a connection to a room: add its player + register the conn on the room.
-  bind(conn: Conn, roomId: string): RoomRuntime {
-    const room = this.ensureRoom(roomId);
+  bind(conn: Conn, roomId: string, difficulty: Difficulty): RoomRuntime {
+    const room = this.ensureRoom(roomId, difficulty);
     room.addPlayer(conn.playerId!);
     room.conns.set(conn.id, conn);
     conn.worldId = room.id;

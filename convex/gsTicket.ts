@@ -12,10 +12,12 @@
 //
 // Rooms: when a room code is supplied, the mint FIRST verifies the caller actually sits in
 // that online room (rooms.membership), then binds the room's world id into the ticket as the
-// `wld` claim. The game server binds the connection to exactly that world — this chain
-// (lobby membership -> signed claim -> server bind) is what makes rooms real isolation, not a
-// client-asserted string. The ticket only ASSERTS identity/authorization to the game server —
-// all gameplay authority stays in the server simulation.
+// `wld` claim — plus the room's host-selected difficulty as the `df` claim (room STATE, read
+// server-side; a client can neither pass nor alter it). The game server binds the connection
+// to exactly that world — this chain (lobby membership -> signed claim -> server bind) is
+// what makes rooms real isolation, not a client-asserted string. The ticket only ASSERTS
+// identity/authorization to the game server — all gameplay authority stays in the server
+// simulation.
 
 import { v } from "convex/values";
 import { action } from "./_generated/server";
@@ -45,9 +47,10 @@ export const mint = action({
       if (!profile) throw new Error("join the room before requesting a room ticket");
       // Profile serializes the players-row id as a string; narrow it back for the query arg.
       const memberId = profile.playerId as Id<"players">;
-      const { isMember } = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
+      const { isMember, difficulty } = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
       if (!isMember) throw new Error("you are not in that room");
       claims.worldId = worldIdForRoomCode(roomCode);
+      claims.difficulty = difficulty;
     }
 
     const ticket = await mintGsTicket(secret, playerId, TICKET_TTL_SECS, Date.now(), claims);

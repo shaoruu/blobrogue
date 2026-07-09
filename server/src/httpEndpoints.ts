@@ -4,6 +4,7 @@
 // loopback and must not be exposed to the internet (ops spec §7).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isDifficulty } from "../../src/sim/balance.js";
 import { mintTicket, isValidWorldId, sanitizeDisplayName, type TicketClaims } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { HealthReport } from "./metrics.js";
@@ -35,8 +36,9 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
     if (url.pathname === "/dev-ticket") {
       // Local-only convenience: mint a ticket for a browser tab without a Convex minter. Enabled
       // ONLY when the dev bypass is on (hard-disabled in production). Mirrors the production
-      // minter's optional claims so the two-tab proof covers room-scoped worlds + identity:
-      // ?world=<worldId>&name=<displayName>&color=<index>.
+      // minter's optional claims so the two-tab proof covers room-scoped worlds + identity +
+      // difficulty: ?world=<worldId>&name=<displayName>&color=<index>&df=<difficulty>.
+      // A claimless/omitted df keeps the STANDARD default, matching production compat.
       if (!deps.config.auth.allowDev) { res.writeHead(404).end(); return; }
       const playerId = (url.searchParams.get("playerId") ?? "guest-" + Math.random().toString(36).slice(2, 8)).slice(0, 48);
       const claims: TicketClaims = {};
@@ -50,6 +52,8 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
         const color = Number(colorRaw);
         if (Number.isInteger(color) && color >= 0 && color <= 15) claims.colorIndex = color;
       }
+      const df = url.searchParams.get("df");
+      if (df !== null && isDifficulty(df)) claims.difficulty = df;
       const ticket = deps.config.auth.secret
         ? mintTicket(deps.config.auth.secret, playerId, undefined, undefined, claims)
         : "dev:" + playerId + (claims.worldId !== undefined ? "@" + claims.worldId : "");

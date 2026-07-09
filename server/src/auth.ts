@@ -11,7 +11,11 @@
 //         client can never assert a world id itself. Absent -> the default/public world.
 //   nm  — the player's display name (shown above their blob to other players).
 //   cl  — a cosmetic color index (player-chosen blob tint).
-// All three are validated/sanitized here before anything trusts them.
+//   df  — the room's difficulty mode. Convex mints it from the ROOM's host-selected state
+//         (never a per-client choice), and the session store applies it only when the
+//         room's world is first created — an existing world's difficulty always wins, so
+//         no client (or stale ticket) can flip a live run. Absent -> STANDARD.
+// All four are validated/sanitized here before anything trusts them.
 //
 // The signature is HMAC-SHA256 over `v1.<payload>`, so the secret never leaves the server<->
 // minter trust boundary and can be rotated without a client change.
@@ -22,6 +26,8 @@
 // worlds too. It is off by default — production requires a real signed ticket.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isDifficulty } from "../../src/sim/balance.js";
+import type { Difficulty } from "../../src/sim/balance.js";
 
 export interface TicketPayload {
   pid: string;  // authenticated playerId
@@ -29,6 +35,7 @@ export interface TicketPayload {
   wld?: string; // authorized world id
   nm?: string;  // display name
   cl?: number;  // cosmetic color index
+  df?: string;  // room difficulty mode
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -36,14 +43,16 @@ export interface TicketClaims {
   worldId?: string;
   name?: string;
   colorIndex?: number;
+  difficulty?: Difficulty;
 }
 
 export interface AuthResult {
   ok: boolean;
   playerId?: string;
-  worldId?: string;     // verified world authorization (absent -> default world)
-  name?: string;        // sanitized display name
-  colorIndex?: number;  // validated cosmetic color index
+  worldId?: string;         // verified world authorization (absent -> default world)
+  name?: string;            // sanitized display name
+  colorIndex?: number;      // validated cosmetic color index
+  difficulty?: Difficulty;  // verified room difficulty (absent -> STANDARD default)
   reason?: string;
 }
 
@@ -77,12 +86,13 @@ function sign(secret: string, body: string): string {
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
-// (payload keys in the FIXED order pid, exp, wld, nm, cl; see convex/gsTicketCore.ts).
+// (payload keys in the FIXED order pid, exp, wld, nm, cl, df; see convex/gsTicketCore.ts).
 export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
   if (claims.name !== undefined) payload.nm = claims.name;
   if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
+  if (claims.difficulty !== undefined) payload.df = claims.difficulty;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -147,6 +157,10 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
       return { ok: false, reason: "bad_color" };
     }
     out.colorIndex = payload.cl;
+  }
+  if (payload.df !== undefined) {
+    if (!isDifficulty(payload.df)) return { ok: false, reason: "bad_difficulty" };
+    out.difficulty = payload.df;
   }
   return out;
 }

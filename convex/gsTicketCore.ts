@@ -4,7 +4,8 @@
 //
 //   ticket  = "v1." + b64url(utf8(JSON.stringify(payload))) + "." + b64url(sig)
 //   payload = { pid, exp } plus OPTIONAL identity/room claims appended in a FIXED order:
-//             wld (authorized world id), nm (display name), cl (cosmetic color index).
+//             wld (authorized world id), nm (display name), cl (cosmetic color index),
+//             df (room difficulty mode).
 //             JSON.stringify preserves insertion order, so both mints build the object in
 //             exactly this order — that is what keeps the two implementations byte-identical.
 //   sig     = HMAC-SHA256(secret, "v1." + b64url(payload))     (signed over the BODY string)
@@ -19,12 +20,18 @@
 // player proved room membership (see convex/gsTicket.ts), and the game server binds the
 // connection to exactly the world the ticket names — a client can never assert a world id.
 
+// The difficulty mode ids, redeclared here (not imported from src/sim/balance.ts) so this
+// module stays dependency-free inside the Convex bundle. server/test/ticket.test.ts locks
+// the values against the game server's verifier, so the two literals can never drift.
+export type GsDifficulty = "casual" | "standard" | "brutal";
+
 export interface GsTicketPayload {
   pid: string;  // authenticated playerId
   exp: number;  // unix seconds expiry
   wld?: string; // authorized world id (absent -> the default/public world)
   nm?: string;  // display name shown to other players
   cl?: number;  // cosmetic color index (player-chosen blob tint)
+  df?: string;  // room difficulty mode (absent -> the STANDARD default)
 }
 
 // Optional identity/room claims for a mint. Field names are the long-form of the wire keys.
@@ -32,6 +39,7 @@ export interface GsTicketClaims {
   worldId?: string;
   name?: string;
   colorIndex?: number;
+  difficulty?: GsDifficulty;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
@@ -60,7 +68,7 @@ function b64urlFromBytes(bytes: Uint8Array): string {
 
 // Mint a signed ticket valid for ttlSecs. Deterministic w.r.t. nowMs so the agreement test can
 // assert byte equality against the server's Node-crypto mint. Claims append in the FIXED key
-// order pid, exp, wld, nm, cl — the byte contract with server/src/auth.ts mintTicket.
+// order pid, exp, wld, nm, cl, df — the byte contract with server/src/auth.ts mintTicket.
 export async function mintGsTicket(
   secret: string,
   playerId: string,
@@ -72,6 +80,7 @@ export async function mintGsTicket(
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
   if (claims.name !== undefined) payload.nm = claims.name;
   if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
+  if (claims.difficulty !== undefined) payload.df = claims.difficulty;
   const enc = new TextEncoder();
   const body = "v1." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
