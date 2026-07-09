@@ -1,10 +1,12 @@
 // Authoritative run-result reporting: when a player's run ends on THIS server (death or
-// disconnect), the server — never the client — builds the result from its own simulation
-// state and POSTs it to the Convex inbox (convex/http.ts /gs/run-result), signed with
-// HMAC-SHA256 over the exact body bytes using the SAME GS_AUTH_SECRET that already backs
-// join tickets. Convex re-validates and clamps every field (convex/statsCore.ts), so this
-// payload asserts, Convex decides. Fire-and-forget with bounded retries: stats must never
-// stall the tick loop, and a duplicate retry is settled idempotently by submissionId.
+// terminal disconnect), the server — never the client — builds the result from its own
+// simulation state and POSTs it to the Convex inbox (convex/http.ts /gs/run-result),
+// signed with HMAC-SHA256 over the exact body bytes using GS_RUN_RESULTS_SECRET — a
+// secret deliberately SEPARATE from the join-ticket GS_AUTH_SECRET, so the two trust
+// channels rotate independently and a leak of one never compromises the other. Convex
+// re-validates and clamps every field (convex/statsCore.ts), so this payload asserts,
+// Convex decides. Fire-and-forget with bounded retries: stats must never stall the tick
+// loop, and a duplicate retry is settled idempotently by submissionId.
 
 import { randomUUID } from "node:crypto";
 import { signRunBody } from "../../convex/gsSignCore.js";

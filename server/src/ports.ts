@@ -50,6 +50,14 @@ export interface RoomRuntime {
   gameOverPlayers(): PlayerId[];
   // Blessing offers raised this tick — the server turns each into a validated offer.
   offerPlayers(): BlessingOfferRequest[];
+
+  // Reconnect/resume seam (Sev-0 connection-loss work in flight): when implemented and it
+  // returns false, a socket close is a RESERVATION, not a terminal leave — the run-result
+  // reporter must NOT submit an abandon for it (authoritative game overs still report).
+  // The resume system reports the run itself when the reservation expires unclaimed, via
+  // GameServer.reportTerminalLeave. Absent (undefined) = every disconnect is terminal,
+  // which is exactly today's pre-resume behavior.
+  isLeaveTerminal?(pid: PlayerId): boolean;
 }
 
 // One sim-raised blessing offer (descend or boss chest) awaiting server-side rolling.

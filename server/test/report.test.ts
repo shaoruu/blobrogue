@@ -2,7 +2,9 @@
 // real GameServer + real WSTransport bots against a local HTTP stub standing in for the
 // Convex inbox, and asserts: a death POSTs a signed "death" result built from SERVER sim
 // state, a mid-run disconnect POSTs "abandon", nothing double-submits, connection blips are
-// suppressed, and the HMAC verifies with the shared-core verifier over the exact bytes.
+// suppressed, the HMAC verifies with the shared-core verifier over the exact bytes using
+// the DEDICATED results secret (never the ticket secret), and a reconnect reservation
+// (isLeaveTerminal false) suppresses abandon reporting while game overs still report.
 // Run: npm run test:report (in server/).
 
 import { createServer } from "node:http";
@@ -15,6 +17,10 @@ import { parseServerSubmission } from "../../convex/statsCore.js";
 import type { ServerSubmission } from "../../convex/statsCore.js";
 import { createLogger } from "../src/logger.js";
 import { createWorld, spawnPlayerInWorld, stepWorldPhase } from "../../src/sim/world.js";
+
+// A DIFFERENT secret from the join-ticket TEST_SECRET, proving the two channels are
+// fully decoupled: tickets verify with one, run results sign/verify with the other.
+const REPORT_SECRET = "harness-report-secret";
 
 let passed = 0;
 let failed = 0;
@@ -68,8 +74,8 @@ async function startInbox(secret: string): Promise<{ url: string; posts: Capture
 
 async function main(): Promise<void> {
   await test("death: the server POSTs a signed, verifiable 'death' result from its own sim", async () => {
-    const inbox = await startInbox(TEST_SECRET);
-    const s = await startTestServer({ runResultsUrl: inbox.url });
+    const inbox = await startInbox(REPORT_SECRET);
+    const s = await startTestServer({ runResultsUrl: inbox.url, runResultsSecret: REPORT_SECRET });
     try {
       const bot = new Bot({ url: s.url, secret: s.secret, playerId: "reporter-a", script: () => idle() });
       bot.start();
@@ -92,6 +98,8 @@ async function main(): Promise<void> {
       check("exactly one report arrived", arrived && inbox.posts.length === 1, `posts=${inbox.posts.length}`);
       const post = inbox.posts[0];
       check("HMAC verifies over the exact bytes (shared core)", post.isVerified);
+      check("secrets are decoupled: the TICKET secret cannot verify a report",
+        !(await verifyRunBody(TEST_SECRET, post.body, post.signature)));
       check("envelope parses through the Convex-side validator", post.sub !== null);
       if (post.sub) {
         check("result is death", post.sub.run.result === "death");
@@ -114,8 +122,8 @@ async function main(): Promise<void> {
   });
 
   await test("disconnect: leaving mid-run POSTs an 'abandon' with the stats so far", async () => {
-    const inbox = await startInbox(TEST_SECRET);
-    const s = await startTestServer({ runResultsUrl: inbox.url });
+    const inbox = await startInbox(REPORT_SECRET);
+    const s = await startTestServer({ runResultsUrl: inbox.url, runResultsSecret: REPORT_SECRET });
     try {
       const bot = new Bot({ url: s.url, secret: s.secret, playerId: "reporter-b", script: () => idle() });
       bot.start();
@@ -135,8 +143,8 @@ async function main(): Promise<void> {
   });
 
   await test("blip suppression: an instant no-progress disconnect reports nothing", async () => {
-    const inbox = await startInbox(TEST_SECRET);
-    const s = await startTestServer({ runResultsUrl: inbox.url });
+    const inbox = await startInbox(REPORT_SECRET);
+    const s = await startTestServer({ runResultsUrl: inbox.url, runResultsSecret: REPORT_SECRET });
     try {
       const bot = new Bot({ url: s.url, secret: s.secret, playerId: "reporter-c", script: () => idle() });
       bot.start();
@@ -144,6 +152,48 @@ async function main(): Promise<void> {
       bot.stop();
       await sleep(500);
       check("no report for a zero-progress blip", inbox.posts.length === 0, `posts=${inbox.posts.length}`);
+    } finally {
+      await s.close();
+      await inbox.close();
+    }
+  });
+
+  await test("reconnect seam: a reserved (non-terminal) leave NEVER reports; a game over still does", async () => {
+    const inbox = await startInbox(REPORT_SECRET);
+    const s = await startTestServer({ runResultsUrl: inbox.url, runResultsSecret: REPORT_SECRET });
+    try {
+      const bot = new Bot({ url: s.url, secret: s.secret, playerId: "reporter-d", script: () => idle() });
+      bot.start();
+      await waitUntil(() => bot.transport.isReady(), 3000);
+      const world = s.server.getWorld()!;
+      const pid = bot.serverId()!;
+      world.state.players.get(pid)!.kills = 9; // well past the blip filter
+      // Stand in for the resume system: this player's slot is reserved for reconnect.
+      world.isLeaveTerminal = (leavingPid) => leavingPid !== pid;
+      bot.stop();
+      await sleep(500);
+      check("no abandon while the reservation holds", inbox.posts.length === 0, `posts=${inbox.posts.length}`);
+
+      // A genuine game over is authoritative-terminal and reports even under a reservation.
+      const bot2 = new Bot({ url: s.url, secret: s.secret, playerId: "reporter-e", script: () => idle() });
+      bot2.start();
+      await waitUntil(() => bot2.transport.isReady(), 3000);
+      const world2 = s.server.getWorld()!;
+      const pid2 = bot2.serverId()!;
+      world2.isLeaveTerminal = () => false; // reserve everyone
+      const p2 = world2.state.players.get(pid2)!;
+      p2.kills = 3;
+      p2.invuln = 0;
+      p2.dashInvuln = 0;
+      p2.hp = 1;
+      world2.state.bullets.push({
+        x: p2.x, y: p2.y, vx: 0, vy: 0, radius: 8, life: 1, friendly: false,
+        owner: null, damage: 5, color: "#f00", pierce: 0, hitList: null, isCrit: false,
+      });
+      const arrived = await waitUntil(() => inbox.posts.length >= 1, 5000);
+      check("authoritative death reports through the reservation", arrived
+        && inbox.posts[0]?.sub?.run.result === "death", `posts=${inbox.posts.length}`);
+      bot2.stop();
     } finally {
       await s.close();
       await inbox.close();

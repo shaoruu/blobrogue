@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server as HttpServer } from "n
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { jsonCodec, TICK_HZ, FIXED_DT, ProtocolError } from "../../src/net/protocol.js";
+import type { PlayerId } from "../../src/sim/input.js";
 import type { ServerConfig } from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
 import { GameWorld } from "./world.js";
@@ -84,7 +85,9 @@ export class GameServer {
     });
     this.reporter = deps.reporter ?? new RunReporter({
       url: cfg.runResultsUrl,
-      secret: cfg.auth.secret,
+      // The run-result channel signs with ITS OWN secret — never the ticket secret (see
+      // config.runResultsSecret). Missing secret leaves the reporter disabled.
+      secret: cfg.runResultsSecret,
       log: this.log,
       onSettled: (isOk) => { if (!isOk) this.metrics.counters.runReportFailures++; },
     });
@@ -294,9 +297,29 @@ export class GameServer {
     const room = this.sessions.room(conn.worldId);
     const p = room?.state.players.get(conn.playerId);
     if (!room || !p) return;
+    // Reconnect/resume seam (Sev-0 work in flight): a non-terminal leave is a reservation,
+    // NEVER an abandon — the resume system reports later via reportTerminalLeave if the
+    // reservation expires. Authoritative game overs (this player's run truly ended) always
+    // report regardless of any reservation.
+    const isGameOver = conn.gameOver || room.state.isRunOver;
+    if (!isGameOver && room.isLeaveTerminal !== undefined && !room.isLeaveTerminal(conn.playerId)) return;
     conn.isRunReported = true;
-    const result = conn.gameOver || room.state.isRunOver ? "death" : "abandon";
+    const result = isGameOver ? "death" : "abandon";
     const payload = buildRunReport(room.state, p, conn.authName, room.id, result, this.clock.now());
+    if (!isReportWorthy(payload)) return;
+    this.metrics.counters.runReports++;
+    this.reporter.submit(payload);
+  }
+
+  // Reconnect/resume seam: the resume system calls this when a reservation expires
+  // unclaimed (the authoritative terminal leave). Builds the report from the CURRENT
+  // server sim state for the still-resident player, then the caller removes the player.
+  reportTerminalLeave(worldId: string, playerId: PlayerId, authIdentity: string, result: "death" | "abandon"): void {
+    if (!this.reporter.isEnabled || this.cfg.arena) return;
+    const room = this.sessions.room(worldId);
+    const p = room?.state.players.get(playerId);
+    if (!room || !p) return;
+    const payload = buildRunReport(room.state, p, authIdentity, room.id, result, this.clock.now());
     if (!isReportWorthy(payload)) return;
     this.metrics.counters.runReports++;
     this.reporter.submit(payload);

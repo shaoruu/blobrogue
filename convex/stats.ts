@@ -108,16 +108,21 @@ function aggregatesOf(doc: Doc<"players">): PlayerAggregates {
   };
 }
 
-// Persist one validated run for a player row: dedupe by submissionId, insert the history
-// row, fold the lifetime aggregates, and (server-sourced, account-backed, full runs only)
-// advance the per-difficulty leaderboard bests. Shared by both submission paths.
+// A legitimate run takes ~30s at an absolute minimum, so this cap is far above any real
+// play rate while bounding what a compromised submitter can write per player row.
+const MAX_RUNS_PER_HOUR = 120;
+
+// Persist one validated run for a player row: dedupe by submissionId, rate-cap the row,
+// insert the history row, fold the lifetime aggregates, and (server-sourced,
+// account-backed, full runs only) advance the per-difficulty/party leaderboard bests.
+// Shared by both submission paths.
 async function persistRun(
   ctx: MutationCtx,
   doc: Doc<"players">,
   run: CleanRun,
   source: RunSource,
   submissionId: string,
-): Promise<{ isDuplicate: boolean }> {
+): Promise<{ isDuplicate: boolean; isRateLimited?: boolean }> {
   const existing = await ctx.db
     .query("runs")
     .withIndex("by_submission", (q) => q.eq("submissionId", submissionId))
@@ -125,6 +130,11 @@ async function persistRun(
   if (existing) return { isDuplicate: true };
 
   const now = Date.now();
+  const recent = await ctx.db
+    .query("runs")
+    .withIndex("by_player", (q) => q.eq("playerId", doc._id).gte("_creationTime", now - 60 * 60 * 1000))
+    .take(MAX_RUNS_PER_HOUR);
+  if (recent.length >= MAX_RUNS_PER_HOUR) return { isDuplicate: false, isRateLimited: true };
   const score = scoreForRun(run);
   await ctx.db.insert("runs", {
     playerId: doc._id,
@@ -244,7 +254,8 @@ export const applyServerRun = internalMutation({
       doc = id !== null ? await ctx.db.get(id) : null;
     }
     if (doc === null) return { ok: true as const, isSkipped: true };
-    const { isDuplicate } = await persistRun(ctx, doc, run, "server", submissionId);
+    const { isDuplicate, isRateLimited } = await persistRun(ctx, doc, run, "server", submissionId);
+    if (isRateLimited) return { ok: false as const, reason: "rate_limited" };
     return { ok: true as const, isDuplicate };
   },
 });
@@ -270,7 +281,8 @@ export const recordLocalRun = mutation({
       doc = await findByClientId(ctx, clientId);
     }
     if (doc === null) return null;
-    await persistRun(ctx, doc, run, "local", submissionId);
+    const { isRateLimited } = await persistRun(ctx, doc, run, "local", submissionId);
+    if (isRateLimited) return null;
     const updated = await ctx.db.get(doc._id);
     return updated ? statsOf(updated) : null;
   },

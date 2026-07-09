@@ -89,12 +89,15 @@ npm run harness     # measured go/no-go report; env: GS_RTT GS_JITTER GS_LOSS GS
   own logs — beside town, isolated (`ecosystem.config.cjs`).
 - `GS_AUTH_SECRET` is required in production (the server refuses to start without it). The dev
   bypass (`GS_ALLOW_DEV_AUTH=1`) is refused when `NODE_ENV=production`.
-- `GS_RUN_RESULTS_URL` (optional) enables authoritative run-result reporting: when a player's
-  run ends (death or disconnect), the server POSTs the result — built from its OWN sim state,
-  never a client payload — to the Convex inbox at
+- `GS_RUN_RESULTS_URL` + `GS_RUN_RESULTS_SECRET` (optional, both required to enable)
+  turn on authoritative run-result reporting: when a player's run ends (death or terminal
+  disconnect — never a reconnect reservation), the server POSTs the result — built from
+  its OWN sim state, never a client payload — to the production Convex inbox at
   `https://<deployment>.convex.site/gs/run-result`, signed with HMAC-SHA256 over the exact
-  body bytes using the same `GS_AUTH_SECRET` as the join tickets. Unset = disabled (dev
-  servers run exactly as before). See MULTIPLAYER.md §8 for the full trust model.
+  body bytes using `GS_RUN_RESULTS_SECRET`. That secret is deliberately SEPARATE from the
+  join-ticket `GS_AUTH_SECRET` (independent rotation; a leak of one never compromises the
+  other). Unset = disabled (dev servers run exactly as before). See MULTIPLAYER.md §8 for
+  the full trust model + rotation notes.
 - `deploy.sh` is a **template** (mirrors town's flow) — review before first use; this repo does
   not touch any live box.
 

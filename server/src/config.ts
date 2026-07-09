@@ -39,9 +39,13 @@ export interface ServerConfig {
   // interest management: per-client snapshot radius in px (0 disables filtering)
   interestRadius: number;
   // Authoritative run-result reporting: the Convex HTTP inbox this server POSTs finished
-  // runs to (https://<deployment>.convex.site/gs/run-result), signed with GS_AUTH_SECRET.
-  // null (unset) disables reporting — a dev server without Convex runs exactly as before.
+  // runs to (https://<deployment>.convex.site/gs/run-result). null (unset) disables
+  // reporting — a dev server without Convex runs exactly as before.
   runResultsUrl: string | null;
+  // The run-result signing secret — its OWN secret, deliberately separate from the
+  // join-ticket GS_AUTH_SECRET (security review): the two trust channels rotate
+  // independently and a leak of one never compromises the other. No fallback.
+  runResultsSecret: string | null;
   // Measurement mode: build an OPEN arena world (no dungeon walls) so the load harness can move a
   // probe in a straight monotonic line for render-latency correlation. Production runs the real
   // dungeon (same stepWorld/tick/netcode); this only changes map geometry. Default off.
@@ -85,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     offerTtlMs: intEnv(env, "GS_OFFER_TTL_MS", 60000, 1000, 3600000),
     interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 1100, 0, 100000), // ~1.5x viewport half-extent; 0 = off
     runResultsUrl: urlEnv(env, "GS_RUN_RESULTS_URL"),
+    runResultsSecret: env.GS_RUN_RESULTS_SECRET && env.GS_RUN_RESULTS_SECRET.length > 0 ? env.GS_RUN_RESULTS_SECRET : null,
     arena: env.GS_ARENA === "1",
   };
 }

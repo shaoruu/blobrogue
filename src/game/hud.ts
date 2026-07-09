@@ -8,7 +8,8 @@
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
 import type { WeaponId } from "../sim/types.js";
 import type { WeaponCard } from "../sim/weaponStats.js";
-import { weaponCardKey } from "../sim/weaponStats.js";
+import { WeaponTipController } from "./weaponTip.js";
+import type { WeaponTipSource } from "./weaponTip.js";
 
 export interface HudState {
   hp: number;
@@ -175,21 +176,9 @@ export class Hud {
   private controlsHint: HTMLElement;
   private hintTimer = 0;
 
-  // ---- weapon stat tooltip (hover / keyboard-selected slot) ----
-  // The slots stay pointer-events:none (clicks/aim always pass through to the game), so
-  // hover is hit-tested manually against slot rects from a window mousemove. Keyboard
-  // selection (1-9 / Q / scroll) flashes the tooltip for the newly selected slot. Every
-  // trigger funnels through showWeaponTip(index, source) — the single seam a controller
-  // or mobile long-press path can call later.
-  private weaponTip: HTMLElement;
-  private slotEls: HTMLElement[] = [];
-  private slotIds: WeaponId[] = [];
-  private hoverSlot = -1;
-  private flashSlot = -1;
-  private flashTimer = 0;
-  private prevCurrentId: WeaponId | "" = "";
-  private tipKey = "";
-  private cardProvider: ((id: WeaponId) => WeaponCard | null) | null = null;
+  // Weapon stat tooltip — a self-contained controller (see weaponTip.ts) so the
+  // interactive-hotbar work (PR #36) can mount the same presentation on its own DOM.
+  private weaponTip: WeaponTipController;
 
   // Hearts are the one expensive redraw (canvas per heart), so only rebuild on change.
   private prevHp = -1;
@@ -259,118 +248,26 @@ export class Hud {
       "WASD MOVE \u00b7 MOUSE AIM \u00b7 CLICK SHOOT \u00b7 SHIFT DASH");
     root.appendChild(this.controlsHint);
 
-    // Weapon stat tooltip (see the field-block comment). Lives outside #hud so it can't
-    // inherit its stacking; fixed + pointer-events:none, so it never blocks gameplay.
-    this.weaponTip = el("div", "");
-    this.weaponTip.className = "hb-tip";
-    root.appendChild(this.weaponTip);
-    window.addEventListener("mousemove", (e) => this.onTipMouseMove(e));
+    // Weapon stat tooltip: lives outside #hud so it can't inherit its stacking; fixed +
+    // pointer-events:none, so it never blocks gameplay (see weaponTip.ts).
+    this.weaponTip = new WeaponTipController(root);
   }
 
   // Feed the tooltip live weapon cards (game.ts closes over the local player, so the values
   // include the player's current blessings and low-HP scalers). Null provider hides the tip.
   setWeaponCardProvider(fn: ((id: WeaponId) => WeaponCard | null) | null) {
-    this.cardProvider = fn;
+    this.weaponTip.setProvider(fn);
   }
 
-  private onTipMouseMove(e: MouseEvent) {
-    if (this.hud.style.display === "none" || this.slotEls.length === 0) {
-      if (this.hoverSlot !== -1) { this.hoverSlot = -1; this.syncWeaponTip(); }
-      return;
-    }
-    let hit = -1;
-    for (let i = 0; i < this.slotEls.length; i++) {
-      const r = this.slotEls[i].getBoundingClientRect();
-      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { hit = i; break; }
-    }
-    if (hit !== this.hoverSlot) {
-      this.hoverSlot = hit;
-      this.syncWeaponTip();
-    }
-  }
-
-  // The single tooltip trigger seam. source "select" = keyboard/scroll selection flash
-  // (auto-fades); "hover" pins while the cursor stays; "focus" mirrors hover for future
-  // controller/mobile focus drivers.
-  showWeaponTip(index: number, source: "hover" | "select" | "focus") {
-    if (source === "select") {
-      this.flashSlot = index;
-      this.flashTimer = index >= 0 ? 2.2 : 0;
-    } else {
-      this.hoverSlot = index;
-    }
-    this.syncWeaponTip();
-  }
-
-  private activeTipSlot(): number {
-    if (this.hoverSlot >= 0 && this.hoverSlot < this.slotIds.length) return this.hoverSlot;
-    if (this.flashTimer > 0 && this.flashSlot >= 0 && this.flashSlot < this.slotIds.length) return this.flashSlot;
-    return -1;
-  }
-
-  private syncWeaponTip() {
-    const idx = this.activeTipSlot();
-    const card = idx >= 0 && this.cardProvider ? this.cardProvider(this.slotIds[idx]) : null;
-    if (!card) {
-      if (this.tipKey !== "") {
-        this.tipKey = "";
-        this.weaponTip.classList.remove("show");
-      }
-      return;
-    }
-    const key = idx + ":" + weaponCardKey(card);
-    if (key !== this.tipKey) {
-      this.tipKey = key;
-      this.renderWeaponTip(card);
-      this.weaponTip.classList.add("show");
-    }
-    this.positionWeaponTip(this.slotEls[idx]);
-  }
-
-  private renderWeaponTip(card: WeaponCard) {
-    this.weaponTip.replaceChildren();
-    const name = el("div", "", card.name.toUpperCase());
-    name.className = "wt-name";
-    const kind = el("div", "", card.kind === "melee" ? "MELEE" : "RANGED");
-    kind.className = "wt-kind";
-    const verb = el("div", "", card.verb);
-    verb.className = "wt-verb";
-    this.weaponTip.append(name, kind, verb);
-    for (const l of card.lines) {
-      const row = el("div", "");
-      row.className = "wt-row" + (l.delta > 0 ? " up" : l.delta < 0 ? " down" : "");
-      row.appendChild(el("span", "", l.label)).className = "k";
-      const val = el("span", "");
-      val.className = "v";
-      if (l.delta !== 0) {
-        const baseSpan = el("span", "", l.base);
-        baseSpan.className = "vb";
-        const arrow = el("span", "", "\u2192");
-        arrow.className = "arrow";
-        val.append(baseSpan, arrow, document.createTextNode(l.current));
-      } else {
-        val.textContent = l.current;
-      }
-      row.appendChild(val);
-      this.weaponTip.appendChild(row);
-    }
-    const hint = el("div", "", "BASE \u2192 WITH BLESSINGS");
-    hint.className = "wt-hint";
-    this.weaponTip.appendChild(hint);
-  }
-
-  private positionWeaponTip(slot: HTMLElement | undefined) {
-    if (!slot) return;
-    const r = slot.getBoundingClientRect();
-    const w = this.weaponTip.offsetWidth || 212;
-    const x = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), window.innerWidth - w - 8);
-    this.weaponTip.style.left = `${Math.round(x)}px`;
-    this.weaponTip.style.bottom = `${Math.round(window.innerHeight - r.top + 8)}px`;
-    this.weaponTip.style.top = "auto";
+  // Public tooltip trigger (hover/select/focus) — forwarded to the controller so other
+  // input drivers (controller focus, mobile long-press, PR #36's interactions) share it.
+  showWeaponTip(index: number, source: WeaponTipSource) {
+    this.weaponTip.show(index, source);
   }
 
   setVisible(v: boolean) {
     this.hud.style.display = v ? "block" : "none";
+    this.weaponTip.setActive(v);
   }
 
   update(s: HudState) {
@@ -388,18 +285,12 @@ export class Hud {
     if (slotsKey !== this.prevSlotsKey) {
       this.prevSlotsKey = slotsKey;
       this.slotsEl.replaceChildren();
-      this.slotEls = s.weapons.map((w, i) => buildSlot(w, i));
-      this.slotIds = s.weapons.map((w) => w.id);
-      for (const slot of this.slotEls) this.slotsEl.appendChild(slot);
-      // Switching weapons flashes the selected slot's stat card (the keyboard-focus path);
-      // suppressed on the first build of a run so the opening pistol doesn't pop a tooltip.
-      const currentId = s.weapons.find((w) => w.isCurrent)?.id ?? "";
-      if (currentId !== "" && this.prevCurrentId !== "" && currentId !== this.prevCurrentId) {
-        this.showWeaponTip(s.weapons.findIndex((w) => w.isCurrent), "select");
-      }
-      this.prevCurrentId = currentId;
+      const slotEls = s.weapons.map((w, i) => buildSlot(w, i));
+      for (const slot of slotEls) this.slotsEl.appendChild(slot);
+      this.weaponTip.setSlots(slotEls, s.weapons.map((w) => w.id));
+      this.weaponTip.noteSelection(s.weapons.find((w) => w.isCurrent)?.id ?? "");
     }
-    this.syncWeaponTip();
+    this.weaponTip.sync();
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
@@ -535,10 +426,7 @@ export class Hud {
   }
 
   tick(dt: number) {
-    if (this.flashTimer > 0) {
-      this.flashTimer -= dt;
-      if (this.flashTimer <= 0) { this.flashTimer = 0; this.flashSlot = -1; this.syncWeaponTip(); }
-    }
+    this.weaponTip.tick(dt);
     if (this.bannerTimer > 0) {
       this.bannerTimer -= dt;
       if (this.bannerTimer <= 0) this.banner.style.opacity = "0";
@@ -567,13 +455,6 @@ export class Hud {
     this.buffsEl.replaceChildren();
     this.buffsEl.classList.remove("show");
     this.prevItemsCount = -1;
-    this.slotEls = [];
-    this.slotIds = [];
-    this.hoverSlot = -1;
-    this.flashSlot = -1;
-    this.flashTimer = 0;
-    this.prevCurrentId = "";
-    this.tipKey = "";
-    this.weaponTip.classList.remove("show");
+    this.weaponTip.reset();
   }
 }

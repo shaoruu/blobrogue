@@ -357,24 +357,38 @@ Product guardrails (owner directive):
 
 Duplicate protection: every submission carries a `submissionId`; retries settle
 idempotently on the `by_submission` index. Signed submissions also carry `sentAt` and are
-rejected outside a ±10-minute freshness window (defense-in-depth on top of the dedupe).
+rejected outside a ±10-minute freshness window (defense-in-depth on top of the dedupe —
+a replayed capture is settled as a duplicate no-op either way, locked by the inbox tests).
+The signature covers the EXACT body bytes before anything parses them — there is no
+canonicalization step to disagree on — verification is constant-time, oversized bodies
+(>16 KB) are refused before any work, and each player row is capped at 120 recorded runs
+per hour on top of the signature gate.
 
 Difficulty: the schema/API accept `casual | standard | brutal` **today** with a
 `standard` default at every seam (`statsCore.DEFAULT_DIFFICULTY`,
 `buildRunReport`, the boards' filter chips), so the in-flight authoritative-difficulty
 feature only threads its value through `buildRunReport` — no schema migration.
 
-**Operator setup for run reporting:**
+**Operator setup for run reporting** (on the EXISTING production Convex deployment — the
+same one that already serves auth/tickets; nothing here assumes a fresh or local
+deployment):
 
 ```bash
-# Convex side: the same shared secret the ticket mint already uses (likely already set).
-npx convex env set GS_AUTH_SECRET <the game server's GS_AUTH_SECRET>
+# Convex side (production deployment): the run-result signing secret. Its OWN secret,
+# deliberately separate from the join-ticket GS_AUTH_SECRET — there is no fallback.
+npx convex env set GS_RUN_RESULTS_SECRET <long random value>   # e.g. `openssl rand -hex 32`
 
-# Game server side (.env), pointing at the deployment's HTTP Actions domain
-# (https://<deployment>.convex.site — note .site, not .cloud):
-GS_RUN_RESULTS_URL=https://<deployment>.convex.site/gs/run-result
+# Game server side (.env):
+GS_RUN_RESULTS_SECRET=<the same value>
+# The production deployment's HTTP Actions domain (.convex.site, not .convex.cloud):
+GS_RUN_RESULTS_URL=https://<production deployment>.convex.site/gs/run-result
 ```
 
-Unset `GS_RUN_RESULTS_URL` disables reporting entirely (a dev server runs exactly as
-before). Rotating `GS_AUTH_SECRET` rotates both tickets and run-result signing at once —
-update both sides together.
+Unset `GS_RUN_RESULTS_URL` (or the secret) disables reporting entirely (a dev server runs
+exactly as before; the inbox answers 503 rather than falling back to the ticket secret).
+
+**Rotation:** the two trust channels rotate independently. Rotating
+`GS_RUN_RESULTS_SECRET` (set the new value on the Convex deployment and the game server
+together; in-flight reports signed with the old secret fail closed and are retried/settled
+idempotently) never invalidates join tickets, and rotating `GS_AUTH_SECRET` never breaks
+run reporting — a leak of one channel's secret does not compromise the other.

@@ -19,19 +19,29 @@ function json(status: number, body: Record<string, string | number | boolean>): 
 }
 
 // The authoritative run-result inbox: the game server POSTs each finished run here, signed
-// with HMAC-SHA256(GS_AUTH_SECRET) over the exact body bytes (x-gs-signature header). This
-// is the ONLY door into applyServerRun — the endpoint is public (convex.site), the secret
-// is the gate. Verification order: size -> signature (over raw bytes, before any parsing
-// trusts them) -> envelope freshness + field clamps -> idempotent apply (submissionId).
+// with HMAC-SHA256 over the exact body bytes (x-gs-signature header). This is the ONLY
+// door into applyServerRun — the endpoint is public (convex.site), the secret is the gate.
 //
-// Setup (see MULTIPLAYER.md "Run results"): the same GS_AUTH_SECRET as the ticket mint,
-//   npx convex env set GS_AUTH_SECRET <secret>          (already required for gsTicket)
-//   GS_RUN_RESULTS_URL=https://<deployment>.convex.site/gs/run-result   (game server env)
+// SECRET SEPARATION (security review): run-result signing uses its OWN shared secret,
+// GS_RUN_RESULTS_SECRET — deliberately NOT the join-ticket secret (GS_AUTH_SECRET), so the
+// two trust channels rotate independently and a leak of one never compromises the other.
+// There is intentionally no fallback to GS_AUTH_SECRET: an unset results secret disables
+// the inbox (503) rather than silently re-coupling the channels.
+//
+// Verification order: size -> signature (over the exact raw bytes, BEFORE any parsing
+// trusts them; no canonicalization step exists to disagree on) -> envelope freshness
+// (sentAt ±10 min) + field clamps -> per-player rate cap -> idempotent apply
+// (submissionId dedupe), so a replayed capture is settled as a duplicate no-op.
+//
+// Setup on the PRODUCTION Convex deployment + game server env (see MULTIPLAYER.md §8):
+//   npx convex env set GS_RUN_RESULTS_SECRET <long random value>   (production deployment)
+//   GS_RUN_RESULTS_SECRET=<same value>                             (game server .env)
+//   GS_RUN_RESULTS_URL=https://<production deployment>.convex.site/gs/run-result
 http.route({
   path: "/gs/run-result",
   method: "POST",
   handler: httpAction(async (ctx, req) => {
-    const secret = process.env.GS_AUTH_SECRET;
+    const secret = process.env.GS_RUN_RESULTS_SECRET;
     if (!secret) return json(503, { ok: false, reason: "not_configured" });
     const body = await req.text();
     if (body.length === 0 || body.length > 16384) return json(413, { ok: false, reason: "bad_size" });
@@ -68,7 +78,9 @@ http.route({
       ...(sub.run.deathCause !== null ? { deathCause: sub.run.deathCause } : {}),
       partySize: sub.run.partySize,
     });
-    if (!outcome.ok) return json(422, { ok: false, reason: outcome.reason ?? "rejected" });
+    if (!outcome.ok) {
+      return json(outcome.reason === "rate_limited" ? 429 : 422, { ok: false, reason: outcome.reason ?? "rejected" });
+    }
     return json(200, { ok: true, isDuplicate: outcome.isDuplicate ?? false, isSkipped: outcome.isSkipped ?? false });
   }),
 });
