@@ -436,8 +436,12 @@ export class Menu {
     this.host.startOnline(lobby, profile);
   }
 
-  // The room lobby: the shareable code, who's here (names + colors, host tag), and the
-  // start/waiting/rejoin control. Re-renders on every roster/status change.
+  // The room lobby, in the UI Director menu hierarchy (title -> context line -> code badge
+  // -> roster -> setup -> status -> primary action row -> hint; frame gap only, no ad-hoc
+  // spacing). Roster rows carry live READY markers; the host's difficulty picker sits as
+  // room setup below the roster (read-only to members); the primary action is READY UP /
+  // UNREADY for members and the all-ready-gated START RUN for the host. Re-renders on
+  // every roster/status change.
   showOnlineLobby(lobby: OnlineLobby, profile: ProfileDoc | null, note = "") {
     let prevStatus = lobby.status;
     const render = () => {
@@ -447,6 +451,7 @@ export class Menu {
       if (lobby.status === "playing" && prevStatus === "lobby") { this.launchOnline(lobby, profile); return; }
       prevStatus = lobby.status;
 
+      const isLobbyPhase = lobby.status === "lobby" && !lobby.isQuickPlay;
       const wrap = el("div", "menu");
       wrap.appendChild(el("h1", "", "ROOM " + lobby.code));
       wrap.appendChild(el("p", "", "Share this code \u2014 friends pick PLAY ONLINE \u2192 JOIN CODE to join you."));
@@ -460,6 +465,10 @@ export class Menu {
         dot.style.background = playerColor(p.colorIndex);
         const you = p.playerId === lobby.selfId ? " (you)" : "";
         rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
+        if (isLobbyPhase && !p.isHost) {
+          // Hosts carry no marker: their confirmation IS the start button.
+          rowEl.appendChild(el("span", p.isReady ? "readytag on" : "readytag", p.isReady ? "READY" : "NOT READY"));
+        }
         list.appendChild(rowEl);
       }
       wrap.appendChild(list);
@@ -467,10 +476,11 @@ export class Menu {
 
       // The room's difficulty is host-selected ROOM state: the host picks here in the lobby
       // (locked once a run is live), everyone else sees the same control read-only. The pick
-      // is bound into every member's join ticket at START RUN — never a per-client choice.
+      // is bound into every member's join ticket at START RUN — never a per-client choice —
+      // and changing it clears everyone's readiness server-side (re-confirm the new mode).
       wrap.appendChild(this.difficultyRow({
         selected: () => lobby.difficulty,
-        isEditable: lobby.isHost && lobby.status === "lobby" && !lobby.isQuickPlay,
+        isEditable: lobby.isHost && isLobbyPhase,
         onPick: (d) => void lobby.setDifficulty(d).catch(() => {}),
       }));
 
@@ -481,11 +491,23 @@ export class Menu {
         rejoin.addEventListener("click", () => this.launchOnline(lobby, profile));
         row.appendChild(rejoin);
       } else if (lobby.isHost) {
+        // All-ready start gate (server-enforced in rooms.start; the disabled state is the
+        // honest mirror). The waiting count keeps the reason visible, never a dead button.
+        const waiting = lobby.waitingCount();
         const start = el("button", "", "\u25be  START RUN");
+        start.disabled = !lobby.isPartyReady;
         start.addEventListener("click", () => void lobby.start().catch(() => {}));
         row.appendChild(start);
+        // Always one status line (fixed slot in the hierarchy — enabling never shifts layout).
+        wrap.appendChild(el("p", "muted", waiting > 0
+          ? `waiting for ${waiting} player${waiting === 1 ? "" : "s"} to ready up\u2026`
+          : "everyone is ready \u2014 good to go"));
       } else {
-        wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
+        const isReady = lobby.isSelfReady;
+        const ready = el("button", isReady ? "secondary" : "", isReady ? "UNREADY" : "\u25be  READY UP");
+        ready.addEventListener("click", () => void lobby.setReady(!isReady).catch(() => {}));
+        row.appendChild(ready);
+        wrap.appendChild(el("p", "muted", isReady ? "ready \u2014 waiting for the host to start\u2026" : "ready up so the host can start\u2026"));
       }
       const leave = el("button", "secondary", "leave");
       leave.addEventListener("click", () => { lobby.leave(); void this.showTitle(); });

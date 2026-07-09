@@ -42,7 +42,10 @@
       .chip .v{ font-family:var(--f-num); font-size:19px; line-height:1; margin-top:2px; color:var(--cream); }
       .chip .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
       .chip.floor .v{ color:var(--amber); } .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
-      .chip.diff .v{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; margin-top:0; align-self:center; }
+      /* Difficulty readout is SECONDARY chrome (ui director): quieter fill + dimmer frame
+         than the stat chips, so FL/kills/coins keep visual priority. */
+      .chip.diff{ background:rgba(13,8,25,.45); box-shadow:inset 0 0 0 2px var(--dun-2); }
+      .chip.diff .v{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; margin-top:0; align-self:center; opacity:.85; }
       .coopstrip{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--blu); background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3); padding:4px 9px; text-transform:uppercase; }
       .minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
       .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
@@ -280,8 +283,13 @@
       .stat-label { font-size: 11px; color: #8579a0; }
 
       .code-badge { font-size: 40px; letter-spacing: 10px; color: #ffb43b; background: #120e20; border: 1px solid rgba(255,180,59,0.4); border-radius: 12px; padding: 10px 22px; }
-      .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
+      .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 260px; width: min(420px, 100%); align-self: center; }
       .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+      /* Lobby readiness marker: fixed width so READY <-> NOT READY never shifts the row. */
+      .playerrow .readytag{ margin-left:auto; font-family:var(--f-ui); font-size:8px; letter-spacing:1px; padding:3px 7px; min-width:78px; text-align:center; color:var(--dun-4); box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .playerrow .readytag.on{ color:#0c2410; background:#7dd87d; box-shadow:inset 0 0 0 2px #3f8f4a; }
+      /* A gated primary action reads inert (no hover pop) but keeps its slot. */
+      button:disabled{ opacity:.55; filter:saturate(.45); pointer-events:none; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 
       /* --- Between-floor "choose a blessing" cards --- */
@@ -336,7 +344,8 @@
       .diffbtn{ flex:1; min-width:0; padding:10px 6px; font-size:11px; letter-spacing:1px;
         --c:#1a1330; --c-hi:#2a2140; --c-lo:#0d0819; --tx:#8579a0; text-shadow:none; }
       .diffbtn:hover{ --c:#241a3d; --c-hi:#392d5c; --c-lo:#120c22; --tx:#cbb6d6; }
-      .diffbtn:disabled{ cursor:default; transform:none; }
+      /* Read-only (member view) keeps full legibility — the selection must stay obvious. */
+      .diffbtn:disabled{ cursor:default; transform:none; opacity:1; filter:none; pointer-events:none; }
       .diffbtn.casual.sel, .diffbtn.casual.sel:hover{ --c:#7dd87d; --c-hi:#a8e8a8; --c-lo:#3f8f4a; --tx:#0c2410; }
       .diffbtn.standard.sel, .diffbtn.standard.sel:hover{ --c:#ffd166; --c-hi:#ffe9b0; --c-lo:#c9942e; --tx:#241a06; }
       .diffbtn.brutal.sel, .diffbtn.brutal.sel:hover{ --c:#ff6a6a; --c-hi:#ff9a9a; --c-lo:#b23a3a; --tx:#2a0a0a; }

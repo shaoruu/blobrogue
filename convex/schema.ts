@@ -85,6 +85,11 @@ export default defineSchema({
     kills: v.number(),
     colorIndex: v.number(),
     reviveNonce: v.number(),
+    // Lobby readiness for "online" rooms: non-host members ready up before the host may
+    // START RUN (rooms.start enforces it). Optional: absent (pre-existing rows) = not
+    // ready. Reset on (re)join, on regroup (rooms.reopen), and whenever the host changes
+    // the room difficulty — nobody stays "ready" for a mode they haven't seen.
+    isReady: v.optional(v.boolean()),
     updatedAt: v.number(),
   })
     .index("by_room", ["roomId"])

@@ -65,6 +65,7 @@ export const list = query({
         kills: r.kills,
         colorIndex: r.colorIndex,
         reviveNonce: r.reviveNonce,
+        isReady: r.isReady ?? false,
         updatedAt: r.updatedAt,
       }));
   },

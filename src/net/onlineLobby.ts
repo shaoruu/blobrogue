@@ -22,6 +22,7 @@ export interface LobbyPlayer {
   name: string;
   colorIndex: number;
   isHost: boolean;
+  isReady: boolean;
 }
 
 export class OnlineLobby {
@@ -162,7 +163,28 @@ export class OnlineLobby {
     return this.presenceRows
       .slice()
       .sort((a, b) => (a.playerId === this.hostPlayerId ? -1 : b.playerId === this.hostPlayerId ? 1 : a.name.localeCompare(b.name)))
-      .map((r) => ({ playerId: r.playerId, name: r.name, colorIndex: r.colorIndex, isHost: r.playerId === this.hostPlayerId }));
+      .map((r) => ({ playerId: r.playerId, name: r.name, colorIndex: r.colorIndex, isHost: r.playerId === this.hostPlayerId, isReady: r.isReady }));
+  }
+
+  get isSelfReady(): boolean {
+    const self = this.presenceRows.find((r) => r.playerId === this.selfPlayerId);
+    return self?.isReady ?? false;
+  }
+
+  get isPartyReady(): boolean {
+    // Every fresh non-host member has readied up (the roster is already staleness-
+    // filtered; the host's confirmation is START RUN itself). Mirrors the server-side
+    // gate in rooms.start — this UI state is cosmetic, the mutation enforces it.
+    return this.presenceRows.every((r) => r.playerId === this.hostPlayerId || r.isReady);
+  }
+
+  waitingCount(): number {
+    return this.presenceRows.filter((r) => r.playerId !== this.hostPlayerId && !r.isReady).length;
+  }
+
+  async setReady(isReady: boolean): Promise<void> {
+    const playerId = this.requirePlayerId();
+    await this.client.mutation(api.rooms.setReady, { roomId: this.roomId, playerId, isReady });
   }
 
   // Host picks the room's run difficulty from the lobby (server-enforced: host only, lobby

@@ -76,6 +76,8 @@ export interface PresenceDoc {
   kills: number;
   colorIndex: number;
   reviveNonce: number;
+  // Lobby readiness (online rooms): gates the host's START RUN (defaulted server-side).
+  isReady: boolean;
   updatedAt: number;
 }
 
@@ -119,6 +121,8 @@ export const api = {
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     // Host-only, lobby-only, private-online-rooms-only (enforced server-side in convex/rooms.ts).
     setDifficulty: makeFunctionReference<"mutation", { roomId: string; playerId: string; difficulty: Difficulty }, null>("rooms:setDifficulty"),
+    // Member readiness for the private-lobby all-ready start gate (lobby status only).
+    setReady: makeFunctionReference<"mutation", { roomId: string; playerId: string; isReady: boolean }, null>("rooms:setReady"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
     reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:reopen"),
     heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:heartbeat"),

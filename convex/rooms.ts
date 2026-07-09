@@ -15,6 +15,9 @@ const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous O/0/I/
 const CODE_LEN = 4;
 const MAX_PLAYERS = 4;                 // party cap (both kinds)
 const QUICKPLAY_STALE_MS = 45_000;     // ignore rooms with no activity for this long
+// A presence row this stale is a departed client (same cutoff the roster uses in
+// presence.ts) — it neither blocks the all-ready start gate nor counts as a member.
+const PRESENCE_STALE_MS = 12_000;
 
 const kindArg = v.optional(v.union(v.literal("coop"), v.literal("online")));
 type RoomKind = "coop" | "online";
@@ -67,7 +70,8 @@ async function ensurePresence(
     .unique();
   const now = Date.now();
   if (existing) {
-    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false });
+    // A (re)join lands NOT ready: readiness is a live confirmation, never carried over.
+    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false, isReady: false });
     return;
   }
   await ctx.db.insert("presence", {
@@ -75,8 +79,15 @@ async function ensurePresence(
     x: 0, y: 0, facing: 1,
     hp: 6, maxHp: 6, weapon: "pistol",
     floor, isDown: false, aimAngle: 0, shotSeq: 0, kills: 0,
-    colorIndex, reviveNonce: 0, updatedAt: now,
+    colorIndex, reviveNonce: 0, isReady: false, updatedAt: now,
   });
+}
+
+async function clearRoomReadiness(ctx: MutationCtx, roomId: Id<"rooms">): Promise<void> {
+  const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
+  for (const row of rows) {
+    if (row.isReady === true) await ctx.db.patch(row._id, { isReady: false });
+  }
 }
 
 // Host a new room. Returns a short code to share with friends. Online rooms use the caller's
@@ -218,7 +229,9 @@ export const membership = query({
 // Host picks the room's difficulty while everyone waits in the lobby. Locked down on every
 // axis: online rooms only, host only, lobby status only (a live run's mode is immutable),
 // and never public quick-play rooms (the pool is always STANDARD). The pick persists on the
-// room row, so it survives wipes/regroups until the host changes it again.
+// room row, so it survives wipes/regroups until the host changes it again. Changing the
+// mode CLEARS every member's readiness — nobody stays "ready" for a mode they haven't seen,
+// which is what binds the difficulty picker into the all-ready start gate.
 export const setDifficulty = mutation({
   args: { roomId: v.id("rooms"), playerId: v.id("players"), difficulty: difficultyArg },
   handler: async (ctx, { roomId, playerId, difficulty }) => {
@@ -227,17 +240,46 @@ export const setDifficulty = mutation({
     if (room.hostPlayerId !== playerId) throw new Error("only the host can set difficulty");
     if (room.status !== "lobby") throw new Error("difficulty can only change in the lobby");
     if (room.isPublic === true) throw new Error("public rooms always play standard");
+    if (difficultyOf(room) === difficulty) return;
     await ctx.db.patch(roomId, { difficulty, lastActivity: Date.now() });
+    await clearRoomReadiness(ctx, roomId);
   },
 });
 
-// Host flips the lobby into a live game; everyone waiting begins.
+// A member confirms (or withdraws) readiness in a private online lobby. Hosts never ready
+// up — pressing START RUN is the host's confirmation; the gate below counts everyone else.
+export const setReady = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), isReady: v.boolean() },
+  handler: async (ctx, { roomId, playerId, isReady }) => {
+    const room = await ctx.db.get(roomId);
+    if (!room || kindOf(room) !== "online") throw new Error("no such room");
+    if (room.status !== "lobby") return; // a live/ended room has nothing to ready for
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!row) throw new Error("join the room first");
+    await ctx.db.patch(row._id, { isReady, updatedAt: Date.now() });
+    await ctx.db.patch(roomId, { lastActivity: Date.now() });
+  },
+});
+
+// Host flips the lobby into a live game; everyone waiting begins. The all-ready gate holds
+// for private online lobbies: every FRESH non-host member must have readied up (stale rows
+// are departed clients and neither block nor count). Classic co-op and the public pool
+// keep their historical no-gate flow.
 export const start = mutation({
   args: { roomId: v.id("rooms"), playerId: v.id("players") },
   handler: async (ctx, { roomId, playerId }) => {
     const room = await ctx.db.get(roomId);
     if (!room) throw new Error("no such room");
     if (room.hostPlayerId !== playerId) throw new Error("only the host can start");
+    if (kindOf(room) === "online" && room.isPublic !== true) {
+      const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
+      const cutoff = Date.now() - PRESENCE_STALE_MS;
+      const waiting = rows.filter((r) => r.playerId !== playerId && r.updatedAt >= cutoff && r.isReady !== true);
+      if (waiting.length > 0) throw new Error(`waiting for ${waiting.length} to ready up`);
+    }
     await ctx.db.patch(roomId, { status: "playing", lastActivity: Date.now() });
   },
 });
@@ -255,7 +297,10 @@ export const reopen = mutation({
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
       .unique();
     if (!member) return;
+    // The regroup keeps the room's difficulty (host state) but clears readiness: the next
+    // run needs a fresh round of confirmations.
     await ctx.db.patch(roomId, { status: "lobby", lastActivity: Date.now() });
+    await clearRoomReadiness(ctx, roomId);
   },
 });
 
