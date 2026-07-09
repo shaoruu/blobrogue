@@ -1,6 +1,7 @@
 import { Sprites, playerColor } from "../game/assets.js";
 import { createAnim, stepAnim, characterXform, CHARACTER_STYLE } from "../game/anim.js";
-import { cosmeticOverlay } from "../game/cosmeticArt.js";
+import { resolveOverlay } from "../game/cosmeticArt.js";
+import { capCosmeticXform } from "../game/cosmeticSockets.js";
 
 // A small live preview of a blob's appearance (tint + cosmetic overlays) for the menu:
 // the closet's mirror, the title's identity card, and the leaderboard profile view. Renders
@@ -70,10 +71,25 @@ export function createBlobPreview(initial: BlobLook, size = 96): BlobPreview {
       g.arc(0, 0, drawSize * 0.3, 0, 6.28);
       g.fill();
     }
+    g.restore();
+    // The cosmetic pass mirrors the in-game renderer: capped transform, asset-first
+    // resolution (side orientation — the mirror's facing), socket anchors for assets.
+    const capped = capCosmeticXform(xf);
+    g.save();
+    g.translate(size / 2 + capped.ox, size * 0.56 + capped.oy);
+    g.rotate(capped.rot);
+    g.scale(capped.sx, capped.sy);
+    const frameScale = drawSize / 64;
     for (const id of [look.face, look.hat]) {
       if (id === null) continue;
-      const overlay = cosmeticOverlay(id);
-      if (overlay) g.drawImage(overlay, -half, -half, drawSize, drawSize);
+      const overlay = resolveOverlay(id, "side", 0);
+      if (!overlay) continue;
+      if (overlay.mode === "frame") {
+        g.drawImage(overlay.source, -half, -half, drawSize, drawSize);
+      } else {
+        const s2 = overlay.sizePx * frameScale;
+        g.drawImage(overlay.source, (overlay.socket.x - 32) * frameScale - s2 / 2, (overlay.socket.y - 32) * frameScale - s2 / 2, s2, s2);
+      }
     }
     g.restore();
   };

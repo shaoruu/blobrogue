@@ -17,7 +17,8 @@ import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
-import { cosmeticOverlay } from "./cosmeticArt.js";
+import { resolveOverlay } from "./cosmeticArt.js";
+import { capCosmeticXform } from "./cosmeticSockets.js";
 import { bodyPaletteIndex } from "./cosmetics.js";
 import type { CosmeticLoadout } from "./cosmetics.js";
 import { PartyGate } from "../net/partyGate.js";
@@ -4826,23 +4827,37 @@ export class Game {
     return idx > 0 ? playerColor(idx) : null;
   }
 
-  // Draw a blob's equipped cosmetic overlays (hat/face) with EXACTLY the body sprite's
-  // transform so they ride its squash/stretch/bob. `isSheetPlaying` mirrors drawChar's rule:
-  // frame sheets bake the deform, so the overlay neutralizes the procedural scale with them.
-  // Unknown/absent ids draw nothing — cosmetics are labels, never load-bearing.
-  private drawCosmetics(hat: string | null, face: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean) {
+  // Draw a blob's equipped cosmetic overlays (hat/face) on the body's transform, CAPPED
+  // per the layer spec (capCosmeticXform): cosmetics follow bob/lean/squash only up to the
+  // readability caps, never exaggerating the silhouette. `isSheetPlaying` mirrors
+  // drawChar's rule: frame sheets bake the deform, so the overlay neutralizes procedural
+  // scale with them. Resolution is asset-first per orientation (the hero renders the
+  // side-authored orientation, mirrored by the facing flip; up/down arrive with
+  // directional hero sheets) with graceful procedural fallback — unknown/absent ids draw
+  // nothing. Weapon, status, and name/team cues always draw AFTER this pass.
+  private drawCosmetics(hat: string | null, face: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean, frameIndex = 0) {
     if (hat === null && face === null) return;
     const { ctx } = this;
     const half = size / 2;
+    const scale = size / 64; // frame space -> world px
+    const capped = capCosmeticXform(xf);
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.translate(cx + xf.ox, cy + xf.oy);
-    ctx.rotate(xf.rot);
-    ctx.scale(isSheetPlaying ? facing : facing * xf.sx, isSheetPlaying ? 1 : xf.sy);
+    ctx.translate(cx + capped.ox, cy + capped.oy);
+    ctx.rotate(capped.rot);
+    ctx.scale(isSheetPlaying ? facing : facing * capped.sx, isSheetPlaying ? 1 : capped.sy);
     for (const id of [face, hat]) {
       if (id === null) continue;
-      const overlay = cosmeticOverlay(id);
-      if (overlay) ctx.drawImage(overlay, -half, -half, size, size);
+      const overlay = resolveOverlay(id, "side", frameIndex);
+      if (!overlay) continue;
+      if (overlay.mode === "frame") {
+        ctx.drawImage(overlay.source, -half, -half, size, size);
+      } else {
+        const drawSize = overlay.sizePx * scale;
+        const sx = (overlay.socket.x - 32) * scale;
+        const sy = (overlay.socket.y - 32) * scale;
+        ctx.drawImage(overlay.source, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
+      }
     }
     ctx.restore();
   }
@@ -4865,7 +4880,15 @@ export class Game {
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
     if (this.selfCosmetics) {
-      this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.face, psx, psy, 52, this.facing, xf, alpha, !!this.sprites.sheet("hero", clip));
+      // Socket determinism: the cosmetic pass reads the SAME frame index the body sheet
+      // shows this tick, so per-frame socket anchors can never drift off the head.
+      const sheet = this.sprites.sheet("hero", clip);
+      let cosmeticFrame = 0;
+      if (sheet) {
+        const fw = sheet.img.naturalHeight || 64;
+        cosmeticFrame = frameIndex(Math.max(1, Math.round(sheet.img.naturalWidth / fw)), sheet.fps, this.playerAnim.clock);
+      }
+      this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.face, psx, psy, 52, this.facing, xf, alpha, !!sheet, cosmeticFrame);
     }
     if (!this.isDown) {
       // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)

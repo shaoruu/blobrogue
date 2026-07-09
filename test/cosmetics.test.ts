@@ -20,7 +20,11 @@ import {
   COSMETICS, COSMETIC_SLOTS, cosmeticById, cosmeticsForSlot, isCosmeticOwned, sanitizeEquip,
   earnedCosmeticsFor, isCosmeticIdFormat, bodyItemForPaletteIndex, bodyPaletteIndex,
 } from "../src/game/cosmetics.js";
-import { hasCosmeticArt } from "../src/game/cosmeticArt.js";
+import { hasCosmeticArt, resolveOverlay } from "../src/game/cosmeticArt.js";
+import {
+  COSMETIC_ORIENTATIONS, SOCKET_KINDS, socketFor, capCosmeticXform,
+  COSMETIC_SCALE_CAP, COSMETIC_ROT_CAP, COSMETIC_BOB_CAP, COSMETIC_ASSET_SOURCES, LAYERED_HERO_BASE_SRC,
+} from "../src/game/cosmeticSockets.js";
 import { jsonCodec, ProtocolError, buildSnapshot } from "../src/net/protocol.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
 import { IDLE_INPUT } from "../src/sim/input.js";
@@ -239,6 +243,65 @@ function publicSchemaTests(): void {
   check("the client contract matches (no ids in LeaderboardEntryDoc)", !docBlock.includes("playerId"));
 }
 
+// The socket gate (fal-art/COSMETIC_LAYER_SPEC.md integration): deterministic anchors
+// across every orientation x socket x frame, capped transforms, layer order (covered by
+// renderContractTests), and the FIRST integration pair only on the asset hooks.
+function socketGateTests(): void {
+  section("sockets: deterministic per-facing/per-frame anchors, full coverage, safe clamping");
+  check("three orientations ship (down/up/side — side mirrored for left)",
+    COSMETIC_ORIENTATIONS.join(",") === "down,up,side");
+  check("three socket kinds ship (head/face/back)", SOCKET_KINDS.join(",") === "head,face,back");
+  let covered = 0;
+  let isDeterministic = true;
+  let isInFrame = true;
+  for (const o of COSMETIC_ORIENTATIONS) {
+    for (const k of SOCKET_KINDS) {
+      for (let f = -4; f < 12; f++) {
+        const a = socketFor(k, o, f);
+        const b = socketFor(k, o, f);
+        if (a.x !== b.x || a.y !== b.y || a.isVisible !== b.isVisible || a.isBehindBody !== b.isBehindBody) isDeterministic = false;
+        if (!(a.x >= 0 && a.x <= 64 && a.y >= 0 && a.y <= 64)) isInFrame = false;
+        covered++;
+      }
+    }
+  }
+  check("every orientation x socket x frame (incl. negative/oversized) resolves", covered === 3 * 3 * 16);
+  check("lookups are deterministic (same inputs, same anchor, every client)", isDeterministic);
+  check("every anchor sits inside the 64px frame", isInFrame);
+  check("frame index wraps by modulo (frame 4 == frame 0)",
+    socketFor("head", "side", 4).x === socketFor("head", "side", 0).x);
+  check("the face socket is INVISIBLE facing away (up)", !socketFor("face", "up", 0).isVisible);
+  check("...but visible facing down and side", socketFor("face", "down", 0).isVisible && socketFor("face", "side", 0).isVisible);
+
+  section("capped transforms: cosmetics follow bob/lean/squash only up to the readability caps");
+  const wild = capCosmeticXform({ ox: 9, oy: -14, sx: 1.4, sy: 0.5, rot: 0.8 });
+  check("bob capped", Math.abs(wild.oy) <= COSMETIC_BOB_CAP, String(wild.oy));
+  check("squash/stretch capped", wild.sx <= 1 + COSMETIC_SCALE_CAP && wild.sy >= 1 - COSMETIC_SCALE_CAP, `${wild.sx},${wild.sy}`);
+  check("lean capped", Math.abs(wild.rot) <= COSMETIC_ROT_CAP, String(wild.rot));
+  const mild = capCosmeticXform({ ox: 0.5, oy: -1, sx: 1.02, sy: 0.99, rot: 0.01 });
+  check("mild body motion passes through untouched", mild.oy === -1 && mild.sx === 1.02 && mild.sy === 0.99 && mild.rot === 0.01);
+
+  section("asset hooks: EXACTLY the gated first pair, oriented paths, graceful degradation");
+  const keys = Object.keys(COSMETIC_ASSET_SOURCES).sort();
+  check("first integration pair ONLY (cowboy_hat_classic + round_glasses)",
+    keys.join(",") === "cowboy_hat_classic,round_glasses", keys.join(","));
+  for (const [key, def] of Object.entries(COSMETIC_ASSET_SOURCES)) {
+    const oriented = COSMETIC_ORIENTATIONS.every((o) => def.src[o] === `/sprites/cosmetics/${key}_${o}.png`);
+    check(`${key}: all three oriented asset paths follow the pipeline contract`, oriented);
+  }
+  check("round_glasses hooks the shipped Round Specs item", cosmeticById("face_round")?.assetKey === "round_glasses");
+  check("cowboy_hat_classic is NOT a catalog item (the baked default until the layered base ships)",
+    COSMETICS.every((c) => c.assetKey !== "cowboy_hat_classic"));
+  check("the layered bald base has an explicit hook for the art pipeline",
+    LAYERED_HERO_BASE_SRC === "/sprites/cosmetics/hero_base_bald.png");
+  // With no binaries on this machine, resolution degrades gracefully: the hooked item
+  // falls back to its procedural painter; an unknown id renders nothing.
+  const fallback = resolveOverlay("face_round", "side", 0);
+  check("absent asset falls back to the procedural painter (no fabricated placeholder)",
+    fallback !== null && fallback.mode === "frame");
+  check("an unknown id resolves to NOTHING (multiplayer-safe fallback)", resolveOverlay("hat_from_2031", "side", 0) === null);
+}
+
 function fakeStore(): NudgeStore & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {
@@ -280,6 +343,7 @@ function main(): void {
   simImmunityTests();
   renderContractTests();
   publicSchemaTests();
+  socketGateTests();
   nudgeTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

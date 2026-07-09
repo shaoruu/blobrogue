@@ -9,6 +9,10 @@
 // above and deliberately keeps the cowboy hat. Unknown ids return null and render nothing —
 // the defensive posture for ids minted by a newer catalog.
 
+import { COSMETIC_ASSET_SOURCES, socketFor } from "./cosmeticSockets.js";
+import type { CosmeticOrientation, SocketPoint } from "./cosmeticSockets.js";
+import { COSMETICS } from "../../convex/cosmeticsCore.js";
+
 const FRAME = 64;
 
 type Painter = (g: CanvasRenderingContext2D) => void;
@@ -151,4 +155,63 @@ export function cosmeticOverlay(id: string): HTMLCanvasElement | null {
 // overlay row can never ship invisible (body renders as tint, titles as text).
 export function hasCosmeticArt(id: string): boolean {
   return PAINTERS[id] !== undefined;
+}
+
+// ---- generated-asset layer (the socket pipeline's art side) ------------------------------
+// Assets are ASSET-FIRST with graceful degradation: a cosmetic whose assetKey has a loaded
+// oriented image renders that image anchored on its socket; while the file is absent /
+// still streaming / failed, the item's procedural painter (when it has one) keeps working,
+// and an asset-only item simply renders nothing. No placeholder art is ever fabricated.
+
+interface AssetSlot {
+  img: HTMLImageElement;
+  isFailed: boolean;
+}
+
+const assetCache = new Map<string, AssetSlot>();
+
+function assetSlot(key: string, orientation: CosmeticOrientation): AssetSlot {
+  const def = COSMETIC_ASSET_SOURCES[key];
+  const cacheKey = `${key}|${orientation}`;
+  let slot = assetCache.get(cacheKey);
+  if (!slot) {
+    const img = new Image();
+    slot = { img, isFailed: false };
+    img.addEventListener("error", () => { slot!.isFailed = true; });
+    img.src = def.src[orientation];
+    assetCache.set(cacheKey, slot);
+  }
+  return slot;
+}
+
+// Catalog id -> generated-asset key (built once; ids without a hook fall straight through
+// to their procedural painter).
+const ASSET_KEY_BY_ID = new Map<string, string>(
+  COSMETICS.filter((c) => c.assetKey !== undefined).map((c) => [c.id, c.assetKey as string]),
+);
+
+// The drawable overlay for a cosmetic, resolved asset-first. `frame` overlays fill the
+// hero's 64px frame (the procedural art); `socket` overlays are generated assets centered
+// on their deterministic socket for the given orientation/frame.
+export type OverlayResolved =
+  | { mode: "frame"; source: CanvasImageSource }
+  | { mode: "socket"; source: CanvasImageSource; socket: SocketPoint; sizePx: number };
+
+export function resolveOverlay(
+  id: string,
+  orientation: CosmeticOrientation,
+  frameIndex: number,
+): OverlayResolved | null {
+  const assetKey = ASSET_KEY_BY_ID.get(id);
+  if (assetKey !== undefined && COSMETIC_ASSET_SOURCES[assetKey] !== undefined) {
+    const def = COSMETIC_ASSET_SOURCES[assetKey];
+    const slot = assetSlot(assetKey, orientation);
+    if (!slot.isFailed && slot.img.complete && slot.img.naturalWidth > 0) {
+      const socket = socketFor(def.socket, orientation, frameIndex);
+      if (!socket.isVisible) return null;
+      return { mode: "socket", source: slot.img, socket, sizePx: def.sizePx };
+    }
+  }
+  const painted = cosmeticOverlay(id);
+  return painted ? { mode: "frame", source: painted } : null;
 }

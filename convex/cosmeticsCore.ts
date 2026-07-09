@@ -75,6 +75,10 @@ export interface CosmeticDef {
   hint?: string;
   // Body items only: the authored palette slot this body color renders as.
   paletteIndex?: number;
+  // Overlay items only: the generated-asset key in the art pipeline (see
+  // src/game/cosmeticSockets.ts COSMETIC_ASSET_SOURCES). Asset-first with graceful
+  // fallback to the item's procedural painter while the files are absent.
+  assetKey?: string;
 }
 
 export const COSMETICS: readonly CosmeticDef[] = [
@@ -90,7 +94,7 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "hat_crown", slot: "hat", name: "Crown", unlock: "earned", need: { deepestFloor: 10 }, hint: "reach floor 10" },
   { id: "hat_halo", slot: "hat", name: "Halo", unlock: "earned", need: { deepestFloor: 20 }, hint: "reach floor 20" },
   // face
-  { id: "face_round", slot: "face", name: "Round Specs", unlock: "starter" },
+  { id: "face_round", slot: "face", name: "Round Specs", unlock: "starter", assetKey: "round_glasses" },
   { id: "face_shades", slot: "face", name: "Shades", unlock: "starter" },
   { id: "face_monocle", slot: "face", name: "Monocle", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills" },
   // titles — text honors, earned only (the empty slot is the default)

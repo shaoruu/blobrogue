@@ -3,6 +3,21 @@
 ## Sprites
 Every sprite is a **64×64 transparent PNG** in `public/sprites/`
 (`hero`, `slime`, `bat`, `skeleton`, `ghost`, `boss`, `heart`, `coin`, `gun`).
+
+## Cosmetic layer assets (socket pipeline)
+Generated cosmetic layers (see the art environment's `fal-art/COSMETIC_LAYER_SPEC.md`)
+drop into `public/sprites/cosmetics/` as square transparent PNGs, one per orientation:
+`<assetKey>_down.png`, `<assetKey>_up.png`, `<assetKey>_side.png` (side authored FACING
+RIGHT; the renderer mirrors left). Register the key + socket + authored size in
+`src/game/cosmeticSockets.ts` `COSMETIC_ASSET_SOURCES`, then point a catalog item at it via
+`assetKey` (`convex/cosmeticsCore.ts`). Resolution is asset-first with graceful
+degradation: absent/failed files fall back to the item's procedural painter (when it has
+one), else render nothing — never a placeholder. Anchors come from the deterministic
+socket tables in the same module (head/face/back, per orientation, per frame); cosmetics
+inherit the body's bob/lean/squash only up to the readability caps and always draw BELOW
+weapon, status, and name cues. The gated first pair is `cowboy_hat_classic` (plus the
+layered bald base `hero_base_bald.png`) and `round_glasses` — broader content waits until
+that pair passes the socket gate across facings/animations/biomes/weapons.
 They are registered in `src/game/assets.ts` (`SOURCES`).
 
 ## Everything is animated (procedural, no extra art)
