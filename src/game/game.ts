@@ -6,13 +6,13 @@ import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS } from "../sim/balance.js";
-import type { EnemyTier } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL } from "../sim/balance.js";
+import type { EnemyTier, EliteAffix } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
 import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
@@ -29,12 +29,15 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, nearestShopSlot } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
-import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC } from "../sim/constants.js";
+import {
+  comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC,
+  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR,
+} from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
@@ -47,6 +50,7 @@ import {
 } from "./anim.js";
 import type { Anim, Xform, XformStyle } from "./anim.js";
 import { createFacing, computeEnemyPose } from "./facing.js";
+import { TIER_LAYERS, bestiaryCue } from "./bestiaryAudio.js";
 import type { FacingState, EnemyPose } from "./facing.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
@@ -309,6 +313,23 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   slam: "#ffd166",    // Gilded Warden anvil quake: gold
   sweep: "#ffd166",   // Gilded Warden ring waves
   brace: "#9fb4a8",   // elite brace: braced steel-green slide
+  decoy: "#d7b8ff",   // echojack planting its false noise: pale violet jangle
+  build: "#a8e07a",   // worker raise (bailiff divider / mason L-corner): living green footprint
+  blink: "#d7b8ff",   // echojack's perpendicular relocation dash
+  seam: "#e88fb1",    // seamcutter's previewed wall-to-wall lane
+  stoke: "#ff8a3b",   // sinderling self-arming channel: gathering embers
+  harmonize: "#bfe9ff", // fragment tether pulse: the Choir's cold light
+  knell: "#c9b458",   // The Toll's expanding sound ring: bronze
+};
+
+// The elite affix's ground-ring accent (derived from kind — the affix table is pure sim
+// data, so the client can color the tell without any extra wire state).
+const AFFIX_RING_COLOR: Record<EliteAffix, string> = {
+  brace: "#9fb4a8",
+  commander: "#ffd166", // the horn: gold
+  bulwark: "#cfd6dd",   // the plate: steel
+  volatile: "#ff5a3b",  // the fuse: hot red-orange
+  echoed: "#7fe9ff",    // the repeat: cold cyan
 };
 
 // Fallback disc tint per sprite while its PNG streams in (or before generated art lands):
@@ -342,14 +363,17 @@ const CHEST_OPEN_DUR = 0.4;      // seconds the 3-frame chest-open clip plays, t
 const PROP_INTACT_IMG: Record<PropKind, PropSpriteName> = {
   crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
   barrel_explosive: "barrel_explosive", brazier: "brazier",
+  root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
 };
 // Break sheet per destructible kind (frames 1-2 = breaking). Brazier never breaks.
 const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
   crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
   barrel_explosive: "barrel_explosive_break", brazier: null,
+  root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
 };
 const PROP_TINT: Record<PropKind, string> = {
   crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
+  root_wall: "#86c06c", silt_mound: "#b8a888", clinker_brick: "#c9743f",
 };
 // Patch's station art hooks per slot kind (assets.ts PROP_SOURCES); flat primitives
 // stand in until the approved PNGs land.
@@ -890,14 +914,18 @@ export class Game {
     this.chestAnims.clear();
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
-    if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
     // Wave layer: sweep entity-keyed loops/tells from the old floor, crossfade the biome's
-    // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually here).
+    // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually
+    // here + every encounter kind on the floor — the contract's preload plan).
     waveAudio.onFloorLoad();
     // Deterministic biome-ambient RNG: the Deep's sparse pattern is a pure function of
     // (run seed, floor) — reproducible per floor, different across floors.
     waveAudio.setAmbientZone(this.biomeIdx, (this.seed ^ Math.imul(this.floor, 0x9E3779B9)) | 0);
     const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
+    if (isBoss) {
+      if (!waveAudio.bossEntrance(bossUnit?.kind ?? "boss", bossUnit?.x, bossUnit?.y)) sfx("bossSpawn");
+      this.addTrauma(TRAUMA_BOSS_FLOOR);
+    }
     // First-trigger contract: decode every cue this floor can reach — the boss actually
     // here plus every spawned archetype's tells — before any of them can fire.
     const floorKinds = new Set<string>();
@@ -1618,8 +1646,18 @@ export class Game {
         // Sunlance hits tick through the wave layer's 120ms-per-target limiter — a held
         // beam at 22Hz must never machine-gun the generic hit sample.
         if (!e.killed) {
-          if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
-          else sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
+          if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) {
+            waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
+          } else if (e.melee) {
+            sfx("meleeHit", { gain: 0.9 });
+          } else {
+            // The semantic HURT event (bestiary audio contract): kind-resolved where a
+            // body owns a hurt identity (a shielder only ever hurts from the flank),
+            // the rate-limited generic row otherwise, legacy sample as the last rung.
+            const hitKind = this.world.enemies.find((en) => en.id === e.eid)?.kind;
+            const hurtCue = (hitKind !== undefined ? bestiaryCue(hitKind, "rearHurt") : null) ?? "mob.hurt";
+            if (!waveAudio.cueAt(hurtCue, e.dmgX, e.dmgY, e.eid)) sfx("enemyHit", { gain: 0.65 });
+          }
         }
         break;
       }
@@ -1657,7 +1695,12 @@ export class Game {
         const comboRate = 1 + Math.min(e.combo - 1, 20) * 0.015;
         // Wave-roster bosses die on their authored identity cue, never the generic splat.
         if (!waveAudio.bossDeath(e.kind, e.x, e.y)) {
-          sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+          if (!waveAudio.cueAt("mob.death", e.x, e.y, e.eid)) {
+            sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+          }
+          // The tier's authored body/debris LAYER rides on top of the material death.
+          const layer = TIER_LAYERS[e.tier];
+          if (layer) waveAudio.cueAt(layer, e.x, e.y, e.eid);
         }
         this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
         const mult = comboTierFor(e.combo).mult;
@@ -1747,10 +1790,16 @@ export class Game {
         this.spawnSparks(e.x, e.y, 3, e.aim);
         this.spawnSparkFlash(e.x, e.y, e.color);
         break;
-      case "bulletBlocked":
-        this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
+      case "bulletBlocked": {
+        // The block voices in the blocker's MATERIAL: shielder wood, living root
+        // (rootward/marshal), a bulwark elite's steel plate.
+        const blockCue = e.kind === "shielder" ? "shielder.block"
+          : e.kind === "rootward" || e.kind === "marshal" ? "root.block"
+          : "plate.block";
+        if (!waveAudio.cueAt(blockCue, e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
         this.spawnSparks(e.x, e.y, 4, e.aim);
         break;
+      }
       case "bulletExpire":
         this.spawnPuff(e.x, e.y, 6, e.color);
         break;
@@ -1866,6 +1915,11 @@ export class Game {
       case "enemySpawn": {
         const tint = ENEMY_ARCHETYPES[e.kind].tint;
         this.spawnPuff(e.x, e.y, 8, tint);
+        // A miniboss captain announces itself on its bespoke entrance row; the
+        // caskbellows plants on its anchor cue; everyone else keeps the spawn tick.
+        if (waveAudio.bossEntrance(e.kind, e.x, e.y, e.eid)) break;
+        const placeCue = e.kind === "caskbellows" ? bestiaryCue(e.kind, "place") : null;
+        if (placeCue !== null && waveAudio.cueAt(placeCue, e.x, e.y, e.eid)) break;
         if (this.isNearCamera(e.x, e.y)) sfx("enemyHit", { gain: 0.4, rate: 0.7 });
         break;
       }
@@ -2071,6 +2125,20 @@ export class Game {
         this.spawnGibs(x, y, 10, "#8a5a2c");
         this.spawnPuff(x, y, 6, "#b07a3c");
         this.sfxAt("barrel", x, y, { rate: 1.1, gain: 0.7 });
+        break;
+      case "root_wall":
+        this.spawnGibs(x, y, 8, "#86c06c");
+        this.spawnPuff(x, y, 6, "#5f8f4c");
+        this.sfxAt("barrel", x, y, { rate: 0.9, gain: 0.6 });
+        break;
+      case "silt_mound":
+        this.spawnPuff(x, y, 10, "#b8a888");
+        this.sfxAt("dash", x, y, { rate: 0.6, gain: 0.5 });
+        break;
+      case "clinker_brick":
+        this.spawnGibs(x, y, 8, "#c9743f");
+        this.spawnPuff(x, y, 5, "#8a4a2c");
+        this.sfxAt("barrel", x, y, { rate: 1.2, gain: 0.6 });
         break;
       default:
         break;
@@ -4176,6 +4244,9 @@ export class Game {
         continue;
       }
 
+      // A worker's build tell previews the EXACT construction footprint (the sim's own
+      // site geometry): green rising markers where the divider / L-corner will stand.
+      if (a.move === "build" && isWindup) this.renderBuildFootprint(e);
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
       // The shrinking safe-ring of the boss arena squeeze.
@@ -4187,8 +4258,10 @@ export class Game {
       if (e.kind === "gilded" && a.move === "slam" && (isWindup || a.phase === "active")) {
         this.renderDangerDisc(a.markX, a.markY, GILDED.slamRadius, a.phase === "active" ? 1 : a.windup);
       }
-      // Brutes/elites carry a colored ground ring so the tier reads before the first hit.
-      const ring = TIER_RING_COLOR[e.tier];
+      // Brutes/elites carry a colored ground ring so the tier reads before the first
+      // hit; an elite's ring takes its AFFIX color (derived from kind — pure sim data),
+      // so "gold ring = commander" is learnable at a glance.
+      const ring = e.tier === "elite" ? AFFIX_RING_COLOR[eliteAffixOf(e.kind)] : TIER_RING_COLOR[e.tier];
       if (ring) this.renderTierRing(sx, sy, drawSize, ring);
 
       // Ghost solidify reads as an opacity ramp; the Choir mid-fade is barely there;
@@ -4231,6 +4304,25 @@ export class Game {
 
       // The shielder's guard arc — drawn from the sim's authoritative block angle.
       if (e.kind === "shielder") this.renderShielderGuard(e, sx, sy, drawSize);
+      // The formation guards: the rootward's slow arc, the marshal's P1 frontage (its
+      // aux channel carries the captain phase — 2 means the shield already shattered).
+      if (e.kind === "rootward") this.renderGuardArc(e, sx, sy, drawSize, ROOTWARD_GUARD_ARC, ENEMY_ARCHETYPES.rootward.tint);
+      if (e.kind === "marshal" && e.aux < 2) this.renderGuardArc(e, sx, sy, drawSize, MARSHAL.guardArc, ENEMY_ARCHETYPES.marshal.tint);
+      // A bulwark elite's directional plate (aux = remaining plate HP; 0 = shattered).
+      if (e.tier === "elite" && e.aux > 0 && eliteAffixOf(e.kind) === "bulwark") {
+        this.renderGuardArc(e, sx, sy, drawSize, ELITE_BULWARK.arc, AFFIX_RING_COLOR.bulwark);
+      }
+      // The caskbellows' rear crank: the weak point marked on its back between volleys.
+      if (e.kind === "caskbellows") this.renderCaskCrank(e, sx, sy, drawSize);
+      // The stoked sinderling burns visibly — armed state rides the aux channel.
+      if (e.kind === "sinderling" && e.aux === 1) {
+        const emberPulse = 0.6 + 0.4 * Math.sin(anim.clock * 9);
+        this.fxLayer("glow_round", "#ff8a3b", sx, sy, drawSize * 1.1 * emberPulse, drawSize * 1.1 * emberPulse, 0.4, 0);
+      }
+      // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
+      if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
+      // The fragment's tether: the authoritative source id rides aux; the line IS the lane.
+      if (e.kind === "fragment" && e.aux > 0) this.renderFragmentTether(e);
       // The Warden's plate: a gold sheen while closed, a cracked-open core glow while EXPOSED.
       if (e.kind === "gilded") this.renderGildedPlate(e, sx, sy, drawSize);
 
@@ -4249,8 +4341,9 @@ export class Game {
     }
   }
 
-  // The Weaver's webs: violet ground lattices (spokes + rings) that fade with their life.
-  // Ground FX like the danger markers — the hazard itself is authoritative sim state.
+  // Dynamic ground hazards, each in its own language: the Weaver's violet web lattices,
+  // the sinderling's burning cinders, a volatile elite's blinking fused charge. Ground
+  // FX like the danger markers — the hazards themselves are authoritative sim state.
   private renderHazards() {
     if (this.hazards.length === 0) return;
     const { ctx, cam } = this;
@@ -4258,6 +4351,31 @@ export class Game {
     for (const h of this.hazards) {
       const sx = h.x - cam.x, sy = h.y - cam.y;
       const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3); // holds, then fades out
+      if (h.kind === "cinder") {
+        // Burning ground: an ember-orange pool with a flickering core.
+        const flicker = 0.7 + 0.3 * Math.sin(this.animClock * 11 + h.id * 1.9);
+        ctx.globalAlpha = 0.26 * fade * flicker;
+        ctx.fillStyle = "#ff8a3b";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.5 * fade * flicker;
+        ctx.fillStyle = "#ffd27a";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius * 0.4, 0, 6.28); ctx.fill();
+        continue;
+      }
+      if (h.kind === "charge") {
+        // The volatile fuse: a red ring that blinks faster as the burst approaches —
+        // "step off the corpse" needs no tutorial.
+        const urgency = 1 - h.life / Math.max(0.001, h.maxLife);
+        const blink = 0.5 + 0.5 * Math.sin(this.animClock * (8 + urgency * 22));
+        ctx.globalAlpha = 0.25 + 0.55 * urgency * blink;
+        ctx.strokeStyle = "#ff5a3b";
+        ctx.lineWidth = 2 + 2 * urgency;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
+        ctx.globalAlpha = 0.12 + 0.14 * urgency * blink;
+        ctx.fillStyle = "#ff5a3b";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        continue;
+      }
       ctx.globalAlpha = 0.34 * fade;
       ctx.strokeStyle = "#c98bff";
       ctx.lineWidth = 1.5;
@@ -4302,6 +4420,29 @@ export class Game {
 
   // A generic filled danger disc + bright rim (the burrower's eruption marker). Grows with
   // the telegraph so "leave this circle" needs no explanation.
+  // The worker tell's footprint preview: one soft rising marker per planned segment —
+  // the sim's OWN site geometry (workerBuildSites), so the preview never drifts from
+  // what lands. Escape-route standoffs may still skip a segment at raise time; the
+  // preview shows intent, the props are truth.
+  private renderBuildFootprint(e: Enemy) {
+    const { ctx, cam } = this;
+    const a = e.attack;
+    const pulse = 0.5 + 0.5 * Math.sin(this.animClock * 9);
+    ctx.save();
+    for (const site of workerBuildSites(e)) {
+      const sx = site.x - cam.x, sy = site.y - cam.y;
+      const r = 10 + 5 * a.windup;
+      ctx.globalAlpha = 0.14 + 0.2 * a.windup;
+      ctx.fillStyle = TELEGRAPH_COLOR.build;
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+      ctx.globalAlpha = (0.3 + 0.45 * a.windup) * (0.6 + 0.4 * pulse);
+      ctx.strokeStyle = TELEGRAPH_COLOR.build;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   private renderDangerDisc(x: number, y: number, radius: number, grow: number) {
     const { ctx, cam } = this;
     const sx = x - cam.x, sy = y - cam.y;
@@ -4369,6 +4510,87 @@ export class Game {
     ctx.beginPath();
     ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // A formation/plate guard arc (rootward, P1 marshal, bulwark elites): the protected
+  // frontage drawn from the sim's authoritative lockedAngle, in the owner's color.
+  private renderGuardArc(e: Enemy, sx: number, sy: number, size: number, arc: number, color: string) {
+    const { ctx } = this;
+    const half = arc / 2;
+    const facing = e.attack.lockedAngle;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#e8efe4";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The caskbellows' crank: a bright stud on its BACK — the stagger point. It sits
+  // opposite the authoritative lane (lockedAngle), so where the lane points, the weak
+  // point is exactly behind.
+  private renderCaskCrank(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const back = e.attack.lockedAngle + Math.PI;
+    const x = sx + Math.cos(back) * size * 0.4;
+    const y = sy + Math.sin(back) * size * 0.4;
+    ctx.save();
+    ctx.globalAlpha = 0.7 + 0.3 * Math.sin(this.animClock * 6);
+    ctx.fillStyle = "#ffd166";
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 6.28); ctx.fill();
+    ctx.restore();
+  }
+
+  // A decoy's fuse readout (aux = seconds left): the echo simply fades; the knell blinks
+  // faster and hotter as its toll approaches — "shoot the noise" needs no tutorial.
+  private renderDecoyFuse(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    ctx.save();
+    if (e.kind === "knell") {
+      const urgency = Math.max(0, 1 - e.aux / 2.2);
+      const blink = 0.5 + 0.5 * Math.sin(clock * (6 + urgency * 18));
+      ctx.globalAlpha = 0.35 + 0.5 * urgency * blink;
+      ctx.strokeStyle = "#ff5a3b";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, size * (0.5 + 0.2 * urgency), 0, 6.28); ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.25 + 0.15 * Math.sin(clock * 4);
+      ctx.strokeStyle = ENEMY_ARCHETYPES.echo.tint;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // The fragment's tether to its source (aux = source id + 1). A faint standing line
+  // that brightens through the harmonize windup and burns solid during the pulse —
+  // the lane IS the telegraph.
+  private renderFragmentTether(e: Enemy) {
+    const src = this.enemies.find((other) => other.id === e.aux - 1 && !other.dead);
+    if (!src) return;
+    const { ctx, cam } = this;
+    const a = e.attack;
+    const isPulsing = a.move === "harmonize" && a.phase === "active";
+    const charge = a.move === "harmonize" && a.phase === "windup" ? a.windup : 0;
+    ctx.save();
+    ctx.globalAlpha = isPulsing ? 0.95 : 0.2 + 0.55 * charge;
+    ctx.strokeStyle = TELEGRAPH_COLOR.harmonize;
+    ctx.lineWidth = isPulsing ? 5 : 1.5 + 2 * charge;
+    ctx.setLineDash(isPulsing || charge > 0.99 ? AIM_SOLID : AIM_DASH);
+    ctx.beginPath();
+    ctx.moveTo(e.x - cam.x, e.y - cam.y);
+    ctx.lineTo(src.x - cam.x, src.y - cam.y);
+    ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
     ctx.restore();
   }
 
@@ -4488,13 +4710,16 @@ export class Game {
     ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
     ctx.restore();
 
-    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley") {
+    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley" || a.move === "seam") {
       // Line commitments draw their whole lane: the rush lengths match the sim's actual
-      // travel, so where the line ends is where the rusher stops (or crashes).
+      // travel, so where the line ends is where the rusher stops (or crashes). The seam
+      // draws to its authoritative mark — the far wall the cut will reach.
       const len = a.move === "lunge" ? 150
         : a.move === "spit" ? 300
         : a.move === "volley" ? 260
+        : a.move === "seam" ? Math.hypot(a.markX - e.x, a.markY - e.y)
         : e.kind === "marrow" ? MARROW.chargeSpeed * MARROW.chargeDur
+        : e.kind === "sinderling" ? SINDER_JET_SPEED * SINDER_JET_DUR
         : CHARGER_RUSH_SPEED * CHARGER_RUSH_DUR;
       ctx.save();
       ctx.globalAlpha = (a.isAimLocked ? 0.9 : 0.4) * (0.55 + 0.45 * a.windup);

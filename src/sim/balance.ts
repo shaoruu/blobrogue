@@ -155,26 +155,96 @@ export interface TierDef {
   attackCdMult: number; // elite: one affix + 20% shorter commit cooldowns
 }
 
-// Playtest finding (durability pass): enemy toughness read as uniformly low — the big
-// bodies died as fast as the chaff. The fix is TIER-SHAPED, never a blanket raise:
-// swarm/standard keep their exact melt/beat numbers (fodder must stay deletable, the
-// §7.1 early-melt gates are untouched), while the two VISUALLY tougher silhouettes now
-// demand sustained focus with a legible durability ladder — standard 1.0× << elite 2.6×
-// < brute 3.2× (the brute's 1.35× draw is the biggest body, so it holds the most).
-// Threat costs rise with the HP so the floor budget buys FEWER tough bodies instead of
-// inflating the floor's total effective health: pressure composition, not sponge.
+// Durability (the playtest pass): enemy toughness read as uniformly low — the big bodies
+// died as fast as the chaff. The fix is TIER-SHAPED, never a blanket raise: swarm/standard
+// keep their exact melt/beat numbers (fodder must stay deletable, the §7.1 early-melt
+// gates are untouched), while the two VISUALLY tougher silhouettes demand sustained focus
+// with a legible durability ladder — standard 1.0× << elite 2.6× < brute 3.8× (the brute's
+// 1.35× draw is the biggest body, so it holds the most).
+// Pricing follows the bestiary balance envelope's ladder (swarm 0.5 / brute 3 / elite 4,
+// superseding the in-flight 0.55 / 2.2 / 2.8 AND the durability pass's interim 2.8 / 3.0):
+// heavies price what they deny — the brute its HP wall, the elite its affix + tempo — so a
+// budget buys readable pressure, never soup. Elite costs additionally clamp at
+// ELITE_COST_CAP on complex chassis (see threatCostOf).
 export const TIERS: Record<EnemyTier, TierDef> = {
-  swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.55, minFloor: 1, attackCdMult: 1 },
+  swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.5, minFloor: 1, attackCdMult: 1 },
   standard: { hpMult: 1.00, speedMult: 1.00, radiusMult: 1.00, drawMult: 1.00, threatCost: 1.0, minFloor: 1, attackCdMult: 1 },
   // Brute: the slow anchor you must commit to — starter-pistol focused TTK ~3.2s at its
   // F4 debut (band measured in balance tests), roughly 4× a standard body and clearly
   // the toughest silhouette on the floor.
-  brute: { hpMult: 3.80, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 2.8, minFloor: 4, attackCdMult: 1 },
+  brute: { hpMult: 3.80, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 3.0, minFloor: 4, attackCdMult: 1 },
   // Elite: fast + affix, durable but always under the brute — the identity is still the
   // visible BRACE commitment (below), not an HP wall: focused ~2.8s at the F6 median
   // build (~3.4× a standard body), aggro→death ~3.6s (bands measured in balance tests).
-  elite: { hpMult: 2.6, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 3.0, minFloor: 6, attackCdMult: 0.8 },
+  elite: { hpMult: 2.6, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 4.0, minFloor: 6, attackCdMult: 0.8 },
 };
+
+// An elite on a complex/controller chassis never prices past this (envelope: "elite 4,
+// + complex chassis ≤ 6") — the affix is one visible behavior, not a doubled tax.
+export const ELITE_COST_CAP = 6;
+
+// ---- the bestiary balance envelope (roster capacity, cadence, composition, pacing) ----
+// The governance layer over ALL bestiary growth. Numbers here are the contract the
+// planner enforces at build time and test/envelope.test.ts regresses seeded; the
+// identity layer (roles, modules, acceptance manifests) lives in src/sim/bestiary.ts.
+
+export const ENVELOPE = {
+  // Roster capacity: how large the regular bestiary may ever grow — 8 simple bodies,
+  // 10 complex families (ranged/complex/controller verbs), 6 biome specialists.
+  capacity: { simple: 8, complexFamilies: 10, biomeSpecialists: 6 },
+  // Intro cadence: at most this many TRULY NEW movement/attack modules per 5-floor
+  // band, and a remix of an existing module only after a teaching floor. Band 1
+  // (F1–5) is the shipped curriculum's teaching prologue and is grandfathered — it
+  // deliberately front-loads the primer verbs per the corrected gate's cadence table.
+  maxNewModulesPerBand: 2,
+  firstEnvelopeBand: 1, // bands ≥ this index (F6+) obey the module cadence
+  // Composition exposure caps (planner-enforced): distinct regular archetypes per
+  // floor and per room, on top of the §4 complex/tier guards.
+  floorArchetypeCap: 7,
+  roomArchetypeCap: 4,
+  roomControllerCap: 1,
+  // Deck quota: at least this share of a floor's rooms stay simple/mastery (raised
+  // from the interim 30%), with the existing ≤2-consecutive-complex rule unchanged.
+  simpleRoomShare: 0.35,
+  // The envelope's threat-cost ladder (documented here; the sim realizes it through
+  // ENEMY_ARCHETYPES.threat × TIERS.threatCost + ELITE_COST_CAP + MINIBOSS.threatCost).
+  // Hazard units are budgeted by the hazard system's own studio gate (tile budgets +
+  // denial/simultaneity caps); the equivalent costs are recorded for composition math.
+  threatCost: {
+    swarm: 0.5, simple: 1.0, ranged: 1.5, complex: 2.0, controller: 2.25,
+    brute: 3.0, elite: 4.0, eliteComplexCap: 6.0,
+    minibossMin: 8, minibossMax: 12,
+    hazardUnit: 1.5, hazardArena: 4.0,
+  },
+  // Room-clear P50 targets (seconds) for the band-median reference build, and the
+  // pressure ceiling (simultaneous live enemy projectiles: sustained / hard).
+  roomTtkP50: { early: [12, 22], mid: [18, 32], late: [24, 40] } as Record<string, readonly number[]>,
+  pressure: { sustained: 50, hard: 60 },
+  // Escalation regression: per-floor effective-HP growth ≤ +12% (the F1–4 teaching
+  // ramp is steeper by authored design and grandfathered), damage taken ≤ +10%
+  // (enemy damage never scales with floor at all — the spec's stronger rule).
+  hpGrowthCapPerFloor: 0.12,
+  hpGrowthCapFromFloor: 5,
+  damageGrowthCapPerFloor: 0.10,
+} as const;
+
+// Live-simultaneity caps (envelope): enforced at the spawn split AND at every
+// reinforcement release, per class, on top of the threat-based activeThreatCap.
+// Summons count — a decoy or a ward occupies real live budget (its threat cost).
+export const LIVE_CAPS = {
+  bodies: 24,
+  complexMovers: 2, // +1 at a full P4 party (see activeMoverCapFor)
+  brutes: 2,
+  elites: 2,
+  controllers: 2,
+} as const;
+
+// Co-op: the extra threat budget buys MOSTLY SIMPLE BODIES (the heavy share of a floor
+// is capped at the solo budget — see planFloorUnits), and the live complex-mover cap
+// grows by exactly one only at a full four-player party.
+export function activeMoverCapFor(players: number): number {
+  return MAX_COMPLEX_MOVERS_ACTIVE + (clampPlayers(players) >= 4 ? 1 : 0);
+}
 
 // The elite's one visible affix COMMITMENT (balancer final): a braced defensive
 // reposition — 0.9s slide away from the attacker at ≤25% damage reduction (never
@@ -188,6 +258,122 @@ export const ELITE_BRACE = {
   cooldown: 4.0,
   damageReduction: 0.25,
   slideSpeed: 230,
+} as const;
+
+// ---- the behavior-elite affix set (bestiary wave) ----
+// Each elite carries EXACTLY ONE affix, assigned deterministically BY KIND (see
+// ELITE_AFFIXES in enemies.ts) so the read is learnable: "an elite slime is always a
+// commander". No affix multiplies damage; each is a visible behavior with counterplay.
+
+export type EliteAffix = "brace" | "commander" | "bulwark" | "volatile" | "echoed";
+
+// Commander: a synchronized ONE commit — the rally. A fixed roar-grammar beat that
+// orders every nearby ally into the existing pack-surge (speed, never damage, so the
+// gate's release arbiter is untouched). Killing the commander PANICS the pack: nearby
+// allies flee leaderless for panicDuration and start nothing from idle.
+export const ELITE_COMMANDER = {
+  rallyWindup: 0.8,       // the horn — a stationary fixed beat (roar semantics)
+  rallyRadius: 260,
+  rallyRecover: 0.5,
+  rallyCooldown: 6.0,
+  rallyTrigger: 420,      // target must be within this range to sound the horn
+  surgeDelay: 0.35,       // the ordered surge lands a beat later (readable, dodgeable)
+  panicRadius: 260,
+  panicDuration: 1.4,
+  panicSpeedMult: 0.85,   // a scattering pack, not a second charge
+} as const;
+
+// Bulwark: ONE directional breakable plate. Absorbs non-piercing bullets arriving inside
+// its frontal arc until plateHp is spent, then shatters for good — never immunity, and
+// never against melee/blasts/pierce. The plate tracks its target SLOWLY, so footwork
+// beats it even solo.
+export const ELITE_BULWARK = {
+  arc: 2.0,             // radians of protected frontage (~115°)
+  plateHp: 8,           // floor-1 baseline; scaled by floorHpMult at spawn
+  turnRate: 1.6,        // rad/s the plate can track — a strafing player out-turns it
+} as const;
+
+// Volatile: a DELAYED shared burst. Death plants a fused charge (a visible hazard) that
+// detonates after fuseSeconds — players take 1 inside the radius, enemies take more
+// (shared risk: the burst is nobody's friend), props are destroyed. The delay is the
+// counterplay: the kill itself is always safe, lingering on the corpse is not.
+export const ELITE_VOLATILE = {
+  fuseSeconds: 0.9,
+  radius: 60,
+  playerDamage: 1,
+  enemyDamage: 4,
+} as const;
+
+// Echoed: the last ranged release REPEATS once after a delay, along the same locked
+// bearing, from wherever the body now stands. Never simultaneous double damage — the
+// offset IS the affix (you dodge the shot, then its echo).
+export const ELITE_ECHOED = {
+  delay: 0.6,
+} as const;
+
+// ---- the mid-band miniboss cadence (bestiary wave) ----
+// Authored two-phase captains (the gauntlet's 50%-split contract: one short stagger,
+// non-invulnerable, no HP floor) placed on the seeded mid-band floors between bosses:
+// F13, F18, F23, F28, … (floor % 5 === firstFloor % 5, from firstFloor). The pick walks
+// a seeded no-immediate-repeat ladder over the template roster, like the deep bosses.
+// HP anchors to the same calibrated MARROW base the gauntlet captains use, ridden up the
+// §3 floor curve and party-scaled at spawn.
+export const MINIBOSS = {
+  firstFloor: 13,
+  // The captain's ENVELOPE threat cost (band 8–12): paid straight out of the floor's
+  // budget, so a miniboss floor spends real pressure on its beat — never "a boss plus
+  // a full mob". Max one per band by construction (the cadence is one floor per band).
+  threatCost: 10,
+  hpFrac: { marshal: 0.30, toll: 0.34 } as Readonly<Partial<Record<string, number>>>,
+} as const;
+
+// ---- ROOT MARSHAL (miniboss template: the formation fight) ----
+// P1 (100–50%): a broad, slow-turning guard (the rootward's frontage, wider and deeper)
+// and a live formation — it raises swarm rootwards to wall for it and rallies them.
+// At 50%: the shield SHATTERS INTO DESTRUCTIBLE COVER — real crates on the field where
+// the guard hung — and P2 trades the wall for tempo: ring sweeps alternating aimed fans.
+export const MARSHAL = {
+  guardArc: 2.6,
+  guardReach: 22,        // px beyond the body the guard still eats bullets (formation cover)
+  guardTurnRate: 1.1,    // rad/s — flanking is the whole P1 answer
+  summonInterval: 5.0,
+  summonCap: 2,          // live swarm rootwards it may field at once
+  coverCount: 3,         // crates the shattering shield leaves behind
+  coverDist: 64,
+  sweepCooldown: 3.2,
+  sweepWindup: 0.8,
+  sweepCount: 8,
+  sweepSpeed: 200,
+  sweepRecover: 0.9,
+  fanShots: 5,
+  fanSpread: 0.24,
+  fanSpeed: 280,
+  shotRadius: 7,
+  shotLife: 2.4,
+} as const;
+
+// ---- THE TOLL (miniboss template: the sound-lane fight) ----
+// A near-stationary bell. P1: the knell — expanding sound rings, alternating with an
+// aimed three-bolt peal down a locked lane (volley grammar). P2 (50%): every knell also
+// plants a NOISE-LURE at the nearest player's feet — a 1-HP knell decoy that tolls its
+// own ring when its fuse runs out. Shoot the noise or leave it; the lure is the fight.
+export const TOLL = {
+  ringCooldown: 3.4,
+  ringWindup: 1.0,
+  ringCount: 10,
+  ringSpeed: 190,
+  ringRecover: 0.8,
+  pealWindup: 0.8,
+  pealLock: 0.45,
+  pealShots: 3,
+  pealSpread: 0.14,
+  pealSpeed: 280,
+  pealRecover: 0.7,
+  shotRadius: 7,
+  shotLife: 2.6,
+  lureLife: 2.2,      // knell decoy fuse (aux countdown)
+  lureRingCount: 6,
+  lureRingSpeed: 200,
 } as const;
 
 // Brute damage rule: only its authored, clearly telegraphed commitment (the skeleton lunge)
@@ -207,6 +393,11 @@ export const MAX_COMPLEX_MOVERS_ACTIVE = 2;
 // consume more than 35% of the room's threat spend.
 export const MAX_BURROWERS_PER_ROOM = 1;
 export const MAX_SHIELDERS_PER_ROOM = 1;
+// The rootward is the same wall-verb readability problem as the shielder: one anchor per
+// room keeps a formation a formation, never a bullet-proof hedge.
+// The ecology gate: at most ONE topology worker (bailiff / keel / mason) per room —
+// one persistent topology edit per room, by construction.
+export const MAX_WORKERS_PER_ROOM = 1;
 export const FLOCK_THREAT_SHARE_MAX = 0.35;
 
 // Reinforcement release pacing: pending threat trickles in as waves whenever the living

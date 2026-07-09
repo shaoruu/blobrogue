@@ -293,20 +293,21 @@ section("trigger mapping");
   check("marrow rush windup -> listenStart", tellCuesFor("marrow", null, snap("windup", "rush")).join() === "marrow.listenStart");
   check("marrow aim lock edge -> aimLock", tellCuesFor("marrow", snap("windup", "rush", false), snap("windup", "rush", true)).join() === "marrow.aimLock");
   check("marrow charge release -> chargeStart", tellCuesFor("marrow", snap("windup", "rush", true), snap("active", "rush", true)).join() === "marrow.chargeStart");
-  check("marrow wall crash -> wallImpact", tellCuesFor("marrow", snap("active", "rush", true), snap("recover", "crash", true)).join() === "marrow.wallImpact");
+  check("marrow wall crash -> wallImpact + the dazed recover", tellCuesFor("marrow", snap("active", "rush", true), snap("recover", "crash", true)).join() === "marrow.wallImpact,marrow.recover");
   check("marrow volley fire -> stompImpact", tellCuesFor("marrow", snap("windup", "volley", true), snap("recover", "volley", true)).join() === "marrow.stompImpact");
   check("choir wail lock -> strikeLock", tellCuesFor("choir", snap("windup", "wail", false), snap("windup", "wail", true)).join() === "choir.strikeLock");
-  check("choir rematerialize -> swellFire", tellCuesFor("choir", snap("active", "fade"), snap("recover", "fade")).join() === "choir.swellFire");
+  check("choir rematerialize -> swellFire + the punish recover", tellCuesFor("choir", snap("active", "fade"), snap("recover", "fade")).join() === "choir.swellFire,choir.recover");
   check("weaver pounce chain lands + retells", tellCuesFor("weaver", snap("active", "pounce", true), snap("windup", "pounce", false)).join()
     === ["weaver.blinkTell", "weaver.blinkArriveStrike"].join());
   check("warden slam telegraph/lock/close", tellCuesFor("gilded", null, snap("windup", "slam")).join() === "warden.prisonWarn"
     && tellCuesFor("gilded", snap("windup", "slam", false), snap("windup", "slam", true)).join() === "warden.turretLock"
-    && tellCuesFor("gilded", snap("active", "slam", true), snap("recover", "slam", true)).join() === "warden.prisonClose");
+    && tellCuesFor("gilded", snap("active", "slam", true), snap("recover", "slam", true)).join() === "warden.prisonClose,warden.exposed");
   check("warden sweep -> glyphWarn then turretFire", tellCuesFor("gilded", null, snap("windup", "sweep")).join() === "warden.glyphWarn"
     && tellCuesFor("gilded", snap("windup", "sweep"), snap("active", "sweep")).join() === "warden.turretFire");
   check("charger windup + lock + crash", tellCuesFor("charger", null, snap("windup", "rush")).join() === "charger.windup"
     && tellCuesFor("charger", snap("windup", "rush", false), snap("windup", "rush", true)).join() === "charger.lock"
-    && tellCuesFor("charger", snap("active", "rush", true), snap("recover", "crash", true)).join() === "charger.crash");
+    && tellCuesFor("charger", snap("windup", "rush", true), snap("active", "rush", true)).join() === "charger.rush"
+    && tellCuesFor("charger", snap("active", "rush", true), snap("recover", "crash", true)).join() === "charger.crash,charger.dazed");
   check("burrower dive/lock/erupt grammar", tellCuesFor("burrower", snap("windup", "dive"), snap("active", "dive")).join() === "burrower.submerge"
     && tellCuesFor("burrower", snap("active", "dive"), snap("windup", "erupt")).join() === "burrower.lock"
     && tellCuesFor("burrower", snap("windup", "erupt"), snap("active", "erupt")).join() === "burrower.erupt");
@@ -314,10 +315,14 @@ section("trigger mapping");
     && !isBurrowUnderground("burrower", snap("windup", "erupt")) && !isBurrowUnderground("charger", snap("active", "dive")));
   check("orbiter stillness tell + shielder brace", tellCuesFor("orbiter", null, snap("windup", "spit")).join() === "orbiter.diveWarn"
     && tellCuesFor("shielder", null, snap("windup", "lunge")).join() === "shielder.raise");
-  check("Slime King keeps its existing audio (no wave tells)", tellCuesFor("boss", null, snap("windup", "hopslam")).length === 0
-    && tellCuesFor("boss", snap("windup", "hopslam"), snap("active", "hopslam")).length === 0);
-  check("skeleton/spitter untouched by the wave layer", tellCuesFor("skeleton", null, snap("windup", "lunge")).length === 0
-    && tellCuesFor("spitter", null, snap("windup", "spit")).length === 0);
+  // The bestiary audio contract brought the King and the primer roster into the wave
+  // manifest: every boss attack carries windup+lock+impact, the skeleton commits, the
+  // spitter kites on the shared chitin bank.
+  check("the Slime King's hop rides the wave grammar", tellCuesFor("boss", null, snap("windup", "hopslam")).join() === "king.hopWarn"
+    && tellCuesFor("boss", snap("windup", "hopslam", false), snap("windup", "hopslam", true)).join() === "king.hopLock"
+    && tellCuesFor("boss", snap("active", "hopslam", true), snap("recover", "hopslam", true)).join() === "king.slam,king.recover");
+  check("skeleton commit + spitter kite tells", tellCuesFor("skeleton", null, snap("windup", "lunge")).join() === "skeleton.commit"
+    && tellCuesFor("spitter", null, snap("windup", "spit")).join() === "orbiter.diveWarn");
   const marrowMoves = Object.keys(WAVE_TELLS["marrow"]);
   check("marrow binding covers all content moves", ["rush", "crash", "volley", "spin"].every((m) => marrowMoves.includes(m)));
 }
@@ -341,7 +346,9 @@ section("cooldowns / rate limits");
   dir.frame(frameInput([]));
   check("charger lock per-entity cooldown blocks the double", dir.play("charger.lock", { entityId: 7 }) && !dir.play("charger.lock", { entityId: 7 }));
   check("another entity is not blocked", dir.play("charger.lock", { entityId: 8 }));
-  eng.nowMs += 250;
+  // Step past BOTH windows: the 200ms per-entity cooldown AND the mob-lock concurrency
+  // window (two locks already sounded this beat — the danger arbiter holds a third).
+  eng.nowMs += 700;
   check("cooldown expires with time", dir.play("charger.lock", { entityId: 7 }));
 
   eng.nowMs += 5000;
@@ -478,7 +485,8 @@ section("tell watcher (frame observation)");
   dir.frame(frameInput([enemyAt(1, "marrow", snap("active", "rush", true), 100, 0)]));
   dir.frame(frameInput([enemyAt(1, "marrow", snap("recover", "crash", true), 100, 0)]));
   const order = eng.plays.map((p) => p.event).join(",");
-  check("full rush arc in order", order === "marrow.listenStart,marrow.aimLock,marrow.chargeStart,marrow.wallImpact");
+  check("full rush arc in order (crash impact + the dazed punish recover)",
+    order === "marrow.listenStart,marrow.aimLock,marrow.chargeStart,marrow.wallImpact,marrow.recover");
 
   eng.plays.length = 0;
   const orbiterFar = enemyAt(3, "orbiter", snap("none", "none"), 600, 0);

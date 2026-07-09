@@ -15,9 +15,10 @@ const ENEMY_KINDS: readonly EnemyKind[] = [
   "boss", "marrow", "choir", "weaver", "gilded",
 ];
 const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"];
-const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier"];
+const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
+  root_wall: "Root Wall", silt_mound: "Silt Mound", clinker_brick: "Clinker Brick",
 };
 
 // Sprite filenames mostly follow WeaponId; melee uses its display-name art filenames.

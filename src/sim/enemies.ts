@@ -5,13 +5,16 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
+  MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
-  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR, MAX_COMPLEX_MOVERS_ACTIVE,
-  MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, FLOCK_THREAT_SHARE_MAX,
+  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
+  MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
+  FLOCK_THREAT_SHARE_MAX,
 } from "./balance.js";
-import type { EnemyTier } from "./balance.js";
+import type { EnemyTier, EliteAffix } from "./balance.js";
+import { isControllerKind, isWorkerKind, ENEMY_MODULE } from "./bestiary.js";
 
 export type Movement = "chase" | "flock" | "drift" | "kite" | "charge" | "burrow" | "orbit" | "boss";
 
@@ -79,7 +82,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   charger: {
     kind: "charger", sprite: "charger", movement: "charge", isPhasing: false,
     radius: 17, drawSize: 48, alpha: 1, tint: "#d9a066", kbResist: 1.8,
-    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 1.5,
+    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 2.0,
   },
   // Kite-denial: dives underground (untargetable, bounded), tunnels to the target, and
   // erupts on a marked, telegraphed circle. You cannot outrange it — you dodge its marker
@@ -88,7 +91,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   burrower: {
     kind: "burrower", sprite: "burrower", movement: "burrow", isPhasing: false,
     radius: 15, drawSize: 44, alpha: 1, tint: "#caa27e", kbResist: 1.2,
-    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 1.5,
+    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 2.0,
   },
   // Ring strafer: circles the target at mid range (rotational tracking — a different aim
   // problem from the spitter's straight kiting) and stops to fire a quick telegraphed bolt.
@@ -106,7 +109,116 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   shielder: {
     kind: "shielder", sprite: "shielder", movement: "chase", isPhasing: false,
     radius: 16, drawSize: 46, alpha: 1, tint: "#9fb4a8", kbResist: 2.2,
-    baseHp: 5, baseSpeed: 50, touchDamage: 1, threat: 1.5,
+    baseHp: 5, baseSpeed: 50, touchDamage: 1, threat: 2.0,
+  },
+  // The FORKROOT BAILIFF (Rootbound's topology worker — ecology-gate consolidation of
+  // the wave-1 walking wall): the slow-turning frontal guard stays its defense, and its
+  // ONE commitment is now the worker verb — a long stationary tell, then it RAISES an
+  // asymmetric root divider across its facing. Raising anew crumbles the old divider;
+  // wall standoff guarantees walkable gaps at both ends. Flank the guard, break or
+  // round the divider — or use the divider as YOUR cover (props block either side).
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: rootward).
+  rootward: {
+    kind: "rootward", sprite: "rootward", movement: "chase", isPhasing: false,
+    radius: 17, drawSize: 48, alpha: 1, tint: "#86c06c", kbResist: 2.6,
+    baseHp: 7, baseSpeed: 34, touchDamage: 1, threat: 2.0,
+  },
+  // Flee support / trickster: keeps its distance, plants a 1-HP false-noise decoy on a
+  // telegraphed beat, then blinks perpendicular — visible, never a teleport. The decoy
+  // soaks homing fire and attention; kill the jack first or ignore the noise.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: echojack).
+  echojack: {
+    kind: "echojack", sprite: "echojack", movement: "kite", isPhasing: false,
+    radius: 13, drawSize: 42, alpha: 1, tint: "#d7b8ff", kbResist: 0.9,
+    baseHp: 4, baseSpeed: 95, touchDamage: 1, threat: 2.25,
+  },
+  // The SILT KEEL (the Deep's topology worker — ecology-gate consolidation of the wave-1
+  // seamcutter): previews an oblique wall-to-wall seam, then PLOWS it at a flat speed,
+  // piling ONE persistent berm of destructible silt mounds beside the furrow (the old
+  // sweep-bolt payload is superseded — the zoning is the ridge, not projectiles). Its
+  // next plow sinks the old berm. Cross the lane early (post-lock it never turns), round
+  // or break the berm; the far-wall recover is the punish window.
+  // Movement verb "charge" so the complex-mover cap governs it like the charger.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: seamcutter).
+  seamcutter: {
+    kind: "seamcutter", sprite: "seamcutter", movement: "charge", isPhasing: false,
+    radius: 15, drawSize: 46, alpha: 1, tint: "#e88fb1", kbResist: 1.5,
+    baseHp: 6, baseSpeed: 55, touchDamage: 1, threat: 2.0,
+  },
+  // Stationary lane sentry: locks a target, fires a 3-shot volley down the locked lane,
+  // and staggers hard (crash grammar) when a round lands on its rear crank mid-attack —
+  // circle behind it between volleys. Waddles back to range when crowded.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: caskbellows).
+  caskbellows: {
+    kind: "caskbellows", sprite: "caskbellows", movement: "kite", isPhasing: false,
+    radius: 16, drawSize: 46, alpha: 1, tint: "#e0a95a", kbResist: 2.0,
+    baseHp: 8, baseSpeed: 30, touchDamage: 1, threat: 1.5,
+  },
+  // The heat-feeder: consumes one environmental heat pulse (an active fire vent, a
+  // brazier) — or stokes itself on a long stationary channel — to ARM. Armed: a locked
+  // flame-jet dash that lays a burning cinder wake, and its death bursts SHARED-risk
+  // fire. Kill it unarmed, or kill it armed from range.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: sinderling).
+  sinderling: {
+    kind: "sinderling", sprite: "sinderling", movement: "chase", isPhasing: false,
+    radius: 13, drawSize: 40, alpha: 1, tint: "#ff8a3b", kbResist: 0.9,
+    baseHp: 4, baseSpeed: 80, touchDamage: 1, threat: 2.0,
+  },
+
+  // The CLINKER MASON (Emberreach's topology worker): walks to the nearest heat vent —
+  // the sinderling's feeding ground — and masons ONE handed L-corner of destructible
+  // clinker bricks around it (corner apex toward the nearest player, long arm handed by
+  // id parity). The bricks deny your clean lane at the feeders and hand you cover to
+  // approach. Old corner collapses when it builds anew; kill it during the long tell.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: mason).
+  mason: {
+    kind: "mason", sprite: "mason", movement: "chase", isPhasing: false,
+    radius: 14, drawSize: 44, alpha: 1, tint: "#c9743f", kbResist: 1.8,
+    baseHp: 6, baseSpeed: 46, touchDamage: 1, threat: 2.0,
+  },
+  // The tethered voice (the Null's echo of the F30 Choir): binds to the nearest other
+  // enemy in line of sight and, on cadence, HARMONIZES — the tether line becomes a
+  // damaging lane for a pulse. Kill its source (or break line of sight) and the pattern
+  // simplifies to a slow contact drifter.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: fragment).
+  fragment: {
+    kind: "fragment", sprite: "fragment", movement: "drift", isPhasing: false,
+    radius: 13, drawSize: 40, alpha: 0.75, tint: "#a9d4f0", kbResist: 1.0,
+    baseHp: 3, baseSpeed: 60, touchDamage: 1, threat: 2.25,
+  },
+  // The echojack's false-noise decoy: a stationary 1-HP fake body. It attacks nothing
+  // and touches for nothing; it exists to be shot at (and to soak homing fire). Expires
+  // quietly on its aux fuse. Summon-only — never in the floor plan, never drops loot.
+  echo: {
+    kind: "echo", sprite: "echo", movement: "drift", isPhasing: false,
+    radius: 13, drawSize: 40, alpha: 0.7, tint: "#d7b8ff", kbResist: 3.0,
+    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
+  // The Toll's noise-lure: a planted 1-HP bell-bomb. Harmless until its fuse (aux) runs
+  // out, then it tolls its own ring. Shoot the noise or leave its radius. Summon-only.
+  knell: {
+    kind: "knell", sprite: "knell", movement: "drift", isPhasing: false,
+    radius: 12, drawSize: 36, alpha: 0.9, tint: "#c9b458", kbResist: 3.0,
+    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
+  // ROOT MARSHAL (miniboss template: the formation fight). P1: a wide slow-turning
+  // guard + a live rootward formation it raises and rallies. At 50% the shield SHATTERS
+  // INTO DESTRUCTIBLE COVER (real crates where the guard hung) and P2 trades the wall
+  // for tempo: ring sweeps alternating aimed fans. Two-phase captain contract.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: marshal).
+  marshal: {
+    kind: "marshal", sprite: "marshal", movement: "chase", isPhasing: false,
+    radius: 24, drawSize: 72, alpha: 1, tint: "#86c06c", kbResist: 5,
+    baseHp: 60, baseSpeed: 30, touchDamage: 1, threat: 0,
+  },
+  // THE TOLL (miniboss template: the sound-lane fight). P1: expanding knell rings
+  // alternating an aimed three-bolt peal. P2 (50%): every knell also plants a NOISE-LURE
+  // at the nearest player's feet — kill the noise before it tolls. Two-phase captain.
+  // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: toll).
+  toll: {
+    kind: "toll", sprite: "toll", movement: "chase", isPhasing: false,
+    radius: 26, drawSize: 80, alpha: 1, tint: "#c9b458", kbResist: 6,
+    baseHp: 60, baseSpeed: 22, touchDamage: 1, threat: 0,
   },
   boss: {
     kind: "boss", sprite: "boss", movement: "boss", isPhasing: false,
@@ -158,6 +270,36 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
 const SWARM_KINDS: readonly EnemyKind[] = ["slime", "bat"];
 const BRUTE_KINDS: readonly EnemyKind[] = ["slime", "skeleton", "charger"];
 
+// The behavior-elite affix per kind (bestiary wave): exactly one, deterministic BY KIND
+// so the read is learnable — an elite slime is ALWAYS a commander, an elite spitter is
+// ALWAYS echoed. Kinds that never roll elite (summon-only bodies, captains, bosses)
+// simply never consult this. Brace remains the roster default where no sharper identity
+// fits the chassis.
+export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
+  slime: "commander",   // the pack kind — its elite leads the pack
+  bat: "commander",     // flock commander: the wheeling swarm surges on its horn
+  skeleton: "brace",    // the balancer's calibrated brace chassis stays put
+  ghost: "volatile",    // a ghost that dies loudly
+  spitter: "echoed",    // dodge the glob, then its echo
+  charger: "bulwark",   // a plated line-bruiser: flank it while it lines up
+  burrower: "brace",
+  orbiter: "echoed",
+  shielder: "brace",    // already a wall — brace keeps it one mechanic, not two
+  rootward: "commander",// the formation anchor rallies its formation
+  echojack: "volatile", // the trickster's last trick
+  seamcutter: "brace",
+  mason: "brace",       // the worker's wall is already its loud mechanic
+  caskbellows: "bulwark", // frontal plate + rear crank = a strongly directional sentry
+  sinderling: "brace",  // its armed death burst is already its loud exit
+  fragment: "volatile",
+  echo: "brace", knell: "brace", marshal: "brace", toll: "brace", // never elite in practice
+  boss: "brace", marrow: "brace", choir: "brace", weaver: "brace", gilded: "brace",
+};
+
+export function eliteAffixOf(kind: EnemyKind): EliteAffix {
+  return ELITE_AFFIXES[kind];
+}
+
 export const BOSS_EVERY = 5;
 export function isBossFloor(floor: number): boolean {
   return floor % BOSS_EVERY === 0;
@@ -187,6 +329,39 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
 // a boss. The stage machine lives in world.ts; spawn/clear plumbing branches here.
 export function isGauntletFloor(floor: number): boolean {
   return floor === GAUNTLET.floor;
+}
+
+// ---- the mid-band miniboss cadence (bestiary wave) ----
+
+const MINIBOSS_ROSTER: readonly EnemyKind[] = ["marshal", "toll"];
+
+export function isMinibossKind(kind: EnemyKind): boolean {
+  return MINIBOSS_ROSTER.indexOf(kind) !== -1;
+}
+
+// Which miniboss template holds this floor, or null off the cadence. Floors 13, 18, 23,
+// 28, … (every 5 from firstFloor — always the mid-band beat between boss floors) draw
+// from the template roster on a seeded no-immediate-repeat walk, exactly like the deep
+// boss rotation: variety between runs, identical across a run's clients/restarts.
+export function minibossKindForFloor(seed: number, floor: number): EnemyKind | null {
+  if (floor < MINIBOSS.firstFloor) return null;
+  if (floor % BOSS_EVERY !== MINIBOSS.firstFloor % BOSS_EVERY) return null;
+  const step = Math.floor((floor - MINIBOSS.firstFloor) / BOSS_EVERY);
+  let prev = -1;
+  for (let s = 0; ; s++) {
+    let pick = new Rng((seed ^ 0x707E11) + s * 2654435761).int(0, MINIBOSS_ROSTER.length - 1);
+    if (pick === prev) pick = (pick + 1) % MINIBOSS_ROSTER.length;
+    if (s === step) return MINIBOSS_ROSTER[pick];
+    prev = pick;
+  }
+}
+
+// The miniboss captain's HP at its floor: the gauntlet's anchor (a fraction of the
+// calibrated MARROW base) ridden up the same clamped §3 curve, rounded to tens. Party
+// scaling applies at spawn (spawnFloorEnemies), like the gauntlet captains.
+export function minibossHpForFloor(kind: EnemyKind, floor: number): number {
+  const frac = MINIBOSS.hpFrac[kind] ?? 0.3;
+  return Math.round((frac * marrowHpForFloor(floor)) / 10) * 10;
 }
 
 // Which boss holds each boss-cadence floor: the authored F5–F30 chain (null = the F10
@@ -228,9 +403,12 @@ export function enemySpeedForFloor(kind: EnemyKind, floor: number): number {
   return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseSpeed * floorSpeedMult(floor));
 }
 
-// §4 threat-budget cost of one unit: archetype cost × tier cost.
+// §4 threat-budget cost of one unit: archetype cost × tier cost, with the envelope's
+// elite clamp — an elite on a complex/controller chassis never prices past
+// ELITE_COST_CAP (the affix is one behavior, not a doubled tax).
 export function threatCostOf(kind: EnemyKind, tier: EnemyTier): number {
-  return ENEMY_ARCHETYPES[kind].threat * TIERS[tier].threatCost;
+  const cost = ENEMY_ARCHETYPES[kind].threat * TIERS[tier].threatCost;
+  return tier === "elite" ? Math.min(cost, ELITE_COST_CAP) : cost;
 }
 
 // The complex MOVERS of studio gate §1: the movement verbs that deny standard answers
@@ -266,6 +444,12 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   // reads it, so it must be deterministic. Drawn BEFORE zig to match the historical rng
   // stream order. Still desyncs each enemy, but reproducibly.
   const hopClock = rng.next() * 10;
+  // The bulwark elite's plate arrives with the body (aux carries its remaining HP to the
+  // wire); every other kind starts its aux channel at 0 — echo/knell fuses are stamped
+  // by their spawners.
+  const aux = tier === "elite" && ELITE_AFFIXES[kind] === "bulwark"
+    ? roundHalfToEven(ELITE_BULWARK.plateHp * floorHpMult(floor))
+    : 0;
   return {
     id,
     kind, x, y, vx: 0, vy: 0,
@@ -277,6 +461,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     touchDamage: a.touchDamage,
     kbResist: a.kbResist * (tier === "brute" ? 2 : 1) * coopKbResistMult(players),
     surgeDelay: 0, surgeTime: 0,
+    aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     zig: rng.next() * Math.PI * 2,
     hopClock, hopMove: 0,
     spawnTimer: SPAWN_GRACE,
@@ -316,9 +501,15 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
 // F2 expands (bat, skeleton, spitter — the bat flock's first isolated floor), F3 remixes
 // (+ghost, charger), F4 proves (+burrower, first guaranteed brute), F6 recovers with the
 // orbiter's isolated teaching room, F7 adapts with the shielder wall.
+// The bestiary wave extends the cadence down the biome ladder, each kind landing in the
+// band whose ecology it belongs to: the rootward walls Rootbound's formation floors
+// (F8), the caskbellows holds Sunless lanes (F11) where the echojack's noise starts
+// lying (F13), the seamcutter tears the Deep's load seams (F16), the sinderling feeds on
+// Emberreach's vents (F26), and the fragment sings only after the Choir falls (F31).
 export const FAMILY_INTRO_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = {
   slime: 1, bat: 2, skeleton: 2, spitter: 2, ghost: 3, charger: 3,
   burrower: 4, orbiter: 6, shielder: 7,
+  rootward: 8, caskbellows: 11, echojack: 13, seamcutter: 16, sinderling: 26, mason: 28, fragment: 31,
 };
 
 function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
@@ -334,6 +525,16 @@ function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKi
   if (has("burrower")) roster.push({ kind: "burrower", weight: 2 * complexShare });
   if (has("orbiter")) roster.push({ kind: "orbiter", weight: 2 * complexShare });
   if (has("shielder")) roster.push({ kind: "shielder", weight: 2 });
+  if (has("rootward")) roster.push({ kind: "rootward", weight: 2 });
+  if (has("caskbellows")) roster.push({ kind: "caskbellows", weight: 2 * complexShare });
+  // Support stays rarer than line troops: one liar per fight is texture, two is noise.
+  if (has("echojack")) roster.push({ kind: "echojack", weight: 1.5 * complexShare });
+  if (has("seamcutter")) roster.push({ kind: "seamcutter", weight: 2 });
+  // Ember native: heavier weight in its home band, where the vents it feeds on live.
+  if (has("sinderling")) roster.push({ kind: "sinderling", weight: 2.5 });
+  // The worker is texture, never the fight: one mason fortifying the vents is ecology.
+  if (has("mason")) roster.push({ kind: "mason", weight: 1.5 * complexShare });
+  if (has("fragment")) roster.push({ kind: "fragment", weight: 2 * complexShare });
   return roster;
 }
 
@@ -367,19 +568,26 @@ function isComplexCard(card: EncounterCard): boolean {
 // Which card a complex family plays under (simple families fit any room).
 function cardOfKind(kind: EnemyKind): EncounterCard | null {
   switch (kind) {
-    case "spitter": case "orbiter": return "ranged";
-    case "charger": case "burrower": return "mover";
-    case "shielder": return "wall";
+    case "spitter": case "orbiter": case "caskbellows": case "echojack": case "fragment":
+      return "ranged";
+    case "charger": case "burrower": case "seamcutter": case "sinderling":
+      return "mover";
+    case "shielder": case "rootward": case "mason":
+      return "wall";
     default: return null;
   }
 }
 
+// A complex card joins the pool once ANY of its families has been introduced. The card
+// order is fixed (ranged, mover, wall) so the seeded shuffle bag stays byte-identical on
+// every floor whose pool composition is unchanged.
 function availableCards(floor: number): EncounterCard[] {
   const has = (kind: EnemyKind): boolean => floor >= (FAMILY_INTRO_FLOOR[kind] ?? Infinity);
   const cards: EncounterCard[] = ["pack", "hunt"];
-  if (has("spitter") || has("orbiter")) cards.push("ranged");
-  if (has("charger") || has("burrower")) cards.push("mover");
-  if (has("shielder")) cards.push("wall");
+  const kinds = Object.keys(ENEMY_ARCHETYPES) as EnemyKind[];
+  for (const card of ["ranged", "mover", "wall"] as const) {
+    if (kinds.some((k) => cardOfKind(k) === card && has(k))) cards.push(card);
+  }
   return cards;
 }
 
@@ -426,9 +634,10 @@ export function encounterDeckForFloor(seed: number, floor: number, combatRoomCou
     complexRun = isComplexCard(card) ? complexRun + 1 : 0;
     cards.push(card);
   }
-  // ≥30% simple/mastery rooms: drop complexity from the tail before repeating pressure,
-  // picking whichever simple card keeps neighbors distinct.
-  const simpleQuota = Math.ceil(combatRoomCount * 0.30);
+  // ≥35% simple/mastery rooms (envelope; raised from the interim 30%): drop complexity
+  // from the tail before repeating pressure, picking whichever simple card keeps
+  // neighbors distinct.
+  const simpleQuota = Math.ceil(combatRoomCount * ENVELOPE.simpleRoomShare);
   let simple = cards.filter((c) => !isComplexCard(c)).length;
   for (let i = cards.length - 1; i >= 0 && simple < simpleQuota; i--) {
     if (!isComplexCard(cards[i])) continue;
@@ -465,15 +674,23 @@ interface PlannedUnit {
   kind: EnemyKind;
   tier: EnemyTier;
   room: number;
+  // Mid-band miniboss anchor: spawns as a two-phase captain (HP override + captainPhase)
+  // and always enters the active wave — it IS its room's encounter.
+  isMiniboss?: boolean;
 }
 
-// Per-room composition bookkeeping for the §4 readability guards.
+// Per-room composition bookkeeping for the §4 readability guards + the envelope's
+// exposure caps (≤4 distinct archetypes, ≤1 controller, no control+denial pairing).
 interface RoomLoad {
   card: EncounterCard;
   units: number;
   complex: number;
   burrowers: number;
   shielders: number;
+  workers: number; // topology workers (ecology gate: one persistent edit per room)
+  controllers: number;
+  hasDenial: boolean; // a guard-module wall (shielder/rootward) holds this room
+  kinds: Set<EnemyKind>;
   hasBrute: boolean;
   hasElite: boolean;
 }
@@ -518,14 +735,40 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     combatRooms.push(candidates.splice(rng.int(0, candidates.length - 1), 1)[0]);
   }
   combatRooms.sort((a, b) => a - b);
+
+  // The mid-band miniboss (F13/18/23/…): the DEEPEST combat room becomes its arena —
+  // pulled out of the ordinary plan entirely (the captain is that room's whole
+  // encounter) — and the floor keeps only part of its threat budget for regular units,
+  // so the floor reads as "the miniboss floor", never "a boss plus a full mob".
+  const minibossKind = minibossKindForFloor(seed, floor);
+  let minibossRoom = -1;
+  if (minibossKind !== null && combatRooms.length >= 2) {
+    minibossRoom = combatRooms.pop()!;
+    // The captain pays its ENVELOPE threat cost (8–12 band) straight out of the floor's
+    // budget; a small floor of simple bodies always remains so the approach isn't empty.
+    budget = Math.max(2, budget - MINIBOSS.threatCost);
+  }
+
   const deck = encounterDeckForFloor(seed, floor, combatRooms.length);
   const load = new Map<number, RoomLoad>();
   for (let i = 0; i < combatRooms.length; i++) {
-    load.set(combatRooms[i], { card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, hasBrute: false, hasElite: false });
+    load.set(combatRooms[i], {
+      card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, workers: 0,
+      controllers: 0, hasDenial: false, kinds: new Set<EnemyKind>(), hasBrute: false, hasElite: false,
+    });
   }
   // §4: at most 35% of the floor's rooms may carry TWO complex units.
   let twoComplexRooms = 0;
   const twoComplexCap = Math.floor(combatRooms.length * 0.35);
+  // Envelope exposure cap: a floor exposes at most floorArchetypeCap distinct regular
+  // archetypes — depth grows the POOL, never one floor's simultaneous vocabulary.
+  const exposure = new Set<EnemyKind>();
+  // Envelope co-op rule: the party's EXTRA threat buys mostly simple bodies — the
+  // floor's heavy spend (any unit costing more than a simple standard) is capped at
+  // the SOLO budget, so P>1 scales pressure with bodies, not stacked verbs. At P1 the
+  // whole budget IS the solo budget, so the constraint never binds solo.
+  const soloBudget = floorThreat(floor) * pressure.budgetMult;
+  let heavySpent = 0;
 
   // Swarm placement (flock spacing, gate: flocks need open air): combat rooms with real
   // open floor host the packs; the ordinary card-constrained draw is the fallback. Room
@@ -546,6 +789,24 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     }
     if (unit.kind === "burrower" && l.burrowers >= MAX_BURROWERS_PER_ROOM) return false;
     if (unit.kind === "shielder" && l.shielders >= MAX_SHIELDERS_PER_ROOM) return false;
+    // The ecology gate: at most ONE topology worker per room — one persistent edit.
+    if (isWorkerKind(unit.kind) && l.workers >= MAX_WORKERS_PER_ROOM) return false;
+    // Envelope exposure caps: ≤ roomArchetypeCap distinct kinds per room, ≤ 7 per
+    // floor; ≤ 1 controller per room; a controller NEVER shares a room with a
+    // guard-module wall (the banned control+denial pairing — a room that both lies to
+    // you and denies your fire has no honest answer).
+    if (!l.kinds.has(unit.kind) && l.kinds.size >= ENVELOPE.roomArchetypeCap) return false;
+    if (!exposure.has(unit.kind) && exposure.size >= ENVELOPE.floorArchetypeCap) return false;
+    const isDenial = ENEMY_MODULE[unit.kind] === "guard";
+    if (isControllerKind(unit.kind)) {
+      if (l.controllers >= ENVELOPE.roomControllerCap) return false;
+      if (l.hasDenial) return false;
+    } else if (isDenial && l.controllers > 0) {
+      return false;
+    }
+    // Envelope co-op rule: heavy spend (cost > 1) caps at the solo budget.
+    const cost = threatCostOf(unit.kind, unit.tier);
+    if (cost > 1 && heavySpent + cost > soloBudget) return false;
     // Corrected gate §2 tier cadence: one brute and one elite per room.
     if (unit.tier === "brute" && l.hasBrute) return false;
     if (unit.tier === "elite" && l.hasElite) return false;
@@ -565,6 +826,13 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     }
     if (unit.kind === "burrower") l.burrowers++;
     if (unit.kind === "shielder") l.shielders++;
+    if (isWorkerKind(unit.kind)) l.workers++;
+    if (isControllerKind(unit.kind)) l.controllers++;
+    if (ENEMY_MODULE[unit.kind] === "guard") l.hasDenial = true;
+    l.kinds.add(unit.kind);
+    exposure.add(unit.kind);
+    const cost = threatCostOf(unit.kind, unit.tier);
+    if (cost > 1) heavySpent += cost;
     if (unit.tier === "brute") l.hasBrute = true;
     if (unit.tier === "elite") l.hasElite = true;
     return room;
@@ -662,6 +930,11 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
       if (isSwarmable) add(kind, "swarm");
     }
   }
+  // The miniboss lands last in plan order (spawn ids stay stable for the regular units)
+  // but owns the floor's deepest room outright.
+  if (minibossKind !== null && minibossRoom !== -1) {
+    plan.push({ kind: minibossKind, tier: "standard", room: minibossRoom, isMiniboss: true });
+  }
   return plan;
 }
 
@@ -705,21 +978,46 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
 
   const plan = planFloorUnits(rng, dungeon, seed, floor, players);
   const cap = activeThreatCap(floor) * coopThreatMult(players);
+  const moverCap = activeMoverCapFor(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;
   let activeComplexMovers = 0;
+  let activeBrutes = 0;
+  let activeElites = 0;
+  let activeControllers = 0;
   let id = 0;
   for (const unit of plan) {
     const p = pointInRoom(rng, dungeon, unit.room);
     const enemy = createEnemy(unit.kind, p.x, p.y, floor, rng, id++, { tier: unit.tier, players });
+    if (unit.isMiniboss) {
+      // The mid-band captain: gauntlet HP formula anchored to its template fraction,
+      // party-scaled at THIS spawn, two-phase contract armed. Always active — the
+      // miniboss is the floor's authored beat, never a queued reinforcement.
+      const hp = Math.round((minibossHpForFloor(unit.kind, floor) * coopBossHpMult(players)) / 10) * 10;
+      enemy.hp = enemy.maxHp = hp;
+      enemy.captainPhase = 1;
+      // The captain phase rides the aux channel for the client (the marshal's shield
+      // render keys off it; captainPhase itself never travels the wire).
+      enemy.aux = 1;
+      active.push(enemy);
+      continue;
+    }
     const cost = threatCostOf(unit.kind, unit.tier);
     const isMover = isComplexMover(unit.kind);
-    // Never exceed the ActiveThreatCap simultaneously, and never field more than the
-    // gate's complex-mover budget at once: overflow becomes reinforcements.
-    if (activeThreat + cost <= cap && (!isMover || activeComplexMovers < MAX_COMPLEX_MOVERS_ACTIVE)) {
+    // The envelope's LIVE caps: never exceed the ActiveThreatCap, the body cap, or any
+    // per-class simultaneity cap (movers — +1 only at a full P4 party — brutes, elites,
+    // controllers). Overflow becomes reinforcements, released under the same gates.
+    const fitsClasses = (!isMover || activeComplexMovers < moverCap)
+      && (unit.tier !== "brute" || activeBrutes < LIVE_CAPS.brutes)
+      && (unit.tier !== "elite" || activeElites < LIVE_CAPS.elites)
+      && (!isControllerKind(unit.kind) || activeControllers < LIVE_CAPS.controllers);
+    if (activeThreat + cost <= cap && active.length < LIVE_CAPS.bodies && fitsClasses) {
       activeThreat += cost;
       if (isMover) activeComplexMovers++;
+      if (unit.tier === "brute") activeBrutes++;
+      if (unit.tier === "elite") activeElites++;
+      if (isControllerKind(unit.kind)) activeControllers++;
       active.push(enemy);
     } else {
       pending.push(enemy);

@@ -94,6 +94,29 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 - Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`, plus the `fx/beam_ray.png`
   pure-white alpha mask (code-tinted per shot; `trail_streak` fallback until it lands).
 
+**Bestiary-wave hooks (registered, awaiting generated art — the tinted-disc fallback
+carries each identity color until the base PNGs land, and the ladder holds every body on
+its best available tier).** Generate via the locked FAL flux/dev → birefnet → pixelize
+pipeline (`tools/gen-sprites.mjs`) and drop the cutouts on these exact stems:
+- Base 64×64 PNGs: `rootward.png`, `echojack.png`, `seamcutter.png`, `caskbellows.png`,
+  `sinderling.png`, `fragment.png`, `echo.png`, `knell.png`, `marshal.png`, `toll.png`.
+- Directional walk + attack sets (`<stem>_walk_{down,up,side}.png` +
+  `<stem>_attack_{down,up,side}.png`) for **echojack, seamcutter, caskbellows,
+  sinderling, marshal**.
+- **rootward** — walk triplet only (`rootward_walk_{down,up,side}.png`): a walking wall
+  has no attack strip; its guard arc is a code overlay off the authoritative angle.
+- Drifting masses (the Choir's contract — idle loop + omni attack, no walk triplet):
+  `fragment_idle.png` + `fragment_attack.png`, `toll_idle.png` + `toll_attack.png`.
+- Decoys (idle loop only): `echo_idle.png`, `knell_idle.png`.
+- The LEGACY roster's directional sets are also pre-registered off their own stems
+  (`slime`, `bat`, `skeleton`, `ghost`, `spitter` — walk triplets; skeleton/spitter also
+  directional attacks). Their current single-strip walks stay registered and keep
+  playing until the new sheets actually load — approved directional finals become pure
+  file drops with zero code changes, and today's look is preserved byte-for-byte.
+- Sim-side visual state the art can key on: `EnemyWire.aux` carries the sinderling's
+  armed flag (stoked glow), the echo/knell fuse (fade / blink-out), the fragment's
+  tether source (the line render), and a bulwark elite's plate HP.
+
 
 **Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
 MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored
@@ -115,6 +138,25 @@ its art lands. Contract locked by `npm run test:facing`.
 
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.
+
+## Ecology-wave worker hooks (constructions + the mason)
+
+The topology workers raise real destructible props; each prop kind ships as a 64px
+horizontal sheet, frame 0 = intact, frames 1-2 = breaking (the crate contract):
+
+- `/sprites/root_wall_break.png` — the Forkroot Bailiff's woven root-wall segment
+  (mossy green, living bark; tint `#86c06c` carries the fallback block until it lands).
+- `/sprites/silt_mound_break.png` — the Silt Keel's plowed berm mound (wet grey-brown
+  silt ridge; tint `#b8a888`).
+- `/sprites/clinker_brick_break.png` — the Clinker Mason's ember-brick stack (dark
+  clinker with glowing mortar seams; tint `#c9743f`).
+
+New body: `mason` (`/sprites/mason.png` + the full directional walk/attack set —
+`mason_walk_*` / `mason_attack_*`, where the attack sheets are the RAISE: trowel hands
+up, bricks rising). The bailiff (`rootward`) now also declares directional ATTACK hooks
+(`rootward_attack_*` = the divider raise, arms up, roots surging). FAL recipes for both
+live in `tools/gen-sprites.mjs`; the missing-asset ladder (tinted block/disc fallback)
+covers every hook until approved art lands.
 
 ## Patch & the waystation (shop room) — ART GATE, hooks wired, art pending
 **Patch** is the Dealer NPC (studio coherence gate: a *warm amber salvage-hauler* whose

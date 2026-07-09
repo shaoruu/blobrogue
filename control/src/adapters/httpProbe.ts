@@ -30,7 +30,8 @@ import type {
 // v7: the depth-progression world (new shared dungeon generator + seeded floor hazards
 // + hazardHit event) on top of the co-op experience pass (v6).
 // v8: Patch's shop room (dealer pickups off the wire, `shop` snapshot state, the shopBuy
-// command + event).
+// command + event) + the bestiary wave (new enemy kinds/moves/hazard kinds + the
+// EnemyWire aux channel) — disjoint wire growth sharing one version.
 export const SYNTHETIC_JOIN_PROTOCOL = 8;
 
 export interface HttpProbeConfig {

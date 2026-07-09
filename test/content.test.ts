@@ -808,14 +808,14 @@ function curriculumTests(): void {
           run = isSimple(a[k]) ? 0 : run + 1;
           if (run > 2) runOk = false;
         }
-        if (a.filter(isSimple).length < Math.ceil(a.length * 0.30)) quotaOk = false;
+        if (a.filter(isSimple).length < Math.ceil(a.length * 0.35)) quotaOk = false;
         if (floor > 1 && isBossFloor(floor - 1) && a[0] !== "breather") breatherOk = false;
       }
     }
     check("the deck is a pure function of (seed, floor, rooms)", deterministic);
     check("an exact card never repeats back-to-back (shuffle-bag anti-repetition)", noRepeat);
     check("never more than two complex cards consecutively", runOk);
-    check("every floor keeps ≥30% simple/mastery rooms", quotaOk);
+    check("every floor keeps ≥35% simple/mastery rooms (envelope share)", quotaOk);
     check("the first room after a milestone floor is the authored breather", breatherOk);
   }
 
@@ -1085,8 +1085,10 @@ function rosterTests(): void {
     check("floor plans field chargers and burrowers", sawCharger && sawBurrower,
       `charger=${sawCharger} burrower=${sawBurrower}`);
   }
-  check("charger/burrower keep the corrected gate's in-flight 1.5 threat cost",
-    ENEMY_ARCHETYPES.charger.threat === 1.5 && ENEMY_ARCHETYPES.burrower.threat === 1.5);
+  // The bestiary balance envelope reprices the complex verbs at 2.0 (superseding the
+  // corrected gate's in-flight 1.5 — see ENVELOPE.threatCost in balance.ts).
+  check("charger/burrower carry the envelope's complex 2.0 threat cost",
+    ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
   check("neither new enemy appears before its corrected intro floor (charger F3, burrower F4)",
     (() => {
       for (let i = 0; i < 8; i++) {

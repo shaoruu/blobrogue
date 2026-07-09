@@ -114,10 +114,33 @@ function poseTests(): void {
     const moves: AttackMove[] = [
       "none", "lunge", "spit", "hopslam", "radial", "roar", "squeeze",
       "rush", "crash", "dive", "erupt", "volley", "spin", "shield",
-      "fade", "wail", "split", "pounce", "weave", "slam", "sweep",
+      "fade", "wail", "split", "pounce", "weave", "slam", "sweep", "brace",
+      "decoy", "blink", "seam", "stoke", "harmonize", "knell",
     ];
     check("every AttackMove has an authored aimed/non-aimed facing decision",
       moves.every((m) => typeof AIMED_MOVES[m] === "boolean"), `${moves.length} moves`);
+    check("the bestiary wave's aimed moves face their lanes (seam/blink), its beats face movement",
+      AIMED_MOVES.seam && AIMED_MOVES.blink
+      && !AIMED_MOVES.decoy && !AIMED_MOVES.stoke && !AIMED_MOVES.harmonize && !AIMED_MOVES.knell);
+  }
+  {
+    // A seamcutter's locked lane owns the facing through the whole cut; tiny velocity
+    // jitter mid-commitment must never flip it (the anti-flicker contract on a new kind).
+    const e = createEnemy("seamcutter", 500, 500, 16, new Rng(2), 1);
+    const f = createFacing();
+    e.attack.phase = "windup";
+    e.attack.move = "seam";
+    e.attack.lockedAngle = Math.PI; // cutting west
+    let flips = 0;
+    let prevMirror = true;
+    for (let i = 0; i < 90; i++) {
+      const jitterX = (i % 2 === 0 ? 1 : -1) * 20; // sub-deadzone knockback dribble
+      const pose = computeEnemyPose(e, f, jitterX, 6, true);
+      if (pose.isMirrored !== prevMirror && i > 0) flips++;
+      prevMirror = pose.isMirrored;
+    }
+    check("a locked seam never flip-flickers under sub-deadzone velocity noise",
+      flips === 0 && f.facing === "side" && f.isMirrored, `flips=${flips}`);
   }
 }
 
@@ -300,6 +323,46 @@ function approvedHookTests(): void {
     SHEETS["choir.idle"]?.src === "/sprites/choir_idle.png"
     && SHEETS["choir.attack"]?.src === "/sprites/choir_attack.png"
     && SHEETS["choir.walk_down"] === undefined);
+
+  section("bestiary-wave asset hooks: directional sets, mass contracts, decoy loops");
+  // Full walk+attack contract for the mobile new kinds (+ the marshal miniboss).
+  for (const [sprite, hasAttack] of [
+    ["echojack", true], ["seamcutter", true], ["caskbellows", true],
+    ["sinderling", true], ["marshal", true], ["rootward", true], ["mason", true],
+  ] as Array<[string, boolean]>) {
+    const walkOk = (["down", "up", "side"] as const).every(
+      (f) => SHEETS[`${sprite}.walk_${f}`]?.src === `/sprites/${sprite}_walk_${f}.png`);
+    const attackOk = (["down", "up", "side"] as const).every(
+      (f) => (SHEETS[`${sprite}.attack_${f}`]?.src === `/sprites/${sprite}_attack_${f}.png`) === hasAttack);
+    check(`${sprite}: directional hooks registered (${hasAttack ? "walk + attack" : "walk only — it has no attack"})`,
+      walkOk && attackOk);
+  }
+  // The ecology gate made the rootward the FORKROOT BAILIFF: its directional attack
+  // sheet is the divider RAISE (arms up, roots rising), never a swing.
+  check("the bailiff's raise rides the directional attack hooks",
+    SHEETS["rootward.attack_down"] !== undefined && SHEETS["rootward.attack_side"] !== undefined);
+  check("the fragment and The Toll ride the drifting-mass contract (idle + omni attack)",
+    SHEETS["fragment.idle"]?.src === "/sprites/fragment_idle.png"
+    && SHEETS["fragment.attack"]?.src === "/sprites/fragment_attack.png"
+    && SHEETS["toll.idle"]?.src === "/sprites/toll_idle.png"
+    && SHEETS["toll.attack"]?.src === "/sprites/toll_attack.png"
+    && SHEETS["fragment.walk_down"] === undefined && SHEETS["toll.walk_down"] === undefined);
+  check("the decoys carry idle-loop hooks only (echo/knell)",
+    SHEETS["echo.idle"]?.src === "/sprites/echo_idle.png"
+    && SHEETS["knell.idle"]?.src === "/sprites/knell_idle.png"
+    && SHEETS["echo.walk_down"] === undefined && SHEETS["knell.attack"] === undefined);
+
+  section("legacy roster directional hooks: drop-in ready, current art preserved");
+  for (const sprite of ["slime", "bat", "skeleton", "ghost", "spitter"]) {
+    check(`${sprite}: directional walk hooks registered off its own stem`,
+      (["down", "up", "side"] as const).every(
+        (f) => SHEETS[`${sprite}.walk_${f}`]?.src === `/sprites/${sprite}_walk_${f}.png`));
+  }
+  check("the legacy single-strip walks REMAIN registered (the ladder holds today's look until new sheets load)",
+    SHEETS["slime.walk"]?.src === "/sprites/slime_walk.png"
+    && SHEETS["skeleton.walk"]?.src === "/sprites/skeleton_walk.png"
+    && SHEETS["bat.walk"]?.src === "/sprites/bat_walk.png"
+    && SHEETS["ghost.walk"]?.src === "/sprites/ghost_walk.png");
   {
     // The stationary-boss ladder: a drifting Choir with only an idle sheet keeps
     // breathing while it moves instead of dropping to the static base.

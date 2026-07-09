@@ -412,6 +412,82 @@ export const WAVE_SOUNDS = {
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
     fallback: { sample: "chest", rate: 0.85, lowpassHz: 1800 },
   },
+
+  // ---- the bestiary wave (generation stems queued; safe-band authored fallbacks carry each identity
+  // ---- until the audio pipeline ships the files) --------------------------------------
+  "echojack.jangle": {
+    stem: "enemy/echojack_jangle", variants: 2, gain: 0.7, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "coin", rate: 0.85, highpassHz: 900 },
+  },
+  "echojack.blink": {
+    stem: "enemy/echojack_blink", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 1.15 },
+  },
+  "seamcutter.preview": {
+    stem: "enemy/seam_preview", variants: 2, gain: 0.75, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 0.85, lowpassHz: 2400 },
+  },
+  "seamcutter.lock": {
+    stem: "enemy/seam_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
+    jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.8, 0.05, 0.2)],
+    fallback: { sample: "meleeHit", rate: 1.15, highpassHz: 1200 },
+  },
+  "seamcutter.cut": {
+    stem: "enemy/seam_cut", variants: 2, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.85 },
+  },
+  "caskbellows.crank": {
+    stem: "enemy/cask_crank", variants: 2, gain: 0.7, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+  },
+  "caskbellows.stagger": {
+    stem: "enemy/cask_stagger", variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 0.85 },
+  },
+  "sinderling.stoke": {
+    stem: "enemy/sinder_stoke", variants: 2, gain: 0.68, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 1.15 },
+  },
+  "sinderling.jet": {
+    stem: "enemy/sinder_jet", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 1.15 },
+  },
+  "fragment.harmonize": {
+    stem: "enemy/fragment_harmonize", variants: 2, gain: 0.72, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.03, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 0.85, highpassHz: 700 },
+  },
+  "marshal.order": {
+    stem: "mini/marshal_order", variants: 2, gain: 0.8, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.85, lowpassHz: 1400 },
+  },
+  "marshal.shatter": {
+    stem: "mini/marshal_shatter", variants: 1, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.5, 0.2, 0.5)],
+    fallback: { sample: "barrel", rate: 0.85 },
+  },
+  "toll.ringWarn": {
+    stem: "mini/toll_ring_warn", variants: 2, gain: 0.8, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85, lowpassHz: 1200 },
+  },
+  "toll.ring": {
+    stem: "mini/toll_ring", variants: 2, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.55, 0.15, 0.45)],
+    fallback: { sample: "floorClear", rate: 0.85 },
+  },
   "shielder.block": {
     stem: "enemy/shield_block", variants: 3, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true, // manifest rate limit 120ms
@@ -721,6 +797,359 @@ export const WAVE_SOUNDS = {
     jitter: 0,
     fallback: { sample: "floorClear", rate: 0.9 },
   },
+
+  // ---- bestiary audio hook contract (see src/game/bestiaryAudio.ts) -----------------
+  // Behavior verb teaches counterplay, body material identifies the species, tier adds
+  // an authored layer. Every row ships a SAME-MATERIAL sample fallback (no oscillator
+  // identities, no extreme rates) until its generated stem lands.
+  "slime.move": {
+    stem: "mob/slime_move", variants: 3, gain: 0.3, bus: "sfx", priority: WAVE_PRIORITY.ambient,
+    jitter: 0.05, spatial: true, cooldownMs: 260, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 1.15, lowpassHz: 900 },
+  },
+  "slime.commit": {
+    stem: "mob/slime_commit", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 1.15 },
+  },
+  "skeleton.move": {
+    stem: "mob/skeleton_move", variants: 3, gain: 0.3, bus: "sfx", priority: WAVE_PRIORITY.ambient,
+    jitter: 0.05, spatial: true, cooldownMs: 280, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 1.15, highpassHz: 1200 },
+  },
+  "skeleton.commit": {
+    stem: "mob/skeleton_commit", variants: 2, gain: 0.7, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.9 },
+  },
+  // The flock is ONE aggregate bed (a single group-keyed loop, gain scales with count).
+  "flock.bed": {
+    stem: "mob/flock_bed", variants: 1, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.ambient,
+    jitter: 0, loop: true, spatial: false,
+  },
+  "flock.pass": {
+    stem: "mob/flock_pass", variants: 3, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.ambient,
+    jitter: 0.05, spatial: true, cooldownMs: 700, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 1.15 },
+  },
+  "flock.surge": {
+    stem: "mob/flock_surge", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.9 },
+  },
+  // The commander's pack beats (any chassis: the rally IS the flock's one commit).
+  "elite.rally": {
+    stem: "mob/elite_rally", variants: 2, gain: 0.75, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.85 },
+  },
+  "elite.panic": {
+    stem: "mob/elite_panic", variants: 2, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 300,
+    fallback: { sample: "enemyDeath", rate: 1.15 },
+  },
+  "charger.rush": {
+    stem: "enemy/charger_rush", variants: 2, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.85 },
+  },
+  "charger.dazed": {
+    stem: "enemy/charger_dazed", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "enemyDeath", rate: 0.85 },
+  },
+  "burrower.recover": {
+    stem: "enemy/burrow_recover", variants: 2, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 250, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.85, lowpassHz: 1400 },
+  },
+  // ONE orbit hum for the whole ring, group-keyed like the flock bed.
+  "orbit.loop": {
+    stem: "mob/orbit_loop", variants: 1, gain: 0.32, bus: "sfx", priority: WAVE_PRIORITY.ambient,
+    jitter: 0, loop: true, spatial: false,
+  },
+  "orbiter.lock": {
+    stem: "enemy/orbiter_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
+    jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "uiClick", rate: 1.15 },
+  },
+  "orbiter.fire": {
+    stem: "enemy/orbiter_fire", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 150, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 1.15 },
+  },
+  "shielder.bash": {
+    stem: "enemy/shield_bash", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 0.85 },
+  },
+  "guard.break": {
+    stem: "mob/guard_break", variants: 1, gain: 0.85, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 0.85 },
+  },
+  "shielder.rearHurt": {
+    stem: "enemy/shield_rear_hurt", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 220, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 1.15 },
+  },
+  "root.raise": {
+    stem: "mob/root_raise", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+  },
+  "root.block": {
+    stem: "mob/root_block", variants: 3, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "barrel", rate: 1.1 },
+  },
+  "root.divider": {
+    stem: "mob/root_divider", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+  },
+  "keel.berm": {
+    stem: "mob/keel_berm", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.85, lowpassHz: 1100 },
+  },
+  "mason.survey": {
+    stem: "mob/mason_survey", variants: 2, gain: 0.6, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 0.85 },
+  },
+  "mason.raise": {
+    stem: "mob/mason_raise", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "cannon", rate: 1.1 },
+  },
+  "plate.block": {
+    stem: "mob/plate_block", variants: 3, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "meleeHit", rate: 1.15 },
+  },
+  "anchor.place": {
+    stem: "enemy/cask_place", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+  },
+  "caskbellows.lock": {
+    stem: "enemy/cask_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
+    jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "coin", rate: 0.85 },
+  },
+  "caskbellows.fire": {
+    stem: "enemy/cask_fire", variants: 2, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true,
+    fallback: { sample: "cannon", rate: 1.15 },
+  },
+  "seamcutter.stop": {
+    stem: "enemy/seam_stop", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 250, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 0.85 },
+  },
+  "seamcutter.dazed": {
+    stem: "enemy/seam_dazed", variants: 2, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 0.85 },
+  },
+  "sinderling.burst": {
+    stem: "enemy/sinder_burst", variants: 2, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 200,
+    fallback: { sample: "barrel", rate: 1.0 },
+  },
+  "fragment.pulse": {
+    stem: "enemy/fragment_pulse", variants: 2, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.03, spatial: true, cooldownMs: 250, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 0.85 },
+  },
+  "knell.fuse": {
+    stem: "mob/knell_fuse", variants: 2, gain: 0.6, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "uiClick", rate: 0.85 },
+  },
+  // Rate-limited generic hurt/death (the contract's hurt/death semantic events); the
+  // per-material death banks are a generation backlog — these carry the limit today.
+  "mob.hurt": {
+    stem: "mob/hurt", variants: 3, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 90,
+    fallback: { sample: "enemyHit" },
+  },
+  "mob.death": {
+    stem: "mob/death", variants: 3, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 120,
+    fallback: { sample: "enemyDeath" },
+  },
+  // Authored tier LAYERS (played alongside the material death — never a pitch-down, so
+  // the fallbacks carry NO rate transform).
+  "tier.bruteBody": {
+    stem: "mob/tier_brute_body", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "cannon" },
+  },
+  "tier.eliteSheen": {
+    stem: "mob/tier_elite_sheen", variants: 2, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "coin" },
+  },
+
+  // ---- the Slime King joins the wave manifest (windup/lock/impact/recover + bespoke
+  // ---- entrance/phase/special/death — it was the last legacy-only boss) --------------
+  "king.entrance": {
+    stem: "boss/king_entrance", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+    fallback: { sample: "bossSpawn", rate: 0.9 },
+  },
+  "king.hopWarn": {
+    stem: "boss/king_hop_warn", variants: 2, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.85 },
+  },
+  "king.hopLock": {
+    stem: "boss/king_hop_lock", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.35, 0.15, 0.45)],
+    fallback: { sample: "enemyHit", rate: 1.15 },
+  },
+  "king.slam": {
+    stem: "boss/king_slam", variants: 2, gain: 1.0, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true,
+    duck: [dM(0.5, 0.15, 0.5)],
+    fallback: { sample: "enemyDeath", rate: 0.85 },
+  },
+  "king.radialWarn": {
+    stem: "boss/king_radial_warn", variants: 2, gain: 0.82, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.85 },
+  },
+  "king.radialFire": {
+    stem: "boss/king_radial_fire", variants: 2, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyHit", rate: 0.85 },
+  },
+  "king.squeezeWarn": {
+    stem: "boss/king_squeeze_warn", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.35, 0.8)],
+    fallback: { sample: "enemyAttack", rate: 0.85 },
+  },
+  "king.recover": {
+    stem: "boss/king_recover", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "enemyDeath", rate: 0.9 },
+  },
+  "king.phase": {
+    stem: "boss/king_phase", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.35, 0.8)],
+    fallback: { sample: "bossSpawn", rate: 0.85 },
+  },
+  "king.death": {
+    stem: "boss/king_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.25, 0.8, 1.2)],
+    fallback: { sample: "enemyDeath", rate: 0.85 },
+  },
+
+  // ---- bespoke entrances + punish-recover beats for the deep bosses ------------------
+  "marrow.entrance": {
+    stem: "boss/marrow_entrance", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+    fallback: { sample: "bossSpawn", rate: 0.85 },
+  },
+  "marrow.recover": {
+    stem: "boss/marrow_recover", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "enemyDeath", rate: 0.85 },
+  },
+  "choir.entrance": {
+    stem: "boss/choir_entrance", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+    fallback: { sample: "bossSpawn", rate: 1.1, highpassHz: 400 },
+  },
+  "choir.recover": {
+    stem: "boss/choir_recover", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.85, highpassHz: 500 },
+  },
+  "weaver.entrance": {
+    stem: "boss/weaver_entrance", variants: 1, gain: 0.92, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+    fallback: { sample: "bossSpawn", rate: 1.15 },
+  },
+  "weaver.recover": {
+    stem: "boss/weaver_recover", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.85 },
+  },
+  "gilded.entrance": {
+    stem: "boss/gilded_entrance", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.4, 0.9)],
+    fallback: { sample: "bossSpawn", rate: 0.85, lowpassHz: 2600 },
+  },
+  // The Warden's EXPOSED window: the plate hangs open — the punish-window identity cue.
+  "warden.exposed": {
+    stem: "boss/warden_exposed", variants: 2, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 1.15 },
+  },
+
+  // ---- miniboss captains: full boss grammar in miniature -----------------------------
+  "marshal.lock": {
+    stem: "mini/marshal_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
+    jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 1.15 },
+  },
+  "marshal.recover": {
+    stem: "mini/marshal_recover", variants: 2, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+  },
+  "marshal.entrance": {
+    stem: "mini/marshal_entrance", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.4, 0.3, 0.7)],
+    fallback: { sample: "enemyDeath", rate: 0.85 },
+  },
+  "marshal.death": {
+    stem: "mini/marshal_death", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.5, 1.0)],
+    fallback: { sample: "enemyDeath", rate: 0.85 },
+  },
+  "toll.lock": {
+    stem: "mini/toll_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
+    jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "coin", rate: 0.85 },
+  },
+  "toll.recover": {
+    stem: "mini/toll_recover", variants: 2, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+  },
+  "toll.entrance": {
+    stem: "mini/toll_entrance", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.4, 0.3, 0.7)],
+    fallback: { sample: "floorClear", rate: 0.85 },
+  },
+  "toll.phase": {
+    stem: "mini/toll_phase", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.35, 0.35, 0.8)],
+    fallback: { sample: "floorClear", rate: 0.85 },
+  },
+  "toll.death": {
+    stem: "mini/toll_death", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.3, 0.5, 1.0)],
+    fallback: { sample: "floorClear", rate: 0.85 },
+  },
 } as const satisfies Record<string, WaveSoundSpec>;
 
 export type WaveEventId = keyof typeof WAVE_SOUNDS;
@@ -746,49 +1175,110 @@ export interface MoveTells {
   readonly active?: WaveEventId;
   readonly release?: WaveEventId;
   readonly impact?: WaveEventId;
+  // Any transition INTO "recover" — the punish-window identity (a crash daze, the
+  // Warden's exposed plate). Fires alongside release/impact where both are authored.
+  readonly recover?: WaveEventId;
 }
 
 export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTells>>>> = {
+  // The Slime King (kind "boss"): the last legacy-only boss joins the wave manifest.
+  boss: {
+    hopslam: { windup: "king.hopWarn", lock: "king.hopLock", impact: "king.slam", recover: "king.recover" },
+    radial: { windup: "king.radialWarn", release: "king.radialFire" },
+    squeeze: { windup: "king.squeezeWarn" },
+  },
   marrow: {
     rush: { windup: "marrow.listenStart", lock: "marrow.aimLock", active: "marrow.chargeStart" },
-    crash: { impact: "marrow.wallImpact" }, // the move flips to "crash" as the stun recover begins
+    crash: { impact: "marrow.wallImpact", recover: "marrow.recover" }, // the move flips to "crash" as the stun recover begins
     volley: { windup: "marrow.stompWindup", lock: "marrow.aimLock", release: "marrow.stompImpact" },
     spin: { windup: "marrow.stompWindup", active: "marrow.stompImpact" },
   },
   choir: {
     wail: { windup: "choir.strikeWarn", lock: "choir.strikeLock", release: "choir.strikeImpact" },
-    fade: { windup: "choir.swellWarn", impact: "choir.swellFire" }, // impact = the rematerialize burst
+    fade: { windup: "choir.swellWarn", impact: "choir.swellFire", recover: "choir.recover" }, // impact = the rematerialize burst
   },
   weaver: {
-    pounce: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike" },
+    pounce: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
     weave: { windup: "weaver.latticeWarn", release: "weaver.latticeFire" },
   },
   gilded: {
-    slam: { windup: "warden.prisonWarn", lock: "warden.turretLock", impact: "warden.prisonClose" },
-    sweep: { windup: "warden.glyphWarn", active: "warden.turretFire" },
+    // The EXPOSED recover after each commitment is the fight's punish identity.
+    slam: { windup: "warden.prisonWarn", lock: "warden.turretLock", impact: "warden.prisonClose", recover: "warden.exposed" },
+    sweep: { windup: "warden.glyphWarn", active: "warden.turretFire", recover: "warden.exposed" },
+  },
+  skeleton: {
+    lunge: { windup: "skeleton.commit" },
   },
   charger: {
-    rush: { windup: "charger.windup", lock: "charger.lock" },
-    crash: { impact: "charger.crash" },
+    rush: { windup: "charger.windup", lock: "charger.lock", active: "charger.rush" },
+    crash: { impact: "charger.crash", recover: "charger.dazed" },
   },
   burrower: {
     dive: { active: "burrower.submerge" },
-    erupt: { windup: "burrower.lock", active: "burrower.erupt" },
+    erupt: { windup: "burrower.lock", active: "burrower.erupt", recover: "burrower.recover" },
   },
   orbiter: {
-    spit: { windup: "orbiter.diveWarn" },
+    spit: { windup: "orbiter.diveWarn", lock: "orbiter.lock", release: "orbiter.fire" },
+  },
+  // The spitter's kite grammar rides the shared chitin caster bank until its own lands.
+  spitter: {
+    spit: { windup: "orbiter.diveWarn", lock: "seamcutter.lock", release: "orbiter.fire" },
   },
   shielder: {
-    lunge: { windup: "shielder.raise" },
+    lunge: { windup: "shielder.raise", active: "shielder.bash" },
+  },
+  // The workers: a long stationary tell, then the construction lands on the release.
+  rootward: {
+    build: { windup: "root.raise", release: "root.divider" },
+  },
+  mason: {
+    build: { windup: "mason.survey", release: "mason.raise" },
+  },
+  echojack: {
+    decoy: { windup: "echojack.jangle" },
+    blink: { impact: "echojack.blink" },
+  },
+  seamcutter: {
+    seam: { windup: "seamcutter.preview", lock: "seamcutter.lock", active: "seamcutter.cut", impact: "seamcutter.stop", recover: "seamcutter.dazed" },
+  },
+  caskbellows: {
+    volley: { windup: "caskbellows.crank", lock: "caskbellows.lock", active: "caskbellows.fire" },
+    crash: { impact: "caskbellows.stagger" }, // the rear-crank stagger flips the move to crash
+  },
+  sinderling: {
+    stoke: { windup: "sinderling.stoke" },
+    rush: { active: "sinderling.jet" },
+  },
+  fragment: {
+    harmonize: { windup: "fragment.harmonize" },
+  },
+  marshal: {
+    sweep: { windup: "marshal.order", recover: "marshal.recover" },
+    volley: { windup: "marshal.order", lock: "marshal.lock", recover: "marshal.recover" },
+  },
+  toll: {
+    knell: { windup: "toll.ringWarn", release: "toll.ring", recover: "toll.recover" },
+    volley: { windup: "toll.ringWarn", lock: "toll.lock", recover: "toll.recover" },
   },
 };
 
 export const WAVE_BOSS_PHASE: Readonly<Record<string, WaveEventId>> = {
+  boss: "king.phase",
   marrow: "marrow.phase", choir: "choir.phase", weaver: "weaver.phase", gilded: "warden.phase",
+  marshal: "marshal.shatter", toll: "toll.phase",
 };
 
 export const WAVE_BOSS_DEATH: Readonly<Record<string, WaveEventId>> = {
+  boss: "king.death",
   marrow: "marrow.death", choir: "choir.death", weaver: "weaver.death", gilded: "warden.death",
+  marshal: "marshal.death", toll: "toll.death",
+};
+
+// Bespoke entrance per boss-grade body (played at floor load / captain spawn).
+export const WAVE_BOSS_ENTRANCE: Readonly<Record<string, WaveEventId>> = {
+  boss: "king.entrance",
+  marrow: "marrow.entrance", choir: "choir.entrance", weaver: "weaver.entrance", gilded: "gilded.entrance",
+  marshal: "marshal.entrance", toll: "toll.entrance",
 };
 
 // Every event a boss OR regular archetype kind can raise — its preload group (§10:
@@ -813,6 +1303,8 @@ export function bossWaveEvents(kind: string): WaveEventId[] {
   if (phase) out.push(phase);
   const death = WAVE_BOSS_DEATH[kind];
   if (death) out.push(death);
+  const entrance = WAVE_BOSS_ENTRANCE[kind];
+  if (entrance && out.indexOf(entrance) === -1) out.push(entrance);
   return out;
 }
 
@@ -904,6 +1396,10 @@ export function tellCuesFor(kind: string, prev: TellSnapshot | null, next: TellS
     // Landings/crashes key the impact on the move the attacker LANDED IN (a crash flips
     // rush->crash as recover begins; a chained pounce leaves active straight into windup).
     const cue = moves[next.move]?.impact ?? moves[prev.move]?.impact;
+    if (cue) out.push(cue);
+  }
+  if (next.phase === "recover" && wasPhase !== "recover") {
+    const cue = moves[next.move]?.recover;
     if (cue) out.push(cue);
   }
   return out;

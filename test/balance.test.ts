@@ -428,9 +428,9 @@ function normalTtkGates(): void {
     `${at8("swarm")}/${at8("standard")}/${at8("elite")}/${at8("brute")}`);
   check("tough tiers are clearly separated (elite ≥ 2.4x standard, brute ≥ 1.3x elite)",
     at8("elite") >= at8("standard") * 2.4 && at8("brute") >= at8("elite") * 1.3);
-  check("tier threat costs track durability (swarm .55 < std 1 < brute 2.8 < elite 3.0)",
-    TIERS.swarm.threatCost === 0.55 && TIERS.standard.threatCost === 1.0
-    && TIERS.brute.threatCost === 2.8 && TIERS.elite.threatCost === 3.0);
+  check("tier threat costs track the envelope ladder (swarm .5 < std 1 < brute 3.0 < elite 4.0)",
+    TIERS.swarm.threatCost === 0.5 && TIERS.standard.threatCost === 1.0
+    && TIERS.brute.threatCost === 3.0 && TIERS.elite.threatCost === 4.0);
 }
 
 // ---- base-pistol reality check: the tables must actually hold up in live autofire ----
@@ -892,9 +892,9 @@ function earlyMeltGates(): void {
 
 function compositionCapGates(): void {
   section("studio gate §1/§2: ≤2 complex movers live, ≤1 burrower/room, flock spend ≤35%");
-  check("charge/burrow are the complex movers; the corrected gate pins their in-flight 1.5 cost",
+  check("charge/burrow are the complex movers; the bestiary envelope prices them at 2.0",
     isComplexMover("charger") && isComplexMover("burrower") && !isComplexMover("orbiter")
-    && ENEMY_ARCHETYPES.charger.threat === 1.5 && ENEMY_ARCHETYPES.burrower.threat === 1.5);
+    && ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
 
   // Static plans across seeds and the F11–24 late band: burrower room cap + pack spend.
   let burrowRoomOk = true;
@@ -1196,11 +1196,12 @@ function eliteContractGates(): void {
       survivors > 0 && commits / survivors >= 0.7, `${commits}/${survivors}`);
   }
   {
-    // Room-clear cost at EQUAL THREAT (the elite costs 3.0 threat = it replaces three
-    // standard bodies in the director's budget): an elite-led room may cost at most a
-    // third more clear time than the same threat spent on standard bodies — the
-    // durability pass explicitly buys "sustained focus" on the big silhouettes, and the
-    // higher threat price is what keeps the floor's TOTAL pressure budget-shaped.
+    // Room-clear cost at EQUAL THREAT (the envelope prices an elite at 4 threat — it
+    // replaces several standard bodies in the director's budget): an elite-led room may
+    // cost at most a third more clear time than comparable threat spent on standard
+    // bodies — the durability pass explicitly buys "sustained focus" on the big
+    // silhouettes, and the higher threat price is what keeps the floor's TOTAL pressure
+    // budget-shaped.
     const clearTime = (isEliteRoom: boolean): number => {
       const w = createWorld(0xE17F, 6, { isSandbox: true });
       w.isGodMode = true;

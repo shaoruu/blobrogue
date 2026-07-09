@@ -194,10 +194,136 @@ export const SHIELDER_BASH_SPEED = 420;
 export const SHIELDER_RECOVER = 0.55;
 export const SHIELDER_CD = 2.6;
 
+// Rootward: the formation anchor. A slow-turning frontal guard that eats non-piercing
+// bullets (flank, melee over the top, pierce through, or splash) with a small reach pad
+// so allies trailing its shadow get real cover. It has NO committed attack — the body is
+// a moving wall, the pressure is positioning.
+export const ROOTWARD_GUARD_ARC = 2.6;   // radians of protected frontage (~150°)
+export const ROOTWARD_GUARD_PAD = 12;    // px beyond the body the guard still blocks
+export const ROOTWARD_TURN_RATE = 1.4;   // rad/s the guard can track — flanking wins
+// The FORKROOT BAILIFF consolidation (the ecology gate's Rootbound worker): the anchor's
+// one commitment is raising an asymmetric root divider ACROSS its facing — 2 segments to
+// the handed side, 1 to the other, planted a short reach ahead. Raising anew crumbles the
+// old divider; wall standoff guarantees walkable gaps at both ends (the escape route).
+export const BAILIFF_BUILD_TRIGGER = 300; // px to target before it commits to a raise
+export const BAILIFF_BUILD_MIN_DIST = 120; // closer than this it walls with its body, not roots
+export const BAILIFF_BUILD_ALIGN = 0.3;    // rad the guard must face the target before raising
+export const BAILIFF_REBUILD_DIST = 260;   // px from its divider before it MOVES it (re-raise)
+export const BAILIFF_BUILD_WINDUP = 1.3;
+export const BAILIFF_BUILD_RECOVER = 0.7;
+export const BAILIFF_BUILD_CD = 9.0;
+export const BAILIFF_DIVIDER_DIST = 78;   // px ahead of the body the divider line sits
+export const BAILIFF_SEG_SPACING = 40;    // px between root-wall segment centers
+
+// The CLINKER MASON (the ecology gate's Emberreach worker): walks to the nearest heat
+// vent (the sinderling's feeding ground) and masons ONE handed L-corner of clinker
+// bricks around it — the corner points at the nearest player, the long arm is handed by
+// id parity. No vent in range: it builds the corner around itself. Old corner collapses
+// when a new one is raised.
+export const MASON_VENT_RANGE = 420;      // px it will travel to claim a vent site
+export const MASON_SITE_REACH = 96;       // px from the site before the tell may start
+export const MASON_BUILD_WINDUP = 1.4;    // the long masonry tell (kill it mid-course)
+export const MASON_BUILD_RECOVER = 0.8;
+export const MASON_BUILD_CD = 11.0;
+export const MASON_CORNER_DIST = 84;      // px from the vent the corner apex sits
+export const MASON_SEG_SPACING = 40;      // px between brick centers along each arm
+export const MASON_ARM_LONG = 3;          // bricks on the handed arm (incl. the apex)
+export const MASON_ARM_SHORT = 2;         // bricks on the off arm (excl. the apex)
+
+// Worker construction placement law (raiseConstruction): the escape-route gate.
+export const CONSTRUCT_WALL_STANDOFF = 1; // tiles of clearance to any wall (end gaps!)
+export const CONSTRUCT_EXIT_STANDOFF = 2; // tiles of clearance to the floor exit
+
+// Echojack: the fleeing trickster. Keeps its distance, plants a false-noise decoy on a
+// telegraphed beat, then BLINKS — a visible perpendicular relocation dash, never a
+// teleport. The decoy (kind "echo") is a 1-HP fake body that soaks homing/attention.
+export const ECHOJACK_FLEE = 220;
+export const ECHOJACK_APPROACH = 460;
+export const ECHOJACK_DECOY_WINDUP = 0.7;
+export const ECHOJACK_BLINK_DUR = 0.35;
+export const ECHOJACK_BLINK_SPEED = 520;
+export const ECHOJACK_RECOVER = 0.4;
+export const ECHOJACK_CD = 5.0;
+export const ECHO_LIFE = 4.0;            // decoy lifetime (rides the aux channel)
+export const ECHO_CAP = 3;               // live decoys before new plants are held
+
+// Seamcutter: the lane. Windup previews the whole wall-to-wall seam (mark = the far
+// wall), active travels it at a flat speed emitting timed PERPENDICULAR sweep bolts,
+// recover is the punish window at the far wall. Cross early or stay behind it.
+export const SEAM_TRIGGER = 360;
+export const SEAM_WINDUP = 1.0;
+export const SEAM_LOCK = 0.55;           // long post-lock window: the lane is readable
+export const SEAM_SPEED = 300;
+export const SEAM_MAX_DUR = 2.2;
+// The plow's berm (the SILT KEEL consolidation — the ecology gate's Deep worker): the
+// cut piles ONE persistent line of destructible silt mounds beside the furrow, handed by
+// id parity. The keel's next plow sinks its old berm (replacement rule).
+export const BERM_SEG_SPACING = 42;      // px between mound centers along the furrow
+export const BERM_MAX_SEGS = 6;          // capped length: a berm zones, it never seals
+export const BERM_SIDE_OFFSET = 34;      // px the mounds pile beside the furrow line
+export const SEAM_RECOVER = 0.9;
+export const SEAM_CD = 4.0;
+
+// Caskbellows: the stationary lane sentry. Locks a target, fires a 3-shot volley down
+// the locked lane, and STAGGERS (crash grammar — the long punish window) when a shot
+// lands on its rear crank mid-commitment. Backpedals when crowded; otherwise it holds.
+export const CASK_TRIGGER = 460;
+export const CASK_WINDUP = 0.85;
+export const CASK_LOCK = 0.5;
+export const CASK_SHOTS = 3;
+export const CASK_SHOT_GAP = 0.22;
+export const CASK_BOLT_SPEED = 340;
+export const CASK_BOLT_RADIUS = 6;
+export const CASK_BOLT_LIFE = 2.0;
+export const CASK_RECOVER = 0.6;
+export const CASK_CD = 2.8;
+export const CASK_REAR_ARC = 2.1;        // radians centered on its back (the crank)
+export const CASK_STAGGER = 1.5;         // the rear-crank stun (crash recover)
+export const CASK_TOO_CLOSE = 180;       // inside this it waddles back to its lane range
+
+// Sinderling: the heat-feeder. Unarmed it seeks environmental heat (an active fire vent
+// or a brazier) and consumes one pulse to ARM; with no heat in reach it stokes itself on
+// a long stationary channel. Armed: a locked flame-jet dash that lays a burning cinder
+// wake, and an armed DEATH bursts shared-risk fire (players 1, enemies more).
+export const SINDER_HEAT_RANGE = 600;
+export const SINDER_BRAZIER_RANGE = 30;
+export const SINDER_STOKE_WINDUP = 1.3;
+export const SINDER_ARMED_SPEED_MULT = 1.3;
+export const SINDER_JET_TRIGGER = 300;
+export const SINDER_JET_WINDUP = 0.6;
+// Locks early enough to keep the §4 ≥0.30s post-lock dodge window the envelope's
+// acceptance manifest records (0.6 − 0.3).
+export const SINDER_JET_LOCK = 0.3;
+export const SINDER_JET_SPEED = 420;
+export const SINDER_JET_DUR = 0.45;
+export const SINDER_JET_RECOVER = 0.5;
+export const SINDER_CD = 3.4;
+export const SINDER_CINDER_GAP = 0.08;   // seconds between cinder drops along the jet
+export const SINDER_CINDER_RADIUS = 24;
+export const SINDER_CINDER_LIFE = 3.0;
+export const SINDER_CINDER_CAP = 12;     // hard cap on live cinders (squeeze, never fill)
+export const SINDER_BURST_RADIUS = 60;
+export const SINDER_BURST_PLAYER_DMG = 1;
+export const SINDER_BURST_ENEMY_DMG = 3;
+
+// Choir fragment: the tethered voice. It binds to the nearest other enemy in line of
+// sight; on cadence the tether HARMONIZES — the line between the two bodies becomes a
+// damaging lane for a short pulse. Kill the source (or break line of sight) and the
+// fragment falls silent: a slow drifting body with contact only.
+export const FRAGMENT_TETHER_RANGE = 380;
+export const FRAGMENT_HOLD_DIST = 240;   // it hovers at mid-range, singing
+export const FRAGMENT_PULSE_WINDUP = 0.9;
+export const FRAGMENT_PULSE_ACTIVE = 0.5;
+export const FRAGMENT_PULSE_RECOVER = 0.5;
+export const FRAGMENT_CD = 3.2;
+export const FRAGMENT_BEAM_HALF_WIDTH = 14;
+
 // Destructible props + chests.
 export const PROP_RADIUS = 15;
 export const PROP_HP: Record<PropKind, number> = {
   crate: 4, pot: 1, barrel: 3, barrel_explosive: 3, brazier: 0,
+  // Worker constructions: cover for either side, breakable by either side.
+  root_wall: 3, silt_mound: 2, clinker_brick: 3,
 };
 // Physical world impacts (damagePropsInRadius): a committed charge or slam does not chip
 // cover, it obliterates it — one figure comfortably above every PROP_HP entry.

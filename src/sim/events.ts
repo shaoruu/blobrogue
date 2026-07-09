@@ -49,8 +49,10 @@ export type SimEvent =
   | { t: "bulletWall"; x: number; y: number; aim: number }
   | { t: "bulletBounce"; x: number; y: number; aim: number; color: string }
   | { t: "bulletExpire"; x: number; y: number; color: string }
-  // A shielder's front arc swallowed a round (aim = the direction the shot came from).
-  | { t: "bulletBlocked"; x: number; y: number; aim: number }
+  // A guard swallowed a round (aim = the direction the shot came from). `kind` names the
+  // blocker so the client can voice the block in the right MATERIAL (shielder wood, a
+  // rootward's living root, a bulwark plate) — the bestiary audio contract.
+  | { t: "bulletBlocked"; kind: EnemyKind; x: number; y: number; aim: number }
   | { t: "propHit"; propId: number; kind: PropKind; x: number; y: number }
   | { t: "propBreak"; kind: PropKind; x: number; y: number }
   | { t: "explosion"; x: number; y: number; r: number }
