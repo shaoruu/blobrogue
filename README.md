@@ -31,11 +31,12 @@ Clear a floor of enemies, then step into the glowing exit to descend. See how de
   through walls), and a **slime-king boss every 5th floor** that spawns minions.
 - **Difficulty modes** — CASUAL / STANDARD / BRUTAL, picked at run setup: on the title
   screen for solo (persisted), or by the room host in the online lobby (authoritative room
-  state everyone sees). Same mechanics and telegraphs in every mode; STANDARD is the authored
-  baseline, and the knobs follow the studio balance gate
-  ([spec](docs/specs/blobrogue_STUDIO_BALANCE_GATE.md) §1): enemy/boss HP, threat budget +
-  active cap, commit pacing, move speed, hazards, hearts (ambient + boss reward), revive
-  channel/HP, and per-floor down limits.
+  state everyone sees). Enemy/boss HP, damage, tells and focused TTK are identical in every
+  mode — a mode changes concurrent pressure and recovery only, per the studio balance gate
+  ([spec](docs/specs/blobrogue_STUDIO_BALANCE_GATE.md) §1): threat budget + active cap, idle
+  attack cadence, reinforcement waves, boss add pacing/caps, enemy projectile speed, hazards,
+  hearts (ambient + boss reward), revive channel/HP, and per-floor down limits. STANDARD is
+  the authored baseline, exactly as tuned.
 - **Weapons & pickups** — pistol, shotgun (spread), and rapid-fire; hearts heal, coins are
   currency, and gun pickups swap your weapon. Weapon shown in the HUD.
 - **Minimap + stats HUD** — top-right minimap (rooms, exit, enemies, teammates), a clean

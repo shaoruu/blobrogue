@@ -80,7 +80,8 @@ function applyCommands(game: any, s: Scenario, tick: number): void {
 }
 
 function applyInput(game: any, inp: FrameInput): void {
-  const keys: Set<string> = game.keys;
+  const input = game.input; // InputController (private internals reached for the harness)
+  const keys: Set<string> = input.keys;
   keys.clear();
   if (inp.moveX > 0) keys.add("d");
   else if (inp.moveX < 0) keys.add("a");
@@ -88,10 +89,9 @@ function applyInput(game: any, inp: FrameInput): void {
   else if (inp.moveY < 0) keys.add("w");
   if (inp.dash) keys.add("shift");
   const cam = game.cam;
-  const m = game.mouse;
-  m.x = game.px - cam.x + Math.cos(inp.aim) * 100;
-  m.y = game.py - cam.y + Math.sin(inp.aim) * 100;
-  m.isDown = inp.firing;
+  input.mouseX = game.px - cam.x + Math.cos(inp.aim) * 100;
+  input.mouseY = game.py - cam.y + Math.sin(inp.aim) * 100;
+  input.isMouseDown = inp.firing;
 }
 
 function snapshot(w: WorldState, tick: number): TickSnapshot {

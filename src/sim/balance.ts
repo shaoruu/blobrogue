@@ -11,67 +11,79 @@ export const BALANCE_VERSION = 3;
 
 // ---- §0.5 difficulty modes (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1) ----
 //
-// ONE typed definition per mode, consumed at the deterministic floor-build/sim seams
-// (createEnemy HP/speed, commitment cooldowns, threat budget + active cap, hazard band,
-// ambient heart rates, boss chest hearts, revive, per-floor down limits). Every knob
-// multiplies the SAME baseline tables below — gameplay logic is never forked, and per the
-// gate all modes keep identical tells, hitboxes, boss phase mechanics, loot quality and
-// authored damage integers (no mode blanket-multiplies damage).
+// ONE typed definition per mode, consumed at the deterministic floor-build/sim seams.
+// The gate's core rule: ALL modes use identical enemy/boss HP, tier HP, weapon DPS,
+// damage, phase thresholds/floors, windups, locks and recoveries — focused TTK stays
+// authored. Mode changes CONCURRENT PRESSURE and RECOVERY only: threat budget, active
+// cap, idle attack cadence, reinforcement pacing, boss add pacing/cap, enemy projectile
+// speed, hazards, hearts, revive and down limits. Every knob multiplies the SAME
+// baseline tables below — gameplay logic is never forked.
 //
 // STANDARD is the exact ×1.0 identity — the authored baseline the studio gate calibrates
 // (§8: "mode modifiers are then applied around that validated baseline") — which is what
 // keeps the golden-master oracle honest (goldens pin standard and stay byte-stable).
-// CASUAL is forgiveness, not inert enemies; BRUTAL adds composition (+25%) and hazard
-// (+30%) pressure but only 12–15% HP, preventing sponges.
+// CASUAL gives more reaction and recovery; BRUTAL increases composition/opportunity
+// frequency without extra HP or ordinary damage.
 
 export type Difficulty = "casual" | "standard" | "brutal";
 
 export interface DifficultyDef {
   id: Difficulty;
-  blurb: string;             // one-sentence run-setup description (menu + lobby)
-  tint: string;              // HUD/menu accent for this mode
-  enemyHpMult: number;       // normal/elite HP (applied inside the single §3 rounding pass)
-  bossHpMult: number;        // boss HP (applied inside the round-to-10 pass)
-  threatBudgetMult: number;  // floor threat budget + boss-floor escort density
-  activeCapMult: number;     // active-threat cap (scaled modes round UP at the seam)
-  attackCdMult: number;      // non-boss commitment cooldowns (never tells/recovery; boss
-                             // cadence is fixed by the §3 per-boss pressure contract)
-  enemySpeedMult: number;    // non-boss move speed (inside the §3 speed rounding pass)
-  hazardMult: number;        // hazard budget (currently the explosive-prop band lever)
-  maxComplexPerRoom: number; // simultaneous complex movers per room (readability guard)
-  heartMult: number;         // §2 ambient heart-drop chances (enemy / crate / wood chest)
-  bossChestHearts: number;   // hearts the boss chest ejects (the boss heart reward)
-  reviveChannel: number;     // seconds an uninterrupted revive hold takes
-  reviveHp: number;          // HP a revived player returns at
-  floorDownLimit: number;    // downs per player per floor before spectating until descent
+  blurb: string;               // one-sentence run-setup description (menu + lobby)
+  tint: string;                // HUD/menu accent for this mode
+  // §1 pins normal/elite and boss HP at 1.00× in EVERY mode ("focused TTK stays
+  // authored"); the typed seam stays so a future gate revision can recalibrate without
+  // re-plumbing, and the balance suite asserts all three rows are exactly 1.
+  enemyHpMult: number;
+  bossHpMult: number;
+  threatBudgetMult: number;    // floor threat budget + boss-floor escort density
+  activeCapMult: number;       // active-threat cap (casual floors w/ min 6; brutal ceils w/ max 18)
+  attackCdMult: number;        // enemy AND boss idle attack cooldowns (never tells/recovery)
+  reinforceIntervalMult: number; // seconds between reinforcement release waves
+  bossAddIntervalMult: number; // boss add cadence (first delay + per-phase interval)
+  bossAddCapDelta: number;     // per-phase live add cap adjustment (clamped to ≥2)
+  projectileSpeedMult: number; // enemy projectile speed (globs; never player bullets)
+  hazardMult: number;          // hazard budget (currently the explosive-prop band lever)
+  maxComplexPerRoom: number;   // simultaneous complex movers per room (readability guard)
+  heartMult: number;           // §2 ambient heart-drop chances (enemy / crate / wood chest)
+  bossChestHearts: number;     // hearts the boss chest ejects (the boss heart reward)
+  reviveChannel: number;       // seconds an uninterrupted revive hold takes
+  reviveHp: number;            // HP a revived player returns at
+  floorDownLimit: number;      // downs per player per floor before spectating until descent
 }
 
 export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
   casual: {
     id: "casual",
-    blurb: "Forgiving, not toothless \u2014 softer foes, more hearts, easy revives.",
+    blurb: "More room to breathe \u2014 fewer foes at once, gentler pacing, richer recovery.",
     tint: "#7dd87d",
-    enemyHpMult: 0.90, bossHpMult: 0.90, threatBudgetMult: 0.80, activeCapMult: 0.80,
-    attackCdMult: 1.15, enemySpeedMult: 0.95, hazardMult: 0.65, maxComplexPerRoom: 1,
-    heartMult: 1.35, bossChestHearts: 2, reviveChannel: 1.20, reviveHp: 3,
+    enemyHpMult: 1.00, bossHpMult: 1.00,
+    threatBudgetMult: 0.80, activeCapMult: 0.85, attackCdMult: 1.15,
+    reinforceIntervalMult: 1.25, bossAddIntervalMult: 1.20, bossAddCapDelta: -1,
+    projectileSpeedMult: 0.90, hazardMult: 0.65, maxComplexPerRoom: 1,
+    heartMult: 1.25, bossChestHearts: 2, reviveChannel: 1.20, reviveHp: 3,
     floorDownLimit: Number.POSITIVE_INFINITY,
   },
   standard: {
     id: "standard",
     blurb: "The authored descent \u2014 dangerous, fair, and exactly as tuned.",
     tint: "#ffd166",
-    enemyHpMult: 1.00, bossHpMult: 1.00, threatBudgetMult: 1.00, activeCapMult: 1.00,
-    attackCdMult: 1.00, enemySpeedMult: 1.00, hazardMult: 1.00, maxComplexPerRoom: 2,
+    enemyHpMult: 1.00, bossHpMult: 1.00,
+    threatBudgetMult: 1.00, activeCapMult: 1.00, attackCdMult: 1.00,
+    reinforceIntervalMult: 1.00, bossAddIntervalMult: 1.00, bossAddCapDelta: 0,
+    projectileSpeedMult: 1.00, hazardMult: 1.00, maxComplexPerRoom: 2,
     heartMult: 1.00, bossChestHearts: 1, reviveChannel: 1.50, reviveHp: 2,
     floorDownLimit: 3,
   },
   brutal: {
     id: "brutal",
-    blurb: "More bodies, faster commits, scarcer hearts \u2014 two downs and you watch.",
+    blurb: "Denser waves, faster commits, leaner hearts \u2014 same foes, no sponges.",
     tint: "#ff6a6a",
-    enemyHpMult: 1.12, bossHpMult: 1.15, threatBudgetMult: 1.25, activeCapMult: 1.15,
-    attackCdMult: 0.90, enemySpeedMult: 1.05, hazardMult: 1.30, maxComplexPerRoom: 2,
-    heartMult: 0.75, bossChestHearts: 1, reviveChannel: 1.80, reviveHp: 2,
+    enemyHpMult: 1.00, bossHpMult: 1.00,
+    threatBudgetMult: 1.20, activeCapMult: 1.15, attackCdMult: 0.85,
+    reinforceIntervalMult: 0.85, bossAddIntervalMult: 0.85, bossAddCapDelta: 1,
+    projectileSpeedMult: 1.10, hazardMult: 1.30, maxComplexPerRoom: 2,
+    heartMult: 0.80, bossChestHearts: 1, reviveChannel: 1.80, reviveHp: 2,
     floorDownLimit: 2,
   },
 };
@@ -89,16 +101,26 @@ export function isDifficulty(v: unknown): v is Difficulty {
 export function difficultyThreatBudget(base: number, difficulty: Difficulty): number {
   // Standard IS the validated baseline and passes through untouched (gate §8); scaled
   // modes multiply AFTER summing and round to the nearest 0.5 so budgets stay on the
-  // same half-point grid as the §4 threat costs (gate §2).
+  // same half-point grid as the §2 threat costs. Party scaling (§4) applies on top.
   if (difficulty === "standard") return base;
   return Math.round(base * DIFFICULTIES[difficulty].threatBudgetMult * 2) / 2;
 }
 
 export function difficultyActiveCap(base: number, difficulty: Difficulty): number {
-  // Scaled modes round UP (gate §1: "0.80×, round up" / "1.15×, round up") so a casual
-  // cap can never strand a planned unit behind a fractional ceiling.
-  if (difficulty === "standard") return base;
-  return Math.ceil(base * DIFFICULTIES[difficulty].activeCapMult);
+  // §1: casual 0.85× FLOORED with a 6-threat minimum (a mercy cap can never starve the
+  // floor's composition); brutal 1.15× CEILED with an 18 ceiling. Standard passes the
+  // authored formula through untouched. Applied to the SOLO cap; party scaling (§4)
+  // multiplies on top, so the min/max anchor to the authored solo table.
+  if (difficulty === "casual") return Math.max(6, Math.floor(base * DIFFICULTIES.casual.activeCapMult));
+  if (difficulty === "brutal") return Math.min(18, Math.ceil(base * DIFFICULTIES.brutal.activeCapMult));
+  return base;
+}
+
+export function difficultyBossAddCap(base: number, difficulty: Difficulty): number {
+  // §1 "boss add interval / cap": casual −1 (never below 2 — adds are boss mechanics,
+  // not optional), brutal +1, standard authored. A zero base (phase 0 slot) stays zero.
+  if (base <= 0) return base;
+  return Math.max(2, base + DIFFICULTIES[difficulty].bossAddCapDelta);
 }
 
 // ---- §1 player constants ----

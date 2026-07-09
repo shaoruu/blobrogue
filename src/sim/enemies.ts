@@ -114,16 +114,16 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const players = opts.players ?? 1;
   const dif = DIFFICULTIES[opts.difficulty ?? DEFAULT_DIFFICULTY];
   const isBoss = kind === "boss";
-  // Difficulty multiplies INSIDE the single rounding pass (never round-then-round), so
-  // each (floor, tier, players, difficulty) tuple maps to one exact deterministic HP.
-  // The boss keeps its authored base speed and cadence in every mode — its pressure
-  // contract is per-boss (studio gate §3), so only the escort/HP scale with mode.
+  // The difficulty HP knobs multiply INSIDE the single rounding pass — the studio gate
+  // pins both at 1.00× in every mode ("focused TTK stays authored"), so today this is
+  // the identity; the seam stays typed for a future gate recalibration. Move speed is
+  // NOT a mode knob at all: the §3 speed tables are authored, identical in every mode.
   const hp = isBoss
     ? Math.round((bossHpForFloor(floor) * coopBossHpMult(players) * dif.bossHpMult) / 10) * 10
     : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players) * dif.enemyHpMult));
   const speed = isBoss
     ? a.baseSpeed
-    : roundHalfToEven(a.baseSpeed * floorSpeedMult(floor) * tierDef.speedMult * dif.enemySpeedMult);
+    : roundHalfToEven(a.baseSpeed * floorSpeedMult(floor) * tierDef.speedMult);
   // Seed the slime hop clock from the sim Rng (not Math.random): the slime's hop-cadence
   // reads it, so it must be deterministic. Drawn BEFORE zig to match the historical rng
   // stream order. Still desyncs each enemy, but reproducibly.
@@ -153,7 +153,9 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
       lockedAngle: 0, isAimLocked: false, markX: 0, markY: 0,
     },
     boss: isBoss
-      ? { phase: 1, transitionsDone: 0, roar: null, addTimer: BOSS.addFirstAt, attackCount: 0, isNextRadial: false, burstParity: 0 }
+      // The first-add delay carries the mode's boss-add pacing knob (§1); the per-phase
+      // interval scales at its reset seam in the boss update, and the cap at its check.
+      ? { phase: 1, transitionsDone: 0, roar: null, addTimer: BOSS.addFirstAt * dif.bossAddIntervalMult, attackCount: 0, isNextRadial: false, burstParity: 0 }
       : null,
   };
 }
@@ -213,9 +215,10 @@ interface RoomLoad {
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
 function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number, difficulty: Difficulty): PlannedUnit[] {
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
-  // Studio gate §2: the mode multiplier applies AFTER the baseline budget is summed
-  // (floor × biome × party), rounded to the nearest 0.5 — standard passes through exact.
-  let budget = difficultyThreatBudget(floorThreat(floor) * pressure.budgetMult * coopThreatMult(players), difficulty);
+  // Studio gate §2: the mode multiplier applies AFTER the authored budget is summed
+  // (floor × biome), rounded to the nearest 0.5 — standard passes through exact. Party
+  // scaling (§4) is a separate axis and multiplies on top of the mode budget.
+  let budget = difficultyThreatBudget(floorThreat(floor) * pressure.budgetMult, difficulty) * coopThreatMult(players);
   const maxComplexPerRoom = DIFFICULTIES[difficulty].maxComplexPerRoom;
   const roster = floorRoster(floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
@@ -310,7 +313,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
   }
 
   const plan = planFloorUnits(rng, floor, roomCount, players, difficulty);
-  const cap = difficultyActiveCap(activeThreatCap(floor) * coopThreatMult(players), difficulty);
+  const cap = difficultyActiveCap(activeThreatCap(floor), difficulty) * coopThreatMult(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;

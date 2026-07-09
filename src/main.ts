@@ -7,6 +7,7 @@ import { settings } from "./game/settings.js";
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
+import { bindUiScale } from "./ui/settings.js";
 import type { Multiplayer } from "./net/multiplayer.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 
@@ -25,6 +26,7 @@ if (devMode !== null) {
 }
 
 async function bootNormal() {
+  bindUiScale(); // persisted HUD/overlay scale, applied before anything renders
   // The single online entry point. With no VITE_CONVEX_URL this stays null and the
   // entire multiplayer/identity layer is inert — solo play is unaffected.
   const client = CONVEX_URL ? new ConvexClient(CONVEX_URL, { unsavedChangesWarning: false }) : null;

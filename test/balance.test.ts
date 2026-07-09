@@ -24,7 +24,7 @@ import { generateDungeon } from "../src/sim/dungeon.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
   DIFFICULTIES, DIFFICULTY_IDS, DEFAULT_DIFFICULTY, isDifficulty,
-  difficultyThreatBudget, difficultyActiveCap,
+  difficultyThreatBudget, difficultyActiveCap, difficultyBossAddCap,
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
 } from "../src/sim/balance.js";
@@ -560,6 +560,66 @@ function measureSkeletonCommit(difficulty: Difficulty): { tellTicks: number; coo
   return { tellTicks: -1, cooldown: -1 };
 }
 
+function measureFocusedTtkTiered(kind: EnemyKind, tier: "brute" | "elite", floor: number, difficulty: Difficulty): number {
+  // Like measureFocusedTtk, but the target carries a variety tier (the dev spawner only
+  // makes standard-tier bodies).
+  const w = createWorld(0xF0C05, floor, { isSandbox: true, difficulty });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  acquireWeaponInWorld(w, LOCAL_ID, "pistol");
+  const target = createEnemy(kind, p.x + 140, p.y, floor, w.rng, w.nextEnemyId++, { tier, difficulty });
+  w.enemies.push(target);
+  let ticks = 0;
+  while (!target.dead && ticks < 60 * 20) {
+    const aim = Math.atan2(target.y - p.y, target.x - p.x);
+    step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+    ticks++;
+  }
+  return ticks * DT;
+}
+
+function measureBossIdleCooldown(difficulty: Difficulty): number {
+  // The cooldown bossBeginAttack re-arms with as the first windup starts (P1 authored 3.2s).
+  const w = createWorld(0xB0551, 5, { isSandbox: true, difficulty });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  const boss = devSpawnEnemy(w, "boss", p.x + 120, p.y);
+  for (let t = 0; t < 60 * 6; t++) {
+    step(w, idle(t));
+    if (boss.attack.phase !== "none") return boss.attack.cooldown;
+  }
+  return -1;
+}
+
+function measureGlobSpeed(difficulty: Difficulty): number {
+  // The spitter's first glob, straight off the ONE enemy-projectile seam (authored 300px/s).
+  const w = createWorld(0x510B, 4, { isSandbox: true, difficulty });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  devSpawnEnemy(w, "spitter", p.x + 260, p.y);
+  for (let t = 0; t < 60 * 6; t++) {
+    step(w, idle(t));
+    const glob = w.bullets.find((b) => !b.friendly);
+    if (glob) return Math.hypot(glob.vx, glob.vy);
+  }
+  return -1;
+}
+
+function measureReinforceStagger(difficulty: Difficulty): number {
+  // Clear the field each tick so the living threat always has room under the cap, step a
+  // deep floor until the first pending reinforcement releases, then read the re-armed
+  // wave stagger (authored 0.9s ÷ biome rate, × the mode's interval knob).
+  const w = createWorld(0xCA9, 8, { difficulty });
+  w.isGodMode = true;
+  for (let t = 0; t < 60 * 30; t++) {
+    for (const e of w.enemies) if (e.kind !== "boss" && !e.dead) plantBullet(w, e.x, e.y, 999, 30);
+    const pendingBefore = w.pendingSpawns.length;
+    step(w, idle(t));
+    if (pendingBefore > 0 && w.pendingSpawns.length < pendingBefore) return w.spawnReleaseCd;
+  }
+  return -1;
+}
+
 function measureExplosiveProps(difficulty: Difficulty, seeds: number): number {
   let n = 0;
   for (let i = 0; i < seeds; i++) {
@@ -601,64 +661,47 @@ function difficultyGates(): void {
     DIFFICULTY_IDS.every((id) => isDifficulty(id))
     && !isDifficulty("CASUAL") && !isDifficulty("easy") && !isDifficulty("") && !isDifficulty(1) && !isDifficulty(null));
   const c = DIFFICULTIES.casual, s = DIFFICULTIES.standard, b = DIFFICULTIES.brutal;
-  check("casual row: HP .90/.90, threat .80, cap .80, cd 1.15, speed .95, hazards .65, complex 1, hearts 1.35, boss hearts +2, revive 1.20s/3HP, downs unlimited",
-    c.enemyHpMult === 0.90 && c.bossHpMult === 0.90 && c.threatBudgetMult === 0.80 && c.activeCapMult === 0.80
-    && c.attackCdMult === 1.15 && c.enemySpeedMult === 0.95 && c.hazardMult === 0.65 && c.maxComplexPerRoom === 1
-    && c.heartMult === 1.35 && c.bossChestHearts === 2 && c.reviveChannel === 1.20 && c.reviveHp === 3
+  check("casual row: HP 1.00, budget .80, cap .85, cd 1.15, reinforce 1.25, boss adds 1.20/-1, projectiles .90, hazards .65, complex 1, hearts 1.25, +2 boss hearts, revive 1.20s/3HP, downs unlimited",
+    c.enemyHpMult === 1 && c.bossHpMult === 1 && c.threatBudgetMult === 0.80 && c.activeCapMult === 0.85
+    && c.attackCdMult === 1.15 && c.reinforceIntervalMult === 1.25 && c.bossAddIntervalMult === 1.20 && c.bossAddCapDelta === -1
+    && c.projectileSpeedMult === 0.90 && c.hazardMult === 0.65 && c.maxComplexPerRoom === 1
+    && c.heartMult === 1.25 && c.bossChestHearts === 2 && c.reviveChannel === 1.20 && c.reviveHp === 3
     && c.floorDownLimit === Number.POSITIVE_INFINITY);
-  check("standard row is the exact x1.0 authored baseline (complex 2, hearts x1, +1 boss heart, 1.50s/2HP revive, 3 downs/floor)",
+  check("standard row is the exact x1.0 authored baseline (complex 2, +1 boss heart, 1.50s/2HP revive, 3 downs/floor)",
     s.enemyHpMult === 1 && s.bossHpMult === 1 && s.threatBudgetMult === 1 && s.activeCapMult === 1
-    && s.attackCdMult === 1 && s.enemySpeedMult === 1 && s.hazardMult === 1 && s.maxComplexPerRoom === 2
+    && s.attackCdMult === 1 && s.reinforceIntervalMult === 1 && s.bossAddIntervalMult === 1 && s.bossAddCapDelta === 0
+    && s.projectileSpeedMult === 1 && s.hazardMult === 1 && s.maxComplexPerRoom === 2
     && s.heartMult === 1 && s.bossChestHearts === 1 && s.reviveChannel === 1.50 && s.reviveHp === 2
     && s.floorDownLimit === 3);
-  check("brutal row: HP 1.12, boss 1.15, threat 1.25, cap 1.15, cd .90, speed 1.05, hazards 1.30, complex 2, hearts .75, +1 boss heart, revive 1.80s/2HP, 2 downs/floor",
-    b.enemyHpMult === 1.12 && b.bossHpMult === 1.15 && b.threatBudgetMult === 1.25 && b.activeCapMult === 1.15
-    && b.attackCdMult === 0.90 && b.enemySpeedMult === 1.05 && b.hazardMult === 1.30 && b.maxComplexPerRoom === 2
-    && b.heartMult === 0.75 && b.bossChestHearts === 1 && b.reviveChannel === 1.80 && b.reviveHp === 2
+  check("brutal row: HP 1.00, budget 1.20, cap 1.15, cd .85, reinforce .85, boss adds .85/+1, projectiles 1.10, hazards 1.30, complex 2, hearts .80, +1 boss heart, revive 1.80s/2HP, 2 downs/floor",
+    b.enemyHpMult === 1 && b.bossHpMult === 1 && b.threatBudgetMult === 1.20 && b.activeCapMult === 1.15
+    && b.attackCdMult === 0.85 && b.reinforceIntervalMult === 0.85 && b.bossAddIntervalMult === 0.85 && b.bossAddCapDelta === 1
+    && b.projectileSpeedMult === 1.10 && b.hazardMult === 1.30 && b.maxComplexPerRoom === 2
+    && b.heartMult === 0.80 && b.bossChestHearts === 1 && b.reviveChannel === 1.80 && b.reviveHp === 2
     && b.floorDownLimit === 2);
   check("every mode has a one-sentence blurb for the run-setup UI",
     DIFFICULTY_IDS.every((id) => DIFFICULTIES[id].blurb.length > 0));
 
-  section("studio gate §1/§8: STANDARD reproduces the authored baseline exactly (identity proof)");
+  section("studio gate §1: EVERY mode reproduces the authored HP/speed/damage tables (focused TTK stays authored)");
   {
     const kinds: Array<Exclude<EnemyKind, "boss">> = ["slime", "bat", "skeleton", "ghost", "spitter"];
     let isIdentity = true;
-    for (const kind of kinds) {
-      for (let f = 1; f <= 10; f++) {
-        const e = createEnemy(kind, 0, 0, f, new Rng(1), 0, { difficulty: "standard" });
-        if (e.hp !== enemyHpForFloor(kind, f) || e.speed !== enemySpeedForFloor(kind, f)) isIdentity = false;
+    for (const id of DIFFICULTY_IDS) {
+      for (const kind of kinds) {
+        for (let f = 1; f <= 10; f++) {
+          const e = createEnemy(kind, 0, 0, f, new Rng(1), 0, { difficulty: id });
+          if (e.hp !== enemyHpForFloor(kind, f) || e.speed !== enemySpeedForFloor(kind, f)) isIdentity = false;
+        }
       }
     }
-    check("standard enemy HP + speed == the exact §3 tables for every kind x floor", isIdentity);
-    check("standard F5 boss HP == the 900 calibration",
-      createEnemy("boss", 0, 0, 5, new Rng(1), 0, { difficulty: "standard" }).hp === bossHpForFloor(5));
-    check("standard threat budget/cap pass through EXACT (no rounding of the baseline)",
-      difficultyThreatBudget(11.4, "standard") === 11.4 && difficultyActiveCap(9, "standard") === 9);
-  }
-
-  section("studio gate §1/§3: exact deterministic HP/speed deltas (single rounding pass)");
-  {
+    check("enemy HP + speed == the exact §3 tables for every kind x floor x MODE", isIdentity);
     const bossHp = (d: Difficulty) => createEnemy("boss", 0, 0, 5, new Rng(1), 0, { difficulty: d }).hp;
-    check("F5 Slime King HP 810 / 900 / 1040 (the spec §3 row, exactly)",
-      bossHp("casual") === 810 && bossHp("standard") === 900 && bossHp("brutal") === 1040,
+    check("F5 boss HP is the SAME 900 calibration in every mode (no mode HP scaling)",
+      bossHp("casual") === 900 && bossHp("standard") === 900 && bossHp("brutal") === 900,
       `${bossHp("casual")}/${bossHp("standard")}/${bossHp("brutal")}`);
-    const skelHp = (d: Difficulty) => createEnemy("skeleton", 0, 0, 5, new Rng(1), 0, { difficulty: d }).hp;
-    check("F5 skeleton HP 10 / 12 / 13 (0.90x inside the single unrounded pass: 11.64 -> 10.48 -> 10)",
-      skelHp("casual") === 10 && skelHp("standard") === 12 && skelHp("brutal") === 13,
-      `${skelHp("casual")}/${skelHp("standard")}/${skelHp("brutal")}`);
     const bruteHp = (d: Difficulty) => createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute", difficulty: d }).hp;
-    check("F4 brute HP 22 / 25 / 28", bruteHp("casual") === 22 && bruteHp("standard") === 25 && bruteHp("brutal") === 28,
-      `${bruteHp("casual")}/${bruteHp("standard")}/${bruteHp("brutal")}`);
-    const eliteHp = (d: Difficulty) => createEnemy("spitter", 0, 0, 6, new Rng(1), 0, { tier: "elite", difficulty: d }).hp;
-    check("F6 elite HP 10 / 11 / 12", eliteHp("casual") === 10 && eliteHp("standard") === 11 && eliteHp("brutal") === 12,
-      `${eliteHp("casual")}/${eliteHp("standard")}/${eliteHp("brutal")}`);
-    const slimeSpeed = (d: Difficulty) => createEnemy("slime", 0, 0, 1, new Rng(1), 0, { difficulty: d }).speed;
-    check("F1 slime speed 40 / 42 / 44 (the .95/1.05 knob inside the rounding pass)",
-      slimeSpeed("casual") === 40 && slimeSpeed("standard") === 42 && slimeSpeed("brutal") === 44,
-      `${slimeSpeed("casual")}/${slimeSpeed("standard")}/${slimeSpeed("brutal")}`);
-    const bossSpeed = (d: Difficulty) => createEnemy("boss", 0, 0, 5, new Rng(1), 0, { difficulty: d }).speed;
-    check("boss speed/cadence never scales with mode (per-boss §3 pressure contract)",
-      bossSpeed("casual") === bossSpeed("standard") && bossSpeed("standard") === bossSpeed("brutal"));
+    check("tier HP identical in every mode (F4 brute 25)",
+      bruteHp("casual") === 25 && bruteHp("standard") === 25 && bruteHp("brutal") === 25);
     const touch = (d: Difficulty) => [
       createEnemy("slime", 0, 0, 5, new Rng(1), 0, { difficulty: d }).touchDamage,
       createEnemy("skeleton", 0, 0, 5, new Rng(1), 0, { tier: "brute", difficulty: d }).touchDamage,
@@ -666,9 +709,11 @@ function difficultyGates(): void {
     ].join(",");
     check("authored damage integers identical in every mode (no blanket damage multiplier)",
       touch("casual") === touch("standard") && touch("standard") === touch("brutal"), touch("standard"));
+    check("standard threat budget/cap pass through EXACT (no rounding of the baseline)",
+      difficultyThreatBudget(11.4, "standard") === 11.4 && difficultyActiveCap(9, "standard") === 9);
   }
 
-  section("studio gate §1: commitment pacing knob (cooldown only; the tell is untouched)");
+  section("studio gate §1: pacing knobs (idle CDs, reinforcement waves, boss adds, projectiles)");
   {
     const casual = measureSkeletonCommit("casual");
     const standard = measureSkeletonCommit("standard");
@@ -676,24 +721,49 @@ function difficultyGates(): void {
     check("the lunge telegraph is tick-identical in every mode",
       casual.tellTicks > 0 && casual.tellTicks === standard.tellTicks && standard.tellTicks === brutal.tellTicks,
       `tell=${casual.tellTicks}/${standard.tellTicks}/${brutal.tellTicks} ticks`);
-    check("the re-arm cooldown carries the 1.15x / 1.00x / 0.90x knob (2.3s / 2.0s / 1.8s)",
-      Math.abs(casual.cooldown - 2.3) < 1e-9 && Math.abs(standard.cooldown - 2.0) < 1e-9 && Math.abs(brutal.cooldown - 1.8) < 1e-9,
+    check("the enemy re-arm cooldown carries the 1.15x / 1.00x / 0.85x knob (2.3s / 2.0s / 1.7s)",
+      Math.abs(casual.cooldown - 2.3) < 1e-9 && Math.abs(standard.cooldown - 2.0) < 1e-9 && Math.abs(brutal.cooldown - 1.7) < 1e-9,
       `${casual.cooldown.toFixed(2)}/${standard.cooldown.toFixed(2)}/${brutal.cooldown.toFixed(2)}`);
+    const bossCd = { casual: measureBossIdleCooldown("casual"), standard: measureBossIdleCooldown("standard"), brutal: measureBossIdleCooldown("brutal") };
+    check("the BOSS idle attack CD carries the same knob (P1 3.68s / 3.2s / 2.72s)",
+      Math.abs(bossCd.casual - 3.2 * 1.15) < 1e-9 && Math.abs(bossCd.standard - 3.2) < 1e-9 && Math.abs(bossCd.brutal - 3.2 * 0.85) < 1e-9,
+      `${bossCd.casual.toFixed(2)}/${bossCd.standard.toFixed(2)}/${bossCd.brutal.toFixed(2)}`);
+    const glob = { casual: measureGlobSpeed("casual"), standard: measureGlobSpeed("standard"), brutal: measureGlobSpeed("brutal") };
+    check("enemy projectile speed carries 0.90x / 1.00x / 1.10x (270 / 300 / 330 px/s globs)",
+      Math.abs(glob.casual - 270) < 1e-6 && Math.abs(glob.standard - 300) < 1e-6 && Math.abs(glob.brutal - 330) < 1e-6,
+      `${glob.casual.toFixed(0)}/${glob.standard.toFixed(0)}/${glob.brutal.toFixed(0)}`);
+    const wave = { casual: measureReinforceStagger("casual"), standard: measureReinforceStagger("standard"), brutal: measureReinforceStagger("brutal") };
+    check("reinforcement wave stagger carries 1.25x / 1.00x / 0.85x (1.125s / 0.9s / 0.765s on F8)",
+      Math.abs(wave.casual - 0.9 * 1.25) < 1e-9 && Math.abs(wave.standard - 0.9) < 1e-9 && Math.abs(wave.brutal - 0.9 * 0.85) < 1e-9,
+      `${wave.casual.toFixed(3)}/${wave.standard.toFixed(3)}/${wave.brutal.toFixed(3)}`);
+    check("boss add caps shift -1/0/+1 and never drop below 2 (P1 cap 5 -> 4/5/6; P3 cap 7 -> 6/7/8; zero slot stays zero)",
+      difficultyBossAddCap(5, "casual") === 4 && difficultyBossAddCap(5, "standard") === 5 && difficultyBossAddCap(5, "brutal") === 6
+      && difficultyBossAddCap(7, "casual") === 6 && difficultyBossAddCap(7, "brutal") === 8
+      && difficultyBossAddCap(2, "casual") === 2 && difficultyBossAddCap(0, "casual") === 0);
+    const firstAdd = (d: Difficulty) => createEnemy("boss", 0, 0, 5, new Rng(1), 0, { difficulty: d }).boss!.addTimer;
+    check("the boss's first-add delay carries the add-interval knob (5.4s / 4.5s / 3.825s)",
+      Math.abs(firstAdd("casual") - 4.5 * 1.2) < 1e-9 && Math.abs(firstAdd("standard") - 4.5) < 1e-9 && Math.abs(firstAdd("brutal") - 4.5 * 0.85) < 1e-9,
+      `${firstAdd("casual").toFixed(2)}/${firstAdd("standard").toFixed(2)}/${firstAdd("brutal").toFixed(2)}`);
   }
 
-  section("studio gate §1: mode TTK bands (focused, starter build, F5 median archetype)");
+  section("studio gate §1: focused TTK is IDENTICAL in every mode (authored, not a knob)");
   {
     const casual = measureFocusedTtk("skeleton", 5, "pistol", [], "casual");
     const standard = measureFocusedTtk("skeleton", 5, "pistol", [], "standard");
     const brutal = measureFocusedTtk("skeleton", 5, "pistol", [], "brutal");
-    check("casual normal TTK in the 0.40-1.20s band", casual >= 0.40 && casual <= 1.20, `ttk=${casual.toFixed(2)}s`);
-    check("standard normal TTK in the 0.45-1.40s band", standard >= 0.45 && standard <= 1.40, `ttk=${standard.toFixed(2)}s`);
-    check("brutal normal TTK in the 0.50-1.55s band", brutal >= 0.50 && brutal <= 1.55, `ttk=${brutal.toFixed(2)}s`);
-    check("TTK never decreases with difficulty", casual <= standard && standard <= brutal,
-      `${casual.toFixed(2)} / ${standard.toFixed(2)} / ${brutal.toFixed(2)}`);
+    check("F5 skeleton starter TTK is exactly equal across modes",
+      casual === standard && standard === brutal, `${casual.toFixed(2)} / ${standard.toFixed(2)} / ${brutal.toFixed(2)}`);
+    check("and sits in the authored normal band (0.70-1.40s late-side)",
+      standard >= 0.70 && standard <= 1.40, `ttk=${standard.toFixed(2)}s`);
+    const early = measureFocusedTtk("skeleton", 2, "pistol", [], "standard");
+    check("F2 skeleton starter TTK sits in the authored early band (0.45-0.90s)",
+      early >= 0.45 && early <= 0.90, `ttk=${early.toFixed(2)}s`);
+    const brute = measureFocusedTtkTiered("skeleton", "brute", 4, "standard");
+    check("F4 brute starter TTK sits in the authored brute band (1.8-3.2s)",
+      brute >= 1.8 && brute <= 3.2, `ttk=${brute.toFixed(2)}s`);
     // §7.1 early-melt status, tracked honestly: the F1 starter TTK on the softest archetypes
-    // sits BELOW the §1 standard floor today (pistol 2dmg vs slime 3HP = two shots). The
-    // spec's remedy is an archetype-HP recalibration of the authored baseline (raise HP, not
+    // sits BELOW the §1 0.45s floor today (pistol 2dmg vs slime 3HP = two shots). The spec's
+    // remedy is an archetype-HP recalibration of the authored baseline (raise HP, not
     // bodies) — a §8 telemetry decision deliberately NOT smuggled into the difficulty layer,
     // because it rewrites the §3 tables and the golden oracle. This check pins the current
     // status so the recalibration flips it visibly instead of silently.
@@ -702,28 +772,30 @@ function difficultyGates(): void {
       f1 < 0.45, `ttk=${f1.toFixed(2)}s`);
   }
 
-  section("studio gate §1/§5: measured boss TTK per mode (same median legal build)");
+  section("studio gate §3: measured boss TTK per mode (same median legal build, same HP)");
   {
     const casual = measureBossTtk("pistol", L3("hair_trigger"), "casual");
     const standard = measureBossTtk("pistol", L3("hair_trigger"), "standard");
     const brutal = measureBossTtk("pistol", L3("hair_trigger"), "brutal");
     check("every mode kills the boss with the median build", casual.killed && standard.killed && brutal.killed);
-    check("boss TTK orders casual < standard < brutal",
-      casual.seconds < standard.seconds && standard.seconds < brutal.seconds,
-      `${casual.seconds.toFixed(1)}s / ${standard.seconds.toFixed(1)}s / ${brutal.seconds.toFixed(1)}s`);
     check("standard median-build boss TTK holds the §3 35-50s row",
       standard.seconds >= 35 && standard.seconds <= 50, `ttk=${standard.seconds.toFixed(1)}s`);
+    check("casual/brutal TTK stays inside the same authored 35-50s gate (mode = pressure, not HP)",
+      casual.seconds >= 35 && casual.seconds <= 50 && brutal.seconds >= 35 && brutal.seconds <= 50,
+      `${casual.seconds.toFixed(1)}s / ${brutal.seconds.toFixed(1)}s`);
     const highCasual = measureBossTtk("sawnoff", [...L3("deadeye"), "glass_cannon"], "casual");
     check("casual keeps the anti-burst floor: both 1.2s roars still gate even a high roll",
       highCasual.killed && highCasual.seconds >= 2 * BOSS.roarDuration + 2, `ttk=${highCasual.seconds.toFixed(1)}s`);
   }
 
-  section("studio gate §2: mode budget (round-to-0.5 after summing) + cap (round up)");
+  section("studio gate §2: mode budget (x after summing, round to 0.5) + cap (floor/min6, ceil/max18)");
   {
     check("casual budget: 11.4 x 0.80 = 9.12 -> 9.0 (nearest half)", difficultyThreatBudget(11.4, "casual") === 9.0);
-    check("brutal budget: 11.4 x 1.25 = 14.25 -> 14.5 (nearest half)", difficultyThreatBudget(11.4, "brutal") === 14.5);
-    check("casual cap rounds UP: 9 x 0.80 = 7.2 -> 8", difficultyActiveCap(9, "casual") === 8);
-    check("brutal cap rounds UP: 9 x 1.15 = 10.35 -> 11", difficultyActiveCap(9, "brutal") === 11);
+    check("brutal budget: 11.4 x 1.20 = 13.68 -> 13.5 (nearest half)", difficultyThreatBudget(11.4, "brutal") === 13.5);
+    check("casual cap FLOORS with a 6 minimum: 9 x .85 = 7.65 -> 7; 8 x .85 = 6.8 -> 6; never below 6",
+      difficultyActiveCap(9, "casual") === 7 && difficultyActiveCap(8, "casual") === 6 && difficultyActiveCap(6, "casual") === 6);
+    check("brutal cap CEILS with an 18 ceiling: 9 x 1.15 = 10.35 -> 11; 16 x 1.15 = 18.4 -> 18",
+      difficultyActiveCap(9, "brutal") === 11 && difficultyActiveCap(16, "brutal") === 18);
 
     let isBudgetOk = true, isCapOk = true, isCasualComplexOk = true;
     const totals: Record<Difficulty, number> = { casual: 0, standard: 0, brutal: 0 };
@@ -776,11 +848,11 @@ function difficultyGates(): void {
       `${casual} / ${standard} / ${brutal} over 30 seeds`);
   }
 
-  section("studio gate §1: sustain (hearts 1.35x / 1.00x / 0.75x + boss heart reward 2/1/1)");
+  section("studio gate §1: sustain (hearts 1.25x / 1.00x / 0.80x + boss heart reward 2/1/1)");
   {
     const chance = (id: Difficulty) => SUSTAIN.enemyHeartDrop * DIFFICULTIES[id].heartMult;
-    check("enemy heart chance 8.1% / 6% / 4.5%",
-      Math.abs(chance("casual") - 0.081) < 1e-9 && Math.abs(chance("standard") - 0.06) < 1e-9 && Math.abs(chance("brutal") - 0.045) < 1e-9);
+    check("enemy heart chance 7.5% / 6% / 4.8%",
+      Math.abs(chance("casual") - 0.075) < 1e-9 && Math.abs(chance("standard") - 0.06) < 1e-9 && Math.abs(chance("brutal") - 0.048) < 1e-9);
     const hearts: Record<Difficulty, number> = { casual: 0, standard: 0, brutal: 0 };
     for (const id of DIFFICULTY_IDS) hearts[id] = measureHearts(id, 400);
     check("hearts over the same 400 seeded kills are monotone (superset property)",
