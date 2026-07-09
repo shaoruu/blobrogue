@@ -89,7 +89,7 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     const out = new Map<string, PlayerIdentity>();
     for (const conn of room.conns.values()) {
       if (conn.playerId !== null) {
-        out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex, hat: conn.hat, glasses: conn.glasses });
+        out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex, hat: conn.hat, face: conn.face });
       }
     }
     return out;

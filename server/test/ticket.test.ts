@@ -54,8 +54,8 @@ async function main(): Promise<void> {
       ["unicode name", { worldId: "room:WXYZ", name: "\u00e9\u00e8-bl\u00f6b \u2764", colorIndex: 5 }],
       ["color 0 (explicit amber)", { name: "amber", colorIndex: 0 }],
       ["hat only", { name: "Ada", hat: "hat_top" }],
-      ["glasses only", { name: "Ada", glasses: "glasses_shades" }],
-      ["full cosmetic identity", { worldId: "room:ABCD", name: "Ada", colorIndex: 2, hat: "hat_crown", glasses: "glasses_monocle" }],
+      ["face only", { name: "Ada", face: "face_shades" }],
+      ["full cosmetic identity", { worldId: "room:ABCD", name: "Ada", colorIndex: 2, hat: "hat_crown", face: "face_monocle" }],
     ];
     for (const [label, claims] of claimVariants) {
       const fromConvex = await mintGsTicket(secret, "player-1", 120, now, claims);
@@ -74,20 +74,20 @@ async function main(): Promise<void> {
     for (const code of ["abcd", " QQQQ ", "zz99"]) {
       check(`minter and client agree on worldIdForRoomCode(${JSON.stringify(code)})`, worldIdForRoomCode(code) === clientWorldIdForRoomCode(code));
     }
-    const ticket = await mintGsTicket(secret, "player-1", 120, now, { worldId: world, name: "Ada", colorIndex: 2, hat: "hat_top", glasses: "glasses_round" });
+    const ticket = await mintGsTicket(secret, "player-1", 120, now, { worldId: world, name: "Ada", colorIndex: 2, hat: "hat_top", face: "face_round" });
     const res = verifyTicket(cfg, ticket, now);
     check("claimed ticket verifies", res.ok === true, res.reason ?? "");
     check("world claim round-trips", res.worldId === "room:ABCD", `got=${res.worldId}`);
     check("name claim round-trips", res.name === "Ada", `got=${res.name}`);
     check("color claim round-trips", res.colorIndex === 2, `got=${res.colorIndex}`);
     check("hat claim round-trips", res.hat === "hat_top", `got=${res.hat}`);
-    check("glasses claim round-trips", res.glasses === "glasses_round", `got=${res.glasses}`);
+    check("face claim round-trips", res.face === "face_round", `got=${res.face}`);
 
     const bare = await mintGsTicket(secret, "player-1", 120, now);
     const bareRes = verifyTicket(cfg, bare, now);
     check("claimless ticket verifies with NO world (old-format compat -> default world)",
       bareRes.ok === true && bareRes.worldId === undefined && bareRes.name === undefined && bareRes.colorIndex === undefined
-      && bareRes.hat === undefined && bareRes.glasses === undefined);
+      && bareRes.hat === undefined && bareRes.face === undefined);
 
     // The verifier sanitizes names (they render on other players' screens).
     const messy = await mintGsTicket(secret, "player-1", 120, now, { name: "  A\u0000da\n  the   Blob  " });
@@ -103,8 +103,8 @@ async function main(): Promise<void> {
     check("out-of-range color rejects (bad_color)", verifyTicket(cfg, badColor, now).reason === "bad_color");
     const badHat = await mintGsTicket(secret, "player-1", 120, now, { hat: "NOT A TOKEN!" });
     check("malformed hat id rejects (bad_cosmetic)", verifyTicket(cfg, badHat, now).reason === "bad_cosmetic");
-    const longGlasses = await mintGsTicket(secret, "player-1", 120, now, { glasses: "g".repeat(25) });
-    check("oversized glasses id rejects (bad_cosmetic)", verifyTicket(cfg, longGlasses, now).reason === "bad_cosmetic");
+    const longFace = await mintGsTicket(secret, "player-1", 120, now, { face: "f".repeat(25) });
+    check("oversized face id rejects (bad_cosmetic)", verifyTicket(cfg, longFace, now).reason === "bad_cosmetic");
     const unknownHat = await mintGsTicket(secret, "player-1", 120, now, { hat: "hat_from_the_future" });
     const unknownRes = verifyTicket(cfg, unknownHat, now);
     check("well-formed UNKNOWN cosmetic id passes format-only verification (catalog-independent servers)",

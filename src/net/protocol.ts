@@ -140,9 +140,9 @@ export interface SelfWire {
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
-// nm/cl/ht/gl are the verified cosmetic identity from that player's join ticket (name above
-// the blob, chosen blob tint, equipped hat/glasses — all visual-only). All are decode-
-// OPTIONAL with safe fallbacks (nm -> id, cl/ht/gl -> null) so frames from an older server
+// nm/cl/ht/fc are the verified cosmetic identity from that player's join ticket (name above
+// the blob, party color, equipped hat/face — all visual-only). All are decode-
+// OPTIONAL with safe fallbacks (nm -> id, cl/ht/fc -> null) so frames from an older server
 // still decode, and unknown cosmetic ids simply render nothing. rv is the authoritative revive-channel
 // progress on a DOWNED player (seconds) — it drives the reviver-side progress ring; out
 // marks a body past the floor's down limit (teammates stop offering the revive). ab marks
@@ -161,7 +161,7 @@ export interface PlayerWire {
   nm: string;
   cl: number | null;
   ht: string | null; // equipped cosmetic hat id (visual-only; null = the classic blob)
-  gl: string | null; // equipped cosmetic glasses id (visual-only)
+  fc: string | null; // equipped cosmetic face id (visual-only)
 }
 
 // One SEAT in this world, as published on every snapshot REGARDLESS of interest filtering:
@@ -651,7 +651,7 @@ function validateSelfWire(v: unknown): SelfWire {
 function validatePlayerWire(v: unknown): PlayerWire {
   const o = obj(v, "player");
   const id = shortStr(o, "id", 64);
-  // nm/cl/ht/gl are optional (older servers omit them): validate strictly WHEN present, fall
+  // nm/cl/ht/fc are optional (older servers omit them): validate strictly WHEN present, fall
   // back safely when absent — never a decode failure across a version skew.
   let nm = id;
   if (o.nm !== undefined) nm = shortStr(o, "nm", 24);
@@ -659,8 +659,8 @@ function validatePlayerWire(v: unknown): PlayerWire {
   if (o.cl !== undefined && o.cl !== null) cl = intOf(o, "cl", 0, 63);
   let ht: string | null = null;
   if (o.ht !== undefined && o.ht !== null) ht = shortStr(o, "ht", 24);
-  let gl: string | null = null;
-  if (o.gl !== undefined && o.gl !== null) gl = shortStr(o, "gl", 24);
+  let fc: string | null = null;
+  if (o.fc !== undefined && o.fc !== null) fc = shortStr(o, "fc", 24);
   return {
     id,
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
@@ -671,7 +671,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
     ab: boolOf(o, "ab"),
-    nm, cl, ht, gl,
+    nm, cl, ht, fc,
   };
 }
 
@@ -902,9 +902,10 @@ export function applySelfWire(p: PlayerSim, s: SelfWire): void {
 export interface PlayerIdentity {
   name: string | null;
   colorIndex: number | null;
-  // Equipped visual-only cosmetics (optional so pre-cosmetics constructors stay valid).
+  // Equipped visual-only overlay cosmetics (optional so pre-cosmetics constructors stay
+  // valid). Body renders from the party color at launch; titles never ride the wire.
   hat?: string | null;
-  glasses?: string | null;
+  face?: string | null;
 }
 
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
@@ -917,7 +918,7 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
     nm: identity?.name ?? p.id,
     cl: identity?.colorIndex ?? null,
     ht: identity?.hat ?? null,
-    gl: identity?.glasses ?? null,
+    fc: identity?.face ?? null,
   };
 }
 

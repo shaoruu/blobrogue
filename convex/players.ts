@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import { sanitizeEquip, earnedCosmeticsFor } from "./cosmeticsCore";
+import { sanitizeEquip, earnedCosmeticsFor, COSMETIC_SLOTS } from "./cosmeticsCore";
+import type { CosmeticLoadout } from "./cosmeticsCore";
 import { foldBestRun, mergeBestRun, syncIdentity, cleanBuild } from "./leaderboard";
 import type { RunBuild } from "./leaderboard";
 
@@ -12,8 +13,8 @@ export interface Profile {
   name: string;
   // Chosen blob tint (client palette index); null until the player picks one.
   colorIndex: number | null;
-  // Equipped visual-only cosmetics; null slots render the natural blob.
-  cosmetics: { hat: string | null; glasses: string | null };
+  // Equipped visual-only cosmetic loadout; null slots render the classic blob.
+  cosmetics: CosmeticLoadout;
   totalKills: number;
   deepestFloor: number;
   totalCoins: number;
@@ -30,7 +31,12 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
     playerId: doc._id,
     name: doc.name,
     colorIndex: doc.colorIndex ?? null,
-    cosmetics: { hat: doc.cosmetics?.hat ?? null, glasses: doc.cosmetics?.glasses ?? null },
+    cosmetics: {
+      hat: doc.cosmeticLoadout?.hat ?? null,
+      face: doc.cosmeticLoadout?.face ?? null,
+      body: doc.cosmeticLoadout?.body ?? null,
+      title: doc.cosmeticLoadout?.title ?? null,
+    },
     totalKills: doc.totalKills,
     deepestFloor: doc.deepestFloor,
     totalCoins: doc.totalCoins,
@@ -51,28 +57,30 @@ function cleanColor(colorIndex: number | undefined): number | undefined {
   return Math.min(15, Math.max(0, colorIndex));
 }
 
-// The wire shape of an explicit cosmetics pick: per-slot, "none" clears the slot, an id
-// equips it (validated against ownership), absent = "don't touch" (like colorIndex).
-type CosmeticsPick = { hat?: string; glasses?: string };
+// The wire shape of an explicit loadout pick: per-slot, "none" clears the slot, an id
+// equips it (validated against ownership + slot), absent = "don't touch" (like colorIndex).
+type CosmeticsPick = { hat?: string; face?: string; body?: string; title?: string };
+type StoredLoadout = { hat?: string; face?: string; body?: string; title?: string };
 
-// The stored-cosmetics patch for an explicit pick, or undefined when nothing valid changed.
-// Locked/unknown ids are IGNORED (never stored), so a tampered client can't fake-equip.
+// The stored-loadout patch for an explicit pick, or undefined when nothing valid changed.
+// Locked/unknown/mis-slotted ids are IGNORED (never stored), so a tampered client can't
+// fake-equip — ownership + slot validation is the server's authority here.
 function cosmeticsPatch(
   row: Doc<"players">,
   pick: CosmeticsPick | undefined,
-): { hat?: string; glasses?: string } | undefined {
+): StoredLoadout | undefined {
   if (!pick) return undefined;
-  const current = { hat: row.cosmetics?.hat, glasses: row.cosmetics?.glasses };
-  const next = { ...current };
-  for (const slot of ["hat", "glasses"] as const) {
+  const current: StoredLoadout = { ...(row.cosmeticLoadout ?? {}) };
+  const next: StoredLoadout = { ...current };
+  for (const { slot } of COSMETIC_SLOTS) {
     const raw = pick[slot];
     if (raw === undefined) continue;
     if (raw === "none") { delete next[slot]; continue; }
     const valid = sanitizeEquip(slot, raw, row.unlocks);
     if (valid !== undefined) next[slot] = valid;
   }
-  if (next.hat === current.hat && next.glasses === current.glasses) return undefined;
-  return next;
+  const isSame = COSMETIC_SLOTS.every(({ slot }) => next[slot] === current[slot]);
+  return isSame ? undefined : next;
 }
 
 async function findByClientId(ctx: QueryCtx, clientId: string): Promise<Doc<"players"> | null> {
@@ -128,7 +136,7 @@ async function absorbGuestRow(
     gamesPlayed: account.gamesPlayed + guest.gamesPlayed,
     unlocks: [...new Set([...account.unlocks, ...guest.unlocks])],
     ...(account.colorIndex === undefined && guest.colorIndex !== undefined ? { colorIndex: guest.colorIndex } : {}),
-    ...(account.cosmetics === undefined && guest.cosmetics !== undefined ? { cosmetics: guest.cosmetics } : {}),
+    ...(account.cosmeticLoadout === undefined && guest.cosmeticLoadout !== undefined ? { cosmeticLoadout: guest.cosmeticLoadout } : {}),
     // The account row adopts this browser's clientId (when free) so guest play after a
     // sign-out keeps accruing onto the same identity — the first-sign-in semantics.
     ...(account.clientId === undefined ? { clientId: guest.clientId } : {}),
@@ -196,10 +204,10 @@ async function applyAppearance(
   color: number | undefined,
   cosmetics: CosmeticsPick | undefined,
 ): Promise<Doc<"players">> {
-  const patch: { colorIndex?: number; cosmetics?: { hat?: string; glasses?: string } } = {};
+  const patch: { colorIndex?: number; cosmeticLoadout?: StoredLoadout } = {};
   if (color !== undefined && row.colorIndex !== color) patch.colorIndex = color;
-  const nextCosmetics = cosmeticsPatch(row, cosmetics);
-  if (nextCosmetics !== undefined) patch.cosmetics = nextCosmetics;
+  const nextLoadout = cosmeticsPatch(row, cosmetics);
+  if (nextLoadout !== undefined) patch.cosmeticLoadout = nextLoadout;
   if (Object.keys(patch).length === 0) return row;
   await ctx.db.patch(row._id, patch);
   return { ...row, ...patch };
@@ -217,7 +225,12 @@ export const ensurePlayer = mutation({
     clientId: v.string(),
     name: v.string(),
     colorIndex: v.optional(v.number()),
-    cosmetics: v.optional(v.object({ hat: v.optional(v.string()), glasses: v.optional(v.string()) })),
+    cosmetics: v.optional(v.object({
+      hat: v.optional(v.string()),
+      face: v.optional(v.string()),
+      body: v.optional(v.string()),
+      title: v.optional(v.string()),
+    })),
   },
   handler: async (ctx, { clientId, name, colorIndex, cosmetics }) => {
     const color = cleanColor(colorIndex);

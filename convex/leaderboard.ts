@@ -19,7 +19,9 @@ export interface LeaderboardEntry {
   name: string;
   colorIndex: number | null;
   hat: string | null;
-  glasses: string | null;
+  face: string | null;
+  body: string | null;
+  title: string | null;
   floor: number;
   kills: number;
   coins: number;
@@ -35,7 +37,9 @@ function toEntry(doc: Doc<"leaderboard">): LeaderboardEntry {
     name: doc.name,
     colorIndex: doc.colorIndex ?? null,
     hat: doc.hat ?? null,
-    glasses: doc.glasses ?? null,
+    face: doc.face ?? null,
+    body: doc.body ?? null,
+    title: doc.title ?? null,
     floor: doc.floor,
     kills: doc.kills,
     coins: doc.coins,
@@ -76,11 +80,15 @@ export async function foldBestRun(
     .query("leaderboard")
     .withIndex("by_player", (q) => q.eq("playerId", player._id))
     .unique();
+  // The appearance SNAPSHOT: the loadout as worn at record time, separate from the
+  // mutable profile (renames/re-equips only refresh it via syncIdentity, never a join).
   const identity = {
     name: player.name,
     colorIndex: player.colorIndex,
-    hat: player.cosmetics?.hat,
-    glasses: player.cosmetics?.glasses,
+    hat: player.cosmeticLoadout?.hat,
+    face: player.cosmeticLoadout?.face,
+    body: player.cosmeticLoadout?.body,
+    title: player.cosmeticLoadout?.title,
   };
   if (!existing) {
     if (run.floor < 1) return;
@@ -124,14 +132,18 @@ export async function syncIdentity(ctx: MutationCtx, player: Doc<"players">): Pr
   const next = {
     name: player.name,
     colorIndex: player.colorIndex,
-    hat: player.cosmetics?.hat,
-    glasses: player.cosmetics?.glasses,
+    hat: player.cosmeticLoadout?.hat,
+    face: player.cosmeticLoadout?.face,
+    body: player.cosmeticLoadout?.body,
+    title: player.cosmeticLoadout?.title,
   };
   if (
     existing.name !== next.name ||
     existing.colorIndex !== next.colorIndex ||
     existing.hat !== next.hat ||
-    existing.glasses !== next.glasses
+    existing.face !== next.face ||
+    existing.body !== next.body ||
+    existing.title !== next.title
   ) {
     await ctx.db.patch(existing._id, next);
   }

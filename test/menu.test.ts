@@ -91,7 +91,7 @@ function byClass(overlay: ShimNode, cls: string): ShimNode[] {
 function makeProfile(overrides: Partial<ProfileDoc> = {}): ProfileDoc {
   return {
     playerId: "player-1", name: "blob", colorIndex: 2,
-    cosmetics: { hat: null, glasses: null },
+    cosmetics: { hat: null, face: null, body: null, title: null },
     totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0, unlocks: [], isAccount: false,
     ...overrides,
   };
@@ -101,12 +101,12 @@ const PROFILE = makeProfile();
 
 const LB_ENTRIES: LeaderboardEntryDoc[] = [
   {
-    playerId: "p-ada", name: "Ada", colorIndex: 3, hat: "hat_crown", glasses: null,
+    playerId: "p-ada", name: "Ada", colorIndex: 3, hat: "hat_crown", face: null, body: "body_pink", title: "title_depth_diver",
     floor: 12, kills: 230, coins: 90, durationMs: 754_000,
     weapons: ["pistol", "shotgun"], items: [{ id: "hair_trigger", count: 2 }], achievedAt: 1,
   },
   {
-    playerId: "p-max", name: "MaximumLengthBlobXX!", colorIndex: 5, hat: null, glasses: "glasses_shades",
+    playerId: "p-max", name: "MaximumLengthBlobXX!", colorIndex: 5, hat: null, face: "face_shades", body: null, title: null,
     floor: 9, kills: 100, coins: 40, durationMs: 300_000,
     weapons: ["pistol"], items: [], achievedAt: 2,
   },
@@ -296,6 +296,7 @@ async function main(): Promise<void> {
     check("build shows the run's weapons by display name", all.includes(WEAPONS.pistol.name) && all.includes(WEAPONS.shotgun.name));
     const itemName = itemById("hair_trigger")?.name ?? "";
     check("build shows blessings with levels", itemName.length > 0 && all.includes(`${itemName} Lv2`));
+    check("the SNAPSHOTTED worn title shows on the profile", all.includes("Depth Diver"));
     check("a back action exists", buttonsOf(overlay).some((b) => b === "back"));
     check("no account/private fields leak (name/appearance/run data only)", !all.includes("@") && !all.toLowerCase().includes("email"));
     // Return to the title so this menu's Escape handler is torn down — the shim shares one
@@ -362,7 +363,7 @@ async function main(): Promise<void> {
 
   section("sign-out flushes prior-user data (no stale profile leaks into the guest render)");
   {
-    const { session } = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", glasses: null }, deepestFloor: 9, unlocks: ["hat_crown"] }) });
+    const { session } = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", face: null, body: null, title: null }, deepestFloor: 9, unlocks: ["hat_crown"] }) });
     await session.login("someone");
     check("profile cached after login", session.profile !== null && session.profile.deepestFloor === 9);
     check("profile cosmetics adopted while cached", session.cosmetics.hat === "hat_top");
@@ -387,17 +388,26 @@ async function main(): Promise<void> {
     check("signed-in states what the account holds", textOf(signed.overlay).includes("saved to this account"));
   }
 
-  section("the closet: equipped/locked states from real ownership; locked carries its hint");
+  section("the wardrobe: every SHIPPED slot, equipped/locked states from real ownership");
   {
     const { menu, overlay, session } = makeMenu();
     await menu.showProfile();
     await settle();
     const states = byClass(overlay, "cos-state").map(textOf);
-    check("the default (none) slots read EQUIPPED", states.filter((s) => s === "EQUIPPED").length === 2, states.join("|"));
-    check("earned items read LOCKED with zero unlocks", states.filter((s) => s === "LOCKED").length === 3, states.join("|"));
+    check("the default (none) slots read EQUIPPED (hat/face/title)", states.filter((s) => s === "EQUIPPED").length === 3, states.join("|"));
+    check("earned items read LOCKED with zero unlocks", states.filter((s) => s === "LOCKED").length === 5, states.join("|"));
     const names = byClass(overlay, "cos-name").map(textOf);
     check("starter hats offered", names.includes("Top Hat") && names.includes("Party Cone"));
     check("earned items visible (aspirational, never hidden)", names.includes("Crown") && names.includes("Halo") && names.includes("Monocle"));
+    check("earned TITLES ship as locked honors", names.includes("Depth Diver") && names.includes("Blob Slayer"));
+    check("the authored body palette renders as swatches", byClass(overlay, "swatch").length > 0);
+    // One swatch pick drives BOTH color layers at launch (party color + body item),
+    // while the model keeps them separate for future party-assigned colors.
+    session.setColorIndex(3);
+    check("a swatch pick records the body cosmetic", session.cosmetics.body === "body_pink", String(session.cosmetics.body));
+    check("...and the party color", session.colorIndex === 3);
+    session.setColorIndex(0);
+    check("slot 0 (classic amber) clears the body slot", session.cosmetics.body === null);
 
     // Equipping a starter moves the EQUIPPED chip (session state drives the render).
     session.setCosmetic("hat", "hat_top");

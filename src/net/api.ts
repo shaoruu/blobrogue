@@ -16,8 +16,8 @@ export interface ProfileDoc {
   name: string;
   // Chosen blob tint (client palette index); null until the player picks one.
   colorIndex: number | null;
-  // Equipped visual-only cosmetics; null slots render the natural blob.
-  cosmetics: { hat: string | null; glasses: string | null };
+  // Equipped visual-only cosmetic loadout; null slots render the classic blob.
+  cosmetics: { hat: string | null; face: string | null; body: string | null; title: string | null };
   totalKills: number;
   deepestFloor: number;
   totalCoins: number;
@@ -37,7 +37,9 @@ export interface LeaderboardEntryDoc {
   name: string;
   colorIndex: number | null;
   hat: string | null;
-  glasses: string | null;
+  face: string | null;
+  body: string | null;
+  title: string | null;
   floor: number;
   kills: number;
   coins: number;
@@ -53,8 +55,8 @@ export type RunBuildArg = {
   items: Array<{ id: string; count: number }>;
 };
 
-// Explicit per-slot cosmetic picks for ensurePlayer ("none" clears a slot; absent = keep).
-export type CosmeticsArg = { hat?: string; glasses?: string };
+// Explicit per-slot loadout picks for ensurePlayer ("none" clears a slot; absent = keep).
+export type CosmeticsArg = { hat?: string; face?: string; body?: string; title?: string };
 
 export interface CurrentUserDoc {
   name: string | null;

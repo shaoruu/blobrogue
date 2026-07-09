@@ -11,10 +11,12 @@ import { cosmeticOverlay } from "../game/cosmeticArt.js";
 // streams in — a placeholder disc renders until then), and the animation loop parks itself
 // the moment the canvas leaves the document (menu screens swap via replaceChildren).
 
+// The EFFECTIVE render look: callers resolve the body palette (cosmetic body item or the
+// party-color fallback) into colorIndex before handing it here.
 export interface BlobLook {
   colorIndex: number | null;
   hat: string | null;
-  glasses: string | null;
+  face: string | null;
 }
 
 // One shared sprite loader for every preview (the browser cache makes this free once the
@@ -68,7 +70,7 @@ export function createBlobPreview(initial: BlobLook, size = 96): BlobPreview {
       g.arc(0, 0, drawSize * 0.3, 0, 6.28);
       g.fill();
     }
-    for (const id of [look.glasses, look.hat]) {
+    for (const id of [look.face, look.hat]) {
       if (id === null) continue;
       const overlay = cosmeticOverlay(id);
       if (overlay) g.drawImage(overlay, -half, -half, drawSize, drawSize);

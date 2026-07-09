@@ -9,10 +9,11 @@ import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
-import { cosmeticsForSlot, cosmeticById, isCosmeticOwned } from "../game/cosmetics.js";
-import type { CosmeticSlot, CosmeticDef } from "../game/cosmetics.js";
+import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
+import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { cosmeticOverlay } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
+import type { BlobLook } from "./blobPreview.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
@@ -68,6 +69,24 @@ function fmtClock(seconds: number): string {
 export interface TitleFocus {
   dest?: "online" | "leaderboard" | "profile" | "settings";
   lbRow?: number;
+}
+
+// The render look for a loadout: the cosmetic body palette wins the tint, the PARTY color
+// is the fallback (and always keeps owning name/minimap/roster identity elsewhere).
+function lookOf(loadout: CosmeticLoadout, partyColorIndex: number | null): BlobLook {
+  const hasTint = loadout.body !== null || partyColorIndex !== null;
+  return {
+    colorIndex: hasTint ? bodyPaletteIndex(loadout.body, partyColorIndex ?? 0) : null,
+    hat: loadout.hat,
+    face: loadout.face,
+  };
+}
+
+// A worn title's display text (quoted), or empty for the bare slot.
+function titleTextOf(title: string | null): string {
+  if (title === null) return "";
+  const def = cosmeticById(title);
+  return `\u201c${def?.name ?? title}\u201d`;
 }
 
 function weaponName(id: string): string {
@@ -253,7 +272,7 @@ export class Menu {
   // no competing click target). Fixed height; the stat line hydrates in place.
   private youStrip(): { strip: HTMLElement; setProfile: (p: ProfileDoc | null, isError?: boolean) => void } {
     const strip = el("div", "you-strip");
-    const preview = createBlobPreview({ colorIndex: this.session.colorIndex, ...this.session.cosmetics }, 48);
+    const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 48);
     const info = el("div", "you-info");
     const name = el("span", "you-name", this.session.name || "blob");
     const stats = el("span", "you-stats skel", "\u2014");
@@ -266,7 +285,7 @@ export class Menu {
         stats.textContent = p.gamesPlayed > 0
           ? `deepest ${p.deepestFloor} \u00b7 ${p.gamesPlayed} runs`
           : "no runs yet";
-        preview.setLook({ colorIndex: p.colorIndex ?? this.session.colorIndex, hat: p.cosmetics.hat, glasses: p.cosmetics.glasses });
+        preview.setLook(lookOf(p.cosmetics, p.colorIndex ?? this.session.colorIndex));
       } else {
         // No profile row yet is a fresh blob, not a failure; only a thrown fetch is.
         stats.textContent = isError ? "stats unavailable" : "no runs yet";
@@ -533,10 +552,14 @@ export class Menu {
   showPlayerProfile(entry: LeaderboardEntryDoc, onBack: () => void) {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", entry.name.toUpperCase()));
+    // The worn title (a reserved line even when bare — the header never shifts between
+    // titled and untitled players), then the context line.
+    wrap.appendChild(el("p", "worn-title", titleTextOf(entry.title)));
     wrap.appendChild(el("p", "muted", "best run on the global leaderboard"));
 
     const top = el("div", "pp-top");
-    const preview = createBlobPreview({ colorIndex: entry.colorIndex, hat: entry.hat, glasses: entry.glasses }, 96);
+    const look = lookOf({ hat: entry.hat, face: entry.face, body: entry.body, title: entry.title }, entry.colorIndex);
+    const preview = createBlobPreview(look, 96);
     top.appendChild(preview.el);
     const grid = el("div", "profile-grid");
     const stat = (label: string, value: string, isAmber = false) => {
@@ -577,19 +600,24 @@ export class Menu {
     this.bindEscape(onBack);
   }
 
-  // ---- OWN PROFILE + CLOSET -----------------------------------------------------------
+  // ---- OWN PROFILE + WARDROBE ----------------------------------------------------------
   //
-  // The player's own destination: all-time stats plus the character closet — blob color and
-  // the cosmetic slots (hats, glasses) with explicit equipped/owned/locked states. Cosmetics
-  // are visual-only; equipping persists locally at once and onto the profile in the
-  // background (multiplayer identity picks it up at the next ticket mint).
+  // The player's own destination: all-time stats plus the wardrobe — every SHIPPED cosmetic
+  // slot (COSMETIC_SLOTS: body color, hats, face, titles) with explicit equipped/owned/
+  // locked states. Cosmetics are trophies you wear: purely visual, achievement-unlocked,
+  // never currency or power. Equipping persists locally at once and onto the profile in the
+  // background (multiplayer identity picks the overlays up at the next ticket mint). The
+  // wardrobe lives HERE, off the launch menu, by design.
 
   async showProfile() {
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "YOUR BLOB"));
+    // The worn title, reserved even when bare so equipping never shifts the header.
+    const ownTitle = el("p", "worn-title", titleTextOf(this.session.cosmetics.title));
+    wrap.appendChild(ownTitle);
 
     const top = el("div", "pp-top");
-    const preview = createBlobPreview({ colorIndex: this.session.colorIndex, ...this.session.cosmetics }, 96);
+    const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96);
     top.appendChild(preview.el);
     const grid = el("div", "profile-grid");
     const cells = new Map<string, HTMLElement>();
@@ -612,21 +640,26 @@ export class Menu {
           : "offline build \u2014 your closet is saved on this device");
     wrap.appendChild(accountLine);
 
-    // ---- the closet ----
+    // ---- the wardrobe: exactly the shipped slots, in catalog order ----
     const note = el("p", "muted closet-note", "");
-    const syncPreview = () => preview.setLook({ colorIndex: this.session.colorIndex, ...this.session.cosmetics });
-    const previewLook = (look: { colorIndex: number | null; hat: string | null; glasses: string | null }) => preview.setLook(look);
+    const syncPreview = () => {
+      preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+      ownTitle.textContent = titleTextOf(this.session.cosmetics.title);
+    };
+    // A locked pick previews the TENTATIVE loadout on the mirror (visual slots) without
+    // ever equipping it.
+    const previewLoadout = (tentative: CosmeticLoadout) => preview.setLook(lookOf(tentative, this.session.colorIndex));
 
-    wrap.appendChild(this.colorRow(syncPreview));
-
-    const closets: Array<{ slot: CosmeticSlot; title: string; noneLabel: string }> = [
-      { slot: "hat", title: "hats", noneLabel: "Cowboy (classic)" },
-      { slot: "glasses", title: "glasses", noneLabel: "None" },
-    ];
     const syncFns: Array<() => void> = [];
-    for (const c of closets) {
-      wrap.appendChild(el("div", "col-h", c.title));
-      const { rowEl, sync } = this.closetRow(c.slot, c.noneLabel, note, syncPreview, previewLook);
+    for (const slotDef of COSMETIC_SLOTS) {
+      if (slotDef.slot === "body") {
+        // Body color renders as the swatch row (one pick drives the cosmetic body item
+        // AND the party color at launch — see Session.setColorIndex).
+        wrap.appendChild(this.colorRow(syncPreview));
+        continue;
+      }
+      wrap.appendChild(el("div", "col-h", slotDef.label));
+      const { rowEl, sync } = this.closetRow(slotDef.slot, slotDef.noneLabel, note, syncPreview, previewLoadout);
       syncFns.push(sync);
       wrap.appendChild(rowEl);
     }
@@ -662,15 +695,15 @@ export class Menu {
     }
   }
 
-  // One closet row: the empty-slot tile plus a tile per catalog item, with explicit
-  // EQUIPPED / owned / LOCKED states. Locked tiles PREVIEW on the mirror (with the unlock
-  // hint in the reserved note line) but never equip.
+  // One wardrobe row: the empty-slot tile plus a tile per catalog item, with explicit
+  // EQUIPPED / owned / LOCKED states. Locked tiles PREVIEW on the mirror (with the exact
+  // configured unlock condition in the reserved note line) but never equip.
   private closetRow(
     slot: CosmeticSlot,
     noneLabel: string,
     note: HTMLElement,
     syncPreview: () => void,
-    previewLook: (look: { colorIndex: number | null; hat: string | null; glasses: string | null }) => void,
+    previewLoadout: (tentative: CosmeticLoadout) => void,
   ): { rowEl: HTMLElement; sync: () => void } {
     const rowEl = el("div", "closet-row");
     const unlocks = () => this.session.profile?.unlocks ?? [];
@@ -695,17 +728,16 @@ export class Menu {
       const btn = el("button", "cos-tile");
       btn.type = "button";
       const icon = el("span", "cos-icon");
-      if (def) {
-        const art = cosmeticOverlay(def.id);
-        if (art) {
-          const mini = document.createElement("canvas");
-          mini.width = 40; mini.height = 40;
-          const g = mini.getContext("2d");
-          if (g) { g.imageSmoothingEnabled = false; g.drawImage(art, 0, 0, 40, 40); }
-          icon.appendChild(mini);
-        }
+      const art = def ? cosmeticOverlay(def.id) : null;
+      if (art) {
+        const mini = document.createElement("canvas");
+        mini.width = 40; mini.height = 40;
+        const g = mini.getContext("2d");
+        if (g) { g.imageSmoothingEnabled = false; g.drawImage(art, 0, 0, 40, 40); }
+        icon.appendChild(mini);
       } else {
-        icon.textContent = "\u25cf";
+        // Artless slots: titles wear the honor glyph, the empty slot a plain dot.
+        icon.textContent = def?.slot === "title" ? "\u2726" : "\u25cf";
       }
       const name = el("span", "cos-name", label);
       const state = el("span", "cos-state", "");
@@ -713,9 +745,9 @@ export class Menu {
       btn.setAttribute("aria-label", `${slot}: ${label}`);
       btn.addEventListener("click", () => {
         if (def && !isCosmeticOwned(def, unlocks())) {
-          // Locked: preview only, with the honest unlock criterion.
+          // Locked: preview only, exposing the exact configured unlock condition.
           note.textContent = `${def.name} is locked \u2014 ${def.hint ?? "earn it in the depths"} (preview only)`;
-          previewLook({ colorIndex: this.session.colorIndex, ...this.session.cosmetics, [slot]: def.id });
+          previewLoadout({ ...this.session.cosmetics, [slot]: def.id });
           return;
         }
         note.textContent = "";

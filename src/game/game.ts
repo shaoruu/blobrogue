@@ -18,7 +18,8 @@ import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { cosmeticOverlay } from "./cosmeticArt.js";
-import type { EquippedCosmetics } from "./cosmetics.js";
+import { bodyPaletteIndex } from "./cosmetics.js";
+import type { CosmeticLoadout } from "./cosmetics.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
@@ -105,9 +106,10 @@ export interface StartOptions {
   // The player's chosen blob tint (client palette index). Applies to solo + online; classic
   // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
   selfColorIndex?: number | null;
-  // The player's equipped visual-only cosmetics (hat/glasses overlay ids). Solo + online;
-  // never touches the sim — teammates see them via the verified ticket identity instead.
-  selfCosmetics?: EquippedCosmetics | null;
+  // The player's equipped visual-only cosmetic loadout (hat/face overlays + body palette).
+  // Solo + online; never touches the sim — teammates see the overlays via the verified
+  // ticket identity instead, and body renders from the party color at launch.
+  selfCosmetics?: CosmeticLoadout | null;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -451,7 +453,7 @@ export class Game {
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
-  private selfCosmetics: EquippedCosmetics | null = null; // equipped hat/glasses overlays (visual-only)
+  private selfCosmetics: CosmeticLoadout | null = null; // equipped cosmetic loadout (visual-only)
   private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
@@ -4798,7 +4800,7 @@ export class Game {
       ctx.restore();
       // Teammates' verified cosmetic overlays (same transform as their body draw above,
       // which never uses frame sheets — the procedural xf carries the full deform).
-      this.drawCosmetics(r.hat, r.glasses, sx, sy, 52, r.facing, xf, r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1, false);
+      this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1, false);
 
       if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
@@ -4815,18 +4817,21 @@ export class Game {
     }
   }
 
-  // The chosen identity tint for the local blob, or null for the natural amber sprite
-  // (palette slot 0 IS the sprite's own coloring, so it never re-tints).
+  // The body tint for the local blob, or null for the natural amber sprite (palette slot 0
+  // IS the sprite's own coloring, so it never re-tints). The cosmetic body item wins;
+  // otherwise the PARTY color is the fallback — the party color always keeps owning the
+  // name label / minimap / roster identity surfaces regardless.
   private selfTint(): string | null {
-    return this.selfColorIndex !== null && this.selfColorIndex > 0 ? playerColor(this.selfColorIndex) : null;
+    const idx = bodyPaletteIndex(this.selfCosmetics?.body ?? null, this.selfColorIndex ?? 0);
+    return idx > 0 ? playerColor(idx) : null;
   }
 
-  // Draw a blob's equipped cosmetic overlays (hat/glasses) with EXACTLY the body sprite's
+  // Draw a blob's equipped cosmetic overlays (hat/face) with EXACTLY the body sprite's
   // transform so they ride its squash/stretch/bob. `isSheetPlaying` mirrors drawChar's rule:
   // frame sheets bake the deform, so the overlay neutralizes the procedural scale with them.
   // Unknown/absent ids draw nothing — cosmetics are labels, never load-bearing.
-  private drawCosmetics(hat: string | null, glasses: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean) {
-    if (hat === null && glasses === null) return;
+  private drawCosmetics(hat: string | null, face: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean) {
+    if (hat === null && face === null) return;
     const { ctx } = this;
     const half = size / 2;
     ctx.save();
@@ -4834,7 +4839,7 @@ export class Game {
     ctx.translate(cx + xf.ox, cy + xf.oy);
     ctx.rotate(xf.rot);
     ctx.scale(isSheetPlaying ? facing : facing * xf.sx, isSheetPlaying ? 1 : xf.sy);
-    for (const id of [glasses, hat]) {
+    for (const id of [face, hat]) {
       if (id === null) continue;
       const overlay = cosmeticOverlay(id);
       if (overlay) ctx.drawImage(overlay, -half, -half, size, size);
@@ -4860,7 +4865,7 @@ export class Game {
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
     if (this.selfCosmetics) {
-      this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.glasses, psx, psy, 52, this.facing, xf, alpha, !!this.sprites.sheet("hero", clip));
+      this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.face, psx, psy, 52, this.facing, xf, alpha, !!this.sprites.sheet("hero", clip));
     }
     if (!this.isDown) {
       // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)

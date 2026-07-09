@@ -329,7 +329,7 @@ export interface RemotePlayer {
   // Equipped visual-only cosmetics from the verified ticket identity (plain id labels here —
   // the sim never interprets them; the renderer maps ids to overlay art). null = none.
   hat: string | null;
-  glasses: string | null;
+  face: string | null;
   updatedAt: number;
 }
 

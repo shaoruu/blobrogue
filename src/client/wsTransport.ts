@@ -841,7 +841,7 @@ export class WSTransport implements Transport {
         shotSeq: 0,
         colorIndex: p.cl ?? colorIndexFor(p.id),
         hat: p.ht,
-        glasses: p.gl,
+        face: p.fc,
         updatedAt: now,
       };
     });

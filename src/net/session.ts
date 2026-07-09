@@ -2,7 +2,8 @@ import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { ProfileDoc } from "./api.js";
 import type { RunResult } from "../game/game.js";
-import type { CosmeticSlot, EquippedCosmetics } from "../game/cosmetics.js";
+import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
+import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
 const NAME_KEY = "blobrogue.name";
@@ -33,10 +34,11 @@ function readStoredColor(): number | null {
   }
 }
 
-// Locally-picked cosmetics. Per slot: undefined = never picked (adopt the profile's saved
+// Locally-picked loadout. Per slot: undefined = never picked (adopt the profile's saved
 // value), "none" = explicitly cleared, else an equipped id. Mirrors the colorIndex rule:
 // only explicit picks are ever written to the backend.
-type StoredCosmetics = { hat?: string; glasses?: string };
+type StoredCosmetics = { hat?: string; face?: string; body?: string; title?: string };
+const COSMETIC_PICK_SLOTS = ["hat", "face", "body", "title"] as const;
 
 function readStoredCosmetics(): StoredCosmetics {
   try {
@@ -46,8 +48,10 @@ function readStoredCosmetics(): StoredCosmetics {
     if (typeof parsed !== "object" || parsed === null) return {};
     const rec = parsed as Record<string, unknown>;
     const out: StoredCosmetics = {};
-    if (typeof rec.hat === "string") out.hat = rec.hat.slice(0, 24);
-    if (typeof rec.glasses === "string") out.glasses = rec.glasses.slice(0, 24);
+    for (const slot of COSMETIC_PICK_SLOTS) {
+      const v = rec[slot];
+      if (typeof v === "string") out[slot] = v.slice(0, 24);
+    }
     return out;
   } catch {
     return {};
@@ -88,15 +92,15 @@ export class Session {
     this.profile = null;
   }
 
-  // The equipped cosmetics as the renderer consumes them: local explicit picks win, the
+  // The equipped loadout as the renderer consumes it: local explicit picks win, the
   // saved profile fills never-picked slots, "none" resolves to the empty slot.
-  get cosmetics(): EquippedCosmetics {
+  get cosmetics(): CosmeticLoadout {
     const resolve = (slot: CosmeticSlot): string | null => {
       const local = this.cosmeticPicks[slot];
       if (local !== undefined) return local === "none" ? null : local;
       return this.profile?.cosmetics[slot] ?? null;
     };
-    return { hat: resolve("hat"), glasses: resolve("glasses") };
+    return { hat: resolve("hat"), face: resolve("face"), body: resolve("body"), title: resolve("title") };
   }
 
   private persistName(name: string) {
@@ -104,18 +108,27 @@ export class Session {
     try { localStorage.setItem(NAME_KEY, name); } catch { /* ignore */ }
   }
 
+  // One swatch pick sets BOTH color layers at launch: the PARTY color (colorIndex — name
+  // label / minimap / roster identity) and the cosmetic body item. The model keeps them
+  // separate so party-assigned colors can diverge from the worn body palette later.
   setColorIndex(colorIndex: number) {
     this.colorIndex = colorIndex;
     try { localStorage.setItem(COLOR_KEY, String(colorIndex)); } catch { /* ignore */ }
+    const bodyItem = bodyItemForPaletteIndex(colorIndex);
+    this.recordCosmeticPick("body", bodyItem?.id ?? null);
     // Persist the pick onto the profile in the background; the local value already applies.
     if (this.client) void this.login(this.name || "blob").catch(() => {});
+  }
+
+  private recordCosmeticPick(slot: CosmeticSlot, id: string | null) {
+    this.cosmeticPicks = { ...this.cosmeticPicks, [slot]: id ?? "none" };
+    try { localStorage.setItem(COSMETICS_KEY, JSON.stringify(this.cosmeticPicks)); } catch { /* ignore */ }
   }
 
   // Equip a cosmetic (or clear the slot with null). Applies locally immediately; persisted
   // onto the profile in the background exactly like the color pick.
   setCosmetic(slot: CosmeticSlot, id: string | null) {
-    this.cosmeticPicks = { ...this.cosmeticPicks, [slot]: id ?? "none" };
-    try { localStorage.setItem(COSMETICS_KEY, JSON.stringify(this.cosmeticPicks)); } catch { /* ignore */ }
+    this.recordCosmeticPick(slot, id);
     if (this.client) void this.login(this.name || "blob").catch(() => {});
   }
 
@@ -123,12 +136,13 @@ export class Session {
     this.persistName(name);
     if (!this.client) return null;
     const picks: StoredCosmetics = { ...this.cosmeticPicks };
+    const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => picks[slot] !== undefined);
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
       name,
       // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
-      ...(picks.hat !== undefined || picks.glasses !== undefined ? { cosmetics: picks } : {}),
+      ...(hasPicks ? { cosmetics: picks } : {}),
     });
     // A signed-in account may carry picks made on another device; adopt them locally.
     if (this.colorIndex === null && this.profile.colorIndex !== null) {

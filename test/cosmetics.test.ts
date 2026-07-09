@@ -17,8 +17,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import {
-  COSMETICS, cosmeticById, cosmeticsForSlot, isCosmeticOwned, sanitizeEquip,
-  earnedCosmeticsFor, isCosmeticIdFormat,
+  COSMETICS, COSMETIC_SLOTS, cosmeticById, cosmeticsForSlot, isCosmeticOwned, sanitizeEquip,
+  earnedCosmeticsFor, isCosmeticIdFormat, bodyItemForPaletteIndex, bodyPaletteIndex,
 } from "../src/game/cosmetics.js";
 import { hasCosmeticArt } from "../src/game/cosmeticArt.js";
 import { jsonCodec, ProtocolError, buildSnapshot } from "../src/net/protocol.js";
@@ -41,18 +41,38 @@ function section(name: string): void {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function catalogTests(): void {
-  section("catalog integrity: wire-safe ids, honest unlock criteria, art for every entry");
+  section("catalog integrity: shipped slots only, wire-safe ids, honest criteria, art where art is due");
   const ids = COSMETICS.map((c) => c.id);
+  const shipped = new Set(COSMETIC_SLOTS.map((s) => s.slot));
+  check("the shipped slot registry is exactly body/hat/face/title",
+    [...shipped].sort().join(",") === "body,face,hat,title", [...shipped].join(","));
   check("ids are unique", new Set(ids).size === ids.length, ids.join(","));
   check("every id passes the wire/claim format gate", ids.every(isCosmeticIdFormat));
-  check("every entry names a real slot", COSMETICS.every((c) => c.slot === "hat" || c.slot === "glasses"));
+  check("every entry belongs to a SHIPPED slot (the UI only shows the registry)", COSMETICS.every((c) => shipped.has(c.slot)));
   const earned = COSMETICS.filter((c) => c.unlock === "earned");
   check("every EARNED item has a grant criterion (need)", earned.every((c) => c.need !== undefined && Object.keys(c.need).length > 0));
-  check("every EARNED item has a player-facing hint", earned.every((c) => typeof c.hint === "string" && c.hint.length > 0));
-  check("at least one starter hat + starter glasses (no fabricated inventory needed)",
-    cosmeticsForSlot("hat").some((c) => c.unlock === "starter") && cosmeticsForSlot("glasses").some((c) => c.unlock === "starter"));
-  check("every catalog entry has overlay art (nothing ships invisible)", ids.every(hasCosmeticArt), ids.filter((id) => !hasCosmeticArt(id)).join(","));
+  check("every EARNED item exposes its exact condition (hint)", earned.every((c) => typeof c.hint === "string" && c.hint.length > 0));
+  check("at least one starter hat + starter face (no fabricated inventory needed)",
+    cosmeticsForSlot("hat").some((c) => c.unlock === "starter") && cosmeticsForSlot("face").some((c) => c.unlock === "starter"));
+  const overlays = COSMETICS.filter((c) => c.slot === "hat" || c.slot === "face");
+  check("every hat/face entry has overlay art (nothing ships invisible)",
+    overlays.every((c) => hasCosmeticArt(c.id)), overlays.filter((c) => !hasCosmeticArt(c.id)).map((c) => c.id).join(","));
+  const bodies = cosmeticsForSlot("body");
+  check("every body entry maps to an authored palette slot (>0; slot 0 is the default look)",
+    bodies.every((c) => Number.isInteger(c.paletteIndex) && (c.paletteIndex ?? 0) > 0));
+  check("body palette slots are unique", new Set(bodies.map((c) => c.paletteIndex)).size === bodies.length);
+  check("all body colors are starter (the authored palette is free)", bodies.every((c) => c.unlock === "starter"));
+  check("titles are text honors (no art required, earned only)", cosmeticsForSlot("title").every((c) => c.unlock === "earned"));
   check("lookup round-trips", ids.every((id) => cosmeticById(id)?.id === id));
+}
+
+function bodyPaletteTests(): void {
+  section("body palette vs party color: separated in the model, in step at launch");
+  check("palette slot 1 maps to a body item", bodyItemForPaletteIndex(1)?.id === "body_cyan");
+  check("palette slot 0 (classic amber) is the EMPTY body slot", bodyItemForPaletteIndex(0) === undefined);
+  check("a worn body item resolves its own palette slot", bodyPaletteIndex("body_pink", 0) === 3);
+  check("an empty body slot falls back to the PARTY color", bodyPaletteIndex(null, 4) === 4);
+  check("an unknown body id falls back safely", bodyPaletteIndex("body_from_the_future", 2) === 2);
 }
 
 function ownershipTests(): void {
@@ -65,7 +85,7 @@ function ownershipTests(): void {
   check("sanitizeEquip accepts an owned pick", sanitizeEquip(starter.slot, starter.id, []) === starter.id);
   check("sanitizeEquip refuses a LOCKED pick", sanitizeEquip(lockedItem.slot, lockedItem.id, []) === undefined);
   check("sanitizeEquip refuses an unknown id", sanitizeEquip("hat", "hat_haxx", []) === undefined);
-  const wrongSlot = lockedItem.slot === "hat" ? "glasses" : "hat";
+  const wrongSlot = lockedItem.slot === "hat" ? "face" : "hat";
   check("sanitizeEquip refuses a mis-slotted pick", sanitizeEquip(wrongSlot, lockedItem.id, [lockedItem.id]) === undefined);
 }
 
@@ -73,13 +93,13 @@ function grantTests(): void {
   section("earned grants key off all-time stats (the recordRun grant path)");
   check("nothing granted at zero stats", earnedCosmeticsFor({ deepestFloor: 0, totalKills: 0 }).length === 0);
   const atTen = earnedCosmeticsFor({ deepestFloor: 10, totalKills: 0 });
-  check("floor 10 grants the crown", atTen.includes("hat_crown"), atTen.join(","));
+  check("floor 10 grants the crown AND the Depth Diver title", atTen.includes("hat_crown") && atTen.includes("title_depth_diver"), atTen.join(","));
   check("floor 10 does NOT grant the floor-20 halo", !atTen.includes("hat_halo"));
   const atTwenty = earnedCosmeticsFor({ deepestFloor: 20, totalKills: 0 });
   check("floor 20 grants crown + halo", atTwenty.includes("hat_crown") && atTwenty.includes("hat_halo"));
   const killer = earnedCosmeticsFor({ deepestFloor: 0, totalKills: 500 });
-  check("500 kills grants the monocle", killer.includes("glasses_monocle"));
-  check("499 kills does not", !earnedCosmeticsFor({ deepestFloor: 0, totalKills: 499 }).includes("glasses_monocle"));
+  check("500 kills grants the monocle AND the Blob Slayer title", killer.includes("face_monocle") && killer.includes("title_blob_slayer"));
+  check("499 kills does not", !earnedCosmeticsFor({ deepestFloor: 0, totalKills: 499 }).includes("face_monocle"));
 }
 
 function purityTests(): void {
@@ -95,7 +115,7 @@ function purityTests(): void {
 }
 
 function wireTests(): void {
-  section("wire: ht/gl decorate PlayerWire, default safely when absent, reject when malformed");
+  section("wire: ht/fc decorate PlayerWire, default safely when absent, reject when malformed");
   const w = createWorld(0xC05, 1, { isShared: true, skipLocalPlayer: true });
   spawnPlayerInWorld(w, "pMe");
   const dressed = spawnPlayerInWorld(w, "pDressed");
@@ -103,26 +123,26 @@ function wireTests(): void {
   plain.x = dressed.x + 30;
 
   const identities = new Map([
-    ["pDressed", { name: "Ada", colorIndex: 2, hat: "hat_crown", glasses: "glasses_shades" }],
+    ["pDressed", { name: "Ada", colorIndex: 2, hat: "hat_crown", face: "face_shades" }],
     ["pPlain", { name: "Bob", colorIndex: null }], // pre-cosmetics identity constructor shape
   ]);
   const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", identities });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   const wDressed = snap.players.find((p) => p.id === "pDressed");
   const wPlain = snap.players.find((p) => p.id === "pPlain");
-  check("equipped cosmetics decorate the wire", wDressed?.ht === "hat_crown" && wDressed?.gl === "glasses_shades", `ht=${wDressed?.ht} gl=${wDressed?.gl}`);
-  check("an identity without cosmetic fields decodes to null slots", wPlain?.ht === null && wPlain?.gl === null);
+  check("equipped cosmetics decorate the wire", wDressed?.ht === "hat_crown" && wDressed?.fc === "face_shades", `ht=${wDressed?.ht} fc=${wDressed?.fc}`);
+  check("an identity without cosmetic fields decodes to null slots", wPlain?.ht === null && wPlain?.fc === null);
 
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
-  check("ht/gl round-trip deep-equal", JSON.stringify(decoded) === JSON.stringify(snap));
+  check("ht/fc round-trip deep-equal", JSON.stringify(decoded) === JSON.stringify(snap));
 
-  // An OLD server's PlayerWire (no ht/gl at all) still decodes, with the safe fallbacks.
+  // An OLD server's PlayerWire (no ht/fc at all) still decodes, with the safe fallbacks.
   const legacy = JSON.parse(jsonCodec.encodeServer(snap)) as { players: Array<Record<string, unknown>> };
-  for (const p of legacy.players) { delete p.ht; delete p.gl; }
+  for (const p of legacy.players) { delete p.ht; delete p.fc; }
   const fromLegacy = jsonCodec.decodeServer(JSON.stringify(legacy));
   if (fromLegacy.t === "snap") {
     const lp = fromLegacy.players.find((p) => p.id === "pDressed");
-    check("absent ht/gl decode as null (old-server compat)", lp?.ht === null && lp?.gl === null);
+    check("absent ht/fc decode as null (old-server compat)", lp?.ht === null && lp?.fc === null);
   } else {
     check("legacy frame decoded", false);
   }
@@ -175,6 +195,7 @@ function nudgeTests(): void {
 
 function main(): void {
   catalogTests();
+  bodyPaletteTests();
   ownershipTests();
   grantTests();
   purityTests();

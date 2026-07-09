@@ -123,9 +123,9 @@ const PAINTERS: Record<string, Painter> = {
   hat_party: partyCone,
   hat_crown: crown,
   hat_halo: halo,
-  glasses_round: roundSpecs,
-  glasses_shades: shades,
-  glasses_monocle: monocle,
+  face_round: roundSpecs,
+  face_shades: shades,
+  face_monocle: monocle,
 };
 
 const cache = new Map<string, HTMLCanvasElement | null>();
@@ -147,8 +147,8 @@ export function cosmeticOverlay(id: string): HTMLCanvasElement | null {
   return c;
 }
 
-// Which ids have real art — the catalog test asserts every catalog entry does, so a new
-// catalog row can never ship invisible.
+// Which ids have real art — the catalog test asserts every hat/face entry does, so a new
+// overlay row can never ship invisible (body renders as tint, titles as text).
 export function hasCosmeticArt(id: string): boolean {
   return PAINTERS[id] !== undefined;
 }

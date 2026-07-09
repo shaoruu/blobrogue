@@ -285,9 +285,11 @@ incident the client also refuses to play in a world the server didn't prove is t
 2. **Ticket (Convex → signed claim).** On connect, [`convex/gsTicket.ts`](convex/gsTicket.ts)
    `mint({ clientId, roomCode })` verifies the caller actually SITS in that online room
    (`rooms.membership`), then binds `wld: "room:<CODE>"` into the HMAC ticket payload —
-   along with the display name (`nm`), chosen blob color (`cl`), and equipped visual-only
-   cosmetics (`ht`/`gl` — hat/glasses ids from [`convex/cosmeticsCore.ts`](convex/cosmeticsCore.ts);
-   ownership is validated by the profile system at equip time, the server gates format only).
+   along with the display name (`nm`), the party color (`cl` — the network identity tint for
+   name labels/minimap, separate from the cosmetic body palette), and the equipped visual-only
+   overlay cosmetics (`ht`/`fc` — hat/face ids from [`convex/cosmeticsCore.ts`](convex/cosmeticsCore.ts);
+   ownership + slot are validated by the profile system at equip time, the server gates format
+   only). Body colors render from the party color at launch and titles never ride the wire.
 3. **Join (game server).** The server verifies the ticket (`server/src/auth.ts`) and binds
    the connection to exactly the ticket's world: `sessions.bind(conn, worldId)`. Same code →
    same world; different codes → fully isolated runs (own seed/floor/enemies). No claim →
@@ -302,7 +304,7 @@ incident the client also refuses to play in a world the server didn't prove is t
    accepted and returns to the lobby with an explicit error. It never plays (protocol v4;
    `server/test/coherence.test.ts`).
 5. **Identity on the wire.** The verified name/color/cosmetics ride each snapshot's
-   `PlayerWire` (`nm`/`cl`, plus `ht`/`gl` for the hat/glasses overlays) and the roster, so
+   `PlayerWire` (`nm`/`cl`, plus `ht`/`fc` for the hat/face overlays) and the roster, so
    names render above blobs, everyone sees your chosen tint and closet look, and the lobby
    roster and the in-game snapshot agree (both derive from the same profile write). All
    cosmetic fields decode defensively (absent → safe fallbacks) so old/new client-server

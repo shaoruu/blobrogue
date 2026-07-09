@@ -145,7 +145,7 @@ async function bootNormal() {
       if (session.colorIndex !== null) params.set("color", String(session.colorIndex));
       const cosmetics = session.cosmetics;
       if (cosmetics.hat !== null) params.set("hat", cosmetics.hat);
-      if (cosmetics.glasses !== null) params.set("glasses", cosmetics.glasses);
+      if (cosmetics.face !== null) params.set("face", cosmetics.face);
       const res = await fetch(`${devTicketUrl(gsOverride)}?${params}`);
       if (!res.ok) throw new Error(`ticket endpoint ${res.status}`);
       const data = (await res.json()) as { ticket: string };
