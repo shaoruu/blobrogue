@@ -92,7 +92,11 @@ function makeEl(tag = "div"): any {
         case "prepend":
           return (...cs: any[]) => { children.unshift(...cs); };
         case "removeChild":
-          return (c: any) => c;
+          return (c: any) => {
+            const i = children.indexOf(c);
+            if (i >= 0) children.splice(i, 1);
+            return c;
+          };
         case "replaceChildren":
           return (...cs: any[]) => { children.length = 0; children.push(...cs); };
         case "remove":

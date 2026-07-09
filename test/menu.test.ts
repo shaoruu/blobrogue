@@ -354,18 +354,21 @@ async function main(): Promise<void> {
     check("no Controls DESTINATION (the settings card may describe controls)", !buttonsOf(overlay).some((b) => /^controls\b/i.test(b.trim())));
   }
 
-  section("the title character stage: YOUR blob, reserved geometry, Play still dominant");
+  section("the camp stage: YOUR blob on the plinth above PLAY — one glance stack");
   {
     // A dressed profile: the stage must mirror the ACTUAL equipped loadout once hydrated.
     const dressed = makeProfile({ cosmetics: { hat: "hat_top", face: "face_shades", body: "body_cyan", title: null }, colorIndex: 1 });
     const { menu, overlay } = makeMenu({ profile: dressed, lb: LB_ENTRIES.slice(0, 2) });
     await menu.showTitle();
+    const camp = () => byClass(overlay, "home-camp")[0];
     const stage = () => byClass(overlay, "home-stage")[0];
-    check("the stage renders in the hero band from first paint", stage() !== undefined && byClass(overlay, "hero").length === 1);
+    check("the camp stage lives in the LEFT column with Play (one stack)",
+      camp() !== undefined && byClass(byClass(overlay, "home-left")[0] ?? {}, "home-camp").length === 1);
+    check("the blob stands on the authored plinth", byClass(camp() ?? {}, "home-plinth").length === 1);
     check("it draws through the shared preview renderer (the world/closet code path)",
       byClass(stage() ?? {}, "blob-preview").length === 1);
     const canvasBefore = collect(stage() ?? {}, (n) => n.tagName === "CANVAS")[0];
-    check("the canvas reserves its fixed 104px box from creation", canvasBefore?.width === 104 && canvasBefore?.height === 104);
+    check("the canvas reserves its fixed 128px box from creation", canvasBefore?.width === 128 && canvasBefore?.height === 128);
     check("before hydration a fresh guest shows the DEFAULT blob",
       stage()?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true, stage()?.getAttribute?.("aria-label") ?? "");
     const buttonsBefore = buttonsOf(overlay).length;
@@ -375,8 +378,11 @@ async function main(): Promise<void> {
     const label = stage()?.getAttribute?.("aria-label") ?? "";
     check("the hydrated stage mirrors the EQUIPPED loadout (hat + glasses + body color)",
       label.includes("Top Hat") && label.includes("Shades") && label.includes("Cyan"), label);
-    check("the stage is display-only and PLAY stays the FIRST action in order",
-      collect(stage() ?? {}, (n) => n.tagName === "BUTTON").length === 0 && (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE"));
+    check("PLAY stays the FIRST action in DOM/tab order (the camp lifts visually via CSS order)",
+      (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE") && (buttonsOf(overlay)[1] ?? "").includes("PLAY SOLO"));
+    check("the CUSTOMIZE affordance rides beside the blob", byClass(camp() ?? {}, "stage-customize").length === 1);
+    check("the glance moved with the stack intact: 3 fixed leaderboard rows still render",
+      byClass(overlay, "lb-preview").length === 1 && byClass(overlay, "lb-row").length === 3);
 
     // Signed-out/guest: the default blob — plus the guest's body-color pick when one exists.
     const guest = makeMenu({ lb: [] });
@@ -388,6 +394,90 @@ async function main(): Promise<void> {
     void picked.session.setColorIndex(2); // the guest's swatch pick, applied locally at once
     await picked.menu.showTitle();
     check("a guest body-color pick rides the stage", byClass(picked.overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("Green") === true);
+  }
+
+  section("attention hierarchy gate: calm identity, brightest PLAY, no reflow under worst case");
+  {
+    // Worst case: the flashiest equippable set, a signed-in identity still resolving its
+    // name/avatar, and a profile carrying fresh unlock badges — nothing may reflow, and
+    // Play must stay the same dominant node.
+    const flashy = makeProfile({
+      cosmetics: { hat: "hat_halo", face: "face_monocle", body: "body_pink", title: "title_depth_diver" },
+      colorIndex: 3,
+      unlocks: ["hat_halo", "face_monocle", "hat_crown", "title_depth_diver"],
+      deepestFloor: 22, totalKills: 900,
+    });
+    const auth = fakeAuth(true);
+    const { menu, overlay } = makeMenu({ profile: flashy, lb: LB_ENTRIES, standing: { floor: 22, kills: 900, rank: 7 }, auth });
+    await menu.showTitle();
+    const playNode = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
+    const stageCanvas = collect(byClass(overlay, "home-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0];
+    const nodesBefore = collect(overlay, () => true).length;
+    const buttonsBefore = buttonsOf(overlay).length;
+    await settle();
+    check("worst-case hydration adds/removes NO nodes anywhere on the home",
+      collect(overlay, () => true).length === nodesBefore, `${nodesBefore} -> ${collect(overlay, () => true).length}`);
+    check("...and no buttons", buttonsOf(overlay).length === buttonsBefore);
+    check("the Play node is the SAME node after the flashy loadout landed",
+      collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
+    check("the stage canvas never resizes (fixed reserved bounds)",
+      collect(byClass(overlay, "home-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0] === stageCanvas && stageCanvas?.width === 128);
+    check("PLAY is still the first action in order", (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE"));
+    // The stage chrome is CSS-quiet by construction: no animation, no glow shadows — the
+    // calm idle lives canvas-side (blink/wave under the cosmetic transform caps), so an
+    // equipped set can never emit motion or glow that outranks Play.
+    const html = readFileSync(join(ROOT, "index.html"), "utf8");
+    const stageCss = html.slice(html.indexOf("THE CAMP STAGE"), html.indexOf(".body{"));
+    check("stage/plinth CSS carries no animation and no glow", !/animation:/.test(stageCss) && !/box-shadow:0 0 \d/.test(stageCss), "");
+    const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
+    check("the title stage opts into the CALM idle (blink/wave, capped)", menuSrc.includes("isCalmIdle: true"));
+    const previewSrc = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
+    check("the wave tilt stays under the cosmetic rot cap (hats follow, quietly)",
+      previewSrc.includes("const WAVE_ROT = 0.05"));
+  }
+
+  section("CUSTOMIZE opens the closet as an OVERLAY — Play never leaves the screen");
+  {
+    const { menu, overlay, session } = makeMenu();
+    await menu.showTitle();
+    await settle();
+    const playNode = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
+    collect(overlay, (n) => n.tagName === "BUTTON" && typeof n.className === "string" && n.className.includes("stage-customize"))[0]?.onclick?.();
+    check("the closet panel overlays the title", byClass(overlay, "closet-pop").length === 1 && byClass(overlay, "closet-scrim").length === 1);
+    check("the title (and Play) is STILL in the tree behind it — no mode swap",
+      collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
+    check("the overlay carries the autosave promise in copy", textOf(byClass(overlay, "closet-pop")[0] ?? {}).includes("changes save instantly"));
+    // Equip from the overlay, then close: the SAME title stands, wearing the new blob.
+    byClass(overlay, "cos-card").find((c) => textOf(c).includes("Top Hat"))?.onclick?.();
+    check("instant equip works inside the overlay", session.cosmetics.hat === "hat_top");
+    await settle();
+    byClass(byClass(overlay, "closet-pop")[0] ?? {}, "panel-close")[0]?.onclick?.();
+    check("closing removes the overlay", byClass(overlay, "closet-pop").length === 0 && byClass(overlay, "closet-scrim").length === 0);
+    check("...returning to the UNCHANGED title (same Play node, never rebuilt)",
+      collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
+    check("...with the stage repainted to the updated blob",
+      byClass(overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("Top Hat") === true);
+    // Escape drives the same overlay close (B on a pad dispatches this exact event).
+    collect(overlay, (n) => n.tagName === "BUTTON" && typeof n.className === "string" && n.className.includes("stage-customize"))[0]?.onclick?.();
+    check("re-opened for the Escape path", byClass(overlay, "closet-pop").length === 1);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("Escape/B closes the overlay and the title stands", byClass(overlay, "closet-pop").length === 0
+      && collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
+  }
+
+  section("instant equip autosaves server-authoritative: the change survives a reload");
+  {
+    const first = makeMenu();
+    await first.menu.showProfile("closet");
+    await settle();
+    byClass(first.overlay, "cos-card").find((c) => textOf(c).includes("Top Hat"))?.onclick?.();
+    await settle();
+    check("equip accepted and persisted", first.session.cosmetics.hat === "hat_top");
+    // Simulate the reload: a brand-new Session over the SAME storage + backend.
+    const reloaded = new Session(fakeConvex().client);
+    check("the pick is already worn before any network (local persistence)", reloaded.cosmetics.hat === "hat_top");
+    await reloaded.login("blob");
+    check("...and the server-side loadout agrees after login (it stuck)", reloaded.cosmetics.hat === "hat_top");
   }
 
   section("top-runs glance: FINAL geometry from first paint; hydration fills in place");
