@@ -43,6 +43,9 @@ export interface Pet {
   attackAnim: number;  // action-pose timer (counts down from PET_BALANCE.attackAnimTime)
   stuckTime: number;   // seconds of blocked-while-far progress (safe-teleport failsafe)
   peck: PetPeck | null; // bonebird only; null otherwise / while none in flight
+  // Vanished while its owner is down (gate spec §5): state frozen, excluded from snapshots
+  // and rendering; pops back beside the owner on revive.
+  isDormant: boolean;
 }
 
 // Telegraphed-attack state machine. Committed attacks read as
@@ -130,6 +133,10 @@ export interface Enemy extends Entity {
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
   // tick that finishes a kill credits the correct player's combo/loot. null before any burn.
   burnOwner: PlayerId | null;
+  // Whether the current burn was lit by the owner's COMPANION rather than the owner: its
+  // kill follows the pet rules (credits the owner, never procs Fang) and the balance ledger
+  // attributes its ticks to the pet.
+  burnIsPet: boolean;
   // Bonebird mark: seconds this enemy takes amplified damage from PLAYER strikes (a small,
   // capped team-utility bonus — see pets.ts). Never amplifies pet damage itself.
   petMark: number;

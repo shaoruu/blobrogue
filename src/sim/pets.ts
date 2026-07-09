@@ -125,20 +125,32 @@ export const PET_BALANCE = {
   },
   bonebird: {
     range: 280,        // target acquisition range around the OWNER
-    peckCd: 2.8,
+    peckCd: 4.5,
     peckSpeed: 400,
     peckRadius: 5,
     peckDamage: 1,
     peckLife: 0.8,     // seconds of flight (~320 px) before the peck fizzles
-    markSecs: 4,
-    markDamageMult: 1.10, // marked enemies take +10% damage from PLAYER strikes
+    // Mark window / cadence author the §5 utility budget: 1.0s per 4.5s peck ≈ 22% worst-
+    // case single-target uptime, under the 25% cap with margin.
+    markSecs: 1.0,
+    markDamageMult: 1.08, // marked enemies take +8% damage from PLAYER strikes (§5 ceiling)
   },
 } as const;
 
-// Hard ceilings on pet contribution (asserted in test/pets.test.ts against PET_BALANCE), the
-// same pattern as balance.ts CAPS: tuning may move numbers, never past these.
+// Hard ceilings on pet contribution — the §5 table of
+// docs/specs/blobrogue_STUDIO_BALANCE_GATE.md, the same pattern as balance.ts CAPS: tuning
+// may move PET_BALANCE, never past these. The static suite (test/pets.test.ts) checks the
+// authored numbers; the MANDATORY studio gate (test/petgate.test.ts) checks the same caps
+// against MEASURED play across Casual/Standard/Brutal and party sizes 1–4.
 export const PET_CAPS = {
-  sustainedDps: 1.25,   // any single pet's steady-state damage/second incl. its status damage
-  markDamageMult: 1.15, // the team-utility mark may never exceed +15%
-  coinPullSpeed: 240,   // wisp assist stays at-or-under Coin Magnet Lv1 pull
+  sustainedDps: 1.25,    // absolute ceiling on one pet's steady-state damage/second
+  ownerDpsShare: 0.12,   // one pet's sustained DPS vs its owner's measured median weapon DPS
+  ownerBurstShare: 0.18, // pet damage in ANY 3s window vs the owner baseline over 3s
+  partyDpsShare: 0.25,   // all party pets combined vs the party's measured player DPS
+  killShare: 0.15,       // pet-finished kills vs the owner's total credited kills
+  markDamageMult: 1.08,  // the team-utility mark may never exceed +8% (§5 vulnerability cap)
+  markUptime: 0.25,      // worst-case single-target mark uptime
+  healingPerFloor: 0.25, // expected HP/floor a pet may restore (ours restore exactly 0)
+  healingPer90s: 1,      // absolute HP per rolling 90s (ours: 0 — Fang never procs off pets)
+  coinPullSpeed: 240,    // wisp assist stays at-or-under Coin Magnet Lv1 pull
 } as const;

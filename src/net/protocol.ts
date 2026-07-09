@@ -736,6 +736,7 @@ export function petFromWire(w: PetWire, x: number, y: number): Pet {
     id: w.id, kind: w.kind, ownerId: w.own, x, y, vx: 0, vy: 0,
     facing: w.fac, attackCd: 0, attackAnim: w.at, stuckTime: 0,
     peck: w.pk ? { x: w.pk.x, y: w.pk.y, vx: w.pk.vx, vy: w.pk.vy, life: 1 } : null,
+    isDormant: false,
   };
 }
 
@@ -751,7 +752,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     tier: w.tr, isSummoned: false, kbResist: 1, surgeDelay: 0, surgeTime: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
-    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
+    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null, burnIsPet: false,
     petMark: w.mk,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
@@ -876,9 +877,11 @@ export function buildSnapshot(
   }
   // A client's OWN pet is always included (it follows them, but a teleport lag-beat must
   // never blink it out of their snapshot); other pets ride the ordinary interest filter.
+  // A dormant pet (owner down) is on nobody's wire — it has visibly disappeared.
   const pets: PetWire[] = [];
   const keepPets = new Set<number>();
   for (const t of w.pets.values()) {
+    if (t.isDormant) continue;
     if (t.ownerId === selfPid || near(t.x, t.y, view?.pets.has(t.id) ?? false)) { pets.push(toPetWire(t)); keepPets.add(t.id); }
   }
   const enemies: EnemyWire[] = [];

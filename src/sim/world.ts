@@ -15,9 +15,11 @@ import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, n
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, Pet, PetKind, WeaponId, AttackMove, TileKind } from "./types.js";
-import { PET_BALANCE } from "./pets.js";
+import { PETS, PET_BALANCE } from "./pets.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
+import { MODES, modeActiveCap, modeBossAddCap } from "./difficulty.js";
+import type { DifficultyMode } from "./difficulty.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -112,6 +114,24 @@ export interface PlayerSim {
 // the existing presence path; the sim only needs remote POSITIONS as enemy aggro targets).
 export interface RemoteTarget { x: number; y: number; isDown: boolean }
 
+// Source-attributed measurement for the studio balance gates (spec §7.7). Written only when
+// non-null, at the sim's damage/kill/heal SOURCES — the one place pet output is still
+// distinguishable from the owner's (credit intentionally merges them everywhere else).
+export interface DamageLedger {
+  playerDamage: number;   // every player-sourced strike/burn/thorns/barrel/arc
+  petDamage: number;      // every pet-sourced strike/burn
+  petBossDamage: number;  // pet damage that landed on a boss (the gate requires exactly 0)
+  playerKills: number;    // kills finished by player-sourced damage
+  petKills: number;       // kills finished by pet-sourced damage
+  petHealing: number;     // HP restored by any pet-attributable path (the gate requires 0)
+  // Every pet damage instance with its tick, for the ≤18%-of-owner-DPS 3s burst-window gate.
+  petHits: Array<{ tick: number; dmg: number }>;
+}
+
+export function createLedger(): DamageLedger {
+  return { playerDamage: 0, petDamage: 0, petBossDamage: 0, playerKills: 0, petKills: 0, petHealing: 0, petHits: [] };
+}
+
 // A per-enemy ring of recent positions for lag-compensated hit rewind.
 interface EnemyHist { x: number[]; y: number[] }
 
@@ -187,6 +207,15 @@ export interface WorldState {
   // (one offer per cleared non-boss floor; reset on every floor build).
   isBlessingOfferedThisFloor: boolean;
   remoteTargets: RemoteTarget[];
+  // Difficulty mode (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1): concurrent pressure +
+  // recovery knobs only, never HP/damage/telegraphs. "standard" — the only mode any shipped
+  // path creates — is exactly the authored sim (every multiplier 1, every helper identity);
+  // casual/brutal exist for the mandatory balance gates until modes pass their ship gates.
+  mode: DifficultyMode;
+  // Balance-gate damage ledger: null in every real run (zero cost); the studio gates enable
+  // it to attribute pet vs player output honestly (pets credit their OWNER everywhere else,
+  // so attribution must be recorded at the damage SOURCE, not derived from credit).
+  ledger: DamageLedger | null;
   isCoop: boolean;
   // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
   // (the server owns floor transitions), but unlike solo a player hitting 0 HP goes DOWN rather
@@ -221,7 +250,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
 // skipLocalPlayer: the authoritative server owns N per-connection players and adds them via
 // spawnPlayerInWorld on join, so it creates the world WITHOUT the implicit LOCAL_ID player.
 // Solo/co-op/prediction clients keep the default (one LOCAL_ID player).
-export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean }
+export interface WorldOptions { isSandbox?: boolean; isCoop?: boolean; isShared?: boolean; skipLocalPlayer?: boolean; mode?: DifficultyMode }
 
 export function createWorld(seed: number, floor: number, opts: WorldOptions = {}): WorldState {
   const w: WorldState = {
@@ -262,6 +291,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     pendingBlessings: new Map(),
     isBlessingOfferedThisFloor: false,
     remoteTargets: [],
+    mode: opts.mode ?? "standard",
+    ledger: null,
     isCoop: opts.isCoop ?? false,
     isShared: opts.isShared ?? false,
     isSandbox: opts.isSandbox ?? false,
@@ -321,6 +352,7 @@ export function spawnPetInWorld(w: WorldState, ownerId: PlayerId, kind: PetKind)
     attackAnim: 0,
     stuckTime: 0,
     peck: null,
+    isDormant: false,
   };
   w.pets.set(ownerId, pet);
   return pet;
@@ -374,7 +406,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.mode);
   w.enemies = spawns.active;
   w.pendingSpawns = spawns.pending;
   w.spawnReleaseCd = 0;
@@ -496,7 +528,7 @@ function rollPropKind(rng: Rng, hazardMult: number): Prop["kind"] {
 function placeProps(w: WorldState): Prop[] {
   const d = w.dungeon;
   const rng = new Rng((w.seed ^ 0x2f6a35c1) + w.floor * 26417);
-  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult;
+  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult * MODES[w.mode].hazardMult;
   const list: Prop[] = [];
   const occupied = new Set<number>();
   for (const room of d.rooms) {
@@ -711,6 +743,12 @@ function dashCooldown(p: PlayerSim): number {
 function isProtected(p: PlayerSim): boolean {
   return p.invuln > 0 || p.dashInvuln > 0;
 }
+// The ambient heart economy scales by party size (co-op §8) and by difficulty mode (gate
+// spec §1 recovery knob) — one multiplier used by every ambient heart roll.
+function heartRateMult(w: WorldState): number {
+  return coopHeartRateMult(w.encounterPlayers) * MODES[w.mode].heartRateMult;
+}
+
 function coinGain(p: PlayerSim): number {
   return Math.max(1, Math.round(p.mods.coinMult));
 }
@@ -874,13 +912,15 @@ function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
   return isFrozen(e) ? 0 : C.CHILL_SLOW;
 }
-function applyBurn(e: Enemy, secs: number, owner: PlayerId | null): void {
+function applyBurn(e: Enemy, secs: number, owner: PlayerId | null, isPetBurn = false): void {
   if (secs > e.burn) e.burn = secs;
   e.burnDmg = Math.min(C.BURN_DMG_MAX, e.burnDmg + C.BURN_DMG_STACK);
   // The most recent igniter owns the burn; its DoT tick credits that id on a kill. The identity
   // is immutable: if the igniter disconnects, the burn keeps THEIR id (which then credits no
-  // one), never a different live player.
+  // one), never a different live player. isPetBurn tags a pet-lit burn so its kills follow the
+  // pet kill rules (no Fang sustain) and the balance ledger attributes its ticks to the pet.
   e.burnOwner = owner;
+  e.burnIsPet = isPetBurn;
 }
 function applyChill(e: Enemy, secs: number): void {
   e.chill = Math.min(C.CHILL_MAX, e.chill + secs);
@@ -908,12 +948,14 @@ function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     e.burn = e.burn > dt ? e.burn - dt : 0;
     e.statusTick += dt;
     while (e.statusTick > C.BURN_TICK) {
-      damageEnemy(w, e.burnOwner, e, e.burnDmg * C.BURN_TICK, ev);
+      const tickDmg = e.burnDmg * C.BURN_TICK;
+      damageEnemy(w, e.burnOwner, e, tickDmg, ev);
+      recordDamage(w, tickDmg, e, e.burnIsPet);
       e.statusTick -= C.BURN_TICK;
-      ev.push({ t: "burnTick", x: e.x, y: e.y, radius: e.radius, dmg: e.burnDmg * C.BURN_TICK });
+      ev.push({ t: "burnTick", x: e.x, y: e.y, radius: e.radius, dmg: tickDmg });
       // The burn DoT kill credits whoever last ignited this enemy (authoritative attribution).
       // A departed igniter credits no one — the kill still resolves and drops base-value loot.
-      if (e.hp <= 0) { killEnemy(w, ownerOf(w, e.burnOwner), e, ev); break; }
+      if (e.hp <= 0) { killEnemy(w, ownerOf(w, e.burnOwner), e, ev, e.burnIsPet); break; }
     }
     if (e.burn === 0) { e.burnDmg = 0; e.statusTick = 0; }
   }
@@ -935,6 +977,7 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
     }
     if (!best) break;
     damageEnemy(w, p ? p.id : null, best, dmg, ev);
+    recordDamage(w, dmg, best, false);
     const killed = best.hp <= 0 && !best.dead;
     ev.push({ t: "shockArc", eid: best.id, x: cur.x, y: cur.y, tx: best.x, ty: best.y, tRadius: best.radius, dmg, color, killed });
     list.push(best);
@@ -944,6 +987,23 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
 }
 
 // ---- strikes / kills ----
+
+// Balance-gate ledger write (no-op in real runs — w.ledger is null). Damage is attributed at
+// its SOURCE (player weaponry/status/thorns/barrels vs pet strikes/burns) because credit
+// deliberately merges pets into their owner everywhere else. Pet hits also record their tick
+// for the spec's 3s burst-window cap, and pet damage on a BOSS is tallied separately — the
+// pet gate requires it to be exactly zero (pets must never shift boss TTK or phases).
+function recordDamage(w: WorldState, dmg: number, e: Enemy, isPetSource: boolean): void {
+  const led = w.ledger;
+  if (!led) return;
+  if (isPetSource) {
+    led.petDamage += dmg;
+    led.petHits.push({ tick: w.tick, dmg });
+    if (e.kind === "boss") led.petBossDamage += dmg;
+  } else {
+    led.playerDamage += dmg;
+  }
+}
 
 // EVERY authoritative point of enemy damage funnels through here, so the boss's phase
 // thresholds are evaluated after every damage event (spec §5) — bullets, melee, burn ticks,
@@ -1033,6 +1093,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
     * (frozen ? C.FROZEN_DMG_MULT : 1)
     * (e.petMark > 0 ? PET_BALANCE.bonebird.markDamageMult : 1);
   damageEnemy(w, hit.ownerId, e, dmg, ev);
+  recordDamage(w, dmg, e, false);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit);
   const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
@@ -1048,23 +1109,34 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
 
 // `p` null = the killing actor has left: the kill still resolves (death, loot, boss chest) but
 // grants no personal reward (kills/combo/lifesteal) and never credits another live player.
-function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
+// isPetKill: the finishing damage came from the owner's COMPANION (nip or pet-lit burn) — the
+// kill still credits the owner's kills/combo/loot, but never Vampire Fang: pets share the
+// global sustain budget at exactly zero (gate spec §5 healing cap), so pet output can't be
+// laundered into hearts.
+function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[], isPetKill = false): void {
   e.dead = true;
   if (p) {
     p.kills++;
     p.combo++;
     p.comboTimer = C.COMBO_WINDOW;
   }
+  if (w.ledger && p) {
+    if (isPetKill) w.ledger.petKills++;
+    else w.ledger.playerKills++;
+  }
   const big = e.kind === "boss";
   ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
   if (big) endBossDanger(w, e, ev);
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
-  // sustain comes from scarcity decisions, not add-farming.
-  if (p && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
+  // sustain comes from scarcity decisions, not add-farming — and never off a pet's kill.
+  if (p && !isPetKill && !e.isSummoned && p.mods.lifestealChance > 0 && p.fangCd === 0
     && p.hp < p.maxHp && w.rng.next() < p.mods.lifestealChance) {
     p.hp++;
     p.fangCd = FANG_PROC_COOLDOWN;
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
+    // Tripwire for the pet healing gate: a heal that fired off a pet kill records itself,
+    // so removing the suppression above fails the gate instead of slipping through.
+    if (w.ledger && isPetKill) w.ledger.petHealing++;
   }
   // The shipped elite affix: SPLIT — on death the elite breaks into swarm units (readable,
   // summoned, so they feed no hearts/Fang). Each child settles onto a validated point
@@ -1113,7 +1185,7 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
   if (w.rng.next() < 0.5) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(p) : 1));
   // Ambient hearts (§2): halved rate, party-scaled in co-op, never from summoned adds.
-  if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
+  if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * heartRateMult(w)) {
     w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
   }
 }
@@ -1404,13 +1476,13 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   for (const e of w.enemies) {
     if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
   }
-  const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
+  const cap = modeActiveCap(w.mode, activeThreatCap(w.floor)) * coopThreatMult(w.encounterPlayers);
   const next = w.pendingSpawns[0];
   if (living + threatCostOf(next.kind, next.tier) > cap) return;
   // Its spawn grace never ticked while pending, so it activates with the full grace window.
   w.pendingSpawns.shift();
   w.enemies.push(next);
-  w.spawnReleaseCd = REINFORCE_STAGGER / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
+  w.spawnReleaseCd = REINFORCE_STAGGER * MODES[w.mode].reinforceMult / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
   ev.push({ t: "enemySpawn", eid: next.id, kind: next.kind, tier: next.tier, x: next.x, y: next.y });
 }
 
@@ -1525,6 +1597,7 @@ function lungeImpact(w: WorldState, p: PlayerSim, e: Enemy, ev: SimEvent[]): voi
 function applyThorns(w: WorldState, src: PlayerSim, victim: PlayerSim, e: Enemy, ev: SimEvent[]): void {
   if (victim.mods.thorns <= 0 || e.dead) return;
   damageEnemy(w, victim.id, e, victim.mods.thorns, ev);
+  recordDamage(w, victim.mods.thorns, e, false);
   ev.push({ t: "thornsHit", eid: e.id, x: e.x, y: e.y, radius: e.radius, dmg: victim.mods.thorns, tint: ENEMY_ARCHETYPES[e.kind].tint });
   if (e.hp <= 0 && !e.dead) killEnemy(w, src, e, ev);
 }
@@ -1545,7 +1618,7 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
   const a = e.attack;
   if (a.phase === "windup") {
     if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)) {
-      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(e);
+      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(w, e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.12 });
     }
     return;
@@ -1644,13 +1717,15 @@ function spitterFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     const off = n === 1 ? 0 : (i - 1) * C.GLOB_SPREAD;
     spawnEnemyBullet(w, mx, my, a.lockedAngle + off, 300, 7, 1, "#ff5a7a", 2.5);
   }
-  a.cooldown = C.SPITTER_CD * attackCdMultOf(e);
+  a.cooldown = C.SPITTER_CD * attackCdMultOf(w, e);
   ev.push({ t: "spitMuzzle", x: mx, y: my });
 }
 
-// Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier.
-function attackCdMultOf(e: Enemy): number {
-  return TIERS[e.tier].attackCdMult;
+// Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier. The
+// difficulty mode scales the same idle cooldown (gate spec §1): opportunity frequency moves,
+// telegraph/lock/recovery timings never do.
+function attackCdMultOf(w: WorldState, e: Enemy): number {
+  return TIERS[e.tier].attackCdMult * MODES[w.mode].attackCdMult;
 }
 
 // The Slime King (spec §5, calibrated to ~37.5s median / ≥20s absolute solo TTK). Phase
@@ -1669,8 +1744,8 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (!boss.roar) {
     boss.addTimer -= dt;
     if (boss.addTimer <= 0) {
-      boss.addTimer = BOSS.addInterval[boss.phase];
-      const cap = BOSS.addCap[boss.phase];
+      boss.addTimer = BOSS.addInterval[boss.phase] * MODES[w.mode].bossAddIntervalMult;
+      const cap = modeBossAddCap(w.mode, BOSS.addCap[boss.phase]);
       for (let i = 0; i < BOSS.addBatch[boss.phase]; i++) {
         if (countBossAdds(w) >= cap) break;
         spawnBossAdd(w, e, w.rng.next() * Math.PI * 2, ev);
@@ -1687,7 +1762,7 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
     return;
   }
 
-  if (a.cooldown === 0 && e.spawnTimer === 0) { bossBeginAttack(e, ev); return; }
+  if (a.cooldown === 0 && e.spawnTimer === 0) { bossBeginAttack(w, e, ev); return; }
   bossChase(w, e, dt);
 }
 
@@ -1698,10 +1773,10 @@ function countBossAdds(w: WorldState): number {
   return n;
 }
 
-function bossBeginAttack(e: Enemy, ev: SimEvent[]): void {
+function bossBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
-  e.attack.cooldown = BOSS.attackCd[boss.phase];
+  e.attack.cooldown = BOSS.attackCd[boss.phase] * MODES[w.mode].attackCdMult;
   // P3: every 3rd attack is the arena squeeze (1.0s telegraph, 3.0s hold).
   if (boss.phase >= 3 && boss.attackCount % BOSS.squeezeEvery === 0) {
     beginWindup(e, "squeeze");
@@ -2077,9 +2152,11 @@ function moveEnemyBy(w: WorldState, e: Enemy, dx: number, dy: number): void {
 }
 
 function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, speed: number, radius: number, damage: number, color: string, life: number): void {
+  // Difficulty modes scale ENEMY projectile speed only (gate spec §1); standard is exactly 1.
+  const sp = speed * MODES[w.mode].projectileSpeedMult;
   w.bullets.push({
     x, y,
-    vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+    vx: Math.cos(angle) * sp, vy: Math.sin(angle) * sp,
     radius, life, friendly: false, owner: null, damage, color,
     pierce: 0, hitList: null, isCrit: false,
   });
@@ -2101,11 +2178,14 @@ function isPetOwnerActive(w: WorldState, owner: PlayerSim): boolean {
   return !owner.isDown && owner.hp > 0 && !w.isRunOver && !w.pendingBlessings.has(owner.id);
 }
 
+// Pets never target bosses (gate spec §5: a pet cannot trigger boss phases, and boss HP is
+// calibrated against PLAYER DPS — pet damage would silently shift every boss TTK gate).
+// Pets fight the adds; the boss belongs to the players.
 function nearestEnemyWithin(w: WorldState, x: number, y: number, range: number): Enemy | null {
   let best: Enemy | null = null;
   let bestD = range * range;
   for (const e of w.enemies) {
-    if (e.dead) continue;
+    if (e.dead || e.kind === "boss") continue;
     const dx = e.x - x, dy = e.y - y, d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; best = e; }
   }
@@ -2221,18 +2301,20 @@ function petSpotNear(w: WorldState, owner: PlayerSim): [number, number] {
   return [owner.x, owner.y];
 }
 
-// Every point of pet damage: standard credit rules (damageEnemy funnel -> boss phases work;
-// killEnemy -> the owner's kills/combo/loot, exactly like their thorns or burn already do),
-// with NO knockback and NO owner-mod rolls — a pet's output never scales with the build.
+// Every point of pet damage: standard credit rules (damageEnemy funnel; killEnemy -> the
+// owner's kills/combo/loot, but NEVER Fang — see killEnemy), with NO knockback and NO
+// owner-mod rolls — a pet's output never scales with the build, and never touches a boss
+// (targeting excludes them; the ledger tripwires any regression).
 function petStrike(w: WorldState, ownerId: PlayerId, e: Enemy, dmg: number, burnSecs: number, ev: SimEvent[]): void {
   damageEnemy(w, ownerId, e, dmg, ev);
-  if (burnSecs > 0) applyBurn(e, burnSecs, ownerId);
+  recordDamage(w, dmg, e, true);
+  if (burnSecs > 0) applyBurn(e, burnSecs, ownerId, true);
   const killed = e.hp <= 0 && !e.dead;
   ev.push({
     t: "enemyHit", eid: e.id, dmgX: e.x, dmgY: e.y - e.radius, dmg, crit: false,
     puffX: e.x, puffY: e.y, puffColor: ENEMY_ARCHETYPES[e.kind].tint, melee: false, closeShotgun: false, killed,
   });
-  if (killed) killEnemy(w, ownerOf(w, ownerId), e, ev);
+  if (killed) killEnemy(w, ownerOf(w, ownerId), e, ev, true);
 }
 
 function updateEmberPup(w: WorldState, pet: Pet, owner: PlayerSim, ev: SimEvent[]): void {
@@ -2282,7 +2364,8 @@ function stepPetPeck(w: WorldState, pet: Pet, dt: number, ev: SimEvent[]): void 
     return;
   }
   for (const e of w.enemies) {
-    if (e.dead) continue;
+    // A peck flies straight through a boss (pets never touch bosses — see nearestEnemyWithin).
+    if (e.dead || e.kind === "boss") continue;
     if (!segmentHitsCircle(x0, y0, pk.x, pk.y, e.x, e.y, e.radius + P.peckRadius)) continue;
     e.petMark = P.markSecs;
     petStrike(w, pet.ownerId, e, P.peckDamage, 0, ev);
@@ -2317,6 +2400,25 @@ function updatePets(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const pet of w.pets.values()) {
     const owner = w.players.get(pet.ownerId);
     if (!owner) continue; // unreachable: removePlayerFromWorld removes the pet with its owner
+    // Gate spec §5: the pet DISAPPEARS while its owner is down. Its state freezes as a
+    // snapshot (cooldowns don't tick — a down is never a free cooldown reset) and any loosed
+    // peck fizzles with it; the revive brings it back beside the owner as a visible teleport.
+    if (owner.isDown || owner.hp <= 0) {
+      if (!pet.isDormant) {
+        pet.isDormant = true;
+        pet.peck = null;
+        pet.vx = 0; pet.vy = 0;
+        pet.stuckTime = 0;
+        ev.push({ t: "puff", x: pet.x, y: pet.y, n: 6, color: PETS[pet.kind].tint });
+      }
+      continue;
+    }
+    if (pet.isDormant) {
+      pet.isDormant = false;
+      const [tx, ty] = petSpotNear(w, owner);
+      ev.push({ t: "petTeleport", kind: pet.kind, ox: pet.x, oy: pet.y, x: tx, y: ty });
+      pet.x = tx; pet.y = ty;
+    }
     if (pet.attackCd > 0) pet.attackCd = pet.attackCd > dt ? pet.attackCd - dt : 0;
     if (pet.attackAnim > 0) pet.attackAnim = pet.attackAnim > dt ? pet.attackAnim - dt : 0;
     stepPetMotion(w, pet, owner, dt, ev);
@@ -2394,7 +2496,7 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
       if (w.rng.next() < 0.6) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
-      if (w.rng.next() < SUSTAIN.crateHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
+      if (w.rng.next() < SUSTAIN.crateHeartDrop * heartRateMult(w)) {
         w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
       }
       break;
@@ -2419,6 +2521,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
     if (e.dead) continue;
     if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
     damageEnemy(w, p ? p.id : null, e, C.BARREL_EXPLOSION_DAMAGE, ev);
+    recordDamage(w, C.BARREL_EXPLOSION_DAMAGE, e, false);
     ev.push({ t: "flash", eid: e.id });
     ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES[e.kind].tint });
     applyBurn(e, C.BARREL_BURN_SECS, p ? p.id : null);
@@ -2489,7 +2592,7 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   // exactly as they always did per chest opened.
   const loot: ChestLoot[] = [];
   if (c.kind === "boss") {
-    loot.push({ kind: "heart" });
+    for (let i = 0; i < MODES[w.mode].bossChestHearts; i++) loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
     if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
@@ -2598,7 +2701,7 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
     return [{ kind: "heart" }];
   }
   const r = w.rng.next();
-  const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
+  const heartChance = SUSTAIN.woodChestHeart * heartRateMult(w);
   if (r < heartChance) return [{ kind: "heart" }];
   if (r < heartChance + SUSTAIN.woodChestWeapon) {
     return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
@@ -2732,9 +2835,9 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (reviver) {
       downed.reviveProgress += dt;
-      if (downed.reviveProgress >= REVIVE.channel) {
+      if (downed.reviveProgress >= MODES[w.mode].reviveChannel) {
         downed.isDown = false;
-        downed.hp = Math.min(downed.maxHp, REVIVE.hp);
+        downed.hp = Math.min(downed.maxHp, MODES[w.mode].reviveHp);
         downed.invuln = Math.max(downed.invuln, REVIVE.invuln);
         downed.fireCd = Math.max(downed.fireCd, REVIVE.fireLockout);
         downed.reviveProgress = 0;

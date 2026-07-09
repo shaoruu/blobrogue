@@ -931,6 +931,7 @@ export class Game {
     }
     const livePetIds = new Set<number>();
     for (const pet of this.pets.values()) {
+      if (pet.isDormant) continue; // vanished with a downed owner; a fresh anim greets the reappear
       livePetIds.add(pet.id);
       const anim = this.animForPet(pet.id);
       const prev = this.petAnimPos.get(pet.id);
@@ -2355,7 +2356,8 @@ export class Game {
     }
     // companion pets (the wisp floats — no ground shadow)
     for (const t of this.pets.values()) {
-      if (t.kind !== "lantern_wisp" && this.isNearCamera(t.x, t.y, TILE)) this.shadow(t.x - cam.x, t.y - cam.y + 9, 18);
+      if (t.isDormant || t.kind === "lantern_wisp") continue; // gone with a downed owner / the wisp floats
+      if (this.isNearCamera(t.x, t.y, TILE)) this.shadow(t.x - cam.x, t.y - cam.y + 9, 18);
     }
     // remote players (co-op presence or authoritative server)
     for (const r of this.remotes()) {
@@ -2503,7 +2505,7 @@ export class Game {
     // sparkle so they read from across the room (pure client cosmetics off shared state —
     // every player sees the same reveal).
     let wisps: Pet[] | null = null;
-    for (const t of this.pets.values()) if (t.kind === "lantern_wisp") (wisps ??= []).push(t);
+    for (const t of this.pets.values()) if (t.kind === "lantern_wisp" && !t.isDormant) (wisps ??= []).push(t);
     const revealR2 = PET_BALANCE.lantern_wisp.revealRadius ** 2;
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
@@ -2846,6 +2848,7 @@ export class Game {
     if (this.pets.size === 0) return;
     const { ctx, cam } = this;
     for (const pet of this.pets.values()) {
+      if (pet.isDormant) continue; // disappeared with its downed owner
       // The peck renders even when its bird is just off-screen (it flies ahead of the body).
       if (pet.peck && this.isNearCamera(pet.peck.x, pet.peck.y, TILE)) this.renderPetPeck(pet);
       if (!this.isNearCamera(pet.x, pet.y, TILE)) continue;
