@@ -19,11 +19,28 @@ export const STUCK_TIME = 0.12;
 export const STUCK_PROGRESS = 0.5;
 export const STUCK_MIN_STEP = 0.05;
 
-// Local prop avoidance (props aren't in the flow field, so chasers steer around them).
+// Local prop avoidance — the FINISHING layer. Routes come from the prop-aware nav fields
+// (see nav.ts); this steering only rounds the ring of a prop the current leg happens to
+// graze, so it can no longer be trapped by clusters/rows/pockets the route already avoids.
 export const AVOID_LOOKAHEAD = 30;   // px past touching distance a chaser anticipates a prop
 export const AVOID_CLEARANCE = 5;    // px of extra clearance the detour tangent aims for
 export const AVOID_COMMIT = 0.45;    // seconds a chosen detour side persists after the last block
 export const AVOID_SIDE_PROBE = 20;  // px beyond the body the side-clearance probes test
+
+// The fraction of a prop's radius that actually blocks movement. Single source of truth
+// shared by collision (blockedByProp) and the navigation clearance grid (nav.ts): the
+// routes enemies follow must reflect exactly the rings their bodies collide with.
+export const PROP_BLOCK_RING = 0.8;
+
+// Inside this range a chaser commits to the direct line whenever it has wall LOS: the
+// last prop between the bodies is the tangent steering's job (single-obstacle rounding is
+// what it is good at), and melee contact must never be gated on tile-resolution routing.
+export const NAV_DIRECT_RANGE = 76;
+
+// Spawn settling (see settleSpawnPoint): how many Chebyshev tile rings the deterministic
+// relocation scan walks around an invalid spawn point before giving up and leaving the
+// intended point as-is. 8 rings cover any room a floor can generate.
+export const SPAWN_SCAN_RINGS = 8;
 
 // How long a pending blessing offer may sit unanswered (sim seconds) before it expires and
 // the run moves on without the pick. Matches the server's offer TTL default, and — because
@@ -126,6 +143,10 @@ export const CHEST_EJECT_RIM = 24;
 // A loot spot must keep this margin of open floor on all four sides so the sprite never
 // visually clips into a wall.
 export const CHEST_LOOT_WALL_MARGIN = 10;
+// Player weapon drop (Q / inventory UI): candidate rings around the dropper, preferred
+// toward the aim direction. The inner radius sits beyond pickup range (pr 18 + weapon
+// pickup radius 16 = 34), so a stationary dropper never instantly re-collects the drop.
+export const WEAPON_DROP_RADII: readonly number[] = [44, 60, 76];
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;

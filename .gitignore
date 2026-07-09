@@ -25,5 +25,9 @@ dist-ssr
 .vercel
 .env*
 
+<<<<<<< HEAD
 # Python bytecode (tools/ tests)
+=======
+# Python bytecode (tools/ scripts)
+>>>>>>> origin/main
 __pycache__/

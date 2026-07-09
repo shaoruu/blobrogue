@@ -10,7 +10,9 @@
 
 import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
-import { FlowField } from "./pathfind.js";
+import type { FlowField } from "./pathfind.js";
+import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
+import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type { Enemy, EnemyKind, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
@@ -183,9 +185,16 @@ export interface WorldState {
   props: Prop[];
   chests: Chest[];
   dungeon: Dungeon;
-  flow: FlowField;
+  // Dynamic-obstacle navigation caches (prop clearance grid + per-class flow fields).
+  // Derived data only — never on the wire; every consumer rebuilds lazily off
+  // (obstacleRev, flowKey), so server and clients always agree.
+  nav: NavRuntime;
+  // Obstacle revision: increments whenever the blocking prop set changes (floor build,
+  // prop destroyed, dev spawn). Keys every navigation cache; content systems that
+  // destroy cover (charges, slams) bump it implicitly through destroyProp.
+  obstacleRev: number;
   flowCd: number;
-  // Combined hash of every living source tile; the flow field rebuilds when it changes.
+  // Combined hash of every living source tile; the chase fields rebuild when it changes.
   flowKey: number;
   flowSources: number[];
   rng: Rng;
@@ -273,7 +282,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     props: [],
     chests: [],
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
-    flow: new FlowField(),
+    nav: createNav(),
+    obstacleRev: 0,
     flowCd: 0,
     flowKey: -1,
     flowSources: [],
@@ -365,13 +375,6 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.nextPropId = 0;
   w.nextPickupId = 0;
   w.nextChestId = 0;
-  const spawns = w.isSandbox
-    ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
-  w.enemies = spawns.active;
-  w.pendingSpawns = spawns.pending;
-  w.spawnReleaseCd = 0;
-  w.nextEnemyId = spawns.active.length + spawns.pending.length;
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.pendingBlessings.clear();
@@ -379,12 +382,29 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.flowCd = 0;
   w.flowKey = -1;
   w.pickups = [];
+  // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
+  // footprint, and the obstacle revision must already name this floor's layout. The
+  // ordering is free — every placement draws from its own seeded stream.
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) {
     stockWeaponChests(w);
     placeDealerHearts(w);
   }
+  w.obstacleRev++;
+  const spawns = w.isSandbox
+    ? { active: [], pending: [] }
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
+  w.enemies = spawns.active;
+  w.pendingSpawns = spawns.pending;
+  w.spawnReleaseCd = 0;
+  w.nextEnemyId = spawns.active.length + spawns.pending.length;
+  // Every planned unit — the active wave AND the queued reinforcements — settles onto a
+  // spawn point with full body clearance and a route to the playable region now, at
+  // build time. Props only ever VANISH mid-floor, so a point valid here is still valid
+  // when a reinforcement releases.
+  for (const e of w.enemies) settleEnemySpawn(w, e);
+  for (const e of w.pendingSpawns) settleEnemySpawn(w, e);
   // Reposition living players to the new spawn, each under the spawn-grace mercy window:
   // nobody loads into a fresh floor (a boss floor especially) already taking damage.
   const spawn = w.dungeon.spawn;
@@ -495,6 +515,7 @@ function placeProps(w: WorldState): Prop[] {
       const ty = room.y + rng.int(0, room.h - 1);
       const idx = ty * d.w + tx;
       if (occupied.has(idx) || d.tiles[idx] !== 0) continue;
+      if (isCorridorMouth(d, tx, ty)) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
       occupied.add(idx);
@@ -503,6 +524,25 @@ function placeProps(w: WorldState): Prop[] {
     }
   }
   return list;
+}
+
+function isRoomTile(d: Dungeon, tx: number, ty: number): boolean {
+  for (const r of d.rooms) {
+    if (tx >= r.x && tx < r.x + r.w && ty >= r.y && ty < r.y + r.h) return true;
+  }
+  return false;
+}
+
+// A room tile with corridor floor beside it is a DOOR MOUTH: a prop there can seal a
+// room's only connection to the rest of the floor (observed in a live-seed audit — two
+// barrels stacked across a 2-wide corridor mouth cut half the map off the spawn, and
+// with braziers the barricade isn't even breakable). Props are placed per-room so
+// corridors themselves never take one; guarding the mouths keeps the whole floor graph
+// connected for every clearance class.
+function isCorridorMouth(d: Dungeon, tx: number, ty: number): boolean {
+  const isCorridorFloor = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < d.w && y < d.h && d.tiles[y * d.w + x] === 0 && !isRoomTile(d, x, y);
+  return isCorridorFloor(tx + 1, ty) || isCorridorFloor(tx - 1, ty) || isCorridorFloor(tx, ty + 1) || isCorridorFloor(tx, ty - 1);
 }
 
 function placeChests(w: WorldState): Chest[] {
@@ -579,11 +619,84 @@ function moveCircle(w: WorldState, x: number, y: number, r: number, dx: number, 
 function blockedByProp(w: WorldState, x: number, y: number, r: number): boolean {
   for (const p of w.props) {
     if (p.dead) continue;
-    const rr = r + p.radius * 0.8;
+    const rr = r + p.radius * C.PROP_BLOCK_RING;
     const ddx = x - p.x, ddy = y - p.y;
     if (ddx * ddx + ddy * ddy < rr * rr) return true;
   }
   return false;
+}
+
+// ---- dynamic-obstacle navigation (see nav.ts for the module rationale) ----
+
+// The prop-aware chase field for a body of this radius (lazily rebuilt off the current
+// targets + obstacle revision — see refreshNav / nav.ts).
+function chaseFieldFor(w: WorldState, radius: number): FlowField {
+  return navChaseField(w.nav, w.dungeon, w.props, w.obstacleRev, navClassFor(radius));
+}
+
+// Reachability from the floor spawn tile (where players enter — and the only region a
+// player can ever walk, since obstacles only OPEN mid-floor). The oracle behind every
+// spawn-position validation.
+function reachFieldFor(w: WorldState, radius: number): FlowField {
+  const d = w.dungeon;
+  return navReachField(w.nav, d, w.props, w.obstacleRev, navClassFor(radius), d.spawn.y * d.w + d.spawn.x);
+}
+
+// Whether a body of radius `r` can physically exist at (x, y): the same wall probes
+// movement uses, outside every live prop's collision ring, and off every chest footprint
+// (chests never block movement, but a body materializing ON one reads as a bug).
+function isBodyClear(w: WorldState, x: number, y: number, r: number): boolean {
+  if (isWall(w, x, y) || isWall(w, x - r, y) || isWall(w, x + r, y) || isWall(w, x, y - r) || isWall(w, x, y + r)) return false;
+  if (blockedByProp(w, x, y, r)) return false;
+  for (const c of w.chests) {
+    const rr = r + c.radius;
+    const dx = x - c.x, dy = y - c.y;
+    if (dx * dx + dy * dy < rr * rr) return false;
+  }
+  return true;
+}
+
+// Shared scratch for settleSpawnPoint (read immediately by callers).
+const settlePoint = { x: 0, y: 0 };
+
+// Validate a spawn point for a body of radius `r`, or deterministically relocate it: the
+// intended point stands when it is body-clear AND its tile has a route to the playable
+// region; otherwise the scan walks outward over Chebyshev tile rings (fixed order — no
+// RNG, so spawn placement never shifts any seeded stream) and takes the first reachable,
+// body-clear tile center. Returns false when even the bounded scan finds nothing.
+function settleSpawnPoint(w: WorldState, x: number, y: number, r: number): boolean {
+  const reach = reachFieldFor(w, r);
+  const tx0 = Math.floor(x / TILE), ty0 = Math.floor(y / TILE);
+  if (isBodyClear(w, x, y, r) && reach.distAt(tx0, ty0) >= 0) {
+    settlePoint.x = x;
+    settlePoint.y = y;
+    return true;
+  }
+  for (let ring = 1; ring <= C.SPAWN_SCAN_RINGS; ring++) {
+    for (let dy = -ring; dy <= ring; dy++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        const tx = tx0 + dx, ty = ty0 + dy;
+        if (reach.distAt(tx, ty) < 0) continue; // wall / prop-blocked / unreachable pocket
+        const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
+        if (!isBodyClear(w, cx, cy, r)) continue; // off-center prop ring / chest footprint
+        settlePoint.x = cx;
+        settlePoint.y = cy;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Settle a freshly created floor enemy onto its validated spawn point. Falls back to the
+// intended point when the bounded scan finds nothing (never worse than the old behavior;
+// practically unreachable — a scan ring covers any generatable room).
+function settleEnemySpawn(w: WorldState, e: Enemy): void {
+  if (settleSpawnPoint(w, e.x, e.y, e.radius)) {
+    e.x = settlePoint.x;
+    e.y = settlePoint.y;
+  }
 }
 
 // ---- item mods ----
@@ -681,22 +794,17 @@ function equipWeapon(p: PlayerSim, id: WeaponId): void {
 }
 
 // Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
-// and by dev/grant. The client's keyboard/scroll switching calls equipWeaponInWorld.
+// and by dev/grant. Manual switching (1-9 / scroll / hotbar) goes through the validated
+// switchWeaponInWorld below on every path (LocalTransport and the server).
 function acquireWeapon(p: PlayerSim, id: WeaponId): void {
   if (!p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
   equipWeapon(p, id);
 }
 
-// Client-driven weapon switch (1-9 / Q / scroll). Equips an already-owned slot.
-export function equipWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
-  const p = w.players.get(pid);
-  if (p) equipWeapon(p, id);
-}
-
-// Authoritative, validated weapon switch (the server's switch-input handler). Equips only a
-// slot the player actually owns; an unowned id is ignored (a tampered client can't equip a
-// weapon it never picked up). Returns whether the switch was accepted. equipWeapon resets the
-// fire cooldown and cancels any in-progress melee swing server-side.
+// Authoritative, validated weapon switch (LocalTransport + the server's equip handler).
+// Equips only a slot the player actually owns; an unowned id is ignored (a tampered client
+// can't equip a weapon it never picked up). Returns whether the switch was accepted.
+// equipWeapon resets the fire cooldown and cancels any in-progress melee swing.
 export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): boolean {
   const p = w.players.get(pid);
   if (!p || !p.ownedWeapons.includes(id)) return false;
@@ -708,6 +816,68 @@ export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId):
 export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
   if (p) acquireWeapon(p, id);
+}
+
+export function reorderWeaponsInWorld(w: WorldState, pid: PlayerId, from: number, to: number): boolean {
+  // Authoritative inventory reorder (drag/drop on the hotbar). Moves the slot at `from` to
+  // position `to`; every other slot keeps its relative order. The equipped weapon is tracked
+  // by ID (p.weapon), so it survives any reorder — only the 1-9 key mapping changes. Both
+  // indices must name real slots; a stale index (inventory changed in flight) is rejected.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  const n = p.ownedWeapons.length;
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return false;
+  if (from < 0 || from >= n || to < 0 || to >= n) return false;
+  if (from === to) return true; // no-op reorder is valid (idempotent)
+  const [moved] = p.ownedWeapons.splice(from, 1);
+  p.ownedWeapons.splice(to, 0, moved);
+  return true;
+}
+
+export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev: SimEvent[]): boolean {
+  // Authoritative weapon drop (Q / inventory UI): remove an OWNED weapon from the player's
+  // inventory and spawn it as a shared world pickup on a safe, reachable spot. Gates:
+  //  - never while the run is over, the player is downed, or a blessing pick is pending
+  //    (those states pause the player; a drop there would be a free action or a dupe window);
+  //  - never the final weapon — the player always keeps at least one (the default pistol
+  //    if that is all they own). Any weapon may be dropped while another remains.
+  // If the dropped weapon was equipped, the adjacent slot (same index, else the new last)
+  // is equipped so the hand is never empty. Rejected drops mutate nothing.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  if (w.isRunOver || p.isDown || w.pendingBlessings.has(pid)) return false;
+  if (p.ownedWeapons.length <= 1) return false;
+  const idx = p.ownedWeapons.indexOf(id);
+  if (idx < 0) return false;
+  const spot = weaponDropSpot(w, p);
+  if (!spot) return false; // fully boxed in: keep the weapon rather than spawn it unreachable
+  p.ownedWeapons.splice(idx, 1);
+  if (p.weapon === id) equipWeapon(p, p.ownedWeapons[Math.min(idx, p.ownedWeapons.length - 1)]);
+  const [x, y] = spot;
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
+  ev.push({ t: "weaponDrop", weapon: id, x, y });
+  return true;
+}
+
+function weaponDropSpot(w: WorldState, p: PlayerSim): [number, number] | null {
+  // Deterministic candidate scan for a player-initiated drop, sharing the chest-loot safety
+  // rules: the spot must be standable (walkable floor with wall margin, prop-free,
+  // chest-free) AND straight-line reachable from the dropper, so the pickup is always
+  // collectible. Candidates prefer the aim direction (drop lands where the player faces),
+  // then fan out; radii walk inner-to-outer starting past pickup range (no instant
+  // re-collect). Null when everything nearby is blocked — the caller keeps the weapon.
+  const angles = C.CHEST_EJECT_ANGLES;
+  for (const radius of C.WEAPON_DROP_RADII) {
+    for (const da of angles) {
+      const a = p.aimAngle + da;
+      const x = p.x + Math.cos(a) * radius;
+      const y = p.y + Math.sin(a) * radius;
+      if (!isStandableSpot(w, x, y, p.pr)) continue;
+      if (!isPathOpen(w, p.x, p.y, x, y, p.pr)) continue;
+      return [x, y];
+    }
+  }
+  return null;
 }
 
 // Apply a picked blessing to a player: append the pick to the level history, RECOMPUTE the
@@ -996,18 +1166,27 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     ev.push({ t: "heal", pid: p.id, x: e.x, y: e.y });
   }
   // The shipped elite affix: SPLIT — on death the elite breaks into swarm units (readable,
-  // summoned, so they feed no hearts/Fang).
+  // summoned, so they feed no hearts/Fang). Each child settles onto a validated point
+  // (body-clear + reachable); when the rolled rim point has none (the elite died wedged
+  // against a full corner), the child takes the parent's own center — a spot the parent's
+  // larger body just proved out — so every split always yields its full count.
   if (e.tier === "elite" && !w.isRunOver) {
     for (let i = 0; i < ELITE_SPLIT_COUNT; i++) {
       const a = w.rng.next() * Math.PI * 2;
       const sx = e.x + Math.cos(a) * (e.radius + 6);
       const sy = e.y + Math.sin(a) * (e.radius + 6);
-      if (isWall(w, sx, sy)) continue;
       const child = createEnemy(e.kind, sx, sy, w.floor, w.rng, w.nextEnemyId++, {
         tier: "swarm", isSummoned: true, players: w.encounterPlayers,
       });
+      if (settleSpawnPoint(w, sx, sy, child.radius)) {
+        child.x = settlePoint.x;
+        child.y = settlePoint.y;
+      } else {
+        child.x = e.x;
+        child.y = e.y;
+      }
       w.enemies.push(child);
-      ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: sx, y: sy });
+      ev.push({ t: "enemySpawn", eid: child.id, kind: child.kind, tier: child.tier, x: child.x, y: child.y });
     }
   }
   dropLoot(w, p, e, ev);
@@ -1338,7 +1517,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
   // authoritative player. Solo resolves to the one player, so behavior is unchanged.
   releaseReinforcements(w, dt, ev);
-  refreshFlowField(w, dt);
+  refreshNav(w, dt);
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
@@ -1543,12 +1722,14 @@ function updateSpitter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.4, gain: 0.5, trauma: 0 });
     return;
   }
-  let dir = 0;
-  if (dist < C.SPITTER_FLEE) dir = -1;
-  else if (dist > C.SPITTER_APPROACH) dir = 1;
-  if (dir !== 0) {
-    const step = e.speed * dt * dir;
-    moveEnemyBy(w, e, Math.cos(toTarget) * step, Math.sin(toTarget) * step);
+  if (dist < C.SPITTER_FLEE) {
+    // Retreat stays a direct backpedal: a cornered spitter is the player's reward.
+    const step = e.speed * dt;
+    moveEnemyBy(w, e, -Math.cos(toTarget) * step, -Math.sin(toTarget) * step);
+  } else if (dist > C.SPITTER_APPROACH) {
+    // The approach routes like every other ground enemy (prop-aware + anti-stuck):
+    // a kiter that wedges on a barrel forever out of range never becomes a fight.
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
   }
 }
 
@@ -1735,15 +1916,21 @@ function bossChase(w: WorldState, e: Enemy, dt: number): void {
 }
 
 // Spawn one summoned slime at `angle` off the boss's edge. Summons are excluded from
-// hearts/Fang (isSummoned) so add pressure never becomes a sustain farm.
+// hearts/Fang (isSummoned) so add pressure never becomes a sustain farm. The point
+// settles like every other spawn (body-clear + reachable — never inside a wall or a
+// sealed cover pocket); a rim point with no valid neighborhood skips the add.
 function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): void {
   const mx = e.x + Math.cos(angle) * (e.radius + 20);
   const my = e.y + Math.sin(angle) * (e.radius + 20);
-  if (isWall(w, mx, my)) { ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false }); return; }
-  w.enemies.push(createEnemy("slime", mx, my, w.floor, w.rng, w.nextEnemyId++, {
+  if (!settleSpawnPoint(w, mx, my, ENEMY_ARCHETYPES.slime.radius)) {
+    ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: e.x, my: e.y, spawned: false });
+    return;
+  }
+  const sx = settlePoint.x, sy = settlePoint.y;
+  w.enemies.push(createEnemy("slime", sx, sy, w.floor, w.rng, w.nextEnemyId++, {
     isSummoned: true, players: w.encounterPlayers,
   }));
-  ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx, my, spawned: true });
+  ev.push({ t: "bossAddSpawn", eid: e.id, x: e.x, y: e.y, mx: sx, my: sy, spawned: true });
 }
 
 // ---- shared attack helpers ----
@@ -1776,14 +1963,14 @@ function hasLineOfSight(w: WorldState, x0: number, y0: number, x1: number, y1: n
   return true;
 }
 
-function refreshFlowField(w: WorldState, dt: number): void {
+function refreshNav(w: WorldState, dt: number): void {
   w.flowCd -= dt;
   const d = w.dungeon;
-  // Rebuild trigger keys off a combined hash of EVERY living source tile (players + legacy
-  // remote targets), so ANY player crossing a tile refreshes multi-source paths — not only the
-  // primary. Solo has exactly one player, so the hash changes precisely when that player's
-  // tile changes: identical rebuild ticks, goldens unchanged. The field itself is sourced from
-  // every living player, so enemies flow toward whichever player is nearest.
+  // Retarget trigger keys off a combined hash of EVERY living source tile (players + legacy
+  // remote targets), so ANY player crossing a tile refreshes multi-source paths — not only
+  // the primary. The chase fields themselves rebuild LAZILY per clearance class (see
+  // nav.ts) — this only records the target tiles and invalidates; obstacle-revision
+  // invalidation (a prop broke) rides the same lazy path inside the field queries.
   let keyHash = 0;
   let anyUp = false;
   for (const pl of w.players.values()) {
@@ -1797,7 +1984,7 @@ function refreshFlowField(w: WorldState, dt: number): void {
     keyHash = (Math.imul(keyHash, 31) + Math.floor(r.y / TILE) * d.w + Math.floor(r.x / TILE)) | 0;
   }
   const tileChanged = anyUp && keyHash !== w.flowKey;
-  if (w.flowCd > 0 && !tileChanged && w.flow.isReady()) return;
+  if (w.flowCd > 0 && !tileChanged) return;
   w.flowCd = C.FLOW_REBUILD;
   w.flowKey = keyHash;
 
@@ -1815,16 +2002,44 @@ function refreshFlowField(w: WorldState, dt: number): void {
     if (rtx < 0 || rty < 0 || rtx >= d.w || rty >= d.h) continue;
     srcs.push(rty * d.w + rtx);
   }
-  w.flow.build(d, srcs);
+  markNavTargets(w.nav, srcs);
 }
 
-function chaseAngle(w: WorldState, e: Enemy): number {
-  if (hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
-    return Math.atan2(w.targetY - e.y, w.targetX - e.x);
+// Does any live prop's collision ring cut the straight corridor from (x0,y0) to (x1,y1)
+// for a body of radius `r`? The full radius sum keeps the same conservative margin the
+// local steering uses, so "corridor clear" always means "actually walkable".
+function propOnSegment(w: WorldState, x0: number, y0: number, x1: number, y1: number, r: number): boolean {
+  const dx = x1 - x0, dy = y1 - y0;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return false;
+  const ux = dx / len, uy = dy / len;
+  for (const p of w.props) {
+    if (p.dead) continue;
+    const rr = r + p.radius;
+    const t = Math.max(0, Math.min(len, (p.x - x0) * ux + (p.y - y0) * uy));
+    const cx = x0 + ux * t - p.x, cy = y0 + uy * t - p.y;
+    if (cx * cx + cy * cy < rr * rr) return true;
   }
-  const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
-  if (w.flow.sampleStep(tx, ty)) return Math.atan2(w.flow.step.dy, w.flow.step.dx);
-  return Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  return false;
+}
+
+// The chase heading: direct when the straight corridor is genuinely walkable (wall LOS
+// AND no prop ring across it), otherwise the next waypoint of the prop-aware flow route
+// for this body's clearance class. Close range always commits to the direct line — the
+// finishing layer (avoidPropAhead + the stuck net in applyChaseStep) rounds a final
+// single prop far better than tile-resolution routing, and contact must never stall on
+// grid quantization. The route is what fixes the live wedge: rows, corners and concave
+// pockets are simply not part of the field, so steering can no longer be lured into them.
+function chaseAngle(w: WorldState, e: Enemy): number {
+  const direct = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  if (hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY)) {
+    const dx = w.targetX - e.x, dy = w.targetY - e.y;
+    if (dx * dx + dy * dy <= C.NAV_DIRECT_RANGE * C.NAV_DIRECT_RANGE) return direct;
+    if (!propOnSegment(w, e.x, e.y, w.targetX, w.targetY, e.radius)) return direct;
+  }
+  const field = chaseFieldFor(w, e.radius);
+  if (navStepPoint(field, e.x, e.y)) return Math.atan2(navPoint.y - e.y, navPoint.x - e.x);
+  return direct;
 }
 
 function slimeHopPulse(e: Enemy): number {
@@ -2025,6 +2240,10 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
   if (p.breakT !== undefined || p.kind === "brazier") return;
   p.dead = true;
   p.breakT = 0;
+  // The blocking set changed: invalidate every navigation cache so routes flow through
+  // the fresh gap on their next rebuild. Any future system that destroys cover (charges,
+  // slams, environmental chains) goes through this same door and inherits the bump.
+  w.obstacleRev++;
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
@@ -2537,7 +2756,15 @@ export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: 
 }
 export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: number): void {
   w.props.push({ id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+  w.obstacleRev++;
 }
 export function devSpawnChest(w: WorldState, x: number, y: number): void {
   w.chests.push({ id: w.nextChestId++, kind: "wood", x, y, radius: 16, opened: false });
+}
+
+// Dev flow inspector: the standard-class prop-aware chase field, lazily built off the
+// current targets. Diagnostics only — reading it never changes game outcomes (the same
+// cached build would happen on the next enemy query anyway).
+export function navDebugField(w: WorldState): FlowField {
+  return chaseFieldFor(w, ENEMY_ARCHETYPES.slime.radius);
 }

@@ -15,25 +15,34 @@ import { settings } from "./settings.js";
 // Which surface currently owns input. Exactly one is active at a time:
 //  - menu:      no run on screen (title/lobby/game-over own the DOM)
 //  - gameplay:  live run, local player acting
+//  - hud:       live run, but the HUD owns the pointer/keys (hotbar drag or an open
+//               drawer) — gameplay reads idle so a UI gesture can never fire/dash
 //  - pause:     Esc overlay up
 //  - blessing:  between-floor choice overlay up (the overlay owns 1/2/3/arrows/enter)
 //  - reconnect: online run waiting for the authoritative world (connecting veil)
 //  - spectate:  local player downed in a party run (watching, not acting)
-export type InputContext = "menu" | "gameplay" | "pause" | "blessing" | "reconnect" | "spectate";
+export type InputContext = "menu" | "gameplay" | "hud" | "pause" | "blessing" | "reconnect" | "spectate";
 
 export type GameAction =
   | { kind: "togglePause" }
   | { kind: "selectWeapon"; index: number }
   | { kind: "cycleWeapon"; dir: 1 | -1 }
+  | { kind: "dropWeapon" }
+  | { kind: "activateSlot"; index: number }
+  | { kind: "reorderSlots"; from: number; to: number }
   | { kind: "stats"; isHeld: boolean };
 
 // Per-action context allow-list. togglePause stays available while paused (Esc resumes),
-// spectating (quit out while down), and reconnecting (escape a dead connect); weapon
-// actions and fire exist only in live gameplay.
+// spectating (quit out while down), reconnecting (escape a dead connect), and under the
+// hud context (the game routes it to close-the-drawer first); weapon/inventory actions
+// and fire exist only in live gameplay.
 const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
-  togglePause: ["gameplay", "pause", "spectate", "reconnect"],
+  togglePause: ["gameplay", "hud", "pause", "spectate", "reconnect"],
   selectWeapon: ["gameplay"],
   cycleWeapon: ["gameplay"],
+  dropWeapon: ["gameplay"],
+  activateSlot: ["gameplay"],
+  reorderSlots: ["gameplay"],
   stats: ["gameplay", "spectate"],
 };
 
@@ -113,7 +122,7 @@ export class InputController {
     }
     if (!isRepeat) {
       if (k >= "1" && k <= "9") this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
-      if (k === "q") this.emit({ kind: "cycleWeapon", dir: -1 });
+      if (k === "q") this.emit({ kind: "dropWeapon" }); // Q drops the equipped weapon
     }
     return isPlaying && (k === " " || k === "shift");
   }

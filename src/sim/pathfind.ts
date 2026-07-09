@@ -6,15 +6,22 @@ import type { Dungeon } from "./dungeon.js";
 // then just walk downhill on that distance to route around walls toward whoever is
 // closest by path — no per-enemy search, no straight-line "stick on the wall" bug.
 //
+// Besides walls, a build may exclude tiles by CLEARANCE: callers pass a per-tile
+// clearance grid (px of open room around the tile center — see nav.ts) plus the body
+// radius that must fit, and the flood treats too-tight tiles as impassable. That is how
+// the dynamic-obstacle overlay (props) rides the same field without this module knowing
+// what a prop is. Source tiles are exempt from the clearance test on purpose: a target
+// hugging a barrel is still the tile to walk toward.
+//
 // Allocation discipline: the typed arrays are sized once per dungeon and reused on
 // every rebuild (build() only fills, never allocates). Sampling writes into a shared
 // `step` scratch vector rather than returning a fresh object, mirroring anim.ts.
 
 // 8-neighborhood, orthogonals first so a diagonal can be gated on its two ortho cells.
-const DX = [1, -1, 0, 0, 1, 1, -1, -1] as const;
-const DY = [0, 0, 1, -1, 1, -1, 1, -1] as const;
+export const DX = [1, -1, 0, 0, 1, 1, -1, -1] as const;
+export const DY = [0, 0, 1, -1, 1, -1, 1, -1] as const;
 
-const UNREACHED = -1; // dist sentinel: wall or not-yet-flooded (treated as impassable)
+export const UNREACHED = -1; // dist sentinel: wall/blocked or not-yet-flooded (impassable)
 
 export class FlowField {
   private w = 0;
@@ -40,9 +47,11 @@ export class FlowField {
   }
 
   // Flood from every source tile at once. `sources` holds row-major tile indices;
-  // wall / out-of-range sources are ignored. After this, dist[i] is the step count
-  // from tile i to the nearest reachable source (UNREACHED if walled off).
-  build(dungeon: Dungeon, sources: readonly number[]): void {
+  // wall / out-of-range sources are ignored. When a clearance grid is given, tiles with
+  // clearance below `minClearance` are impassable (sources stay exempt — see above).
+  // After this, dist[i] is the step count from tile i to the nearest reachable source
+  // (UNREACHED if walled off).
+  build(dungeon: Dungeon, sources: readonly number[], clearance?: Float32Array, minClearance = 0): void {
     this.ensureSize(dungeon.w, dungeon.h);
     const { w, h, tiles } = dungeon;
     const dist = this.dist;
@@ -70,12 +79,20 @@ export class FlowField {
         if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
         const ni = ny * w + nx;
         if (tiles[ni] === 1 || dist[ni] !== UNREACHED) continue;
+        if (clearance !== undefined && clearance[ni] < minClearance) continue;
         dist[ni] = nd;
         queue[tail++] = ni;
       }
     }
 
     this.isBuilt = true;
+  }
+
+  // BFS step-distance of tile (tx,ty) to the nearest source; UNREACHED for walls,
+  // blocked/unreachable tiles, out-of-range coordinates, or before the first build.
+  distAt(tx: number, ty: number): number {
+    if (!this.isBuilt || tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) return UNREACHED;
+    return this.dist[ty * this.w + tx];
   }
 
   // Writes the downhill step direction from tile (tx,ty) into `this.step` and returns

@@ -6,6 +6,8 @@
 // mid-run.
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
+import { MAX_ITEM_LEVEL } from "../sim/items.js";
+import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
 import type { WeaponCard } from "../sim/weaponStats.js";
 import { WeaponTipController } from "./weaponTip.js";
@@ -31,8 +33,32 @@ export interface HudState {
   comboColor: string; // tier accent (drives the mult text + drain bar)
   comboFrac: number;  // 0..1 of the combo window still remaining (drives the drain bar)
   // Collected blessings, duplicates collapsed into a level (count = Lv1-3), shown as
-  // labeled chips above the hotbar.
-  items: { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }[];
+  // compact icon-only slots above the hotbar. desc = the CURRENT level's effect;
+  // nextDesc = the next level's effect (the upgrade delta), null at max level.
+  items: { id: string; name: string; desc: string; nextDesc: string | null; glyph: string; tint: string; rarity: string; count: number }[];
+}
+
+export interface HotbarActions {
+  // Click / Enter / Space on a slot: equip that inventory index — or, when the slot is
+  // already equipped, open its stat drawer (the touch-safe replacement for hover info).
+  onSlotActivate(index: number): void;
+  // Drag/drop finished: move slot `from` to position `to` (indices into the CURRENT order).
+  onSlotReorder(from: number, to: number): void;
+}
+
+// The equipped weapon's stat sheet for the tap-to-inspect drawer. onDrop backs the drawer's
+// DROP button (the touch path for Q); null when the weapon can't drop (final weapon).
+// `card` is the full base→current stat card (src/sim/weaponStats.ts) — the same data the
+// hover tooltip renders, so the touch drawer shows identical effective values.
+export interface WeaponDrawerData {
+  id: WeaponId;
+  name: string;
+  damage: number;
+  rate: number;    // shots per second
+  range: number;   // px (melee reach or bullet travel)
+  isMelee: boolean;
+  card: WeaponCard | null;
+  onDrop: (() => void) | null;
 }
 
 export interface ProfileStats {
@@ -75,11 +101,17 @@ function fmtTime(seconds: number): string {
 }
 
 // One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath. Slots
-// past 9 get no key badge — Q/scroll still cycles to them. Fixed width so switching
-// never resizes anything.
-function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
+// past 9 get no key badge — scroll still cycles to them. Fixed width so switching never
+// resizes anything. Slots are pointer/keyboard interactive (click/Enter/Space equips, drag
+// reorders — see Hud.attachSlotInteractions), so they carry button semantics for a11y.
+// Exported for the DOM suite.
+export function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
   slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
+  slot.tabIndex = 0;
+  slot.setAttribute("role", "button");
+  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}`);
+  slot.title = `${w.name} — click to equip, drag to reorder`;
   if (index < 9) {
     const key = el("span", "", String(index + 1));
     key.className = "hb-key";
@@ -87,27 +119,73 @@ function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   }
   const icon = el("span", "");
   icon.className = "hb-icon";
-  icon.appendChild(weaponIconEl(w.id, w.name));
+  const iconEl = weaponIconEl(w.id, w.name);
+  if (iconEl instanceof HTMLImageElement) iconEl.draggable = false; // never the native image drag — ours
+  icon.appendChild(iconEl);
   const name = el("span", "", w.name.toUpperCase());
   name.className = "hb-name";
   slot.append(icon, name);
   return slot;
 }
 
-// One blessing chip: tinted icon + name + Lv1-3, with the current level's effect text
-// as a hover tooltip (the chips row is the only pointer-enabled part of the hotbar).
-function buildBuffChip(it: HudState["items"][number]): HTMLElement {
+// UI Director gate: the main-HUD blessing row shows at most this many icon slots; the rest
+// collapse into one "+N" overflow chip and the FULL build list lives in the hold-Tab panel.
+export const MAX_BUFF_SLOTS = 8;
+
+// One blessing slot: a compact 24px icon-only square with the blessing's tint as its border
+// and a small LV badge in the corner — no text in the row itself, so many blessings stay one
+// tidy strip. The full name, the exact current effect, and the next-level delta live in the
+// hover/focus tooltip (and in the aria-label for screen readers). Exported for the DOM suite.
+export function buildBuffChip(it: HudState["items"][number]): HTMLElement {
   const chip = el("span", "");
   chip.className = "hb-buff" + (it.rarity === "rare" ? " rare" : "");
   chip.style.setProperty("--t", it.tint);
+  chip.tabIndex = 0;
+  chip.setAttribute("role", "img");
+  chip.setAttribute("aria-label",
+    `${it.name}, level ${it.count}: ${it.desc}` + (it.nextDesc ? ` Next level: ${it.nextDesc}` : ""));
   chip.appendChild(itemIconEl(it.id, it.glyph));
-  const name = el("span", "", it.name.toUpperCase());
-  name.className = "bn";
-  const lv = el("span", "", "LV" + it.count);
-  lv.className = "bl";
-  const tip = el("span", "", it.desc);
+
+  const lv = el("span", "", String(it.count));
+  lv.className = "lv" + (it.count >= MAX_ITEM_LEVEL ? " max" : "");
+  chip.appendChild(lv);
+
+  const tip = el("span", "");
   tip.className = "tip";
-  chip.append(name, lv, tip);
+  const tipName = el("span", "", it.name.toUpperCase());
+  tipName.className = "tn";
+  const tipNow = el("span", "", `LV${it.count} — ${it.desc}`);
+  tipNow.className = "tc";
+  tip.append(tipName, tipNow);
+  if (it.nextDesc) {
+    const tipNext = el("span", "", `NEXT LV${it.count + 1} — ${it.nextDesc}`);
+    tipNext.className = "tx";
+    tip.appendChild(tipNext);
+  } else {
+    const tipMax = el("span", "", "MAX LEVEL");
+    tipMax.className = "tx max";
+    tip.appendChild(tipMax);
+  }
+  chip.appendChild(tip);
+  return chip;
+}
+
+// The "+N" overflow chip when the build outgrows the row: points at the hold-Tab panel,
+// which always lists the complete build. Exported for the DOM suite.
+export function buildMoreChip(hiddenCount: number): HTMLElement {
+  const chip = el("span", "", `+${hiddenCount}`);
+  chip.className = "hb-buff more";
+  chip.tabIndex = 0;
+  chip.setAttribute("role", "img");
+  chip.setAttribute("aria-label", `${hiddenCount} more blessings. Hold Tab for the full build.`);
+  const tip = el("span", "");
+  tip.className = "tip";
+  const tipName = el("span", "", `${hiddenCount} MORE`);
+  tipName.className = "tn";
+  const tipHint = el("span", "", "HOLD TAB FOR THE FULL BUILD");
+  tipHint.className = "tx";
+  tip.append(tipName, tipHint);
+  chip.appendChild(tip);
   return chip;
 }
 
@@ -133,7 +211,9 @@ const HUD_MARKUP = `
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
   <div class="hotbar">
     <div class="hb-buffs" data-hb-buffs></div>
+    <button class="hb-build" data-hb-build type="button" aria-haspopup="dialog"></button>
     <div class="hb-slots" data-hb-slots></div>
+    <div class="hb-hint" data-hb-hint>CLICK EQUIP &middot; DRAG REORDER &middot; Q DROP</div>
   </div>
   <div class="combo" data-combo>
     <div class="combo-badge">
@@ -145,6 +225,22 @@ const HUD_MARKUP = `
   </div>
 `;
 
+// In-flight hotbar drag. Exists from pointerdown; isActive flips once the pointer travels
+// past the click threshold (so a plain click never flickers a ghost). `gap` is the insertion
+// index in 0..slotCount — the position the dragged slot would be spliced into.
+interface SlotDrag {
+  pointerId: number;
+  fromIndex: number;
+  startX: number;
+  startY: number;
+  isActive: boolean;
+  ghost: HTMLElement | null;
+  marker: HTMLElement | null;
+  gap: number;
+}
+
+const DRAG_START_PX = 6;
+
 export class Hud {
   private hud: HTMLElement;
   private heartsEl: HTMLElement;
@@ -153,6 +249,14 @@ export class Hud {
   private coinsEl: HTMLElement;
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
+  private hotbarHintEl: HTMLElement;
+  private buildPillEl: HTMLButtonElement;
+  private scrimEl: HTMLElement;
+  private drawerEl: HTMLElement;
+  private lastItems: HudState["items"] = [];
+  private hotbarActions: HotbarActions | null = null;
+  private drawerFocus = new FocusScope(); // modal focus capture/restore (same pattern as overlays)
+  private drag: SlotDrag | null = null;
   private prevSlotsKey = "";
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
@@ -176,8 +280,8 @@ export class Hud {
   private controlsHint: HTMLElement;
   private hintTimer = 0;
 
-  // Weapon stat tooltip — a self-contained controller (see weaponTip.ts) so the
-  // interactive-hotbar work (PR #36) can mount the same presentation on its own DOM.
+  // Weapon stat tooltip — a self-contained controller (see weaponTip.ts) rendering the
+  // hover/selection-flash stat card over the interactive slots (never intercepting them).
   private weaponTip: WeaponTipController;
 
   // Hearts are the one expensive redraw (canvas per heart), so only rebuild on change.
@@ -198,6 +302,23 @@ export class Hud {
     this.coinsEl = hud.querySelector("[data-coins]")!;
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
+    this.hotbarHintEl = hud.querySelector("[data-hb-hint]")!;
+    this.buildPillEl = hud.querySelector("[data-hb-build]")!;
+    // The drawers live on the ROOT, not inside #hud: #hud is a z-index:5 stacking context
+    // that would pin them under the root-level hint/banner layers (z 6). Root placement
+    // puts them above all passive chrome and still under the menus (z 10) — same pattern
+    // as the stats panel below.
+    this.scrimEl = el("div", "");
+    this.scrimEl.className = "hb-scrim";
+    this.drawerEl = el("div", "");
+    this.drawerEl.className = "hb-drawer";
+    this.drawerEl.setAttribute("role", "dialog");
+    this.drawerEl.setAttribute("aria-modal", "true");
+    root.append(this.scrimEl, this.drawerEl);
+    // The BUILD·N pill (compact/touch summary of the blessing row) taps open the full
+    // build drawer; the scrim behind any drawer closes it and swallows the tap.
+    this.buildPillEl.addEventListener("click", (e) => { e.stopPropagation(); this.openBuildDrawer(); });
+    this.scrimEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); this.closeDrawer(); });
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
@@ -228,7 +349,7 @@ export class Hud {
     card.appendChild(el("h2", "color:var(--amber);font:14px var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
     this.statsBody = el("div", "display:flex;flex-direction:column;gap:6px;");
     card.appendChild(this.statsBody);
-    card.appendChild(el("p", "margin-top:16px;font:8px var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "HOLD TAB TO VIEW \u00b7 RELEASE TO RESUME"));
+    card.appendChild(el("p", "margin-top:16px;font:8px var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "RELEASE TAB TO CLOSE"));
     this.statsPanel.appendChild(card);
     root.appendChild(this.statsPanel);
 
@@ -248,9 +369,19 @@ export class Hud {
       "WASD MOVE \u00b7 MOUSE AIM \u00b7 CLICK SHOOT \u00b7 SHIFT DASH");
     root.appendChild(this.controlsHint);
 
-    // Weapon stat tooltip: lives outside #hud so it can't inherit its stacking; fixed +
-    // pointer-events:none, so it never blocks gameplay (see weaponTip.ts).
+    // Weapon stat tooltip: root-level like the drawers (out of #hud's stacking context),
+    // pointer-transparent, so it floats over the interactive slots without touching their
+    // click/drag hit-testing (see weaponTip.ts).
     this.weaponTip = new WeaponTipController(root);
+  }
+
+  setVisible(v: boolean) {
+    this.hud.style.display = v ? "block" : "none";
+    this.weaponTip.setActive(v);
+  }
+
+  setHotbarActions(actions: HotbarActions) {
+    this.hotbarActions = actions;
   }
 
   // Feed the tooltip live weapon cards (game.ts closes over the local player, so the values
@@ -260,14 +391,249 @@ export class Hud {
   }
 
   // Public tooltip trigger (hover/select/focus) — forwarded to the controller so other
-  // input drivers (controller focus, mobile long-press, PR #36's interactions) share it.
+  // input drivers (controller focus, mobile long-press) share one seam.
   showWeaponTip(index: number, source: WeaponTipSource) {
     this.weaponTip.show(index, source);
   }
 
-  setVisible(v: boolean) {
-    this.hud.style.display = v ? "block" : "none";
-    this.weaponTip.setActive(v);
+  // ---- hotbar slot interactions (click equip, drag/drop reorder, keyboard activate) ----
+  // Every pointer event is stopped at the slot so a hotbar press can never leak into the
+  // game canvas as aim/fire; the rest of the HUD stays pointer-transparent.
+
+  private attachSlotInteractions(slot: HTMLElement, index: number) {
+    slot.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation(); // a focused slot owns Enter/Space (Space is also the game's key)
+      this.hotbarActions?.onSlotActivate(index);
+    });
+    slot.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || this.drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      slot.setPointerCapture(e.pointerId);
+      this.drag = { pointerId: e.pointerId, fromIndex: index, startX: e.clientX, startY: e.clientY, isActive: false, ghost: null, marker: null, gap: index };
+    });
+    slot.addEventListener("pointermove", (e) => {
+      const d = this.drag;
+      if (!d || e.pointerId !== d.pointerId) return;
+      e.stopPropagation();
+      if (!d.isActive) {
+        if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_START_PX) return;
+        this.beginDragVisuals(slot, d);
+      }
+      this.moveGhost(d, e.clientX, e.clientY);
+      d.gap = this.insertionGapAt(e.clientX, e.clientY);
+      this.placeInsertionMarker(d);
+    });
+    slot.addEventListener("pointerup", (e) => {
+      const d = this.drag;
+      if (!d || e.pointerId !== d.pointerId) return;
+      e.stopPropagation();
+      const isDragRelease = d.isActive;
+      const from = d.fromIndex;
+      // Gap -> final index: removing the source first shifts every later gap down by one.
+      const to = d.gap > from ? d.gap - 1 : d.gap;
+      this.teardownDrag(slot);
+      if (!isDragRelease) this.hotbarActions?.onSlotActivate(index);
+      else if (to !== from) this.hotbarActions?.onSlotReorder(from, to);
+    });
+    slot.addEventListener("pointercancel", () => this.teardownDrag(slot));
+  }
+
+  private beginDragVisuals(slot: HTMLElement, d: SlotDrag) {
+    d.isActive = true;
+    const rect = slot.getBoundingClientRect();
+    const ghost = slot.cloneNode(true) as HTMLElement;
+    ghost.classList.add("hb-ghost");
+    ghost.classList.remove("dragging");
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    document.body.appendChild(ghost);
+    d.ghost = ghost;
+    const marker = el("span", "");
+    marker.className = "hb-ins";
+    this.slotsEl.appendChild(marker);
+    d.marker = marker;
+    slot.classList.add("dragging");
+  }
+
+  private moveGhost(d: SlotDrag, x: number, y: number) {
+    if (!d.ghost) return;
+    const r = d.ghost.getBoundingClientRect();
+    d.ghost.style.transform = `translate(${x - r.width / 2}px, ${y - r.height / 2}px)`;
+  }
+
+  private slotEls(): HTMLElement[] {
+    return [...this.slotsEl.querySelectorAll<HTMLElement>(".hb-slot")];
+  }
+
+  private insertionGapAt(x: number, y: number): number {
+    // Insertion gap under the pointer, row-aware (the strip wraps past ~10 slots): pick the
+    // row whose vertical center is nearest, then count that row's slots left of the pointer.
+    const slots = this.slotEls();
+    if (slots.length === 0) return 0;
+    const rects = slots.map((s) => s.getBoundingClientRect());
+    const rowTops: number[] = [];
+    for (const r of rects) if (!rowTops.some((t) => Math.abs(t - r.top) < 4)) rowTops.push(r.top);
+    let rowTop = rowTops[0];
+    let best = Infinity;
+    for (const t of rowTops) {
+      const h = rects.find((r) => Math.abs(r.top - t) < 4)!.height;
+      const dist = Math.abs(t + h / 2 - y);
+      if (dist < best) { best = dist; rowTop = t; }
+    }
+    let gap = 0;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (r.top < rowTop - 4) { gap = i + 1; continue; }         // full rows above the target
+      if (Math.abs(r.top - rowTop) < 4 && r.left + r.width / 2 < x) gap = i + 1;
+    }
+    return gap;
+  }
+
+  private placeInsertionMarker(d: SlotDrag) {
+    if (!d.marker) return;
+    const slots = this.slotEls();
+    if (slots.length === 0) return;
+    const parent = this.slotsEl.getBoundingClientRect();
+    const before = d.gap < slots.length ? slots[d.gap].getBoundingClientRect() : null;
+    const anchor = before ?? slots[slots.length - 1].getBoundingClientRect();
+    const xEdge = before ? anchor.left - 4 : anchor.right + 1;
+    d.marker.style.left = `${xEdge - parent.left}px`;
+    d.marker.style.top = `${anchor.top - parent.top}px`;
+    d.marker.style.height = `${anchor.height}px`;
+  }
+
+  private teardownDrag(slot: HTMLElement) {
+    const d = this.drag;
+    if (!d) return;
+    this.drag = null;
+    d.ghost?.remove();
+    d.marker?.remove();
+    slot.classList.remove("dragging");
+    // The DOM order may now be stale against authority (reorder in flight / rebuilds were
+    // held during the drag) — force a rebuild on the next update.
+    this.prevSlotsKey = "";
+  }
+
+  // ---- drawers (touch-first info surfaces — nothing here is hover-only) ----
+
+  isDrawerOpen(): boolean {
+    return this.drawerEl.classList.contains("open");
+  }
+
+  // Whether the HUD currently owns the pointer/keys: a live hotbar drag or an open drawer.
+  // The game gates gameplay actions on this (the input-context seam), so HUD interaction
+  // never leaks into firing/dashing/switching.
+  isInteractionActive(): boolean {
+    return this.drag !== null || this.isDrawerOpen();
+  }
+
+  closeDrawer() {
+    const wasOpen = this.isDrawerOpen();
+    this.drawerEl.classList.remove("open");
+    this.scrimEl.classList.remove("show");
+    this.drawerEl.replaceChildren();
+    if (wasOpen) this.drawerFocus.close(); // return focus to the pill/slot that opened it
+  }
+
+  private openDrawer(title: string, fill: (body: HTMLElement) => void) {
+    this.drawerEl.replaceChildren();
+    const head = el("div", "");
+    head.className = "hd-head";
+    head.appendChild(el("span", "", title));
+    const close = el("button", "", "CLOSE");
+    close.className = "hd-close";
+    close.type = "button";
+    close.addEventListener("click", (e) => { e.stopPropagation(); this.closeDrawer(); });
+    head.appendChild(close);
+    this.drawerEl.appendChild(head);
+    const body = el("div", "");
+    body.className = "hd-body";
+    fill(body);
+    this.drawerEl.appendChild(body);
+    this.drawerEl.classList.add("open");
+    this.scrimEl.classList.add("show");
+    this.drawerFocus.open(close, currentFocus());
+  }
+
+  // The full build list as a bottom drawer — what the collapsed BUILD·N pill taps open
+  // (same content the hold-Tab panel shows, reachable without a keyboard).
+  openBuildDrawer() {
+    this.openDrawer(`BUILD \u00b7 ${this.lastItems.length}`, (body) => {
+      if (this.lastItems.length === 0) {
+        body.appendChild(el("p", "", "NO BLESSINGS YET"));
+        return;
+      }
+      for (const it of this.lastItems) {
+        const row = el("div", "");
+        row.className = "hd-row";
+        row.style.setProperty("--t", it.tint);
+        const icon = el("span", "");
+        icon.className = "hd-icon";
+        icon.appendChild(itemIconEl(it.id, it.glyph));
+        const text = el("span", "");
+        text.className = "hd-text";
+        const name = el("span", "", `${it.name.toUpperCase()} \u00b7 LV${it.count}`);
+        name.className = "hd-name";
+        const desc = el("span", "", it.desc);
+        desc.className = "hd-desc";
+        text.append(name, desc);
+        if (it.nextDesc) {
+          const next = el("span", "", `NEXT LV${it.count + 1} \u2014 ${it.nextDesc}`);
+          next.className = "hd-next";
+          text.appendChild(next);
+        }
+        row.append(icon, text);
+        body.appendChild(row);
+      }
+    });
+  }
+
+  // The equipped weapon's stat sheet — the tap path for what hover-only title text showed
+  // (activate an already-equipped slot to open it). Carries the touch DROP action too.
+  openWeaponDrawer(d: WeaponDrawerData) {
+    this.openDrawer(d.name.toUpperCase(), (body) => {
+      const stats = el("div", "");
+      stats.className = "hd-stats";
+      const stat = (k: string, v: string) => {
+        const box = el("span", "");
+        box.className = "hd-stat";
+        box.append(el("span", "", k), el("b", "", v));
+        stats.appendChild(box);
+      };
+      stat("DMG", String(d.damage));
+      stat("RATE", `${d.rate.toFixed(1)}/S`);
+      stat(d.isMelee ? "REACH" : "RANGE", `${Math.round(d.range)} PX`);
+      body.appendChild(stats);
+      // Full base -> current stat card (same weaponStats data the hover tooltip shows),
+      // so the touch/tap path reads identical effective values under blessings.
+      if (d.card) {
+        const lines = el("div", "");
+        lines.className = "hd-card";
+        lines.appendChild(el("div", "", d.card.verb)).className = "hd-verb";
+        for (const l of d.card.lines) {
+          const row = el("div", "");
+          row.className = "hd-row" + (l.delta > 0 ? " up" : l.delta < 0 ? " down" : "");
+          row.appendChild(el("span", "", l.label)).className = "k";
+          row.appendChild(el("span", "", l.delta !== 0 ? `${l.base} \u2192 ${l.current}` : l.current)).className = "v";
+          lines.appendChild(row);
+        }
+        body.appendChild(lines);
+      }
+      if (d.onDrop) {
+        const drop = el("button", "", "DROP (Q)");
+        drop.className = "hd-drop";
+        drop.type = "button";
+        drop.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.closeDrawer(); // release the input context BEFORE the drop action runs
+          d.onDrop?.();
+        });
+        body.appendChild(drop);
+      }
+    });
   }
 
   update(s: HudState) {
@@ -280,17 +646,29 @@ export class Hud {
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
-    // Only rebuild when the set or selection changes (cheap string key).
+    // Only rebuild when the set/order or selection changes (cheap string key), and NEVER
+    // mid-drag — replacing the slots would strand the pointer capture; the drag teardown
+    // forces the rebuild instead, realigning the DOM with authority.
     const slotsKey = s.weapons.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|");
-    if (slotsKey !== this.prevSlotsKey) {
+    if (slotsKey !== this.prevSlotsKey && !this.drag) {
       this.prevSlotsKey = slotsKey;
       this.slotsEl.replaceChildren();
-      const slotEls = s.weapons.map((w, i) => buildSlot(w, i));
-      for (const slot of slotEls) this.slotsEl.appendChild(slot);
+      const slotEls: HTMLElement[] = [];
+      s.weapons.forEach((w, i) => {
+        const slot = buildSlot(w, i);
+        this.attachSlotInteractions(slot, i);
+        this.slotsEl.appendChild(slot);
+        slotEls.push(slot);
+      });
       this.weaponTip.setSlots(slotEls, s.weapons.map((w) => w.id));
       this.weaponTip.noteSelection(s.weapons.find((w) => w.isCurrent)?.id ?? "");
     }
+    // The hover card follows live values, but never over an in-flight drag (the ghost
+    // under the pointer would fight the card) — the drawer owns the tap/inspect path.
+    this.weaponTip.setActive(this.hud.style.display !== "none" && !this.drag);
     this.weaponTip.sync();
+    // The interaction hint matters once there is something to switch/reorder/drop.
+    this.hotbarHintEl.classList.toggle("show", s.weapons.length > 1);
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
@@ -311,13 +689,23 @@ export class Hud {
     this.updateCombo(s);
 
     // Rebuild the blessing chips only when a blessing is picked. Gated on total picks
-    // (sum of levels) so a repeat pick that just levels a chip still refreshes it.
+    // (sum of levels) so a repeat pick that just levels a chip still refreshes it. The row
+    // is capped at MAX_BUFF_SLOTS: past that, the last slot becomes a "+N" overflow chip
+    // and the hold-Tab panel carries the full build.
     const totalPicks = s.items.reduce((n, it) => n + it.count, 0);
+    this.lastItems = s.items;
     if (totalPicks !== this.prevItemsCount) {
       this.prevItemsCount = totalPicks;
       this.buffsEl.replaceChildren();
-      for (const it of s.items) this.buffsEl.appendChild(buildBuffChip(it));
+      const shownCount = s.items.length > MAX_BUFF_SLOTS ? MAX_BUFF_SLOTS - 1 : s.items.length;
+      for (const it of s.items.slice(0, shownCount)) this.buffsEl.appendChild(buildBuffChip(it));
+      if (s.items.length > shownCount) this.buffsEl.appendChild(buildMoreChip(s.items.length - shownCount));
       this.buffsEl.classList.toggle("show", s.items.length > 0);
+      // Compact/touch contexts collapse the chip row into this summary pill (CSS decides
+      // which of the two is visible); tapping it opens the full build drawer.
+      this.buildPillEl.textContent = `BUILD \u00b7 ${s.items.length}`;
+      this.buildPillEl.setAttribute("aria-label", `${s.items.length} blessings. Open the full build.`);
+      this.buildPillEl.classList.toggle("has", s.items.length > 0);
     }
   }
 
@@ -450,8 +838,15 @@ export class Hud {
     this.prevMult = 1;
     this.comboPop = 0;
     this.comboBurstEl.classList.remove("fire");
+    this.drag?.ghost?.remove();
+    this.drag?.marker?.remove();
+    this.drag = null;
+    this.closeDrawer();
+    this.buildPillEl.classList.remove("has");
+    this.lastItems = [];
     this.slotsEl.replaceChildren();
     this.prevSlotsKey = "";
+    this.hotbarHintEl.classList.remove("show");
     this.buffsEl.replaceChildren();
     this.buffsEl.classList.remove("show");
     this.prevItemsCount = -1;

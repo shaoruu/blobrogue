@@ -32,7 +32,8 @@ function isIdle(input: InputController): boolean {
   return s.moveX === 0 && s.moveY === 0 && !s.firing && !s.dash;
 }
 
-const NON_GAMEPLAY: InputContext[] = ["menu", "pause", "blessing", "reconnect", "spectate"];
+const NON_GAMEPLAY: InputContext[] = ["menu", "hud", "pause", "blessing", "reconnect", "spectate"];
+const WEAPON_ACTIONS: readonly GameAction["kind"][] = ["selectWeapon", "cycleWeapon", "dropWeapon", "activateSlot", "reorderSlots"];
 
 function overlayLeakageTests(): void {
   section("overlay leakage: gameplay actions exist only in the gameplay context");
@@ -46,7 +47,7 @@ function overlayLeakageTests(): void {
     check("gameplay: 1/Q/wheel produce weapon actions",
       actions.length === 4
       && actions[0].kind === "selectWeapon" && actions[0].index === 0
-      && actions[1].kind === "cycleWeapon" && actions[1].dir === -1
+      && actions[1].kind === "dropWeapon" // Q drops the equipped weapon
       && actions[2].kind === "cycleWeapon" && actions[2].dir === 1
       && actions[3].kind === "cycleWeapon" && actions[3].dir === -1);
   }
@@ -57,12 +58,14 @@ function overlayLeakageTests(): void {
     input.keyDown("9");
     input.keyDown("q");
     input.wheel(120);
-    const leaked = actions.filter((a) => a.kind === "selectWeapon" || a.kind === "cycleWeapon");
-    check(`${ctx}: number/Q/wheel cannot change weapons`, leaked.length === 0, leaked.map((a) => a.kind).join(","));
+    const leaked = actions.filter((a) => WEAPON_ACTIONS.includes(a.kind));
+    check(`${ctx}: number/Q/wheel cannot change or drop weapons`, leaked.length === 0, leaked.map((a) => a.kind).join(","));
   }
   {
     const { input, actions } = harness();
-    for (const ctx of ["gameplay", "pause", "spectate", "reconnect"] as InputContext[]) {
+    // "hud" allows togglePause too: the game routes it to close-the-drawer first, so
+    // Escape always dismisses the topmost surface.
+    for (const ctx of ["gameplay", "hud", "pause", "spectate", "reconnect"] as InputContext[]) {
       actions.length = 0;
       input.setContext(ctx);
       input.keyDown("Escape");
@@ -209,6 +212,37 @@ function edgeTriggerTests(): void {
   }
 }
 
+function uiDispatchTests(): void {
+  section("UI dispatch: hotbar-injected actions ride the same context gate");
+  {
+    const { input, actions } = harness();
+    input.setContext("gameplay");
+    input.dispatch({ kind: "activateSlot", index: 2 });
+    input.dispatch({ kind: "reorderSlots", from: 0, to: 2 });
+    input.dispatch({ kind: "dropWeapon" });
+    check("gameplay: activate/reorder/drop dispatches pass",
+      actions.length === 3
+      && actions[0].kind === "activateSlot" && actions[0].index === 2
+      && actions[1].kind === "reorderSlots" && actions[1].from === 0 && actions[1].to === 2
+      && actions[2].kind === "dropWeapon");
+  }
+  for (const ctx of NON_GAMEPLAY) {
+    const { input, actions } = harness();
+    input.setContext(ctx);
+    input.dispatch({ kind: "activateSlot", index: 0 });
+    input.dispatch({ kind: "reorderSlots", from: 0, to: 1 });
+    input.dispatch({ kind: "dropWeapon" });
+    check(`${ctx}: UI dispatches are rejected by the gate`, actions.length === 0, actions.map((a) => a.kind).join(","));
+  }
+  {
+    const { input } = harness();
+    input.setContext("hud");
+    input.keyDown("w");
+    input.mouseDown(0);
+    check("hud context (drag/drawer): gameplay sample is idle", isIdle(input));
+  }
+}
+
 function spectateTests(): void {
   section("spectate: watching, not acting");
   const { input, actions } = harness();
@@ -255,6 +289,7 @@ mouseButtonTests();
 blurVisibilityTests();
 autofireContextTests();
 edgeTriggerTests();
+uiDispatchTests();
 spectateTests();
 focusScopeTests();
 

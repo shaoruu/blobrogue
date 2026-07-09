@@ -38,6 +38,11 @@ export interface RoomRuntime {
   // Authoritative gameplay actions (validated; inputs/intents only, never outcomes).
   queueInput(conn: Conn, cmd: InputIntent, maxQueue: number): void;
   trySwitchWeapon(pid: PlayerId, weapon: WeaponId): boolean;
+  // Inventory reorder (hotbar drag/drop): indices validated against the live inventory.
+  tryReorderWeapons(pid: PlayerId, from: number, to: number): boolean;
+  // Weapon drop: ownership + player-state + last-weapon rule validated; the room spawns the
+  // shared pickup and emits the drop event through its reliable channel.
+  tryDropWeapon(pid: PlayerId, weapon: WeaponId): boolean;
   // Rolls against the player's owned levels (maxed blessings leave the pool; new ones weigh
   // 3× an upgrade); rare = the boss-chest Rare-pool reward.
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[];

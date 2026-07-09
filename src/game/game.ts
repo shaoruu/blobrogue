@@ -6,7 +6,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
+import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
@@ -14,7 +14,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -122,6 +122,8 @@ export interface DevSnapshot {
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
+interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
@@ -373,6 +375,7 @@ export class Game {
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
+  private worldLabels: WorldLabel[] = []; // floating text popups (visual only; e.g. drop names)
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
@@ -480,6 +483,13 @@ export class Game {
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
+    // Hotbar UI injects into the SAME context-gated InputController the keyboard uses —
+    // one action gate for every input surface. Context is re-synced first because these
+    // callbacks fire between ticks (right after a drag tears down or a drawer closes).
+    this.hud.setHotbarActions({
+      onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
+      onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
+    });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
@@ -525,6 +535,9 @@ export class Game {
   // (keyup/mouseup are lost while unfocused, so a key or autofire could otherwise stick).
   private bindInput() {
     window.addEventListener("keydown", (e) => {
+      // Refresh the context first: a drawer/drag can open and a key can land within the
+      // same tick, and the gate must see the CURRENT surface, never last tick's.
+      this.syncInputContext();
       if (this.input.keyDown(e.key, e.repeat)) e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.input.keyUp(e.key));
@@ -534,9 +547,10 @@ export class Game {
     });
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
+      this.syncInputContext();
       this.input.wheel(e.deltaY); // scroll to cycle weapons (gameplay context only)
     }, { passive: false });
-    this.canvas.addEventListener("mousedown", (e) => this.input.mouseDown(e.button));
+    this.canvas.addEventListener("mousedown", (e) => { this.syncInputContext(); this.input.mouseDown(e.button); });
     window.addEventListener("mouseup", (e) => this.input.mouseUp(e.button));
     // Right-click is not a gameplay input; only suppress the browser menu over the
     // canvas while actually playing, never on overlays or the menu.
@@ -553,13 +567,24 @@ export class Game {
   private onInputAction(a: GameAction) {
     switch (a.kind) {
       case "togglePause":
-        this.togglePause();
+        // Under the hud context Escape means "dismiss the drawer"; pause is next.
+        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
+        else this.togglePause();
         break;
       case "selectWeapon":
-        if (this.isRunning) this.selectWeapon(a.index);
+        if (this.isRunning) this.equipSlot(a.index);
         break;
       case "cycleWeapon":
         if (this.isRunning) this.cycleWeapon(a.dir);
+        break;
+      case "dropWeapon":
+        if (this.isRunning) this.dropEquippedWeapon();
+        break;
+      case "activateSlot":
+        if (this.isRunning) this.activateSlot(a.index);
+        break;
+      case "reorderSlots":
+        if (this.isRunning) this.reorderSlots(a.from, a.to);
         break;
       case "stats":
         this.isStatsHeld = a.isHeld;
@@ -581,6 +606,8 @@ export class Game {
     if (this.isPaused) return "pause";
     if (this.isAwaitingOnlineWorld()) return "reconnect";
     if (this.isDown) return "spectate";
+    // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
+    if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
   }
 
@@ -676,6 +703,7 @@ export class Game {
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
+    this.worldLabels = [];
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
@@ -896,7 +924,8 @@ export class Game {
   }
 
   // Build this tick's InputCmd from the context-gated controller sample plus the
-  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash.
+  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash. The "hud" context
+  // (hotbar drag / open drawer) samples idle, so HUD interaction never leaks into combat.
   private buildInput(): InputCmd {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
@@ -971,6 +1000,7 @@ export class Game {
     this.updateFootstepDust(dt);
     this.updateParticles(dt);
     this.updateDmgNumbers(dt);
+    this.updateWorldLabels(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
@@ -1172,6 +1202,14 @@ export class Game {
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
         this.spawnPuff(e.x, e.y, 5, e.color);
+        break;
+      case "weaponDrop":
+        // A deliberate drop lands with a small pop and names itself, so every nearby player
+        // (including the dropper) reads what just hit the floor.
+        this.addDecal(e.x, e.y, "#ffb43b", 14, "ring");
+        this.spawnPuff(e.x, e.y, 6, "#ffb43b");
+        this.spawnWorldLabel(e.x, e.y - 22, WEAPONS[e.weapon].name.toUpperCase(), "#ffd166");
+        this.sfxAt("weapon", e.x, e.y, { rate: 0.8, gain: 0.5 });
         break;
       case "bulletWall":
         this.spawnSparks(e.x, e.y, 5, e.aim);
@@ -1482,29 +1520,68 @@ export class Game {
     return e.kind !== "boss" && e.chill >= FREEZE_AT;
   }
 
-  // Weapon switching (1-9 / Q / scroll): resolves the target slot client-side, then equips
-  // it in the sim. All local — no networking. Switching resets fire cooldown + cancels any
-  // in-progress swing (in the sim).
-  private selectWeapon(index: number) {
+  // ---- inventory action handlers ----
+  // Reached ONLY through the context-gated InputController (keyboard keys, wheel, and the
+  // hotbar UI all dispatch GameActions into it), so context legality lives in one place.
+  // These bodies keep just the structural rules, and route through the ONE transport seam:
+  // solo/co-op apply through the validated sim mutators in LocalTransport; online sends
+  // the authoritative command and the snapshot confirms — there is NO client-local
+  // inventory mutation on the online path.
+
+  // Equip the weapon in hotbar slot `index` (number keys 1-9 via the selectWeapon action).
+  private equipSlot(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
-    this.equipOrRequest(owned[index]);
+    this.transport.requestEquip(owned[index]);
+  }
+
+  // Hotbar activation (tap/click/Enter/Space): an unequipped slot equips; the already-
+  // equipped slot opens its stat drawer instead — weapon info is never hover-only, so
+  // touch and keyboard users reach it too. Number keys keep pure-equip semantics. The
+  // drawer's DROP button re-enters the controller as a dropWeapon action (context is
+  // re-synced after the drawer closes, so it passes the same gate as the Q key).
+  private activateSlot(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
+    const w = WEAPONS[this.weapon];
+    this.hud.openWeaponDrawer({
+      id: w.id,
+      name: w.name,
+      damage: w.damage,
+      rate: 1 / w.fireCd,
+      range: w.melee ? w.melee.reach : w.speed * w.life,
+      isMelee: w.melee !== undefined,
+      // The full base -> current card (same weaponStats data the hover tooltip renders),
+      // so touch/keyboard users read the same effective values under their blessings.
+      card: this.world?.players.get(LOCAL_ID) ? weaponCard(w.id, this.world.players.get(LOCAL_ID)!) : null,
+      onDrop: owned.length > 1
+        ? () => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeapon" }); }
+        : null,
+    });
+  }
+
+  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
+  // the resulting order, because they index the same authoritative ownedWeapons array.
+  private reorderSlots(from: number, to: number) {
+    const n = this.p.ownedWeapons.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    this.transport.requestReorder(from, to);
+  }
+
+  // Drop the currently equipped weapon into the world (Q / drawer DROP). The final weapon
+  // never drops; the authority (sim or server) additionally rejects downed/pending/terminal
+  // states server-side even if a tampered client bypasses the context gate.
+  private dropEquippedWeapon() {
+    if (this.p.ownedWeapons.length < 2) return;
+    this.transport.requestDrop(this.weapon);
   }
 
   private cycleWeapon(dir: number) {
     const owned = this.p.ownedWeapons;
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
-    const next = (cur + dir + owned.length) % owned.length;
-    this.equipOrRequest(owned[next]);
-  }
-
-  // Solo/co-op equip in the local sim (authoritative locally); online sends an authoritative
-  // equip command — the server validates ownership + equips, and the result returns via SelfWire.
-  // There is NO client-local inventory mutation on the online path.
-  private equipOrRequest(weapon: WeaponId) {
-    if (this.mode === "online" && this.wsTransport) this.wsTransport.sendEquip(weapon);
-    else equipWeaponInWorld(this.world, LOCAL_ID, weapon);
+    this.equipSlot((cur + dir + owned.length) % owned.length);
   }
 
 
@@ -1625,6 +1702,22 @@ export class Game {
     }
     if (this.dmgNumbers.some((n) => n.life <= 0)) {
       this.dmgNumbers = this.dmgNumbers.filter((n) => n.life > 0);
+    }
+  }
+
+  private spawnWorldLabel(x: number, y: number, text: string, color: string) {
+    if (this.worldLabels.length >= 12) this.worldLabels.shift();
+    this.worldLabels.push({ x, y, vy: -22, life: 1.1, maxLife: 1.1, text, color });
+  }
+
+  private updateWorldLabels(dt: number) {
+    for (const l of this.worldLabels) {
+      l.y += l.vy * dt;
+      l.vy *= 0.9;
+      l.life -= dt;
+    }
+    if (this.worldLabels.some((l) => l.life <= 0)) {
+      this.worldLabels = this.worldLabels.filter((l) => l.life > 0);
     }
   }
 
@@ -1827,14 +1920,19 @@ export class Game {
   }
 
   // Collapse owned blessings by id into level-bearing entries (first-seen order), so the
-  // HUD panel shows one chip per distinct blessing with an xN level badge; the chip text
-  // tracks the current level's effect.
+  // HUD strip shows one icon slot per distinct blessing with level pips; desc tracks the
+  // current level's effect and nextDesc the upgrade delta (null once maxed).
   private collapsedItems() {
-    const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
+    const collapsed = new Map<string, { id: string; name: string; desc: string; nextDesc: string | null; glyph: string; tint: string; rarity: string; count: number }>();
     for (const it of this.currentItemDefs()) {
       const seen = collapsed.get(it.id);
-      if (seen) { seen.count++; seen.desc = itemDesc(it, seen.count); }
-      else collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      if (seen) {
+        seen.count++;
+        seen.desc = itemDesc(it, seen.count);
+        seen.nextDesc = seen.count < MAX_ITEM_LEVEL ? itemDesc(it, seen.count + 1) : null;
+      } else {
+        collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), nextDesc: itemDesc(it, 2), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      }
     }
     return [...collapsed.values()];
   }
@@ -2111,6 +2209,7 @@ export class Game {
     this.renderPlayer();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
+    this.renderWorldLabels();
     ctx.restore();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
@@ -2704,6 +2803,27 @@ export class Game {
       ctx.fillText(label, sx - 1, sy + 1);
       ctx.fillStyle = n.color;
       ctx.fillText(label, sx, sy);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  private renderWorldLabels() {
+    if (this.worldLabels.length === 0) return;
+    const { ctx, cam } = this;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 10px "Silkscreen", monospace`;
+    for (const l of this.worldLabels) {
+      const a = l.life / l.maxLife;
+      if (a <= 0) continue;
+      const sx = l.x - cam.x, sy = l.y - cam.y;
+      ctx.globalAlpha = Math.min(1, a * 1.4);
+      ctx.fillStyle = "rgba(8,6,16,0.9)";
+      ctx.fillText(l.text, sx + 1, sy + 1);
+      ctx.fillStyle = l.color;
+      ctx.fillText(l.text, sx, sy);
     }
     ctx.restore();
     ctx.globalAlpha = 1;
@@ -3573,10 +3693,11 @@ export class Game {
   }
 
   // Flow-field inspector: an arrow per open tile pointing downhill toward the player,
-  // plus a marker on source/unreachable tiles. Reads the shared field the AI already
-  // built this frame (see updateEnemies), so it costs nothing until toggled on.
+  // plus a marker on source/unreachable/prop-blocked tiles. Reads the standard-class
+  // prop-aware chase field the AI shares (cached — see nav.ts), so it costs one lazy
+  // build at most and nothing until toggled on.
   private renderFlowDebug(): void {
-    const flow = this.world.flow;
+    const flow = navDebugField(this.world);
     if (!flow.isReady()) return;
     const { ctx, cam, canvas } = this;
     const d = this.dungeon;
