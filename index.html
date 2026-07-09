@@ -413,6 +413,13 @@
       .stat-label { font-size: 11px; color: #8579a0; }
 
       .code-badge { font-size: 40px; letter-spacing: 10px; color: #ffb43b; background: #120e20; border: 1px solid rgba(255,180,59,0.4); border-radius: 12px; padding: 10px 22px; }
+      /* The badge + COPY INVITE share one fixed row; the button's width is reserved so its
+         COPIED!/SHARED!/COPY FAILED label swaps never move the badge or the roster below. */
+      .code-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
+      .invite-copy { min-width: 150px; }
+      /* Reserved single line under the badge: empty normally, the raw invite URL on a copy
+         failure — content swaps inside the same box, zero layout shift. */
+      .menu p.invite-url { min-height: 15px; font-size: 10px; color: #8579a0; margin: 0; overflow-wrap: anywhere; max-width: 360px; user-select: text; }
       .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
       .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }

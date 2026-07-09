@@ -41,6 +41,7 @@ import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { padActions } from "../src/ui/menuGamepad.js";
+import { INVITE_RUN_LIVE_NOTE, COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL } from "../src/ui/onlineCopy.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -56,6 +57,16 @@ function section(name: string): void {
 function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
+
+// The invite sections drive the REAL OnlineLobby, whose 5s heartbeat interval would hold
+// the Node process open after the last check; unref'd intervals behave identically while
+// letting the suite exit. (setTimeout stays real — settle() depends on it firing.)
+const nodeSetInterval = setInterval;
+globalThis.setInterval = ((fn: () => void, ms?: number) => {
+  const t = nodeSetInterval(fn, ms);
+  t.unref();
+  return t;
+}) as typeof setInterval;
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -149,6 +160,8 @@ interface FakeOpts {
   // the real backend), "static" (the fixture untouched — a server refusing every pick),
   // "fail" (network failure), "manual" (the test settles each write by hand, in any order).
   persist?: "echo" | "static" | "fail" | "manual";
+  // The rooms:join answer for invite tests: a joined room, or the server's real refusal.
+  join?: { code: string; status: "lobby" | "playing" } | "full" | "ended" | "missing" | "error";
 }
 
 interface FakeConvex {
@@ -158,11 +171,12 @@ interface FakeConvex {
 }
 
 // The menu's Convex surface, routed by function name: profile upserts/reads resolve to the
-// fixture, the leaderboard resolves (or fails) per test.
-function fakeConvex(opts: FakeOpts = {}): FakeConvex {
+// fixture, the leaderboard resolves (or fails) per test. rooms:join answers invite tests, and
+// mutation names are recorded (in order) via the shared `calls` array for the guest identity path.
+function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
   const profile = opts.profile ?? PROFILE;
   const pendingPersists: PendingPersist[] = [];
-  let calls = 0;
+  let mutationCount = 0;
   const echo = (args: EnsureArgs): ProfileDoc => {
     const cosmetics = { ...profile.cosmetics };
     for (const slot of ["hat", "face", "body", "title"] as const) {
@@ -172,8 +186,18 @@ function fakeConvex(opts: FakeOpts = {}): FakeConvex {
     return { ...profile, cosmetics, colorIndex: args.colorIndex ?? profile.colorIndex };
   };
   const fake = {
-    mutation: (_ref: unknown, args?: EnsureArgs) => {
-      calls++;
+    mutation: (ref: unknown, args?: EnsureArgs) => {
+      const name = getFunctionName(ref as Parameters<typeof getFunctionName>[0]);
+      calls.push(name);
+      if (name === "rooms:join") {
+        if (opts.join === "full") return Promise.reject(new Error("that room is full"));
+        if (opts.join === "ended") return Promise.reject(new Error("that game has ended"));
+        if (opts.join === "missing") return Promise.reject(new Error("no room with that code"));
+        if (opts.join === "error" || opts.join === undefined) return Promise.reject(new Error("boom"));
+        return Promise.resolve({ roomId: "room-doc-1", code: opts.join.code, seed: 1, floor: 1, status: opts.join.status });
+      }
+      // profile writes (players:ensurePlayer): apply the persist mode
+      mutationCount++;
       const sent = args ?? {};
       if (opts.persist === "fail") return Promise.reject(new Error("offline"));
       if (opts.persist === "static") return Promise.resolve(profile);
@@ -205,7 +229,7 @@ function fakeConvex(opts: FakeOpts = {}): FakeConvex {
     action: () => Promise.resolve({ ticket: "t", playerId: profile.playerId }),
     onUpdate: () => () => {},
   };
-  return { client: fake as unknown as ConvexClient, pendingPersists, mutationCalls: () => calls };
+  return { client: fake as unknown as ConvexClient, pendingPersists, mutationCalls: () => mutationCount };
 }
 
 type FakeAuth = AuthClient & { fire(): void; setSignedIn(v: boolean): void; setCompleting(v: boolean): void; signInWithGoogle: () => Promise<void> };
@@ -235,6 +259,7 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
   session: Session;
   pendingPersists: PendingPersist[];
   mutationCalls: () => number;
+  calls: string[];
 } {
   // Section isolation: the shim shares ONE localStorage; stale appearance picks from a
   // previous section must never leak into a fresh session.
@@ -245,7 +270,8 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
   // test; the one-time name gate has its own sections (which clear this latch explicitly).
   localStorage.setItem("blobrogue.nameConfirmed", "1");
   const overlay = document.createElement("div") as unknown as ShimNode;
-  const convex = fakeConvex(opts);
+  const calls: string[] = [];
+  const convex = fakeConvex(opts, calls);
   const session = new Session(convex.client);
   const launches: LaunchRecord[] = [];
   const host: MenuHost = {
@@ -255,7 +281,7 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
     },
   };
   const menu = new Menu(overlay as unknown as HTMLElement, session, convex.client, opts.auth ?? null, host);
-  return { menu, overlay, launches, session, pendingPersists: convex.pendingPersists, mutationCalls: convex.mutationCalls };
+  return { menu, overlay, launches, session, pendingPersists: convex.pendingPersists, mutationCalls: convex.mutationCalls, calls };
 }
 
 // A lobby double exposing exactly the surface showOnlineLobby reads. Kept as a plain object
@@ -1354,6 +1380,115 @@ async function main(): Promise<void> {
     again.menu.showOnlineLobby(live.lobby, PROFILE);
     const rejoin = collect(again.overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("REJOIN RUN"))[0];
     check("rejoin button rendered for the live room", rejoin !== undefined);
+  }
+
+  section("invite links: openInvite auto-joins through the real validated join, busy first");
+  {
+    const { menu, overlay, launches } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    const pending = menu.openInvite("ABCD");
+    // The join is in flight: the online home paints busy with the joining note — an
+    // arriving invite never shows a blank screen or an interactive home mid-join.
+    const busyText = textOf(overlay);
+    check("the joining note paints while the join is in flight", busyText.includes("joining room ABCD"), busyText.slice(0, 120));
+    const quickBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("QUICK PLAY"))[0];
+    check("the home actions are disabled while the join owns the screen", quickBtn?.disabled === true);
+    await pending;
+    const text = textOf(overlay);
+    check("the invite lands IN the room lobby (code auto-consumed, nothing to retype)", text.includes("ROOM ABCD"));
+    check("the code badge renders the joined room", textOf(byClass(overlay, "code-badge")[0] ?? {}) === "ABCD");
+    check("a lobby-status invite never cold-launches gameplay", launches.length === 0);
+  }
+
+  section("invite onto a live run: the lobby with REJOIN RUN + the honest note (no cold yank)");
+  {
+    const { menu, overlay, launches } = makeMenu({ join: { code: "WXYZ", status: "playing" } });
+    await menu.openInvite("WXYZ");
+    check("the run-already-live note is explicit", textOf(overlay).includes(INVITE_RUN_LIVE_NOTE));
+    check("REJOIN RUN is the obvious next action", buttonsOf(overlay).some((b) => b.includes("REJOIN RUN")));
+    check("gameplay is never auto-launched from a cold link", launches.length === 0);
+  }
+
+  section("invite fallbacks: full / ended / gone land on the online home with a reason + live actions");
+  {
+    const expectations: Array<{ join: "full" | "ended" | "missing" | "error"; reason: string }> = [
+      { join: "full", reason: "Room full" },
+      { join: "ended", reason: "That room's gone" },
+      { join: "missing", reason: "That room's gone" },
+      { join: "error", reason: "couldn't join that room" },
+    ];
+    for (const { join, reason } of expectations) {
+      const { menu, overlay } = makeMenu({ join });
+      await menu.openInvite("ABCD");
+      const text = textOf(overlay);
+      check(`${join}: the specific reason renders`, text.includes(reason), text.slice(0, 160));
+      const quickBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("QUICK PLAY"))[0];
+      const joinBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("JOIN CODE"))[0];
+      check(`${join}: QUICK PLAY + JOIN CODE stay live (never a dead end)`,
+        quickBtn !== undefined && quickBtn.disabled !== true && joinBtn !== undefined && joinBtn.disabled !== true);
+    }
+  }
+
+  section("guest invite: a signed-out player joins as a guest — the invite never forces sign-in");
+  {
+    const guest = makeMenu({ join: { code: "GHJK", status: "lobby" }, auth: null });
+    await guest.menu.openInvite("GHJK");
+    check("the guest lands in the room lobby", textOf(guest.overlay).includes("ROOM GHJK"));
+    const flushIdx = guest.calls.indexOf("players:ensurePlayer");
+    const joinIdx = guest.calls.indexOf("rooms:join");
+    check("identity comes from the ordinary guest ensurePlayer path, before the join",
+      flushIdx !== -1 && joinIdx !== -1 && flushIdx < joinIdx, guest.calls.join(" -> "));
+    check("no sign-in demand anywhere on the landing", !textOf(guest.overlay).includes("SIGN IN"));
+  }
+
+  section("COPY INVITE: one tap shares the FULL URL with honest per-outcome confirmation");
+  {
+    const nav = navigator as unknown as {
+      clipboard?: { writeText(text: string): Promise<void> };
+      share?: (data: { url: string }) => Promise<void>;
+      maxTouchPoints?: number;
+    };
+    const copiedUrls: string[] = [];
+    nav.clipboard = { writeText: (t) => { copiedUrls.push(t); return Promise.resolve(); } };
+    const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    await menu.openInvite("ABCD");
+    const btn = byClass(overlay, "invite-copy")[0];
+    check("the control idles as COPY INVITE", textOf(btn ?? {}) === COPY_INVITE_LABEL);
+    const buttonsBefore = buttonsOf(overlay).length;
+    btn.onclick?.();
+    await settle();
+    check("one tap copies the FULL shareable URL (not just the code)", copiedUrls[0] === "http://localhost/r/ABCD", copiedUrls.join("|"));
+    check("the confirmation reads COPIED! in the same button", textOf(btn) === INVITE_COPIED_LABEL);
+    check("feedback swaps the LABEL only — no button appears or moves", buttonsOf(overlay).length === buttonsBefore);
+
+    // A blocked clipboard: honest failure + the raw URL in the reserved line.
+    nav.clipboard = { writeText: () => Promise.reject(new Error("denied")) };
+    btn.onclick?.();
+    await settle();
+    check("a blocked clipboard reads COPY FAILED (never a fake COPIED!)", textOf(btn) === INVITE_COPY_FAILED_LABEL);
+    check("...and the reserved line hands over the raw URL", textOf(byClass(overlay, "invite-url")[0]).includes("/r/ABCD"));
+
+    // Touch device: the native share sheet wins.
+    const sharedUrls: string[] = [];
+    nav.maxTouchPoints = 1;
+    nav.share = (d) => { sharedUrls.push(d.url); return Promise.resolve(); };
+    btn.onclick?.();
+    await settle();
+    check("touch devices get the native share sheet with the same URL", sharedUrls[0] === "http://localhost/r/ABCD");
+    check("a completed share confirms SHARED!", textOf(btn) === INVITE_SHARED_LABEL);
+    delete nav.share;
+    delete nav.clipboard;
+    nav.maxTouchPoints = 0;
+  }
+
+  section("invite affordance keeps the fixed geometry (reserved boxes from first paint)");
+  {
+    const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    await menu.openInvite("ABCD");
+    check("the badge + invite control share one row", byClass(overlay, "code-row").length === 1);
+    check("the invite-url line is reserved EMPTY from first paint", byClass(overlay, "invite-url").length === 1 && textOf(byClass(overlay, "invite-url")[0]) === "");
+    const html = readFileSync(join(ROOT, "index.html"), "utf8");
+    check("the control's width is reserved in CSS (label swaps can't shift)", /\.invite-copy\s*\{[^}]*min-width/.test(html));
+    check("the URL line's height is reserved in CSS (failure fill can't shift)", /invite-url\s*\{[^}]*min-height/.test(html));
   }
 
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

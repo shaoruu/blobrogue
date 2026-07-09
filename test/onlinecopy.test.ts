@@ -9,6 +9,9 @@ import {
   onlineHudLabel, netDetailsLine, reconnectOverlayCopy, exitNoteFor, startAnywayHoldLabel,
   WORLD_MISMATCH_NOTE, RUN_ENDED_AWAY_NOTE, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT,
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS,
+  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
+  INVITE_SHARE_HINT, INVITE_RUN_LIVE_NOTE, INVITE_LINK_BROKEN_NOTE, INVITE_UNREACHABLE_NOTE,
+  inviteJoiningNote, inviteFailNote,
 } from "../src/ui/onlineCopy.js";
 import type { ReconnectInfo } from "../src/client/wsTransport.js";
 
@@ -75,6 +78,22 @@ function main(): void {
   check("holding counts down and offers the out", startAnywayHoldLabel(0) === "STARTING IN 3\u2026 release to cancel"
     && startAnywayHoldLabel(2100) === "STARTING IN 1\u2026 release to cancel");
 
+  section("invite copy: exact labels + every landing state names a reason and a next action");
+  check("the control labels", COPY_INVITE_LABEL === "COPY INVITE" && INVITE_COPIED_LABEL === "COPIED!"
+    && INVITE_SHARED_LABEL === "SHARED!" && INVITE_COPY_FAILED_LABEL === "COPY FAILED");
+  check("the lobby hint pitches the LINK, not just the code", INVITE_SHARE_HINT.includes("invite link"));
+  check("the in-flight note names the room", inviteJoiningNote("ABCD") === "joining room ABCD\u2026");
+  check("a full room says Room full and points at QUICK PLAY",
+    inviteFailNote("that room is full").startsWith("Room full") && inviteFailNote("that room is full").includes("QUICK PLAY"));
+  check("an ended room says the room's gone", inviteFailNote("that game has ended").startsWith("That room's gone"));
+  check("a nonexistent code says the room's gone + offers another code",
+    inviteFailNote("no room with that code").startsWith("That room's gone") && inviteFailNote("no room with that code").includes("code"));
+  check("an unrecognized refusal stays generic (no raw internals) with a next action",
+    inviteFailNote("ConvexError: [Request ID x] weird").includes("couldn't join") && inviteFailNote("weird").includes("QUICK PLAY"));
+  check("a run already live is an honest REJOIN pointer, not a refusal", INVITE_RUN_LIVE_NOTE.includes("REJOIN RUN"));
+  check("a mangled link says so and offers the manual path", INVITE_LINK_BROKEN_NOTE.includes("broken") && INVITE_LINK_BROKEN_NOTE.includes("code"));
+  check("an unreachable backend stops the spinner honestly", INVITE_UNREACHABLE_NOTE.includes("QUICK PLAY") || INVITE_UNREACHABLE_NOTE.includes("JOIN CODE"));
+
   section("neutral prompts only: controller glyphs wait for real controller support");
   {
     // Enclosed-letter button art (Ⓐ…Ⓩ, 🅐…, 🅰…) and "(A)"-style prompts are banned until a
@@ -87,6 +106,10 @@ function main(): void {
       reconnectOverlayCopy(t0 + 5000, info(t0, 2, t0 + 90000)).hint ?? "",
       exitNoteFor("connection_lost"), exitNoteFor("world_mismatch"), exitNoteFor("party_incomplete", "Bob"),
       exitNoteFor("superseded"), exitNoteFor("connect_failed"), exitNoteFor("run_ended_away"),
+      COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
+      INVITE_SHARE_HINT, INVITE_RUN_LIVE_NOTE, INVITE_LINK_BROKEN_NOTE, INVITE_UNREACHABLE_NOTE,
+      inviteJoiningNote("ABCD"), inviteFailNote("that room is full"), inviteFailNote("that game has ended"),
+      inviteFailNote("no room with that code"), inviteFailNote("weird"),
     ];
     check("every contract string is controller-glyph free", allCopy.every((s) => !GLYPH_RE.test(s)));
     check("the cancel prompt names the key, not a pad button", CONNECT_CANCEL_HINT === "ESC \u2014 cancel");

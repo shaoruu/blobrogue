@@ -18,7 +18,12 @@ import type { BlobLook, BlobPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
-import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
+import {
+  READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
+  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
+  INVITE_RUN_LIVE_NOTE, INVITE_UNREACHABLE_NOTE, inviteJoiningNote, inviteFailNote,
+} from "./onlineCopy.js";
+import { inviteUrlFor, shareInviteUrl } from "../net/inviteLink.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -1345,8 +1350,10 @@ export class Menu {
 
   // The online home: quick play into the public pool, create a private room (shareable
   // code), or join a friend's code. Every action stays on this screen until it succeeds,
-  // so a failed backend just writes a status line — never a dead end.
-  async showOnlineHome(note = "") {
+  // so a failed backend just writes a status line — never a dead end. `isBusy` renders
+  // the actions disabled from first paint (an invite join in flight owns the screen until
+  // it settles — the settle re-arms them, success or failure).
+  async showOnlineHome(note = "", opts: { isBusy?: boolean } = {}) {
     if (!this.client) { await this.showTitle(); return; }
     if (this.needsNameGate()) { this.showNameGate(); return; }
     const wrap = el("div", "menu");
@@ -1382,6 +1389,7 @@ export class Menu {
       buttons.forEach((b) => (b.disabled = isBusy));
       status.textContent = text;
     };
+    if (opts.isBusy) buttons.forEach((b) => (b.disabled = true));
     quick.addEventListener("click", () => void this.doQuickPlayOnline(setBusy));
     create.addEventListener("click", () => void this.doCreateOnline(setBusy));
     join.addEventListener("click", () => void this.showJoinScreen({
@@ -1393,6 +1401,40 @@ export class Menu {
 
     this.show(wrap);
     this.bindEscape(goBack);
+  }
+
+  // An invite link's landing (cold boot in main.ts, warm popstate arrivals — same door).
+  // Routes straight into that room's lobby with the join in flight: the online home paints
+  // busy with "joining room CODE…" while the SAME server-validated rooms.join a typed code
+  // takes runs underneath (capacity, kind, ended — nothing bypassed). Guests join through
+  // the ordinary ensurePlayer identity; an invite never forces sign-in. Every failure
+  // settles THIS screen with a specific reason and the live quick-play/join actions.
+  async openInvite(code: string): Promise<void> {
+    if (!this.client) { await this.showTitle(); return; }
+    await this.showOnlineHome(inviteJoiningNote(code), { isBusy: true });
+    const client = this.client;
+    // An unreachable backend never REJECTS (the Convex client retries forever) — it just
+    // never resolves. Settle honestly after the hydrate window; a join landing later must
+    // not teleport the player, so it leaves the room it silently won.
+    let isSettled = false;
+    const timer = setTimeout(() => {
+      isSettled = true;
+      void this.showOnlineHome(INVITE_UNREACHABLE_NOTE);
+    }, HYDRATE_TIMEOUT_MS);
+    try {
+      const profile = await this.session.login();
+      const lobby = new OnlineLobby(client, this.session);
+      await lobby.join(code);
+      clearTimeout(timer);
+      if (isSettled) { lobby.leave(); return; }
+      // A live room is a JOINABLE room (drop-in): land in the lobby with the honest note —
+      // REJOIN RUN is right there. A cold link never yanks anyone straight into gameplay.
+      this.showOnlineLobby(lobby, profile, lobby.status === "playing" ? INVITE_RUN_LIVE_NOTE : "");
+    } catch (err) {
+      clearTimeout(timer);
+      if (isSettled) return;
+      await this.showOnlineHome(inviteFailNote(this.cleanErr(err instanceof Error ? err.message : "")));
+    }
   }
 
   private async doQuickPlayOnline(setBusy: (b: boolean, t: string) => void) {
@@ -1465,8 +1507,20 @@ export class Menu {
       youSwatch.style.background = playerColor(this.session.colorIndex ?? 0);
       you.append(el("span", "you-label", "YOU:"), youSwatch, el("span", "you-name", this.session.name));
       wrap.appendChild(you);
-      wrap.appendChild(el("p", "", "Share this code \u2014 friends pick PLAY ONLINE \u2192 JOIN CODE to join you."));
-      wrap.appendChild(el("div", "code-badge", lobby.code));
+      wrap.appendChild(el("p", "", INVITE_SHARE_HINT));
+      // The code badge + the one-tap invite share, one fixed row. Every feedback state
+      // swaps the button's LABEL inside its fixed width; the reserved line underneath
+      // only ever fills on a copy failure (the raw URL, shareable by hand) — the roster
+      // below never moves.
+      const codeRow = el("div", "code-row");
+      codeRow.appendChild(el("div", "code-badge", lobby.code));
+      const inviteUrlLine = el("p", "muted invite-url", "");
+      const invite = el("button", "secondary invite-copy", COPY_INVITE_LABEL);
+      invite.type = "button";
+      invite.onclick = () => void this.doCopyInvite(lobby.code, invite, inviteUrlLine);
+      codeRow.appendChild(invite);
+      wrap.appendChild(codeRow);
+      wrap.appendChild(inviteUrlLine);
 
       const players = lobby.players();
       const list = el("div", "playerlist");
@@ -1508,6 +1562,26 @@ export class Menu {
     this.teardownLobby();
     this.unsub = lobby.onChange(render);
     render();
+  }
+
+  // One tap shares the FULL invite URL (/r/<CODE>), not just the code: the native share
+  // sheet on touch devices, the clipboard everywhere else. The confirmation is honest per
+  // outcome — a dismissed share sheet copied nothing, so it confirms nothing — and every
+  // state swaps content inside the fixed button/line geometry. Node-local with a timed
+  // revert: a roster re-render simply rebuilds the idle control.
+  private async doCopyInvite(code: string, btn: HTMLButtonElement, urlLine: HTMLElement): Promise<void> {
+    const url = inviteUrlFor(code, window.location.origin);
+    btn.disabled = true;
+    const outcome = await shareInviteUrl(url);
+    btn.disabled = false;
+    if (outcome === "dismissed") { btn.textContent = COPY_INVITE_LABEL; return; }
+    if (outcome === "failed") {
+      btn.textContent = INVITE_COPY_FAILED_LABEL;
+      urlLine.textContent = url;
+      return;
+    }
+    btn.textContent = outcome === "shared" ? INVITE_SHARED_LABEL : INVITE_COPIED_LABEL;
+    setTimeout(() => { btn.textContent = COPY_INVITE_LABEL; }, 1600);
   }
 
   // A member's roster chip. In the lobby it is the readiness consent (READY / NOT READY,

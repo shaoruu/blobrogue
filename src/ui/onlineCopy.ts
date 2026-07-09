@@ -88,6 +88,49 @@ export function reconnectOverlayCopy(nowMs: number, info: ReconnectInfo): Reconn
   };
 }
 
+// ---- room invite links (the COPY INVITE control + every invite landing state) ----
+//
+// The invite link (/r/<CODE>) is only a convenient path to the same server-validated
+// rooms.join a typed code takes. Every way it can land — joined, run already live, room
+// full, room gone, backend unreachable, mangled link — has exact copy here, and every
+// failure lands on the online home with its live actions (quick play / join code): never
+// a dead end, never a silent fail.
+
+// The control's states all fit the same fixed-width button (zero layout shift); the
+// failure state additionally surfaces the raw URL in the reserved line under the badge,
+// so a blocked clipboard still hands the player something to share by hand.
+export const COPY_INVITE_LABEL = "COPY INVITE";
+export const INVITE_COPIED_LABEL = "COPIED!";
+export const INVITE_SHARED_LABEL = "SHARED!";
+export const INVITE_COPY_FAILED_LABEL = "COPY FAILED";
+export const INVITE_SHARE_HINT = "Share the code \u2014 or copy the invite link and friends land straight in this lobby.";
+
+export function inviteJoiningNote(code: string): string {
+  return `joining room ${code}\u2026`;
+}
+
+// The invite landed on a room whose run is already live: the join SUCCEEDED (drop-in is
+// allowed), so the honest state is this lobby with the jump-in action — not a refusal.
+export const INVITE_RUN_LIVE_NOTE = "Run already started \u2014 REJOIN RUN drops you in.";
+
+// The link itself failed the room-code grammar — never routed, never guessed.
+export const INVITE_LINK_BROKEN_NOTE = "That invite link is broken \u2014 ask for a fresh one, or enter the code by hand.";
+
+// The backend never answered inside the hydrate window (Convex retries forever instead of
+// rejecting): stop the spinner honestly; the actions on the online home stay live.
+export const INVITE_UNREACHABLE_NOTE = "couldn't reach the server to join \u2014 try QUICK PLAY or JOIN CODE in a moment";
+
+// A refused invite join, mapped from the server's real rejection to a specific, honest
+// reason + the obvious next action. Anything unrecognized stays generic — never a raw
+// internal error on a player surface.
+export function inviteFailNote(errMessage: string): string {
+  const msg = errMessage.toLowerCase();
+  if (msg.includes("full")) return "Room full \u2014 all four seats are taken. QUICK PLAY instead, or ask the host to make space.";
+  if (msg.includes("ended")) return "That room's gone \u2014 the game ended. QUICK PLAY, or ask your friend for a fresh invite.";
+  if (msg.includes("no room")) return "That room's gone \u2014 no room has that code anymore. QUICK PLAY, or enter another code.";
+  return "couldn't join that room \u2014 try again, or QUICK PLAY instead";
+}
+
 // ---- exit notes (the room-lobby status line after a run ends without a game over) ----
 
 export type OnlineExitReason = "quit" | "connect_failed" | "world_mismatch" | "party_incomplete" | "connection_lost" | "superseded" | "run_ended_away";
