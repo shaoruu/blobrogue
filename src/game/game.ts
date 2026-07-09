@@ -1,26 +1,30 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, RemotePlayer } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer } from "../sim/types.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, TIERS, DEALER } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
+import { PartyGate } from "../net/partyGate.js";
+import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
+import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
+import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
-import type { InputCmd } from "../sim/input.js";
+import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
-import { comboTierFor } from "../sim/constants.js";
+import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
@@ -32,6 +36,8 @@ import {
   characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
 import type { Anim, Xform, XformStyle } from "./anim.js";
+import { createFacing, computeEnemyPose } from "./facing.js";
+import type { FacingState, EnemyPose } from "./facing.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
@@ -42,7 +48,6 @@ import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
 import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
-import { WeaponClaimOverlay } from "../ui/weaponClaim.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 
@@ -56,12 +61,14 @@ export interface RunResult {
   };
 }
 
-// Why a run exited without a game over: the player quit, or an online connection never came
-// up (lets the menu land back on the lobby with an explanation instead of silence). The
-// wrong-world assertion (bailing when the server bound a different world than the lobby
-// room) lives in the Sev-0 coherence system (PR #39), which owns the lobby-to-authoritative
-// trust chain; this branch consumes it at integration.
-export type ExitReason = "quit" | "connect_failed";
+// Why a run exited without a game over: the player quit/cancelled, an online connection
+// never came up, the server bound us to a world other than the room's (world_mismatch —
+// refuse to play), the party never assembled behind the readiness veil (party_incomplete),
+// the reconnect window ran out (connection_lost — the run is unreachable, NOT a death),
+// another session took the body over (superseded), or the run finished while this player
+// was mid-outage (run_ended_away — they see RUN ENDED WHILE AWAY, never a fabricated
+// death). The copy contract for every reason lives in src/ui/onlineCopy.ts.
+export type ExitReason = OnlineExitReason;
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -71,6 +78,18 @@ export interface OnlineOptions {
   // The lobby room code this run belongs to (shown in the HUD so friends can be invited
   // mid-run); null for direct dev joins.
   roomCode: string | null;
+  // The ONLY world this run is allowed to play in (worldIdForRoomCode of the lobby's code).
+  // Every snapshot's authoritative world id is asserted against it — a mismatch closes the
+  // socket and returns to the lobby. null for direct dev joins (no room expectation).
+  expectedWorldId: string | null;
+  // This player's lobby identity (matches the server roster's verified `aid`); null for dev.
+  selfPlayerId: string | null;
+  // The live lobby expectation for a PARTY-STARTED run: who should be in this world before
+  // gameplay reveals. null = no readiness gate (quick play, drop-in join, rejoin, dev).
+  party: (() => ExpectedMember[]) | null;
+  // Mirrors the authoritative connection state onto the lobby roster (worldId once the
+  // server's snapshot confirms the join, null on leaving) — best-effort UI plumbing.
+  onWorldPresence?: (worldId: string | null) => void;
 }
 
 export interface StartOptions {
@@ -111,6 +130,10 @@ interface Afterimage { x: number; y: number; facing: number; t: number; }
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
+// The online handshake (connect -> ticket -> join -> first snapshot) must resolve within
+// this window or the veil exits explicitly — never an infinite ENTERING THE DUNGEON hold.
+// Generous: covers a slow Convex mint + a TLS handshake; the transport retries inside it.
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 15000;
 
 // Client FX magnitudes / tables the event handler + render read (the sim emits the events;
 // the client decides the juice). Sim-side tuning lives in src/sim/constants.ts.
@@ -127,6 +150,8 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   sawnoff: "shootShotgun",
   railgun: "cannon",
   nailer: "shootRapid",
+  mortar: "cannon",
+  beam: "tesla",
   flamer: "shootRapid",
   sword: "meleeSwing",
   longsword: "meleeSwing",
@@ -196,7 +221,8 @@ const SHAKE_MAX_PX = 26;
 const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
-  sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04,
+  sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04, mortar: 0.45,
+  beam: 0.02,
   sword: 0.08, longsword: 0.16, spear: 0.07,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
@@ -204,13 +230,15 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
 const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
-  sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3,
+  sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3, mortar: 1.4,
+  beam: 0.15,
   sword: 0.7, longsword: 1.1, spear: 0.6,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
-  sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5,
+  sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5, mortar: 7,
+  beam: 0.3,
   sword: 1.5, longsword: 2.5, spear: 1,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
@@ -257,7 +285,30 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   radial: "#c98bff",  // boss burst: violet
   roar: "#ffb43b",    // boss phase change: gold
   squeeze: "#ff5a5a", // boss arena squeeze: closing red ring
+  rush: "#ff8a3b",    // charger / MARROW line charge: hot orange lane
+  crash: "#ffd27a",   // post-crash stun (no windup renders; the dizzy wobble carries it)
+  dive: "#c9a06a",    // burrower submerge: earthen shudder
+  erupt: "#ff5a5a",   // burrower eruption marker: red danger disc
+  volley: "#dceef5",  // MARROW bone fan: pale bone
+  spin: "#dceef5",    // MARROW spiral barrage
+  shield: "#7fd6ff",  // MARROW transition shield: cold blue
+  fade: "#bfe9ff",    // Choir submerging into intangibility: cold mist
+  wail: "#9fd8ff",    // Choir homing wail volley
+  split: "#bfe9ff",   // Choir wisp-split beat
+  pounce: "#c98bff",  // Weaver drop-from-above: Deep violet
+  weave: "#c98bff",   // Weaver web planting
+  slam: "#ffd166",    // Gilded Warden anvil quake: gold
+  sweep: "#ffd166",   // Gilded Warden ring waves
+  brace: "#9fb4a8",   // elite brace: braced steel-green slide
 };
+
+// Fallback disc tint per sprite while its PNG streams in (or before generated art lands):
+// each enemy keeps its identity color instead of everything reading as a purple slime.
+const SPRITE_FALLBACK_TINT: Partial<Record<SpriteName, string>> = (() => {
+  const tints: Partial<Record<SpriteName, string>> = {};
+  for (const arch of Object.values(ENEMY_ARCHETYPES)) tints[arch.sprite] = arch.tint;
+  return tints;
+})();
 
 // Ground-ring accents that make brutes/elites read at a glance (tier is also on the wire).
 const TIER_RING_COLOR: Partial<Record<EnemyTier, string>> = {
@@ -319,19 +370,31 @@ export class Game {
   private tiles = new TileSet();
   private minimap: Minimap;
   private hud: Hud;
-  // isPartyWiped distinguishes the authoritative full-wipe end (the whole room is done —
-  // the menu may reopen the room's lobby) from a mere lost connection (the run may still
-  // be live for the rest of the party — the room must be left alone).
-  private onGameOver: (result: RunResult, isPartyWiped: boolean) => void;
-  private onExit: (reason?: ExitReason) => void;
+  private onGameOver: (result: RunResult) => void;
+  private onExit: (reason?: ExitReason, detail?: string) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
-  private weaponClaim: WeaponClaimOverlay;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
-  // Online: whether the first authoritative snapshot has revealed the real world yet. Until
-  // then the run sits behind a connecting veil (the local world is a placeholder).
+  // Online: whether gameplay has been revealed yet. Until then the run sits behind the
+  // readiness veil: first CONNECTING (no authoritative snapshot), then — for a party-started
+  // run — WAITING FOR PARTY until the server's own roster contains every expected member.
   private isWorldRevealed = false;
+  // The readiness gate for a party-started run (null = ungated: quick play/drop-in/dev) and
+  // its latest evaluation (drives the veil's member list).
+  private partyGate: PartyGate | null = null;
+  private partyView: PartyGateView | null = null;
+  // The authoritative geometry that arrived while the veil was up, applied at reveal.
+  private pendingWorld: { seed: number; floor: number } | null = null;
+  private isWorldReported = false; // the lobby mirror heard about this world join
+  // Handshake deadline: the CONNECTING veil may never sit forever — if no authoritative
+  // snapshot arrives by this wall-clock time, the run exits with an explicit failure.
+  private connectDeadline = 0;
+  // Edge detector for the outage overlay (drives the BACK ONLINE toast on recovery).
+  private isOutageSeen = false;
+  // The authoritative tick when the current online blessing overlay opened (guards the
+  // wait-state watchdog against a fresh offer's snapshot lag).
+  private choosingSinceTick = 0;
 
   // The simulation is owned by the Transport. Solo/co-op run stepWorld in-process
   // (LocalTransport); online routes through WSTransport (predict + reconcile against an
@@ -355,7 +418,7 @@ export class Game {
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
-  private onlineRoomCode: string | null = null; // lobby room code for the HUD label (online only)
+  private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
   // one path; sentSpectateId tracks what the server was last told (interest centering).
@@ -399,7 +462,10 @@ export class Game {
   // the entity is removed; loadFloor clears them wholesale.
   private enemyAnims = new Map<number, Anim>();
   private enemyAnimPos = new Map<number, { x: number; y: number }>();
-  private enemyFacing = new Map<number, number>(); // stable L/R facing (velocity-driven + deadzone) to kill mirror-flicker
+  // The render-contract facing state (persistent 4-way + L/R memory, velocity-driven with
+  // a deadzone so facing never jitters) and the per-frame pose handed to the draw pass.
+  private enemyFacing = new Map<number, FacingState>();
+  private enemyPoses = new Map<number, EnemyPose>();
   private propAnims = new Map<number, Anim>();
   // Keyed by the sim's stable per-floor id (like enemies/props): online rebuilds pickup/chest
   // objects from each snapshot, so object-identity keying would reset the idle anim 20x/s.
@@ -439,6 +505,7 @@ export class Game {
   private get bullets(): Bullet[] { return this.world.bullets; }
   private get pickups(): Pickup[] { return this.world.pickups; }
   private get props(): Prop[] { return this.world.props; }
+  private get hazards(): Hazard[] { return this.world.hazards; }
   private get chests(): Chest[] { return this.world.chests; }
 
   private isRunning = false;
@@ -473,7 +540,7 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult, isPartyWiped: boolean) => void, onExit: (reason?: ExitReason) => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason, detail?: string) => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
@@ -489,7 +556,6 @@ export class Game {
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
-    this.weaponClaim = new WeaponClaimOverlay();
     this.buildWallGradients();
     this.bindInput();
     this.resize();
@@ -556,8 +622,14 @@ export class Game {
     switch (a.kind) {
       case "togglePause":
         // Under the hud context Escape means "dismiss the drawer"; pause is next.
-        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
-        else this.togglePause();
+        if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
+        // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
+        // connection attempt and return to the lobby — never a pause menu over a dead world.
+        if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
+          this.quitToMenu("quit");
+          break;
+        }
+        this.togglePause();
         break;
       case "selectWeapon":
         if (this.isRunning) this.equipSlot(a.index);
@@ -598,11 +670,19 @@ export class Game {
     if (!this.isRunning) return "menu";
     if (this.isChoosing) return "blessing";
     if (this.isPaused) return "pause";
-    if (this.isAwaitingOnlineWorld()) return "reconnect";
+    // Both no-world-yet (connecting/readiness veil) AND a mid-run outage are the reconnect
+    // context: gameplay actions and fire samples are blocked at the controller, so a dead
+    // connection can never accumulate inputs or keep an autofire latch alive.
+    if (this.isAwaitingOnlineWorld() || this.isOnlineOutage()) return "reconnect";
     if (this.isDown) return "spectate";
     // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
     if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
+  }
+
+  // Mid-run connection outage: the transport is auto-resuming with its seat token.
+  private isOnlineOutage(): boolean {
+    return this.mode === "online" && this.wsTransport !== null && this.wsTransport.getReconnectInfo().isReconnecting;
   }
 
   start(opts: StartOptions) {
@@ -611,25 +691,33 @@ export class Game {
     this.profile = opts.profile ?? null;
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
-    this.onlineRoomCode = opts.online?.roomCode ?? null;
+    this.online = this.mode === "online" ? opts.online ?? null : null;
     this.spectateId = null;
     this.sentSpectateId = null;
+    this.isSpectatingBody = false;
     let floor: number;
     if (this.mode === "online" && opts.online) {
       // Online: the SERVER owns the world (seed/floor/dungeon). WSTransport boots a placeholder
       // world for pre-join prediction; the first snapshot's authoritative seed/floor/rev rebuilds
-      // it (consumeWorldRebuilt below refreshes the cosmetic floor state to match). A transport
-      // terminal state (closed/error) while running ends the run — never a stranded session.
+      // it (the readiness veil applies it at reveal). Every snapshot's world id is asserted
+      // against the room's expected world — a mismatch is terminal, never played through. A
+      // transport terminal state (closed/error) while running ends the run — never a stranded
+      // session.
       this.wsTransport = new WSTransport({
         url: opts.online.url,
         getTicket: opts.online.getTicket,
+        expectedWorldId: opts.online.expectedWorldId,
         onStatus: (s) => this.onOnlineStatus(s),
       });
+      this.partyGate = opts.online.party && opts.online.selfPlayerId
+        ? new PartyGate(opts.online.selfPlayerId)
+        : null;
       this.seed = STAGE_B_SEED;
       floor = STAGE_B_FLOOR;
       this.transport.start(this.seed, floor, { isSandbox: true, isCoop: false });
     } else {
       this.wsTransport = null;
+      this.partyGate = null;
       floor = this.coop ? this.coop.getFloor() : 1;
       this.seed = this.coop ? this.coop.getSeed() : randomSeed();
       this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
@@ -649,10 +737,14 @@ export class Game {
     this.isPaused = false;
     this.isChoosing = false;
     this.isWorldRevealed = this.mode !== "online";
+    this.partyView = null;
+    this.pendingWorld = null;
+    this.isWorldReported = false;
+    this.connectDeadline = performance.now() + CONNECT_HANDSHAKE_TIMEOUT_MS;
+    this.isOutageSeen = false;
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
-    this.weaponClaim.hide();
     audio.unlock();
     waveAudio.reset();
     resetAnim(this.playerAnim);
@@ -670,7 +762,7 @@ export class Game {
       this.loadFloorClient();
       this.cam.x = this.px - this.canvas.width / 2;
       this.cam.y = this.py - this.canvas.height / 2;
-      this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+      this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
     }
     this.hud.setVisible(true);
     // First run ever: briefly surface the core controls, then never nag again.
@@ -689,6 +781,12 @@ export class Game {
     this.isRunning = false;
     this.transport.stop();
     cancelAnimationFrame(this.raf);
+    // Leaving the world (quit, wipe, or a dead socket): clear the lobby's readiness mirror
+    // so the roster shows this member back at LOBBY instead of a phantom CONNECTED.
+    if (this.isWorldReported) {
+      this.isWorldReported = false;
+      this.online?.onWorldPresence?.(null);
+    }
   }
 
   // Cosmetic floor-load: biome + torches + music + the boss-floor entry cue, plus a reset
@@ -754,8 +852,11 @@ export class Game {
     if (raw > 0) this.fps += (1 / raw - this.fps) * 0.1; // dev readout only; harmless otherwise
     this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
     // Paused (Esc) or picking a blessing: keep drawing the frozen frame under the
-    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates.
+    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates. An ONLINE
+    // pick still pumps the authoritative stream: the server world keeps ticking under the
+    // overlay, and the offer's TTL expiry must land NOW, not when the overlay closes.
     if (this.isPaused || this.isChoosing) {
+      if (this.isChoosing) this.pumpChoosingOnline();
       this.render();
       this.raf = requestAnimationFrame(this.loop);
       return;
@@ -803,7 +904,7 @@ export class Game {
     }
   }
 
-  private quitToMenu(reason?: ExitReason) {
+  private quitToMenu(reason?: ExitReason, detail?: string) {
     this.setPaused(false);
     this.stop();
     this.syncInputContext();
@@ -811,7 +912,7 @@ export class Game {
     waveAudio.reset();
     this.hud.hideStats();
     this.hud.clear();
-    this.onExit(reason);
+    this.onExit(reason, detail);
   }
 
   private addFreeze(seconds: number) {
@@ -855,11 +956,118 @@ export class Game {
     return a;
   }
 
-  // Online, before the first authoritative snapshot: the local world is a placeholder built
-  // for pre-join prediction — the wrong dungeon, the wrong spawn. Nothing of it may run or
-  // render, or the player sees themselves spawn there and teleport once truth arrives.
+  // Online, before gameplay is revealed: the local world is either the pre-join prediction
+  // placeholder (wrong dungeon, wrong spawn) or the real world still gated on party
+  // readiness. Nothing of it may run or render, or the player sees themselves spawn there
+  // and teleport once truth arrives — or worse, start a run their party never joined.
   private isAwaitingOnlineWorld(): boolean {
-    return this.mode === "online" && this.wsTransport !== null && !this.wsTransport.isReady();
+    return this.mode === "online" && this.wsTransport !== null && !this.isWorldRevealed;
+  }
+
+  // The veil frame for an online run: keep the handshake/inputs alive, and reveal gameplay
+  // only when the world AND (for a party-started run) the whole expected roster are in.
+  private tickOnlineVeil(dt: number) {
+    const t = this.wsTransport!;
+    this.transport.advance(dt);
+    if (!t.isReady()) {
+      // No infinite entering veil: a handshake that produces no authoritative snapshot in
+      // time is a failed connect — exit explicitly (the lobby shows the reason; ESC cancels
+      // sooner). The transport keeps its own retries INSIDE this window.
+      if (performance.now() > this.connectDeadline) {
+        console.warn("[net] handshake timeout — no authoritative snapshot inside the window");
+        this.quitToMenu("connect_failed");
+        return;
+      }
+      this.updateHud();
+      return;
+    }
+    // First authoritative contact: mirror the verified world join onto the lobby roster.
+    if (!this.isWorldReported) {
+      this.isWorldReported = true;
+      this.online?.onWorldPresence?.(t.getWorldId());
+    }
+    // Latch the authoritative geometry; the reveal applies it. Events that arrive while
+    // veiled are join-time bootstrap noise for a player who cannot see the world yet — poll
+    // to keep the reliable-event acks advancing, discard the cosmetics.
+    const rebuilt = t.consumeWorldRebuilt();
+    if (rebuilt) this.pendingWorld = rebuilt;
+    t.poll();
+
+    if (this.partyGate && this.online?.party) {
+      const roster = t.getWorldRoster();
+      const connected = new Set(roster.filter((r) => r.st === "on").map((r) => r.aid));
+      const away = new Set(roster.filter((r) => r.st === "away").map((r) => r.aid));
+      const expected = this.online.party();
+      const view = this.partyGate.evaluate(Date.now(), expected, connected, away);
+      this.partyView = view;
+      if (view.phase === "failed") {
+        console.warn("[net] party never assembled — returning to the lobby", {
+          worldId: t.getWorldId(), expected: expected.map((m) => m.playerId), connected: [...connected],
+        });
+        this.quitToMenu("party_incomplete", view.missingNames.join(", "));
+        return;
+      }
+      // Safety valve: the world found us while we waited (spawn damage). An invisible fight
+      // is worse than an early reveal — surface the game and let the veil's warning stand.
+      const self = t.getLatestSnapshot()?.self;
+      const isHurt = self != null && self.hp < self.mhp;
+      if (view.phase === "waiting" && !isHurt) { this.updateHud(); return; }
+      if (view.phase === "waiting" && isHurt) {
+        console.warn("[net] revealing before the full party — took damage while waiting");
+      }
+    }
+    this.revealOnlineWorld();
+  }
+
+  // While the blessing overlay is up in an ONLINE run the normal tick is frozen, but the
+  // authoritative world is not: keep the countdown honest from the snapshot's wait state and
+  // drain the event stream so the offer's expiry closes the overlay the moment it happens.
+  // The pick window's cosmetic FX events are deliberately dropped (bounded to the overlay).
+  private pumpChoosingOnline() {
+    if (this.mode !== "online" || !this.wsTransport) return;
+    const selfId = this.wsTransport.getSelfServerId();
+    const mine = this.wsTransport.getPartyWait().find((w) => w.pid === selfId);
+    this.blessing.setCountdown(mine ? mine.s : null);
+    const { events } = this.transport.poll();
+    for (const e of events) {
+      if (e.t === "blessingExpired") this.onOfferExpired(e.pid);
+    }
+    // Watchdog for a LOST expiry event (e.g. it fell into a reconnect's skipped backlog):
+    // the authoritative wait state is on every snapshot — once it no longer lists us (a few
+    // ticks past the offer opening, so a fresh offer's first snapshot can't false-trigger),
+    // the offer is dead server-side and the overlay must not outlive it.
+    const snap = this.wsTransport.getLatestSnapshot();
+    if (this.isChoosing && !mine && snap !== null && snap.tick > this.choosingSinceTick + 2 && selfId !== null) {
+      this.onOfferExpired(selfId);
+    }
+  }
+
+  // The offer's TTL ran out unanswered (pid-scoped: only the owner receives it). Close the
+  // overlay if it is still up, drop any undelivered transport offer, and say so — the run
+  // moved on, and a pick after this point is rejected server-side anyway.
+  private onOfferExpired(pid: PlayerId) {
+    if (this.mode !== "online" || !this.wsTransport || pid !== this.wsTransport.getSelfServerId()) return;
+    this.wsTransport.consumePendingOffer();
+    if (!this.isChoosing) return;
+    this.blessing.hide();
+    this.isChoosing = false;
+    this.syncInputContext();
+    this.hud.showBanner(OFFER_EXPIRED_TOAST);
+  }
+
+  // Apply the authoritative first world and lift the veil: cosmetic floor load, camera on
+  // the true spawn, banner, and the run clock starting at the first playable frame.
+  private revealOnlineWorld() {
+    this.isWorldRevealed = true;
+    this.partyView = null;
+    const world = this.pendingWorld;
+    this.pendingWorld = null;
+    if (world) this.seed = world.seed;
+    this.loadFloorClient();
+    this.cam.x = this.px - this.canvas.width / 2;
+    this.cam.y = this.py - this.canvas.height / 2;
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    this.runStart = performance.now();
   }
 
   // One client frame: sample input -> drive the sim through the transport -> replay the
@@ -872,12 +1080,36 @@ export class Game {
     // Snapshot player pos BEFORE this sim step so the renderer can interpolate between the
     // last two sim positions (smooth motion at any frame rate vs the fixed sim rate).
     this.renderPrevX = this.px; this.renderPrevY = this.py; this.hasRenderPrev = true;
-    // Awaiting the authoritative world: keep the handshake alive (join resends live in
-    // advance) but run no gameplay — there is nothing real to play in yet.
+    // Behind the readiness veil: no gameplay runs and nothing of the world shows.
     if (this.isAwaitingOnlineWorld()) {
-      this.transport.advance(dt);
+      this.tickOnlineVeil(dt);
+      return;
+    }
+    // Mid-run outage: the transport is resuming with its seat token and the server is holding
+    // our body safe. Freeze gameplay on the last authoritative frame — no inputs, no local
+    // prediction drift — and let the CONNECTION LOST overlay carry the state. Never a game
+    // over; the terminal paths route through onOnlineStatus if the window runs out.
+    if (this.isOnlineOutage()) {
+      if (!this.isOutageSeen) {
+        // Loss edge: same policy as window blur — drop everything held (keys, mouse, the
+        // autofire latch, the stats hold) so nothing carries across the outage and resuming
+        // always requires fresh input. The context flip to "reconnect" (above) blocks any
+        // new gameplay action for the duration.
+        this.input.releaseAll();
+      }
+      this.isOutageSeen = true;
       this.updateHud();
       return;
+    }
+    if (this.mode === "online" && this.wsTransport && this.isOutageSeen) {
+      this.isOutageSeen = false;
+      // The run may have FINISHED while we were away (the party wiped): an explicit RUN
+      // ENDED WHILE AWAY exit — no recorded death, no YOU DIED — per the UI contract.
+      if (this.wsTransport.getIsResumedIntoOver()) {
+        this.quitToMenu("run_ended_away");
+        return;
+      }
+      this.hud.showBanner(BACK_ONLINE_TOAST);
     }
 
     if (this.coop) this.syncCoop(dt);
@@ -887,8 +1119,8 @@ export class Game {
     this.transport.sendInput(cmd);
     this.transport.advance(dt);
 
-    // Online: the authoritative world geometry changed (initial join / party descend) — refresh
-    // the seed-keyed cosmetic floor state (biome/torches/music/banner) BEFORE replaying events.
+    // Online: the authoritative world geometry changed (party descend) — refresh the
+    // seed-keyed cosmetic floor state (biome/torches/music/banner) BEFORE replaying events.
     if (this.mode === "online" && this.wsTransport) {
       const rebuilt = this.wsTransport.consumeWorldRebuilt();
       if (rebuilt) {
@@ -896,7 +1128,7 @@ export class Game {
         this.isWorldRevealed = true;
         this.seed = rebuilt.seed;
         this.loadFloorClient();
-        this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor) }));
+        this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor), isGauntlet: isGauntletFloor(rebuilt.floor) }));
         // The run properly begins at the first reveal (the connect veil isn't run time).
         if (isFirstReveal) this.runStart = performance.now();
       }
@@ -926,25 +1158,10 @@ export class Game {
     }
     this.lastSelfRevive = this.isDown ? this.p.reviveProgress : 0;
 
-    // Online: surface any server-decided reward pick (choice authority is server-side).
-    // Blessing offers drain first, then the boss weapon claim (gate §4) — sequential
-    // overlays, one decision at a time. A claim that resolved/expired server-side while
-    // its overlay was up (the 60s sim TTL) closes itself: the pending set is the truth.
+    // Online: surface any server-decided blessing offer (choice authority is server-side).
     if (this.mode === "online" && this.wsTransport && !this.isChoosing) {
       const offer = this.wsTransport.consumePendingOffer();
       if (offer) this.offerServerBlessing(offer);
-      else {
-        const woffer = this.wsTransport.consumePendingWeaponOffer();
-        if (woffer) this.offerWeaponClaim(woffer);
-      }
-    }
-    if (this.weaponClaim.isOpen() && this.wsTransport) {
-      const selfId = this.wsTransport.getSelfServerId();
-      if (selfId !== null && !this.wsTransport.pendingBlessingParty().includes(selfId)) {
-        this.weaponClaim.hide();
-        this.isChoosing = false;
-        this.syncInputContext();
-      }
     }
 
     // Dev combo-freeze holds the chain full so the HUD can be screenshotted at a tier.
@@ -1055,15 +1272,27 @@ export class Game {
       const prev = this.enemyAnimPos.get(e.id);
       const dx = prev ? e.x - prev.x : 0, dy = prev ? e.y - prev.y : 0;
       const moving = dx * dx + dy * dy > 0.12;
-      // Stable facing: only flip on committed horizontal movement (deadzone), never from
-      // player-relative x every frame — that was the ghost/mob mirror-flicker.
-      if (dx > 0.6) this.enemyFacing.set(e.id, 1);
-      else if (dx < -0.6) this.enemyFacing.set(e.id, -1);
       stepAnim(anim, dt, moving, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
+      // The render-contract pose: persistent 4-way facing from observed velocity (deadzone
+      // + axis hysteresis kill the old mirror-flicker), aim intent overriding while a
+      // committed move telegraphs. A fresh body starts out looking at the player.
+      let facing = this.enemyFacing.get(e.id);
+      if (!facing) {
+        facing = createFacing();
+        facing.isMirrored = this.px < e.x;
+        this.enemyFacing.set(e.id, facing);
+      }
+      const inv = dt > 0 ? 1 / dt : 0;
+      this.enemyPoses.set(e.id, computeEnemyPose(e, facing, dx * inv, dy * inv, anim.move > 0.5));
       this.enemyAnimPos.set(e.id, { x: e.x, y: e.y });
     }
     if (this.enemyAnims.size > liveEnemyIds.size) {
-      for (const id of this.enemyAnims.keys()) if (!liveEnemyIds.has(id)) { this.enemyAnims.delete(id); this.enemyAnimPos.delete(id); this.enemyFacing.delete(id); }
+      for (const id of this.enemyAnims.keys()) {
+        if (!liveEnemyIds.has(id)) {
+          this.enemyAnims.delete(id); this.enemyAnimPos.delete(id);
+          this.enemyFacing.delete(id); this.enemyPoses.delete(id);
+        }
+      }
     }
     const livePropIds = new Set<number>();
     for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
@@ -1259,13 +1488,13 @@ export class Game {
       }
       case "enemyKill": {
         const arch = ENEMY_ARCHETYPES[e.kind];
-        const big = e.kind === "boss";
+        const big = isBossKind(e.kind);
         if (big) audio.setMusic("dungeon"); // the intense boss track relaxes after the kill
         this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
         this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
         this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
         this.replayDeathBurst(e.kind, e.x, e.y);
-        const dur = e.kind === "boss" ? DEATH_DUR_BOSS
+        const dur = big ? DEATH_DUR_BOSS
           : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
           : DEATH_DUR;
         const size = arch.drawSize * (TIERS[e.tier as EnemyTier]?.drawMult ?? 1);
@@ -1318,6 +1547,9 @@ export class Game {
         // server-side. Solo/co-op roll their own choices locally.
         if (this.mode !== "online") this.offerBlessing(e.rare);
         break;
+      case "blessingExpired":
+        this.onOfferExpired(e.pid);
+        break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
         else if (e.kind === "heart" || e.kind === "dealer_heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
@@ -1341,6 +1573,10 @@ export class Game {
       case "bulletBounce":
         this.spawnSparks(e.x, e.y, 3, e.aim);
         this.spawnSparkFlash(e.x, e.y, e.color);
+        break;
+      case "bulletBlocked":
+        this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
+        this.spawnSparks(e.x, e.y, 4, e.aim);
         break;
       case "bulletExpire":
         this.spawnPuff(e.x, e.y, 6, e.color);
@@ -1377,6 +1613,33 @@ export class Game {
         break;
       case "lungeTrail":
         this.spawnPuff(e.x, e.y, 1, ENEMY_ARCHETYPES.skeleton.tint);
+        break;
+      case "chargeCrash":
+        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.7, gain: 0.8 });
+        this.spawnParticles(e.x, e.y, 10, "#c9a06a");
+        this.spawnSparks(e.x, e.y, 6, 0);
+        this.shockwaves.spawn(e.x, e.y, 10, 60, 0.3, "#ffd27a", 3);
+        this.addTrauma(0.18);
+        break;
+      case "burrowDive":
+        this.sfxAt("enemyHit", e.x, e.y, { rate: 0.6, gain: 0.5 });
+        this.spawnPuff(e.x, e.y, 8, "#c9a06a");
+        break;
+      case "burrowErupt":
+        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.85, gain: 0.8 });
+        this.spawnParticles(e.x, e.y, 14, "#c9a06a");
+        this.spawnDustRing(e.x, e.y, e.r * 0.7, 10, "#c9a06a");
+        this.shockwaves.spawn(e.x, e.y, 10, e.r * 1.4, 0.32, "#ffd27a", 3);
+        this.addTrauma(0.14);
+        break;
+      case "bossVolley":
+        this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.75, gain: 0.55 });
+        this.spawnPuff(e.x, e.y, 6, "#dceef5");
+        break;
+      case "webPlaced":
+        this.sfxAt("enemyHit", e.x, e.y, { rate: 1.4, gain: 0.4 });
+        this.spawnPuff(e.x, e.y, 7, "#c98bff");
+        this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
         break;
       case "bossSlam":
         this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
@@ -1428,7 +1691,7 @@ export class Game {
         // (consumeWorldRebuilt in tick) — the event only carries the juice. Solo/co-op load here.
         if (this.mode !== "online") {
           this.loadFloorClient();
-          this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isDescend: true }));
+          this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor), isDescend: true }));
         }
         break;
       case "reachExit":
@@ -1533,11 +1796,53 @@ export class Game {
       case "spitter":
         this.spawnPuff(x, y, 9, "#ff9ab8");
         break;
+      case "charger":
+        this.spawnGibs(x, y, 7, ENEMY_ARCHETYPES.charger.tint);
+        this.spawnSparks(x, y, 5, 0);
+        break;
+      case "burrower":
+        this.spawnPuff(x, y, 10, ENEMY_ARCHETYPES.burrower.tint);
+        this.spawnDustRing(x, y, 26, 8, "#c9a06a");
+        break;
+      case "orbiter":
+        this.spawnWisps(x, y, 5, ENEMY_ARCHETYPES.orbiter.tint);
+        this.spawnSparks(x, y, 4, 0);
+        break;
+      case "shielder":
+        this.spawnGibs(x, y, 8, "#cfe0d4");
+        this.spawnSparks(x, y, 6, 0);
+        break;
       case "boss":
         this.flashScreen(255, 214, 120, 0.4, 1.4);
         this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd27a", 5);
         this.shockwaves.spawn(x, y, 12, 260, 0.8, "#ffb43b", 3);
         this.spawnSparkleBurst(x, y, 26, "#ffd27a");
+        break;
+      case "marrow":
+        this.screenFlash.flash(191, 216, 224, 0.4, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#dceef5", 5);
+        this.shockwaves.spawn(x, y, 12, 260, 0.8, "#bfd8e0", 3);
+        this.spawnGibs(x, y, 14, "#e8e4d8");
+        this.spawnSparkleBurst(x, y, 26, "#dceef5");
+        break;
+      case "choir":
+        this.screenFlash.flash(191, 233, 255, 0.35, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#bfe9ff", 5);
+        this.spawnWisps(x, y, 18, "#dff4ff");
+        this.spawnSparkleBurst(x, y, 22, "#bfe9ff");
+        break;
+      case "weaver":
+        this.screenFlash.flash(201, 139, 255, 0.35, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#c98bff", 5);
+        this.spawnGibs(x, y, 12, "#c98bff");
+        this.spawnSparkleBurst(x, y, 22, "#e0c8ff");
+        break;
+      case "gilded":
+        this.screenFlash.flash(255, 209, 102, 0.45, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd166", 5);
+        this.shockwaves.spawn(x, y, 12, 260, 0.8, "#ffb43b", 3);
+        this.spawnGibs(x, y, 14, "#ffe6a0");
+        this.spawnSparkleBurst(x, y, 30, "#ffd166");
         break;
     }
   }
@@ -1625,6 +1930,7 @@ export class Game {
     if (choices.length === 0 || !this.wsTransport) return;
     this.isChoosing = true;
     this.isPaused = false;
+    this.choosingSinceTick = this.wsTransport.getLatestSnapshot()?.tick ?? 0;
     this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
@@ -1640,28 +1946,6 @@ export class Game {
   private toBlessingCards(choices: ItemDef[]) {
     const levels = itemLevelsOf(this.p.ownedItemIds);
     return choices.map((item) => ({ item, nextLevel: (levels.get(item.id) ?? 0) + 1 }));
-  }
-
-  // The boss weapon claim (gate §4): a personal pick from the party's shared choice set.
-  // Claim/reroll/pass are all requests — the sim owns the grant (SelfWire.wpns reflects
-  // it), the reroll budget, and the TTL. A reroll's fresh view arrives as a new `woffer`,
-  // which the drain above re-surfaces.
-  private offerWeaponClaim(offer: { id: number; choices: WeaponId[]; rerollsLeft: number }) {
-    if (!this.wsTransport || offer.choices.length === 0) return;
-    const owned = new Set<WeaponId>(this.wsTransport.getLatestSnapshot()?.self?.wpns ?? this.p.ownedWeapons);
-    this.isChoosing = true;
-    this.isPaused = false;
-    this.syncInputContext();
-    const done = () => {
-      this.isChoosing = false;
-      this.syncInputContext();
-      this.last = performance.now();
-    };
-    this.weaponClaim.show(offer.choices, owned, offer.rerollsLeft, {
-      onClaim: (id) => { this.wsTransport?.sendClaimWeapon(offer.id, id); sfx("blessing"); done(); },
-      onReroll: () => { this.wsTransport?.sendRerollWeapons(offer.id); done(); },
-      onPass: () => { this.wsTransport?.sendSkipWeapons(offer.id); done(); },
-    });
   }
 
   private dashCooldown(): number {
@@ -2031,7 +2315,7 @@ export class Game {
   }
 
   private updateHud() {
-    const boss = this.enemies.find((e) => e.kind === "boss");
+    const boss = this.enemies.find((e) => isBossKind(e.kind));
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
     // TL co-op status strip: ONLINE ONLY (UI Director hierarchy) — the authoritative
@@ -2040,12 +2324,29 @@ export class Game {
     // Sev-0 coherence system (PR #39); until it lands this keeps the plain lobby label,
     // and integration swaps in its authoritative roster line.
     let coopLabel: string | null = null;
-    if (this.mode === "online" && this.wsTransport) {
-      const count = this.wsTransport.remotePlayers().length + 1;
-      const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
-      // Surface the room code mid-run so a friend can still be invited into this world.
-      const room = this.onlineRoomCode ? ` \u00b7 ${this.onlineRoomCode}` : "";
-      coopLabel = `${live}${room} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+    if (this.coop) {
+      const count = this.coop.remotePlayers().length + 1;
+      coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+    } else if (this.mode === "online" && this.wsTransport) {
+      // The UI contract's normal HUD: CONNECTED · ROOM CODE · N PLAYERS (server-roster
+      // truth; away members appended explicitly). World/rev/protocol debug details live in
+      // the hold-Tab panel, not here.
+      const phase: OnlinePhase = this.wsTransport.getReconnectInfo().isReconnecting ? "reconnecting"
+        : !this.wsTransport.isReady() ? "connecting"
+          : this.isWorldRevealed ? "connected" : "waiting";
+      const roster = this.wsTransport.getWorldRoster();
+      const connected = roster.filter((r) => r.st === "on").length;
+      const selfId = this.wsTransport.getSelfServerId();
+      coopLabel = onlineHudLabel({
+        phase,
+        roomCode: this.online?.roomCode ?? null,
+        worldId: this.wsTransport.getWorldId(),
+        connected,
+        away: roster.length - connected,
+        // Teammates still deciding a pick — the visible reason a cleared floor isn't
+        // descending yet (own overlay covers the self case).
+        waitingPicks: this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
+      });
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -2233,11 +2534,15 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
+      // The details panel owns the connection debug surface (world / rev / protocol).
+      netInfo: this.mode === "online" && this.wsTransport
+        ? netDetailsLine(this.wsTransport.getWorldId(), this.wsTransport.getLatestSnapshot()?.rev ?? null, PROTOCOL_VERSION)
+        : null,
       items: this.collapsedItems().map((it) => ({ name: it.count > 1 ? `${it.name} Lv${it.count}` : it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
     });
   }
 
-  private gameOver(isPartyWiped = true) {
+  private gameOver() {
     if (!this.isRunning) return;
     this.isRunning = false;
     this.syncInputContext();
@@ -2258,21 +2563,33 @@ export class Game {
         weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name })),
         items: this.collapsedItems().map((it) => ({ id: it.id, name: it.name, glyph: it.glyph, tint: it.tint, count: it.count })),
       },
-    }, isPartyWiped);
+    });
   }
 
-  // Online transport terminal states end the run cleanly instead of freezing the last frame:
-  // once we were in the authoritative world, a closed/errored socket IS the end of this run
-  // (the server also closes the socket after a game over — same path). If the connection never
-  // became ready (server unreachable / rejected), return to the menu instead. This path is
-  // NOT proof of a party wipe (the wipe paths are the gameOver event and the isRunOver
-  // snapshot, both handled before the close arrives) — a kicked/crashed client must not
-  // flip the room's lobby while its party still fights.
-  private onOnlineStatus(s: "connecting" | "open" | "closed" | "error") {
+  // Online transport terminal states end the run cleanly instead of freezing the last frame.
+  // The ONLY path that reads as a death is the server's own game-over close — a network
+  // outage that exhausts the reconnect window is connection_lost (back to the lobby, the run
+  // may still be live for friends), never a fabricated YOU DIED. Pre-reveal failures return
+  // to the lobby with their explicit reason: no run happened. "reconnecting" is not terminal
+  // — the freeze in tick() and the overlay own that state.
+  private onOnlineStatus(s: "connecting" | "open" | "reconnecting" | "closed" | "error") {
     if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
     if (s !== "closed" && s !== "error") return;
-    if (this.wsTransport.isReady()) this.gameOver(false);
-    else this.quitToMenu("connect_failed");
+    const kind = this.wsTransport.getCloseKind();
+    if (kind === "game_over" && this.wsTransport.isReady() && this.isWorldRevealed) { this.gameOver(); return; }
+    const mismatch = this.wsTransport.getWorldMismatch();
+    if (mismatch) { this.quitToMenu("world_mismatch", `expected ${mismatch.expected}, got ${mismatch.got}`); return; }
+    switch (kind) {
+      case "connection_lost": this.quitToMenu("connection_lost"); return;
+      case "superseded": this.quitToMenu("superseded"); return;
+      case "resume_rejected": this.quitToMenu("connection_lost", "resume rejected"); return;
+      // The run ended while we were still behind the veil — nothing was played; regroup.
+      case "game_over": this.quitToMenu("connection_lost", "the run ended before you got in"); return;
+      case null: break;
+    }
+    // No classified cause (defensive): a dead mid-run socket is an OUTAGE, never a death.
+    if (this.wsTransport.isReady() && this.isWorldRevealed) { this.quitToMenu("connection_lost"); return; }
+    this.quitToMenu("connect_failed");
   }
 
   // True when a world point is on (or near) the visible screen — used to gate audio
@@ -2448,6 +2765,7 @@ export class Game {
     if (this.isFlowDebug) this.renderFlowDebug();
     this.renderProps();
     this.renderDecals();
+    this.renderHazards();
     this.motes.render(ctx, this.cam.x, this.cam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -2476,22 +2794,103 @@ export class Game {
     this.renderSpectateBanner();
     this.renderReticle();
     this.renderMinimap();
+    this.renderReconnectOverlay();
   }
 
-  // The pre-world online frame: a plain dark hold with a pulsing status line. Never the
-  // placeholder dungeon — showing it is exactly the spawn-then-teleport artifact.
+  // Mid-run outage overlay over the frozen world, following the UI contract's state
+  // machine: the first 3s are a calm CONNECTION LOST / Reconnecting… (most blips end
+  // there); from 3s the attempt counter, the ESC cancel affordance, and the seat-grace
+  // countdown appear. Explicitly NOT a game-over screen.
+  private renderReconnectOverlay() {
+    if (this.mode !== "online" || !this.wsTransport) return;
+    const info = this.wsTransport.getReconnectInfo();
+    if (!info.isReconnecting) return;
+    const copy = reconnectOverlayCopy(Date.now(), info);
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(13, 10, 24, 0.72)";
+    ctx.fillRect(0, cy - 58, canvas.width, 116);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const pulse = 0.6 + 0.3 * Math.sin(this.animClock * 4);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffb43b";
+    ctx.font = '700 14px "Silkscreen", monospace';
+    ctx.fillText(copy.title, cx, cy - 22);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#e8e2f4";
+    ctx.font = '16px "VT323", monospace';
+    ctx.fillText(copy.line, cx, cy + 4);
+    if (copy.hint) {
+      ctx.fillStyle = "#8f87a8";
+      ctx.fillText(copy.hint, cx, cy + 28);
+    }
+    ctx.restore();
+  }
+
+  // The pre-reveal online frame: a plain dark hold, never the placeholder dungeon — showing
+  // it is exactly the spawn-then-teleport artifact. A party-started run additionally lists
+  // every expected room member with their live server-verified status, so "only the host
+  // made it in" is an explicit, visible state instead of a silent solo run.
   private renderConnectingVeil() {
     const { ctx, canvas } = this;
     ctx.fillStyle = "#0d0a18";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
     const pulse = 0.55 + 0.35 * Math.sin(this.animClock * 4);
+    const view = this.partyView;
     ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    if (!view) {
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = "#ffb43b";
+      ctx.font = '700 14px "Silkscreen", monospace';
+      ctx.fillText("ENTERING THE DUNGEON\u2026", cx, cy);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#8f87a8";
+      ctx.font = '16px "VT323", monospace';
+      ctx.fillText(CONNECT_CANCEL_HINT, cx, cy + 28);
+      ctx.restore();
+      return;
+    }
+    const rows = view.members;
+    const rowH = 26;
+    const top = cy - (rows.length * rowH) / 2;
     ctx.globalAlpha = pulse;
     ctx.fillStyle = "#ffb43b";
     ctx.font = '700 14px "Silkscreen", monospace';
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("ENTERING THE DUNGEON\u2026", canvas.width / 2, canvas.height / 2);
+    ctx.fillText("WAITING FOR PARTY\u2026", cx, top - 44);
+    ctx.globalAlpha = 1;
+    ctx.font = '700 11px "Silkscreen", monospace';
+    for (let i = 0; i < rows.length; i++) {
+      const m = rows[i];
+      const y = top + i * rowH;
+      ctx.fillStyle = playerColor(m.colorIndex);
+      ctx.beginPath();
+      ctx.arc(cx - 150, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#e8e2f4";
+      ctx.fillText(`${m.name}${m.isSelf ? " (you)" : ""}`, cx - 136, y);
+      ctx.textAlign = "right";
+      if (m.link === "connected") {
+        ctx.fillStyle = "#7CFC98";
+        ctx.fillText("CONNECTED TO WORLD", cx + 150, y);
+      } else {
+        ctx.fillStyle = "#ffb43b";
+        ctx.globalAlpha = pulse;
+        ctx.fillText(m.link === "reconnecting" ? "RECONNECTING\u2026" : "CONNECTING\u2026", cx + 150, y);
+        ctx.globalAlpha = 1;
+      }
+      ctx.textAlign = "center";
+    }
+    ctx.fillStyle = "#8f87a8";
+    ctx.font = '16px "VT323", monospace';
+    ctx.fillText(`the run starts when everyone is in \u00b7 absent players drop out automatically \u00b7 ${CONNECT_CANCEL_HINT}`, cx, top + rows.length * rowH + 30);
     ctx.restore();
   }
 
@@ -2839,11 +3238,14 @@ export class Game {
   // Draws a character sprite with its animation transform, an optional frame from a
   // spritesheet (falling back to the static PNG), an optional white hit-flash, and an
   // optional identity tint (recolored via the shading-preserving cache in assets.ts).
-  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number, tint: string | null = null) {
+  // `isHoldFirstFrame`: directional walk sheets double as the idle pose by clamping to
+  // frame 0 while the body stands still (the AD authors one sheet per facing, not two).
+  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number, tint: string | null = null, isHoldFirstFrame = false) {
     const { ctx } = this;
     const sheet = this.sprites.sheet(name, clip);
     if (!sheet && !this.sprites.ready(name)) {
-      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = "#a855f7";
+      // Streaming/absent sprite: a plain disc in the character's own tint keeps it readable.
+      ctx.save(); ctx.globalAlpha = alpha; ctx.fillStyle = SPRITE_FALLBACK_TINT[name] ?? "#a855f7";
       ctx.beginPath(); ctx.arc(cx, cy, size * 0.34, 0, 6.28); ctx.fill(); ctx.restore();
       return;
     }
@@ -2862,7 +3264,7 @@ export class Game {
     if (sheet) {
       const fw = sheet.img.naturalHeight || FRAME;
       const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
-      const i = frameIndex(count, sheet.fps, frameClock);
+      const i = isHoldFirstFrame ? 0 : frameIndex(count, sheet.fps, frameClock);
       // The tinted sheet is pixel-identical in layout, so the source frame rect still applies.
       const src = tint ? this.sprites.tintedSheetCanvas(name, clip, tint) ?? sheet.img : sheet.img;
       ctx.drawImage(src, i * fw, 0, fw, fw, -half, -half, size, size);
@@ -2936,6 +3338,17 @@ export class Game {
           ctx.fillText(text, sx, sy - 18);
           ctx.restore();
         }
+      }
+      // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
+      // spent their one personal claim (teammates still see their own live options).
+      if (p.isBossChoice) {
+        ctx.save();
+        const isSpent = this.p.hasClaimedBossChoice;
+        ctx.globalAlpha = isSpent ? 0.25 : 0.55 + Math.sin(clock * 3) * 0.2;
+        ctx.strokeStyle = isSpent ? "#8a8378" : "#ffd27a";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy + 2, 19, 0, 6.28); ctx.stroke();
+        ctx.restore();
       }
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
       const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;
@@ -3163,52 +3576,265 @@ export class Game {
       const a = e.attack;
       const anim = this.animForEnemy(e);
       const sx = e.x - cam.x, sy = e.y - cam.y;
-      const facing = this.enemyFacing.get(e.id) ?? (this.px >= e.x ? 1 : -1);
+      const pose = this.enemyPoses.get(e.id) ?? computeEnemyPose(e, createFacing(), 0, 0, anim.move > 0.5);
       const isWindup = a.phase === "windup";
+      const isBoss = isBossKind(e.kind);
       const isHopSlam = e.kind === "boss" && a.move === "hopslam";
       const drawSize = this.enemyDrawSize(e);
+
+      // An underground burrower (tunneling, or armed under its marker — the sim's
+      // untargetable window) renders as a traveling mound, never a body: nothing to shoot
+      // until it surfaces.
+      const isUnderground = e.kind === "burrower"
+        && ((a.move === "dive" && a.phase === "active") || (a.move === "erupt" && isWindup));
+      if (isUnderground) {
+        if (a.move === "erupt") this.renderDangerDisc(a.markX, a.markY, BURROW_ERUPT_RADIUS, a.windup);
+        this.renderBurrowMound(e, sx, sy, drawSize, anim.clock);
+        continue;
+      }
+      // The Choir mid-split is GONE — only a reforming shimmer marks where it will return.
+      if (e.kind === "choir" && a.move === "split") {
+        this.renderChoirSplit(e, sx, sy, drawSize, anim.clock);
+        continue;
+      }
+      // The Weaver airborne: no body to shoot — just the falling shadow on its landing mark.
+      if (e.kind === "weaver" && a.move === "pounce" && a.phase === "active") {
+        this.renderDangerDisc(a.markX, a.markY, WEAVER.pounceRadius, 1);
+        this.renderPounceShadow(a.markX, a.markY, drawSize, a.windup);
+        continue;
+      }
 
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
       // The shrinking safe-ring of the boss arena squeeze.
       if (e.kind === "boss" && a.move === "squeeze") this.renderSqueeze(e);
+      // MARROW's transition shield bubble (the interactive beat: kill the husks).
+      if (e.kind === "marrow" && a.move === "shield" && isWindup) this.renderMarrowShield(e, sx, sy, drawSize);
+      // The Weaver's pounce marker while it coils; the Warden's quake ring while it winds.
+      if (e.kind === "weaver" && a.move === "pounce" && isWindup) this.renderDangerDisc(a.markX, a.markY, WEAVER.pounceRadius, a.windup);
+      if (e.kind === "gilded" && a.move === "slam" && (isWindup || a.phase === "active")) {
+        this.renderDangerDisc(a.markX, a.markY, GILDED.slamRadius, a.phase === "active" ? 1 : a.windup);
+      }
       // Brutes/elites carry a colored ground ring so the tier reads before the first hit.
       const ring = TIER_RING_COLOR[e.tier];
       if (ring) this.renderTierRing(sx, sy, drawSize, ring);
 
-      // Ghost solidify reads as an opacity ramp; everyone else uses the archetype alpha.
-      const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup : arch.alpha;
+      // Ghost solidify reads as an opacity ramp; the Choir mid-fade is barely there;
+      // everyone else uses the archetype alpha.
+      const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup
+        : e.kind === "choir" && a.move === "fade" && a.phase === "active" ? 0.3
+        : arch.alpha;
 
-      const clip: SheetClip = anim.move > 0.5 ? "walk" : "idle";
-      const xf = characterXform(anim, e.kind === "boss" ? BOSS_STYLE : CHARACTER_STYLE);
+      // The AD drop-in ladder: attack_<facing> -> attack -> walk_<facing> -> legacy
+      // walk/idle -> static + procedural (see facing.ts). New directional/attack sheets
+      // light up per sprite with zero further render changes.
+      const choice = this.sprites.selectClip(arch.sprite, pose);
+      const facing = choice.isMirrored ? -1 : 1;
+      const xf = characterXform(anim, isBoss ? BOSS_STYLE : CHARACTER_STYLE);
       let extra = 1;
-      // Skeleton coils down (squash) as its lunge charges.
-      if (e.kind === "skeleton" && isWindup) { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
+      // Skeleton and charger coil down (squash) as their line commitments charge.
+      if ((e.kind === "skeleton" || e.kind === "charger") && isWindup && a.move !== "none") { xf.sx += 0.28 * a.windup; xf.sy -= 0.24 * a.windup; }
+      // Mid-rush stretch along the lane; post-crash dizzy wobble (the punish window tell).
+      if (a.move === "rush" && a.phase === "active") { xf.sx += 0.18; xf.sy -= 0.12; }
+      if (a.move === "crash" && a.phase === "recover") { xf.rot += Math.sin(anim.clock * 11) * 0.14; xf.sy -= 0.08; }
       // Boss inflates for radial/roar/squeeze telegraphs and lifts off the ground mid-slam.
       if (e.kind === "boss") {
         if (isWindup && (a.move === "radial" || a.move === "roar" || a.move === "squeeze")) extra = 1 + a.windup * 0.16;
         if (isHopSlam && a.phase === "windup") xf.sy -= 0.18 * a.windup; // crouch before the leap
         if (isHopSlam && a.phase === "active") { xf.oy -= Math.sin(a.windup * Math.PI) * BOSS_JUMP_HEIGHT; extra = 1.08; }
       }
+      // The MARROW inflates for its spiral/shield telegraphs; the Choir for its fade and
+      // the Warden for its sweep/sanctify; the Weaver coils down before the leap.
+      if (e.kind === "marrow" && isWindup && (a.move === "spin" || a.move === "shield")) extra = 1 + a.windup * 0.14;
+      if (e.kind === "choir" && isWindup && a.move === "fade") extra = 1 + a.windup * 0.12;
+      if (e.kind === "gilded" && isWindup && (a.move === "sweep" || a.move === "roar")) extra = 1 + a.windup * 0.14;
+      if (e.kind === "weaver" && isWindup && a.move === "pounce") { xf.sy -= 0.22 * a.windup; xf.sx += 0.14 * a.windup; }
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
-      this.drawChar(arch.sprite, clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock);
+      this.drawChar(arch.sprite, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, null, choice.isHoldFirstFrame);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
 
+      // The shielder's guard arc — drawn from the sim's authoritative block angle.
+      if (e.kind === "shielder") this.renderShielderGuard(e, sx, sy, drawSize);
+      // The Warden's plate: a gold sheen while closed, a cracked-open core glow while EXPOSED.
+      if (e.kind === "gilded") this.renderGildedPlate(e, sx, sy, drawSize);
+
       // Shimmer flecks while a ghost is materializing.
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
+      // The Choir mid-fade shimmers like its wisp kin (intangible — hold your fire).
+      if (e.kind === "choir" && a.move === "fade" && a.phase === "active") this.renderGhostShimmer(e, sx, sy);
       // Aura + aim line for a charging attack.
       if (isWindup) this.renderTelegraph(e, sx, sy);
 
-      const barW = e.kind === "boss" ? 64 : 32;
+      const barW = isBoss ? 64 : 32;
       const barY = sy - drawSize / 2 - 8;
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
-      ctx.fillStyle = e.kind === "boss" ? "#ffb43b" : "#ff5a5a";
+      ctx.fillStyle = isBoss ? "#ffb43b" : "#ff5a5a";
       ctx.fillRect(sx - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), 4);
     }
+  }
+
+  // The Weaver's webs: violet ground lattices (spokes + rings) that fade with their life.
+  // Ground FX like the danger markers — the hazard itself is authoritative sim state.
+  private renderHazards() {
+    if (this.hazards.length === 0) return;
+    const { ctx, cam } = this;
+    ctx.save();
+    for (const h of this.hazards) {
+      const sx = h.x - cam.x, sy = h.y - cam.y;
+      const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3); // holds, then fades out
+      ctx.globalAlpha = 0.34 * fade;
+      ctx.strokeStyle = "#c98bff";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 8; i++) {
+        const ang = (i / 8) * 6.28 + h.id * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + Math.cos(ang) * h.radius, sy + Math.sin(ang) * h.radius);
+        ctx.stroke();
+      }
+      for (let ring = 1; ring <= 2; ring++) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, h.radius * (ring / 2.4), 0, 6.28);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.1 * fade;
+      ctx.fillStyle = "#c98bff";
+      ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // The traveling dirt mound of a tunneling burrower: a low earthen bump + kicked specks.
+  // A ground effect, not a body — the sprite returns at the eruption.
+  private renderBurrowMound(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const tint = ENEMY_ARCHETYPES[e.kind].tint;
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = tint;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy + size * 0.18, size * 0.34, size * 0.14, 0, 0, 6.28);
+    ctx.fill();
+    ctx.globalAlpha = 0.85;
+    for (let i = 0; i < 5; i++) {
+      const ang = clock * 6 + (i / 5) * 6.28;
+      const rad = size * (0.2 + 0.14 * Math.sin(clock * 9 + i * 1.7));
+      ctx.fillRect(sx + Math.cos(ang) * rad - 1.5, sy + size * 0.12 + Math.sin(ang) * rad * 0.4 - 1.5, 3, 3);
+    }
+    ctx.restore();
+  }
+
+  // A generic filled danger disc + bright rim (the burrower's eruption marker). Grows with
+  // the telegraph so "leave this circle" needs no explanation.
+  private renderDangerDisc(x: number, y: number, radius: number, grow: number) {
+    const { ctx, cam } = this;
+    const sx = x - cam.x, sy = y - cam.y;
+    const r = radius * Math.max(0.2, grow);
+    ctx.save();
+    ctx.globalAlpha = 0.16 + 0.16 * grow;
+    ctx.fillStyle = "#ff5a5a";
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+    ctx.globalAlpha = 0.45 + 0.35 * grow;
+    ctx.strokeStyle = "#ffd27a";
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The Choir's split beat: the body is gone; a slow inward spiral of flecks marks the
+  // reforming point (and the wisps you should be shooting are live enemies elsewhere).
+  private renderChoirSplit(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const t = e.attack.windup;
+    ctx.save();
+    ctx.fillStyle = "#dff4ff";
+    for (let i = 0; i < 7; i++) {
+      const ang = clock * 1.6 + (i / 7) * 6.28;
+      const rad = size * (0.65 - 0.35 * t) * (0.7 + 0.3 * Math.sin(clock * 5 + i * 1.3));
+      ctx.globalAlpha = 0.35 + 0.3 * Math.sin(clock * 7 + i);
+      ctx.fillRect(sx + Math.cos(ang) * rad - 2, sy + Math.sin(ang) * rad - 2, 4, 4);
+    }
+    ctx.globalAlpha = 0.12 + 0.1 * t;
+    ctx.strokeStyle = TELEGRAPH_COLOR.split;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.4, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The airborne Weaver's falling shadow: a blob that swells over the landing mark as it
+  // drops — the classic "get out from under it" read.
+  private renderPounceShadow(x: number, y: number, size: number, t: number) {
+    const { ctx, cam } = this;
+    const sx = x - cam.x, sy = y - cam.y;
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.35 * t;
+    ctx.fillStyle = "#1a0f24";
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, size * (0.2 + 0.25 * t), size * (0.1 + 0.13 * t), 0, 0, 6.28);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // The shielder's guard: a braced arc across its authoritative block frontage.
+  private renderShielderGuard(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const half = SHIELDER_BLOCK_ARC / 2;
+    const facing = e.attack.lockedAngle;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#cfe0d4";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = ENEMY_ARCHETYPES.shielder.tint;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The Warden's plate state: sealed = a cool gold rim (your shots are chipping); exposed
+  // = the plate hangs open and the amber core blazes — unload.
+  private renderGildedPlate(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const a = e.attack;
+    const isExposed = a.phase === "recover" && (a.move === "slam" || a.move === "sweep");
+    if (isExposed) {
+      const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
+      this.fxLayer("glow_round", "#ffb43b", sx, sy, size * 1.1 * pulse, size * 1.1 * pulse, 0.55, 0);
+      this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.4, size * 0.4, 0.8 * pulse, 0);
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.15 * Math.sin(this.animClock * 3);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The MARROW's bone shield: a cold ring that thins as the beat runs out. Husk deaths
+  // collapse it early — the ring is the "switch targets" prompt.
+  private renderMarrowShield(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const t = e.attack.windup;
+    const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 7);
+    ctx.save();
+    ctx.globalAlpha = (0.5 - 0.25 * t) * pulse + 0.2;
+    ctx.strokeStyle = TELEGRAPH_COLOR.shield;
+    ctx.lineWidth = 4 - 2 * t;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.62, 0, 6.28); ctx.stroke();
+    ctx.globalAlpha = 0.12 * pulse;
+    ctx.fillStyle = TELEGRAPH_COLOR.shield;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.62, 0, 6.28); ctx.fill();
+    ctx.restore();
   }
 
   // A thin pulsing ellipse under a brute/elite — the tier tell.
@@ -3290,8 +3916,14 @@ export class Game {
     ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
     ctx.restore();
 
-    if (a.move === "lunge" || a.move === "spit") {
-      const len = a.move === "lunge" ? 150 : 300;
+    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley") {
+      // Line commitments draw their whole lane: the rush lengths match the sim's actual
+      // travel, so where the line ends is where the rusher stops (or crashes).
+      const len = a.move === "lunge" ? 150
+        : a.move === "spit" ? 300
+        : a.move === "volley" ? 260
+        : e.kind === "marrow" ? MARROW.chargeSpeed * MARROW.chargeDur
+        : CHARGER_RUSH_SPEED * CHARGER_RUSH_DUR;
       ctx.save();
       ctx.globalAlpha = (a.isAimLocked ? 0.9 : 0.4) * (0.55 + 0.45 * a.windup);
       ctx.strokeStyle = color;
@@ -3490,6 +4122,20 @@ export class Game {
         this.fxLayer("flame_puff", color, bx, by, R * 4.5, R * 4.5, 0.75, angle);
         this.fxLayer("glow_round", color, bx, by, R * 5.5, R * 5.5, 0.5, 0);
         return this.fxLayer("core_dot", "#ffe6a0", bx, by, R * 2.4, R * 2.4, 0.9, 0);
+      case "mortar":
+        // A heavy lobbed shell: smoke billowing off the tail, warm glow, fat slug head.
+        this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.4, by - Math.sin(angle) * R * 2.4, R * 4.5, R * 4.5, 0.45, 0);
+        this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
+        return this.fxLayer("slug", color, bx, by, R * 4.2, R * 4.2, 1, angle);
+      case "beam":
+        // The lance: rounds so fast and frequent the long streaks fuse into one continuous
+        // line of light. The dedicated code-tinted white ray mask (AD final) carries it;
+        // the generic streak keeps the beam reading until that mask lands.
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.4, 0);
+        if (!this.fxTrail("beam_ray", color, bx, by, Math.max(trailLen, R * 14), R * 3, 0.9, angle)) {
+          this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 14), R * 2.4, 0.85, angle);
+        }
+        return this.fxLayer("core_dot", "#fff7dd", bx, by, R * 2, R * 2, 1, 0);
       default:
         return false;
     }
@@ -3540,7 +4186,9 @@ export class Game {
       const entry = this.remoteAnims.get(r.playerId);
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
-      ctx.globalAlpha = r.isDown ? 0.4 : 1;
+      // A network-absent teammate renders as an explicit ghost (their body is reserved for
+      // the reconnect grace) — never mistakable for a live player or a corpse.
+      ctx.globalAlpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
       ctx.scale(r.facing * xf.sx, xf.sy);
@@ -3552,7 +4200,7 @@ export class Game {
       }
       ctx.restore();
 
-      if (!r.isDown) {
+      if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
         else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
       }
@@ -3560,7 +4208,9 @@ export class Game {
       ctx.fillStyle = color;
       ctx.font = '700 11px "Silkscreen", monospace';
       ctx.textAlign = "center";
-      ctx.fillText(r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.globalAlpha = r.isAbsent ? 0.8 : 1;
+      ctx.fillText(r.isAbsent ? `${r.name} (reconnecting\u2026)` : r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.globalAlpha = 1;
       ctx.textAlign = "left";
     }
   }
@@ -4066,7 +4716,7 @@ export class Game {
   private renderMinimap() {
     const dots: MinimapDot[] = [];
     for (const e of this.enemies) {
-      dots.push({ x: e.x, y: e.y, color: e.kind === "boss" ? "#ffb43b" : "#ff6a6a", size: e.kind === "boss" ? 3 : 2 });
+      dots.push({ x: e.x, y: e.y, color: isBossKind(e.kind) ? "#ffb43b" : "#ff6a6a", size: isBossKind(e.kind) ? 3 : 2 });
     }
     for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
     this.minimap.render({
@@ -4188,7 +4838,7 @@ export class Game {
   devSetFloor(floor: number): void {
     loadFloorIntoWorld(this.world, Math.max(1, Math.floor(floor)));
     this.loadFloorClient();
-    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
   }
 
   devToggleFlowDebug(): boolean {

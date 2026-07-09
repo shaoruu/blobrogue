@@ -53,13 +53,13 @@ function main(): void {
   check("generated dungeon has rooms", w.dungeon.rooms.length > 2, `rooms=${w.dungeon.rooms.length}`);
   check("floor spawned enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
   check("floor stocked a weapon INSIDE a chest (never loose on the floor)",
-    w.chests.some((c) => c.weapons !== undefined) && w.pickups.every((p) => p.kind !== "weapon"), `chests=${w.chests.length}`);
+    w.chests.some((c) => c.weapon !== undefined) && w.pickups.every((p) => p.kind !== "weapon"), `chests=${w.chests.length}`);
   check("both players share the spawn point", Math.hypot(a.x - b.x, a.y - b.y) < 1);
   const rev0 = w.rev;
 
   section("chest loot: A opens the weapon chest -> inventories DIVERGE");
-  const weaponChest = w.chests.find((c) => c.weapons !== undefined)!;
-  const droppedWeapon = weaponChest.weapons![0];
+  const weaponChest = w.chests.find((c) => c.weapon !== undefined)!;
+  const droppedWeapon = weaponChest.weapon!;
   placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
   placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
   step(w);
@@ -142,8 +142,8 @@ function main(): void {
   check("blessings PERSIST across the descend", a.ownedItemIds.includes(dmgItem.id) && b.ownedItemIds.includes(speedItem.id));
 
   section("wire coherence: both players' snapshots agree on the new authoritative world");
-  const snapA = buildSnapshot(w, "pA", 0, [], 0, false, {});
-  const snapB = buildSnapshot(w, "pB", 0, [], 0, false, {});
+  const snapA = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-test" });
+  const snapB = buildSnapshot(w, "pB", 0, [], 0, false, { worldId: "w-test" });
   if (snapA.t === "snap" && snapB.t === "snap") {
     check("same seed on both wires", snapA.seed === snapB.seed && snapA.seed === SEED);
     check("same floor on both wires", snapA.floor === 3 && snapB.floor === 3);

@@ -216,14 +216,14 @@ async function main(): Promise<void> {
       // B stages too: the gate satisfies and immediately raises the party's blessing offers.
       const bSim = world.state.players.get(b.serverId()!)!;
       bSim.x = ex; bSim.y = ey;
-      const offered = await waitUntil(() => (b.transport.getLatestSnapshot()?.pnd.length ?? 0) === 2, 2000);
+      const offered = await waitUntil(() => (b.transport.getLatestSnapshot()?.wait.length ?? 0) === 2, 2000);
       check("all-at-exit flips straight into the party blessing gate (pnd on both wires)",
-        offered && (a.transport.getLatestSnapshot()?.pnd.length ?? 0) === 2);
+        offered && (a.transport.getLatestSnapshot()?.wait.length ?? 0) === 2);
       check("still floor 1 until the picks resolve", world.state.floor === 1);
       // The expiry countdown is AUTHORITATIVE state riding the wire: both clients read the
       // same seconds, and they fall with the server's sim clock — no client ever times out
       // a pick locally (resolution/expiry arrive as snapshots or not at all).
-      const secondsOf = (bot: Bot): number[] => (bot.transport.getLatestSnapshot()?.pnd ?? []).map((p) => p.s).sort();
+      const secondsOf = (bot: Bot): number[] => (bot.transport.getLatestSnapshot()?.wait ?? []).map((p) => p.s).sort();
       const t0 = secondsOf(a);
       check("both wires read the same authoritative countdown", t0.join(",") === secondsOf(b).join(",") && t0.every((s) => s > 0), t0.join(","));
       const isFalling = await waitUntil(() => {
@@ -236,7 +236,7 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
-  await test("boss weapon claims END-TO-END: woffer delivery, personal claim, one reroll, junk rejected", async () => {
+  await test("boss weapon choices END-TO-END: shared pedestals, personal claims, no depletion", async () => {
     const s = await startTestServer();
     try {
       const a = new Bot({ url: s.url, secret: s.secret, playerId: "claim-a", world: "room:CLMS", script: () => idle() });
@@ -244,9 +244,6 @@ async function main(): Promise<void> {
       a.start(); b.start();
       await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
       const world = s.server.getWorld("room:CLMS")!;
-      // Arm the claim state directly through the sim's own path: a boss chest on floor 1's
-      // world, opened by A (the transport flow from here — woffer, claim, reroll — is
-      // exactly the production path; only the chest's provenance is scripted).
       world.state.enemies = [];
       world.state.pendingSpawns = [];
       // The encounter snapshot a boss floor would carry (P is snapshotted at floor build;
@@ -254,43 +251,38 @@ async function main(): Promise<void> {
       world.state.encounterPlayers = 2;
       const aSim = world.state.players.get(a.serverId()!)!;
       const bSim = world.state.players.get(b.serverId()!)!;
-      world.state.chests.push({ id: world.state.nextChestId++, kind: "boss", x: aSim.x, y: aSim.y, radius: 18, opened: false });
-      await waitUntil(() => a.transport.getPendingWeaponOfferPeek() !== null && b.transport.getPendingWeaponOfferPeek() !== null, 3000);
-      const wa = a.transport.getPendingWeaponOfferPeek()!;
-      const wb = b.transport.getPendingWeaponOfferPeek()!;
-      check("both members received the SAME shared choice set (P2 -> 3 distinct, 1 reroll)",
-        wa.choices.join(",") === wb.choices.join(",") && wa.choices.length === 3
-        && new Set(wa.choices).size === 3 && wa.rerollsLeft === 1, wa.choices.join(","));
+      // A signature-bearing boss chest (every real boss drop carries one); opening it spills
+      // the min(P+1,5) personal-choice pedestals through the production path.
+      world.state.chests.push({ id: world.state.nextChestId++, kind: "boss", x: aSim.x + 40, y: aSim.y, radius: 18, opened: false, weapon: "mortar" });
+      aSim.x += 40; // walk onto the chest: openChest runs on contact in updateChests
+      const isSpilled = await waitUntil(() => (a.transport.getLatestSnapshot()?.pickups ?? []).filter((p) => p.bch).length === 3, 3000);
+      const chA = (a.transport.getLatestSnapshot()?.pickups ?? []).filter((p) => p.bch).map((p) => `${p.id}:${p.wpn}`).sort();
+      const chB = (b.transport.getLatestSnapshot()?.pickups ?? []).filter((p) => p.bch).map((p) => `${p.id}:${p.wpn}`).sort();
+      check("both wires carry the SAME min(P+1,5) boss-choice pedestals (P2 -> 3)", isSpilled && chA.join(",") === chB.join(","), chA.join(","));
 
-      // A claims: the grant arrives authoritatively via SelfWire.wpns.
-      a.transport.sendClaimWeapon(wa.id, wa.choices[0]);
-      const isGranted = await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns ?? []).includes(wa.choices[0]), 2000);
-      check("A's claim granted personally (SelfWire.wpns)", isGranted);
-      check("A's claim removed nothing from B's pending view",
-        world.state.weaponClaims !== null && world.state.weaponClaims.pending.get(b.serverId()!)!.view.join(",") === wb.choices.join(","));
+      // A claims by touch: the grant arrives via SelfWire.wpns and bcl flips — while every
+      // pedestal PERSISTS for B (a claim never depletes a teammate's options).
+      const first = (world.state.pickups.filter((p) => p.isBossChoice))[0];
+      aSim.x = first.x; aSim.y = first.y;
+      const isGranted = await waitUntil(() => a.transport.getLatestSnapshot()?.self?.bcl === true, 3000);
+      check("A's personal claim granted (SelfWire.bcl, weapon in wpns)",
+        isGranted && (a.transport.getLatestSnapshot()?.self?.wpns.length ?? 0) >= 2);
+      check("every pedestal still stands for B after A's claim",
+        world.state.pickups.filter((p) => p.isBossChoice).length === 3);
 
-      // B rerolls: a FRESH woffer (new id, different set) replaces the view; then claims.
-      b.transport.sendRerollWeapons(wb.id);
-      const isRerolled = await waitUntil(() => {
-        const o = b.transport.getPendingWeaponOfferPeek();
-        return o !== null && o.id > wb.id;
-      }, 2000);
-      const wb2 = b.transport.getPendingWeaponOfferPeek()!;
-      check("B's reroll delivered a fresh view (new id, off the base set, budget spent)",
-        isRerolled && wb2.rerollsLeft === 0 && wb2.choices.every((id) => !wb.choices.includes(id)), wb2.choices.join(","));
-      b.transport.sendRerollWeapons(wb2.id);
-      await sleep(200);
-      check("a second reroll is rejected (budget is authoritative)", world.state.weaponClaims !== null
-        && world.state.weaponClaims.pending.get(b.serverId()!)!.view.join(",") === wb2.choices.join(","));
-      // Junk claim: an id outside B's current view must not grant.
-      b.transport.sendClaimWeapon(wb2.id, wb.choices[0]);
-      await sleep(200);
-      check("a claim outside the live view rejects", !(b.transport.getLatestSnapshot()?.self?.wpns ?? []).includes(wb.choices[0]));
-      b.transport.sendClaimWeapon(wb2.id, wb2.choices[0]);
-      const isBGranted = await waitUntil(() => (b.transport.getLatestSnapshot()?.self?.wpns ?? []).includes(wb2.choices[0]), 2000);
-      check("B's claim from the rerolled view granted", isBGranted);
-      check("all claims resolved: the sim released the state", await waitUntil(() => world.state.weaponClaims === null, 1000));
-      check("B holds the sim-side body too", bSim.ownedWeapons.includes(wb2.choices[0]));
+      // A cannot claim twice: standing on another pedestal grants nothing more.
+      const owned = aSim.ownedWeapons.length;
+      const second = world.state.pickups.filter((p) => p.isBossChoice)[1];
+      aSim.x = second.x; aSim.y = second.y;
+      await sleep(300);
+      check("one personal claim per player (a second touch grants nothing)", aSim.ownedWeapons.length === owned);
+
+      // B claims: with every living player claimed, the pedestals clear on both wires.
+      const target = world.state.pickups.filter((p) => p.isBossChoice)[2];
+      bSim.x = target.x; bSim.y = target.y;
+      const isCleared = await waitUntil(() => (b.transport.getLatestSnapshot()?.pickups ?? []).filter((p) => p.bch).length === 0
+        && (a.transport.getLatestSnapshot()?.pickups ?? []).filter((p) => p.bch).length === 0, 3000);
+      check("all claimed -> the pedestals clear identically on both wires", isCleared && bSim.hasClaimedBossChoice);
       a.stop(); b.stop();
     } finally { await s.close(); }
   });

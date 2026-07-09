@@ -449,41 +449,11 @@ function spawnValidationSweep(): void {
   check("every spawn tile reachable from the player spawn", reachFailures === 0, `failures=${reachFailures}`);
 }
 
-// ---- case 9: runtime spawns — elite split + boss adds settle out of sealed pockets ----
+// ---- case 9: runtime spawns — boss adds settle out of sealed pockets ----
+// (The elite split affix was retired by the balancer's elite rework — elites now BRACE
+// instead of splitting — so runtime-spawn settling is exercised by boss adds alone.)
 
 function splitAndAddCase(): void {
-  section("elite split: children of a parent killed inside a sealed pocket relocate outside it");
-  const w = sandbox(0x5B117);
-  placePlayer(w, tileCenter(5, 12).x, tileCenter(5, 12).y);
-  const pocket = tileCenter(25, 12);
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      if (dx === 0 && dy === 0) continue;
-      propAtTile(w, "barrel", 25 + dx, 12 + dy);
-    }
-  }
-  const elite = createEnemy("slime", pocket.x, pocket.y, w.floor, w.rng, w.nextEnemyId++, { tier: "elite" });
-  w.enemies.push(elite);
-  w.bullets.push({
-    x: elite.x, y: elite.y, vx: 1, vy: 0, radius: elite.radius + 4, life: 0.06, friendly: true,
-    owner: LOCAL_ID, damage: 500, color: "#fff", pierce: 0, hitList: null, isCrit: false,
-  });
-  stepWorld(w, idleInputs, DT);
-  const children = w.enemies.filter((e) => e.tier === "swarm");
-  check("both split children spawned and survived the pocket kill", children.length === 2, `children=${children.length}`);
-  const reach = oracleReachable(w.dungeon, w.props, children[0]?.radius ?? 13);
-  let isOutsideOk = true;
-  let isReachOk = true;
-  let isBodyOk = true;
-  for (const c of children) {
-    if (Math.hypot(c.x - pocket.x, c.y - pocket.y) < 60) isOutsideOk = false;
-    if (!reach[Math.floor(c.y / TILE) * w.dungeon.w + Math.floor(c.x / TILE)]) isReachOk = false;
-    if (spawnBodyError(w, c)) isBodyOk = false;
-  }
-  check("children relocated OUTSIDE the sealed pocket", isOutsideOk);
-  check("children landed on reachable tiles", isReachOk);
-  check("children body-clear", isBodyOk);
-
   section("boss adds: summons from a cover-ringed boss settle body-clear on reachable ground");
   const wb = sandbox(0xB055);
   placePlayer(wb, tileCenter(8, 12).x, tileCenter(8, 12).y);

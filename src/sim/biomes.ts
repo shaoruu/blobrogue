@@ -12,11 +12,15 @@ export interface Biome {
   readonly accent: string;
 }
 
-const FLOORS_PER_BIOME = 3;
+// The canonical 30-floor spine (docs/specs/blobrogue_ENCOUNTER_CURRICULUM_spec.md §0):
+// six regions of five floors, each closed by its milestone — Amberwild/Slime King,
+// Rootbound Warrens/the F10 Miniboss Gauntlet, Sunless Caves/Marrow, The Deep/Weaver,
+// Gilded Archive/Warden, Emberreach/Hollow Choir. Past F30 the bands cycle.
+const FLOORS_PER_BIOME = 5;
 
 export const BIOMES: readonly Biome[] = [
   {
-    name: "Verdant Hollow",
+    name: "Amberwild",
     bgColor: "#0a120e",
     floorA: "#141f18",
     floorB: "#182419",
@@ -27,6 +31,21 @@ export const BIOMES: readonly Biome[] = [
     tint: "#3d6b50",
     tintAlpha: 0.24,
     accent: "#5fbf7a",
+  },
+  {
+    // Same living ecology as Amberwild, denser and darker — the accepted lane is deep
+    // GREEN-BROWN braided roots threaded with amber channels (the accent).
+    name: "Rootbound Warrens",
+    bgColor: "#0d0e09",
+    floorA: "#171a10",
+    floorB: "#1c1e12",
+    wallFront: "#242718",
+    wallCap: "#383a22",
+    wallSideRgb: "30,31,19",
+    wallCorner: "rgba(10,11,7,0.5)",
+    tint: "#565232",
+    tintAlpha: 0.24,
+    accent: "#d9a24a",
   },
   {
     name: "Sunless Caves",
@@ -55,6 +74,21 @@ export const BIOMES: readonly Biome[] = [
     accent: "#a24bff",
   },
   {
+    // The accepted lane: RIGID amber/brass + cold mineral — dead honey and tarnished
+    // metal, order turned to imprisonment (never the Camp's warm gold).
+    name: "Gilded Archive",
+    bgColor: "#100e09",
+    floorA: "#1d1a11",
+    floorB: "#222016",
+    wallFront: "#2d2819",
+    wallCap: "#453c24",
+    wallSideRgb: "38,33,22",
+    wallCorner: "rgba(13,11,7,0.5)",
+    tint: "#7d6a3a",
+    tintAlpha: 0.20,
+    accent: "#e8c265",
+  },
+  {
     name: "Emberreach",
     bgColor: "#120a08",
     floorA: "#1f1410",
@@ -80,7 +114,8 @@ export function biomeIndexForFloor(floor: number): number {
   return Math.floor((f - 1) / FLOORS_PER_BIOME) % BIOMES.length;
 }
 
-export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isDescend?: boolean }): string {
+export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
+  if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";
   if (opts?.isBoss) return "BOSS FLOOR";
   const name = biomeForFloor(floor).name.toUpperCase();
   if (opts?.isDescend) return `${name} · DOWN TO FLOOR ${floor}`;

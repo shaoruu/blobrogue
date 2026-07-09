@@ -9,7 +9,7 @@
 // Run: npm run test:netcode
 
 import { WSTransport, type SocketLike } from "../src/client/wsTransport.js";
-import { buildSnapshot, jsonCodec, type ServerMsg, type WireEvent } from "../src/net/protocol.js";
+import { buildSnapshot, jsonCodec, type RosterWire, type ServerMsg, type WireEvent } from "../src/net/protocol.js";
 import { createWorld, spawnPlayerInWorld } from "../src/sim/world.js";
 import type { WorldState } from "../src/sim/world.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
@@ -43,7 +43,7 @@ interface Rig {
   sock: FakeSocket;
   world: WorldState;
   pid: string;
-  snap: (opts?: { ackSeq?: number; events?: WireEvent[]; evTo?: number; full?: boolean }) => ServerMsg;
+  snap: (opts?: { ackSeq?: number; events?: WireEvent[]; evTo?: number; full?: boolean; worldId?: string; roster?: RosterWire[] }) => ServerMsg;
   tickNow: (ms: number) => void;
 }
 
@@ -66,7 +66,7 @@ async function makeRig(seed = 0xAB12): Promise<Rig> {
   sock.onopen?.();
   return {
     transport, sock, world, pid,
-    snap: (opts = {}) => buildSnapshot(world, pid, opts.ackSeq ?? 0, opts.events ?? [], opts.evTo ?? 0, opts.full ?? false, {}),
+    snap: (opts = {}) => buildSnapshot(world, pid, opts.ackSeq ?? 0, opts.events ?? [], opts.evTo ?? 0, opts.full ?? false, { worldId: opts.worldId ?? "w-test", roster: opts.roster }),
     tickNow: (ms) => { now += ms; },
   };
 }

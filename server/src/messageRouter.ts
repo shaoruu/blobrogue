@@ -9,16 +9,23 @@
 // stays far below every cap.
 
 import { jsonCodec, PROTOCOL_VERSION, ProtocolError, INTERP_DELAY_MIN_MS, INTERP_DELAY_MAX_MS, type ClientMsg, type Codec } from "../../src/net/protocol.js";
-import { verifyTicket } from "./auth.js";
+import { mintResumeToken, resumeTokensEqual, verifyTicket, type AuthResult } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { Clock } from "./clock.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
 import { inputToIntent } from "./connection.js";
-import type { SessionStore, SnapshotPublisher } from "./ports.js";
+import type { RoomRuntime, Seat, SessionStore, SnapshotPublisher } from "./ports.js";
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
+const ROOM_WORLD_PREFIX = "room:";
+
+// The room code a world id was minted from (worldIdForRoomCode), or null for non-room worlds
+// (the public default, dev worlds). Log/ops-facing only — binding always uses the full id.
+export function roomCodeOfWorldId(worldId: string): string | null {
+  return worldId.startsWith(ROOM_WORLD_PREFIX) ? worldId.slice(ROOM_WORLD_PREFIX.length) : null;
+}
 
 // assertNever makes the dispatch exhaustive: a new ClientMsg variant is a COMPILE error until it
 // is handled here.
@@ -45,13 +52,11 @@ function classOf(t: ClientMsg["t"]): MsgClass {
     case "pong": return "pong";
     case "stat": return "stat";
     case "join":
+    case "leave":
     case "equip":
     case "reorder":
     case "drop":
     case "chooseBlessing":
-    case "claimWeapon":
-    case "rerollWeapons":
-    case "skipWeapons":
     case "spec":
       return "control";
     default: return assertNever(t);
@@ -71,6 +76,7 @@ export class MessageRouter {
     if (!this.admitClass(conn, classOf(msg.t))) return; // over a class cap -> connection closed
     switch (msg.t) {
       case "join": this.onJoin(conn, msg); return;
+      case "leave": this.onLeave(conn); return;
       case "input": this.onInput(conn, msg); return;
       case "pong": this.onPong(conn, msg); return;
       case "stat": this.onStat(conn, msg); return;
@@ -78,9 +84,6 @@ export class MessageRouter {
       case "reorder": this.onReorder(conn, msg); return;
       case "drop": this.onDrop(conn, msg); return;
       case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
-      case "claimWeapon": this.onClaimWeapon(conn, msg); return;
-      case "rerollWeapons": this.onRerollWeapons(conn, msg); return;
-      case "skipWeapons": this.onSkipWeapons(conn, msg); return;
       case "spec": this.onSpectate(conn, msg); return;
       default: assertNever(msg); // exhaustive — a new variant won't compile until handled
     }
@@ -117,23 +120,171 @@ export class MessageRouter {
     if (!auth.ok || !auth.playerId) { this.ctx.reject(conn, "auth", auth.reason ?? "unauthorized"); return; }
     conn.authed = true;
     conn.authName = auth.playerId;
-    conn.playerId = "p" + conn.id; // world-scoped id; auth identity kept for logs
     conn.displayName = auth.name ?? null;
     conn.colorIndex = auth.colorIndex ?? null;
     // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
     // player proved membership in that room, so friends sharing a code land in the same
     // isolated world and a client can never assert a world id. No claim -> the public default.
-    const room = this.ctx.sessions.bind(conn, auth.worldId ?? DEFAULT_WORLD_ID);
+    const worldId = auth.worldId ?? DEFAULT_WORLD_ID;
+    // A join presenting a resume token reclaims the reserved body instead of spawning one.
+    if (msg.resume !== undefined) { this.onResume(conn, worldId, msg.resume, auth); return; }
+
+    // Plain join by an identity that still holds a seat: the player deliberately started a
+    // NEW session (fresh tab, post-expiry rejoin) — the reserved body is abandoned so the
+    // fresh spawn is never a duplicate. Continuity requires the token; identity alone never
+    // resurrects state (that would make replay rejection meaningless).
+    const existingRoom = this.ctx.sessions.room(worldId);
+    if (existingRoom?.discardSeat(auth.playerId)) {
+      this.ctx.metrics.counters.seatsDiscarded++;
+      conn.log.info("reserved seat discarded (plain rejoin without resume token)", { authName: auth.playerId, worldId });
+    }
+
+    conn.playerId = "p" + conn.id; // world-scoped id; auth identity kept for logs
+    const room = this.ctx.sessions.bind(conn, worldId);
+    this.finishJoin(conn, room, auth, "join ok");
+    this.supersedeDuplicateIdentity(room, conn);
+  }
+
+  // Shared join/resume tail: liveness stamp, a FRESH single-use resume token (delivered on
+  // the full snapshot), the trust-chain log line, and the immediate full snapshot (carries
+  // selfId + authoritative state) — don't wait a tick.
+  private finishJoin(conn: Conn, room: RoomRuntime, auth: AuthResult, what: string): void {
     conn.lastPongAt = this.ctx.clock.now();
+    conn.resumeToken = mintResumeToken();
     this.ctx.metrics.counters.joinsOk++;
-    conn.log.info("join ok", { authName: conn.authName, playerId: conn.playerId, worldId: room.id, name: conn.displayName ?? "" });
-    // Immediate FULL snapshot (carries selfId + authoritative spawn) — don't wait a tick.
+    conn.log.info(what, {
+      authName: conn.authName ?? "", playerId: conn.playerId ?? "", worldId: room.id,
+      roomCode: roomCodeOfWorldId(room.id) ?? "", ticketWorld: auth.worldId ?? "",
+      name: conn.displayName ?? "", worldPlayers: room.playerCount,
+    });
     this.ctx.publisher.sendFull(room, conn);
+  }
+
+  // Reclaim a reserved seat (or take over a half-dead live connection) with the single-use
+  // resume token. Every failure is EXPLICIT: a token mismatch on an existing seat/connection
+  // is a hard reject (replay/forgery — never a silent fresh spawn), while a missing seat
+  // (grace expired, world released, server restarted) rejects with `resume_expired` so the
+  // client knows the run cannot be resumed and returns to the lobby.
+  private onResume(conn: Conn, worldId: string, token: string, auth: AuthResult): void {
+    const room = this.ctx.sessions.room(worldId);
+    const authName = conn.authName ?? "";
+    if (room) {
+      const taken = room.takeSeat(authName, token, this.ctx.clock.now());
+      if (taken.ok) {
+        this.adoptSeat(conn, taken.seat);
+        conn.presentedResumeToken = token;
+        this.ctx.sessions.attach(conn, room);
+        this.ctx.metrics.counters.resumesOk++;
+        if (taken.isViaPrevToken) {
+          // The previous connection died inside the rotation-ack window (rotated token never
+          // reached the client) — the armed previous token healed the resume. Counted so a
+          // spike in unconfirmed rotations is visible in ops.
+          this.ctx.metrics.counters.resumesPrevToken++;
+        }
+        conn.log.info("resume ok (seat reclaimed)", {
+          authName, worldId: room.id, playerId: conn.playerId ?? "", viaPrevToken: taken.isViaPrevToken,
+          awayMs: this.ctx.clock.now() - taken.seat.reservedAt, worldPlayers: room.playerCount,
+        });
+        this.finishJoin(conn, room, auth, "join ok (resumed)");
+        return;
+      }
+      if (taken.reason === "token_mismatch") {
+        this.ctx.metrics.counters.resumesRejected++;
+        conn.log.warn("resume REJECTED (token mismatch — replay or forgery)", { authName, worldId });
+        this.ctx.reject(conn, "resume", "invalid_resume");
+        return;
+      }
+      // No seat — the connection may still be live (half-dead socket the server has not
+      // noticed yet). A matching token takes the body over in place; a mismatch rejects.
+      // The live connection's UNCONFIRMED presented token is honored exactly like a seat's
+      // prevToken: the client may never have received the rotated one.
+      for (const other of room.conns.values()) {
+        if (other.id === conn.id || other.closing || other.authName !== authName) continue;
+        const isCurrent = other.resumeToken !== null && resumeTokensEqual(other.resumeToken, token);
+        const isPrev = !isCurrent && !other.isResumeTokenConfirmed
+          && other.presentedResumeToken !== null && resumeTokensEqual(other.presentedResumeToken, token);
+        if (isCurrent || isPrev) {
+          this.adoptLiveConn(conn, other);
+          conn.presentedResumeToken = token;
+          this.ctx.sessions.attach(conn, room);
+          this.ctx.metrics.counters.resumesOk++;
+          if (isPrev) this.ctx.metrics.counters.resumesPrevToken++;
+          conn.log.info("resume ok (live connection taken over)", { authName, worldId: room.id, playerId: conn.playerId ?? "", viaPrevToken: isPrev });
+          this.ctx.close(other, 4009, "superseded");
+          this.finishJoin(conn, room, auth, "join ok (resumed)");
+          return;
+        }
+        this.ctx.metrics.counters.resumesRejected++;
+        conn.log.warn("resume REJECTED (live connection holds a different token)", { authName, worldId });
+        this.ctx.reject(conn, "resume", "invalid_resume");
+        return;
+      }
+    }
+    // Nothing to resume: the grace expired, the world was released, or the server restarted
+    // (seats are in-memory by design — see MULTIPLAYER.md). The run is gone for this player.
+    this.ctx.metrics.counters.resumesExpired++;
+    conn.log.info("resume expired (no seat)", { authName, worldId });
+    this.ctx.reject(conn, "resume_expired", "seat expired or server restarted");
+  }
+
+  // Continuity transfer: the resumed connection IS the old player. lastAppliedSeq/lastCseq
+  // keep the client's monotonic input/command counters idempotent across the reconnect; the
+  // pending blessing offer survives with a fresh resend budget so a pick made mid-outage is
+  // still answerable.
+  private adoptSeat(conn: Conn, seat: Seat): void {
+    conn.playerId = seat.pid;
+    conn.lastAppliedSeq = seat.lastAppliedSeq;
+    conn.lastCseq = seat.lastCseq;
+    conn.pendingOffer = seat.pendingOffer;
+    conn.offerId = seat.offerId;
+    conn.offerDeadline = seat.offerDeadline;
+    conn.offerResendsLeft = seat.pendingOffer !== null ? OFFER_RESENDS : 0;
+  }
+
+  private adoptLiveConn(conn: Conn, other: Conn): void {
+    conn.playerId = other.playerId;
+    conn.lastAppliedSeq = other.lastAppliedSeq;
+    conn.lastCseq = other.lastCseq;
+    conn.pendingOffer = other.pendingOffer;
+    conn.offerId = other.offerId;
+    conn.offerDeadline = other.offerDeadline;
+    conn.offerResendsLeft = other.pendingOffer !== null ? OFFER_RESENDS : 0;
+    // The body now belongs to the new connection: the old one must neither remove the player
+    // nor reserve a seat when it closes.
+    other.playerId = null;
+  }
+
+  // A deliberate goodbye: the close that follows must NOT reserve a reconnect seat (quit to
+  // lobby / run end are not network accidents).
+  private onLeave(conn: Conn): void {
+    conn.isLeaving = true;
+    this.ctx.close(conn, 4010, "left");
+  }
+
+  // Two live connections with the SAME verified identity in the SAME world (two tabs, a
+  // zombie socket after a refresh, a stolen guest id) must never coexist silently: they
+  // would render as two blobs of one lobby member and desync every roster/readiness read.
+  // Newest wins — the older connection is closed explicitly. Bind-then-kick order matters:
+  // the room never empties in between, so the run is not reset by a tab takeover. (A
+  // reconnect that still HOLDS its token instead takes the body over in onResume.)
+  private supersedeDuplicateIdentity(room: RoomRuntime, conn: Conn): void {
+    for (const other of room.conns.values()) {
+      if (other.id === conn.id || other.closing || other.authName !== conn.authName) continue;
+      this.ctx.metrics.counters.duplicateIdentityKicks++;
+      other.log.warn("superseded by a newer connection with the same identity", {
+        authName: other.authName ?? "", worldId: room.id, oldPlayerId: other.playerId ?? "", newPlayerId: conn.playerId ?? "",
+      });
+      this.ctx.close(other, 4009, "superseded");
+    }
   }
 
   private onInput(conn: Conn, msg: Extract<ClientMsg, { t: "input" }>): void {
     // Inputs before the join binding are expected under reordering; drop (don't kill the conn).
     if (!conn.authed || !conn.worldId) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    // An input is the token-receipt proof: a conforming client sends inputs only after
+    // ingesting a snapshot on this socket, and every per-connection snapshot carries the
+    // rotated token. From here the previous token is dead (single-use fully restored).
+    conn.isResumeTokenConfirmed = true;
     const room = this.ctx.sessions.room(conn.worldId);
     if (!room) return;
     room.queueInput(conn, inputToIntent(msg), this.ctx.config.maxInputQueue);
@@ -223,45 +374,6 @@ export class MessageRouter {
     if (!room) return;
     if (room.applyBlessing(conn.playerId, msg.choiceId)) { conn.pendingOffer = null; conn.offerResendsLeft = 0; }
     else this.ctx.metrics.counters.rejectedInputs++;
-  }
-
-  // Boss weapon claim (gate §4). The echo-id/view check is delivery hygiene; the SIM is the
-  // authority (it owns the pending claim, its TTL, and the never-a-duplicate grant), so a
-  // tampered client can neither claim outside its view nor mint a second weapon.
-  private onClaimWeapon(conn: Conn, msg: Extract<ClientMsg, { t: "claimWeapon" }>): void {
-    if (!conn.authed || !conn.playerId || !conn.worldId) return;
-    if (!conn.pendingWeaponOffer || msg.offerId !== conn.weaponOfferId || !conn.pendingWeaponOffer.includes(msg.weapon)) {
-      this.ctx.metrics.counters.rejectedInputs++;
-      return;
-    }
-    const room = this.ctx.sessions.room(conn.worldId);
-    if (!room) return;
-    if (room.applyWeaponClaim(conn.playerId, msg.weapon)) { conn.pendingWeaponOffer = null; conn.weaponOfferResendsLeft = 0; }
-    else this.ctx.metrics.counters.rejectedInputs++;
-  }
-
-  // The claimant's one reroll: the sim validates the budget; the fresh view re-arms the
-  // delivery under a NEW monotonic id so stale answers can never hit the new set.
-  private onRerollWeapons(conn: Conn, msg: Extract<ClientMsg, { t: "rerollWeapons" }>): void {
-    if (!conn.authed || !conn.playerId || !conn.worldId) return;
-    if (!conn.pendingWeaponOffer || msg.offerId !== conn.weaponOfferId) { this.ctx.metrics.counters.rejectedInputs++; return; }
-    const room = this.ctx.sessions.room(conn.worldId);
-    if (!room) return;
-    const view = room.rerollWeaponClaim(conn.playerId);
-    if (view === null) { this.ctx.metrics.counters.rejectedInputs++; return; }
-    conn.pendingWeaponOffer = view;
-    conn.weaponOfferId++;
-    conn.weaponOfferResendsLeft = OFFER_RESENDS;
-  }
-
-  private onSkipWeapons(conn: Conn, msg: Extract<ClientMsg, { t: "skipWeapons" }>): void {
-    if (!conn.authed || !conn.playerId || !conn.worldId) return;
-    if (!conn.pendingWeaponOffer || msg.offerId !== conn.weaponOfferId) { this.ctx.metrics.counters.rejectedInputs++; return; }
-    const room = this.ctx.sessions.room(conn.worldId);
-    if (!room) return;
-    room.skipWeaponClaim(conn.playerId);
-    conn.pendingWeaponOffer = null;
-    conn.weaponOfferResendsLeft = 0;
   }
 }
 

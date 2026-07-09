@@ -59,8 +59,9 @@ async function ensurePresence(
     .unique();
   const now = Date.now();
   if (existing) {
-    // (Re)entering through create/join resets the member to lobby readiness.
-    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false, phase: "lobby" });
+    // A (re)join lands in the LOBBY: any stale world-connection mirror or READY toggle from
+    // a previous round must not carry over — cleared here, re-earned in this lobby.
+    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false, gsWorldId: undefined, gsJoinedAt: undefined, isReady: undefined });
     return;
   }
   await ctx.db.insert("presence", {
@@ -68,7 +69,7 @@ async function ensurePresence(
     x: 0, y: 0, facing: 1,
     hp: 6, maxHp: 6, weapon: "pistol",
     floor, isDown: false, aimAngle: 0, shotSeq: 0, kills: 0,
-    colorIndex, reviveNonce: 0, updatedAt: now, phase: "lobby",
+    colorIndex, reviveNonce: 0, updatedAt: now,
   });
 }
 
@@ -231,23 +232,36 @@ export const reopen = mutation({
       .unique();
     if (!member) return;
     await ctx.db.patch(roomId, { status: "lobby", lastActivity: Date.now() });
+    // A fresh round needs fresh consent: every member's READY toggle resets with the reopen.
+    const rows = await ctx.db.query("presence").withIndex("by_room", (q) => q.eq("roomId", roomId)).collect();
+    for (const row of rows) {
+      if (row.isReady) await ctx.db.patch(row._id, { isReady: undefined });
+    }
   },
 });
 
 // Keepalive while a player sits in a lobby or plays on the game server: refreshes their
 // presence row (the roster hides rows stale for >12s) and the room's lastActivity (so open
 // public rooms stay quick-play matchable). Classic co-op refreshes through presence.update
-// instead; online play has no gameplay presence sync, hence this explicit heartbeat.
+// instead; online play has no gameplay presence sync, hence this explicit heartbeat. The
+// beat also carries the CURRENT identity (name/color pick): a color chosen while sitting in
+// the lobby reaches the roster within one beat, so the roster dot and the ticket identity
+// the next run will carry never disagree.
 export const heartbeat = mutation({
-  args: { roomId: v.id("rooms"), playerId: v.id("players") },
-  handler: async (ctx, { roomId, playerId }) => {
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), name: v.optional(v.string()), colorIndex: v.optional(v.number()), pingMs: v.optional(v.number()) },
+  handler: async (ctx, { roomId, playerId, name, colorIndex, pingMs }) => {
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
       .unique();
     if (!row) return;
     const now = Date.now();
-    await ctx.db.patch(row._id, { updatedAt: now });
+    await ctx.db.patch(row._id, {
+      updatedAt: now,
+      ...(name !== undefined && name.length > 0 ? { name } : {}),
+      ...(colorIndex !== undefined ? { colorIndex } : {}),
+      ...(pingMs !== undefined ? { pingMs: Math.max(0, Math.round(pingMs)) } : {}),
+    });
     const room = await ctx.db.get(roomId);
     if (room && room.status !== "ended") await ctx.db.patch(roomId, { lastActivity: now });
   },

@@ -1,17 +1,20 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
-import type { PresenceDoc, RoomPhase, RoomStatus } from "./api.js";
+import type { PresenceDoc, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
+import { worldIdForRoomCode } from "./protocol.js";
 
-// One room session for AUTHORITATIVE online play. Convex hosts only the social handshake —
-// the room code, who is in it (roster), and the lobby/playing status; ALL gameplay state
-// lives on the game server. The bridge between the two is mintTicket(): a Convex-minted
-// join ticket that embeds this room's world id after verifying membership, so everyone who
-// entered through this lobby lands in the same isolated server world.
+// One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
+// Convex hosts only the social handshake: the room code, who is EXPECTED in it (roster),
+// and the lobby/playing status; ALL gameplay state lives on the game server. The bridge
+// between the two is mintTicket(): a Convex-minted join ticket that embeds this room's
+// world id after verifying membership, so everyone who entered through this lobby lands in
+// the same isolated server world — and the client asserts the server honored it
+// (expectedWorldId), while readiness keys on the server's own snapshot roster.
 //
-// Contrast with Multiplayer (multiplayer.ts): that is the classic peer-synced co-op session
-// (kind "coop"), which stays fully intact on its own path. Rooms of the two kinds never
-// cross-match (enforced in convex/rooms.ts).
+// The legacy peer-synced classic co-op client (kind "coop") was removed after the Sev-0
+// room divergence; its Convex functions remain only so already-deployed clients keep
+// working, and the two kinds never cross-match (enforced in convex/rooms.ts).
 
 const HEARTBEAT_MS = 5000; // presence rows go stale at 12s; keep the roster alive while we sit here
 
@@ -20,8 +23,12 @@ export interface LobbyPlayer {
   name: string;
   colorIndex: number;
   isHost: boolean;
-  // Where this member's client sits in the room lifecycle ("lobby" = ready to start).
-  phase: RoomPhase;
+  // The authoritative world this member is actually connected to (mirrored from the game
+  // server's snapshot; null while in the lobby). Drives the roster's readiness readout.
+  gsWorldId: string | null;
+  // The lobby READY toggle + the member's own heartbeat-measured ping (roster readout).
+  isReady: boolean;
+  pingMs: number | null;
 }
 
 export class OnlineLobby {
@@ -41,6 +48,7 @@ export class OnlineLobby {
   private unsubPresence: (() => void) | null = null;
   private listeners = new Set<() => void>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastPingMs: number | null = null;
 
   constructor(client: ConvexClient, session: Session) {
     this.client = client;
@@ -130,11 +138,21 @@ export class OnlineLobby {
 
   // Keep our presence row + the room's activity fresh for the whole session (lobby AND the
   // run itself — online play has no gameplay presence sync, so this is the only keepalive).
+  // The beat carries the CURRENT identity, so a name/color changed while sitting in the
+  // lobby reaches everyone's roster within one beat — the roster and the ticket identity
+  // the next run mints can never disagree. Each beat is also timed: its round trip is the
+  // member's lobby ping, published on the NEXT beat for the roster's ping readout.
   private startHeartbeat(): void {
     this.stopHeartbeat();
     const beat = () => {
       if (!this.roomId || !this.selfPlayerId) return;
-      this.client.mutation(api.rooms.heartbeat, { roomId: this.roomId, playerId: this.selfPlayerId }).catch(() => {});
+      const sentAt = Date.now();
+      this.client.mutation(api.rooms.heartbeat, {
+        roomId: this.roomId, playerId: this.selfPlayerId,
+        ...(this.session.name ? { name: this.session.name } : {}),
+        ...this.colorArg(),
+        ...(this.lastPingMs !== null ? { pingMs: this.lastPingMs } : {}),
+      }).then(() => { this.lastPingMs = Date.now() - sentAt; }).catch(() => {});
     };
     this.heartbeatTimer = setInterval(beat, HEARTBEAT_MS);
     beat();
@@ -160,27 +178,45 @@ export class OnlineLobby {
       .sort((a, b) => (a.playerId === this.hostPlayerId ? -1 : b.playerId === this.hostPlayerId ? 1 : a.name.localeCompare(b.name)))
       .map((r) => ({
         playerId: r.playerId, name: r.name, colorIndex: r.colorIndex,
-        isHost: r.playerId === this.hostPlayerId,
-        // Defensive default: rows from a backend deployed before the phase field read as
-        // ready, so the gate can never wedge on missing data.
-        phase: r.phase ?? "lobby",
+        isHost: r.playerId === this.hostPlayerId, gsWorldId: r.gsWorldId,
+        isReady: r.isReady, pingMs: r.pingMs,
       }));
   }
 
-  // Mark where THIS client sits in the room lifecycle. Fire-and-forget: phases drive the
-  // replay readiness readout/gate, and a missed write only means this member briefly reads
-  // as its previous phase (the row's stale timeout still bounds everything).
-  setPhase(phase: RoomPhase): void {
-    if (!this.roomId || !this.selfPlayerId) return;
-    this.client.mutation(api.presence.setPhase, { roomId: this.roomId, playerId: this.selfPlayerId, phase }).catch(() => {});
+  get isSelfReady(): boolean {
+    return this.presenceRows.find((r) => r.playerId === this.selfPlayerId)?.isReady ?? false;
   }
 
-  // Members whose clients are still marked in-run — the ones the replay's START gate waits
-  // for. A crashed client's row goes stale and drops off the roster (the explicit timeout),
-  // so this list always drains; members at the results screen auto-launch on start and are
-  // therefore already "ready".
-  membersStillInRun(): LobbyPlayer[] {
-    return this.players().filter((p) => p.phase === "playing" && p.playerId !== this.selfPlayerId);
+  // Every NON-HOST member is ready (the host consents by pressing START). Drives the
+  // all-ready START vs hold-to-START ANYWAY gate in the lobby UI.
+  get isPartyReady(): boolean {
+    return this.players().every((p) => p.isHost || p.isReady);
+  }
+
+  // The lobby READY toggle. Optimistically reflected in the local roster so the button
+  // flips instantly; the subscription confirms it a beat later.
+  setReady(isReady: boolean): void {
+    const playerId = this.selfPlayerId;
+    if (!this.roomId || !playerId) return;
+    const row = this.presenceRows.find((r) => r.playerId === playerId);
+    if (row) { row.isReady = isReady; this.emit(); }
+    this.client.mutation(api.presence.setReady, { roomId: this.roomId, playerId, isReady }).catch(() => {});
+  }
+
+  // The one authoritative world this room's members are allowed to play in. Tickets are
+  // minted with exactly this claim, and the client asserts every snapshot against it.
+  expectedWorldId(): string {
+    return worldIdForRoomCode(this.code);
+  }
+
+  // Mirror the game server's connection truth onto our presence row (worldId after a
+  // verified world join, null on leaving), so the lobby roster's readiness readout works
+  // for members who are still ON the lobby screen. Best-effort — readiness inside the run
+  // always reads the server's snapshot roster directly.
+  reportWorld(worldId: string | null): void {
+    const playerId = this.selfPlayerId;
+    if (!this.roomId || !playerId) return;
+    this.client.mutation(api.presence.reportWorld, { roomId: this.roomId, playerId, worldId }).catch(() => {});
   }
 
   // Host flips the lobby live; every subscribed member sees status "playing" and connects.

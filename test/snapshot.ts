@@ -106,10 +106,7 @@ export function propView(p: Anyish): PropView {
 }
 
 export function chestView(c: Anyish): ChestView {
-  // Baked contents moved from a single `weapon` to a `weapons` list (the boss chest holds a
-  // party arsenal); solo chests hold at most one, so the golden view stays byte-identical.
-  const weapons = Array.isArray(c.weapons) ? (c.weapons as string[]) : [];
-  return { kind: String(c.kind), x: r(num(c.x)), y: r(num(c.y)), opened: Boolean(c.opened), openT: c.openT === undefined ? -1 : r(num(c.openT)), weapon: weapons.length > 0 ? weapons.join(",") : "" };
+  return { kind: String(c.kind), x: r(num(c.x)), y: r(num(c.y)), opened: Boolean(c.opened), openT: c.openT === undefined ? -1 : r(num(c.openT)), weapon: c.weapon ? String(c.weapon) : "" };
 }
 
 // Compare two snapshot streams; returns a human-readable divergence or null if identical.

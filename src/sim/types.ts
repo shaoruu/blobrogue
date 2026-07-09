@@ -12,13 +12,29 @@ export interface Entity {
   dead: boolean;
 }
 
-export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss";
+export type EnemyKind =
+  | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
+  | "orbiter" | "shielder"
+  | "boss" | "marrow" | "choir" | "weaver" | "gilded";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
 export type AttackPhase = "none" | "windup" | "active" | "recover";
-// Which move an attacker is mid-executing. The boss owns several; others own one.
-export type AttackMove = "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze";
+// Which move an attacker is mid-executing. The bosses own several; others own one or two.
+// Shared grammar is deliberately reused across bodies so reads transfer:
+//  - "rush"/"crash": a telegraphed straight rush (charger + MARROW) whose wall impact swaps
+//    the move to "crash" for the longer, punishable stun recover.
+//  - "dive"/"erupt": the burrower's underground cycle.
+//  - "volley"/"spin"/"shield": MARROW's fans, spiral barrage, and husk-shield beat.
+//  - "fade"/"wail"/"split": the Hollow Choir's intangible drift, homing wails, and
+//    wisp-split transition beat.
+//  - "pounce"/"weave": the Weaver's marked leap and web-planting.
+//  - "slam"/"sweep": the Gilded Warden's in-place marked quake and heavy ring waves
+//    (its sanctify beat reuses "roar" — same fixed-beat semantics as the King).
+export type AttackMove =
+  | "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze"
+  | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield"
+  | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep" | "brace";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -43,16 +59,25 @@ export interface BossRoar {
   queuedBy: PlayerId | null;
 }
 
-// Boss-only extra state (HP-phase tracking + add/attack pacing). Phase transitions are
-// driven by damage events (checked after every authoritative hit), never idle polling.
+// Boss-only extra state (HP-phase tracking + add/attack pacing), shared by every boss.
+// Phase transitions are driven by damage events (checked after every authoritative hit),
+// never idle polling. The transition beat — the King's roar, MARROW's shield, the Choir's
+// split, the Weaver's molt, the Warden's sanctify — is ONE anti-burst mechanism
+// (reduction + HP floor + queued overflow), five presentations.
 export interface BossState {
   phase: number;           // 1..3
-  transitionsDone: number; // 0..2 — which of the 70%/35% transition beats have fired
-  roar: BossRoar | null;   // non-null while the 1.2s transition roar is active
+  transitionsDone: number; // 0..2 — which of the two transition beats have fired
+  roar: BossRoar | null;   // non-null while a transition beat is active
   addTimer: number;        // countdown until the next cadence add spawn
-  attackCount: number;     // attacks committed in the current phase (radial/squeeze cadence)
-  isNextRadial: boolean;   // alternates hop-slam / radial-burst in phase 2
-  burstParity: number;     // flips the radial ring offset each burst (0/1)
+  attackCount: number;     // attacks committed in the current phase (special-move cadence)
+  isNextRadial: boolean;   // per-boss two-move alternation flag (hop/radial, rush/volley, …)
+  burstParity: number;     // per-boss parity scratch (radial offset, spiral direction, …)
+  // Interactive transition beats (MARROW husks, Choir wisps): the beat's summoned add ids —
+  // killing them ALL drops the beat early. Empty on fixed-duration beats (King/Weaver/Warden).
+  beatAddIds: number[];
+  // Sequenced-emission scratch: shard pairs fired this spiral (MARROW), waves released this
+  // sweep (Gilded Warden), pounces chained this commitment (Weaver).
+  spinCount: number;
 }
 
 export interface Enemy extends Entity {
@@ -71,6 +96,11 @@ export interface Enemy extends Entity {
   // short burst of chase speed (surgeTime). Zero on everything untouched by the order.
   surgeDelay: number;
   surgeTime: number;
+  // Gauntlet captains (corrected gate §3): 1 before the 50% split, 2 after. Undefined on
+  // every ordinary enemy — the two-phase check runs only on captains.
+  captainPhase?: number;
+  // The elite brace affix's cooldown (keeps its duty cycle ≤35%). Only elites tick it.
+  braceCd?: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   // Deterministic slime hop-cadence clock. The slime pulses its speed off sin(hopClock);
@@ -106,7 +136,7 @@ export interface Enemy extends Entity {
 export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
-  | "sawnoff" | "railgun" | "nailer" | "flamer"
+  | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "beam"
   | "sword" | "longsword" | "spear";
 
 export interface Bullet {
@@ -123,12 +153,19 @@ export interface Bullet {
   pierce: number;          // remaining enemies this bullet can punch through
   hitList: Enemy[] | null; // enemies already struck (only allocated for piercing shots)
   isCrit: boolean;         // rolled at fire time; drives the brighter hit feedback
+  // The crit multiplier baked into damage when isCrit (the boss vulnerability channel
+  // divides it back out at strike time). Undefined = 1.
+  critX?: number;
+  // Boss-facing pellet/weapon coefficient baked at fire time (rooms take full damage).
+  // Undefined = 1.
+  bossCoef?: number;
   // Optional per-weapon behaviors. Undefined for the base weapons, so their bullets
   // take the exact same paths they always did.
   bounce?: number;         // ricochet: wall reflections left before the bullet dies
   homing?: number;         // homing: steering turn rate (rad/s) toward the nearest enemy
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
+  blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies
@@ -154,8 +191,6 @@ export interface Bullet {
 
 // dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
 // enough coins buys +1 HP; `value` carries the coin price.
-// dealer_weapon: the Dealer's party stock (co-op only) — walking over it with enough coins
-// buys the weapon; `value` carries the coin price, `weapon` the merchandise.
 export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart" | "dealer_weapon";
 
 export interface Pickup {
@@ -163,11 +198,15 @@ export interface Pickup {
   kind: PickupKind;
   x: number; y: number;
   radius: number;
-  weapon: WeaponId | null; // set only when kind === "weapon"
+  weapon: WeaponId | null; // set when kind === "weapon" | "dealer_weapon"
   // Coins: the coin worth baked in at drop time (combo multiplier applied then); undefined
   // falls back to the collector's base coin gain, so non-kill coins stay at face value.
-  // Dealer hearts: the coin PRICE.
+  // Dealer hearts/weapons: the coin PRICE.
   value?: number;
+  // Boss weapon reward (studio gate §4): one of the chest's P+1 personal CHOICES. Each
+  // player claims exactly one; a claim never removes a teammate's options, so the pedestal
+  // persists until every living player has claimed.
+  isBossChoice?: boolean;
 }
 
 // Destructible / atmosphere world props. Placed deterministically per floor (seeded Rng)
@@ -186,6 +225,21 @@ export interface Prop {
   breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
 }
 
+// Authored ground hazards (the Weaver's webs). Shared, authoritative floor state like
+// props: placed by boss moves, expire on a timer, rebuilt empty on every floor load.
+// Webs SLOW players standing inside (never enemies — it's their home turf); they never
+// damage, so the pressure is routing, not attrition.
+export type HazardKind = "web";
+
+export interface Hazard {
+  id: number;      // stable per-floor id (wire identity + client anim keying)
+  kind: HazardKind;
+  x: number; y: number;
+  radius: number;
+  life: number;    // seconds until it fades
+  maxLife: number; // authored duration (drives the client's fade render)
+}
+
 // Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are
 // local, so each client opens their own chest and gets their own blessing pick, while
 // the coins/hearts/weapons it spawns are ordinary first-come world pickups.
@@ -198,11 +252,10 @@ export interface Chest {
   radius: number;
   opened: boolean;
   openT?: number; // seconds into the open clip once opened (undefined = closed)
-  // Baked contents: the floor's weapon drops live in chests, never loose on the floor
-  // (wood chests hold one; the boss chest holds the party's arsenal). Opening ejects each
-  // as a real pickup. Sim-side only (not on the wire) — contents stay hidden until the
-  // open. undefined = the ordinary loot roll only.
-  weapons?: WeaponId[];
+  // Baked contents: the floor's weapon drops live in chests, never loose on the floor.
+  // Opening ejects it as a real pickup. Sim-side only (not on the wire) — contents stay
+  // hidden until the open. undefined = the ordinary loot roll only.
+  weapon?: WeaponId;
 }
 
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";
@@ -231,8 +284,7 @@ export interface DmgNumber {
   color: string;
 }
 
-// A teammate as the local client sees them (mapped from Convex presence rows, or from
-// authoritative snapshots online).
+// A teammate as the local client sees them (mapped from Convex presence rows).
 export interface RemotePlayer {
   playerId: string;
   name: string;
@@ -248,6 +300,9 @@ export interface RemotePlayer {
   // Past the floor's down limit (gate §1): down AND unrevivable until the descent rescue —
   // teammates stop being prompted to revive. Always false on the legacy co-op path.
   isOut: boolean;
+  // Network-absent: their connection dropped and the server is holding their body for the
+  // reconnect grace window. Rendered as a ghost with an explicit RECONNECTING label.
+  isAbsent: boolean;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   colorIndex: number; // stable palette slot for this player
@@ -263,5 +318,7 @@ export type TileKind = 0 | 1; // 0 = floor, 1 = wall
 // src/sim free of any import into src/game (which pulls in DOM types). The client re-exports
 // this from assets.ts for its render call sites.
 export type SpriteName =
-  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss"
+  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
+  | "orbiter" | "shielder"
+  | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "heart" | "coin" | "gun" | "spit";

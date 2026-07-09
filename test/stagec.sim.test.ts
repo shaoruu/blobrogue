@@ -9,8 +9,7 @@
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, devSpawnProp, devSpawnChest,
   stepWorld, stepWorldPhase, stepPlayerPhase, recordHistory, rewoundEnemyPos, fireTimeRewind,
-  switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld, descend,
-  claimBossWeaponInWorld, skipBossWeaponInWorld, isPlayerOut,
+  switchWeaponInWorld, acquireWeaponInWorld, chooseBlessingInWorld, descend, isPlayerOut,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -424,7 +423,7 @@ function interestTests(): void {
     devSpawnProp(w, "crate", 380, 320);                       // near -> in
     devSpawnProp(w, "crate", 1450, 980);                      // far -> out
 
-    const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: 400 });
+    const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: 400 });
     if (snap.t !== "snap") { check("snapshot built", false); return; }
     const ids = new Set(snap.enemies.map((e) => e.id));
     check("own player is always included", snap.self !== null);
@@ -434,7 +433,7 @@ function interestTests(): void {
     check("nearby prop included, distant prop excluded", snap.props.length === 1, `props=${snap.props.length}`);
 
     // No filter (radius 0) -> everything is sent (full-snapshot / bootstrap path).
-    const fullSnap = buildSnapshot(w, "pMe", 0, [], 0, true, { interestRadius: 0 });
+    const fullSnap = buildSnapshot(w, "pMe", 0, [], 0, true, { worldId: "w-test", interestRadius: 0 });
     if (fullSnap.t === "snap") check("radius 0 sends all enemies", fullSnap.enemies.length === 3, `enemies=${fullSnap.enemies.length}`);
   }
 }
@@ -542,8 +541,8 @@ function descendTests(): void {
     chooseBlessingInWorld(w, "pA", ITEMS[0]);
     chooseBlessingInWorld(w, "pB", ITEMS[0]);
     stepWorldPhase(w, 1 / 20, []); // descends
-    const snapA = buildSnapshot(w, "pA", 0, [], 0, false, {});
-    const snapB = buildSnapshot(w, "pB", 0, [], 0, false, {});
+    const snapA = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-test" });
+    const snapB = buildSnapshot(w, "pB", 0, [], 0, false, { worldId: "w-test" });
     if (snapA.t === "snap" && snapB.t === "snap") {
       check("both snapshots carry the same seed", snapA.seed === snapB.seed && snapA.seed === seed);
       check("both snapshots carry the same next floor", snapA.floor === snapB.floor && snapA.floor === 2);
@@ -626,8 +625,10 @@ function blessingSafetyTests(): void {
     // The encounter snapshot the floor would carry had it been built with both present
     // (P is snapshotted at floor build; these harness worlds spawn after createWorld).
     w.encounterPlayers = 2;
-    // The boss chest (dropped on the boss kill; the floor is already cleared by then).
-    w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false });
+    // The boss chest (dropped on the boss kill; the floor is already cleared by then). A
+    // real boss drop carries its signature weapon, which seeds the min(P+1,5) personal
+    // choice pedestals on open (gate §4 — see openChest/updatePickups).
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: a.x, y: a.y, radius: 18, opened: false, weapon: "mortar" });
     const ev: SimEvent[] = [];
     stepWorldPhase(w, DT, ev);
     const offers = ev.filter((e) => e.t === "offerBlessing");
@@ -635,20 +636,15 @@ function blessingSafetyTests(): void {
       offers.length === 2 && offers.every((o) => o.t === "offerBlessing" && o.rare)
       && new Set(offers.map((o) => (o as { pid: string }).pid)).size === 2,
       `offers=${offers.length}`);
+    const choices = w.pickups.filter((p) => p.isBossChoice);
+    check("the chest spilled the min(P+1,5) personal boss choices (P2 -> 3, signature first)",
+      choices.length === 3 && choices.some((p) => p.weapon === "mortar")
+      && new Set(choices.map((p) => p.weapon)).size === 3, choices.map((p) => p.weapon).join(","));
     check("descend held while ANY chest pick is open", w.floor === 5, `floor=${w.floor}`);
     chooseBlessingInWorld(w, "pA", ITEMS[0]);
     stepWorldPhase(w, DT, []);
     check("one member picking is not enough — the gate waits for all", w.floor === 5, `floor=${w.floor}`);
     chooseBlessingInWorld(w, "pB", ITEMS[1]);
-    stepWorldPhase(w, DT, []);
-    // The boss chest ALSO opened each member's personal weapon claim (gate §4): the descend
-    // waits for those too. One member claims from their view, the other passes.
-    check("blessings resolved but the weapon claims still hold the gate", w.floor === 5 && w.weaponClaims !== null, `floor=${w.floor}`);
-    const viewA = w.weaponClaims!.pending.get("pA")!.view;
-    check("the claim view is the shared P+1 choice set (P2 -> 3 distinct)", viewA.length === 3 && new Set(viewA).size === 3, viewA.join(","));
-    check("claiming grants the weapon personally", claimBossWeaponInWorld(w, "pA", viewA[0]) && w.players.get("pA")!.ownedWeapons.includes(viewA[0]));
-    check("a resolved claim removes nothing for teammates", w.weaponClaims !== null && w.weaponClaims.pending.get("pB")!.view.join(",") === viewA.join(","));
-    skipBossWeaponInWorld(w, "pB");
     stepWorldPhase(w, DT, []);
     check("party descends once EVERY Rare pick resolves", w.floor === 6, `floor=${w.floor}`);
   }
@@ -770,7 +766,7 @@ function chestWeaponTests(): void {
         if (w.dungeon.rooms.length <= 2) continue;
         floorsChecked++;
         looseWeapons += w.pickups.filter((p) => p.kind === "weapon").length;
-        if (w.chests.some((c) => c.weapons !== undefined)) stockedFloors++;
+        if (w.chests.some((c) => c.weapon !== undefined)) stockedFloors++;
         for (const c of w.chests) {
           for (const p of w.props) {
             if (Math.hypot(c.x - p.x, c.y - p.y) < c.radius + p.radius) chestPropOverlaps++;
@@ -791,8 +787,8 @@ function chestWeaponTests(): void {
     b.x = 50; b.y = 50;
     w.enemies = [];
     w.pendingSpawns = [];
-    const chest = w.chests.find((c) => c.weapons !== undefined)!;
-    const contents = chest.weapons![0];
+    const chest = w.chests.find((c) => c.weapon !== undefined)!;
+    const contents = chest.weapon!;
     a.x = chest.x + 1; a.y = chest.y;
     stepWorldPhase(w, DT, []);
     check("chest opened by touch", chest.opened);
@@ -808,7 +804,7 @@ function chestWeaponTests(): void {
 
   section("chest weapons: identical seed stocks the identical chests (deterministic contents)");
   {
-    const contentsOf = (w: WorldState) => JSON.stringify(w.chests.map((c) => [c.x, c.y, ...(c.weapons ?? [])]));
+    const contentsOf = (w: WorldState) => JSON.stringify(w.chests.map((c) => [c.x, c.y, c.weapon ?? null]));
     const w1 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
     const w2 = createWorld(0x1234, 3, { isShared: true, skipLocalPlayer: true });
     check("two builds of the same floor agree on chest positions + contents", contentsOf(w1) === contentsOf(w2));
@@ -829,8 +825,8 @@ function chestWeaponTests(): void {
         b.x = 40; b.y = 40;
         w.enemies = [];
         w.pendingSpawns = [];
-        for (const chest of w.chests.filter((c) => c.weapons !== undefined)) {
-          const contents = chest.weapons![0];
+        for (const chest of w.chests.filter((c) => c.weapon !== undefined)) {
+          const contents = chest.weapon!;
           const dropId = w.nextPickupId; // the baked weapon ejects first, so it takes this id
           a.x = chest.x + 1; a.y = chest.y;
           stepWorldPhase(w, 1 / 20, []);
@@ -867,7 +863,7 @@ function chestWeaponTests(): void {
     const cx = w.dungeon.spawn.x * TILE + TILE / 2, cy = w.dungeon.spawn.y * TILE + TILE / 2;
     devSpawnChest(w, cx, cy);
     const chest = w.chests[0];
-    chest.weapons = ["railgun"];
+    chest.weapon = "railgun";
     // Barrels sat exactly on every eject ray: every fan candidate is either inside a
     // barrel's ring or has one astride its walk path, so the drop must degrade to the
     // chest's own tile and still collect.

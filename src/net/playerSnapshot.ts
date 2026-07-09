@@ -38,6 +38,7 @@ export interface AuthoritativePlayerSnapshot {
   coins: number;
   combo: number;
   comboTimer: number;
+  hasClaimedBossChoice: boolean;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -51,7 +52,10 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - meleeSwing:    derived swing state; the client's own prediction recreates it from inputs
 // - isInteracting: per-tick input derivative (the interact key) — the wire carries the input
 //                  bit itself; both server and prediction re-derive this from consumed inputs
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting";
+// - isAbsent:      connection-lifecycle bookkeeping (reserved reconnect seat). The OWNING
+//                  client is by definition connected whenever it can receive a SelfWire, so
+//                  it would always read false there; others see it via PlayerWire.ab instead.
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent";
 // Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
 // - reviveBy:       the channel's identity (WHO is reviving whom) — prediction has no
 //                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
@@ -93,6 +97,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     coins: p.coins,
     combo: p.combo,
     comboTimer: p.comboTimer,
+    hasClaimedBossChoice: p.hasClaimedBossChoice,
   };
 }
 
@@ -122,6 +127,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.coins = s.coins;
   p.combo = s.combo;
   p.comboTimer = s.comboTimer;
+  p.hasClaimedBossChoice = s.hasClaimedBossChoice;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

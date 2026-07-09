@@ -9,8 +9,8 @@
 
 import {
   jsonCodec, ProtocolError, buildSnapshot, toSelfWire, applySelfWire, eventScope,
-  PROTOCOL_VERSION, INTEREST_EXIT_FACTOR,
-  type ClientMsg, type ServerMsg, type WireEvent,
+  PROTOCOL_VERSION, INTEREST_EXIT_FACTOR, worldIdForRoomCode, isValidWorldId,
+  type ClientMsg, type RosterWire, type ServerMsg, type WireEvent,
 } from "../src/net/protocol.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "../src/net/playerSnapshot.js";
 import { createWorld, createPlayer, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world.js";
@@ -74,9 +74,6 @@ function clientRoundTripTests(): void {
     { t: "reorder", from: 0, to: 3, cseq: 6 },
     { t: "drop", weapon: "railgun", cseq: 7 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
-    { t: "claimWeapon", offerId: 3, weapon: "railgun" },
-    { t: "rerollWeapons", offerId: 3 },
-    { t: "skipWeapons", offerId: 3 },
     { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
   ];
@@ -123,11 +120,6 @@ function unknownFieldTests(): void {
     ["drop with an unknown weapon id", { t: "drop", weapon: "bfg9000", cseq: 1 }],
     ["drop with a smuggled extra field", { t: "drop", weapon: "pistol", cseq: 1, x: 10 }],
     ["drop without cseq", { t: "drop", weapon: "pistol" }],
-    ["claimWeapon with an unknown weapon id", { t: "claimWeapon", offerId: 1, weapon: "bfg9000" }],
-    ["claimWeapon with a smuggled extra field", { t: "claimWeapon", offerId: 1, weapon: "pistol", free: true }],
-    ["claimWeapon without an offer id", { t: "claimWeapon", weapon: "pistol" }],
-    ["rerollWeapons with a smuggled extra field", { t: "rerollWeapons", offerId: 1, count: 9 }],
-    ["skipWeapons with a float offer id", { t: "skipWeapons", offerId: 1.5 }],
   ];
   for (const [label, frame] of badInventoryFrames) {
     let isRejected = false;
@@ -153,23 +145,18 @@ function serverRoundTripTests(): void {
     { id: 9, e: { t: "gameOver", pid: "pMe" } },
     { id: 10, e: { t: "weaponDrop", weapon: "railgun", x: 33, y: 44 } },
   ];
-  const snap = buildSnapshot(w, "pMe", 12, events, 9, false, {});
+  const snap = buildSnapshot(w, "pMe", 12, events, 9, false, { worldId: "w-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("full snapshot round-trips deep-equal", deepEqual(decoded, snap));
 
   const others: ServerMsg[] = [
     { t: "ping", id: 4, tick: 100, time: 1234567 },
     { t: "offer", id: 2, choices: ["it_a", "it_b", "it_c"] },
-    { t: "woffer", id: 3, choices: ["railgun", "sword", "flamer"], rr: 1 },
     { t: "error", code: "auth", msg: "nope" },
   ];
   for (const m of others) {
     check(`round-trip ${m.t}`, deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(m)), m));
   }
-  let isWofferRejected = false;
-  try { jsonCodec.decodeServer(JSON.stringify({ t: "woffer", id: 1, choices: ["bfg9000"], rr: 0 })); }
-  catch (err) { isWofferRejected = err instanceof ProtocolError; }
-  check("a woffer with an unknown weapon id is a protocol error", isWofferRejected);
 
   section("corrupt server frames are ProtocolError, never NaN state");
   const snapObj = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
@@ -179,7 +166,7 @@ function serverRoundTripTests(): void {
     { ...snapObj, self: { hp: 1 } },
     { ...snapObj, enemies: [{ id: 1 }] },
     { ...snapObj, events: [{ id: 0, e: { t: "enemyKill" } }] },
-    { ...snapObj, pnd: [42] },
+    { ...snapObj, wait: [42] },
     { ...snapObj, exr: [""] },
     { ...snapObj, exr: "p1" },
     { t: "snap" },
@@ -189,6 +176,69 @@ function serverRoundTripTests(): void {
     try { jsonCodec.decodeServer(JSON.stringify(corrupt[i])); } catch (err) { rejected = err instanceof ProtocolError; }
     check(`corrupt snapshot variant ${i} rejected`, rejected);
   }
+}
+
+// v4 room-correctness fields: the authoritative world id + connected roster are REQUIRED and
+// strictly validated on every snapshot — a client can always assert which world it is in and
+// who is actually there (the Sev-0 readout).
+function worldBindingWireTests(): void {
+  section("v4: authoritative world id + roster are required, strict, and round-trip");
+  check("protocol version covers room-correctness (v4) + the content wave (v5) + the co-op experience pass (v6)", PROTOCOL_VERSION === 6, `v=${PROTOCOL_VERSION}`);
+  check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
+  check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
+  check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
+
+  const w = createWorld(0xF00D, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(w, "pMe");
+  spawnPlayerInWorld(w, "pOther");
+  const roster: RosterWire[] = [
+    { pid: "pMe", aid: "player-1", nm: "Ada", cl: 2, st: "on" },
+    { pid: "pOther", aid: "guest:abc", nm: "Bob", cl: null, st: "away" },
+  ];
+  w.pendingBlessings.set("pMe", 42.3);
+  w.pendingBlessings.set("pOther", 7);
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: worldIdForRoomCode("ABCD"), roster, resumeToken: "tok-abc123" });
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  check("snapshot carries the world id", snap.wid === "room:ABCD");
+  check("snapshot carries the full roster (interest-independent identities + on/away)", deepEqual(snap.roster, roster));
+  check("snapshot carries the resume token when supplied", snap.tok === "tok-abc123");
+  check("snapshot carries the party-wait state (sorted, whole seconds)",
+    deepEqual(snap.wait, [{ pid: "pMe", s: 43 }, { pid: "pOther", s: 7 }]), JSON.stringify(snap.wait));
+  const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
+  check("wid/roster/tok/wait round-trip deep-equal", deepEqual(decoded, snap));
+
+  const base = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
+  const bad: Array<[string, Record<string, unknown>]> = [
+    ["missing wid", (() => { const o = { ...base }; delete o.wid; return o; })()],
+    ["empty wid", { ...base, wid: "" }],
+    ["junk-charset wid", { ...base, wid: "room:../../etc" }],
+    ["missing roster", (() => { const o = { ...base }; delete o.roster; return o; })()],
+    ["non-array roster", { ...base, roster: {} }],
+    ["roster entry missing aid", { ...base, roster: [{ pid: "p1", nm: "x", cl: null, st: "on" }] }],
+    ["roster entry with junk color", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: 99999, st: "on" }] }],
+    ["roster entry with junk seat state", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: null, st: "zombie" }] }],
+    ["non-string resume token", { ...base, tok: 42 }],
+    ["missing wait", (() => { const o = { ...base }; delete o.wait; return o; })()],
+    ["non-array wait", { ...base, wait: {} }],
+    ["wait entry with junk seconds", { ...base, wait: [{ pid: "p1", s: "soon" }] }],
+  ];
+  for (const [label, frame] of bad) {
+    let rejected = false;
+    try { jsonCodec.decodeServer(JSON.stringify(frame)); } catch (err) { rejected = err instanceof ProtocolError; }
+    check(`${label} is a protocol error`, rejected);
+  }
+
+  // The reconnect handshake frames themselves.
+  const joinResume: ClientMsg = { t: "join", ticket: "v1.a.b", protocol: PROTOCOL_VERSION, resume: "tok-xyz" };
+  check("join with a resume token round-trips", deepEqual(jsonCodec.decodeClient(jsonCodec.encodeClient(joinResume)), joinResume));
+  const leave: ClientMsg = { t: "leave" };
+  check("leave round-trips", deepEqual(jsonCodec.decodeClient(jsonCodec.encodeClient(leave)), leave));
+  let extraOnLeave = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "leave", pid: "hax" })); } catch (err) { extraOnLeave = err instanceof ProtocolError; }
+  check("leave with a smuggled field is a protocol error", extraOnLeave);
+  let junkResume = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "join", ticket: "x", protocol: PROTOCOL_VERSION, resume: 42 })); } catch (err) { junkResume = err instanceof ProtocolError; }
+  check("join with a non-string resume token is a protocol error", junkResume);
 }
 
 // PlayerWire identity (nm/cl): decorated from the verified per-connection identities at
@@ -206,7 +256,7 @@ function identityWireTests(): void {
     ["pNamed", { name: "Ada", colorIndex: 2 }],
     ["pAnon", { name: null, colorIndex: null }],
   ]);
-  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { identities });
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", identities });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   const wNamed = snap.players.find((p) => p.id === "pNamed");
   const wAnon = snap.players.find((p) => p.id === "pAnon");
@@ -310,20 +360,20 @@ function interestHysteresisTests(): void {
   const R = 400;
   const e = devSpawnEnemy(w, "slime", me.x + R - 10, me.y); // just inside -> enters
   const view = { rev: -1, enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
-  const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity inside R enters the view", snapIn.t === "snap" && snapIn.enemies.some((x) => x.id === e.id));
   // Drift just past R but inside the exit radius: hysteresis keeps it.
   e.x = me.x + R + 20;
-  const snapHold = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapHold = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity between R and exit radius is RETAINED (hysteresis)", snapHold.t === "snap" && snapHold.enemies.some((x) => x.id === e.id));
   // Past the exit radius: leaves.
   e.x = me.x + R * INTEREST_EXIT_FACTOR + 30;
-  const snapOut = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapOut = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity beyond the exit radius leaves the view", snapOut.t === "snap" && !snapOut.enemies.some((x) => x.id === e.id));
   // Back inside R re-enters; a NEVER-known entity between R and exit stays out (no false enter).
   e.x = me.x + R - 40;
   const fresh = devSpawnEnemy(w, "slime", me.x + R + 20, me.y);
-  const snapBack = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
+  const snapBack = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test", interestRadius: R, view });
   check("entity re-enters inside R", snapBack.t === "snap" && snapBack.enemies.some((x) => x.id === e.id));
   check("an unknown entity in the hysteresis band does NOT enter", snapBack.t === "snap" && !snapBack.enemies.some((x) => x.id === fresh.id));
 }
@@ -348,6 +398,7 @@ function main(): void {
   clientRoundTripTests();
   unknownFieldTests();
   serverRoundTripTests();
+  worldBindingWireTests();
   identityWireTests();
   fuzzTests();
   projectionTests();

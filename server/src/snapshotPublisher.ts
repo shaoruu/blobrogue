@@ -12,7 +12,7 @@
 // additionally advances its ack to the snapshot's evTo, so filtered-out ids never wedge the
 // stream. Delivery is effectively-once (no missing, no double kill/loot/FX).
 
-import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type ServerMsg, type WireEvent } from "../../src/net/protocol.js";
+import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type RosterWire, type WireEvent } from "../../src/net/protocol.js";
 import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
@@ -35,6 +35,7 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   publish(room: RoomRuntime): void {
     const identities = this.identitiesFor(room);
+    const roster = this.rosterFor(room);
     for (const conn of room.conns.values()) {
       if (conn.playerId === null || conn.closing) continue;
       const buffered = conn.ws.bufferedAmount;
@@ -48,7 +49,14 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
       }
       const center = this.viewCenterFor(room, conn);
       const events = this.eventsFor(room, conn, center);
+      // The seat token rides EVERY per-connection snapshot, not only the join-time full one:
+      // under packet loss the full snapshot can drop, and a client without its current token
+      // would come back from the next outage as a stranger (fresh body) — the exact bug class
+      // this system exists to kill. Snapshots are per-connection already; ~40 bytes.
       const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
+        worldId: room.id,
+        roster,
+        resumeToken: conn.resumeToken ?? undefined,
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
         identities,
@@ -85,6 +93,31 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     return out;
   }
 
+  // Every seat in this world with the verified ticket identity it joined as: live
+  // connections ("on") plus bodies reserved for a reconnect ("away"). Interest-independent
+  // by design: this is the readiness/roster truth the client veil and HUD key on — an
+  // interest filter must never be able to hide a party member's presence, and a member
+  // mid-outage must read as RECONNECTING, not as gone.
+  private rosterFor(room: RoomRuntime): RosterWire[] {
+    const out: RosterWire[] = [];
+    for (const conn of room.conns.values()) {
+      if (conn.playerId === null || conn.closing) continue;
+      out.push({
+        pid: conn.playerId,
+        aid: conn.authName ?? conn.playerId,
+        nm: conn.displayName ?? conn.playerId,
+        cl: conn.colorIndex,
+        // A silent-but-open link reads as away too: teammates should see RECONNECTING the
+        // moment the body goes safe (3s), not only once the socket finally dies.
+        st: conn.isSoftAbsent ? "away" : "on",
+      });
+    }
+    for (const seat of room.seats()) {
+      out.push({ pid: seat.pid, aid: seat.authName, nm: seat.displayName ?? seat.pid, cl: seat.colorIndex, st: "away" });
+    }
+    return out;
+  }
+
   // The reliable events newer than this client's ack, scoped to what this client should see:
   // its own pid events, global objective events, and positional FX within its (exit-hysteresis)
   // interest radius — measured from the same view center the snapshot uses, so a spectator's
@@ -112,9 +145,13 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   sendFull(room: RoomRuntime, conn: Conn): void {
     // Start the reliable-event stream from "now": the full snapshot bootstraps state, so the client
-    // shouldn't replay the pre-join event backlog. Future events flow from here.
+    // shouldn't replay the pre-join event backlog (on a resume that means the outage window's
+    // one-shot FX are deliberately skipped, never replayed). Future events flow from here.
     conn.ackedEventId = room.latestEventId();
     const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
+      worldId: room.id,
+      roster: this.rosterFor(room),
+      resumeToken: conn.resumeToken ?? undefined,
       interestRadius: 0,
       identities: this.identitiesFor(room),
     });
@@ -123,20 +160,9 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   sendOffers(room: RoomRuntime): void {
     for (const conn of room.conns.values()) {
-      if (conn.closing) continue;
-      if (conn.pendingOffer && conn.offerResendsLeft > 0) {
-        conn.offerResendsLeft--;
-        try { conn.ws.send(this.codec.encodeServer({ t: "offer", id: conn.offerId, choices: conn.pendingOffer })); } catch { /* closing */ }
-      }
-      if (conn.pendingWeaponOffer !== null && conn.playerId !== null) {
-        // The SIM owns the claim lifecycle: when it resolved/expired there, stop delivering.
-        const view = room.weaponClaimViewFor(conn.playerId);
-        if (view === null) { conn.pendingWeaponOffer = null; conn.weaponOfferResendsLeft = 0; continue; }
-        if (conn.weaponOfferResendsLeft <= 0) continue;
-        conn.weaponOfferResendsLeft--;
-        const msg: ServerMsg = { t: "woffer", id: conn.weaponOfferId, choices: conn.pendingWeaponOffer, rr: view.rerollsLeft };
-        try { conn.ws.send(this.codec.encodeServer(msg)); } catch { /* closing */ }
-      }
+      if (conn.closing || !conn.pendingOffer || conn.offerResendsLeft <= 0) continue;
+      conn.offerResendsLeft--;
+      try { conn.ws.send(this.codec.encodeServer({ t: "offer", id: conn.offerId, choices: conn.pendingOffer })); } catch { /* closing */ }
     }
   }
 

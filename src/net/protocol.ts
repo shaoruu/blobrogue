@@ -13,14 +13,14 @@
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
 import type {
-  Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
-  PropKind, PickupKind, ChestKind,
+  Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
+  AttackMove, PropKind, PickupKind, ChestKind,
 } from "../sim/types.js";
 import type { EnemyTier } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { ENEMY_ARCHETYPES } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossKind } from "../sim/enemies.js";
 import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
@@ -38,19 +38,61 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-// v4: hotbar inventory commands — client->server `reorder` (move an inventory slot) and
-// `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event. New CLIENT
-// message types change the wire contract, so the strict join gate bumps.
-// v5: the co-op experience pass — input carries the interact intent (`act`, the explicit
+// v4 (ONE migration, strict equal-version join gate — skew is explicit, never silently
+// interoperated on a Sev-0 surface):
+//   - hotbar inventory commands: client->server `reorder` (move an inventory slot) and
+//     `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event
+//   - room correctness: `wid` — the authoritative world id this connection is bound to, on
+//     EVERY snap, so the client can ASSERT it landed in the room it expected (mismatch =
+//     close, never play); `roster` — every seat in the world (verified identity + on/away
+//     state), independent of interest filtering, so readiness/HUD show who actually joined
+//     and who is reconnecting
+//   - reconnect resume: `tok` — the single-use seat token for THIS connection (rides every
+//     per-connection snapshot), presented via join's optional `resume` to reclaim the
+//     reserved body; a deliberate disconnect says `leave` so no seat is reserved; PlayerWire
+//     `ab` marks an absent body (rendered as a reconnecting ghost)
+// v5 (intentional bump, the content wave): the snapshot grew the `hzds` hazard list
+// (webs slow PREDICTED movement, so clients must know them), boss-choice/dealer
+// pickup flags + the personal-claim player flag, and the enemy wire's closed kind/move
+// sets grew (charger/burrower/orbiter/shielder + the boss roster; a v4 client would
+// reject any snapshot carrying them as a ProtocolError). The join gate enforcing
+// equality is what turns that skew into a clean "update your client" instead of a
+// mid-run desync. NOTE: the control plane's synthetic VERIFY join mirrors this constant
+// (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
+// v6 (this branch, the co-op experience pass — client->server messages changed, so the
+// strict join gate bumps): input carries the interact intent (`act`, the explicit
 // revive-channel key), a semantic `spec` message names a downed player's spectate target
 // (the server centers that client's interest view on it), PlayerWire carries `rv`
-// (authoritative revive progress for the reviver-side ring), snapshots carry `pnd` (the
-// players whose blessing picks currently hold the descend gate) and `exr` (the living
-// players standing at the cleared exit — the descend gate's own readiness predicate), and
-// dealer_weapon pickups stock the party shop. Client->server messages changed, so the
-// version bumps. (The world-id echo + verified party roster ride the parallel Sev-0
-// coherence work — see PR #39 — which this branch consumes at integration, not duplicates.)
-export const PROTOCOL_VERSION = 5;
+// (authoritative revive progress for the reviver-side ring) and `out` (past the floor's
+// down limit — unrevivable until the descent rescue), SelfWire carries `out`, and
+// snapshots carry `exr` (the living present players standing at the cleared exit — the
+// descend gate's own readiness predicate, driving the party coordination readout).
+export const PROTOCOL_VERSION = 6;
+
+// How long the server reserves a disconnected player's body (their seat) before the
+// authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
+// contract (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §6) — a reserved body is paused,
+// safe, gate-neutral, and never blocks a wipe, so the long window costs teammates nothing
+// while covering real-world outages (router resets, elevator rides). Shared so the client's
+// reconnect loop and grace countdown agree with the server default (GS_RESUME_GRACE_MS can
+// override server-side; the countdown is display-only).
+export const RESUME_GRACE_MS = 90000;
+
+// World ids are minter-controlled but still bounded/charset-checked so a compromised minter
+// can't inject log-breaking or unbounded ids ("room:ABCD", "arena-1", ...). Shared by the
+// ticket verifier (server), the snapshot decoder (client), and the dev mint endpoint.
+const WORLD_ID_RE = /^[a-zA-Z0-9:_-]{1,40}$/;
+
+export function isValidWorldId(id: string): boolean {
+  return WORLD_ID_RE.test(id);
+}
+
+// The single room-code -> authoritative-world-id mapping the CLIENT and SERVER share. The
+// Convex minter keeps its own copy (convex/gsTicketCore.ts must stay import-free of app
+// code for bundling); server/test/ticket.test.ts locks the two to byte agreement.
+export function worldIdForRoomCode(code: string): string {
+  return "room:" + code.trim().toUpperCase();
+}
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -88,23 +130,53 @@ export interface SelfWire {
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
+  bcl: boolean;                // hasClaimedBossChoice (gate §4 personal boss-reward claim)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
 // nm/cl are the verified cosmetic identity from that player's join ticket (name above the
 // blob, chosen blob tint). Both are decode-OPTIONAL with safe fallbacks (nm -> id, cl ->
 // null) so frames from an older server still decode. rv is the authoritative revive-channel
-// progress on a DOWNED player (seconds) — it drives the reviver-side progress ring.
+// progress on a DOWNED player (seconds) — it drives the reviver-side progress ring; out
+// marks a body past the floor's down limit (teammates stop offering the revive). ab marks
+// a network-absent body (its player disconnected and the seat is reserved for the
+// reconnect grace) — rendered as an explicit reconnecting ghost, never a live/dead read.
 export interface PlayerWire {
   id: PlayerId;
   x: number; y: number;
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
-  rv: number;
+  rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
   out: boolean; // past the floor's down limit — teammates stop offering the revive
+  bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
+  ab: boolean;  // absent body — the seat is reserved for a reconnect (rendered as a ghost)
   nm: string;
   cl: number | null;
+}
+
+// One SEAT in this world, as published on every snapshot REGARDLESS of interest filtering:
+// the world-scoped player id, the VERIFIED ticket identity it joined with (aid — the same id
+// the lobby roster keys on, so readiness can be matched member-by-member), the cosmetic
+// name/color, and whether the seat is live ("on") or reserved for a reconnect ("away").
+// This is the server's authoritative "who is actually in this world" — the lobby's Convex
+// presence is only the expectation.
+export type SeatState = "on" | "away";
+
+export interface RosterWire {
+  pid: PlayerId;
+  aid: string;
+  nm: string;
+  cl: number | null;
+  st: SeatState;
+}
+
+// A player still deciding a blessing offer + the seconds left on its authoritative TTL.
+// Rides every snapshot (tiny, party-sized) so all clients agree on WHO is holding the
+// descend gate and for how long — a wait that is visible and bounded, never a mystery.
+export interface WaitWire {
+  pid: PlayerId;
+  s: number;
 }
 
 // A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
@@ -143,14 +215,23 @@ export interface BulletWire {
 // so they ride the snapshot as discrete values — no interpolation needed. All three carry the
 // sim's STABLE per-floor id (interest hysteresis + client anim keying + lifecycle identity).
 export interface PropWire { id: number; kind: PropKind; x: number; y: number; brk: number } // brk<0 => intact
-export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number } // val<0 => face value
+export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number; bch: boolean } // val<0 => face value; bch = boss weapon choice
 export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; op: boolean; opt: number } // opt<0 => not yet open
+// Authored ground hazards (webs): bounded (hard sim cap), gameplay-relevant everywhere
+// (they slow PREDICTED movement), so they ride every snapshot unfiltered.
+export interface HazardWire { id: number; k: HazardKind; x: number; y: number; r: number; life: number; max: number }
 
 // ---- messages ----
 
 // Client -> server. The client authors INPUTS/INTENTS ONLY.
 export type ClientMsg =
-  | { t: "join"; ticket: string; protocol: number }
+  // resume (optional): the single-use seat token from a previous connection's full snapshot.
+  // Presenting it with a fresh valid ticket reclaims the reserved body (same player id, same
+  // state, same world) instead of spawning a new one.
+  | { t: "join"; ticket: string; protocol: number; resume?: string }
+  // Deliberate goodbye: the player is leaving on purpose (quit to lobby / run end), so the
+  // server must NOT reserve a reconnect seat for this connection.
+  | { t: "leave" }
   // An input is an INTENT SAMPLE, not a time authority: it carries NO dt. The server advances
   // simulation time by its own fixed tick (one command = one fixed step), so a client can't buy
   // extra time by claiming a large dt. `ackEv` piggybacks the reliable-event ack (last event id
@@ -183,16 +264,6 @@ export type ClientMsg =
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
   | { t: "chooseBlessing"; offerId: number; choiceId: string }
-  // Boss weapon claim (gate §4): answer the live `woffer` by naming the claimed weapon. The
-  // server validates the id against THIS client's current view (base set or their reroll)
-  // and the sim re-validates ownership (a duplicate claim rejects — dupes route to the
-  // reroll, never to coins). A claim removes nothing for teammates.
-  | { t: "claimWeapon"; offerId: number; weapon: WeaponId }
-  // The claimant's one reroll of their personal view. Replies with a fresh `woffer`.
-  | { t: "rerollWeapons"; offerId: number }
-  // Explicitly pass on the boss weapon claim (the claimant wants neither the set nor their
-  // reroll): resolves the pending claim so the descend gate never waits on a decided player.
-  | { t: "skipWeapons"; offerId: number }
   // Client netcode telemetry uplink (observability + the lag-comp render-delay sample `dly`,
   // which the server clamps to the adaptive [90,300]ms window — a lie can only mis-rewind the
   // sender's own shots within that bounded window).
@@ -209,17 +280,19 @@ export type ServerMsg =
       over: boolean;             // terminal run state (party wiped) — derivable from STATE
       selfId: PlayerId;          // this client's server-assigned id (on every snap so a dropped
                                  // join snapshot never loses identity)
+      wid: string;               // the authoritative world id this connection is BOUND to —
+                                 // the client asserts it against the expected room world and
+                                 // refuses to play on a mismatch
+      roster: RosterWire[];      // every seat in this world (verified identities + on/away),
+                                 // interest-INDEPENDENT — drives readiness + the HUD count
+      wait: WaitWire[];          // players still deciding a blessing offer (pid + seconds
+                                 // left) — the party-wait state everyone sees identically,
+                                 // so a held descend gate is explicit and NEVER indefinite
+      tok?: string;              // single-use resume token for THIS connection (full snaps
+                                 // only) — presented on reconnect to reclaim the seat
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
-      // Players whose reward picks (blessing offers ∪ boss weapon claims) currently hold
-      // the descend gate, each with the AUTHORITATIVE seconds left before its expiry
-      // releases them (the sim clock's TTL — the client renders this countdown and NEVER
-      // runs its own timer; only a snapshot saying so unblocks anything). The expiry
-      // mechanics themselves are being reworked authoritatively by the Sev-0 coherence
-      // system (PR #39, e.g. absence-aware pauses); this field is the UI's consumption
-      // seam and follows that fix at integration.
-      pnd: PendingPickWire[];
       exr: PlayerId[];           // living players standing at the cleared exit — the SAME
                                  // predicate the descend gate requires, on the wire (drives
                                  // the "WAITING AT EXIT · N/M" coordination readout)
@@ -234,6 +307,7 @@ export type ServerMsg =
       props: PropWire[];         // shared destructibles
       pickups: PickupWire[];     // shared loot on the ground
       chests: ChestWire[];       // shared chests (incl. the boss chest)
+      hzds: HazardWire[];        // shared ground hazards (the Weaver's webs)
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
@@ -242,10 +316,6 @@ export type ServerMsg =
   // offer expires, and the client shows each id only once (no double prompt from resends). The
   // client replies with `chooseBlessing {offerId, choiceId}`; choice authority stays server-side.
   | { t: "offer"; id: number; choices: string[] }
-  // The boss weapon claim view for this client (gate §4): the shared choice set — or this
-  // claimant's personal reroll — plus the rerolls they still hold. Same idempotent-id +
-  // bounded-resend contract as `offer`; answered by claimWeapon/rerollWeapons/skipWeapons.
-  | { t: "woffer"; id: number; choices: WeaponId[]; rr: number }
   | { t: "error"; code: string; msg: string };
 
 // ---- Codec seam (JSON now; binary is a later swap) ----
@@ -320,8 +390,14 @@ function isEnemyKind(v: unknown): v is EnemyKind {
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
-const ATTACK_MOVES: Record<AttackMove, true> = { none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true };
+const ATTACK_MOVES: Record<AttackMove, true> = {
+  none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
+  rush: true, crash: true, dive: true, erupt: true, volley: true, spin: true, shield: true,
+  fade: true, wail: true, split: true, pounce: true, weave: true, slam: true, sweep: true,
+  brace: true,
+};
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
   if (typeof v !== "string" || !Object.prototype.hasOwnProperty.call(set, v)) throw new ProtocolError(`bad ${what}`);
@@ -354,9 +430,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
-  // Like offerBlessing, the server intercepts this (the claim view rides `woffer`); the
-  // spec keeps the exhaustive table honest if one ever leaks to the wire.
-  offerWeapons: { scope: "pid", fields: { pid: "str" } },
+  blessingExpired: { scope: "pid", fields: { pid: "str" } },
   // Positional: the revive moment plays for everyone standing at it (the reviver most of
   // all), not only the revived player. The revived player is AT the point by definition.
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
@@ -366,14 +440,20 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  bulletBlocked: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   propHit: { scope: "pos", fields: { propId: "num", kind: "str", x: "num", y: "num" } },
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
   lungeTrail: { scope: "pos", fields: { x: "num", y: "num" } },
+  chargeCrash: { scope: "pos", fields: { x: "num", y: "num" } },
+  burrowDive: { scope: "pos", fields: { x: "num", y: "num" } },
+  burrowErupt: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   bossSlam: { scope: "pos", fields: { x: "num", y: "num" } },
   radialBurst: { scope: "pos", fields: { x: "num", y: "num" } },
+  bossVolley: { scope: "pos", fields: { x: "num", y: "num" } },
+  webPlaced: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   bossAddSpawn: { scope: "pos", fields: { eid: "num", x: "num", y: "num", mx: "num", my: "num", spawned: "bool" } },
   // Global: shared-objective transitions every client must see regardless of distance.
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
@@ -439,12 +519,19 @@ function decodeClientMsg(raw: string): ClientMsg {
   const o = obj(parsed, "frame");
   switch (o.t) {
     case "join": {
-      exactKeys(o, ["t", "ticket", "protocol"]);
+      // `resume` is the ONE optional field on a security-sensitive frame: validate the two
+      // allowed shapes exactly (with/without it) — anything else is still an error.
+      exactKeys(o, o.resume === undefined ? ["t", "ticket", "protocol"] : ["t", "ticket", "protocol", "resume"]);
       const ticket = shortStr(o, "ticket", 512);
       // Protocol must be an explicit finite integer (no defaulting to 0 — that was a bypass).
       // The join handler additionally enforces it EQUALS the current PROTOCOL_VERSION.
       const protocol = intOf(o, "protocol", 0, 1e6);
-      return { t: "join", ticket, protocol };
+      if (o.resume === undefined) return { t: "join", ticket, protocol };
+      return { t: "join", ticket, protocol, resume: shortStr(o, "resume", 64) };
+    }
+    case "leave": {
+      exactKeys(o, ["t"]);
+      return { t: "leave" };
     }
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
@@ -495,18 +582,6 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "chooseBlessing": {
       exactKeys(o, ["t", "offerId", "choiceId"]);
       return { t: "chooseBlessing", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER), choiceId: shortStr(o, "choiceId", 48) };
-    }
-    case "claimWeapon": {
-      exactKeys(o, ["t", "offerId", "weapon"]);
-      return { t: "claimWeapon", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER), weapon: weaponOf(o, "weapon") };
-    }
-    case "rerollWeapons": {
-      exactKeys(o, ["t", "offerId"]);
-      return { t: "rerollWeapons", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER) };
-    }
-    case "skipWeapons": {
-      exactKeys(o, ["t", "offerId"]);
-      return { t: "skipWeapons", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER) };
     }
     case "stat": {
       exactKeys(o, ["t", "rtt", "jit", "rec", "corr", "dly"]);
@@ -559,6 +634,7 @@ function validateSelfWire(v: unknown): SelfWire {
     mods: modsFromWire(obj(o.mods, "self.mods")),
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
     combo: num(o, "combo", 0, 1e9), ct: num(o, "ct", 0, 1e4),
+    bcl: boolOf(o, "bcl"),
   };
 }
 
@@ -579,6 +655,8 @@ function validatePlayerWire(v: unknown): PlayerWire {
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
     rv: num(o, "rv", 0, 1e4),
     out: boolOf(o, "out"),
+    bcl: boolOf(o, "bcl"),
+    ab: boolOf(o, "ab"),
     nm, cl,
   };
 }
@@ -637,6 +715,7 @@ function validatePickupWire(v: unknown): PickupWire {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     wpn: wpn as WeaponId | null,
     val: num(o, "val", -1, 1e9),
+    bch: boolOf(o, "bch"),
   };
 }
 
@@ -650,9 +729,45 @@ function validateChestWire(v: unknown): ChestWire {
   };
 }
 
+function validateHazardWire(v: unknown): HazardWire {
+  const o = obj(v, "hazard");
+  return {
+    id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER),
+    k: inSet(HAZARD_KINDS, o.k, "hazard.k"),
+    x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
+    r: num(o, "r", 0, 1e4), life: num(o, "life", 0, 1e4), max: num(o, "max", 0, 1e4),
+  };
+}
+
 function validateWireEvent(v: unknown): WireEvent {
   const o = obj(v, "wireEvent");
   return { id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), e: validateEvent(o.e) };
+}
+
+const SEAT_STATES: Record<SeatState, true> = { on: true, away: true };
+
+function validateWaitWire(v: unknown): WaitWire {
+  const o = obj(v, "wait");
+  return { pid: shortStr(o, "pid", 64), s: num(o, "s", 0, 1e4) };
+}
+
+function validateRosterWire(v: unknown): RosterWire {
+  const o = obj(v, "roster");
+  let cl: number | null = null;
+  if (o.cl !== undefined && o.cl !== null) cl = intOf(o, "cl", 0, 63);
+  return {
+    pid: shortStr(o, "pid", 64),
+    aid: shortStr(o, "aid", 64),
+    nm: shortStr(o, "nm", 24),
+    cl,
+    st: inSet(SEAT_STATES, o.st, "roster.st"),
+  };
+}
+
+function worldIdOf(o: Record<string, unknown>): string {
+  const wid = shortStr(o, "wid", 40);
+  if (!isValidWorldId(wid)) throw new ProtocolError("bad wid");
+  return wid;
 }
 
 function decodeServerMsg(raw: string): ServerMsg {
@@ -669,10 +784,6 @@ function decodeServerMsg(raw: string): ServerMsg {
         if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError(`bad ${k} entry`);
         return p;
       });
-      const pnd: PendingPickWire[] = arr(o.pnd, "pnd").map((p) => {
-        const e = obj(p, "pnd entry");
-        return { id: shortStr(e, "id", 64), s: intOf(e, "s", 0, 1e4) };
-      });
       const exr = pidList("exr");
       return {
         t: "snap",
@@ -682,10 +793,13 @@ function decodeServerMsg(raw: string): ServerMsg {
         full: boolOf(o, "full"),
         over: boolOf(o, "over"),
         selfId: shortStr(o, "selfId", 64),
+        wid: worldIdOf(o),
+        roster: arr(o.roster, "roster").map(validateRosterWire),
+        wait: arr(o.wait, "wait").map(validateWaitWire),
+        ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
-        pnd,
         exr,
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
         self: o.self === null ? null : validateSelfWire(o.self),
@@ -695,6 +809,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         props: arr(o.props, "props").map(validatePropWire),
         pickups: arr(o.pickups, "pickups").map(validatePickupWire),
         chests: arr(o.chests, "chests").map(validateChestWire),
+        hzds: arr(o.hzds, "hzds").map(validateHazardWire),
         events: arr(o.events, "events").map(validateWireEvent),
       };
     }
@@ -712,14 +827,6 @@ function decodeServerMsg(raw: string): ServerMsg {
       });
       if (choices.length < 1 || choices.length > 8) throw new ProtocolError("bad offer size");
       return { t: "offer", id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), choices };
-    }
-    case "woffer": {
-      const choices = arr(o.choices, "woffer.choices").map((c) => {
-        if (!isWeaponId(c)) throw new ProtocolError("bad woffer choice");
-        return c;
-      });
-      if (choices.length < 1 || choices.length > 8) throw new ProtocolError("bad woffer size");
-      return { t: "woffer", id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), choices, rr: intOf(o, "rr", 0, 8) };
     }
     case "error":
       return { t: "error", code: shortStr(o, "code", 64), msg: typeof o.msg === "string" && o.msg.length <= 256 ? o.msg : "" };
@@ -746,6 +853,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
+    bcl: s.hasClaimedBossChoice,
   };
 }
 
@@ -756,6 +864,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
+    hasClaimedBossChoice: w.bcl,
   };
 }
 
@@ -786,6 +895,8 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
     rv: p.reviveProgress,
     out: isPlayerOut(p),
+    bcl: p.hasClaimedBossChoice,
+    ab: p.isAbsent,
     nm: identity?.name ?? p.id,
     cl: identity?.colorIndex ?? null,
   };
@@ -819,7 +930,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0 }
+      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0 }
       : null,
   };
 }
@@ -828,10 +939,13 @@ export function toPropWire(p: Prop): PropWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
 }
 export function toPickupWire(p: Pickup): PickupWire {
-  return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1 };
+  return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1, bch: p.isBossChoice ?? false };
 }
 export function toChestWire(c: Chest): ChestWire {
   return { id: c.id, kind: c.kind, x: c.x, y: c.y, op: c.opened, opt: c.openT ?? -1 };
+}
+export function toHazardWire(h: Hazard): HazardWire {
+  return { id: h.id, k: h.kind, x: h.x, y: h.y, r: h.radius, life: h.life, max: h.maxLife };
 }
 
 // Radius reconstructed from kind so the wire stays tiny. Matches the sim's placement radii
@@ -841,11 +955,14 @@ export function propFromWire(w: PropWire): Prop {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: PROP_RADIUS, hp: 1, dead: w.brk >= 0, breakT: w.brk < 0 ? undefined : w.brk };
 }
 export function pickupFromWire(w: PickupWire): Pickup {
-  const radius = w.kind === "weapon" ? 16 : 13;
-  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val };
+  const radius = w.kind === "weapon" ? 16 : w.kind === "dealer_weapon" ? 15 : 13;
+  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined };
 }
 export function chestFromWire(w: ChestWire): Chest {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: w.kind === "boss" ? 18 : 16, opened: w.op, openT: w.opt < 0 ? undefined : w.opt };
+}
+export function hazardFromWire(w: HazardWire): Hazard {
+  return { id: w.id, kind: w.k, x: w.x, y: w.y, radius: w.r, life: w.life, maxLife: w.max };
 }
 
 export function bulletFromWire(b: BulletWire): Bullet {
@@ -883,6 +1000,14 @@ export function createInterestView(): InterestView {
 // own player becomes `self`; everyone else becomes a PlayerWire. events are supplied by the
 // caller (per-client reliable stream); evTo is the room's highest committed event id.
 export interface SnapshotOpts {
+  // The authoritative world id this snapshot describes (REQUIRED — the client asserts it
+  // against the room it expected to join; see the v4 protocol note).
+  worldId: string;
+  // Every seat in this world (verified identities + on/away), independent of interest
+  // filtering. Omitted => empty (direct test callers that don't exercise readiness).
+  roster?: RosterWire[];
+  // Single-use resume token for the receiving connection (full snapshots only).
+  resumeToken?: string;
   // Interest radius in px around the client's view center. Entities outside it are omitted from
   // this client's snapshot (the primary bandwidth + CPU lever). <= 0 disables the filter (send
   // everything) — the default, so direct callers/tests keep full snapshots.
@@ -899,30 +1024,21 @@ export interface SnapshotOpts {
   viewCenter?: { x: number; y: number };
 }
 
+// The party-wait state straight off the sim's pending-blessing map, identical for every
+// client (sorted for determinism; whole seconds — a countdown readout, not a timer source).
+function partyWait(w: WorldState): WaitWire[] {
+  if (w.pendingBlessings.size === 0) return [];
+  const out: WaitWire[] = [];
+  for (const [pid, left] of w.pendingBlessings) out.push({ pid, s: Math.max(0, Math.ceil(left)) });
+  out.sort((a, b) => a.pid.localeCompare(b.pid));
+  return out;
+}
+
 // Interest management: a client always receives its OWN player, EVERY party member (the
 // party is a shared objective — spectate/roster/revive prompts need all of it), globally-
 // relevant state (the boss enemy and the boss chest), and, in addition, the nearby
 // enemies/bullets/props/pickups/chests within its interest radius (with exit hysteresis).
 // A simple distance filter is enough for a single bounded floor.
-// One member's pending reward pick on the wire: who, and the authoritative seconds left
-// before expiry releases their hold (the max across their open blessing offer and weapon
-// claim — the gate waits for BOTH, so the longer clock is the binding one).
-export interface PendingPickWire { id: PlayerId; s: number }
-
-// The party members whose pending reward picks (blessing offers AND boss weapon claims)
-// currently hold the descend gate — the union the sim's gate actually waits on, so the
-// "WAITING FOR N PLAYERS…" readout can never drift from the rule.
-function pendingPickParty(w: WorldState): PendingPickWire[] {
-  const seconds = new Map<PlayerId, number>();
-  for (const [pid, left] of w.pendingBlessings) seconds.set(pid, left);
-  if (w.weaponClaims !== null) {
-    for (const [pid, pend] of w.weaponClaims.pending) {
-      seconds.set(pid, Math.max(seconds.get(pid) ?? 0, pend.ttl));
-    }
-  }
-  return [...seconds].map(([id, s]) => ({ id, s: Math.max(0, Math.ceil(s)) }));
-}
-
 export function buildSnapshot(
   w: WorldState,
   selfPid: PlayerId,
@@ -930,7 +1046,7 @@ export function buildSnapshot(
   events: WireEvent[],
   evTo: number,
   full: boolean,
-  opts: SnapshotOpts = {},
+  opts: SnapshotOpts,
 ): ServerMsg {
   const self = w.players.get(selfPid);
   const r = opts.interestRadius ?? 0;
@@ -959,7 +1075,7 @@ export function buildSnapshot(
   const enemies: EnemyWire[] = [];
   const keepEnemies = new Set<number>();
   for (const e of w.enemies) {
-    if (e.kind === "boss" || near(e.x, e.y, view?.enemies.has(e.id) ?? false)) { enemies.push(toEnemyWire(e)); keepEnemies.add(e.id); }
+    if (isBossKind(e.kind) || near(e.x, e.y, view?.enemies.has(e.id) ?? false)) { enemies.push(toEnemyWire(e)); keepEnemies.add(e.id); }
   }
   const bullets: BulletWire[] = [];
   for (const b of w.bullets) if (near(b.x, b.y, false)) bullets.push(toBulletWire(b));
@@ -993,10 +1109,13 @@ export function buildSnapshot(
     full,
     over: w.isRunOver,
     selfId: selfPid,
+    wid: opts.worldId,
+    roster: opts.roster ?? [],
+    wait: partyWait(w),
+    ...(opts.resumeToken !== undefined ? { tok: opts.resumeToken } : {}),
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),
-    pnd: pendingPickParty(w),
     exr: playersAtExit(w),
     evTo,
     self: self ? toSelfWire(self) : null,
@@ -1006,6 +1125,9 @@ export function buildSnapshot(
     props,
     pickups,
     chests,
+    // Unfiltered by design: hazards are hard-capped in the sim, and PREDICTED movement
+    // must know about a web before the player walks into interest range of its center.
+    hzds: w.hazards.map(toHazardWire),
     events,
   };
 }

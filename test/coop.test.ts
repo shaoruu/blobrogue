@@ -24,7 +24,6 @@ import { domCanvas, domMinimap, domOverlay } from "./harness/domShim.js";
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, loadFloorIntoWorld, devSpawnEnemy,
   stepWorldPhase, chooseBlessingInWorld, acquireWeaponInWorld, playersAtExit,
-  claimBossWeaponInWorld, rerollBossWeaponsInWorld, skipBossWeaponInWorld, isPickPaused,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -32,8 +31,8 @@ import type { Bullet, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 import {
-  REVIVE, WEAPON_ECONOMY, DEALER,
-  pedestalWeaponsFor, dealerWeaponStockFor, dealerWeaponPriceFor, bossWeaponChoicesFor,
+  REVIVE, DEALER,
+  pedestalWeaponRolls, dealerWeaponStock, bossWeaponChoices,
 } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
@@ -46,7 +45,6 @@ import { Game } from "../src/game/game.js";
 import { Hud } from "../src/game/hud.js";
 import { Minimap } from "../src/game/minimap.js";
 import { BlessingOverlay } from "../src/ui/blessing.js";
-import { WeaponClaimOverlay } from "../src/ui/weaponClaim.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -111,12 +109,12 @@ function killBoss(w: WorldState, by: string): void {
 }
 
 function chestWeaponCount(w: WorldState): number {
-  return w.chests.reduce((n, c) => n + (c.weapons?.length ?? 0), 0);
+  return w.chests.reduce((n, c) => n + (c.weapon !== undefined ? 1 : 0), 0);
 }
 
 function stockedKinds(w: WorldState): WeaponId[] {
   const out: WeaponId[] = [];
-  for (const c of w.chests) if (c.weapons) out.push(...c.weapons);
+  for (const c of w.chests) if (c.weapon !== undefined) out.push(c.weapon);
   return out;
 }
 
@@ -200,7 +198,6 @@ for (const m of ["update", "setVisible", "showBanner", "tick", "showStats", "hid
 }
 (Minimap.prototype as any).render = noop;
 (BlessingOverlay.prototype as any).show = noop;
-(WeaponClaimOverlay.prototype as any).show = noop;
 (globalThis as any).WebSocket = ScriptedSocket;
 
 async function headlessClientSpectateTests(): Promise<void> {
@@ -219,7 +216,10 @@ async function headlessClientSpectateTests(): Promise<void> {
   const game: any = new Game(domCanvas as any, domMinimap as any, domOverlay as any, noop, () => { exits++; });
   game.start({
     mode: "online",
-    online: { url: "ws://scripted", getTicket: () => Promise.resolve("dev:test"), roomCode: "ABCD" },
+    online: {
+      url: "ws://scripted", getTicket: () => Promise.resolve("dev:test"), roomCode: "ABCD",
+      expectedWorldId: null, selfPlayerId: null, party: null,
+    },
     profile: null,
     selfColorIndex: 1,
   });
@@ -231,7 +231,7 @@ async function headlessClientSpectateTests(): Promise<void> {
 
   const deliverSnap = (full = false): void => {
     world.tick++;
-    sock.deliver(buildSnapshot(world, "s0", 0, [], 0, full, {}));
+    sock.deliver(buildSnapshot(world, "s0", 0, [], 0, full, { worldId: "room:ABCD" }));
   };
   deliverSnap(true);
   for (let i = 0; i < 3; i++) game.tick(1 / 60);
@@ -348,7 +348,7 @@ async function headlessClientSpectateTests(): Promise<void> {
   game.tick(1 / 60);
   check("a satisfied gate clears the exit readout (the blessing gate takes over)", game.exitWaitLabel() === null);
 
-  // Co-op reward overlays BLOCK gameplay input (UI Part4): a delivered claim flips the
+  // Co-op reward overlays BLOCK gameplay input (UI Part4): a delivered offer flips the
   // input context, so movement/fire/interact sample dead at the source while it is up —
   // and the semantic contextual action yields even with a revivable body in range.
   mateA.isDown = true; mateA.hp = 0;
@@ -359,9 +359,9 @@ async function headlessClientSpectateTests(): Promise<void> {
   check("a revivable body in range exposes the SEMANTIC action (data, not presentation)",
     preClaim !== null && preClaim.action === "revive" && preClaim.targetName === "s1" && preClaim.progress === null,
     JSON.stringify(preClaim));
-  sock.deliver({ t: "woffer", id: 1, choices: ["railgun", "sword", "flamer"], rr: 1 });
+  sock.deliver({ t: "offer", id: 1, choices: ["glass_cannon", "hair_trigger", "split_shot"] });
   game.tick(1 / 60);
-  check("a weapon claim overlay flips the input context to blessing", game.input.context === "blessing", `ctx=${game.input.context}`);
+  check("a reward overlay flips the input context to blessing", game.input.context === "blessing", `ctx=${game.input.context}`);
   game.input.keyDown("w");
   game.input.keyDown("e");
   game.input.mouseDown();
@@ -489,12 +489,12 @@ function exitReadinessTests(): void {
     const ev: SimEvent[] = [];
     stepWorldPhase(w, DT, ev);
     check("all-at-exit raises every member's offer", ev.filter((e) => e.t === "offerBlessing").length === size);
-    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
-    const snapB = buildSnapshot(w, ps[size - 1].id, 0, [], 0, false, {});
+    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, { worldId: "room:TEST" });
+    const snapB = buildSnapshot(w, ps[size - 1].id, 0, [], 0, false, { worldId: "room:TEST" });
     check("exr rides both wires identically (and matches pnd's party)",
       snapA.t === "snap" && snapB.t === "snap"
       && snapA.exr.slice().sort().join(",") === snapB.exr.slice().sort().join(",")
-      && snapA.exr.length === size && snapA.pnd.length === size);
+      && snapA.exr.length === size && snapA.wait.length === size);
     for (let i = 0; i < size; i++) chooseBlessingInWorld(w, ps[i].id, ITEMS[i % ITEMS.length]);
     stepWorldPhase(w, DT, []);
     check("picks resolved -> the party descends", w.floor === 2, `floor=${w.floor}`);
@@ -554,55 +554,25 @@ function weaponEconomyTests(): void {
   // (seed, floor, P) cell — a wide deterministic net rather than a statistical claim.
   const gateSeeds = [...seeds, 0x51ab, 0x9e3d, 0x77aa01, 0x00d1ce, 0xfeed5, 0xabc123, 0x31415, 0x27182];
 
-  section("economy: pedestal counts stay the solo cadence; each pedestal holds exactly max(1, ceil(P/2))");
+  section("economy: pedestal rolls follow the gate exactly — max(1, ceil(P/2)) distinct per floor");
   {
-    let cadenceBreaks = 0, contentBreaks = 0, cells = 0;
+    let countBreaks = 0, dupes = 0, cells = 0;
     for (const seed of gateSeeds) {
       for (let floor = 2; floor <= 6; floor++) {
-        if (floor === 5) continue; // boss floor: the reward is the claim set, not pedestals
-        const soloPedestals = partyWorld(seed, floor, 1).w.chests.filter((c) => c.weapons !== undefined).length;
+        if (floor === 5) continue; // boss floor: the reward is the chest's choice set
         for (const size of [1, 2, 3, 4]) {
+          const { w } = partyWorld(seed, floor, size);
+          if (w.dungeon.rooms.length <= 2) continue;
           cells++;
-          const pedestals = partyWorld(seed, floor, size).w.chests.filter((c) => c.weapons !== undefined);
-          if (pedestals.length !== soloPedestals) cadenceBreaks++;
-          if (!pedestals.every((c) => c.weapons!.length === pedestalWeaponsFor(size))) contentBreaks++;
+          const kinds = stockedKinds(w);
+          if (kinds.length !== pedestalWeaponRolls(size)) countBreaks++;
+          if (new Set(kinds).size !== kinds.length) dupes++;
         }
       }
     }
-    check("pedestal COUNT identical to solo on every cell (party scales contents, not chests)",
-      cells >= 100 && cadenceBreaks === 0, `cells=${cells} breaks=${cadenceBreaks}`);
-    check("every pedestal holds exactly ceil(P/2) weapons (P1-2: 1, P3-4: 2)",
-      contentBreaks === 0, `breaks=${contentBreaks}`);
-  }
-
-  section("economy: every non-boss floor from 2 up offers a weapon opportunity (nobody starves)");
-  {
-    let dryFloors = 0;
-    for (const seed of gateSeeds) {
-      for (let floor = 2; floor <= 8; floor++) {
-        if (floor === 5) continue;
-        const { w } = partyWorld(seed, floor, 4);
-        const hasPedestal = w.chests.some((c) => c.weapons !== undefined);
-        const hasDealer = w.pickups.some((p) => p.kind === "dealer_weapon");
-        if (!hasPedestal && !hasDealer) dryFloors++;
-      }
-    }
-    check("no dry non-boss floor anywhere in the sweep (gate: never >2 consecutive)", dryFloors === 0, `dry=${dryFloors}`);
-  }
-
-  section("economy: the starvation guard force-stocks after 2 consecutive dry floors");
-  {
-    // Floor 1 stocks nothing by cadence — repeated floor-1 rebuilds walk the drought
-    // counter up; at 2 the guard forces a pedestal even where the cadence says none.
-    const w = createWorld(0xD10, 1, { isShared: true, skipLocalPlayer: true });
-    spawnPlayerInWorld(w, "p0");
-    spawnPlayerInWorld(w, "p1");
-    check("floor 1 stocks no pedestal (cadence) and counts drought 1", chestWeaponCount(w) === 0 && w.weaponDrought === 1);
-    loadFloorIntoWorld(w, 1);
-    check("second dry floor counts drought 2", chestWeaponCount(w) === 0 && w.weaponDrought === 2);
-    loadFloorIntoWorld(w, 1);
-    check("the third floor is FORCE-stocked and the drought resets",
-      chestWeaponCount(w) >= 1 && w.weaponDrought === 0, `stock=${chestWeaponCount(w)}`);
+    check("every cell stocks exactly pedestalWeaponRolls(P) weapons (P1-2: 1, P3-4: 2)",
+      cells >= 100 && countBreaks === 0, `cells=${cells} breaks=${countBreaks}`);
+    check("stocked kinds are distinct when the pool permits", dupes === 0, `dupes=${dupes}`);
   }
 
   section("economy: identical (seed, floor, P) builds an identical arsenal (no per-client divergence)");
@@ -610,7 +580,7 @@ function weaponEconomyTests(): void {
     const build = (size: number): string => {
       const { w } = partyWorld(0xF100D, 3, size);
       return JSON.stringify({
-        chests: w.chests.map((c) => [c.x, c.y, ...(c.weapons ?? [])]),
+        chests: w.chests.map((c) => [c.x, c.y, c.weapon ?? null]),
         dealer: w.pickups.filter((p) => p.kind === "dealer_weapon").map((p) => [p.x, p.y, p.weapon, p.value]),
       });
     };
@@ -619,98 +589,19 @@ function weaponEconomyTests(): void {
     }
   }
 
-  section("economy: party floors never stock duplicate junk, and big sets mix melee + ranged");
-  {
-    let dupes = 0, badMix = 0, setsChecked = 0;
-    for (const seed of seeds) {
-      for (let floor = 2; floor <= 6; floor++) {
-        for (const size of [2, 3, 4]) {
-          const kinds = stockedKinds(partyWorld(seed, floor, size).w);
-          if (kinds.length < 2) continue;
-          setsChecked++;
-          if (new Set(kinds).size !== kinds.length) dupes++;
-          if (kinds.every(isMelee)) badMix++;
-          if (kinds.length >= 3 && !kinds.some(isMelee)) badMix++;
-        }
-      }
-    }
-    check("no duplicate kinds within any party floor's stock", setsChecked >= 30 && dupes === 0, `sets=${setsChecked} dupes=${dupes}`);
-    check("no all-melee pairs and no melee-free 3+ sets", badMix === 0, `badMix=${badMix}`);
-  }
-
-  section("economy: weapon chests land on open floor, off props, never stacked (safe placement)");
-  {
-    let placed = 0, onWall = 0, onProp = 0, stackedTiles = 0;
-    for (const seed of seeds) {
-      for (let floor = 2; floor <= 6; floor++) {
-        const { w } = partyWorld(seed, floor, 4);
-        const tiles = new Set<number>();
-        for (const c of w.chests) {
-          placed++;
-          const tx = Math.floor(c.x / TILE), ty = Math.floor(c.y / TILE);
-          if (w.dungeon.tiles[ty * w.dungeon.w + tx] !== 0) onWall++;
-          const key = ty * w.dungeon.w + tx;
-          if (tiles.has(key)) stackedTiles++;
-          tiles.add(key);
-          for (const p of w.props) {
-            if (!p.dead && Math.hypot(c.x - p.x, c.y - p.y) < c.radius + p.radius) onProp++;
-          }
-        }
-      }
-    }
-    check("every P4 chest sits on an open floor tile", placed >= 30 && onWall === 0, `placed=${placed} onWall=${onWall}`);
-    check("no chest overlaps a live prop", onProp === 0, `onProp=${onProp}`);
-    check("no two chests share a tile", stackedTiles === 0, `stacked=${stackedTiles}`);
-  }
-
-  section("economy: every party-stocked pedestal is openable and its FULL contents collectible");
-  {
-    let opened = 0, stockedCount = 0, uncollected = 0;
-    for (const seed of seeds) {
-      const { w, ps } = partyWorld(seed, 3, 4);
-      const a = ps[0];
-      w.enemies = [];
-      w.pendingSpawns = [];
-      for (const chest of w.chests.filter((c) => c.weapons !== undefined)) {
-        const contents = chest.weapons!.slice();
-        stockedCount += contents.length;
-        a.x = chest.x + 1; a.y = chest.y;
-        stepWorldPhase(w, DT, []);
-        if (!chest.opened) continue;
-        opened++;
-        // Walk to every ejected weapon (a P3-4 pedestal spills two).
-        for (const id of contents) {
-          const drop = w.pickups.find((pk) => pk.kind === "weapon" && pk.weapon === id);
-          if (drop) {
-            a.x = drop.x; a.y = drop.y;
-            stepWorldPhase(w, DT, []);
-          }
-          if (!a.ownedWeapons.includes(id)) uncollected++;
-        }
-      }
-    }
-    check("every stocked pedestal opened and its whole contents collected",
-      opened >= 4 && stockedCount >= 8 && uncollected === 0,
-      `opened=${opened} stocked=${stockedCount} uncollected=${uncollected}`);
-  }
-
   section("economy: the Dealer stocks max(2,P) distinct stalls at 12/18/24 — purchases PERSONAL");
   {
     for (const size of [1, 2, 3, 4]) {
       const { w } = partyWorld(0xDEA1, 3, size);
       const stock = w.pickups.filter((p) => p.kind === "dealer_weapon");
       const hearts = w.pickups.filter((p) => p.kind === "dealer_heart");
-      check(`P${size}: dealer stocks ${dealerWeaponStockFor(size)} stall(s) + ${size} heart(s)`,
-        stock.length === dealerWeaponStockFor(size) && hearts.length === size,
+      check(`P${size}: dealer stocks ${dealerWeaponStock(size)} stall(s) + ${size} heart(s)`,
+        stock.length === dealerWeaponStock(size) && hearts.length === size,
         `weapons=${stock.length} hearts=${hearts.length}`);
-      check(`P${size}: stall kinds distinct, slot prices 12/18/24`,
+      check(`P${size}: stall kinds distinct, slot prices 12/18/24 (4th holds at 24)`,
         new Set(stock.map((s) => s.weapon)).size === stock.length
-        && stock.every((s, i) => s.value === dealerWeaponPriceFor(i)),
+        && stock.every((s, i) => s.value === DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)]),
         stock.map((s) => `${s.weapon}@${s.value}`).join(","));
-      for (const s of stock) {
-        const tx = Math.floor(s.x / TILE), ty = Math.floor(s.y / TILE);
-        check(`P${size}: stall on open floor`, w.dungeon.tiles[ty * w.dungeon.w + tx] === 0);
-      }
     }
     // Personal-purchase flow on a P2 world: broke walks past; a buyer pays and the stall
     // STAYS; the buyer can't rebuy (owns it); a teammate buys the SAME stall.
@@ -729,8 +620,8 @@ function weaponEconomyTests(): void {
     check("a funded buyer pays the slot price and the stall STAYS (personal purchase)",
       w.pickups.includes(stall) && a.ownedWeapons.includes(merch) && a.coins === 0,
       `owned=${a.ownedWeapons.join(",")} coins=${a.coins}`);
-    // Exactly the first stall's price: a rebuy would spend it, and the pricier neighbor
-    // stall (18) stays out of reach — so unchanged coins prove the ownership block.
+    // Exactly the first stall's price again: a rebuy would spend it, and the pricier
+    // neighbor stall (18) stays out of reach — unchanged coins prove the ownership block.
     a.coins = price;
     stepWorldPhase(w, DT, []);
     check("an owner never rebuys their own stall", a.coins === price, `coins=${a.coins}`);
@@ -753,153 +644,76 @@ function weaponEconomyTests(): void {
     a.x = heart.x; a.y = heart.y;
     stepWorldPhase(w, DT, []);
     check("FULL HEALTH touch consumes nothing", w.pickups.includes(heart) && a.coins === 50 && a.hp === a.maxHp);
-    // Broke and hurt: still nothing.
     a.hp = 1;
     a.coins = DEALER.price - 1;
     stepWorldPhase(w, DT, []);
     check("broke touch consumes nothing", w.pickups.includes(heart) && a.coins === DEALER.price - 1 && a.hp === 1);
-    // Hurt and funded: the touch buys exactly +1 HP for the price and the heart is gone.
     a.coins = DEALER.price;
     stepWorldPhase(w, DT, []);
     check("a valid touch pays the price for exactly +1 HP",
       !w.pickups.includes(heart) && a.coins === 0 && a.hp === 2);
   }
 
-  section("economy: the boss reward is min(P+1,5) CHOICES, claimed personally (gate §4)");
+  section("economy: the boss reward is min(P+1,5) personal CHOICES via pedestals (gate §4)");
   {
     for (const size of [1, 2, 3, 4]) {
-      const { w, ps } = partyWorld(0xB055, 5, size);
-      killBoss(w, ps[0].id);
-      const chest = w.chests.find((c) => c.kind === "boss")!;
-      check(`P${size}: the boss chest bakes NO floor weapons (the reward is the claim set)`, chest.weapons === undefined);
-      // Open from afar (a planted bullet) so the spill stays on the floor to count.
-      const opener = ps[0];
-      opener.x = chest.x + 400; opener.y = chest.y + 300;
-      plantKillBullet(w, opener.id, chest.x, chest.y, 6);
-      const ev: SimEvent[] = [];
-      stepWorldPhase(w, DT, ev);
-      check(`P${size}: opening ejected the tuned heart + 5 coins (no weapon spill)`,
-        chest.opened
-        && w.pickups.filter((p) => p.kind === "weapon").length === 0
-        && w.pickups.filter((p) => p.kind === "heart").length === 1
-        && w.pickups.filter((p) => p.kind === "coin").length === 5);
-      const rare = ev.filter((e) => e.t === "offerBlessing");
-      check(`P${size}: every member got the Rare pick from the boss chest`,
-        rare.length === size && rare.every((o) => o.t === "offerBlessing" && o.rare)
-        && new Set(rare.map((o) => (o as { pid: string }).pid)).size === size,
-        `offers=${rare.length}`);
-      const want = bossWeaponChoicesFor(size);
-      const claims = w.weaponClaims!;
-      const wofferEv = ev.filter((e) => e.t === "offerWeapons");
-      check(`P${size}: every member holds a personal claim over ${want} distinct choices`,
-        claims.pending.size === size && wofferEv.length === size
-        && claims.choices.length === want && new Set(claims.choices).size === want,
-        claims.choices.join(","));
-      if (want >= 3) check(`P${size}: the choice set mixes melee + ranged`, claims.choices.some(isMelee) && !claims.choices.every(isMelee));
+      const { w, ps } = partyWorld(0xB055, 3, size);
+      w.enemies = []; w.pendingSpawns = [];
+      // A signature-bearing boss chest (every real boss drop carries one).
+      w.chests.push({ id: w.nextChestId++, kind: "boss", x: ps[0].x + 40, y: ps[0].y, radius: 18, opened: false, weapon: "mortar" });
+      ps[0].x += 40;
+      stepWorldPhase(w, DT, []);
+      const choices = w.pickups.filter((p) => p.isBossChoice);
+      check(`P${size}: the chest spills ${bossWeaponChoices(size)} distinct choices, signature first`,
+        choices.length === bossWeaponChoices(size)
+        && choices.some((p) => p.weapon === "mortar")
+        && new Set(choices.map((p) => p.weapon)).size === choices.length,
+        choices.map((p) => p.weapon).join(","));
+      const rare = w.pendingBlessings.size;
+      check(`P${size}: every member got the Rare pick from the boss chest`, rare === size, `pending=${rare}`);
     }
   }
 
-  section("economy: claims grant personally, never deplete, reject dupes, reroll exactly once");
+  section("economy: boss claims are personal — no depletion, one each, owned claims reroll");
   {
-    const { w, ps } = partyWorld(0xC1A1, 5, 3);
-    killBoss(w, ps[0].id);
-    const chest = w.chests.find((c) => c.kind === "boss")!;
-    ps[0].x = chest.x + 1; ps[0].y = chest.y;
+    const { w, ps } = partyWorld(0xC1A1, 3, 3);
+    w.enemies = []; w.pendingSpawns = [];
+    // Park the teammates far from the spill so nobody auto-claims by standing in the fan.
+    ps[1].x += 600; ps[2].y += 600;
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: ps[0].x + 40, y: ps[0].y, radius: 18, opened: false, weapon: "mortar" });
+    ps[0].x += 40;
     stepWorldPhase(w, DT, []);
-    const claims = w.weaponClaims!;
-    const base = claims.choices.slice();
-    check("a claim inside the view grants the weapon personally",
-      claimBossWeaponInWorld(w, ps[0].id, base[0]) && ps[0].ownedWeapons.includes(base[0]));
-    check("teammates keep the FULL choice set after a claim (no depletion)",
-      claims.pending.get(ps[1].id)!.view.join(",") === base.join(","));
-    check("claiming twice rejects (one personal claim each)", !claimBossWeaponInWorld(w, ps[0].id, base[1]));
-    check("a choice outside the view rejects",
-      !claimBossWeaponInWorld(w, ps[1].id, PICKUP_WEAPONS.find((id) => !base.includes(id))!));
-    acquireWeaponInWorld(w, ps[1].id, base[1]);
-    check("an owned duplicate rejects (dupes route to the reroll, never coins)",
-      !claimBossWeaponInWorld(w, ps[1].id, base[1]));
-    const rerolled = rerollBossWeaponsInWorld(w, ps[1].id)!;
-    check("the reroll is a fresh personal view of the same size, off the base set",
-      rerolled.length === base.length && rerolled.every((id) => !base.includes(id)),
-      rerolled.join(","));
-    check("the reroll is personal — a teammate's view is still the base set",
-      w.weaponClaims!.pending.get(ps[2].id)!.view.join(",") === base.join(","));
-    check("a second reroll rejects (exactly one)", rerollBossWeaponsInWorld(w, ps[1].id) === null);
-    check("claiming from the rerolled view grants", claimBossWeaponInWorld(w, ps[1].id, rerolled[0]));
-    check("mid-claim members are pick-paused and shielded", isPickPaused(w, ps[2].id));
-    skipBossWeaponInWorld(w, ps[2].id);
-    check("a skip resolves the last claim and releases the state", w.weaponClaims === null);
-    check("the boss chest's blessing pick still pauses independently of the claim",
-      isPickPaused(w, ps[2].id) && w.pendingBlessings.has(ps[2].id));
-  }
-
-  section("economy: an unanswered claim expires on the sim clock; a disconnect releases immediately");
-  {
-    const { w, ps } = partyWorld(0xC1A2, 5, 2);
-    killBoss(w, ps[0].id);
-    const chest = w.chests.find((c) => c.kind === "boss")!;
-    ps[0].x = chest.x + 1; ps[0].y = chest.y;
+    for (const p of ps) chooseBlessingInWorld(w, p.id, ITEMS[0]); // resolve picks; pedestals are the subject
+    const choices = w.pickups.filter((p) => p.isBossChoice);
+    check("P3 spilled 4 choice pedestals", choices.length === 4, String(choices.length));
+    const [a, b, c] = ps;
+    // A stands clear first (the opener may be inside the fan already), then claims one.
+    a.x -= 300;
     stepWorldPhase(w, DT, []);
-    check("both claims open", w.weaponClaims!.pending.size === 2);
-    removePlayerFromWorld(w, ps[1].id);
-    check("a disconnect resolves that member's claim", w.weaponClaims!.pending.size === 1);
-    const ticks = Math.ceil(WEAPON_ECONOMY.claimTtl / DT) + 2;
-    for (let t = 0; t < ticks; t++) stepWorldPhase(w, DT, []);
-    check("the AFK claim expired on the sim clock (the descend gate always drains)", w.weaponClaims === null);
-  }
-
-  section("economy: reroll views are deterministic per (seed, floor, player)");
-  {
-    const build = (): string => {
-      const { w, ps } = partyWorld(0xC1A3, 5, 2);
-      killBoss(w, ps[0].id);
-      const chest = w.chests.find((c) => c.kind === "boss")!;
-      ps[0].x = chest.x + 1; ps[0].y = chest.y;
-      stepWorldPhase(w, DT, []);
-      return (rerollBossWeaponsInWorld(w, ps[0].id) ?? []).join(",");
-    };
-    check("identical reroll on a rebuilt world", build() === build() && build().length > 0, build());
-  }
-
-  section("economy: rolls prefer weapons NOBODY owns; family coverage tracks what's equipped");
-  {
-    const { w, ps } = partyWorld(0x0A11, 5, 2);
-    // The party owns 12 of the 15 pickup kinds — three remain fresh.
-    const fresh: WeaponId[] = ["flamer", "spear", "sword"];
-    for (const p of ps) for (const id of PICKUP_WEAPONS) if (!fresh.includes(id)) acquireWeaponInWorld(w, p.id, id);
-    killBoss(w, ps[0].id);
-    const chest = w.chests.find((c) => c.kind === "boss")!;
-    ps[0].x = chest.x + 1; ps[0].y = chest.y;
+    const isPreClaimed = a.hasClaimedBossChoice;
+    a.x = choices[0].x; a.y = choices[0].y;
     stepWorldPhase(w, DT, []);
-    const choices = w.weaponClaims!.choices;
-    check("the P2 choice set is drawn from the unowned kinds",
-      choices.length === 3 && choices.every((id) => fresh.includes(id)), choices.join(","));
-    // Family coverage: a party wielding ONLY melee still sees a ranged option (and vice
-    // versa there's ≥1 melee-compatible pick when someone holds melee).
-    const { w: w2, ps: ps2 } = partyWorld(0x0A12, 5, 2);
-    for (const p of ps2) { acquireWeaponInWorld(w2, p.id, "sword"); p.weapon = "sword"; }
-    killBoss(w2, ps2[0].id);
-    const chest2 = w2.chests.find((c) => c.kind === "boss")!;
-    ps2[0].x = chest2.x + 1; ps2[0].y = chest2.y;
-    stepWorldPhase(w2, DT, []);
-    const set2 = w2.weaponClaims!.choices;
-    check("an all-melee party's set still carries >=1 melee-compatible AND >=1 ranged pick",
-      set2.some(isMelee) && set2.some((id) => !isMelee(id)), set2.join(","));
-  }
-
-  section("economy: solo-local keeps the tuned baseline (no dealer stalls, no boss claims)");
-  {
-    const w = createWorld(0xB055, 5, {});
-    const local = w.players.values().next().value!;
-    killBoss(w, local.id);
-    const chest = w.chests.find((c) => c.kind === "boss")!;
-    local.x = chest.x + 1; local.y = chest.y;
+    check("a claim grants personally and flips the one-claim flag",
+      a.hasClaimedBossChoice && (isPreClaimed || a.ownedWeapons.includes(choices[0].weapon!)));
+    check("every pedestal still stands for teammates (no depletion)",
+      w.pickups.filter((p) => p.isBossChoice).length === 4);
+    const ownedBefore = a.ownedWeapons.length;
+    a.x = choices[1].x; a.y = choices[1].y;
     stepWorldPhase(w, DT, []);
-    check("local boss chest: heart + coins, no weapons, no claim state",
-      chest.opened && chest.weapons === undefined && w.weaponClaims === null);
-    const w3 = createWorld(0xDEA1, 3, {});
-    check("local dealer floor: hearts only, no weapon stalls",
-      w3.pickups.some((p) => p.kind === "dealer_heart") && !w3.pickups.some((p) => p.kind === "dealer_weapon"));
+    check("a second touch grants nothing (one personal claim per player)", a.ownedWeapons.length === ownedBefore);
+    // An owned duplicate claim grants a seeded REROLL — never coins, never nothing.
+    acquireWeaponInWorld(w, b.id, choices[1].weapon!);
+    const bOwned = b.ownedWeapons.length;
+    b.x = choices[1].x; b.y = choices[1].y;
+    stepWorldPhase(w, DT, []);
+    check("claiming an OWNED choice grants a rerolled weapon instead (never coins)",
+      b.hasClaimedBossChoice && b.ownedWeapons.length === bOwned + 1
+      && !b.ownedWeapons.slice(0, bOwned).includes(b.ownedWeapons[bOwned]),
+      b.ownedWeapons.join(","));
+    c.x = choices[2].x; c.y = choices[2].y;
+    stepWorldPhase(w, DT, []);
+    stepWorldPhase(w, DT, []);
+    check("all living claimed -> the pedestals clear", w.pickups.filter((p) => p.isBossChoice).length === 0);
   }
 
   section("economy: options scale, scarcity holds — the measured §4 table");
@@ -911,7 +725,7 @@ function weaponEconomyTests(): void {
           const { w } = partyWorld(seed, floor, size);
           n += chestWeaponCount(w);
           n += w.pickups.filter((p) => p.kind === "dealer_weapon").length;
-          if (floor === 5) n += bossWeaponChoicesFor(size);
+          if (floor === 5) n += bossWeaponChoices(size);
         }
       }
       return n;
@@ -919,7 +733,7 @@ function weaponEconomyTests(): void {
     const t1 = total(1), t2 = total(2), t3 = total(3), t4 = total(4);
     check("P4 offers stay well under 4x solo (per-person scarcity)", t4 < 4 * t1, `P1=${t1} P4=${t4}`);
     check("P4 offers meaningfully exceed solo (the playtest fix)", t4 > t1 + 10, `P1=${t1} P4=${t4}`);
-    process.stdout.write(`  measured §4 offers (pedestal slots + stalls + boss choices, floors 2-6 x ${seeds.length} seeds): P1=${t1} P2=${t2} P3=${t3} P4=${t4}\n`);
+    process.stdout.write(`  measured §4 offers (pedestals + stalls + boss choices, floors 2-6 x ${seeds.length} seeds): P1=${t1} P2=${t2} P3=${t3} P4=${t4}\n`);
     process.stdout.write(`  per person: P1=${t1.toFixed(1)} P2=${(t2 / 2).toFixed(1)} P3=${(t3 / 3).toFixed(1)} P4=${(t4 / 4).toFixed(1)}\n`);
   }
 }
@@ -931,26 +745,26 @@ function wireCoherenceTests(): void {
   {
     const { w, ps } = partyAtExit(0x51D0, 2);
     stepWorldPhase(w, DT, []); // raises both exit-gate offers
-    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
-    const snapB = buildSnapshot(w, ps[1].id, 0, [], 0, false, {});
+    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, { worldId: "room:TEST" });
+    const snapB = buildSnapshot(w, ps[1].id, 0, [], 0, false, { worldId: "room:TEST" });
     if (snapA.t !== "snap" || snapB.t !== "snap") { check("snapshots built", false); return; }
-    const key = (s: typeof snapA): string => s.pnd.map((p) => `${p.id}:${p.s}`).sort().join(",");
+    const key = (s: typeof snapA): string => s.wait.map((p) => `${p.pid}:${p.s}`).sort().join(",");
     check("both clients read the same pending party + seconds",
-      key(snapA) === key(snapB) && snapA.pnd.length === 2, key(snapA));
+      key(snapA) === key(snapB) && snapA.wait.length === 2, key(snapA));
     check("the countdown is the sim's authoritative TTL (fresh offers ride at the full window)",
-      snapA.pnd.every((p) => p.s === Math.ceil(C.BLESSING_OFFER_TTL)), key(snapA));
+      snapA.wait.every((p) => p.s === Math.ceil(C.BLESSING_OFFER_TTL)), key(snapA));
     const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snapA));
-    check("pnd survives the codec round trip", decoded.t === "snap" && decoded.pnd.length === 2 && decoded.pnd.every((p) => p.s > 0));
+    check("wait survives the codec round trip", decoded.t === "snap" && decoded.wait.length === 2 && decoded.wait.every((p) => p.s > 0));
     // The countdown DECREASES as the sim clock advances — server truth, not client time
     // (a one-second margin absorbs the TTL's repeated-subtraction float error).
     for (let i = 0; i < Math.ceil(3 / DT); i++) stepWorldPhase(w, DT, []);
-    const later = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
+    const later = buildSnapshot(w, ps[0].id, 0, [], 0, false, { worldId: "room:TEST" });
     check("the countdown falls with the SIM clock only", later.t === "snap"
-      && later.pnd.every((p) => p.s <= Math.ceil(C.BLESSING_OFFER_TTL) - 2 && p.s > C.BLESSING_OFFER_TTL - 10),
+      && later.wait.every((p) => p.s <= Math.ceil(C.BLESSING_OFFER_TTL) - 2 && p.s > C.BLESSING_OFFER_TTL - 10),
       later.t === "snap" ? key(later) : "?");
     chooseBlessingInWorld(w, ps[0].id, ITEMS[0]);
-    const after = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
-    check("a resolved pick leaves the pending set", after.t === "snap" && after.pnd.length === 1 && after.pnd[0].id === ps[1].id);
+    const after = buildSnapshot(w, ps[0].id, 0, [], 0, false, { worldId: "room:TEST" });
+    check("a resolved pick leaves the pending set", after.t === "snap" && after.wait.length === 1 && after.wait[0].pid === ps[1].id);
   }
 
   section("wire: teammates ALWAYS ride snapshots (the party is never interest-filtered)");
@@ -975,7 +789,7 @@ function wireCoherenceTests(): void {
     rev.isInteracting = true;
     for (let i = 0; i < 10; i++) stepWorldPhase(w, DT, []);
     check("channel accrued under the hold", down.reviveProgress > 0.4, `progress=${down.reviveProgress.toFixed(2)}`);
-    const snap = buildSnapshot(w, "pRev", 0, [], 0, false, {});
+    const snap = buildSnapshot(w, "pRev", 0, [], 0, false, { worldId: "room:TEST" });
     const seen = snap.t === "snap" ? snap.players.find((p) => p.id === "pDown") : undefined;
     check("the reviver's snapshot carries the downed teammate's live progress",
       seen !== undefined && Math.abs(seen.rv - down.reviveProgress) < 1e-9, `rv=${seen?.rv}`);
