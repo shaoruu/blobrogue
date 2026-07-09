@@ -49,8 +49,8 @@ export function installFxCapture(): void {
   // Wave-routed semantic cues (the bestiary audio contract's hurt/death/block/tell
   // channel) are FX atoms too: record the deterministic routing decision (event + spot),
   // then let the real cueAt run (inert against the shimmed AudioContext).
-  const origCueAt = (waveAudio as any).cueAt.bind(waveAudio);
-  (waveAudio as any).cueAt = (name: string, x: number, y: number, entityId?: number) => {
+  const origCueAt = waveAudio.cueAt.bind(waveAudio);
+  waveAudio.cueAt = (name: string, x: number, y: number, entityId?: number) => {
     const isRouted = origCueAt(name, x, y, entityId);
     if (isRouted) sink.push(`wavecue ${name} ${r(x)} ${r(y)}`);
     return isRouted;

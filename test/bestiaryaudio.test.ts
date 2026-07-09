@@ -10,7 +10,7 @@
 
 import "./harness/domShim.js";
 import {
-  WAVE_SOUNDS, WAVE_TELLS, WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE,
+  WAVE_TELLS, WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE,
   WAVE_PRIORITY, waveSpecOf, tellCuesFor, isWaveEventId,
 } from "../src/game/waveSpec.js";
 import type { WaveEventId, WaveSoundSpec, TellSnapshot } from "../src/game/waveSpec.js";
@@ -101,20 +101,20 @@ function bestiarySurface(): Set<WaveEventId> {
 
 function manifestGates(): void {
   section("resolution: every kind declares behavior + material; every behavior hook resolves");
-  let ok = true;
+  let isOk = true;
   for (const kind of ALL_KINDS) {
     const behavior = AUDIO_BEHAVIOR[kind];
     const material = AUDIO_MATERIAL[kind];
-    if (behavior === undefined || material === undefined) { ok = false; continue; }
+    if (behavior === undefined || material === undefined) { isOk = false; continue; }
     for (const hook of BEHAVIOR_HOOKS[behavior]) {
       const id = bestiaryCue(kind, hook);
       if (id === null || !isWaveEventId(id)) {
-        ok = false;
+        isOk = false;
         process.stdout.write(`    ${kind} (${behavior}): hook '${hook}' unresolved\n`);
       }
     }
   }
-  check("every kind resolves EVERY hook its behavior verb declares", ok);
+  check("every kind resolves EVERY hook its behavior verb declares", isOk);
   check("boss-grade kinds also carry bespoke entrance/phase/death maps",
     (["boss", "marrow", "choir", "weaver", "gilded", "marshal", "toll"] as const).every(
       (k) => WAVE_BOSS_ENTRANCE[k] !== undefined && WAVE_BOSS_PHASE[k] !== undefined && WAVE_BOSS_DEATH[k] !== undefined));
@@ -137,37 +137,37 @@ function manifestGates(): void {
 function rowHygieneGates(): void {
   section("row hygiene: stems, fallbacks, rates, dry positional locks");
   const surface = bestiarySurface();
-  let stemOk = true;
-  let fallbackOk = true;
-  let rateOk = true;
-  let lockOk = true;
+  let isStemOk = true;
+  let isFallbackOk = true;
+  let isRateOk = true;
+  let isLockOk = true;
   for (const id of surface) {
     const spec: WaveSoundSpec = waveSpecOf(id);
-    if (spec.stem === null) { stemOk = false; process.stdout.write(`    stem:null — ${id}\n`); }
+    if (spec.stem === null) { isStemOk = false; process.stdout.write(`    stem:null — ${id}\n`); }
     if (spec.loop !== true && spec.fallback === undefined) {
-      fallbackOk = false;
+      isFallbackOk = false;
       process.stdout.write(`    no sample fallback — ${id}\n`);
     }
     const rate = spec.fallback?.rate ?? 1;
     if (rate < FALLBACK_RATE_MIN || rate > FALLBACK_RATE_MAX) {
-      rateOk = false;
+      isRateOk = false;
       process.stdout.write(`    extreme fallback rate — ${id} (${rate})\n`);
     }
     if (spec.priority === WAVE_PRIORITY.enemyLock) {
       // Dry positional locks: spatial, zero jitter — a lock must localize instantly.
       if (spec.spatial !== true || spec.jitter !== 0) {
-        lockOk = false;
+        isLockOk = false;
         process.stdout.write(`    non-dry lock — ${id}\n`);
       }
     }
   }
-  check(`no bestiary row ships stem:null (${surface.size} rows audited)`, stemOk);
-  check("every one-shot row declares a shipped-sample fallback (synth is the zero-file rung)", fallbackOk);
-  check(`every fallback rate sits in [${FALLBACK_RATE_MIN}, ${FALLBACK_RATE_MAX}] (no extreme pitching)`, rateOk);
-  check("every mob lock row is DRY and positional (spatial, zero jitter)", lockOk);
+  check(`no bestiary row ships stem:null (${surface.size} rows audited)`, isStemOk);
+  check("every one-shot row declares a shipped-sample fallback (synth is the zero-file rung)", isFallbackOk);
+  check(`every fallback rate sits in [${FALLBACK_RATE_MIN}, ${FALLBACK_RATE_MAX}] (no extreme pitching)`, isRateOk);
+  check("every mob lock row is DRY and positional (spatial, zero jitter)", isLockOk);
 
   // Same-material law: each kind's hook rows fall back inside ITS material family.
-  let materialOk = true;
+  let isMaterialOk = true;
   for (const kind of ALL_KINDS) {
     const material = AUDIO_MATERIAL[kind];
     const allowed = MATERIAL_FALLBACK_SAMPLES[material];
@@ -175,22 +175,22 @@ function rowHygieneGates(): void {
       const spec = waveSpecOf(BESTIARY_CUES[kind][hook]);
       if (spec.loop === true || spec.fallback === undefined) continue;
       if (!allowed.includes(spec.fallback.sample)) {
-        materialOk = false;
+        isMaterialOk = false;
         process.stdout.write(`    ${kind}/${hook}: fallback '${spec.fallback.sample}' outside material '${material}'\n`);
       }
     }
   }
-  check("every kind's fallbacks stay inside its MATERIAL family (same-material only)", materialOk);
+  check("every kind's fallbacks stay inside its MATERIAL family (same-material only)", isMaterialOk);
 
   // Tier layers: authored additions, never a pitch-down of anything.
-  let tierOk = true;
+  let isTierOk = true;
   for (const id of Object.values(TIER_LAYERS)) {
     if (!id) continue;
     const spec = waveSpecOf(id);
-    if (spec.fallback?.rate !== undefined) tierOk = false;
-    if (spec.stem === null) tierOk = false;
+    if (spec.fallback?.rate !== undefined) isTierOk = false;
+    if (spec.stem === null) isTierOk = false;
   }
-  check("tier layers are authored stems with UNPITCHED fallbacks (never pitch-down)", tierOk);
+  check("tier layers are authored stems with UNPITCHED fallbacks (never pitch-down)", isTierOk);
   check("hurt/death rate limits are pinned on the rows",
     waveSpecOf("mob.hurt").cooldownMs === HURT_RATE_LIMIT_MS
     && waveSpecOf("mob.death").cooldownMs === DEATH_RATE_LIMIT_MS);

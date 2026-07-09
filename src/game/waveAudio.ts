@@ -305,10 +305,8 @@ class WaveAudioDirector {
     // loop each, held while any member is near — never a voice per body.
     this.holdLoop("flock.bed", GROUP_LOOP_KEY, flockNear > 0, { gain: Math.min(1, 0.5 + 0.12 * flockNear) });
     this.holdLoop("orbit.loop", GROUP_LOOP_KEY, orbitNear > 0);
-    for (const [id, memory] of this.tells) {
-      if (seen.has(id)) continue;
-      void memory;
-      this.tells.delete(id);
+    for (const id of [...this.tells.keys()]) {
+      if (!seen.has(id)) this.tells.delete(id);
     }
 
     this.observeRevives(input.players);
