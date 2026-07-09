@@ -3131,6 +3131,15 @@ export class Game {
           ctx.fillStyle = (tx + ty) % 2 === 0 ? biome.floorA : biome.floorB;
           ctx.fillRect(sx, sy, TILE, TILE);
         }
+        // Structural value hierarchy: floor material stays quieter/darker than wall caps.
+        // The biome wash later shifts hue across both, so this per-floor dim preserves a
+        // grayscale walkable-vs-solid distinction independent of palette.
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = 0.28;
+        ctx.fillStyle = "#05030b";
+        ctx.fillRect(sx, sy, TILE, TILE);
+        ctx.restore();
         const rd = tileHash(tx, ty, 2);
         if (rd < detailDensity) {
           const t = rd / detailDensity;
@@ -3190,6 +3199,13 @@ export class Game {
         }
         if (biomeWall) {
           ctx.drawImage(biomeWall, sx, sy, TILE, TILE);
+          // Lift the authored wall cap as a material plane; floor is darkened separately.
+          ctx.save();
+          ctx.globalCompositeOperation = "screen";
+          ctx.globalAlpha = 0.13;
+          ctx.fillStyle = biome.wallCap;
+          ctx.fillRect(sx, sy, TILE, TILE);
+          ctx.restore();
         } else if (tiles.ready("wall_top")) {
           ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
         } else {
