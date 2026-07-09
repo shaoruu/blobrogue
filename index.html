@@ -501,10 +501,47 @@
       .navrow{ display:flex; gap:8px; }
       .navrow .nav-btn{ flex:1; min-width:0; font-size:9px; padding:10px 4px; letter-spacing:1px; }
 
-      /* --- profile screens (own wardrobe + leaderboard player view) --- */
-      /* Worn title under the header: reserved line, so titled and untitled render at the
+      /* --- profile screens (the shared fixed card + the own wardrobe) --- */
+      /* Worn title under the name: reserved line, so titled and untitled render at the
          same height and equipping a title never shifts the screen. */
       .worn-title{ min-height:15px; font-family:var(--f-ui); font-size:11px; letter-spacing:1px; color:var(--amber-hi); text-transform:none; margin:0; }
+      /* THE PROFILE CARD: one fixed ~640x430 surface for every profile (own Overview and
+         the read-only player view). Attention order: appearance/name (left) -> ranked top
+         run + exact build (right, top) -> lifetime (right, bottom). Every region is
+         reserved; loading/private/no-snapshot swap content inside identical boxes. */
+      .pc-context{ text-align:center; }
+      .profile-card{ width:min(640px,100%); height:430px; margin:0 auto; display:flex; gap:20px; padding:16px;
+        background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); text-align:left; }
+      .pc-left{ flex:0 0 192px; display:flex; flex-direction:column; gap:7px; min-width:0; }
+      .blob-stage{ flex:0 0 192px; width:192px; height:192px; background:var(--dun-0);
+        box-shadow:inset 0 0 0 2px var(--dun-3); display:flex; align-items:center; justify-content:center; }
+      .blob-stage .blob-preview{ width:192px; height:192px; image-rendering:pixelated; }
+      .pc-name{ font-family:var(--f-ui); font-size:13px; letter-spacing:1px; color:var(--cream);
+        min-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .pc-rank{ min-height:14px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:#8f87a8;
+        text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      /* Owner-only slot (CUSTOMIZE BLOB); reserved on read-only profiles too, so both
+         variants share byte-identical card geometry. */
+      .pc-left-slot{ min-height:40px; display:flex; align-items:flex-end; }
+      .pc-customize{ width:100%; min-width:0; font-size:9px; padding:10px 8px; letter-spacing:1px; }
+      .pc-right{ flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
+      .pc-run{ grid-template-columns:1fr 1fr 1fr 1fr; }
+      .pc-run .stat-value{ font-size:18px; }
+      .pc-build{ height:64px; overflow-y:auto; align-content:flex-start; justify-content:flex-start; }
+      .pc-lifetime{ min-height:56px; }
+      .pc-life{ grid-template-columns:1fr 1fr 1fr 1fr; }
+      .pc-life .stat-value{ font-size:16px; }
+      .pc-life-note{ margin:0; font-size:11px; text-align:left; }
+      .pc-account{ display:flex; gap:10px; align-items:center; justify-content:center; min-height:52px; }
+      .pc-tabs{ display:flex; gap:8px; justify-content:center; }
+      .pc-tab{ min-width:120px; font-size:9px; padding:9px 12px; letter-spacing:1px; }
+      .pc-tab.on{ box-shadow:inset 0 0 0 2px var(--amber), 0 0 0 0 transparent; color:var(--amber-hi); }
+      .lb-arrow{ flex:0 0 auto; font-family:var(--f-num); font-size:15px; color:var(--dun-4); }
+      .lb-row:hover:not(:disabled) .lb-arrow, .lb-row:focus-visible .lb-arrow{ color:var(--cream); }
+      @media (max-width:640px){
+        .profile-card{ height:auto; flex-direction:column; align-items:center; }
+        .pc-left{ align-items:center; text-align:center; }
+      }
       .pp-top{ display:flex; gap:18px; align-items:center; justify-content:center; }
       .pp-top .blob-preview{ flex:0 0 96px; width:96px; height:96px; image-rendering:pixelated;
         background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }

@@ -374,7 +374,7 @@ export class Menu {
     wrap.replaceChildren();
     if (this.auth && this.auth.isSignedIn) {
       wrap.appendChild(this.accountChip());
-      wrap.appendChild(el("p", "id-note", "progress, cosmetics & leaderboard runs are saved to this account"));
+      wrap.appendChild(el("p", "id-note", "progress, cosmetics & leaderboard runs are saved to this account — manage it in PROFILE"));
     } else if (this.auth && this.auth.isCompletingSignIn) {
       wrap.appendChild(el("p", "id-note id-pending", "signing you in with Google\u2026"));
     } else {
@@ -383,6 +383,8 @@ export class Menu {
     }
   }
 
+  // The account chip is pure DISPLAY (avatar + name). Sign-out lives on the own-profile
+  // Overview — account management belongs to the profile surface, not the launchpad.
   private accountChip(): HTMLElement {
     const box = el("div", "account");
     const av = document.createElement("img");
@@ -394,9 +396,7 @@ export class Menu {
     const name = el("div", "account-name", this.session.name || "signed in");
     const sub = el("div", "account-sub", "google account");
     info.append(name, sub);
-    const out = el("button", "secondary account-out", "sign out");
-    out.addEventListener("click", () => void this.doSignOut());
-    box.append(av, info, out);
+    box.append(av, info);
     void this.hydrateAccount(av, name);
     return box;
   }
@@ -479,6 +479,7 @@ export class Menu {
         el("span", "lb-dot"),
         el("span", "lb-name skel", "\u2014"),
         el("span", "lb-floor", ""),
+        el("span", "lb-arrow", "\u203a"),
       );
       rows.push(row);
       box.appendChild(row);
@@ -509,7 +510,7 @@ export class Menu {
       floor.textContent = `FL ${entry.floor}`;
       row.disabled = false;
       row.setAttribute("aria-label", `${displayName} \u2014 floor ${entry.floor} \u2014 view profile`);
-      row.onclick = () => this.showPlayerProfile(entry, () => backTo(i));
+      row.onclick = () => this.showPlayerProfile(entry, i + 1, () => backTo(i));
     }
     if (entries === null) setNote("leaderboard unavailable \u2014 check your connection");
     else if (entries.length === 0) setNote("no runs on the board yet \u2014 yours could be first");
@@ -612,49 +613,117 @@ export class Menu {
     void this.fetchLeaderboard(onStall).then((entries) => this.fillLeaderboardRows(rows, setNote, entries, backTo));
   }
 
-  // A leaderboard player's public profile: their blob's look and that run's build. Only
-  // leaderboard-entry data renders here — name/appearance/run stats, nothing account-side.
-  showPlayerProfile(entry: LeaderboardEntryDoc, onBack: () => void) {
-    const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", (entry.name.trim() || "anonymous blob").toUpperCase()));
-    // The worn title (a reserved line even when bare — the header never shifts between
-    // titled and untitled players), then the context line.
-    wrap.appendChild(el("p", "worn-title", titleTextOf(entry.title)));
-    wrap.appendChild(el("p", "muted", "best run on the global leaderboard"));
+  // ---- the shared profile card -----------------------------------------------------------
+  //
+  // ONE fixed-geometry surface (~640x430 desktop) for every profile view, own or read-only.
+  // Attention order: (1) the 192px appearance stage + name on the left, (2) the ranked Top
+  // Run + exact build on the right, (3) lifetime stats last. Every region is reserved from
+  // first paint — loading/private/no-snapshot states swap content inside identical boxes.
+  private profileCard(look: BlobLook, name: string, title: string | null): {
+    card: HTMLElement;
+    setLook: (look: BlobLook) => void;
+    nameEl: HTMLElement;
+    titleEl: HTMLElement;
+    rankEl: HTMLElement;
+    leftSlot: HTMLElement;
+    setTopRun: (entry: { floor: number; kills: number; coins: number; durationMs: number } | null) => void;
+    setBuild: (build: { weapons: string[]; items: Array<{ id: string; count: number }> } | null, emptyNote: string) => void;
+    setLifetime: (p: { deepestFloor: number; totalKills: number; totalCoins: number; gamesPlayed: number } | { note: string }) => void;
+  } {
+    const card = el("div", "profile-card");
 
-    const top = el("div", "pp-top");
-    const look = lookOf({ hat: entry.hat, face: entry.face, body: entry.body, title: entry.title }, entry.colorIndex);
-    const preview = createBlobPreview(look, 96);
-    top.appendChild(preview.el);
-    const grid = el("div", "profile-grid");
-    const stat = (label: string, value: string, isAmber = false) => {
+    // LEFT: the appearance stage (fixed 192), then name / worn title / rank line.
+    const left = el("div", "pc-left");
+    const stage = el("div", "blob-stage");
+    const preview = createBlobPreview(look, 192);
+    stage.appendChild(preview.el);
+    const nameEl = el("div", "pc-name", (name.trim() || "anonymous blob").toUpperCase());
+    const titleEl = el("p", "worn-title", titleTextOf(title));
+    const rankEl = el("p", "pc-rank", "");
+    const leftSlot = el("div", "pc-left-slot");
+    left.append(stage, nameEl, titleEl, rankEl, leftSlot);
+
+    // RIGHT: top run, the exact run build, then lifetime.
+    const right = el("div", "pc-right");
+    right.appendChild(el("div", "col-h", "top run"));
+    const runGrid = el("div", "profile-grid pc-run");
+    const runCells = new Map<string, HTMLElement>();
+    for (const label of ["floor", "kills", "coins", "time"]) {
       const cell = el("div", "stat");
-      const v = el("span", "stat-value", value);
-      if (isAmber) v.classList.add("amber");
+      const v = el("span", "stat-value skel", "\u2014");
+      if (label === "floor") v.classList.add("amber");
       cell.append(v, el("span", "stat-label", label));
-      grid.appendChild(cell);
-    };
-    stat("floor", String(entry.floor), true);
-    stat("kills", String(entry.kills));
-    stat("coins", String(entry.coins));
-    stat("time", entry.durationMs > 0 ? fmtClock(entry.durationMs / 1000) : "\u2014");
-    top.appendChild(grid);
-    wrap.appendChild(top);
+      runCells.set(label, v);
+      runGrid.appendChild(cell);
+    }
+    right.appendChild(runGrid);
+    right.appendChild(el("div", "col-h", "that run's build"));
+    const build = el("div", "build-strip pc-build");
+    right.appendChild(build);
+    right.appendChild(el("div", "col-h", "lifetime \u2014 all time"));
+    const lifetime = el("div", "pc-lifetime");
+    right.appendChild(lifetime);
 
-    wrap.appendChild(el("div", "col-h", "that run's build"));
-    const build = el("div", "build-strip");
-    for (const id of entry.weapons) build.appendChild(el("span", "build-chip weapon", weaponName(id)));
-    for (const it of entry.items) {
-      const def = itemById(it.id);
-      const label = def ? (it.count > 1 ? `${def.name} Lv${it.count}` : def.name) : it.id;
-      const chip = el("span", "build-chip", label);
-      if (def) chip.style.setProperty("--t", def.tint);
-      build.appendChild(chip);
-    }
-    if (entry.weapons.length === 0 && entry.items.length === 0) {
-      build.appendChild(el("span", "muted", "no build recorded for this run"));
-    }
-    wrap.appendChild(build);
+    card.append(left, right);
+
+    const setTopRun = (entry: { floor: number; kills: number; coins: number; durationMs: number } | null) => {
+      runCells.forEach((v) => v.classList.remove("skel"));
+      runCells.get("floor")!.textContent = entry ? String(entry.floor) : "\u2014";
+      runCells.get("kills")!.textContent = entry ? String(entry.kills) : "\u2014";
+      runCells.get("coins")!.textContent = entry ? String(entry.coins) : "\u2014";
+      runCells.get("time")!.textContent = entry && entry.durationMs > 0 ? fmtClock(entry.durationMs / 1000) : "\u2014";
+    };
+    const setBuild = (b: { weapons: string[]; items: Array<{ id: string; count: number }> } | null, emptyNote: string) => {
+      build.replaceChildren();
+      if (!b || (b.weapons.length === 0 && b.items.length === 0)) {
+        build.appendChild(el("span", "muted", emptyNote));
+        return;
+      }
+      for (const id of b.weapons) build.appendChild(el("span", "build-chip weapon", weaponName(id)));
+      for (const it of b.items) {
+        const def = itemById(it.id);
+        const label = def ? (it.count > 1 ? `${def.name} Lv${it.count}` : def.name) : it.id;
+        const chip = el("span", "build-chip", label);
+        if (def) chip.style.setProperty("--t", def.tint);
+        build.appendChild(chip);
+      }
+    };
+    const setLifetime = (p: { deepestFloor: number; totalKills: number; totalCoins: number; gamesPlayed: number } | { note: string }) => {
+      lifetime.replaceChildren();
+      if ("note" in p) {
+        lifetime.appendChild(el("p", "muted pc-life-note", p.note));
+        return;
+      }
+      const grid = el("div", "profile-grid pc-life");
+      const stat = (label: string, value: number) => {
+        const cell = el("div", "stat");
+        cell.append(el("span", "stat-value", String(value)), el("span", "stat-label", label));
+        grid.appendChild(cell);
+      };
+      stat("deepest", p.deepestFloor);
+      stat("kills", p.totalKills);
+      stat("coins", p.totalCoins);
+      stat("runs", p.gamesPlayed);
+      lifetime.appendChild(grid);
+    };
+
+    return { card, setLook: (l) => preview.setLook(l), nameEl, titleEl, rankEl, leftSlot, setTopRun, setBuild, setLifetime };
+  }
+
+  // A leaderboard player's READ-ONLY profile: their blob's look and that run's snapshot.
+  // Only leaderboard-entry data renders here — name/appearance/run stats, nothing
+  // account-side, and no edit controls of any kind.
+  showPlayerProfile(entry: LeaderboardEntryDoc, rank: number, onBack: () => void) {
+    const wrap = el("div", "menu");
+    wrap.appendChild(el("div", "col-h pc-context", "player profile \u2014 read only"));
+    const look = lookOf({ hat: entry.hat, face: entry.face, body: entry.body, title: entry.title }, entry.colorIndex);
+    const card = this.profileCard(look, entry.name, entry.title);
+    card.rankEl.textContent = `rank #${rank} \u00b7 best FL ${entry.floor}`;
+    card.setTopRun(entry);
+    card.setBuild(entry, "no build recorded for this run");
+    // Lifetime stats are each blob's own business — the public schema carries run data only.
+    card.setLifetime({ note: "lifetime stats are private to each blob" });
+    wrap.appendChild(card.card);
 
     const row = el("div", "btnrow");
     const back = el("button", "secondary", "back");
@@ -665,57 +734,140 @@ export class Menu {
     this.bindEscape(onBack);
   }
 
-  // ---- OWN PROFILE + WARDROBE ----------------------------------------------------------
+  // ---- OWN PROFILE (Overview + Closet on the SAME surface) --------------------------------
   //
-  // The player's own destination: all-time stats plus the wardrobe — every SHIPPED cosmetic
-  // slot (COSMETIC_SLOTS: body color, hats, face, titles) with explicit equipped/owned/
-  // locked states. Cosmetics are trophies you wear: purely visual, achievement-unlocked,
-  // never currency or power. Equipping persists locally at once and onto the profile in the
-  // background (multiplayer identity picks the overlays up at the next ticket mint). The
-  // wardrobe lives HERE, off the launch menu, by design.
+  // The player's own destination reuses the read-only profile card, plus what only an owner
+  // gets: the CUSTOMIZE BLOB door, the Overview/Closet views, and the account controls
+  // (the account chip + sign-out live HERE, not on the title). The Closet carries every
+  // SHIPPED cosmetic slot (COSMETIC_SLOTS) with explicit equipped/owned/locked states —
+  // trophies you wear, purely visual, achievement-unlocked.
 
-  async showProfile() {
+  async showProfile(view: "overview" | "closet" = "overview") {
     const wrap = el("div", "menu");
-    wrap.appendChild(el("h1", "", "YOUR BLOB"));
-    // The worn title, reserved even when bare so equipping never shifts the header.
-    const ownTitle = el("p", "worn-title", titleTextOf(this.session.cosmetics.title));
-    wrap.appendChild(ownTitle);
+    const tabs = el("div", "pc-tabs");
+    const overviewTab = el("button", `secondary pc-tab${view === "overview" ? " on" : ""}`, "OVERVIEW");
+    overviewTab.addEventListener("click", () => void this.showProfile("overview"));
+    const closetTab = el("button", `secondary pc-tab${view === "closet" ? " on" : ""}`, "CLOSET");
+    closetTab.addEventListener("click", () => void this.showProfile("closet"));
+    tabs.append(overviewTab, closetTab);
+    wrap.appendChild(tabs);
 
+    const goBack = () => void this.showTitle({ dest: "profile" });
+
+    if (view === "overview") this.buildOwnOverview(wrap);
+    else this.buildCloset(wrap);
+
+    const row = el("div", "btnrow");
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", goBack);
+    row.appendChild(back);
+    wrap.appendChild(row);
+    this.show(wrap);
+    this.bindEscape(goBack);
+
+    if (view === "overview") void this.hydrateOwnOverview();
+    else void this.hydrateCloset();
+  }
+
+  // The Overview: the shared profile card with the owner's extras. Every async region
+  // hydrates inside its reserved box (top run + build from the caller's own charted entry,
+  // lifetime from the profile), and unavailable states stay honest.
+  private ownCard: ReturnType<Menu["profileCard"]> | null = null;
+
+  private buildOwnOverview(wrap: HTMLElement) {
+    const card = this.profileCard(
+      lookOf(this.session.cosmetics, this.session.colorIndex),
+      this.session.name || "blob",
+      this.session.cosmetics.title,
+    );
+    this.ownCard = card;
+    const customize = el("button", "secondary pc-customize", "CUSTOMIZE BLOB");
+    customize.addEventListener("click", () => void this.showProfile("closet"));
+    card.leftSlot.appendChild(customize);
+    wrap.appendChild(card.card);
+
+    // The account region (owner-only): chip + sign-out for accounts, the honest guest /
+    // offline line otherwise. Reserved height either way.
+    const account = el("div", "pc-account");
+    if (this.auth?.isSignedIn) {
+      account.appendChild(this.accountChip());
+      const out = el("button", "secondary account-out", "sign out");
+      out.addEventListener("click", () => void this.doSignOut());
+      account.appendChild(out);
+    } else {
+      account.appendChild(el("p", "muted id-note",
+        this.client
+          ? "playing as guest \u2014 sign in from the title screen to keep this blob across devices"
+          : "offline build \u2014 your closet is saved on this device"));
+    }
+    wrap.appendChild(account);
+  }
+
+  private async hydrateOwnOverview() {
+    const card = this.ownCard;
+    if (!card) return;
+    if (!this.client) {
+      card.setTopRun(null);
+      card.setBuild(null, "no charted run yet \u2014 go on down");
+      card.setLifetime({ note: "stats live on the server \u2014 offline build" });
+      return;
+    }
+    // Lifetime (and identity adoption) from the profile row; card regions fill in place.
+    try {
+      const profile = await this.session.login(this.session.name || "blob");
+      if (profile) {
+        card.nameEl.textContent = (profile.name.trim() || "blob").toUpperCase();
+        card.titleEl.textContent = titleTextOf(profile.cosmetics.title);
+        card.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+        card.setLifetime(profile);
+      }
+    } catch {
+      card.setLifetime({ note: "stats unavailable \u2014 check your connection" });
+    }
+    // The caller's own charted best (same public shape a leaderboard click renders).
+    try {
+      const mine = await this.client.query(api.leaderboard.mine, { clientId: this.session.clientId });
+      if (mine) {
+        card.rankEl.textContent = mine.rank !== null
+          ? `rank #${mine.rank} \u00b7 best FL ${mine.entry.floor}`
+          : `best FL ${mine.entry.floor} \u00b7 below the top 50`;
+        card.setTopRun(mine.entry);
+        card.setBuild(mine.entry, "no build recorded for this run");
+      } else {
+        card.rankEl.textContent = "no charted run yet";
+        card.setTopRun(null);
+        card.setBuild(null, "no charted run yet \u2014 go on down");
+      }
+    } catch {
+      card.setTopRun(null);
+      card.setBuild(null, "top run unavailable \u2014 check your connection");
+    }
+  }
+
+  // The Closet: every shipped slot with equipped/owned/locked states and the live mirror.
+  private closetSyncFns: Array<() => void> = [];
+  private closetSyncPreview: (() => void) | null = null;
+
+  private buildCloset(wrap: HTMLElement) {
     const top = el("div", "pp-top");
     const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96);
     top.appendChild(preview.el);
-    const grid = el("div", "profile-grid");
-    const cells = new Map<string, HTMLElement>();
-    for (const label of ["deepest", "kills", "coins", "runs"]) {
-      const cell = el("div", "stat");
-      const v = el("span", "stat-value skel", "\u2014");
-      if (label === "deepest") v.classList.add("amber");
-      cell.append(v, el("span", "stat-label", label));
-      cells.set(label, v);
-      grid.appendChild(cell);
-    }
-    top.appendChild(grid);
+    const ownTitle = el("p", "worn-title", titleTextOf(this.session.cosmetics.title));
+    const info = el("div", "you-info");
+    info.append(el("span", "you-name", this.session.name || "blob"), ownTitle);
+    top.appendChild(info);
     wrap.appendChild(top);
 
-    const accountLine = el("p", "muted id-note",
-      this.auth?.isSignedIn
-        ? "saved to your google account \u2014 every device sees this blob"
-        : this.client
-          ? "playing as guest \u2014 sign in from the title screen to keep this blob across devices"
-          : "offline build \u2014 your closet is saved on this device");
-    wrap.appendChild(accountLine);
-
-    // ---- the wardrobe: exactly the shipped slots, in catalog order ----
     const note = el("p", "muted closet-note", "");
     const syncPreview = () => {
       preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
       ownTitle.textContent = titleTextOf(this.session.cosmetics.title);
     };
-    // A locked pick previews the TENTATIVE loadout on the mirror (visual slots) without
-    // ever equipping it.
+    this.closetSyncPreview = syncPreview;
+    // A locked pick previews the TENTATIVE loadout on the mirror without ever equipping it.
     const previewLoadout = (tentative: CosmeticLoadout) => preview.setLook(lookOf(tentative, this.session.colorIndex));
 
-    const syncFns: Array<() => void> = [];
+    this.closetSyncFns = [];
     for (const slotDef of COSMETIC_SLOTS) {
       if (slotDef.slot === "body") {
         // Body color renders as the swatch row (one pick drives the cosmetic body item
@@ -725,38 +877,23 @@ export class Menu {
       }
       wrap.appendChild(el("div", "col-h", slotDef.label));
       const { rowEl, sync } = this.closetRow(slotDef.slot, slotDef.noneLabel, note, syncPreview, previewLoadout);
-      syncFns.push(sync);
+      this.closetSyncFns.push(sync);
       wrap.appendChild(rowEl);
     }
     wrap.appendChild(note);
+  }
 
-    const row = el("div", "btnrow");
-    const goBack = () => void this.showTitle({ dest: "profile" });
-    const back = el("button", "secondary", "back");
-    back.addEventListener("click", goBack);
-    row.appendChild(back);
-    wrap.appendChild(row);
-    this.show(wrap);
-    this.bindEscape(goBack);
-
-    // Hydrate stats + unlock states in place (fixed geometry; a dead backend just leaves
-    // the placeholders and the locked states, never an error screen).
-    if (this.client) {
-      try {
-        const profile = await this.session.login(this.session.name || "blob");
-        if (profile) {
-          cells.forEach((v) => v.classList.remove("skel"));
-          cells.get("deepest")!.textContent = String(profile.deepestFloor);
-          cells.get("kills")!.textContent = String(profile.totalKills);
-          cells.get("coins")!.textContent = String(profile.totalCoins);
-          cells.get("runs")!.textContent = String(profile.gamesPlayed);
-        }
-        this.syncColorRow?.();
-        for (const sync of syncFns) sync();
-        syncPreview();
-      } catch {
-        // placeholders stand
-      }
+  private async hydrateCloset() {
+    // Refresh unlock states in place (fixed geometry; a dead backend just leaves the
+    // locked states standing, never an error screen).
+    if (!this.client) return;
+    try {
+      await this.session.login(this.session.name || "blob");
+      this.syncColorRow?.();
+      for (const sync of this.closetSyncFns) sync();
+      this.closetSyncPreview?.();
+    } catch {
+      // locked states stand
     }
   }
 

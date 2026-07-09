@@ -143,6 +143,8 @@ export const api = {
     top: makeFunctionReference<"query", { limit?: number }, LeaderboardEntryDoc[]>("leaderboard:top"),
     // The caller's OWN charted standing (rank null = below the ranked window).
     standing: makeFunctionReference<"query", { clientId: string }, { floor: number; kills: number; rank: number | null } | null>("leaderboard:standing"),
+    // The caller's OWN full charted entry + window rank (the own-profile Top Run card).
+    mine: makeFunctionReference<"query", { clientId: string }, { entry: LeaderboardEntryDoc; rank: number | null } | null>("leaderboard:mine"),
   },
   auth: {
     signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),

@@ -123,6 +123,7 @@ interface FakeOpts {
   profile?: ProfileDoc;
   lb?: LeaderboardEntryDoc[] | "fail";
   standing?: { floor: number; kills: number; rank: number | null } | null | "fail";
+  mine?: { entry: LeaderboardEntryDoc; rank: number | null } | null | "fail";
 }
 
 // The menu's Convex surface, routed by function name: profile upserts/reads resolve to the
@@ -138,6 +139,9 @@ function fakeConvex(opts: FakeOpts = {}): ConvexClient {
       }
       if (name === "leaderboard:standing") {
         return opts.standing === "fail" ? Promise.reject(new Error("offline")) : Promise.resolve(opts.standing ?? null);
+      }
+      if (name === "leaderboard:mine") {
+        return opts.mine === "fail" ? Promise.reject(new Error("offline")) : Promise.resolve(opts.mine ?? null);
       }
       if (name === "players:getProfile") return Promise.resolve(profile);
       return Promise.resolve(null);
@@ -369,13 +373,20 @@ async function main(): Promise<void> {
     check("row is clickable", typeof row.onclick === "function");
     row.onclick?.();
     const all = textOf(overlay);
-    check("profile headline is the player", all.includes("ADA"));
+    check("the fixed profile card renders", byClass(overlay, "profile-card").length === 1);
+    check("the 192px appearance stage exists", byClass(overlay, "blob-stage").length === 1);
+    check("appearance/name lead the card", all.includes("ADA"));
+    check("the ranked result rides the left column", all.includes("rank #1") && all.includes("best FL 12"));
+    check("read-only context is explicit", all.includes("read only"));
     check("best-run stats shown", all.includes("12") && all.includes("230"));
     check("build shows the run's weapons by display name", all.includes(WEAPONS.pistol.name) && all.includes(WEAPONS.shotgun.name));
     const itemName = itemById("hair_trigger")?.name ?? "";
     check("build shows blessings with levels", itemName.length > 0 && all.includes(`${itemName} Lv2`));
     check("the SNAPSHOTTED worn title shows on the profile", all.includes("Depth Diver"));
-    check("a back action exists", buttonsOf(overlay).some((b) => b === "back"));
+    check("lifetime stats are an honest PRIVATE state (never faked)", all.includes("lifetime stats are private"));
+    const btns = buttonsOf(overlay);
+    check("a back action exists", btns.some((b) => b === "back"));
+    check("NO edit controls on another player's profile", !btns.some((b) => b.includes("CUSTOMIZE") || b === "sign out" || b.includes("OVERVIEW") || b.includes("CLOSET")));
     check("no account/private fields leak (name/appearance/run data only)", !all.includes("@") && !all.toLowerCase().includes("email"));
 
     // Retired-id fallback: the historical row renders safely — the retired title is HIDDEN
@@ -446,7 +457,7 @@ async function main(): Promise<void> {
     await settle();
     const row1 = byClass(overlay, "lb-row")[1];
     row1.onclick?.();
-    check("player profile open", textOf(overlay).includes("best run on the global leaderboard"));
+    check("player profile open", textOf(overlay).includes("read only"));
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
     check("Escape restores focus to the originating leaderboard row", lastFocused()?.className?.includes("lb-row") === true, lastFocused()?.className);
@@ -472,7 +483,7 @@ async function main(): Promise<void> {
     auth.setSignedIn(true);
     auth.fire();
     const playAfter = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
-    check("the exchange settles into the account chip in place", buttonsOf(overlay).some((b) => b === "sign out"));
+    check("the exchange settles into the account chip in place", byClass(overlay, "account").length === 1);
     check("the shell around the identity card is NOT rebuilt (same play node)", playBefore === playAfter);
 
     // The failure path settles into the guest CTA instead — same box.
@@ -514,15 +525,50 @@ async function main(): Promise<void> {
 
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
-    check("signed-in shows the account chip", buttonsOf(signed.overlay).some((b) => b === "sign out"));
+    check("signed-in shows the account chip (display only)", byClass(signed.overlay, "account").length === 1);
+    check("sign-out does NOT live on the title (it belongs to the profile)", !buttonsOf(signed.overlay).some((b) => b === "sign out"));
     check("signed-in has NO sign-in CTA", !buttonsOf(signed.overlay).some((b) => b.includes("Sign in with Google")));
     check("signed-in states what the account holds", textOf(signed.overlay).includes("saved to this account"));
+  }
+
+  section("own profile Overview: the same fixed surface, owner extras, real data only");
+  {
+    const MINE = { entry: { ...LB_ENTRIES[0], name: "blob" }, rank: 4 };
+    const { menu, overlay } = makeMenu({
+      auth: fakeAuth(true),
+      profile: makeProfile({ deepestFloor: 12, totalKills: 230, totalCoins: 90, gamesPlayed: 8 }),
+      mine: MINE,
+    });
+    await menu.showProfile();
+    await settle();
+    const all = textOf(overlay);
+    check("the SAME fixed card surface renders", byClass(overlay, "profile-card").length === 1 && byClass(overlay, "blob-stage").length === 1);
+    check("CUSTOMIZE BLOB is the closet door", buttonsOf(overlay).some((b) => b === "CUSTOMIZE BLOB"));
+    check("Overview/Closet tabs exist", buttonsOf(overlay).some((b) => b === "OVERVIEW") && buttonsOf(overlay).some((b) => b === "CLOSET"));
+    check("own ranked result from the REAL charted entry", all.includes("rank #4") && all.includes("best FL 12"));
+    check("own top-run build renders", all.includes(WEAPONS.pistol.name));
+    check("REAL lifetime stats render (deepest/kills/coins/runs)", all.includes("230") && all.includes("8"));
+    check("account + sign-out live HERE", byClass(overlay, "account").length === 1 && buttonsOf(overlay).some((b) => b === "sign out"));
+
+    // Uncharted guest: every region keeps its box with honest empty states.
+    const fresh = makeMenu({ mine: null });
+    await fresh.menu.showProfile();
+    await settle();
+    const freshAll = textOf(fresh.overlay);
+    check("uncharted profile keeps the card with honest states", byClass(fresh.overlay, "profile-card").length === 1 && freshAll.includes("no charted run yet"));
+    check("guest account region is the honest guest line", freshAll.includes("playing as guest"));
+
+    // Failed own-run fetch: same geometry, honest note.
+    const broken = makeMenu({ mine: "fail" });
+    await broken.menu.showProfile();
+    await settle();
+    check("a failed top-run fetch stays honest in the same box", textOf(broken.overlay).includes("top run unavailable"));
   }
 
   section("the wardrobe: every SHIPPED slot, equipped/locked states from real ownership");
   {
     const { menu, overlay, session } = makeMenu();
-    await menu.showProfile();
+    await menu.showProfile("closet");
     await settle();
     const states = byClass(overlay, "cos-state").map(textOf);
     check("the default (none) slots read EQUIPPED (hat/face/title)", states.filter((s) => s === "EQUIPPED").length === 3, states.join("|"));
@@ -544,7 +590,7 @@ async function main(): Promise<void> {
     // the real backend does for owned items).
     const echo = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", face: null, body: null, title: null } }) });
     echo.session.setCosmetic("hat", "hat_top");
-    await echo.menu.showProfile();
+    await echo.menu.showProfile("closet");
     await settle();
     const tiles = byClass(echo.overlay, "cos-tile");
     const topHatTile = tiles.find((t) => textOf(t).includes("Top Hat"));
@@ -552,7 +598,7 @@ async function main(): Promise<void> {
 
     // Ownership unlocks the earned tile.
     const owned = makeMenu({ profile: makeProfile({ unlocks: ["hat_crown"] }) });
-    await owned.menu.showProfile();
+    await owned.menu.showProfile("closet");
     await settle();
     const crownTile = byClass(owned.overlay, "cos-tile").find((t) => textOf(t).includes("Crown"));
     check("a granted unlock stops reading LOCKED", crownTile !== undefined && !textOf(crownTile!).includes("LOCKED"));

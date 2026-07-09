@@ -196,23 +196,40 @@ export const top = query({
   },
 });
 
+// Resolve the caller's own leaderboard row (account-first, else the guest clientId row).
+async function callerRow(ctx: QueryCtx, clientId: string): Promise<Doc<"leaderboard"> | null> {
+  const userId = await getAuthUserId(ctx);
+  const me = userId
+    ? await ctx.db.query("players").withIndex("by_userId", (q) => q.eq("userId", userId)).unique()
+    : await ctx.db.query("players").withIndex("by_clientId", (q) => q.eq("clientId", clientId)).unique();
+  if (!me) return null;
+  return await ctx.db
+    .query("leaderboard")
+    .withIndex("by_player", (q) => q.eq("playerId", me._id))
+    .unique();
+}
+
 // The CALLER's own charted standing (their data, nobody else's): best-run floor/kills plus
 // the rank inside the top window, or rank null when the run sits below it. Null when the
 // caller has no charted run. Powers the title glance's fixed "your best" state line.
 export const standing = query({
   args: { clientId: v.string() },
   handler: async (ctx, { clientId }) => {
-    const userId = await getAuthUserId(ctx);
-    const me = userId
-      ? await ctx.db.query("players").withIndex("by_userId", (q) => q.eq("userId", userId)).unique()
-      : await ctx.db.query("players").withIndex("by_clientId", (q) => q.eq("clientId", clientId)).unique();
-    if (!me) return null;
-    const mine = await ctx.db
-      .query("leaderboard")
-      .withIndex("by_player", (q) => q.eq("playerId", me._id))
-      .unique();
+    const mine = await callerRow(ctx, clientId);
     if (!mine) return null;
     const idx = (await rankedWindow(ctx)).findIndex((d) => d._id === mine._id);
     return { floor: mine.floor, kills: mine.kills, rank: idx >= 0 ? idx + 1 : null };
+  },
+});
+
+// The CALLER's own full charted entry (the same public shape a leaderboard click renders,
+// plus their window rank) — the own-profile Overview's Top Run card. Null when uncharted.
+export const mine = query({
+  args: { clientId: v.string() },
+  handler: async (ctx, { clientId }) => {
+    const row = await callerRow(ctx, clientId);
+    if (!row) return null;
+    const idx = (await rankedWindow(ctx)).findIndex((d) => d._id === row._id);
+    return { entry: toEntry(row), rank: idx >= 0 ? idx + 1 : null };
   },
 });
