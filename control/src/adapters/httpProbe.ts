@@ -88,13 +88,14 @@ export class HttpGameServerProbe implements GameServerProbe {
           players: typeof e.players === "number" && Number.isFinite(e.players) ? e.players : 0,
           tick: typeof e.tick === "number" && Number.isFinite(e.tick) ? e.tick : 0,
           names: Array.isArray(e.names) ? e.names.filter((n): n is string => typeof n === "string") : [],
+          away: Array.isArray(e.away) ? e.away.filter((n): n is string => typeof n === "string") : [],
         });
       }
       return out;
     }
     const h = await this.getJson(`${this.cfg.baseUrl}/healthz`);
     if (h === null) return [];
-    return [{ id: "gs-aggregate", players: numField(h, "players"), tick: 0, names: [] }];
+    return [{ id: "gs-aggregate", players: numField(h, "players"), tick: 0, names: [], away: [] }];
   }
 
   async logs(q: LogQuery): Promise<LogRecord[]> {

@@ -128,6 +128,9 @@ export interface WorldSummary {
   // Who is actually connected to this world (display names) — the ops answer to "did the
   // whole room land in ONE world?" during a multiplayer incident.
   names: string[];
+  // Whose seats are reserved for a reconnect (mid-outage) — the ops answer to "who is
+  // currently dropped and inside their grace window?".
+  away: string[];
 }
 
 // A single redacted structured log line. Values are primitives only (already sanitized).
