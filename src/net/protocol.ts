@@ -286,7 +286,7 @@ function isEnemyKind(v: unknown): v is EnemyKind {
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true, rubble: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
@@ -346,7 +346,6 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   radialBurst: { scope: "pos", fields: { x: "num", y: "num" } },
   bossVolley: { scope: "pos", fields: { x: "num", y: "num" } },
   webPlaced: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
-  pounceFeint: { scope: "pos", fields: { x: "num", y: "num", r: "num", dur: "num" } },
   bossAddSpawn: { scope: "pos", fields: { eid: "num", x: "num", y: "num", mx: "num", my: "num", spawned: "bool" } },
   // Global: shared-objective transitions every client must see regardless of distance.
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
@@ -765,7 +764,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0, rubbleLane: 0 }
+      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0 }
       : null,
   };
 }

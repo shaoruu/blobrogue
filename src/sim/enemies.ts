@@ -9,7 +9,7 @@ import {
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR, MAX_COMPLEX_MOVERS_ACTIVE,
-  MAX_BURROWERS_PER_ROOM, FLOCK_THREAT_SHARE_MAX,
+  MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, FLOCK_THREAT_SHARE_MAX,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 
@@ -73,22 +73,22 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   },
   // Line-rush bruiser: a slow stalker whose telegraphed straight charge crosses most of a
   // room — sidestep it, then punish the wall-crash stun. Heavy on its feet (high kbResist),
-  // so the answer is footwork, not knockback. Complex MOVEMENT (studio gate §2): its
-  // standard cost carries the ×2 complexity multiplier.
+  // so the answer is footwork, not knockback. The corrected gate pins the in-flight base
+  // (threat 1.5, like every special-answer mob).
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: charger).
   charger: {
     kind: "charger", sprite: "charger", movement: "charge", isPhasing: false,
     radius: 17, drawSize: 48, alpha: 1, tint: "#d9a066", kbResist: 1.8,
-    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 2.0,
+    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 1.5,
   },
   // Kite-denial: dives underground (untargetable, bounded), tunnels to the target, and
   // erupts on a marked, telegraphed circle. You cannot outrange it — you dodge its marker
-  // and punish the surfaced recover window. Complex movement: ×2 cost, like the charger.
+  // and punish the surfaced recover window.
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: burrower).
   burrower: {
     kind: "burrower", sprite: "burrower", movement: "burrow", isPhasing: false,
     radius: 15, drawSize: 44, alpha: 1, tint: "#caa27e", kbResist: 1.2,
-    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 2.0,
+    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 1.5,
   },
   // Ring strafer: circles the target at mid range (rotational tracking — a different aim
   // problem from the spitter's straight kiting) and stops to fire a quick telegraphed bolt.
@@ -295,7 +295,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         phase: 1, transitionsDone: 0, roar: null,
         addTimer: BOSS_ADD_FIRST_AT[kind] ?? 0,
         attackCount: 0, isNextRadial: false, burstParity: 0,
-        beatAddIds: [], spinCount: 0, rubbleLane: 0,
+        beatAddIds: [], spinCount: 0,
       }
       : null,
   };
@@ -312,22 +312,13 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt,
 };
 
-// The curriculum's one-new-lesson-per-floor family introductions (spec §2), mapped onto
-// the runtime roster. Every floor introduces AT MOST one new family; the in-between
-// floors are synthesize/remix floors by design.
-//   F1  slime     — HUNT establishes.
-//   F2  bat       — FLOCK discovers (the skeleton rides along as the HUNT family's
-//                    "guaranteed melee" escalation, not a new family).
-//   F3  spitter   — the ranged CHOOSE lesson (the first Dealer also lands on F3).
-//   F7  ghost     — the evasive drifter holds the curriculum's FLEE/BAIT lesson slot
-//                    (Knellbat has no runtime kind yet — see PR notes).
-//   F8  shielder  — SHIELD counter-lesson, exactly the curriculum floor.
-//   F11 charger   — HUNT-commit introduced alone (Sunless arrival), exactly per spec.
-//   F12 burrower  — BURROW / Rattleback ground-reading, exactly per spec.
-//   F17 orbiter   — the ORBIT track lesson slot (Seamwalker's floor in the spec).
+// The corrected gate §2 cadence table (authoritative over earlier drafts): F1 slime only,
+// F2 expands (bat, skeleton, spitter — the bat flock's first isolated floor), F3 remixes
+// (+ghost, charger), F4 proves (+burrower, first guaranteed brute), F6 recovers with the
+// orbiter's isolated teaching room, F7 adapts with the shielder wall.
 export const FAMILY_INTRO_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = {
-  slime: 1, bat: 2, skeleton: 2, spitter: 3, ghost: 7, shielder: 8,
-  charger: 11, burrower: 12, orbiter: 17,
+  slime: 1, bat: 2, skeleton: 2, spitter: 2, ghost: 3, charger: 3,
+  burrower: 4, orbiter: 6, shielder: 7,
 };
 
 function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
@@ -335,13 +326,14 @@ function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKi
   const has = (kind: EnemyKind): boolean => floor >= (FAMILY_INTRO_FLOOR[kind] ?? Infinity);
   if (has("bat")) roster.push({ kind: "bat", weight: 3 });
   if (has("skeleton")) roster.push({ kind: "skeleton", weight: 2 });
-  // Ranged pressure grows once the melee reads are learned; Sunless raises the share.
-  if (has("spitter")) roster.push({ kind: "spitter", weight: (floor >= 5 ? 2 : 1) * complexShare });
+  // Ranged threat: rare on its intro floor (a gentle lesson), a bit more common from
+  // floor 3 once the melee lunge is learned. Sunless raises the complex share.
+  if (has("spitter")) roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
   if (has("ghost")) roster.push({ kind: "ghost", weight: 2 * complexShare });
-  if (has("shielder")) roster.push({ kind: "shielder", weight: 2 });
   if (has("charger")) roster.push({ kind: "charger", weight: 2 });
   if (has("burrower")) roster.push({ kind: "burrower", weight: 2 * complexShare });
   if (has("orbiter")) roster.push({ kind: "orbiter", weight: 2 * complexShare });
+  if (has("shielder")) roster.push({ kind: "shielder", weight: 2 });
   return roster;
 }
 
@@ -473,6 +465,7 @@ interface RoomLoad {
   units: number;
   complex: number;
   burrowers: number;
+  shielders: number;
   hasBrute: boolean;
   hasElite: boolean;
 }
@@ -500,7 +493,7 @@ function planFloorUnits(rng: Rng, seed: number, floor: number, roomCount: number
   const deck = encounterDeckForFloor(seed, floor, combatRooms.length);
   const load = new Map<number, RoomLoad>();
   for (let i = 0; i < combatRooms.length; i++) {
-    load.set(combatRooms[i], { card: deck[i], units: 0, complex: 0, burrowers: 0, hasBrute: false, hasElite: false });
+    load.set(combatRooms[i], { card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, hasBrute: false, hasElite: false });
   }
   // §4: at most 35% of the floor's rooms may carry TWO complex units.
   let twoComplexRooms = 0;
@@ -518,6 +511,10 @@ function planFloorUnits(rng: Rng, seed: number, floor: number, roomCount: number
       if (l.complex === 1 && twoComplexRooms >= twoComplexCap) return false;
     }
     if (unit.kind === "burrower" && l.burrowers >= MAX_BURROWERS_PER_ROOM) return false;
+    if (unit.kind === "shielder" && l.shielders >= MAX_SHIELDERS_PER_ROOM) return false;
+    // Corrected gate §2 tier cadence: one brute and one elite per room.
+    if (unit.tier === "brute" && l.hasBrute) return false;
+    if (unit.tier === "elite" && l.hasElite) return false;
     if (floor < BRUTE_ELITE_COMBO_FLOOR) {
       if (unit.tier === "brute" && l.hasElite) return false;
       if (unit.tier === "elite" && l.hasBrute) return false;
@@ -533,6 +530,7 @@ function planFloorUnits(rng: Rng, seed: number, floor: number, roomCount: number
       if (l.complex === 2) twoComplexRooms++;
     }
     if (unit.kind === "burrower") l.burrowers++;
+    if (unit.kind === "shielder") l.shielders++;
     if (unit.tier === "brute") l.hasBrute = true;
     if (unit.tier === "elite") l.hasElite = true;
     return room;

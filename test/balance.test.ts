@@ -24,7 +24,7 @@ import { generateDungeon } from "../src/sim/dungeon.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  CAPS, TIERS,
+  GAUNTLET, gauntletCaptainHp, CAPS, TIERS,
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, choirHpForFloor,
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
@@ -165,11 +165,10 @@ interface BossGateRow {
   beatCap: number;
 }
 
-// Gate §3 rows at the curriculum's corrected first-clear chain (King F5 / Gauntlet F10 /
-// Marrow F15 / Weaver F20 / Warden F25 / Choir F30 — the Warden holds the armored slot;
-// Jet stays post-F30 content). Median builds model expected power at each depth;
-// high-roll = the representative aggressive build (smg + Deadeye Lv3 + the depth's
-// Glass Cannon stack).
+// The corrected gate §3 rows at the locked first-clear chain (King F5 / Gauntlet F10 /
+// Marrow F15 / Weaver F20 / Warden F25 / Choir F30 — Jet stays post-F30 content).
+// Median builds model expected power at each depth; high-roll = the representative
+// aggressive build (smg + Deadeye Lv3 + the depth's Glass Cannon stack).
 const BOSS_GATE_ROWS: readonly BossGateRow[] = [
   {
     kind: "boss", floor: 5, medianWeapon: "pistol", medianBuild: L3("hair_trigger"),
@@ -178,38 +177,41 @@ const BOSS_GATE_ROWS: readonly BossGateRow[] = [
   },
   {
     kind: "marrow", floor: 15, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    medianBand: [38, 52], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 22,
+    medianBand: [35, 50], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
     forcedEach: MARROW.shieldMinDuration, beatCap: MARROW.shieldDuration,
   },
   {
     kind: "weaver", floor: 20, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    medianBand: [40, 55], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 22,
+    medianBand: [38, 55], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
     forcedEach: WEAVER.moltDuration, beatCap: WEAVER.moltDuration,
   },
   {
     kind: "gilded", floor: 25, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    medianBand: [42, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 24,
+    medianBand: [40, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
     forcedEach: GILDED.sanctifyDuration, beatCap: GILDED.sanctifyDuration,
   },
   {
     kind: "choir", floor: 30, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    medianBand: [45, 65], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 25,
+    medianBand: [40, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
     forcedEach: CHOIR.splitMinDuration, beatCap: CHOIR.splitDuration,
   },
 ];
 
 function bossLadderGates(): void {
-  section("gate §3 HP anchors at the curriculum's authored floors (curve clamps at F10)");
-  check("F5 King HP is 950 (gate initial 900 recalibrated by arsenal telemetry — see PR)",
+  section("corrected gate §3 HP anchors at the locked chain floors (curve clamps at F10)");
+  check("F5 King HP is 950 (the corrected gate's pinned in-flight value)",
     bossHpForFloor(5) === BOSS.baseHp && BOSS.baseHp === 950, `hp=${bossHpForFloor(5)}`);
-  check("F15 Marrow HP is exactly the gate's 1,260 initial", marrowHpForFloor(15) === 1260, `hp=${marrowHpForFloor(15)}`);
-  check("F20 Weaver anchor holds at its curriculum floor", weaverHpForFloor(20) === WEAVER.baseHp, `hp=${weaverHpForFloor(20)}`);
-  check("F25 Warden anchor holds at its curriculum floor", gildedHpForFloor(25) === GILDED.baseHp, `hp=${gildedHpForFloor(25)}`);
-  check("F30 Choir HP is exactly the gate's 1,800 initial", choirHpForFloor(30) === 1800, `hp=${choirHpForFloor(30)}`);
+  check("F15 Marrow HP is exactly the corrected gate's 1,250", marrowHpForFloor(15) === 1250, `hp=${marrowHpForFloor(15)}`);
+  check("F20 Weaver anchor holds at its chain floor (telemetry-recalibrated per §3)",
+    weaverHpForFloor(20) === WEAVER.baseHp, `hp=${weaverHpForFloor(20)}`);
+  check("F25 Warden anchor holds at its chain floor (telemetry-recalibrated per §3)",
+    gildedHpForFloor(25) === GILDED.baseHp, `hp=${gildedHpForFloor(25)}`);
+  check("F30 Choir anchor holds at its chain floor (telemetry-recalibrated per §3)",
+    choirHpForFloor(30) === CHOIR.baseHp, `hp=${choirHpForFloor(30)}`);
   check("every boss deals 2 contact damage (authored integer, never scales)",
     (["boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[]).every((k) => ENEMY_ARCHETYPES[k].touchDamage === 2));
   check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
-    bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= 1260 * 1.5,
+    bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= MARROW.baseHp * 1.5,
     `king@35=${bossHpForFloor(35)} marrow@35=${marrowHpForFloor(35)}`);
 
   for (const row of BOSS_GATE_ROWS) {
@@ -239,22 +241,23 @@ function bossLadderGates(): void {
   }
 
   section("gate §3 mechanism: fixed beats ≤1.2s; interactive beats attackable throughout");
-  check("every FIXED transition beat is ≤1.2s (King roar / Weaver molt / Warden sanctify)",
-    BOSS.roarDuration <= 1.2 && WEAVER.moltDuration <= 1.2 && GILDED.sanctifyDuration <= 1.2);
+  check("fixed roar beats are ≤1.2s and the molt is the authored 1.4s cocoon (corrected §3)",
+    BOSS.roarDuration <= 1.2 && WEAVER.moltDuration === 1.4 && GILDED.sanctifyDuration === 1.2);
   check("interactive beats (Marrow shield, Choir split) hold forced minima ≤1.2s",
     MARROW.shieldMinDuration <= 1.2 && CHOIR.splitMinDuration <= 1.2);
   check("the Marrow shield is reduction (65% damage still lands), never immunity",
     MARROW.shieldDamageReduction < 1 && MARROW.shieldDamageReduction === BOSS.roarDamageReduction);
   check("the Warden's plate is tempo, never immunity (chip is 30%, exposed windows ≥2s)",
     GILDED.armorChip > 0 && GILDED.slamRecover >= 2 && GILDED.sweepRecover >= 2);
-  check("gate §3 charge contract: windup .70 / lock .40 / active .60 @520 / wall recover 1.0",
-    MARROW.chargeWindup === 0.70 && MARROW.chargeLock === 0.40 && MARROW.chargeDur === 0.60
-    && MARROW.chargeSpeed === 520 && MARROW.crashStun === 1.0);
-  check("gate §3 blink contract: tell .65 / lock .35 / recover .60; 2-hit gap .45",
-    WEAVER.pounceWindup === 0.65 && WEAVER.pounceLock === 0.35 && WEAVER.pounceRecover === 0.60
-    && Math.abs(WEAVER.pounceChainWindup + WEAVER.pounceAir - 0.45) < 1e-9);
-  check("gate §3 Choir contract: strike tells ≥.75s and volleys rain sequentially",
-    CHOIR.wailWindup >= 0.75 && CHOIR.wailReleaseGap > 0);
+  check("corrected §3 charge contract: tell .9 / lock .5 / 520 for 1.1s / recover .7 or crash 1.6",
+    MARROW.chargeWindup === 0.9 && MARROW.chargeLock === 0.5 && MARROW.chargeDur === 1.1
+    && MARROW.chargeSpeed === 520 && MARROW.chargeRecover === 0.7 && MARROW.crashStun === 1.6);
+  check("corrected §3 pounce contract: tell .65 / lock .3 / .35 air / .9 recover, chains 1/2/2",
+    WEAVER.pounceWindup === 0.65 && WEAVER.pounceLock === 0.3 && WEAVER.pounceAir === 0.35
+    && WEAVER.pounceRecover === 0.9 && WEAVER.pounceChains[1] === 1 && WEAVER.pounceChains[2] === 2 && WEAVER.pounceChains[3] === 2);
+  check("corrected §3 Choir contract: fade tell .6 / drift 1.8×1.6 / recover .8; split 1–3.2s",
+    CHOIR.fadeWindup === 0.6 && CHOIR.fadeDuration === 1.8 && CHOIR.fadeSpeedMult === 1.6
+    && CHOIR.fadeRecover === 0.8 && CHOIR.splitMinDuration === 1.0 && CHOIR.splitDuration === 3.2);
 }
 
 // The anti-burst floor as a hard mechanism: even an absurd single hit cannot delete the
@@ -711,7 +714,7 @@ function coopScalingGates(): void {
   check("post-descend floor snapshots P=2", w.encounterPlayers === 2);
   const someMob = w.enemies.find((e) => e.kind !== "boss" && e.tier === "standard");
   check("the new floor's enemies carry the duo HP scale",
-    someMob !== undefined && someMob.hp === Math.max(1, Math.round(enemyHpForFloor(someMob.kind, 2) * 1.55)),
+    someMob !== undefined && someMob.hp === createEnemy(someMob.kind, 0, 0, 2, new Rng(1), 0, { players: 2 }).hp,
     someMob ? `${someMob.kind} hp=${someMob.hp}` : "no standard mob spawned");
 }
 
@@ -761,8 +764,8 @@ function reviveGates(): void {
 function earlyMeltGates(): void {
   section("studio gate §7.1 early-melt: entry-floor focused TTK in the 0.45–1.40s Standard band");
   const entries: Array<[EnemyKind, number]> = [
-    ["slime", 1], ["bat", 2], ["skeleton", 2], ["spitter", 3], ["ghost", 7],
-    ["charger", 11], ["burrower", 12], ["orbiter", 17],
+    ["slime", 1], ["bat", 2], ["skeleton", 2], ["spitter", 2], ["ghost", 3],
+    ["charger", 3], ["burrower", 4], ["orbiter", 6],
   ];
   for (const [kind, floor] of entries) {
     const t = measureFocusedTtk(kind, floor, "pistol", []);
@@ -773,9 +776,9 @@ function earlyMeltGates(): void {
   // straight-line measure never lands: assert its unblocked burn-down instead — landed
   // hits at the base pistol's cadence keep it inside the same band.
   {
-    const shots = Math.ceil(enemyHpForFloor("shielder", 8) / WEAPONS.pistol.damage);
+    const shots = Math.ceil(enemyHpForFloor("shielder", 7) / WEAPONS.pistol.damage);
     const burn = (shots - 1) * WEAPONS.pistol.fireCd + 0.25; // cadence + ~140px flight
-    check("shielder F8 unblocked burn-down sits in [0.45, 1.40]s (front arc adds the rest)",
+    check("shielder F7 unblocked burn-down sits in [0.45, 1.40]s (front arc adds the rest)",
       burn >= 0.45 && burn <= 1.40, `burn=${burn.toFixed(2)}s (${shots} landed rounds)`);
   }
 }
@@ -784,9 +787,9 @@ function earlyMeltGates(): void {
 
 function compositionCapGates(): void {
   section("studio gate §1/§2: ≤2 complex movers live, ≤1 burrower/room, flock spend ≤35%");
-  check("charge/burrow are the complex movers; their cost carries the ×2 complexity multiplier",
+  check("charge/burrow are the complex movers; the corrected gate pins their in-flight 1.5 cost",
     isComplexMover("charger") && isComplexMover("burrower") && !isComplexMover("orbiter")
-    && ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
+    && ENEMY_ARCHETYPES.charger.threat === 1.5 && ENEMY_ARCHETYPES.burrower.threat === 1.5);
 
   // Static plans across seeds and the F11–24 late band: burrower room cap + pack spend.
   let burrowRoomOk = true;
@@ -794,7 +797,7 @@ function compositionCapGates(): void {
   let splitMoverOk = true;
   for (let seedIdx = 0; seedIdx < 30; seedIdx++) {
     const seed = 0xCA9E + seedIdx * 6151;
-    for (let floor = 8; floor <= 24; floor++) {
+    for (let floor = 5; floor <= 24; floor++) {
       if (isBossFloor(floor)) continue;
       const d = generateDungeon(seed, floor);
       const spawns = spawnFloorEnemies(d, seed, floor);
@@ -949,6 +952,78 @@ function partyRewardGates(): void {
   }
 }
 
+// ---- corrected gate §3/§7.4: the F10 gauntlet TTK gates ----
+// A deterministic maximally-aggressive harness (point-blank focus, flanking the shielder
+// captain's guard arc — its front is a block loop by design) drives the natural floor-10
+// world through the whole sequence and measures each ROUND (captain spawn -> captain,
+// summons and hazards all cleared) plus the arena total.
+
+function measureGauntlet(weapon: WeaponId, picks: string[]): { total: number; rounds: number[]; captains: string[] } {
+  const w = createWorld(0xF10B, 10);
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  acquireWeaponInWorld(w, LOCAL_ID, weapon);
+  grant(w, LOCAL_ID, picks);
+  const roundStart: number[] = [];
+  const roundEnd: number[] = [];
+  const captains: string[] = [];
+  let isInRound = false;
+  let firstCaptainTick = -1;
+  let ticks = 0;
+  for (; ticks < 60 * 240 && !isFloorCleared(w); ticks++) {
+    const captain = w.enemies.find((e) => !e.dead && e.captainPhase !== undefined);
+    if (captain && !isInRound) {
+      isInRound = true;
+      roundStart.push(ticks * DT);
+      captains.push(`${captain.kind}/${captain.tier}`);
+      if (firstCaptainTick < 0) firstCaptainTick = ticks;
+    }
+    if (isInRound && !w.enemies.some((e) => !e.dead)) {
+      isInRound = false;
+      roundEnd.push(ticks * DT);
+    }
+    const target = captain ?? w.enemies.find((e) => !e.dead);
+    if (target) {
+      const behind = target.kind === "shielder" ? target.attack.lockedAngle + Math.PI : Math.PI;
+      p.x = target.x + Math.cos(behind) * 34;
+      p.y = target.y + Math.sin(behind) * 34;
+    }
+    const aim = target ? Math.atan2(target.y - p.y, target.x - p.x) : 0;
+    step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+  }
+  // The final round's clear coincides with the floor clear: close it from the loop exit.
+  if (roundEnd.length < roundStart.length) roundEnd.push(ticks * DT);
+  const rounds = roundEnd.map((end, i) => end - roundStart[i]);
+  return { total: firstCaptainTick >= 0 ? (ticks - firstCaptainTick) * DT : -1, rounds, captains };
+}
+
+function gauntletGates(): void {
+  section("corrected gate §3: gauntlet captains at round10(.28/.32/.40 × Marrow HP)");
+  check("captain HP derives from calibrated Marrow HP: 350 / 400 / 500 (sums to 1.00×)",
+    gauntletCaptainHp(GAUNTLET.rounds[0]) === 350 && gauntletCaptainHp(GAUNTLET.rounds[1]) === 400
+    && gauntletCaptainHp(GAUNTLET.rounds[2]) === 500
+    && Math.abs(GAUNTLET.rounds.reduce((s, r) => s + r.hpFrac, 0) - 1.0) < 1e-9);
+  check("the round order is the gate's commander -> elite -> brute",
+    GAUNTLET.rounds[0].kind === "charger" && GAUNTLET.rounds[1].kind === "shielder" && GAUNTLET.rounds[2].kind === "burrower"
+    && GAUNTLET.rounds[2].addCount === 0);
+  check("intermissions are the authored 5s and the captain transition is 0.8s (≤1.2s cap)",
+    GAUNTLET.intermission === 5 && GAUNTLET.captainTransition === 0.8 && GAUNTLET.captainTransition <= 1.2);
+
+  section("corrected gate §7.4: gauntlet TTK — total 55–80s median, ≥35s high-roll, rounds ≥10s");
+  const median = measureGauntlet("pistol", [...L3("hair_trigger"), "glass_cannon", "glass_cannon"]);
+  check("three ordered captain rounds, never overlapping",
+    median.captains.join(" ") === "charger/elite shielder/elite burrower/brute", median.captains.join(" "));
+  check("median-build total sits in the 55–80s gate", median.total >= 55 && median.total <= 80,
+    `total=${median.total.toFixed(1)}s`);
+  check("every median round runs ≥10s", median.rounds.every((r) => r >= 10),
+    median.rounds.map((r) => r.toFixed(1)).join("/"));
+  const highRoll = measureGauntlet("smg", [...L3("deadeye"), "glass_cannon", "glass_cannon"]);
+  check("high-roll total stays ≥35s", highRoll.total >= 35, `total=${highRoll.total.toFixed(1)}s`);
+  check("every high-roll round runs ≥10s", highRoll.rounds.every((r) => r >= 10),
+    highRoll.rounds.map((r) => r.toFixed(1)).join("/"));
+  process.stdout.write(`  info: gauntlet median=${median.total.toFixed(1)}s (${median.rounds.map((r) => r.toFixed(1)).join("/")}), high-roll=${highRoll.total.toFixed(1)}s\n`);
+}
+
 // ---- studio gate §2: the mob overlap arbiter ----
 
 function arbiterGates(): void {
@@ -1011,6 +1086,7 @@ function main(): void {
   normalTtkGates();
   threatBudgetGates();
   compositionCapGates();
+  gauntletGates();
   partyRewardGates();
   arbiterGates();
   sustainGates();

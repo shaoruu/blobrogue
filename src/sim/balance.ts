@@ -11,7 +11,7 @@
 
 import type { EnemyKind, WeaponId } from "./types.js";
 
-export const BALANCE_VERSION = 2;
+export const BALANCE_VERSION = 3;
 
 // ---- §1 player constants ----
 
@@ -154,9 +154,10 @@ export const ELITE_SPLIT_COUNT = 2;       // the shipped elite affix: splits int
 // charge/burrow verbs that deny standard answers. Enforced at the spawn split and again
 // at every reinforcement release.
 export const MAX_COMPLEX_MOVERS_ACTIVE = 2;
-// Studio gate §2: max one burrower per room, and no flock pack may consume more than 35%
-// of the room's threat spend.
+// Studio gate §2: max one burrower AND one shielder per room, and no flock pack may
+// consume more than 35% of the room's threat spend.
 export const MAX_BURROWERS_PER_ROOM = 1;
+export const MAX_SHIELDERS_PER_ROOM = 1;
 export const FLOCK_THREAT_SHARE_MAX = 0.35;
 
 // Reinforcement release pacing: pending threat trickles in as waves whenever the living
@@ -241,42 +242,29 @@ export function bossHpForFloor(floor: number): number {
   return Math.round(scaled / 10) * 10;
 }
 
-// ---- §5b MARROW (curriculum F15 milestone; gate §3 initial 1,260, median 38–52s, high-roll 22–28s) ----
+// ---- §5b MARROW (corrected gate §3: F15, 1,250 HP, median 35–50s, high-roll 20–25s) ----
 // A LINE fight, not an area fight: sidestep the charge lanes, weave the volleys/spiral,
 // and punish the wall crash. Its transition beat is a bone SHIELD instead of a roar:
 // identical anti-burst plumbing (damage reduction + hard HP floor + queued overflow), but
-// INTERACTIVE — killing both summoned husks drops the shield early. The gate's forced
-// transition time (0.9s each) is the beat's unbreakable minimum.
+// INTERACTIVE — killing both summoned husks drops the shield early (.9–2.6s at 35%).
 
 export const MARROW = {
-  // Gate §3 initial Standard-solo calibration, verified by Stage-C telemetry against the
-  // depth's median build (Hair Trigger Lv3 + Glass Cannon Lv2 pistol) — see balance
-  // tests. The curriculum slots Marrow at F15; the §3 HP curve clamps at F10, so the
-  // calibrated value holds unchanged at the deeper floor.
-  baseHp: 1260,
+  // The corrected gate pins the in-flight kit as authoritative: charge tell .9 / lock .5
+  // / 520 for 1.1s / recover .7 or crash 1.6; 65/30 thresholds with 57/22 floors;
+  // 1,250 HP at the F15 slot (the §3 curve clamps at F10, so the calibration carries).
+  baseHp: 1250,
   baseHpFloor: 15,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // indexed by phase 1..3
-  // Line charge per the gate's pressure contract: windup .70, lock .40, active .60 @ 520,
-  // wall recover 1.0. From P2 charges come in PAIRS (a crash cancels the pair — the stun
-  // is the punish); P3 charges run 20% hotter and pave rubble lanes down the furrow.
-  chargeWindup: 0.70,
-  chargeLock: 0.40,
+  // Line charge: long windup, long lane, and a wall crash that self-stuns (the punish window).
+  chargeWindup: 0.9,
+  chargeLock: 0.5,
   chargeSpeed: 520,
-  chargeDur: 0.60,
+  chargeDur: 1.1,
   chargeRecover: 0.7,
-  crashStun: 1.0,
-  chargePairPhase: 2,   // charges chain into pairs from this phase
-  p3ChargeSpeedMult: 1.2,
+  crashStun: 1.6,
   crashShards: [0, 0, 6, 8] as readonly number[],    // ring size on a wall crash, per phase
-  // P3 rubble lanes: slow-zone debris paved along the charge furrow. Max 2 live lanes —
-  // planting a third expires the oldest (gate §3: "max 2 rubble lanes, each 4s").
-  rubbleRadius: 34,
-  rubbleSpacing: 72,    // px between rubble pads along the lane
-  rubbleLife: 4,
-  rubbleMaxLanes: 2,
-  rubbleSlow: 0.65,     // player move-speed multiplier on rubble (enemies unaffected)
   // Bone-shard volley: an aimed fan that widens with the phase.
   volleyWindup: 0.7,
   volleyLock: 0.4,
@@ -294,12 +282,12 @@ export const MARROW = {
   spinInterval: 0.22,   // seconds between shard pairs
   spinStep: 0.55,       // radians the spiral advances per pair
   spinRecover: 0.8,
-  // Gate §3 phase thresholds (66%/33%), floors 8pp under; evaluated after EVERY
-  // authoritative damage event (like §5).
-  phaseAt: [0.66, 0.33] as readonly number[],
-  phaseFloor: [0.58, 0.25] as readonly number[],
+  // Phase thresholds/floors (65/30, floors 57/22), evaluated after EVERY authoritative
+  // damage event (like §5).
+  phaseAt: [0.65, 0.30] as readonly number[],
+  phaseFloor: [0.57, 0.22] as readonly number[],
   shieldDuration: 2.6,        // max beat length when the husks are ignored (attackable at 65%)
-  shieldMinDuration: 0.9,     // the gate's forced transition time — the unbreakable minimum
+  shieldMinDuration: 0.9,     // the beat always reads, even if the husks die instantly
   shieldDamageReduction: 0.35, // reduction, not immunity — same principle as the roar
   shieldBulletClearRadius: 70,
   shieldHusks: 2,             // summoned at opposite marked edges; killing both breaks early
@@ -320,7 +308,7 @@ export function marrowHpForFloor(floor: number): number {
   return anchoredBossHp(MARROW.baseHp, MARROW.baseHpFloor, floor);
 }
 
-// ---- §5c THE HOLLOW CHOIR (curriculum F30 finale; gate §3 initial 1,800, median 45–65s, high-roll 25–35s) ----
+// ---- §5c THE HOLLOW CHOIR (corrected gate §3: F30 finale, median 40–58s, high-roll ≥22s) ----
 // The grieving ghost mass: it does not zone you with bodies — it UNMAKES itself. On
 // cadence it fades intangible and drifts through you (a breather you must keep moving
 // through), then rematerializes into a burst; its volleys are slow HOMING wails you juke
@@ -328,9 +316,10 @@ export function marrowHpForFloor(floor: number): number {
 // kill them to force it back together early (the wisps ARE the boss during the beat).
 
 export const CHOIR = {
-  // Gate §3 initial Standard-solo calibration at the run's finale (curriculum F30),
-  // verified by telemetry against the depth's median build — see balance tests.
-  baseHp: 1800,
+  // The corrected gate lists 1,130 as the in-flight initial; at the F30 median build it
+  // burns in ≈34s — under the 40s floor — so the §3 recalibration formula lands the
+  // anchor below (measured in-band; see balance tests).
+  baseHp: 1450,
   baseHpFloor: 30,
   contactDamage: 2,
   entranceGrace: 1.2,
@@ -345,12 +334,9 @@ export const CHOIR = {
   burstShards: [0, 0, 8, 10] as readonly number[], // rematerialize ring per phase
   burstSpeed: 240,
   // Homing wails: slow, readable seekers with a capped turn rate — orbit them off.
-  // Gate §3: strike tells ≥0.75s, and volleys RAIN SEQUENTIALLY — one wail per release
-  // step, never a simultaneous wall (the doubled P3 volume stays dodgeable).
-  wailWindup: 0.75,
+  wailWindup: 0.7,
   wailLock: 0.4,
   wailRecover: 0.6,
-  wailReleaseGap: 0.12,   // seconds between wails inside one volley
   wailCount: [0, 2, 3, 4] as readonly number[],
   wailSpread: 0.5,
   wailSpeed: 150,
@@ -361,13 +347,14 @@ export const CHOIR = {
   shardRadius: 7,
   shardDamage: 1,
   shardLife: 2.6,
-  // Transition beats: the Choir scatters into wisps (it is GONE — untargetable) until the
-  // wisps die or the cap elapses. Queued overflow lands when it reforms, same §5 contract.
-  // Gate §3 thresholds 66%/33%; forced time (the unbreakable minimum) 1.2s each.
-  phaseAt: [0.66, 0.33] as readonly number[],
-  phaseFloor: [0.58, 0.25] as readonly number[],
+  // Transition beats: the Choir scatters into wisps (it is GONE — untargetable, but the
+  // wisps ARE the active pressure) until they die or the cap elapses. Queued overflow
+  // lands when it reforms, same §5 contract. Corrected: 65/30 thresholds, 57/22 floors,
+  // split 1–3.2s.
+  phaseAt: [0.65, 0.30] as readonly number[],
+  phaseFloor: [0.57, 0.22] as readonly number[],
   splitDuration: 3.2,
-  splitMinDuration: 1.2,
+  splitMinDuration: 1.0,
   splitWisps: 3,
   splitBulletClearRadius: 70,
 } as const;
@@ -376,17 +363,17 @@ export function choirHpForFloor(floor: number): number {
   return anchoredBossHp(CHOIR.baseHp, CHOIR.baseHpFloor, floor);
 }
 
-// ---- §5d THE WEAVER (curriculum F20 milestone; gate §3 median 40–55s, high-roll 22–30s) ----
+// ---- §5d THE WEAVER (corrected gate §3: F20, median 38–55s, high-roll ≥20s) ----
 // The duelist that fights the FLOOR: webs are persistent slow-zones that shrink your
 // dance space (never damage — routing pressure), and its pounce is a marked drop from
 // above that chains in later phases. Small, fast, evasive — hard to pin, exactly like
 // the roster spec's duelist.
 
 export const WEAVER = {
-  // Gate §3 lists 1,340 as the initial, assuming ≈28 median DPS; measured Stage-C
-  // telemetry at the depth's median build runs ≈34 DPS, so the gate's own recalibration
-  // rule (§3: telemetry over sheet DPS) lands 1,500 — median ≈44s, inside the 40–55 band
-  // with margin on both edges (see balance tests). Curriculum floor: F20 (curve clamps).
+  // The corrected gate lists 1,080 as the in-flight initial and recalibrates by
+  // telemetry for the intended floor's legal build pool (§3): at the F20 median build
+  // 1,080 burns in ≈32s — under the 38s floor — so the formula lands 1,500 (measured
+  // in-band; see balance tests).
   baseHp: 1500,
   baseHpFloor: 20,
   contactDamage: 2,
@@ -401,32 +388,26 @@ export const WEAVER = {
   webRadius: 62,
   webLife: 12,
   webSlow: 0.55,       // player move-speed multiplier inside a web (enemies unaffected)
-  // Gate §3: max 2 web ZONES — a zone is one commitment's planting (a 4-web P3 weave), so
-  // the hard cap is two full zones; planting past it expires the oldest webs first.
-  maxWebs: 8,
-  // Pounce per the gate's blink contract: tell .65, lock .35, recover .60. P2+ is the
-  // 2-hit: a chained second leap re-telegraphs on a .45s land-to-land gap.
+  maxWebs: 8,          // hard cap: the arena squeezes, it never fills
+  // Pounce per the corrected in-flight contract: tell .65 / lock .3 / .35 air / .9
+  // recover; P2+ chains a second, shorter-telegraph leap (chains 1/2/2).
   pounceWindup: 0.65,
-  pounceLock: 0.35,
-  pounceChainWindup: 0.10,
-  pounceChainLock: 0.10,
+  pounceLock: 0.3,
+  pounceChainWindup: 0.5,
+  pounceChainLock: 0.2,
   pounceAir: 0.35,
-  pounceRecover: 0.60,
+  pounceRecover: 0.9,
   pounceRadius: 74,
   pounceInnerRadius: 44,
   pounceCenterDamage: 2,
   pounceOuterDamage: 1,
-  pounceChains: [0, 1, 2, 1] as readonly number[], // EXTRA chained leaps per commitment
-  // Gate §3 P3: "one real + two afterimages" — the single P3 leap throws two feint
-  // markers (pure telegraph noise; only the real mark lands damage).
-  pounceFeints: [0, 0, 0, 2] as readonly number[],
-  pounceFeintDist: 90,  // feint marker offset from the real mark
+  pounceChains: [0, 1, 2, 2] as readonly number[], // chained leaps per commitment (P2+)
   pounceWebRadius: 52,
-  // Molt beat: a fixed cocoon (roar semantics) that bursts into a web-bolt ring + broodlings.
-  // Gate §3 thresholds 66%/33%; forced time 0.8s each.
-  phaseAt: [0.66, 0.33] as readonly number[],
-  phaseFloor: [0.58, 0.25] as readonly number[],
-  moltDuration: 0.8,
+  // Molt beat: a fixed 1.4s cocoon (roar semantics) that bursts into a web-bolt ring +
+  // two broodlings. Corrected thresholds 65/30, floors 57/22.
+  phaseAt: [0.65, 0.30] as readonly number[],
+  phaseFloor: [0.57, 0.22] as readonly number[],
+  moltDuration: 1.4,
   moltDamageReduction: 0.35,
   moltBoltCount: 8,
   moltBoltSpeed: 260,
@@ -441,18 +422,16 @@ export function weaverHpForFloor(floor: number): number {
   return anchoredBossHp(WEAVER.baseHp, WEAVER.baseHpFloor, floor);
 }
 
-// ---- §5e THE GILDED WARDEN (curriculum F25 milestone; gate §3 formula-calibrated, median 42–58s, high-roll 24–32s) ----
+// ---- §5e THE GILDED WARDEN (corrected gate §3: F25, median 40–58s, high-roll ≥22s) ----
 // The armored tempo boss: its plate chips incoming damage to 30% at ALL times except the
 // EXPOSED window — the long recover after each committed quake/sweep, when the plate
 // hangs open. You do not out-DPS the Warden whenever you like; you dodge the commitment,
 // then unload into the opening. Reduction, never immunity: impatient chip still works,
 // it is just the slow way.
-// NOTE: the balance gate named a "Jet" slot — the curriculum overrides: Jet is later
-// post-F30 endgame content, and the Gilded Warden holds the F25 milestone. HP rides the
-// gate §3 formula: its raw 1,520 assumes an unarmored body; the plate's 0.3 chip outside
-// exposed windows raises effective health ≈1.35×, so the raw anchor lands lower —
-// telemetry at the depth's median build (Hair Trigger Lv3 + Glass Cannon Lv3) calibrates
-// 1,280 into the 42–58s median band with margin (see balance tests).
+// The corrected gate lists 800 as the in-flight initial "valid only if its closed-armor/
+// exposure cycle lands inside its gate" — at the F25 median build 800 burns in ≈26s,
+// under the 40s floor, so the §3 recalibration formula lands 1,280 (measured in-band;
+// see balance tests). Jet stays post-F30 expansion content; the Warden holds F25.
 
 export const GILDED = {
   baseHp: 1280,
@@ -484,11 +463,11 @@ export const GILDED = {
   shardRadius: 8,
   shardDamage: 1,
   shardLife: 3.0,
-  // Sanctify beat: fixed-duration roar semantics. Gate §3 F20 slot: thresholds 66%/33%,
-  // forced time 1.0s each.
-  phaseAt: [0.66, 0.33] as readonly number[],
-  phaseFloor: [0.58, 0.25] as readonly number[],
-  sanctifyDuration: 1.0,
+  // Sanctify beat: fixed-duration roar semantics — corrected contract 70/35 thresholds,
+  // 62/27 floors, 1.2s transition at 35% reduction (the King's sturdier shape).
+  phaseAt: [0.70, 0.35] as readonly number[],
+  phaseFloor: [0.62, 0.27] as readonly number[],
+  sanctifyDuration: 1.2,
   sanctifyDamageReduction: 0.35,
   sanctifyBulletClearRadius: 70,
 } as const;
@@ -497,33 +476,46 @@ export function gildedHpForFloor(floor: number): number {
   return anchoredBossHp(GILDED.baseHp, GILDED.baseHpFloor, floor);
 }
 
-// ---- §5f the F10 MINIBOSS GAUNTLET (curriculum §2 F10 + §5) ----
-// The Rootbound Warrens close on an authored Arena Gauntlet, not a boss: three sequential
-// minibosses — the Flock Commander (an elite bat leading a small escort), an Orbiter
-// elite, and a Shielder brute — with an authored breath between stages, NEVER
-// simultaneous. Each miniboss carries 45–70% of the depth's boss-effective HP (§5:
-// authored arena only, 1–2 moves, never a random-room roll), and the last stage drops
-// the floor's premium boss chest.
+// ---- §5f the F10 MINIBOSS GAUNTLET (corrected gate §3, exact formula) ----
+// Three sequential CAPTAINS derived from calibrated Marrow HP — commander round10(.28×),
+// elite round10(.32×), brute round10(.40×), total 1.00× — with 5s intermissions after
+// rounds 1 and 2, never more than one captain alive, and the next spawn waiting until
+// the prior captain, its summons AND its hazards are all dead/cleared. Round composition
+// per the gate: R1 Charger commander + max 4 simple adds; R2 Shielder elite + max 3
+// ranged adds; R3 brute Burrower alone. Each captain runs TWO phases split at 50% with
+// one 0.8s NON-invulnerable transition and no phase floor. +1 heart drops only after R2;
+// no blessing until the full clear (the premium chest carries the rare offer).
 
-export interface GauntletStage {
+export interface GauntletRound {
   kind: EnemyKind;
   tier: EnemyTier;
-  hpFrac: number; // fraction of bossHpForFloor(GAUNTLET.floor), §5's 45–70% band
-  escort: number; // swarm-kin escort spawned WITH the stage (part of the stage's clear)
+  hpFrac: number;        // fraction of the calibrated Marrow HP (.28/.32/.40)
+  addKind: EnemyKind | null;
+  addTier: EnemyTier;
+  addCount: number;
 }
 
 export const GAUNTLET = {
   floor: 10,
-  breath: 1.2, // seconds between a stage's last death and the next stage's entrance
-  stages: [
-    { kind: "bat", tier: "elite", hpFrac: 0.45, escort: 4 },
-    { kind: "orbiter", tier: "elite", hpFrac: 0.45, escort: 0 },
-    { kind: "shielder", tier: "brute", hpFrac: 0.50, escort: 0 },
-  ] as readonly GauntletStage[],
+  intermission: 5,          // seconds after R1 and R2 before the next captain enters
+  captainPhaseAt: 0.5,      // two phases split at 50%…
+  captainTransition: 0.8,   // …one short stagger, non-invulnerable, no floor
+  // Round threat stays inside the gate caps (≤8/≤8/≤6 counting the captain's elite/brute
+  // pricing): R1 4.2 + 3×1.0 = 7.2, R2 4.2 + 3×0.825 ≈ 6.7, R3 3.3 alone.
+  rounds: [
+    { kind: "charger", tier: "elite", hpFrac: 0.28, addKind: "slime", addTier: "standard", addCount: 3 },
+    { kind: "shielder", tier: "elite", hpFrac: 0.32, addKind: "spitter", addTier: "swarm", addCount: 3 },
+    { kind: "burrower", tier: "brute", hpFrac: 0.40, addKind: null, addTier: "swarm", addCount: 0 },
+  ] as readonly GauntletRound[],
+  heartAfterRound: 2,       // +1 heart only after R2
   // The premium reward: the gauntlet's boss chest bakes the Burst rifle — Rootbound's
   // formation-fire signature (no full boss signature is duplicated).
   chestWeapon: "burst" as WeaponId,
 } as const;
+
+export function gauntletCaptainHp(round: GauntletRound): number {
+  return Math.round((round.hpFrac * MARROW.baseHp) / 10) * 10;
+}
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----
 // The 4–6× strong-run fantasy is EXPRESSIVE capability (pellets/pierce/status/crit/

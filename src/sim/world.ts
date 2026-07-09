@@ -27,7 +27,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  GAUNTLET, CAPS, TIERS, bossHpForFloor, coopBossHpMult,
+  GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
@@ -144,7 +144,6 @@ export interface WorldState {
   // A new mob release whose area overlaps a recent one HOLDS until the window clears — no
   // two releases may pincer the same escape lane inside one reaction window.
   recentReleases: Array<{ x: number; y: number; radius: number; t: number }>;
-  nextRubbleLane: number;
   // The F10 Arena Gauntlet stage machine (curriculum §2): `stage` counts spawned stages,
   // `breath` is the authored 1.2s beat between a clear and the next entrance, and
   // `isRewarded` latches once the premium chest has dropped. Null on ordinary floors.
@@ -249,7 +248,6 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     chests: [],
     hazards: [],
     recentReleases: [],
-    nextRubbleLane: 0,
     gauntlet: null,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     nav: createNav(),
@@ -342,7 +340,6 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.bullets = [];
   w.hazards = [];
   w.recentReleases = [];
-  w.nextRubbleLane = 0;
   w.gauntlet = !w.isSandbox && isGauntletFloor(floor) ? { stage: 0, breath: 0, isRewarded: false } : null;
   w.nextEnemyId = 0;
   w.nextPropId = 0;
@@ -393,7 +390,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
 // Floor cleared = every active enemy dead AND no reinforcements still queued. The exit,
 // the snapshot `cleared` flag, and the client HUD/minimap all read this one predicate.
 export function isFloorCleared(w: WorldState): boolean {
-  if (w.gauntlet !== null && (w.gauntlet.stage < GAUNTLET.stages.length || !w.gauntlet.isRewarded)) return false;
+  if (w.gauntlet !== null && (w.gauntlet.stage < GAUNTLET.rounds.length || !w.gauntlet.isRewarded)) return false;
   return w.enemies.length === 0 && w.pendingSpawns.length === 0;
 }
 
@@ -1645,6 +1642,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
+    if (e.captainPhase !== undefined) tickCaptainPhase(e, ev);
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
     // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
@@ -2474,7 +2472,6 @@ function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
 function marrowBeginAttack(e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
-  boss.spinCount = 0; // spiral pairs / rush-pair chain counter for this commitment
   e.attack.cooldown = MARROW.attackCd[boss.phase];
   // P3: every 3rd attack is the stationary spiral barrage (0.8s telegraph, 2.2s weave).
   if (boss.phase >= 3 && boss.attackCount % MARROW.spinEvery === 0) {
@@ -2528,7 +2525,6 @@ function marrowWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   // rush
   if (stepWindupTimer(w, e, dt, MARROW.chargeWindup, MARROW.chargeLock, false)) {
     a.phase = "active"; a.time = 0; a.windup = 0;
-    if (e.boss!.phase >= 3) openRubbleLane(w, e); // every P3 lane paves its own rubble
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.55, gain: 0.9, trauma: 0.05 });
   }
 }
@@ -2550,63 +2546,22 @@ function marrowActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     if (a.time >= MARROW.spinDuration) enterRecover(e);
     return;
   }
-  // rush — gate §3 contract: P3 runs 20% hotter and paves a rubble lane down the furrow.
-  const speed = MARROW.chargeSpeed * (boss.phase >= 3 ? MARROW.p3ChargeSpeedMult : 1);
-  const prevTraveled = speed * a.time;
+  // rush
   a.time += dt;
   // A connect ends the rush BEFORE the next step (the contact pass already landed the
-  // hit + shove last tick, while the rush was active) — hit-and-stop, never a drag. A
-  // connect also ends the P2 pair: the hit is paid for, no instant second lane.
+  // hit + shove last tick, while the rush was active) — hit-and-stop, never a drag.
   if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
-  const step = speed * dt;
+  const step = MARROW.chargeSpeed * dt;
   const x0 = e.x, y0 = e.y;
   rushSmashEnvironment(w, e, ev); // the blind bull clears its furrow FIRST — no furniture wedge
   moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
   ev.push({ t: "lungeTrail", x: e.x, y: e.y });
-  if (boss.phase >= 3 && Math.floor(speed * a.time / MARROW.rubbleSpacing) > Math.floor(prevTraveled / MARROW.rubbleSpacing)) {
-    plantRubble(w, e, boss.rubbleLane, ev);
-  }
   const moved = Math.hypot(e.x - x0, e.y - y0);
   if (moved < step * chillMoveScale(e) * 0.5) {
-    marrowCrash(w, e, ev); // the crash stun also cancels a pending pair charge
+    marrowCrash(w, e, ev);
     return;
   }
-  if (a.time >= MARROW.chargeDur) {
-    // Gate §3 "P2 pairs": a clean miss re-tracks into a second full-telegraph charge
-    // within the same commitment. The pair counter lives in spinCount for this move.
-    if (boss.phase >= MARROW.chargePairPhase && boss.spinCount === 0) {
-      boss.spinCount = 1;
-      beginWindup(e, "rush");
-      ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.4, gain: 0.7, trauma: 0 });
-      return;
-    }
-    enterRecover(e);
-  }
-}
-
-// Rubble lanes (gate §3): P3 charges pave slow-zone debris. Opening a lane past the cap
-// expires the OLDEST lane's pads first — never more than 2 live lanes.
-function openRubbleLane(w: WorldState, e: Enemy): void {
-  const boss = e.boss!;
-  boss.rubbleLane = w.nextRubbleLane++;
-  const liveLanes: number[] = [];
-  for (const h of w.hazards) {
-    if (h.kind === "rubble" && h.lane !== undefined && !liveLanes.includes(h.lane)) liveLanes.push(h.lane);
-  }
-  liveLanes.sort((a, b) => a - b);
-  while (liveLanes.length >= MARROW.rubbleMaxLanes) {
-    const oldest = liveLanes.shift()!;
-    w.hazards = w.hazards.filter((h) => !(h.kind === "rubble" && h.lane === oldest));
-  }
-}
-
-function plantRubble(w: WorldState, e: Enemy, lane: number, ev: SimEvent[]): void {
-  if (isWall(w, e.x, e.y)) return;
-  w.hazards.push({
-    id: w.nextHazardId++, kind: "rubble", x: e.x, y: e.y, radius: MARROW.rubbleRadius,
-    life: MARROW.rubbleLife, maxLife: MARROW.rubbleLife, lane,
-  });
-  ev.push({ t: "webPlaced", x: e.x, y: e.y, r: MARROW.rubbleRadius });
+  if (a.time >= MARROW.chargeDur) enterRecover(e);
 }
 
 // The wall crash: MARROW's authored weakness. A long self-stun ("crash" recover), and
@@ -2720,30 +2675,15 @@ function choirWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
     }
     return;
   }
-  // wail: the tell completes, then the volley RAINS SEQUENTIALLY (gate §3 — never a
-  // simultaneous release) from the streaming active phase.
+  // wail
   if (stepWindupTimer(w, e, dt, CHOIR.wailWindup, CHOIR.wailLock, false)) {
-    const boss = e.boss!;
-    boss.spinCount = 0; // wails streamed so far
-    a.phase = "active"; a.time = 0; a.windup = 0;
+    choirWailFire(w, e, ev);
+    enterRecover(e);
   }
 }
 
 function choirActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
-  if (a.move === "wail") {
-    // Sequential stream: wail k releases as elapsed time crosses k×gap; the commitment
-    // recovers one gap after the last release.
-    a.time += dt;
-    const boss = e.boss!;
-    const n = CHOIR.wailCount[boss.phase];
-    while (boss.spinCount < n && a.time >= boss.spinCount * CHOIR.wailReleaseGap) {
-      choirWailFire(w, e, boss.spinCount, n, ev);
-      boss.spinCount++;
-    }
-    if (a.time >= n * CHOIR.wailReleaseGap) enterRecover(e);
-    return;
-  }
   // The fade: intangible, drifting through the target's position — keep moving.
   a.time += dt;
   a.windup = Math.min(1, a.time / CHOIR.fadeDuration);
@@ -2770,22 +2710,23 @@ function choirRematerialize(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.8, gain: 0.7, trauma: 0.08 });
 }
 
-// One wail of the volley: a slow seeker with a capped turn rate, fanned around the locked
-// bearing (wail i of n keeps its fan slot; the stream releases them one by one).
-function choirWailFire(w: WorldState, e: Enemy, i: number, n: number, ev: SimEvent[]): void {
+// The wail volley: slow seekers with a capped turn rate, fanned around the locked bearing.
+function choirWailFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const a = e.attack;
-  const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * CHOIR.wailSpread;
-  const ang = a.lockedAngle + off;
-  w.bullets.push({
-    x: e.x + Math.cos(ang) * (e.radius + 6), y: e.y + Math.sin(ang) * (e.radius + 6),
-    vx: Math.cos(ang) * CHOIR.wailSpeed, vy: Math.sin(ang) * CHOIR.wailSpeed,
-    radius: CHOIR.wailRadius, life: CHOIR.wailLife, friendly: false, owner: null,
-    damage: CHOIR.wailDamage, color: "#9fd8ff", pierce: 0, hitList: null, isCrit: false,
-    homing: CHOIR.wailTurnRate,
-  });
-  if (i === 0) {
-    ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
+  const boss = e.boss!;
+  const n = CHOIR.wailCount[boss.phase];
+  for (let i = 0; i < n; i++) {
+    const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * CHOIR.wailSpread;
+    const ang = a.lockedAngle + off;
+    w.bullets.push({
+      x: e.x + Math.cos(ang) * (e.radius + 6), y: e.y + Math.sin(ang) * (e.radius + 6),
+      vx: Math.cos(ang) * CHOIR.wailSpeed, vy: Math.sin(ang) * CHOIR.wailSpeed,
+      radius: CHOIR.wailRadius, life: CHOIR.wailLife, friendly: false, owner: null,
+      damage: CHOIR.wailDamage, color: "#9fd8ff", pierce: 0, hitList: null, isCrit: false,
+      homing: CHOIR.wailTurnRate,
+    });
   }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
 }
 
 // THE WEAVER (spec §5d). The duelist that fights the FLOOR: its webs are persistent
@@ -2849,31 +2790,11 @@ function weaverWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     }
     return;
   }
-  // pounce: the marker tracks then locks; chained pounces re-telegraph faster (the gate's
-  // .45s land-to-land 2-hit).
-  const boss = e.boss!;
-  const isChained = boss.spinCount > 0;
+  // pounce: the marker tracks then locks; chained pounces re-telegraph faster.
+  const isChained = e.boss!.spinCount > 0;
   const windup = isChained ? WEAVER.pounceChainWindup : WEAVER.pounceWindup;
   const lockAt = isChained ? WEAVER.pounceChainLock : WEAVER.pounceLock;
-  const wasLocked = a.isAimLocked;
-  const isDone = stepWindupTimer(w, e, dt, windup, lockAt, true);
-  // Gate §3 P3 "one real + two afterimages": the moment the real mark locks, throw the
-  // feint markers — identical telegraphs, only the real one lands damage.
-  if (!wasLocked && a.isAimLocked && WEAVER.pounceFeints[boss.phase] > 0) {
-    const feints = WEAVER.pounceFeints[boss.phase];
-    const dur = Math.max(0, windup - a.time) + WEAVER.pounceAir;
-    const base = w.rng.next() * Math.PI * 2;
-    for (let i = 0; i < feints; i++) {
-      const ang = base + (i / feints) * Math.PI * 2;
-      ev.push({
-        t: "pounceFeint",
-        x: a.markX + Math.cos(ang) * WEAVER.pounceFeintDist,
-        y: a.markY + Math.sin(ang) * WEAVER.pounceFeintDist,
-        r: WEAVER.pounceRadius, dur,
-      });
-    }
-  }
-  if (isDone) {
+  if (stepWindupTimer(w, e, dt, windup, lockAt, true)) {
     a.phase = "active"; a.time = 0; a.windup = 0;
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.1, gain: 0.8, trauma: 0.05 });
   }
@@ -2895,9 +2816,8 @@ function weaverActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     weaverLand(w, e, ev);
     const boss = e.boss!;
     boss.spinCount++;
-    // pounceChains is the TOTAL leaps per commitment (gate §3: P2 is the 2-hit; P3 is a
-    // single real leap dressed with afterimage feints).
-    if (boss.spinCount < WEAVER.pounceChains[boss.phase]) {
+    // P2+: chain straight into the next leap off the landing (shorter telegraph).
+    if (boss.spinCount < WEAVER.pounceChains[boss.phase] + 1 && boss.phase >= 2) {
       beginWindup(e, "pounce");
       return;
     }
@@ -3339,29 +3259,39 @@ function rushSmashEnvironment(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   enemySmashEnvironment(w, e.x, e.y, e.radius + RUSH_SMASH_PAD, ev);
 }
 
-// ---- the F10 Miniboss Gauntlet (curriculum §2 F10 + §5) ----
-// A stage machine, not a boss: once the floor's living pressure is cleared, an authored
-// 1.2s breath passes and the next miniboss ENTERS the arena — the Flock Commander with
-// its escort, then the Orbiter elite, then the Shielder brute, strictly sequential and
-// never simultaneous. Each miniboss carries its authored fraction of the depth's
-// boss-effective HP (co-op scaled like a boss). The final clear drops the premium boss
-// chest (P+1 weapon choices led by the gauntlet's signature + the rare blessing offer).
+// ---- the F10 Miniboss Gauntlet (corrected gate §3, exact formula) ----
+// A stage machine, not a boss: once the floor's living pressure, its summons AND its
+// hazards are all cleared, the authored 5s intermission passes and the next CAPTAIN
+// enters the arena — the Charger commander with simple adds, the Shielder elite with
+// ranged adds, then the brute Burrower alone — strictly sequential, never simultaneous.
+// Captains carry round10(.28/.32/.40 × calibrated Marrow HP), party-scaled independently
+// at each spawn, and run two phases split at 50% with one 0.8s non-invulnerable
+// transition (no floor, no overflow — see the captain check in updateEnemies). +1 heart
+// drops only after round 2; the full clear drops the premium boss chest (P+1 weapon
+// choices led by the gauntlet's signature + the rare blessing offer).
 
 function updateGauntlet(w: WorldState, dt: number, ev: SimEvent[]): void {
   const g = w.gauntlet;
   if (!g || w.isRunOver || g.isRewarded) return;
-  if (w.enemies.some((e) => !e.dead) || w.pendingSpawns.length > 0) {
-    g.breath = GAUNTLET.breath;
+  if (w.enemies.some((e) => !e.dead) || w.pendingSpawns.length > 0 || w.hazards.length > 0) {
+    // The intermission runs only after R1/R2 (the first captain enters as soon as the
+    // approach is down; the reward follows the final kill on the same beat).
+    g.breath = g.stage > 0 && g.stage < GAUNTLET.rounds.length ? GAUNTLET.intermission : 0;
     return;
   }
   g.breath -= dt;
   if (g.breath > 0) return;
-  if (g.stage < GAUNTLET.stages.length) {
-    spawnGauntletStage(w, GAUNTLET.stages[g.stage], ev);
+  if (g.stage < GAUNTLET.rounds.length) {
+    spawnGauntletRound(w, GAUNTLET.rounds[g.stage], ev);
     g.stage++;
+    // The gate's +1 heart lands only after round 2 clears — i.e. alongside R3's entrance.
+    if (g.stage - 1 === GAUNTLET.heartAfterRound) {
+      const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
+      w.pickups.push(makePickup(w, "heart", (arena.cx + 0.5) * TILE + 40, (arena.cy + 0.5) * TILE, ev));
+    }
     return;
   }
-  // Sequence complete: the premium reward stands where the last miniboss fell.
+  // Sequence complete: the premium reward stands where the last captain fell.
   g.isRewarded = true;
   const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
   w.chests.push({
@@ -3372,7 +3302,7 @@ function updateGauntlet(w: WorldState, dt: number, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "bossSpawn", x: (arena.cx + 0.5) * TILE, y: (arena.cy + 0.5) * TILE, rate: 1.3, gain: 0.8, trauma: 0.1 });
 }
 
-function spawnGauntletStage(w: WorldState, stage: (typeof GAUNTLET.stages)[number], ev: SimEvent[]): void {
+function spawnGauntletRound(w: WorldState, round: (typeof GAUNTLET.rounds)[number], ev: SimEvent[]): void {
   const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
   const cx = (arena.cx + 0.5) * TILE, cy = (arena.cy + 0.5) * TILE;
   const spawnAt = (kind: Enemy["kind"], tier: Enemy["tier"], x: number, y: number, isSummoned: boolean): Enemy | null => {
@@ -3384,28 +3314,40 @@ function spawnGauntletStage(w: WorldState, stage: (typeof GAUNTLET.stages)[numbe
     ev.push({ t: "enemySpawn", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y });
     return e;
   };
-  const boss = spawnAt(stage.kind, stage.tier, cx, cy, false);
-  if (boss) {
-    // §5 miniboss calibration: an authored fraction of the depth's boss-effective HP.
-    const hp = Math.round((stage.hpFrac * bossHpForFloor(GAUNTLET.floor) * coopBossHpMult(w.encounterPlayers)) / 10) * 10;
-    boss.hp = boss.maxHp = hp;
-    ev.push({ t: "cue", name: "bossSpawn", x: boss.x, y: boss.y, rate: 0.8, gain: 0.9, trauma: 0.15 });
+  const captain = spawnAt(round.kind, round.tier, cx, cy, false);
+  if (captain) {
+    // Gate formula: round10(hpFrac × calibrated Marrow HP), party-scaled at THIS spawn.
+    const hp = Math.round((gauntletCaptainHp(round) * coopBossHpMult(w.encounterPlayers)) / 10) * 10;
+    captain.hp = captain.maxHp = hp;
+    captain.captainPhase = 1;
+    ev.push({ t: "cue", name: "bossSpawn", x: captain.x, y: captain.y, rate: 0.8, gain: 0.9, trauma: 0.15 });
   }
-  for (let i = 0; i < stage.escort; i++) {
-    const ang = (i / stage.escort) * Math.PI * 2;
-    spawnAt("bat", "swarm", cx + Math.cos(ang) * 70, cy + Math.sin(ang) * 70, true);
+  for (let i = 0; i < round.addCount; i++) {
+    const ang = (i / round.addCount) * Math.PI * 2;
+    spawnAt(round.addKind ?? "slime", round.addTier, cx + Math.cos(ang) * 70, cy + Math.sin(ang) * 70, true);
   }
 }
 
-// ---- hazards (the Weaver's webs, MARROW's rubble lanes) ----
+// The captain's two-phase contract: crossing 50% triggers ONE 0.8s stagger — the current
+// windup drops and the next commitment waits — with no invulnerability, no damage
+// reduction, and no HP floor (a big hit may carry straight through the threshold).
+function tickCaptainPhase(e: Enemy, ev: SimEvent[]): void {
+  if (e.captainPhase !== 1 || e.dead || e.hp > e.maxHp * GAUNTLET.captainPhaseAt) return;
+  e.captainPhase = 2;
+  if (e.attack.phase === "windup") enterIdle(e);
+  e.spawnTimer = Math.max(e.spawnTimer, GAUNTLET.captainTransition);
+  e.attack.cooldown = Math.max(e.attack.cooldown, GAUNTLET.captainTransition);
+  ev.push({ t: "bossPhase", eid: e.id, x: e.x, y: e.y });
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.1, gain: 0.7, trauma: 0.08 });
+}
+
+// ---- hazards (the Weaver's webs) ----
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
-  let mult = 1;
   for (const h of w.hazards) {
-    if (Math.hypot(x - h.x, y - h.y) >= h.radius) continue;
-    mult = Math.min(mult, h.kind === "web" ? WEAVER.webSlow : MARROW.rubbleSlow);
+    if (Math.hypot(x - h.x, y - h.y) < h.radius) return WEAVER.webSlow;
   }
-  return mult;
+  return 1;
 }
 
 function updateHazards(w: WorldState, dt: number): void {

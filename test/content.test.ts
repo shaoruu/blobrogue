@@ -253,10 +253,9 @@ function marrowTests(): void {
   section("Marrow: the opening line charge and its wall-crash stun");
   {
     const { w, p, boss } = marrowSetup(0xAD01);
-    // Park the pair so the charge lane points into the east wall (wall face ~x=1584; the
-    // gate's 0.60s active at 520px/s covers 312px, so start inside that reach).
-    boss.x = 1300; boss.y = 600;
-    p.x = 1500; p.y = 600;
+    // Park the pair so the charge lane points into the east wall (wall face ~x=1584).
+    boss.x = 1150; boss.y = 600;
+    p.x = 1400; p.y = 600;
     // Entrance grace, then the first commitment is the line charge.
     let guard = 0;
     while (boss.attack.move !== "rush" && guard++ < 300) step(w, idle(w.tick + 1));
@@ -269,7 +268,7 @@ function marrowTests(): void {
     check("the missed charge crashes and stuns", ev.some((x) => x.t === "chargeCrash")
       && boss.attack.move === "crash" && boss.attack.phase === "recover");
     check("P1 crash bursts no shard ring yet (that is P2+)", w.bullets.every((b) => b.friendly));
-    check("the crash stun is the gate 1.0s wall recover — the punish window", MARROW.crashStun === 1.0, `${MARROW.crashStun}s`);
+    check("the crash stun is the corrected 1.6s punish window", MARROW.crashStun === 1.6, `${MARROW.crashStun}s`);
   }
 
   section("Marrow: bone-shard volley");
@@ -300,7 +299,7 @@ function marrowTests(): void {
     plantBullet(w, boss.x, boss.y, 1e6);
     stepFor(w, 0.1, ev);
     const enter = ev.find((x) => x.t === "bossTransition" && x.entering);
-    check("a million-damage hit floors the Marrow at 58%", Math.abs(boss.hp - MARROW.phaseFloor[0] * boss.maxHp) < 1e-6,
+    check("a million-damage hit floors the Marrow at 57%", Math.abs(boss.hp - MARROW.phaseFloor[0] * boss.maxHp) < 1e-6,
       `hp=${boss.hp}/${boss.maxHp}`);
     check("the overflow is queued and the shield beat raised", enter !== undefined && boss.attack.move === "shield");
     const husks = w.enemies.filter((e) => e.isSummoned && e.kind === "skeleton" && !e.dead);
@@ -334,7 +333,7 @@ function marrowTests(): void {
     stepFor(w, 0.2);
     plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
     stepFor(w, 0.1);
-    check("a clean 66% cross shields without queueing", boss.attack.move === "shield"
+    check("a clean 65% cross shields without queueing", boss.attack.move === "shield"
       && Math.abs(boss.hp - 0.6 * boss.maxHp) < 1);
     stepFor(w, MARROW.shieldMinDuration);
     for (const h of w.enemies.filter((e) => e.isSummoned && !e.dead)) {
@@ -501,16 +500,15 @@ function choirTests(): void {
     while (boss.attack.move !== "wail" && guard++ < 600) step(w, idle(w.tick + 1));
     check("the Choir telegraphs the wail volley", boss.attack.move === "wail" && boss.attack.phase === "windup");
     let released = false;
+    let wails = 0;
     for (let i = 0; i < Math.round((CHOIR.wailWindup + 0.2) / DT) && !released; i++) {
       const out = step(w, idle(w.tick + 1));
-      if (out.some((x) => x.t === "bossVolley")) released = true;
+      if (out.some((x) => x.t === "bossVolley")) {
+        released = true;
+        wails = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
+      }
     }
-    // Gate §3: the volley rains SEQUENTIALLY — one seeker per release step, never a wall.
-    const atRelease = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
-    stepFor(w, CHOIR.wailCount[1] * CHOIR.wailReleaseGap + 0.05);
-    const wails = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
-    check("the first release step throws exactly ONE wail (sequential rain)", released && atRelease === 1, `atRelease=${atRelease}`);
-    check("the full P1 stream totals the 2-wail volley", wails === CHOIR.wailCount[1], `wails=${wails}`);
+    check("P1 releases a 2-wail volley of seekers", released && wails === CHOIR.wailCount[1], `wails=${wails}`);
     // The homing: move the player sideways; the wail's velocity must bend toward them.
     const wail = w.bullets.find((b) => !b.friendly && b.homing !== undefined);
     check("a wail exists to track", wail !== undefined);
@@ -552,7 +550,7 @@ function choirTests(): void {
     stepFor(w, 0.2);
     plantBullet(w, boss.x, boss.y, 1e6);
     stepFor(w, 0.1);
-    check("a million-damage hit floors the Choir at 58%", Math.abs(boss.hp - CHOIR.phaseFloor[0] * boss.maxHp) < 1e-6,
+    check("a million-damage hit floors the Choir at 57%", Math.abs(boss.hp - CHOIR.phaseFloor[0] * boss.maxHp) < 1e-6,
       `hp=${boss.hp}/${boss.maxHp}`);
     check("the Choir scatters (split beat, boss out of play)", boss.attack.move === "split");
     const wisps = w.enemies.filter((e) => e.isSummoned && e.kind === "ghost" && !e.dead);
@@ -668,7 +666,7 @@ function weaverTests(): void {
     const ev: SimEvent[] = [];
     plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
     stepFor(w, 0.15, ev);
-    check("a 66% cross raises the molt (roar semantics)", boss.attack.move === "roar");
+    check("a 65% cross raises the molt (roar semantics)", boss.attack.move === "roar");
     const brood = w.enemies.filter((e) => e.isSummoned && e.kind === "bat" && !e.dead);
     check("two swarm broodling bats spawn with the beat", brood.length === WEAVER.moltAdds && brood.every((x) => x.tier === "swarm"));
     const shotsBefore = w.bullets.filter((b) => !b.friendly).length;
@@ -756,134 +754,33 @@ function gildedTests(): void {
   }
 }
 
-// ---- the studio-gate pressure contracts (gate §3 rows on the approved kits) ----
-
-function gatePressureTests(): void {
-  section("gate §3 Marrow: P2 pair charges; P3 rubble lanes (max 2, 4s)");
-  {
-    // Surgery to P2: the pair contract — a clean miss re-tracks into a second full
-    // telegraph within one commitment (one cooldown), and a connect/crash ends the pair.
-    const { w, p, boss } = marrowSetup(0xAD11);
-    boss.boss!.phase = 2;
-    boss.boss!.transitionsDone = 1;
-    boss.x = 800; boss.y = 600;
-    p.x = 1050; p.y = 600;
-    let releases = 0;
-    let guard = 0;
-    // Ride exactly one rush commitment: count releases ("dash" cues) until it recovers.
-    while (boss.attack.move !== "rush" && guard++ < 400) step(w, idle(w.tick + 1));
-    check("the P2 Marrow telegraphs the rush", boss.attack.move === "rush");
-    guard = 0;
-    while (!(boss.attack.phase === "recover") && guard++ < 400) {
-      // Step aside the moment the aim locks so every lane misses cleanly.
-      if (boss.attack.isAimLocked && boss.attack.phase === "windup") { p.y = boss.y + 260; p.x = boss.x; }
-      const out = step(w, idle(w.tick + 1));
-      releases += out.filter((x) => x.t === "cue" && x.name === "dash").length;
-    }
-    check("one P2 commitment releases the PAIR (two charges, one cooldown)", releases === 2, `releases=${releases}`);
-  }
-  {
-    // Surgery to P3: rubble paves along the furrow; live lanes cap at 2 (oldest expires).
-    const { w, p, boss } = marrowSetup(0xAD12);
-    boss.boss!.phase = 3;
-    boss.boss!.transitionsDone = 2;
-    boss.x = 800; boss.y = 600;
-    p.x = 1050; p.y = 600;
-    let rushesSeen = 0;
-    let sawRubble = false;
-    let lanesOk = true;
-    let wasActive = false;
-    for (let t = 0; t < 60 * 30 && rushesSeen < 3; t++) {
-      if (boss.attack.isAimLocked && boss.attack.phase === "windup" && boss.attack.move === "rush") {
-        p.y = boss.y + 280; p.x = boss.x; // sidestep: every lane runs its full length
-      }
-      const isActive = boss.attack.move === "rush" && boss.attack.phase === "active";
-      if (wasActive && !isActive) rushesSeen++;
-      wasActive = isActive;
-      step(w, idle(w.tick + 1));
-      const rubble = w.hazards.filter((h) => h.kind === "rubble");
-      if (rubble.length > 0) sawRubble = true;
-      const lanes = new Set(rubble.map((h) => h.lane));
-      if (lanes.size > MARROW.rubbleMaxLanes) lanesOk = false;
-    }
-    check("P3 charges pave rubble slow-lanes down the furrow", sawRubble && rushesSeen >= 2, `rushes=${rushesSeen}`);
-    check("live rubble never exceeds the 2-lane cap (oldest expires first)", lanesOk);
-    check("rubble pads carry the gate lifetime", MARROW.rubbleLife === 4 && MARROW.rubbleMaxLanes === 2);
-  }
-
-  section("gate §3 Weaver: the P2 2-hit (.45s gap) and the P3 real-plus-afterimages");
-  {
-    const { w, p, boss } = weaverSetup(0x3EB1);
-    boss.boss!.phase = 2;
-    boss.boss!.transitionsDone = 1;
-    let guard = 0;
-    while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
-    check("the P2 Weaver telegraphs the pounce", boss.attack.move === "pounce");
-    const landAt: number[] = [];
-    guard = 0;
-    while (landAt.length < 2 && guard++ < 600) {
-      p.x = boss.attack.markX + 220; p.y = boss.attack.markY; // never stand the mark
-      const out = step(w, idle(w.tick + 1));
-      if (out.some((x) => x.t === "bossSlam")) landAt.push(w.tick * DT);
-    }
-    check("the P2 commitment lands the 2-hit", landAt.length === 2, `hits=${landAt.length}`);
-    check("the chained leap re-telegraphs on the gate's .45s land-to-land gap",
-      landAt.length === 2 && Math.abs(landAt[1] - landAt[0] - 0.45) <= 3 * DT,
-      landAt.length === 2 ? `gap=${(landAt[1] - landAt[0]).toFixed(2)}s` : "");
-  }
-  {
-    const { w, p, boss } = weaverSetup(0x3EB2);
-    boss.boss!.phase = 3;
-    boss.boss!.transitionsDone = 2;
-    let guard = 0;
-    while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
-    let feints = 0;
-    let lands = 0;
-    guard = 0;
-    while (!(boss.attack.phase === "recover") && guard++ < 600) {
-      p.x = boss.attack.markX + 220; p.y = boss.attack.markY;
-      const out = step(w, idle(w.tick + 1));
-      feints += out.filter((x) => x.t === "pounceFeint").length;
-      lands += out.filter((x) => x.t === "bossSlam").length;
-    }
-    check("P3 throws one REAL pounce dressed with two afterimage feints",
-      feints === WEAVER.pounceFeints[3] && lands === 1, `feints=${feints} lands=${lands}`);
-  }
-}
-
 // ---- the encounter curriculum: cadence, deck, family intros, the F10 gauntlet ----
 
 function curriculumTests(): void {
-  section("curriculum §2: one new family lesson per floor (the authored intro ladder)");
+  section("corrected gate §2: the authored roster cadence (F1 slime -> F7 shielder)");
   {
-    const byFloor = new Map<number, EnemyKind[]>();
-    for (const [kind, floor] of Object.entries(FAMILY_INTRO_FLOOR) as Array<[EnemyKind, number]>) {
-      byFloor.set(floor, [...(byFloor.get(floor) ?? []), kind]);
-    }
-    let oneLessonOk = true;
-    for (const [floor, kinds] of byFloor) {
-      // F2 is the documented exception: the skeleton rides along as the HUNT family's
-      // "guaranteed melee" escalation, not a new family (curriculum §2 F2).
-      const allowed = floor === 2 ? 2 : 1;
-      if (kinds.length > allowed) oneLessonOk = false;
-    }
-    check("no floor introduces more than one new family (F2's skeleton = HUNT escalation)", oneLessonOk);
-    check("the curriculum intro floors hold (spitter F3, ghost F7, shielder F8, charger F11, burrower F12, orbiter F17)",
-      FAMILY_INTRO_FLOOR.spitter === 3 && FAMILY_INTRO_FLOOR.ghost === 7 && FAMILY_INTRO_FLOOR.shielder === 8
-      && FAMILY_INTRO_FLOOR.charger === 11 && FAMILY_INTRO_FLOOR.burrower === 12 && FAMILY_INTRO_FLOOR.orbiter === 17);
-    // The plans respect the ladder live: no kind spawns before its intro floor.
+    check("the corrected cadence table holds (bat/skeleton/spitter F2, ghost/charger F3, burrower F4, orbiter F6, shielder F7)",
+      FAMILY_INTRO_FLOOR.slime === 1 && FAMILY_INTRO_FLOOR.bat === 2 && FAMILY_INTRO_FLOOR.skeleton === 2
+      && FAMILY_INTRO_FLOOR.spitter === 2 && FAMILY_INTRO_FLOOR.ghost === 3 && FAMILY_INTRO_FLOOR.charger === 3
+      && FAMILY_INTRO_FLOOR.burrower === 4 && FAMILY_INTRO_FLOOR.orbiter === 6 && FAMILY_INTRO_FLOOR.shielder === 7);
+    // The plans respect the cadence live: no kind spawns before its intro floor, and F1
+    // fields slimes only (the gate's teach floor).
     let introOk = true;
+    let f1Ok = true;
     for (let i = 0; i < 10 && introOk; i++) {
       const seed = 0xC0DE + i * 4241;
-      for (let floor = 1; floor <= 18 && introOk; floor++) {
+      for (let floor = 1; floor <= 9 && introOk; floor++) {
         if (isBossFloor(floor)) continue;
         const d = generateDungeon(seed, floor);
-        for (const e of [...spawnFloorEnemies(d, seed, floor).active, ...spawnFloorEnemies(d, seed, floor).pending]) {
+        const spawns = spawnFloorEnemies(d, seed, floor);
+        for (const e of [...spawns.active, ...spawns.pending]) {
           if (floor < (FAMILY_INTRO_FLOOR[e.kind] ?? 0)) introOk = false;
+          if (floor === 1 && e.kind !== "slime") f1Ok = false;
         }
       }
     }
-    check("no family ever spawns before its authored intro floor (10 seeds × F1–18)", introOk);
+    check("no family ever spawns before its intro floor (10 seeds × F1–9)", introOk);
+    check("floor 1 fields slimes only (the teach floor)", f1Ok);
   }
 
   section("curriculum §4: the deterministic anti-repeat encounter deck");
@@ -918,7 +815,7 @@ function curriculumTests(): void {
     check("the first room after a milestone floor is the authored breather", breatherOk);
   }
 
-  section("curriculum §2 F10: the sequential Miniboss Gauntlet");
+  section("corrected gate §3 F10: the sequential captain gauntlet");
   {
     const w = createWorld(0xF10A, 10);
     w.isGodMode = true;
@@ -926,39 +823,47 @@ function curriculumTests(): void {
     check("the arena starts without a boss (non-boss milestone)", w.enemies.every((e) => !isBossKind(e.kind)));
 
     const entrances: Array<{ kind: EnemyKind; tier: string; at: number; maxHp: number }> = [];
-    let lastKillAt = 0;
+    let lastClearAt = 0;
+    let wasAnyAlive = false;
     const gaps: number[] = [];
-    let maxMinibosses = 0;
+    let maxCaptains = 0;
+    let heartAtRoundThree = false;
     let clearedEarly = false;
-    for (let t = 0; t < 60 * 60 && !isFloorCleared(w); t++) {
+    let sawTransition = false;
+    for (let t = 0; t < 60 * 90 && !isFloorCleared(w); t++) {
       for (const e of w.enemies) {
-        if (!e.dead) plantBullet(w, e.x, e.y, 5000, 18);
+        if (!e.dead) plantBullet(w, e.x, e.y, e.captainPhase !== undefined ? 60 : 5000, 18);
       }
       const evs = step(w, idle(t + 1));
       for (const e of evs) {
         if (e.t === "enemySpawn") {
           const spawned = w.enemies.find((x) => x.id === e.eid)!;
-          if (spawned.tier === "elite" || spawned.tier === "brute") {
-            gaps.push(t * DT - lastKillAt);
+          if (spawned.captainPhase !== undefined) {
+            gaps.push(t * DT - lastClearAt);
             entrances.push({ kind: spawned.kind, tier: spawned.tier, at: t * DT, maxHp: spawned.maxHp });
+            if (entrances.length === 3) heartAtRoundThree = w.pickups.some((k) => k.kind === "heart");
           }
         }
-        if (e.t === "enemyKill") lastKillAt = t * DT;
+        if (e.t === "bossPhase") sawTransition = true;
       }
-      const minibosses = w.enemies.filter((e) => !e.dead && (e.tier === "elite" || e.tier === "brute")).length;
-      maxMinibosses = Math.max(maxMinibosses, minibosses);
+      const anyAlive = w.enemies.some((e) => !e.dead);
+      if (wasAnyAlive && !anyAlive) lastClearAt = t * DT;
+      wasAnyAlive = anyAlive;
+      const captains = w.enemies.filter((e) => !e.dead && e.captainPhase !== undefined).length;
+      maxCaptains = Math.max(maxCaptains, captains);
       if (isFloorCleared(w) && w.gauntlet !== null && !w.gauntlet.isRewarded) clearedEarly = true;
     }
-    check("the gauntlet stages the authored sequence (Flock Commander -> Orbiter elite -> Shielder brute)",
-      entrances.map((e) => `${e.kind}/${e.tier}`).join(" ") === "bat/elite orbiter/elite shielder/brute",
+    check("the gauntlet stages the corrected sequence (Charger commander -> Shielder elite -> brute Burrower)",
+      entrances.map((e) => `${e.kind}/${e.tier}`).join(" ") === "charger/elite shielder/elite burrower/brute",
       entrances.map((e) => `${e.kind}/${e.tier}`).join(" "));
-    check("stages are NEVER simultaneous (max one miniboss alive)", maxMinibosses === 1, `max=${maxMinibosses}`);
-    check("every entrance waits the authored 1.2s breath after the previous clear",
-      gaps.slice(1).every((g) => g >= GAUNTLET.breath - 2 * DT),
+    check("captains are NEVER simultaneous", maxCaptains === 1, `max=${maxCaptains}`);
+    check("R2/R3 wait the authored 5s intermission after the prior full clear",
+      gaps.length === 3 && gaps.slice(1).every((g) => g >= GAUNTLET.intermission - 2 * DT),
       gaps.map((g) => g.toFixed(2)).join(","));
-    check("each miniboss carries 45-70% of the depth's boss-effective HP (§5)",
-      entrances.every((e) => e.maxHp >= 0.45 * bossHpForFloor(10) - 10 && e.maxHp <= 0.70 * bossHpForFloor(10) + 10),
-      entrances.map((e) => e.maxHp).join(","));
+    check("captain HP is the gate formula: 350 / 400 / 500 (round10 of .28/.32/.40 × Marrow)",
+      entrances.map((e) => e.maxHp).join(",") === "350,400,500", entrances.map((e) => e.maxHp).join(","));
+    check("every captain walks its 50% two-phase transition (logged, non-invulnerable)", sawTransition);
+    check("the +1 heart lands only after round 2 clears", heartAtRoundThree);
     check("the floor never reads cleared before the sequence resolves", !clearedEarly);
     check("the final clear drops the premium boss chest with the gauntlet signature",
       isFloorCleared(w) && w.chests.some((c) => c.kind === "boss" && c.weapon === GAUNTLET.chestWeapon));
@@ -968,10 +873,40 @@ function curriculumTests(): void {
     const p = w.players.get(LOCAL_ID)!;
     p.x = chest.x; p.y = chest.y;
     const evs = step(w, idle(9999));
-    check("opening it raises the rare blessing offer and the P+1 choice set",
+    check("opening it raises the rare blessing offer and the P+1 choice set (no blessing before the full clear)",
       evs.some((e) => e.t === "offerBlessing" && e.rare)
       && w.pickups.filter((k) => k.isBossChoice).length === 2
       && w.pickups.some((k) => k.isBossChoice && k.weapon === GAUNTLET.chestWeapon));
+  }
+
+  section("corrected gate §3: the captain two-phase contract (no floor, non-invulnerable)");
+  {
+    const w = createWorld(0xF10C, 10, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const captain = devSpawnEnemy(w, "charger", p.x + 200, p.y);
+    captain.hp = captain.maxHp = 350;
+    captain.captainPhase = 1;
+    // Chip to just above the split, then land a huge hit: no floor may catch it.
+    plantBullet(w, captain.x, captain.y, 170, 18);
+    stepFor(w, 0.1);
+    check("the captain holds phase 1 above 50%", captain.captainPhase === 1 && captain.hp > 350 * 0.5);
+    const ev: SimEvent[] = [];
+    plantBullet(w, captain.x, captain.y, 10, 18);
+    stepFor(w, 0.1, ev);
+    check("crossing 50% flips phase 2 with ONE logged transition",
+      captain.captainPhase === 2 && ev.some((x) => x.t === "bossPhase"));
+    const hp0 = captain.hp;
+    plantBullet(w, captain.x, captain.y, 50, 18);
+    stepFor(w, 0.1);
+    check("the 0.8s transition is non-invulnerable (full damage lands through it)",
+      Math.abs(hp0 - captain.hp - 50) < 1e-6, `took ${(hp0 - captain.hp).toFixed(1)}`);
+    const fresh = devSpawnEnemy(w, "charger", p.x + 400, p.y);
+    fresh.hp = fresh.maxHp = 350;
+    fresh.captainPhase = 1;
+    plantBullet(w, fresh.x, fresh.y, 1e6, 18);
+    stepFor(w, 0.1);
+    check("no phase floor: a single huge hit carries straight through 50% to the kill", fresh.dead);
   }
 }
 
@@ -1129,11 +1064,11 @@ function weaponTests(): void {
 function rosterTests(): void {
   section("roster: the new enemies join the §4 floor plan");
   {
-    // Across seeds, the Sunless floors should actually field chargers and burrowers.
+    // Across seeds, mid floors should actually field chargers and burrowers.
     let sawCharger = false, sawBurrower = false;
     for (let i = 0; i < 12 && !(sawCharger && sawBurrower); i++) {
       const seed = 0xF00 + i * 131;
-      for (const floor of [12, 13, 14]) {
+      for (const floor of [4, 6, 7]) {
         const d = generateDungeon(seed, floor);
         const spawns = spawnFloorEnemies(d, seed, floor);
         for (const e of [...spawns.active, ...spawns.pending]) {
@@ -1145,18 +1080,18 @@ function rosterTests(): void {
     check("floor plans field chargers and burrowers", sawCharger && sawBurrower,
       `charger=${sawCharger} burrower=${sawBurrower}`);
   }
-  check("charger/burrower carry the gate's ×2 complex-movement cost (threat 2.0)",
-    ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
-  check("neither new enemy appears before its curriculum intro floor (charger F11, burrower F12)",
+  check("charger/burrower keep the corrected gate's in-flight 1.5 threat cost",
+    ENEMY_ARCHETYPES.charger.threat === 1.5 && ENEMY_ARCHETYPES.burrower.threat === 1.5);
+  check("neither new enemy appears before its corrected intro floor (charger F3, burrower F4)",
     (() => {
       for (let i = 0; i < 8; i++) {
         const seed = 0xABC + i * 977;
-        for (const floor of [1, 2, 3, 4, 6, 7, 8, 9, 11]) {
+        for (const floor of [1, 2, 3]) {
           const d = generateDungeon(seed, floor);
           const spawns = spawnFloorEnemies(d, seed, floor);
           for (const e of [...spawns.active, ...spawns.pending]) {
             if (e.kind === "burrower") return false;
-            if (e.kind === "charger" && floor < 11) return false;
+            if (e.kind === "charger" && floor < 3) return false;
           }
         }
       }
@@ -1317,8 +1252,7 @@ function main(): void {
   choirTests();
   weaverTests();
   gildedTests();
-  gatePressureTests();
-curriculumTests();
+  curriculumTests();
 rotationTests();
   bossChestTests();
   weaponTests();

@@ -76,11 +76,8 @@ export interface BossState {
   // killing them ALL drops the beat early. Empty on fixed-duration beats (King/Weaver/Warden).
   beatAddIds: number[];
   // Sequenced-emission scratch: shard pairs fired this spiral (MARROW), waves released this
-  // sweep (Gilded Warden), pounces/charges chained this commitment (Weaver/MARROW), wails
-  // streamed this volley (Choir).
+  // sweep (Gilded Warden), pounces chained this commitment (Weaver).
   spinCount: number;
-  // The rubble lane id the current MARROW charge is paving into (sim-side only).
-  rubbleLane: number;
 }
 
 export interface Enemy extends Entity {
@@ -99,6 +96,9 @@ export interface Enemy extends Entity {
   // short burst of chase speed (surgeTime). Zero on everything untouched by the order.
   surgeDelay: number;
   surgeTime: number;
+  // Gauntlet captains (corrected gate §3): 1 before the 50% split, 2 after. Undefined on
+  // every ordinary enemy — the two-phase check runs only on captains.
+  captainPhase?: number;
   // Per-behavior scratch state.
   zig: number;         // heading offset used by the bat's erratic drift
   // Deterministic slime hop-cadence clock. The slime pulses its speed off sin(hopClock);
@@ -221,7 +221,7 @@ export interface Prop {
 // props: placed by boss moves, expire on a timer, rebuilt empty on every floor load.
 // Webs SLOW players standing inside (never enemies — it's their home turf); they never
 // damage, so the pressure is routing, not attrition.
-export type HazardKind = "web" | "rubble";
+export type HazardKind = "web";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)
@@ -230,9 +230,6 @@ export interface Hazard {
   radius: number;
   life: number;    // seconds until it fades
   maxLife: number; // authored duration (drives the client's fade render)
-  // Rubble pads planted by one MARROW charge share a lane id (sim-side only — the gate
-  // caps live rubble at 2 lanes, oldest expires first). Undefined for webs.
-  lane?: number;
 }
 
 // Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are
