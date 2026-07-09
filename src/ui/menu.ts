@@ -10,7 +10,7 @@ import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { resolveNameInput, rerollBlobName } from "../net/blobName.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
-import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
+import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex, bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { cosmeticOverlay } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
@@ -120,6 +120,9 @@ export class Menu {
   // The title's live identity region: auth settling (an OAuth exchange finishing after the
   // shell painted) re-renders CONTENT inside this reserved box — never the shell around it.
   private identityMount: HTMLElement | null = null;
+  // The title's character stage refresh: identity hydration/auth settle repaints the blob
+  // inside its fixed 104px box (content only — the hero band never moves).
+  private titleStageRefresh: (() => void) | null = null;
   // The current screen's tab group for controller LB/RB (closet categories, profile views).
   private tabCycle: ((dir: 1 | -1) => void) | null = null;
 
@@ -133,6 +136,8 @@ export class Menu {
     // region's content in place when it does (same reserved geometry, zero layout shift).
     this.auth?.onChange(() => {
       if (this.identityMount) this.renderIdentityInto(this.identityMount);
+      // A settled sign-in can carry a different loadout — re-hydrate and repaint the stage.
+      if (this.titleStageRefresh) void this.flushTitleIdentity().then(() => this.titleStageRefresh?.());
     });
   }
 
@@ -143,8 +148,9 @@ export class Menu {
 
   private show(...nodes: HTMLElement[]) {
     this.teardownLobby();
-    this.identityMount = null; // the title re-arms it after its own show()
-    this.tabCycle = null;      // screens with tab groups re-arm after their own show()
+    this.identityMount = null;     // the title re-arms it after its own show()
+    this.titleStageRefresh = null; // idem
+    this.tabCycle = null;          // screens with tab groups re-arm after their own show()
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
   }
@@ -155,7 +161,7 @@ export class Menu {
   }
 
   // The always-visible close affordance on the profile surfaces (the mobile-friendly \u2715
-  // in the shell corner). Routes through the SAME guard as Back/Escape.
+  // in the shell corner). Same action as Back/Escape.
   private closeButton(onClose: () => void): HTMLButtonElement {
     const btn = el("button", "secondary panel-close", "\u2715");
     btn.type = "button";
@@ -199,7 +205,9 @@ export class Menu {
   async showTitle(focus?: TitleFocus) {
     // THE canonical home markup (finalized; supersedes every earlier shell variant):
     //   .menu-home
-    //     .hero                          logo + tagline
+    //     .hero                          the live .home-stage (the player's ACTUAL blob,
+    //                                    drawn by the shared loadout renderer), then the
+    //                                    logo + tagline
     //     .home-body
     //       .home-left                   Play heading, PLAY ONLINE, PLAY SOLO,
     //                                    fixed .home-status line, fixed leaderboard
@@ -210,18 +218,38 @@ export class Menu {
     const wrap = el("div", "menu menu-home");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
-    // Hero banner: logo + tagline, divider under it. The logo carries its intrinsic
-    // dimensions (1128x192) so the box is reserved before the file streams in.
+    // Hero band: the character stage on the left, logo + tagline centered (a matching
+    // empty grid track on the right keeps the wordmark on the shell's axis). The stage
+    // shows YOUR blob — equipped hat/glasses/body color through the exact renderer the
+    // world and closet use, idling — inside a fixed 104px box reserved from first paint.
+    // It is display only (no button, aria description instead), so PLAY stays the first
+    // and dominant action.
     const hero = el("div", "hero");
+    const stageBox = el("div", "home-stage");
+    stageBox.setAttribute("role", "img");
+    stageBox.setAttribute("aria-label", this.stageLabel());
+    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 104);
+    stageBox.appendChild(stagePreview.el);
+    hero.appendChild(stageBox);
+    const heroText = el("div", "hero-text");
+    // The logo carries its intrinsic dimensions (1128x192) so the box is reserved before
+    // the file streams in.
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
     logo.className = "logo-img";
     logo.alt = "BLOBROGUE";
     logo.width = 1128;
     logo.height = 192;
-    hero.appendChild(logo);
-    hero.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    heroText.appendChild(logo);
+    heroText.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    hero.appendChild(heroText);
     wrap.appendChild(hero);
+    // Hydration repaints the blob inside the same fixed box — content only, zero shift.
+    // (Armed after show(); show() clears the previous screen's hook.)
+    const refreshStage = () => {
+      stagePreview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+      stageBox.setAttribute("aria-label", this.stageLabel());
+    };
 
     if (!this.client) {
       // Offline build: no profile/multiplayer — single centered actions column, no split.
@@ -237,6 +265,7 @@ export class Menu {
       left.appendChild(nav);
       wrap.appendChild(left);
       this.show(wrap);
+      this.titleStageRefresh = refreshStage;
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
       return;
     }
@@ -279,8 +308,10 @@ export class Menu {
     wrap.appendChild(body);
     this.show(wrap);
     this.identityMount = identity;
-    // Background identity flush (login/adoption) — no home UI depends on its timing.
-    void this.flushTitleIdentity();
+    this.titleStageRefresh = refreshStage;
+    // Background identity flush (login/adoption) — no home UI depends on its timing; the
+    // stage repaints in place once the profile's loadout lands.
+    void this.flushTitleIdentity().then(() => this.titleStageRefresh?.());
     // Back/Escape focus restore: land keyboard focus on the destination that was used
     // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
     if (focus?.dest) focusTargets.get(focus.dest)?.focus();
@@ -297,6 +328,26 @@ export class Menu {
     } catch {
       // the home shell stands
     }
+  }
+
+  // The stage's accessible description mirrors exactly what it draws — the equipped
+  // loadout by display name, or the classic default look for a fresh guest.
+  private stageLabel(): string {
+    const loadout = this.session.cosmetics;
+    // The rendered tint: the worn body item, else a legacy party-color pick (the same
+    // fallback lookOf paints with), else the classic amber default.
+    const bodyName = loadout.body !== null
+      ? cosmeticById(loadout.body)?.name
+      : this.session.colorIndex !== null
+        ? bodyItemForPaletteIndex(this.session.colorIndex)?.name
+        : undefined;
+    const worn = [loadout.hat, loadout.face]
+      .map((id) => (id !== null ? cosmeticById(id)?.name : undefined))
+      .concat(bodyName)
+      .filter((name): name is string => name !== undefined);
+    return worn.length > 0
+      ? `your blob \u2014 wearing ${worn.join(", ")}`
+      : "your blob \u2014 the classic amber cowboy look";
   }
 
   // A 90px home destination card: the label leads (and IS the button's own text, so focus
@@ -767,34 +818,26 @@ export class Menu {
 
     const goBack = () => void this.showTitle({ dest: "profile" });
 
-    // Every way OUT of the closet (back, Escape/B, the Overview tab, the close \u2715)
-    // goes through the discard guard when unsaved preview picks exist; the Overview has no
-    // unsaved state.
-    let guard: (leave: () => void) => void = (leave) => leave();
+    // Closing (back, Escape/B, the Overview tab, the close \u2715) just closes: equips are
+    // instant and already persisted in the background, so there is never anything to
+    // discard and never a confirmation in the way.
     let closetTabCycle: ((dir: 1 | -1) => void) | null = null;
     if (view === "overview") this.buildOwnOverview(wrap);
-    else {
-      const closet = this.buildCloset(wrap);
-      guard = closet.requestLeave;
-      closetTabCycle = closet.cycleCategory;
-    }
-    wrap.prepend(this.closeButton(() => guard(goBack)));
+    else closetTabCycle = this.buildCloset(wrap).cycleCategory;
+    wrap.prepend(this.closeButton(goBack));
 
-    overviewTab.onclick = () => { if (view !== "overview") guard(() => void this.showProfile("overview")); };
+    overviewTab.onclick = () => { if (view !== "overview") void this.showProfile("overview"); };
     closetTab.onclick = () => { if (view !== "closet") void this.showProfile("closet"); };
 
     const row = el("div", "btnrow");
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => guard(goBack));
+    back.addEventListener("click", goBack);
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
-    this.bindEscape(() => guard(goBack));
+    this.bindEscape(goBack);
     // Controller LB/RB: closet cycles its categories; the Overview toggles the views.
-    this.tabCycle = closetTabCycle ?? ((dir) => {
-      void dir;
-      guard(() => void this.showProfile("closet"));
-    });
+    this.tabCycle = closetTabCycle ?? (() => void this.showProfile("closet"));
 
     if (view === "overview") void this.hydrateOwnOverview();
     else void this.hydrateCloset();
@@ -892,18 +935,21 @@ export class Menu {
 
   // ---- THE CLOSET (own-profile-only, fixed panel) ------------------------------------
   //
-  // Browse -> preview -> commit, with real state semantics:
-  //   - clicking an unlocked card writes a PENDING pick (temporary preview only, per slot;
-  //     pending picks survive category switches)
-  //   - EQUIP persists the ACTIVE category's pending pick only
-  //   - RESET restores the equipped look (discards all pending) without any write
-  //   - leaving (back / Escape / the Overview tab) with unsaved picks swaps the action
-  //     strip into an explicit discard confirmation — same fixed geometry
+  // INSTANT EQUIP — there is no staging model, no save step, nothing to discard:
+  //   - clicking/tapping/A/Enter an OWNED card equips it IMMEDIATELY: the stage updates,
+  //     the card wears the unmistakable EQUIPPED state (chip text + persistent \u2713 badge +
+  //     the amber double frame + 3px lift), the category's previous card loses it
+  //   - persistence is OPTIMISTIC: the local apply is instant, the server write runs in
+  //     the background (a tiny corner spinner rides the card while in flight); success is
+  //     silent, FAILURE reverts stage + badge to the previously-equipped item with one
+  //     non-blocking inline message. Rapid switching is last-click-wins via a per-slot
+  //     sequence, so a slow earlier response can never override a newer pick.
+  //   - clicking the already-equipped card is a no-op; closing just closes.
   // Categories are REAL only: a slot renders a tab only while it has items (future slots
-  // stay hidden until populated). Locked cards are disabled (cannot focus or equip) and
-  // wear their exact configured condition — no mystery. Card states are distinguished by
-  // geometry + glyph + text, never hue alone. The mirror renders through the same shared
-  // loadout renderer as the world.
+  // stay hidden until populated). LOCKED cards are never equippable but stay FOCUSABLE so
+  // the condition is readable — the chip IS the exact configured condition, activation
+  // reads it out inline. Card states are distinguished by geometry + glyph + text, never
+  // hue alone. The mirror renders through the same shared loadout renderer as the world.
 
   private closetRefresh: (() => void) | null = null;
 
@@ -921,10 +967,7 @@ export class Menu {
     try { localStorage.setItem("blobrogue.closet.seenUnlocks", JSON.stringify(unlocks)); } catch { /* ignore */ }
   }
 
-  private buildCloset(wrap: HTMLElement): { requestLeave: (leave: () => void) => void; cycleCategory: (dir: 1 | -1) => void } {
-    // Pending picks: slot -> id-or-null (null = the always-unlocked empty slot). A pick
-    // equal to the equipped value clears itself — no phantom "unsaved" state.
-    const pending = new Map<CosmeticSlot, string | null>();
+  private buildCloset(wrap: HTMLElement): { cycleCategory: (dir: 1 | -1) => void } {
     const categories = COSMETIC_SLOTS.filter((slotDef) => cosmeticsForSlot(slotDef.slot).length > 0);
     let active: CosmeticSlot = categories[0]?.slot ?? "hat";
     // NEW badges: real unlocks earned since the last closet visit (marked seen on open).
@@ -936,32 +979,55 @@ export class Menu {
     const stage = el("div", "closet-stage");
     const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 128);
     stage.appendChild(preview.el);
-    const stageState = el("p", "closet-stage-state", "EQUIPPED");
-    stage.appendChild(stageState);
     panel.appendChild(stage);
 
     const rightCol = el("div", "closet-right");
     const cats = el("div", "closet-cats");
     const grid = el("div", "closet-grid");
+    // The ONE inline message line (reserved height): the failure revert notice and the
+    // locked-condition readout swap text here — nothing modal, nothing moves.
     const note = el("p", "muted closet-note", "");
-    const actions = el("div", "closet-actions");
-    rightCol.append(cats, grid, note, actions);
+    rightCol.append(cats, grid, note);
     panel.appendChild(rightCol);
     wrap.appendChild(panel);
 
     const unlocks = () => this.session.profile?.unlocks ?? [];
     const equippedOf = (slot: CosmeticSlot) => this.session.cosmetics[slot];
-    const effectiveOf = (slot: CosmeticSlot) => (pending.has(slot) ? pending.get(slot) ?? null : equippedOf(slot));
-    const effectiveLoadout = (): CosmeticLoadout => ({
-      hat: effectiveOf("hat"),
-      face: effectiveOf("face"),
-      body: effectiveOf("body"),
-      title: effectiveOf("title"),
-    });
+    const syncStage = () => preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
 
-    const syncStage = () => {
-      preview.setLook(lookOf(effectiveLoadout(), this.session.colorIndex));
-      stageState.textContent = pending.size > 0 ? "PREVIEWING \u2014 unsaved" : "EQUIPPED";
+    // Optimistic-equip bookkeeping: a per-slot sequence makes rapid switching last-click-
+    // wins (a stale response is simply ignored), and the in-flight pick wears the corner
+    // spinner while its background write runs.
+    const equipSeq = new Map<CosmeticSlot, number>();
+    const inFlight = new Map<CosmeticSlot, string | null>();
+
+    const equip = (id: string | null) => {
+      const slot = active;
+      if (equippedOf(slot) === id) return; // selecting the equipped item is a no-op
+      const token = (equipSeq.get(slot) ?? 0) + 1;
+      equipSeq.set(slot, token);
+      const prevId = equippedOf(slot);
+      const prevColor = this.session.colorIndex;
+      inFlight.set(slot, id);
+      note.textContent = "";
+      // Apply locally NOW (stage + badge move immediately); persist in the background.
+      const persist = slot === "body"
+        ? this.session.setColorIndex(id !== null ? cosmeticById(id)?.paletteIndex ?? 0 : 0)
+        : this.session.setCosmetic(slot, id);
+      renderAll();
+      void persist.then((isSaved) => {
+        if (equipSeq.get(slot) !== token) return; // a newer pick owns this slot
+        inFlight.delete(slot);
+        // isKept covers the server-authority reconcile: a write the backend refused has
+        // already been rolled back by the session and must read as a failure here too.
+        const isKept = equippedOf(slot) === id;
+        if (!isSaved) {
+          if (slot === "body") this.session.revertColor(prevColor, prevId);
+          else this.session.revertCosmetic(slot, prevId);
+        }
+        if (!isSaved || !isKept) note.textContent = "COULDN'T SAVE \u2014 REVERTED";
+        renderAll();
+      });
     };
 
     const renderCats = () => {
@@ -969,7 +1035,7 @@ export class Menu {
       for (const slotDef of categories) {
         const tab = el("button", `secondary closet-cat${slotDef.slot === active ? " on" : ""}`, slotDef.label);
         tab.type = "button";
-        tab.onclick = () => { active = slotDef.slot; renderAll(); };
+        tab.onclick = () => { active = slotDef.slot; note.textContent = ""; renderAll(); };
         cats.appendChild(tab);
       }
     };
@@ -995,32 +1061,35 @@ export class Menu {
       return icon;
     };
 
+    // One card. State language: .cos-card owned|equipped|locked, the .cos-check badge,
+    // the .cos-lock glyph, the .cos-saving corner spinner — states read by GEOMETRY +
+    // GLYPH + TEXT (double frame, lift, badge, chip copy), never hue alone.
     const addCard = (def: CosmeticDef | null, label: string) => {
       const id = def?.id ?? null;
       const isLocked = def !== null && !isCosmeticOwned(def, unlocks());
       const isEquipped = equippedOf(active) === id;
-      const isPreviewing = pending.has(active) && (pending.get(active) ?? null) === id;
-      const btn = el("button", "cos-tile");
+      const isSaving = inFlight.has(active) && (inFlight.get(active) ?? null) === id;
+      const condition = def?.hint ?? "secret";
+      const btn = el("button", `cos-card ${isLocked ? "locked" : isEquipped ? "equipped" : "owned"}`);
       btn.type = "button";
-      btn.classList.toggle("sel", isEquipped);
-      btn.classList.toggle("prev", isPreviewing);
-      btn.classList.toggle("locked", isLocked);
       btn.setAttribute("aria-pressed", String(isEquipped));
-      // State semantics carried by geometry + glyph + text (never hue alone); locked cards
-      // are DISABLED — they cannot take focus or equip, and wear their exact condition.
-      btn.disabled = isLocked;
-      const glyph = isLocked ? "\u2716" : isPreviewing ? "\u25b8" : isEquipped ? "\u25c9" : isNewUnlock(id ?? "") ? "\u2605" : "";
-      const stateText = isLocked
-        ? `LOCKED \u2014 ${def?.hint ?? "secret"}`
-        : isPreviewing ? "PREVIEWING" : isEquipped ? "EQUIPPED" : isNewUnlock(id ?? "") ? "NEW" : "";
-      btn.append(el("span", "cos-glyph", glyph), cardIcon(def), el("span", "cos-name", label), el("span", "cos-state", stateText));
-      btn.setAttribute("aria-label", `${active}: ${label}${isLocked ? ` \u2014 locked, ${def?.hint ?? "secret"}` : ""}`);
+      if (isLocked) btn.appendChild(el("span", "cos-lock"));
+      if (isEquipped) btn.appendChild(el("span", "cos-check", "\u2713"));
+      btn.append(cardIcon(def), el("span", "cos-name", label));
+      // The chip: EQUIPPED, the exact unlock condition (locked), or the one-visit NEW tag.
+      const chip = isLocked
+        ? condition.toUpperCase()
+        : isEquipped ? "EQUIPPED" : isNewUnlock(id ?? "") ? "NEW" : "";
+      btn.appendChild(el("span", "cos-chip", chip));
+      if (isSaving) btn.appendChild(el("span", "cos-saving"));
+      btn.setAttribute("aria-label", isLocked
+        ? `${label}, locked \u2014 ${condition}`
+        : `${label}${isEquipped ? ", equipped" : ""}`);
+      // Locked cards stay focusable/clickable so the condition is readable everywhere —
+      // activation READS the condition inline, it never equips.
       btn.onclick = () => {
-        // Browsing updates the TEMPORARY preview only; equality with the equipped value
-        // clears the pending pick (nothing unsaved).
-        if (equippedOf(active) === id) pending.delete(active);
-        else pending.set(active, id);
-        renderAll();
+        if (isLocked) { note.textContent = `LOCKED \u2014 ${condition.toUpperCase()}`; return; }
+        equip(id);
       };
       grid.appendChild(btn);
     };
@@ -1028,37 +1097,12 @@ export class Menu {
     const renderGrid = () => {
       grid.replaceChildren();
       const slotDef = categories.find((c) => c.slot === active);
+      // The always-owned DEFAULT/NONE card leads every category.
       addCard(null, slotDef?.noneLabel ?? "None");
       for (const def of cosmeticsForSlot(active)) addCard(def, def.name);
     };
 
-    const renderActions = () => {
-      actions.replaceChildren();
-      const equip = el("button", "closet-equip", "EQUIP");
-      equip.type = "button";
-      equip.disabled = !pending.has(active);
-      equip.onclick = () => {
-        if (!pending.has(active)) return;
-        const pick = pending.get(active) ?? null;
-        if (active === "body") {
-          // One pick drives the cosmetic body item AND the party color at launch.
-          const def = pick !== null ? cosmeticById(pick) : undefined;
-          this.session.setColorIndex(def?.paletteIndex ?? 0);
-        } else {
-          this.session.setCosmetic(active, pick);
-        }
-        pending.delete(active);
-        note.textContent = "equipped";
-        renderAll();
-      };
-      const reset = el("button", "secondary closet-reset", "RESET");
-      reset.type = "button";
-      reset.disabled = pending.size === 0;
-      reset.onclick = () => { pending.clear(); note.textContent = ""; renderAll(); };
-      actions.append(equip, reset);
-    };
-
-    const renderAll = () => { renderCats(); renderGrid(); renderActions(); syncStage(); };
+    const renderAll = () => { renderCats(); renderGrid(); syncStage(); };
     renderAll();
     this.closetRefresh = renderAll;
     // This visit's NEW badges are computed — mark everything seen for the next visit.
@@ -1068,24 +1112,10 @@ export class Menu {
     const cycleCategory = (dir: 1 | -1) => {
       const idx = categories.findIndex((c) => c.slot === active);
       const next = categories[(idx + dir + categories.length) % categories.length];
-      if (next) { active = next.slot; renderAll(); }
+      if (next) { active = next.slot; note.textContent = ""; renderAll(); }
     };
 
-    // Leaving with unsaved picks needs an explicit decision; the confirmation swaps INSIDE
-    // the fixed action strip.
-    const requestLeave = (leave: () => void) => {
-      if (pending.size === 0) { leave(); return; }
-      actions.replaceChildren();
-      actions.appendChild(el("span", "closet-confirm-copy", "discard unsaved preview?"));
-      const discard = el("button", "secondary closet-discard", "DISCARD");
-      discard.type = "button";
-      discard.onclick = () => { pending.clear(); leave(); };
-      const keep = el("button", "secondary closet-keep", "KEEP BROWSING");
-      keep.type = "button";
-      keep.onclick = () => { renderActions(); };
-      actions.append(discard, keep);
-    };
-    return { requestLeave, cycleCategory };
+    return { cycleCategory };
   }
 
   private async hydrateCloset() {
