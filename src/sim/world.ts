@@ -30,7 +30,7 @@ import {
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
-  WEAPON_BOSS_COEF,
+  WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
@@ -116,6 +116,17 @@ export interface PlayerSim {
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
+  // WHO is channeling this downed player's revive (gate §6: one reviver only, 1.5s
+  // UNINTERRUPTED). Identity makes the cancel rules exact: the channeler's damage, dash,
+  // attack, or exit resets the channel; a bystander's does not. Null when up / unattended.
+  reviveBy: PlayerId | null;
+  // Downs on THIS floor (gate §1, Standard: 3/player/floor). Past the limit the player is
+  // OUT — unrevivable until the party's descent rescues them. Reset every floor.
+  downsThisFloor: number;
+  // Whether this player's interact key (E) is held THIS tick — the explicit revive-channel
+  // intent. Derived from the consumed input every stepPlayerPhase, never wired: the server
+  // sets it from the inputs it consumes, prediction from the same inputs locally.
+  isInteracting: boolean;
   // Lag-compensation rewind for THIS player's shots/swings, in ticks (server-computed from the
   // player's measured RTT + interp delay, clamped). 0 in solo/prediction, so hit tests use
   // present-time positions and behavior is unchanged.
@@ -211,6 +222,9 @@ export interface WorldState {
   // Whether this floor's between-floor blessing offers were already raised at the exit gate
   // (one offer per cleared non-boss floor; reset on every floor build).
   isBlessingOfferedThisFloor: boolean;
+  // Seconds EVERY player has been down simultaneously (gate §6): the wipe is a held
+  // 4.0s all-down beat, not an instant cut. Resets whenever anyone is standing.
+  wipeTimer: number;
   remoteTargets: RemoteTarget[];
   isCoop: boolean;
   // Authoritative shared multiplayer world (the Stage-C server). Like solo it descends in-sim
@@ -236,7 +250,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false, isAbsent: false, reviveProgress: 0, rewindTicks: 0,
+    shotSeq: 0, isDown: false, isAbsent: false, reviveProgress: 0, reviveBy: null, downsThisFloor: 0, isInteracting: false, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -289,6 +303,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     histCount: 0,
     pendingBlessings: new Map(),
     isBlessingOfferedThisFloor: false,
+    wipeTimer: 0,
     remoteTargets: [],
     isCoop: opts.isCoop ?? false,
     isShared: opts.isShared ?? false,
@@ -326,6 +341,9 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
 // the world.
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   w.pendingBlessings.delete(id);
+  for (const downed of w.players.values()) {
+    if (downed.reviveBy === id) { downed.reviveBy = null; downed.reviveProgress = 0; }
+  }
   return w.players.delete(id);
 }
 
@@ -376,6 +394,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.pendingBlessings.clear();
+  w.wipeTimer = 0;
   w.isBlessingOfferedThisFloor = false;
   w.flowCd = 0;
   w.flowKey = -1;
@@ -445,21 +464,21 @@ function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
 
-// The floor's weapon drops are CONTENTS of chests, never loose floor pickups. (They used to
-// spawn at room centers — the same tiles chests and props prefer — so guns sat visibly
-// stacked on top of chests, and free weapons in the open undercut chests as the reward
-// container.) Each rolled weapon is stocked into a weaponless wood chest, treasure room
-// first; when the floor placed fewer chests than weapons, an extra chest is placed to hold
-// the overflow, roomed where the loose drop used to land. Opening the chest ejects the
-// weapon (see openChest). Same seeded stream as the old loose drops, so a given seed still
-// finds the same arsenal — just inside chests.
+// The floor's weapon drops are CONTENTS of chests (pedestals), never loose floor pickups.
+// (They used to spawn at room centers — the same tiles chests and props prefer — so guns
+// sat visibly stacked on top of chests, and free weapons in the open undercut chests as the
+// reward container.) Each pedestal is stocked into a weaponless wood chest, treasure room
+// first; when the floor placed fewer chests than pedestals, an extra chest is placed to
+// hold the overflow, roomed where the loose drop used to land. Opening the chest ejects the
+// contents (see openChest).
+//
+// Studio gate §4 pedestal rolls: max(1, ceil(P/2)) physical weapons per floor (P1–2
+// roll 1, P3–4 roll 2), DISTINCT ids when the pool permits. Party size buys options,
+// never rarity — the roll table is identical solo and co-op.
 function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
   if (w.floor < 2 || d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
-  // Studio gate §4 pedestal rolls: max(1, ceil(P/2)) physical weapons per floor (P1–2
-  // roll 1, P3–4 roll 2), DISTINCT ids when the pool permits. Party size buys options,
-  // never rarity — the roll table is identical solo and co-op.
   const kinds: WeaponId[] = [];
   for (let i = 0; i < pedestalWeaponRolls(w.encounterPlayers); i++) {
     kinds.push(rollDistinctWeapon(rng, kinds));
@@ -847,8 +866,9 @@ export function reorderWeaponsInWorld(w: WorldState, pid: PlayerId, from: number
 export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev: SimEvent[]): boolean {
   // Authoritative weapon drop (Q / inventory UI): remove an OWNED weapon from the player's
   // inventory and spawn it as a shared world pickup on a safe, reachable spot. Gates:
-  //  - never while the run is over, the player is downed, or a blessing pick is pending
-  //    (those states pause the player; a drop there would be a free action or a dupe window);
+  //  - never while the run is over, the player is downed, or a pick is pending (blessing
+  //    or weapon claim — those states pause the player; a drop there would be a free
+  //    action or a dupe window);
   //  - never the final weapon — the player always keeps at least one (the default pistol
   //    if that is all they own). Any weapon may be dropped while another remains.
   // If the dropped weapon was equipped, the adjacent slot (same index, else the new last)
@@ -1308,6 +1328,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
     // SET, never max'd against post-hit protection, so the two can neither refresh nor
     // extend each other.
     p.dashInvuln = PLAYER.dashIframe;
+    cancelReviveChannelBy(w, p.id); // gate §6: the reviver's dash cancels their channel
     ev.push({ t: "dashStart", pid: p.id, x: p.x, y: p.y });
   }
   let mvx: number, mvy: number;
@@ -1328,6 +1349,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
 function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
   p.fireCd = Math.max(0, p.fireCd - dt);
   if (input.firing && p.fireCd === 0) {
+    cancelReviveChannelBy(w, p.id); // gate §6: the reviver's attack cancels their channel
     const wep = WEAPONS[p.weapon];
     if (wep.melee) {
       startMeleeSwing(w, p, ev);
@@ -3632,7 +3654,15 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     loot.push(...rollWoodChest(w));
   }
   ejectChestLoot(w, c, loot, openerAngle(p, c), p.pr, ev);
-  if (c.kind === "boss") raiseBlessingOffer(w, p.id, true, ev);
+  // The boss chest is the floor's reward for the WHOLE party: every member gets (and must
+  // answer) their own Rare pick — never only whoever touched the chest first. Solo has one
+  // player, so exactly one offer is raised, as before. (Absent bodies are skipped — their
+  // pick can't be shown; the coherence system carries them to the next floor instead.)
+  if (c.kind === "boss") {
+    for (const member of w.players.values()) {
+      if (!member.isAbsent) raiseBlessingOffer(w, member.id, true, ev);
+    }
+  }
 }
 
 // An enemy commitment bursts a wood chest open: the same deterministic contents, spilled
@@ -3758,6 +3788,8 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
   const r = w.rng.next();
   const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
   if (r < heartChance) return [{ kind: "heart" }];
+  // The ambient weapon window is IDENTICAL solo/co-op (gate §4: party quantity increases
+  // options through the §4 counts only — never through drop rates).
   if (r < heartChance + SUSTAIN.woodChestWeapon) {
     return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
   }
@@ -3877,24 +3909,32 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   if (w.pendingBlessings.has(p.id)) return;
   p.hp -= amount;
   p.invuln = PLAYER.postHitInvuln;
-  // Any damage cancels a revive channel the victim was holding (§2): reviving is a real
-  // commitment, not something you tank through.
-  for (const downed of w.players.values()) {
-    if (!downed.isDown || downed.reviveProgress <= 0) continue;
-    if (Math.hypot(p.x - downed.x, p.y - downed.y) <= REVIVE.radius) downed.reviveProgress = 0;
-  }
+  // Damage to the CHANNELER cancels the revive it was powering (gate §6) — identity-exact:
+  // a bystander inside the radius taking a hit resets nothing.
+  cancelReviveChannelBy(w, p.id);
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
-    if (hasStandingAlly(w, p)) {
-      // A teammate can still revive: go DOWN, not out. reviveProgress accrues in updateRevives.
+    if (w.isShared) {
+      // Stage C (gate §6): going to 0 is always DOWN, never a direct cut — the wipe is the
+      // held all-down beat in checkStrandedWipe (4.0s), which is also what lets a teammate's
+      // last-moment revive (or a reconnect return) save the run. The per-floor down limit
+      // is counted on the TRANSITION only (splash on an already-down body recounts nothing);
+      // past the limit the player is OUT (unrevivable) until the descent rescue.
+      if (!p.isDown) {
+        p.isDown = true;
+        p.reviveProgress = 0;
+        p.reviveBy = null;
+        p.downsThisFloor++;
+      }
+    } else if (hasStandingAlly(w, p)) {
+      // Legacy local co-op: a teammate can still revive — go DOWN, not out.
       p.isDown = true;
       p.reviveProgress = 0;
+      p.reviveBy = null;
     } else {
-      // No one left to revive -> solo death or full team wipe. End the run for the whole room
-      // (every remaining player, incl. already-downed teammates) so all clients see game over.
-      // Solo has one player, so this emits exactly one gameOver as before. isRunOver makes the
-      // terminal transition derivable from STATE (snapshots carry it), not only from the event.
+      // Solo death (local): end the run immediately, exactly as it always did. isRunOver
+      // makes the terminal transition derivable from STATE, not only from the event.
       endRun(w, ev);
     }
   }
@@ -3908,16 +3948,17 @@ function endRun(w: WorldState, ev: SimEvent[]): void {
   for (const other of w.players.values()) ev.push({ t: "gameOver", pid: other.id });
 }
 
-// Shared-world safety net: if the last STANDING player leaves (an expired seat or a deliberate
-// leave, not death), the remaining downed players have no possible revive — end the run for
-// them instead of stranding them on the floor forever. damagePlayer covers the death path;
-// this covers the leave path. Network-absent bodies are excluded from the calculus entirely
-// (studio balance gate §6): a reservation neither blocks a wipe (an absent ally cannot be
-// waited on while the whole CONNECTED party lies downed) nor causes one (a body that merely
+// The wipe (studio balance gate §6): the run ends only after EVERY connected player has
+// been down SIMULTANEOUSLY for the full 4.0s hold — a beat where a last-tick revive
+// completion (updateRevives runs first) or a reconnect return can still save the run.
+// Anyone standing resets the hold. Network-absent bodies are excluded from the calculus
+// entirely (gate §6): a reservation neither blocks a wipe (an absent ally cannot be waited
+// on while the whole CONNECTED party lies downed) nor causes one (a body that merely
 // disconnected is not "down" — with every connected player absent and nobody downed, the
-// world simply idles until the seats resolve).
-function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
-  if (!w.isShared || w.isRunOver || w.players.size === 0) return;
+// world simply idles until the seats resolve). Solo-local keeps its classic instant game
+// over in damagePlayer; this gate is shared-world only.
+function checkStrandedWipe(w: WorldState, dt: number, ev: SimEvent[]): void {
+  if (!w.isShared || w.isRunOver || w.players.size === 0) { w.wipeTimer = 0; return; }
   let anyUp = false;
   let anyDown = false;
   for (const p of w.players.values()) {
@@ -3925,63 +3966,117 @@ function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
     if (!p.isDown && p.hp > 0) anyUp = true;
     else anyDown = true;
   }
-  if (!anyUp && anyDown) endRun(w, ev);
+  if (anyUp || !anyDown) { w.wipeTimer = 0; return; }
+  w.wipeTimer += dt;
+  if (w.wipeTimer >= WIPE_HOLD_SECONDS) endRun(w, ev);
 }
 
-// Authoritative revive (§2): a living teammate holds within REVIVE.radius for the full
-// 1.5s channel (any damage to the channeler cancels it — see damagePlayer). The revived
-// player returns at 2 HP with 1.0s protection and a 0.35s attack lockout. Progress decays
-// when no one is nearby, so it takes a sustained hold. Solo never has a downed player with
-// a standing ally, so this no-ops there.
+// Authoritative revive (studio balance gate §6): ONE living teammate HOLDS the interact
+// key (isInteracting, the consumed input's explicit intent) within REVIVE.radius for the
+// full 1.5s channel, UNINTERRUPTED. Any break — the channeler taking damage, dashing,
+// attacking (all three cancel at their sites via cancelReviveChannelBy), releasing the
+// key, or leaving the radius — resets the channel to zero; a different teammate taking
+// over starts fresh, and extra revivers never accelerate (the identity in reviveBy is the
+// single channel). A player past the floor's down limit is OUT: unrevivable until the
+// descent rescue. The revived player returns at 2 HP with 1.0s protection and a 0.35s
+// attack lockout. The server validates everything from ITS OWN state — a tampered client
+// can flip an input bit, never conjure proximity or skip the channel. Solo never has a
+// downed player with a standing ally, so this no-ops there.
 function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const downed of w.players.values()) {
-    if (!downed.isDown) continue;
-    let reviver: PlayerSim | undefined;
-    for (const other of w.players.values()) {
-      // An absent body cannot channel a revive; an absent DOWNED body can still be revived
-      // (a kindness that survives the reconnect — they resume upright).
-      if (other === downed || other.isDown || other.isAbsent || other.hp <= 0) continue;
-      if (Math.hypot(other.x - downed.x, other.y - downed.y) <= REVIVE.radius) { reviver = other; break; }
+    if (!downed.isDown) { downed.reviveBy = null; continue; }
+    if (downed.downsThisFloor > REVIVE.downsPerFloor) {
+      downed.reviveBy = null;
+      downed.reviveProgress = 0;
+      continue;
     }
-    if (reviver) {
-      downed.reviveProgress += dt;
-      if (downed.reviveProgress >= REVIVE.channel) {
-        downed.isDown = false;
-        downed.hp = Math.min(downed.maxHp, REVIVE.hp);
-        downed.invuln = Math.max(downed.invuln, REVIVE.invuln);
-        downed.fireCd = Math.max(downed.fireCd, REVIVE.fireLockout);
-        downed.reviveProgress = 0;
-        ev.push({ t: "revive", pid: downed.id, by: reviver.id, x: downed.x, y: downed.y });
+    const current = downed.reviveBy !== null ? w.players.get(downed.reviveBy) : undefined;
+    let reviver = current !== undefined && isValidReviver(current, downed) ? current : undefined;
+    if (reviver === undefined) {
+      // The running channel broke (or none existed): zero it, then let the first valid
+      // candidate in stable map order open a FRESH one.
+      downed.reviveProgress = 0;
+      for (const other of w.players.values()) {
+        if (other !== downed && isValidReviver(other, downed)) { reviver = other; break; }
       }
-    } else {
-      downed.reviveProgress = downed.reviveProgress > dt ? downed.reviveProgress - dt : 0;
+      downed.reviveBy = reviver !== undefined ? reviver.id : null;
     }
+    if (reviver === undefined) continue;
+    downed.reviveProgress += dt;
+    if (downed.reviveProgress >= REVIVE.channel) {
+      downed.isDown = false;
+      downed.hp = Math.min(downed.maxHp, REVIVE.hp);
+      downed.invuln = Math.max(downed.invuln, REVIVE.invuln);
+      downed.fireCd = Math.max(downed.fireCd, REVIVE.fireLockout);
+      downed.reviveProgress = 0;
+      ev.push({ t: "revive", pid: downed.id, by: reviver.id, x: downed.x, y: downed.y });
+      downed.reviveBy = null;
+    }
+  }
+}
+
+// Past the floor's down limit (gate §1: Standard 3/player/floor): OUT — down and
+// unrevivable until the descent rescue. Both wires carry this derived bit so every client
+// can stop offering a revive that the sim would refuse.
+export function isPlayerOut(p: PlayerSim): boolean {
+  return p.isDown && p.downsThisFloor > REVIVE.downsPerFloor;
+}
+
+function isValidReviver(other: PlayerSim, downed: PlayerSim): boolean {
+  // An absent body cannot channel a revive; an absent DOWNED body can still be revived
+  // (a kindness that survives the reconnect — they resume upright).
+  if (other.isDown || other.isAbsent || other.hp <= 0 || !other.isInteracting) return false;
+  if (other.dashTime > 0) return false; // mid-dash is a movement commitment, not a channel
+  return Math.hypot(other.x - downed.x, other.y - downed.y) <= REVIVE.radius;
+}
+
+// Reset any revive channel POWERED BY this player (gate §6: the reviver's damage, dash, or
+// attack cancels the whole channel — no partial credit).
+function cancelReviveChannelBy(w: WorldState, pid: PlayerId): void {
+  for (const downed of w.players.values()) {
+    if (downed.reviveBy !== pid) continue;
+    downed.reviveBy = null;
+    downed.reviveProgress = 0;
   }
 }
 
 // ---- exit / descend ----
 
-function updateExit(w: WorldState, ev: SimEvent[]): void {
-  if (w.isSandbox) return;
+// The living players currently standing at the cleared exit — THE party-descend readiness
+// predicate. One function backs the authoritative gate (updateExit) AND the wire readout
+// (snapshot `exr`), so what the UI shows can never drift from what the gate requires.
+// Downed players are never listed (they aren't required at the stairs; the descend rescues
+// them), network-absent bodies are excluded on BOTH sides of the gate (they can neither
+// hold the party hostage nor stand in as a phantom "player at the exit" — the descend
+// carries them along), and an uncleared floor has no usable exit, so it reads nobody-ready.
+export function playersAtExit(w: WorldState): PlayerId[] {
+  if (w.isSandbox || !isFloorCleared(w)) return [];
   const d = w.dungeon;
   const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
+  const out: PlayerId[] = [];
+  for (const p of w.players.values()) {
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
+    if (Math.hypot(p.x - ex, p.y - ey) < TILE) out.push(p.id);
+  }
+  return out;
+}
+
+function updateExit(w: WorldState, ev: SimEvent[]): void {
+  if (w.isSandbox) return;
   if (!isFloorCleared(w)) return;
   // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
   // player, so this is identical to the old single-player check. The authoritative server owns
   // this decision entirely off server positions — no client triggers the transition.
-  // Network-absent bodies are excluded on BOTH sides of the gate: they can neither hold the
-  // party hostage for the whole grace window (they cannot walk to the exit) nor stand in as a
-  // phantom "player at the exit". At least one PRESENT living player must be at the exit, so an
-  // all-absent world never descends by itself; a reserved body is carried down with the party
-  // (descend repositions every player) and resumes on the new floor.
-  let anyLiving = false;
-  let allAtExit = true;
+  // Network-absent bodies are excluded on BOTH sides of the gate (see playersAtExit): they
+  // can neither hold the party hostage for the whole grace window nor stand in as a phantom
+  // "player at the exit". At least one PRESENT living player must be at the exit, so an
+  // all-absent world never descends by itself; a reserved body is carried down with the
+  // party (descend repositions every player) and resumes on the new floor.
+  let living = 0;
   for (const p of w.players.values()) {
-    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
-    anyLiving = true;
-    if (Math.hypot(p.x - ex, p.y - ey) >= TILE) { allAtExit = false; break; }
+    if (!p.isDown && !p.isAbsent && p.hp > 0) living++;
   }
-  if (!anyLiving || !allAtExit) return;
+  if (living === 0 || playersAtExit(w).length < living) return;
   // Solo + shared server descend in-sim; the legacy Convex co-op path defers to the client's
   // shared-floor orchestration (everyone descends together via presence, offers ride descend).
   if (w.isCoop) {
@@ -4032,8 +4127,15 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   w.floor = nextFloor;
   for (const p of w.players.values()) {
     p.combo = 0; p.comboTimer = 0;
+    // Descending rescues downed members — OUT (down-limit) members included: the living
+    // party reaching the stairs pulls them through at the same partial HP a revive grants
+    // (never at 0 — a "living" player with an empty bar must not exist). They land under
+    // the spawn-grace shield like everyone, and the floor's down count starts over.
+    if (p.isDown) p.hp = Math.max(p.hp, REVIVE.hp);
     p.isDown = false;
     p.reviveProgress = 0;
+    p.reviveBy = null;
+    p.downsThisFloor = 0;
     if (SUSTAIN.descentHeal > 0) p.hp = Math.min(p.maxHp, p.hp + SUSTAIN.descentHeal);
   }
   ev.push({ t: "descend", toFloor: nextFloor });
@@ -4051,11 +4153,17 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
 // dt (each InputCmd carries its own frame dt) while the world half runs once per fixed tick.
 // stepWorld itself calls this, so solo behavior is unchanged.
 export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
-  // A player with a blessing offer open is paused: no aim, movement, or fire. Their client
-  // freezes under the overlay and sends nothing anyway; the guard makes a tampered client
-  // equally inert (it can't kite or shoot from inside the damage-shielded pick window).
-  if (w.pendingBlessings.has(p.id)) return;
+  // A player with a blessing offer open is paused: no aim, movement, fire, or revive
+  // channel. Their client freezes under the overlay and sends nothing anyway; the guard
+  // makes a tampered client equally inert (it can't kite, shoot, or channel from inside
+  // the damage-shielded pick window).
+  if (w.pendingBlessings.has(p.id)) {
+    p.isInteracting = false;
+    return;
+  }
   p.aimAngle = input.aim;
+  // The revive-channel intent, held only by a living player (a downed body can't revive).
+  p.isInteracting = input.interact === true && !p.isDown && p.hp > 0;
   if (!p.isDown) {
     updatePlayer(w, p, input, dt, ev);
     updateShooting(w, p, input, dt, ev);
@@ -4079,7 +4187,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateChests(w, dt, ev);
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
-  checkStrandedWipe(w, ev);
+  checkStrandedWipe(w, dt, ev);
   tickPendingBlessings(w, dt, ev);
   updateExit(w, ev);
 

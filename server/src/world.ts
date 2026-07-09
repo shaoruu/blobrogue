@@ -45,7 +45,7 @@ function rewindTicksFor(conn: Conn): number {
 }
 
 function intentToInput(i: InputIntent): InputCmd {
-  return { seq: i.seq, moveX: i.mx, moveY: i.my, aim: i.aim, firing: i.fire, dash: i.dash };
+  return { seq: i.seq, moveX: i.mx, moveY: i.my, aim: i.aim, firing: i.fire, dash: i.dash, interact: i.act };
 }
 
 export class GameWorld implements RoomRuntime {
@@ -232,6 +232,7 @@ export class GameWorld implements RoomRuntime {
   dismissBlessing(pid: PlayerId): void {
     dismissBlessingOfferInWorld(this.state, pid);
   }
+
 
   // Queue a validated input INTENT. Bounded (drop oldest beyond the cap) so a fast/flooding client
   // can neither exhaust memory nor gain an advantage — the tick still consumes only one per tick.

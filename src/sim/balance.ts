@@ -71,13 +71,25 @@ export function bossWeaponChoices(players: number): number {
   return Math.min(5, clampPlayers(players) + 1);
 }
 
+// Revive (studio balance gate §6, Standard baseline): 1.5s UNINTERRUPTED channel — any
+// reviver damage, dash, attack, or leaving the radius cancels the whole channel (hard
+// reset, no partial credit). One reviver only; extra players never accelerate.
 export const REVIVE = {
   radius: 46,
-  channel: 1.5,     // was 1.1 — any damage to the reviver cancels the channel
+  channel: 1.5,
   hp: 2,
   invuln: 1.0,
   fireLockout: 0.35, // a revived player cannot attack for this long
+  // Down limit per floor (gate §1, Standard): after this many downs on one floor the player
+  // is OUT — unrevivable until the party's descent rescues them at the stairs.
+  downsPerFloor: 3,
 } as const;
+
+// Wipe (gate §6): the run ends only after every connected player has been down
+// SIMULTANEOUSLY for this long — a held beat, not an instant cut. Reconnect reservations
+// neither block nor extend it (absent bodies are outside the calculus — the coherence
+// system's rule). Solo-local keeps the classic instant game over.
+export const WIPE_HOLD_SECONDS = 4.0;
 
 // Vampire Fang: shared proc cooldown; boss-spawned/summoned adds are excluded from both
 // Fang procs and natural heart drops (no farmable trivial sustain).
@@ -638,4 +650,47 @@ export function coopKbResistMult(players: number): number {
 
 export function coopHeartRateMult(players: number): number {
   return 1 + COOP.heartRatePerExtra * (clampPlayers(players) - 1);
+}
+
+// ---- §8b party weapon opportunities (studio balance gate §4 — Stage C shared worlds only) ----
+// Quantity increases OPTIONS, never rarity or stats: weapon stats and roll pools are
+// identical solo/co-op; only opportunity COUNTS follow the gate's exact formulas, and every
+// count is deterministic per (seed, floor, P). The local solo economy is untouched
+// (golden-locked); a shared world applies §4 at every P including 1.
+
+export const WEAPON_ECONOMY = {
+  // Dealer stall prices by slot (gate: "prices unchanged 12/18/24") — a fourth stall (P4)
+  // clamps to the last price. Purchases are PERSONAL: a stall never depletes for teammates.
+  dealerPrices: [12, 18, 24] as readonly number[],
+  // Boss reward choices are capped regardless of party size.
+  bossChoiceCap: 5,
+  // Boss weapon claims expire on the sim clock like blessing offers (the descend gate must
+  // always drain); each claimant gets exactly one reroll, never coins/raw damage.
+  claimTtl: 60,
+  claimRerolls: 1,
+  // Starvation guard (gate §4): no player goes more than this many consecutive non-boss
+  // floors without a weapon opportunity — the next floor force-stocks a pedestal.
+  maxDroughtFloors: 2,
+} as const;
+
+// Weapons per pedestal (gate: `max(1, ceil(P/2))` — P1–2: 1, P3–4: 2), distinct IDs when
+// the pool permits. The pedestal COUNT per floor stays the solo cadence.
+export function pedestalWeaponsFor(players: number): number {
+  return Math.max(1, Math.ceil(clampPlayers(players) / 2));
+}
+
+// Dealer weapon stalls (gate: `max(2,P)` distinct weapons) — Stage C shared worlds only.
+export function dealerWeaponStockFor(players: number): number {
+  return Math.max(2, clampPlayers(players));
+}
+
+export function dealerWeaponPriceFor(slot: number): number {
+  const prices = WEAPON_ECONOMY.dealerPrices;
+  return prices[Math.min(Math.max(0, slot), prices.length - 1)];
+}
+
+// Boss weapon reward (gate: `P+1` distinct choices, capped 5): every member claims ONE
+// personal choice from the shared set; claims never remove choices for teammates.
+export function bossWeaponChoicesFor(players: number): number {
+  return Math.min(clampPlayers(players) + 1, WEAPON_ECONOMY.bossChoiceCap);
 }

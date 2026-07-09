@@ -57,6 +57,7 @@ function classOf(t: ClientMsg["t"]): MsgClass {
     case "reorder":
     case "drop":
     case "chooseBlessing":
+    case "spec":
       return "control";
     default: return assertNever(t);
   }
@@ -83,6 +84,7 @@ export class MessageRouter {
       case "reorder": this.onReorder(conn, msg); return;
       case "drop": this.onDrop(conn, msg); return;
       case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
+      case "spec": this.onSpectate(conn, msg); return;
       default: assertNever(msg); // exhaustive — a new variant won't compile until handled
     }
   }
@@ -315,6 +317,17 @@ export class MessageRouter {
     // client's interpolation actually uses — a lie can only mis-rewind the sender's own shots
     // within [90,300]ms, and the sim additionally clamps total rewind to its history window.
     conn.cliInterpDelayMs = Math.min(INTERP_DELAY_MAX_MS, Math.max(INTERP_DELAY_MIN_MS, msg.dly));
+  }
+
+  // Spectate is a pure VIEW preference: it names the teammate whose surroundings this
+  // client's interest (and positional events) should follow while they are down. It never
+  // touches the sim. Only a real player in this client's own world is accepted; anything
+  // else clears the preference (the publisher then falls back to the first living teammate).
+  private onSpectate(conn: Conn, msg: Extract<ClientMsg, { t: "spec" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    const room = this.ctx.sessions.room(conn.worldId);
+    const isKnown = room !== undefined && msg.target !== conn.playerId && room.state.players.has(msg.target);
+    conn.spectateTarget = isKnown ? msg.target : null;
   }
 
   private onEquip(conn: Conn, msg: Extract<ClientMsg, { t: "equip" }>): void {

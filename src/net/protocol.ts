@@ -11,7 +11,7 @@
 // field type-checked before the client trusts it).
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
-import { isFloorCleared } from "../sim/world.js";
+import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
   AttackMove, PropKind, PickupKind, ChestKind,
@@ -59,7 +59,15 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // equality is what turns that skew into a clean "update your client" instead of a
 // mid-run desync. NOTE: the control plane's synthetic VERIFY join mirrors this constant
 // (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-export const PROTOCOL_VERSION = 5;
+// v6 (this branch, the co-op experience pass — client->server messages changed, so the
+// strict join gate bumps): input carries the interact intent (`act`, the explicit
+// revive-channel key), a semantic `spec` message names a downed player's spectate target
+// (the server centers that client's interest view on it), PlayerWire carries `rv`
+// (authoritative revive progress for the reviver-side ring) and `out` (past the floor's
+// down limit — unrevivable until the descent rescue), SelfWire carries `out`, and
+// snapshots carry `exr` (the living present players standing at the cleared exit — the
+// descend gate's own readiness predicate, driving the party coordination readout).
+export const PROTOCOL_VERSION = 6;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -116,6 +124,7 @@ export interface SelfWire {
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
   rev: number;                 // reviveProgress seconds (authoritative revive hold readout)
+  out: boolean;                // past the floor's down limit: unrevivable until the descent
   wpn: WeaponId;
   wpns: WeaponId[];            // authoritative owned-weapon inventory (validated equip source)
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
@@ -127,15 +136,19 @@ export interface SelfWire {
 // Another player as seen by this client (rendered via interpolation, never predicted).
 // nm/cl are the verified cosmetic identity from that player's join ticket (name above the
 // blob, chosen blob tint). Both are decode-OPTIONAL with safe fallbacks (nm -> id, cl ->
-// null) so frames from an older server still decode. ab marks a network-absent body (its
-// player disconnected and the seat is reserved for the reconnect grace) — rendered as an
-// explicit reconnecting ghost, never mistaken for a live or dead teammate.
+// null) so frames from an older server still decode. rv is the authoritative revive-channel
+// progress on a DOWNED player (seconds) — it drives the reviver-side progress ring; out
+// marks a body past the floor's down limit (teammates stop offering the revive). ab marks
+// a network-absent body (its player disconnected and the seat is reserved for the
+// reconnect grace) — rendered as an explicit reconnecting ghost, never a live/dead read.
 export interface PlayerWire {
   id: PlayerId;
   x: number; y: number;
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
+  out: boolean; // past the floor's down limit — teammates stop offering the revive
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
   ab: boolean;  // absent body — the seat is reserved for a reconnect (rendered as a ghost)
   nm: string;
@@ -222,9 +235,16 @@ export type ClientMsg =
   // An input is an INTENT SAMPLE, not a time authority: it carries NO dt. The server advances
   // simulation time by its own fixed tick (one command = one fixed step), so a client can't buy
   // extra time by claiming a large dt. `ackEv` piggybacks the reliable-event ack (last event id
-  // the client has processed) so the server can stop resending delivered events.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; ackEv: number }
+  // the client has processed) so the server can stop resending delivered events. `act` is the
+  // interact intent (the held revive-channel key) — the sim validates proximity/liveness, so
+  // the bit alone can never conjure a revive.
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ackEv: number }
   | { t: "pong"; id: number }
+  // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
+  // the server uses it only to center that client's interest view (and positional events)
+  // while they are down; it never touches the sim, and an invalid/living-player target is
+  // simply ignored (the publisher falls back to the first living teammate).
+  | { t: "spec"; target: string }
   // Authoritative weapon equip: the server equips ONLY if the id is in the player's owned set
   // (a tampered client can't equip an unowned weapon). cseq is a monotonic command sequence:
   // the server ignores stale/duplicate commands so a resent equip can never double-apply or
@@ -273,10 +293,15 @@ export type ServerMsg =
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
+      exr: PlayerId[];           // living players standing at the cleared exit — the SAME
+                                 // predicate the descend gate requires, on the wire (drives
+                                 // the "WAITING AT EXIT · N/M" coordination readout)
       evTo: number;              // highest committed event id — the client acks up to here even
                                  // when every pending event was interest-filtered away for it
       self: SelfWire | null;     // authoritative local player (null until spawned)
-      players: PlayerWire[];     // OTHER players (interest-filtered)
+      players: PlayerWire[];     // OTHER players — the whole party, NEVER interest-filtered
+                                 // (teammates are shared objectives: spectate targets, roster,
+                                 // minimap, revive prompts all need every member)
       enemies: EnemyWire[];
       bullets: BulletWire[];
       props: PropWire[];         // shared destructibles
@@ -406,7 +431,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
   blessingExpired: { scope: "pid", fields: { pid: "str" } },
-  revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
+  // Positional: the revive moment plays for everyone standing at it (the reviver most of
+  // all), not only the revived player. The revived player is AT the point by definition.
+  revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
@@ -509,7 +536,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "ackEv"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ackEv"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -518,12 +545,17 @@ function decodeClientMsg(raw: string): ClientMsg {
         aim: num(o, "aim", -1000, 1000), // radians; unbounded angle is fine to clamp loosely
         fire: boolOf(o, "fire"),
         dash: boolOf(o, "dash"),
+        act: boolOf(o, "act"),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
       };
     }
     case "pong": {
       exactKeys(o, ["t", "id"]);
       return { t: "pong", id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER) };
+    }
+    case "spec": {
+      exactKeys(o, ["t", "target"]);
+      return { t: "spec", target: shortStr(o, "target", 64) };
     }
     case "equip": {
       // The weapon id must be a KNOWN weapon; the server further validates it is actually owned.
@@ -596,6 +628,7 @@ function validateSelfWire(v: unknown): SelfWire {
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
     rev: num(o, "rev", 0, 1e4),
+    out: boolOf(o, "out"),
     wpn: weaponOf(o, "wpn"),
     wpns, items,
     mods: modsFromWire(obj(o.mods, "self.mods")),
@@ -620,6 +653,8 @@ function validatePlayerWire(v: unknown): PlayerWire {
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    rv: num(o, "rv", 0, 1e4),
+    out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
     ab: boolOf(o, "ab"),
     nm, cl,
@@ -745,6 +780,11 @@ function decodeServerMsg(raw: string): ServerMsg {
   const o = obj(parsed, "frame");
   switch (o.t) {
     case "snap": {
+      const pidList = (k: "exr"): PlayerId[] => arr(o[k], k).map((p) => {
+        if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError(`bad ${k} entry`);
+        return p;
+      });
+      const exr = pidList("exr");
       return {
         t: "snap",
         tick: intOf(o, "tick", 0, Number.MAX_SAFE_INTEGER),
@@ -760,6 +800,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
+        exr,
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
         self: o.self === null ? null : validateSelfWire(o.self),
         players: arr(o.players, "players").map(validatePlayerWire),
@@ -809,7 +850,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, fng: s.fangCd,
-    fac: s.facing, down: s.isDown, rev: s.reviveProgress, wpn: s.weapon,
+    fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
@@ -828,7 +869,10 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
 }
 
 export function toSelfWire(p: PlayerSim): SelfWire {
-  return selfWireFromSnapshot(projectPlayer(p));
+  // `out` is derived from server-only down bookkeeping (never reconciled back — the
+  // prediction world has no down counter to apply it to), so it rides beside the
+  // snapshot-projected fields.
+  return { ...selfWireFromSnapshot(projectPlayer(p)), out: isPlayerOut(p) };
 }
 
 // Reset a predicted local player to authoritative server truth (the reconciliation snap). All
@@ -849,6 +893,8 @@ export interface PlayerIdentity {
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    rv: p.reviveProgress,
+    out: isPlayerOut(p),
     bcl: p.hasClaimedBossChoice,
     ab: p.isAbsent,
     nm: identity?.name ?? p.id,
@@ -936,10 +982,10 @@ export const INTEREST_EXIT_FACTOR = 1.15;
 
 // The per-client view membership, keyed by STABLE entity ids. rev-scoped: a new floor (new
 // world revision) invalidates every set. Bullets are excluded on purpose — they are fast,
-// short-lived, and id-less; plain radius filtering is correct for them.
+// short-lived, and id-less; plain radius filtering is correct for them. Players are excluded
+// too: the party (≤4 members) is a shared objective and always rides every snapshot.
 export interface InterestView {
   rev: number;
-  players: Set<PlayerId>;
   enemies: Set<number>;
   props: Set<number>;
   pickups: Set<number>;
@@ -947,7 +993,7 @@ export interface InterestView {
 }
 
 export function createInterestView(): InterestView {
-  return { rev: -1, players: new Set(), enemies: new Set(), props: new Set(), pickups: new Set(), chests: new Set() };
+  return { rev: -1, enemies: new Set(), props: new Set(), pickups: new Set(), chests: new Set() };
 }
 
 // Snapshot the current server world into a full ServerMsg body for one client. The client's
@@ -962,7 +1008,7 @@ export interface SnapshotOpts {
   roster?: RosterWire[];
   // Single-use resume token for the receiving connection (full snapshots only).
   resumeToken?: string;
-  // Interest radius in px around the client's own player. Entities outside it are omitted from
+  // Interest radius in px around the client's view center. Entities outside it are omitted from
   // this client's snapshot (the primary bandwidth + CPU lever). <= 0 disables the filter (send
   // everything) — the default, so direct callers/tests keep full snapshots.
   interestRadius?: number;
@@ -972,6 +1018,10 @@ export interface SnapshotOpts {
   // Per-player cosmetic identity (verified name/color from each join ticket), keyed by the
   // world-scoped player id. Omitted / missing entries fall back to id-as-name, no color.
   identities?: ReadonlyMap<PlayerId, PlayerIdentity>;
+  // The interest view center, when it is NOT the client's own player: a downed spectator's
+  // view follows the teammate they are watching, so their snapshots stay coherent with what
+  // their camera shows. Omitted => centered on self (the ordinary case).
+  viewCenter?: { x: number; y: number };
 }
 
 // The party-wait state straight off the sim's pending-blessing map, identical for every
@@ -984,10 +1034,11 @@ function partyWait(w: WorldState): WaitWire[] {
   return out;
 }
 
-// Interest management: a client always receives its OWN player + globally-relevant state (the
-// boss enemy and the boss chest — the shared objective) and, in addition, the nearby
-// players/enemies/bullets/props/pickups/chests within its interest radius (with exit
-// hysteresis). A simple distance filter is enough for a single bounded floor.
+// Interest management: a client always receives its OWN player, EVERY party member (the
+// party is a shared objective — spectate/roster/revive prompts need all of it), globally-
+// relevant state (the boss enemy and the boss chest), and, in addition, the nearby
+// enemies/bullets/props/pickups/chests within its interest radius (with exit hysteresis).
+// A simple distance filter is enough for a single bounded floor.
 export function buildSnapshot(
   w: WorldState,
   selfPid: PlayerId,
@@ -1002,26 +1053,24 @@ export function buildSnapshot(
   const r2 = r * r;
   const rExit = r * INTEREST_EXIT_FACTOR;
   const rExit2 = rExit * rExit;
-  const sx = self ? self.x : 0;
-  const sy = self ? self.y : 0;
+  const center = opts.viewCenter ?? (self ? { x: self.x, y: self.y } : null);
   const view = opts.view;
   if (view && view.rev !== w.rev) {
     view.rev = w.rev;
-    view.players.clear(); view.enemies.clear(); view.props.clear(); view.pickups.clear(); view.chests.clear();
+    view.enemies.clear(); view.props.clear(); view.pickups.clear(); view.chests.clear();
   }
-  // No radius, or we don't know where this client is yet -> send everything.
+  // No radius, or we don't know where this client is looking yet -> send everything.
   const near = (x: number, y: number, wasKnown: boolean): boolean => {
-    if (r <= 0 || !self) return true;
-    const dx = x - sx, dy = y - sy;
+    if (r <= 0 || center === null) return true;
+    const dx = x - center.x, dy = y - center.y;
     const d2 = dx * dx + dy * dy;
     return d2 <= r2 || (wasKnown && d2 <= rExit2);
   };
 
   const players: PlayerWire[] = [];
-  const keepPlayers = new Set<PlayerId>();
   for (const p of w.players.values()) {
     if (p.id === selfPid) continue;
-    if (near(p.x, p.y, view?.players.has(p.id) ?? false)) { players.push(toPlayerWire(p, opts.identities?.get(p.id))); keepPlayers.add(p.id); }
+    players.push(toPlayerWire(p, opts.identities?.get(p.id)));
   }
   const enemies: EnemyWire[] = [];
   const keepEnemies = new Set<number>();
@@ -1046,7 +1095,6 @@ export function buildSnapshot(
     if (c.kind === "boss" || near(c.x, c.y, view?.chests.has(c.id) ?? false)) { chests.push(toChestWire(c)); keepChests.add(c.id); }
   }
   if (view) {
-    view.players = keepPlayers;
     view.enemies = keepEnemies;
     view.props = keepProps;
     view.pickups = keepPickups;
@@ -1068,6 +1116,7 @@ export function buildSnapshot(
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),
+    exr: playersAtExit(w),
     evTo,
     self: self ? toSelfWire(self) : null,
     players,

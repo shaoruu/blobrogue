@@ -18,11 +18,23 @@ export interface HudState {
   coins: number;
   // Hotbar slots in inventory order (= the 1-9 selection order); `isCurrent` = equipped.
   weapons: { id: WeaponId; name: string; isCurrent: boolean }[];
+  // The authoritative objective feed for the top-center lane: `N ENEMIES LEFT` while the
+  // floor fights, `FLOOR CLEAR · GO DOWN` once cleared. A boss hides the line entirely
+  // (the boss bar IS the objective), and the dev sandbox has no objective.
   isCleared: boolean;
   enemiesLeft: number;
+  isObjectiveHidden: boolean;
+  // Party context: the cleared copy reads MEET AT EXIT instead of GO DOWN.
+  isParty: boolean;
   isBossActive: boolean;
   bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
   coopLabel: string | null;
+  // Party coordination readout in the objective lane ("WAITING FOR 1/2 PLAYERS…" /
+  // "WAITING AT EXIT…"); null hides it.
+  waitLabel: string | null;
+  // The bottom-left contextual action (revive/interact): key cap + label; isActive marks a
+  // hold that is channeling RIGHT NOW. Null hides the prompt.
+  prompt: { key: string; label: string; isActive: boolean } | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
   combo: number;      // current chain length
@@ -63,7 +75,7 @@ export interface ProfileStats {
   gamesPlayed: number;
 }
 
-export interface RosterEntry { name: string; isYou: boolean; color: string; isDown: boolean; }
+export interface RosterEntry { name: string; isYou: boolean; color: string; isDown: boolean; isOut: boolean; isAtExit: boolean; isReconnecting: boolean; }
 
 export interface StatsPanelData {
   floor: number;
@@ -90,6 +102,33 @@ function fmtTime(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
   const m = Math.floor(s / 60);
   return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// The Dealer's price-tag copy (UI gate: the state must be readable at a glance BEFORE the
+// touch): what a purchase would cost, why it can't happen, or why it's pointless — and the
+// sim guarantees an invalid touch never consumes anything either way. Pure so the DOM
+// suite locks the matrix. `state` drives the tag tint in the world renderer.
+export interface DealerTag { text: string; state: "buy" | "broke" | "blocked" }
+
+export function dealerTagCopy(
+  item: { kind: "heart" | "weapon"; name: string; price: number },
+  viewer: { coins: number; hp: number; maxHp: number; isOwned: boolean },
+): DealerTag {
+  if (item.kind === "heart" && viewer.hp >= viewer.maxHp) return { text: "FULL HEALTH", state: "blocked" };
+  if (item.kind === "weapon" && viewer.isOwned) return { text: "OWNED", state: "blocked" };
+  if (viewer.coins < item.price) return { text: `NEED ${item.price - viewer.coins} MORE`, state: "broke" };
+  return { text: `${item.name.toUpperCase()} \u00b7 ${item.price} COIN${item.price === 1 ? "" : "S"}`, state: "buy" };
+}
+
+// The one normal-objective copy (UI Director): the authoritative cleared flag decides the
+// line, and an uncleared floor with nothing visible on the board reads as the incoming
+// reinforcement wave rather than a lying "0 ENEMIES LEFT". A party's cleared floor is a
+// coordination moment, so its copy points at the MEET, not the descend (the descend fires
+// itself once everyone stages). Exported for the DOM suite.
+export function objectiveCopy(isCleared: boolean, enemiesLeft: number, isParty = false): string {
+  if (isCleared) return isParty ? "FLOOR CLEAR \u00b7 MEET AT EXIT" : "FLOOR CLEAR \u00b7 GO DOWN";
+  if (enemiesLeft <= 0) return "ENEMIES INCOMING\u2026";
+  return `${enemiesLeft} ${enemiesLeft === 1 ? "ENEMY" : "ENEMIES"} LEFT`;
 }
 
 // One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath. Slots
@@ -181,11 +220,15 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
   return chip;
 }
 
-// The corner HUD DOM (docs/ui/hud_markup.html) + the bottom-center hotbar. The minimap
-// canvas already lives in index.html; its <canvas id="minimap"> is moved into the
-// .tr .minimap frame at build. The hotbar is a Minecraft-style strip: one slot per owned
-// weapon (icon + name + its 1-9 select key, equipped slot lit) with the player's
-// blessings as labeled chips on the row above.
+// The corner HUD DOM (docs/ui/hud_markup.html + the UI Director hierarchy pass). The
+// minimap canvas already lives in index.html; its <canvas id="minimap"> is moved into the
+// .tr .minimap frame at build. The layout is the Director's five-region hierarchy:
+//   TL  hearts + compact floor/kills/coins, the co-op status strip below (online only)
+//   TC  ONE objective lane: boss bar (wins) or the objective line, the co-op wait line,
+//       then the combo (yields to 70% scale under a boss bar)
+//   TR  minimap
+//   BL  dash meter + the contextual revive/interact prompt
+//   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
     <div class="hearts" data-hearts></div>
@@ -195,25 +238,32 @@ const HUD_MARKUP = `
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
   </div><div class="coopstrip" data-coop></div></div>
-  <div class="bossbar" data-bossbar>
-    <div class="bossbar-label">BOSS</div>
-    <div class="bossbar-track"><i data-bossfill></i></div>
+  <div class="objlane" data-objlane>
+    <div class="bossbar" data-bossbar>
+      <div class="bossbar-label">BOSS</div>
+      <div class="bossbar-track"><i data-bossfill></i></div>
+    </div>
+    <div class="objective" data-objective></div>
+    <div class="waitline" data-waitline></div>
+    <div class="combo" data-combo>
+      <div class="combo-badge">
+        <div class="combo-burst" data-combo-burst></div>
+        <div class="combo-mult" data-combo-mult>x1</div>
+      </div>
+      <div class="combo-row"><span class="combo-n" data-combo-n>0</span><span class="combo-k">COMBO</span></div>
+      <div class="combo-bar"><i data-combo-fill></i></div>
+    </div>
   </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
-  <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
+  <div class="hud-corner bl">
+    <div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
+    <div class="ctx-prompt" data-prompt role="status"><span class="key" data-prompt-key>E</span><span class="k" data-prompt-label></span></div>
+  </div>
   <div class="hotbar">
     <div class="hb-buffs" data-hb-buffs></div>
     <button class="hb-build" data-hb-build type="button" aria-haspopup="dialog"></button>
     <div class="hb-slots" data-hb-slots></div>
     <div class="hb-hint" data-hb-hint>CLICK EQUIP &middot; DRAG REORDER &middot; Q DROP</div>
-  </div>
-  <div class="combo" data-combo>
-    <div class="combo-badge">
-      <div class="combo-burst" data-combo-burst></div>
-      <div class="combo-mult" data-combo-mult>x1</div>
-    </div>
-    <div class="combo-row"><span class="combo-n" data-combo-n>0</span><span class="combo-k">COMBO</span></div>
-    <div class="combo-bar"><i data-combo-fill></i></div>
   </div>
 `;
 
@@ -268,6 +318,15 @@ export class Hud {
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
   private banner: HTMLElement;
+  private objLaneEl!: HTMLElement;
+  private objectiveEl!: HTMLElement;
+  private waitLine!: HTMLElement;
+  private promptEl!: HTMLElement;
+  private promptKeyEl!: HTMLElement;
+  private promptLabelEl!: HTMLElement;
+  private prevObjective = "";
+  private prevWaitLabel: string | null = null;
+  private prevPromptLabel: string | null = null;
   private bannerTimer = 0;
   private controlsHint: HTMLElement;
   private hintTimer = 0;
@@ -317,6 +376,12 @@ export class Hud {
     this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
     this.bossbarEl = hud.querySelector("[data-bossbar]")!;
     this.bossFillEl = hud.querySelector("[data-bossfill]")!;
+    this.objLaneEl = hud.querySelector("[data-objlane]")!;
+    this.objectiveEl = hud.querySelector("[data-objective]")!;
+    this.waitLine = hud.querySelector("[data-waitline]")!;
+    this.promptEl = hud.querySelector("[data-prompt]")!;
+    this.promptKeyEl = hud.querySelector("[data-prompt-key]")!;
+    this.promptLabelEl = hud.querySelector("[data-prompt-label]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
     const minimap = document.getElementById("minimap");
@@ -621,17 +686,43 @@ export class Hud {
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
     this.dashEl.classList.toggle("ready", fill >= 1);
 
-    // Boss health bar: a big top-center bar visible only while a boss is on the board,
-    // draining as it takes damage and flashing red when the boss is nearly dead.
+    // The top-center objective lane: the boss bar WINS the lane (the normal objective
+    // hides — the bar is the objective); otherwise the authoritative clear/enemies-left
+    // copy owns the line. The `boss` class also scales the combo down to 70%.
+    this.objLaneEl.classList.toggle("boss", s.isBossActive);
     this.bossbarEl.classList.toggle("show", s.isBossActive);
     if (s.isBossActive) {
       const bf = s.bossHpFrac < 0 ? 0 : s.bossHpFrac > 1 ? 1 : s.bossHpFrac;
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
     }
+    const objective = s.isBossActive || s.isObjectiveHidden ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
+    if (objective !== this.prevObjective) {
+      this.prevObjective = objective;
+      this.objectiveEl.textContent = objective;
+      this.objectiveEl.classList.toggle("show", objective !== "");
+      this.objectiveEl.classList.toggle("clear", s.isCleared && objective !== "");
+    }
 
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
+
+    if (s.waitLabel !== this.prevWaitLabel) {
+      this.prevWaitLabel = s.waitLabel;
+      this.waitLine.textContent = s.waitLabel ?? "";
+      this.waitLine.classList.toggle("show", s.waitLabel !== null);
+    }
+
+    // The bottom-left contextual prompt (revive/interact): key cap + label, lit while the
+    // hold is actually channeling. Text refreshes on change only; show/hide is opacity.
+    const promptLabel = s.prompt ? `${s.prompt.key}|${s.prompt.label}|${s.prompt.isActive}` : null;
+    if (promptLabel !== this.prevPromptLabel) {
+      this.prevPromptLabel = promptLabel;
+      this.promptKeyEl.textContent = s.prompt?.key ?? "E";
+      this.promptLabelEl.textContent = s.prompt?.label ?? "";
+      this.promptEl.classList.toggle("show", s.prompt !== null);
+      this.promptEl.classList.toggle("active", s.prompt?.isActive === true);
+    }
 
     this.updateCombo(s);
 
@@ -725,8 +816,12 @@ export class Hud {
       for (const r of d.roster) {
         const row = el("div", "display:flex;align-items:center;gap:8px;");
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
-        const label = `${r.name}${r.isYou ? " (you)" : ""}${r.isDown ? " \u2014 down" : ""}`;
-        row.appendChild(el("span", `color:${r.isDown ? "#ff6a6a" : "#ffe6b0"};`, label));
+        // A reconnecting member is neither dead nor departed — their body is reserved for
+        // the reconnect grace (the Sev-0 coherence system); the roster says so explicitly.
+        // OUT (down limit spent) outranks plain down: the party's move is the stairs.
+        const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
+        const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
+        row.appendChild(el("span", `color:${r.isReconnecting ? "#9a8fb5" : r.isDown || r.isOut ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
         this.statsBody.appendChild(row);
       }
     }
@@ -778,6 +873,13 @@ export class Hud {
   clear() {
     this.coopEl.textContent = "";
     this.coopEl.style.display = "none";
+    this.waitLine.classList.remove("show");
+    this.prevWaitLabel = null;
+    this.objectiveEl.classList.remove("show", "clear");
+    this.prevObjective = "";
+    this.objLaneEl.classList.remove("boss");
+    this.promptEl.classList.remove("show", "active");
+    this.prevPromptLabel = null;
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;

@@ -30,12 +30,16 @@ export type GameAction =
   | { kind: "dropWeapon" }
   | { kind: "activateSlot"; index: number }
   | { kind: "reorderSlots"; from: number; to: number }
+  | { kind: "cycleSpectate"; dir: 1 | -1 }
+  // Spectate follow toggle (F): watched teammate <-> your own body (see who's coming).
+  | { kind: "spectateFollow" }
   | { kind: "stats"; isHeld: boolean };
 
 // Per-action context allow-list. togglePause stays available while paused (Esc resumes),
 // spectating (quit out while down), reconnecting (escape a dead connect), and under the
 // hud context (the game routes it to close-the-drawer first); weapon/inventory actions
-// and fire exist only in live gameplay.
+// and fire exist only in live gameplay; cycling the spectated teammate exists only while
+// downed — so a spectator structurally cannot reach any gameplay action.
 const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   togglePause: ["gameplay", "hud", "pause", "spectate", "reconnect"],
   selectWeapon: ["gameplay"],
@@ -43,6 +47,8 @@ const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   dropWeapon: ["gameplay"],
   activateSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
+  cycleSpectate: ["spectate"],
+  spectateFollow: ["spectate"],
   stats: ["gameplay", "spectate"],
 };
 
@@ -51,9 +57,12 @@ export interface InputSample {
   moveY: number;
   firing: boolean;
   dash: boolean;
+  // The revive-channel hold (E). A gameplay-context level input like movement; every other
+  // context samples it released, so a spectator/chooser can never channel.
+  interact: boolean;
 }
 
-const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false };
+const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false };
 
 export class InputController {
   private keys = new Set<string>();
@@ -123,6 +132,12 @@ export class InputController {
     if (!isRepeat) {
       if (k >= "1" && k <= "9") this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
       if (k === "q") this.emit({ kind: "dropWeapon" }); // Q drops the equipped weapon
+      // Downed: Q/E and the arrows step the spectated teammate instead (the context gate
+      // keeps these dead everywhere else, and gameplay keys dead here). A controller's
+      // bumpers would dispatch the same action.
+      if (k === "q" || k === "arrowleft") this.emit({ kind: "cycleSpectate", dir: -1 });
+      if (k === "e" || k === "arrowright") this.emit({ kind: "cycleSpectate", dir: 1 });
+      if (k === "f") this.emit({ kind: "spectateFollow" });
     }
     return isPlaying && (k === " " || k === "shift");
   }
@@ -152,11 +167,22 @@ export class InputController {
   }
 
   wheel(deltaY: number): void {
-    this.emit({ kind: "cycleWeapon", dir: deltaY > 0 ? 1 : -1 });
+    const dir = deltaY > 0 ? 1 : -1;
+    // While down the wheel steps the spectated teammate; alive it cycles weapons. Both ride
+    // the context gate, so exactly one can ever fire.
+    this.emit({ kind: "cycleWeapon", dir });
+    this.emit({ kind: "cycleSpectate", dir });
+  }
+
+  // Whether the revive-channel key is physically held in live gameplay (drives the
+  // world-space HOLD E / REVIVING prompt beside a downed teammate).
+  get isInteractHeld(): boolean {
+    return this.ctx === "gameplay" && this.keys.has("e");
   }
 
   // The per-tick gameplay sample. Anything but live gameplay reads as a player doing
-  // nothing — movement, fire, and dash cannot leak out of an overlay or spectate.
+  // nothing — movement, fire, dash, and the revive channel cannot leak out of an overlay
+  // or spectate.
   sample(): InputSample {
     if (this.ctx !== "gameplay") return IDLE_SAMPLE;
     let moveX = 0, moveY = 0;
@@ -166,7 +192,7 @@ export class InputController {
     if (this.keys.has("d") || this.keys.has("arrowright")) moveX += 1;
     if (!settings.isAutofire) this.isAutofireLatched = false;
     const firing = settings.isAutofire ? this.isAutofireLatched : this.isMouseDown;
-    return { moveX, moveY, firing, dash: this.keys.has("shift") };
+    return { moveX, moveY, firing, dash: this.keys.has("shift"), interact: this.keys.has("e") };
   }
 
   private suspendFire(): void {

@@ -195,6 +195,25 @@ Ambient heart rate × (1 + 0.30×(P−1)); pickup heals collector only; Dealer s
 
 Co-op boss TTK target: duo 0.75–0.95× solo, four-player 0.65–0.90× solo; damage taken per player within ±20% of solo.
 
+### 8b. Party weapon economy (post-playtest: shared loot meant fewer guns per person)
+
+All shared, first-come pickups; every quantity is deterministic per `(seed, floor, P)` so
+clients can never diverge. Solo streams stay byte-identical (golden-locked).
+
+```
+WeaponChestRolls = solo table + (P−1) per floor      (floor 2 therefore stocks ≥ P — the
+                                                      guaranteed early beat before boss F5)
+WoodChestWeapon% = 7% × (1 + 0.35×(P−1))             (threshold move on the same rng draw)
+DealerWeapons    = 0 / 1 / 1 / 2 @ 12 coins          (P-indexed; hearts stay P @ 6 coins)
+BossChestArsenal = 0 / 2 / 3 / 4 weapons             (solo keeps the tuned heart+coins)
+Anti-junk pass (P≥2 only): distinct kinds, prefer weapons NOBODY owns, never all-melee at
+2+, at least one melee at 3+. Measured chest totals (floors 2–6 × 4 seeds):
+P1=28  P2=48  P3=68  P4=88  → per person 28 / 24 / 22.7 / 22 (scarcity preserved).
+```
+
+The boss chest also raises the Rare blessing offer for EVERY member (not only the opener),
+and the descend gate holds until every pick resolves (TTL 60s; disconnect releases).
+
 ---
 
 ## 9. Determinism requirements

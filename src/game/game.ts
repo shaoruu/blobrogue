@@ -8,12 +8,13 @@ import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../s
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
+import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
@@ -27,7 +28,7 @@ import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
-import { Hud } from "./hud.js";
+import { Hud, dealerTagCopy } from "./hud.js";
 import type { ProfileStats } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
@@ -40,6 +41,7 @@ import type { FacingState, EnemyPose } from "./facing.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
+import type { WaveFramePlayer } from "./waveAudio.js";
 import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -49,7 +51,15 @@ import { BlessingOverlay } from "../ui/blessing.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 
-export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
+export interface RunResult {
+  floor: number; kills: number; coins: number; durationMs: number;
+  // The run's final build for the results screen (weapons carried + blessings with
+  // levels) — display-only, never persisted.
+  build?: {
+    weapons: { id: WeaponId; name: string }[];
+    items: { id: string; name: string; glyph: string; tint: string; count: number }[];
+  };
+}
 
 // Why a run exited without a game over: the player quit/cancelled, an online connection
 // never came up, the server bound us to a world other than the room's (world_mismatch —
@@ -409,6 +419,17 @@ export class Game {
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
   private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
+  // Spectate: the teammate a downed local player's camera follows (null while up / solo).
+  // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
+  // one path; sentSpectateId tracks what the server was last told (interest centering).
+  private spectateId: string | null = null;
+  // Spectate follow mode (F): watch the teammate, or your own body (see who's coming).
+  private isSpectatingBody = false;
+  // Client-side revive-interrupt read: the last authoritative self progress, and a short
+  // flash timer when it snaps back to zero mid-channel (the gate's hard reset).
+  private lastSelfRevive = 0;
+  private reviveInterruptT = 0;
+  private sentSpectateId: string | null = null;
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
@@ -581,7 +602,7 @@ export class Game {
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
       this.syncInputContext();
-      this.input.wheel(e.deltaY); // scroll to cycle weapons (gameplay context only)
+      this.input.wheel(e.deltaY); // cycle weapons — or, while down, the spectated teammate
     }, { passive: false });
     this.canvas.addEventListener("mousedown", (e) => { this.syncInputContext(); this.input.mouseDown(e.button); });
     window.addEventListener("mouseup", (e) => this.input.mouseUp(e.button));
@@ -625,6 +646,12 @@ export class Game {
       case "reorderSlots":
         if (this.isRunning) this.reorderSlots(a.from, a.to);
         break;
+      case "cycleSpectate":
+        if (this.isRunning) this.cycleSpectate(a.dir);
+        break;
+      case "spectateFollow":
+        if (this.isRunning) this.toggleSpectateFollow();
+        break;
       case "stats":
         this.isStatsHeld = a.isHeld;
         if (a.isHeld) this.openStats();
@@ -665,6 +692,9 @@ export class Game {
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
     this.online = this.mode === "online" ? opts.online ?? null : null;
+    this.spectateId = null;
+    this.sentSpectateId = null;
+    this.isSpectatingBody = false;
     let floor: number;
     if (this.mode === "online" && opts.online) {
       // Online: the SERVER owns the world (seed/floor/dungeon). WSTransport boots a placeholder
@@ -1114,6 +1144,20 @@ export class Game {
       return;
     }
 
+    // Spectate: down with the party still fighting means the camera rides a living teammate
+    // (game over only lands on a full wipe — the check above). Revive releases it.
+    this.updateSpectate();
+
+    // The revive-interrupt read (gate §6 hard reset): authoritative progress snapping back
+    // to zero while still down = the channel broke — flash the interrupted copy briefly.
+    if (this.isDown) {
+      if (this.p.reviveProgress === 0 && this.lastSelfRevive > 0.15) this.reviveInterruptT = 1.6;
+      if (this.reviveInterruptT > 0) this.reviveInterruptT = Math.max(0, this.reviveInterruptT - dt);
+    } else {
+      this.reviveInterruptT = 0;
+    }
+    this.lastSelfRevive = this.isDown ? this.p.reviveProgress : 0;
+
     // Online: surface any server-decided blessing offer (choice authority is server-side).
     if (this.mode === "online" && this.wsTransport && !this.isChoosing) {
       const offer = this.wsTransport.consumePendingOffer();
@@ -1131,13 +1175,15 @@ export class Game {
   }
 
   // Build this tick's InputCmd from the context-gated controller sample plus the
-  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash. The "hud" context
-  // (hotbar drag / open drawer) samples idle, so HUD interaction never leaks into combat.
+  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash/interact. The "hud"
+  // context (hotbar drag / open drawer) samples idle, so HUD interaction never leaks into
+  // combat — and the "spectate" context (downed) samples idle too, so a spectator sends no
+  // gameplay intents at the source (the authoritative sim ignores them anyway).
   private buildInput(): InputCmd {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
-    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash };
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -1145,6 +1191,54 @@ export class Game {
   private coopTargets(): RemoteTarget[] {
     if (!this.coop) return [];
     return this.coop.remotePlayers().map((r) => ({ x: r.x, y: r.y, isDown: r.isDown }));
+  }
+
+  // Whether the local player sits in the spectator seat: down, with somebody left to watch.
+  private isSpectating(): boolean {
+    return this.isRunning && this.isDown && this.remotes().some((r) => !r.isDown);
+  }
+
+  // Keep the spectate target valid every tick: acquire one on going down, keep it while it
+  // lives, hand off when it dies or leaves, and release on revive (the camera glides home).
+  // The server learns the chosen target whenever it changes so it can center this client's
+  // interest view (and positional events) on what the camera actually shows.
+  private updateSpectate() {
+    this.spectateId = this.isDown ? resolveSpectateTarget(this.spectateId, this.remotes()) : null;
+    if (this.spectateId === null) {
+      this.sentSpectateId = null;
+      this.isSpectatingBody = false; // revive/hand-off releases the body toggle too
+      return;
+    }
+    if (this.mode === "online" && this.wsTransport && this.spectateId !== this.sentSpectateId) {
+      this.wsTransport.sendSpectate(this.spectateId);
+      this.sentSpectateId = this.spectateId;
+    }
+  }
+
+  // Every spectate input source lands here (Q/E, arrows, scroll — and a controller's bumpers
+  // when pads arrive): step the watched teammate through the stable living ring. Cycling
+  // also snaps out of body-follow — picking a teammate means you want to watch them.
+  private cycleSpectate(dir: 1 | -1) {
+    if (!this.isDown) return;
+    this.spectateId = cycleSpectateTarget(this.spectateId, this.remotes(), dir);
+    this.isSpectatingBody = false;
+  }
+
+  // F while down: flip the camera between the watched teammate and your own body (the
+  // UI Director's FOLLOW control — see who's coming for the revive).
+  private toggleSpectateFollow() {
+    if (!this.isDown) return;
+    this.isSpectatingBody = !this.isSpectatingBody;
+  }
+
+  // Where the camera looks: the local player, or the spectated teammate while down (unless
+  // the body toggle holds the camera home).
+  private cameraFocus(): { x: number; y: number } {
+    if (this.spectateId !== null && !this.isSpectatingBody) {
+      const target = this.remotes().find((r) => r.playerId === this.spectateId);
+      if (target) return { x: target.x, y: target.y };
+    }
+    return { x: this.px, y: this.py };
   }
 
   // Other players to render, from whichever remote source is active: co-op presence (Convex)
@@ -1235,12 +1329,15 @@ export class Game {
 
     this.checkFloorCleared();
 
-    // Smooth camera follow: ease toward the player instead of hard-snapping every frame, so
+    // Smooth camera follow: ease toward the focus instead of hard-snapping every frame, so
     // per-frame movement variance (variable-dt sim step) doesn't read as jitter. High factor
-    // = still tight tracking, just enough smoothing to absorb frame-time noise.
+    // = still tight tracking, just enough smoothing to absorb frame-time noise. The focus is
+    // the local player — or, while down and spectating, the watched teammate; the same ease
+    // glides the hand-off out and back (revive returns the camera home).
     {
-      const tx = this.px - this.canvas.width / 2;
-      const ty = this.py - this.canvas.height / 2;
+      const focus = this.cameraFocus();
+      const tx = focus.x - this.canvas.width / 2;
+      const ty = focus.y - this.canvas.height / 2;
       const k = 1 - Math.pow(0.000001, dt); // very tight follow; movement is already smooth (fixed-step)
       this.cam.x += (tx - this.cam.x) * k;
       this.cam.y += (ty - this.cam.y) * k;
@@ -1256,8 +1353,20 @@ export class Game {
         camRight: this.cam.x + this.canvas.width + 160, camBottom: this.cam.y + this.canvas.height + 160,
       },
       enemies: this.world.enemies,
-      players: this.world.players.values(),
+      players: this.waveFramePlayers(),
     });
+  }
+
+  // Every body the revive-channel audio watches: the local sim player(s) plus — online —
+  // the interpolated teammates, whose authoritative channel progress rides PlayerWire.rv.
+  // Without the remotes, a teammate being revived beside you would be silent online.
+  private *waveFramePlayers(): Generator<WaveFramePlayer> {
+    for (const p of this.world.players.values()) {
+      yield { id: p.id, x: p.x, y: p.y, isDown: p.isDown, reviveProgress: p.reviveProgress };
+    }
+    for (const r of this.remotes()) {
+      yield { id: r.playerId, x: r.x, y: r.y, isDown: r.isDown, reviveProgress: r.reviveProgress };
+    }
   }
 
   // Little dust kicks at the feet while running — the floor reacts to movement. Direct
@@ -1290,7 +1399,8 @@ export class Game {
     sfx("floorClear");
     this.addTrauma(0.1);
     this.flashScreen(140, 255, 190, 0.08, 2.5);
-    this.hud.showBanner("FLOOR CLEARED \u00b7 \u25be TAKE THE STAIRS");
+    const isParty = this.mode !== "solo" && this.remotes().length > 0;
+    this.hud.showBanner(isParty ? "FLOOR CLEAR \u00b7 MEET AT EXIT" : "FLOOR CLEAR \u00b7 \u25be GO DOWN");
     const d = this.dungeon;
     this.spawnSparkleBurst(d.exit.x * TILE + TILE / 2, d.exit.y * TILE + TILE / 2, 14, "#8affc0");
   }
@@ -2208,6 +2318,11 @@ export class Game {
     const boss = this.enemies.find((e) => isBossKind(e.kind));
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
+    // TL co-op status strip: ONLINE ONLY (UI Director hierarchy) — the authoritative
+    // shared world is the one place the party status is load-bearing mid-run. The verified
+    // world-id echo + per-member connected/reconnecting readiness readout belong to the
+    // Sev-0 coherence system (PR #39); until it lands this keeps the plain lobby label,
+    // and integration swaps in its authoritative roster line.
     let coopLabel: string | null = null;
     if (this.coop) {
       const count = this.coop.remotePlayers().length + 1;
@@ -2242,16 +2357,129 @@ export class Game {
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
       enemiesLeft: this.enemies.length,
+      isObjectiveHidden: this.isSandbox,
+      isParty: this.mode !== "solo" && this.remotes().length > 0,
       isBossActive,
       bossHpFrac,
       coopLabel,
+      prompt: this.hudPrompt(),
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,
       comboMult: comboTier.mult,
       comboColor: comboTier.color,
       comboFrac: this.comboTimer / COMBO_WINDOW,
       items: this.collapsedItems(),
+      // One coordination slot: an open blessing gate outranks exit staging (picks always
+      // resolve before the descend, so the messages can never both apply).
+      waitLabel: this.blessingWaitLabel() ?? this.exitWaitLabel(),
     });
+  }
+
+  // The SEMANTIC contextual action (UI Part4): what the interact input would do right now,
+  // as data — action id + target + authoritative progress — never presentation. This is
+  // the single source the HUD prompt derives from today and a controller pass maps to its
+  // A-button glyph later; it rides the P0 input-context system (the `interact` sample +
+  // context gates in src/game/input.ts) rather than any parallel input path. The revive
+  // affordance appears while a living local player stands inside a revivable downed
+  // teammate's ring; OUT bodies (down limit spent) never prompt — the sim would refuse
+  // the channel, and the world label already says the rescue is the stairs.
+  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | null {
+    // A pick overlay pauses the player (sim-shielded, inputs idle) — there IS no
+    // contextual action to offer under it.
+    if (this.mode === "solo" || this.isSandbox || !this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
+    let near: RemotePlayer | null = null;
+    for (const r of this.remotes()) {
+      if (!r.isDown || r.isOut) continue;
+      if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
+      if (near === null || r.reviveProgress > near.reviveProgress) near = r;
+    }
+    if (near === null) return null;
+    const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
+    return {
+      action: "revive",
+      targetName: near.name,
+      progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
+    };
+  }
+
+  // The BL prompt presentation over the semantic action. The key cap is the KEYBOARD
+  // binding only — no controller glyph until a controller actually exists (UI Part4);
+  // when pads land, the same semantic action maps to its A-button glyph here.
+  private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
+    const act = this.contextualAction();
+    if (act === null) return null;
+    const name = act.targetName.toUpperCase();
+    if (act.progress !== null) {
+      return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
+    }
+    return { key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
+  }
+
+  // The party blessing gate readout: which members still owe their pick (the descend holds
+  // for them, authoritatively — snapshots carry the pending set). Null when nobody is owed
+  // or when solo/classic (their gate is the local overlay itself). A pending member whose
+  // connection dropped reads RECONNECTING (their offer survives the reconnect grace — the
+  // coherence system, PR #39 — so "picking" would be a lie while they can't see the cards).
+  private blessingWaitLabel(): string | null {
+    if (this.mode !== "online" || !this.wsTransport) return null;
+    const pending = this.wsTransport.pendingPickWait();
+    if (pending.length === 0) return null;
+    const selfId = this.wsTransport.getSelfServerId();
+    const others = pending.filter((p) => p.id !== selfId);
+    if (others.length === 0) return null;
+    const remotes = this.wsTransport.remotePlayers();
+    const picking: string[] = [];
+    const reconnecting: string[] = [];
+    let secondsLeft = 0;
+    for (const p of others) {
+      const r = remotes.find((x) => x.playerId === p.id);
+      const name = (r?.name ?? "teammate").toUpperCase();
+      if (r !== undefined && isReconnectingTeammate(r)) reconnecting.push(name);
+      else {
+        picking.push(name);
+        secondsLeft = Math.max(secondsLeft, p.secondsLeft);
+      }
+    }
+    // UI Director copy: name who the party is waiting on, with the AUTHORITATIVE expiry
+    // countdown (the sim's TTL riding every snapshot — never a client timer; the gate
+    // unblocks only when a snapshot says the pending set drained). pnd is the union of
+    // blessing picks and boss weapon claims, so "choose" covers both reward kinds.
+    const parts: string[] = [];
+    if (picking.length > 0) {
+      const countdown = secondsLeft > 0 ? ` \u00b7 ${secondsLeft}s` : "";
+      parts.push(`WAITING FOR ${picking.join(" \u00b7 ")} TO CHOOSE${countdown}`);
+    }
+    if (reconnecting.length > 0) parts.push(`${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026`);
+    return parts.join(" \u00b7 ");
+  }
+
+  // The party exit-coordination readout (UI Director copy: `2/3 READY TO GO DOWN` plus a
+  // checklist of who is still missing WITH their distance to the stairs), mirroring the
+  // authoritative descend gate exactly (the snapshot's exr IS playersAtExit). Shows only
+  // while coordination is actually owed: a cleared party floor, somebody staged, somebody
+  // required still missing. Downed members aren't required (the descend rescues them), and
+  // neither are RECONNECTING members — the coherence system (PR #39) reserves their body
+  // and excludes it from the gate on both sides, so the party never waits on a ghost.
+  private exitWaitLabel(): string | null {
+    if (this.mode !== "online" || !this.wsTransport || !this.wsTransport.isFloorCleared()) return null;
+    const remotes = this.wsTransport.remotePlayers();
+    const presentLiving = remotes.filter((r) => !r.isDown && !isReconnectingTeammate(r));
+    const required = presentLiving.length + (this.isDown ? 0 : 1);
+    if (required <= 1) return null;
+    const exr = this.wsTransport.exitReadyParty();
+    if (exr.length === 0 || exr.length >= required) return null;
+    const d = this.world.dungeon;
+    const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
+    const meters = (x: number, y: number): string => `${Math.max(1, Math.round(Math.hypot(x - ex, y - ey) / TILE))}m`;
+    const selfId = this.wsTransport.getSelfServerId();
+    const checklist: string[] = [];
+    if (!this.isDown && (selfId === null || !exr.includes(selfId))) checklist.push(`YOU ${meters(this.px, this.py)}`);
+    for (const r of presentLiving) {
+      if (!exr.includes(r.playerId)) checklist.push(`${r.name.toUpperCase()} ${meters(r.x, r.y)}`);
+    }
+    const reconnecting = remotes.filter((r) => !r.isDown && isReconnectingTeammate(r)).map((r) => r.name.toUpperCase());
+    const suffix = reconnecting.length > 0 ? ` \u00b7 ${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026` : "";
+    return `${exr.length}/${required} READY TO GO DOWN${checklist.length > 0 ? ` \u2014 ${checklist.join(" \u00b7 ")}` : ""}${suffix}`;
   }
 
   // The player's owned blessing defs from the authoritative source: online that is the server's
@@ -2282,16 +2510,22 @@ export class Game {
   }
 
   private openStats() {
-    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean }> | null = null;
+    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean; isOut: boolean; isAtExit: boolean; isReconnecting: boolean }> | null = null;
     if (this.coop) {
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown },
-        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
+        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isOut: false, isAtExit: false, isReconnecting: false },
+        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isOut: false, isAtExit: false, isReconnecting: false })),
       ];
     } else if (this.mode === "online" && this.wsTransport) {
+      const exr = this.wsTransport.exitReadyParty();
+      const selfId = this.wsTransport.getSelfServerId();
+      const isSelfOut = this.wsTransport.getLatestSnapshot()?.self?.out === true;
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown },
-        ...this.wsTransport.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
+        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isOut: isSelfOut, isAtExit: selfId !== null && exr.includes(selfId), isReconnecting: false },
+        ...this.wsTransport.remotePlayers().map((r) => ({
+          name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isOut: r.isOut,
+          isAtExit: exr.includes(r.playerId), isReconnecting: isReconnectingTeammate(r),
+        })),
       ];
     }
     this.hud.showStats({
@@ -2323,7 +2557,13 @@ export class Game {
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
+    this.onGameOver({
+      floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart,
+      build: {
+        weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name })),
+        items: this.collapsedItems().map((it) => ({ id: it.id, name: it.name, glyph: it.glyph, tint: it.tint, count: it.count })),
+      },
+    });
   }
 
   // Online transport terminal states end the run cleanly instead of freezing the last frame.
@@ -2542,12 +2782,16 @@ export class Game {
     this.renderAfterimages();
     this.renderMeleeSwing();
     this.renderPlayer();
+    this.renderReviveRings();
+    this.renderExitCoordination();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     this.renderWorldLabels();
     ctx.restore();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
+    this.renderDownOverlay();
+    this.renderSpectateBanner();
     this.renderReticle();
     this.renderMinimap();
     this.renderReconnectOverlay();
@@ -3035,8 +3279,22 @@ export class Game {
     ctx.restore();
   }
 
+  // The one dealer item whose full state copy the player is reading right now: the nearest
+  // within approach range. Null when nothing is close (everything wears its compact tag).
+  private focusedDealerId(): number | null {
+    let best: number | null = null;
+    let bestD = 90;
+    for (const p of this.pickups) {
+      if (p.kind !== "dealer_heart" && p.kind !== "dealer_weapon") continue;
+      const d = Math.hypot(this.px - p.x, this.py - p.y);
+      if (d < bestD) { bestD = d; best = p.id; }
+    }
+    return best;
+  }
+
   private renderPickups() {
     const { ctx, cam } = this;
+    const focusedDealer = this.focusedDealerId();
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
@@ -3049,17 +3307,37 @@ export class Game {
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      // The Dealer's stock wears its coin price; gray if this player can't afford it.
+      // The Dealer's stock wears its state tag (UI gate): the item the player is ABOUT TO
+      // TOUCH carries the full copy — `HEART · 6 COINS`, `NEED N MORE`, `FULL HEALTH`,
+      // `OWNED` — matching the sim, which never consumes on an invalid touch; its shelf
+      // neighbors wear compact tags (price, or the short blocked word) so a row of stalls
+      // never collides into soup.
       if (p.kind === "dealer_heart" || p.kind === "dealer_weapon") {
-        const price = p.value ?? 6;
-        ctx.save();
-        ctx.font = '700 10px "Silkscreen", monospace';
-        ctx.textAlign = "center";
-        ctx.fillStyle = "rgba(8,6,16,0.9)";
-        ctx.fillText(`${price}c`, sx + 1, sy - 17);
-        ctx.fillStyle = this.coins >= price ? "#ffd27a" : "#8a8378";
-        ctx.fillText(`${price}c`, sx, sy - 18);
-        ctx.restore();
+        const tag = dealerTagCopy(
+          p.kind === "dealer_heart"
+            ? { kind: "heart", name: "Heart", price: p.value ?? DEALER.price }
+            : { kind: "weapon", name: p.weapon ? WEAPONS[p.weapon].name : "Weapon", price: p.value ?? 12 },
+          { coins: this.coins, hp: this.hp, maxHp: this.maxHp, isOwned: p.weapon !== null && this.p.ownedWeapons.includes(p.weapon) },
+        );
+        const isFocused = focusedDealer === p.id;
+        // A neighbor of the focused item yields its tag entirely — the focused full copy
+        // owns the shelf line (compact tags return the moment the player steps away).
+        const focused = focusedDealer !== null ? this.pickups.find((d) => d.id === focusedDealer) : undefined;
+        const isYielding = !isFocused && focused !== undefined
+          && Math.abs(focused.y - p.y) < 14 && Math.abs(focused.x - p.x) < 72;
+        if (!isYielding) {
+          const text = isFocused ? tag.text
+            : tag.state === "blocked" ? (p.kind === "dealer_heart" ? "FULL" : "OWNED")
+            : `${p.value ?? DEALER.price}c`;
+          ctx.save();
+          ctx.font = '700 9px "Silkscreen", monospace';
+          ctx.textAlign = "center";
+          ctx.fillStyle = "rgba(8,6,16,0.9)";
+          ctx.fillText(text, sx + 1, sy - 17);
+          ctx.fillStyle = tag.state === "buy" ? "#ffd27a" : tag.state === "broke" ? "#ff8a7a" : "#9a8fb5";
+          ctx.fillText(text, sx, sy - 18);
+          ctx.restore();
+        }
       }
       // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
       // spent their one personal claim (teammates still see their own live options).
@@ -3078,7 +3356,7 @@ export class Game {
       // Weapon pickups draw their own 64px side-profile sprite so each gun is
       // recognizable on the floor; anything without dedicated art (or not yet loaded)
       // falls back to the generic "gun" sprite, then to a plain dot.
-      const weaponImg = p.kind === "weapon" && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
+      const weaponImg = (p.kind === "weapon" || p.kind === "dealer_weapon") && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
       if (weaponImg) {
         ctx.save();
         ctx.translate(sx, sy);
@@ -3969,12 +4247,237 @@ export class Game {
       else this.renderHeldWeapon(bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
     }
     if (this.isDown) {
+      // The revive ring (renderReviveRings) owns the "being revived" read; the spectate
+      // banner owns the down-state instructions. Only the bare label rides the body here.
       ctx.fillStyle = "#ff6a6a";
       ctx.font = '700 12px "Silkscreen", monospace';
       ctx.textAlign = "center";
-      ctx.fillText("DOWN \u2014 wait for a teammate", psx, psy - 34);
+      ctx.fillText(this.isSpectating() || this.p.reviveProgress > 0 ? "DOWN" : "DOWN \u2014 wait for a teammate", psx, psy - 34);
       ctx.textAlign = "left";
     }
+  }
+
+  // World-space revive UX. Around every downed body: a faint stand-here ring at the exact
+  // authoritative revive radius. While a channel runs: a progress arc that both sides read
+  // from the SAME authoritative number (SelfWire.rev for your own body, PlayerWire.rv for a
+  // teammate's). For a living player in range: the HOLD E prompt / REVIVING label.
+  private renderReviveRings() {
+    if (this.mode === "solo" || !this.isRunning) return;
+    const { ctx, cam } = this;
+    const drawStandRing = (sx: number, sy: number) => {
+      ctx.save();
+      ctx.globalAlpha = 0.22 + 0.08 * Math.sin(this.animClock * 3);
+      ctx.strokeStyle = "#8affc0";
+      ctx.lineWidth = 2;
+      ctx.setLineDash(AIM_DASH);
+      ctx.beginPath();
+      ctx.arc(sx, sy, REVIVE.radius, 0, 6.28);
+      ctx.stroke();
+      ctx.restore();
+    };
+    const drawProgress = (sx: number, sy: number, frac: number) => {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = "#0d2a1e";
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 27, 0, 6.28);
+      ctx.stroke();
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = "#8affc0";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 27, -Math.PI / 2, -Math.PI / 2 + 6.283 * Math.min(1, frac));
+      ctx.stroke();
+      ctx.restore();
+    };
+    const label = (sx: number, sy: number, text: string, color: string) => {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.font = '700 11px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.fillText(text, sx, sy - 48);
+      ctx.restore();
+      ctx.textAlign = "left";
+    };
+    for (const r of this.remotes()) {
+      if (!r.isDown) continue;
+      const sx = r.x - cam.x, sy = r.y - cam.y;
+      // Past the floor's down limit (gate §1) the body is OUT: the sim refuses the channel,
+      // so the UI must stop inviting one — no ring, no prompt, just the descent-rescue read.
+      if (r.isOut) {
+        label(sx, sy, `${r.name.toUpperCase()} IS OUT \u2014 DESCEND TO RESCUE`, "#ff8a7a");
+        continue;
+      }
+      // World space carries the SPATIAL guidance only — the stand-here ring and the
+      // authoritative progress arc at the body; the input affordance (`E | REVIVE GF`)
+      // lives in the bottom-left prompt cluster (UI Director hierarchy), so the copy
+      // never doubles up over the fight.
+      if (!this.isDown) drawStandRing(sx, sy);
+      if (r.reviveProgress > 0) drawProgress(sx, sy, r.reviveProgress / REVIVE.channel);
+    }
+    // The local downed body: the authoritative channel a teammate holds on us.
+    if (this.isDown && this.p.reviveProgress > 0) {
+      const a = this.hasRenderPrev ? this.renderAlpha : 1;
+      const sx = this.renderPrevX + (this.px - this.renderPrevX) * a - cam.x;
+      const sy = this.renderPrevY + (this.py - this.renderPrevY) * a - cam.y;
+      drawProgress(sx, sy, this.p.reviveProgress / REVIVE.channel);
+      label(sx, sy, "A TEAMMATE IS REVIVING YOU\u2026", "#8affc0");
+    }
+  }
+
+  // World-space party exit coordination, shown only while the descend gate is actually
+  // waiting on someone: a pulsing chevron from the local player toward the STAIRS while
+  // teammates stand staged there, and — once staged yourself — chevrons toward each living
+  // teammate the gate still needs. Pure reads of the authoritative exr; nothing sim-side.
+  private renderExitCoordination() {
+    if (this.mode !== "online" || !this.wsTransport || this.isDown || !this.isRunning) return;
+    if (!this.wsTransport.isFloorCleared()) return;
+    const remotes = this.remotes();
+    // Only PRESENT living teammates are required at the stairs (a reconnecting member's
+    // reserved body is excluded from the gate — PR #39 — so no chevron ever points at it).
+    const livingRemotes = remotes.filter((r) => !r.isDown && !isReconnectingTeammate(r));
+    if (livingRemotes.length === 0) return;
+    const exr = this.wsTransport.exitReadyParty();
+    const required = livingRemotes.length + 1;
+    if (exr.length === 0 || exr.length >= required) return;
+    const selfId = this.wsTransport.getSelfServerId();
+    const isSelfAt = selfId !== null && exr.includes(selfId);
+    const chevron = (fromX: number, fromY: number, angle: number, color: string) => {
+      const { ctx, cam } = this;
+      const pulse = 2.5 * Math.sin(this.animClock * 5);
+      const cx = fromX + Math.cos(angle) * (58 + pulse) - cam.x;
+      const cy = fromY + Math.sin(angle) * (58 + pulse) - cam.y;
+      ctx.save();
+      ctx.globalAlpha = 0.75 + 0.2 * Math.sin(this.animClock * 5);
+      ctx.fillStyle = color;
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(9, 0);
+      ctx.lineTo(-5, 6.5);
+      ctx.lineTo(-5, -6.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    };
+    if (!isSelfAt) {
+      // You are the missing one: point at the stairs where the party waits.
+      const d = this.dungeon;
+      const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
+      if (Math.hypot(ex - this.px, ey - this.py) > TILE * 2) {
+        chevron(this.px, this.py, Math.atan2(ey - this.py, ex - this.px), "#8affc0");
+      }
+      return;
+    }
+    // You are staged: point at each living teammate the gate still needs.
+    for (const r of livingRemotes) {
+      if (exr.includes(r.playerId)) continue;
+      chevron(this.px, this.py, Math.atan2(r.y - this.py, r.x - this.px), "#ffd27a");
+    }
+  }
+
+  // Screen-space spectator chrome: who the camera follows and how to switch. Fixed position
+  // and opacity-only, so it can never shift the layout.
+  // The spectator's control bar (UI Director: SPECTATING NAME + prev/next/follow/menu).
+  // The DOWN state itself — YOU'RE DOWN, revive progress, interrupts, teammate arrows —
+  // lives in renderDownOverlay; this bar is purely "what am I watching and how do I drive".
+  private renderSpectateBanner() {
+    if (!this.isSpectating() || this.spectateId === null) return;
+    const target = this.remotes().find((r) => r.playerId === this.spectateId);
+    if (!target) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const y = canvas.height - 168;
+    const isTargetReconnecting = isReconnectingTeammate(target);
+    const living = this.remotes().filter((r) => !r.isDown).length;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffb43b";
+    ctx.font = '700 16px "Silkscreen", monospace';
+    ctx.globalAlpha = 0.85 + 0.15 * Math.sin(this.animClock * 3);
+    ctx.fillText(this.isSpectatingBody ? "WATCHING YOUR BODY" : `SPECTATING ${target.name.toUpperCase()}`, cx, y);
+    ctx.globalAlpha = 0.8;
+    ctx.font = '700 10px "Silkscreen", monospace';
+    if (isTargetReconnecting && !this.isSpectatingBody) {
+      ctx.fillStyle = "#9a8fb5";
+      ctx.fillText(`${target.name.toUpperCase()} IS RECONNECTING\u2026 THE RUN RESUMES WHEN THEY RETURN`, cx, y + 18);
+    }
+    ctx.fillStyle = "#d9d2c0";
+    const controls = [
+      ...(living > 1 ? ["Q \u25c0 PREV", "NEXT \u25b6 E"] : []),
+      this.isSpectatingBody ? `F FOLLOW ${target.name.toUpperCase()}` : "F YOUR BODY",
+      "ESC MENU",
+    ];
+    ctx.fillText(controls.join(" \u00b7 "), cx, y + (isTargetReconnecting && !this.isSpectatingBody ? 34 : 18));
+    ctx.restore();
+    ctx.textAlign = "left";
+  }
+
+  // The downed player's own state overlay (UI Director): YOU'RE DOWN, the authoritative
+  // revive readout (`NAME REVIVING · N%`), the hard-reset interrupt flash, the OUT state,
+  // and screen-edge arrows with distances toward every living teammate (the people who can
+  // come channel you). Drawn while down regardless of what the camera watches.
+  private renderDownOverlay() {
+    if (!this.isDown || !this.isRunning || this.mode === "solo") return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const y = 118;
+    const reviver = this.remotes().find((r) => !r.isDown && !isReconnectingTeammate(r)
+      && Math.hypot(r.x - this.px, r.y - this.py) <= REVIVE.radius);
+    const isSelfOut = this.wsTransport?.getLatestSnapshot()?.self?.out === true;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ff6a6a";
+    ctx.font = '700 22px "Silkscreen", monospace';
+    ctx.globalAlpha = 0.8 + 0.2 * Math.sin(this.animClock * 2.4);
+    ctx.fillText("YOU'RE DOWN", cx, y);
+    ctx.globalAlpha = 0.9;
+    ctx.font = '700 11px "Silkscreen", monospace';
+    if (this.p.reviveProgress > 0) {
+      ctx.fillStyle = "#8affc0";
+      const by = reviver ? reviver.name.toUpperCase() : "A TEAMMATE";
+      ctx.fillText(`${by} REVIVING \u00b7 ${Math.round((this.p.reviveProgress / REVIVE.channel) * 100)}%`, cx, y + 20);
+    } else if (this.reviveInterruptT > 0) {
+      ctx.fillStyle = "#ffb43b";
+      ctx.globalAlpha = Math.min(1, this.reviveInterruptT * 2);
+      ctx.fillText("REVIVE INTERRUPTED \u2014 THE CHANNEL RESTARTS FROM ZERO", cx, y + 20);
+    } else if (isSelfOut) {
+      ctx.fillStyle = "#ff8a7a";
+      ctx.fillText("NO REVIVES LEFT THIS FLOOR \u2014 THE PARTY'S DESCENT RESCUES YOU", cx, y + 20);
+    } else {
+      ctx.fillStyle = "#d9d2c0";
+      ctx.fillText("A TEAMMATE CAN HOLD E ON YOUR BODY", cx, y + 20);
+    }
+    // Screen-edge arrows toward every living teammate + their distance to your body —
+    // the downed player's answer to "is anyone coming?".
+    const living = this.remotes().filter((r) => !r.isDown && !isReconnectingTeammate(r)).slice(0, 3);
+    ctx.font = '700 10px "Silkscreen", monospace';
+    for (const mate of living) {
+      const sx = mate.x - this.cam.x, sy = mate.y - this.cam.y;
+      const isOnScreen = sx > 40 && sx < canvas.width - 40 && sy > 40 && sy < canvas.height - 40;
+      if (isOnScreen) continue; // visible teammates need no arrow
+      const ang = Math.atan2(mate.y - this.py, mate.x - this.px);
+      const ax = cx + Math.cos(ang) * 150;
+      const ay = y + 64 + Math.sin(ang) * 34;
+      ctx.save();
+      ctx.translate(ax, ay);
+      ctx.rotate(ang);
+      ctx.fillStyle = "#8affc0";
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(10, 0); ctx.lineTo(-6, -7); ctx.lineTo(-6, 7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = "#8affc0";
+      ctx.globalAlpha = 0.85;
+      const dist = Math.max(1, Math.round(Math.hypot(mate.x - this.px, mate.y - this.py) / TILE));
+      ctx.fillText(`${mate.name.toUpperCase()} ${dist}m`, ax, ay + 22);
+    }
+    ctx.restore();
+    ctx.textAlign = "left";
   }
 
   // Where the blade POINTS at swing progress t (0..1): an eased sweep across the sim's
