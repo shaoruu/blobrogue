@@ -14,6 +14,22 @@ export const FLOW_REBUILD = 0.2;
 export const SLIME_HOP_FREQ = 3.4;
 export const SLIME_HOP_AMOUNT = 0.55;
 
+// Bat flock steering (deterministic boids): separation/alignment/cohesion + target
+// attraction, blended into a persistent heading (stored in the bat's `zig` scratch) that
+// turns at a capped rate — a readable flock, never a stack, never independent beelines.
+// The neighbor scan is BOUNDED: same-kind bodies inside FLOCK_RADIUS, first
+// FLOCK_MAX_NEIGHBORS in deterministic array order, so cost is O(n·k) with a small k.
+export const FLOCK_RADIUS = 90;
+export const FLOCK_SEP_RADIUS = 30;
+export const FLOCK_MAX_NEIGHBORS = 5;
+export const FLOCK_SEP_WEIGHT = 1.7;
+export const FLOCK_ALIGN_WEIGHT = 0.5;
+export const FLOCK_COHESION_WEIGHT = 0.35;
+export const FLOCK_TARGET_WEIGHT = 1.0;
+export const FLOCK_TURN_RATE = 7;   // rad/s cap on heading change
+export const FLOCK_MIN_SPEED = 0.5; // airspeed floor while the desired pull opposes the heading
+export const FLOCK_HARD_CORE = 18;  // px: inside this, separation overrides every other pull
+
 // Anti-stuck nudge for wedged chasers.
 export const STUCK_TIME = 0.12;
 export const STUCK_PROGRESS = 0.5;

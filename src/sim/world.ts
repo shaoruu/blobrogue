@@ -1598,6 +1598,7 @@ function applyThorns(w: WorldState, src: PlayerSim, victim: PlayerSim, e: Enemy,
 function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   switch (e.kind) {
     case "spitter": updateSpitter(w, e, dt, ev); return;
+    case "bat": updateFlocker(w, e, dt); return;
     case "skeleton": updateSkeleton(w, e, dt, ev); return;
     case "ghost": updateGhost(w, e, dt, ev); return;
     case "charger": updateCharger(w, e, dt, ev); return;
@@ -1649,14 +1650,97 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
 }
 
 function updateChaser(w: WorldState, e: Enemy, dt: number): void {
-  const arch = ENEMY_ARCHETYPES[e.kind];
   if (!findTarget(w, e.x, e.y)) return;
-  let angle = chaseAngle(w, e);
-  if (arch.movement === "zigzag") { e.zig += dt * 5; angle += Math.sin(e.zig) * 0.9; }
+  const angle = chaseAngle(w, e);
   let step = e.speed * dt;
   if (e.kind === "slime") step *= slimeHopPulse(e);
   if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
   applyChaseStep(w, e, dt, angle, step);
+}
+
+// Deterministic boids for the bat family. Each bat carries a persistent heading in its
+// `zig` scratch (seeded at spawn, so a fresh flock fans out reproducibly) and blends four
+// steering pulls into it under a capped turn rate:
+//   separation (strong, inside FLOCK_SEP_RADIUS)  — never stack;
+//   alignment + cohesion (with capped, deterministic array-order neighbors) — move as ONE
+//   wheeling body;
+//   target attraction (the flow-field chase bearing) — the flock still hunts.
+// Pure state math, no RNG, bounded O(n·FLOCK_MAX_NEIGHBORS): replay-identical every run.
+function updateFlocker(w: WorldState, e: Enemy, dt: number): void {
+  const hasTarget = findTarget(w, e.x, e.y);
+  let sepX = 0, sepY = 0;
+  let aliX = 0, aliY = 0;
+  let cohX = 0, cohY = 0;
+  let social = 0;
+  let closest = Infinity;
+  // One pass over the enemy list (the same per-enemy scan shape every AI routine here
+  // uses). The SOCIAL terms (alignment/cohesion) cap at FLOCK_MAX_NEIGHBORS in
+  // deterministic array order; SEPARATION must instead see every body inside its small
+  // radius — a capped-by-array-order pick can starve exactly the stacked pair it exists
+  // to split (two late-array bats never scanning each other).
+  for (const other of w.enemies) {
+    if (other === e || other.dead || other.kind !== e.kind) continue;
+    const dx = other.x - e.x, dy = other.y - e.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= C.FLOCK_RADIUS) continue;
+    if (d < closest) closest = d;
+    if (d < C.FLOCK_SEP_RADIUS) {
+      // A fully co-located pair has no separation axis — break the tie along each bat's
+      // own id-derived bearing (golden-angle spread: stable, deterministic, never shared),
+      // so an exactly-stacked pair can never become a fixed point.
+      if (d < 1) {
+        const tie = e.id * 2.399963;
+        sepX -= Math.cos(tie);
+        sepY -= Math.sin(tie);
+      } else {
+        const push = (C.FLOCK_SEP_RADIUS - d) / C.FLOCK_SEP_RADIUS;
+        sepX -= (dx / d) * push;
+        sepY -= (dy / d) * push;
+      }
+    }
+    if (social < C.FLOCK_MAX_NEIGHBORS) {
+      social++;
+      aliX += Math.cos(other.zig);
+      aliY += Math.sin(other.zig);
+      cohX += dx;
+      cohY += dy;
+    }
+  }
+  let desX = sepX * C.FLOCK_SEP_WEIGHT;
+  let desY = sepY * C.FLOCK_SEP_WEIGHT;
+  // Priority arbitration: inside the hard core, separation is the ONLY voice. The shared
+  // target pull focuses converging bats onto one point like rays — without this override
+  // it laterally re-compresses any pair it likes back into a stack.
+  const isCrowded = closest < C.FLOCK_HARD_CORE;
+  if (!isCrowded && social > 0) {
+    const aliLen = Math.hypot(aliX, aliY) || 1;
+    desX += (aliX / aliLen) * C.FLOCK_ALIGN_WEIGHT;
+    desY += (aliY / aliLen) * C.FLOCK_ALIGN_WEIGHT;
+    const cohLen = Math.hypot(cohX, cohY) || 1;
+    desX += (cohX / cohLen) * C.FLOCK_COHESION_WEIGHT;
+    desY += (cohY / cohLen) * C.FLOCK_COHESION_WEIGHT;
+  }
+  if (!isCrowded && hasTarget) {
+    const hunt = chaseAngle(w, e);
+    desX += Math.cos(hunt) * C.FLOCK_TARGET_WEIGHT;
+    desY += Math.sin(hunt) * C.FLOCK_TARGET_WEIGHT;
+  }
+  // No pulls at all (lone bat, no target): glide on the current heading at full speed.
+  let brake = 1;
+  if (desX !== 0 || desY !== 0) {
+    let delta = Math.atan2(desY, desX) - e.zig;
+    while (delta > Math.PI) delta -= Math.PI * 2;
+    while (delta < -Math.PI) delta += Math.PI * 2;
+    const maxTurn = C.FLOCK_TURN_RATE * dt;
+    e.zig += delta > maxTurn ? maxTurn : delta < -maxTurn ? -maxTurn : delta;
+    // Variable airspeed: a bat whose desired pull opposes its heading BRAKES (a trailing
+    // bat glued to a leader's tail can fall back and slide out) — turning alone can never
+    // unstack a pair flying the same axis at the same speed.
+    brake = C.FLOCK_MIN_SPEED + (1 - C.FLOCK_MIN_SPEED) * Math.max(0, Math.cos(delta));
+  }
+  let step = e.speed * brake * dt;
+  if (e.surgeTime > 0) step *= BOSS.packSurgeSpeedMult;
+  applyChaseStep(w, e, dt, e.zig, step);
 }
 
 // The charger: a slow stalker whose whole threat is one long, telegraphed straight rush.
@@ -1678,6 +1762,7 @@ function updateCharger(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
     const step = C.CHARGER_RUSH_SPEED * dt;
     const x0 = e.x, y0 = e.y;
+    rushSmashEnvironment(w, e, ev); // the lane splinters FIRST — furniture never wedges a rush
     moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
     ev.push({ t: "lungeTrail", x: e.x, y: e.y });
     // Wall crash: barely progressing at full commitment = it hit something solid.
@@ -1771,6 +1856,7 @@ function burrowerErupt(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     if (isProtected(p) || p.isDown || p.hp <= 0) continue;
     if (Math.hypot(p.x - a.markX, p.y - a.markY) < C.BURROW_ERUPT_RADIUS) damagePlayer(w, p, e.touchDamage, ev);
   }
+  enemySmashEnvironment(w, a.markX, a.markY, C.BURROW_ERUPT_RADIUS, ev);
   ev.push({ t: "burrowErupt", x: a.markX, y: a.markY, r: C.BURROW_ERUPT_RADIUS });
 }
 
@@ -2057,6 +2143,7 @@ function bossLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev);
     else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev);
   }
+  enemySmashEnvironment(w, x, y, BOSS.slamRadius, ev);
   ev.push({ t: "bossSlam", x, y });
   if (boss && boss.phase >= 3) {
     for (let i = 0; i < 4; i++) spawnEnemyBullet(w, x, y, (i / 4) * 6.28, 220, 7, BOSS.globDamage, "#a24bff", 2.5);
@@ -2235,6 +2322,7 @@ function marrowActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
   const step = MARROW.chargeSpeed * dt;
   const x0 = e.x, y0 = e.y;
+  rushSmashEnvironment(w, e, ev); // the blind bull clears its furrow FIRST — no furniture wedge
   moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
   ev.push({ t: "lungeTrail", x: e.x, y: e.y });
   const moved = Math.hypot(e.x - x0, e.y - y0);
@@ -2515,6 +2603,7 @@ function weaverLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     if (d < WEAVER.pounceInnerRadius) damagePlayer(w, p, WEAVER.pounceCenterDamage, ev);
     else if (d < WEAVER.pounceRadius) damagePlayer(w, p, WEAVER.pounceOuterDamage, ev);
   }
+  enemySmashEnvironment(w, a.markX, a.markY, WEAVER.pounceRadius, ev);
   plantWeb(w, a.markX, a.markY, WEAVER.pounceWebRadius, ev);
   ev.push({ t: "bossSlam", x: a.markX, y: a.markY });
 }
@@ -2646,6 +2735,7 @@ function gildedSlamResolve(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     const off = (i - (GILDED.slamLineShards - 1) / 2) * GILDED.slamLineGap;
     spawnEnemyBullet(w, a.markX, a.markY, a.lockedAngle + off, GILDED.slamLineSpeed, GILDED.shardRadius, GILDED.shardDamage, "#ffd166", GILDED.shardLife);
   }
+  enemySmashEnvironment(w, a.markX, a.markY, GILDED.slamRadius, ev);
   ev.push({ t: "bossSlam", x: a.markX, y: a.markY });
 }
 
@@ -2880,6 +2970,36 @@ function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, sp
   });
 }
 
+// ---- enemy -> environment destruction ----
+
+// The authoritative environment-damage path for enemy commitments (charges, slams,
+// pounces, eruptions — every caller is a fully telegraphed move, so the wreckage is
+// as dodge-readable as the hit itself). Props splinter through the ordinary destroyProp
+// pipeline WITHOUT an owner: chained explosive barrels hurt everything but their kills
+// credit NO player (the departed-actor ownership contract), and crate/pot spills stay
+// ordinary first-come world loot. Wood chests burst open and eject their contents away
+// from the impact onto standable floor.
+function enemySmashEnvironment(w: WorldState, x: number, y: number, radius: number, ev: SimEvent[]): void {
+  for (const p of w.props) {
+    if (p.breakT !== undefined || p.kind === "brazier") continue;
+    if (Math.hypot(p.x - x, p.y - y) <= radius + p.radius) destroyProp(w, p, ev);
+  }
+  for (const c of w.chests) {
+    if (c.opened || c.kind !== "wood") continue;
+    if (Math.hypot(c.x - x, c.y - y) <= radius + c.radius) smashOpenChest(w, c, x, y, ev);
+  }
+}
+
+// A rusher plows THROUGH the furniture: splinter everything at the body's leading edge,
+// BEFORE the move resolves (called per active-rush tick — the lane telegraph already drew
+// exactly this corridor). The pad must clear moveCircle's prop-collision ring
+// (prop radius × 0.8 ≈ 12px), or the rush would wedge against the crate it was about to
+// smash and read the stall as a wall crash.
+const RUSH_SMASH_PAD = 16;
+function rushSmashEnvironment(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  enemySmashEnvironment(w, e.x, e.y, e.radius + RUSH_SMASH_PAD, ev);
+}
+
 // ---- hazards (the Weaver's webs) ----
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
@@ -3046,29 +3166,48 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   // Baked contents first (the floor's weapon drop lives in this chest — see
   // stockWeaponChests), then the ordinary roll: the weapon replaces nothing, so the heart
   // economy and pity behave exactly as they always did per chest opened.
-  if (c.weapon !== undefined) ejectChestWeapon(w, p, c, c.weapon, ev);
-  rollWoodChest(w, p, c, ev);
+  if (c.weapon !== undefined) ejectChestWeapon(w, c, c.weapon, openerAngle(p, c), ev);
+  rollWoodChest(w, c, openerAngle(p, c), ev);
 }
 
-// A weapon coming out of a chest lands just in FRONT of it — toward the opener — so it
-// reads as spilled loot, clearly collectible, never a pickup stacked under the chest
-// sprite. The landing spot must be somewhere the opener can actually STAND (open floor,
-// off every live prop's collision ring, clear of other chests): the old loose floor drops
-// could sit where the 34px collect range never triggered — the unreachable gun of the
-// playtest. Candidate angles fan out from the opener direction in a fixed order; if every
-// one is blocked (a chest boxed in by props), the drop degrades to the chest's own tile,
-// which is open, prop-free floor by construction (see chestTile).
-function ejectChestWeapon(w: WorldState, p: PlayerSim, c: Chest, weapon: WeaponId, ev: SimEvent[]): void {
-  const dx = p.x - c.x, dy = p.y - c.y;
-  const base = Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
+// An enemy commitment bursts a wood chest open: the same deterministic contents, ejected
+// AWAY from the impact onto standable floor, with NO opener — everything it spills is
+// ordinary first-come world loot, and no blessing machinery is touched (wood chests never
+// carried one). Boss chests are the cleared floor's pedestal and are never smashable.
+function smashOpenChest(w: WorldState, c: Chest, fromX: number, fromY: number, ev: SimEvent[]): void {
+  c.opened = true;
+  c.openT = 0;
+  ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
+  const away = Math.atan2(c.y - fromY, c.x - fromX);
+  if (c.weapon !== undefined) ejectChestWeapon(w, c, c.weapon, away, ev);
+  rollWoodChest(w, c, away, ev);
+}
+
+// A weapon coming out of a chest lands just in FRONT of it along `base` — toward the
+// opener, or away from whatever smashed it open — so it reads as spilled loot, clearly
+// collectible, never a pickup stacked under the chest sprite. The landing spot must be
+// somewhere a player can actually STAND (open floor, off every live prop's collision
+// ring, clear of other chests): the old loose floor drops could sit where the 34px
+// collect range never triggered — the unreachable gun of the playtest. Candidate angles
+// fan out from `base` in a fixed order; if every one is blocked (a chest boxed in by
+// props), the drop degrades to the chest's own tile, which is open, prop-free floor by
+// construction (see chestTile).
+function ejectChestWeapon(w: WorldState, c: Chest, weapon: WeaponId, base: number, ev: SimEvent[]): void {
   let x = c.x, y = c.y;
   for (const off of C.CHEST_EJECT_ANGLES) {
     const ex = c.x + Math.cos(base + off) * C.CHEST_WEAPON_EJECT;
     const ey = c.y + Math.sin(base + off) * C.CHEST_WEAPON_EJECT;
-    if (isStandableSpot(w, ex, ey, p.pr)) { x = ex; y = ey; break; }
+    // Standable by a player body (pr 18, see createPlayer) — the collector's clearance.
+    if (isStandableSpot(w, ex, ey, 18)) { x = ex; y = ey; break; }
   }
   w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon });
   ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+}
+
+// The eject bearing for a player-opened chest: out toward the opener.
+function openerAngle(p: PlayerSim, c: Chest): number {
+  const dx = p.x - c.x, dy = p.y - c.y;
+  return Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
 }
 
 // Whether a player of radius `pr` can physically stand at (x, y): open floor and outside
@@ -3085,7 +3224,7 @@ function isStandableSpot(w: WorldState, x: number, y: number, pr: number): boole
 // Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer
 // drop from random chests — the reward cadence lives on descents and the boss chest. The
 // recovery pity, once armed, forces the heart.
-function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
+function rollWoodChest(w: WorldState, c: Chest, ejectBase: number, ev: SimEvent[]): void {
   if (w.isPityHeartArmed) {
     w.isPityHeartArmed = false;
     w.pityStreak = 0;
@@ -3097,7 +3236,7 @@ function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): v
     w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
   } else if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers) + SUSTAIN.woodChestWeapon) {
     const weapon = PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)];
-    ejectChestWeapon(w, p, c, weapon, ev);
+    ejectChestWeapon(w, c, weapon, ejectBase, ev);
   } else {
     const n = 3 + Math.floor(w.rng.next() * 4);
     for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
@@ -3111,7 +3250,7 @@ function rollWoodChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): v
 // the safe side; the pending entry still applies so a party can't descend out from under
 // the pick.
 function grantBossChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
-  if (c.weapon !== undefined) ejectChestWeapon(w, p, c, c.weapon, ev);
+  if (c.weapon !== undefined) ejectChestWeapon(w, c, c.weapon, openerAngle(p, c), ev);
   w.pickups.push(makePickup(w, "heart", c.x - 18, c.y, ev));
   for (let i = 0; i < 5; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - 2) * 16, c.y + 18, ev));
   raiseBlessingOffer(w, p.id, true, ev);

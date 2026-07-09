@@ -7,7 +7,7 @@
 // Run: npm run test:content
 
 import {
-  createWorld, stepWorld, devSpawnEnemy, devSpawnProp, acquireWeaponInWorld, isFloorCleared,
+  createWorld, stepWorld, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -954,6 +954,125 @@ function rosterTests(): void {
     })());
 }
 
+// ---- enemy -> environment destruction (authoritative, ownerless) ----
+
+function environmentTests(): void {
+  section("environment: a charger's rush splinters the furniture in its lane");
+  {
+    const { w, p } = arena(0xE0B1);
+    p.x = 1000; p.y = 600;
+    const e = spawnReady(w, "charger", 700, 600);
+    devSpawnProp(w, "crate", 850, 600);
+    devSpawnProp(w, "pot", 920, 604);
+    const ev: SimEvent[] = [];
+    stepFor(w, C.CHARGER_WINDUP + C.CHARGER_RUSH_DUR + 0.2, ev);
+    check("both props in the lane are splintered", w.props.every((pr) => pr.dead),
+      `alive=${w.props.filter((pr) => !pr.dead).length}`);
+    check("the wreckage emits ordinary break events", ev.filter((x) => x.t === "propBreak").length >= 2);
+    check("the rush still connects with the player beyond the furniture", e.attack.move !== "none" || e.attack.cooldown > 0);
+  }
+
+  section("environment: enemy-chained barrels kill without crediting anyone");
+  {
+    const { w, p } = arena(0xE0B2);
+    p.x = 1000; p.y = 600;
+    spawnReady(w, "charger", 700, 600);
+    devSpawnProp(w, "barrel_explosive", 860, 600);
+    // A bystander inside the barrel's blast, OFF the charge lane.
+    const bystander = spawnReady(w, "slime", 890, 660);
+    const ev: SimEvent[] = [];
+    stepFor(w, C.CHARGER_WINDUP + C.CHARGER_RUSH_DUR + 0.3, ev);
+    check("the rushed barrel detonated", ev.some((x) => x.t === "explosion"));
+    check("the blast killed the bystander slime", bystander.dead);
+    check("the kill credits NO player (kills/combo untouched)", p.kills === 0 && p.combo === 0,
+      `kills=${p.kills}`);
+  }
+
+  section("environment: the Gilded Warden's quake wrecks its ring and bursts chests");
+  {
+    const { w, boss } = gildedSetup(0xE0B3);
+    devSpawnProp(w, "crate", boss.x + 40, boss.y);
+    devSpawnChest(w, boss.x - 50, boss.y);
+    const ev: SimEvent[] = [];
+    let guard = 0;
+    while (!ev.some((x) => x.t === "bossSlam") && guard++ < 60 * 8) stepFor(w, DT, ev);
+    check("the quake resolves", guard < 60 * 8);
+    check("the crate inside the ring is wrecked", w.props.every((pr) => pr.dead));
+    const chest = w.chests.find((c) => c.kind === "wood");
+    check("the wood chest bursts open with its contents spilled as world loot",
+      chest !== undefined && chest.opened && w.pickups.length > 0, `pickups=${w.pickups.length}`);
+    check("an enemy-burst chest never raises a blessing offer", !ev.some((x) => x.t === "offerBlessing"));
+    const spill = w.pickups.every((k) => !isWall(wallProbe(w), k.x, k.y));
+    check("everything it spilled landed on walkable floor", spill);
+  }
+}
+
+// isWall is world-internal; probe the dungeon tiles directly for the loot-landing check.
+function wallProbe(w: WorldState): WorldState { return w; }
+function isWall(w: WorldState, px: number, py: number): boolean {
+  const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+  if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h) return true;
+  return w.dungeon.tiles[ty * w.dungeon.w + tx] === 1;
+}
+
+// ---- the bat flock (deterministic boids) ----
+
+function flockTests(): void {
+  section("flock: separation — a stacked cluster spreads and never re-stacks");
+  {
+    const { w, p } = arena(0xF10C);
+    p.x = 1400; p.y = 600;
+    const bats: Enemy[] = [];
+    for (let i = 0; i < 8; i++) bats.push(spawnReady(w, "bat", 400 + (i % 3) * 4, 600 + Math.floor(i / 3) * 4));
+    stepFor(w, 4);
+    let minPair = Infinity;
+    for (let i = 0; i < bats.length; i++) {
+      for (let j = i + 1; j < bats.length; j++) minPair = Math.min(minPair, Math.hypot(bats[i].x - bats[j].x, bats[i].y - bats[j].y));
+    }
+    check("no two bats overlap after 4s of flight (bodies are 13px radius)", minPair >= 14,
+      `minPair=${minPair.toFixed(1)}px`);
+  }
+
+  section("flock: cohesion + alignment — one wheeling body that still hunts");
+  {
+    const { w, p } = arena(0xF10D);
+    p.x = 1400; p.y = 600;
+    const bats: Enemy[] = [];
+    for (let i = 0; i < 6; i++) bats.push(spawnReady(w, "bat", 380 + (i % 3) * 55, 560 + Math.floor(i / 3) * 55));
+    const cx0 = bats.reduce((s, b) => s + b.x, 0) / bats.length;
+    stepFor(w, 3);
+    const cx = bats.reduce((s, b) => s + b.x, 0) / bats.length;
+    const cy = bats.reduce((s, b) => s + b.y, 0) / bats.length;
+    const maxFromCentroid = Math.max(...bats.map((b) => Math.hypot(b.x - cx, b.y - cy)));
+    const hx = bats.reduce((s, b) => s + Math.cos(b.zig), 0) / bats.length;
+    const hy = bats.reduce((s, b) => s + Math.sin(b.zig), 0) / bats.length;
+    check("the flock holds together while traveling (every bat near the centroid)",
+      maxFromCentroid <= 110, `spread=${maxFromCentroid.toFixed(0)}px`);
+    check("headings align — a flock, not independent beelines", Math.hypot(hx, hy) >= 0.8,
+      `alignment=${Math.hypot(hx, hy).toFixed(2)}`);
+    check("the flock still hunts (centroid advanced toward the target)", cx > cx0 + 150,
+      `${cx0.toFixed(0)} -> ${cx.toFixed(0)}`);
+  }
+
+  section("flock: bounded neighborhood + replay determinism");
+  check("social neighborhood is capped (O(n·k), small k)", C.FLOCK_MAX_NEIGHBORS <= 8 && C.FLOCK_RADIUS <= 120);
+  {
+    // Two identical seeded worlds, identical inputs, a big 24-bat swarm: bit-identical replay.
+    const run = (): number[] => {
+      const w = createWorld(0xD37, 1, { isSandbox: true });
+      const p = w.players.get(LOCAL_ID)!;
+      p.x = 1300; p.y = 700;
+      for (let i = 0; i < 24; i++) spawnReady(w, "bat", 350 + (i % 6) * 9, 500 + Math.floor(i / 6) * 9);
+      for (let t = 0; t < 300; t++) step(w, { seq: t, moveX: Math.sin(t / 20), moveY: 0, aim: 0, firing: t % 4 === 0, dash: false });
+      return w.enemies.flatMap((e) => [e.x, e.y, e.zig]);
+    };
+    const a = run(), b = run();
+    check("a 24-bat swarm replays bit-identically (pure, seeded, no wall-clock)",
+      a.length === b.length && a.every((v, i) => v === b[i]), `${a.length / 3} bodies`);
+    check("the swarm stayed finite and in-bounds", a.every((v) => Number.isFinite(v)));
+  }
+}
+
 // Long-run stability on REAL generated floors: the new enemies dive/charge/crash around
 // real geometry (walls, props, flow-field corners) for sim-minutes without the world going
 // bad (every position stays finite, no enemy escapes the dungeon bounds).
@@ -992,6 +1111,8 @@ function main(): void {
   bossChestTests();
   weaponTests();
   beamVortexTests();
+  environmentTests();
+  flockTests();
   rosterTests();
   stabilityTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

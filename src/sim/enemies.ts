@@ -12,7 +12,7 @@ import {
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 
-export type Movement = "chase" | "zigzag" | "drift" | "kite" | "charge" | "burrow" | "orbit" | "boss";
+export type Movement = "chase" | "flock" | "drift" | "kite" | "charge" | "burrow" | "orbit" | "boss";
 
 // Seconds a freshly-spawned enemy stays passive before it may start a windup, so
 // boss-spat adds (or a room's mob on entry) never telegraph-and-hit on frame one.
@@ -41,8 +41,10 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 16, drawSize: 44, alpha: 1, tint: "#a855f7", kbResist: 1,
     baseHp: 3, baseSpeed: 42, touchDamage: 1, threat: 1.0,
   },
+  // Bats fly as a FLOCK (deterministic boids: separation/alignment/cohesion + target
+  // attraction) — a wheeling, readable swarm instead of independent zigzag beelines.
   bat: {
-    kind: "bat", sprite: "bat", movement: "zigzag", isPhasing: false,
+    kind: "bat", sprite: "bat", movement: "flock", isPhasing: false,
     radius: 13, drawSize: 40, alpha: 1, tint: "#9aa4bf", kbResist: 0.7,
     baseHp: 2, baseSpeed: 96, touchDamage: 1, threat: 1.0,
   },
