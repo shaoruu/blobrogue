@@ -105,7 +105,7 @@ const LB_ENTRIES: LeaderboardEntryDoc[] = [
     weapons: ["pistol", "shotgun"], items: [{ id: "hair_trigger", count: 2 }], achievedAt: 1,
   },
   {
-    playerId: "p-bob", name: "Bob", colorIndex: 5, hat: null, glasses: "glasses_shades",
+    playerId: "p-max", name: "MaximumLengthBlobXX!", colorIndex: 5, hat: null, glasses: "glasses_shades",
     floor: 9, kills: 100, coins: 40, durationMs: 300_000,
     weapons: ["pistol"], items: [], achievedAt: 2,
   },
@@ -232,45 +232,51 @@ async function main(): Promise<void> {
     check("exactly two play actions (online + solo)", playButtons.length === 2, playButtons.join(" | "));
   }
 
-  section("title hierarchy: destinations are explicit; the settings panel is NOT inline");
+  section("title hierarchy: launchpad, not control panel — explicit destinations, settings off-surface");
   {
     const { menu, overlay } = makeMenu();
     await menu.showTitle();
     const buttons = buttonsOf(overlay);
-    check("PROFILE & CLOSET destination", buttons.some((b) => b.includes("PROFILE & CLOSET")));
     check("LEADERBOARD destination", buttons.some((b) => b === "LEADERBOARD"));
+    check("PROFILE destination", buttons.some((b) => b === "PROFILE"));
     check("SETTINGS destination", buttons.some((b) => b === "SETTINGS"));
+    const navs = byClass(overlay, "nav-btn").map(textOf);
+    check("exactly the three destinations, in order", navs.join("|") === "LEADERBOARD|PROFILE|SETTINGS", navs.join("|"));
     check("VIEW LEADERBOARD action on the preview", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
     const all = textOf(overlay);
     check("no inline settings controls on the title (sound/shake live behind SETTINGS)",
       !all.includes("sound:") && !all.includes("screen shake"), all.slice(0, 160));
+    // The identity/progress strip is PASSIVE display — one door to the profile, not two.
+    const strip = byClass(overlay, "you-strip")[0];
+    check("the identity/progress strip exists and is not a button", strip !== undefined && strip.tagName !== "BUTTON", strip?.tagName);
   }
 
-  section("top-runs preview: FINAL geometry from first paint; hydration fills in place");
+  section("top-runs glance: FINAL geometry from first paint; hydration fills in place");
   {
     const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });
     await menu.showTitle();
     const before = byClass(overlay, "lb-row");
-    check("exactly 5 fixed rows at first paint", before.length === 5, String(before.length));
+    check("exactly 3 fixed rows at first paint (a glance, not a dashboard)", before.length === 3, String(before.length));
     check("skeleton rows are disabled (no dead click targets)", before.every((r) => r.disabled === true));
     const buttonsBefore = buttonsOf(overlay).length;
     await settle();
     const after = byClass(overlay, "lb-row");
-    check("hydration keeps exactly 5 rows (zero layout shift)", after.length === 5);
+    check("hydration keeps exactly 3 rows (zero layout shift)", after.length === 3);
     check("hydration adds/removes NO buttons (no click-target movement)", buttonsOf(overlay).length === buttonsBefore, `${buttonsBefore} -> ${buttonsOf(overlay).length}`);
     const rowText = textOf(after[0] as ShimNode);
     check("row 1 carries the top run", rowText.includes("Ada") && rowText.includes("FL 12"), rowText);
+    check("a maximum-length name still rides its fixed row", textOf(after[1]).includes("MaximumLengthBlobXX!"));
     check("rows with entries are enabled", after[0].disabled === false && after[1].disabled === false);
     check("rows past the entries stay disabled placeholders", after[2].disabled === true && textOf(after[2]).includes("\u2014"));
   }
 
-  section("top-runs preview failure: same geometry, honest note, no dead end");
+  section("top-runs glance failure: same geometry, honest note, no dead end");
   {
     const { menu, overlay } = makeMenu({ lb: "fail" });
     await menu.showTitle();
     await settle();
     const rows = byClass(overlay, "lb-row");
-    check("still exactly 5 rows after a failed fetch", rows.length === 5);
+    check("still exactly 3 rows after a failed fetch", rows.length === 3);
     check("all rows disabled", rows.every((r) => r.disabled === true));
     check("the reserved note line explains", textOf(overlay).includes("leaderboard unavailable"));
   }

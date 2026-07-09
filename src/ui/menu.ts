@@ -44,7 +44,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?
 }
 
 const CONTROLS = "WASD move \u00b7 Mouse aim \u00b7 Click shoot \u00b7 Shift dash \u00b7 hold TAB for stats";
-const LB_PREVIEW_ROWS = 5;
+// The title preview stays a GLANCE, not a dashboard: three quiet rows under Play.
+const LB_PREVIEW_ROWS = 3;
 const LB_FULL_ROWS = 10;
 
 function fmtClock(seconds: number): string {
@@ -102,12 +103,14 @@ export class Menu {
 
   // ---- TITLE ------------------------------------------------------------------------
   //
-  // Attention hierarchy (explicit, in order):
-  //   1. PLAY ONLINE / PLAY SOLO — the big amber actions, top-left, first in tab order.
-  //   2. The identity card (guest sign-in CTA or account chip) and the compact top-runs
-  //      preview — supporting context, visually quieter.
-  //   3. The destination row (profile & closet / leaderboard / settings) and the controls
-  //      footline.
+  // The title is a LAUNCHPAD, not a control panel. Attention hierarchy (explicit, in order):
+  //   1. PLAY ONLINE / PLAY SOLO — the only dominant warm actions, top-left, first in tab
+  //      order. Nothing else on the surface wears the amber.
+  //   2. The compact fixed-height identity/progress strip (guest sign-in CTA or account
+  //      chip + the blob/stat readout) and the deliberately quiet top-runs glance under
+  //      Play — supporting context, hairline chrome, muted ink.
+  //   3. The explicit destinations — LEADERBOARD / PROFILE / SETTINGS — and the footline.
+  //      The full settings panel lives entirely off this surface.
   // Every async-hydrated region (auth, stats, leaderboard) renders its FINAL geometry from
   // first paint — skeletons fill in place, so nothing below them ever moves.
 
@@ -130,14 +133,14 @@ export class Menu {
       colA.appendChild(this.soloButton("\u25be  PLAY"));
       colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       const nav = el("div", "navrow");
-      nav.append(this.navButton("PROFILE & CLOSET", () => void this.showProfile()), this.navButton("SETTINGS", () => void this.showSettings()));
+      nav.append(this.navButton("PROFILE", () => void this.showProfile()), this.navButton("SETTINGS", () => void this.showSettings()));
       colA.appendChild(nav);
       wrap.appendChild(colA);
     } else {
       const body = el("div", "body");
 
-      // LEFT column: the play actions own the top; the compact global top-runs preview
-      // fills the space under them (subordinate contrast, fixed row geometry).
+      // LEFT column: the play actions own the top; the quiet top-runs glance fills the
+      // space under them (hairline chrome, fixed row geometry, subordinate to Play).
       const colA = el("div", "col-actions");
       colA.appendChild(el("div", "col-h", "Play"));
       const onlineBtn = el("button", "btn-quick primary");
@@ -151,15 +154,16 @@ export class Menu {
       colA.appendChild(this.leaderboardPreview());
       body.appendChild(colA);
 
-      // RIGHT column: reserved identity card, the compact "you" card (the Profile & Closet
-      // door), then the remaining destinations.
+      // RIGHT column: the reserved identity card, the passive identity/progress strip,
+      // then the explicit destinations.
       const colB = el("div", "col-side");
       colB.appendChild(this.identitySection());
-      const you = this.youCard();
-      colB.appendChild(you.card);
+      const you = this.youStrip();
+      colB.appendChild(you.strip);
       const nav = el("div", "navrow");
       nav.append(
         this.navButton("LEADERBOARD", () => void this.showLeaderboard()),
+        this.navButton("PROFILE", () => void this.showProfile()),
         this.navButton("SETTINGS", () => void this.showSettings()),
       );
       colB.appendChild(nav);
@@ -196,19 +200,17 @@ export class Menu {
     return btn;
   }
 
-  // The compact "you" card: live blob preview + name + a one-line stat readout, doubling as
-  // the explicit PROFILE & CLOSET destination. Fixed height; the stat line hydrates in place.
-  private youCard(): { card: HTMLButtonElement; setProfile: (p: ProfileDoc | null, isError?: boolean) => void } {
-    const card = el("button", "secondary you-card");
-    card.setAttribute("aria-label", "profile and closet");
+  // The passive identity/progress strip: live blob preview + name + a one-line stat
+  // readout. Pure display (the PROFILE destination below is the door — one obvious way in,
+  // no competing click target). Fixed height; the stat line hydrates in place.
+  private youStrip(): { strip: HTMLElement; setProfile: (p: ProfileDoc | null, isError?: boolean) => void } {
+    const strip = el("div", "you-strip");
     const preview = createBlobPreview({ colorIndex: this.session.colorIndex, ...this.session.cosmetics }, 48);
     const info = el("div", "you-info");
     const name = el("span", "you-name", this.session.name || "blob");
     const stats = el("span", "you-stats skel", "\u2014");
     info.append(name, stats);
-    const go = el("span", "you-go", "PROFILE & CLOSET \u25b8");
-    card.append(preview.el, info, go);
-    card.addEventListener("click", () => void this.showProfile());
+    strip.append(preview.el, info);
     const setProfile = (p: ProfileDoc | null, isError = false) => {
       stats.classList.remove("skel");
       if (p) {
@@ -222,7 +224,7 @@ export class Menu {
         stats.textContent = isError ? "stats unavailable" : "no runs yet";
       }
     };
-    return { card, setProfile };
+    return { strip, setProfile };
   }
 
   private nameRow(): HTMLElement {

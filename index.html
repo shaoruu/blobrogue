@@ -421,29 +421,39 @@
         animation:skelPulse 1.1s steps(2,jump-none) infinite; }
       @keyframes skelPulse{ 0%{opacity:.85;} 100%{opacity:.5;} }
 
-      /* --- compact global top-runs preview (left column, under PLAY — subordinate) --- */
-      .lb-preview{ display:flex; flex-direction:column; gap:7px; margin-top:5px; padding:10px 11px 8px;
-        background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
-      .lb-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
-      .lb-view{ min-width:0; width:auto; font-size:8px; padding:6px 9px; letter-spacing:1px; }
-      .lb-rows{ display:flex; flex-direction:column; gap:4px; }
-      .lb-row{ display:flex; align-items:center; gap:9px; width:100%; min-width:0; height:32px; padding:0 9px;
+      /* --- the top-runs GLANCE (left column, under PLAY) ---
+         Deliberately quiet: hairline chrome, muted ink, zero amber — it may inform, never
+         compete with Play. Three fixed 30px rows + a reserved note line = constant height
+         through every hydration state (skeleton / data / short board / offline). */
+      .lb-preview{ display:flex; flex-direction:column; gap:6px; margin-top:7px; padding:9px 10px 7px;
+        box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .lb-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; min-height:20px; }
+      /* The view action is an explicit but link-quiet affordance, not a chunky button. */
+      .lb-view{ min-width:0; width:auto; font-size:8px; padding:4px 6px; letter-spacing:1px;
+        background:transparent; color:#8f87a8; clip-path:none; box-shadow:none; text-shadow:none; }
+      .lb-view:hover{ transform:none; background:transparent; color:var(--cream); box-shadow:inset 0 -1px 0 var(--dun-4); }
+      .lb-view:active{ transform:none; box-shadow:none; }
+      .lb-view:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
+      .lb-rows{ display:flex; flex-direction:column; gap:3px; }
+      .lb-row{ display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:30px; padding:0 8px;
         font-family:var(--f-ui); font-size:10px; letter-spacing:.5px; text-transform:none; text-align:left;
-        color:var(--cream); background:var(--dun-1); clip-path:none;
-        box-shadow:inset 0 0 0 1px var(--dun-3); text-shadow:none; }
-      .lb-row:hover:not(:disabled){ background:var(--dun-2); transform:none; box-shadow:inset 0 0 0 1px var(--dun-4); }
-      .lb-row:active:not(:disabled){ transform:none; box-shadow:inset 0 0 0 1px var(--amber); }
+        color:#cbb6d6; background:transparent; clip-path:none;
+        box-shadow:inset 0 0 0 1px var(--dun-2); text-shadow:none; }
+      .lb-row:hover:not(:disabled){ background:var(--dun-1); transform:none; box-shadow:inset 0 0 0 1px var(--dun-4); color:var(--cream); }
+      .lb-row:active:not(:disabled){ transform:none; box-shadow:inset 0 0 0 1px var(--dun-4); }
       .lb-row:disabled{ cursor:default; }
       .lb-row:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
-      .lb-rank{ flex:0 0 16px; font-family:var(--f-num); font-size:16px; color:var(--dun-4); text-align:right; }
-      .lb-row:nth-child(1) .lb-rank{ color:var(--amber); }
-      .lb-dot{ flex:0 0 10px; width:10px; height:10px; background:var(--dun-3); }
+      .lb-rank{ flex:0 0 16px; font-family:var(--f-num); font-size:15px; color:var(--dun-4); text-align:right; }
+      .lb-dot{ flex:0 0 9px; width:9px; height:9px; background:var(--dun-3); }
       .lb-name{ flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-height:12px; }
-      .lb-floor{ flex:0 0 auto; font-family:var(--f-num); font-size:16px; color:var(--amber-hi); min-width:44px; text-align:right; }
+      .lb-floor{ flex:0 0 auto; font-family:var(--f-num); font-size:15px; color:#9a8fb5; min-width:48px; text-align:right; }
       /* Reserves two lines: the longest note wraps in the preview's column, and on narrow
          viewports the identity card stacks BELOW it — growth here must never push it. */
       .lb-note{ min-height:30px; font-size:10px; line-height:1.5; margin:0; text-align:left; }
-      .lb-rows-full .lb-row{ height:38px; }
+      /* The full LEADERBOARD destination keeps the readable panel treatment. */
+      .lb-rows-full .lb-row{ height:38px; background:var(--dun-1); box-shadow:inset 0 0 0 1px var(--dun-3); color:var(--cream); }
+      .lb-rows-full .lb-floor{ color:var(--amber-hi); }
+      .lb-rows-full .lb-row:nth-child(1) .lb-rank{ color:var(--amber); }
 
       /* --- reserved identity card (right column): guest CTA and account chip share ONE
          geometry so signed-in/out/loading/error never move anything below --- */
@@ -456,19 +466,16 @@
         --c:#ffe9b0; --c-hi:#fff; --c-lo:#cbb68a; --tx:#120a24; text-shadow:none; }
       .auth-status{ font-size:10px; color:var(--red); text-align:left; min-height:12px; margin:0; }
 
-      /* --- the "you" card: live blob preview + compact stats; the Profile & Closet door --- */
-      .you-card{ display:flex; align-items:center; gap:10px; width:100%; min-width:0; height:64px; padding:7px 11px;
-        text-transform:none; letter-spacing:0; text-align:left; clip-path:none; text-shadow:none;
-        background:#0d0819; color:var(--cream); box-shadow:inset 0 0 0 2px var(--dun-3); }
-      .you-card:hover{ transform:none; background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--dun-4); }
-      .you-card:active{ transform:none; box-shadow:inset 0 0 0 2px var(--amber); }
-      .you-card .blob-preview{ flex:0 0 48px; width:48px; height:48px; image-rendering:pixelated; }
-      .you-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+      /* --- the identity/progress strip: passive, fixed-height (the PROFILE destination
+         below is the one door — no competing click target, no warm accent) --- */
+      .you-strip{ display:flex; align-items:center; gap:10px; width:100%; min-width:0; height:64px; padding:7px 11px;
+        background:#0d0819; color:var(--cream); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .you-strip .blob-preview{ flex:0 0 48px; width:48px; height:48px; image-rendering:pixelated; }
+      .you-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; text-align:left; }
       .you-name{ font-family:var(--f-ui); font-size:11px; color:var(--cream); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .you-stats{ font-family:var(--f-ui); font-size:9px; color:var(--dun-4); min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .you-go{ flex:0 0 auto; font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--amber); text-transform:uppercase; }
+      .you-stats{ font-family:var(--f-ui); font-size:9px; color:#8f87a8; min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .navrow{ display:flex; gap:8px; }
-      .navrow .nav-btn{ flex:1; min-width:0; font-size:10px; padding:10px 8px; letter-spacing:1px; }
+      .navrow .nav-btn{ flex:1; min-width:0; font-size:9px; padding:10px 4px; letter-spacing:1px; }
 
       /* --- profile screens (own closet + leaderboard player view) --- */
       .pp-top{ display:flex; gap:18px; align-items:center; justify-content:center; }
