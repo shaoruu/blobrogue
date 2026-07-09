@@ -1810,6 +1810,12 @@ export class Game {
       floor: this.floor, kills: this.kills, coins: this.coins,
       runTime: (performance.now() - this.runStart) / 1000,
       weaponName: WEAPONS[this.weapon].name,
+      // Online these are the local prediction's view; the server's copy is authoritative
+      // for submission, so the Tab panel is informational either way.
+      damageDealt: this.p.runStats.damageDealt,
+      damageTaken: this.p.runStats.damageTaken,
+      bestCombo: this.p.runStats.bestCombo,
+      bossKills: this.p.runStats.bossKills,
       profile: this.profile,
       roster,
       items: this.collapsedItems().map((it) => ({ name: it.count > 1 ? `${it.name} Lv${it.count}` : it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),

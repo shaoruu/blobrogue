@@ -50,6 +50,11 @@ export interface StatsPanelData {
   coins: number;
   runTime: number; // seconds
   weaponName: string;
+  // Live per-run accumulation (sim RunStats) — the same numbers the run submission reports.
+  damageDealt: number;
+  damageTaken: number;
+  bestCombo: number;
+  bossKills: number;
   profile: ProfileStats | null;
   roster: RosterEntry[] | null;
   items: { name: string; desc: string; glyph: string; tint: string }[];
@@ -468,6 +473,9 @@ export class Hud {
       line("coins", String(d.coins)),
       line("weapon", d.weaponName),
       line("run time", fmtTime(d.runTime)),
+      line("damage dealt / taken", `${Math.round(d.damageDealt)} / ${Math.round(d.damageTaken)}`),
+      line("best combo", d.bestCombo > 0 ? `x${d.bestCombo}` : "\u2014"),
+      line("bosses slain", String(d.bossKills)),
     );
     if (d.items.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));

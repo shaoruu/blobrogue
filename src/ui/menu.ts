@@ -860,6 +860,13 @@ export class Menu {
     stat("time", result.durationMs / 1000, fmtClock);
     wrap.appendChild(grid);
 
+    // The run's combat fine print (from the same accumulation the submission reports).
+    const s = result.stats;
+    const bits: string[] = [`${fmtBig(s.damageDealt)} dealt / ${fmtBig(s.damageTaken)} taken`];
+    if (s.bestCombo > 0) bits.push(`x${s.bestCombo} best combo`);
+    if (s.bossKills > 0) bits.push(`${s.bossKills} boss${s.bossKills > 1 ? "es" : ""} slain`);
+    wrap.appendChild(el("p", "muted", bits.join(" \u00b7 ")));
+
     if (ctx.isNewBest) {
       const best = el("p", "", "\u2605 NEW BEST \u2014 your deepest run yet");
       best.style.color = "#ffb43b";

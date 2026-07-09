@@ -308,3 +308,52 @@ The game server side is unchanged (`GS_AUTH_SECRET` in its `.env`; nginx termina
 real per-client connection limits). Note the menu's online flow mints through Convex even on
 dev builds, so a local game server must share the dev deployment's `GS_AUTH_SECRET`; the
 zero-Convex path is `?gs=`.
+
+## 8. Run results, profile stats & global leaderboards (trust model)
+
+Every finished run becomes a `runs` row + a fold into the player's lifetime aggregates
+(`convex/statsCore.ts` owns validation/clamping/score/aggregation; `convex/stats.ts` owns
+persistence). There are exactly TWO write paths, each labeled on the row:
+
+| source     | who writes it | how it's trusted | boards? |
+|------------|---------------|------------------|---------|
+| `server`   | the authoritative game server (`server/src/runReport.ts`) | HMAC-SHA256 over the exact body bytes with `GS_AUTH_SECRET`, verified by the Convex HTTP action `POST /gs/run-result` (`convex/http.ts`), then re-validated/clamped field-by-field | **yes** — the only source that can |
+| `local`    | the player's own browser after a solo / classic co-op run (`stats:recordLocalRun`) | none — by design. It is validated/clamped and folds into the CALLER'S OWN stats + history only | **never** |
+
+Global leaderboards (`leaderboardBest` + `leaderboard:top`) additionally require:
+
+- an **account-backed** player row (signed in with Google) — guests keep full personal
+  stats (Convex guest row + a localStorage mirror) but never appear publicly;
+- a **full run** (`startFloor === 1`) — a mid-run drop-in to a friend's floor-12 room
+  folds into personal stats but can't chart a floor-12 "run";
+- the run's **score is derived in Convex** (`statsCore.scoreForRun`) from the validated
+  fields — no submitter, including the game server, ever sends a score.
+
+Clients can therefore not invent score/depth/kills: the online path never accepts a
+client payload at all (the server reports from its own sim), and the local path can only
+lie to itself. Signed-in solo runs are intentionally **excluded** from the boards (marked
+`local` in the history) until solo goes through an authoritative path.
+
+Duplicate protection: every submission carries a `submissionId`; retries settle
+idempotently on the `by_submission` index. Signed submissions also carry `sentAt` and are
+rejected outside a ±10-minute freshness window (defense-in-depth on top of the dedupe).
+
+Difficulty: the schema/API accept `casual | standard | brutal` **today** with a
+`standard` default at every seam (`statsCore.DEFAULT_DIFFICULTY`,
+`buildRunReport`, the boards' filter chips), so the in-flight authoritative-difficulty
+feature only threads its value through `buildRunReport` — no schema migration.
+
+**Operator setup for run reporting:**
+
+```bash
+# Convex side: the same shared secret the ticket mint already uses (likely already set).
+npx convex env set GS_AUTH_SECRET <the game server's GS_AUTH_SECRET>
+
+# Game server side (.env), pointing at the deployment's HTTP Actions domain
+# (https://<deployment>.convex.site — note .site, not .cloud):
+GS_RUN_RESULTS_URL=https://<deployment>.convex.site/gs/run-result
+```
+
+Unset `GS_RUN_RESULTS_URL` disables reporting entirely (a dev server runs exactly as
+before). Rotating `GS_AUTH_SECRET` rotates both tickets and run-result signing at once —
+update both sides together.
