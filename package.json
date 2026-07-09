@@ -18,7 +18,8 @@
     "test:balance": "tsx test/balance.test.ts",
     "test:input": "tsx test/input.test.ts",
     "test:pets": "tsx test/pets.test.ts",
-    "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/protocol.test.ts && tsx test/netcode.test.ts && tsx test/floorrun.test.ts && tsx test/nav.test.ts && tsx test/purity.test.ts && tsx test/anim.test.ts && tsx test/balance.test.ts && tsx test/input.test.ts && tsx test/pets.test.ts && npm run test:tools",
+    "test:petgate": "tsx test/petgate.test.ts",
+    "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/protocol.test.ts && tsx test/netcode.test.ts && tsx test/floorrun.test.ts && tsx test/nav.test.ts && tsx test/purity.test.ts && tsx test/anim.test.ts && tsx test/balance.test.ts && tsx test/input.test.ts && tsx test/pets.test.ts && tsx test/petgate.test.ts && npm run test:tools",
     "test:tools": "python3 tools/test_pixelize.py",
     "harness": "npm --prefix server run harness",
     "test:anim": "tsx test/anim.test.ts"

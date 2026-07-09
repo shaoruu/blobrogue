@@ -7,7 +7,7 @@
 // Run: npm run test:pets
 
 import {
-  createWorld, spawnPlayerInWorld, removePlayerFromWorld, spawnPetInWorld, devSpawnEnemy,
+  createWorld, createLedger, spawnPlayerInWorld, removePlayerFromWorld, spawnPetInWorld, devSpawnEnemy,
   stepWorld, descend,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
@@ -18,7 +18,7 @@ import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { PETS, PET_KINDS, PET_BALANCE, PET_CAPS, isPetKind, isPetUnlocked, petUnlocksFor } from "../src/sim/pets.js";
 import { BURN_DMG_STACK, PROP_BLOCK_RING } from "../src/sim/constants.js";
 import { createMods, recomputeMods } from "../src/sim/items.js";
-import { FIXED_DT } from "../src/net/protocol.js";
+import { FIXED_DT, buildSnapshot } from "../src/net/protocol.js";
 
 let passed = 0;
 let failed = 0;
@@ -99,15 +99,20 @@ function unlockTests(): void {
 }
 
 function capTests(): void {
-  section("bounded power: the balance table can never exceed the pet caps");
+  section("bounded power: the balance table can never exceed the pet caps (spec §5)");
   const pup = PET_BALANCE.ember_pup;
   const pupDps = (pup.nipDamage + pup.burnSecs * BURN_DMG_STACK) / pup.nipCd;
   check("ember pup nominal DPS (nip + full burn) under the cap",
     pupDps <= PET_CAPS.sustainedDps, `${pupDps.toFixed(3)} <= ${PET_CAPS.sustainedDps}`);
+  // Worst 3s burst: one full nip cycle (the cooldown outlasts the window, so two can't fit).
+  check("ember pup nip cadence can never double up inside the 3s burst window", pup.nipCd > 3);
   const bird = PET_BALANCE.bonebird;
   check("bonebird nominal DPS under the cap",
     bird.peckDamage / bird.peckCd <= PET_CAPS.sustainedDps, `${(bird.peckDamage / bird.peckCd).toFixed(3)}`);
-  check("mark multiplier under the utility cap", bird.markDamageMult <= PET_CAPS.markDamageMult);
+  check("mark multiplier at-or-under the +8% utility cap",
+    bird.markDamageMult <= PET_CAPS.markDamageMult, `${bird.markDamageMult} <= ${PET_CAPS.markDamageMult}`);
+  check("authored worst-case mark uptime under the 25% cap",
+    bird.markSecs / bird.peckCd <= PET_CAPS.markUptime, `${(bird.markSecs / bird.peckCd).toFixed(3)}`);
   const magnetLv1 = createMods();
   recomputeMods(magnetLv1, ["coin_magnet"]);
   check("wisp coin pull at-or-under the cap AND weaker than Coin Magnet Lv1",
@@ -297,8 +302,83 @@ function bonebirdTests(): { dps: number; markUptime: number } {
   const dps = (dummy.maxHp - dummy.hp) / secs;
   const markUptime = markedTicks / ticks;
   check("bird sustained DPS is under the cap", dps <= PET_CAPS.sustainedDps, `dps=${dps.toFixed(3)}`);
-  check("the mark holds most of the fight on a focused target", markUptime > 0.7, `uptime=${(markUptime * 100).toFixed(0)}%`);
+  check("measured worst-case (focused single target) mark uptime respects the 25% utility cap",
+    markUptime > 0 && markUptime <= PET_CAPS.markUptime, `uptime=${(markUptime * 100).toFixed(0)}%`);
   return { dps, markUptime };
+}
+
+function bossExclusionTests(): void {
+  section("pets never touch bosses: no damage, no marks, no phase interference (spec §5)");
+  const w = createWorld(0xB055, 1, { isSandbox: true, skipLocalPlayer: true });
+  const p = spawnPlayerInWorld(w, "pA");
+  w.ledger = createLedger();
+  spawnPetInWorld(w, "pA", "ember_pup");
+  const boss = devSpawnEnemy(w, "boss", p.x + 50, p.y);
+  w.isGodMode = true; // survive the contact while the pup proves its restraint
+  run(w, Math.ceil(6 / FIXED_DT));
+  check("an adjacent boss is never nipped", boss.hp === boss.maxHp && w.ledger.petBossDamage === 0, `hp=${boss.hp}/${boss.maxHp}`);
+  check("the pup heels instead of hunting the boss (no target -> owner anchor)",
+    Math.hypot(w.pets.get("pA")!.x - p.x, w.pets.get("pA")!.y - p.y) < 90);
+  check("boss phase state untouched by the pet", boss.boss !== null && boss.boss.transitionsDone === 0);
+
+  // The bonebird refuses the boss too — and its peck flies THROUGH one to reach real targets.
+  const w2 = createWorld(0xB056, 1, { isSandbox: true, skipLocalPlayer: true });
+  const p2 = spawnPlayerInWorld(w2, "pB");
+  w2.ledger = createLedger();
+  w2.isGodMode = true;
+  spawnPetInWorld(w2, "pB", "bonebird");
+  const boss2 = devSpawnEnemy(w2, "boss", p2.x + 120, p2.y);
+  const slime = devSpawnEnemy(w2, "slime", p2.x + 240, p2.y); // behind the boss on the firing line
+  slime.hp = slime.maxHp = 50;
+  slime.speed = 0;
+  for (let i = 0; i < Math.ceil(8 / FIXED_DT) && slime.hp === 50; i++) run(w2, 1);
+  check("the peck passed through the boss and hit the target behind it",
+    slime.hp < 50 && boss2.hp === boss2.maxHp, `slime=${slime.hp} boss=${boss2.hp}/${boss2.maxHp}`);
+  check("no boss was ever marked", boss2.petMark === 0);
+  check("the ledger's boss tripwire stayed silent", w2.ledger.petBossDamage === 0);
+}
+
+function fangSuppressionTests(): void {
+  section("pet kills never launder into hearts: Vampire Fang ignores pet-sourced kills (spec §5)");
+  // A guaranteed-proc Fang owner (chance 1) makes the assertions deterministic.
+  const w = createWorld(0xFA96, 1, { isSandbox: true, skipLocalPlayer: true });
+  const p = spawnPlayerInWorld(w, "pA");
+  w.ledger = createLedger();
+  p.mods.lifestealChance = 1;
+  p.hp = 3;
+  spawnPetInWorld(w, "pA", "ember_pup");
+  const prey = devSpawnEnemy(w, "slime", p.x + 60, p.y);
+  prey.hp = 1;
+  const ev = run(w, Math.ceil(2.5 / FIXED_DT));
+  check("the pup finished the kill", ev.some((x) => x.t === "enemyKill") && w.ledger.petKills === 1);
+  check("the kill still credited the owner", p.kills === 1);
+  check("no Fang heart off the pet's kill", p.hp === 3 && !ev.some((x) => x.t === "heal"), `hp=${p.hp}`);
+  check("the healing ledger stayed at zero", w.ledger.petHealing === 0);
+
+  // Same owner, same build — their OWN kill still procs (the suppression is pet-scoped).
+  const prey2 = devSpawnEnemy(w, "slime", p.x - 200, p.y);
+  prey2.hp = 1;
+  w.bullets.push({
+    x: prey2.x, y: prey2.y, vx: 1, vy: 0, radius: 6, life: 1, friendly: true,
+    owner: "pA", damage: 10, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+  });
+  const ev2 = run(w, 1);
+  check("the owner's own kill still procs Fang", p.hp === 4 && ev2.some((x) => x.t === "heal"), `hp=${p.hp}`);
+
+  // A PET-LIT BURN finishing a kill follows the same rule (the burnIsPet thread).
+  const w3 = createWorld(0xFA97, 1, { isSandbox: true, skipLocalPlayer: true });
+  const p3 = spawnPlayerInWorld(w3, "pB");
+  w3.ledger = createLedger();
+  p3.mods.lifestealChance = 1;
+  p3.hp = 3;
+  spawnPetInWorld(w3, "pB", "ember_pup");
+  const burned = devSpawnEnemy(w3, "skeleton", p3.x + 60, p3.y);
+  burned.hp = burned.maxHp = PET_BALANCE.ember_pup.nipDamage + 1; // survives the nip, dies to its burn
+  burned.speed = 0;
+  const ev3 = run(w3, Math.ceil(4 / FIXED_DT));
+  check("the pet's burn finished the kill without a Fang heart",
+    ev3.some((x) => x.t === "enemyKill") && w3.ledger.petKills === 1 && p3.hp === 3 && w3.ledger.petHealing === 0,
+    `hp=${p3.hp} petKills=${w3.ledger.petKills}`);
 }
 
 function wispTests(): void {
@@ -376,37 +456,45 @@ function teleportTests(): void {
 }
 
 function ownerStateTests(): void {
-  section("owner state: pets pause while their owner is down/choosing, resume on revive");
+  section("owner state: a downed owner's pet DISAPPEARS (frozen snapshot) and returns on revive");
   const w = createWorld(0xC0FFEE, 1, { isSandbox: true, skipLocalPlayer: true });
+  w.isGodMode = true; // the skeleton must not re-down the owner mid-assertion
   const a = spawnPlayerInWorld(w, "pA");
   const b = spawnPlayerInWorld(w, "pB");
   b.x = a.x + 400; b.y = a.y;
-  spawnPetInWorld(w, "pA", "ember_pup");
+  const pet = spawnPetInWorld(w, "pA", "ember_pup")!;
   const e = devSpawnEnemy(w, "skeleton", a.x + 60, a.y);
   e.hp = e.maxHp = 500;
   e.speed = 0;
 
   a.isDown = true; a.hp = 0; // downed with a standing ally (B): run continues
-  run(w, Math.ceil(5 / FIXED_DT));
-  check("a downed owner's pet starts no attacks", e.hp === 500, `hp=${e.hp}`);
+  pet.attackCd = 2.5;        // a mid-cooldown snapshot to prove the freeze
+  const downEv = run(w, Math.ceil(5 / FIXED_DT));
+  check("the pet vanished (spec §5: disappears while owner downed)", pet.isDormant);
+  check("the disappearance puffed", downEv.some((x) => x.t === "puff"));
+  check("a dormant pet starts no attacks", e.hp === 500, `hp=${e.hp}`);
+  check("dormancy froze its cooldown snapshot (a down is never a cooldown reset)", pet.attackCd === 2.5);
+  const snap = buildSnapshot(w, "pA", 0, [], 0, false, {});
+  check("a dormant pet is on nobody's wire — not even its owner's", snap.t === "snap" && snap.pets.length === 0);
 
   a.isDown = false; a.hp = 2; // revived
-  run(w, Math.ceil(5 / FIXED_DT));
+  const upEv = run(w, Math.ceil(5 / FIXED_DT));
+  check("the revive teleports the pet back beside its owner", upEv.some((x) => x.t === "petTeleport") && !pet.isDormant);
   check("the pet resumes after the revive", e.hp < 500, `hp=${e.hp}`);
 
-  // A pending blessing pick pauses the pet exactly like it pauses the owner.
-  const { w: w2, p: p2 } = arenaWithPet("ember_pup");
+  // A pending blessing pick pauses the pet (holds fire) without the vanish beat.
+  const { w: w2, p: p2, pet: pet2 } = arenaWithPet("ember_pup");
   const e2 = devSpawnEnemy(w2, "skeleton", p2.x + 60, p2.y);
   e2.hp = e2.maxHp = 500;
   e2.speed = 0;
   w2.pendingBlessings.set("pA", 60);
   run(w2, Math.ceil(5 / FIXED_DT));
-  check("a mid-pick owner's pet holds fire", e2.hp === 500);
+  check("a mid-pick owner's pet holds fire but stays visible", e2.hp === 500 && !pet2.isDormant);
   w2.pendingBlessings.delete("pA");
   run(w2, Math.ceil(5 / FIXED_DT));
   check("the pet resumes once the pick resolves", e2.hp < 500);
 
-  // An already-loosed peck finishes its flight even if the owner drops mid-flight.
+  // A loosed peck fizzles the moment its owner drops — the pet disappears whole.
   const { w: w3, p: p3, pet: bird } = arenaWithPet("bonebird");
   const ally = spawnPlayerInWorld(w3, "pC");
   ally.x = p3.x + 300; ally.y = p3.y + 300;
@@ -414,11 +502,13 @@ function ownerStateTests(): void {
   target.hp = target.maxHp = 50;
   target.speed = 0;
   let downed = false;
-  for (let i = 0; i < Math.ceil(3 / FIXED_DT) && target.hp === 50; i++) {
+  for (let i = 0; i < Math.ceil(3 / FIXED_DT) && !downed; i++) {
     run(w3, 1);
-    if (bird.peck && !downed) { p3.isDown = true; p3.hp = 0; downed = true; }
+    if (bird.peck) { p3.isDown = true; p3.hp = 0; downed = true; }
   }
-  check("an in-flight peck still lands after the owner goes down", downed && target.hp < 50, `hp=${target.hp}`);
+  run(w3, Math.ceil(1 / FIXED_DT));
+  check("an in-flight peck fizzles when the owner drops (the pet vanishes whole)",
+    downed && bird.isDormant && bird.peck === null && target.hp === 50, `hp=${target.hp}`);
 }
 
 function floorTransitionTests(): void {
@@ -455,6 +545,8 @@ function main(): void {
   emberPupTests();
   const pupDps = pupDpsMeasurement();
   const bird = bonebirdTests();
+  bossExclusionTests();
+  fangSuppressionTests();
   wispTests();
   teleportTests();
   ownerStateTests();
