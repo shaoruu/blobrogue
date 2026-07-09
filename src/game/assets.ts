@@ -120,6 +120,34 @@ SHEETS["gilded.attack"] = { src: "/sprites/gilded_attack.png", fps: 10 };
 SHEETS["choir.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
 SHEETS["choir.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
 
+// Directional hooks for the LEGACY roster (slime/bat/skeleton/ghost/spitter): the full
+// walk contract is registered so approved directional finals are pure file drops, while
+// the selection ladder keeps every one of them on its existing single walk strip until
+// the new sheets actually load — current final art is preserved byte-for-byte.
+registerDirectionalSet("slime", { walkFps: 10 });
+registerDirectionalSet("bat", { walkFps: 12 });
+registerDirectionalSet("skeleton", { walkFps: 11, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("ghost", { walkFps: 6 });
+registerDirectionalSet("spitter", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+
+// Bestiary-wave directional hooks. Same drop-in contract; fps are starting points.
+// The rootward has NO attack (a walking wall): walk triplet only.
+registerDirectionalSet("rootward", { walkFps: 8 });
+registerDirectionalSet("echojack", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("seamcutter", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("caskbellows", { walkFps: 8, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("sinderling", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("marshal", { walkFps: 8, attackFps: 10, isDirectionalAttack: true });
+// The fragment and The Toll are drifting/stationary masses (the Choir's contract):
+// a breathing idle loop + one omni attack sheet, no walk triplet.
+SHEETS["fragment.idle"] = { src: "/sprites/fragment_idle.png", fps: 6 };
+SHEETS["fragment.attack"] = { src: "/sprites/fragment_attack.png", fps: 10 };
+SHEETS["toll.idle"] = { src: "/sprites/toll_idle.png", fps: 5 };
+SHEETS["toll.attack"] = { src: "/sprites/toll_attack.png", fps: 10 };
+// Decoys are stationary props-with-a-pulse: one idle loop each.
+SHEETS["echo.idle"] = { src: "/sprites/echo_idle.png", fps: 6 };
+SHEETS["knell.idle"] = { src: "/sprites/knell_idle.png", fps: 8 };
+
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
 // composite additively. Sizes are baked into the art; the renderer scales per bullet.
@@ -184,6 +212,18 @@ const SOURCES: Record<SpriteName, string> = {
   burrower: "/sprites/burrower.png",
   orbiter: "/sprites/orbiter.png",
   shielder: "/sprites/shielder.png",
+  // Bestiary-wave hooks (same contract: fal recipe -> cutout drop-in; the tinted-disc
+  // fallback carries each identity color until then).
+  rootward: "/sprites/rootward.png",
+  echojack: "/sprites/echojack.png",
+  seamcutter: "/sprites/seamcutter.png",
+  caskbellows: "/sprites/caskbellows.png",
+  sinderling: "/sprites/sinderling.png",
+  fragment: "/sprites/fragment.png",
+  echo: "/sprites/echo.png",
+  knell: "/sprites/knell.png",
+  marshal: "/sprites/marshal.png",
+  toll: "/sprites/toll.png",
   boss: "/sprites/boss.png",
   marrow: "/sprites/marrow.png",
   choir: "/sprites/choir.png",

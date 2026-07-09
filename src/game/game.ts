@@ -6,12 +6,12 @@ import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
-import type { EnemyTier } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER, ELITE_BULWARK, MARSHAL } from "../sim/balance.js";
+import type { EnemyTier, EliteAffix } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
@@ -26,7 +26,10 @@ import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/wor
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
-import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC } from "../sim/constants.js";
+import {
+  comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC,
+  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR,
+} from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
@@ -302,6 +305,22 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   slam: "#ffd166",    // Gilded Warden anvil quake: gold
   sweep: "#ffd166",   // Gilded Warden ring waves
   brace: "#9fb4a8",   // elite brace: braced steel-green slide
+  decoy: "#d7b8ff",   // echojack planting its false noise: pale violet jangle
+  blink: "#d7b8ff",   // echojack's perpendicular relocation dash
+  seam: "#e88fb1",    // seamcutter's previewed wall-to-wall lane
+  stoke: "#ff8a3b",   // sinderling self-arming channel: gathering embers
+  harmonize: "#bfe9ff", // fragment tether pulse: the Choir's cold light
+  knell: "#c9b458",   // The Toll's expanding sound ring: bronze
+};
+
+// The elite affix's ground-ring accent (derived from kind — the affix table is pure sim
+// data, so the client can color the tell without any extra wire state).
+const AFFIX_RING_COLOR: Record<EliteAffix, string> = {
+  brace: "#9fb4a8",
+  commander: "#ffd166", // the horn: gold
+  bulwark: "#cfd6dd",   // the plate: steel
+  volatile: "#ff5a3b",  // the fuse: hot red-orange
+  echoed: "#7fe9ff",    // the repeat: cold cyan
 };
 
 // Fallback disc tint per sprite while its PNG streams in (or before generated art lands):
@@ -4204,8 +4223,10 @@ export class Game {
       if (e.kind === "gilded" && a.move === "slam" && (isWindup || a.phase === "active")) {
         this.renderDangerDisc(a.markX, a.markY, GILDED.slamRadius, a.phase === "active" ? 1 : a.windup);
       }
-      // Brutes/elites carry a colored ground ring so the tier reads before the first hit.
-      const ring = TIER_RING_COLOR[e.tier];
+      // Brutes/elites carry a colored ground ring so the tier reads before the first
+      // hit; an elite's ring takes its AFFIX color (derived from kind — pure sim data),
+      // so "gold ring = commander" is learnable at a glance.
+      const ring = e.tier === "elite" ? AFFIX_RING_COLOR[eliteAffixOf(e.kind)] : TIER_RING_COLOR[e.tier];
       if (ring) this.renderTierRing(sx, sy, drawSize, ring);
 
       // Ghost solidify reads as an opacity ramp; the Choir mid-fade is barely there;
@@ -4248,6 +4269,25 @@ export class Game {
 
       // The shielder's guard arc — drawn from the sim's authoritative block angle.
       if (e.kind === "shielder") this.renderShielderGuard(e, sx, sy, drawSize);
+      // The formation guards: the rootward's slow arc, the marshal's P1 frontage (its
+      // aux channel carries the captain phase — 2 means the shield already shattered).
+      if (e.kind === "rootward") this.renderGuardArc(e, sx, sy, drawSize, ROOTWARD_GUARD_ARC, ENEMY_ARCHETYPES.rootward.tint);
+      if (e.kind === "marshal" && e.aux < 2) this.renderGuardArc(e, sx, sy, drawSize, MARSHAL.guardArc, ENEMY_ARCHETYPES.marshal.tint);
+      // A bulwark elite's directional plate (aux = remaining plate HP; 0 = shattered).
+      if (e.tier === "elite" && e.aux > 0 && eliteAffixOf(e.kind) === "bulwark") {
+        this.renderGuardArc(e, sx, sy, drawSize, ELITE_BULWARK.arc, AFFIX_RING_COLOR.bulwark);
+      }
+      // The caskbellows' rear crank: the weak point marked on its back between volleys.
+      if (e.kind === "caskbellows") this.renderCaskCrank(e, sx, sy, drawSize);
+      // The stoked sinderling burns visibly — armed state rides the aux channel.
+      if (e.kind === "sinderling" && e.aux === 1) {
+        const emberPulse = 0.6 + 0.4 * Math.sin(anim.clock * 9);
+        this.fxLayer("glow_round", "#ff8a3b", sx, sy, drawSize * 1.1 * emberPulse, drawSize * 1.1 * emberPulse, 0.4, 0);
+      }
+      // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
+      if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
+      // The fragment's tether: the authoritative source id rides aux; the line IS the lane.
+      if (e.kind === "fragment" && e.aux > 0) this.renderFragmentTether(e);
       // The Warden's plate: a gold sheen while closed, a cracked-open core glow while EXPOSED.
       if (e.kind === "gilded") this.renderGildedPlate(e, sx, sy, drawSize);
 
@@ -4266,8 +4306,9 @@ export class Game {
     }
   }
 
-  // The Weaver's webs: violet ground lattices (spokes + rings) that fade with their life.
-  // Ground FX like the danger markers — the hazard itself is authoritative sim state.
+  // Dynamic ground hazards, each in its own language: the Weaver's violet web lattices,
+  // the sinderling's burning cinders, a volatile elite's blinking fused charge. Ground
+  // FX like the danger markers — the hazards themselves are authoritative sim state.
   private renderHazards() {
     if (this.hazards.length === 0) return;
     const { ctx, cam } = this;
@@ -4275,6 +4316,31 @@ export class Game {
     for (const h of this.hazards) {
       const sx = h.x - cam.x, sy = h.y - cam.y;
       const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3); // holds, then fades out
+      if (h.kind === "cinder") {
+        // Burning ground: an ember-orange pool with a flickering core.
+        const flicker = 0.7 + 0.3 * Math.sin(this.animClock * 11 + h.id * 1.9);
+        ctx.globalAlpha = 0.26 * fade * flicker;
+        ctx.fillStyle = "#ff8a3b";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.5 * fade * flicker;
+        ctx.fillStyle = "#ffd27a";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius * 0.4, 0, 6.28); ctx.fill();
+        continue;
+      }
+      if (h.kind === "charge") {
+        // The volatile fuse: a red ring that blinks faster as the burst approaches —
+        // "step off the corpse" needs no tutorial.
+        const urgency = 1 - h.life / Math.max(0.001, h.maxLife);
+        const blink = 0.5 + 0.5 * Math.sin(this.animClock * (8 + urgency * 22));
+        ctx.globalAlpha = 0.25 + 0.55 * urgency * blink;
+        ctx.strokeStyle = "#ff5a3b";
+        ctx.lineWidth = 2 + 2 * urgency;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
+        ctx.globalAlpha = 0.12 + 0.14 * urgency * blink;
+        ctx.fillStyle = "#ff5a3b";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        continue;
+      }
       ctx.globalAlpha = 0.34 * fade;
       ctx.strokeStyle = "#c98bff";
       ctx.lineWidth = 1.5;
@@ -4386,6 +4452,87 @@ export class Game {
     ctx.beginPath();
     ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // A formation/plate guard arc (rootward, P1 marshal, bulwark elites): the protected
+  // frontage drawn from the sim's authoritative lockedAngle, in the owner's color.
+  private renderGuardArc(e: Enemy, sx: number, sy: number, size: number, arc: number, color: string) {
+    const { ctx } = this;
+    const half = arc / 2;
+    const facing = e.attack.lockedAngle;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#e8efe4";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The caskbellows' crank: a bright stud on its BACK — the stagger point. It sits
+  // opposite the authoritative lane (lockedAngle), so where the lane points, the weak
+  // point is exactly behind.
+  private renderCaskCrank(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const back = e.attack.lockedAngle + Math.PI;
+    const x = sx + Math.cos(back) * size * 0.4;
+    const y = sy + Math.sin(back) * size * 0.4;
+    ctx.save();
+    ctx.globalAlpha = 0.7 + 0.3 * Math.sin(this.animClock * 6);
+    ctx.fillStyle = "#ffd166";
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 6.28); ctx.fill();
+    ctx.restore();
+  }
+
+  // A decoy's fuse readout (aux = seconds left): the echo simply fades; the knell blinks
+  // faster and hotter as its toll approaches — "shoot the noise" needs no tutorial.
+  private renderDecoyFuse(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    ctx.save();
+    if (e.kind === "knell") {
+      const urgency = Math.max(0, 1 - e.aux / 2.2);
+      const blink = 0.5 + 0.5 * Math.sin(clock * (6 + urgency * 18));
+      ctx.globalAlpha = 0.35 + 0.5 * urgency * blink;
+      ctx.strokeStyle = "#ff5a3b";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, size * (0.5 + 0.2 * urgency), 0, 6.28); ctx.stroke();
+    } else {
+      ctx.globalAlpha = 0.25 + 0.15 * Math.sin(clock * 4);
+      ctx.strokeStyle = ENEMY_ARCHETYPES.echo.tint;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // The fragment's tether to its source (aux = source id + 1). A faint standing line
+  // that brightens through the harmonize windup and burns solid during the pulse —
+  // the lane IS the telegraph.
+  private renderFragmentTether(e: Enemy) {
+    const src = this.enemies.find((other) => other.id === e.aux - 1 && !other.dead);
+    if (!src) return;
+    const { ctx, cam } = this;
+    const a = e.attack;
+    const isPulsing = a.move === "harmonize" && a.phase === "active";
+    const charge = a.move === "harmonize" && a.phase === "windup" ? a.windup : 0;
+    ctx.save();
+    ctx.globalAlpha = isPulsing ? 0.95 : 0.2 + 0.55 * charge;
+    ctx.strokeStyle = TELEGRAPH_COLOR.harmonize;
+    ctx.lineWidth = isPulsing ? 5 : 1.5 + 2 * charge;
+    ctx.setLineDash(isPulsing || charge > 0.99 ? AIM_SOLID : AIM_DASH);
+    ctx.beginPath();
+    ctx.moveTo(e.x - cam.x, e.y - cam.y);
+    ctx.lineTo(src.x - cam.x, src.y - cam.y);
+    ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
     ctx.restore();
   }
 
@@ -4505,13 +4652,16 @@ export class Game {
     ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
     ctx.restore();
 
-    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley") {
+    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley" || a.move === "seam") {
       // Line commitments draw their whole lane: the rush lengths match the sim's actual
-      // travel, so where the line ends is where the rusher stops (or crashes).
+      // travel, so where the line ends is where the rusher stops (or crashes). The seam
+      // draws to its authoritative mark — the far wall the cut will reach.
       const len = a.move === "lunge" ? 150
         : a.move === "spit" ? 300
         : a.move === "volley" ? 260
+        : a.move === "seam" ? Math.hypot(a.markX - e.x, a.markY - e.y)
         : e.kind === "marrow" ? MARROW.chargeSpeed * MARROW.chargeDur
+        : e.kind === "sinderling" ? SINDER_JET_SPEED * SINDER_JET_DUR
         : CHARGER_RUSH_SPEED * CHARGER_RUSH_DUR;
       ctx.save();
       ctx.globalAlpha = (a.isAimLocked ? 0.9 : 0.4) * (0.55 + 0.45 * a.windup);

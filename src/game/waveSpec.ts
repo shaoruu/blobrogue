@@ -414,6 +414,96 @@ export const WAVE_SOUNDS = {
     fallback: { sample: "chest", rate: 0.6, lowpassHz: 1800 },
     synth: { kind: "knock", freq: 190, count: 2 },
   },
+
+  // ---- the bestiary wave (generation stems queued; fallbacks/synths carry each identity
+  // ---- until the audio pipeline ships the files) --------------------------------------
+  "echojack.jangle": {
+    stem: "enemy/echojack_jangle", variants: 2, gain: 0.7, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "coin", rate: 0.7, highpassHz: 900 },
+    synth: { kind: "shimmer", durMs: 600, freq: 1900, isRising: true },
+  },
+  "echojack.blink": {
+    stem: "enemy/echojack_blink", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 1.7 },
+    synth: { kind: "whoosh", durMs: 350, fromHz: 2600, toHz: 700 },
+  },
+  "seamcutter.preview": {
+    stem: "enemy/seam_preview", variants: 2, gain: 0.75, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 0.5, lowpassHz: 2400 },
+    synth: { kind: "swell", durMs: 800, fromHz: 140, toHz: 480, mode: "noise" },
+  },
+  "seamcutter.lock": {
+    stem: "enemy/seam_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
+    jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.8, 0.05, 0.2)],
+    fallback: { sample: "meleeHit", rate: 1.3, highpassHz: 1200 },
+    synth: { kind: "tick", freq: 2600, count: 1, spreadMs: 0, isBright: true },
+  },
+  "seamcutter.cut": {
+    stem: "enemy/seam_cut", variants: 2, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "dash", rate: 0.6 },
+    synth: { kind: "whoosh", durMs: 700, fromHz: 900, toHz: 2400 },
+  },
+  "caskbellows.crank": {
+    stem: "enemy/cask_crank", variants: 2, gain: 0.7, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.85 },
+    synth: { kind: "knock", freq: 240, count: 3 },
+  },
+  "caskbellows.stagger": {
+    stem: "enemy/cask_stagger", variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 0.7 },
+    synth: { kind: "impact", durMs: 600, depthHz: 70 },
+  },
+  "sinderling.stoke": {
+    stem: "enemy/sinder_stoke", variants: 2, gain: 0.68, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 1.3 },
+    synth: { kind: "swell", durMs: 900, fromHz: 160, toHz: 640, mode: "noise" },
+  },
+  "sinderling.jet": {
+    stem: "enemy/sinder_jet", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 1.4 },
+    synth: { kind: "whoosh", durMs: 500, fromHz: 700, toHz: 2100 },
+  },
+  "fragment.harmonize": {
+    stem: "enemy/fragment_harmonize", variants: 2, gain: 0.72, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.03, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 0.7, highpassHz: 700 },
+    synth: { kind: "swell", durMs: 850, fromHz: 260, toHz: 520, mode: "voice" },
+  },
+  "marshal.order": {
+    stem: "mini/marshal_order", variants: 2, gain: 0.8, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyAttack", rate: 0.6, lowpassHz: 1400 },
+    synth: { kind: "swell", durMs: 700, fromHz: 90, toHz: 200, mode: "growl" },
+  },
+  "marshal.shatter": {
+    stem: "mini/marshal_shatter", variants: 1, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
+    duck: [dM(0.5, 0.2, 0.5)],
+    fallback: { sample: "barrel", rate: 0.55 },
+    synth: { kind: "impact", durMs: 900, depthHz: 55 },
+  },
+  "toll.ringWarn": {
+    stem: "mini/toll_ring_warn", variants: 2, gain: 0.8, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "chest", rate: 0.45, lowpassHz: 1200 },
+    synth: { kind: "swell", durMs: 900, fromHz: 120, toHz: 320, mode: "voice" },
+  },
+  "toll.ring": {
+    stem: "mini/toll_ring", variants: 2, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
+    jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
+    duck: [dM(0.55, 0.15, 0.45)],
+    fallback: { sample: "floorClear", rate: 0.5 },
+    synth: { kind: "notes", freqs: [392, 311, 262], stepMs: 60, noteMs: 700, shape: "triangle" },
+  },
   "shielder.block": {
     stem: "enemy/shield_block", variants: 3, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true, // manifest rate limit 120ms
@@ -811,6 +901,32 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
   },
   shielder: {
     lunge: { windup: "shielder.raise" },
+  },
+  echojack: {
+    decoy: { windup: "echojack.jangle" },
+    blink: { impact: "echojack.blink" },
+  },
+  seamcutter: {
+    seam: { windup: "seamcutter.preview", lock: "seamcutter.lock", active: "seamcutter.cut" },
+  },
+  caskbellows: {
+    volley: { windup: "caskbellows.crank" },
+    crash: { impact: "caskbellows.stagger" }, // the rear-crank stagger flips the move to crash
+  },
+  sinderling: {
+    stoke: { windup: "sinderling.stoke" },
+    rush: { active: "sinderling.jet" },
+  },
+  fragment: {
+    harmonize: { windup: "fragment.harmonize" },
+  },
+  marshal: {
+    sweep: { windup: "marshal.order" },
+    volley: { windup: "marshal.order" },
+  },
+  toll: {
+    knell: { windup: "toll.ringWarn", release: "toll.ring" },
+    volley: { windup: "toll.ringWarn" },
   },
 };
 
