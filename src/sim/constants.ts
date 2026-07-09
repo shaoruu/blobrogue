@@ -190,11 +190,21 @@ export const PROP_HP: Record<PropKind, number> = {
 };
 export const PROP_BREAK_DUR = 0.25;
 export const CHEST_OPEN_DUR = 0.4;
-// How far a chest's weapon lands in front of it on open (past both sprites, clearly loot).
-export const CHEST_WEAPON_EJECT = 36;
-// Candidate directions for that landing spot, relative to the opener, tried in order until
-// one is standable (see ejectChestWeapon). Fixed order keeps the drop deterministic.
+// Chest loot ejection (see ejectChestLoot). Every drop a chest produces — coin, heart or
+// weapon — lands on a candidate ring around the chest, toward the opener. Radii are tried
+// inner-to-outer and angles fan out from the opener direction; the fixed candidate order
+// keeps every landing spot deterministic across clients and replays.
+export const CHEST_EJECT_RADII: readonly number[] = [36, 52, 68];
 export const CHEST_EJECT_ANGLES: readonly number[] = [0, 0.6, -0.6, 1.2, -1.2, 2.0, -2.0, Math.PI];
+// Preferred minimum spacing between drops of ONE opening (the pleasing spread); dropped
+// when space is too tight for it (overlapping loot beats hidden loot).
+export const CHEST_LOOT_SEPARATION = 20;
+// Last-resort ring at the source chest's rim: peeking out from under the opened chest's
+// sprite, ignoring only the source chest's own hide-exclusion — never other chests.
+export const CHEST_EJECT_RIM = 24;
+// A loot spot must keep this margin of open floor on all four sides so the sprite never
+// visually clips into a wall.
+export const CHEST_LOOT_WALL_MARGIN = 10;
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;

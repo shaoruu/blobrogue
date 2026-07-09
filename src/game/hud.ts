@@ -1,10 +1,12 @@
-// All the on-screen chrome that lives in the DOM (not the game canvas): the 4-corner
-// HUD (hearts / stat chips / minimap frame / weapon / dash meter), the hold-Tab stats
-// panel, and the between-floor banner. The 4-corner markup + CSS come from the ui
-// designer's spec (docs/ui). Elements are built once and updated via textContent /
-// classList / CSS vars so nothing ever reflows the layout mid-run.
+// All the on-screen chrome that lives in the DOM (not the game canvas): the corner HUD
+// (hearts / stat chips / minimap frame / dash meter), the bottom-center hotbar (weapons
+// + blessings), the hold-Tab stats panel, and the between-floor banner. The corner
+// markup + CSS come from the ui designer's spec (docs/ui). Elements are built once and
+// updated via textContent / classList / CSS vars so nothing ever reflows the layout
+// mid-run.
 
-import { renderHearts, mountIcons, itemIconEl } from "./hudIcons.js";
+import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
+import type { WeaponId } from "../sim/types.js";
 
 export interface HudState {
   hp: number;
@@ -12,8 +14,8 @@ export interface HudState {
   floor: number;
   kills: number;
   coins: number;
-  weaponName: string;
-  weapons: { name: string; current: boolean }[]; // inventory row
+  // Hotbar slots in inventory order (= the 1-9 selection order); `isCurrent` = equipped.
+  weapons: { id: WeaponId; name: string; isCurrent: boolean }[];
   isCleared: boolean;
   enemiesLeft: number;
   isBossActive: boolean;
@@ -25,7 +27,8 @@ export interface HudState {
   comboMult: number;  // score/coin multiplier for the current tier (1 / 1.5 / 2 / 3)
   comboColor: string; // tier accent (drives the mult text + drain bar)
   comboFrac: number;  // 0..1 of the combo window still remaining (drives the drain bar)
-  // Collected blessings, duplicates collapsed into a count, shown in the YOUR BUILD panel.
+  // Collected blessings, duplicates collapsed into a level (count = Lv1-3), shown as
+  // labeled chips above the hotbar.
   items: { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }[];
 }
 
@@ -63,8 +66,48 @@ function fmtTime(seconds: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// The 4-corner HUD DOM (docs/ui/hud_markup.html). The minimap canvas already lives in
-// index.html; its <canvas id="minimap"> is moved into the .tr .minimap frame at build.
+// One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath. Slots
+// past 9 get no key badge — Q/scroll still cycles to them. Fixed width so switching
+// never resizes anything.
+function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
+  const slot = el("span", "");
+  slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
+  if (index < 9) {
+    const key = el("span", "", String(index + 1));
+    key.className = "hb-key";
+    slot.appendChild(key);
+  }
+  const icon = el("span", "");
+  icon.className = "hb-icon";
+  icon.appendChild(weaponIconEl(w.id, w.name));
+  const name = el("span", "", w.name.toUpperCase());
+  name.className = "hb-name";
+  slot.append(icon, name);
+  return slot;
+}
+
+// One blessing chip: tinted icon + name + Lv1-3, with the current level's effect text
+// as a hover tooltip (the chips row is the only pointer-enabled part of the hotbar).
+function buildBuffChip(it: HudState["items"][number]): HTMLElement {
+  const chip = el("span", "");
+  chip.className = "hb-buff" + (it.rarity === "rare" ? " rare" : "");
+  chip.style.setProperty("--t", it.tint);
+  chip.appendChild(itemIconEl(it.id, it.glyph));
+  const name = el("span", "", it.name.toUpperCase());
+  name.className = "bn";
+  const lv = el("span", "", "LV" + it.count);
+  lv.className = "bl";
+  const tip = el("span", "", it.desc);
+  tip.className = "tip";
+  chip.append(name, lv, tip);
+  return chip;
+}
+
+// The corner HUD DOM (docs/ui/hud_markup.html) + the bottom-center hotbar. The minimap
+// canvas already lives in index.html; its <canvas id="minimap"> is moved into the
+// .tr .minimap frame at build. The hotbar is a Minecraft-style strip: one slot per owned
+// weapon (icon + name + its 1-9 select key, equipped slot lit) with the player's
+// blessings as labeled chips on the row above.
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
     <div class="hearts" data-hearts></div>
@@ -73,14 +116,17 @@ const HUD_MARKUP = `
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
-  </div><div class="coopstrip" data-coop></div><div class="build" data-build><div class="build-title">YOUR BUILD <span class="n" data-build-n>0</span></div><div class="build-grid" data-build-grid></div></div></div>
+  </div><div class="coopstrip" data-coop></div></div>
   <div class="bossbar" data-bossbar>
     <div class="bossbar-label">BOSS</div>
     <div class="bossbar-track"><i data-bossfill></i></div>
   </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
-  <div class="hud-corner br"><div class="invrow" data-invrow></div><div class="weapon"><span class="ic" data-ic="gun" style="width:38px;height:24px"></span><span class="wname" data-wname>PISTOL</span><span class="wammo" data-wammo>&#8734;</span></div></div>
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
+  <div class="hotbar">
+    <div class="hb-buffs" data-hb-buffs></div>
+    <div class="hb-slots" data-hb-slots></div>
+  </div>
   <div class="combo" data-combo>
     <div class="combo-badge">
       <div class="combo-burst" data-combo-burst></div>
@@ -97,9 +143,9 @@ export class Hud {
   private floorEl: HTMLElement;
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
-  private wnameEl: HTMLElement;
-  private invrowEl!: HTMLElement;
-  private prevInvKey = "";
+  private slotsEl: HTMLElement;
+  private buffsEl: HTMLElement;
+  private prevSlotsKey = "";
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
@@ -113,9 +159,6 @@ export class Hud {
   private prevMult = 1;
   private prevCombo = -1;
   private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
-  private buildPanel: HTMLElement;
-  private buildGrid: HTMLElement;
-  private buildN: HTMLElement;
   private prevItemsCount = -1;
 
   private statsPanel: HTMLElement;
@@ -141,8 +184,8 @@ export class Hud {
     this.floorEl = hud.querySelector("[data-floor]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
-    this.wnameEl = hud.querySelector("[data-wname]")!;
-    this.invrowEl = hud.querySelector("[data-invrow]")!;
+    this.slotsEl = hud.querySelector("[data-hb-slots]")!;
+    this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
@@ -153,16 +196,13 @@ export class Hud {
     this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
     this.bossbarEl = hud.querySelector("[data-bossbar]")!;
     this.bossFillEl = hud.querySelector("[data-bossfill]")!;
-    this.buildPanel = hud.querySelector("[data-build]")!;
-    this.buildGrid = hud.querySelector("[data-build-grid]")!;
-    this.buildN = hud.querySelector("[data-build-n]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
     const minimap = document.getElementById("minimap");
     const frame = hud.querySelector(".minimap");
     if (minimap && frame) frame.appendChild(minimap);
 
-    // Rasterize the chip icons (skull/coin/gun) once; hearts render on hp change.
+    // Rasterize the chip icons (skull/coin) once; hearts render on hp change.
     mountIcons(hud);
 
     // Hold-Tab stats panel (token-styled to match the pixel dungeon frame).
@@ -187,10 +227,10 @@ export class Hud {
       `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
     root.appendChild(this.banner);
 
-    // One-time controls onboarding hint: a subtle, auto-dismissing line near the bottom.
-    // Fixed + opacity-only so it never shifts the layout.
+    // One-time controls onboarding hint: a subtle, auto-dismissing line above the hotbar
+    // (clear of its blessing-chip row). Fixed + opacity-only so it never shifts the layout.
     this.controlsHint = el("div",
-      `position:fixed;left:0;right:0;bottom:64px;z-index:6;text-align:center;pointer-events:none;` +
+      `position:fixed;left:0;right:0;bottom:122px;z-index:6;text-align:center;pointer-events:none;` +
       `color:var(--cream);font:9px var(--f-ui),monospace;letter-spacing:1px;` +
       `text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,0.6);opacity:0;transition:opacity 0.6s ease;`,
       "WASD MOVE \u00b7 MOUSE AIM \u00b7 CLICK SHOOT \u00b7 SHIFT DASH");
@@ -210,22 +250,14 @@ export class Hud {
     this.floorEl.textContent = String(s.floor);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
-    this.wnameEl.textContent = s.weaponName.toUpperCase();
-    // Weapon inventory row: one chip per owned weapon, current highlighted. Only rebuild
-    // when the set or selection changes (cheap string key), and hide it with <2 weapons.
-    const invKey = s.weapons.map((w) => (w.current ? "*" : "") + w.name).join("|");
-    if (invKey !== this.prevInvKey) {
-      this.prevInvKey = invKey;
-      this.invrowEl.classList.toggle("show", s.weapons.length >= 2);
-      this.invrowEl.replaceChildren();
-      s.weapons.forEach((w, i) => {
-        const chip = el("span", "");
-        chip.className = "invchip" + (w.current ? " on" : "");
-        chip.textContent = `${i + 1} ${w.name.toUpperCase()}`;
-        this.invrowEl.appendChild(chip);
-      });
+    // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
+    // Only rebuild when the set or selection changes (cheap string key).
+    const slotsKey = s.weapons.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|");
+    if (slotsKey !== this.prevSlotsKey) {
+      this.prevSlotsKey = slotsKey;
+      this.slotsEl.replaceChildren();
+      s.weapons.forEach((w, i) => this.slotsEl.appendChild(buildSlot(w, i)));
     }
-    // Ammo stays the infinity glyph from the markup — weapons have no clip concept.
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
@@ -245,34 +277,14 @@ export class Hud {
 
     this.updateCombo(s);
 
-    // Rebuild the YOUR BUILD panel only when a blessing is picked. Gated on total picks
-    // (sum of counts) so a repeat pick that just bumps a chip's count still refreshes.
+    // Rebuild the blessing chips only when a blessing is picked. Gated on total picks
+    // (sum of levels) so a repeat pick that just levels a chip still refreshes it.
     const totalPicks = s.items.reduce((n, it) => n + it.count, 0);
     if (totalPicks !== this.prevItemsCount) {
       this.prevItemsCount = totalPicks;
-      this.buildGrid.replaceChildren();
-      for (const it of s.items) {
-        const chip = el("div", "");
-        chip.className = "ichip" + (it.rarity === "rare" ? " rare" : "");
-        chip.style.setProperty("--t", it.tint);
-        chip.appendChild(itemIconEl(it.id, it.glyph));
-        if (it.count > 1) {
-          const c = el("span", "", "x" + it.count);
-          c.className = "cnt";
-          chip.appendChild(c);
-        }
-        const tip = el("div", "");
-        tip.className = "tip";
-        const tn = el("span", "", it.name.toUpperCase());
-        tn.className = "tn";
-        const td = el("span", "", it.desc);
-        td.className = "td";
-        tip.append(tn, td);
-        chip.appendChild(tip);
-        this.buildGrid.appendChild(chip);
-      }
-      this.buildN.textContent = String(s.items.length);
-      this.buildPanel.classList.toggle("show", s.items.length > 0);
+      this.buffsEl.replaceChildren();
+      for (const it of s.items) this.buffsEl.appendChild(buildBuffChip(it));
+      this.buffsEl.classList.toggle("show", s.items.length > 0);
     }
   }
 
@@ -401,8 +413,10 @@ export class Hud {
     this.prevMult = 1;
     this.comboPop = 0;
     this.comboBurstEl.classList.remove("fire");
-    this.buildGrid.replaceChildren();
-    this.buildPanel.classList.remove("show");
+    this.slotsEl.replaceChildren();
+    this.prevSlotsKey = "";
+    this.buffsEl.replaceChildren();
+    this.buffsEl.classList.remove("show");
     this.prevItemsCount = -1;
   }
 }

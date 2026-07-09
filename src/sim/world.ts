@@ -3162,46 +3162,41 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   c.opened = true;
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
-  if (c.kind === "boss") { grantBossChest(w, p, c, ev); return; }
-  // Baked contents first (the floor's weapon drop lives in this chest — see
-  // stockWeaponChests), then the ordinary roll: the weapon replaces nothing, so the heart
-  // economy and pity behave exactly as they always did per chest opened.
-  if (c.weapon !== undefined) ejectChestWeapon(w, c, c.weapon, openerAngle(p, c), ev);
-  rollWoodChest(w, c, openerAngle(p, c), ev);
+  // The full loot of the opening is decided first, then placed as ONE batch, so the fan
+  // spreads coins, hearts and weapons together without stacking. Boss completion recovery
+  // is the chest's +1 heart ONLY (no descent heal) plus the boss's authored SIGNATURE
+  // weapon (see BOSS_SIGNATURE_WEAPON, baked at drop); its blessing offer is the floor's
+  // reward — a Rare pick (see raiseBlessingOffer). Wood chests eject baked contents first
+  // (the floor's weapon drop lives in this chest — see stockWeaponChests), then the
+  // ordinary roll: the weapon replaces nothing, so the heart economy and pity behave
+  // exactly as they always did per chest opened.
+  const loot: ChestLoot[] = [];
+  if (c.kind === "boss") {
+    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+    loot.push({ kind: "heart" });
+    for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
+  } else {
+    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+    loot.push(...rollWoodChest(w));
+  }
+  ejectChestLoot(w, c, loot, openerAngle(p, c), p.pr, ev);
+  if (c.kind === "boss") raiseBlessingOffer(w, p.id, true, ev);
 }
 
-// An enemy commitment bursts a wood chest open: the same deterministic contents, ejected
-// AWAY from the impact onto standable floor, with NO opener — everything it spills is
-// ordinary first-come world loot, and no blessing machinery is touched (wood chests never
-// carried one). Boss chests are the cleared floor's pedestal and are never smashable.
+// An enemy commitment bursts a wood chest open: the same deterministic contents, spilled
+// through the same safe-spot fan but AWAY from the impact, with NO opener — everything it
+// drops is ordinary first-come world loot, and no blessing machinery is touched (wood
+// chests never carried one). Boss chests are the cleared floor's pedestal and are never
+// smashable (see enemySmashEnvironment).
 function smashOpenChest(w: WorldState, c: Chest, fromX: number, fromY: number, ev: SimEvent[]): void {
   c.opened = true;
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
+  const loot: ChestLoot[] = [];
+  if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+  loot.push(...rollWoodChest(w));
   const away = Math.atan2(c.y - fromY, c.x - fromX);
-  if (c.weapon !== undefined) ejectChestWeapon(w, c, c.weapon, away, ev);
-  rollWoodChest(w, c, away, ev);
-}
-
-// A weapon coming out of a chest lands just in FRONT of it along `base` — toward the
-// opener, or away from whatever smashed it open — so it reads as spilled loot, clearly
-// collectible, never a pickup stacked under the chest sprite. The landing spot must be
-// somewhere a player can actually STAND (open floor, off every live prop's collision
-// ring, clear of other chests): the old loose floor drops could sit where the 34px
-// collect range never triggered — the unreachable gun of the playtest. Candidate angles
-// fan out from `base` in a fixed order; if every one is blocked (a chest boxed in by
-// props), the drop degrades to the chest's own tile, which is open, prop-free floor by
-// construction (see chestTile).
-function ejectChestWeapon(w: WorldState, c: Chest, weapon: WeaponId, base: number, ev: SimEvent[]): void {
-  let x = c.x, y = c.y;
-  for (const off of C.CHEST_EJECT_ANGLES) {
-    const ex = c.x + Math.cos(base + off) * C.CHEST_WEAPON_EJECT;
-    const ey = c.y + Math.sin(base + off) * C.CHEST_WEAPON_EJECT;
-    // Standable by a player body (pr 18, see createPlayer) — the collector's clearance.
-    if (isStandableSpot(w, ex, ey, 18)) { x = ex; y = ey; break; }
-  }
-  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon });
-  ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+  ejectChestLoot(w, c, loot, away, 18, ev);
 }
 
 // The eject bearing for a player-opened chest: out toward the opener.
@@ -3210,50 +3205,114 @@ function openerAngle(p: PlayerSim, c: Chest): number {
   return Math.hypot(dx, dy) > 1 ? Math.atan2(dy, dx) : C.HALF_PI;
 }
 
-// Whether a player of radius `pr` can physically stand at (x, y): open floor and outside
-// every live prop's collision ring. Chests don't block movement but a drop under one would
-// hide the sprite, so they're excluded too.
-function isStandableSpot(w: WorldState, x: number, y: number, pr: number): boolean {
-  if (isWall(w, x, y) || blockedByProp(w, x, y, pr)) return false;
+type ChestLoot =
+  | { kind: "coin" | "heart" }
+  | { kind: "weapon"; weapon: WeaponId };
+
+// Every drop a chest produces lands somewhere the collector can actually STAND — the old
+// loose offsets (coins in a row, heart under the chest) could put loot inside a wall or
+// a prop ring where the collect range never triggered: the unreachable coins of the
+// playtest. Slots fan out from `base` (toward the opener, or away from whatever smashed
+// the chest) so the batch reads as spilled loot. `pr` is the collector's clearance —
+// the opener's own radius, or the standard 18px body for ownerless bursts.
+function ejectChestLoot(w: WorldState, c: Chest, loot: ChestLoot[], base: number, pr: number, ev: SimEvent[]): void {
+  const placed: { x: number; y: number }[] = [];
+  for (let slot = 0; slot < loot.length; slot++) {
+    const item = loot[slot];
+    const [x, y] = chestLootSpot(w, c, base, slot, pr, placed);
+    placed.push({ x, y });
+    if (item.kind === "weapon") {
+      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon });
+      ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+    } else {
+      w.pickups.push(makePickup(w, item.kind, x, y, ev));
+    }
+  }
+}
+
+function chestLootSpot(w: WorldState, c: Chest, base: number, slot: number, pr: number, placed: { x: number; y: number }[]): [number, number] {
+  // Deterministic candidate scan for one drop. Each slot prefers its own direction in the
+  // fan (slot i starts at angle i), then walks the fixed angle order and the radii
+  // inner-to-outer, so the preferred point loses only to the NEAREST safe candidate. The
+  // first pass demands spacing from already-placed drops; the second gives that up rather
+  // than land anywhere unsafe. A candidate must also have a walkable straight path from
+  // the chest — a spot past a wall or a prop ring would be visible yet uncollectible.
+  const angles = C.CHEST_EJECT_ANGLES;
+  for (const sep of [C.CHEST_LOOT_SEPARATION, 0]) {
+    for (const radius of C.CHEST_EJECT_RADII) {
+      for (let k = 0; k < angles.length; k++) {
+        const a = base + angles[(slot + k) % angles.length];
+        const x = c.x + Math.cos(a) * radius;
+        const y = c.y + Math.sin(a) * radius;
+        if (!isStandableSpot(w, x, y, pr)) continue;
+        if (!isPathOpen(w, c.x, c.y, x, y, pr)) continue;
+        if (sep > 0 && placed.some((q) => Math.hypot(x - q.x, y - q.y) < sep)) continue;
+        return [x, y];
+      }
+    }
+  }
+  // Everything around is blocked (a chest boxed in by props/walls): fall back to the
+  // source chest's own rim — outside its sprite, ignoring only ITS hide-exclusion — and
+  // finally to the chest's own tile, which is open floor by construction (see chestTile)
+  // and right under the opener, who collects the drop the same tick.
+  for (let k = 0; k < angles.length; k++) {
+    const a = base + angles[(slot + k) % angles.length];
+    const x = c.x + Math.cos(a) * C.CHEST_EJECT_RIM;
+    const y = c.y + Math.sin(a) * C.CHEST_EJECT_RIM;
+    if (isStandableSpot(w, x, y, pr, c)) return [x, y];
+  }
+  return [c.x, c.y];
+}
+
+function isStandableSpot(w: WorldState, x: number, y: number, pr: number, ignoreChest?: Chest): boolean {
+  // Whether a player of radius `pr` can physically stand at (x, y) — open floor with a
+  // margin on all sides (so a loot sprite never clips into a wall) and outside every live
+  // prop's collision ring. Chests don't block movement but a drop under one would hide
+  // the sprite, so they're excluded too; `ignoreChest` lifts that for the already-opened
+  // source chest on the rim fallback.
+  const m = C.CHEST_LOOT_WALL_MARGIN;
+  if (isWall(w, x, y) || isWall(w, x - m, y) || isWall(w, x + m, y) || isWall(w, x, y - m) || isWall(w, x, y + m)) return false;
+  if (blockedByProp(w, x, y, pr)) return false;
   for (const c of w.chests) {
+    if (c === ignoreChest) continue;
     if (Math.hypot(x - c.x, y - c.y) < c.radius + 16) return false;
   }
   return true;
 }
 
-// Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer
-// drop from random chests — the reward cadence lives on descents and the boss chest. The
-// recovery pity, once armed, forces the heart.
-function rollWoodChest(w: WorldState, c: Chest, ejectBase: number, ev: SimEvent[]): void {
+function isPathOpen(w: WorldState, x0: number, y0: number, x1: number, y1: number, pr: number): boolean {
+  // Can a player walk the straight segment from (x0,y0) to (x1,y1)? Sampled finely enough
+  // that no wall tile or prop ring fits between consecutive samples at these distances.
+  const d = Math.hypot(x1 - x0, y1 - y0);
+  const steps = Math.ceil(d / 8);
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+    if (isWall(w, x, y) || blockedByProp(w, x, y, pr)) return false;
+  }
+  return true;
+}
+
+function rollWoodChest(w: WorldState): ChestLoot[] {
+  // Wood chest table (§2/§6): heart 15%, weapon 7%, otherwise coins. Blessings no longer
+  // drop from random chests — the reward cadence lives on descents and the boss chest.
+  // The recovery pity, once armed, forces the heart. Decides WHAT drops only; placement
+  // happens in ejectChestLoot, so the RNG stream stays exactly as it always was.
   if (w.isPityHeartArmed) {
     w.isPityHeartArmed = false;
     w.pityStreak = 0;
-    w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
-    return;
+    return [{ kind: "heart" }];
   }
   const r = w.rng.next();
-  if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers)) {
-    w.pickups.push(makePickup(w, "heart", c.x, c.y, ev));
-  } else if (r < SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers) + SUSTAIN.woodChestWeapon) {
-    const weapon = PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)];
-    ejectChestWeapon(w, c, weapon, ejectBase, ev);
-  } else {
-    const n = 3 + Math.floor(w.rng.next() * 4);
-    for (let i = 0; i < n; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - (n - 1) / 2) * 14, c.y + 12, ev));
+  const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
+  if (r < heartChance) return [{ kind: "heart" }];
+  if (r < heartChance + SUSTAIN.woodChestWeapon) {
+    return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
   }
-}
-
-// Boss completion recovery is the chest's +1 heart ONLY (no descent heal), and its blessing
-// offer is the floor's reward — a Rare pick (the `rare` flag steers the roll pool). Each
-// boss also bakes its authored SIGNATURE weapon into the chest (see BOSS_SIGNATURE_WEAPON).
-// The boss kill already cleared the floor (endBossDanger), so this offer is inherently on
-// the safe side; the pending entry still applies so a party can't descend out from under
-// the pick.
-function grantBossChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void {
-  if (c.weapon !== undefined) ejectChestWeapon(w, c, c.weapon, openerAngle(p, c), ev);
-  w.pickups.push(makePickup(w, "heart", c.x - 18, c.y, ev));
-  for (let i = 0; i < 5; i++) w.pickups.push(makePickup(w, "coin", c.x + (i - 2) * 16, c.y + 18, ev));
-  raiseBlessingOffer(w, p.id, true, ev);
+  const n = 3 + Math.floor(w.rng.next() * 4);
+  const coins: ChestLoot[] = [];
+  for (let i = 0; i < n; i++) coins.push({ kind: "coin" });
+  return coins;
 }
 
 function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -3265,8 +3324,13 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         const dx = player.x - p.x, dy = player.y - p.y;
         const d = Math.hypot(dx, dy);
         if (d > 0.5 && d < player.mods.coinMagnet) {
+          // Each magnet step resolves per-axis against walls (like moveCircle) so a coin
+          // slides along a wall toward its owner but can never be dragged THROUGH one
+          // into a tile the player can't reach.
           const pull = Math.min(d, player.mods.coinMagnetPull * dt);
-          p.x += (dx / d) * pull; p.y += (dy / d) * pull;
+          const sx = (dx / d) * pull, sy = (dy / d) * pull;
+          if (!isWall(w, p.x + sx, p.y)) p.x += sx;
+          if (!isWall(w, p.x, p.y + sy)) p.y += sy;
         }
       }
       if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + p.radius) {

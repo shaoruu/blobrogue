@@ -1837,8 +1837,7 @@ export class Game {
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
-      weaponName: WEAPONS[this.weapon].name,
-      weapons: this.p.ownedWeapons.map((id) => ({ name: WEAPONS[id].name, current: id === this.weapon })),
+      weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name, isCurrent: id === this.weapon })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
@@ -2313,7 +2312,10 @@ export class Game {
     const { ctx, cam } = this;
     const d = this.dungeon;
     const ex = d.exit.x * TILE + TILE / 2 - cam.x, ey = d.exit.y * TILE + TILE / 2 - cam.y;
-    const isCleared = isFloorCleared(this.world);
+    // Use the SAME authoritative/objective clear predicate as the HUD + descend gate. Online
+    // snapshots can carry an interest-filtered entity view, so local isFloorCleared(world)
+    // may say "clear" while global enemies/reinforcements remain — that caused false GO DOWN.
+    const isCleared = this.isCurrentFloorCleared();
     // Stairs-down sprite reads as the way to the next floor (replaces the vague portal
     // ring). Subtle amber shimmer between the 2 frames + a soft glow once the floor's clear.
     const stairs: TileName = (isCleared && Math.floor(this.animClock * 1.5) % 2 === 1) ? "stairs_f1" : "stairs_f0";

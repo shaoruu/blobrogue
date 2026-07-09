@@ -2,6 +2,9 @@
 // ui designer's verbatim spec). Each icon is a tiny char-map painted 1px-per-cell onto
 // a canvas, then upscaled with image-rendering:pixelated so it stays crisp and chunky.
 
+import { weaponIconSrc } from "./assets.js";
+import type { WeaponId } from "../sim/types.js";
+
 const INK = "#120a24";
 
 export function pxIcon(map: readonly string[], pal: Record<string, string>, scale = 2): HTMLCanvasElement {
@@ -56,7 +59,7 @@ export const ICONS: Record<string, IconDef> = {
 // single-char glyph. If the sprite isn't present the <img> quietly swaps itself for a
 // tinted glyph span, so the UI never shows a broken image — mirroring the sprite
 // ready()/fallback pattern used on the canvas. Returns the <img> to append; the caller's
-// container (.ichip / .bc-icon) supplies the frame and the --t tint.
+// container (.hb-buff / .bc-icon) supplies the frame and the --t tint.
 export function itemIconEl(id: string, glyph: string): HTMLImageElement {
   const img = document.createElement("img");
   img.alt = glyph;
@@ -68,6 +71,21 @@ export function itemIconEl(id: string, glyph: string): HTMLImageElement {
     img.replaceWith(span);
   }, { once: true });
   img.src = `/sprites/item_${id}.png`;
+  return img;
+}
+
+// A weapon's hotbar icon: its floor-pickup art, degrading to the generic pixel gun if the
+// sprite is missing or fails to load (same graceful-fallback pattern as itemIconEl). The
+// caller's .hb-icon frame sizes the result.
+export function weaponIconEl(id: WeaponId, name: string): HTMLElement {
+  const fallback = () => pxIcon(ICONS.gun.map, ICONS.gun.pal, 2);
+  const src = weaponIconSrc(id);
+  if (!src) return fallback();
+  const img = document.createElement("img");
+  img.alt = name;
+  img.decoding = "async";
+  img.addEventListener("error", () => img.replaceWith(fallback()), { once: true });
+  img.src = src;
   return img;
 }
 

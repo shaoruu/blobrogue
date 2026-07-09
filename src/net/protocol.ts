@@ -38,7 +38,14 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-export const PROTOCOL_VERSION = 3;
+// v4 (intentional bump, the content wave): the snapshot grew the `hzds` hazard list
+// (webs slow PREDICTED movement, so clients must know it) and the enemy wire's closed
+// kind/move sets grew (charger/burrower/orbiter/shielder + the boss roster; a v3 client
+// would reject any snapshot carrying them as a ProtocolError). The join gate enforcing
+// equality is what turns that skew into a clean "update your client" instead of a
+// mid-run desync. NOTE: control/src/adapters/httpProbe.ts pins this in its synthetic
+// VERIFY join — keep them in lockstep.
+export const PROTOCOL_VERSION = 4;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
