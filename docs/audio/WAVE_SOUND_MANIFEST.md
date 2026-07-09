@@ -221,3 +221,42 @@ declared fallback/synth until files land. Trigger source is the authoritative at
 |`marshal.shatter`|`mini/marshal_shatter`|the 50% shield-to-cover shatter|
 |`toll.ringWarn`|`mini/toll_ring_warn_vN`|bell draw-back before the knell|
 |`toll.ring`|`mini/toll_ring_vN`|the knell itself (descending bronze triad)|
+
+## 14. Bestiary audio hook contract (`src/game/bestiaryAudio.ts`)
+Shipped as typed manifest + director policy + QA gates (`test/bestiaryaudio.test.ts`); the
+main agent generates the authored stems (checklist: `npx tsx tools/waveAudioPaths.ts --missing`).
+
+**Identity model.** Semantic sim events only — windup/lock/active/impact/recover/hurt/death
+off the authoritative attack state and sim events, never animation inference. The BEHAVIOR
+VERB teaches counterplay (`AUDIO_BEHAVIOR`), the BODY MATERIAL identifies the species
+(`AUDIO_MATERIAL`), the TIER adds an authored body/debris layer (`tier.bruteBody` /
+`tier.eliteSheen`) — never a pitch-down (fallbacks on layer rows carry no rate transform).
+
+**Danger arbiter.** Lock cues ride accepted commitments only (aim-lock edges; releases are
+already gated by the sim's release arbiter). At most 2 concurrent mob lock cues per 600ms
+window (boss locks exempt). The flock is ONE aggregate bed (`flock.bed`, group-keyed loop,
+gain scales with count) and the orbit ring ONE hum (`orbit.loop`). Hurt/death are
+rate-limited rows (`mob.hurt` 90ms, `mob.death` 120ms). Locks are dry + positional
+(spatial, zero jitter).
+
+**Minimum hooks per behavior** (all resolved in `BESTIARY_CUES`, gated by the QA suite):
+HUNT move/commit; FLOCK bed/windup/lock/pass/leaderBreak/rally; CHARGE plant/lock/rush/
+crash/dazed; BURROW dive/emitter/lock/erupt/recover — the underground tracker is a
+COMPONENT EMITTER (`burrower.track`, 450ms per-entity cadence), no continuous loop;
+ORBIT acquire/loop/warn/lock/fire; SHIELD raise/block/bash/guardBreak/rearHurt;
+ANCHOR place/laneWarn/lock/active/deflate. Boss-grade bodies (King, Marrow, Choir,
+Weaver, Warden, Marshal, Toll) carry windup+lock+active/impact+recover per attack plus
+bespoke entrance/phase/special/death; the Slime King joined the wave manifest
+(`king.*` rows) as the last legacy-only boss.
+
+**Hygiene.** No `stem: null` anywhere on the bestiary surface (charger.crash got a real
+stem). Every one-shot row declares a SAME-MATERIAL shipped-sample fallback
+(`MATERIAL_FALLBACK_SAMPLES`) inside rate [0.4, 2.0]; synth recipes remain the zero-file
+rung only. Preload covers biome bed + hazards + the floor's boss (entrance included) +
+every encounter kind on the floor.
+
+**Wire hooks.** `bulletBlocked` carries the blocker's `kind` so blocks voice in the right
+material (shielder wood / living root / bulwark plate); the commander's rally, panic and
+surge-landing, the bulwark's plate shatter, the sinderling burst, the fragment pulse and
+the toll's lure plant are semantic sim cues (`elite.rally`, `elite.panic`, `flock.surge`,
+`guard.break`, `sinderling.burst`, `fragment.pulse`, `knell.fuse`).
