@@ -27,6 +27,7 @@
     "test:onlinelobby": "tsx test/onlinelobby.test.ts",
     "test:onlinecopy": "tsx test/onlinecopy.test.ts",
     "test:tools": "python3 tools/test_pixelize.py",
+    "fixtures:ttk": "tsx test/balance.test.ts --write-fixtures",
     "test": "tsx test/golden.test.ts && tsx test/stagec.sim.test.ts && tsx test/protocol.test.ts && tsx test/netcode.test.ts && tsx test/floorrun.test.ts && tsx test/nav.test.ts && tsx test/inventory.test.ts && tsx test/hud.dom.test.ts && tsx test/purity.test.ts && tsx test/anim.test.ts && tsx test/facing.test.ts && tsx test/balance.test.ts && tsx test/content.test.ts && tsx test/input.test.ts && tsx test/waveaudio.test.ts && tsx test/partygate.test.ts && tsx test/menu.test.ts && tsx test/onlinelobby.test.ts && tsx test/onlinecopy.test.ts && npm run test:tools",
     "harness": "npm --prefix server run harness",
     "test:anim": "tsx test/anim.test.ts"

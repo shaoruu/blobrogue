@@ -28,14 +28,28 @@ import {
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, choirHpForFloor,
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
-  pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
+  pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock, BOSS_MIN_LEGAL_TTK,
+  bossIntakeEnvelopeSeconds, BOSS_INTAKE_BANK_SECONDS,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
+import type { EnemyTier } from "../src/sim/balance.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
+import { readFileSync, writeFileSync } from "node:fs";
 import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
 
 const DT = 1 / 60;
+
+// Measured-build fixtures: every TTK number the gates measure is recorded here and pinned
+// against test/fixtures/boss_ttk.fixtures.json. These are DETERMINISTIC SIM-HARNESS
+// measurements (seeded worlds, scripted aggression) — NOT live playtest telemetry — and
+// the fixture file says so. Regenerate after intentional balance changes with
+// `npm run fixtures:ttk`.
+const FIXTURES_PATH = new URL("./fixtures/boss_ttk.fixtures.json", import.meta.url);
+const MEASURED: Record<string, number> = {};
+function record(key: string, seconds: number): void {
+  MEASURED[key] = Math.round(seconds * 1000) / 1000;
+}
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -217,10 +231,12 @@ function bossLadderGates(): void {
   for (const row of BOSS_GATE_ROWS) {
     section(`gate §3 ${row.kind} @F${row.floor}: median ${row.medianBand[0]}–${row.medianBand[1]}s, high-roll ≥${row.highRollMin}s, forced ${row.forcedEach}s×2`);
     const median = measureBossTtk(row.medianWeapon, row.medianBuild, { kind: row.kind, floor: row.floor });
+    record(`${row.kind}.median`, median.seconds);
     check(`median build kills in ${row.medianBand[0]}–${row.medianBand[1]}s`,
       median.killed && median.seconds >= row.medianBand[0] && median.seconds <= row.medianBand[1],
       `ttk=${median.seconds.toFixed(1)}s`);
     const highRoll = measureBossTtk("smg", row.highRollBuild, { kind: row.kind, floor: row.floor });
+    record(`${row.kind}.highRoll`, highRoll.seconds);
     check(`representative high-roll stays ≥${row.highRollMin}s`,
       highRoll.killed && highRoll.seconds >= row.highRollMin, `ttk=${highRoll.seconds.toFixed(1)}s`);
 
@@ -260,46 +276,65 @@ function bossLadderGates(): void {
     && CHOIR.fadeRecover === 0.8 && CHOIR.splitMinDuration === 1.0 && CHOIR.splitDuration === 3.2);
 }
 
-// The anti-burst floor as a hard mechanism: even an absurd single hit cannot delete the
-// boss — damage floors at 62%/27%, the overflow queues, and applies only after each full
-// 1.2s roar. Kill time under INFINITE damage is still ≥ 2×1.2s.
+// The anti-burst stack as a hard mechanism: an absurd single hit banks one second of
+// intake, QUEUES the rest in the governor, walks BOTH phase floors (62%/27% with their
+// queued overflow + full roars) as the drain crosses them, and cannot finish before the
+// 20s legal minimum. No damage is ever lost — the kill still resolves.
 function bossOverflowGates(): void {
-  section("gate 2 mechanism: phase floors + queued overflow under extreme burst");
+  section("gate 2 mechanism: governor + phase floors + queued overflow under extreme burst");
   const w = createWorld(0x0DDBA11, 5, { isSandbox: true });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
   const boss = devSpawnEnemy(w, "boss", p.x + 100, p.y);
 
   plantBullet(w, boss.x, boss.y, 1e6, 40);
-  let events = step(w, idle(1));
-  const enter1 = events.find((e) => e.t === "bossTransition" && e.entering);
-  check("a million-damage hit floors the boss at 62%", Math.abs(boss.hp - 0.62 * boss.maxHp) < 1e-6, `hp=${boss.hp}`);
-  check("the overflow is queued and logged", enter1 !== undefined && enter1.t === "bossTransition" && enter1.queued > 0,
-    enter1 && enter1.t === "bossTransition" ? `queued=${enter1.queued.toFixed(0)}` : "no event");
+  step(w, idle(1));
+  const bank = (boss.maxHp / bossIntakeEnvelopeSeconds("boss")) * BOSS_INTAKE_BANK_SECONDS;
+  check("a million-damage hit lands at most the banked second of intake",
+    boss.hp >= boss.maxHp - bank - 1e-6 && boss.hp < boss.maxHp, `hp=${boss.hp.toFixed(0)}`);
+  check("the rest is queued in the governor (never lost)",
+    boss.intake !== undefined && boss.intake.queue > 1e5, `queued=${boss.intake?.queue.toFixed(0)}`);
 
   let ticks = 1;
   let dead = false;
-  while (!dead && ticks < 60 * 10) {
-    events = step(w, idle(ticks + 1));
-    if (events.some((e) => e.t === "enemyKill" && e.kind === "boss")) dead = true;
+  let enters = 0;
+  let exits = 0;
+  while (!dead && ticks < 60 * 40) {
+    const events = step(w, idle(ticks + 1));
+    for (const e of events) {
+      if (e.t === "bossTransition" && e.entering) enters++;
+      if (e.t === "bossTransition" && !e.entering) exits++;
+      if (e.t === "enemyKill" && e.kind === "boss") dead = true;
+    }
     ticks++;
   }
   const seconds = ticks * DT;
-  check("boss dies only after BOTH full roars resolve the queued overflow", dead && seconds >= 2 * BOSS.roarDuration,
-    `death at ${seconds.toFixed(2)}s (was ~1 tick pre-reset)`);
+  // The governor subsumes the burst BEFORE the floors see it (the drain approaches each
+  // threshold at envelope rate), so the beats walk with near-zero beat-level overflow —
+  // the six-figure queue asserted above IS the overflow ledger now.
+  check("the drain walks BOTH transition beats (full roars, in order)",
+    enters === 2 && exits === 2, `enters=${enters} exits=${exits}`);
+  check("death cannot beat the 20s legal minimum, and the queued damage does finish the kill",
+    dead && seconds >= (BOSS_MIN_LEGAL_TTK.boss ?? 20) - 2 * DT, `death at ${seconds.toFixed(2)}s`);
   check("boss death ends danger: all adds despawn and the exit opens", isFloorCleared(w),
     `enemies=${w.enemies.length} pending=${w.pendingSpawns.length}`);
 }
 
 // ---- gate 3: normal/brute/elite focused TTK at representative legal builds ----
 
-function measureFocusedTtk(kind: EnemyKind, floor: number, weapon: WeaponId, picks: string[]): number {
+function measureFocusedTtk(kind: EnemyKind, floor: number, weapon: WeaponId, picks: string[], tier: EnemyTier = "standard"): number {
   const w = createWorld(0xF0C05, floor, { isSandbox: true });
   w.isGodMode = true;
   const p = w.players.get(LOCAL_ID)!;
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
   grant(w, LOCAL_ID, picks);
-  const target = devSpawnEnemy(w, kind, p.x + 140, p.y);
+  const target = tier === "standard"
+    ? devSpawnEnemy(w, kind, p.x + 140, p.y)
+    : (() => {
+      const e = createEnemy(kind, p.x + 140, p.y, floor, new Rng(9), w.nextEnemyId++, { tier });
+      w.enemies.push(e);
+      return e;
+    })();
   let ticks = 0;
   while (!target.dead && ticks < 60 * 20) {
     const aim = Math.atan2(target.y - p.y, target.x - p.x);
@@ -322,11 +357,24 @@ function normalTtkGates(): void {
   // Tier bands, measured against the same late median build on their first-eligible floors.
   const bruteHp = createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute" }).hp;
   check("brute = 2.40x scaled HP (6 x 1.72 x 2.4 -> 25)", bruteHp === 25, `hp=${bruteHp}`);
+  // §1 brute band, measured live at the first guaranteed floor with the starter pistol.
+  const bruteTtk = measureFocusedTtk("skeleton", 4, "pistol", [], "brute");
+  record("brute.f4", bruteTtk);
+  check("F4 brute focused TTK sits in the 1.8-3.2s band (starter build)",
+    bruteTtk >= 1.8 && bruteTtk <= 3.2, `ttk=${bruteTtk.toFixed(2)}s`);
+  // §1 elite band: elites carry the uniform captain-grade pool (rhte(48 x floorMult)) —
+  // one multiplier over 3-6 HP chassis can't hold a single band, a uniform pool can.
   const eliteHp = createEnemy("spitter", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp;
-  check("elite = 1.70x scaled HP (5 x 2.12 x 1.7 -> 18; one affix, never doubled stats)", eliteHp === 18, `hp=${eliteHp}`);
-  // The studio gate's elite focused-TTK band (3-6s Standard) is NOT enforced here: at the
-  // approved 1.70x tier an F6 elite measures ~1.3s focused, and closing that gap via HP
-  // would sponge (5-6x tier HP). Reported as a deviation for the balancer's elite rework.
+  check("elite = the uniform captain-grade pool (rhte(48 x 2.12) -> 102, any chassis)",
+    eliteHp === 102 && createEnemy("skeleton", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp === 102, `hp=${eliteHp}`);
+  const eliteEntry = measureFocusedTtk("skeleton", 6, "pistol", L3("hair_trigger"), "elite");
+  record("elite.f6", eliteEntry);
+  check("F6 elite focused TTK sits in the 3-6s band (F6 median build)",
+    eliteEntry >= 3 && eliteEntry <= 6, `ttk=${eliteEntry.toFixed(2)}s`);
+  const eliteLate = measureFocusedTtk("skeleton", 9, "pistol", [...L3("hair_trigger"), "glass_cannon", "glass_cannon"], "elite");
+  record("elite.f9", eliteLate);
+  check("F9 elite focused TTK stays in the 3-6s band (late median build)",
+    eliteLate >= 3 && eliteLate <= 6, `ttk=${eliteLate.toFixed(2)}s`);
   const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm" });
   check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 3 && swarm.speed === 48
     && Math.abs(swarm.radius - 16 * 0.78) < 1e-9, `hp=${swarm.hp} speed=${swarm.speed}`);
@@ -633,6 +681,7 @@ function powerBudgetGates(): void {
     w.isGodMode = true;
     const p = w.players.get(LOCAL_ID)!;
     const boss = devSpawnEnemy(w, "boss", p.x + 120, p.y);
+    boss.intake = undefined; // reward cadence under test; the governor has its own gates
     for (let t = 1; t <= 60 * 8 && !boss.dead; t++) {
       plantBullet(w, boss.x, boss.y, 1000, 30);
       step(w, idle(t));
@@ -900,6 +949,7 @@ function partyRewardGates(): void {
     w.encounterPlayers = 2; // the encounter snapshot (a real run sets this at floor build)
     b.x = 60; b.y = 60;
     const boss = devSpawnEnemy(w, "boss", a.x + 130, a.y);
+    boss.intake = undefined; // reward mechanics under test; the governor has its own gates
     for (let t = 1; t <= 60 * 10 && !boss.dead; t++) {
       plantBullet(w, boss.x, boss.y, 1000, 30);
       step(w, idle(t));
@@ -1011,6 +1061,8 @@ function gauntletGates(): void {
 
   section("corrected gate §7.4: gauntlet TTK — total 55–80s median, ≥35s high-roll, rounds ≥10s");
   const median = measureGauntlet("pistol", [...L3("hair_trigger"), "glass_cannon", "glass_cannon"]);
+  record("gauntlet.median.total", median.total);
+  median.rounds.forEach((r, i) => record(`gauntlet.median.round${i + 1}`, r));
   check("three ordered captain rounds, never overlapping",
     median.captains.join(" ") === "charger/elite shielder/elite burrower/brute", median.captains.join(" "));
   check("median-build total sits in the 55–80s gate", median.total >= 55 && median.total <= 80,
@@ -1018,10 +1070,44 @@ function gauntletGates(): void {
   check("every median round runs ≥10s", median.rounds.every((r) => r >= 10),
     median.rounds.map((r) => r.toFixed(1)).join("/"));
   const highRoll = measureGauntlet("smg", [...L3("deadeye"), "glass_cannon", "glass_cannon"]);
+  record("gauntlet.highRoll.total", highRoll.total);
   check("high-roll total stays ≥35s", highRoll.total >= 35, `total=${highRoll.total.toFixed(1)}s`);
   check("every high-roll round runs ≥10s", highRoll.rounds.every((r) => r >= 10),
     highRoll.rounds.map((r) => r.toFixed(1)).join("/"));
   process.stdout.write(`  info: gauntlet median=${median.total.toFixed(1)}s (${median.rounds.map((r) => r.toFixed(1)).join("/")}), high-roll=${highRoll.total.toFixed(1)}s\n`);
+}
+
+// ---- the intake governor: "no legal build below high-roll minimum", now a HARD floor ----
+// An unbounded planted stream (~30,000 DPS) stands in for ANY legal god build: the
+// governor's envelope + frozen-beat math guarantees the §3 minimums regardless of
+// stacking, while median/high-roll builds sit under the envelope untouched (their band
+// tests above run on the same governed sim).
+
+function governorGates(): void {
+  section("§3 hard floor: even an unbounded damage stream cannot beat the high-roll minimum");
+  for (const [kind, floor] of [["boss", 5], ["marrow", 15], ["weaver", 20], ["gilded", 25], ["choir", 30]] as Array<[EnemyKind, number]>) {
+    const w = createWorld(0x60D, floor, { isSandbox: true });
+    w.isGodMode = true;
+    const boss = devSpawnEnemy(w, kind, 900, 600);
+    let ticks = 0;
+    while (!boss.dead && ticks < 60 * 60) {
+      plantBullet(w, boss.x, boss.y, 500, 24);
+      stepWorld(w, new Map(), DT);
+      ticks++;
+    }
+    const seconds = ticks * DT;
+    const min = BOSS_MIN_LEGAL_TTK[kind] ?? 20;
+    record(`${kind}.godFloor`, seconds);
+    check(`${kind} under ~30k DPS still lives ≥ its ${min}s minimum (all damage queues, none is lost)`,
+      boss.dead && seconds >= min - 2 * DT, `ttk=${seconds.toFixed(1)}s`);
+  }
+  section("§7.4 hard floor: a god-build gauntlet still meets total ≥35s and rounds ≥10s");
+  {
+    const god = measureGauntlet("smg", [...L3("deadeye"), ...L3("glass_cannon"), ...L3("split_shot")]);
+    check("god-build gauntlet total stays ≥35s", god.total >= 35, `total=${god.total.toFixed(1)}s`);
+    check("every god-build round runs ≥10s", god.rounds.every((r) => r >= 10),
+      god.rounds.map((r) => r.toFixed(1)).join("/"));
+  }
 }
 
 // ---- studio gate §2: the mob overlap arbiter ----
@@ -1077,6 +1163,37 @@ function arbiterGates(): void {
   }
 }
 
+// Pin every measurement against the checked-in fixture file — deterministic sim, exact
+// equality. `--write-fixtures` regenerates the file after intentional balance changes.
+function fixtureGates(): void {
+  section("measured-build fixtures (deterministic sim harness — NOT live telemetry)");
+  if (process.argv.includes("--write-fixtures")) {
+    const payload = {
+      note: "Deterministic sim-harness TTK measurements (seeded worlds, scripted aggression). NOT live playtest telemetry. Regenerate: npm run fixtures:ttk",
+      builds: {
+        median: "pistol + Hair Trigger Lv3 (+ Glass Cannon stack at depth)",
+        highRoll: "smg + Deadeye Lv3 + Glass Cannon stack",
+        godFloor: "unbounded planted stream (~30,000 DPS) — the governor's hard-floor proof",
+      },
+      measurements: MEASURED,
+    };
+    writeFileSync(FIXTURES_PATH, JSON.stringify(payload, null, 2) + "\n");
+    check(`fixtures written (${Object.keys(MEASURED).length} measurements)`, true);
+    return;
+  }
+  const fixture = JSON.parse(readFileSync(FIXTURES_PATH, "utf8")) as { measurements: Record<string, number> };
+  let allMatch = true;
+  for (const [key, value] of Object.entries(fixture.measurements)) {
+    if (MEASURED[key] === undefined || Math.abs(MEASURED[key] - value) > 1e-9) {
+      allMatch = false;
+      process.stdout.write(`  MISMATCH ${key}: fixture=${value} measured=${MEASURED[key]}\n`);
+    }
+  }
+  check(`every measurement matches the checked-in fixture exactly (${Object.keys(fixture.measurements).length} pins)`,
+    allMatch && Object.keys(fixture.measurements).length === Object.keys(MEASURED).length,
+    `fixture=${Object.keys(fixture.measurements).length} measured=${Object.keys(MEASURED).length}`);
+}
+
 function main(): void {
   enemyTableGates();
   pistolBaselineGates();
@@ -1087,6 +1204,7 @@ function main(): void {
   threatBudgetGates();
   compositionCapGates();
   gauntletGates();
+  governorGates();
   partyRewardGates();
   arbiterGates();
   sustainGates();
@@ -1094,6 +1212,7 @@ function main(): void {
   powerBudgetGates();
   coopScalingGates();
   reviveGates();
+  fixtureGates();
   check("no ITEMS entry exceeds three authored levels", ITEMS.every((it) => it.descs.length === 3));
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

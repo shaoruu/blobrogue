@@ -138,8 +138,20 @@ export const TIERS: Record<EnemyTier, TierDef> = {
   swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.55, minFloor: 1, attackCdMult: 1 },
   standard: { hpMult: 1.00, speedMult: 1.00, radiusMult: 1.00, drawMult: 1.00, threatCost: 1.0, minFloor: 1, attackCdMult: 1 },
   brute: { hpMult: 2.40, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 2.2, minFloor: 4, attackCdMult: 1 },
+  // The elite's hpMult is nominal: elite HP is a UNIFORM captain-grade pool (see
+  // ELITE_BASE_HP below), not a chassis multiple — the gate's 3–6s focused band cannot
+  // hold across 4-HP and 6-HP archetypes with one multiplier.
   elite: { hpMult: 1.70, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 2.8, minFloor: 6, attackCdMult: 0.8 },
 };
+
+// The corrected gate §1 pins elite focused TTK at 3–6s in every mode — a mini-captain
+// fight, not a tinted mob. One multiplier over per-kind bases can't deliver that band
+// (a 3-HP orbiter and a 6-HP skeleton diverge 2×), so elites carry one uniform HP pool
+// scaled by the same §3 floor curve: rhte(48 × floorMult) lands 102 at F6 and 125 at F9 —
+// measured in the 3–6s band at the depth-representative median builds (see balance
+// tests). The visible modifier set (speed, 20% faster commits, death-split) is unchanged;
+// damage is never touched (no blanket damage).
+export const ELITE_BASE_HP = 48;
 
 // Brute damage rule: only its authored, clearly telegraphed commitment (the skeleton lunge)
 // deals 2 — ordinary contact stays 1. No tier ever blanket-multiplies damage.
@@ -516,6 +528,46 @@ export const GAUNTLET = {
 export function gauntletCaptainHp(round: GauntletRound): number {
   return Math.round((round.hpFrac * MARROW.baseHp) / 10) * 10;
 }
+
+// ---- §3/§7.4 the boss damage-intake governor ("no legal build below high-roll minimum") ----
+// The corrected gate demands a HARD floor: no legal build may kill a boss under its
+// high-roll minimum. Blessing stacking makes that unreachable by HP alone (a 9-pick god
+// build triples the median build's DPS), so the anti-burst contract that already governs
+// transition beats (hard floors + queued overflow, never immunity) extends to the whole
+// fight: a boss accepts damage through a per-second intake envelope sized so that even
+// unbounded DPS cannot finish faster than the minimum; excess damage QUEUES and drains
+// through the same envelope (every point still lands — reduction of RATE, never of
+// damage). Median and representative high-roll builds sit far below the envelope and
+// never touch it (verified in the balance tests).
+
+export const BOSS_MIN_LEGAL_TTK: Readonly<Partial<Record<EnemyKind, number>>> = {
+  boss: 20, marrow: 20, weaver: 20, gilded: 22, choir: 22,
+};
+
+// A small burst bank so openers land with full weight; the envelope math below repays it.
+export const BOSS_INTAKE_BANK_SECONDS = 1.0;
+
+// Seconds of pure damage the envelope allows. The governor FREEZES during transition
+// beats (their time is strictly additive), so the worst-case kill is
+//   bank + envelope + forced-beat time ≥ minTtk:
+// envelope = minTtk − forced + bank + a half-second guard for tick rounding.
+export function bossIntakeEnvelopeSeconds(kind: EnemyKind): number {
+  const minTtk = BOSS_MIN_LEGAL_TTK[kind] ?? 20;
+  const forced =
+    kind === "boss" ? 2 * BOSS.roarDuration
+    : kind === "marrow" ? 2 * MARROW.shieldMinDuration
+    : kind === "weaver" ? 2 * WEAVER.moltDuration
+    : kind === "gilded" ? 2 * GILDED.sanctifyDuration
+    : kind === "choir" ? 2 * CHOIR.splitMinDuration
+    : 0;
+  return minTtk - forced + BOSS_INTAKE_BANK_SECONDS + 0.5;
+}
+
+// Gauntlet captains ride the same governor against §7.4's "each round ≥10s": damage can
+// start the moment a captain enters (grace gates commits, not intake), so the envelope
+// covers the full ten seconds plus the bank and rounding guard; the median build only
+// grazes it on R1.
+export const CAPTAIN_INTAKE_ENVELOPE_SECONDS = 11.5;
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----
 // The 4–6× strong-run fantasy is EXPRESSIVE capability (pellets/pierce/status/crit/

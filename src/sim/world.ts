@@ -28,6 +28,7 @@ import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
+  BOSS_INTAKE_BANK_SECONDS, CAPTAIN_INTAKE_ENVELOPE_SECONDS,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
@@ -1091,6 +1092,25 @@ function bossBeatOf(e: Enemy): BossBeatDef {
 // `isOverflow` marks a transition beat's queued damage being released: it already passed
 // every reduction when it first landed, so it must not be chipped a second time.
 function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[], isOverflow = false): void {
+  if (!isOverflow) {
+    // The Gilded Warden's plate: chip damage while closed, full damage through the EXPOSED
+    // recover after its commitments — tempo, never immunity (see isGildedExposed). The chip
+    // lands BEFORE the governor so the intake envelope stays HP-true.
+    if (e.kind === "gilded" && !isGildedExposed(e)) dmg *= GILDED.armorChip;
+    // The intake governor (gate: no legal build below the high-roll minimum): damage past
+    // the envelope QUEUES and drains at the envelope rate — see tickIntakeGovernor.
+    if (e.intake) {
+      const allowed = Math.min(dmg, e.intake.budget);
+      e.intake.budget -= allowed;
+      const excess = dmg - allowed;
+      if (excess > 0) {
+        e.intake.queue += excess;
+        e.intake.by = by;
+      }
+      if (allowed <= 0) return;
+      dmg = allowed;
+    }
+  }
   if (!e.boss) {
     e.hp -= dmg;
     return;
@@ -1110,11 +1130,26 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
     }
     return;
   }
-  // The Gilded Warden's plate: chip damage while closed, full damage through the EXPOSED
-  // recover after its commitments — tempo, never immunity (see isGildedExposed).
-  if (!isOverflow && e.kind === "gilded" && !isGildedExposed(e)) dmg *= GILDED.armorChip;
   e.hp -= dmg;
   checkBossTransition(w, e, ev);
+}
+
+// Drain the governor: replenish the envelope, then release queued damage through the
+// ordinary post-mitigation path (beat reductions/floors still apply). Attribution keeps
+// the last governed striker so kills stay credited.
+function tickIntakeGovernor(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const g = e.intake;
+  if (!g) return;
+  // Frozen through transition beats: their forced time is strictly additive to the
+  // envelope, which is exactly how the minimum-TTK math is sized.
+  if (e.boss && e.boss.roar) return;
+  g.budget = Math.min(g.budget + g.rate * dt, g.rate * BOSS_INTAKE_BANK_SECONDS);
+  if (g.queue <= 0 || g.budget <= 0) return;
+  const release = Math.min(g.queue, g.budget);
+  g.queue -= release;
+  g.budget -= release;
+  damageEnemy(w, g.by, e, release, ev, true);
+  if (e.hp <= 0 && !e.dead) killEnemy(w, ownerOf(w, g.by), e, ev);
 }
 
 // The Warden's plate hangs open through the long recover after each committed quake or
@@ -1668,6 +1703,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
     if (e.captainPhase !== undefined) tickCaptainPhase(e, ev);
+    if (e.intake) tickIntakeGovernor(w, e, dt, ev);
     if (e.spawnTimer > 0) e.spawnTimer = e.spawnTimer > dt ? e.spawnTimer - dt : 0;
     if (e.attack.cooldown > 0) e.attack.cooldown = e.attack.cooldown > dt ? e.attack.cooldown - dt : 0;
     // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
@@ -3345,6 +3381,8 @@ function spawnGauntletRound(w: WorldState, round: (typeof GAUNTLET.rounds)[numbe
     const hp = Math.round((gauntletCaptainHp(round) * coopBossHpMult(w.encounterPlayers)) / 10) * 10;
     captain.hp = captain.maxHp = hp;
     captain.captainPhase = 1;
+    const rate = hp / CAPTAIN_INTAKE_ENVELOPE_SECONDS;
+    captain.intake = { rate, budget: rate * BOSS_INTAKE_BANK_SECONDS, queue: 0, by: null };
     ev.push({ t: "cue", name: "bossSpawn", x: captain.x, y: captain.y, rate: 0.8, gain: 0.9, trauma: 0.15 });
   }
   for (let i = 0; i < round.addCount; i++) {

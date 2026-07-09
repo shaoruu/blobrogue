@@ -127,6 +127,11 @@ export interface Enemy extends Entity {
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
   // tick that finishes a kill credits the correct player's combo/loot. null before any burn.
   burnOwner: PlayerId | null;
+  // The damage-intake governor (corrected gate: "no legal build below high-roll minimum").
+  // Bosses and gauntlet captains accept damage through a per-second envelope; the excess
+  // QUEUES here and drains at the same rate — rate reduction, never lost damage. Absent on
+  // ordinary enemies.
+  intake?: { rate: number; budget: number; queue: number; by: PlayerId | null };
   attack: AttackState;
   boss: BossState | null; // set only on the boss
 }
