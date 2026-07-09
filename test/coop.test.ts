@@ -22,7 +22,7 @@ import { domCanvas, domMinimap, domOverlay } from "./harness/domShim.js";
 
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, loadFloorIntoWorld, devSpawnEnemy,
-  stepWorldPhase, chooseBlessingInWorld, acquireWeaponInWorld,
+  stepWorldPhase, chooseBlessingInWorld, acquireWeaponInWorld, playersAtExit,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -274,6 +274,30 @@ async function headlessClientSpectateTests(): Promise<void> {
   check("WAITING readout names the still-picking teammate", wait !== null && wait.includes("WAITING FOR 1/3 PLAYER"), wait ?? "null");
   world.pendingBlessings.clear();
 
+  // Exit coordination readout: authoritative exr drives both perspectives of the label.
+  world.enemies = [];
+  world.pendingSpawns = [];
+  const exitX = world.dungeon.exit.x * 48 + 24, exitY = world.dungeon.exit.y * 48 + 24;
+  mateA.x = exitX; mateA.y = exitY; // the living teammate stages on the stairs; self is away
+  deliverSnap();
+  game.tick(1 / 60);
+  const stragglerLabel: string | null = game.exitWaitLabel();
+  check("straggler reads STAND ON THE STAIRS with the staged count",
+    stragglerLabel !== null && stragglerLabel.includes("WAITING AT EXIT \u00b7 1/2") && stragglerLabel.includes("STAND ON THE STAIRS"),
+    stragglerLabel ?? "null");
+  self.x = exitX; self.y = exitY;
+  mateA.x = exitX - 400; mateA.y = exitY;
+  deliverSnap();
+  game.tick(1 / 60);
+  const stagedLabel: string | null = game.exitWaitLabel();
+  check("staged player reads WAITING FOR the missing teammate",
+    stagedLabel !== null && stagedLabel.includes("WAITING AT EXIT \u00b7 1/2") && stagedLabel.includes("WAITING FOR"),
+    stagedLabel ?? "null");
+  mateA.x = exitX; mateA.y = exitY;
+  deliverSnap();
+  game.tick(1 / 60);
+  check("a satisfied gate clears the exit readout (the blessing gate takes over)", game.exitWaitLabel() === null);
+
   check("no exit fired during the whole down/spectate/revive pass", exits === 0);
 
   section("headless client: a snapshot from the WRONG world bails to the lobby (Sev-0 guard)");
@@ -363,6 +387,92 @@ function blessingGateTests(): void {
     check("the unanswered offer expired and the party descended", w.floor === 2, `after ${(ticks * DT).toFixed(1)}s`);
     check("the AFK member got nothing from the lapsed offer", ps[2].ownedItemIds.length === 0);
     check("timeout matches the 60s contract", C.BLESSING_OFFER_TTL === 60);
+  }
+}
+
+// ---- 2b. party exit readiness (the descend gate's own predicate, on the wire) ----
+
+function exitReadinessTests(): void {
+  const exitOf = (w: WorldState) => ({ ex: w.dungeon.exit.x * TILE + TILE / 2, ey: w.dungeon.exit.y * TILE + TILE / 2 });
+
+  for (const size of [2, 3, 4]) {
+    section(`exit readiness (P${size}): exr counts stage-ins exactly; no descend until everyone`);
+    const { w, ps } = partyWorld(0xE817 + size, 1, size);
+    const { ex, ey } = exitOf(w);
+    // The exit is unusable while enemies remain: nobody reads as staged even ON the tile.
+    for (const p of ps) { p.x = ex; p.y = ey; }
+    check("uncleared floor stages nobody", playersAtExit(w).length === 0);
+    w.enemies = [];
+    w.pendingSpawns = [];
+    // Stage members one at a time; the count and the gate must track exactly.
+    for (const p of ps) { p.x = ex - 300; p.y = ey; }
+    for (let i = 0; i < size; i++) {
+      ps[i].x = ex; ps[i].y = ey;
+      const staged = playersAtExit(w);
+      check(`staged ${i + 1}/${size} reads exactly that`, staged.length === i + 1 && staged.includes(ps[i].id), staged.join(","));
+      if (i < size - 1) {
+        stepWorldPhase(w, DT, []);
+        check(`no offers/descend at ${i + 1}/${size}`, w.floor === 1 && w.pendingBlessings.size === 0, `floor=${w.floor}`);
+      }
+    }
+    // Everyone staged: the gate raises the offers, then the picks release the descend.
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("all-at-exit raises every member's offer", ev.filter((e) => e.t === "offerBlessing").length === size);
+    const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
+    const snapB = buildSnapshot(w, ps[size - 1].id, 0, [], 0, false, {});
+    check("exr rides both wires identically (and matches pnd's party)",
+      snapA.t === "snap" && snapB.t === "snap"
+      && snapA.exr.slice().sort().join(",") === snapB.exr.slice().sort().join(",")
+      && snapA.exr.length === size && snapA.pnd.length === size);
+    for (let i = 0; i < size; i++) chooseBlessingInWorld(w, ps[i].id, ITEMS[i % ITEMS.length]);
+    stepWorldPhase(w, DT, []);
+    check("picks resolved -> the party descends", w.floor === 2, `floor=${w.floor}`);
+  }
+
+  section("exit readiness: a member LEAVING releases the gate for the rest");
+  {
+    const { w, ps } = partyWorld(0xE830, 1, 3);
+    const { ex, ey } = exitOf(w);
+    w.enemies = []; w.pendingSpawns = [];
+    ps[0].x = ex; ps[0].y = ey;
+    ps[1].x = ex; ps[1].y = ey;
+    ps[2].x = ex - 300; ps[2].y = ey; // never shows up
+    stepWorldPhase(w, DT, []);
+    check("gate held while the straggler is connected", w.floor === 1 && w.pendingBlessings.size === 0);
+    removePlayerFromWorld(w, ps[2].id); // rage-quit / disconnect
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("the departure re-scopes the gate to the remaining party",
+      ev.filter((e) => e.t === "offerBlessing").length === 2 && playersAtExit(w).length === 2);
+    chooseBlessingInWorld(w, ps[0].id, ITEMS[0]);
+    chooseBlessingInWorld(w, ps[1].id, ITEMS[1]);
+    stepWorldPhase(w, DT, []);
+    check("the remaining pair descends", w.floor === 2, `floor=${w.floor}`);
+  }
+
+  section("exit readiness: a DOWNED member is neither required nor listed — and rides the rescue");
+  {
+    const { w, ps } = partyWorld(0xE831, 1, 3);
+    const { ex, ey } = exitOf(w);
+    w.enemies = []; w.pendingSpawns = [];
+    const downed = ps[2];
+    downed.x = ex; downed.y = ey; // down ON the stairs — still never listed as staged
+    downed.invuln = 0; downed.hp = 1;
+    plantEnemyBullet(w, downed, 5);
+    stepWorldPhase(w, DT, []);
+    check("member downed on the exit tile", downed.isDown);
+    check("a downed body is not exit-ready even on the stairs", !playersAtExit(w).includes(downed.id));
+    ps[0].x = ex; ps[0].y = ey;
+    ps[1].x = ex; ps[1].y = ey;
+    const ev: SimEvent[] = [];
+    stepWorldPhase(w, DT, ev);
+    check("the LIVING pair satisfies the gate; every member (downed too) gets the offer",
+      ev.filter((e) => e.t === "offerBlessing").length === 3);
+    for (let i = 0; i < 3; i++) chooseBlessingInWorld(w, ps[i].id, ITEMS[i]);
+    stepWorldPhase(w, DT, []);
+    check("descend fires and rescues the downed member at the revive HP",
+      w.floor === 2 && !downed.isDown && downed.hp === REVIVE.hp, `floor=${w.floor} hp=${downed.hp}`);
   }
 }
 
@@ -664,6 +774,7 @@ async function main(): Promise<void> {
   spectateSelectionTests();
   await headlessClientSpectateTests();
   blessingGateTests();
+  exitReadinessTests();
   weaponEconomyTests();
   wireCoherenceTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

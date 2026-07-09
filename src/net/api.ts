@@ -60,6 +60,9 @@ export interface RoomDoc {
   status: RoomStatus;
 }
 
+// Where a member's client sits in the room lifecycle (drives the replay readiness gate).
+export type RoomPhase = "lobby" | "playing" | "over";
+
 export interface PresenceDoc {
   playerId: string;
   name: string;
@@ -74,6 +77,7 @@ export interface PresenceDoc {
   colorIndex: number;
   reviveNonce: number;
   updatedAt: number;
+  phase: RoomPhase;
 }
 
 // A type alias (not an interface) so it satisfies Convex's `DefaultFunctionArgs`
@@ -124,5 +128,6 @@ export const api = {
     update: makeFunctionReference<"mutation", PresenceUpdateArgs, null>("presence:update"),
     list: makeFunctionReference<"query", { roomId: string }, PresenceDoc[]>("presence:list"),
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
+    setPhase: makeFunctionReference<"mutation", { roomId: string; playerId: string; phase: RoomPhase }, null>("presence:setPhase"),
   },
 };

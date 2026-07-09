@@ -216,6 +216,23 @@ async function main(): Promise<void> {
     });
   }
 
+  // 5. Party exit coordination: ian staged on the cleared stairs, gf still looting — the
+  // chevron points at her and the authoritative exr drives the WAITING AT EXIT readout.
+  {
+    const { w, identities } = partyScene(0xE817, 2, ["s0", "s1"]);
+    w.enemies = [];
+    w.pendingSpawns = [];
+    const me = w.players.get("s0")!;
+    const gf = w.players.get("s1")!;
+    const ex = w.dungeon.exit.x * TILE + TILE / 2, ey = w.dungeon.exit.y * TILE + TILE / 2;
+    me.x = ex; me.y = ey;
+    gf.x = ex - 380; gf.y = ey + 140;
+    await capture({
+      name: "exit-waiting", world: w, selfId: "s0", identities, ticks: 40,
+      setup: (game) => game.input.mouseMove(560, 320),
+    });
+  }
+
   // Also snap tile x TILE alignment sanity so the shots always frame something real.
   process.stdout.write(`done (TILE=${TILE})\n`);
 }

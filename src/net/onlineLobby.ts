@@ -1,6 +1,6 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
-import type { PresenceDoc, RoomStatus } from "./api.js";
+import type { PresenceDoc, RoomPhase, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
 
 // One room session for AUTHORITATIVE online play. Convex hosts only the social handshake —
@@ -20,6 +20,8 @@ export interface LobbyPlayer {
   name: string;
   colorIndex: number;
   isHost: boolean;
+  // Where this member's client sits in the room lifecycle ("lobby" = ready to start).
+  phase: RoomPhase;
 }
 
 export class OnlineLobby {
@@ -156,7 +158,29 @@ export class OnlineLobby {
     return this.presenceRows
       .slice()
       .sort((a, b) => (a.playerId === this.hostPlayerId ? -1 : b.playerId === this.hostPlayerId ? 1 : a.name.localeCompare(b.name)))
-      .map((r) => ({ playerId: r.playerId, name: r.name, colorIndex: r.colorIndex, isHost: r.playerId === this.hostPlayerId }));
+      .map((r) => ({
+        playerId: r.playerId, name: r.name, colorIndex: r.colorIndex,
+        isHost: r.playerId === this.hostPlayerId,
+        // Defensive default: rows from a backend deployed before the phase field read as
+        // ready, so the gate can never wedge on missing data.
+        phase: r.phase ?? "lobby",
+      }));
+  }
+
+  // Mark where THIS client sits in the room lifecycle. Fire-and-forget: phases drive the
+  // replay readiness readout/gate, and a missed write only means this member briefly reads
+  // as its previous phase (the row's stale timeout still bounds everything).
+  setPhase(phase: RoomPhase): void {
+    if (!this.roomId || !this.selfPlayerId) return;
+    this.client.mutation(api.presence.setPhase, { roomId: this.roomId, playerId: this.selfPlayerId, phase }).catch(() => {});
+  }
+
+  // Members whose clients are still marked in-run — the ones the replay's START gate waits
+  // for. A crashed client's row goes stale and drops off the roster (the explicit timeout),
+  // so this list always drains; members at the results screen auto-launch on start and are
+  // therefore already "ready".
+  membersStillInRun(): LobbyPlayer[] {
+    return this.players().filter((p) => p.phase === "playing" && p.playerId !== this.selfPlayerId);
   }
 
   // Host flips the lobby live; every subscribed member sees status "playing" and connects.

@@ -66,7 +66,28 @@ export const list = query({
         colorIndex: r.colorIndex,
         reviveNonce: r.reviveNonce,
         updatedAt: r.updatedAt,
+        phase: r.phase ?? "lobby",
       }));
+  },
+});
+
+// Room-lifecycle phase for the replay flow: the client marks where it sits ("lobby" /
+// "playing" / "over") at each screen transition, and the lobby's START gate waits for
+// members still marked "playing". Doubles as a keepalive (bumps updatedAt), so a client
+// that stops phasing goes stale and releases the gate — the explicit roster timeout.
+export const setPhase = mutation({
+  args: {
+    roomId: v.id("rooms"),
+    playerId: v.id("players"),
+    phase: v.union(v.literal("lobby"), v.literal("playing"), v.literal("over")),
+  },
+  handler: async (ctx, { roomId, playerId, phase }) => {
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!row) return;
+    await ctx.db.patch(row._id, { phase, updatedAt: Date.now() });
   },
 });
 

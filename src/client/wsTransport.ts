@@ -701,6 +701,12 @@ export class WSTransport implements Transport {
     return this.latestSnap?.pnd ?? [];
   }
 
+  // Living party members standing at the cleared exit — the descend gate's own readiness
+  // predicate on the wire (drives the "WAITING AT EXIT · N/M" coordination readout).
+  exitReadyParty(): PlayerId[] {
+    return this.latestSnap?.exr ?? [];
+  }
+
   // Latch-consume the "world geometry was rebuilt" signal (initial join + every descend). The
   // game refreshes its cosmetic floor state (seed-keyed torches, biome, music) off it.
   consumeWorldRebuilt(): { seed: number; floor: number } | null {

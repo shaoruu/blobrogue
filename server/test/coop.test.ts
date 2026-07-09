@@ -142,6 +142,86 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
+  await test("wipe -> replay: the room hosts a FRESH shared world every round, nobody stranded", async () => {
+    const s = await startTestServer();
+    try {
+      const seeds: number[] = [];
+      // Three rounds in the same room: the first run, the replay, and the replay's replay
+      // (idempotence). Each round is a fresh pair of client connections — exactly what the
+      // lobby's regroup-then-START produces.
+      for (let round = 1; round <= 3; round++) {
+        const a = new Bot({ url: s.url, secret: s.secret, playerId: `ian-r${round}`, world: "room:AGN", script: () => idle() });
+        const b = new Bot({ url: s.url, secret: s.secret, playerId: `gf-r${round}`, world: "room:AGN", script: () => idle() });
+        a.start(); b.start();
+        const ready = await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+        check(`round ${round}: both members joined the room's world (nobody stranded)`, ready);
+        await sleep(250);
+        const world = s.server.getWorld("room:AGN")!;
+        seeds.push(world.state.seed);
+        const sa = a.transport.getLatestSnapshot()!;
+        const sb = b.transport.getLatestSnapshot()!;
+        check(`round ${round}: a FRESH run (floor 1, not over) on both wires`,
+          !sa.over && !sb.over && sa.floor === 1 && sb.floor === 1);
+        check(`round ${round}: both wires carry the same seed/rev`,
+          sa.seed === sb.seed && sa.seed === world.state.seed && sa.rev === sb.rev);
+        check(`round ${round}: identical enemy sets`,
+          sa.enemies.map((e) => e.id).sort((x, y) => x - y).join(",") === sb.enemies.map((e) => e.id).sort((x, y) => x - y).join(",")
+          && sa.enemies.length > 0);
+
+        // Wipe the party in one tick: both members die with no standing ally left.
+        for (const bot of [a, b]) {
+          const p = world.state.players.get(bot.serverId()!)!;
+          p.hp = 1; p.invuln = 0; p.dashInvuln = 0;
+          world.state.bullets.push({
+            x: p.x, y: p.y, vx: 0, vy: 0, radius: 8, life: 1, friendly: false,
+            owner: null, damage: 5, color: "#f00", pierce: 0, hitList: null, isCrit: false,
+          });
+        }
+        const ended = await waitUntil(() => a.transport.isRunOver() || a.transport.getStatus() === "closed", 3000);
+        check(`round ${round}: clients observed the wipe (terminal snapshot or server close)`, ended);
+        // The server closes every socket after the final snapshot and RELEASES the world —
+        // the replay can never inherit the dead run.
+        const released = await waitUntil(() => s.server.getWorld("room:AGN") === undefined, 3000);
+        check(`round ${round}: old sockets closed + world released after the wipe`, released);
+        a.stop(); b.stop();
+      }
+      check("every replay rolled its own fresh run seed", new Set(seeds).size === seeds.length, seeds.join(","));
+    } finally { await s.close(); }
+  });
+
+  await test("exit readiness (exr) rides both wires identically and mirrors the descend gate", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "stair-a", world: "room:EXIT", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "stair-b", world: "room:EXIT", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+      const world = s.server.getWorld("room:EXIT")!;
+      // Clear the floor authoritatively and stage A on the stairs; B stays at spawn.
+      world.state.enemies = [];
+      world.state.pendingSpawns = [];
+      const ex = world.state.dungeon.exit.x * TILE + TILE / 2, ey = world.state.dungeon.exit.y * TILE + TILE / 2;
+      const aSim = world.state.players.get(a.serverId()!)!;
+      aSim.x = ex; aSim.y = ey;
+      await waitUntil(() => (a.transport.getLatestSnapshot()?.exr.length ?? 0) === 1, 2000);
+      const sa = a.transport.getLatestSnapshot()!;
+      const sb = b.transport.getLatestSnapshot()!;
+      check("both wires agree exactly one member is staged", sa.exr.length === 1 && sb.exr.length === 1);
+      check("both wires agree on WHO is staged", sa.exr[0] === a.serverId() && sb.exr[0] === a.serverId());
+      check("client transport surfaces the readiness set", a.transport.exitReadyParty().length === 1);
+      check("no descend while the gate waits", sa.floor === 1 && world.state.floor === 1);
+
+      // B stages too: the gate satisfies and immediately raises the party's blessing offers.
+      const bSim = world.state.players.get(b.serverId()!)!;
+      bSim.x = ex; bSim.y = ey;
+      const offered = await waitUntil(() => (b.transport.getLatestSnapshot()?.pnd.length ?? 0) === 2, 2000);
+      check("all-at-exit flips straight into the party blessing gate (pnd on both wires)",
+        offered && (a.transport.getLatestSnapshot()?.pnd.length ?? 0) === 2);
+      check("still floor 1 until the picks resolve", world.state.floor === 1);
+      a.stop(); b.stop();
+    } finally { await s.close(); }
+  });
+
   await test("re-enabled interest filtering stays COHERENT: co-located clients agree; the party always ships", async () => {
     const s = await startTestServer({ interestRadius: 300 });
     try {

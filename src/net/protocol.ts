@@ -11,7 +11,7 @@
 // field type-checked before the client trusts it).
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
-import { isFloorCleared } from "../sim/world.js";
+import { isFloorCleared, playersAtExit } from "../sim/world.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
   PropKind, PickupKind, ChestKind,
@@ -45,9 +45,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // revive-channel key), a semantic `spec` message names a downed player's spectate target
 // (the server centers that client's interest view on it), PlayerWire carries `rv`
 // (authoritative revive progress for the reviver-side ring), snapshots carry `wid` (the
-// authoritative world id, so a client can PROVE it shares its party's room) and `pnd` (the
-// players whose blessing picks currently hold the descend gate), and dealer_weapon pickups
-// stock the party shop. Client->server messages changed, so the version bumps.
+// authoritative world id, so a client can PROVE it shares its party's room), `pnd` (the
+// players whose blessing picks currently hold the descend gate) and `exr` (the living
+// players standing at the cleared exit — the descend gate's own readiness predicate), and
+// dealer_weapon pickups stock the party shop. Client->server messages changed, so the
+// version bumps.
 export const PROTOCOL_VERSION = 5;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
@@ -213,6 +215,9 @@ export type ServerMsg =
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
       pnd: PlayerId[];           // players whose blessing picks currently hold the descend gate
                                  // (drives the party-wide "WAITING FOR N PLAYERS…" readout)
+      exr: PlayerId[];           // living players standing at the cleared exit — the SAME
+                                 // predicate the descend gate requires, on the wire (drives
+                                 // the "WAITING AT EXIT · N/M" coordination readout)
       evTo: number;              // highest committed event id — the client acks up to here even
                                  // when every pending event was interest-filtered away for it
       self: SelfWire | null;     // authoritative local player (null until spawned)
@@ -636,10 +641,12 @@ function decodeServerMsg(raw: string): ServerMsg {
     case "snap": {
       const wid = o.wid;
       if (typeof wid !== "string" || wid.length > 64) throw new ProtocolError("bad wid");
-      const pnd = arr(o.pnd, "pnd").map((p) => {
-        if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError("bad pnd entry");
+      const pidList = (k: "pnd" | "exr"): PlayerId[] => arr(o[k], k).map((p) => {
+        if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError(`bad ${k} entry`);
         return p;
       });
+      const pnd = pidList("pnd");
+      const exr = pidList("exr");
       return {
         t: "snap",
         tick: intOf(o, "tick", 0, Number.MAX_SAFE_INTEGER),
@@ -653,6 +660,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
         pnd,
+        exr,
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
         self: o.self === null ? null : validateSelfWire(o.self),
         players: arr(o.players, "players").map(validatePlayerWire),
@@ -936,6 +944,7 @@ export function buildSnapshot(
     floor: w.floor,
     cleared: isFloorCleared(w),
     pnd: [...w.pendingBlessings.keys()],
+    exr: playersAtExit(w),
     evTo,
     self: self ? toSelfWire(self) : null,
     players,

@@ -313,7 +313,10 @@ export class Game {
   private tiles = new TileSet();
   private minimap: Minimap;
   private hud: Hud;
-  private onGameOver: (result: RunResult) => void;
+  // isPartyWiped distinguishes the authoritative full-wipe end (the whole room is done —
+  // the menu may reopen the room's lobby) from a mere lost connection (the run may still
+  // be live for the rest of the party — the room must be left alone).
+  private onGameOver: (result: RunResult, isPartyWiped: boolean) => void;
   private onExit: (reason?: ExitReason) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
@@ -458,7 +461,7 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason) => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult, isPartyWiped: boolean) => void, onExit: (reason?: ExitReason) => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
@@ -2011,7 +2014,9 @@ export class Game {
       comboColor: comboTier.color,
       comboFrac: this.comboTimer / COMBO_WINDOW,
       items: this.collapsedItems(),
-      waitLabel: this.blessingWaitLabel(),
+      // One coordination slot: an open blessing gate outranks exit staging (picks always
+      // resolve before the descend, so the messages can never both apply).
+      waitLabel: this.blessingWaitLabel() ?? this.exitWaitLabel(),
     });
   }
 
@@ -2029,6 +2034,26 @@ export class Game {
     const names = others.map((id) => (remotes.find((r) => r.playerId === id)?.name ?? "teammate").toUpperCase());
     const total = remotes.length + 1;
     return `WAITING FOR ${others.length}/${total} PLAYER${others.length === 1 ? "" : "S"}\u2026 ${names.join(" \u00b7 ")} PICKING A BLESSING`;
+  }
+
+  // The party exit-coordination readout, mirroring the authoritative descend gate exactly
+  // (the snapshot's exr IS playersAtExit). Shows only while coordination is actually owed:
+  // a cleared party floor, somebody staged on the stairs, somebody required still missing.
+  // Downed members aren't required (the descend rescues them) — same rule as the gate.
+  private exitWaitLabel(): string | null {
+    if (this.mode !== "online" || !this.wsTransport || !this.wsTransport.isFloorCleared()) return null;
+    const remotes = this.wsTransport.remotePlayers();
+    const livingRemotes = remotes.filter((r) => !r.isDown);
+    const required = livingRemotes.length + (this.isDown ? 0 : 1);
+    if (required <= 1) return null;
+    const exr = this.wsTransport.exitReadyParty();
+    if (exr.length === 0 || exr.length >= required) return null;
+    const selfId = this.wsTransport.getSelfServerId();
+    if (!this.isDown && (selfId === null || !exr.includes(selfId))) {
+      return `WAITING AT EXIT \u00b7 ${exr.length}/${required} \u2014 STAND ON THE STAIRS`;
+    }
+    const missing = livingRemotes.filter((r) => !exr.includes(r.playerId)).map((r) => r.name.toUpperCase());
+    return `WAITING AT EXIT \u00b7 ${exr.length}/${required}${missing.length > 0 ? ` \u2014 WAITING FOR ${missing.join(" \u00b7 ")}` : ""}`;
   }
 
   // The player's owned blessing defs from the authoritative source: online that is the server's
@@ -2059,16 +2084,18 @@ export class Game {
   }
 
   private openStats() {
-    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean }> | null = null;
+    let roster: Array<{ name: string; isYou: boolean; color: string; isDown: boolean; isAtExit: boolean }> | null = null;
     if (this.coop) {
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown },
-        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
+        { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isAtExit: false },
+        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isAtExit: false })),
       ];
     } else if (this.mode === "online" && this.wsTransport) {
+      const exr = this.wsTransport.exitReadyParty();
+      const selfId = this.wsTransport.getSelfServerId();
       roster = [
-        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown },
-        ...this.wsTransport.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown })),
+        { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isAtExit: selfId !== null && exr.includes(selfId) },
+        ...this.wsTransport.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isAtExit: exr.includes(r.playerId) })),
       ];
     }
     this.hud.showStats({
@@ -2081,7 +2108,7 @@ export class Game {
     });
   }
 
-  private gameOver() {
+  private gameOver(isPartyWiped = true) {
     if (!this.isRunning) return;
     this.isRunning = false;
     this.syncInputContext();
@@ -2096,17 +2123,20 @@ export class Game {
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
+    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart }, isPartyWiped);
   }
 
   // Online transport terminal states end the run cleanly instead of freezing the last frame:
   // once we were in the authoritative world, a closed/errored socket IS the end of this run
   // (the server also closes the socket after a game over — same path). If the connection never
-  // became ready (server unreachable / rejected), return to the menu instead.
+  // became ready (server unreachable / rejected), return to the menu instead. This path is
+  // NOT proof of a party wipe (the wipe paths are the gameOver event and the isRunOver
+  // snapshot, both handled before the close arrives) — a kicked/crashed client must not
+  // flip the room's lobby while its party still fights.
   private onOnlineStatus(s: "connecting" | "open" | "closed" | "error") {
     if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
     if (s !== "closed" && s !== "error") return;
-    if (this.wsTransport.isReady()) this.gameOver();
+    if (this.wsTransport.isReady()) this.gameOver(false);
     else this.quitToMenu("connect_failed");
   }
 
@@ -2300,6 +2330,7 @@ export class Game {
     this.renderMeleeSwing();
     this.renderPlayer();
     this.renderReviveRings();
+    this.renderExitCoordination();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     this.renderWorldLabels();
@@ -3468,6 +3499,55 @@ export class Game {
       const sy = this.renderPrevY + (this.py - this.renderPrevY) * a - cam.y;
       drawProgress(sx, sy, this.p.reviveProgress / REVIVE.channel);
       label(sx, sy, "A TEAMMATE IS REVIVING YOU\u2026", "#8affc0");
+    }
+  }
+
+  // World-space party exit coordination, shown only while the descend gate is actually
+  // waiting on someone: a pulsing chevron from the local player toward the STAIRS while
+  // teammates stand staged there, and — once staged yourself — chevrons toward each living
+  // teammate the gate still needs. Pure reads of the authoritative exr; nothing sim-side.
+  private renderExitCoordination() {
+    if (this.mode !== "online" || !this.wsTransport || this.isDown || !this.isRunning) return;
+    if (!this.wsTransport.isFloorCleared()) return;
+    const remotes = this.remotes();
+    const livingRemotes = remotes.filter((r) => !r.isDown);
+    if (livingRemotes.length === 0) return;
+    const exr = this.wsTransport.exitReadyParty();
+    const required = livingRemotes.length + 1;
+    if (exr.length === 0 || exr.length >= required) return;
+    const selfId = this.wsTransport.getSelfServerId();
+    const isSelfAt = selfId !== null && exr.includes(selfId);
+    const chevron = (fromX: number, fromY: number, angle: number, color: string) => {
+      const { ctx, cam } = this;
+      const pulse = 2.5 * Math.sin(this.animClock * 5);
+      const cx = fromX + Math.cos(angle) * (58 + pulse) - cam.x;
+      const cy = fromY + Math.sin(angle) * (58 + pulse) - cam.y;
+      ctx.save();
+      ctx.globalAlpha = 0.75 + 0.2 * Math.sin(this.animClock * 5);
+      ctx.fillStyle = color;
+      ctx.translate(cx, cy);
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(9, 0);
+      ctx.lineTo(-5, 6.5);
+      ctx.lineTo(-5, -6.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    };
+    if (!isSelfAt) {
+      // You are the missing one: point at the stairs where the party waits.
+      const d = this.dungeon;
+      const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
+      if (Math.hypot(ex - this.px, ey - this.py) > TILE * 2) {
+        chevron(this.px, this.py, Math.atan2(ey - this.py, ex - this.px), "#8affc0");
+      }
+      return;
+    }
+    // You are staged: point at each living teammate the gate still needs.
+    for (const r of livingRemotes) {
+      if (exr.includes(r.playerId)) continue;
+      chevron(this.px, this.py, Math.atan2(r.y - this.py, r.x - this.px), "#ffd27a");
     }
   }
 

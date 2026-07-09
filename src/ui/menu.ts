@@ -20,6 +20,10 @@ export interface GameOverContext {
   wasCoop: boolean;
   isNewBest: boolean;
   online: OnlineLobby | null;
+  // Whether the run ended in an authoritative party wipe (vs. a lost connection). A wipe
+  // ended the run for the WHOLE room, so any member may reopen the room's lobby; a mere
+  // disconnect must leave the room alone — the run may still be live for the others.
+  isPartyWiped: boolean;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -392,11 +396,12 @@ export class Menu {
 
   private launchOnline(lobby: OnlineLobby, profile: ProfileDoc | null) {
     this.teardownLobby();
+    lobby.setPhase("playing");
     this.host.startOnline(lobby, profile);
   }
 
-  // The room lobby: the shareable code, who's here (names + colors, host tag), and the
-  // start/waiting/rejoin control. Re-renders on every roster/status change.
+  // The room lobby: the shareable code, who's here (names + colors, host tag, readiness),
+  // and the start/waiting/rejoin control. Re-renders on every roster/status change.
   showOnlineLobby(lobby: OnlineLobby, profile: ProfileDoc | null, note = "") {
     let prevStatus = lobby.status;
     const render = () => {
@@ -418,7 +423,13 @@ export class Menu {
         const dot = el("span", "dot");
         dot.style.background = playerColor(p.colorIndex);
         const you = p.playerId === lobby.selfId ? " (you)" : "";
-        rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
+        // Readiness readout while regrouping: a member still marked in-run is finishing up
+        // (or their crashed row is about to go stale and drop off); one at the results
+        // screen follows the start automatically, so both read as honest states, not blockers.
+        const state = lobby.status === "lobby" && p.playerId !== lobby.selfId
+          ? (p.phase === "playing" ? " \u2014 returning from the last run\u2026" : p.phase === "over" ? " \u2014 at the results screen" : "")
+          : "";
+        rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}${state}`));
         list.appendChild(rowEl);
       }
       wrap.appendChild(list);
@@ -431,7 +442,14 @@ export class Menu {
         rejoin.addEventListener("click", () => this.launchOnline(lobby, profile));
         row.appendChild(rejoin);
       } else if (lobby.isHost) {
-        const start = el("button", "", "\u25be  START RUN");
+        // The replay readiness gate: START waits for members whose clients are still marked
+        // in-run (mid-crash / mid-reload). Their rows go stale and drop off the roster in
+        // seconds, so the gate always drains — never a deadlock, never a stranded member.
+        const stillInRun = lobby.membersStillInRun();
+        const start = el("button", "", stillInRun.length > 0
+          ? `waiting for ${stillInRun.length} member${stillInRun.length === 1 ? "" : "s"} to return\u2026`
+          : "\u25be  START RUN");
+        start.disabled = stillInRun.length > 0;
         start.addEventListener("click", () => void lobby.start().catch(() => {}));
         row.appendChild(start);
       } else {
@@ -449,6 +467,7 @@ export class Menu {
     };
 
     this.teardownLobby();
+    lobby.setPhase("lobby");
     this.unsub = lobby.onChange(render);
     render();
   }
@@ -650,14 +669,23 @@ export class Menu {
     let hint: string;
     const online = ctx.online;
     if (online && online.isActive && !online.isQuickPlay) {
-      // Private room: the party regroups in the same lobby, same code, ready to go again.
-      primary = () => { void online.reopen(); this.showOnlineLobby(online, profile); };
-      const backBtn = el("button", "", "back to lobby \u21b5");
+      // Private room replay lifecycle. A party WIPE is authoritative — the server ended the
+      // run for every member and released the world — so any member's client flips the room
+      // back to its lobby (idempotent; all clients land here at once). The old status would
+      // otherwise stay "playing" and the lobby would offer REJOIN into a dead world: the
+      // live "can't play again" bug. A non-wipe exit (lost connection) leaves the room
+      // alone; the run may still be live for the others and REJOIN is then correct.
+      if (ctx.isPartyWiped) void online.reopen();
+      online.setPhase("over");
+      primary = () => this.showOnlineLobby(online, profile);
+      const backBtn = el("button", "", online.isHost ? "play again \u21b5" : "back to lobby \u21b5");
       backBtn.addEventListener("click", () => primary());
       const leaveBtn = el("button", "secondary", "leave room");
       leaveBtn.addEventListener("click", () => { online.leave(); void this.showTitle(); });
       row.append(backBtn, leaveBtn);
-      hint = "press ENTER for the lobby";
+      hint = online.isHost
+        ? "press ENTER, then START RUN when the party is back"
+        : "press ENTER for the lobby \u2014 the host starts the next run";
     } else if (online) {
       // Quick play (or a room that ended underneath us): matchmake again.
       primary = () => void this.retryQuickPlayOnline(online);
@@ -692,6 +720,18 @@ export class Menu {
 
     this.show(wrap);
     this.runCountups(counts);
+
+    // Never strand a member on this screen: the room subscription keeps following the
+    // lifecycle, and a host starting the next run pulls everyone here straight into it.
+    // Only a lobby -> playing TRANSITION launches (the wiped run's stale "playing" status
+    // must not — we wait until the reopen has been observed first).
+    if (online && online.isActive && !online.isQuickPlay) {
+      let hasSeenLobby = online.status === "lobby";
+      this.unsub = online.onChange(() => {
+        if (online.status === "lobby") { hasSeenLobby = true; return; }
+        if (online.status === "playing" && hasSeenLobby) this.launchOnline(online, profile);
+      });
+    }
 
     // One-key retention loop: ENTER always triggers the primary action (R also, solo only).
     const onKey = (e: KeyboardEvent) => {

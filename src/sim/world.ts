@@ -2629,22 +2629,34 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
 
 // ---- exit / descend ----
 
-function updateExit(w: WorldState, ev: SimEvent[]): void {
-  if (w.isSandbox) return;
+// The living players currently standing at the cleared exit — THE party-descend readiness
+// predicate. One function backs the authoritative gate (updateExit) AND the wire readout
+// (snapshot `exr`), so what the UI shows can never drift from what the gate requires.
+// Downed players are never listed (they aren't required at the stairs; the descend rescues
+// them), and an uncleared floor has no usable exit, so it reads as nobody-ready.
+export function playersAtExit(w: WorldState): PlayerId[] {
+  if (w.isSandbox || !isFloorCleared(w)) return [];
   const d = w.dungeon;
   const ex = d.exit.x * TILE + TILE / 2, ey = d.exit.y * TILE + TILE / 2;
+  const out: PlayerId[] = [];
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    if (Math.hypot(p.x - ex, p.y - ey) < TILE) out.push(p.id);
+  }
+  return out;
+}
+
+function updateExit(w: WorldState, ev: SimEvent[]): void {
+  if (w.isSandbox) return;
   if (!isFloorCleared(w)) return;
   // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
   // player, so this is identical to the old single-player check. The authoritative server owns
   // this decision entirely off server positions — no client triggers the transition.
-  let anyLiving = false;
-  let allAtExit = true;
+  let living = 0;
   for (const p of w.players.values()) {
-    if (p.isDown || p.hp <= 0) continue;
-    anyLiving = true;
-    if (Math.hypot(p.x - ex, p.y - ey) >= TILE) { allAtExit = false; break; }
+    if (!p.isDown && p.hp > 0) living++;
   }
-  if (!anyLiving || !allAtExit) return;
+  if (living === 0 || playersAtExit(w).length < living) return;
   // Solo + shared server descend in-sim; the legacy Convex co-op path defers to the client's
   // shared-floor orchestration (everyone descends together via presence, offers ride descend).
   if (w.isCoop) {

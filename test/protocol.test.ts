@@ -164,6 +164,9 @@ function serverRoundTripTests(): void {
     { ...snapObj, self: { hp: 1 } },
     { ...snapObj, enemies: [{ id: 1 }] },
     { ...snapObj, events: [{ id: 0, e: { t: "enemyKill" } }] },
+    { ...snapObj, pnd: [42] },
+    { ...snapObj, exr: [""] },
+    { ...snapObj, exr: "p1" },
     { t: "snap" },
   ];
   for (let i = 0; i < corrupt.length; i++) {

@@ -37,17 +37,17 @@ async function bootNormal() {
   let activeCoop: Multiplayer | null = null;
   let activeOnline: OnlineLobby | null = null;
 
-  async function onGameOver(result: RunResult) {
+  async function onGameOver(result: RunResult, isPartyWiped: boolean) {
     const wasCoop = activeCoop !== null;
     if (activeCoop) { activeCoop.leave(); activeCoop = null; }
     // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
-    // game-over screen offers "back to lobby" / "play again" and owns leaving the room).
+    // game-over screen reopens the room on a wipe and owns leaving it).
     const online = activeOnline;
     // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
     const prevBest = session.profile?.deepestFloor ?? 0;
     const saved = await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
-    menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online });
+    menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online, isPartyWiped });
   }
 
   function onExit(reason?: ExitReason) {
@@ -70,7 +70,7 @@ async function bootNormal() {
     if (activeOnline) { activeOnline.leave(); activeOnline = null; }
   }
 
-  const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result), onExit);
+  const game = new Game(canvas, minimap, document.body, (result, isPartyWiped) => void onGameOver(result, isPartyWiped), onExit);
 
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {

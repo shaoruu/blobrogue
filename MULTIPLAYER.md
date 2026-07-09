@@ -329,6 +329,32 @@ pending set (`pnd`), so everyone sees `WAITING FOR N/M PLAYERS…` with the name
 picking. Choosers are paused and damage-shielded; a disconnect releases their hold
 immediately and an unanswered offer expires after 60s on the sim clock.
 
+### Party exit coordination
+
+The descend gate always required every LIVING member on the cleared stairs; now the gate's
+own readiness predicate rides every snapshot (`exr` = `playersAtExit`, one shared function,
+so the UI can never drift from the rule). The HUD shows `WAITING AT EXIT · 1/2` with who is
+missing, the straggler reads `STAND ON THE STAIRS` with a chevron toward the exit, staged
+players get chevrons toward each missing teammate, and the hold-Tab roster marks who is
+`at the stairs`. Downed members are neither required nor listed (the descend rescues them
+at the revive HP), and once everyone stages, the blessing gate takes over the same message
+slot — picks always resolve before the floor changes.
+
+### Room replay (play again after a wipe)
+
+A party wipe is authoritative: the server ends the run for every member, closes the
+sockets, and releases the room's world, so a replay can never inherit the dead run. On the
+client side, any member's game-over screen flips the room's status back to `lobby`
+(idempotent — the old bug left it on `playing`, offering REJOIN into a dead world). Every
+member's results screen keeps following the room: the host's next START pulls everyone —
+wherever they sit — into the fresh run together (only on a `lobby → playing` transition;
+the wiped run's stale status can never relaunch anyone). Members carry a lifecycle `phase`
+on their presence row (`lobby`/`playing`/`over`): the lobby roster shows who is ready, and
+the host's START is held while a member is still marked in-run — crashed rows go stale and
+drop off the roster within seconds, so the gate always drains. A lost CONNECTION (vs. a
+wipe) never reopens the room: the run may still be live for the rest of the party, and the
+lobby then correctly offers REJOIN RUN.
+
 ### Ticket sources
 
 - **Production / menu flow:** the trusted Convex action above — an HMAC-SHA256

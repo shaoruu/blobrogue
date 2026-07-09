@@ -59,7 +59,8 @@ async function ensurePresence(
     .unique();
   const now = Date.now();
   if (existing) {
-    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false });
+    // (Re)entering through create/join resets the member to lobby readiness.
+    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false, phase: "lobby" });
     return;
   }
   await ctx.db.insert("presence", {
@@ -67,7 +68,7 @@ async function ensurePresence(
     x: 0, y: 0, facing: 1,
     hp: 6, maxHp: 6, weapon: "pistol",
     floor, isDown: false, aimAngle: 0, shotSeq: 0, kills: 0,
-    colorIndex, reviveNonce: 0, updatedAt: now,
+    colorIndex, reviveNonce: 0, updatedAt: now, phase: "lobby",
   });
 }
 

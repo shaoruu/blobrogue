@@ -81,6 +81,11 @@ export default defineSchema({
     colorIndex: v.number(),
     reviveNonce: v.number(),
     updatedAt: v.number(),
+    // Where this member's CLIENT currently sits in the room lifecycle: "lobby" (ready to
+    // start), "playing" (in a run / launching one), or "over" (at the results screen).
+    // Drives the replay readiness gate — the host's START waits for members still marked
+    // "playing" (crashed rows go stale and drop off the roster, releasing the gate).
+    phase: v.optional(v.string()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_player", ["roomId", "playerId"]),
