@@ -30,11 +30,11 @@ check("live NN% value while dragging", (await panel.locator(".settings-val").fir
 check("aria-valuetext mirrors NN%", (await slider("music").getAttribute("aria-valuetext")) === "35%");
 
 const stored = await page.evaluate(() => [
-  localStorage.getItem("blobrogue.vol.master"),
-  localStorage.getItem("blobrogue.vol.music"),
-  localStorage.getItem("blobrogue.vol.sfx"),
+  localStorage.getItem("blobrogue.vol.master.v2"),
+  localStorage.getItem("blobrogue.vol.music.v2"),
+  localStorage.getItem("blobrogue.vol.sfx.v2"),
 ]);
-check("setters persist to blobrogue.vol.*", stored.join() === "0.4,0.35,0.65", stored.join());
+check("setters persist slider positions to blobrogue.vol.*.v2", stored.join() === "0.4,0.35,0.65", stored.join());
 
 // keyboard: arrow key steps the native range by 5
 await slider("sfx").focus();
@@ -49,7 +49,7 @@ check("mute keeps slider values (no zeroing)", (await slider("master volume").in
 check("muted sliders carry is-muted + aria-disabled", (await panel.locator(".settings-shake.is-muted").count()) === 3
   && (await slider("music").getAttribute("aria-disabled")) === "true");
 check("inline muted note visible", ((await panel.locator(".settings-muted-note").textContent()) ?? "").includes("muted"));
-check("mute never touches the stored mix", (await page.evaluate(() => localStorage.getItem("blobrogue.vol.master"))) === "0.4");
+check("mute never touches the stored mix", (await page.evaluate(() => localStorage.getItem("blobrogue.vol.master.v2"))) === "0.4");
 await mute.click();
 check("unmute restores state", (await panel.locator(".settings-shake.is-muted").count()) === 0
   && (await slider("music").getAttribute("aria-disabled")) === "false");
@@ -68,8 +68,9 @@ await page.evaluate(() => {
   window.__gainTargets = targets;
 });
 await setSlider("master volume", 45);
-check("slider drag live-applies to the audio bus gain",
-  await page.evaluate(() => window.__gainTargets.includes(0.45)));
+check("slider drag live-applies the CURVED gain (0.45² = 0.2025) to the audio bus",
+  await page.evaluate(() => window.__gainTargets.includes(0.45 * 0.45)
+    && !window.__gainTargets.includes(0.45)));
 await setSlider("master volume", 55);
 
 // reload: values persist and hydrate the sliders
@@ -82,6 +83,21 @@ check("thumb hit area >= 24px and row >= 44px", await slider("music").evaluate((
   const row = el.closest(".settings-shake");
   return el.getBoundingClientRect().height >= 24 && row.getBoundingClientRect().height >= 44;
 }));
+
+// live migration: a legacy raw-gain value converts to a sqrt position on next boot
+await page.evaluate(() => {
+  localStorage.removeItem("blobrogue.vol.music.v2");
+  localStorage.setItem("blobrogue.vol.music", "0.5");
+});
+await page.reload({ waitUntil: "networkidle" });
+await page.getByRole("button", { name: /^SETTINGS/i }).click();
+await panel.waitFor();
+// the native input snaps its value to the step-5 grid, so read the NN% label (which
+// reflects the true stored position) rather than inputValue
+check("legacy gain 0.5 migrates to position 71% (same audible volume)",
+  (await slider("music").evaluate((el) => el.closest(".settings-shake").querySelector(".settings-val").textContent)) === "71%");
+check("…and the .v2 key is written one-time", await page.evaluate(
+  () => Math.abs(Number(localStorage.getItem("blobrogue.vol.music.v2")) - Math.SQRT1_2) < 1e-9));
 
 await browser.close();
 process.exit(failed === 0 ? 0 : 1);
