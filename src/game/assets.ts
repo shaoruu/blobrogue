@@ -1,16 +1,20 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
 import type { WeaponId, SpriteName } from "../sim/types.js";
+import { resolveClip } from "./facing.js";
+import type { SelectableClip, EnemyPose, ClipChoice } from "./facing.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
 // imports into src/game.
 export type { SpriteName };
 
-// Animation clip an entity can request. When a matching sheet is registered below
-// it plays frame-by-frame; otherwise the draw path falls back to procedural juice.
-// "death" is a one-shot clip played over a corpse (see game.ts renderCorpses).
-export type SheetClip = "idle" | "walk" | "death";
+// Animation clip an entity can request. When a matching sheet is registered below it
+// plays frame-by-frame; otherwise the draw path falls back to procedural juice.
+// SelectableClip is the render-contract set (legacy idle/walk + directional walk_* /
+// attack_* — see src/game/facing.ts for the resolution ladder); "death" is a one-shot
+// clip played over a corpse (see game.ts renderCorpses).
+export type SheetClip = SelectableClip | "death";
 
 export const FRAME = 64; // px per frame in a horizontal strip spritesheet
 
@@ -36,6 +40,21 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   "bat.death": { src: "/sprites/bat_death.png", fps: 12 },
   "boss.death": { src: "/sprites/boss_death.png", fps: 12 },
 };
+
+// One-line registration for an AD directional set (the art/render contract convention):
+//   registerDirectionalSet("charger", 10)      -> charger_walk_{down,up,side}.png
+//   registerDirectionalSet("charger", 10, 12)  -> + charger_attack.png at 12fps
+// Directional ATTACK variants (`<name>_attack_{down,up,side}.png`) are rarer and get
+// explicit SHEETS entries when authored. Side sheets are authored facing RIGHT (the
+// renderer mirrors for left); frame 0 of each walk sheet doubles as that facing's idle
+// pose. Call sites are added only once the PNGs exist, so nothing 404s before then —
+// the clip-selection ladder (facing.ts resolveClip) already routes around absences.
+export function registerDirectionalSet(name: SpriteName, walkFps: number, attackFps?: number): void {
+  SHEETS[`${name}.walk_down`] = { src: `/sprites/${name}_walk_down.png`, fps: walkFps };
+  SHEETS[`${name}.walk_up`] = { src: `/sprites/${name}_walk_up.png`, fps: walkFps };
+  SHEETS[`${name}.walk_side`] = { src: `/sprites/${name}_walk_side.png`, fps: walkFps };
+  if (attackFps !== undefined) SHEETS[`${name}.attack`] = { src: `/sprites/${name}_attack.png`, fps: attackFps };
+}
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -282,6 +301,13 @@ export class Sprites {
     const s = this.sheets.get(`${name}.${clip}`);
     if (s && s.img.complete && s.img.naturalWidth > 0) return s;
     return null;
+  }
+
+  // The render-contract clip pick for a body's pose this frame (see facing.ts for the
+  // fallback ladder). Availability is LOADED sheets, so a registered-but-streaming
+  // directional set degrades to the legacy tier until its pixels arrive.
+  selectClip(name: SpriteName, pose: EnemyPose): ClipChoice {
+    return resolveClip((clip) => this.sheet(name, clip) !== null, pose);
   }
 
   // A cached fully-white silhouette of a sprite, used to flash it on hit.

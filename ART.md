@@ -43,5 +43,29 @@ falls back to the procedural animation above whenever a sheet is absent (the cur
 
 `SHEETS` is empty by default, so nothing extra is fetched (no 404s) until you opt in.
 
+## Directional facing + attack sheets (the mob/boss render contract)
+Every mob/boss carries persistent **4-way facing** (down / up / side; side authored facing
+RIGHT and mirrored for left) derived from its movement with a deadzone + axis hysteresis,
+and an **aimed attack overrides facing** while the move telegraphs (the body turns onto its
+locked angle). The pose — facing, motion, move, phase, 0..1 windup, aim — is a typed hook
+(`EnemyPose` in `src/game/facing.ts`) the draw pass and dev tools both consume.
+
+**Directional set convention** (all optional, per sprite):
+- `<name>_walk_down.png`, `<name>_walk_up.png`, `<name>_walk_side.png` — walk strips;
+  **frame 0 doubles as that facing's idle pose** (held while standing).
+- `<name>_attack.png` — omni windup/strike strip, or `<name>_attack_{down,up,side}.png`
+  for full directional attacks.
+
+**Enable a whole set with one line** in `src/game/assets.ts` (only once the PNGs exist):
+```ts
+registerDirectionalSet("charger", 10);      // the walk triplet
+registerDirectionalSet("marrow", 8, 12);    // + marrow_attack.png at 12fps
+```
+
+Selection degrades one deliberate step at a time — `attack_<facing>` → `attack` →
+`walk_<facing>` → legacy `walk`/`idle` → static PNG + procedural juice — so partial sets
+ship safely and every existing sprite keeps today's exact look until its directional art
+lands. Contract locked by `npm run test:facing`.
+
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.

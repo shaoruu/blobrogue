@@ -31,6 +31,8 @@ import {
   characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
 import type { Anim, Xform, XformStyle } from "./anim.js";
+import { createFacing, computeEnemyPose } from "./facing.js";
+import type { FacingState, EnemyPose } from "./facing.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
@@ -394,7 +396,10 @@ export class Game {
   // the entity is removed; loadFloor clears them wholesale.
   private enemyAnims = new Map<number, Anim>();
   private enemyAnimPos = new Map<number, { x: number; y: number }>();
-  private enemyFacing = new Map<number, number>(); // stable L/R facing (velocity-driven + deadzone) to kill mirror-flicker
+  // The render-contract facing state (persistent 4-way + L/R memory, velocity-driven with
+  // a deadzone so facing never jitters) and the per-frame pose handed to the draw pass.
+  private enemyFacing = new Map<number, FacingState>();
+  private enemyPoses = new Map<number, EnemyPose>();
   private propAnims = new Map<number, Anim>();
   // Keyed by the sim's stable per-floor id (like enemies/props): online rebuilds pickup/chest
   // objects from each snapshot, so object-identity keying would reset the idle anim 20x/s.
@@ -892,15 +897,27 @@ export class Game {
       const prev = this.enemyAnimPos.get(e.id);
       const dx = prev ? e.x - prev.x : 0, dy = prev ? e.y - prev.y : 0;
       const moving = dx * dx + dy * dy > 0.12;
-      // Stable facing: only flip on committed horizontal movement (deadzone), never from
-      // player-relative x every frame — that was the ghost/mob mirror-flicker.
-      if (dx > 0.6) this.enemyFacing.set(e.id, 1);
-      else if (dx < -0.6) this.enemyFacing.set(e.id, -1);
       stepAnim(anim, dt, moving, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
+      // The render-contract pose: persistent 4-way facing from observed velocity (deadzone
+      // + axis hysteresis kill the old mirror-flicker), aim intent overriding while a
+      // committed move telegraphs. A fresh body starts out looking at the player.
+      let facing = this.enemyFacing.get(e.id);
+      if (!facing) {
+        facing = createFacing();
+        facing.isMirrored = this.px < e.x;
+        this.enemyFacing.set(e.id, facing);
+      }
+      const inv = dt > 0 ? 1 / dt : 0;
+      this.enemyPoses.set(e.id, computeEnemyPose(e, facing, dx * inv, dy * inv, anim.move > 0.5));
       this.enemyAnimPos.set(e.id, { x: e.x, y: e.y });
     }
     if (this.enemyAnims.size > liveEnemyIds.size) {
-      for (const id of this.enemyAnims.keys()) if (!liveEnemyIds.has(id)) { this.enemyAnims.delete(id); this.enemyAnimPos.delete(id); this.enemyFacing.delete(id); }
+      for (const id of this.enemyAnims.keys()) {
+        if (!liveEnemyIds.has(id)) {
+          this.enemyAnims.delete(id); this.enemyAnimPos.delete(id);
+          this.enemyFacing.delete(id); this.enemyPoses.delete(id);
+        }
+      }
     }
     const livePropIds = new Set<number>();
     for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
@@ -2468,7 +2485,9 @@ export class Game {
   // Draws a character sprite with its animation transform, an optional frame from a
   // spritesheet (falling back to the static PNG), an optional white hit-flash, and an
   // optional identity tint (recolored via the shading-preserving cache in assets.ts).
-  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number, tint: string | null = null) {
+  // `isHoldFirstFrame`: directional walk sheets double as the idle pose by clamping to
+  // frame 0 while the body stands still (the AD authors one sheet per facing, not two).
+  private drawChar(name: SpriteName, clip: SheetClip, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, alpha: number, flash: number, frameClock: number, tint: string | null = null, isHoldFirstFrame = false) {
     const { ctx } = this;
     const sheet = this.sprites.sheet(name, clip);
     if (!sheet && !this.sprites.ready(name)) {
@@ -2492,7 +2511,7 @@ export class Game {
     if (sheet) {
       const fw = sheet.img.naturalHeight || FRAME;
       const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
-      const i = frameIndex(count, sheet.fps, frameClock);
+      const i = isHoldFirstFrame ? 0 : frameIndex(count, sheet.fps, frameClock);
       // The tinted sheet is pixel-identical in layout, so the source frame rect still applies.
       const src = tint ? this.sprites.tintedSheetCanvas(name, clip, tint) ?? sheet.img : sheet.img;
       ctx.drawImage(src, i * fw, 0, fw, fw, -half, -half, size, size);
@@ -2738,7 +2757,7 @@ export class Game {
       const a = e.attack;
       const anim = this.animForEnemy(e);
       const sx = e.x - cam.x, sy = e.y - cam.y;
-      const facing = this.enemyFacing.get(e.id) ?? (this.px >= e.x ? 1 : -1);
+      const pose = this.enemyPoses.get(e.id) ?? computeEnemyPose(e, createFacing(), 0, 0, anim.move > 0.5);
       const isWindup = a.phase === "windup";
       const isBoss = isBossKind(e.kind);
       const isHopSlam = e.kind === "boss" && a.move === "hopslam";
@@ -2787,7 +2806,11 @@ export class Game {
         : e.kind === "choir" && a.move === "fade" && a.phase === "active" ? 0.3
         : arch.alpha;
 
-      const clip: SheetClip = anim.move > 0.5 ? "walk" : "idle";
+      // The AD drop-in ladder: attack_<facing> -> attack -> walk_<facing> -> legacy
+      // walk/idle -> static + procedural (see facing.ts). New directional/attack sheets
+      // light up per sprite with zero further render changes.
+      const choice = this.sprites.selectClip(arch.sprite, pose);
+      const facing = choice.isMirrored ? -1 : 1;
       const xf = characterXform(anim, isBoss ? BOSS_STYLE : CHARACTER_STYLE);
       let extra = 1;
       // Skeleton and charger coil down (squash) as their line commitments charge.
@@ -2810,7 +2833,7 @@ export class Game {
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
-      this.drawChar(arch.sprite, clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock);
+      this.drawChar(arch.sprite, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, null, choice.isHoldFirstFrame);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
