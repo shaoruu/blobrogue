@@ -1345,7 +1345,7 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
       ally.surgeDelay = 0;
       ally.surgeTime = 0;
     }
-    ev.push({ t: "cue", name: "enemyDeath", x: e.x, y: e.y, rate: 0.7, gain: 0.6, trauma: 0.05 });
+    ev.push({ t: "cue", name: "elite.panic", x: e.x, y: e.y, rate: 1, gain: 0.7, trauma: 0.05 });
   }
   // Vampire Fang: one heart per proc, on a shared 1.25s cooldown, never off summoned adds —
   // sustain comes from scarcity decisions, not add-farming.
@@ -1825,7 +1825,15 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     // Boss pack-surge order: the delay elapses, then a short burst of chase speed.
     if (e.surgeDelay > 0) {
       e.surgeDelay -= dt;
-      if (e.surgeDelay <= 0) { e.surgeDelay = 0; e.surgeTime = BOSS.packSurgeDuration; }
+      if (e.surgeDelay <= 0) {
+        e.surgeDelay = 0;
+        e.surgeTime = BOSS.packSurgeDuration;
+        // The commander's ordered surge lands: ONE aggregate cue off the leader (the
+        // flock's lock beat), never a voice per surged body.
+        if (e.tier === "elite" && eliteAffixOf(e.kind) === "commander") {
+          ev.push({ t: "cue", name: "flock.surge", x: e.x, y: e.y, rate: 1, gain: 0.65, trauma: 0 });
+        }
+      }
     } else if (e.surgeTime > 0) {
       e.surgeTime = e.surgeTime > dt ? e.surgeTime - dt : 0;
     }
@@ -1888,14 +1896,14 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         // A formation guard swallows a non-piercing shot arriving inside its slow arc.
         if (isGuardBlocked(e, b)) {
           b.life = 0;
-          ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
+          ev.push({ t: "bulletBlocked", kind: e.kind, x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
           continue;
         }
         if (!isBodyHit) continue; // pad graze the guard did not cover: flies on
         // The shielder's front arc swallows the shot: no damage, the round is spent.
         if (isShieldBlocked(e, b.vx, b.vy)) {
           b.life = 0;
-          ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
+          ev.push({ t: "bulletBlocked", kind: e.kind, x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
           continue;
         }
         // A bulwark elite's directional plate absorbs the round instead (until it breaks).
@@ -2157,7 +2165,7 @@ function commanderRally(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     if (Math.hypot(ally.x - e.x, ally.y - e.y) > ELITE_COMMANDER.rallyRadius) continue;
     ally.surgeDelay = ELITE_COMMANDER.surgeDelay;
   }
-  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.4, gain: 0.6, trauma: 0.04 });
+  ev.push({ t: "cue", name: "elite.rally", x: e.x, y: e.y, rate: 1, gain: 0.75, trauma: 0.04 });
 }
 
 // The echoed elite's repeat: refire the last ranged release along its stored bearing
@@ -2565,11 +2573,11 @@ function absorbOnBulwark(e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
   if (Math.abs(angleDiff(incoming, e.attack.lockedAngle)) > ELITE_BULWARK.arc / 2) return false;
   e.aux = Math.max(0, e.aux - b.damage);
   b.life = 0;
-  ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
+  ev.push({ t: "bulletBlocked", kind: e.kind, x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
   if (e.aux === 0) {
     // The shatter: loud and final — from here the elite is just its chassis.
     ev.push({ t: "puff", x: e.x, y: e.y, n: 8, color: "#cfd6dd" });
-    ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.55, gain: 0.8, trauma: 0.06 });
+    ev.push({ t: "cue", name: "guard.break", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.06 });
   }
   return true;
 }
@@ -2963,6 +2971,7 @@ function plantCinder(w: WorldState, x: number, y: number): void {
 function sinderlingBurst(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   const r = C.SINDER_BURST_RADIUS;
   ev.push({ t: "explosion", x: e.x, y: e.y, r });
+  ev.push({ t: "cue", name: "sinderling.burst", x: e.x, y: e.y, rate: 1, gain: 0.8, trauma: 0.05 });
   for (const victim of w.players.values()) {
     if (isProtected(victim) || victim.isDown || victim.isAbsent || victim.hp <= 0) continue;
     if (Math.hypot(victim.x - e.x, victim.y - e.y) <= r) damagePlayer(w, victim, C.SINDER_BURST_PLAYER_DMG, ev);
@@ -3005,7 +3014,7 @@ function updateFragment(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
       const half = Math.hypot(src.x - e.x, src.y - e.y) / 2;
       if (tryRelease(w, midX, midY, half)) {
         a.phase = "active"; a.time = 0; a.windup = 0;
-        ev.push({ t: "cue", name: "tesla", x: e.x, y: e.y, rate: 0.7, gain: 0.6, trauma: 0.03 });
+        ev.push({ t: "cue", name: "fragment.pulse", x: e.x, y: e.y, rate: 1, gain: 0.7, trauma: 0.03 });
       }
     }
     return;
@@ -3254,7 +3263,7 @@ function tollPlantLure(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   lure.aux = TOLL.lureLife;
   w.enemies.push(lure);
   ev.push({ t: "enemySpawn", eid: lure.id, kind: lure.kind, tier: lure.tier, x: lure.x, y: lure.y });
-  ev.push({ t: "cue", name: "uiClick", x: lure.x, y: lure.y, rate: 0.6, gain: 0.6, trauma: 0 });
+  ev.push({ t: "cue", name: "knell.fuse", x: lure.x, y: lure.y, rate: 1, gain: 0.65, trauma: 0 });
 }
 
 function updateGhost(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {

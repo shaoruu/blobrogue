@@ -458,7 +458,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
-  bulletBlocked: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
+  bulletBlocked: { scope: "pos", fields: { kind: "str", x: "num", y: "num", aim: "num" } },
   propHit: { scope: "pos", fields: { propId: "num", kind: "str", x: "num", y: "num" } },
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
