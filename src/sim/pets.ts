@@ -95,8 +95,8 @@ export const PET_BALANCE = {
   spring: 40,          // follow spring stiffness (accel per px of offset)
   damping: 11,         // velocity damping (slightly under critical — a lively, organic tail)
   maxSpeed: 380,       // px/s cap; outruns the player (200) and closes a dash gap (620) fast
-  followBehind: 26,    // anchor offset behind the owner, px
-  followRaise: 10,     // anchor offset above the owner's center, px
+  followBehind: 40,    // anchor offset behind the owner, px (clears the 40px hero sprite)
+  followRaise: 14,     // anchor offset above the owner's center, px
   separation: 26,      // boids-style separation radius between pets, px
   // Peak separation acceleration. Must dominate the follow spring inside the overlap band
   // or pets sharing one anchor squash together; 1300 settles a same-anchor pair ~19px apart

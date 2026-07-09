@@ -1954,12 +1954,18 @@ function nearestEnemyWithin(w: WorldState, x: number, y: number, range: number):
   return best;
 }
 
-// Where this pet wants to hover: an ember pup with a live target hunts it; everything else
-// heels at a per-kind offset around the owner (wisp lights the way ahead, the others trail).
+// Where this pet wants to hover: an ember pup with a live target harries it from the rim
+// (the owner-side edge — inside nip reach but never buried under the enemy sprite);
+// everything else heels at a per-kind offset (wisp lights the way ahead, the others trail).
 function petAnchor(w: WorldState, pet: Pet, owner: PlayerSim): { x: number; y: number } {
   if (pet.kind === "ember_pup" && isPetOwnerActive(w, owner)) {
     const target = nearestEnemyWithin(w, owner.x, owner.y, PET_BALANCE.ember_pup.engageRange);
-    if (target) return { x: target.x, y: target.y };
+    if (target) {
+      const dx = owner.x - target.x, dy = owner.y - target.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const rim = target.radius + PET_BALANCE.radius;
+      return { x: target.x + (dx / d) * rim, y: target.y + (dy / d) * rim };
+    }
   }
   if (pet.kind === "lantern_wisp") {
     return { x: owner.x + owner.facing * (PET_BALANCE.followBehind * 0.7), y: owner.y - PET_BALANCE.followRaise * 2 };
