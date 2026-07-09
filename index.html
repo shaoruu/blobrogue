@@ -334,6 +334,8 @@
       .settings-group-h:first-child { margin-top: 0; }
       .settings-note { font-family: var(--f-ui); font-size: 9px; letter-spacing: .5px; color: var(--amber); text-transform: none; margin: 0; }
       .settings-note:empty { display: none; }
+      /* the mute explainer keeps its one line reserved so toggling mute never shifts layout */
+      .settings-muted-note, .settings-muted-note:empty { display: block; height: 12px; line-height: 12px; overflow: hidden; text-align: center; }
       .settings-shake { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #cbb6d6; }
       .settings-label { text-transform: uppercase; letter-spacing: 1px; color: #8579a0; }
       .settings-val { color: #ffd27a; font-variant-numeric: tabular-nums; }

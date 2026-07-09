@@ -88,8 +88,10 @@ export function createSettingsControls(): HTMLElement {
   const music = sliderRow("music", 0, 100, 5, () => settings.musicVol, (v) => settings.setMusicVol(v));
   const sfxVol = sliderRow("sfx", 0, 100, 5, () => settings.sfxVol, (v) => settings.setSfxVol(v));
 
+  // The note line is ALWAYS in flow (reserved height, blank when unmuted) so toggling
+  // mute never shifts the groups below it.
   const mutedNote = document.createElement("p");
-  mutedNote.className = "settings-note";
+  mutedNote.className = "settings-note settings-muted-note";
   const volumeRows = [master, music, sfxVol];
   const syncMuted = () => {
     const isMuted = settings.isMuted;
@@ -100,7 +102,6 @@ export function createSettingsControls(): HTMLElement {
       range.setAttribute("aria-disabled", String(isMuted));
     }
     mutedNote.textContent = isMuted ? "muted — sliders keep your mix until sound is back on" : "";
-    mutedNote.style.display = isMuted ? "" : "none";
   };
   syncMuted();
 
