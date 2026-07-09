@@ -368,6 +368,8 @@ export class Game {
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
+  // The Weaver's P3 afterimage feints: transient pounce markers that expire harmlessly.
+  private feintMarks: Array<{ x: number; y: number; r: number; t: number; dur: number }> = [];
   private afterimages: Afterimage[] = [];
   private dashImgCd = 0; // spacing timer for dropping dash afterimages
   private remoteTracers: RemoteTracer[] = [];
@@ -1212,6 +1214,9 @@ export class Game {
         this.spawnPuff(e.x, e.y, 7, "#c98bff");
         this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
         break;
+      case "pounceFeint":
+        this.feintMarks.push({ x: e.x, y: e.y, r: e.r, t: 0, dur: e.dur });
+        break;
       case "bossSlam":
         this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
         this.spawnParticles(e.x, e.y, 22, "#ffd27a");
@@ -1678,6 +1683,8 @@ export class Game {
   private updateDecals(dt: number) {
     for (const d of this.decals) d.t += dt;
     this.decals = this.decals.filter((d) => d.t < d.life);
+    for (const f of this.feintMarks) f.t += dt;
+    this.feintMarks = this.feintMarks.filter((f) => f.t < f.dur);
   }
 
   private updateAfterimages(dt: number) {
@@ -2099,6 +2106,7 @@ export class Game {
     this.renderProps();
     this.renderDecals();
     this.renderHazards();
+    for (const f of this.feintMarks) this.renderDangerDisc(f.x, f.y, f.r, Math.min(1, f.t / Math.max(0.001, f.dur)));
     this.motes.render(ctx, this.cam.x, this.cam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -2531,17 +2539,17 @@ export class Game {
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
-      const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
+      const name: SpriteName = p.kind === "weapon" || p.kind === "dealer_weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
       ctx.save();
       ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
       const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" ? "#ffd27a" : "#ffb43b");
+      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" || p.kind === "dealer_weapon" ? "#ffd27a" : "#ffb43b");
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      // The Dealer's heart wears its coin price; gray if this player can't afford it.
-      if (p.kind === "dealer_heart") {
+      // The Dealer's stock wears its coin price; gray if this player can't afford it.
+      if (p.kind === "dealer_heart" || p.kind === "dealer_weapon") {
         const price = p.value ?? 6;
         ctx.save();
         ctx.font = '700 10px "Silkscreen", monospace';
@@ -2550,6 +2558,17 @@ export class Game {
         ctx.fillText(`${price}c`, sx + 1, sy - 17);
         ctx.fillStyle = this.coins >= price ? "#ffd27a" : "#8a8378";
         ctx.fillText(`${price}c`, sx, sy - 18);
+        ctx.restore();
+      }
+      // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
+      // spent their one personal claim (teammates still see their own live options).
+      if (p.isBossChoice) {
+        ctx.save();
+        const isSpent = this.p.hasClaimedBossChoice;
+        ctx.globalAlpha = isSpent ? 0.25 : 0.55 + Math.sin(clock * 3) * 0.2;
+        ctx.strokeStyle = isSpent ? "#8a8378" : "#ffd27a";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy + 2, 19, 0, 6.28); ctx.stroke();
         ctx.restore();
       }
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
@@ -2867,23 +2886,36 @@ export class Game {
     for (const h of this.hazards) {
       const sx = h.x - cam.x, sy = h.y - cam.y;
       const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3); // holds, then fades out
+      const tint = h.kind === "web" ? "#c98bff" : "#cbb89a"; // violet silk / bone-pale rubble
       ctx.globalAlpha = 0.34 * fade;
-      ctx.strokeStyle = "#c98bff";
+      ctx.strokeStyle = tint;
       ctx.lineWidth = 1.5;
-      for (let i = 0; i < 8; i++) {
-        const ang = (i / 8) * 6.28 + h.id * 0.7;
-        ctx.beginPath();
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(sx + Math.cos(ang) * h.radius, sy + Math.sin(ang) * h.radius);
-        ctx.stroke();
-      }
-      for (let ring = 1; ring <= 2; ring++) {
-        ctx.beginPath();
-        ctx.arc(sx, sy, h.radius * (ring / 2.4), 0, 6.28);
-        ctx.stroke();
+      if (h.kind === "web") {
+        for (let i = 0; i < 8; i++) {
+          const ang = (i / 8) * 6.28 + h.id * 0.7;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(ang) * h.radius, sy + Math.sin(ang) * h.radius);
+          ctx.stroke();
+        }
+        for (let ring = 1; ring <= 2; ring++) {
+          ctx.beginPath();
+          ctx.arc(sx, sy, h.radius * (ring / 2.4), 0, 6.28);
+          ctx.stroke();
+        }
+      } else {
+        // Rubble: a scatter of debris chips inside the slow ring.
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.stroke();
+        ctx.fillStyle = tint;
+        for (let i = 0; i < 6; i++) {
+          const ang = (i / 6) * 6.28 + h.id * 1.3;
+          const d = h.radius * (0.25 + 0.55 * (((h.id + i * 7) % 5) / 5));
+          const cx = sx + Math.cos(ang) * d, cy = sy + Math.sin(ang) * d;
+          ctx.fillRect(cx - 2, cy - 2, 4, 4);
+        }
       }
       ctx.globalAlpha = 0.1 * fade;
-      ctx.fillStyle = "#c98bff";
+      ctx.fillStyle = tint;
       ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
     }
     ctx.restore();

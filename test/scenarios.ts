@@ -145,11 +145,11 @@ const marrow: Scenario = {
 // The rest of the boss roster, each hosed down by the same strong Lv3 build so the
 // goldens walk every phase machine tick-for-tick: the Choir's wails/fades/wisp-splits,
 // the Weaver's webs/pounces/molt, the Gilded Warden's plate/quakes/sweeps/sanctifies.
-function bossGolden(name: string, seed: number, kind: EnemyKind): Scenario {
+function bossGolden(name: string, seed: number, kind: EnemyKind, floor: number): Scenario {
   return {
     name,
     seed,
-    floor: 10,
+    floor,
     ticks: 2400,
     commands: (() => {
       const cmds: Command[] = [];
@@ -167,9 +167,10 @@ function bossGolden(name: string, seed: number, kind: EnemyKind): Scenario {
   };
 }
 
-const choir = bossGolden("choir", 0x8888, "choir");
-const weaverScenario = bossGolden("weaver", 0x9999, "weaver");
-const gilded = bossGolden("gilded", 0xAAAA, "gilded");
+// Each deep boss is exercised at its authored gate floor (F15/F20/F25).
+const choir = bossGolden("choir", 0x8888, "choir", 25);
+const weaverScenario = bossGolden("weaver", 0x9999, "weaver", 15);
+const gilded = bossGolden("gilded", 0xAAAA, "gilded", 20);
 
 // Items + synergies: stack pellet/crit/pierce/bounce mods, then verify mod-affected shots
 // against a fed line of enemies (pierce punches through, ricochet bounces off walls).

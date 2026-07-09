@@ -76,8 +76,11 @@ export interface BossState {
   // killing them ALL drops the beat early. Empty on fixed-duration beats (King/Weaver/Warden).
   beatAddIds: number[];
   // Sequenced-emission scratch: shard pairs fired this spiral (MARROW), waves released this
-  // sweep (Gilded Warden), pounces chained this commitment (Weaver).
+  // sweep (Gilded Warden), pounces/charges chained this commitment (Weaver/MARROW), wails
+  // streamed this volley (Choir).
   spinCount: number;
+  // The rubble lane id the current MARROW charge is paving into (sim-side only).
+  rubbleLane: number;
 }
 
 export interface Enemy extends Entity {
@@ -180,18 +183,22 @@ export interface Bullet {
 
 // dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
 // enough coins buys +1 HP; `value` carries the coin price.
-export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart";
+export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart" | "dealer_weapon";
 
 export interface Pickup {
   id: number;      // stable per-floor id (wire identity: interest view + client anim keying)
   kind: PickupKind;
   x: number; y: number;
   radius: number;
-  weapon: WeaponId | null; // set only when kind === "weapon"
+  weapon: WeaponId | null; // set when kind === "weapon" | "dealer_weapon"
   // Coins: the coin worth baked in at drop time (combo multiplier applied then); undefined
   // falls back to the collector's base coin gain, so non-kill coins stay at face value.
-  // Dealer hearts: the coin PRICE.
+  // Dealer hearts/weapons: the coin PRICE.
   value?: number;
+  // Boss weapon reward (studio gate §4): one of the chest's P+1 personal CHOICES. Each
+  // player claims exactly one; a claim never removes a teammate's options, so the pedestal
+  // persists until every living player has claimed.
+  isBossChoice?: boolean;
 }
 
 // Destructible / atmosphere world props. Placed deterministically per floor (seeded Rng)
@@ -214,7 +221,7 @@ export interface Prop {
 // props: placed by boss moves, expire on a timer, rebuilt empty on every floor load.
 // Webs SLOW players standing inside (never enemies — it's their home turf); they never
 // damage, so the pressure is routing, not attrition.
-export type HazardKind = "web";
+export type HazardKind = "web" | "rubble";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)
@@ -223,6 +230,9 @@ export interface Hazard {
   radius: number;
   life: number;    // seconds until it fades
   maxLife: number; // authored duration (drives the client's fade render)
+  // Rubble pads planted by one MARROW charge share a lane id (sim-side only — the gate
+  // caps live rubble at 2 lanes, oldest expires first). Undefined for webs.
+  lane?: number;
 }
 
 // Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are

@@ -14,7 +14,7 @@ import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
-import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind } from "./enemies.js";
+import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -28,6 +28,7 @@ import {
   CAPS, TIERS,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
+  MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
 
@@ -104,6 +105,9 @@ export interface PlayerSim {
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
   meleeSwing: MeleeSwing | null;
+  // Studio gate §4: the boss chest offers P+1 weapon CHOICES and each player claims exactly
+  // one per boss floor. Reset on every floor build.
+  hasClaimedBossChoice: boolean;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -134,6 +138,11 @@ export interface WorldState {
   // Authored ground hazards (the Weaver's webs): shared authoritative floor state, capped
   // and self-expiring; rebuilt empty on every floor load.
   hazards: Hazard[];
+  // Overlap arbiter (studio gate §2): damage releases mobs committed in the last 0.30s.
+  // A new mob release whose area overlaps a recent one HOLDS until the window clears — no
+  // two releases may pincer the same escape lane inside one reaction window.
+  recentReleases: Array<{ x: number; y: number; radius: number; t: number }>;
+  nextRubbleLane: number;
   dungeon: Dungeon;
   flow: FlowField;
   flowCd: number;
@@ -203,6 +212,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
+    hasClaimedBossChoice: false,
   };
 }
 
@@ -225,6 +235,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     props: [],
     chests: [],
     hazards: [],
+    recentReleases: [],
+    nextRubbleLane: 0,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     flow: new FlowField(),
     flowCd: 0,
@@ -314,6 +326,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.hazards = [];
+  w.recentReleases = [];
+  w.nextRubbleLane = 0;
   w.nextEnemyId = 0;
   w.nextPropId = 0;
   w.nextPickupId = 0;
@@ -333,11 +347,12 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.flowCd = 0;
   w.flowKey = -1;
   w.pickups = [];
+  for (const p of w.players.values()) p.hasClaimedBossChoice = false;
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) {
     stockWeaponChests(w);
-    placeDealerHearts(w);
+    placeDealerStock(w);
   }
   // Reposition living players to the new spawn, each under the spawn-grace mercy window:
   // nobody loads into a fresh floor (a boss floor especially) already taking damage.
@@ -391,8 +406,13 @@ function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
   if (w.floor < 2 || d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
-  const kinds: WeaponId[] = [rng.pick(PICKUP_WEAPONS)];
-  if (w.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
+  // Studio gate §4 pedestal rolls: max(1, ceil(P/2)) physical weapons per floor (P1–2
+  // roll 1, P3–4 roll 2), DISTINCT ids when the pool permits. Party size buys options,
+  // never rarity — the roll table is identical solo and co-op.
+  const kinds: WeaponId[] = [];
+  for (let i = 0; i < pedestalWeaponRolls(w.encounterPlayers); i++) {
+    kinds.push(rollDistinctWeapon(rng, kinds));
+  }
   const used = new Set<number>();
   for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
   for (const weapon of kinds) {
@@ -407,9 +427,20 @@ function stockWeaponChests(w: WorldState): void {
   }
 }
 
-// The Dealer's stock (§2): on every third floor, P purchasable hearts near a mid-run room
-// center. Walking over one with enough coins buys exactly +1 HP — never a full heal.
-function placeDealerHearts(w: WorldState): void {
+// A weapon roll that avoids the ids already taken this batch (distinct while the pool
+// permits — with a 17-weapon pool the retry loop is a formality, but bounded regardless).
+function rollDistinctWeapon(rng: Rng, taken: readonly WeaponId[]): WeaponId {
+  let pick = rng.pick(PICKUP_WEAPONS);
+  for (let i = 0; i < PICKUP_WEAPONS.length && taken.includes(pick); i++) pick = rng.pick(PICKUP_WEAPONS);
+  return pick;
+}
+
+// The Dealer's stock (§2 + studio gate §4): on every third floor, P purchasable hearts
+// plus max(2, P) DISTINCT weapons at the fixed 12/18/24 price ladder, near a mid-run room
+// center. Hearts buy exactly +1 HP — never a full heal. Weapon purchases are PERSONAL:
+// buying one never depletes a teammate's stock (see updatePickups), and prices/stats are
+// identical solo and co-op.
+function placeDealerStock(w: WorldState): void {
   if (w.floor % DEALER.floorInterval !== 0 || isBossFloor(w.floor)) return;
   const d = w.dungeon;
   if (d.rooms.length < 3) return;
@@ -421,6 +452,17 @@ function placeDealerHearts(w: WorldState): void {
       id: w.nextPickupId++, kind: "dealer_heart",
       x: (room.cx + 0.5) * TILE + (i - (stock - 1) / 2) * 30, y: (room.cy + 0.5) * TILE - 26,
       radius: 13, weapon: null, value: DEALER.price,
+    });
+  }
+  const weapons: WeaponId[] = [];
+  const weaponStock = dealerWeaponStock(w.encounterPlayers);
+  for (let i = 0; i < weaponStock; i++) {
+    const weapon = rollDistinctWeapon(rng, weapons);
+    weapons.push(weapon);
+    w.pickups.push({
+      id: w.nextPickupId++, kind: "dealer_weapon",
+      x: (room.cx + 0.5) * TILE + (i - (weaponStock - 1) / 2) * 34, y: (room.cy + 0.5) * TILE + 14,
+      radius: 15, weapon, value: DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)],
     });
   }
 }
@@ -1381,14 +1423,27 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   w.spawnReleaseCd -= dt;
   if (w.spawnReleaseCd > 0) return;
   let living = 0;
+  let livingMovers = 0;
   for (const e of w.enemies) {
-    if (!e.dead && !isBossKind(e.kind)) living += threatCostOf(e.kind, e.tier);
+    if (e.dead || isBossKind(e.kind)) continue;
+    living += threatCostOf(e.kind, e.tier);
+    if (isComplexMover(e.kind)) livingMovers++;
   }
   const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
-  const next = w.pendingSpawns[0];
-  if (living + threatCostOf(next.kind, next.tier) > cap) return;
+  // The head of the queue releases when it fits BOTH budgets (threat cap + the gate's
+  // complex-mover cap). A blocked complex mover never head-blocks the queue: the first
+  // releasable unit behind it goes instead, preserving order otherwise.
+  let idx = -1;
+  for (let i = 0; i < w.pendingSpawns.length; i++) {
+    const cand = w.pendingSpawns[i];
+    if (living + threatCostOf(cand.kind, cand.tier) > cap) continue;
+    if (isComplexMover(cand.kind) && livingMovers >= MAX_COMPLEX_MOVERS_ACTIVE) continue;
+    idx = i;
+    break;
+  }
+  if (idx === -1) return;
   // Its spawn grace never ticked while pending, so it activates with the full grace window.
-  w.pendingSpawns.shift();
+  const next = w.pendingSpawns.splice(idx, 1)[0];
   w.enemies.push(next);
   w.spawnReleaseCd = REINFORCE_STAGGER / BIOME_PRESSURE[biomeIndexForFloor(w.floor)].reinforceRate;
   ev.push({ t: "enemySpawn", eid: next.id, kind: next.kind, tier: next.tier, x: next.x, y: next.y });
@@ -1398,6 +1453,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   // Stage C: every strike is attributed to the player who caused it (bullet.owner / swing owner
   // / burn igniter), NOT a single "primary player". Kills/coins/combo/lifesteal go to the right
   // authoritative player. Solo resolves to the one player, so behavior is unchanged.
+  tickReleaseArbiter(w, dt);
   releaseReinforcements(w, dt, ev);
   refreshFlowField(w, dt);
   for (const e of w.enemies) {
@@ -1596,7 +1652,8 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
 function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   if (a.phase === "windup") {
-    if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)) {
+    if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.SKELETON_LUNGE_SPEED * C.SKELETON_LUNGE_DUR)) {
       a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.12 });
     }
@@ -1728,7 +1785,8 @@ function updateFlocker(w: WorldState, e: Enemy, dt: number): void {
 function updateCharger(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   if (a.phase === "windup") {
-    if (stepWindupTimer(w, e, dt, C.CHARGER_WINDUP, C.CHARGER_LOCK, false)) {
+    if (stepWindupTimer(w, e, dt, C.CHARGER_WINDUP, C.CHARGER_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.CHARGER_RUSH_SPEED * C.CHARGER_RUSH_DUR)) {
       a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.CHARGER_CD * attackCdMultOf(e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.8, gain: 0.85, trauma: 0.08 });
     }
@@ -1791,7 +1849,9 @@ function updateBurrower(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
     // erupt: stationary underground, marker armed — the player's reaction window.
     a.time += dt;
     a.windup = Math.min(1, a.time / C.BURROW_ERUPT_WINDUP);
-    if (a.time >= C.BURROW_ERUPT_WINDUP) burrowerErupt(w, e, ev);
+    if (a.time >= C.BURROW_ERUPT_WINDUP && tryRelease(w, a.markX, a.markY, C.BURROW_ERUPT_RADIUS)) {
+      burrowerErupt(w, e, ev);
+    }
     return;
   }
   if (a.phase === "active") {
@@ -1885,7 +1945,8 @@ function updateOrbiter(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
 function updateShielder(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   if (a.phase === "windup") {
-    if (stepWindupTimer(w, e, dt, C.SHIELDER_WINDUP, C.SHIELDER_LOCK, false)) {
+    if (stepWindupTimer(w, e, dt, C.SHIELDER_WINDUP, C.SHIELDER_LOCK, false)
+      && tryReleaseLane(w, e, a.lockedAngle, C.SHIELDER_BASH_SPEED * C.SHIELDER_BASH_DUR)) {
       a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SHIELDER_CD * attackCdMultOf(e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.9, gain: 0.7, trauma: 0.05 });
     }
@@ -2220,6 +2281,7 @@ function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
 function marrowBeginAttack(e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
+  boss.spinCount = 0; // spiral pairs / rush-pair chain counter for this commitment
   e.attack.cooldown = MARROW.attackCd[boss.phase];
   // P3: every 3rd attack is the stationary spiral barrage (0.8s telegraph, 2.2s weave).
   if (boss.phase >= 3 && boss.attackCount % MARROW.spinEvery === 0) {
@@ -2273,16 +2335,17 @@ function marrowWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   // rush
   if (stepWindupTimer(w, e, dt, MARROW.chargeWindup, MARROW.chargeLock, false)) {
     a.phase = "active"; a.time = 0; a.windup = 0;
+    if (e.boss!.phase >= 3) openRubbleLane(w, e); // every P3 lane paves its own rubble
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.55, gain: 0.9, trauma: 0.05 });
   }
 }
 
 function marrowActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
+  const boss = e.boss!;
   if (a.move === "spin") {
     a.time += dt;
     a.windup = Math.min(1, a.time / MARROW.spinDuration);
-    const boss = e.boss!;
     const dir = boss.burstParity === 0 ? 1 : -1;
     // Deterministic pair emitter: shard pair k fires as elapsed time crosses k×interval.
     while (boss.spinCount < Math.floor(a.time / MARROW.spinInterval)) {
@@ -2294,22 +2357,63 @@ function marrowActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     if (a.time >= MARROW.spinDuration) enterRecover(e);
     return;
   }
-  // rush
+  // rush — gate §3 contract: P3 runs 20% hotter and paves a rubble lane down the furrow.
+  const speed = MARROW.chargeSpeed * (boss.phase >= 3 ? MARROW.p3ChargeSpeedMult : 1);
+  const prevTraveled = speed * a.time;
   a.time += dt;
   // A connect ends the rush BEFORE the next step (the contact pass already landed the
-  // hit + shove last tick, while the rush was active) — hit-and-stop, never a drag.
+  // hit + shove last tick, while the rush was active) — hit-and-stop, never a drag. A
+  // connect also ends the P2 pair: the hit is paid for, no instant second lane.
   if (isTouchingAnyPlayer(w, e)) { enterRecover(e); return; }
-  const step = MARROW.chargeSpeed * dt;
+  const step = speed * dt;
   const x0 = e.x, y0 = e.y;
   rushSmashEnvironment(w, e, ev); // the blind bull clears its furrow FIRST — no furniture wedge
   moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
   ev.push({ t: "lungeTrail", x: e.x, y: e.y });
+  if (boss.phase >= 3 && Math.floor(speed * a.time / MARROW.rubbleSpacing) > Math.floor(prevTraveled / MARROW.rubbleSpacing)) {
+    plantRubble(w, e, boss.rubbleLane, ev);
+  }
   const moved = Math.hypot(e.x - x0, e.y - y0);
   if (moved < step * chillMoveScale(e) * 0.5) {
-    marrowCrash(w, e, ev);
+    marrowCrash(w, e, ev); // the crash stun also cancels a pending pair charge
     return;
   }
-  if (a.time >= MARROW.chargeDur) enterRecover(e);
+  if (a.time >= MARROW.chargeDur) {
+    // Gate §3 "P2 pairs": a clean miss re-tracks into a second full-telegraph charge
+    // within the same commitment. The pair counter lives in spinCount for this move.
+    if (boss.phase >= MARROW.chargePairPhase && boss.spinCount === 0) {
+      boss.spinCount = 1;
+      beginWindup(e, "rush");
+      ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.4, gain: 0.7, trauma: 0 });
+      return;
+    }
+    enterRecover(e);
+  }
+}
+
+// Rubble lanes (gate §3): P3 charges pave slow-zone debris. Opening a lane past the cap
+// expires the OLDEST lane's pads first — never more than 2 live lanes.
+function openRubbleLane(w: WorldState, e: Enemy): void {
+  const boss = e.boss!;
+  boss.rubbleLane = w.nextRubbleLane++;
+  const liveLanes: number[] = [];
+  for (const h of w.hazards) {
+    if (h.kind === "rubble" && h.lane !== undefined && !liveLanes.includes(h.lane)) liveLanes.push(h.lane);
+  }
+  liveLanes.sort((a, b) => a - b);
+  while (liveLanes.length >= MARROW.rubbleMaxLanes) {
+    const oldest = liveLanes.shift()!;
+    w.hazards = w.hazards.filter((h) => !(h.kind === "rubble" && h.lane === oldest));
+  }
+}
+
+function plantRubble(w: WorldState, e: Enemy, lane: number, ev: SimEvent[]): void {
+  if (isWall(w, e.x, e.y)) return;
+  w.hazards.push({
+    id: w.nextHazardId++, kind: "rubble", x: e.x, y: e.y, radius: MARROW.rubbleRadius,
+    life: MARROW.rubbleLife, maxLife: MARROW.rubbleLife, lane,
+  });
+  ev.push({ t: "webPlaced", x: e.x, y: e.y, r: MARROW.rubbleRadius });
 }
 
 // The wall crash: MARROW's authored weakness. A long self-stun ("crash" recover), and
@@ -2423,15 +2527,30 @@ function choirWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
     }
     return;
   }
-  // wail
+  // wail: the tell completes, then the volley RAINS SEQUENTIALLY (gate §3 — never a
+  // simultaneous release) from the streaming active phase.
   if (stepWindupTimer(w, e, dt, CHOIR.wailWindup, CHOIR.wailLock, false)) {
-    choirWailFire(w, e, ev);
-    enterRecover(e);
+    const boss = e.boss!;
+    boss.spinCount = 0; // wails streamed so far
+    a.phase = "active"; a.time = 0; a.windup = 0;
   }
 }
 
 function choirActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
+  if (a.move === "wail") {
+    // Sequential stream: wail k releases as elapsed time crosses k×gap; the commitment
+    // recovers one gap after the last release.
+    a.time += dt;
+    const boss = e.boss!;
+    const n = CHOIR.wailCount[boss.phase];
+    while (boss.spinCount < n && a.time >= boss.spinCount * CHOIR.wailReleaseGap) {
+      choirWailFire(w, e, boss.spinCount, n, ev);
+      boss.spinCount++;
+    }
+    if (a.time >= n * CHOIR.wailReleaseGap) enterRecover(e);
+    return;
+  }
   // The fade: intangible, drifting through the target's position — keep moving.
   a.time += dt;
   a.windup = Math.min(1, a.time / CHOIR.fadeDuration);
@@ -2458,33 +2577,32 @@ function choirRematerialize(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.8, gain: 0.7, trauma: 0.08 });
 }
 
-// The wail volley: slow seekers with a capped turn rate, fanned around the locked bearing.
-function choirWailFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+// One wail of the volley: a slow seeker with a capped turn rate, fanned around the locked
+// bearing (wail i of n keeps its fan slot; the stream releases them one by one).
+function choirWailFire(w: WorldState, e: Enemy, i: number, n: number, ev: SimEvent[]): void {
   const a = e.attack;
-  const boss = e.boss!;
-  const n = CHOIR.wailCount[boss.phase];
-  for (let i = 0; i < n; i++) {
-    const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * CHOIR.wailSpread;
-    const ang = a.lockedAngle + off;
-    w.bullets.push({
-      x: e.x + Math.cos(ang) * (e.radius + 6), y: e.y + Math.sin(ang) * (e.radius + 6),
-      vx: Math.cos(ang) * CHOIR.wailSpeed, vy: Math.sin(ang) * CHOIR.wailSpeed,
-      radius: CHOIR.wailRadius, life: CHOIR.wailLife, friendly: false, owner: null,
-      damage: CHOIR.wailDamage, color: "#9fd8ff", pierce: 0, hitList: null, isCrit: false,
-      homing: CHOIR.wailTurnRate,
-    });
+  const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * CHOIR.wailSpread;
+  const ang = a.lockedAngle + off;
+  w.bullets.push({
+    x: e.x + Math.cos(ang) * (e.radius + 6), y: e.y + Math.sin(ang) * (e.radius + 6),
+    vx: Math.cos(ang) * CHOIR.wailSpeed, vy: Math.sin(ang) * CHOIR.wailSpeed,
+    radius: CHOIR.wailRadius, life: CHOIR.wailLife, friendly: false, owner: null,
+    damage: CHOIR.wailDamage, color: "#9fd8ff", pierce: 0, hitList: null, isCrit: false,
+    homing: CHOIR.wailTurnRate,
+  });
+  if (i === 0) {
+    ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
   }
-  ev.push({ t: "bossVolley", x: e.x + Math.cos(a.lockedAngle) * (e.radius + 6), y: e.y + Math.sin(a.lockedAngle) * (e.radius + 6) });
 }
 
 // THE WEAVER (spec §5d). The duelist that fights the FLOOR: its webs are persistent
 // slow-zones that shrink your dance space, and its pounce is a marked drop from above —
 // airborne (untargetable) for a beat, center-heavy on the landing, a fresh web at the
-// crater. Phase changes ride the shared beat plumbing (a fixed 1.4s molt that bursts into
+// crater. Phase changes ride the shared beat plumbing (a fixed 0.8s molt that bursts into
 // a web-bolt ring + two broodlings).
-//   P1 (100–65%): alternating weave (3 webs) / single pounce every 3.0s.
-//   P2 (65–30%):  2.7s cadence; the pounce chains into a second, shorter-telegraph leap.
-//   P3 (30–0%):   2.3s cadence; 4-web weave; chained pounces.
+//   P1 (100–66%): alternating weave (3 webs) / single pounce every 3.0s.
+//   P2 (66–33%):  2.7s cadence; the gate's 2-hit — a chained second leap, .45s land-to-land.
+//   P3 (33–0%):   2.3s cadence; 4-web weave; one REAL pounce dressed with two afterimage feints.
 function updateWeaver(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
@@ -2538,11 +2656,31 @@ function weaverWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     }
     return;
   }
-  // pounce: the marker tracks then locks; chained pounces re-telegraph faster.
-  const isChained = e.boss!.spinCount > 0;
+  // pounce: the marker tracks then locks; chained pounces re-telegraph faster (the gate's
+  // .45s land-to-land 2-hit).
+  const boss = e.boss!;
+  const isChained = boss.spinCount > 0;
   const windup = isChained ? WEAVER.pounceChainWindup : WEAVER.pounceWindup;
   const lockAt = isChained ? WEAVER.pounceChainLock : WEAVER.pounceLock;
-  if (stepWindupTimer(w, e, dt, windup, lockAt, true)) {
+  const wasLocked = a.isAimLocked;
+  const isDone = stepWindupTimer(w, e, dt, windup, lockAt, true);
+  // Gate §3 P3 "one real + two afterimages": the moment the real mark locks, throw the
+  // feint markers — identical telegraphs, only the real one lands damage.
+  if (!wasLocked && a.isAimLocked && WEAVER.pounceFeints[boss.phase] > 0) {
+    const feints = WEAVER.pounceFeints[boss.phase];
+    const dur = Math.max(0, windup - a.time) + WEAVER.pounceAir;
+    const base = w.rng.next() * Math.PI * 2;
+    for (let i = 0; i < feints; i++) {
+      const ang = base + (i / feints) * Math.PI * 2;
+      ev.push({
+        t: "pounceFeint",
+        x: a.markX + Math.cos(ang) * WEAVER.pounceFeintDist,
+        y: a.markY + Math.sin(ang) * WEAVER.pounceFeintDist,
+        r: WEAVER.pounceRadius, dur,
+      });
+    }
+  }
+  if (isDone) {
     a.phase = "active"; a.time = 0; a.windup = 0;
     ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1.1, gain: 0.8, trauma: 0.05 });
   }
@@ -2564,8 +2702,9 @@ function weaverActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     weaverLand(w, e, ev);
     const boss = e.boss!;
     boss.spinCount++;
-    // P2+: chain straight into the next leap off the landing (shorter telegraph).
-    if (boss.spinCount < WEAVER.pounceChains[boss.phase] + 1 && boss.phase >= 2) {
+    // pounceChains is the TOTAL leaps per commitment (gate §3: P2 is the 2-hit; P3 is a
+    // single real leap dressed with afterimage feints).
+    if (boss.spinCount < WEAVER.pounceChains[boss.phase]) {
       beginWindup(e, "pounce");
       return;
     }
@@ -2979,19 +3118,52 @@ function rushSmashEnvironment(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   enemySmashEnvironment(w, e.x, e.y, e.radius + RUSH_SMASH_PAD, ev);
 }
 
-// ---- hazards (the Weaver's webs) ----
+// ---- hazards (the Weaver's webs, MARROW's rubble lanes) ----
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
+  let mult = 1;
   for (const h of w.hazards) {
-    if (Math.hypot(x - h.x, y - h.y) < h.radius) return WEAVER.webSlow;
+    if (Math.hypot(x - h.x, y - h.y) >= h.radius) continue;
+    mult = Math.min(mult, h.kind === "web" ? WEAVER.webSlow : MARROW.rubbleSlow);
   }
-  return 1;
+  return mult;
 }
 
 function updateHazards(w: WorldState, dt: number): void {
   if (w.hazards.length === 0) return;
   for (const h of w.hazards) h.life -= dt;
   w.hazards = w.hazards.filter((h) => h.life > 0);
+}
+
+// ---- the mob overlap arbiter (studio gate §2) ----
+// "No two damage releases within 0.30s covering the same escape lane": before a REGULAR
+// mob's committed windup may flip into its damage release, its release area must be clear
+// of every release from the last 0.30s. Blocked commitments HOLD at full windup (telegraph
+// stays up, no damage) and re-check each tick — the stagger is at most the window itself.
+// Bosses are exempt: boss floors are authored end-to-end by their own §3 contracts.
+
+const RELEASE_ARBITER_WINDOW = 0.30;
+const RELEASE_LANE_CLEARANCE = 36; // a player body's diameter — the escape lane itself
+
+function tickReleaseArbiter(w: WorldState, dt: number): void {
+  if (w.recentReleases.length === 0) return;
+  for (const r of w.recentReleases) r.t -= dt;
+  w.recentReleases = w.recentReleases.filter((r) => r.t > 0);
+}
+
+function tryRelease(w: WorldState, x: number, y: number, radius: number): boolean {
+  for (const r of w.recentReleases) {
+    if (Math.hypot(x - r.x, y - r.y) < radius + r.radius + RELEASE_LANE_CLEARANCE) return false;
+  }
+  w.recentReleases.push({ x, y, radius, t: RELEASE_ARBITER_WINDOW });
+  return true;
+}
+
+// The release area of a straight commitment (lunge/rush/bash): the swept lane,
+// approximated as a circle over its middle.
+function tryReleaseLane(w: WorldState, e: Enemy, angle: number, reach: number): boolean {
+  const half = reach / 2;
+  return tryRelease(w, e.x + Math.cos(angle) * half, e.y + Math.sin(angle) * half, half + e.radius);
 }
 
 // ---- props / chests / pickups ----
@@ -3151,7 +3323,17 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   // exactly as they always did per chest opened.
   const loot: ChestLoot[] = [];
   if (c.kind === "boss") {
-    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+    // Studio gate §4 boss weapon reward: P+1 DISTINCT personal choices (capped 5) — the
+    // boss's authored signature weapon plus seeded distinct alternatives. Every player
+    // claims exactly one (see updatePickups); a claim never removes a teammate's options.
+    // (Only signature-bearing chests — every real boss drop — carry the choice set.)
+    if (c.weapon !== undefined) {
+      const choices: WeaponId[] = [c.weapon];
+      while (choices.length < bossWeaponChoices(w.encounterPlayers)) {
+        choices.push(rollDistinctWeapon(w.rng, choices));
+      }
+      for (const weapon of choices) loot.push({ kind: "weapon", weapon, isBossChoice: true });
+    }
     loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
@@ -3186,7 +3368,7 @@ function openerAngle(p: PlayerSim, c: Chest): number {
 
 type ChestLoot =
   | { kind: "coin" | "heart" }
-  | { kind: "weapon"; weapon: WeaponId };
+  | { kind: "weapon"; weapon: WeaponId; isBossChoice?: boolean };
 
 // Every drop a chest produces lands somewhere the collector can actually STAND — the old
 // loose offsets (coins in a row, heart under the chest) could put loot inside a wall or
@@ -3201,7 +3383,7 @@ function ejectChestLoot(w: WorldState, c: Chest, loot: ChestLoot[], base: number
     const [x, y] = chestLootSpot(w, c, base, slot, pr, placed);
     placed.push({ x, y });
     if (item.kind === "weapon") {
-      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon });
+      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon, isBossChoice: item.isBossChoice });
       ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
     } else {
       w.pickups.push(makePickup(w, item.kind, x, y, ev));
@@ -3331,12 +3513,50 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           }
           continue;
         }
-        if (p.kind === "weapon" && p.weapon && !player.ownedWeapons.includes(p.weapon)) { acquireWeapon(player, p.weapon); ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "dealer_weapon") {
+          // Gate §4: purchases are PERSONAL and never deplete the stock — an owner (or a
+          // broke player) walks past; a buyer pays and the pedestal stays for teammates.
+          if (p.weapon && !player.ownedWeapons.includes(p.weapon) && player.coins >= (p.value ?? 0)) {
+            player.coins -= p.value ?? 0;
+            acquireWeapon(player, p.weapon);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+          }
+          continue;
+        }
+        if (p.kind === "weapon" && p.weapon) {
+          if (p.isBossChoice) {
+            // Gate §4 boss reward: one personal CLAIM per player per boss chest. Claiming a
+            // weapon the player already owns grants one seeded REROLL (never coins/raw
+            // damage); the pedestal itself persists for teammates either way.
+            if (player.hasClaimedBossChoice) continue;
+            player.hasClaimedBossChoice = true;
+            const grant = player.ownedWeapons.includes(p.weapon)
+              ? rollDistinctWeapon(w.rng, player.ownedWeapons)
+              : p.weapon;
+            acquireWeapon(player, grant);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+            continue;
+          }
+          if (!player.ownedWeapons.includes(p.weapon)) {
+            acquireWeapon(player, p.weapon);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+            collected = true; break;
+          }
+        }
       }
     }
     if (!collected) remaining.push(p);
   }
   w.pickups = remaining;
+  // Boss-choice pedestals clear only once every living player has claimed — until then a
+  // claim leaves every remaining option standing for the others.
+  if (w.pickups.some((p) => p.isBossChoice)) {
+    let allClaimed = true;
+    for (const player of w.players.values()) {
+      if (!player.isDown && player.hp > 0 && !player.hasClaimedBossChoice) { allClaimed = false; break; }
+    }
+    if (allClaimed) w.pickups = w.pickups.filter((p) => !p.isBossChoice);
+  }
 }
 
 // Is there another player (or, on the legacy Convex co-op path, a remote target) still up who

@@ -253,9 +253,10 @@ function marrowTests(): void {
   section("Marrow: the opening line charge and its wall-crash stun");
   {
     const { w, p, boss } = marrowSetup(0xAD01);
-    // Park the pair so the charge lane points into the east wall (wall face ~x=1584).
-    boss.x = 1150; boss.y = 600;
-    p.x = 1400; p.y = 600;
+    // Park the pair so the charge lane points into the east wall (wall face ~x=1584; the
+    // gate's 0.60s active at 520px/s covers 312px, so start inside that reach).
+    boss.x = 1300; boss.y = 600;
+    p.x = 1500; p.y = 600;
     // Entrance grace, then the first commitment is the line charge.
     let guard = 0;
     while (boss.attack.move !== "rush" && guard++ < 300) step(w, idle(w.tick + 1));
@@ -268,7 +269,7 @@ function marrowTests(): void {
     check("the missed charge crashes and stuns", ev.some((x) => x.t === "chargeCrash")
       && boss.attack.move === "crash" && boss.attack.phase === "recover");
     check("P1 crash bursts no shard ring yet (that is P2+)", w.bullets.every((b) => b.friendly));
-    check("the crash stun is a real punish window", MARROW.crashStun >= 1.5, `${MARROW.crashStun}s`);
+    check("the crash stun is the gate 1.0s wall recover — the punish window", MARROW.crashStun === 1.0, `${MARROW.crashStun}s`);
   }
 
   section("Marrow: bone-shard volley");
@@ -299,7 +300,7 @@ function marrowTests(): void {
     plantBullet(w, boss.x, boss.y, 1e6);
     stepFor(w, 0.1, ev);
     const enter = ev.find((x) => x.t === "bossTransition" && x.entering);
-    check("a million-damage hit floors the Marrow at 57%", Math.abs(boss.hp - MARROW.phaseFloor[0] * boss.maxHp) < 1e-6,
+    check("a million-damage hit floors the Marrow at 58%", Math.abs(boss.hp - MARROW.phaseFloor[0] * boss.maxHp) < 1e-6,
       `hp=${boss.hp}/${boss.maxHp}`);
     check("the overflow is queued and the shield beat raised", enter !== undefined && boss.attack.move === "shield");
     const husks = w.enemies.filter((e) => e.isSummoned && e.kind === "skeleton" && !e.dead);
@@ -333,7 +334,7 @@ function marrowTests(): void {
     stepFor(w, 0.2);
     plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
     stepFor(w, 0.1);
-    check("a clean 65% cross shields without queueing", boss.attack.move === "shield"
+    check("a clean 66% cross shields without queueing", boss.attack.move === "shield"
       && Math.abs(boss.hp - 0.6 * boss.maxHp) < 1);
     stepFor(w, MARROW.shieldMinDuration);
     for (const h of w.enemies.filter((e) => e.isSummoned && !e.dead)) {
@@ -491,7 +492,7 @@ function choirSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy } 
 function choirTests(): void {
   section("Hollow Choir: identity + anchors");
   check("choir is a boss kind", isBossKind("choir"));
-  check("F10 Choir HP matches its calibration anchor", choirHpForFloor(10) === CHOIR.baseHp, `hp=${choirHpForFloor(10)}`);
+  check("F25 Choir HP matches its calibration anchor", choirHpForFloor(25) === CHOIR.baseHp, `hp=${choirHpForFloor(25)}`);
 
   section("Hollow Choir: homing wails you juke by turning");
   {
@@ -500,15 +501,16 @@ function choirTests(): void {
     while (boss.attack.move !== "wail" && guard++ < 600) step(w, idle(w.tick + 1));
     check("the Choir telegraphs the wail volley", boss.attack.move === "wail" && boss.attack.phase === "windup");
     let released = false;
-    let wails = 0;
     for (let i = 0; i < Math.round((CHOIR.wailWindup + 0.2) / DT) && !released; i++) {
       const out = step(w, idle(w.tick + 1));
-      if (out.some((x) => x.t === "bossVolley")) {
-        released = true;
-        wails = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
-      }
+      if (out.some((x) => x.t === "bossVolley")) released = true;
     }
-    check("P1 releases a 2-wail volley of seekers", released && wails === CHOIR.wailCount[1], `wails=${wails}`);
+    // Gate §3: the volley rains SEQUENTIALLY — one seeker per release step, never a wall.
+    const atRelease = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
+    stepFor(w, CHOIR.wailCount[1] * CHOIR.wailReleaseGap + 0.05);
+    const wails = w.bullets.filter((b) => !b.friendly && b.homing !== undefined).length;
+    check("the first release step throws exactly ONE wail (sequential rain)", released && atRelease === 1, `atRelease=${atRelease}`);
+    check("the full P1 stream totals the 2-wail volley", wails === CHOIR.wailCount[1], `wails=${wails}`);
     // The homing: move the player sideways; the wail's velocity must bend toward them.
     const wail = w.bullets.find((b) => !b.friendly && b.homing !== undefined);
     check("a wail exists to track", wail !== undefined);
@@ -550,7 +552,7 @@ function choirTests(): void {
     stepFor(w, 0.2);
     plantBullet(w, boss.x, boss.y, 1e6);
     stepFor(w, 0.1);
-    check("a million-damage hit floors the Choir at 57%", Math.abs(boss.hp - CHOIR.phaseFloor[0] * boss.maxHp) < 1e-6,
+    check("a million-damage hit floors the Choir at 58%", Math.abs(boss.hp - CHOIR.phaseFloor[0] * boss.maxHp) < 1e-6,
       `hp=${boss.hp}/${boss.maxHp}`);
     check("the Choir scatters (split beat, boss out of play)", boss.attack.move === "split");
     const wisps = w.enemies.filter((e) => e.isSummoned && e.kind === "ghost" && !e.dead);
@@ -589,7 +591,7 @@ function weaverSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
 function weaverTests(): void {
   section("Weaver: identity + anchors");
   check("weaver is a boss kind", isBossKind("weaver"));
-  check("F10 Weaver HP matches its calibration anchor", weaverHpForFloor(10) === WEAVER.baseHp, `hp=${weaverHpForFloor(10)}`);
+  check("F15 Weaver HP matches its calibration anchor", weaverHpForFloor(15) === WEAVER.baseHp, `hp=${weaverHpForFloor(15)}`);
 
   section("Weaver: webs — persistent slow-zones, never damage");
   {
@@ -666,7 +668,7 @@ function weaverTests(): void {
     const ev: SimEvent[] = [];
     plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
     stepFor(w, 0.15, ev);
-    check("a 65% cross raises the molt (roar semantics)", boss.attack.move === "roar");
+    check("a 66% cross raises the molt (roar semantics)", boss.attack.move === "roar");
     const brood = w.enemies.filter((e) => e.isSummoned && e.kind === "bat" && !e.dead);
     check("two swarm broodling bats spawn with the beat", brood.length === WEAVER.moltAdds && brood.every((x) => x.tier === "swarm"));
     const shotsBefore = w.bullets.filter((b) => !b.friendly).length;
@@ -692,7 +694,7 @@ function gildedSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
 function gildedTests(): void {
   section("Gilded Warden: identity + anchors");
   check("gilded is a boss kind", isBossKind("gilded"));
-  check("F10 Warden HP matches its calibration anchor", gildedHpForFloor(10) === GILDED.baseHp, `hp=${gildedHpForFloor(10)}`);
+  check("F20 Warden HP matches its calibration anchor", gildedHpForFloor(20) === GILDED.baseHp, `hp=${gildedHpForFloor(20)}`);
 
   section("Gilded Warden: the plate — chip while closed, full while EXPOSED");
   {
@@ -754,36 +756,136 @@ function gildedTests(): void {
   }
 }
 
+// ---- the studio-gate pressure contracts (gate §3 rows on the approved kits) ----
+
+function gatePressureTests(): void {
+  section("gate §3 Marrow: P2 pair charges; P3 rubble lanes (max 2, 4s)");
+  {
+    // Surgery to P2: the pair contract — a clean miss re-tracks into a second full
+    // telegraph within one commitment (one cooldown), and a connect/crash ends the pair.
+    const { w, p, boss } = marrowSetup(0xAD11);
+    boss.boss!.phase = 2;
+    boss.boss!.transitionsDone = 1;
+    boss.x = 800; boss.y = 600;
+    p.x = 1050; p.y = 600;
+    let releases = 0;
+    let guard = 0;
+    // Ride exactly one rush commitment: count releases ("dash" cues) until it recovers.
+    while (boss.attack.move !== "rush" && guard++ < 400) step(w, idle(w.tick + 1));
+    check("the P2 Marrow telegraphs the rush", boss.attack.move === "rush");
+    guard = 0;
+    while (!(boss.attack.phase === "recover") && guard++ < 400) {
+      // Step aside the moment the aim locks so every lane misses cleanly.
+      if (boss.attack.isAimLocked && boss.attack.phase === "windup") { p.y = boss.y + 260; p.x = boss.x; }
+      const out = step(w, idle(w.tick + 1));
+      releases += out.filter((x) => x.t === "cue" && x.name === "dash").length;
+    }
+    check("one P2 commitment releases the PAIR (two charges, one cooldown)", releases === 2, `releases=${releases}`);
+  }
+  {
+    // Surgery to P3: rubble paves along the furrow; live lanes cap at 2 (oldest expires).
+    const { w, p, boss } = marrowSetup(0xAD12);
+    boss.boss!.phase = 3;
+    boss.boss!.transitionsDone = 2;
+    boss.x = 800; boss.y = 600;
+    p.x = 1050; p.y = 600;
+    let rushesSeen = 0;
+    let sawRubble = false;
+    let lanesOk = true;
+    let wasActive = false;
+    for (let t = 0; t < 60 * 30 && rushesSeen < 3; t++) {
+      if (boss.attack.isAimLocked && boss.attack.phase === "windup" && boss.attack.move === "rush") {
+        p.y = boss.y + 280; p.x = boss.x; // sidestep: every lane runs its full length
+      }
+      const isActive = boss.attack.move === "rush" && boss.attack.phase === "active";
+      if (wasActive && !isActive) rushesSeen++;
+      wasActive = isActive;
+      step(w, idle(w.tick + 1));
+      const rubble = w.hazards.filter((h) => h.kind === "rubble");
+      if (rubble.length > 0) sawRubble = true;
+      const lanes = new Set(rubble.map((h) => h.lane));
+      if (lanes.size > MARROW.rubbleMaxLanes) lanesOk = false;
+    }
+    check("P3 charges pave rubble slow-lanes down the furrow", sawRubble && rushesSeen >= 2, `rushes=${rushesSeen}`);
+    check("live rubble never exceeds the 2-lane cap (oldest expires first)", lanesOk);
+    check("rubble pads carry the gate lifetime", MARROW.rubbleLife === 4 && MARROW.rubbleMaxLanes === 2);
+  }
+
+  section("gate §3 Weaver: the P2 2-hit (.45s gap) and the P3 real-plus-afterimages");
+  {
+    const { w, p, boss } = weaverSetup(0x3EB1);
+    boss.boss!.phase = 2;
+    boss.boss!.transitionsDone = 1;
+    let guard = 0;
+    while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
+    check("the P2 Weaver telegraphs the pounce", boss.attack.move === "pounce");
+    const landAt: number[] = [];
+    guard = 0;
+    while (landAt.length < 2 && guard++ < 600) {
+      p.x = boss.attack.markX + 220; p.y = boss.attack.markY; // never stand the mark
+      const out = step(w, idle(w.tick + 1));
+      if (out.some((x) => x.t === "bossSlam")) landAt.push(w.tick * DT);
+    }
+    check("the P2 commitment lands the 2-hit", landAt.length === 2, `hits=${landAt.length}`);
+    check("the chained leap re-telegraphs on the gate's .45s land-to-land gap",
+      landAt.length === 2 && Math.abs(landAt[1] - landAt[0] - 0.45) <= 3 * DT,
+      landAt.length === 2 ? `gap=${(landAt[1] - landAt[0]).toFixed(2)}s` : "");
+  }
+  {
+    const { w, p, boss } = weaverSetup(0x3EB2);
+    boss.boss!.phase = 3;
+    boss.boss!.transitionsDone = 2;
+    let guard = 0;
+    while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
+    let feints = 0;
+    let lands = 0;
+    guard = 0;
+    while (!(boss.attack.phase === "recover") && guard++ < 600) {
+      p.x = boss.attack.markX + 220; p.y = boss.attack.markY;
+      const out = step(w, idle(w.tick + 1));
+      feints += out.filter((x) => x.t === "pounceFeint").length;
+      lands += out.filter((x) => x.t === "bossSlam").length;
+    }
+    check("P3 throws one REAL pounce dressed with two afterimage feints",
+      feints === WEAVER.pounceFeints[3] && lands === 1, `feints=${feints} lands=${lands}`);
+  }
+}
+
 // ---- the boss ladder: seeded rotation ----
 
 function rotationTests(): void {
-  section("boss ladder: F5 is the King; deeper floors rotate the seeded roster");
+  section("boss ladder: the authored F5-F25 table, then the seeded deep rotation");
   {
-    let f5Ok = true;
+    // Studio gate §2 cadence: every run walks the same authored encounters in order.
+    const ladder: Array<[number, EnemyKind]> = [[5, "boss"], [10, "marrow"], [15, "weaver"], [20, "gilded"], [25, "choir"]];
+    let authoredOk = true;
     for (let s = 0; s < 40; s++) {
-      if (bossKindForFloor(0xAAA + s * 131, 5) !== "boss") f5Ok = false;
+      for (const [floor, kind] of ladder) {
+        if (bossKindForFloor(0xAAA + s * 131, floor) !== kind) authoredOk = false;
+      }
     }
-    check("floor 5 is ALWAYS the Slime King (the telegraph tutor)", f5Ok);
+    check("F5/10/15/20/25 are ALWAYS King/Marrow/Weaver/Warden/Choir (gate §2, Warden in the F20 slot)", authoredOk);
   }
   {
-    // Determinism + variety + no immediate repeats across the ladder.
+    // Beyond the authored table: seeded, deterministic, varied, no immediate repeats —
+    // including the F25 Choir -> F30 boundary.
     const seen = new Set<EnemyKind>();
     let deterministic = true;
     let noRepeats = true;
     for (let s = 0; s < 60; s++) {
       const seed = 0x5EED + s * 977;
-      let prev: EnemyKind | null = null;
-      for (let floor = 10; floor <= 40; floor += 5) {
+      let prev: EnemyKind = "choir";
+      for (let floor = 30; floor <= 60; floor += 5) {
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
-        if (prev !== null && a === prev) noRepeats = false;
+        if (a === prev) noRepeats = false;
         seen.add(a);
         prev = a;
       }
     }
-    check("the pick is a pure function of (seed, floor)", deterministic);
-    check("no boss repeats back-to-back within a run", noRepeats);
-    check("all five bosses appear across seeds", seen.size === 5, [...seen].join(","));
+    check("the deep pick is a pure function of (seed, floor)", deterministic);
+    check("no boss repeats back-to-back deep (nor against the F25 finale)", noRepeats);
+    check("all five bosses appear across deep seeds", seen.size === 5, [...seen].join(","));
   }
   {
     // Every deep boss floor spawns its boss with the matching kin.
@@ -916,18 +1018,18 @@ function rosterTests(): void {
     check("floor plans field chargers and burrowers", sawCharger && sawBurrower,
       `charger=${sawCharger} burrower=${sawBurrower}`);
   }
-  check("charger/burrower are complex (threat 1.5) so the room-readability guards apply",
-    ENEMY_ARCHETYPES.charger.threat === 1.5 && ENEMY_ARCHETYPES.burrower.threat === 1.5);
-  check("neither new enemy appears before its intro floor",
+  check("charger/burrower carry the gate's ×2 complex-movement cost (threat 2.0)",
+    ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
+  check("neither new enemy appears before its gate §2 intro floor (charger F4, burrower F7)",
     (() => {
       for (let i = 0; i < 8; i++) {
         const seed = 0xABC + i * 977;
-        for (const floor of [1, 2, 3]) {
+        for (const floor of [1, 2, 3, 4, 6]) {
           const d = generateDungeon(seed, floor);
           const spawns = spawnFloorEnemies(d, seed, floor);
           for (const e of [...spawns.active, ...spawns.pending]) {
             if (e.kind === "burrower") return false;
-            if (e.kind === "charger" && floor < 3) return false;
+            if (e.kind === "charger" && floor < 4) return false;
           }
         }
       }
@@ -1088,7 +1190,8 @@ function main(): void {
   choirTests();
   weaverTests();
   gildedTests();
-  rotationTests();
+  gatePressureTests();
+rotationTests();
   bossChestTests();
   weaponTests();
   beamTests();

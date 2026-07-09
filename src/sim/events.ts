@@ -57,6 +57,9 @@ export type SimEvent =
   | { t: "bossVolley"; x: number; y: number }
   // The Weaver planted a web slow-zone (the hazard itself rides world/snapshot state).
   | { t: "webPlaced"; x: number; y: number; r: number }
+  // The Weaver's P3 afterimage feints (gate §3): identical pounce telegraphs at fake marks
+  // that expire harmlessly after `dur` seconds — only the real mark lands damage.
+  | { t: "pounceFeint"; x: number; y: number; r: number; dur: number }
   | { t: "bossAddSpawn"; eid: number; x: number; y: number; mx: number; my: number; spawned: boolean }
   | { t: "bossPhase"; eid: number; x: number; y: number }
   // Transition telemetry (§5/§7 gate 2): enter/exit of each 1.2s roar beat with the queued

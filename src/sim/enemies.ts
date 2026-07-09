@@ -8,7 +8,8 @@ import {
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
-  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
+  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR, MAX_COMPLEX_MOVERS_ACTIVE,
+  MAX_BURROWERS_PER_ROOM, FLOCK_THREAT_SHARE_MAX,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 
@@ -35,18 +36,22 @@ export interface EnemyArchetype {
   threat: number;       // §4 threat-budget cost (simple chaser 1.0, ranged/kiter 1.5)
 }
 
+// Standard-tier baselines satisfy the studio gate's early-melt floor: a focused starter
+// pistol takes ≥0.45s median to delete any archetype on its entry floor (gate §7.1 raised
+// slime 3→5, bat 2→4, spitter 3→5 — "raise archetype HP, not body count"). Swarm-tier
+// bodies stay the deliberate 0.55× melt chaff.
 export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   slime: {
     kind: "slime", sprite: "slime", movement: "chase", isPhasing: false,
     radius: 16, drawSize: 44, alpha: 1, tint: "#a855f7", kbResist: 1,
-    baseHp: 3, baseSpeed: 42, touchDamage: 1, threat: 1.0,
+    baseHp: 5, baseSpeed: 42, touchDamage: 1, threat: 1.0,
   },
   // Bats fly as a FLOCK (deterministic boids: separation/alignment/cohesion + target
   // attraction) — a wheeling, readable swarm instead of independent zigzag beelines.
   bat: {
     kind: "bat", sprite: "bat", movement: "flock", isPhasing: false,
     radius: 13, drawSize: 40, alpha: 1, tint: "#9aa4bf", kbResist: 0.7,
-    baseHp: 2, baseSpeed: 96, touchDamage: 1, threat: 1.0,
+    baseHp: 4, baseSpeed: 96, touchDamage: 1, threat: 1.0,
   },
   skeleton: {
     kind: "skeleton", sprite: "skeleton", movement: "chase", isPhasing: false,
@@ -64,25 +69,26 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   spitter: {
     kind: "spitter", sprite: "spitter", movement: "kite", isPhasing: false,
     radius: 15, drawSize: 42, alpha: 1, tint: "#ff5a7a", kbResist: 0.8,
-    baseHp: 3, baseSpeed: 30, touchDamage: 1, threat: 1.5,
+    baseHp: 5, baseSpeed: 30, touchDamage: 1, threat: 1.5,
   },
   // Line-rush bruiser: a slow stalker whose telegraphed straight charge crosses most of a
   // room — sidestep it, then punish the wall-crash stun. Heavy on its feet (high kbResist),
-  // so the answer is footwork, not knockback.
+  // so the answer is footwork, not knockback. Complex MOVEMENT (studio gate §2): its
+  // standard cost carries the ×2 complexity multiplier.
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: charger).
   charger: {
     kind: "charger", sprite: "charger", movement: "charge", isPhasing: false,
     radius: 17, drawSize: 48, alpha: 1, tint: "#d9a066", kbResist: 1.8,
-    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 1.5,
+    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 2.0,
   },
   // Kite-denial: dives underground (untargetable, bounded), tunnels to the target, and
   // erupts on a marked, telegraphed circle. You cannot outrange it — you dodge its marker
-  // and punish the surfaced recover window.
+  // and punish the surfaced recover window. Complex movement: ×2 cost, like the charger.
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: burrower).
   burrower: {
     kind: "burrower", sprite: "burrower", movement: "burrow", isPhasing: false,
     radius: 15, drawSize: 44, alpha: 1, tint: "#caa27e", kbResist: 1.2,
-    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 1.5,
+    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 2.0,
   },
   // Ring strafer: circles the target at mid range (rotational tracking — a different aim
   // problem from the spitter's straight kiting) and stops to fire a quick telegraphed bolt.
@@ -163,9 +169,14 @@ export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
 }
 
-// The deep rotation: every boss floor past the first draws from the full roster, seeded
-// per run — variety between runs, identical across a run's clients/restarts. The King is
-// in the pool too (it scales on the same clamped curve), so deep runs still meet him.
+// The authored ladder (studio gate §2): every run walks the same five encounters in the
+// same teaching order — the King's telegraph tutorial, MARROW's lanes, the Weaver's floor
+// fight, the F20 armored tempo boss (the approved Gilded Warden in the gate's "Jet" slot),
+// and the Hollow Choir finale.
+const AUTHORED_BOSS_LADDER: readonly EnemyKind[] = ["boss", "marrow", "weaver", "gilded", "choir"];
+
+// Beyond the authored table (F30+), boss floors draw from the full roster, seeded per
+// run — variety between runs, identical across a run's clients/restarts.
 const DEEP_BOSS_ROSTER: readonly EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss"];
 
 // Each boss floor's kin — the floor's ambient minions and its cadence/beat adds.
@@ -173,19 +184,19 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   boss: "slime", marrow: "skeleton", choir: "ghost", weaver: "bat", gilded: "shielder",
 };
 
-// Which boss holds each boss floor. F5 is ALWAYS the Slime King — the tutorial boss that
-// teaches the telegraph language. Deeper boss floors (10, 15, 20, …) roll the seeded deep
-// roster with no immediate repeats, so every run's boss ladder is its own.
+// Which boss holds each boss floor: the authored F5–F25 ladder, then the seeded deep
+// rotation with no immediate repeats (its first pick also never repeats the F25 Choir).
 export function bossKindForFloor(seed: number, floor: number): EnemyKind {
   const ladder = Math.floor(floor / BOSS_EVERY);
-  if (ladder <= 1) return "boss";
-  return DEEP_BOSS_ROSTER[deepBossIndex(seed, ladder - 2)];
+  if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
+  return DEEP_BOSS_ROSTER[deepBossIndex(seed, ladder - AUTHORED_BOSS_LADDER.length - 1)];
 }
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
-// deterministic at any depth (each step rerolls, shifting off the previous pick).
+// deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
+// treats the authored finale (the Choir) as its predecessor.
 function deepBossIndex(seed: number, step: number): number {
-  let prev = -1;
+  let prev = DEEP_BOSS_ROSTER.indexOf(AUTHORED_BOSS_LADDER[AUTHORED_BOSS_LADDER.length - 1]);
   for (let s = 0; ; s++) {
     let pick = new Rng((seed ^ 0xB055ED) + s * 2654435761).int(0, DEEP_BOSS_ROSTER.length - 1);
     if (pick === prev) pick = (pick + 1) % DEEP_BOSS_ROSTER.length;
@@ -214,6 +225,14 @@ export function enemySpeedForFloor(kind: EnemyKind, floor: number): number {
 // §4 threat-budget cost of one unit: archetype cost × tier cost.
 export function threatCostOf(kind: EnemyKind, tier: EnemyTier): number {
   return ENEMY_ARCHETYPES[kind].threat * TIERS[tier].threatCost;
+}
+
+// The complex MOVERS of studio gate §1: the movement verbs that deny standard answers
+// (the charger's lane, the burrower's tunnel). At most MAX_COMPLEX_MOVERS_ACTIVE of them
+// may be live at once on Standard.
+export function isComplexMover(kind: EnemyKind): boolean {
+  const m = ENEMY_ARCHETYPES[kind].movement;
+  return m === "charge" || m === "burrow";
 }
 
 export interface CreateEnemyOpts {
@@ -270,7 +289,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         phase: 1, transitionsDone: 0, roar: null,
         addTimer: BOSS_ADD_FIRST_AT[kind] ?? 0,
         attackCount: 0, isNextRadial: false, burstParity: 0,
-        beatAddIds: [], spinCount: 0,
+        beatAddIds: [], spinCount: 0, rubbleLane: 0,
       }
       : null,
   };
@@ -287,29 +306,32 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt,
 };
 
+// Entry floors follow the studio gate §2 cadence table: F1 establishes with Slime +
+// Spitter, F2 expands (Bat, Skeleton), F3 decides (+Ghost), F4 proves the base five and
+// lands the first guaranteed brute (the charger's long lane graduates the skeleton's
+// lunge), F6 adds the orbiter's rotational pressure, and F7 is the adapt floor — the
+// burrower (the gate's Rattleback) plus the shielder wall.
 function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
   const roster: Array<{ kind: EnemyKind; weight: number }> = [{ kind: "slime", weight: 5 }];
+  // Ranged threat from the very first room (gate §2 F1: "Slime + Spitter") — rare at
+  // first, a bit more common from floor 3 once the melee reads are learned. Sunless
+  // raises the complex share.
+  roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
   if (floor >= 2) {
     roster.push({ kind: "bat", weight: 3 });
     roster.push({ kind: "skeleton", weight: 2 });
-    // Ranged threat: rare on floor 2 (a gentle intro) and a bit more common from floor 3
-    // once the player has learned to dodge the melee lunge. Sunless raises the complex share.
-    roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
   }
-  if (floor >= 3) {
-    roster.push({ kind: "ghost", weight: 2 * complexShare });
-    // The charger arrives once the skeleton has taught the short lunge — its long lane is
-    // the graduate version of the same read.
-    roster.push({ kind: "charger", weight: 2 });
-  }
-  // The burrower lands after the ranged/kite lessons: it exists to deny the "stand at
-  // range" answer, so it enters once that answer has formed.
-  if (floor >= 4) roster.push({ kind: "burrower", weight: 2 * complexShare });
+  if (floor >= 3) roster.push({ kind: "ghost", weight: 2 * complexShare });
+  if (floor >= 4) roster.push({ kind: "charger", weight: 2 });
   // The orbiter joins once dodging straight shots is learned — its circling bolt asks for
-  // rotational tracking instead. The shielder arrives last: by floor 7 the player owns
-  // flanking/melee/splash answers, so a walking wall is a puzzle, not a stonewall.
+  // rotational tracking instead.
   if (floor >= 6) roster.push({ kind: "orbiter", weight: 2 * complexShare });
-  if (floor >= 7) roster.push({ kind: "shielder", weight: 2 });
+  // F7, the adapt floor: the burrower denies the "stand at range" answer the moment it has
+  // formed, and the shielder wall asks for the flank/melee/splash answers owned by now.
+  if (floor >= 7) {
+    roster.push({ kind: "burrower", weight: 2 * complexShare });
+    roster.push({ kind: "shielder", weight: 2 });
+  }
   return roster;
 }
 
@@ -346,6 +368,7 @@ interface PlannedUnit {
 // Per-room composition bookkeeping for the §4 readability guards.
 interface RoomLoad {
   complex: number;
+  burrowers: number;
   hasBrute: boolean;
   hasElite: boolean;
 }
@@ -368,31 +391,48 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
     combatRooms.push(candidates.splice(rng.int(0, candidates.length - 1), 1)[0]);
   }
   const load = new Map<number, RoomLoad>();
-  for (const r of combatRooms) load.set(r, { complex: 0, hasBrute: false, hasElite: false });
+  for (const r of combatRooms) load.set(r, { complex: 0, burrowers: 0, hasBrute: false, hasElite: false });
 
-  const pickRoom = (unit: { kind: EnemyKind; tier: EnemyTier }): number => {
+  const roomFits = (room: number, unit: { kind: EnemyKind; tier: EnemyTier }): boolean => {
+    const l = load.get(room)!;
+    if (ENEMY_ARCHETYPES[unit.kind].threat > 1 && l.complex >= MAX_COMPLEX_PER_ROOM) return false;
+    if (unit.kind === "burrower" && l.burrowers >= MAX_BURROWERS_PER_ROOM) return false;
+    if (floor < BRUTE_ELITE_COMBO_FLOOR) {
+      if (unit.tier === "brute" && l.hasElite) return false;
+      if (unit.tier === "elite" && l.hasBrute) return false;
+    }
+    return true;
+  };
+
+  const claimRoom = (room: number, unit: { kind: EnemyKind; tier: EnemyTier }): number => {
+    const l = load.get(room)!;
+    if (ENEMY_ARCHETYPES[unit.kind].threat > 1) l.complex++;
+    if (unit.kind === "burrower") l.burrowers++;
+    if (unit.tier === "brute") l.hasBrute = true;
+    if (unit.tier === "elite") l.hasElite = true;
+    return room;
+  };
+
+  // Random placement first, then a deterministic scan — the composition guards are HARD
+  // (a floor plants fewer units before it ever breaks one).
+  const pickRoom = (unit: { kind: EnemyKind; tier: EnemyTier }): number | null => {
     for (let attempt = 0; attempt < 8; attempt++) {
       const room = combatRooms[rng.int(0, combatRooms.length - 1)];
-      const l = load.get(room)!;
-      const isComplex = ENEMY_ARCHETYPES[unit.kind].threat > 1;
-      if (isComplex && l.complex >= MAX_COMPLEX_PER_ROOM) continue;
-      if (floor < BRUTE_ELITE_COMBO_FLOOR) {
-        if (unit.tier === "brute" && l.hasElite) continue;
-        if (unit.tier === "elite" && l.hasBrute) continue;
-      }
-      if (isComplex) l.complex++;
-      if (unit.tier === "brute") l.hasBrute = true;
-      if (unit.tier === "elite") l.hasElite = true;
-      return room;
+      if (roomFits(room, unit)) return claimRoom(room, unit);
     }
-    return combatRooms[rng.int(0, combatRooms.length - 1)];
+    for (const room of combatRooms) {
+      if (roomFits(room, unit)) return claimRoom(room, unit);
+    }
+    return null;
   };
 
   const add = (kind: EnemyKind, tier: EnemyTier): boolean => {
     const cost = threatCostOf(kind, tier);
     if (cost > budget) return false;
+    const room = pickRoom({ kind, tier });
+    if (room === null) return false;
     budget -= cost;
-    plan.push({ kind, tier, room: pickRoom({ kind, tier }) });
+    plan.push({ kind, tier, room });
     return true;
   };
 
@@ -405,6 +445,9 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
     for (let i = 0; i < brutes; i++) add(BRUTE_KINDS[rng.int(0, BRUTE_KINDS.length - 1)], "brute");
   }
 
+  // Gate §2: no pack (the bat flock especially) may consume more than 35% of the floor's
+  // threat spend — a swarm is texture, never the room's whole budget.
+  const packSpendCap = FLOCK_THREAT_SHARE_MAX * floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
   const minCost = threatCostOf("slime", "swarm");
   let guard = 0;
   while (budget >= minCost && guard++ < 200) {
@@ -413,10 +456,13 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
     if (isSwarmable && rng.chance(0.3 * pressure.packBias)) {
       const pack = rng.int(2, 3);
       const room = pickRoom({ kind, tier: "swarm" });
+      if (room === null) continue;
+      let packSpent = 0;
       for (let i = 0; i < pack; i++) {
         const cost = threatCostOf(kind, "swarm");
-        if (cost > budget) break;
+        if (cost > budget || packSpent + cost > packSpendCap) break;
         budget -= cost;
+        packSpent += cost;
         plan.push({ kind, tier: "swarm", room });
       }
     } else if (!add(kind, "standard")) {
@@ -456,14 +502,18 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;
+  let activeComplexMovers = 0;
   let id = 0;
   for (const unit of plan) {
     const p = pointInRoom(rng, dungeon, unit.room);
     const enemy = createEnemy(unit.kind, p.x, p.y, floor, rng, id++, { tier: unit.tier, players });
     const cost = threatCostOf(unit.kind, unit.tier);
-    // Never exceed the ActiveThreatCap simultaneously: overflow becomes reinforcements.
-    if (activeThreat + cost <= cap) {
+    const isMover = isComplexMover(unit.kind);
+    // Never exceed the ActiveThreatCap simultaneously, and never field more than the
+    // gate's complex-mover budget at once: overflow becomes reinforcements.
+    if (activeThreat + cost <= cap && (!isMover || activeComplexMovers < MAX_COMPLEX_MOVERS_ACTIVE)) {
       activeThreat += cost;
+      if (isMover) activeComplexMovers++;
       active.push(enemy);
     } else {
       pending.push(enemy);

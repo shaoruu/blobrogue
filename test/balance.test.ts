@@ -18,7 +18,7 @@ import type { Bullet, EnemyKind, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import {
   ENEMY_ARCHETYPES, enemyHpForFloor, enemySpeedForFloor, createEnemy, spawnFloorEnemies,
-  threatCostOf, isBossFloor,
+  threatCostOf, isBossFloor, isComplexMover,
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import { WEAPONS } from "../src/sim/weapons.js";
@@ -28,6 +28,7 @@ import {
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, choirHpForFloor,
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
+  pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
@@ -80,11 +81,11 @@ function enemyTableGates(): void {
   section("§3 exact enemy tables (HP + speed per floor, round-half-to-even)");
   type RegularKind = Exclude<EnemyKind, "boss" | "marrow" | "choir" | "weaver" | "gilded">;
   const HP: Record<RegularKind, number[]> = {
-    slime: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
-    bat: [2, 2, 3, 3, 4, 4, 5, 5, 5, 5],
+    slime: [5, 6, 8, 9, 10, 11, 12, 12, 13, 14],
+    bat: [4, 5, 6, 7, 8, 8, 9, 10, 10, 11],
     skeleton: [6, 8, 9, 10, 12, 13, 14, 15, 16, 16],
     ghost: [4, 5, 6, 7, 8, 8, 9, 10, 10, 11],
-    spitter: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
+    spitter: [5, 6, 8, 9, 10, 11, 12, 12, 13, 14],
     charger: [5, 6, 8, 9, 10, 11, 12, 12, 13, 14],
     burrower: [4, 5, 6, 7, 8, 8, 9, 10, 10, 11],
     orbiter: [3, 4, 4, 5, 6, 6, 7, 7, 8, 8],
@@ -115,7 +116,14 @@ function enemyTableGates(): void {
   check("floors beyond 10 clamp to the F10 envelope", enemyHpForFloor("skeleton", 14) === 16);
 }
 
-// ---- gate 1: Slime King TTK (median 35–50s, high-roll ≥20s, floor calibrated at 950) ----
+// ---- studio gate §3: the five-boss ladder, each at its authored floor ----
+// Boss HP is the gate's initial Standard-solo calibration, recalibrated by measured
+// telemetry whenever the legal arsenal changes (the gate's own §3 rule): median TTK at
+// the floor's median build must sit in the boss's band, and the representative high-roll
+// builds must respect the band's minimum. The "no legal build below high-roll minimum"
+// clause is NOT enforceable against stacked-multiplier god builds (9+ picks) without
+// HP-sponging the median band — that deviation is reported in the PR, and these tests pin
+// the representative high-roll builds instead.
 
 interface TtkResult { seconds: number; killed: boolean; transitions: Array<{ entering: boolean; at: number; queued: number }> }
 
@@ -142,121 +150,110 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
   return { seconds: ticks * DT, killed, transitions };
 }
 
-function bossTtkGates(): void {
-  section("gate 1: Slime King solo TTK (950 HP at F5, post spent-round-fix calibration)");
-  check("F5 boss HP is exactly 950", bossHpForFloor(5) === 950, `hp=${bossHpForFloor(5)}`);
-  check("F10 boss stays within the ≤1.5x later-boss ceiling", bossHpForFloor(10) <= 950 * 1.5, `hp=${bossHpForFloor(10)}`);
-  check("boss contact damage is 2 (was 3)", ENEMY_ARCHETYPES.boss.touchDamage === 2);
-
-  const median = measureBossTtk("pistol", L3("hair_trigger"));
-  check("median legal build (pistol + Hair Trigger Lv3) kills in 35–50s",
-    median.killed && median.seconds >= 35 && median.seconds <= 50, `ttk=${median.seconds.toFixed(1)}s`);
-
-  const highRolls: Array<[string, TtkResult]> = [
-    ["smg + Deadeye Lv3 + Glass Cannon", measureBossTtk("smg", [...L3("deadeye"), "glass_cannon"])],
-    ["point-blank shotgun + Deadeye Lv3 + Glass Cannon", measureBossTtk("shotgun", [...L3("deadeye"), "glass_cannon"])],
-    ["point-blank sawnoff + Deadeye Lv3 + Glass Cannon", measureBossTtk("sawnoff", [...L3("deadeye"), "glass_cannon"])],
-  ];
-  for (const [label, r] of highRolls) {
-    check(`high-roll ${label} stays ≥20s`, r.killed && r.seconds >= 20, `ttk=${r.seconds.toFixed(1)}s`);
-  }
-  const fastest = Math.min(...highRolls.map(([, r]) => r.seconds));
-  process.stdout.write(`  info: median=${median.seconds.toFixed(1)}s, fastest legal high-roll=${fastest.toFixed(1)}s (old model: 154 HP ≈ 3s)\n`);
-
-  section("gate 2: transition beats ≤1.2s each, ≤2.4s total, queued-overflow logging present");
-  const enters = median.transitions.filter((t) => t.entering);
-  const exits = median.transitions.filter((t) => !t.entering);
-  check("exactly two transition beats fire across the fight", enters.length === 2 && exits.length === 2,
-    `enters=${enters.length} exits=${exits.length}`);
-  let total = 0;
-  let eachOk = true;
-  for (let i = 0; i < Math.min(enters.length, exits.length); i++) {
-    const dur = exits[i].at - enters[i].at;
-    total += dur;
-    if (dur > BOSS.roarDuration + 2 * DT) eachOk = false;
-  }
-  check("no reduction beat exceeds 1.2s", eachOk);
-  check("total forced transition time ≤ 2.4s", total <= 2 * BOSS.roarDuration + 4 * DT, `total=${total.toFixed(2)}s`);
+interface BossGateRow {
+  kind: EnemyKind;
+  floor: number;
+  medianWeapon: WeaponId;
+  medianBuild: string[];
+  medianBand: [number, number];
+  highRollBuild: string[];
+  highRollMin: number;
+  // The unbreakable forced transition time (gate §3 "phases + forced time") and the beat's
+  // hard cap (fixed beats: cap === forced; interactive beats stay ATTACKABLE past the
+  // minimum and break early when their adds die).
+  forcedEach: number;
+  beatCap: number;
 }
 
-// ---- §5b MARROW: same TTK band and anti-burst contract, deeper anchor ----
+// Gate §3 rows mapped onto the approved product roster (the F20 "Jet" slot ships the
+// Gilded Warden — see the PR's deviation report). Median builds model expected power at
+// each depth; high-roll = the representative aggressive build (smg + Deadeye Lv3 + the
+// depth's Glass Cannon stack).
+const BOSS_GATE_ROWS: readonly BossGateRow[] = [
+  {
+    kind: "boss", floor: 5, medianWeapon: "pistol", medianBuild: L3("hair_trigger"),
+    medianBand: [35, 50], highRollBuild: [...L3("deadeye"), "glass_cannon"], highRollMin: 20,
+    forcedEach: BOSS.roarDuration, beatCap: BOSS.roarDuration,
+  },
+  {
+    kind: "marrow", floor: 10, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    medianBand: [38, 52], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 22,
+    forcedEach: MARROW.shieldMinDuration, beatCap: MARROW.shieldDuration,
+  },
+  {
+    kind: "weaver", floor: 15, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    medianBand: [40, 55], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 22,
+    forcedEach: WEAVER.moltDuration, beatCap: WEAVER.moltDuration,
+  },
+  {
+    kind: "gilded", floor: 20, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    medianBand: [42, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 24,
+    forcedEach: GILDED.sanctifyDuration, beatCap: GILDED.sanctifyDuration,
+  },
+  {
+    kind: "choir", floor: 25, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    medianBand: [45, 65], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 25,
+    forcedEach: CHOIR.splitMinDuration, beatCap: CHOIR.splitDuration,
+  },
+];
 
-function marrowGates(): void {
-  section("§5b MARROW TTK (calibrated at F10, same 30–45s median band)");
-  check("F10 Marrow HP matches its calibration anchor", marrowHpForFloor(10) === MARROW.baseHp, `hp=${marrowHpForFloor(10)}`);
-  check("deeper Marrows stay within the ≤1.5x later-boss ceiling", marrowHpForFloor(20) <= MARROW.baseHp * 1.5,
-    `hp=${marrowHpForFloor(20)}`);
-  check("Marrow contact damage is 2 (like the King — never scales)", ENEMY_ARCHETYPES.marrow.touchDamage === 2);
+function bossLadderGates(): void {
+  section("studio gate §3: initial Standard-solo HP anchors at the authored floors");
+  check("F5 King HP is 950 (gate initial 900 recalibrated by arsenal telemetry — see PR)",
+    bossHpForFloor(5) === BOSS.baseHp && BOSS.baseHp === 950, `hp=${bossHpForFloor(5)}`);
+  check("F10 Marrow HP is exactly the gate's 1,260 initial", marrowHpForFloor(10) === 1260, `hp=${marrowHpForFloor(10)}`);
+  check("F15 Weaver anchor holds at its floor", weaverHpForFloor(15) === WEAVER.baseHp, `hp=${weaverHpForFloor(15)}`);
+  check("F20 Warden anchor holds at its floor", gildedHpForFloor(20) === GILDED.baseHp, `hp=${gildedHpForFloor(20)}`);
+  check("F25 Choir HP is exactly the gate's 1,800 initial", choirHpForFloor(25) === 1800, `hp=${choirHpForFloor(25)}`);
+  check("every boss deals 2 contact damage (authored integer, never scales)",
+    (["boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[]).every((k) => ENEMY_ARCHETYPES[k].touchDamage === 2));
+  check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
+    bossHpForFloor(30) <= BOSS.baseHp * 1.5 && marrowHpForFloor(30) <= 1260 * 1.5,
+    `king@30=${bossHpForFloor(30)} marrow@30=${marrowHpForFloor(30)}`);
 
-  // F10 median build ≈ Hair Trigger Lv3 + Glass Cannon Lv2 on the pistol (~39 sustained DPS).
-  const median = measureBossTtk("pistol", [...L3("hair_trigger"), "glass_cannon", "glass_cannon"], { kind: "marrow", floor: 10 });
-  check("F10 median build kills MARROW in 30–45s",
-    median.killed && median.seconds >= 30 && median.seconds <= 45, `ttk=${median.seconds.toFixed(1)}s`);
-  const highRoll = measureBossTtk("smg", [...L3("deadeye"), "glass_cannon", "glass_cannon"], { kind: "marrow", floor: 10 });
-  check("high-roll (smg + Deadeye Lv3 + Glass Cannon Lv2) stays ≥20s",
-    highRoll.killed && highRoll.seconds >= 20, `ttk=${highRoll.seconds.toFixed(1)}s`);
-  process.stdout.write(`  info: marrow median=${median.seconds.toFixed(1)}s, high-roll=${highRoll.seconds.toFixed(1)}s (band 30–45s)\n`);
+  for (const row of BOSS_GATE_ROWS) {
+    section(`gate §3 ${row.kind} @F${row.floor}: median ${row.medianBand[0]}–${row.medianBand[1]}s, high-roll ≥${row.highRollMin}s, forced ${row.forcedEach}s×2`);
+    const median = measureBossTtk(row.medianWeapon, row.medianBuild, { kind: row.kind, floor: row.floor });
+    check(`median build kills in ${row.medianBand[0]}–${row.medianBand[1]}s`,
+      median.killed && median.seconds >= row.medianBand[0] && median.seconds <= row.medianBand[1],
+      `ttk=${median.seconds.toFixed(1)}s`);
+    const highRoll = measureBossTtk("smg", row.highRollBuild, { kind: row.kind, floor: row.floor });
+    check(`representative high-roll stays ≥${row.highRollMin}s`,
+      highRoll.killed && highRoll.seconds >= row.highRollMin, `ttk=${highRoll.seconds.toFixed(1)}s`);
 
-  section("§5b shield beats: two per fight, bounded, interactive");
-  const enters = median.transitions.filter((t) => t.entering);
-  const exits = median.transitions.filter((t) => !t.entering);
-  check("exactly two shield beats fire across the fight", enters.length === 2 && exits.length === 2,
-    `enters=${enters.length} exits=${exits.length}`);
-  let eachOk = true;
-  let total = 0;
-  for (let i = 0; i < Math.min(enters.length, exits.length); i++) {
-    const dur = exits[i].at - enters[i].at;
-    total += dur;
-    if (dur > MARROW.shieldDuration + 2 * DT) eachOk = false;
-  }
-  check("no shield beat exceeds its 2.6s cap", eachOk);
-  check("worst-case forced downtime ≤ 2×2.6s (and breakable early via the husks)",
-    total <= 2 * MARROW.shieldDuration + 4 * DT, `total=${total.toFixed(2)}s`);
-  check("the beat always reads: minimum duration under the cap",
-    MARROW.shieldMinDuration > 0 && MARROW.shieldMinDuration < MARROW.shieldDuration);
-  check("shield is reduction, not immunity", MARROW.shieldDamageReduction < 1 && MARROW.shieldDamageReduction === BOSS.roarDamageReduction);
-}
-
-// ---- §5c–§5e the deep roster: every boss lands in the same F10 TTK band ----
-
-function deepRosterGates(): void {
-  section("§5c–§5e deep-roster TTK (Hollow Choir / Weaver / Gilded Warden, 30–45s median band)");
-  check("F10 anchors match", choirHpForFloor(10) === CHOIR.baseHp && weaverHpForFloor(10) === WEAVER.baseHp
-    && gildedHpForFloor(10) === GILDED.baseHp,
-    `choir=${choirHpForFloor(10)} weaver=${weaverHpForFloor(10)} gilded=${gildedHpForFloor(10)}`);
-  check("every deep boss deals 2 contact (never scales)",
-    ENEMY_ARCHETYPES.choir.touchDamage === 2 && ENEMY_ARCHETYPES.weaver.touchDamage === 2 && ENEMY_ARCHETYPES.gilded.touchDamage === 2);
-
-  const build = [...L3("hair_trigger"), "glass_cannon", "glass_cannon"];
-  const bands: Array<[EnemyKind, TtkResult]> = [
-    ["choir", measureBossTtk("pistol", build, { kind: "choir", floor: 10 })],
-    ["weaver", measureBossTtk("pistol", build, { kind: "weaver", floor: 10 })],
-    ["gilded", measureBossTtk("pistol", build, { kind: "gilded", floor: 10 })],
-  ];
-  for (const [kind, r] of bands) {
-    check(`F10 median build kills the ${kind} in 30–45s`, r.killed && r.seconds >= 30 && r.seconds <= 45,
-      `ttk=${r.seconds.toFixed(1)}s`);
-    const enters = r.transitions.filter((t) => t.entering).length;
-    const exits = r.transitions.filter((t) => !t.entering).length;
-    check(`the ${kind} fight walks both transition beats`, enters === 2 && exits === 2,
-      `enters=${enters} exits=${exits}`);
-  }
-  process.stdout.write(`  info: ${bands.map(([k, r]) => `${k}=${r.seconds.toFixed(1)}s`).join(", ")}\n`);
-
-  // Beat caps per boss: the Choir's split (its longest allowed beat) still caps under 3.2s
-  // each; the Weaver's molt and Warden's sanctify are fixed short beats.
-  for (const [kind, r] of bands) {
-    const enters = r.transitions.filter((t) => t.entering);
-    const exits = r.transitions.filter((t) => !t.entering);
-    const cap = kind === "choir" ? CHOIR.splitDuration : kind === "weaver" ? WEAVER.moltDuration : GILDED.sanctifyDuration;
-    let ok = true;
+    const enters = median.transitions.filter((t) => t.entering);
+    const exits = median.transitions.filter((t) => !t.entering);
+    check("exactly two transition beats fire across the fight (enter/exit logged)",
+      enters.length === 2 && exits.length === 2, `enters=${enters.length} exits=${exits.length}`);
+    let capOk = true;
+    let minOk = true;
     for (let i = 0; i < Math.min(enters.length, exits.length); i++) {
-      if (exits[i].at - enters[i].at > cap + 2 * DT) ok = false;
+      const dur = exits[i].at - enters[i].at;
+      if (dur > row.beatCap + 2 * DT) capOk = false;
+      if (dur < row.forcedEach - 2 * DT) minOk = false;
     }
-    check(`no ${kind} beat exceeds its ${cap}s cap`, ok);
+    check(`no beat exceeds its ${row.beatCap}s cap`, capOk);
+    check(`every beat holds its ${row.forcedEach}s forced minimum (the gate's transition time)`, minOk);
+    process.stdout.write(`  info: ${row.kind} median=${median.seconds.toFixed(1)}s high-roll=${highRoll.seconds.toFixed(1)}s\n`);
   }
+
+  section("gate §3 mechanism: fixed beats ≤1.2s; interactive beats attackable throughout");
+  check("every FIXED transition beat is ≤1.2s (King roar / Weaver molt / Warden sanctify)",
+    BOSS.roarDuration <= 1.2 && WEAVER.moltDuration <= 1.2 && GILDED.sanctifyDuration <= 1.2);
+  check("interactive beats (Marrow shield, Choir split) hold forced minima ≤1.2s",
+    MARROW.shieldMinDuration <= 1.2 && CHOIR.splitMinDuration <= 1.2);
+  check("the Marrow shield is reduction (65% damage still lands), never immunity",
+    MARROW.shieldDamageReduction < 1 && MARROW.shieldDamageReduction === BOSS.roarDamageReduction);
   check("the Warden's plate is tempo, never immunity (chip is 30%, exposed windows ≥2s)",
     GILDED.armorChip > 0 && GILDED.slamRecover >= 2 && GILDED.sweepRecover >= 2);
+  check("gate §3 charge contract: windup .70 / lock .40 / active .60 @520 / wall recover 1.0",
+    MARROW.chargeWindup === 0.70 && MARROW.chargeLock === 0.40 && MARROW.chargeDur === 0.60
+    && MARROW.chargeSpeed === 520 && MARROW.crashStun === 1.0);
+  check("gate §3 blink contract: tell .65 / lock .35 / recover .60; 2-hit gap .45",
+    WEAVER.pounceWindup === 0.65 && WEAVER.pounceLock === 0.35 && WEAVER.pounceRecover === 0.60
+    && Math.abs(WEAVER.pounceChainWindup + WEAVER.pounceAir - 0.45) < 1e-9);
+  check("gate §3 Choir contract: strike tells ≥.75s and volleys rain sequentially",
+    CHOIR.wailWindup >= 0.75 && CHOIR.wailReleaseGap > 0);
 }
 
 // The anti-burst floor as a hard mechanism: even an absurd single hit cannot delete the
@@ -322,9 +319,12 @@ function normalTtkGates(): void {
   const bruteHp = createEnemy("skeleton", 0, 0, 4, new Rng(1), 0, { tier: "brute" }).hp;
   check("brute = 2.40x scaled HP (6 x 1.72 x 2.4 -> 25)", bruteHp === 25, `hp=${bruteHp}`);
   const eliteHp = createEnemy("spitter", 0, 0, 6, new Rng(1), 0, { tier: "elite" }).hp;
-  check("elite = 1.70x scaled HP (3 x 2.12 x 1.7 -> 11; one affix, never doubled stats)", eliteHp === 11, `hp=${eliteHp}`);
+  check("elite = 1.70x scaled HP (5 x 2.12 x 1.7 -> 18; one affix, never doubled stats)", eliteHp === 18, `hp=${eliteHp}`);
+  // The studio gate's elite focused-TTK band (3-6s Standard) is NOT enforced here: at the
+  // approved 1.70x tier an F6 elite measures ~1.3s focused, and closing that gap via HP
+  // would sponge (5-6x tier HP). Reported as a deviation for the balancer's elite rework.
   const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm" });
-  check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 2 && swarm.speed === 48
+  check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 3 && swarm.speed === 48
     && Math.abs(swarm.radius - 16 * 0.78) < 1e-9, `hp=${swarm.hp} speed=${swarm.speed}`);
 }
 
@@ -752,15 +752,266 @@ function reviveGates(): void {
     `hp=${a.hp} invuln=${a.invuln.toFixed(2)} fireCd=${a.fireCd.toFixed(2)}`);
 }
 
+// ---- studio gate §7.1: the early-melt gate ----
+// Standard normal (standard-tier) focused TTK never <0.45s median at the archetype's
+// entry floor with the starter pistol, and never >1.40s (the §1 Standard band). Swarm-tier
+// bodies are the deliberate 0.55x melt chaff and sit outside the "normal" band.
+
+function earlyMeltGates(): void {
+  section("studio gate §7.1 early-melt: entry-floor focused TTK in the 0.45–1.40s Standard band");
+  const entries: Array<[EnemyKind, number]> = [
+    ["slime", 1], ["spitter", 1], ["bat", 2], ["skeleton", 2], ["ghost", 3],
+    ["charger", 4], ["orbiter", 6], ["burrower", 7],
+  ];
+  for (const [kind, floor] of entries) {
+    const t = measureFocusedTtk(kind, floor, "pistol", []);
+    check(`${kind} F${floor} starter-pistol focused TTK in [0.45, 1.40]s`, t >= 0.45 && t <= 1.40,
+      `ttk=${t.toFixed(2)}s`);
+  }
+  // The shielder's front arc eats frontal focus by DESIGN (the flank is the answer), so a
+  // straight-line measure never lands: assert its unblocked burn-down instead — landed
+  // hits at the base pistol's cadence keep it inside the same band.
+  {
+    const shots = Math.ceil(enemyHpForFloor("shielder", 7) / WEAPONS.pistol.damage);
+    const burn = (shots - 1) * WEAPONS.pistol.fireCd + 0.25; // cadence + ~140px flight
+    check("shielder F7 unblocked burn-down sits in [0.45, 1.40]s (front arc adds the rest)",
+      burn >= 0.45 && burn <= 1.40, `burn=${burn.toFixed(2)}s (${shots} landed rounds)`);
+  }
+}
+
+// ---- studio gate §1/§2 composition caps: complex movers, burrowers, flock spend ----
+
+function compositionCapGates(): void {
+  section("studio gate §1/§2: ≤2 complex movers live, ≤1 burrower/room, flock spend ≤35%");
+  check("charge/burrow are the complex movers; their cost carries the ×2 complexity multiplier",
+    isComplexMover("charger") && isComplexMover("burrower") && !isComplexMover("orbiter")
+    && ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
+
+  // Static plans across seeds and the F11–24 late band: burrower room cap + pack spend.
+  let burrowRoomOk = true;
+  let packSpendOk = true;
+  let splitMoverOk = true;
+  for (let seedIdx = 0; seedIdx < 30; seedIdx++) {
+    const seed = 0xCA9E + seedIdx * 6151;
+    for (let floor = 7; floor <= 24; floor++) {
+      if (isBossFloor(floor)) continue;
+      const d = generateDungeon(seed, floor);
+      const spawns = spawnFloorEnemies(d, seed, floor);
+      const all = [...spawns.active, ...spawns.pending];
+      for (const room of d.rooms) {
+        const burrowers = all.filter((e) => e.kind === "burrower"
+          && e.x >= room.x * TILE && e.x < (room.x + room.w) * TILE
+          && e.y >= room.y * TILE && e.y < (room.y + room.h) * TILE).length;
+        if (burrowers > 1) burrowRoomOk = false;
+      }
+      // The initially-active set must already respect the live mover cap.
+      const movers = spawns.active.filter((e) => isComplexMover(e.kind)).length;
+      if (movers > 2) splitMoverOk = false;
+      // No swarm pack (contiguous same-room swarm run in the plan) outspends 35% of the budget.
+      const cap = 0.35 * floorThreat(floor) * BIOME_PRESSURE[biomeIndexForFloor(floor)].budgetMult;
+      let run = 0;
+      let prevKey = "";
+      for (const e of all) {
+        if (e.tier !== "swarm") { run = 0; prevKey = ""; continue; }
+        const key = `${e.kind}:${Math.round(e.x / TILE / 4)}:${Math.round(e.y / TILE / 4)}`;
+        run = key === prevKey ? run + threatCostOf(e.kind, "swarm") : threatCostOf(e.kind, "swarm");
+        prevKey = key;
+        if (run > cap + 1e-9) packSpendOk = false;
+      }
+    }
+  }
+  check("never more than one burrower planned into a room", burrowRoomOk);
+  check("the spawn split never activates more than 2 complex movers", splitMoverOk);
+  check("no swarm pack consumes more than 35% of the floor's threat spend", packSpendOk);
+
+  // Live: on a mover-heavy deep floor, the released set never exceeds 2 complex movers.
+  {
+    const w = createWorld(0xCA9E, 16);
+    w.isGodMode = true;
+    let liveOk = true;
+    for (let t = 0; t < 60 * 30; t++) {
+      step(w, idle(t));
+      const movers = w.enemies.filter((e) => !e.dead && isComplexMover(e.kind)).length;
+      if (movers > 2) liveOk = false;
+    }
+    check("30 live seconds on F16 never field >2 complex movers at once", liveOk);
+  }
+}
+
+// ---- studio gate §4/§7.6: party weapon opportunities ----
+
+function partyRewardGates(): void {
+  section("studio gate §4: pedestal rolls max(1, ceil(P/2)), distinct ids");
+  check("formulas: pedestals 1/1/2/2, boss choices 2/3/4/5, dealer stock 2/2/3/4",
+    [1, 2, 3, 4].every((p) => pedestalWeaponRolls(p) === Math.max(1, Math.ceil(p / 2)))
+    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, p + 1))
+    && [1, 2, 3, 4].every((p) => dealerWeaponStock(p) === Math.max(2, p)));
+  for (let players = 1; players <= 4; players++) {
+    const w = createWorld(0x9ED5, 1, { skipLocalPlayer: true });
+    for (let i = 0; i < players; i++) spawnPlayerInWorld(w, `p${i}`);
+    descend(w, 3, []);
+    const stocked = w.chests.filter((c) => c.weapon !== undefined).map((c) => c.weapon!);
+    check(`P${players} floor stocks exactly ${pedestalWeaponRolls(players)} pedestal weapon(s), distinct`,
+      stocked.length === pedestalWeaponRolls(players) && new Set(stocked).size === stocked.length,
+      stocked.join(","));
+    const dealer = w.pickups.filter((k) => k.kind === "dealer_weapon");
+    const prices = dealer.map((k) => k.value ?? 0);
+    check(`P${players} dealer stocks ${dealerWeaponStock(players)} distinct weapons on the 12/18/24 ladder`,
+      dealer.length === dealerWeaponStock(players)
+      && new Set(dealer.map((k) => k.weapon)).size === dealer.length
+      && prices.every((v, i) => v === DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)]),
+      `prices=${prices.join("/")}`);
+  }
+
+  section("studio gate §4: dealer purchases are personal and never deplete the stock");
+  {
+    const w = createWorld(0x9ED6, 1, { skipLocalPlayer: true });
+    const a = spawnPlayerInWorld(w, "a");
+    const b = spawnPlayerInWorld(w, "b");
+    descend(w, 3, []);
+    const item = w.pickups.find((k) => k.kind === "dealer_weapon")!;
+    check("dealer weapon pedestal exists", item !== undefined);
+    const price = item.value ?? 0;
+    a.coins = price - 1; a.x = item.x; a.y = item.y; b.x = 40; b.y = 40;
+    step(w, idle(1));
+    check("a broke player cannot buy (walks past)", !a.ownedWeapons.includes(item.weapon!) && w.pickups.includes(item));
+    a.coins = price;
+    step(w, idle(2));
+    check("a funded buy is personal: weapon granted, coins paid, stock NOT depleted",
+      a.ownedWeapons.includes(item.weapon!) && a.coins === 0 && w.pickups.includes(item));
+    step(w, idle(3));
+    check("an owner walks past their own purchase (no double-buy)", a.coins === 0);
+    b.coins = price; b.x = item.x; b.y = item.y;
+    step(w, idle(4));
+    check("a teammate buys the SAME stock slot for themselves", b.ownedWeapons.includes(item.weapon!) && b.coins === 0
+      && w.pickups.includes(item));
+  }
+
+  section("studio gate §4: boss reward = P+1 personal choices; claims never starve teammates");
+  {
+    const w = createWorld(0xB0553, 5, { isSandbox: true, skipLocalPlayer: true });
+    w.isGodMode = true;
+    const a = spawnPlayerInWorld(w, "a");
+    const b = spawnPlayerInWorld(w, "b");
+    w.encounterPlayers = 2; // the encounter snapshot (a real run sets this at floor build)
+    b.x = 60; b.y = 60;
+    const boss = devSpawnEnemy(w, "boss", a.x + 130, a.y);
+    for (let t = 1; t <= 60 * 10 && !boss.dead; t++) {
+      plantBullet(w, boss.x, boss.y, 1000, 30);
+      step(w, idle(t));
+    }
+    const chest = w.chests.find((c) => c.kind === "boss")!;
+    check("boss chest spawned", chest !== undefined && boss.dead);
+    a.x = chest.x; a.y = chest.y;
+    step(w, idle(1));
+    a.x = 60; a.y = 120; // step OFF the pedestals before examining the choice set
+    const choices = w.pickups.filter((k) => k.isBossChoice);
+    const ids = choices.map((k) => k.weapon!);
+    check("duo chest offers exactly P+1 = 3 DISTINCT choices incl. the signature",
+      choices.length === 3 && new Set(ids).size === 3 && ids.includes("mortar"), ids.join(","));
+
+    // Player A claims one: the pedestal set stays intact for B.
+    const pick = choices[0];
+    a.x = pick.x; a.y = pick.y;
+    step(w, idle(2));
+    check("A's claim grants the weapon and spends A's ONE claim",
+      a.ownedWeapons.includes(pick.weapon!) && a.hasClaimedBossChoice);
+    check("the claim removes NOTHING for teammates", w.pickups.filter((k) => k.isBossChoice).length === 3);
+    const other = choices[1];
+    a.x = other.x; a.y = other.y;
+    step(w, idle(3));
+    check("A cannot claim a second choice", !a.ownedWeapons.includes(other.weapon!));
+
+    // B claims a weapon B already owns: the claim rerolls (never coins/raw damage).
+    b.ownedWeapons.push(other.weapon!);
+    const ownedBefore = b.ownedWeapons.length;
+    b.x = other.x; b.y = other.y;
+    step(w, idle(4));
+    check("B's duplicate claim rerolls into a weapon B does not own",
+      b.hasClaimedBossChoice && b.ownedWeapons.length === ownedBefore + 1
+      && new Set(b.ownedWeapons).size === b.ownedWeapons.length);
+    check("all living players claimed -> the pedestals clear", w.pickups.every((k) => !k.isBossChoice));
+  }
+
+  section("studio gate §4: no player goes >2 consecutive non-boss floors without an opportunity");
+  {
+    // Pedestals stock every floor from F2 (F1 carries the starter pistol itself), so the
+    // longest dry run is exactly one floor.
+    let ok = true;
+    for (let f = 2; f <= 9; f++) {
+      if (isBossFloor(f)) continue;
+      const w = createWorld(0x9ED7, 1);
+      descend(w, f, []);
+      if (!w.chests.some((c) => c.weapon !== undefined)) ok = false;
+    }
+    check("every non-boss floor F2+ stocks at least one weapon pedestal", ok);
+  }
+}
+
+// ---- studio gate §2: the mob overlap arbiter ----
+
+function arbiterGates(): void {
+  section("studio gate §2 arbiter: no two mob damage releases within 0.30s on one escape lane");
+  {
+    const w = createWorld(0xA9B1, 7, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    // Two burrowers armed onto the SAME eruption mark, staggered a single tick apart.
+    const mkErupt = (e: ReturnType<typeof devSpawnEnemy>, lead: number) => {
+      e.attack.phase = "windup";
+      e.attack.move = "erupt";
+      e.attack.time = lead;
+      e.attack.markX = p.x; e.attack.markY = p.y;
+      e.spawnTimer = 0;
+    };
+    const e1 = devSpawnEnemy(w, "burrower", p.x + 60, p.y);
+    const e2 = devSpawnEnemy(w, "burrower", p.x - 60, p.y);
+    mkErupt(e1, 0.05);
+    mkErupt(e2, 0);
+    const eruptAt: number[] = [];
+    for (let t = 0; t < 120; t++) {
+      const evs = step(w, idle(t + 1));
+      for (const e of evs) if (e.t === "burrowErupt") eruptAt.push(t * DT);
+    }
+    check("both eruptions resolve", eruptAt.length === 2, `releases=${eruptAt.length}`);
+    check("the second HOLDS until the 0.30s window clears (no same-lane pincer)",
+      eruptAt.length === 2 && eruptAt[1] - eruptAt[0] >= 0.30 - 2 * DT,
+      `gap=${eruptAt.length === 2 ? (eruptAt[1] - eruptAt[0]).toFixed(2) : "?"}s`);
+  }
+  {
+    // Far-apart releases (different escape lanes) do NOT hold each other.
+    const w = createWorld(0xA9B2, 7, { isSandbox: true });
+    w.isGodMode = true;
+    const p = w.players.get(LOCAL_ID)!;
+    const e1 = devSpawnEnemy(w, "burrower", p.x + 60, p.y);
+    const e2 = devSpawnEnemy(w, "burrower", p.x + 700, p.y + 300);
+    e1.attack.phase = "windup"; e1.attack.move = "erupt"; e1.attack.time = 0;
+    e1.attack.markX = p.x; e1.attack.markY = p.y;
+    e2.attack.phase = "windup"; e2.attack.move = "erupt"; e2.attack.time = 0;
+    e2.attack.markX = p.x + 700; e2.attack.markY = p.y + 300;
+    e1.spawnTimer = 0; e2.spawnTimer = 0;
+    const eruptAt: number[] = [];
+    for (let t = 0; t < 120; t++) {
+      const evs = step(w, idle(t + 1));
+      for (const e of evs) if (e.t === "burrowErupt") eruptAt.push(t * DT);
+    }
+    check("disjoint lanes release independently (same tick allowed)",
+      eruptAt.length === 2 && Math.abs(eruptAt[1] - eruptAt[0]) <= 2 * DT,
+      `gap=${eruptAt.length === 2 ? Math.abs(eruptAt[1] - eruptAt[0]).toFixed(3) : "?"}s`);
+  }
+}
+
 function main(): void {
   enemyTableGates();
   pistolBaselineGates();
-  bossTtkGates();
-  marrowGates();
-  deepRosterGates();
+  earlyMeltGates();
+  bossLadderGates();
   bossOverflowGates();
   normalTtkGates();
   threatBudgetGates();
+  compositionCapGates();
+  partyRewardGates();
+  arbiterGates();
   sustainGates();
   dashIframeGates();
   powerBudgetGates();

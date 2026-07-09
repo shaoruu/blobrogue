@@ -82,6 +82,7 @@ export interface SelfWire {
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
+  bcl: boolean;                // hasClaimedBossChoice (gate §4 personal boss-reward claim)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -94,6 +95,7 @@ export interface PlayerWire {
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
   nm: string;
   cl: number | null;
 }
@@ -134,7 +136,7 @@ export interface BulletWire {
 // so they ride the snapshot as discrete values — no interpolation needed. All three carry the
 // sim's STABLE per-floor id (interest hysteresis + client anim keying + lifecycle identity).
 export interface PropWire { id: number; kind: PropKind; x: number; y: number; brk: number } // brk<0 => intact
-export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number } // val<0 => face value
+export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number; bch: boolean } // val<0 => face value; bch = boss weapon choice
 export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; op: boolean; opt: number } // opt<0 => not yet open
 // Authored ground hazards (webs): bounded (hard sim cap), gameplay-relevant everywhere
 // (they slow PREDICTED movement), so they ride every snapshot unfiltered.
@@ -269,9 +271,9 @@ function isEnemyKind(v: unknown): v is EnemyKind {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ENEMY_ARCHETYPES, v);
 }
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
-const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true };
+const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, rubble: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
@@ -330,6 +332,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   radialBurst: { scope: "pos", fields: { x: "num", y: "num" } },
   bossVolley: { scope: "pos", fields: { x: "num", y: "num" } },
   webPlaced: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  pounceFeint: { scope: "pos", fields: { x: "num", y: "num", r: "num", dur: "num" } },
   bossAddSpawn: { scope: "pos", fields: { eid: "num", x: "num", y: "num", mx: "num", my: "num", spawned: "bool" } },
   // Global: shared-objective transitions every client must see regardless of distance.
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
@@ -480,6 +483,7 @@ function validateSelfWire(v: unknown): SelfWire {
     mods: modsFromWire(obj(o.mods, "self.mods")),
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
     combo: num(o, "combo", 0, 1e9), ct: num(o, "ct", 0, 1e4),
+    bcl: boolOf(o, "bcl"),
   };
 }
 
@@ -498,6 +502,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    bcl: boolOf(o, "bcl"),
     nm, cl,
   };
 }
@@ -556,6 +561,7 @@ function validatePickupWire(v: unknown): PickupWire {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     wpn: wpn as WeaponId | null,
     val: num(o, "val", -1, 1e9),
+    bch: boolOf(o, "bch"),
   };
 }
 
@@ -657,6 +663,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
+    bcl: s.hasClaimedBossChoice,
   };
 }
 
@@ -667,6 +674,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
+    hasClaimedBossChoice: w.bcl,
   };
 }
 
@@ -692,6 +700,7 @@ export interface PlayerIdentity {
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    bcl: p.hasClaimedBossChoice,
     nm: identity?.name ?? p.id,
     cl: identity?.colorIndex ?? null,
   };
@@ -725,7 +734,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0 }
+      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0, rubbleLane: 0 }
       : null,
   };
 }
@@ -734,7 +743,7 @@ export function toPropWire(p: Prop): PropWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
 }
 export function toPickupWire(p: Pickup): PickupWire {
-  return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1 };
+  return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1, bch: p.isBossChoice ?? false };
 }
 export function toChestWire(c: Chest): ChestWire {
   return { id: c.id, kind: c.kind, x: c.x, y: c.y, op: c.opened, opt: c.openT ?? -1 };
@@ -750,8 +759,8 @@ export function propFromWire(w: PropWire): Prop {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: PROP_RADIUS, hp: 1, dead: w.brk >= 0, breakT: w.brk < 0 ? undefined : w.brk };
 }
 export function pickupFromWire(w: PickupWire): Pickup {
-  const radius = w.kind === "weapon" ? 16 : 13;
-  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val };
+  const radius = w.kind === "weapon" ? 16 : w.kind === "dealer_weapon" ? 15 : 13;
+  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined };
 }
 export function chestFromWire(w: ChestWire): Chest {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: w.kind === "boss" ? 18 : 16, opened: w.op, openT: w.opt < 0 ? undefined : w.opt };

@@ -38,6 +38,7 @@ export interface AuthoritativePlayerSnapshot {
   coins: number;
   combo: number;
   comboTimer: number;
+  hasClaimedBossChoice: boolean;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -85,6 +86,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     coins: p.coins,
     combo: p.combo,
     comboTimer: p.comboTimer,
+    hasClaimedBossChoice: p.hasClaimedBossChoice,
   };
 }
 
@@ -114,6 +116,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.coins = s.coins;
   p.combo = s.combo;
   p.comboTimer = s.comboTimer;
+  p.hasClaimedBossChoice = s.hasClaimedBossChoice;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is
