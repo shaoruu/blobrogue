@@ -11,7 +11,10 @@
 //     panel is NOT inline on the title anymore
 //   - the reserved identity card: guests get the Google CTA with concrete benefit copy,
 //     signed-in players get the account chip — never both, and guest play is never gated
-//   - the closet: equipped/locked states from real ownership; locked items carry their hint
+//   - the title character stage: the player's ACTUAL blob (shared renderer) in a reserved
+//     hero box — guest default, hydration repaints content only, Play stays dominant
+//   - the closet: INSTANT equip (no staging/save/discard model), optimistic persistence
+//     with revert-on-failure and last-click-wins, locked items readable but never equippable
 //   - the post-run guest sign-in nudge: shown once per session with a persistent dismissal
 //     cooldown; never for signed-in players; the cosmetic-unlock banner rides the same screen
 //   - the room lobby shows each member's live readiness (LOBBY / CONNECTING… / CONNECTED TO
@@ -63,8 +66,11 @@ interface ShimNode {
   className?: string;
   textContent?: string;
   disabled?: boolean;
+  width?: number;
+  height?: number;
   onclick?: () => void;
   children?: ShimNode[];
+  getAttribute?(name: string): string | null;
 }
 
 function textOf(node: ShimNode): string {
@@ -120,19 +126,67 @@ const LB_ENTRIES: LeaderboardEntryDoc[] = [
   },
 ];
 
+interface EnsureArgs {
+  name?: string;
+  colorIndex?: number;
+  cosmetics?: Partial<Record<"hat" | "face" | "body" | "title", string>>;
+}
+
+// One deferred ensurePlayer write the test settles by hand (the rapid-switch suite).
+interface PendingPersist {
+  args: EnsureArgs;
+  resolveEcho: () => void;
+  fail: () => void;
+}
+
 interface FakeOpts {
   profile?: ProfileDoc;
   lb?: LeaderboardEntryDoc[] | "fail";
   standing?: { floor: number; kills: number; rank: number | null } | null | "fail";
   mine?: { entry: LeaderboardEntryDoc; rank: number | null } | null | "fail";
+  // How ensurePlayer answers: "echo" (default — accepted picks round-trip exactly like
+  // the real backend), "static" (the fixture untouched — a server refusing every pick),
+  // "fail" (network failure), "manual" (the test settles each write by hand, in any order).
+  persist?: "echo" | "static" | "fail" | "manual";
+}
+
+interface FakeConvex {
+  client: ConvexClient;
+  pendingPersists: PendingPersist[];
+  mutationCalls: () => number;
 }
 
 // The menu's Convex surface, routed by function name: profile upserts/reads resolve to the
 // fixture, the leaderboard resolves (or fails) per test.
-function fakeConvex(opts: FakeOpts = {}): ConvexClient {
+function fakeConvex(opts: FakeOpts = {}): FakeConvex {
   const profile = opts.profile ?? PROFILE;
+  const pendingPersists: PendingPersist[] = [];
+  let calls = 0;
+  const echo = (args: EnsureArgs): ProfileDoc => {
+    const cosmetics = { ...profile.cosmetics };
+    for (const slot of ["hat", "face", "body", "title"] as const) {
+      const v = args.cosmetics?.[slot];
+      if (v !== undefined) cosmetics[slot] = v === "none" ? null : v;
+    }
+    return { ...profile, cosmetics, colorIndex: args.colorIndex ?? profile.colorIndex };
+  };
   const fake = {
-    mutation: () => Promise.resolve(profile),
+    mutation: (_ref: unknown, args?: EnsureArgs) => {
+      calls++;
+      const sent = args ?? {};
+      if (opts.persist === "fail") return Promise.reject(new Error("offline"));
+      if (opts.persist === "static") return Promise.resolve(profile);
+      if (opts.persist === "manual") {
+        return new Promise((resolve, reject) => {
+          pendingPersists.push({
+            args: sent,
+            resolveEcho: () => resolve(echo(sent)),
+            fail: () => reject(new Error("offline")),
+          });
+        });
+      }
+      return Promise.resolve(echo(sent));
+    },
     query: (ref: unknown) => {
       const name = getFunctionName(ref as Parameters<typeof getFunctionName>[0]);
       if (name === "leaderboard:top") {
@@ -150,7 +204,7 @@ function fakeConvex(opts: FakeOpts = {}): ConvexClient {
     action: () => Promise.resolve({ ticket: "t", playerId: profile.playerId }),
     onUpdate: () => () => {},
   };
-  return fake as unknown as ConvexClient;
+  return { client: fake as unknown as ConvexClient, pendingPersists, mutationCalls: () => calls };
 }
 
 type FakeAuth = AuthClient & { fire(): void; setSignedIn(v: boolean): void; setCompleting(v: boolean): void; signInWithGoogle: () => Promise<void> };
@@ -173,7 +227,14 @@ function fakeAuth(isSignedIn: boolean, isCompletingSignIn = false): FakeAuth {
 
 interface LaunchRecord { code: string; isPartyStart: boolean }
 
-function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): { menu: Menu; overlay: ShimNode; launches: LaunchRecord[]; session: Session } {
+function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): {
+  menu: Menu;
+  overlay: ShimNode;
+  launches: LaunchRecord[];
+  session: Session;
+  pendingPersists: PendingPersist[];
+  mutationCalls: () => number;
+} {
   // Section isolation: the shim shares ONE localStorage; stale appearance picks from a
   // previous section must never leak into a fresh session.
   localStorage.removeItem("blobrogue.cosmetics");
@@ -183,8 +244,8 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): { menu: M
   // test; the one-time name gate has its own sections (which clear this latch explicitly).
   localStorage.setItem("blobrogue.nameConfirmed", "1");
   const overlay = document.createElement("div") as unknown as ShimNode;
-  const client = fakeConvex(opts);
-  const session = new Session(client);
+  const convex = fakeConvex(opts);
+  const session = new Session(convex.client);
   const launches: LaunchRecord[] = [];
   const host: MenuHost = {
     startSolo() {},
@@ -192,8 +253,8 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): { menu: M
       launches.push({ code: lobby.code, isPartyStart });
     },
   };
-  const menu = new Menu(overlay as unknown as HTMLElement, session, client, opts.auth ?? null, host);
-  return { menu, overlay, launches, session };
+  const menu = new Menu(overlay as unknown as HTMLElement, session, convex.client, opts.auth ?? null, host);
+  return { menu, overlay, launches, session, pendingPersists: convex.pendingPersists, mutationCalls: convex.mutationCalls };
 }
 
 // A lobby double exposing exactly the surface showOnlineLobby reads. Kept as a plain object
@@ -291,6 +352,42 @@ async function main(): Promise<void> {
     check("the fixed home-status line exists (reserved, empty)", byClass(overlay, "home-status").length === 1 && textOf(byClass(overlay, "home-status")[0]) === "");
     check("no home footer", byClass(overlay, "foot").length === 0);
     check("no Controls DESTINATION (the settings card may describe controls)", !buttonsOf(overlay).some((b) => /^controls\b/i.test(b.trim())));
+  }
+
+  section("the title character stage: YOUR blob, reserved geometry, Play still dominant");
+  {
+    // A dressed profile: the stage must mirror the ACTUAL equipped loadout once hydrated.
+    const dressed = makeProfile({ cosmetics: { hat: "hat_top", face: "face_shades", body: "body_cyan", title: null }, colorIndex: 1 });
+    const { menu, overlay } = makeMenu({ profile: dressed, lb: LB_ENTRIES.slice(0, 2) });
+    await menu.showTitle();
+    const stage = () => byClass(overlay, "home-stage")[0];
+    check("the stage renders in the hero band from first paint", stage() !== undefined && byClass(overlay, "hero").length === 1);
+    check("it draws through the shared preview renderer (the world/closet code path)",
+      byClass(stage() ?? {}, "blob-preview").length === 1);
+    const canvasBefore = collect(stage() ?? {}, (n) => n.tagName === "CANVAS")[0];
+    check("the canvas reserves its fixed 104px box from creation", canvasBefore?.width === 104 && canvasBefore?.height === 104);
+    check("before hydration a fresh guest shows the DEFAULT blob",
+      stage()?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true, stage()?.getAttribute?.("aria-label") ?? "");
+    const buttonsBefore = buttonsOf(overlay).length;
+    await settle();
+    check("hydration repaints CONTENT only (same canvas node, zero layout shift)",
+      collect(stage() ?? {}, (n) => n.tagName === "CANVAS")[0] === canvasBefore && buttonsOf(overlay).length === buttonsBefore);
+    const label = stage()?.getAttribute?.("aria-label") ?? "";
+    check("the hydrated stage mirrors the EQUIPPED loadout (hat + glasses + body color)",
+      label.includes("Top Hat") && label.includes("Shades") && label.includes("Cyan"), label);
+    check("the stage is display-only and PLAY stays the FIRST action in order",
+      collect(stage() ?? {}, (n) => n.tagName === "BUTTON").length === 0 && (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE"));
+
+    // Signed-out/guest: the default blob — plus the guest's body-color pick when one exists.
+    const guest = makeMenu({ lb: [] });
+    await guest.menu.showTitle();
+    await settle();
+    check("a guest with no picks keeps the default look after hydration",
+      byClass(guest.overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true);
+    const picked = makeMenu({ lb: [] });
+    void picked.session.setColorIndex(2); // the guest's swatch pick, applied locally at once
+    await picked.menu.showTitle();
+    check("a guest body-color pick rides the stage", byClass(picked.overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("Green") === true);
   }
 
   section("top-runs glance: FINAL geometry from first paint; hydration fills in place");
@@ -419,14 +516,14 @@ async function main(): Promise<void> {
 
   section("persistence authority: a pick the server refuses never lingers as local truth");
   {
-    const { session } = makeMenu(); // fake backend always answers with EMPTY loadout
-    session.setCosmetic("hat", "hat_halo"); // locked pick, applied optimistically
+    const { session } = makeMenu({ persist: "static" }); // backend answers with the EMPTY loadout
+    void session.setCosmetic("hat", "hat_halo"); // locked pick, applied optimistically
     check("optimistic local apply", session.cosmetics.hat === "hat_halo");
     await session.login("blob");
     check("the server's answer reconciles the local pick away", session.cosmetics.hat === null, String(session.cosmetics.hat));
     // An ACCEPTED pick round-trips and stays.
     const accepted = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", face: null, body: null, title: null } }) });
-    accepted.session.setCosmetic("hat", "hat_top");
+    void accepted.session.setCosmetic("hat", "hat_top");
     await accepted.session.login("blob");
     check("an accepted pick survives reconcile", accepted.session.cosmetics.hat === "hat_top");
   }
@@ -612,67 +709,173 @@ async function main(): Promise<void> {
     check("a failed top-run fetch stays honest in the same box", textOf(broken.overlay).includes("top run unavailable"));
   }
 
-  section("the closet: browse previews, EQUIP commits per category, reset + discard guard");
+  section("closet instant equip: one click equips immediately — no save step, no staging model");
   {
-    const { menu, overlay, session } = makeMenu();
+    const { menu, overlay, session, mutationCalls } = makeMenu();
     await menu.showProfile("closet");
     await settle();
     const cats = () => byClass(overlay, "closet-cat");
-    const cards = () => byClass(overlay, "cos-tile");
+    const cards = () => byClass(overlay, "cos-card");
     const cardByName = (n: string) => cards().find((c) => textOf(c).includes(n));
-    const stageState = () => textOf(byClass(overlay, "closet-stage-state")[0]);
+    const noteText = () => textOf(byClass(overlay, "closet-note")[0]);
 
     check("real categories only, in order", cats().map(textOf).join("|") === "Hats|Glasses|Blob Color|Titles", cats().map(textOf).join("|"));
-    check("the always-unlocked No Hat card exists and reads EQUIPPED", textOf(cardByName("No Hat") ?? {}).includes("EQUIPPED"));
-    const crown = cardByName("Crown");
-    check("locked cards are DISABLED (cannot focus/equip)", crown?.disabled === true);
-    check("locked cards wear their exact configured condition", textOf(crown ?? {}).includes("reach floor 10"));
-    check("stage starts in the EQUIPPED state", stageState() === "EQUIPPED");
+    check("the always-owned DEFAULT card leads the grid and reads EQUIPPED",
+      textOf(cards()[0] ?? {}).includes("No Hat") && textOf(cards()[0] ?? {}).includes("EQUIPPED"));
+    check("the equipped card wears the persistent \u2713 badge", byClass(cardByName("No Hat") ?? {}, "cos-check").length === 1);
 
-    // Browsing writes the TEMPORARY preview only.
+    const callsBefore = mutationCalls();
     cardByName("Top Hat")?.onclick?.();
-    check("browsing flips the stage to PREVIEWING", stageState().includes("PREVIEWING"));
-    check("...but persists NOTHING", session.cosmetics.hat === null);
-    check("the browsed card reads PREVIEWING", textOf(cardByName("Top Hat") ?? {}).includes("PREVIEWING"));
-
-    // Pending picks survive category switches.
-    cats().find((c) => textOf(c) === "Glasses")?.onclick?.();
-    cardByName("Shades")?.onclick?.();
-    cats().find((c) => textOf(c) === "Hats")?.onclick?.();
-    check("the hat preview survived the category round-trip", textOf(cardByName("Top Hat") ?? {}).includes("PREVIEWING"));
-
-    // EQUIP persists the ACTIVE category only.
-    byClass(overlay, "closet-equip")[0]?.onclick?.();
-    check("EQUIP persisted the active category", session.cosmetics.hat === "hat_top");
-    check("...and ONLY the active category (glasses stay a preview)", session.cosmetics.face === null && stageState().includes("PREVIEWING"));
-
-    // RESET restores equipped without any write.
-    byClass(overlay, "closet-reset")[0]?.onclick?.();
-    check("RESET discards pending picks", stageState() === "EQUIPPED");
-    check("...without writing", session.cosmetics.face === null && session.cosmetics.hat === "hat_top");
-
-    // Leaving with unsaved picks demands an explicit decision (same fixed strip).
-    cats().find((c) => textOf(c) === "Glasses")?.onclick?.();
-    cardByName("Round Specs")?.onclick?.();
-    fireWindowEvent("keydown", { key: "Escape" });
-    check("Escape with unsaved preview swaps in the discard confirmation", textOf(overlay).includes("discard unsaved preview?"));
-    byClass(overlay, "closet-keep")[0]?.onclick?.();
-    check("KEEP BROWSING stays in the closet with the preview intact", stageState().includes("PREVIEWING"));
-    fireWindowEvent("keydown", { key: "Escape" });
-    byClass(overlay, "closet-discard")[0]?.onclick?.();
+    check("clicking an OWNED card equips IMMEDIATELY (no confirm, no save)", session.cosmetics.hat === "hat_top");
+    check("the card reads EQUIPPED at once", textOf(cardByName("Top Hat") ?? {}).includes("EQUIPPED"));
+    check("...with the equipped state class and \u2713 badge",
+      cardByName("Top Hat")?.className?.includes("equipped") === true && byClass(cardByName("Top Hat") ?? {}, "cos-check").length === 1);
+    check("the previous item in the category lost the equipped state",
+      !textOf(cardByName("No Hat") ?? {}).includes("EQUIPPED") && byClass(cardByName("No Hat") ?? {}, "cos-check").length === 0);
+    check("the in-flight write rides the tiny corner spinner (card already reads EQUIPPED)",
+      byClass(cardByName("Top Hat") ?? {}, "cos-saving").length === 1);
+    check("exactly one background persist fired", mutationCalls() === callsBefore + 1);
     await settle();
-    check("DISCARD leaves to the title with nothing written", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")) && session.cosmetics.face === null);
+    check("success clears the spinner (no toast)", byClass(cardByName("Top Hat") ?? {}, "cos-saving").length === 0);
+    check("...and the equip stands after the server round-trip", session.cosmetics.hat === "hat_top" && textOf(cardByName("Top Hat") ?? {}).includes("EQUIPPED"));
+    check("no inline message on success", noteText() === "");
+
+    // Selecting the already-equipped item is a no-op.
+    const callsAfter = mutationCalls();
+    cardByName("Top Hat")?.onclick?.();
+    check("clicking the equipped card is a no-op (no write, state stands)",
+      mutationCalls() === callsAfter && session.cosmetics.hat === "hat_top");
+
+    // The staging chrome is GONE.
+    const btns = buttonsOf(overlay);
+    check("no EQUIP / RESET PREVIEW buttons exist", !btns.some((b) => b === "EQUIP" || /RESET/i.test(b)));
+    check("no action strip / discard chrome in the DOM",
+      byClass(overlay, "closet-actions").length === 0 && byClass(overlay, "closet-discard").length === 0 && byClass(overlay, "closet-keep").length === 0);
+    check("no preview/unsaved copy anywhere on the surface",
+      !/previewing|unsaved|discard/i.test(textOf(overlay)), textOf(overlay).slice(0, 120));
+
+    // Closing just closes — there is nothing to discard and no confirmation.
+    fireWindowEvent("keydown", { key: "Escape" });
+    await settle();
+    check("Escape just closes (no discard dialog exists)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+    check("the equip survived the close", session.cosmetics.hat === "hat_top");
   }
 
-  section("controller parity: pure pad mapping + LB/RB category cycling + guarded close");
+  section("optimistic persistence: a failed write reverts stage + badge with ONE inline notice");
+  {
+    const { menu, overlay, session } = makeMenu({ persist: "fail" });
+    await menu.showProfile("closet");
+    await settle();
+    const cards = () => byClass(overlay, "cos-card");
+    const cardByName = (n: string) => cards().find((c) => textOf(c).includes(n));
+    const noteText = () => textOf(byClass(overlay, "closet-note")[0]);
+
+    cardByName("Top Hat")?.onclick?.();
+    check("the optimistic apply is instant", session.cosmetics.hat === "hat_top" && textOf(cardByName("Top Hat") ?? {}).includes("EQUIPPED"));
+    await settle();
+    check("failure reverts to the previously-equipped item", session.cosmetics.hat === null);
+    check("the default card wears EQUIPPED again (badge restored)",
+      textOf(cardByName("No Hat") ?? {}).includes("EQUIPPED") && byClass(cardByName("No Hat") ?? {}, "cos-check").length === 1);
+    check("the failed card lost the equipped state", !textOf(cardByName("Top Hat") ?? {}).includes("EQUIPPED"));
+    check("ONE non-blocking inline message", noteText() === "COULDN'T SAVE \u2014 REVERTED", noteText());
+    check("nothing modal appeared", !buttonsOf(overlay).some((b) => /DISCARD|KEEP|OK|RETRY/i.test(b)));
+
+    // A failed body-color write reverts BOTH color layers (party color + body item).
+    byClass(overlay, "closet-cat").find((c) => textOf(c) === "Blob Color")?.onclick?.();
+    cardByName("Cyan")?.onclick?.();
+    check("a body color equips both layers instantly", session.colorIndex === 1 && session.cosmetics.body === "body_cyan");
+    await settle();
+    check("failure reverts both color layers", session.colorIndex === null && session.cosmetics.body === null, `${String(session.colorIndex)}/${String(session.cosmetics.body)}`);
+    check("...with the same inline notice", noteText() === "COULDN'T SAVE \u2014 REVERTED");
+  }
+
+  section("rapid switching is last-click-wins: a slow earlier response can never override");
+  {
+    const { menu, overlay, session, pendingPersists } = makeMenu({ persist: "manual" });
+    await menu.showProfile("closet");
+    await settle();
+    pendingPersists.shift()?.resolveEcho(); // settle the closet-open identity hydrate
+    await settle();
+    const cards = () => byClass(overlay, "cos-card");
+    const cardByName = (n: string) => cards().find((c) => textOf(c).includes(n));
+    const noteText = () => textOf(byClass(overlay, "closet-note")[0]);
+
+    cardByName("Top Hat")?.onclick?.();   // write #1 — will settle LAST (slow)
+    cardByName("Party Cone")?.onclick?.(); // write #2 — the newest pick
+    check("two writes are in flight", pendingPersists.length === 2, String(pendingPersists.length));
+    check("the newest pick applied locally at once", session.cosmetics.hat === "hat_party");
+    check("...and its card reads EQUIPPED", textOf(cardByName("Party Cone") ?? {}).includes("EQUIPPED"));
+
+    pendingPersists[1]?.resolveEcho(); // the NEWER write lands first
+    await settle();
+    check("the newer response settles its own pick (spinner cleared)",
+      session.cosmetics.hat === "hat_party" && byClass(cardByName("Party Cone") ?? {}, "cos-saving").length === 0);
+
+    pendingPersists[0]?.fail(); // the slow EARLIER write dies late
+    await settle();
+    check("the stale failure cannot revert the newer pick", session.cosmetics.hat === "hat_party");
+    check("no revert notice for a superseded write", noteText() === "", noteText());
+    check("the newer card still reads EQUIPPED", textOf(cardByName("Party Cone") ?? {}).includes("EQUIPPED"));
+  }
+
+  section("locked items: never equippable, always readable — the condition IS the chip");
+  {
+    const { menu, overlay, session, mutationCalls } = makeMenu();
+    await menu.showProfile("closet");
+    await settle();
+    const crown = () => byClass(overlay, "cos-card").find((c) => textOf(c).includes("Crown"));
+    check("locked card stays FOCUSABLE (not disabled) so the condition is readable", crown()?.disabled !== true);
+    check("locked state class + lock glyph", crown()?.className?.includes("locked") === true && byClass(crown() ?? {}, "cos-lock").length === 1);
+    check("the chip IS the exact configured condition", textOf(crown() ?? {}).includes("REACH FLOOR 10"), textOf(crown() ?? {}));
+    check("aria-label reads name, locked, condition", crown()?.getAttribute?.("aria-label") === "Crown, locked \u2014 reach floor 10", crown()?.getAttribute?.("aria-label") ?? "");
+    const calls = mutationCalls();
+    crown()?.onclick?.();
+    check("activating a locked card equips NOTHING (no write)", session.cosmetics.hat === null && mutationCalls() === calls);
+    check("...and reads the condition out inline", textOf(byClass(overlay, "closet-note")[0]) === "LOCKED \u2014 REACH FLOOR 10");
+    check("the locked card never gains the equipped state", crown()?.className?.includes("equipped") !== true);
+  }
+
+  section("state language survives grayscale + color-vision deficiencies (geometry, glyph, text)");
+  {
+    const { menu, overlay } = makeMenu();
+    await menu.showProfile("closet");
+    await settle();
+    const cards = () => byClass(overlay, "cos-card");
+    const cardByName = (n: string) => cards().find((c) => textOf(c).includes(n));
+    const equipped = cardByName("No Hat");
+    const owned = cardByName("Top Hat");
+    const locked = cardByName("Crown");
+    check("three distinct state CLASSES (never hue alone)",
+      equipped?.className?.includes("equipped") === true && owned?.className?.includes("owned") === true && locked?.className?.includes("locked") === true);
+    check("equipped is marked by the \u2713 badge + EQUIPPED chip", byClass(equipped ?? {}, "cos-check").length === 1 && textOf(equipped ?? {}).includes("EQUIPPED"));
+    check("owned carries neither badge nor chip copy", byClass(owned ?? {}, "cos-check").length === 0 && !textOf(owned ?? {}).includes("EQUIPPED"));
+    check("locked is marked by the lock glyph + condition chip", byClass(locked ?? {}, "cos-lock").length === 1 && textOf(locked ?? {}).includes("REACH FLOOR 10"));
+    // The CSS side: equipped = lift + double frame (geometry), locked = hatch overlay,
+    // and the focus ring is EXTERNAL cream — distinct from the equipped amber frame.
+    const html = readFileSync(join(ROOT, "index.html"), "utf8");
+    check("equipped card geometry: 3px lift + double frame", /\.cos-card\.equipped[^}]*translateY\(-3px\)/.test(html) && /\.cos-card\.equipped[^}]*inset 0 0 0 4px/.test(html));
+    check("locked card geometry: hatch overlay + desaturated thumb", /\.cos-card\.locked::after[^}]*repeating-linear-gradient/.test(html) && /\.cos-card\.locked \.cos-icon[^}]*grayscale/.test(html));
+    check("focus ring is an EXTERNAL cream outline (not the amber frame)", /\.cos-card:focus-visible\{ outline:2px solid var\(--cream\); outline-offset:3px/.test(html));
+    // Blob-color swatches carry a NAME label in addition to the color chip.
+    byClass(overlay, "closet-cat").find((c) => textOf(c) === "Blob Color")?.onclick?.();
+    const cyan = cardByName("Cyan");
+    check("color swatches ride with a text label, never color alone",
+      byClass(cyan ?? {}, "cos-swatch").length === 1 && byClass(cyan ?? {}, "cos-name").some((n) => textOf(n) === "Cyan"));
+    // And the deleted staging model can never come back silently.
+    const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
+    check("the staging model is deleted from the source",
+      !menuSrc.includes("requestLeave") && !menuSrc.includes("PREVIEWING") && !menuSrc.includes("closet-equip") && !menuSrc.includes("discard unsaved") && !menuSrc.includes("KEEP BROWSING"));
+  }
+
+  section("controller parity: pure pad mapping + LB/RB category cycling + B just closes");
   {
     // Edge detection: a held button fires exactly once.
     const idle = new Array<boolean>(16).fill(false);
     const aDown = idle.slice(); aDown[0] = true;
-    check("A press maps to activate", padActions(idle, aDown).join(",") === "activate");
+    check("A press maps to activate (equips the focused owned card instantly)", padActions(idle, aDown).join(",") === "activate");
     check("A held fires nothing further", padActions(aDown, aDown).length === 0);
     const bDown = idle.slice(); bDown[1] = true;
-    check("B maps to back (the guarded Escape path)", padActions(idle, bDown).join(",") === "back");
+    check("B maps to back (the same Escape path)", padActions(idle, bDown).join(",") === "back");
     const dpad = idle.slice(); dpad[13] = true;
     check("D-pad down maps to focusNext", padActions(idle, dpad).join(",") === "focusNext");
     const lb = idle.slice(); lb[4] = true;
@@ -684,18 +887,18 @@ async function main(): Promise<void> {
     await menu.showProfile("closet");
     await settle();
     menu.cycleTabs(1);
-    const cards = () => byClass(overlay, "cos-tile").map(textOf);
+    const cards = () => byClass(overlay, "cos-card").map(textOf);
     check("RB cycles to the next real category (Glasses)", cards().some((c) => c.includes("No Glasses")), cards().join("|").slice(0, 80));
     menu.cycleTabs(-1);
     check("LB cycles back (Hats)", cards().some((c) => c.includes("No Hat")));
 
-    // The visible close routes through the SAME discard guard.
-    byClass(overlay, "cos-tile").find((c) => textOf(c).includes("Top Hat"))?.onclick?.();
+    // A pick then the visible close: the equip is already committed — close just closes,
+    // with NO second confirm anywhere.
+    byClass(overlay, "cos-card").find((c) => textOf(c).includes("Top Hat"))?.onclick?.();
     byClass(overlay, "panel-close")[0]?.onclick?.();
-    check("close with unsaved preview raises the discard confirmation", textOf(overlay).includes("discard unsaved preview?"));
-    byClass(overlay, "closet-discard")[0]?.onclick?.();
     await settle();
-    check("discard via close leaves cleanly with nothing written", session.cosmetics.hat === null);
+    check("close after an equip just closes (no confirmation exists)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+    check("...and the instant equip stands", session.cosmetics.hat === "hat_top");
   }
 
   section("run build is the trusted HISTORICAL snapshot — absent says so honestly");
@@ -716,22 +919,21 @@ async function main(): Promise<void> {
     await menu.showProfile("closet");
     await settle();
     const cats = () => byClass(overlay, "closet-cat");
-    const cards = () => byClass(overlay, "cos-tile");
+    const cards = () => byClass(overlay, "cos-card");
     cats().find((c) => textOf(c) === "Blob Color")?.onclick?.();
     check("body colors render as cards with the Amber default", cards().some((c) => textOf(c).includes("Amber (classic)")));
     cards().find((c) => textOf(c).includes("Cyan"))?.onclick?.();
-    byClass(overlay, "closet-equip")[0]?.onclick?.();
-    check("equipping a body color drives BOTH color layers", session.colorIndex === 1 && session.cosmetics.body === "body_cyan");
+    check("one tap equips a body color and drives BOTH color layers", session.colorIndex === 1 && session.cosmetics.body === "body_cyan");
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
-    check("leaving with nothing unsaved just closes (no confirmation)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
+    check("closing just closes (nothing to discard, no confirmation)", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
 
-    // NEW badge: a real unlock earned since the last visit wears the star ONCE.
+    // NEW badge: a real unlock earned since the last visit wears the tag ONCE.
     const fresh = makeMenu({ profile: makeProfile({ unlocks: ["hat_crown"] }) });
     await fresh.menu.showProfile("closet");
     await settle();
-    const crownCard = () => byClass(fresh.overlay, "cos-tile").find((c) => textOf(c).includes("Crown"));
-    check("a freshly earned unlock reads NEW (and is enabled)", textOf(crownCard() ?? {}).includes("NEW") && crownCard()?.disabled !== true);
+    const crownCard = () => byClass(fresh.overlay, "cos-card").find((c) => textOf(c).includes("Crown"));
+    check("a freshly earned unlock reads NEW (and is equippable)", textOf(crownCard() ?? {}).includes("NEW") && crownCard()?.disabled !== true);
     await fresh.menu.showProfile("closet");
     await settle();
     check("the NEW badge clears on the next visit (marked seen)", !textOf(crownCard() ?? {}).includes("NEW"));

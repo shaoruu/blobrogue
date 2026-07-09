@@ -96,8 +96,6 @@ function makeEl(tag = "div"): any {
         case "replaceChildren":
           return (...cs: any[]) => { children.length = 0; children.push(...cs); };
         case "remove":
-        case "setAttribute":
-        case "removeAttribute":
         case "setAttributeNS":
         case "addEventListener":
         case "removeEventListener":
@@ -109,6 +107,14 @@ function makeEl(tag = "div"): any {
         case "after":
         case "before":
           return noop;
+        // Attributes are tracked (not styled) so UI suites can assert accessibility
+        // contracts (aria-label/aria-pressed) exactly as written by the real code.
+        case "setAttribute":
+          return (k: string, v: unknown) => { (t.__attrs ?? (t.__attrs = {}))[k] = String(v); };
+        case "getAttribute":
+          return (k: string) => (t.__attrs && k in t.__attrs ? t.__attrs[k] : null);
+        case "removeAttribute":
+          return (k: string) => { if (t.__attrs) delete t.__attrs[k]; };
         case "focus":
           return () => { lastFocusedStore = t; };
         case "getBoundingClientRect":
