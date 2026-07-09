@@ -623,7 +623,7 @@ export class Menu {
   // Lifetime aggregates + run history. Backend-first (account or guest row), with the
   // localStorage mirror as the offline fallback — a guest always sees THEIR stats.
   async showProfilePanel() {
-    const busy = this.busy("loading profile\u2026");
+    this.busy("loading profile\u2026");
     let stats: PlayerStatsDoc | null = null;
     let runs: RunHistoryEntryDoc[] = [];
     let runsCursor: string | null = null;
@@ -648,7 +648,6 @@ export class Menu {
       runs = local.runs;
       isLocalFallback = true;
     }
-    void busy;
 
     const wrap = el("div", "menu");
     const head = el("div", "panel-h");
@@ -688,11 +687,7 @@ export class Menu {
     if (bossBits.length) details.push(bossBits.join(" \u00b7 "));
     if (details.length) {
       const line = el("p", "bossline");
-      line.innerHTML = "";
-      line.append(...details.map((d, i) => {
-        const s = el("span", "", (i > 0 ? "  \u00b7  " : "") + d);
-        return s;
-      }));
+      line.append(...details.map((d, i) => el("span", "", (i > 0 ? "  \u00b7  " : "") + d)));
       wrap.appendChild(line);
     }
 
