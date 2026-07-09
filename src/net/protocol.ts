@@ -40,9 +40,10 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
 // v3-additive (difficulty, same rule — no client->server change): the ticket may carry a
-// verified `df` room-difficulty claim, and snapshots carry `dif` (the room's authoritative
-// difficulty) which the client decodes with a STANDARD fallback, so old<->new pairs keep
-// interoperating: an old server reads as standard, an old client ignores the field.
+// verified `df` room-difficulty claim, snapshots carry `dif` (the room's authoritative
+// difficulty), and SelfWire carries `dns` (this floor's down count, for the mode down
+// limit) — all decoded with safe fallbacks (standard / 0), so old<->new pairs keep
+// interoperating: an old server reads as standard, an old client ignores the fields.
 export const PROTOCOL_VERSION = 3;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
@@ -75,6 +76,7 @@ export interface SelfWire {
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
   rev: number;                 // reviveProgress seconds (authoritative revive hold readout)
+  dns: number;                 // downs on this floor (mode down-limit / spectator readout)
   wpn: WeaponId;
   wpns: WeaponId[];            // authoritative owned-weapon inventory (validated equip source)
   items: string[];             // authoritative owned blessing/item ids (HUD strip)
@@ -460,6 +462,8 @@ function validateSelfWire(v: unknown): SelfWire {
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
     rev: num(o, "rev", 0, 1e4),
+    // Decode-OPTIONAL (older servers omit it): absent -> 0 downs, never a decode failure.
+    dns: o.dns === undefined ? 0 : intOf(o, "dns", 0, 1e6),
     wpn: weaponOf(o, "wpn"),
     wpns, items,
     mods: modsFromWire(obj(o.mods, "self.mods")),
@@ -631,7 +635,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
     dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, fng: s.fangCd,
-    fac: s.facing, down: s.isDown, rev: s.reviveProgress, wpn: s.weapon,
+    fac: s.facing, down: s.isDown, rev: s.reviveProgress, dns: s.floorDowns, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
   };
@@ -641,7 +645,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
   return {
     x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv, dashInvuln: w.dnv,
     dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, fangCd: w.fng,
-    facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
+    facing: w.fac, isDown: w.down, reviveProgress: w.rev, floorDowns: w.dns, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
   };

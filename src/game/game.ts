@@ -8,7 +8,7 @@ import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, TIERS, DEFAULT_DIFFICULTY } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, TIERS, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../sim/balance.js";
 import type { Difficulty, EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
@@ -1690,7 +1690,8 @@ export class Game {
         const held = (this.reviveHold.get(r.playerId) ?? 0) + dt;
         this.reviveHold.set(r.playerId, held);
         this.spawnParticles(r.x, r.y, 1, "#8affc0");
-        if (held >= REVIVE.channel) {
+        // Legacy peer-synced co-op runs the STANDARD channel (this.difficulty pins it there).
+        if (held >= DIFFICULTIES[this.difficulty].reviveChannel) {
           this.coop.requestRevive(r.playerId);
           this.reviveHold.set(r.playerId, -2); // debounce until the row flips
         }

@@ -14,7 +14,7 @@ import {
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
-import { REVIVE, BOSS, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../src/sim/balance.js";
+import { REVIVE, BOSS, DIFFICULTIES } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
 import * as C from "../src/sim/constants.js";
@@ -180,7 +180,7 @@ function downReviveTests(): void {
       if (ev.some((x) => x.t === "revive" && (x as { pid: string }).pid === a.id)) revived = true;
     }
     check("A revived by B", revived && !a.isDown, `after ${ticks} ticks`);
-    check("A returns at the revive HP", a.hp === REVIVE.hp, `hp=${a.hp}`);
+    check("A returns at the revive HP", a.hp === DIFFICULTIES.standard.reviveHp, `hp=${a.hp}`);
     check("A briefly invulnerable after revive", a.invuln > 0);
   }
 
@@ -520,8 +520,7 @@ function blessingSafetyTests(): void {
 // entrance grace, and a mandatory telegraph) — a fresh floor can never hurt you on frame one.
 function spawnGraceTests(): void {
   const DT = 1 / 20;
-  // The mercy window is a difficulty knob now; these worlds run the STANDARD default.
-  const GRACE = DIFFICULTIES[DEFAULT_DIFFICULTY].playerSpawnGrace;
+  const GRACE = C.PLAYER_SPAWN_GRACE;
   const GRACE_TICKS = Math.round(GRACE / DT);
 
   // The owner's exact route: clear floor 4, pick blessings at the exit gate, descend into

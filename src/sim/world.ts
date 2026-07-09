@@ -25,7 +25,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
-  DIFFICULTIES, DEFAULT_DIFFICULTY,
+  DIFFICULTIES, DEFAULT_DIFFICULTY, difficultyActiveCap,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
 } from "./balance.js";
@@ -98,6 +98,11 @@ export interface PlayerSim {
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
+  // Times this player has gone down on the CURRENT floor. At the difficulty's per-floor
+  // down limit (studio gate §1: unlimited / 3 / 2) the player stays down — a spectator
+  // until the party descends, which restores them and resets the count. Solo never downs
+  // (no standing ally means game over), so this is co-op pressure only.
+  floorDowns: number;
   // Lag-compensation rewind for THIS player's shots/swings, in ticks (server-computed from the
   // player's measured RTT + interp delay, clamped). 0 in solo/prediction, so hit tests use
   // present-time positions and behavior is unchanged.
@@ -200,7 +205,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
+    shotSeq: 0, isDown: false, reviveProgress: 0, floorDowns: 0, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -262,7 +267,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
     // Run start is a floor entry too: the same spawn grace every descend grants (the
     // reposition loop in loadFloorIntoWorld ran before this player existed).
-    p.invuln = DIFFICULTIES[w.difficulty].playerSpawnGrace;
+    p.invuln = C.PLAYER_SPAWN_GRACE;
     w.players.set(LOCAL_ID, p);
   }
   return w;
@@ -339,11 +344,20 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   }
   // Reposition living players to the new spawn, each under the spawn-grace mercy window:
   // nobody loads into a fresh floor (a boss floor especially) already taking damage.
+  // A floor build also ends every down: carried-down teammates and past-limit spectators
+  // return at the mode's revive HP ("spectator until descent" — studio gate §1), and the
+  // per-floor down count starts over.
   const spawn = w.dungeon.spawn;
   for (const p of w.players.values()) {
     p.x = spawn.x * TILE + TILE / 2;
     p.y = spawn.y * TILE + TILE / 2;
-    p.invuln = Math.max(p.invuln, DIFFICULTIES[w.difficulty].playerSpawnGrace);
+    p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
+    if (p.isDown) {
+      p.isDown = false;
+      p.hp = Math.min(p.maxHp, DIFFICULTIES[w.difficulty].reviveHp);
+      p.reviveProgress = 0;
+    }
+    p.floorDowns = 0;
   }
 }
 
@@ -444,7 +458,10 @@ function rollPropKind(rng: Rng, hazardMult: number): Prop["kind"] {
 function placeProps(w: WorldState): Prop[] {
   const d = w.dungeon;
   const rng = new Rng((w.seed ^ 0x2f6a35c1) + w.floor * 26417);
-  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult;
+  // Hazard budget (studio gate §1: 0.65× / 1.00× / 1.30×) composed with biome pressure.
+  // The explosive-prop band is the runtime's current hazard lever; the §2 telegraphed
+  // hazard-unit grammar scales through this same knob when those systems land.
+  const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult * DIFFICULTIES[w.difficulty].hazardMult;
   const list: Prop[] = [];
   const occupied = new Set<number>();
   for (const room of d.rooms) {
@@ -1242,7 +1259,7 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   for (const e of w.enemies) {
     if (!e.dead && e.kind !== "boss") living += threatCostOf(e.kind, e.tier);
   }
-  const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers) * DIFFICULTIES[w.difficulty].threatMult;
+  const cap = difficultyActiveCap(activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers), w.difficulty);
   const next = w.pendingSpawns[0];
   if (living + threatCostOf(next.kind, next.tier) > cap) return;
   // Its spawn grace never ticked while pending, so it activates with the full grace window.
@@ -1383,7 +1400,7 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
   const a = e.attack;
   if (a.phase === "windup") {
     if (stepWindupTimer(w, e, dt, C.SKELETON_WINDUP, C.SKELETON_LOCK, false)) {
-      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(e);
+      a.phase = "active"; a.time = 0; a.windup = 0; a.cooldown = C.SKELETON_CD * attackCdMultOf(w, e);
       ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.12 });
     }
     return;
@@ -1480,13 +1497,16 @@ function spitterFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     const off = n === 1 ? 0 : (i - 1) * C.GLOB_SPREAD;
     spawnEnemyBullet(w, mx, my, a.lockedAngle + off, 300, 7, 1, "#ff5a7a", 2.5);
   }
-  a.cooldown = C.SPITTER_CD * attackCdMultOf(e);
+  a.cooldown = C.SPITTER_CD * attackCdMultOf(w, e);
   ev.push({ t: "spitMuzzle", x: mx, y: my });
 }
 
-// Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier.
-function attackCdMultOf(e: Enemy): number {
-  return TIERS[e.tier].attackCdMult;
+// Elite affix package: 20% shorter commit cooldowns (§4) — never a damage multiplier —
+// composed with the difficulty pacing knob (studio gate §1: casual 1.15× / brutal 0.90×).
+// Only the cooldown BETWEEN commitments scales: windup/lock/recovery (the tells) are
+// identical in every mode, and the boss's cadence is fixed by its §3 pressure contract.
+function attackCdMultOf(w: WorldState, e: Enemy): number {
+  return TIERS[e.tier].attackCdMult * DIFFICULTIES[w.difficulty].attackCdMult;
 }
 
 // The Slime King (spec §5, calibrated to ~37.5s median / ≥20s absolute solo TTK). Phase
@@ -2043,7 +2063,8 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   // exactly as they always did per chest opened.
   const loot: ChestLoot[] = [];
   if (c.kind === "boss") {
-    loot.push({ kind: "heart" });
+    // Boss heart reward is a difficulty knob (studio gate §1: +2 casual, +1 otherwise).
+    for (let i = 0; i < DIFFICULTIES[w.difficulty].bossChestHearts; i++) loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
     if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
@@ -2237,8 +2258,11 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
     p.hp = 0;
     if (hasStandingAlly(w, p)) {
       // A teammate can still revive: go DOWN, not out. reviveProgress accrues in updateRevives.
+      // At the difficulty's per-floor down limit this down is final for the floor (a
+      // spectator until descent) — updateRevives refuses the channel past the limit.
       p.isDown = true;
       p.reviveProgress = 0;
+      p.floorDowns++;
     } else {
       // No one left to revive -> solo death or full team wipe. End the run for the whole room
       // (every remaining player, incl. already-downed teammates) so all clients see game over.
@@ -2271,14 +2295,18 @@ function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
   if (!anyUp && anyDown) endRun(w, ev);
 }
 
-// Authoritative revive (§2): a living teammate holds within REVIVE.radius for the full
-// 1.5s channel (any damage to the channeler cancels it — see damagePlayer). The revived
-// player returns at 2 HP with 1.0s protection and a 0.35s attack lockout. Progress decays
-// when no one is nearby, so it takes a sustained hold. Solo never has a downed player with
-// a standing ally, so this no-ops there.
+// Authoritative revive (§2 + studio gate §1): a living teammate holds within REVIVE.radius
+// for the difficulty's full channel (1.20s casual / 1.50s standard / 1.80s brutal; any
+// damage to the channeler cancels it — see damagePlayer). The revived player returns at
+// the mode's revive HP (3 / 2 / 2) with 1.0s protection and a 0.35s attack lockout.
+// Progress decays when no one is nearby, so it takes a sustained hold. A player at the
+// mode's per-floor down limit cannot be channeled at all — they spectate until descent.
+// Solo never has a downed player with a standing ally, so this no-ops there.
 function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
+  const dif = DIFFICULTIES[w.difficulty];
   for (const downed of w.players.values()) {
     if (!downed.isDown) continue;
+    if (downed.floorDowns >= dif.floorDownLimit) continue; // spectator until descent
     let reviver: PlayerSim | undefined;
     for (const other of w.players.values()) {
       if (other === downed || other.isDown || other.hp <= 0) continue;
@@ -2286,9 +2314,9 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (reviver) {
       downed.reviveProgress += dt;
-      if (downed.reviveProgress >= REVIVE.channel) {
+      if (downed.reviveProgress >= dif.reviveChannel) {
         downed.isDown = false;
-        downed.hp = Math.min(downed.maxHp, REVIVE.hp);
+        downed.hp = Math.min(downed.maxHp, dif.reviveHp);
         downed.invuln = Math.max(downed.invuln, REVIVE.invuln);
         downed.fireCd = Math.max(downed.fireCd, REVIVE.fireLockout);
         downed.reviveProgress = 0;
@@ -2365,10 +2393,10 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   w.floor = nextFloor;
   for (const p of w.players.values()) {
     p.combo = 0; p.comboTimer = 0;
-    p.isDown = false;
-    p.reviveProgress = 0;
     if (SUSTAIN.descentHeal > 0) p.hp = Math.min(p.maxHp, p.hp + SUSTAIN.descentHeal);
   }
+  // Down state ends at the floor build itself (loadFloorIntoWorld): carried-down teammates
+  // and past-limit spectators return there at the mode's revive HP — never standing at 0.
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
   if (isOfferDue) {

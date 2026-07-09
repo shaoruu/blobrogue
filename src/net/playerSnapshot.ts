@@ -34,6 +34,7 @@ export interface AuthoritativePlayerSnapshot {
   mods: PlayerMods;
   isDown: boolean;
   reviveProgress: number;
+  floorDowns: number;
   kills: number;
   coins: number;
   combo: number;
@@ -81,6 +82,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     mods: { ...p.mods },
     isDown: p.isDown,
     reviveProgress: p.reviveProgress,
+    floorDowns: p.floorDowns,
     kills: p.kills,
     coins: p.coins,
     combo: p.combo,
@@ -110,6 +112,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   Object.assign(p.mods, s.mods);
   p.isDown = s.isDown;
   p.reviveProgress = s.reviveProgress;
+  p.floorDowns = s.floorDowns;
   p.kills = s.kills;
   p.coins = s.coins;
   p.combo = s.combo;

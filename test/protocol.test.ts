@@ -60,6 +60,7 @@ function distinctivePlayer(): PlayerSim {
   p.mods.critChance = 0.21; p.mods.dashCdMult = 0.8; p.mods.coinMult = 2;
   p.isDown = true;
   p.reviveProgress = 0.65;
+  p.floorDowns = 2;
   p.kills = 42; p.coins = 137; p.combo = 9; p.comboTimer = 1.75;
   return p;
 }
@@ -156,11 +157,15 @@ function difficultyWireTests(): void {
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("difficulty round-trips deep-equal", decoded.t === "snap" && decoded.dif === "casual");
 
-  // An OLD server's snapshot (no dif field) still decodes, as the STANDARD default.
-  const legacy = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
+  // An OLD server's snapshot (no dif field, no SelfWire dns) still decodes with the safe
+  // fallbacks (standard difficulty, zero downs).
+  const legacy = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown> & { self: Record<string, unknown> | null };
   delete legacy.dif;
+  if (legacy.self) delete legacy.self.dns;
   const fromLegacy = jsonCodec.decodeServer(JSON.stringify(legacy));
   check("dif absent decodes as standard (old-server compat)", fromLegacy.t === "snap" && fromLegacy.dif === "standard");
+  check("SelfWire dns absent decodes as 0 downs (old-server compat)",
+    fromLegacy.t === "snap" && fromLegacy.self !== null && fromLegacy.self.dns === 0);
 
   for (const junk of ["extreme", "CASUAL", "", 2, null]) {
     const bad = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;

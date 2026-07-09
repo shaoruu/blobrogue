@@ -7,51 +7,72 @@
 // Engine-mechanical constants that are not balance (pathfinding cadence, knockback physics,
 // status-system plumbing) stay in constants.ts.
 
-export const BALANCE_VERSION = 2;
+export const BALANCE_VERSION = 3;
 
-// ---- §0.5 difficulty modes ----
+// ---- §0.5 difficulty modes (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1) ----
 //
 // ONE typed definition per mode, consumed at the deterministic floor-build/sim seams
-// (createEnemy HP, threat budget + active cap, ambient heart rates, floor-entry grace).
-// Every knob multiplies the SAME baseline tables below — gameplay logic is never forked,
-// telegraphs/damage/commitment timings are identical across modes.
+// (createEnemy HP/speed, commitment cooldowns, threat budget + active cap, hazard band,
+// ambient heart rates, boss chest hearts, revive, per-floor down limits). Every knob
+// multiplies the SAME baseline tables below — gameplay logic is never forked, and per the
+// gate all modes keep identical tells, hitboxes, boss phase mechanics, loot quality and
+// authored damage integers (no mode blanket-multiplies damage).
 //
-// BRUTAL is the identity (×1.0 everywhere): it IS the pre-difficulty live balance, which
-// is what keeps the golden-master oracle honest (goldens pin brutal and stay byte-stable).
-// STANDARD (the default everywhere: solo, quick play, claimless tickets) softens live
-// slightly; CASUAL keeps every mechanic intact but forgiving.
+// STANDARD is the exact ×1.0 identity — the authored baseline the studio gate calibrates
+// (§8: "mode modifiers are then applied around that validated baseline") — which is what
+// keeps the golden-master oracle honest (goldens pin standard and stay byte-stable).
+// CASUAL is forgiveness, not inert enemies; BRUTAL adds composition (+25%) and hazard
+// (+30%) pressure but only 12–15% HP, preventing sponges.
 
 export type Difficulty = "casual" | "standard" | "brutal";
 
 export interface DifficultyDef {
   id: Difficulty;
-  blurb: string;          // one-sentence run-setup description (menu + lobby)
-  tint: string;           // HUD/menu accent for this mode
-  enemyHpMult: number;    // regular-enemy HP (applied inside the single §3 rounding pass)
-  bossHpMult: number;     // boss HP (applied inside the round-to-10 pass)
-  threatMult: number;     // §4 threat budget, active cap, and boss-floor minion density
-  heartMult: number;      // §2 ambient heart-drop chances (enemy / crate / wood chest)
-  playerSpawnGrace: number; // seconds of mercy invuln on entering a freshly built floor
+  blurb: string;             // one-sentence run-setup description (menu + lobby)
+  tint: string;              // HUD/menu accent for this mode
+  enemyHpMult: number;       // normal/elite HP (applied inside the single §3 rounding pass)
+  bossHpMult: number;        // boss HP (applied inside the round-to-10 pass)
+  threatBudgetMult: number;  // floor threat budget + boss-floor escort density
+  activeCapMult: number;     // active-threat cap (scaled modes round UP at the seam)
+  attackCdMult: number;      // non-boss commitment cooldowns (never tells/recovery; boss
+                             // cadence is fixed by the §3 per-boss pressure contract)
+  enemySpeedMult: number;    // non-boss move speed (inside the §3 speed rounding pass)
+  hazardMult: number;        // hazard budget (currently the explosive-prop band lever)
+  maxComplexPerRoom: number; // simultaneous complex movers per room (readability guard)
+  heartMult: number;         // §2 ambient heart-drop chances (enemy / crate / wood chest)
+  bossChestHearts: number;   // hearts the boss chest ejects (the boss heart reward)
+  reviveChannel: number;     // seconds an uninterrupted revive hold takes
+  reviveHp: number;          // HP a revived player returns at
+  floorDownLimit: number;    // downs per player per floor before spectating until descent
 }
 
 export const DIFFICULTIES: Record<Difficulty, DifficultyDef> = {
   casual: {
     id: "casual",
-    blurb: "Fewer, softer foes and more hearts \u2014 learn the depths at your own pace.",
+    blurb: "Forgiving, not toothless \u2014 softer foes, more hearts, easy revives.",
     tint: "#7dd87d",
-    enemyHpMult: 0.75, bossHpMult: 0.75, threatMult: 0.75, heartMult: 1.5, playerSpawnGrace: 2.25,
+    enemyHpMult: 0.90, bossHpMult: 0.90, threatBudgetMult: 0.80, activeCapMult: 0.80,
+    attackCdMult: 1.15, enemySpeedMult: 0.95, hazardMult: 0.65, maxComplexPerRoom: 1,
+    heartMult: 1.35, bossChestHearts: 2, reviveChannel: 1.20, reviveHp: 3,
+    floorDownLimit: Number.POSITIVE_INFINITY,
   },
   standard: {
     id: "standard",
-    blurb: "The intended descent \u2014 dangerous but fair, with room to breathe.",
+    blurb: "The authored descent \u2014 dangerous, fair, and exactly as tuned.",
     tint: "#ffd166",
-    enemyHpMult: 0.92, bossHpMult: 0.92, threatMult: 0.95, heartMult: 1.15, playerSpawnGrace: 1.75,
+    enemyHpMult: 1.00, bossHpMult: 1.00, threatBudgetMult: 1.00, activeCapMult: 1.00,
+    attackCdMult: 1.00, enemySpeedMult: 1.00, hazardMult: 1.00, maxComplexPerRoom: 2,
+    heartMult: 1.00, bossChestHearts: 1, reviveChannel: 1.50, reviveHp: 2,
+    floorDownLimit: 3,
   },
   brutal: {
     id: "brutal",
-    blurb: "The depths at full pressure \u2014 every body, every scarcity, no mercy.",
+    blurb: "More bodies, faster commits, scarcer hearts \u2014 two downs and you watch.",
     tint: "#ff6a6a",
-    enemyHpMult: 1.0, bossHpMult: 1.0, threatMult: 1.0, heartMult: 1.0, playerSpawnGrace: 1.75,
+    enemyHpMult: 1.12, bossHpMult: 1.15, threatBudgetMult: 1.25, activeCapMult: 1.15,
+    attackCdMult: 0.90, enemySpeedMult: 1.05, hazardMult: 1.30, maxComplexPerRoom: 2,
+    heartMult: 0.75, bossChestHearts: 1, reviveChannel: 1.80, reviveHp: 2,
+    floorDownLimit: 2,
   },
 };
 
@@ -63,6 +84,21 @@ export const DEFAULT_DIFFICULTY: Difficulty = "standard";
 
 export function isDifficulty(v: unknown): v is Difficulty {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(DIFFICULTIES, v);
+}
+
+export function difficultyThreatBudget(base: number, difficulty: Difficulty): number {
+  // Standard IS the validated baseline and passes through untouched (gate §8); scaled
+  // modes multiply AFTER summing and round to the nearest 0.5 so budgets stay on the
+  // same half-point grid as the §4 threat costs (gate §2).
+  if (difficulty === "standard") return base;
+  return Math.round(base * DIFFICULTIES[difficulty].threatBudgetMult * 2) / 2;
+}
+
+export function difficultyActiveCap(base: number, difficulty: Difficulty): number {
+  // Scaled modes round UP (gate §1: "0.80×, round up" / "1.15×, round up") so a casual
+  // cap can never strand a planned unit behind a fractional ceiling.
+  if (difficulty === "standard") return base;
+  return Math.ceil(base * DIFFICULTIES[difficulty].activeCapMult);
 }
 
 // ---- §1 player constants ----
@@ -103,10 +139,11 @@ export const DEALER = {
   heal: 1,
 } as const;
 
+// Revive mechanics shared by every mode. The channel length and returned HP are difficulty
+// knobs (studio gate §1: 1.20s/3HP casual, 1.50s/2HP standard, 1.80s/2HP brutal) — see
+// DifficultyDef.reviveChannel / reviveHp. Any damage to the reviver cancels the channel.
 export const REVIVE = {
   radius: 46,
-  channel: 1.5,     // was 1.1 — any damage to the reviver cancels the channel
-  hp: 2,
   invuln: 1.0,
   fireLockout: 0.35, // a revived player cannot attack for this long
 } as const;
@@ -177,8 +214,8 @@ export const TIERS: Record<EnemyTier, TierDef> = {
 // deals 2 — ordinary contact stays 1. No tier ever blanket-multiplies damage.
 export const BRUTE_HEAVY_DAMAGE = 2;
 
-// Room-composition guards (§4): readable pressure, never soup.
-export const MAX_COMPLEX_PER_ROOM = 2;
+// Room-composition guards (§4): readable pressure, never soup. The per-room complex-mover
+// cap is a difficulty knob (studio gate §1: 1 / 2 / 2) — see DifficultyDef.maxComplexPerRoom.
 export const BRUTE_ELITE_COMBO_FLOOR = 8; // no brute+elite in one room before this floor
 export const ELITE_SPLIT_COUNT = 2;       // the shipped elite affix: splits into swarm units
 

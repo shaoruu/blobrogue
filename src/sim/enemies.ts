@@ -5,9 +5,10 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, DIFFICULTIES, DEFAULT_DIFFICULTY,
+  difficultyThreatBudget, difficultyActiveCap,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
-  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
+  BRUTE_ELITE_COMBO_FLOOR,
 } from "./balance.js";
 import type { Difficulty, EnemyTier } from "./balance.js";
 
@@ -115,12 +116,14 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const isBoss = kind === "boss";
   // Difficulty multiplies INSIDE the single rounding pass (never round-then-round), so
   // each (floor, tier, players, difficulty) tuple maps to one exact deterministic HP.
+  // The boss keeps its authored base speed and cadence in every mode — its pressure
+  // contract is per-boss (studio gate §3), so only the escort/HP scale with mode.
   const hp = isBoss
     ? Math.round((bossHpForFloor(floor) * coopBossHpMult(players) * dif.bossHpMult) / 10) * 10
     : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players) * dif.enemyHpMult));
   const speed = isBoss
     ? a.baseSpeed
-    : roundHalfToEven(a.baseSpeed * floorSpeedMult(floor) * tierDef.speedMult);
+    : roundHalfToEven(a.baseSpeed * floorSpeedMult(floor) * tierDef.speedMult * dif.enemySpeedMult);
   // Seed the slime hop clock from the sim Rng (not Math.random): the slime's hop-cadence
   // reads it, so it must be deterministic. Drawn BEFORE zig to match the historical rng
   // stream order. Still desyncs each enemy, but reproducibly.
@@ -210,7 +213,10 @@ interface RoomLoad {
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
 function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number, difficulty: Difficulty): PlannedUnit[] {
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
-  let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players) * DIFFICULTIES[difficulty].threatMult;
+  // Studio gate §2: the mode multiplier applies AFTER the baseline budget is summed
+  // (floor × biome × party), rounded to the nearest 0.5 — standard passes through exact.
+  let budget = difficultyThreatBudget(floorThreat(floor) * pressure.budgetMult * coopThreatMult(players), difficulty);
+  const maxComplexPerRoom = DIFFICULTIES[difficulty].maxComplexPerRoom;
   const roster = floorRoster(floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
 
@@ -230,7 +236,7 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
       const room = combatRooms[rng.int(0, combatRooms.length - 1)];
       const l = load.get(room)!;
       const isComplex = ENEMY_ARCHETYPES[unit.kind].threat > 1;
-      if (isComplex && l.complex >= MAX_COMPLEX_PER_ROOM) continue;
+      if (isComplex && l.complex >= maxComplexPerRoom) continue;
       if (floor < BRUTE_ELITE_COMBO_FLOOR) {
         if (unit.tier === "brute" && l.hasElite) continue;
         if (unit.tier === "elite" && l.hasBrute) continue;
@@ -294,7 +300,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
     active.push(createEnemy("boss", b.x, b.y, floor, rng, active.length, { players, difficulty }));
-    const minions = Math.max(1, roundHalfToEven((2 + Math.floor(floor / BOSS_EVERY)) * DIFFICULTIES[difficulty].threatMult));
+    const minions = Math.max(1, roundHalfToEven((2 + Math.floor(floor / BOSS_EVERY)) * DIFFICULTIES[difficulty].threatBudgetMult));
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);
       const p = pointInRoom(rng, dungeon, roomIndex);
@@ -304,7 +310,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
   }
 
   const plan = planFloorUnits(rng, floor, roomCount, players, difficulty);
-  const cap = activeThreatCap(floor) * coopThreatMult(players) * DIFFICULTIES[difficulty].threatMult;
+  const cap = difficultyActiveCap(activeThreatCap(floor) * coopThreatMult(players), difficulty);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;
