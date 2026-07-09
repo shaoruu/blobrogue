@@ -53,7 +53,8 @@
       .hb-slots{ position:relative; display:flex; flex-wrap:wrap; justify-content:center; align-items:flex-end; gap:6px; pointer-events:auto; }
       /* UI Director gate: the EQUIPPED slot is the dominant one — unequipped slots are the
          compact base size, the lit slot grows and lifts. */
-      .hb-slot{ position:relative; width:66px; padding:9px 4px 7px; display:flex; flex-direction:column; align-items:center; gap:5px;
+      .hb-slot{ position:relative; width:66px; min-width:48px; min-height:48px; padding:9px 4px 7px;
+        display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px;
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4);
         transition:transform .06s steps(2),box-shadow .06s steps(2),width .06s steps(2);
         cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none; }
@@ -74,12 +75,57 @@
         font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); pointer-events:none;
         text-shadow:0 1px 0 var(--dun-0); opacity:0; transition:opacity .3s ease; }
       .hb-hint.show{ opacity:1; }
-      /* UI Director gate: narrow viewports drop the weapon-name labels but keep icons + keys. */
-      @media (max-width:900px){
+      /* BUILD·N pill: the compact/touch summary of the blessing row. Hidden on desktop
+         (the chip strip shows instead); compact contexts swap them (media query below). */
+      .hb-build{ display:none; pointer-events:auto; min-height:48px; min-width:48px; padding:0 16px; align-items:center; justify-content:center;
+        font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--cream); border:0; cursor:pointer;
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); }
+      .hb-build:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:2px; }
+      /* UI Part4: narrow viewports drop the weapon-name labels but keep icons + key badges
+         (48px minimum tap targets hold); the blessing chips collapse into the BUILD·N pill
+         there AND on any coarse-pointer device (hover tooltips are unreachable on touch). */
+      @media (max-width:700px){
         .hb-name{ display:none; }
-        .hb-slot{ width:44px; }
-        .hb-slot.on{ width:56px; }
+        .hb-slot{ width:48px; }
+        .hb-slot.on{ width:60px; }
       }
+      @media (max-width:700px), (pointer:coarse){
+        .hb-buffs.show{ display:none; }
+        .hb-build.has{ display:inline-flex; }
+      }
+      /* bottom drawers (full build / weapon stats): fixed overlays above the HUD with a
+         click-to-close scrim that swallows every pointer event — gameplay never sees a tap
+         while a drawer is open. Transform/visibility only: zero layout shift. */
+      .hb-scrim{ position:fixed; inset:0; z-index:8; display:none; background:rgba(5,3,11,.55); pointer-events:auto; }
+      .hb-scrim.show{ display:block; }
+      .hb-drawer{ position:fixed; left:50%; bottom:0; z-index:9; width:min(94vw,460px); max-height:60vh; overflow-y:auto; pointer-events:auto;
+        display:flex; flex-direction:column; gap:10px; padding:12px 14px 16px;
+        background:var(--dun-1); box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--dun-3),0 -6px 18px rgba(0,0,0,.5);
+        transform:translate(-50%,105%); visibility:hidden; transition:transform .12s steps(3), visibility 0s .12s; }
+      .hb-drawer.open{ transform:translate(-50%,0); visibility:visible; transition:transform .12s steps(3); }
+      .hd-head{ display:flex; justify-content:space-between; align-items:center; gap:12px;
+        font-family:var(--f-ui); font-size:10px; letter-spacing:2px; color:var(--amber); }
+      .hd-close{ min-width:64px; min-height:36px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:8px; letter-spacing:1px;
+        color:var(--cream); background:var(--dun-2); box-shadow:inset 0 0 0 1px var(--dun-4); }
+      .hd-close:focus-visible{ outline:2px solid var(--amber-hi); }
+      .hd-body{ display:flex; flex-direction:column; gap:9px; font-family:var(--f-num); font-size:15px; color:var(--bone); }
+      .hd-row{ display:flex; gap:9px; align-items:flex-start; }
+      .hd-icon{ flex:none; width:24px; height:24px; display:flex; align-items:center; justify-content:center;
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)); }
+      .hd-icon img{ width:14px; height:14px; image-rendering:pixelated; }
+      .hd-icon .glyphfb{ font-family:var(--f-num); font-size:13px; line-height:1; color:var(--t,var(--cream)); }
+      .hd-text{ display:flex; flex-direction:column; gap:2px; }
+      .hd-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--t,var(--amber-hi)); }
+      .hd-desc{ line-height:1.15; color:var(--cream); }
+      .hd-next{ line-height:1.15; color:#9a8fb5; }
+      .hd-stats{ display:flex; gap:8px; }
+      .hd-stat{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 4px;
+        background:rgba(5,3,11,.6); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .hd-stat span{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); }
+      .hd-stat b{ font-family:var(--f-num); font-size:18px; font-weight:400; color:var(--amber-hi); }
+      .hd-drop{ min-height:48px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:9px; letter-spacing:2px;
+        color:var(--red); background:rgba(255,90,90,.08); box-shadow:inset 0 0 0 2px #5a2030; }
+      .hd-drop:focus-visible{ outline:2px solid var(--red); }
       .hb-key{ position:absolute; top:3px; left:3px; min-width:14px; height:14px; display:flex; align-items:center; justify-content:center;
         font-family:var(--f-logo); font-size:8px; line-height:1; color:var(--dun-4); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
       .hb-slot.on .hb-key{ color:var(--dun-0); background:var(--amber); box-shadow:inset 0 0 0 1px var(--amber-hi); }

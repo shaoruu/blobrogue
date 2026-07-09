@@ -446,9 +446,10 @@ export class Game {
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
     // Hotbar UI -> the same public inventory handlers keyboard input uses (and a future
-    // controller/touch layer would use): click/Enter/Space equips, drag/drop reorders.
+    // controller/touch layer would use): click/Enter/Space equips (or inspects when the
+    // slot is already equipped — the touch-safe path to weapon info), drag/drop reorders.
     this.hud.setHotbarActions({
-      onSlotActivate: (index) => this.equipSlot(index),
+      onSlotActivate: (index) => this.activateSlot(index),
       onSlotReorder: (from, to) => this.reorderSlots(from, to),
     });
     this.onGameOver = onGameOver;
@@ -488,7 +489,9 @@ export class Game {
       const k = e.key.toLowerCase();
       if (k === "escape") {
         e.preventDefault();
-        if (!this.keys.has("escape")) this.togglePause(); // ignore key auto-repeat
+        // An open HUD drawer owns Escape (close it); pause is the next Escape.
+        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
+        else if (!this.keys.has("escape")) this.togglePause(); // ignore key auto-repeat
         this.keys.add(k);
         return;
       }
@@ -511,7 +514,7 @@ export class Game {
     });
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (this.isRunning) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
+      if (this.isRunning && !this.hud.isInteractionActive()) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
     }, { passive: false });
     this.canvas.addEventListener("mousedown", (e) => {
       this.mouse.isDown = true;
@@ -819,7 +822,9 @@ export class Game {
   }
 
   // Build this tick's InputCmd from keys/mouse/settings. Autofire + the mouse->world aim
-  // are resolved here; the sim only sees moveX/moveY/aim/firing/dash.
+  // are resolved here; the sim only sees moveX/moveY/aim/firing/dash. While the HUD owns
+  // the input context (hotbar drag or an open drawer), combat actions are suppressed so a
+  // UI gesture can never leak into firing/dashing — movement/aim stay live.
   private buildInput(): InputCmd {
     let moveX = 0, moveY = 0;
     if (this.keys.has("w") || this.keys.has("arrowup")) moveY -= 1;
@@ -828,9 +833,10 @@ export class Game {
     if (this.keys.has("d") || this.keys.has("arrowright")) moveX += 1;
     const wx = this.mouse.x + this.cam.x, wy = this.mouse.y + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
+    const isHudBusy = this.hud.isInteractionActive();
     if (!settings.isAutofire) this.isAutoFiring = false;
-    const firing = settings.isAutofire ? this.isAutoFiring : this.mouse.isDown;
-    const dash = this.keys.has("shift");
+    const firing = !isHudBusy && (settings.isAutofire ? this.isAutoFiring : this.mouse.isDown);
+    const dash = !isHudBusy && this.keys.has("shift");
     return { seq: ++this.inputSeq, moveX, moveY, aim, firing, dash };
   }
 
@@ -1433,6 +1439,26 @@ export class Game {
     this.transport.requestEquip(owned[index]);
   }
 
+  // Hotbar activation (tap/click/Enter/Space): an unequipped slot equips; the already-
+  // equipped slot opens its stat drawer instead — weapon info is never hover-only, so
+  // touch and keyboard users reach it too. Number keys keep pure-equip semantics.
+  activateSlot(index: number) {
+    if (!this.canActOnInventory()) return;
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
+    const w = WEAPONS[this.weapon];
+    this.hud.openWeaponDrawer({
+      id: w.id,
+      name: w.name,
+      damage: w.damage,
+      rate: 1 / w.fireCd,
+      range: w.melee ? w.melee.reach : w.speed * w.life,
+      isMelee: w.melee !== undefined,
+      onDrop: owned.length > 1 ? () => this.dropEquippedWeapon() : null,
+    });
+  }
+
   // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
   // the resulting order, because they index the same authoritative ownedWeapons array.
   reorderSlots(from: number, to: number) {
@@ -1451,7 +1477,10 @@ export class Game {
   }
 
   private canActOnInventory(): boolean {
-    return this.isRunning && !this.isPaused && !this.isChoosing && !this.isAwaitingOnlineWorld();
+    // isInteractionActive also covers a live hotbar drag; slot callbacks fire after the
+    // drag tears down, so legitimate click/drop-end actions always pass this gate.
+    return this.isRunning && !this.isPaused && !this.isChoosing && !this.isAwaitingOnlineWorld()
+      && !this.hud.isInteractionActive();
   }
 
   private cycleWeapon(dir: number) {

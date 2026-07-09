@@ -35,10 +35,23 @@ export interface HudState {
 }
 
 export interface HotbarActions {
-  // Click / Enter / Space on a slot: equip that inventory index.
+  // Click / Enter / Space on a slot: equip that inventory index — or, when the slot is
+  // already equipped, open its stat drawer (the touch-safe replacement for hover info).
   onSlotActivate(index: number): void;
   // Drag/drop finished: move slot `from` to position `to` (indices into the CURRENT order).
   onSlotReorder(from: number, to: number): void;
+}
+
+// The equipped weapon's stat sheet for the tap-to-inspect drawer. onDrop backs the drawer's
+// DROP button (the touch path for Q); null when the weapon can't drop (final weapon).
+export interface WeaponDrawerData {
+  id: WeaponId;
+  name: string;
+  damage: number;
+  rate: number;    // shots per second
+  range: number;   // px (melee reach or bullet travel)
+  isMelee: boolean;
+  onDrop: (() => void) | null;
 }
 
 export interface ProfileStats {
@@ -186,6 +199,7 @@ const HUD_MARKUP = `
   <div class="hud-corner bl"><div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div></div>
   <div class="hotbar">
     <div class="hb-buffs" data-hb-buffs></div>
+    <button class="hb-build" data-hb-build type="button" aria-haspopup="dialog"></button>
     <div class="hb-slots" data-hb-slots></div>
     <div class="hb-hint" data-hb-hint>CLICK EQUIP &middot; DRAG REORDER &middot; Q DROP</div>
   </div>
@@ -224,6 +238,10 @@ export class Hud {
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
   private hotbarHintEl: HTMLElement;
+  private buildPillEl: HTMLButtonElement;
+  private scrimEl: HTMLElement;
+  private drawerEl: HTMLElement;
+  private lastItems: HudState["items"] = [];
   private hotbarActions: HotbarActions | null = null;
   private drag: SlotDrag | null = null;
   private prevSlotsKey = "";
@@ -268,6 +286,22 @@ export class Hud {
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
     this.hotbarHintEl = hud.querySelector("[data-hb-hint]")!;
+    this.buildPillEl = hud.querySelector("[data-hb-build]")!;
+    // The drawers live on the ROOT, not inside #hud: #hud is a z-index:5 stacking context
+    // that would pin them under the root-level hint/banner layers (z 6). Root placement
+    // puts them above all passive chrome and still under the menus (z 10) — same pattern
+    // as the stats panel below.
+    this.scrimEl = el("div", "");
+    this.scrimEl.className = "hb-scrim";
+    this.drawerEl = el("div", "");
+    this.drawerEl.className = "hb-drawer";
+    this.drawerEl.setAttribute("role", "dialog");
+    this.drawerEl.setAttribute("aria-modal", "true");
+    root.append(this.scrimEl, this.drawerEl);
+    // The BUILD·N pill (compact/touch summary of the blessing row) taps open the full
+    // build drawer; the scrim behind any drawer closes it and swallows the tap.
+    this.buildPillEl.addEventListener("click", (e) => { e.stopPropagation(); this.openBuildDrawer(); });
+    this.scrimEl.addEventListener("pointerdown", (e) => { e.stopPropagation(); e.preventDefault(); this.closeDrawer(); });
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
@@ -448,6 +482,108 @@ export class Hud {
     this.prevSlotsKey = "";
   }
 
+  // ---- drawers (touch-first info surfaces — nothing here is hover-only) ----
+
+  isDrawerOpen(): boolean {
+    return this.drawerEl.classList.contains("open");
+  }
+
+  // Whether the HUD currently owns the pointer/keys: a live hotbar drag or an open drawer.
+  // The game gates gameplay actions on this (the input-context seam), so HUD interaction
+  // never leaks into firing/dashing/switching.
+  isInteractionActive(): boolean {
+    return this.drag !== null || this.isDrawerOpen();
+  }
+
+  closeDrawer() {
+    this.drawerEl.classList.remove("open");
+    this.scrimEl.classList.remove("show");
+    this.drawerEl.replaceChildren();
+  }
+
+  private openDrawer(title: string, fill: (body: HTMLElement) => void) {
+    this.drawerEl.replaceChildren();
+    const head = el("div", "");
+    head.className = "hd-head";
+    head.appendChild(el("span", "", title));
+    const close = el("button", "", "CLOSE");
+    close.className = "hd-close";
+    close.type = "button";
+    close.addEventListener("click", (e) => { e.stopPropagation(); this.closeDrawer(); });
+    head.appendChild(close);
+    this.drawerEl.appendChild(head);
+    const body = el("div", "");
+    body.className = "hd-body";
+    fill(body);
+    this.drawerEl.appendChild(body);
+    this.drawerEl.classList.add("open");
+    this.scrimEl.classList.add("show");
+    close.focus();
+  }
+
+  // The full build list as a bottom drawer — what the collapsed BUILD·N pill taps open
+  // (same content the hold-Tab panel shows, reachable without a keyboard).
+  openBuildDrawer() {
+    this.openDrawer(`BUILD \u00b7 ${this.lastItems.length}`, (body) => {
+      if (this.lastItems.length === 0) {
+        body.appendChild(el("p", "", "NO BLESSINGS YET"));
+        return;
+      }
+      for (const it of this.lastItems) {
+        const row = el("div", "");
+        row.className = "hd-row";
+        row.style.setProperty("--t", it.tint);
+        const icon = el("span", "");
+        icon.className = "hd-icon";
+        icon.appendChild(itemIconEl(it.id, it.glyph));
+        const text = el("span", "");
+        text.className = "hd-text";
+        const name = el("span", "", `${it.name.toUpperCase()} \u00b7 LV${it.count}`);
+        name.className = "hd-name";
+        const desc = el("span", "", it.desc);
+        desc.className = "hd-desc";
+        text.append(name, desc);
+        if (it.nextDesc) {
+          const next = el("span", "", `NEXT LV${it.count + 1} \u2014 ${it.nextDesc}`);
+          next.className = "hd-next";
+          text.appendChild(next);
+        }
+        row.append(icon, text);
+        body.appendChild(row);
+      }
+    });
+  }
+
+  // The equipped weapon's stat sheet — the tap path for what hover-only title text showed
+  // (activate an already-equipped slot to open it). Carries the touch DROP action too.
+  openWeaponDrawer(d: WeaponDrawerData) {
+    this.openDrawer(d.name.toUpperCase(), (body) => {
+      const stats = el("div", "");
+      stats.className = "hd-stats";
+      const stat = (k: string, v: string) => {
+        const box = el("span", "");
+        box.className = "hd-stat";
+        box.append(el("span", "", k), el("b", "", v));
+        stats.appendChild(box);
+      };
+      stat("DMG", String(d.damage));
+      stat("RATE", `${d.rate.toFixed(1)}/S`);
+      stat(d.isMelee ? "REACH" : "RANGE", `${Math.round(d.range)} PX`);
+      body.appendChild(stats);
+      if (d.onDrop) {
+        const drop = el("button", "", "DROP (Q)");
+        drop.className = "hd-drop";
+        drop.type = "button";
+        drop.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.closeDrawer(); // release the input context BEFORE the drop action runs
+          d.onDrop?.();
+        });
+        body.appendChild(drop);
+      }
+    });
+  }
+
   update(s: HudState) {
     if (s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp) {
       renderHearts(this.heartsEl, s.hp, s.maxHp);
@@ -497,6 +633,7 @@ export class Hud {
     // is capped at MAX_BUFF_SLOTS: past that, the last slot becomes a "+N" overflow chip
     // and the hold-Tab panel carries the full build.
     const totalPicks = s.items.reduce((n, it) => n + it.count, 0);
+    this.lastItems = s.items;
     if (totalPicks !== this.prevItemsCount) {
       this.prevItemsCount = totalPicks;
       this.buffsEl.replaceChildren();
@@ -504,6 +641,11 @@ export class Hud {
       for (const it of s.items.slice(0, shownCount)) this.buffsEl.appendChild(buildBuffChip(it));
       if (s.items.length > shownCount) this.buffsEl.appendChild(buildMoreChip(s.items.length - shownCount));
       this.buffsEl.classList.toggle("show", s.items.length > 0);
+      // Compact/touch contexts collapse the chip row into this summary pill (CSS decides
+      // which of the two is visible); tapping it opens the full build drawer.
+      this.buildPillEl.textContent = `BUILD \u00b7 ${s.items.length}`;
+      this.buildPillEl.setAttribute("aria-label", `${s.items.length} blessings. Open the full build.`);
+      this.buildPillEl.classList.toggle("has", s.items.length > 0);
     }
   }
 
@@ -635,6 +777,9 @@ export class Hud {
     this.drag?.ghost?.remove();
     this.drag?.marker?.remove();
     this.drag = null;
+    this.closeDrawer();
+    this.buildPillEl.classList.remove("has");
+    this.lastItems = [];
     this.slotsEl.replaceChildren();
     this.prevSlotsKey = "";
     this.hotbarHintEl.classList.remove("show");

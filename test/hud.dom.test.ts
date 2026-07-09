@@ -158,6 +158,56 @@ function blessingCardTests(): void {
   overlay.hide();
 }
 
+function drawerTests(): void {
+  section("UI Part4: blessing summary collapses to a BUILD pill that opens the full drawer");
+  const root = document.createElement("div");
+  document.body.appendChild(root);
+  const hud = new Hud(root);
+  hud.update(mkState({ items: [ITEM_LV2, ITEM_MAX] }));
+  const pill = root.querySelector<HTMLButtonElement>("[data-hb-build]")!;
+  check("pill labels BUILD \u00b7 N", pill.textContent === "BUILD \u00b7 2", `text="${pill.textContent}"`);
+  check("pill is a real button with dialog affordance", pill.tagName === "BUTTON" && pill.getAttribute("aria-haspopup") === "dialog");
+  check("pill aria names the action", pill.getAttribute("aria-label") === "2 blessings. Open the full build.");
+  check("pill flagged once blessings exist", pill.classList.contains("has"));
+
+  check("no HUD input context at rest", !hud.isInteractionActive() && !hud.isDrawerOpen());
+  pill.click();
+  check("tapping the pill opens the full build drawer", hud.isDrawerOpen());
+  check("an open drawer owns the input context (gameplay gated)", hud.isInteractionActive());
+  const rows = [...root.querySelectorAll(".hb-drawer .hd-row")];
+  check("drawer lists the FULL build", rows.length === 2);
+  check("drawer head counts the build", root.querySelector(".hd-head span")?.textContent === "BUILD \u00b7 2");
+  check("row carries name + level", rows[0].querySelector(".hd-name")?.textContent === "SHARPENED FANGS \u00b7 LV2");
+  check("row carries the exact current effect", rows[0].querySelector(".hd-desc")?.textContent === ITEM_LV2.desc);
+  check("row carries the next-level delta", rows[0].querySelector(".hd-next")?.textContent === `NEXT LV3 \u2014 ${ITEM_LV2.nextDesc}`);
+  check("maxed row omits the delta line", rows[1].querySelector(".hd-next") === null);
+
+  root.querySelector<HTMLButtonElement>(".hd-close")!.click();
+  check("CLOSE dismisses the drawer and releases the context", !hud.isDrawerOpen() && !hud.isInteractionActive());
+
+  section("UI Part4: weapon stat drawer replaces hover-only info (tap the equipped slot)");
+  let dropCalls = 0;
+  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", damage: 2, rate: 1.9, range: 160, isMelee: false, onDrop: () => dropCalls++ });
+  check("weapon drawer opens", hud.isDrawerOpen());
+  check("drawer titles the weapon", root.querySelector(".hd-head span")?.textContent === "SHOTGUN");
+  const statTexts = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
+  check("stat sheet shows DMG / RATE / RANGE", statTexts.join("|") === "DMG2|RATE1.9/S|RANGE160 PX", statTexts.join("|"));
+  const dropBtn = root.querySelector<HTMLButtonElement>(".hd-drop")!;
+  check("touch DROP action present", dropBtn.textContent === "DROP (Q)");
+  dropBtn.click();
+  check("DROP releases the input context BEFORE acting, then acts once", dropCalls === 1 && !hud.isDrawerOpen());
+
+  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, rate: 6.3, range: 616, isMelee: false, onDrop: null });
+  check("final weapon offers no DROP action", root.querySelector(".hd-drop") === null);
+
+  section("UI Part4: the scrim swallows the tap and closes the drawer");
+  check("scrim shown while open", root.querySelector(".hb-scrim")!.classList.contains("show"));
+  root.querySelector(".hb-scrim")!.dispatchEvent(new dom.window.Event("pointerdown", { bubbles: true, cancelable: true }));
+  check("scrim tap closes the drawer", !hud.isDrawerOpen());
+  check("scrim hidden again", !root.querySelector(".hb-scrim")!.classList.contains("show"));
+  root.remove();
+}
+
 function hudIntegrationTests(): void {
   section("Hud.update wires slots + blessing row + hint into the live DOM");
   const root = document.createElement("div");
@@ -193,6 +243,7 @@ function main(): void {
   buffChipTests();
   buffOverflowTests();
   blessingCardTests();
+  drawerTests();
   hudIntegrationTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
