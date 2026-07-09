@@ -58,14 +58,17 @@ The Stage-B world is a fixed arena; both clients see the same server-owned enemi
 
 The production player flow (`PLAY ONLINE` in the menu, or the `?online=1` deep link) goes
 through the Convex-backed room lobby instead: create/join/quick-play a room, then the ticket
-minted by `convex/gsTicket.ts` binds that room's world id (see MULTIPLAYER.md §7). Solo and
-classic co-op are unaffected either way.
+minted by `convex/gsTicket.ts` binds that room's world id, every snapshot echoes the bound
+world id back for the client to assert, and a party start reveals gameplay only once the
+whole room is on the server's own roster (see MULTIPLAYER.md §7). Solo is unaffected either
+way.
 
 ## Health / metrics
 
 ```sh
 curl http://127.0.0.1:8090/healthz   # { status, uptime, worlds, players, tick p50/p95/max }
 curl http://127.0.0.1:8090/metrics   # counters + tick percentiles (JSON)
+curl http://127.0.0.1:8090/worlds    # per-world occupancy: { id, players, tick, names } each
 ./healthcheck.sh                      # exits 0 iff status ok
 ```
 
