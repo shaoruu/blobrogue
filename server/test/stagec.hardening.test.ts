@@ -133,7 +133,7 @@ async function main(): Promise<void> {
       const pid = [...world.state.players.keys()][0];
       const startX = world.state.players.get(pid)!.x;
       // Dump 40 move commands in a single burst (as a 240Hz cheat might), then wait ~5 ticks.
-      for (let i = 1; i <= 40; i++) ws.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 }));
+      for (let i = 1; i <= 40; i++) ws.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0 }));
       await sleep(300); // ~6 ticks
       const moved = Math.abs(world.state.players.get(pid)!.x - startX);
       // 40 commands unclamped would be 40 fixed steps (~400px). One-per-tick over ~6 ticks is ~60px.
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
       flooder.on("close", () => (closed = true));
       flooder.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "flood2"), protocol: PROTOCOL_VERSION }));
       await waitUntil(() => (s.server.getWorld()?.playerCount ?? 0) >= 1, 2000);
-      for (let i = 1; i <= 100; i++) flooder.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 0, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 }));
+      for (let i = 1; i <= 100; i++) flooder.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 0, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0 }));
       const kicked = await waitUntil(() => closed, 2000);
       check("input-class flood (100 msgs in <1s) disconnected by the input bucket", kicked);
       check("input-bucket kick counted as rate limiting", s.server.health().counters.rateLimited > 0);

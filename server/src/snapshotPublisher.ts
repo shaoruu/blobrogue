@@ -46,14 +46,34 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
         this.deps.metrics.counters.droppedSnaps++;
         continue;
       }
-      const events = this.eventsFor(room, conn);
+      const center = this.viewCenterFor(room, conn);
+      const events = this.eventsFor(room, conn, center);
       const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
         identities,
+        worldId: room.id,
+        ...(center !== null ? { viewCenter: center } : {}),
       });
       this.sendRaw(conn, this.codec.encodeServer(msg), false);
     }
+  }
+
+  // Where this client's interest view is centered when NOT on their own player: a downed
+  // spectator follows the teammate they chose (the semantic `spec` message), else the first
+  // living teammate — so their snapshots and positional events cover what their camera
+  // actually shows. Living players (and downed players with nobody left standing) center on
+  // themselves (null). View preference only; the sim never reads any of this.
+  private viewCenterFor(room: RoomRuntime, conn: Conn): { x: number; y: number } | null {
+    const st = room.state;
+    const self = conn.playerId !== null ? st.players.get(conn.playerId) : undefined;
+    if (!self || !self.isDown) return null;
+    const chosen = conn.spectateTarget !== null ? st.players.get(conn.spectateTarget) : undefined;
+    if (chosen && !chosen.isDown && chosen.hp > 0) return { x: chosen.x, y: chosen.y };
+    for (const p of st.players.values()) {
+      if (p.id !== conn.playerId && !p.isDown && p.hp > 0) return { x: p.x, y: p.y };
+    }
+    return null;
   }
 
   // The room's verified cosmetic identities (name/color from each join ticket), keyed by
@@ -68,13 +88,15 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
 
   // The reliable events newer than this client's ack, scoped to what this client should see:
   // its own pid events, global objective events, and positional FX within its (exit-hysteresis)
-  // interest radius. Skipped ids are covered by the snapshot's evTo ack advance.
-  private eventsFor(room: RoomRuntime, conn: Conn): WireEvent[] {
+  // interest radius — measured from the same view center the snapshot uses, so a spectator's
+  // events follow the teammate they are watching. Skipped ids are covered by evTo.
+  private eventsFor(room: RoomRuntime, conn: Conn, center: { x: number; y: number } | null): WireEvent[] {
     const pending = room.eventsSince(conn.ackedEventId);
     if (pending.length === 0) return pending;
     const r = this.deps.config.interestRadius;
     if (r <= 0) return pending; // interest filtering disabled -> full stream
     const self = conn.playerId ? room.state.players.get(conn.playerId) : undefined;
+    const at = center ?? (self ? { x: self.x, y: self.y } : null);
     const rEvents = r * INTEREST_EXIT_FACTOR;
     const r2 = rEvents * rEvents;
     const out: WireEvent[] = [];
@@ -82,8 +104,8 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
       const scope = eventScope(w.e);
       if (scope.kind === "global") { out.push(w); continue; }
       if (scope.kind === "pid") { if (scope.pid === conn.playerId) out.push(w); continue; }
-      if (!self) continue;
-      const dx = scope.x - self.x, dy = scope.y - self.y;
+      if (at === null) continue;
+      const dx = scope.x - at.x, dy = scope.y - at.y;
       if (dx * dx + dy * dy <= r2) out.push(w);
     }
     return out;
@@ -96,6 +118,7 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
       interestRadius: 0,
       identities: this.identitiesFor(room),
+      worldId: room.id,
     });
     this.sendRaw(conn, this.codec.encodeServer(msg), true);
   }

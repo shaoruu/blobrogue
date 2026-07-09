@@ -68,10 +68,11 @@ function clientRoundTripTests(): void {
   section("client messages round-trip losslessly through the strict decoder");
   const msgs: ClientMsg[] = [
     { t: "join", ticket: "v1.abc.def", protocol: PROTOCOL_VERSION },
-    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, ackEv: 17 },
+    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ackEv: 17 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
+    { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
   ];
   for (const m of msgs) {
@@ -84,7 +85,7 @@ function unknownFieldTests(): void {
   section("security-sensitive client frames REJECT unknown fields (malicious dt)");
   const dtVariants = [0, 1e9, -5, 0.0001];
   for (const dt of dtVariants) {
-    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0, dt });
+    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0, dt });
     let rejected = false;
     try { jsonCodec.decodeClient(raw); } catch (err) { rejected = err instanceof ProtocolError; }
     check(`input carrying dt=${dt} is a protocol error`, rejected);
@@ -97,6 +98,14 @@ function unknownFieldTests(): void {
   try { jsonCodec.decodeClient(JSON.stringify({ t: "join", ticket: "x" })); }
   catch (err) { missing = err instanceof ProtocolError; }
   check("join with a MISSING protocol version is a protocol error (no default-to-0)", missing);
+  let legacyInput = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 })); }
+  catch (err) { legacyInput = err instanceof ProtocolError; }
+  check("a v3 input (no act) is a protocol error — the interact intent is mandatory", legacyInput);
+  let specExtra = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "spec", target: "p1", x: 5 })); }
+  catch (err) { specExtra = err instanceof ProtocolError; }
+  check("spec with a smuggled extra field is a protocol error", specExtra);
 }
 
 function serverRoundTripTests(): void {
@@ -261,7 +270,7 @@ function interestHysteresisTests(): void {
   me.x = 300; me.y = 300;
   const R = 400;
   const e = devSpawnEnemy(w, "slime", me.x + R - 10, me.y); // just inside -> enters
-  const view = { rev: -1, players: new Set<string>(), enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
+  const view = { rev: -1, enemies: new Set<number>(), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>() };
   const snapIn = buildSnapshot(w, "pMe", 0, [], 0, false, { interestRadius: R, view });
   check("entity inside R enters the view", snapIn.t === "snap" && snapIn.enemies.some((x) => x.id === e.id));
   // Drift just past R but inside the exit radius: hysteresis keeps it.

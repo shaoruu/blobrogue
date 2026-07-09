@@ -13,7 +13,8 @@ import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR, worldIdForRoom } from "../net/protocol.js";
+import { resolveSpectateTarget, cycleSpectateTarget } from "./spectate.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
@@ -42,9 +43,11 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
-// Why a run exited without a game over: the player quit, or an online connection never came
-// up (lets the menu land back on the lobby with an explanation instead of silence).
-export type ExitReason = "quit" | "connect_failed";
+// Why a run exited without a game over: the player quit, an online connection never came
+// up, or the authoritative server bound this client to a DIFFERENT world than its lobby
+// room (the Sev-0 separate-simulation guard). Each lands back on the lobby/menu with an
+// explanation instead of silence.
+export type ExitReason = "quit" | "connect_failed" | "world_mismatch";
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -52,8 +55,12 @@ export interface OnlineOptions {
   url: string;
   getTicket: () => Promise<string>;
   // The lobby room code this run belongs to (shown in the HUD so friends can be invited
-  // mid-run); null for direct dev joins.
+  // mid-run, and VERIFIED against the snapshot's authoritative world id); null for direct
+  // dev joins.
   roomCode: string | null;
+  // The live lobby roster (display names), so the HUD can show which expected party members
+  // have no body in the authoritative world yet (per-player CONNECTING status).
+  getPartyNames?: () => string[];
 }
 
 export interface StartOptions {
@@ -334,6 +341,12 @@ export class Game {
   private isAutoFiring = false; // autofire mode only: click toggles continuous fire (settings.isAutofire)
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
   private onlineRoomCode: string | null = null; // lobby room code for the HUD label (online only)
+  private onlineOpts: OnlineOptions | null = null; // live online config (roster provider, room code)
+  // Spectate: the teammate a downed local player's camera follows (null while up / solo).
+  // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
+  // one path; sentSpectateId tracks what the server was last told (interest centering).
+  private spectateId: string | null = null;
+  private sentSpectateId: string | null = null;
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
@@ -486,6 +499,14 @@ export class Game {
       this.keys.add(k);
       if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
       if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
+      // Down = spectating: Q/E and the arrows cycle the watched teammate (any future input
+      // source — a controller's bumpers — calls the same cycleSpectate). Alive: the keys keep
+      // their combat meanings (1-9 slots, Q cycles back, E is the revive-channel hold).
+      if (this.isRunning && this.isSpectating()) {
+        if (k === "q" || k === "arrowleft") { this.cycleSpectate(-1); return; }
+        if (k === "e" || k === "arrowright") { this.cycleSpectate(1); return; }
+        return; // a downed player sends no gameplay intents (weapon keys included)
+      }
       // Weapon switch: number keys 1-9 select that inventory slot directly.
       if (k >= "1" && k <= "9") { const i = parseInt(k, 10) - 1; if (this.isRunning) this.selectWeapon(i); }
       if (k === "q") this.cycleWeapon(-1); // Q cycles back a slot
@@ -502,7 +523,9 @@ export class Game {
     });
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
-      if (this.isRunning) this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
+      if (!this.isRunning) return;
+      if (this.isSpectating()) this.cycleSpectate(e.deltaY > 0 ? 1 : -1); // scroll cycles teammates while down
+      else this.cycleWeapon(e.deltaY > 0 ? 1 : -1); // scroll to cycle weapons
     }, { passive: false });
     this.canvas.addEventListener("mousedown", (e) => {
       this.mouse.isDown = true;
@@ -519,6 +542,9 @@ export class Game {
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
     this.onlineRoomCode = opts.online?.roomCode ?? null;
+    this.onlineOpts = opts.online ?? null;
+    this.spectateId = null;
+    this.sentSpectateId = null;
     let floor: number;
     if (this.mode === "online" && opts.online) {
       // Online: the SERVER owns the world (seed/floor/dungeon). WSTransport boots a placeholder
@@ -782,6 +808,17 @@ export class Game {
       }
     }
 
+    // Sev-0 guard: every snapshot names the authoritative world this socket is bound to. If
+    // it is NOT this lobby room's world, playing on would be a separate simulation dressed
+    // up as co-op (the live incident) — bail to the lobby with an explanation instead.
+    if (this.mode === "online" && this.wsTransport && this.onlineRoomCode !== null) {
+      const wid = this.wsTransport.worldId();
+      if (wid !== null && wid !== worldIdForRoom(this.onlineRoomCode)) {
+        this.quitToMenu("world_mismatch");
+        return;
+      }
+    }
+
     const { events } = this.transport.poll();
     this.handleSimEvents(events);
 
@@ -791,6 +828,10 @@ export class Game {
       this.gameOver();
       return;
     }
+
+    // Spectate: down with the party still fighting means the camera rides a living teammate
+    // (game over only lands on a full wipe — the check above). Revive releases it.
+    this.updateSpectate();
 
     // Online: surface any server-decided blessing offer (choice authority is server-side).
     if (this.mode === "online" && this.wsTransport && !this.isChoosing) {
@@ -809,19 +850,26 @@ export class Game {
   }
 
   // Build this tick's InputCmd from keys/mouse/settings. Autofire + the mouse->world aim
-  // are resolved here; the sim only sees moveX/moveY/aim/firing/dash.
+  // are resolved here; the sim only sees moveX/moveY/aim/firing/dash/interact. A downed
+  // player is a spectator: every gameplay intent is zeroed at the source (the authoritative
+  // sim ignores them anyway — this keeps the client honest and the keys free for cycling).
   private buildInput(): InputCmd {
+    const wx = this.mouse.x + this.cam.x, wy = this.mouse.y + this.cam.y;
+    const aim = Math.atan2(wy - this.py, wx - this.px);
+    if (this.isDown) {
+      this.isAutoFiring = false;
+      return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: false, interact: false };
+    }
     let moveX = 0, moveY = 0;
     if (this.keys.has("w") || this.keys.has("arrowup")) moveY -= 1;
     if (this.keys.has("s") || this.keys.has("arrowdown")) moveY += 1;
     if (this.keys.has("a") || this.keys.has("arrowleft")) moveX -= 1;
     if (this.keys.has("d") || this.keys.has("arrowright")) moveX += 1;
-    const wx = this.mouse.x + this.cam.x, wy = this.mouse.y + this.cam.y;
-    const aim = Math.atan2(wy - this.py, wx - this.px);
     if (!settings.isAutofire) this.isAutoFiring = false;
     const firing = settings.isAutofire ? this.isAutoFiring : this.mouse.isDown;
     const dash = this.keys.has("shift");
-    return { seq: ++this.inputSeq, moveX, moveY, aim, firing, dash };
+    const interact = this.keys.has("e");
+    return { seq: ++this.inputSeq, moveX, moveY, aim, firing, dash, interact };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -829,6 +877,43 @@ export class Game {
   private coopTargets(): RemoteTarget[] {
     if (!this.coop) return [];
     return this.coop.remotePlayers().map((r) => ({ x: r.x, y: r.y, isDown: r.isDown }));
+  }
+
+  // Whether the local player sits in the spectator seat: down, with somebody left to watch.
+  private isSpectating(): boolean {
+    return this.isRunning && this.isDown && this.remotes().some((r) => !r.isDown);
+  }
+
+  // Keep the spectate target valid every tick: acquire one on going down, keep it while it
+  // lives, hand off when it dies or leaves, and release on revive (the camera glides home).
+  // The server learns the chosen target whenever it changes so it can center this client's
+  // interest view (and positional events) on what the camera actually shows.
+  private updateSpectate() {
+    this.spectateId = this.isDown ? resolveSpectateTarget(this.spectateId, this.remotes()) : null;
+    if (this.spectateId === null) {
+      this.sentSpectateId = null;
+      return;
+    }
+    if (this.mode === "online" && this.wsTransport && this.spectateId !== this.sentSpectateId) {
+      this.wsTransport.sendSpectate(this.spectateId);
+      this.sentSpectateId = this.spectateId;
+    }
+  }
+
+  // Every spectate input source lands here (Q/E, arrows, scroll — and a controller's bumpers
+  // when pads arrive): step the watched teammate through the stable living ring.
+  private cycleSpectate(dir: 1 | -1) {
+    if (!this.isDown) return;
+    this.spectateId = cycleSpectateTarget(this.spectateId, this.remotes(), dir);
+  }
+
+  // Where the camera looks: the local player, or the spectated teammate while down.
+  private cameraFocus(): { x: number; y: number } {
+    if (this.spectateId !== null) {
+      const target = this.remotes().find((r) => r.playerId === this.spectateId);
+      if (target) return { x: target.x, y: target.y };
+    }
+    return { x: this.px, y: this.py };
   }
 
   // Other players to render, from whichever remote source is active: co-op presence (Convex)
@@ -906,12 +991,15 @@ export class Game {
 
     this.checkFloorCleared();
 
-    // Smooth camera follow: ease toward the player instead of hard-snapping every frame, so
+    // Smooth camera follow: ease toward the focus instead of hard-snapping every frame, so
     // per-frame movement variance (variable-dt sim step) doesn't read as jitter. High factor
-    // = still tight tracking, just enough smoothing to absorb frame-time noise.
+    // = still tight tracking, just enough smoothing to absorb frame-time noise. The focus is
+    // the local player — or, while down and spectating, the watched teammate; the same ease
+    // glides the hand-off out and back (revive returns the camera home).
     {
-      const tx = this.px - this.canvas.width / 2;
-      const ty = this.py - this.canvas.height / 2;
+      const focus = this.cameraFocus();
+      const tx = focus.x - this.canvas.width / 2;
+      const ty = focus.y - this.canvas.height / 2;
       const k = 1 - Math.pow(0.000001, dt); // very tight follow; movement is already smooth (fixed-step)
       this.cam.x += (tx - this.cam.x) * k;
       this.cam.y += (ty - this.cam.y) * k;
@@ -1708,11 +1796,26 @@ export class Game {
       const count = this.coop.remotePlayers().length + 1;
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     } else if (this.mode === "online" && this.wsTransport) {
-      const count = this.wsTransport.remotePlayers().length + 1;
+      const remotes = this.wsTransport.remotePlayers();
+      const count = remotes.length + 1;
       const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
-      // Surface the room code mid-run so a friend can still be invited into this world.
-      const room = this.onlineRoomCode ? ` \u00b7 ${this.onlineRoomCode}` : "";
-      coopLabel = `${live}${room} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+      // The AUTHORITATIVE room code — parsed from the snapshot's world id — trumps the
+      // lobby's local string: what the HUD shows is what the server actually bound, so two
+      // screens reading the same code PROVES one shared world. (It also lets a friend be
+      // invited mid-run.) Falls back to the lobby code until the first snapshot.
+      const wid = this.wsTransport.worldId();
+      const code = wid !== null && wid.startsWith("room:") ? wid.slice(5) : this.onlineRoomCode;
+      const room = code ? ` \u00b7 ${code}` : "";
+      // Per-player CONNECTING status: lobby members with no body in the authoritative world
+      // yet (names are the verified ticket identities, so the match is honest).
+      const expected = this.onlineOpts?.getPartyNames?.() ?? [];
+      const present = new Set(remotes.map((r) => r.name));
+      if (this.profile?.name) present.add(this.profile.name);
+      const missing = expected.filter((n) => !present.has(n));
+      const party = expected.length > count && missing.length > 0
+        ? ` \u00b7 ${count}/${expected.length} \u2014 CONNECTING: ${missing.join(", ")}`
+        : ` \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+      coopLabel = `${live}${room}${party}`;
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -1732,7 +1835,24 @@ export class Game {
       comboColor: comboTier.color,
       comboFrac: this.comboTimer / COMBO_WINDOW,
       items: this.collapsedItems(),
+      waitLabel: this.blessingWaitLabel(),
     });
+  }
+
+  // The party blessing gate readout: which members still owe their pick (the descend holds
+  // for them, authoritatively — snapshots carry the pending set). Null when nobody is owed
+  // or when solo/classic (their gate is the local overlay itself).
+  private blessingWaitLabel(): string | null {
+    if (this.mode !== "online" || !this.wsTransport) return null;
+    const pending = this.wsTransport.pendingBlessingParty();
+    if (pending.length === 0) return null;
+    const selfId = this.wsTransport.getSelfServerId();
+    const others = pending.filter((id) => id !== selfId);
+    if (others.length === 0) return null;
+    const remotes = this.wsTransport.remotePlayers();
+    const names = others.map((id) => (remotes.find((r) => r.playerId === id)?.name ?? "teammate").toUpperCase());
+    const total = remotes.length + 1;
+    return `WAITING FOR ${others.length}/${total} PLAYER${others.length === 1 ? "" : "S"}\u2026 ${names.join(" \u00b7 ")} PICKING A BLESSING`;
   }
 
   // The player's owned blessing defs from the authoritative source: online that is the server's
@@ -1996,11 +2116,13 @@ export class Game {
     this.renderAfterimages();
     this.renderMeleeSwing();
     this.renderPlayer();
+    this.renderReviveRings();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     ctx.restore();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
+    this.renderSpectateBanner();
     this.renderReticle();
     this.renderMinimap();
   }
@@ -2409,17 +2531,17 @@ export class Game {
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
-      const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
+      const name: SpriteName = p.kind === "weapon" || p.kind === "dealer_weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
       ctx.save();
       ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
       const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" ? "#ffd27a" : "#ffb43b");
+      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" || p.kind === "dealer_weapon" ? "#ffd27a" : "#ffb43b");
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      // The Dealer's heart wears its coin price; gray if this player can't afford it.
-      if (p.kind === "dealer_heart") {
+      // The Dealer's stock wears its coin price; gray if this player can't afford it.
+      if (p.kind === "dealer_heart" || p.kind === "dealer_weapon") {
         const price = p.value ?? 6;
         ctx.save();
         ctx.font = '700 10px "Silkscreen", monospace';
@@ -2436,7 +2558,7 @@ export class Game {
       // Weapon pickups draw their own 64px side-profile sprite so each gun is
       // recognizable on the floor; anything without dedicated art (or not yet loaded)
       // falls back to the generic "gun" sprite, then to a plain dot.
-      const weaponImg = p.kind === "weapon" && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
+      const weaponImg = (p.kind === "weapon" || p.kind === "dealer_weapon") && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
       if (weaponImg) {
         ctx.save();
         ctx.translate(sx, sy);
@@ -3069,12 +3191,110 @@ export class Game {
       else this.renderHeldWeapon(bx, by, this.aimAngle, this.weapon, alpha, this.playerAnim.recoil);
     }
     if (this.isDown) {
+      // The revive ring (renderReviveRings) owns the "being revived" read; the spectate
+      // banner owns the down-state instructions. Only the bare label rides the body here.
       ctx.fillStyle = "#ff6a6a";
       ctx.font = '700 12px "Silkscreen", monospace';
       ctx.textAlign = "center";
-      ctx.fillText("DOWN \u2014 wait for a teammate", psx, psy - 34);
+      ctx.fillText(this.isSpectating() || this.p.reviveProgress > 0 ? "DOWN" : "DOWN \u2014 wait for a teammate", psx, psy - 34);
       ctx.textAlign = "left";
     }
+  }
+
+  // World-space revive UX. Around every downed body: a faint stand-here ring at the exact
+  // authoritative revive radius. While a channel runs: a progress arc that both sides read
+  // from the SAME authoritative number (SelfWire.rev for your own body, PlayerWire.rv for a
+  // teammate's). For a living player in range: the HOLD E prompt / REVIVING label.
+  private renderReviveRings() {
+    if (this.mode === "solo" || !this.isRunning) return;
+    const { ctx, cam } = this;
+    const drawStandRing = (sx: number, sy: number) => {
+      ctx.save();
+      ctx.globalAlpha = 0.22 + 0.08 * Math.sin(this.animClock * 3);
+      ctx.strokeStyle = "#8affc0";
+      ctx.lineWidth = 2;
+      ctx.setLineDash(AIM_DASH);
+      ctx.beginPath();
+      ctx.arc(sx, sy, REVIVE.radius, 0, 6.28);
+      ctx.stroke();
+      ctx.restore();
+    };
+    const drawProgress = (sx: number, sy: number, frac: number) => {
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = "#0d2a1e";
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 27, 0, 6.28);
+      ctx.stroke();
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = "#8affc0";
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 27, -Math.PI / 2, -Math.PI / 2 + 6.283 * Math.min(1, frac));
+      ctx.stroke();
+      ctx.restore();
+    };
+    const label = (sx: number, sy: number, text: string, color: string) => {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.font = '700 11px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.fillText(text, sx, sy - 48);
+      ctx.restore();
+      ctx.textAlign = "left";
+    };
+    for (const r of this.remotes()) {
+      if (!r.isDown) continue;
+      const sx = r.x - cam.x, sy = r.y - cam.y;
+      const isNear = !this.isDown && this.hp > 0 && Math.hypot(this.px - r.x, this.py - r.y) <= REVIVE.radius;
+      if (!this.isDown) drawStandRing(sx, sy);
+      if (r.reviveProgress > 0) drawProgress(sx, sy, r.reviveProgress / REVIVE.channel);
+      if (isNear) {
+        const isHolding = this.keys.has("e");
+        label(sx, sy, isHolding ? `REVIVING ${r.name.toUpperCase()}\u2026` : `HOLD E \u2014 REVIVE ${r.name.toUpperCase()}`, "#8affc0");
+      }
+    }
+    // The local downed body: the authoritative channel a teammate holds on us.
+    if (this.isDown && this.p.reviveProgress > 0) {
+      const a = this.hasRenderPrev ? this.renderAlpha : 1;
+      const sx = this.renderPrevX + (this.px - this.renderPrevX) * a - cam.x;
+      const sy = this.renderPrevY + (this.py - this.renderPrevY) * a - cam.y;
+      drawProgress(sx, sy, this.p.reviveProgress / REVIVE.channel);
+      label(sx, sy, "A TEAMMATE IS REVIVING YOU\u2026", "#8affc0");
+    }
+  }
+
+  // Screen-space spectator chrome: who the camera follows and how to switch. Fixed position
+  // and opacity-only, so it can never shift the layout.
+  private renderSpectateBanner() {
+    if (!this.isSpectating() || this.spectateId === null) return;
+    const target = this.remotes().find((r) => r.playerId === this.spectateId);
+    if (!target) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const y = canvas.height - 168;
+    const isBeingRevived = this.p.reviveProgress > 0;
+    const living = this.remotes().filter((r) => !r.isDown).length;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffb43b";
+    ctx.font = '700 16px "Silkscreen", monospace';
+    ctx.globalAlpha = 0.85 + 0.15 * Math.sin(this.animClock * 3);
+    ctx.fillText(`SPECTATING ${target.name.toUpperCase()}`, cx, y);
+    ctx.globalAlpha = 0.8;
+    ctx.fillStyle = isBeingRevived ? "#8affc0" : "#d9d2c0";
+    ctx.font = '700 10px "Silkscreen", monospace';
+    const hint = living > 1 ? "Q / E \u2014 SWITCH TEAMMATE \u00b7 " : "";
+    ctx.fillText(
+      isBeingRevived
+        ? `A TEAMMATE IS REVIVING YOU\u2026 ${Math.round((this.p.reviveProgress / REVIVE.channel) * 100)}%`
+        : `${hint}A TEAMMATE CAN HOLD E ON YOUR BODY TO REVIVE YOU`,
+      cx, y + 18,
+    );
+    ctx.restore();
+    ctx.textAlign = "left";
   }
 
   // Where the blade POINTS at swing progress t (0..1): an eased sweep across the sim's

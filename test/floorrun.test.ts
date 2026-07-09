@@ -53,13 +53,13 @@ function main(): void {
   check("generated dungeon has rooms", w.dungeon.rooms.length > 2, `rooms=${w.dungeon.rooms.length}`);
   check("floor spawned enemies", w.enemies.length > 0, `enemies=${w.enemies.length}`);
   check("floor stocked a weapon INSIDE a chest (never loose on the floor)",
-    w.chests.some((c) => c.weapon !== undefined) && w.pickups.every((p) => p.kind !== "weapon"), `chests=${w.chests.length}`);
+    w.chests.some((c) => c.weapons !== undefined) && w.pickups.every((p) => p.kind !== "weapon"), `chests=${w.chests.length}`);
   check("both players share the spawn point", Math.hypot(a.x - b.x, a.y - b.y) < 1);
   const rev0 = w.rev;
 
   section("chest loot: A opens the weapon chest -> inventories DIVERGE");
-  const weaponChest = w.chests.find((c) => c.weapon !== undefined)!;
-  const droppedWeapon = weaponChest.weapon!;
+  const weaponChest = w.chests.find((c) => c.weapons !== undefined)!;
+  const droppedWeapon = weaponChest.weapons![0];
   placeAt(a, weaponChest.x + 1, weaponChest.y); // touch-opens; the weapon ejects toward A
   placeAt(b, weaponChest.x + 400, weaponChest.y + 300);
   step(w);

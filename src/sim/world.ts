@@ -24,8 +24,9 @@ import type { InputCmd, PlayerId } from "./input.js";
 import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS,
+  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, CAPS, TIERS, WEAPON_ECONOMY,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
+  coopExtraWeaponRolls, coopWeaponRateMult, dealerWeaponStockFor, bossChestWeaponsFor,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
 } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
@@ -96,6 +97,10 @@ export interface PlayerSim {
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
+  // Whether this player's interact key (E) is held THIS tick — the explicit revive-channel
+  // intent. Derived from the consumed input every stepPlayerPhase, never wired: the server
+  // sets it from the inputs it consumes, prediction from the same inputs locally.
+  isInteracting: boolean;
   // Lag-compensation rewind for THIS player's shots/swings, in ticks (server-computed from the
   // player's measured RTT + interp delay, clamped). 0 in solo/prediction, so hit tests use
   // present-time positions and behavior is unchanged.
@@ -194,7 +199,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
+    shotSeq: 0, isDown: false, reviveProgress: 0, isInteracting: false, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -370,36 +375,91 @@ function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
 
 // ---- deterministic floor placement (seeded per floor, own RNG streams) ----
 
+// Every weapon the whole party currently owns — the anti-junk reference set for party rolls.
+function partyOwnedWeapons(w: WorldState): Set<WeaponId> {
+  const owned = new Set<WeaponId>();
+  for (const p of w.players.values()) for (const id of p.ownedWeapons) owned.add(id);
+  return owned;
+}
+
+function isMeleeWeapon(id: WeaponId): boolean {
+  return WEAPONS[id].melee !== undefined;
+}
+
+// The party anti-junk pass over a rolled weapon set (§8b), consuming NO rng: each roll that
+// duplicates an earlier pick — or that every party member already owns — advances through
+// PICKUP_WEAPONS from its rolled index to the nearest fresh kind (preferring one nobody
+// owns). A set of 2+ never ships all-melee and a set of 3+ always carries at least one
+// melee, so a party's floor reads as a real arsenal, not three copies of the same gun.
+// Deterministic: a pure function of the rolls and the party inventory.
+function diversifyWeaponSet(kinds: WeaponId[], owned: ReadonlySet<WeaponId>): WeaponId[] {
+  const taken = new Set<WeaponId>();
+  const resolve = (want: WeaponId, isEligible: (id: WeaponId) => boolean): WeaponId | null => {
+    const start = Math.max(0, PICKUP_WEAPONS.indexOf(want));
+    for (let k = 0; k < PICKUP_WEAPONS.length; k++) {
+      const id = PICKUP_WEAPONS[(start + k) % PICKUP_WEAPONS.length];
+      if (!taken.has(id) && isEligible(id)) return id;
+    }
+    return null;
+  };
+  const out: WeaponId[] = [];
+  for (const want of kinds) {
+    const id = resolve(want, (x) => !owned.has(x)) ?? resolve(want, () => true);
+    if (id === null) continue; // more rolls than distinct pickup weapons exist
+    taken.add(id);
+    out.push(id);
+  }
+  const isAllMelee = out.length >= 2 && out.every(isMeleeWeapon);
+  const isAllRanged = out.length >= 3 && !out.some(isMeleeWeapon);
+  if (isAllMelee || isAllRanged) {
+    const wantClass = isAllMelee ? (id: WeaponId) => !isMeleeWeapon(id) : isMeleeWeapon;
+    const last = out[out.length - 1];
+    taken.delete(last);
+    const swap = resolve(last, (x) => wantClass(x) && !owned.has(x)) ?? resolve(last, wantClass);
+    if (swap !== null) { taken.add(swap); out[out.length - 1] = swap; }
+  }
+  return out;
+}
+
 // The floor's weapon drops are CONTENTS of chests, never loose floor pickups. (They used to
 // spawn at room centers — the same tiles chests and props prefer — so guns sat visibly
 // stacked on top of chests, and free weapons in the open undercut chests as the reward
 // container.) Each rolled weapon is stocked into a weaponless wood chest, treasure room
 // first; when the floor placed fewer chests than weapons, an extra chest is placed to hold
 // the overflow, roomed where the loose drop used to land. Opening the chest ejects the
-// weapon (see openChest). Same seeded stream as the old loose drops, so a given seed still
-// finds the same arsenal — just inside chests.
+// weapon (see openChest).
+//
+// Party scaling (§8b): the solo table rolls on the byte-identical seeded stream it always
+// did (golden-locked); parties append exactly one extra roll per extra member on the SAME
+// stream, then run the anti-junk pass. Floor 2 therefore stocks >= P opportunities — the
+// guaranteed early weapon beat for every member before the first boss.
 function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
   if (w.floor < 2 || d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
   const kinds: WeaponId[] = [rng.pick(PICKUP_WEAPONS)];
   if (w.floor >= 3 && rng.chance(0.6)) kinds.push(rng.pick(PICKUP_WEAPONS));
+  for (let i = coopExtraWeaponRolls(w.encounterPlayers); i > 0; i--) kinds.push(rng.pick(PICKUP_WEAPONS));
+  const stocked = w.encounterPlayers > 1 ? diversifyWeaponSet(kinds, partyOwnedWeapons(w)) : kinds;
   const used = new Set<number>();
   for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
-  for (const weapon of kinds) {
-    const host = w.chests.find((c) => c.kind === "wood" && c.weapon === undefined);
-    if (host) { host.weapon = weapon; continue; }
+  for (const weapon of stocked) {
+    const host = w.chests.find((c) => c.kind === "wood" && c.weapons === undefined);
+    if (host) { host.weapons = [weapon]; continue; }
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
     let spot = chestTile(w, room, used);
     for (let ri = 1; spot === null && ri < d.rooms.length; ri++) spot = chestTile(w, d.rooms[ri], used);
     if (!spot) continue; // no open tile anywhere: forfeit this weapon roll
     used.add(spot.ty * d.w + spot.tx);
-    w.chests.push({ id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE, radius: 16, opened: false, weapon });
+    w.chests.push({ id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE, radius: 16, opened: false, weapons: [weapon] });
   }
 }
 
-// The Dealer's stock (§2): on every third floor, P purchasable hearts near a mid-run room
-// center. Walking over one with enough coins buys exactly +1 HP — never a full heal.
+// The Dealer's stock (§2/§8b): on every third floor, P purchasable hearts near a mid-run
+// room center (+1 HP each, never a full heal) — and for parties, a row of purchasable
+// weapons under them (first-come, priced above the heart). Solo stocks no weapons: the
+// solo economy is the tuned baseline, and no rng draws happen at P1 so its stream (and the
+// goldens) are untouched.
 function placeDealerHearts(w: WorldState): void {
   if (w.floor % DEALER.floorInterval !== 0 || isBossFloor(w.floor)) return;
   const d = w.dungeon;
@@ -412,6 +472,18 @@ function placeDealerHearts(w: WorldState): void {
       id: w.nextPickupId++, kind: "dealer_heart",
       x: (room.cx + 0.5) * TILE + (i - (stock - 1) / 2) * 30, y: (room.cy + 0.5) * TILE - 26,
       radius: 13, weapon: null, value: DEALER.price,
+    });
+  }
+  const weaponStock = dealerWeaponStockFor(w.encounterPlayers);
+  if (weaponStock === 0) return;
+  const kinds: WeaponId[] = [];
+  for (let i = 0; i < weaponStock; i++) kinds.push(rng.pick(PICKUP_WEAPONS));
+  const stocked = diversifyWeaponSet(kinds, partyOwnedWeapons(w));
+  for (let i = 0; i < stocked.length; i++) {
+    w.pickups.push({
+      id: w.nextPickupId++, kind: "dealer_weapon",
+      x: (room.cx + 0.5) * TILE + (i - (stocked.length - 1) / 2) * 34, y: (room.cy + 0.5) * TILE + 30,
+      radius: 15, weapon: stocked[i], value: WEAPON_ECONOMY.dealerWeaponPrice,
     });
   }
 }
@@ -930,9 +1002,23 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
   }
 }
 
+// The boss chest's party arsenal (§8b): one weapon choice per member — distinct kinds,
+// class-mixed, preferring weapons nobody owns yet — as shared, first-come pickups. Solo
+// keeps the tuned heart+coins reward (no weapons). Seeded from (seed, floor), NOT the live
+// sim stream, so a given encounter's reward is deterministic regardless of when (or by
+// whom) the boss dies.
+function rollBossArsenal(w: WorldState): WeaponId[] | undefined {
+  const count = bossChestWeaponsFor(w.encounterPlayers);
+  if (count <= 0) return undefined;
+  const rng = new Rng((w.seed ^ 0x0b055a53) + w.floor * 77813);
+  const kinds: WeaponId[] = [];
+  for (let i = 0; i < count; i++) kinds.push(rng.pick(PICKUP_WEAPONS));
+  return diversifyWeaponSet(kinds, partyOwnedWeapons(w));
+}
+
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   if (e.kind === "boss") {
-    w.chests.push({ id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false });
+    w.chests.push({ id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false, weapons: rollBossArsenal(w) });
     return;
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
@@ -2021,22 +2107,27 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
   // The full loot of the opening is decided first, then placed as ONE batch, so the fan
-  // spreads coins, hearts and weapons together without stacking. Boss completion recovery
-  // is the chest's +1 heart ONLY (no descent heal); its blessing offer is the floor's
-  // reward — a Rare pick (see raiseBlessingOffer). Wood chests eject baked contents first
-  // (the floor's weapon drop lives in this chest — see stockWeaponChests), then the
-  // ordinary roll: the weapon replaces nothing, so the heart economy and pity behave
-  // exactly as they always did per chest opened.
+  // spreads coins, hearts and weapons together without stacking. Baked contents eject
+  // first (a wood chest's stocked weapon, the boss chest's party arsenal — see
+  // stockWeaponChests / rollBossArsenal), then the fixed/rolled remainder: the weapons
+  // replace nothing, so the heart economy and pity behave exactly as they always did per
+  // chest opened. Boss completion recovery is the chest's +1 heart ONLY (no descent heal).
   const loot: ChestLoot[] = [];
+  if (c.weapons !== undefined) for (const weapon of c.weapons) loot.push({ kind: "weapon", weapon });
   if (c.kind === "boss") {
     loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
-    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
     loot.push(...rollWoodChest(w));
   }
   ejectChestLoot(w, p, c, loot, ev);
-  if (c.kind === "boss") raiseBlessingOffer(w, p.id, true, ev);
+  // The boss chest is the floor's reward for the WHOLE party: every member gets (and must
+  // answer) their own Rare pick — never only whoever touched the chest first. Solo has one
+  // player, so exactly one offer is raised, as before. The descend gate holds until every
+  // pick resolves (or expires / its player leaves), and every chooser is paused+shielded.
+  if (c.kind === "boss") {
+    for (const member of w.players.values()) raiseBlessingOffer(w, member.id, true, ev);
+  }
 }
 
 type ChestLoot =
@@ -2140,7 +2231,9 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
   const r = w.rng.next();
   const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
   if (r < heartChance) return [{ kind: "heart" }];
-  if (r < heartChance + SUSTAIN.woodChestWeapon) {
+  // The ambient weapon window widens with the party like the heart rate does — a threshold
+  // move on the same draw, so the solo stream stays byte-identical.
+  if (r < heartChance + SUSTAIN.woodChestWeapon * coopWeaponRateMult(w.encounterPlayers)) {
     return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
   }
   const n = 3 + Math.floor(w.rng.next() * 4);
@@ -2182,6 +2275,17 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
             player.coins -= p.value ?? DEALER.price;
             player.hp += DEALER.heal;
             ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y });
+            collected = true; break;
+          }
+          continue;
+        }
+        if (p.kind === "dealer_weapon") {
+          // The Dealer's party weapon stock: buy on touch with enough coins; owners and
+          // broke players walk past (the stock stays for a teammate).
+          if (p.weapon && !player.ownedWeapons.includes(p.weapon) && player.coins >= (p.value ?? WEAPON_ECONOMY.dealerWeaponPrice)) {
+            player.coins -= p.value ?? WEAPON_ECONOMY.dealerWeaponPrice;
+            acquireWeapon(player, p.weapon);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
             collected = true; break;
           }
           continue;
@@ -2257,17 +2361,20 @@ function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
   if (!anyUp && anyDown) endRun(w, ev);
 }
 
-// Authoritative revive (§2): a living teammate holds within REVIVE.radius for the full
-// 1.5s channel (any damage to the channeler cancels it — see damagePlayer). The revived
-// player returns at 2 HP with 1.0s protection and a 0.35s attack lockout. Progress decays
-// when no one is nearby, so it takes a sustained hold. Solo never has a downed player with
-// a standing ally, so this no-ops there.
+// Authoritative revive (§2): a living teammate HOLDS the interact key (isInteracting, the
+// consumed input's explicit intent) within REVIVE.radius for the full 1.5s channel. Any
+// damage to the channeler cancels it (see damagePlayer); releasing the key or stepping
+// away lets the progress decay, so it takes a sustained, deliberate hold. The revived
+// player returns at 2 HP with 1.0s protection and a 0.35s attack lockout. The server
+// validates everything here from ITS OWN state — a tampered client can flip an input bit,
+// never conjure proximity or skip the channel. Solo never has a downed player with a
+// standing ally, so this no-ops there.
 function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const downed of w.players.values()) {
     if (!downed.isDown) continue;
     let reviver: PlayerSim | undefined;
     for (const other of w.players.values()) {
-      if (other === downed || other.isDown || other.hp <= 0) continue;
+      if (other === downed || other.isDown || other.hp <= 0 || !other.isInteracting) continue;
       if (Math.hypot(other.x - downed.x, other.y - downed.y) <= REVIVE.radius) { reviver = other; break; }
     }
     if (reviver) {
@@ -2351,6 +2458,10 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   w.floor = nextFloor;
   for (const p of w.players.values()) {
     p.combo = 0; p.comboTimer = 0;
+    // Descending rescues downed members: the living party reaching the stairs pulls them
+    // through at the same partial HP a revive grants (never at 0 — a "living" player with
+    // an empty bar must not exist). They land under the spawn-grace shield like everyone.
+    if (p.isDown) p.hp = Math.max(p.hp, REVIVE.hp);
     p.isDown = false;
     p.reviveProgress = 0;
     if (SUSTAIN.descentHeal > 0) p.hp = Math.min(p.maxHp, p.hp + SUSTAIN.descentHeal);
@@ -2370,11 +2481,17 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
 // dt (each InputCmd carries its own frame dt) while the world half runs once per fixed tick.
 // stepWorld itself calls this, so solo behavior is unchanged.
 export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
-  // A player with a blessing offer open is paused: no aim, movement, or fire. Their client
-  // freezes under the overlay and sends nothing anyway; the guard makes a tampered client
-  // equally inert (it can't kite or shoot from inside the damage-shielded pick window).
-  if (w.pendingBlessings.has(p.id)) return;
+  // A player with a blessing offer open is paused: no aim, movement, fire, or revive
+  // channel. Their client freezes under the overlay and sends nothing anyway; the guard
+  // makes a tampered client equally inert (it can't kite, shoot, or channel from inside
+  // the damage-shielded pick window).
+  if (w.pendingBlessings.has(p.id)) {
+    p.isInteracting = false;
+    return;
+  }
   p.aimAngle = input.aim;
+  // The revive-channel intent, held only by a living player (a downed body can't revive).
+  p.isInteracting = input.interact === true && !p.isDown && p.hp > 0;
   if (!p.isDown) {
     updatePlayer(w, p, input, dt, ev);
     updateShooting(w, p, input, dt, ev);

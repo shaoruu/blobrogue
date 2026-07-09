@@ -376,16 +376,18 @@ export class WSTransport implements Transport {
     this.predState.props = snap.props.map(propFromWire);
 
     // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
-    // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep only
-    // global (enemy/world) events + this client's own player events. evTo advances the ack even
-    // when every pending event was interest-filtered away for this client, so the server stops
-    // re-scanning them; critical transitions stay derivable from snapshot STATE regardless.
+    // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep
+    // global (enemy/world) events + this client's own player events — plus revive, whose moment
+    // belongs to everyone standing at it (the reviver most of all; the FX are positional). evTo
+    // advances the ack even when every pending event was interest-filtered away for this client,
+    // so the server stops re-scanning them; critical transitions stay derivable from snapshot
+    // STATE regardless.
     for (const w of snap.events) {
       if (w.id <= this.lastEventId) continue; // already processed (resend) — dedupe
       this.lastEventId = w.id;
       const e = w.e;
       const pid = pidOf(e);
-      if (pid === undefined || pid === this.selfServerId) this.events.push(e);
+      if (pid === undefined || pid === this.selfServerId || e.t === "revive") this.events.push(e);
     }
     if (snap.evTo > this.lastEventId) this.lastEventId = snap.evTo;
   }
@@ -464,7 +466,7 @@ export class WSTransport implements Transport {
         const stamped: InputCmd = { ...cmd, seq };
         this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
-        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, ackEv: this.lastEventId });
+        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ackEv: this.lastEventId });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
       } else {
         // Pre-join: predict locally for instant feel; don't send before the join is acknowledged.
@@ -589,6 +591,7 @@ export class WSTransport implements Transport {
         hp: p.hp, maxHp: p.mhp,
         weapon: p.wpn, floor: snap.floor,
         isDown: p.down,
+        reviveProgress: p.rv,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl ?? colorIndexFor(p.id),
@@ -624,6 +627,12 @@ export class WSTransport implements Transport {
     this.sendMsg({ t: "chooseBlessing", offerId, choiceId });
   }
 
+  // Name the teammate a downed local player is spectating, so the server centers this
+  // client's interest view (and positional events) on them. Pure view preference.
+  sendSpectate(target: PlayerId): void {
+    this.sendMsg({ t: "spec", target });
+  }
+
   // Consume a pending server-decided blessing offer, or null if none. The game shows it once,
   // then replies via sendChooseBlessing with the same offer id.
   consumePendingOffer(): BlessingOffer | null {
@@ -647,6 +656,20 @@ export class WSTransport implements Transport {
   // event) — a backpressure-dropped final snapshot can't strand the client mid-run.
   isRunOver(): boolean {
     return this.latestSnap?.over ?? false;
+  }
+
+  // The authoritative world id this connection is bound to ("room:CODE" for lobby rooms).
+  // The game compares it against the lobby's expected code and bails to the lobby on a
+  // mismatch — nobody ever plays a separate simulation believing it is shared. null until
+  // the first snapshot.
+  worldId(): string | null {
+    return this.latestSnap?.wid ?? null;
+  }
+
+  // Party members whose blessing picks currently hold the descend gate (authoritative;
+  // drives the "WAITING FOR N PLAYERS…" readout).
+  pendingBlessingParty(): PlayerId[] {
+    return this.latestSnap?.pnd ?? [];
   }
 
   // Latch-consume the "world geometry was rebuilt" signal (initial join + every descend). The

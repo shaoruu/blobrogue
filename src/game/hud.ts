@@ -21,6 +21,8 @@ export interface HudState {
   isBossActive: boolean;
   bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
   coopLabel: string | null;
+  // Party blessing gate readout ("WAITING FOR 1/2 PLAYERS… NAME PICKING…"); null hides it.
+  waitLabel: string | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
   combo: number;      // current chain length
@@ -164,6 +166,8 @@ export class Hud {
   private statsPanel: HTMLElement;
   private statsBody: HTMLElement;
   private banner: HTMLElement;
+  private waitLine!: HTMLElement;
+  private prevWaitLabel: string | null = null;
   private bannerTimer = 0;
   private controlsHint: HTMLElement;
   private hintTimer = 0;
@@ -227,6 +231,14 @@ export class Hud {
       `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
     root.appendChild(this.banner);
 
+    // Party blessing gate readout: a standing line under the banner slot while teammates
+    // still owe their pick (the descend holds for them). Fixed + opacity-only, no reflow.
+    this.waitLine = el("div",
+      `position:fixed;top:34%;left:0;right:0;z-index:6;text-align:center;pointer-events:none;` +
+      `color:var(--cream);font:10px var(--f-ui),monospace;letter-spacing:2px;` +
+      `text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,0.6);opacity:0;transition:opacity 0.3s ease;`);
+    root.appendChild(this.waitLine);
+
     // One-time controls onboarding hint: a subtle, auto-dismissing line above the hotbar
     // (clear of its blessing-chip row). Fixed + opacity-only so it never shifts the layout.
     this.controlsHint = el("div",
@@ -274,6 +286,12 @@ export class Hud {
 
     this.coopEl.textContent = s.coopLabel ?? "";
     this.coopEl.style.display = s.coopLabel ? "block" : "none";
+
+    if (s.waitLabel !== this.prevWaitLabel) {
+      this.prevWaitLabel = s.waitLabel;
+      this.waitLine.textContent = s.waitLabel ?? "";
+      this.waitLine.style.opacity = s.waitLabel ? "1" : "0";
+    }
 
     this.updateCombo(s);
 
@@ -407,6 +425,8 @@ export class Hud {
   clear() {
     this.coopEl.textContent = "";
     this.coopEl.style.display = "none";
+    this.waitLine.style.opacity = "0";
+    this.prevWaitLabel = null;
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;

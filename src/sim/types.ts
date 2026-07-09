@@ -154,7 +154,9 @@ export interface Bullet {
 
 // dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
 // enough coins buys +1 HP; `value` carries the coin price.
-export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart";
+// dealer_weapon: the Dealer's party stock (co-op only) — walking over it with enough coins
+// buys the weapon; `value` carries the coin price, `weapon` the merchandise.
+export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart" | "dealer_weapon";
 
 export interface Pickup {
   id: number;      // stable per-floor id (wire identity: interest view + client anim keying)
@@ -196,10 +198,11 @@ export interface Chest {
   radius: number;
   opened: boolean;
   openT?: number; // seconds into the open clip once opened (undefined = closed)
-  // Baked contents: the floor's weapon drops live in chests, never loose on the floor.
-  // Opening ejects it as a real pickup. Sim-side only (not on the wire) — contents stay
-  // hidden until the open. undefined = the ordinary loot roll only.
-  weapon?: WeaponId;
+  // Baked contents: the floor's weapon drops live in chests, never loose on the floor
+  // (wood chests hold one; the boss chest holds the party's arsenal). Opening ejects each
+  // as a real pickup. Sim-side only (not on the wire) — contents stay hidden until the
+  // open. undefined = the ordinary loot roll only.
+  weapons?: WeaponId[];
 }
 
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";
@@ -228,7 +231,8 @@ export interface DmgNumber {
   color: string;
 }
 
-// A teammate as the local client sees them (mapped from Convex presence rows).
+// A teammate as the local client sees them (mapped from Convex presence rows, or from
+// authoritative snapshots online).
 export interface RemotePlayer {
   playerId: string;
   name: string;
@@ -238,6 +242,9 @@ export interface RemotePlayer {
   weapon: WeaponId;
   floor: number;
   isDown: boolean;
+  // Authoritative revive-channel progress on THIS (downed) player, in seconds — drives the
+  // reviver-side progress ring. 0 when up / not being revived / on the legacy co-op path.
+  reviveProgress: number;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   colorIndex: number; // stable palette slot for this player

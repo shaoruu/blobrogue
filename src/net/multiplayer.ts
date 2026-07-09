@@ -248,6 +248,7 @@ export class Multiplayer implements CoopBridge {
           weapon: asWeapon(r.weapon),
           floor: r.floor,
           isDown: r.isDown,
+          reviveProgress: 0, // legacy presence carries no channel; the client drives its own hold
           aimAngle: pose ? pose.aimAngle : r.aimAngle,
           shotSeq: r.shotSeq,
           colorIndex: r.colorIndex,

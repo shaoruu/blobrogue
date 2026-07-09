@@ -38,7 +38,14 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-export const PROTOCOL_VERSION = 3;
+// v4: the co-op experience pass — input carries the interact intent (`act`, the explicit
+// revive-channel key), a semantic `spec` message names a downed player's spectate target
+// (the server centers that client's interest view on it), PlayerWire carries `rv`
+// (authoritative revive progress for the reviver-side ring), snapshots carry `wid` (the
+// authoritative world id, so a client can PROVE it shares its party's room) and `pnd` (the
+// players whose blessing picks currently hold the descend gate), and dealer_weapon pickups
+// stock the party shop. Client->server messages changed, so the version bumps.
+export const PROTOCOL_VERSION = 4;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -52,6 +59,15 @@ export const INTERP_DELAY_MAX_MS = 300;
 // snapshot's authoritative seed/floor/rev.
 export const STAGE_B_SEED = 0x51a9e_b0b;
 export const STAGE_B_FLOOR = 1;
+
+// The world id a lobby room code maps to — what the client EXPECTS in every snapshot's `wid`
+// once it joined through that room. MUST agree with convex/gsTicketCore.worldIdForRoomCode
+// (the minter that binds the verified claim); the agreement is locked by test. A mismatch at
+// runtime means this client is NOT in its party's world, and the game bails to the lobby
+// rather than play a separate simulation.
+export function worldIdForRoom(code: string): string {
+  return "room:" + code.trim().toUpperCase();
+}
 
 // ---- wire structs (tight plain-data; short keys keep JSON small + debuggable) ----
 
@@ -80,13 +96,15 @@ export interface SelfWire {
 // Another player as seen by this client (rendered via interpolation, never predicted).
 // nm/cl are the verified cosmetic identity from that player's join ticket (name above the
 // blob, chosen blob tint). Both are decode-OPTIONAL with safe fallbacks (nm -> id, cl ->
-// null) so frames from an older server still decode.
+// null) so frames from an older server still decode. rv is the authoritative revive-channel
+// progress on a DOWNED player (seconds) — it drives the reviver-side progress ring.
 export interface PlayerWire {
   id: PlayerId;
   x: number; y: number;
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  rv: number;
   nm: string;
   cl: number | null;
 }
@@ -138,9 +156,16 @@ export type ClientMsg =
   // An input is an INTENT SAMPLE, not a time authority: it carries NO dt. The server advances
   // simulation time by its own fixed tick (one command = one fixed step), so a client can't buy
   // extra time by claiming a large dt. `ackEv` piggybacks the reliable-event ack (last event id
-  // the client has processed) so the server can stop resending delivered events.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; ackEv: number }
+  // the client has processed) so the server can stop resending delivered events. `act` is the
+  // interact intent (the held revive-channel key) — the sim validates proximity/liveness, so
+  // the bit alone can never conjure a revive.
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ackEv: number }
   | { t: "pong"; id: number }
+  // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
+  // the server uses it only to center that client's interest view (and positional events)
+  // while they are down; it never touches the sim, and an invalid/living-player target is
+  // simply ignored (the publisher falls back to the first living teammate).
+  | { t: "spec"; target: string }
   // Authoritative weapon equip: the server equips ONLY if the id is in the player's owned set
   // (a tampered client can't equip an unowned weapon). cseq is a monotonic command sequence:
   // the server ignores stale/duplicate commands so a resent equip can never double-apply or
@@ -166,13 +191,21 @@ export type ServerMsg =
       over: boolean;             // terminal run state (party wiped) — derivable from STATE
       selfId: PlayerId;          // this client's server-assigned id (on every snap so a dropped
                                  // join snapshot never loses identity)
+      wid: string;               // authoritative world id ("room:CODE" / the public default) —
+                                 // the client PROVES it shares its party's room from this, and
+                                 // bails to the lobby on a mismatch instead of playing a
+                                 // separate simulation ("" from direct/test snapshot builds)
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
+      pnd: PlayerId[];           // players whose blessing picks currently hold the descend gate
+                                 // (drives the party-wide "WAITING FOR N PLAYERS…" readout)
       evTo: number;              // highest committed event id — the client acks up to here even
                                  // when every pending event was interest-filtered away for it
       self: SelfWire | null;     // authoritative local player (null until spawned)
-      players: PlayerWire[];     // OTHER players (interest-filtered)
+      players: PlayerWire[];     // OTHER players — the whole party, NEVER interest-filtered
+                                 // (teammates are shared objectives: spectate targets, roster,
+                                 // minimap, revive prompts all need every member)
       enemies: EnemyWire[];
       bullets: BulletWire[];
       props: PropWire[];         // shared destructibles
@@ -258,7 +291,7 @@ function isEnemyKind(v: unknown): v is EnemyKind {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ENEMY_ARCHETYPES, v);
 }
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
-const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true };
+const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = { none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true };
@@ -294,7 +327,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
-  revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
+  // Positional: the revive moment plays for everyone standing at it (the reviver most of
+  // all), not only the revived player. The revived player is AT the point by definition.
+  revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
@@ -383,7 +418,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "ackEv"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ackEv"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -392,12 +427,17 @@ function decodeClientMsg(raw: string): ClientMsg {
         aim: num(o, "aim", -1000, 1000), // radians; unbounded angle is fine to clamp loosely
         fire: boolOf(o, "fire"),
         dash: boolOf(o, "dash"),
+        act: boolOf(o, "act"),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
       };
     }
     case "pong": {
       exactKeys(o, ["t", "id"]);
       return { t: "pong", id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER) };
+    }
+    case "spec": {
+      exactKeys(o, ["t", "target"]);
+      return { t: "spec", target: shortStr(o, "target", 64) };
     }
     case "equip": {
       // The weapon id must be a KNOWN weapon; the server further validates it is actually owned.
@@ -476,6 +516,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    rv: num(o, "rv", 0, 1e4),
     nm, cl,
   };
 }
@@ -562,6 +603,12 @@ function decodeServerMsg(raw: string): ServerMsg {
   const o = obj(parsed, "frame");
   switch (o.t) {
     case "snap": {
+      const wid = o.wid;
+      if (typeof wid !== "string" || wid.length > 64) throw new ProtocolError("bad wid");
+      const pnd = arr(o.pnd, "pnd").map((p) => {
+        if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError("bad pnd entry");
+        return p;
+      });
       return {
         t: "snap",
         tick: intOf(o, "tick", 0, Number.MAX_SAFE_INTEGER),
@@ -570,9 +617,11 @@ function decodeServerMsg(raw: string): ServerMsg {
         full: boolOf(o, "full"),
         over: boolOf(o, "over"),
         selfId: shortStr(o, "selfId", 64),
+        wid,
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
+        pnd,
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
         self: o.self === null ? null : validateSelfWire(o.self),
         players: arr(o.players, "players").map(validatePlayerWire),
@@ -659,6 +708,7 @@ export interface PlayerIdentity {
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    rv: p.reviveProgress,
     nm: identity?.name ?? p.id,
     cl: identity?.colorIndex ?? null,
   };
@@ -738,10 +788,10 @@ export const INTEREST_EXIT_FACTOR = 1.15;
 
 // The per-client view membership, keyed by STABLE entity ids. rev-scoped: a new floor (new
 // world revision) invalidates every set. Bullets are excluded on purpose — they are fast,
-// short-lived, and id-less; plain radius filtering is correct for them.
+// short-lived, and id-less; plain radius filtering is correct for them. Players are excluded
+// too: the party (≤4 members) is a shared objective and always rides every snapshot.
 export interface InterestView {
   rev: number;
-  players: Set<PlayerId>;
   enemies: Set<number>;
   props: Set<number>;
   pickups: Set<number>;
@@ -749,14 +799,14 @@ export interface InterestView {
 }
 
 export function createInterestView(): InterestView {
-  return { rev: -1, players: new Set(), enemies: new Set(), props: new Set(), pickups: new Set(), chests: new Set() };
+  return { rev: -1, enemies: new Set(), props: new Set(), pickups: new Set(), chests: new Set() };
 }
 
 // Snapshot the current server world into a full ServerMsg body for one client. The client's
 // own player becomes `self`; everyone else becomes a PlayerWire. events are supplied by the
 // caller (per-client reliable stream); evTo is the room's highest committed event id.
 export interface SnapshotOpts {
-  // Interest radius in px around the client's own player. Entities outside it are omitted from
+  // Interest radius in px around the client's view center. Entities outside it are omitted from
   // this client's snapshot (the primary bandwidth + CPU lever). <= 0 disables the filter (send
   // everything) — the default, so direct callers/tests keep full snapshots.
   interestRadius?: number;
@@ -766,12 +816,20 @@ export interface SnapshotOpts {
   // Per-player cosmetic identity (verified name/color from each join ticket), keyed by the
   // world-scoped player id. Omitted / missing entries fall back to id-as-name, no color.
   identities?: ReadonlyMap<PlayerId, PlayerIdentity>;
+  // The interest view center, when it is NOT the client's own player: a downed spectator's
+  // view follows the teammate they are watching, so their snapshots stay coherent with what
+  // their camera shows. Omitted => centered on self (the ordinary case).
+  viewCenter?: { x: number; y: number };
+  // The authoritative world id this snapshot belongs to (room binding proof on the wire).
+  // Omitted (direct/test builds) encodes as "".
+  worldId?: string;
 }
 
-// Interest management: a client always receives its OWN player + globally-relevant state (the
-// boss enemy and the boss chest — the shared objective) and, in addition, the nearby
-// players/enemies/bullets/props/pickups/chests within its interest radius (with exit
-// hysteresis). A simple distance filter is enough for a single bounded floor.
+// Interest management: a client always receives its OWN player, EVERY party member (the
+// party is a shared objective — spectate/roster/revive prompts need all of it), globally-
+// relevant state (the boss enemy and the boss chest), and, in addition, the nearby
+// enemies/bullets/props/pickups/chests within its interest radius (with exit hysteresis).
+// A simple distance filter is enough for a single bounded floor.
 export function buildSnapshot(
   w: WorldState,
   selfPid: PlayerId,
@@ -786,26 +844,24 @@ export function buildSnapshot(
   const r2 = r * r;
   const rExit = r * INTEREST_EXIT_FACTOR;
   const rExit2 = rExit * rExit;
-  const sx = self ? self.x : 0;
-  const sy = self ? self.y : 0;
+  const center = opts.viewCenter ?? (self ? { x: self.x, y: self.y } : null);
   const view = opts.view;
   if (view && view.rev !== w.rev) {
     view.rev = w.rev;
-    view.players.clear(); view.enemies.clear(); view.props.clear(); view.pickups.clear(); view.chests.clear();
+    view.enemies.clear(); view.props.clear(); view.pickups.clear(); view.chests.clear();
   }
-  // No radius, or we don't know where this client is yet -> send everything.
+  // No radius, or we don't know where this client is looking yet -> send everything.
   const near = (x: number, y: number, wasKnown: boolean): boolean => {
-    if (r <= 0 || !self) return true;
-    const dx = x - sx, dy = y - sy;
+    if (r <= 0 || center === null) return true;
+    const dx = x - center.x, dy = y - center.y;
     const d2 = dx * dx + dy * dy;
     return d2 <= r2 || (wasKnown && d2 <= rExit2);
   };
 
   const players: PlayerWire[] = [];
-  const keepPlayers = new Set<PlayerId>();
   for (const p of w.players.values()) {
     if (p.id === selfPid) continue;
-    if (near(p.x, p.y, view?.players.has(p.id) ?? false)) { players.push(toPlayerWire(p, opts.identities?.get(p.id))); keepPlayers.add(p.id); }
+    players.push(toPlayerWire(p, opts.identities?.get(p.id)));
   }
   const enemies: EnemyWire[] = [];
   const keepEnemies = new Set<number>();
@@ -830,7 +886,6 @@ export function buildSnapshot(
     if (c.kind === "boss" || near(c.x, c.y, view?.chests.has(c.id) ?? false)) { chests.push(toChestWire(c)); keepChests.add(c.id); }
   }
   if (view) {
-    view.players = keepPlayers;
     view.enemies = keepEnemies;
     view.props = keepProps;
     view.pickups = keepPickups;
@@ -845,9 +900,11 @@ export function buildSnapshot(
     full,
     over: w.isRunOver,
     selfId: selfPid,
+    wid: opts.worldId ?? "",
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),
+    pnd: [...w.pendingBlessings.keys()],
     evTo,
     self: self ? toSelfWire(self) : null,
     players,

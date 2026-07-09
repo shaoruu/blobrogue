@@ -255,3 +255,41 @@ export function coopKbResistMult(players: number): number {
 export function coopHeartRateMult(players: number): number {
   return 1 + COOP.heartRatePerExtra * (clampPlayers(players) - 1);
 }
+
+// ---- §8b party weapon economy (post-playtest: shared world loot meant fewer guns per person) ----
+// Weapon OPPORTUNITIES scale with the encounter's player count while staying sub-linear per
+// person at the top end (scarcity is a design pillar — see the per-person table in the tests).
+// Everything below is deterministic per (seed, floor, P): the server rolls once; every client
+// sees the same shared, first-come pickups.
+
+export const WEAPON_ECONOMY = {
+  // The floor's ambient wood-chest weapon chance scales like the heart rate does. This only
+  // moves a threshold on the SAME rng draw, so the solo stream is untouched.
+  woodChestWeaponPerExtra: 0.35,
+  // The Dealer stocks purchasable weapons for parties (never solo — the solo economy is the
+  // tuned baseline). Indexed by P-1. Priced above the heart so it stays a real decision.
+  dealerWeaponStock: [0, 1, 1, 2] as readonly number[],
+  dealerWeaponPrice: 12,
+  // The boss chest holds the party's arsenal: one weapon CHOICE per member (shared,
+  // first-come). Solo keeps the tuned heart+coins reward. Indexed by P-1.
+  bossChestWeapons: [0, 2, 3, 4] as readonly number[],
+} as const;
+
+// Extra deterministic weapon-chest rolls per floor beyond the solo table: exactly one per
+// extra party member. Floor 2 therefore stocks >= P opportunities — the guaranteed early
+// weapon beat every member can reach before the first boss (floor 5).
+export function coopExtraWeaponRolls(players: number): number {
+  return clampPlayers(players) - 1;
+}
+
+export function coopWeaponRateMult(players: number): number {
+  return 1 + WEAPON_ECONOMY.woodChestWeaponPerExtra * (clampPlayers(players) - 1);
+}
+
+export function dealerWeaponStockFor(players: number): number {
+  return WEAPON_ECONOMY.dealerWeaponStock[clampPlayers(players) - 1];
+}
+
+export function bossChestWeaponsFor(players: number): number {
+  return WEAPON_ECONOMY.bossChestWeapons[clampPlayers(players) - 1];
+}

@@ -15,6 +15,7 @@ export interface InputIntent {
   mx: number; my: number;
   aim: number;
   fire: boolean; dash: boolean;
+  act: boolean; // interact key held (the revive channel); the sim validates everything else
 }
 
 // Per-class inbound rate windows (sliding 1s). Segmenting the buckets means a high-refresh
@@ -85,6 +86,10 @@ export interface Conn {
   // Per-client interest view (enter/exit hysteresis over stable entity ids) + the derived
   // position events are filtered against.
   view: InterestView;
+  // The teammate a DOWNED player is spectating (from the semantic `spec` message). View
+  // preference only: the publisher centers this client's interest on that player while they
+  // are down. Never touches the sim; invalid/absent falls back to the first living teammate.
+  spectateTarget: PlayerId | null;
 
   // observability
   bytesSent: number;
@@ -108,7 +113,7 @@ export function newConnState(now: number): Pick<Conn,
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
   | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline" | "gameOver"
-  | "view" | "bytesSent" | "droppedSnaps" | "cliRttMs" | "cliJitterMs" | "cliInterpDelayMs"
+  | "view" | "spectateTarget" | "bytesSent" | "droppedSnaps" | "cliRttMs" | "cliJitterMs" | "cliInterpDelayMs"
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
@@ -117,12 +122,12 @@ export function newConnState(now: number): Pick<Conn,
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,
     closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0, gameOver: false,
-    view: createInterestView(),
+    view: createInterestView(), spectateTarget: null,
     bytesSent: 0, droppedSnaps: 0,
     cliRttMs: 0, cliJitterMs: 0, cliInterpDelayMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,
   };
 }
 
-export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean }): InputIntent {
-  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash };
+export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean }): InputIntent {
+  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash, act: m.act };
 }

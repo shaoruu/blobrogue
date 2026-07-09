@@ -79,7 +79,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     slowClientKickBytes: intEnv(env, "GS_SLOW_CLIENT_KICK_BYTES", 1024 * 1024, 1024, 1 << 30),
     maxStarveTicks: intEnv(env, "GS_MAX_STARVE_TICKS", 10, 0, 1000),
     offerTtlMs: intEnv(env, "GS_OFFER_TTL_MS", 60000, 1000, 3600000),
-    interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 1100, 0, 100000), // ~1.5x viewport half-extent; 0 = off
+    // Interest filtering ships DISABLED by default (full snapshots for every client): the live
+    // Sev-0 "we see different enemies" incident made same-world coherence the priority, and prod
+    // runs with the radius off until it is re-vetted. The filtering path stays implemented and
+    // tested (per-view hysteresis, party always included, spectate-centered views) so re-enabling
+    // is a deliberate env choice (GS_INTEREST_RADIUS=1100 ≈ 1.5x viewport half-extent), not a
+    // code change.
+    interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 0, 0, 100000),
     arena: env.GS_ARENA === "1",
   };
 }

@@ -43,13 +43,15 @@ export interface AuthoritativePlayerSnapshot {
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 
 // Client-owned / non-wire PlayerSim fields, each with the reason it stays off the wire:
-// - id:          transport identity (snapshots carry selfId separately)
-// - pr:          constant collision radius
-// - aimAngle:    the client owns its own aim (never reconciled, or the cursor would fight)
-// - shotSeq:     legacy presence-driven remote-shot FX counter (server FX ride events instead)
-// - rewindTicks: server-internal lag-comp bookkeeping, meaningless to a client
-// - meleeSwing:  derived swing state; the client's own prediction recreates it from inputs
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing";
+// - id:            transport identity (snapshots carry selfId separately)
+// - pr:            constant collision radius
+// - aimAngle:      the client owns its own aim (never reconciled, or the cursor would fight)
+// - shotSeq:       legacy presence-driven remote-shot FX counter (server FX ride events instead)
+// - rewindTicks:   server-internal lag-comp bookkeeping, meaningless to a client
+// - meleeSwing:    derived swing state; the client's own prediction recreates it from inputs
+// - isInteracting: per-tick input derivative (the interact key) — the wire carries the input
+//                  bit itself; both server and prediction re-derive this from consumed inputs
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
