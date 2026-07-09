@@ -29,16 +29,47 @@ export default defineSchema({
     // Chosen blob tint (index into the client palette). Optional: absent until the
     // player explicitly picks one, so a fresh browser never clobbers an account's pick.
     colorIndex: v.optional(v.number()),
+    // Equipped visual-only cosmetics (ids from convex/cosmeticsCore.ts). A missing field is
+    // the empty slot; only OWNED ids are ever written (players.ts validates). Absent on
+    // pre-cosmetics rows — everything defaults safely.
+    cosmetics: v.optional(v.object({
+      hat: v.optional(v.string()),
+      glasses: v.optional(v.string()),
+    })),
     totalKills: v.number(),
     deepestFloor: v.number(),
     totalCoins: v.number(),
     gamesPlayed: v.number(),
+    // Earned cosmetic/unlock ids. Seeded [] since day one; recordRun grants earned
+    // cosmetics into it (see cosmeticsCore.earnedCosmeticsFor).
     unlocks: v.array(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
   })
     .index("by_clientId", ["clientId"])
     .index("by_userId", ["userId"]),
+
+  // Global leaderboard: ONE row per player — their best run (deepest floor, kills as the
+  // tie-break) — folded in by players.recordRun. The row snapshots the run's build and the
+  // player's appearance so the leaderboard profile view needs no join against players
+  // (and can never leak account fields: name/appearance/run stats only, by construction).
+  leaderboard: defineTable({
+    playerId: v.id("players"),
+    name: v.string(),
+    colorIndex: v.optional(v.number()),
+    hat: v.optional(v.string()),
+    glasses: v.optional(v.string()),
+    floor: v.number(),
+    kills: v.number(),
+    coins: v.number(),
+    durationMs: v.number(),
+    // The run's final build: owned weapon ids + collapsed blessing ids with levels.
+    weapons: v.array(v.string()),
+    items: v.array(v.object({ id: v.string(), count: v.number() })),
+    achievedAt: v.number(),
+  })
+    .index("by_player", ["playerId"])
+    .index("by_floor", ["floor"]),
 
   // A lobby / running game. The two kinds NEVER cross-match:
   //   "coop"   — classic peer-synced co-op (each client simulates from the shared seed/floor;
