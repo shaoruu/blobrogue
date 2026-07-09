@@ -59,7 +59,9 @@ async function ensurePresence(
     .unique();
   const now = Date.now();
   if (existing) {
-    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false });
+    // A (re)join lands in the LOBBY: any stale world-connection mirror from a previous run
+    // must not read as CONNECTED, so it is cleared here and re-reported after the real join.
+    await ctx.db.patch(existing._id, { name, colorIndex, floor, updatedAt: now, isDown: false, gsWorldId: undefined, gsJoinedAt: undefined });
     return;
   }
   await ctx.db.insert("presence", {
