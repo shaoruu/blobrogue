@@ -82,11 +82,13 @@ function lookOf(loadout: CosmeticLoadout, partyColorIndex: number | null): BlobL
   };
 }
 
-// A worn title's display text (quoted), or empty for the bare slot.
+// A worn title's display text (quoted), or empty for the bare slot. A RETIRED id (recorded
+// on an old leaderboard row, no longer in the catalog) safely renders as no title at all —
+// never a raw internal id on a public surface.
 function titleTextOf(title: string | null): string {
   if (title === null) return "";
   const def = cosmeticById(title);
-  return `\u201c${def?.name ?? title}\u201d`;
+  return def ? `\u201c${def.name}\u201d` : "";
 }
 
 function weaponName(id: string): string {

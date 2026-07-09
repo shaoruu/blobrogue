@@ -143,6 +143,8 @@ export class GameWorld implements RoomRuntime {
       expiresAt: nowMs + ttlMs,
       displayName: conn.displayName,
       colorIndex: conn.colorIndex,
+      hat: conn.hat,
+      face: conn.face,
       lastAppliedSeq: conn.lastAppliedSeq,
       lastCseq: conn.lastCseq,
       pendingOffer: conn.pendingOffer,

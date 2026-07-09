@@ -522,7 +522,11 @@
       @media (max-width:640px){
         .identity{ min-height:0; }
         .pp-top{ flex-direction:column; gap:12px; }
+      }
+      /* Touch-friendly leaderboard rows on narrow AND coarse-pointer devices. */
+      @media (max-width:640px), (pointer:coarse){
         .lb-row{ height:40px; }
+        .lb-view{ min-height:32px; }
       }
 
     </style>

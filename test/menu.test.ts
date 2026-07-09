@@ -101,14 +101,21 @@ const PROFILE = makeProfile();
 
 const LB_ENTRIES: LeaderboardEntryDoc[] = [
   {
-    playerId: "p-ada", name: "Ada", colorIndex: 3, hat: "hat_crown", face: null, body: "body_pink", title: "title_depth_diver",
+    name: "Ada", colorIndex: 3, hat: "hat_crown", face: null, body: "body_pink", title: "title_depth_diver",
     floor: 12, kills: 230, coins: 90, durationMs: 754_000,
     weapons: ["pistol", "shotgun"], items: [{ id: "hair_trigger", count: 2 }], achievedAt: 1,
   },
   {
-    playerId: "p-max", name: "MaximumLengthBlobXX!", colorIndex: 5, hat: null, face: "face_shades", body: null, title: null,
+    name: "MaximumLengthBlobXX!", colorIndex: 5, hat: null, face: "face_shades", body: null, title: null,
     floor: 9, kills: 100, coins: 40, durationMs: 300_000,
     weapons: ["pistol"], items: [], achievedAt: 2,
+  },
+  {
+    // A historical row whose cosmetic/build ids were RETIRED from the catalogs: must render
+    // safely (no crash, no raw internal ids on the title surface, title hidden).
+    name: "OldTimer", colorIndex: 1, hat: "hat_retired_2019", face: "face_gone", body: "body_gone", title: "title_gone",
+    floor: 7, kills: 50, coins: 10, durationMs: 200_000,
+    weapons: ["blunderbuss_x"], items: [{ id: "retired_item", count: 1 }], achievedAt: 3,
   },
 ];
 
@@ -149,6 +156,10 @@ function fakeAuth(isSignedIn: boolean): AuthClient {
 interface LaunchRecord { code: string; isPartyStart: boolean }
 
 function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): { menu: Menu; overlay: ShimNode; launches: LaunchRecord[]; session: Session } {
+  // Section isolation: the shim shares ONE localStorage; stale appearance picks from a
+  // previous section must never leak into a fresh session.
+  localStorage.removeItem("blobrogue.cosmetics");
+  localStorage.removeItem("blobrogue.color");
   const overlay = document.createElement("div") as unknown as ShimNode;
   const client = fakeConvex(opts);
   const session = new Session(client);
@@ -254,7 +265,7 @@ async function main(): Promise<void> {
 
   section("top-runs glance: FINAL geometry from first paint; hydration fills in place");
   {
-    const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });
+    const { menu, overlay } = makeMenu({ lb: LB_ENTRIES.slice(0, 2) });
     await menu.showTitle();
     const before = byClass(overlay, "lb-row");
     check("exactly 3 fixed rows at first paint (a glance, not a dashboard)", before.length === 3, String(before.length));
@@ -299,9 +310,34 @@ async function main(): Promise<void> {
     check("the SNAPSHOTTED worn title shows on the profile", all.includes("Depth Diver"));
     check("a back action exists", buttonsOf(overlay).some((b) => b === "back"));
     check("no account/private fields leak (name/appearance/run data only)", !all.includes("@") && !all.toLowerCase().includes("email"));
+
+    // Retired-id fallback: the historical row renders safely — the retired title is HIDDEN
+    // (never a raw internal id on a public surface) and the unknown build ids show as data.
+    await menu.showLeaderboard();
+    await settle();
+    const retiredRow = byClass(overlay, "lb-row")[2];
+    retiredRow.onclick?.();
+    const retired = textOf(overlay);
+    check("a retired-cosmetics row still opens its profile", retired.includes("OLDTIMER"));
+    check("a retired TITLE id renders as no title (never a raw id)", !retired.includes("title_gone"));
+    check("retired hat/face/body ids never leak as text either", !retired.includes("hat_retired_2019") && !retired.includes("face_gone") && !retired.includes("body_gone"));
     // Return to the title so this menu's Escape handler is torn down — the shim shares one
     // window across sections (the real app only ever has one live menu).
     await menu.showTitle();
+  }
+
+  section("persistence authority: a pick the server refuses never lingers as local truth");
+  {
+    const { session } = makeMenu(); // fake backend always answers with EMPTY loadout
+    session.setCosmetic("hat", "hat_halo"); // locked pick, applied optimistically
+    check("optimistic local apply", session.cosmetics.hat === "hat_halo");
+    await session.login("blob");
+    check("the server's answer reconciles the local pick away", session.cosmetics.hat === null, String(session.cosmetics.hat));
+    // An ACCEPTED pick round-trips and stays.
+    const accepted = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", face: null, body: null, title: null } }) });
+    accepted.session.setCosmetic("hat", "hat_top");
+    await accepted.session.login("blob");
+    check("an accepted pick survives reconcile", accepted.session.cosmetics.hat === "hat_top");
   }
 
   section("destinations exist for BOTH auth states; Escape mirrors Back with named focus restore");
@@ -409,11 +445,13 @@ async function main(): Promise<void> {
     session.setColorIndex(0);
     check("slot 0 (classic amber) clears the body slot", session.cosmetics.body === null);
 
-    // Equipping a starter moves the EQUIPPED chip (session state drives the render).
-    session.setCosmetic("hat", "hat_top");
-    await menu.showProfile();
+    // Equipping a starter moves the EQUIPPED chip (the fake echoes the accepted pick, as
+    // the real backend does for owned items).
+    const echo = makeMenu({ profile: makeProfile({ cosmetics: { hat: "hat_top", face: null, body: null, title: null } }) });
+    echo.session.setCosmetic("hat", "hat_top");
+    await echo.menu.showProfile();
     await settle();
-    const tiles = byClass(overlay, "cos-tile");
+    const tiles = byClass(echo.overlay, "cos-tile");
     const topHatTile = tiles.find((t) => textOf(t).includes("Top Hat"));
     check("equipping a starter marks its tile EQUIPPED", topHatTile !== undefined && textOf(topHatTile!).includes("EQUIPPED"));
 

@@ -22,7 +22,9 @@ import {
 } from "../src/game/cosmetics.js";
 import { hasCosmeticArt } from "../src/game/cosmeticArt.js";
 import { jsonCodec, ProtocolError, buildSnapshot } from "../src/net/protocol.js";
-import { createWorld, spawnPlayerInWorld } from "../src/sim/world.js";
+import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
+import { IDLE_INPUT } from "../src/sim/input.js";
+import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import {
   shouldShowSigninNudge, recordNudgeDismissed, NUDGE_COOLDOWN_MS, NUDGE_DISMISSED_AT_KEY,
 } from "../src/ui/signinNudge.js";
@@ -162,6 +164,81 @@ function wireTests(): void {
   }
 }
 
+// The hard proof that cosmetic ids cannot alter gameplay: identities are not INPUTS to the
+// simulation at all — they exist only at snapshot-BUILD time as decoration. Two snapshot
+// builds of the SAME world under wildly different identity maps must agree byte-for-byte on
+// every gameplay field (position/HP/weapon/dash/revive/score...), and stepping the world is
+// impossible to influence because stepWorld's signature has no identity parameter.
+function simImmunityTests(): void {
+  section("cosmetic ids cannot alter the simulation: identity maps decorate, never steer");
+  const w = createWorld(0xFACE, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(w, "pA");
+  spawnPlayerInWorld(w, "pB");
+  const inputs = new Map<PlayerId, InputCmd>([
+    ["pA", { ...IDLE_INPUT, moveX: 1, firing: true, aim: 0.5 }],
+    ["pB", { ...IDLE_INPUT, moveY: -1, dash: true }],
+  ]);
+  for (let i = 0; i < 120; i++) stepWorld(w, inputs, 1 / 60);
+
+  const plain = new Map([["pA", { name: "A", colorIndex: null }]]);
+  const dressed = new Map([
+    ["pA", { name: "Fancy", colorIndex: 5, hat: "hat_crown", face: "face_monocle" }],
+    ["pB", { name: "Cone", colorIndex: 2, hat: "hat_party", face: "face_shades" }],
+  ]);
+  const snapPlain = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-imm", identities: plain });
+  const snapDressed = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-imm", identities: dressed });
+  if (snapPlain.t !== "snap" || snapDressed.t !== "snap") { check("snapshots built", false); return; }
+  const stripIdentity = (frame: object): unknown => JSON.parse(JSON.stringify(frame), (k, v: unknown) => (
+    k === "nm" || k === "cl" || k === "ht" || k === "fc" ? undefined : v
+  ));
+  check("SelfWire (speed/HP/fire/dash/score authority) is identity-independent",
+    JSON.stringify(snapPlain.self) === JSON.stringify(snapDressed.self));
+  check("every gameplay field of every wire struct is byte-identical under different identities",
+    JSON.stringify(stripIdentity(snapPlain)) === JSON.stringify(stripIdentity(snapDressed)));
+
+  // And the world itself cannot diverge: identities are not an argument to stepWorld —
+  // stepping continues normally after decorated snapshot builds.
+  for (let i = 0; i < 60; i++) stepWorld(w, inputs, 1 / 60);
+  const after = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-imm", identities: dressed });
+  check("the world advances normally after decorated snapshots (no state contamination)",
+    after.t === "snap" && after.tick === snapDressed.tick + 60, `tick ${String(after.t === "snap" ? after.tick : "?")} vs ${snapDressed.tick + 60}`);
+}
+
+// Static render/markup gates: overlays draw before the weapon (never on top of it), and
+// the DOM surfaces that render player-authored strings never use innerHTML.
+function renderContractTests(): void {
+  section("render contract: weapon above overlays; user-string surfaces are textContent-only");
+  const game = readFileSync(join(ROOT, "src/game/game.ts"), "utf8");
+  const renderPlayer = game.slice(game.indexOf("private renderPlayer()"), game.indexOf("private renderReviveRings"));
+  check("local player: cosmetics draw BEFORE the held weapon (weapon/muzzle stay readable)",
+    renderPlayer.indexOf("drawCosmetics") !== -1 && renderPlayer.indexOf("drawCosmetics") < renderPlayer.indexOf("renderHeldWeapon"));
+  const renderRemotes = game.slice(game.indexOf("private renderRemotePlayers()"), game.indexOf("private selfTint()"));
+  check("remotes: cosmetics draw BEFORE weapon and name label (identity redundant beyond color)",
+    renderRemotes.indexOf("drawCosmetics") !== -1
+    && renderRemotes.indexOf("drawCosmetics") < renderRemotes.indexOf("renderHeldWeapon")
+    && renderRemotes.indexOf("drawCosmetics") < renderRemotes.indexOf("fillText"));
+  const uiDir = join(ROOT, "src/ui");
+  const offenders: string[] = [];
+  for (const f of readdirSync(uiDir)) {
+    if (f.endsWith(".ts") && readFileSync(join(uiDir, f), "utf8").includes("innerHTML")) offenders.push(f);
+  }
+  check("src/ui never uses innerHTML (names/titles/build labels are inert text)", offenders.length === 0, offenders.join(","));
+}
+
+// The public leaderboard projection is a whitelist: presentation fields only.
+function publicSchemaTests(): void {
+  section("public schema only: the leaderboard entry exposes no account/internal identifiers");
+  const src = readFileSync(join(ROOT, "convex/leaderboard.ts"), "utf8");
+  const entryBlock = src.slice(src.indexOf("export interface LeaderboardEntry"), src.indexOf("function toEntry"));
+  for (const banned of ["playerId", "email", "userId", "clientId", "image", "token", "roomId", "sessionId"]) {
+    check(`public entry never carries ${banned}`, !entryBlock.includes(banned));
+  }
+  check("the module never READS account fields at all", !/\b(doc|player|existing|guest|account)\.(email|userId|clientId|image)\b/.test(src));
+  const apiSrc = readFileSync(join(ROOT, "src/net/api.ts"), "utf8");
+  const docBlock = apiSrc.slice(apiSrc.indexOf("export interface LeaderboardEntryDoc"), apiSrc.indexOf("// The run-build subset"));
+  check("the client contract matches (no ids in LeaderboardEntryDoc)", !docBlock.includes("playerId"));
+}
+
 function fakeStore(): NudgeStore & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {
@@ -200,6 +277,9 @@ function main(): void {
   grantTests();
   purityTests();
   wireTests();
+  simImmunityTests();
+  renderContractTests();
+  publicSchemaTests();
   nudgeTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

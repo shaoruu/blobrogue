@@ -14,8 +14,10 @@ export interface RunBuild {
   items: Array<{ id: string; count: number }>;
 }
 
+// The PUBLIC leaderboard entry: strictly the presentation fields — name, appearance
+// snapshot, run stats, build. Never the players-row id, clientId, userId, email, avatar
+// URL, or any session/room identifier (public-schema-only is asserted by test).
 export interface LeaderboardEntry {
-  playerId: string;
   name: string;
   colorIndex: number | null;
   hat: string | null;
@@ -33,7 +35,6 @@ export interface LeaderboardEntry {
 
 function toEntry(doc: Doc<"leaderboard">): LeaderboardEntry {
   return {
-    playerId: doc.playerId,
     name: doc.name,
     colorIndex: doc.colorIndex ?? null,
     hat: doc.hat ?? null,
@@ -69,8 +70,10 @@ function isBetterRun(a: { floor: number; kills: number }, b: { floor: number; ki
 }
 
 // Fold a finished run into the player's leaderboard row (called from players.recordRun with
-// the player's post-run doc). Floor 0 runs never chart; a run that doesn't beat the stored
-// best only refreshes the appearance snapshot so the board tracks renames/re-equips.
+// the player's post-run doc). Floor 0 runs never chart. The appearance snapshot is the
+// loadout AS WORN FOR THE CHARTED RUN: it only ever changes when a new best run replaces
+// the old one — later profile re-equips never rewrite history (only the display NAME stays
+// current, via syncIdentity, so a rename can't strand an old alias on the board).
 export async function foldBestRun(
   ctx: MutationCtx,
   player: Doc<"players">,
@@ -116,36 +119,22 @@ export async function foldBestRun(
       items: run.build.items,
       achievedAt: Date.now(),
     });
-  } else {
-    await ctx.db.patch(existing._id, identity);
+  } else if (existing.name !== player.name) {
+    await ctx.db.patch(existing._id, { name: player.name });
   }
 }
 
-// Keep the public row's identity snapshot in step when the player renames or re-equips
-// (called from players.ensurePlayer only when something actually changed).
+// Keep the public row's display NAME in step when the player renames (called from
+// players.ensurePlayer). Deliberately name-only: the appearance snapshot belongs to the
+// charted RUN and must stay independent of later profile changes.
 export async function syncIdentity(ctx: MutationCtx, player: Doc<"players">): Promise<void> {
   const existing = await ctx.db
     .query("leaderboard")
     .withIndex("by_player", (q) => q.eq("playerId", player._id))
     .unique();
   if (!existing) return;
-  const next = {
-    name: player.name,
-    colorIndex: player.colorIndex,
-    hat: player.cosmeticLoadout?.hat,
-    face: player.cosmeticLoadout?.face,
-    body: player.cosmeticLoadout?.body,
-    title: player.cosmeticLoadout?.title,
-  };
-  if (
-    existing.name !== next.name ||
-    existing.colorIndex !== next.colorIndex ||
-    existing.hat !== next.hat ||
-    existing.face !== next.face ||
-    existing.body !== next.body ||
-    existing.title !== next.title
-  ) {
-    await ctx.db.patch(existing._id, next);
+  if (existing.name !== player.name) {
+    await ctx.db.patch(existing._id, { name: player.name });
   }
 }
 

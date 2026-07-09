@@ -30,10 +30,10 @@ export interface ProfileDoc {
   isAccount: boolean;
 }
 
-// One public leaderboard entry: a player's best run plus the appearance snapshot the
-// profile view renders. Privacy-safe by construction — name/appearance/run data only.
+// One public leaderboard entry: a player's best run plus the appearance snapshot AS WORN
+// for that run (later re-equips never rewrite it; only the display name stays current).
+// Privacy-safe by construction — name/appearance/run data only, no ids of any kind.
 export interface LeaderboardEntryDoc {
-  playerId: string;
   name: string;
   colorIndex: number | null;
   hat: string | null;

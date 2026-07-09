@@ -47,8 +47,12 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
   };
 }
 
+// Names render on other players' screens and on the public leaderboard: strip control
+// characters, collapse whitespace runs, clamp length (mirrors the game server's
+// sanitizeDisplayName). All UI rendering is textContent-only, so markup is inert data —
+// this keeps stored names clean rather than trusting every consumer.
 function cleanName(name: string): string {
-  return name.trim().slice(0, 20) || "blob";
+  return name.replace(/[\u0000-\u001f\u007f]/g, "").replace(/\s+/g, " ").trim().slice(0, 20) || "blob";
 }
 
 // Clamp a chosen color to a sane palette range; undefined = "no pick", never a write.

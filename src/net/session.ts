@@ -98,7 +98,9 @@ export class Session {
     const resolve = (slot: CosmeticSlot): string | null => {
       const local = this.cosmeticPicks[slot];
       if (local !== undefined) return local === "none" ? null : local;
-      return this.profile?.cosmetics[slot] ?? null;
+      // Optional chain into cosmetics: a pre-cosmetics backend returns profiles without
+      // the field — every slot defaults to empty, never a crash.
+      return this.profile?.cosmetics?.[slot] ?? null;
     };
     return { hat: resolve("hat"), face: resolve("face"), body: resolve("body"), title: resolve("title") };
   }
@@ -135,19 +137,30 @@ export class Session {
   async login(name: string): Promise<ProfileDoc | null> {
     this.persistName(name);
     if (!this.client) return null;
-    const picks: StoredCosmetics = { ...this.cosmeticPicks };
-    const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => picks[slot] !== undefined);
+    const sent: StoredCosmetics = { ...this.cosmeticPicks };
+    const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => sent[slot] !== undefined);
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
       name,
       // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
-      ...(hasPicks ? { cosmetics: picks } : {}),
+      ...(hasPicks ? { cosmetics: sent } : {}),
     });
     // A signed-in account may carry picks made on another device; adopt them locally.
     if (this.colorIndex === null && this.profile.colorIndex !== null) {
       this.colorIndex = this.profile.colorIndex;
       try { localStorage.setItem(COLOR_KEY, String(this.profile.colorIndex)); } catch { /* ignore */ }
+    }
+    // Authority reconcile: a pick the server did NOT store (locked/unknown/tampered) must
+    // not linger as local truth. Only slots untouched since this flush left are reconciled,
+    // so a fresh pick made mid-flight is never clobbered by its predecessor's response —
+    // its own flush (already queued by setCosmetic) settles it.
+    for (const slot of COSMETIC_PICK_SLOTS) {
+      if (sent[slot] === undefined) continue;
+      if (this.cosmeticPicks[slot] !== sent[slot]) continue;
+      const sentValue = sent[slot] === "none" ? null : sent[slot] ?? null;
+      const serverValue = this.profile.cosmetics?.[slot] ?? null;
+      if (serverValue !== sentValue) this.recordCosmeticPick(slot, serverValue);
     }
     return this.profile;
   }
