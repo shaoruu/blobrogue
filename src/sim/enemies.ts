@@ -10,8 +10,8 @@ import {
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
-import { MODES, modeActiveCap } from "./difficulty.js";
-import type { DifficultyMode } from "./difficulty.js";
+import { DEFAULT_DIFFICULTY, difficultyThreatBudget, difficultyActiveCap } from "./difficulty.js";
+import type { Difficulty } from "./difficulty.js";
 
 export type Movement = "chase" | "zigzag" | "drift" | "kite" | "boss";
 
@@ -207,9 +207,9 @@ interface RoomLoad {
 // Deterministic threat-budget floor composition (§4): spend FloorThreat on a tiered unit
 // mix instead of counting bodies. Elites/brutes are planned first (they anchor the opening
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
-function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number, mode: DifficultyMode): PlannedUnit[] {
+function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number, difficulty: Difficulty): PlannedUnit[] {
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
-  let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players) * MODES[mode].threatBudgetMult;
+  let budget = difficultyThreatBudget(floorThreat(floor) * pressure.budgetMult, difficulty) * coopThreatMult(players);
   const roster = floorRoster(floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
 
@@ -281,7 +281,7 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
   return plan;
 }
 
-export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, mode: DifficultyMode = "standard"): FloorSpawns {
+export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, difficulty: Difficulty = DEFAULT_DIFFICULTY): FloorSpawns {
   const rng = new Rng((seed ^ 0x9e3779b9) + floor * 2654435761);
   const roomCount = dungeon.rooms.length;
   if (roomCount <= 1) return { active: [], pending: [] };
@@ -301,8 +301,8 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     return { active, pending: [] };
   }
 
-  const plan = planFloorUnits(rng, floor, roomCount, players, mode);
-  const cap = modeActiveCap(mode, activeThreatCap(floor)) * coopThreatMult(players);
+  const plan = planFloorUnits(rng, floor, roomCount, players, difficulty);
+  const cap = difficultyActiveCap(activeThreatCap(floor), difficulty) * coopThreatMult(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;

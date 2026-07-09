@@ -31,13 +31,13 @@ import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import type { Enemy, PetKind, WeaponId } from "../src/sim/types.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { PET_BALANCE, PET_CAPS } from "../src/sim/pets.js";
-import { MODES, modeActiveCap, modeBossAddCap } from "../src/sim/difficulty.js";
-import type { DifficultyMode } from "../src/sim/difficulty.js";
+import { DIFFICULTIES, difficultyActiveCap, difficultyBossAddCap } from "../src/sim/difficulty.js";
+import type { Difficulty } from "../src/sim/difficulty.js";
 import { threatCostOf } from "../src/sim/enemies.js";
 import { FIXED_DT, TICK_HZ } from "../src/net/protocol.js";
 
 const IS_FULL = process.env.PET_GATE_FULL === "1";
-const MODE_LIST: readonly DifficultyMode[] = ["casual", "standard", "brutal"];
+const MODE_LIST: readonly Difficulty[] = ["casual", "standard", "brutal"];
 const PARTY_SIZES = [1, 2, 3, 4] as const;
 // CI subset vs spec-scale studio run (spec §7.7: 1,000 rooms + 100 boss pulls).
 const FLOORS_PER_CONFIG = IS_FULL ? 24 : 2;      // non-boss floors simmed per (mode, P)
@@ -99,8 +99,8 @@ function stepScripted(w: WorldState, ticks: number, until?: () => boolean): numb
 
 // A party-scaled gate world: players spawned FIRST, then the floor rebuilt so the encounter
 // snapshot (enemy HP / threat / hearts) scales to the real party size.
-function gateWorld(seed: number, floor: number, mode: DifficultyMode, party: number, pet: PetKind | null): WorldState {
-  const w = createWorld(seed, floor, { skipLocalPlayer: true, mode });
+function gateWorld(seed: number, floor: number, mode: Difficulty, party: number, pet: PetKind | null): WorldState {
+  const w = createWorld(seed, floor, { skipLocalPlayer: true, difficulty: mode });
   for (let i = 0; i < party; i++) {
     const p = spawnPlayerInWorld(w, "p" + i);
     p.mods.lifestealChance = 0.17; // Fang Lv3 on every owner: any pet-kill heal would show up
@@ -233,7 +233,7 @@ interface ConfigStats {
   petHealing: number;
 }
 
-function runFloor(seed: number, floor: number, mode: DifficultyMode, party: number): { led: DamageLedger; cleared: boolean; rooms: number } {
+function runFloor(seed: number, floor: number, mode: Difficulty, party: number): { led: DamageLedger; cleared: boolean; rooms: number } {
   const w = gateWorld(seed, floor, mode, party, "ember_pup"); // worst-case damage pet on every owner
   stepScripted(w, 90 * TICK_HZ, () => isFloorCleared(w));
   return { led: w.ledger!, cleared: isFloorCleared(w), rooms: Math.max(1, w.dungeon.rooms.length - 1) };
@@ -326,33 +326,33 @@ function totalThreat(w: WorldState): number {
 function modeWiring(): void {
   section("§1 mode wiring: pressure ordering, cap rounding, recovery knobs");
   for (const floor of [3, 6]) {
-    const spawned = MODE_LIST.map((mode) => totalThreat(createWorld(0x51ee7, floor, { skipLocalPlayer: true, mode })));
+    const spawned = MODE_LIST.map((mode) => totalThreat(createWorld(0x51ee7, floor, { skipLocalPlayer: true, difficulty: mode })));
     check(`floor ${floor}: spawned threat orders casual ≤ standard ≤ brutal`,
       spawned[0] <= spawned[1] && spawned[1] <= spawned[2], spawned.map((v) => v.toFixed(1)).join(" / "));
   }
   check("active-cap rounding: casual floors down with min 6, brutal ceils with max 18",
-    modeActiveCap("casual", 9) === 7 && modeActiveCap("casual", 6) === 6
-    && modeActiveCap("brutal", 16) === 18 && modeActiveCap("brutal", 17) === 18
-    && modeActiveCap("standard", 16) === 16);
+    difficultyActiveCap(9, "casual") === 7 && difficultyActiveCap(6, "casual") === 6
+    && difficultyActiveCap(16, "brutal") === 18 && difficultyActiveCap(17, "brutal") === 18
+    && difficultyActiveCap(16, "standard") === 16);
   check("boss add cap shifts ±1 with casual's floor of 2",
-    modeBossAddCap("casual", 5) === 4 && modeBossAddCap("casual", 2) === 2
-    && modeBossAddCap("standard", 5) === 5 && modeBossAddCap("brutal", 5) === 6);
+    difficultyBossAddCap(5, "casual") === 4 && difficultyBossAddCap(2, "casual") === 2
+    && difficultyBossAddCap(5, "standard") === 5 && difficultyBossAddCap(5, "brutal") === 6);
 
   // Boss-chest hearts: casual pays +2, standard/brutal +1 (spec §1 boss heart reward).
   // Counted via the floor's heart-generation ledger — the opener may inhale them instantly.
   for (const mode of MODE_LIST) {
-    const w = createWorld(0xC4E57, 1, { isSandbox: true, skipLocalPlayer: true, mode });
+    const w = createWorld(0xC4E57, 1, { isSandbox: true, skipLocalPlayer: true, difficulty: mode });
     const p = spawnPlayerInWorld(w, "p0");
     w.chests.push({ id: w.nextChestId++, kind: "boss", x: p.x + 20, y: p.y, radius: 18, opened: false });
     stepScripted(w, 2);
-    check(`${mode} boss chest ejects ${MODES[mode].bossChestHearts} heart(s)`,
-      w.heartsThisFloor === MODES[mode].bossChestHearts, `hearts=${w.heartsThisFloor}`);
+    check(`${mode} boss chest ejects ${DIFFICULTIES[mode].bossChestHearts} heart(s)`,
+      w.heartsThisFloor === DIFFICULTIES[mode].bossChestHearts, `hearts=${w.heartsThisFloor}`);
   }
 
   // Revive channel/HP per mode: a 1.3s hold revives on casual (1.2s) only; the revived HP
   // follows the mode table (3 on casual, 2 elsewhere).
   for (const mode of MODE_LIST) {
-    const w = createWorld(0xEE71E, 1, { isSandbox: true, skipLocalPlayer: true, mode });
+    const w = createWorld(0xEE71E, 1, { isSandbox: true, skipLocalPlayer: true, difficulty: mode });
     const down = spawnPlayerInWorld(w, "pDown");
     const medic = spawnPlayerInWorld(w, "pMedic");
     medic.x = down.x + 20; medic.y = down.y;
@@ -362,7 +362,7 @@ function modeWiring(): void {
     }
     const isRevived = !down.isDown;
     if (mode === "casual") check("casual revive lands inside 1.3s at 3 HP", isRevived && down.hp === 3, `hp=${down.hp}`);
-    else check(`${mode} revive is still channeling at 1.3s (${MODES[mode].reviveChannel}s hold)`, !isRevived);
+    else check(`${mode} revive is still channeling at 1.3s (${DIFFICULTIES[mode].reviveChannel}s hold)`, !isRevived);
   }
 }
 
