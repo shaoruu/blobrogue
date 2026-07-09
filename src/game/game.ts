@@ -7,7 +7,7 @@ import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName, PetPose }
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { PETS, PET_BALANCE } from "../sim/pets.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
+import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
@@ -15,7 +15,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared, navDebugField, spawnPetInWorld } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, spawnPetInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -34,6 +34,7 @@ import {
 import type { Anim, Xform, XformStyle } from "./anim.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
+import { waveAudio } from "./waveAudio.js";
 import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -94,6 +95,8 @@ export interface DevSnapshot {
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
+interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
@@ -345,6 +348,7 @@ export class Game {
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
+  private worldLabels: WorldLabel[] = []; // floating text popups (visual only; e.g. drop names)
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
@@ -459,6 +463,13 @@ export class Game {
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
+    // Hotbar UI injects into the SAME context-gated InputController the keyboard uses —
+    // one action gate for every input surface. Context is re-synced first because these
+    // callbacks fire between ticks (right after a drag tears down or a drawer closes).
+    this.hud.setHotbarActions({
+      onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
+      onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
+    });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
@@ -496,6 +507,9 @@ export class Game {
   // (keyup/mouseup are lost while unfocused, so a key or autofire could otherwise stick).
   private bindInput() {
     window.addEventListener("keydown", (e) => {
+      // Refresh the context first: a drawer/drag can open and a key can land within the
+      // same tick, and the gate must see the CURRENT surface, never last tick's.
+      this.syncInputContext();
       if (this.input.keyDown(e.key, e.repeat)) e.preventDefault();
     });
     window.addEventListener("keyup", (e) => this.input.keyUp(e.key));
@@ -505,9 +519,10 @@ export class Game {
     });
     this.canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
+      this.syncInputContext();
       this.input.wheel(e.deltaY); // scroll to cycle weapons (gameplay context only)
     }, { passive: false });
-    this.canvas.addEventListener("mousedown", (e) => this.input.mouseDown(e.button));
+    this.canvas.addEventListener("mousedown", (e) => { this.syncInputContext(); this.input.mouseDown(e.button); });
     window.addEventListener("mouseup", (e) => this.input.mouseUp(e.button));
     // Right-click is not a gameplay input; only suppress the browser menu over the
     // canvas while actually playing, never on overlays or the menu.
@@ -524,13 +539,24 @@ export class Game {
   private onInputAction(a: GameAction) {
     switch (a.kind) {
       case "togglePause":
-        this.togglePause();
+        // Under the hud context Escape means "dismiss the drawer"; pause is next.
+        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
+        else this.togglePause();
         break;
       case "selectWeapon":
-        if (this.isRunning) this.selectWeapon(a.index);
+        if (this.isRunning) this.equipSlot(a.index);
         break;
       case "cycleWeapon":
         if (this.isRunning) this.cycleWeapon(a.dir);
+        break;
+      case "dropWeapon":
+        if (this.isRunning) this.dropEquippedWeapon();
+        break;
+      case "activateSlot":
+        if (this.isRunning) this.activateSlot(a.index);
+        break;
+      case "reorderSlots":
+        if (this.isRunning) this.reorderSlots(a.from, a.to);
         break;
       case "stats":
         this.isStatsHeld = a.isHeld;
@@ -552,6 +578,8 @@ export class Game {
     if (this.isPaused) return "pause";
     if (this.isAwaitingOnlineWorld()) return "reconnect";
     if (this.isDown) return "spectate";
+    // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
+    if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
   }
 
@@ -605,6 +633,7 @@ export class Game {
     this.pause.hide();
     this.blessing.hide();
     audio.unlock();
+    waveAudio.reset();
     resetAnim(this.playerAnim);
     this.isPlayerMoving = false;
     this.playerLean = 0;
@@ -651,6 +680,7 @@ export class Game {
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
+    this.worldLabels = [];
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
@@ -673,6 +703,12 @@ export class Game {
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
     if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
+    // Wave layer: sweep entity-keyed loops/tells from the old floor, crossfade the biome's
+    // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually here).
+    waveAudio.onFloorLoad();
+    waveAudio.setAmbientZone(this.biomeIdx);
+    const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
+    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null);
   }
 
   // Mount a torch on the wall directly above each room (facing into it), at a
@@ -753,6 +789,7 @@ export class Game {
     this.stop();
     this.syncInputContext();
     audio.setMusic(null);
+    waveAudio.reset();
     this.hud.hideStats();
     this.hud.clear();
     this.onExit(reason);
@@ -873,7 +910,8 @@ export class Game {
   }
 
   // Build this tick's InputCmd from the context-gated controller sample plus the
-  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash.
+  // mouse->world aim; the sim only sees moveX/moveY/aim/firing/dash. The "hud" context
+  // (hotbar drag / open drawer) samples idle, so HUD interaction never leaks into combat.
   private buildInput(): InputCmd {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
@@ -961,6 +999,7 @@ export class Game {
     this.updateFootstepDust(dt);
     this.updateParticles(dt);
     this.updateDmgNumbers(dt);
+    this.updateWorldLabels(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
@@ -987,6 +1026,18 @@ export class Game {
       this.cam.y += (ty - this.cam.y) * k;
     }
     this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height);
+
+    // Wave-audio observation pass: authoritative attack-state tells (windup/lock/active/
+    // recover edges), revive-channel lifecycle, beam stop hysteresis, entity loop sweep.
+    waveAudio.frame({
+      listener: {
+        x: this.px, y: this.py,
+        camLeft: this.cam.x - 160, camTop: this.cam.y - 160,
+        camRight: this.cam.x + this.canvas.width + 160, camBottom: this.cam.y + this.canvas.height + 160,
+      },
+      enemies: this.world.enemies,
+      players: this.world.players.values(),
+    });
   }
 
   // Little dust kicks at the feet while running — the floor reacts to movement. Direct
@@ -1040,7 +1091,11 @@ export class Game {
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
-        sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+        // Manifest-bound weapons (Thumper lob, Sunlance held-beam lifecycle) own their
+        // sound through the wave layer; every other weapon keeps its exact legacy sample.
+        if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
+          sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+        }
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
         this.kickX += -Math.cos(e.aim) * kick;
@@ -1075,7 +1130,12 @@ export class Game {
         }
         if (e.closeShotgun) this.addFreeze(FREEZE_SHOTGUN);
         if (e.melee) this.replayMeleeImpact(e.eid, e.puffX, e.puffY, e.crit);
-        if (!e.killed) sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
+        // Sunlance hits tick through the wave layer's 120ms-per-target limiter — a held
+        // beam at 22Hz must never machine-gun the generic hit sample.
+        if (!e.killed) {
+          if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
+          else sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
+        }
         break;
       }
       case "thornsHit":
@@ -1111,7 +1171,10 @@ export class Game {
         const size = arch.drawSize * (TIERS[e.tier as EnemyTier]?.drawMult ?? 1);
         this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
         const comboRate = 1 + Math.min(e.combo - 1, 20) * 0.015;
-        sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+        // Wave-roster bosses die on their authored identity cue, never the generic splat.
+        if (!waveAudio.bossDeath(e.kind, e.x, e.y)) {
+          sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+        }
         this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
         const mult = comboTierFor(e.combo).mult;
         const comboTrauma = big ? 0 : COMBO_TRAUMA * ((mult - 1) / (COMBO_MAX_MULT - 1));
@@ -1163,6 +1226,14 @@ export class Game {
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
         this.spawnPuff(e.x, e.y, 5, e.color);
+        break;
+      case "weaponDrop":
+        // A deliberate drop lands with a small pop and names itself, so every nearby player
+        // (including the dropper) reads what just hit the floor.
+        this.addDecal(e.x, e.y, "#ffb43b", 14, "ring");
+        this.spawnPuff(e.x, e.y, 6, "#ffb43b");
+        this.spawnWorldLabel(e.x, e.y - 22, WEAPONS[e.weapon].name.toUpperCase(), "#ffd166");
+        this.sfxAt("weapon", e.x, e.y, { rate: 0.8, gain: 0.5 });
         break;
       case "bulletWall":
         this.spawnSparks(e.x, e.y, 5, e.aim);
@@ -1230,13 +1301,17 @@ export class Game {
           if (this.isNearCamera(e.x, e.y)) { sfx("enemyHit", { gain: 0.5, rate: 0.6 }); this.addTrauma(TRAUMA_BOSS_SLAM); }
         }
         break;
-      case "bossPhase":
+      case "bossPhase": {
         triggerFlash(this.animForId(e.eid));
-        this.sfxAt("bossSpawn", e.x, e.y);
+        const phaseKind = this.world.enemies.find((en) => en.id === e.eid)?.kind;
+        if (!(phaseKind !== undefined && waveAudio.bossPhase(phaseKind, e.x, e.y, e.eid))) {
+          this.sfxAt("bossSpawn", e.x, e.y);
+        }
         this.addTrauma(TRAUMA_BOSS_FLOOR);
         this.shockwaves.spawn(e.x, e.y, 30, 190, 0.55, "#ffb43b", 4);
         this.flashScreen(255, 180, 59, 0.12, 2.8);
         break;
+      }
       case "bossTransition":
         // Telemetry-bearing beat (enter/exit + queued overflow); the juice rides bossPhase.
         break;
@@ -1272,6 +1347,7 @@ export class Game {
       case "revive":
         // Authoritative (online) revive: the server brought a downed player back. The revived
         // player's own client replays the juice (wsTransport only forwards its own pid events).
+        waveAudio.reviveComplete(e.pid); // channel loop ends; the manifest duck frames the sting
         sfx("revive");
         this.spawnParticles(e.x, e.y, 14, "#8affe0");
         this.shockwaves.spawn(e.x, e.y, 8, 46, 0.4, "#8affe0", 3);
@@ -1288,12 +1364,17 @@ export class Game {
       case "trauma":
         this.addTrauma(e.amount);
         break;
-      case "cue":
+      case "cue": {
+        // Manifest ids on the cue channel route to the wave layer (its own attenuation +
+        // off-camera law — boss locks must stay audible); legacy names keep the near-camera
+        // gate and exact SfxName replay.
+        const isWaveCue = waveAudio.cueAt(e.name, e.x, e.y);
         if (this.isNearCamera(e.x, e.y)) {
-          sfx(e.name as SfxName, { rate: e.rate, gain: e.gain });
+          if (!isWaveCue) sfx(e.name as SfxName, { rate: e.rate, gain: e.gain });
           if (e.trauma > 0) this.addTrauma(e.trauma);
         }
         break;
+      }
     }
   }
 
@@ -1488,29 +1569,65 @@ export class Game {
     return e.kind !== "boss" && e.chill >= FREEZE_AT;
   }
 
-  // Weapon switching (1-9 / Q / scroll): resolves the target slot client-side, then equips
-  // it in the sim. All local — no networking. Switching resets fire cooldown + cancels any
-  // in-progress swing (in the sim).
-  private selectWeapon(index: number) {
+  // ---- inventory action handlers ----
+  // Reached ONLY through the context-gated InputController (keyboard keys, wheel, and the
+  // hotbar UI all dispatch GameActions into it), so context legality lives in one place.
+  // These bodies keep just the structural rules, and route through the ONE transport seam:
+  // solo/co-op apply through the validated sim mutators in LocalTransport; online sends
+  // the authoritative command and the snapshot confirms — there is NO client-local
+  // inventory mutation on the online path.
+
+  // Equip the weapon in hotbar slot `index` (number keys 1-9 via the selectWeapon action).
+  private equipSlot(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
-    this.equipOrRequest(owned[index]);
+    this.transport.requestEquip(owned[index]);
+  }
+
+  // Hotbar activation (tap/click/Enter/Space): an unequipped slot equips; the already-
+  // equipped slot opens its stat drawer instead — weapon info is never hover-only, so
+  // touch and keyboard users reach it too. Number keys keep pure-equip semantics. The
+  // drawer's DROP button re-enters the controller as a dropWeapon action (context is
+  // re-synced after the drawer closes, so it passes the same gate as the Q key).
+  private activateSlot(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
+    const w = WEAPONS[this.weapon];
+    this.hud.openWeaponDrawer({
+      id: w.id,
+      name: w.name,
+      damage: w.damage,
+      rate: 1 / w.fireCd,
+      range: w.melee ? w.melee.reach : w.speed * w.life,
+      isMelee: w.melee !== undefined,
+      onDrop: owned.length > 1
+        ? () => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeapon" }); }
+        : null,
+    });
+  }
+
+  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
+  // the resulting order, because they index the same authoritative ownedWeapons array.
+  private reorderSlots(from: number, to: number) {
+    const n = this.p.ownedWeapons.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    this.transport.requestReorder(from, to);
+  }
+
+  // Drop the currently equipped weapon into the world (Q / drawer DROP). The final weapon
+  // never drops; the authority (sim or server) additionally rejects downed/pending/terminal
+  // states server-side even if a tampered client bypasses the context gate.
+  private dropEquippedWeapon() {
+    if (this.p.ownedWeapons.length < 2) return;
+    this.transport.requestDrop(this.weapon);
   }
 
   private cycleWeapon(dir: number) {
     const owned = this.p.ownedWeapons;
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
-    const next = (cur + dir + owned.length) % owned.length;
-    this.equipOrRequest(owned[next]);
-  }
-
-  // Solo/co-op equip in the local sim (authoritative locally); online sends an authoritative
-  // equip command — the server validates ownership + equips, and the result returns via SelfWire.
-  // There is NO client-local inventory mutation on the online path.
-  private equipOrRequest(weapon: WeaponId) {
-    if (this.mode === "online" && this.wsTransport) this.wsTransport.sendEquip(weapon);
-    else equipWeaponInWorld(this.world, LOCAL_ID, weapon);
+    this.equipSlot((cur + dir + owned.length) % owned.length);
   }
 
 
@@ -1634,6 +1751,22 @@ export class Game {
     }
   }
 
+  private spawnWorldLabel(x: number, y: number, text: string, color: string) {
+    if (this.worldLabels.length >= 12) this.worldLabels.shift();
+    this.worldLabels.push({ x, y, vy: -22, life: 1.1, maxLife: 1.1, text, color });
+  }
+
+  private updateWorldLabels(dt: number) {
+    for (const l of this.worldLabels) {
+      l.y += l.vy * dt;
+      l.vy *= 0.9;
+      l.life -= dt;
+    }
+    if (this.worldLabels.some((l) => l.life <= 0)) {
+      this.worldLabels = this.worldLabels.filter((l) => l.life > 0);
+    }
+  }
+
   private updateParticles(dt: number) {
     for (const p of this.particles) {
       p.x += p.vx * dt; p.y += p.vy * dt;
@@ -1734,7 +1867,10 @@ export class Game {
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
         const entry = this.remoteAnims.get(r.playerId);
         if (entry) triggerRecoil(entry.anim);
-        if (this.isNearCamera(r.x, r.y)) sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
+        if (this.isNearCamera(r.x, r.y)
+          && !waveAudio.weaponFired(r.weapon, { x: r.x, y: r.y, gain: 0.4, beamKey: r.playerId })) {
+          sfx(SHOOT_SFX[r.weapon], { gain: 0.4 });
+        }
       }
       this.remoteShotSeen.set(r.playerId, r.shotSeq);
     }
@@ -1833,14 +1969,19 @@ export class Game {
   }
 
   // Collapse owned blessings by id into level-bearing entries (first-seen order), so the
-  // HUD panel shows one chip per distinct blessing with an xN level badge; the chip text
-  // tracks the current level's effect.
+  // HUD strip shows one icon slot per distinct blessing with level pips; desc tracks the
+  // current level's effect and nextDesc the upgrade delta (null once maxed).
   private collapsedItems() {
-    const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
+    const collapsed = new Map<string, { id: string; name: string; desc: string; nextDesc: string | null; glyph: string; tint: string; rarity: string; count: number }>();
     for (const it of this.currentItemDefs()) {
       const seen = collapsed.get(it.id);
-      if (seen) { seen.count++; seen.desc = itemDesc(it, seen.count); }
-      else collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      if (seen) {
+        seen.count++;
+        seen.desc = itemDesc(it, seen.count);
+        seen.nextDesc = seen.count < MAX_ITEM_LEVEL ? itemDesc(it, seen.count + 1) : null;
+      } else {
+        collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), nextDesc: itemDesc(it, 2), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      }
     }
     return [...collapsed.values()];
   }
@@ -1878,6 +2019,7 @@ export class Game {
     // no-op, so solo behavior is unchanged.
     this.transport.stop();
     audio.setMusic(null);
+    waveAudio.reset();
     sfx("gameOver");
     this.hud.hideStats();
     this.hud.clear();
@@ -2088,6 +2230,7 @@ export class Game {
     this.renderPlayer();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
+    this.renderWorldLabels();
     ctx.restore();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
@@ -2715,6 +2858,27 @@ export class Game {
       ctx.fillText(label, sx - 1, sy + 1);
       ctx.fillStyle = n.color;
       ctx.fillText(label, sx, sy);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  private renderWorldLabels() {
+    if (this.worldLabels.length === 0) return;
+    const { ctx, cam } = this;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 10px "Silkscreen", monospace`;
+    for (const l of this.worldLabels) {
+      const a = l.life / l.maxLife;
+      if (a <= 0) continue;
+      const sx = l.x - cam.x, sy = l.y - cam.y;
+      ctx.globalAlpha = Math.min(1, a * 1.4);
+      ctx.fillStyle = "rgba(8,6,16,0.9)";
+      ctx.fillText(l.text, sx + 1, sy + 1);
+      ctx.fillStyle = l.color;
+      ctx.fillText(l.text, sx, sy);
     }
     ctx.restore();
     ctx.globalAlpha = 1;

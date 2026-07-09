@@ -8,6 +8,11 @@
 import { createHmac } from "node:crypto";
 import { WebSocket } from "ws";
 
+// Mirrors PROTOCOL_VERSION in src/net/protocol.ts (control stays standalone — no game-code
+// imports — per its build boundary). Drift fails the control integration test, which drives
+// a REAL synthetic join against the in-process game server.
+const GS_PROTOCOL_VERSION = 4;
+
 import { redactFields } from "../redact.js";
 import type { GameServerLifecycleAction, GameServerProbe } from "../ports.js";
 import type {

@@ -32,6 +32,10 @@ export type SimEvent =
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }
+  // a player deliberately dropped an owned weapon back into the world (Q / inventory UI);
+  // clients near the spot play a small pop + a weapon-name label over the new pickup.
+  // Positional like lootDrop — no pid, so EVERY nearby client (not just the dropper) sees it
+  | { t: "weaponDrop"; weapon: WeaponId; x: number; y: number }
   // bullets / world
   | { t: "bulletWall"; x: number; y: number; aim: number }
   | { t: "bulletBounce"; x: number; y: number; aim: number; color: string }
