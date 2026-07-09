@@ -26,7 +26,7 @@ Object.assign(globalThis, {
 const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ShopPanel } = await import("../src/ui/shopPanel.js");
-const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView } = await import("../src/ui/shopCopy.js");
+const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView, shopFooterCopy, isResolvedShopStatus } = await import("../src/ui/shopCopy.js");
 const { buildShopState, shopViewerOf } = await import("../src/sim/shop.js");
 const { generateDungeon } = await import("../src/sim/dungeon.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
@@ -457,7 +457,7 @@ function shopCopyTests(): void {
   section("shopActionCopy: the accepted state matrix, exact strings");
   check("affordable reads BUY \u00b7 N COINS", shopActionCopy("buy", 12, 30) === "BUY \u00b7 12 COINS");
   check("a 1-coin price stays grammatical", shopActionCopy("buy", 1, 30) === "BUY \u00b7 1 COIN");
-  check("broke reads NEED N MORE (the exact shortfall)", shopActionCopy("broke", 12, 9) === "NEED 3 MORE");
+  check("broke reads NEED N MORE COINS (the exact shortfall, coins named)", shopActionCopy("broke", 12, 9) === "NEED 3 MORE COINS");
   check("sold reads SOLD", shopActionCopy("sold", 12, 30) === "SOLD");
   check("owned reads OWNED", shopActionCopy("owned", 12, 30) === "OWNED");
   check("maxed blessing reads MAX LV", shopActionCopy("maxLevel", 24, 30) === "MAX LV");
@@ -480,6 +480,22 @@ function shopCopyTests(): void {
   check("blocked chips carry the state word",
     shopChipCopy("sold", 12) === "SOLD" && shopChipCopy("owned", 12) === "OWNED"
     && shopChipCopy("maxLevel", 24) === "MAX LV" && shopChipCopy("fullHealth", 6) === "FULL HEALTH");
+
+  section("status grouping: broke stays LIVE; everything else non-buy is RESOLVED");
+  check("buy and broke are never in the resolved group",
+    !isResolvedShopStatus("buy") && !isResolvedShopStatus("broke"));
+  check("sold/owned/maxLevel/fullHealth/exhausted all resolve",
+    (["sold", "owned", "maxLevel", "fullHealth", "exhausted"] as const).every(isResolvedShopStatus));
+
+  section("shopFooterCopy: the explicit multi-buy framing, state-dependent");
+  const rich = shopViewerOf({ id: "local", coins: 99, hp: 4, maxHp: 6, ownedWeapons: [], ownedItemIds: [] });
+  const poor = shopViewerOf({ id: "local", coins: 0, hp: 4, maxHp: 6, ownedWeapons: [], ownedItemIds: [] });
+  check("your own buy reads BOUGHT ✓ · other stations still open",
+    shopFooterCopy(shop, rich, true) === "BOUGHT \u2713 \u00b7 other stations still open");
+  check("with affordable stations the footer says spend at ANY of them",
+    shopFooterCopy(shop, rich, false) === "Spend at any station you can afford");
+  check("with nothing affordable the footer says earn and come back",
+    shopFooterCopy(shop, poor, false) === "Earn more coins and come back before you descend");
 }
 
 function shopPanelTests(): void {
@@ -509,23 +525,55 @@ function shopPanelTests(): void {
     && new RegExp(`^POWER [\\d.]+.* \\u00b7 ${expectedStats.cadence.band} \\u00b7 ${expectedStats.reach.band} \\u00b7 ${expectedStats.coverage.kind}$`).test(lineTexts[1]));
   check("the action row is a real focusable button with a live region",
     buy.tagName === "BUTTON" && buy.getAttribute("aria-live") === "polite" && document.activeElement === buy);
-  check("affordable: BUY \u00b7 12 COINS, enabled", buy.textContent === "BUY \u00b7 12 COINS" && !buy.disabled);
+  const buyLabel = () => buy.querySelector(".shop-buy-label")?.textContent ?? "";
+  check("affordable: BUY \u00b7 12 COINS, enabled, no glyph, live classes only",
+    buyLabel() === "BUY \u00b7 12 COINS" && !buy.disabled
+    && buy.querySelector(".shop-buy-glyph") === null
+    && !buy.classList.contains("resolved") && !buy.classList.contains("broke"));
+  check("the header anchors the viewer's live balance (aria-live on change only)",
+    root.querySelector(".shop-coins")?.textContent === "YOUR COINS: 30"
+    && root.querySelector(".shop-coins")?.getAttribute("aria-live") === "polite");
+  check("the footer frames the multi-buy contract while stations are affordable",
+    root.querySelector(".shop-foot")?.textContent === "Spend at any station you can afford");
 
   buy.click();
   check("clicking BUY sends exactly one buy intent for the focused slot",
     bought.length === 1 && bought[0] === weapon.id);
 
-  // The authoritative claim lands (a teammate won the race): the open panel re-renders
-  // to an honest SOLD and the buy control disables — no ambiguous depletion.
+  // The buyer's own claim lands: the panel STAYS OPEN, resolves to OWNED, and the footer
+  // reinforces "keep shopping" — a buy is never a silent close.
+  weapon.soldTo = "local";
+  panel.update(shopPanelView(shop, weapon, shopViewerOf({
+    id: "local", coins: 18, hp: 4, maxHp: 6, ownedWeapons: ["pistol", weapon.weapon!], ownedItemIds: [],
+  }), mods, true));
+  check("your own buy keeps the panel open and resolves to OWNED",
+    panel.isOpen && buyLabel() === "OWNED" && buy.disabled);
+  check("the resolved row wears the muted group's check (distinct from broke in grayscale)",
+    buy.classList.contains("resolved") && buy.querySelector(".shop-buy-glyph")?.textContent === "\u2713"
+    && buy.querySelector(".shop-buy-glyph")?.getAttribute("aria-hidden") === "true");
+  check("the BOUGHT ✓ footer names the other stations still open",
+    root.querySelector(".shop-foot")?.textContent === "BOUGHT \u2713 \u00b7 other stations still open"
+    && root.querySelector(".shop-foot")!.classList.contains("bought"));
+  check("the balance ticks down after the buy", root.querySelector(".shop-coins")?.textContent === "YOUR COINS: 18");
+
+  // The authoritative claim lands for a TEAMMATE (they won the race): the open panel
+  // re-renders to an honest SOLD and the buy control disables — no ambiguous depletion.
   weapon.soldTo = "teammate";
   panel.update(shopPanelView(shop, weapon, viewerOf(30), mods));
-  check("a mid-look claim flips the row to SOLD and disables it", buy.textContent === "SOLD" && buy.disabled);
+  check("a mid-look claim flips the row to SOLD and disables it",
+    buyLabel() === "SOLD" && buy.disabled && buy.classList.contains("resolved"));
   buy.click();
   check("a disabled row sends nothing", bought.length === 1);
 
   weapon.soldTo = null;
   panel.update(shopPanelView(shop, weapon, viewerOf(3), mods));
-  check("broke re-render reads NEED 9 MORE, disabled", buy.textContent === "NEED 9 MORE" && buy.disabled);
+  check("broke re-render reads NEED 9 MORE COINS, disabled", buyLabel() === "NEED 9 MORE COINS" && buy.disabled);
+  check("broke is the LIVE unaffordable group: coin glyph, .broke, never .resolved",
+    buy.classList.contains("broke") && !buy.classList.contains("resolved")
+    && buy.querySelector(".shop-buy-glyph canvas") !== null);
+  check("the balance follows the viewer live", root.querySelector(".shop-coins")?.textContent === "YOUR COINS: 3");
+  check("with nothing affordable the footer says earn and come back",
+    root.querySelector(".shop-foot")?.textContent === "Earn more coins and come back before you descend");
 
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
   check("Escape closes and fires onClose exactly once", !panel.isOpen && closes === 1);

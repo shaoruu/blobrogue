@@ -442,12 +442,16 @@
       /* --- Patch's shop panel: the compact interact panel (world keeps rendering behind it).
          Anchored above the hotbar so it never covers the buyer or the pedestal row; the
          action row is the ONE purchase control, and its disabled states carry the exact
-         copy matrix (NEED N MORE / SOLD / OWNED / MAX LV / FULL HEALTH). --- */
+         copy matrix (NEED N MORE COINS / SOLD / OWNED / MAX LV / FULL HEALTH). The two
+         non-buy groups must never look alike (incl. grayscale + color-blind): .broke is
+         the LIVE amber-OUTLINE + coin glyph ("for sale, fund it"), .resolved is the muted
+         flat + check ("settled for you"). --- */
       .shop-panel { position: fixed; left: 50%; bottom: 118px; transform: translateX(-50%); z-index: 9; }
       .shop-panel.hidden { display: none; }
       .shop-card { width: 302px; background: #0d0819; color: #ffe6b0; padding: 12px 14px; text-align: left;
         box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px #2a2140, 0 5px 0 rgba(5,3,11,0.5); font-family: var(--f-ui), monospace; }
       .shop-head { display: flex; gap: 10px; align-items: center; }
+      .shop-coins { margin: 0 0 8px; font-size: 9px; letter-spacing: 1.5px; color: var(--amber-hi); text-align: right; }
       .shop-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; font-size: 22px; line-height: 1;
         color: var(--cream); background: color-mix(in srgb, var(--t, #ffb43b) 22%, #0d0819); box-shadow: inset 0 0 0 2px var(--t, #2a2140); }
       .shop-icon img { width: 36px; height: 36px; image-rendering: pixelated; }
@@ -460,14 +464,22 @@
       .shop-ownership.shared { color: var(--amber); }
       .shop-lines { margin: 6px 0 10px; }
       .shop-lines p { margin: 2px 0; font-family: var(--f-num), monospace; font-size: 15px; line-height: 1.25; color: #cbb6d6; }
-      .shop-buy { display: block; width: 100%; padding: 9px 10px; border: 0; cursor: pointer; font-family: var(--f-logo), monospace;
+      .shop-buy { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; padding: 9px 10px; border: 0; cursor: pointer; font-family: var(--f-logo), monospace;
         font-size: 11px; letter-spacing: 1px; color: var(--dun-0); background: var(--amber);
         box-shadow: inset 0 0 0 2px #05030b, 0 3px 0 rgba(5,3,11,0.5); }
       .shop-buy:hover:not(:disabled) { background: var(--amber-hi); }
       .shop-buy:focus-visible { outline: 3px solid #ffe9b0; outline-offset: 2px; }
-      .shop-buy:disabled { cursor: default; background: #241a38; color: #9a8fb5; }
-      .shop-buy.broke:disabled { color: #ff8a7a; }
-      .shop-card .hint { margin: 8px 0 0; font-size: 8px; letter-spacing: 1.5px; color: var(--dun-4); text-align: center; }
+      .shop-buy:disabled { cursor: default; }
+      .shop-buy .shop-buy-glyph { display: inline-flex; align-items: center; line-height: 1; }
+      /* unaffordable = still for sale: amber OUTLINE (never filled, never the resolved grey) */
+      .shop-buy.broke { background: #0d0819; color: var(--amber);
+        box-shadow: inset 0 0 0 2px var(--amber), 0 3px 0 rgba(5,3,11,0.5); }
+      /* settled for this viewer (sold/owned/max/full/spent): muted flat + check */
+      .shop-buy.resolved { background: #241a38; color: #9a8fb5;
+        box-shadow: inset 0 0 0 2px #05030b, 0 3px 0 rgba(5,3,11,0.5); }
+      .shop-foot { margin: 8px 0 0; font-size: 8px; letter-spacing: 1px; color: #cbb6d6; text-align: center; min-height: 10px; }
+      .shop-foot.bought { color: var(--grn); }
+      .shop-card .hint { margin: 6px 0 0; font-size: 8px; letter-spacing: 1.5px; color: var(--dun-4); text-align: center; }
 
       /* === MENU SHELL (fixed-geometry launchpad) — overrides earlier menu rules ===
          The home shell renders SYNCHRONOUSLY before any auth/network work, so every box

@@ -12,7 +12,8 @@
 // announced), keyboard-first (Enter/Space buys via the focused button), nothing hover-only.
 
 import type { ShopPanelView } from "./shopCopy.js";
-import { itemIconEl } from "../game/hudIcons.js";
+import { isResolvedShopStatus } from "./shopCopy.js";
+import { itemIconEl, pxIcon, ICONS } from "../game/hudIcons.js";
 import { weaponIconSrc } from "../game/assets.js";
 import { FocusScope, currentFocus } from "./focus.js";
 
@@ -25,6 +26,8 @@ export class ShopPanel {
   private ownershipEl: HTMLElement;
   private linesEl: HTMLElement;
   private buyEl: HTMLButtonElement;
+  private coinsEl: HTMLElement;
+  private footEl: HTMLElement;
   private onBuy: ((slotId: number) => void) | null = null;
   private onClose: (() => void) | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -40,6 +43,14 @@ export class ShopPanel {
 
     const card = document.createElement("div");
     card.className = "shop-card";
+
+    // The viewer's live balance leads the card so NEED N MORE COINS is always anchored
+    // to a visible number. aria-live announces only actual balance changes (render
+    // guards the write), never steady-state re-renders.
+    this.coinsEl = document.createElement("p");
+    this.coinsEl.className = "shop-coins";
+    this.coinsEl.setAttribute("aria-live", "polite");
+    card.appendChild(this.coinsEl);
 
     const head = document.createElement("div");
     head.className = "shop-head";
@@ -79,6 +90,12 @@ export class ShopPanel {
     this.buyEl.setAttribute("aria-live", "polite");
     this.buyEl.addEventListener("click", () => this.buy());
     card.appendChild(this.buyEl);
+
+    // The multi-buy framing footer: always populated (no layout shift), state-dependent
+    // copy — BOUGHT ✓ after your own buy, otherwise spend/earn guidance.
+    this.footEl = document.createElement("p");
+    this.footEl.className = "shop-foot";
+    card.appendChild(this.footEl);
 
     const hint = document.createElement("p");
     hint.className = "hint";
@@ -147,9 +164,39 @@ export class ShopPanel {
       return line;
     }));
     this.renderIcon(view);
-    this.buyEl.textContent = view.action;
+    this.renderAction(view);
+    const coinsText = `YOUR COINS: ${view.coins}`;
+    if (this.coinsEl.textContent !== coinsText) this.coinsEl.textContent = coinsText;
+    this.footEl.textContent = view.footer;
+    this.footEl.classList.toggle("bought", view.isJustBought);
+  }
+
+  // The one action row, rendered as its visual group: BUY (live, filled amber), BROKE
+  // (live but unaffordable — amber outline + coin glyph, never the resolved grey), or
+  // RESOLVED (muted + check: bought/claimed/maxed/full/spent). Glyphs are aria-hidden;
+  // the copy itself carries the meaning for the live region.
+  private renderAction(view: ShopPanelView): void {
+    const isResolved = isResolvedShopStatus(view.status);
+    const label = document.createElement("span");
+    label.className = "shop-buy-label";
+    label.textContent = view.action;
+    if (view.status === "broke") {
+      const coin = document.createElement("span");
+      coin.className = "shop-buy-glyph";
+      coin.setAttribute("aria-hidden", "true");
+      coin.appendChild(pxIcon(ICONS.coin.map, ICONS.coin.pal, 1.5));
+      this.buyEl.replaceChildren(coin, label);
+    } else if (isResolved) {
+      const check = document.createElement("span");
+      check.className = "shop-buy-glyph";
+      check.setAttribute("aria-hidden", "true");
+      check.textContent = "\u2713";
+      this.buyEl.replaceChildren(check, label);
+    } else {
+      this.buyEl.replaceChildren(label);
+    }
     this.buyEl.disabled = !view.isBuyable;
-    this.buyEl.className = `shop-buy ${view.status}`;
+    this.buyEl.className = `shop-buy ${view.status}${isResolved ? " resolved" : ""}`;
   }
 
   private renderIcon(view: ShopPanelView): void {

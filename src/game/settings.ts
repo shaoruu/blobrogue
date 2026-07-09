@@ -6,6 +6,10 @@
 
 const MUTE_KEY = "blobrogue.muted";
 const SHAKE_KEY = "blobrogue.shake";
+// The out-of-the-box screen-shake level for players who never touched the slider —
+// authored calm (live playtest feedback) while keeping game-feel. A stored choice,
+// whatever it is, always wins over this.
+const SHAKE_DEFAULT = 0.55;
 const AUTOFIRE_KEY = "blobrogue.autofire";
 // Volume PERCEPTUAL CURVE: sliders store a position 0..1 and the audible gain is
 // position² (equal-ish loudness steps across the whole travel; 0 stays exactly 0).
@@ -155,7 +159,7 @@ export class Settings {
 
   constructor() {
     this.muted = readBool(MUTE_KEY, false);
-    this.shake = clamp01(readNumber(SHAKE_KEY, 1));
+    this.shake = clamp01(readNumber(SHAKE_KEY, SHAKE_DEFAULT));
     this.autofire = readBool(AUTOFIRE_KEY, false) || readForceAutofire();
     this.master = readVolumePos(MASTER_KEY, LEGACY_MASTER_KEY, DEFAULT_MASTER_POS);
     this.music = readVolumePos(MUSIC_KEY, LEGACY_MUSIC_KEY, DEFAULT_MUSIC_POS);
