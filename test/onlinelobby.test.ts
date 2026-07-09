@@ -102,6 +102,19 @@ async function main(): Promise<void> {
     lobby.leave();
   }
 
+  section("heartbeat carries the CURRENT identity (a lobby color change reaches the roster)");
+  {
+    const calls: Call[] = [];
+    const client = fakeConvex(calls);
+    const session = new Session(client);
+    session.setColorIndex(1);
+    const lobby = new OnlineLobby(client, session);
+    await lobby.create();
+    const first = calls.find((c) => c.fn === "rooms:heartbeat");
+    check("the join-time beat carries the current pick", first !== undefined && first.args.colorIndex === 1, JSON.stringify(first?.args));
+    lobby.leave();
+  }
+
   section("expectedWorldId: the client-side assertion target matches the shared mapping");
   {
     const calls: Call[] = [];

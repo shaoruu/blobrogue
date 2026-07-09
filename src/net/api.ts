@@ -121,7 +121,7 @@ export const api = {
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
     reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:reopen"),
-    heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:heartbeat"),
+    heartbeat: makeFunctionReference<"mutation", { roomId: string; playerId: string; name?: string; colorIndex?: number }, null>("rooms:heartbeat"),
     descend: makeFunctionReference<"mutation", { roomId: string; floor: number }, null>("rooms:descend"),
     leave: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:leave"),
   },

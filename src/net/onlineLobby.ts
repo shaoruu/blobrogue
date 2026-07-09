@@ -134,11 +134,18 @@ export class OnlineLobby {
 
   // Keep our presence row + the room's activity fresh for the whole session (lobby AND the
   // run itself — online play has no gameplay presence sync, so this is the only keepalive).
+  // The beat carries the CURRENT identity, so a name/color changed while sitting in the
+  // lobby reaches everyone's roster within one beat — the roster and the ticket identity
+  // the next run mints can never disagree.
   private startHeartbeat(): void {
     this.stopHeartbeat();
     const beat = () => {
       if (!this.roomId || !this.selfPlayerId) return;
-      this.client.mutation(api.rooms.heartbeat, { roomId: this.roomId, playerId: this.selfPlayerId }).catch(() => {});
+      this.client.mutation(api.rooms.heartbeat, {
+        roomId: this.roomId, playerId: this.selfPlayerId,
+        ...(this.session.name ? { name: this.session.name } : {}),
+        ...this.colorArg(),
+      }).catch(() => {});
     };
     this.heartbeatTimer = setInterval(beat, HEARTBEAT_MS);
     beat();

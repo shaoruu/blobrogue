@@ -238,17 +238,24 @@ export const reopen = mutation({
 // Keepalive while a player sits in a lobby or plays on the game server: refreshes their
 // presence row (the roster hides rows stale for >12s) and the room's lastActivity (so open
 // public rooms stay quick-play matchable). Classic co-op refreshes through presence.update
-// instead; online play has no gameplay presence sync, hence this explicit heartbeat.
+// instead; online play has no gameplay presence sync, hence this explicit heartbeat. The
+// beat also carries the CURRENT identity (name/color pick): a color chosen while sitting in
+// the lobby reaches the roster within one beat, so the roster dot and the ticket identity
+// the next run will carry never disagree.
 export const heartbeat = mutation({
-  args: { roomId: v.id("rooms"), playerId: v.id("players") },
-  handler: async (ctx, { roomId, playerId }) => {
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), name: v.optional(v.string()), colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { roomId, playerId, name, colorIndex }) => {
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
       .unique();
     if (!row) return;
     const now = Date.now();
-    await ctx.db.patch(row._id, { updatedAt: now });
+    await ctx.db.patch(row._id, {
+      updatedAt: now,
+      ...(name !== undefined && name.length > 0 ? { name } : {}),
+      ...(colorIndex !== undefined ? { colorIndex } : {}),
+    });
     const room = await ctx.db.get(roomId);
     if (room && room.status !== "ended") await ctx.db.patch(roomId, { lastActivity: now });
   },
