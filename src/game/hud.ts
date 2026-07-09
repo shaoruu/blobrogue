@@ -314,12 +314,12 @@ export class Hud {
       const d = this.drag;
       if (!d || e.pointerId !== d.pointerId) return;
       e.stopPropagation();
-      const wasDrag = d.isActive;
+      const isDragRelease = d.isActive;
       const from = d.fromIndex;
       // Gap -> final index: removing the source first shifts every later gap down by one.
       const to = d.gap > from ? d.gap - 1 : d.gap;
       this.teardownDrag(slot);
-      if (!wasDrag) this.hotbarActions?.onSlotActivate(index);
+      if (!isDragRelease) this.hotbarActions?.onSlotActivate(index);
       else if (to !== from) this.hotbarActions?.onSlotReorder(from, to);
     });
     slot.addEventListener("pointercancel", () => this.teardownDrag(slot));
