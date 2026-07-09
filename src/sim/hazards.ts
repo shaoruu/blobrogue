@@ -285,8 +285,10 @@ function isOpenFloor(d: Dungeon, tx: number, ty: number): boolean {
 }
 
 // A tile a hazard may claim: open floor, unclaimed, outside the spawn/exit safety radii,
-// and off every room center (+ its 4-neighborhood — chest/dealer stock lands there).
-// Boss floors never reach placement at all (their budget is zero: boss-authored only).
+// and off every room center's 2-tile neighborhood — chests, dealer stalls and their
+// side stock all land on that ground, and shopping must never hurt (the co-op economy
+// suite stands a full party on the stall row). Boss floors never reach placement at all
+// (their budget is zero: boss-authored only).
 function isPlaceable(ctx: PlacementCtx, tx: number, ty: number): boolean {
   const { d } = ctx;
   if (!isOpenFloor(d, tx, ty)) return false;
@@ -294,7 +296,7 @@ function isPlaceable(ctx: PlacementCtx, tx: number, ty: number): boolean {
   if (Math.max(Math.abs(tx - d.spawn.x), Math.abs(ty - d.spawn.y)) <= SPAWN_CLEAR) return false;
   if (Math.max(Math.abs(tx - d.exit.x), Math.abs(ty - d.exit.y)) <= EXIT_CLEAR) return false;
   for (const room of d.rooms) {
-    if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) return false;
+    if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 2) return false;
   }
   return true;
 }
@@ -361,6 +363,10 @@ function placeRow(ctx: PlacementCtx, kind: FloorHazardKind, room: Room, maxLen: 
     for (let i = 0; i < len; i++) {
       const tx = tx0 + (isHorizontal ? i : 0);
       const ty = ty0 + (isHorizontal ? 0 : i);
+      // A row never runs past its room: every cell must stay under the room's own
+      // overlap arbiter — a tail bleeding into the neighbor room (or a corridor) would
+      // be pressure that room's schedule never arbitrated.
+      if (tx >= room.x + room.w || ty >= room.y + room.h) break;
       if (!isPlaceable(ctx, tx, ty)) break;
       cells.push([tx, ty]);
     }

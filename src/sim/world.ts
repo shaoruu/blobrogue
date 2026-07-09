@@ -530,7 +530,18 @@ function placeDealerStock(w: WorldState): void {
   const d = w.dungeon;
   if (d.rooms.length < 3) return;
   const rng = new Rng((w.seed ^ 0x0dea1e12) + w.floor * 68927);
-  const room = d.rooms.find((r) => r.kind === "treasure") ?? d.rooms[1 + rng.int(0, d.rooms.length - 3)];
+  // The stall row needs clean ground: never a sealed vault's sanctum (its center IS the
+  // chest tile — a buyer's touch would pop the chest mid-purchase) and never any room
+  // whose center already holds a chest, for the same reason.
+  const hasCenterChest = (r: Room): boolean =>
+    w.chests.some((c) => Math.floor(c.x / TILE) === r.cx && Math.floor(c.y / TILE) === r.cy);
+  const treasure = d.rooms.find((r) => r.kind === "treasure");
+  let room = treasure && treasure.shape !== "vault" && !hasCenterChest(treasure) ? treasure : null;
+  if (!room) {
+    const candidates = d.rooms.slice(1, d.rooms.length - 1).filter((r) => r.shape !== "vault" && !hasCenterChest(r));
+    if (candidates.length === 0) return;
+    room = candidates[rng.int(0, candidates.length - 1)];
+  }
   const stock = w.encounterPlayers;
   for (let i = 0; i < stock; i++) {
     w.pickups.push({

@@ -457,6 +457,10 @@ function quietWorld(seed: number, floor: number): WorldState {
   const w = createWorld(seed, floor);
   w.enemies = [];
   w.pendingSpawns = [];
+  // Props too: these suites probe hazard mechanics with players teleported next to a
+  // hazard, and a crate in the approach lane would block the probe (moveCircle is
+  // prop-aware), turning a mechanic test into a geometry lottery.
+  w.props = [];
   return w;
 }
 
@@ -557,12 +561,17 @@ function riftPullTests(): void {
   const p = w.players.get(LOCAL_ID)!;
   const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
   p.invuln = 1e9; // isolate the pull from damage
+  // Park on whichever cardinal side of the rift is open floor (placement can hug walls).
+  const d = w.dungeon;
+  const off = RIFT_PULL_RADIUS * 0.7;
+  const [ox, oy] = ([[-off, 0], [off, 0], [0, -off], [0, off]] as const)
+    .find(([dx, dy]) => d.tiles[Math.floor((cy + dy) / TILE) * d.w + Math.floor((cx + dx) / TILE)] === 0) ?? [-off, 0];
   let isPulled = false;
   let isIdleStill = true;
   for (let t = 0; t < 60 * 10; t++) {
     const ph = floorHazardPhaseAt(h, w.floorHazardClock + DT);
-    p.x = cx - RIFT_PULL_RADIUS * 0.7;
-    p.y = cy;
+    p.x = cx + ox;
+    p.y = cy + oy;
     const before = Math.hypot(p.x - cx, p.y - cy);
     step(w, t);
     const after = Math.hypot(p.x - cx, p.y - cy);
