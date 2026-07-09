@@ -20,6 +20,7 @@
 // scattered through world.ts.
 
 import type { PetKind } from "./types.js";
+import { BURN_DMG_STACK } from "./constants.js";
 
 export const PET_KINDS: readonly PetKind[] = ["ember_pup", "lantern_wisp", "bonebird"];
 
@@ -141,6 +142,32 @@ export const PET_BALANCE = {
     markDamageMult: 1.08, // marked enemies take +8% damage from PLAYER strikes (§5 ceiling)
   },
 } as const;
+
+// The exact bounded numbers a companion brings, derived STRAIGHT from PET_BALANCE so the
+// UI can never drift from the sim (the UI Director gate: power is stated in numbers, never
+// hidden in flavor copy). Two short lines per pet: what it does, and its exact cadence/reach.
+export function petStats(kind: PetKind): [string, string] {
+  if (kind === "ember_pup") {
+    const P = PET_BALANCE.ember_pup;
+    const burnTotal = P.burnSecs * BURN_DMG_STACK;
+    return [
+      `nip: ${P.nipDamage} dmg + ${burnTotal} burn over ${P.burnSecs}s`,
+      `every ${P.nipCd}s \u00b7 hunts within ${P.engageRange}px of you`,
+    ];
+  }
+  if (kind === "bonebird") {
+    const P = PET_BALANCE.bonebird;
+    return [
+      `peck: ${P.peckDamage} dmg every ${P.peckCd}s \u00b7 ${P.range}px reach`,
+      `mark: +${Math.round((P.markDamageMult - 1) * 100)}% player dmg for ${P.markSecs}s`,
+    ];
+  }
+  const P = PET_BALANCE.lantern_wisp;
+  return [
+    `reveals loot within ${P.revealRadius}px of it`,
+    `pulls coins ${P.pullSpeed}px/s inside ${P.pullRadius}px \u00b7 0 dmg`,
+  ];
+}
 
 // Hard ceilings on pet contribution — the §5 table of
 // docs/specs/blobrogue_STUDIO_BALANCE_GATE.md, tightened to the severe end of the owner's

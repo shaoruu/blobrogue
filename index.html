@@ -334,18 +334,32 @@
       .swatch:hover{ transform:translateY(-1px); box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }
       .swatch:active{ transform:translateY(1px); box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }
       .swatch.sel, .swatch.sel:hover{ box-shadow:inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--cream); }
-      /* --- Companion pick (right column identity + room lobby) --- */
-      .pets{ display:flex; flex-direction:column; gap:6px; }
-      .pet-btn{ display:flex; flex-direction:column; align-items:stretch; gap:4px; width:100%; min-width:0; padding:8px 10px; text-transform:none; }
-      .pet-btn .pet-row{ display:flex; align-items:center; gap:9px; }
-      .pet-btn .pet-dot{ flex:0 0 auto; width:12px; height:12px; box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }
-      .pet-btn .pet-name{ font-family:var(--f-ui); font-size:11px; letter-spacing:.5px; }
-      .pet-btn .pet-state{ margin-left:auto; font-family:var(--f-ui); font-size:8px; letter-spacing:1px; text-transform:uppercase; opacity:.85; white-space:nowrap; }
-      .pet-btn .pet-sub{ font-family:var(--f-ui); font-size:8px; letter-spacing:.4px; text-align:left; opacity:.75; text-shadow:none; white-space:normal; line-height:1.5; }
-      .pet-btn.locked{ opacity:.5; }
-      .pet-btn.sel{ --c:#46356b; --c-hi:#5a4788; --c-lo:#2a2140; --tx:#fff;
+      /* --- Companion panel (title identity column + room lobby; Amber Camp station later) --- */
+      .pets-panel{ display:flex; flex-direction:column; gap:8px; text-align:left; }
+      .pets-head{ display:flex; align-items:baseline; gap:8px; }
+      .pets-title{ font-family:var(--f-ui); font-size:11px; letter-spacing:2px; color:var(--amber); margin:0; text-transform:uppercase; }
+      .pets-count{ margin-left:auto; font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; white-space:nowrap; }
+      .pets-grid{ display:flex; flex-direction:column; gap:7px; }
+      .pet-card{ display:flex; align-items:center; gap:10px; padding:8px; min-height:64px; cursor:pointer;
+        background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .pet-card:hover{ box-shadow:inset 0 0 0 2px var(--dun-4); }
+      .pet-card.sel{ box-shadow:inset 0 0 0 2px var(--amber); }
+      .pet-card.locked{ cursor:default; }
+      .pet-card.locked:hover{ box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .pet-preview{ flex:0 0 auto; width:64px; height:64px; image-rendering:pixelated; background:#080512; box-shadow:inset 0 0 0 2px rgba(5,3,11,.8); }
+      .pet-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+      .pet-name{ font-family:var(--f-ui); font-size:11px; letter-spacing:1px; color:var(--cream); text-transform:uppercase; }
+      .pet-card.locked .pet-name{ color:var(--dun-4); }
+      .pet-behavior{ font-family:var(--f-ui); font-size:8px; letter-spacing:.4px; color:var(--dun-4); margin:0; line-height:1.5; }
+      .pet-exact{ font-family:var(--f-ui); font-size:8px; letter-spacing:.4px; color:#b8ac96; margin:0; line-height:1.6; white-space:pre-line; }
+      .pet-clue{ font-family:var(--f-ui); font-size:8px; letter-spacing:.4px; color:var(--dun-4); margin:0; line-height:1.5; }
+      /* Controller/mobile target: the button never drops under 44px and the whole card clicks. */
+      .pet-equip{ flex:0 0 auto; min-width:88px; min-height:44px; font-size:9px; padding:8px 10px; letter-spacing:1px; }
+      .pet-equip.on{ --c:#46356b; --c-hi:#5a4788; --c-lo:#2a2140; --tx:#fff;
         box-shadow: inset 0 4px 0 0 var(--c-hi), inset 0 -5px 0 0 var(--c-lo), inset 0 0 0 3px #ffd166, 0 6px 0 0 #05030b, 0 6px 0 3px #120a24; }
-      .pet-note{ font-family:var(--f-ui); font-size:9px; letter-spacing:.4px; color:var(--dun-4); text-align:left; margin:0; min-height:11px; }
+      .pet-equip:disabled{ opacity:.45; cursor:default; transform:none; }
+      .pets-foot{ font-family:var(--f-ui); font-size:8px; letter-spacing:.4px; color:var(--dun-4); margin:0; line-height:1.6; }
+      .pet-note{ font-family:var(--f-ui); font-size:9px; letter-spacing:.4px; color:var(--amber); text-align:left; margin:0; min-height:11px; }
       .pet-note:empty{ display:none; }
       .playerrow .pet-chip{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); margin-left:auto; white-space:nowrap; }
       /* --- Optional Google sign-in (right column identity) --- */

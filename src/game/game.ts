@@ -6,6 +6,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName, PetPose } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { PETS, PET_BALANCE } from "../sim/pets.js";
+import { drawPetBody } from "./petArt.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
@@ -3059,46 +3060,15 @@ export class Game {
     }
   }
 
-  // Procedural pet bodies until the authored sprites land (assets.ts PET_SOURCES): each
-  // kind gets a distinct silhouette drawn in code — the same no-extra-art philosophy as
-  // the muzzle flashes and telegraphs, never a fake placeholder PNG.
+  // Procedural pet bodies until the authored sprites land (assets.ts PET_SOURCES). The
+  // shapes live in petArt.ts — one body shared with the companion panel's previews, so
+  // the pet a player equips is exactly the pet that follows them.
   private renderPetBody(pet: Pet, sx: number, sy: number, pose: PetPose, xf: Xform, tint: string) {
     const { ctx } = this;
     ctx.save();
     ctx.translate(sx + xf.ox, sy + xf.oy);
     ctx.scale(pose.facing * xf.sx, xf.sy);
-    if (pet.kind === "ember_pup") {
-      ctx.fillStyle = tint;
-      ctx.beginPath(); ctx.arc(0, 0, 9, 0, 6.28); ctx.fill();          // body
-      ctx.beginPath(); ctx.arc(7, -3, 5, 0, 6.28); ctx.fill();         // snout
-      ctx.beginPath();                                                  // ear
-      ctx.moveTo(-2, -7); ctx.lineTo(2, -13); ctx.lineTo(5, -6); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = "#3a1c08";
-      ctx.beginPath(); ctx.arc(8, -4, 1.4, 0, 6.28); ctx.fill();       // eye
-      ctx.fillStyle = "#ffd27a";
-      ctx.beginPath();                                                  // tail flame tip
-      ctx.moveTo(-8, 1); ctx.lineTo(-13, -3); ctx.lineTo(-9, 5); ctx.closePath(); ctx.fill();
-    } else if (pet.kind === "bonebird") {
-      ctx.fillStyle = tint;
-      ctx.beginPath(); ctx.ellipse(0, 0, 8, 6.5, 0, 0, 6.28); ctx.fill();  // body
-      ctx.beginPath(); ctx.arc(6, -5, 4.5, 0, 6.28); ctx.fill();           // head
-      ctx.fillStyle = "#b9a24f";
-      ctx.beginPath();                                                      // beak
-      ctx.moveTo(9, -5); ctx.lineTo(15, -4); ctx.lineTo(9, -2); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = "#2a2438";
-      ctx.beginPath(); ctx.arc(7, -6, 1.3, 0, 6.28); ctx.fill();            // eye
-      ctx.fillStyle = "#c9bfa8";
-      const flap = Math.sin(this.animClock * 10) * 3;
-      ctx.beginPath(); ctx.ellipse(-2, -2, 5, 3, -0.5 + flap * 0.08, 0, 6.28); ctx.fill(); // wing
-    } else {
-      // Lantern wisp: a floating core inside its own glow (drawn by renderWispLight).
-      ctx.fillStyle = "#eafaff";
-      ctx.beginPath(); ctx.arc(0, 0, 5, 0, 6.28); ctx.fill();
-      ctx.strokeStyle = tint;
-      ctx.lineWidth = 1.5;
-      ctx.globalAlpha = 0.8;
-      ctx.beginPath(); ctx.arc(0, 0, 7.5 + Math.sin(this.animClock * 5) * 1.2, 0, 6.28); ctx.stroke();
-    }
+    drawPetBody(ctx, pet.kind, tint, this.animClock);
     ctx.restore();
   }
 

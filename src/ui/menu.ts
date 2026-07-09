@@ -7,8 +7,10 @@ import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
-import { PETS, PET_KINDS, isPetKind } from "../sim/pets.js";
+import { PETS, isPetKind } from "../sim/pets.js";
 import type { PetKind } from "../sim/types.js";
+import { createCompanionPanel } from "./companionPanel.js";
+import type { CompanionPanel } from "./companionPanel.js";
 import { createSettingsControls } from "./settings.js";
 
 export interface MenuHost {
@@ -52,7 +54,9 @@ export class Menu {
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
   private syncColorRow: (() => void) | null = null;
-  private petBox: HTMLElement | null = null;
+  // Live companion panels (title identity column + room lobby). Each runs a preview
+  // animation loop, so panels replaced out of the DOM must be destroyed (prunePanels).
+  private petPanels: CompanionPanel[] = [];
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -64,6 +68,7 @@ export class Menu {
 
   hide() {
     this.teardownLobby();
+    this.prunePanels(false);
     this.overlay.classList.add("hidden");
   }
 
@@ -71,12 +76,23 @@ export class Menu {
     this.teardownLobby();
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
+    this.prunePanels(true);
   }
 
   private teardownLobby() {
     if (this.unsub) { this.unsub(); this.unsub = null; }
     if (this.countupRaf) { cancelAnimationFrame(this.countupRaf); this.countupRaf = 0; }
     if (this.gameOverKeys) { window.removeEventListener("keydown", this.gameOverKeys); this.gameOverKeys = null; }
+  }
+
+  // Stop the preview loops of companion panels that are no longer mounted (keepConnected)
+  // or of every panel (leaving the menu for a run).
+  private prunePanels(keepConnected: boolean) {
+    this.petPanels = this.petPanels.filter((p) => {
+      if (keepConnected && p.root.isConnected) return true;
+      p.destroy();
+      return false;
+    });
   }
 
   async showTitle() {
@@ -197,57 +213,21 @@ export class Menu {
     return wrap;
   }
 
-  // The companion picker: the full pet roster with live lock state off the profile.
-  // Unlocked rows equip/unequip (the mutation re-validates unlock ownership server-side);
-  // locked rows surface their exact milestone; guests see everything locked behind a
-  // sign-in nudge — pets are ACCOUNT progression, deliberately nothing local to fake.
+  // The companion panel (src/ui/companionPanel.ts — the UI Director's shippable picker,
+  // host-agnostic so the same component later mounts inside the Amber Camp station). The
+  // menu is just a host: state from the validated profile, equips through the
+  // server-validated mutation. Mounted on the title identity column AND the room lobby.
   private petSection(): HTMLElement {
-    const box = el("div", "namerow");
-    this.renderPetPicker(box);
-    this.petBox = box;
-    return box;
-  }
-
-  private renderPetPicker(box: HTMLElement) {
-    const profile = this.session.profile;
-    const isAccount = profile?.isAccount ?? false;
-    const unlocked = new Set(profile?.unlockedPets ?? []);
-    const list = el("div", "pets");
-    const note = el("p", "pet-note");
-    let isBusy = false;
-    for (const kind of PET_KINDS) {
-      const def = PETS[kind];
-      const isUnlocked = isAccount && unlocked.has(kind);
-      const isActive = this.session.activePet === kind;
-      const b = el("button", "secondary pet-btn" + (isUnlocked ? "" : " locked") + (isActive ? " sel" : ""));
-      b.type = "button";
-      const row = el("span", "pet-row");
-      const dot = el("span", "pet-dot");
-      dot.style.background = def.tint;
-      row.appendChild(dot);
-      row.appendChild(el("span", "pet-name", def.name));
-      row.appendChild(el("span", "pet-state", isActive ? "equipped" : isUnlocked ? "equip" : "locked"));
-      b.appendChild(row);
-      // First-class unlock/equip: the row always SHOWS what it is (role) or what it takes
-      // (the exact milestone) — never a hidden tooltip or a click-to-discover.
-      b.appendChild(el("span", "pet-sub", isUnlocked ? def.role : def.requirement.label));
-      b.addEventListener("click", () => {
-        if (!isAccount) { note.textContent = "sign in with Google to unlock companions"; return; }
-        if (!isUnlocked) { note.textContent = def.requirement.label; return; }
-        if (isBusy) return;
-        isBusy = true;
-        note.textContent = "";
-        // Toggle: clicking the equipped pet dismisses it. The re-render reflects truth.
-        void this.session.setActivePet(isActive ? null : kind)
-          .catch(() => { note.textContent = "could not save the pick — try again"; })
-          .finally(() => this.renderPetPicker(box));
-      });
-      list.appendChild(b);
-    }
-    // The label carries the collection identity: signed-in players see their roster
-    // progress at a glance; guests see the plain label until pets are theirs to earn.
-    const label = isAccount ? `companion \u00b7 ${unlocked.size}/${PET_KINDS.length}` : "companion";
-    box.replaceChildren(el("label", "", label), list, note);
+    const panel = createCompanionPanel({
+      getState: () => ({
+        isAccount: this.session.profile?.isAccount ?? false,
+        unlockedPets: this.session.profile?.unlockedPets ?? [],
+        activePet: this.session.activePet,
+      }),
+      equip: async (pet: PetKind | null) => { await this.session.setActivePet(pet); },
+    });
+    this.petPanels.push(panel);
+    return panel.root;
   }
 
   private accountChip(): HTMLElement {
@@ -323,9 +303,9 @@ export class Menu {
       return;
     }
     // Login may have adopted an account's saved color pick; reflect it in the swatches,
-    // and re-render the companion picker now that unlock state is real.
+    // and refresh the companion panels now that unlock state is real.
     this.syncColorRow?.();
-    if (this.petBox) this.renderPetPicker(this.petBox);
+    for (const p of this.petPanels) p.refresh();
     if (!profile || profile.gamesPlayed === 0) return;
     box.replaceChildren();
     box.appendChild(el("div", "col-h", `${profile.name} \u2014 all time`));
@@ -487,13 +467,9 @@ export class Menu {
       wrap.appendChild(list);
       wrap.appendChild(el("p", "muted", `${players.length} player${players.length === 1 ? "" : "s"} in the room`));
 
-      // Companion swap while waiting: same picker as the title screen; the roster chip
+      // Companion swap while waiting: the same panel as the title screen; the roster chip
       // above refreshes on the next heartbeat.
-      if (lobby.status === "lobby") {
-        const petBox = el("div", "namerow");
-        this.renderPetPicker(petBox);
-        wrap.appendChild(petBox);
-      }
+      if (lobby.status === "lobby") wrap.appendChild(this.petSection());
 
       const row = el("div", "btnrow");
       if (lobby.status === "playing") {
@@ -517,6 +493,9 @@ export class Menu {
 
       this.overlay.classList.remove("hidden");
       this.overlay.replaceChildren(wrap);
+      // Every roster change rebuilds the lobby (and its companion panel); stop the loops
+      // of the panels just replaced.
+      this.prunePanels(true);
     };
 
     this.teardownLobby();
