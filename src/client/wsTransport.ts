@@ -143,7 +143,7 @@ export class WSTransport implements Transport {
   private lastSnapTick = -1;    // reject stale / out-of-order snapshots
   private lastSnapRev = -1;     // reject snapshots from an older world revision
   private lastAckSeq = 0;       // the server ack never decreases (reorder guard)
-  private cseq = 0;             // monotonic command sequence for equip commands
+  private cseq = 0;             // monotonic command sequence for inventory commands (equip/reorder/drop)
 
   // Authoritative shared-world tracking: the client rebuilds the identical dungeon geometry when
   // the server's seed/floor/revision changes (initial join + every party-wide descend), so
@@ -615,6 +615,31 @@ export class WSTransport implements Transport {
     const self = this.latestSnap?.self;
     if (self && !self.wpns.includes(weapon)) return;
     this.sendMsg({ t: "equip", weapon, cseq: ++this.cseq });
+  }
+
+  requestEquip(weapon: WeaponId): void {
+    this.sendEquip(weapon);
+  }
+
+  // Request an authoritative inventory reorder. Like equip, never predicted locally: the
+  // server validates both indices against the CURRENT inventory and the new order returns
+  // via SelfWire.wpns (the HUD rebuilds from that one truth). Pre-filtered against the last
+  // authoritative inventory so an obviously-stale drag is a client no-op, not a wire reject.
+  requestReorder(from: number, to: number): void {
+    const self = this.latestSnap?.self;
+    if (self && (from < 0 || to < 0 || from >= self.wpns.length || to >= self.wpns.length)) return;
+    if (from === to) return;
+    this.sendMsg({ t: "reorder", from, to, cseq: ++this.cseq });
+  }
+
+  // Request an authoritative weapon drop (by id, never by index — a drop racing a reorder
+  // can't discard the wrong weapon). The server owns every outcome: the ownership/state/
+  // last-weapon checks, the safe spawn spot, and the resulting pickup + inventory, all of
+  // which flow back via snapshot. cseq makes a resend idempotent (no duplicate pickups).
+  requestDrop(weapon: WeaponId): void {
+    const self = this.latestSnap?.self;
+    if (self && (!self.wpns.includes(weapon) || self.wpns.length <= 1)) return;
+    this.sendMsg({ t: "drop", weapon, cseq: ++this.cseq });
   }
 
   // Answer a server blessing offer. The offerId names exactly which offer this choice answers;

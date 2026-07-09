@@ -126,6 +126,10 @@ export const CHEST_EJECT_RIM = 24;
 // A loot spot must keep this margin of open floor on all four sides so the sprite never
 // visually clips into a wall.
 export const CHEST_LOOT_WALL_MARGIN = 10;
+// Player weapon drop (Q / inventory UI): candidate rings around the dropper, preferred
+// toward the aim direction. The inner radius sits beyond pickup range (pr 18 + weapon
+// pickup radius 16 = 34), so a stationary dropper never instantly re-collects the drop.
+export const WEAPON_DROP_RADII: readonly number[] = [44, 60, 76];
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;
