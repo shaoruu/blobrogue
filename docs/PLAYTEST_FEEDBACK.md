@@ -30,6 +30,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SPECCED` Bottom-center loadout: 2 weapon + 2 addon slots; weapon-local charge/cylinder/heat; hover/focus signed comparisons. `docs/specs/blobrogue_POST_SERVER_LOADOUT_UX_spec.md`.
 - `NEW` Opened chest looked odd. AD redesign pending.
 - `SHIPPED` Chest open SFX volume raised; generated alternate creak+chime candidate held for A/B.
+- `SHIPPED` **Audio de-synthesis (playtest audit):** all runtime oscillator/MIDI-like/procedural audio removed (synth SFX recipes, synth music fallback, wave synth voices/pads). Authored files or safe-reuse fallbacks (rate 0.85–1.15) only; missing assets fail quietly behind explicit hooks. Hazard cues rewired to the wave manifest (spikes telegraph no longer uiClick@1.6). revive/uiClick got asset hooks + authored reuse. Burrow underground = deterministic component emitter (no loop); the Deep = silent bed + sparse positional emitter. Pending-generation inventory: `docs/audio/AUDIO_ASSET_INVENTORY.md`.
 - `SHIPPED` Avatar replaced with authored amber cowboy-blob portrait.
 
 ## Weapons / melee / blessings / economy
@@ -55,6 +56,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `NEW` Ghost flickers / half frames face opposite. Diagnose sheet direction vs renderer flip; normalize authored direction. Owner: main runner/art. `BLOCKED (multiplayer priority)`.
 - `SPECCED` Movement grammar: HUNT/ORBIT/BURROW/ANCHOR/FLOCK/FLEE-BAIT. First trio Rootkite, Knellbat, Seamwalker. Smart low-HP flee/reposition with tell/counter; no input cheating.
 - `SPECCED` Visible threat ladder: normal→large/brute→elite→miniboss, mechanical size/mass/attacks/loot; no HP sponge.
+- `SHIPPED` **Durability pass (playtest: enemy toughness uniformly low):** swarm/standard untouched (fodder still melts, early-melt gates hold); brute 2.4×→3.8× HP (F4 starter-pistol focused ~3.2s), elite 2.0×→2.6× (F6 median ~2.8s, aggro→death ~3.6s); threat costs repriced (brute 2.2→2.8, elite 2.8→3.0) so floors buy fewer tough bodies instead of inflating total HP. Ladder gate: swarm << standard < elite < brute. Boss pacing + co-op scaling gates unchanged.
 - `SHIPPED` Slime King current boss bar/stat buff, but `FAILED PLAYTEST`: still killed in ~3s.
 - `SHIPPED` Balance reset (#25, live): Slime King F5 900 HP, measured ~20-45s TTK (was ~3s), phase floors enforced, threat-budget floors w/ swarm/brute/elite tiers, heart economy halved, leveled blessings w/ raw caps, co-op scaling. `docs/specs/blobrogue_BALANCE_FINAL_impl.md`.
 - `SPECCED` Boss roster: Slime King, Marrow blind charger, Hollow Choir, Weaver, Jet, Gilded Warden. Only Slime King currently implemented.
