@@ -220,6 +220,18 @@ async function main(): Promise<void> {
       check("all-at-exit flips straight into the party blessing gate (pnd on both wires)",
         offered && (a.transport.getLatestSnapshot()?.pnd.length ?? 0) === 2);
       check("still floor 1 until the picks resolve", world.state.floor === 1);
+      // The expiry countdown is AUTHORITATIVE state riding the wire: both clients read the
+      // same seconds, and they fall with the server's sim clock — no client ever times out
+      // a pick locally (resolution/expiry arrive as snapshots or not at all).
+      const secondsOf = (bot: Bot): number[] => (bot.transport.getLatestSnapshot()?.pnd ?? []).map((p) => p.s).sort();
+      const t0 = secondsOf(a);
+      check("both wires read the same authoritative countdown", t0.join(",") === secondsOf(b).join(",") && t0.every((s) => s > 0), t0.join(","));
+      const isFalling = await waitUntil(() => {
+        const now = secondsOf(a);
+        return now.length === 2 && now[0] < t0[0];
+      }, 3000);
+      check("the countdown falls with the server clock on the wire", isFalling,
+        `t0=${t0.join(",")} now=${secondsOf(a).join(",")}`);
       a.stop(); b.stop();
     } finally { await s.close(); }
   });

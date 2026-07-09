@@ -2121,24 +2121,33 @@ export class Game {
   // coherence system, PR #39 — so "picking" would be a lie while they can't see the cards).
   private blessingWaitLabel(): string | null {
     if (this.mode !== "online" || !this.wsTransport) return null;
-    const pending = this.wsTransport.pendingBlessingParty();
+    const pending = this.wsTransport.pendingPickWait();
     if (pending.length === 0) return null;
     const selfId = this.wsTransport.getSelfServerId();
-    const others = pending.filter((id) => id !== selfId);
+    const others = pending.filter((p) => p.id !== selfId);
     if (others.length === 0) return null;
     const remotes = this.wsTransport.remotePlayers();
     const picking: string[] = [];
     const reconnecting: string[] = [];
-    for (const id of others) {
-      const r = remotes.find((x) => x.playerId === id);
+    let secondsLeft = 0;
+    for (const p of others) {
+      const r = remotes.find((x) => x.playerId === p.id);
       const name = (r?.name ?? "teammate").toUpperCase();
       if (r !== undefined && isReconnectingTeammate(r)) reconnecting.push(name);
-      else picking.push(name);
+      else {
+        picking.push(name);
+        secondsLeft = Math.max(secondsLeft, p.secondsLeft);
+      }
     }
-    // UI Director copy: name who the party is waiting on. pnd is the union of blessing
-    // picks and boss weapon claims, so "choose" covers both reward kinds.
+    // UI Director copy: name who the party is waiting on, with the AUTHORITATIVE expiry
+    // countdown (the sim's TTL riding every snapshot — never a client timer; the gate
+    // unblocks only when a snapshot says the pending set drained). pnd is the union of
+    // blessing picks and boss weapon claims, so "choose" covers both reward kinds.
     const parts: string[] = [];
-    if (picking.length > 0) parts.push(`WAITING FOR ${picking.join(" \u00b7 ")} TO CHOOSE`);
+    if (picking.length > 0) {
+      const countdown = secondsLeft > 0 ? ` \u00b7 ${secondsLeft}s` : "";
+      parts.push(`WAITING FOR ${picking.join(" \u00b7 ")} TO CHOOSE${countdown}`);
+    }
     if (reconnecting.length > 0) parts.push(`${reconnecting.join(" \u00b7 ")} RECONNECTING\u2026`);
     return parts.join(" \u00b7 ");
   }

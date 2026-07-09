@@ -143,6 +143,8 @@ function serverRoundTripTests(): void {
   const me = spawnPlayerInWorld(w, "pMe");
   const other = spawnPlayerInWorld(w, "pOther");
   other.x = me.x + 40; other.y = me.y - 25;
+  // A live pending pick so pnd round-trips non-empty with its authoritative countdown.
+  w.pendingBlessings.set("pOther", 41.2);
   devSpawnEnemy(w, "boss", me.x + 200, me.y);
   w.bullets.push({ x: me.x + 10, y: me.y + 5, vx: 250, vy: -40, radius: 5, life: 1, friendly: true, owner: "pMe", damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false, fx: "pistol" });
   const events: WireEvent[] = [

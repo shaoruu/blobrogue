@@ -728,10 +728,17 @@ export class WSTransport implements Transport {
     return this.latestSnap?.over ?? false;
   }
 
-  // Party members whose blessing picks currently hold the descend gate (authoritative;
-  // drives the "WAITING FOR N PLAYERS…" readout).
+  // Party members whose reward picks currently hold the descend gate (authoritative;
+  // drives the "WAITING FOR …" readout).
   pendingBlessingParty(): PlayerId[] {
-    return this.latestSnap?.pnd ?? [];
+    return (this.latestSnap?.pnd ?? []).map((p) => p.id);
+  }
+
+  // The same pending set WITH the authoritative expiry countdown (seconds left before the
+  // sim releases each hold). Pure snapshot state: the client never runs its own timer —
+  // resolution, expiry, and every countdown step arrive as server truth or not at all.
+  pendingPickWait(): { id: PlayerId; secondsLeft: number }[] {
+    return (this.latestSnap?.pnd ?? []).map((p) => ({ id: p.id, secondsLeft: p.s }));
   }
 
   // Living party members standing at the cleared exit — the descend gate's own readiness

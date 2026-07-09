@@ -301,13 +301,26 @@ async function headlessClientSpectateTests(): Promise<void> {
   for (let i = 0; i < 120; i++) game.tick(1 / 60);
   check("camera returned to the local player", Math.abs(game.cam.x - (self.x - (domCanvas as any).width / 2)) < 24, `cam.x=${game.cam.x.toFixed(0)}`);
 
-  // The party blessing readout reads from the authoritative pending set (UI Director copy).
+  // The party blessing readout reads from the authoritative pending set (UI Director copy)
+  // WITH the server's expiry countdown riding the snapshot.
   world.pendingBlessings.set("s1", 30);
   deliverSnap();
   game.tick(1 / 60);
   const wait: string | null = game.blessingWaitLabel();
-  check("WAITING FOR NAME TO CHOOSE names the still-picking teammate",
-    wait !== null && wait.includes("WAITING FOR S1 TO CHOOSE"), wait ?? "null");
+  check("WAITING FOR NAME TO CHOOSE · Ns carries the authoritative countdown",
+    wait !== null && wait.includes("WAITING FOR S1 TO CHOOSE \u00b7 30s"), wait ?? "null");
+  // NO client-only timeout: 35s of pure CLIENT time (past the fake 30s TTL) with no new
+  // snapshots changes NOTHING — the countdown, the label, and the gate hold exactly as the
+  // last authoritative frame said. Only a snapshot may resolve, count down, or release.
+  for (let i = 0; i < 2100; i++) game.tick(1 / 60);
+  const held: string | null = game.blessingWaitLabel();
+  check("35s of client time WITHOUT snapshots releases nothing (no client-only expiry)",
+    held !== null && held.includes("WAITING FOR S1 TO CHOOSE \u00b7 30s"), held ?? "null");
+  // The authoritative drain is the ONLY release.
+  world.pendingBlessings.clear();
+  deliverSnap();
+  game.tick(1 / 60);
+  check("only the authoritative snapshot clears the wait state", game.blessingWaitLabel() === null);
   world.pendingBlessings.clear();
 
   // Exit coordination readout (UI Director copy): the authoritative exr drives the ready
@@ -914,20 +927,30 @@ function weaponEconomyTests(): void {
 // ---- 4. same-world wire coherence (this branch's fields; the world-id echo is PR #39's) ----
 
 function wireCoherenceTests(): void {
-  section("wire: the pending blessing party rides every snapshot identically");
+  section("wire: the pending party rides every snapshot identically, WITH the expiry countdown");
   {
     const { w, ps } = partyAtExit(0x51D0, 2);
     stepWorldPhase(w, DT, []); // raises both exit-gate offers
     const snapA = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
     const snapB = buildSnapshot(w, ps[1].id, 0, [], 0, false, {});
     if (snapA.t !== "snap" || snapB.t !== "snap") { check("snapshots built", false); return; }
-    check("both clients read the same pending party",
-      snapA.pnd.slice().sort().join(",") === snapB.pnd.slice().sort().join(",") && snapA.pnd.length === 2, snapA.pnd.join(","));
+    const key = (s: typeof snapA): string => s.pnd.map((p) => `${p.id}:${p.s}`).sort().join(",");
+    check("both clients read the same pending party + seconds",
+      key(snapA) === key(snapB) && snapA.pnd.length === 2, key(snapA));
+    check("the countdown is the sim's authoritative TTL (fresh offers ride at the full window)",
+      snapA.pnd.every((p) => p.s === Math.ceil(C.BLESSING_OFFER_TTL)), key(snapA));
     const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snapA));
-    check("pnd survives the codec round trip", decoded.t === "snap" && decoded.pnd.length === 2);
+    check("pnd survives the codec round trip", decoded.t === "snap" && decoded.pnd.length === 2 && decoded.pnd.every((p) => p.s > 0));
+    // The countdown DECREASES as the sim clock advances — server truth, not client time
+    // (a one-second margin absorbs the TTL's repeated-subtraction float error).
+    for (let i = 0; i < Math.ceil(3 / DT); i++) stepWorldPhase(w, DT, []);
+    const later = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
+    check("the countdown falls with the SIM clock only", later.t === "snap"
+      && later.pnd.every((p) => p.s <= Math.ceil(C.BLESSING_OFFER_TTL) - 2 && p.s > C.BLESSING_OFFER_TTL - 10),
+      later.t === "snap" ? key(later) : "?");
     chooseBlessingInWorld(w, ps[0].id, ITEMS[0]);
     const after = buildSnapshot(w, ps[0].id, 0, [], 0, false, {});
-    check("a resolved pick leaves the pending set", after.t === "snap" && after.pnd.length === 1 && after.pnd[0] === ps[1].id);
+    check("a resolved pick leaves the pending set", after.t === "snap" && after.pnd.length === 1 && after.pnd[0].id === ps[1].id);
   }
 
   section("wire: teammates ALWAYS ride snapshots (the party is never interest-filtered)");

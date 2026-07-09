@@ -344,9 +344,19 @@ lifecycle only ever runs on truly-ended runs.
 
 Cleared-floor offers (and the boss chest's Rare offers) go to EVERY member — downed
 players included — and the descend holds until each pick resolves. Snapshots carry the
-pending set (`pnd`), so everyone sees `WAITING FOR N/M PLAYERS…` with the names still
-picking. Choosers are paused and damage-shielded; a disconnect releases their hold
-immediately and an unanswered offer expires after 60s on the sim clock.
+pending set with each member's **authoritative expiry countdown**
+(`pnd: {id, s}[]` — the sim clock's remaining seconds), so everyone sees
+`WAITING FOR GF TO CHOOSE · 41s` ticking down with SERVER truth. The client never runs
+its own timer: resolution, expiry, and every countdown step arrive as snapshots or not at
+all — 35 seconds of pure client time without a frame changes nothing (locked by tests).
+Choosers are paused and damage-shielded; a disconnect releases their hold immediately.
+
+The expiry MECHANICS (what the sim does at zero — including absence-aware pauses under
+the reconnect grace) are being reworked authoritatively by the Sev-0 coherence system
+(PR #39), which owns that fix; this branch's sim TTL reconciles to theirs at integration
+and the UI above consumes whatever the authoritative pending state says, nothing more.
+The wire/UI/integration tests for the countdown re-bind to the fixed semantics in the
+post-integration pass.
 
 ### The party weapon economy (studio balance gate §4, Stage C shared worlds)
 

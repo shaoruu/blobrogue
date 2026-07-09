@@ -212,8 +212,14 @@ export type ServerMsg =
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
-      pnd: PlayerId[];           // players whose blessing picks currently hold the descend gate
-                                 // (drives the party-wide "WAITING FOR N PLAYERS…" readout)
+      // Players whose reward picks (blessing offers ∪ boss weapon claims) currently hold
+      // the descend gate, each with the AUTHORITATIVE seconds left before its expiry
+      // releases them (the sim clock's TTL — the client renders this countdown and NEVER
+      // runs its own timer; only a snapshot saying so unblocks anything). The expiry
+      // mechanics themselves are being reworked authoritatively by the Sev-0 coherence
+      // system (PR #39, e.g. absence-aware pauses); this field is the UI's consumption
+      // seam and follows that fix at integration.
+      pnd: PendingPickWire[];
       exr: PlayerId[];           // living players standing at the cleared exit — the SAME
                                  // predicate the descend gate requires, on the wire (drives
                                  // the "WAITING AT EXIT · N/M" coordination readout)
@@ -659,11 +665,14 @@ function decodeServerMsg(raw: string): ServerMsg {
   const o = obj(parsed, "frame");
   switch (o.t) {
     case "snap": {
-      const pidList = (k: "pnd" | "exr"): PlayerId[] => arr(o[k], k).map((p) => {
+      const pidList = (k: "exr"): PlayerId[] => arr(o[k], k).map((p) => {
         if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError(`bad ${k} entry`);
         return p;
       });
-      const pnd = pidList("pnd");
+      const pnd: PendingPickWire[] = arr(o.pnd, "pnd").map((p) => {
+        const e = obj(p, "pnd entry");
+        return { id: shortStr(e, "id", 64), s: intOf(e, "s", 0, 1e4) };
+      });
       const exr = pidList("exr");
       return {
         t: "snap",
@@ -895,13 +904,23 @@ export interface SnapshotOpts {
 // relevant state (the boss enemy and the boss chest), and, in addition, the nearby
 // enemies/bullets/props/pickups/chests within its interest radius (with exit hysteresis).
 // A simple distance filter is enough for a single bounded floor.
+// One member's pending reward pick on the wire: who, and the authoritative seconds left
+// before expiry releases their hold (the max across their open blessing offer and weapon
+// claim — the gate waits for BOTH, so the longer clock is the binding one).
+export interface PendingPickWire { id: PlayerId; s: number }
+
 // The party members whose pending reward picks (blessing offers AND boss weapon claims)
 // currently hold the descend gate — the union the sim's gate actually waits on, so the
 // "WAITING FOR N PLAYERS…" readout can never drift from the rule.
-function pendingPickParty(w: WorldState): PlayerId[] {
-  const pending = new Set<PlayerId>(w.pendingBlessings.keys());
-  if (w.weaponClaims !== null) for (const pid of w.weaponClaims.pending.keys()) pending.add(pid);
-  return [...pending];
+function pendingPickParty(w: WorldState): PendingPickWire[] {
+  const seconds = new Map<PlayerId, number>();
+  for (const [pid, left] of w.pendingBlessings) seconds.set(pid, left);
+  if (w.weaponClaims !== null) {
+    for (const [pid, pend] of w.weaponClaims.pending) {
+      seconds.set(pid, Math.max(seconds.get(pid) ?? 0, pend.ttl));
+    }
+  }
+  return [...seconds].map(([id, s]) => ({ id, s: Math.max(0, Math.ceil(s)) }));
 }
 
 export function buildSnapshot(
