@@ -42,6 +42,7 @@ import {
 } from "./anim.js";
 import type { Anim, Xform, XformStyle } from "./anim.js";
 import { createFacing, computeEnemyPose } from "./facing.js";
+import { TIER_LAYERS, bestiaryCue } from "./bestiaryAudio.js";
 import type { FacingState, EnemyPose } from "./facing.js";
 import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
@@ -897,13 +898,20 @@ export class Game {
     this.chestAnims.clear();
     const isBoss = isBossFloor(this.floor);
     audio.setMusic(isBoss ? "boss" : "dungeon");
-    if (isBoss) { sfx("bossSpawn"); this.addTrauma(TRAUMA_BOSS_FLOOR); }
     // Wave layer: sweep entity-keyed loops/tells from the old floor, crossfade the biome's
-    // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually here).
+    // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually
+    // here + every encounter kind on the floor — the contract's preload plan).
     waveAudio.onFloorLoad();
     waveAudio.setAmbientZone(this.biomeIdx);
     const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
-    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null);
+    if (isBoss) {
+      if (!waveAudio.bossEntrance(bossUnit?.kind ?? "boss", bossUnit?.x, bossUnit?.y)) sfx("bossSpawn");
+      this.addTrauma(TRAUMA_BOSS_FLOOR);
+    }
+    const encounterKinds = new Set<string>();
+    for (const e of this.world.enemies) encounterKinds.add(e.kind);
+    for (const e of this.world.pendingSpawns) encounterKinds.add(e.kind);
+    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null, [...encounterKinds]);
   }
 
   // Mount torches on the wall directly above each room (facing into it), at deterministic
@@ -1606,8 +1614,18 @@ export class Game {
         // Sunlance hits tick through the wave layer's 120ms-per-target limiter — a held
         // beam at 22Hz must never machine-gun the generic hit sample.
         if (!e.killed) {
-          if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
-          else sfx(e.melee ? "meleeHit" : "enemyHit", { gain: e.melee ? 0.9 : 0.65 });
+          if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) {
+            waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
+          } else if (e.melee) {
+            sfx("meleeHit", { gain: 0.9 });
+          } else {
+            // The semantic HURT event (bestiary audio contract): kind-resolved where a
+            // body owns a hurt identity (a shielder only ever hurts from the flank),
+            // the rate-limited generic row otherwise, legacy sample as the last rung.
+            const hitKind = this.world.enemies.find((en) => en.id === e.eid)?.kind;
+            const hurtCue = (hitKind !== undefined ? bestiaryCue(hitKind, "rearHurt") : null) ?? "mob.hurt";
+            if (!waveAudio.cueAt(hurtCue, e.dmgX, e.dmgY, e.eid)) sfx("enemyHit", { gain: 0.65 });
+          }
         }
         break;
       }
@@ -1645,7 +1663,12 @@ export class Game {
         const comboRate = 1 + Math.min(e.combo - 1, 20) * 0.015;
         // Wave-roster bosses die on their authored identity cue, never the generic splat.
         if (!waveAudio.bossDeath(e.kind, e.x, e.y)) {
-          sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+          if (!waveAudio.cueAt("mob.death", e.x, e.y, e.eid)) {
+            sfx("enemyDeath", { gain: big ? 1 : 0.85, rate: big ? 0.7 : comboRate });
+          }
+          // The tier's authored body/debris LAYER rides on top of the material death.
+          const layer = TIER_LAYERS[e.tier];
+          if (layer) waveAudio.cueAt(layer, e.x, e.y, e.eid);
         }
         this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
         const mult = comboTierFor(e.combo).mult;
@@ -1717,10 +1740,16 @@ export class Game {
         this.spawnSparks(e.x, e.y, 3, e.aim);
         this.spawnSparkFlash(e.x, e.y, e.color);
         break;
-      case "bulletBlocked":
-        this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
+      case "bulletBlocked": {
+        // The block voices in the blocker's MATERIAL: shielder wood, living root
+        // (rootward/marshal), a bulwark elite's steel plate.
+        const blockCue = e.kind === "shielder" ? "shielder.block"
+          : e.kind === "rootward" || e.kind === "marshal" ? "root.block"
+          : "plate.block";
+        if (!waveAudio.cueAt(blockCue, e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
         this.spawnSparks(e.x, e.y, 4, e.aim);
         break;
+      }
       case "bulletExpire":
         this.spawnPuff(e.x, e.y, 6, e.color);
         break;
@@ -1835,6 +1864,11 @@ export class Game {
       case "enemySpawn": {
         const tint = ENEMY_ARCHETYPES[e.kind].tint;
         this.spawnPuff(e.x, e.y, 8, tint);
+        // A miniboss captain announces itself on its bespoke entrance row; the
+        // caskbellows plants on its anchor cue; everyone else keeps the spawn tick.
+        if (waveAudio.bossEntrance(e.kind, e.x, e.y, e.eid)) break;
+        const placeCue = e.kind === "caskbellows" ? bestiaryCue(e.kind, "place") : null;
+        if (placeCue !== null && waveAudio.cueAt(placeCue, e.x, e.y, e.eid)) break;
         if (this.isNearCamera(e.x, e.y)) sfx("enemyHit", { gain: 0.4, rate: 0.7 });
         break;
       }
