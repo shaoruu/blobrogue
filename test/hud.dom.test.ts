@@ -23,11 +23,21 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
-const { ITEMS, itemDesc } = await import("../src/sim/items.js");
+const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
+const { weaponHudStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
+type WeaponId = HudState["weapons"][number]["id"];
+
+// Unmodified live stats for a weapon (fresh mods, full HP) — the shape game.ts feeds.
+function wstat(id: WeaponId) {
+  return weaponHudStats(id, createMods(), 0);
+}
+function wslot(id: WeaponId, name: string, isCurrent: boolean) {
+  return { id, name, isCurrent, stats: wstat(id) };
+}
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -43,9 +53,9 @@ function mkState(over: Partial<HudState> = {}): HudState {
   return {
     hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
     weapons: [
-      { id: "pistol", name: "Pistol", isCurrent: false },
-      { id: "shotgun", name: "Shotgun", isCurrent: true },
-      { id: "tesla", name: "Tesla", isCurrent: false },
+      wslot("pistol", "Pistol", false),
+      wslot("shotgun", "Shotgun", true),
+      wslot("tesla", "Tesla", false),
     ],
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
@@ -66,14 +76,64 @@ const ITEM_MAX = {
 
 function weaponSlotTests(): void {
   section("weapon slots keep their labeled, accessible shape");
-  const slot = buildSlot({ id: "shotgun", name: "Shotgun", isCurrent: true }, 1);
+  const slot = buildSlot(wslot("shotgun", "Shotgun", true), 1);
   check("slot keeps its select-key badge", slot.querySelector(".hb-key")?.textContent === "2");
   check("slot keeps its weapon-name label", slot.querySelector(".hb-name")?.textContent === "SHOTGUN");
   check("slot is a tabbable button", slot.tabIndex === 0 && slot.getAttribute("role") === "button");
-  check("slot aria-label names weapon + slot + equipped state", slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped");
+  check("slot aria-label names weapon + slot + equipped state + live stats",
+    slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped. DMG 1.7 \u00d75, RATE 1.9/S, RANGE 160 PX",
+    slot.getAttribute("aria-label") ?? "");
   check("equipped slot is lit", slot.classList.contains("on"));
-  const tenth = buildSlot({ id: "tesla", name: "Tesla", isCurrent: false }, 9);
+  const tenth = buildSlot(wslot("tesla", "Tesla", false), 9);
   check("slots past 9 carry no key badge", tenth.querySelector(".hb-key") === null);
+}
+
+function weaponTooltipTests(): void {
+  section("weapon stat tooltip: name + live DMG/RATE/RANGE rows in the pixel tip chrome");
+  const slot = buildSlot(wslot("shotgun", "Shotgun", true), 1);
+  const tip = slot.querySelector(".tip")!;
+  check("slot carries a tooltip element", tip !== null && tip.getAttribute("role") === "tooltip");
+  check("no native title attribute (would double the custom tip)", slot.getAttribute("title") === null);
+  check("tooltip names the weapon", tip.querySelector(".tn")?.textContent === "SHOTGUN");
+  const rows = [...tip.querySelectorAll(".tr")].map((r) =>
+    `${r.querySelector(".tk")?.textContent}=${r.querySelector(".tv")?.textContent}`);
+  check("rows read DMG \u00d7volley / RATE / RANGE", rows.join("|") === "DMG=1.7 \u00d75|RATE=1.9/S|RANGE=160 PX", rows.join("|"));
+  check("equipped card marks itself EQUIPPED and carries no deltas",
+    tip.querySelector(".tx")?.textContent === "EQUIPPED" && tip.querySelector(".td") === null);
+  check("plain gun shows no special line", tip.querySelector(".ts") === null);
+
+  section("weapon stat tooltip: melee relabels RANGE to REACH; specials derive from weapon data");
+  const sword = buildSlot(wslot("sword", "Cutlass", false), 0);
+  check("melee row reads REACH", [...sword.querySelectorAll(".tr .tk")].map((k) => k.textContent).join(",") === "DMG,RATE,REACH");
+  const tesla = buildSlot(wslot("tesla", "Tesla", false), 2);
+  check("tesla names its chain", tesla.querySelector(".ts")?.textContent === "CHAINS TO 3 MORE");
+  const spear = buildSlot(wslot("spear", "Pike", false), 3);
+  check("thrust melee names its verb", spear.querySelector(".ts")?.textContent === "PIERCING THRUST");
+
+  section("weapon stat tooltip: restrained deltas vs the equipped weapon");
+  const equipped = wstat("shotgun"); // volley 1.7×5 = 8.5, rate 1.9, range 160
+  const cannonRows = weaponTipRows(wstat("cannon"), equipped); // 9 dmg, slow, long range
+  check("bigger volley damage marks up", cannonRows[0].delta === 1);
+  check("slower rate marks down", cannonRows[1].delta === -1);
+  check("longer range marks up", cannonRows[2].delta === 1);
+  const swordRows = weaponTipRows(wstat("sword"), equipped);
+  check("melee reach is NEVER compared against bullet range (incomparable classes)", swordRows[2].delta === null);
+  check("melee damage/rate still compare", swordRows[0].delta !== null && swordRows[1].delta !== null);
+  const selfRows = weaponTipRows(wstat("shotgun"), wstat("shotgun"));
+  check("identical stats read as no delta (dead zone)", selfRows.every((r) => r.delta === 0));
+  check("no-equipped comparison yields null deltas", weaponTipRows(wstat("pistol"), null).every((r) => r.delta === null));
+  const slotVs = buildSlot(wslot("cannon", "Thunderbolt", false), 0, equipped);
+  const arrows = [...slotVs.querySelectorAll(".td")].map((d) => `${d.textContent}${d.classList.contains("up") ? "+" : "-"}`);
+  check("delta arrows render with up/down classes", arrows.join(",") === "\u25b2+,\u25bc-,\u25b2+", arrows.join(","));
+
+  section("weapon stat tooltip: live mod-adjusted values (never raw balance constants)");
+  const mods = createMods();
+  mods.damageMult = 1.5;
+  mods.extraPellets = 2;
+  const modded = weaponHudStats("shotgun", mods, 0);
+  const moddedRows = weaponTipRows(modded, null);
+  check("damage row reflects the damage mult", moddedRows[0].v === `${fmtStat(1.7 * 1.5)} \u00d77`, moddedRows[0].v);
+  check("fmtStat trims to one decimal", fmtStat(6.25) === "6.3" && fmtStat(2) === "2" && fmtStat(1.9230769) === "1.9");
 }
 
 function buffChipTests(): void {
@@ -187,18 +247,26 @@ function drawerTests(): void {
 
   section("UI Part4: weapon stat drawer replaces hover-only info (tap the equipped slot)");
   let dropCalls = 0;
-  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", damage: 2, rate: 1.9, range: 160, isMelee: false, onDrop: () => dropCalls++ });
+  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", damage: 2, pellets: 1, rate: 1.9, range: 160, isMelee: false, special: null, onDrop: () => dropCalls++ });
   check("weapon drawer opens", hud.isDrawerOpen());
   check("drawer titles the weapon", root.querySelector(".hd-head span")?.textContent === "SHOTGUN");
   const statTexts = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
   check("stat sheet shows DMG / RATE / RANGE", statTexts.join("|") === "DMG2|RATE1.9/S|RANGE160 PX", statTexts.join("|"));
+  check("plain gun carries no special line", root.querySelector(".hd-special") === null);
   const dropBtn = root.querySelector<HTMLButtonElement>(".hd-drop")!;
   check("touch DROP action present", dropBtn.textContent === "DROP (Q)");
   dropBtn.click();
   check("DROP releases the input context BEFORE acting, then acts once", dropCalls === 1 && !hud.isDrawerOpen());
 
-  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, rate: 6.3, range: 616, isMelee: false, onDrop: null });
+  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, pellets: 1, rate: 6.3, range: 616, isMelee: false, special: null, onDrop: null });
   check("final weapon offers no DROP action", root.querySelector(".hd-drop") === null);
+
+  hud.openWeaponDrawer({ id: "tesla", name: "Tesla", damage: 3, pellets: 3, rate: 2.5, range: 450, isMelee: false, special: "CHAINS TO 3 MORE", onDrop: null });
+  const teslaStats = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
+  check("volley weapons read DMG \u00d7N in the drawer", teslaStats[0] === "DMG3 \u00d73", teslaStats[0]);
+  check("drawer carries the weapon's special line", root.querySelector(".hd-special")?.textContent === "CHAINS TO 3 MORE");
+  hud.closeDrawer();
+  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, pellets: 1, rate: 6.3, range: 616, isMelee: false, special: null, onDrop: null });
 
   section("UI Part4: the scrim swallows the tap and closes the drawer");
   check("scrim shown while open", root.querySelector(".hb-scrim")!.classList.contains("show"));
@@ -227,9 +295,9 @@ function hudIntegrationTests(): void {
   // A reorder (same set, new order) rebuilds the slots to match.
   hud.update(mkState({
     weapons: [
-      { id: "tesla", name: "Tesla", isCurrent: false },
-      { id: "pistol", name: "Pistol", isCurrent: false },
-      { id: "shotgun", name: "Shotgun", isCurrent: true },
+      wslot("tesla", "Tesla", false),
+      wslot("pistol", "Pistol", false),
+      wslot("shotgun", "Shotgun", true),
     ],
     items: [ITEM_LV2, ITEM_MAX],
   }));
@@ -321,6 +389,7 @@ function hierarchyTests(): void {
 
 function main(): void {
   weaponSlotTests();
+  weaponTooltipTests();
   buffChipTests();
   buffOverflowTests();
   blessingCardTests();
