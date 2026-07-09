@@ -30,3 +30,6 @@ __pycache__/
 # Python bytecode (tools/ scripts)
 __pycache__/
 *.pyc
+
+# readability QA output (diagnostic PNGs + report; never fixtures)
+test/readability/out/

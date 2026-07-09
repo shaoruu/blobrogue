@@ -35,9 +35,9 @@ export class ChecksumArtifactVerifier implements ArtifactVerifier {
     const digests: FileDigest[] = [];
     for (const rel of manifest.files) {
       if (rel.includes("..") || rel.startsWith("/")) return { ok: false, reason: "unsafe_file_path" };
-      const content = await this.fs.readFile(`${dir}/${rel}`);
-      if (content === null) return { ok: false, reason: `file_missing:${rel}` };
-      digests.push({ path: rel, sha256: sha256Hex(content) });
+      const bytes = await this.fs.readFileBytes(`${dir}/${rel}`);
+      if (bytes === null) return { ok: false, reason: `file_missing:${rel}` };
+      digests.push({ path: rel, sha256: sha256Hex(bytes) });
     }
     const computed = treeChecksum(digests);
     if (computed !== manifest.checksum) return { ok: false, reason: "checksum_mismatch" };

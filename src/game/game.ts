@@ -8,10 +8,15 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
+import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
+import { shopViewerOf, shopSlotStatusFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
+import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
+import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
+import { ShopPanel } from "../ui/shopPanel.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
@@ -24,7 +29,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, nearestShopSlot } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
@@ -33,7 +38,7 @@ import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
-import { Hud, dealerTagCopy } from "./hud.js";
+import { Hud } from "./hud.js";
 import type { ProfileStats } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
@@ -47,6 +52,7 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
+import { WAVE_HAZARDS } from "./waveSpec.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -55,6 +61,8 @@ import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
+import { renderDungeonTiles, buildWallSideGradients, tileHash, hexToRgb } from "./tileRender.js";
+import type { TileRenderGradient } from "./tileRender.js";
 
 export interface RunResult {
   floor: number; kills: number; coins: number; durationMs: number;
@@ -201,15 +209,6 @@ const FREEZE_AT = 3;           // chill >= this renders as frozen-solid crust
 const BURN_TINT = "#ff8a3b";   // ember/burn overlay + burn-tick dmg number color
 const AIM_DASH: number[] = [7, 6]; // dashed aim-line pattern (telegraph render)
 
-// Extruded-block wall look (Soul Knight): a lit top cap, a dark front face where the
-// tile below is floor, plus mid-dark side strips on exposed left/right edges so a wall
-// reads as a 3D cube rather than a flat cap. Tones step cap -> front -> side, darkening
-// toward the world floor. Side strips are precomputed gradients (built once) that fade
-// inward; corners where two faces meet get an extra darken so the cube edge reads.
-const WALL_SIDE_W = 7;        // px width of an exposed side face
-const WALL_SIDE_ALPHA = 0.62; // side-strip darkness at the edge
-
-
 const DEATH_DUR = 0.3;        // seconds a fade-only corpse (ghost/spitter) animates out
 const DEATH_DUR_SHEET = 0.4;  // slime/skeleton/bat: their 5-frame death clip
 const DEATH_DUR_BOSS = 0.65;  // the boss's longer 8-frame death clip
@@ -352,14 +351,17 @@ const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
 const PROP_TINT: Record<PropKind, string> = {
   crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
 };
+// Patch's station art hooks per slot kind (assets.ts PROP_SOURCES); flat primitives
+// stand in until the approved PNGs land.
+const SHOP_STATION_IMG: Record<ShopSlot["kind"], PropSpriteName> = {
+  weapon: "shop_pedestal",
+  blessing: "shop_pedestal",
+  heart: "shop_heart_station",
+  reroll: "shop_reroll_post",
+};
 // Subtle idle bob/flash for props + chests — a fraction of the character juice so a crate
 // reads as a solid object, not a jelly.
 const PROP_STYLE: XformStyle = { freq: 2.1, bob: 0.7, squash: 0.03, hop: 0, lean: 0 };
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.startsWith("#") ? hex.slice(1) : hex;
-  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
-}
 
 // ---- hazard render tables (see renderHazards) ----
 // Spike socket centers within the 48px tile (a 2x2 trap plate).
@@ -380,23 +382,8 @@ const POOL_STYLES: readonly PoolStyle[] = [
 const HAZARD_HIT_TINT: Record<FloorHazardKind, string> = {
   spikes: "#c9c9de", toxic_pool: "#3fbf5f", fire_vent: "#ff8a3b", void_rift: "#d9a6ff",
 };
-
-// Stable per-tile hash -> 0..1. Salted so different features (variant vs. detail) draw
-// from independent streams, and identical every frame so tiles never shimmer.
-function tileHash(x: number, y: number, salt: number): number {
-  let h = Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(salt, 2246822519);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  h ^= h >>> 16;
-  return (h >>> 0) / 4294967296;
-}
-
-// Pick a floor variant from a stable hash: mostly plain floor, others sprinkled in.
-function floorVariant(r: number): TileName {
-  if (r < 0.7) return "floor";
-  if (r < 0.8) return "floor2";
-  if (r < 0.9) return "floor3";
-  return "floor4";
-}
+// Manifest §6: the toxic pool's surface loop sounds only while a player is this close.
+const TOXIC_LOOP_RADIUS = 120;
 
 export class Game {
   private ctx: CanvasRenderingContext2D;
@@ -409,6 +396,11 @@ export class Game {
   private onExit: (reason?: ExitReason, detail?: string) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
+  private shopPanel: ShopPanel;
+  // Patch's handover pose timer (seconds left in the one-shot sell clip) and the per-floor
+  // "welcome" latch (the first step into the waystation names it once).
+  private patchSellT = 0;
+  private isShopWelcomed = false;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
   // Online: whether gameplay has been revealed yet. Until then the run sits behind the
@@ -567,7 +559,7 @@ export class Game {
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
   // Per-biome side-face gradients for the extruded wall look (built once). Indexed by biome.
-  private wallSideGrads: [CanvasGradient, CanvasGradient][] = [];
+  private wallSideGrads: [TileRenderGradient, TileRenderGradient][] = [];
   private currentBiome: Biome = biomeForFloor(1);
   private biomeIdx = 0;
   // Cached screen-space vignette (rebuilt on resize / biome change): the depth mood that
@@ -603,11 +595,13 @@ export class Game {
     this.hud.setHotbarActions({
       onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
       onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
+      onSlotInspect: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "inspectSlot", index }); },
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
+    this.shopPanel = new ShopPanel();
     this.buildWallGradients();
     this.bindInput();
     this.resize();
@@ -616,17 +610,7 @@ export class Game {
 
   // Precompute per-biome side-face gradients once (no per-frame allocation).
   private buildWallGradients() {
-    this.wallSideGrads = BIOMES.map((biome) => {
-      const edge = `rgba(${biome.wallSideRgb},${WALL_SIDE_ALPHA})`;
-      const inner = `rgba(${biome.wallSideRgb},0)`;
-      const left = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
-      left.addColorStop(0, edge);
-      left.addColorStop(1, inner);
-      const right = this.ctx.createLinearGradient(0, 0, WALL_SIDE_W, 0);
-      right.addColorStop(0, inner);
-      right.addColorStop(1, edge);
-      return [left, right] as [CanvasGradient, CanvasGradient];
-    });
+    this.wallSideGrads = BIOMES.map((biome) => buildWallSideGradients(this.ctx, biome));
   }
 
   private resize() {
@@ -673,8 +657,12 @@ export class Game {
   private onInputAction(a: GameAction) {
     switch (a.kind) {
       case "togglePause":
-        // Under the hud context Escape means "dismiss the drawer"; pause is next.
+        // Under the hud context Escape means "abort the HUD gesture": cancel a live hotbar
+        // drag first, then dismiss an open drawer; under the shop context it means "close
+        // the panel"; pause is next.
+        if (this.hud.cancelActiveDrag()) break;
         if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
+        if (this.shopPanel.isOpen) { this.shopPanel.close(); break; }
         // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
         // connection attempt and return to the lobby — never a pause menu over a dead world.
         if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
@@ -682,6 +670,9 @@ export class Game {
           break;
         }
         this.togglePause();
+        break;
+      case "interact":
+        if (this.isRunning) this.openFocusedShopStation();
         break;
       case "selectWeapon":
         if (this.isRunning) this.equipSlot(a.index);
@@ -694,6 +685,9 @@ export class Game {
         break;
       case "activateSlot":
         if (this.isRunning) this.activateSlot(a.index);
+        break;
+      case "inspectSlot":
+        if (this.isRunning) this.inspectSlot(a.index);
         break;
       case "reorderSlots":
         if (this.isRunning) this.reorderSlots(a.from, a.to);
@@ -727,6 +721,9 @@ export class Game {
     // connection can never accumulate inputs or keep an autofire latch alive.
     if (this.isAwaitingOnlineWorld() || this.isOnlineOutage()) return "reconnect";
     if (this.isDown) return "spectate";
+    // Browsing a shop station: the panel owns Enter/Esc/E; gameplay samples idle so the
+    // buy flow can never fire a shot or walk the buyer off the pedestal.
+    if (this.shopPanel.isOpen) return "shop";
     // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
     if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
@@ -798,6 +795,7 @@ export class Game {
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
+    this.shopPanel.close();
     audio.unlock();
     waveAudio.reset();
     resetAnim(this.playerAnim);
@@ -833,6 +831,7 @@ export class Game {
   stop() {
     this.isRunning = false;
     this.transport.stop();
+    this.shopPanel.close();
     cancelAnimationFrame(this.raf);
     // Leaving the world (quit, wipe, or a dead socket): clear the lobby's readiness mirror
     // so the roster shows this member back at LOBBY instead of a phantom CONNECTED.
@@ -865,6 +864,9 @@ export class Game {
     }
     this.lastPx = this.px;
     this.lastPy = this.py;
+    this.shopPanel.close();
+    this.isShopWelcomed = false;
+    this.patchSellT = 0;
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
@@ -892,9 +894,16 @@ export class Game {
     // Wave layer: sweep entity-keyed loops/tells from the old floor, crossfade the biome's
     // ambient bed, and preload this floor's cue set (zone + hazards + the boss actually here).
     waveAudio.onFloorLoad();
-    waveAudio.setAmbientZone(this.biomeIdx);
+    // Deterministic biome-ambient RNG: the Deep's sparse pattern is a pure function of
+    // (run seed, floor) — reproducible per floor, different across floors.
+    waveAudio.setAmbientZone(this.biomeIdx, (this.seed ^ Math.imul(this.floor, 0x9E3779B9)) | 0);
     const bossUnit = this.world.enemies.find((e) => e.boss !== null && !e.dead);
-    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null);
+    // First-trigger contract: decode every cue this floor can reach — the boss actually
+    // here plus every spawned archetype's tells — before any of them can fire.
+    const floorKinds = new Set<string>();
+    for (const e of this.world.enemies) floorKinds.add(e.kind);
+    for (const e of this.world.pendingSpawns) floorKinds.add(e.kind);
+    waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null, floorKinds);
   }
 
   // Mount torches on the wall directly above each room (facing into it), at deterministic
@@ -1240,6 +1249,7 @@ export class Game {
     // Dev combo-freeze holds the chain full so the HUD can be screenshotted at a tier.
     if (this.comboFreeze && this.combo > 0) this.p.comboTimer = COMBO_WINDOW;
 
+    this.tickShop(dt);
     this.tickCosmetics(dt, cmd);
 
     if (this.coop) this.publishPresence();
@@ -1433,6 +1443,9 @@ export class Game {
       },
       enemies: this.world.enemies,
       players: this.waveFramePlayers(),
+      // Diegetic ambience placement (the Deep emitter): only wall/material cells are
+      // valid sources — the biome's fabric creaks, never the empty air over the floor.
+      isMaterialCellAt: (x, y) => this.isWallAt(x, y),
     });
   }
 
@@ -1464,30 +1477,37 @@ export class Game {
       if (this.hazardPhases.size > 0) this.hazardPhases.clear();
       return;
     }
+    let poolNear = false;
     for (const h of hazards) {
+      // Manifest §6: the toxic pool has no phase edge — its quiet surface loop is
+      // proximity-gated instead (one mixed voice for the nearest body of liquid).
+      if (h.kind === "toxic_pool") {
+        const px = (h.tx + 0.5) * TILE, py = (h.ty + 0.5) * TILE;
+        if (Math.hypot(px - this.px, py - this.py) <= TOXIC_LOOP_RADIUS) poolNear = true;
+        continue;
+      }
       const phase = floorHazardPhaseAt(h, this.hazardVisClock);
       const prev = this.hazardPhases.get(h.id);
       this.hazardPhases.set(h.id, phase);
       if (prev === undefined || phase === prev) continue;
       const x = (h.tx + 0.5) * TILE, y = (h.ty + 0.5) * TILE;
       if (!this.isNearCamera(x, y)) continue;
+      // Phase-edge cues route through the wave manifest (authored hazard/* assets with
+      // safe library fallbacks) — never the old uiClick/meleeSwing/enemyAttack repitches.
+      const cues = WAVE_HAZARDS[h.kind];
       if (phase === "telegraph") {
-        if (h.kind === "spikes") this.sfxAt("uiClick", x, y, { rate: 1.6, gain: 0.5 });
-        else if (h.kind === "fire_vent") this.sfxAt("enemyAttack", x, y, { rate: 0.7, gain: 0.3 });
-        else if (h.kind === "void_rift") this.sfxAt("enemyAttack", x, y, { rate: 0.4, gain: 0.3 });
+        if (cues?.telegraph) waveAudio.play(cues.telegraph, { x, y, entityId: h.id });
       } else if (phase === "active") {
+        if (cues?.active) waveAudio.play(cues.active, { x, y, entityId: h.id });
         switch (h.kind) {
           case "spikes":
-            this.sfxAt("meleeSwing", x, y, { rate: 1.5, gain: 0.4 });
             this.spawnPuff(x, y, 3, "#c9c9de");
             break;
           case "fire_vent":
-            this.sfxAt("barrel", x, y, { rate: 1.3, gain: 0.35 });
             this.spawnEmberAt(x, y - 6, 8);
             this.spawnPuff(x, y - 10, 4, "#ff8a3b");
             break;
           case "void_rift":
-            this.sfxAt("tesla", x, y, { rate: 0.6, gain: 0.3 });
             this.spawnSparkleBurst(x, y, 6, this.currentBiome.accent);
             break;
           default:
@@ -1495,6 +1515,7 @@ export class Game {
         }
       }
     }
+    waveAudio.holdLoop("toxic_pool.loop", "near", poolNear);
     if (this.hazardPhases.size > hazards.length * 2) {
       // Floor changed underneath us: drop stale ids so the map stays bounded.
       const live = new Set<number>();
@@ -1666,6 +1687,9 @@ export class Game {
         this.addTrauma(TRAUMA_HURT);
         this.hurtFlash = 1;
         this.hurtDir = this.findThreatDir(); // point the vignette at whatever just hit us
+        // Taking a hit closes the shop panel: browsing must never hold a player's inputs
+        // idle while something that chased them into the room is chewing on them.
+        this.shopPanel.close();
         break;
       case "itemPicked":
         // The pick SOUND (blessing vs levelup) plays at choice time in the blessing overlay,
@@ -1686,8 +1710,23 @@ export class Game {
         break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
-        else if (e.kind === "heart" || e.kind === "dealer_heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
+        else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
         else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); sfx("weapon"); }
+        break;
+      case "shopBuy":
+        // The register moment: positional (everyone browsing the stall sees a teammate's
+        // claim land), with the buyer's kind selecting the flavor. Patch plays the
+        // handover pose over it. The OUTCOME itself is authoritative state — coins/stock/
+        // SOLD flow via snapshot; this is purely the chime.
+        this.spawnSparkleBurst(e.x, e.y, 10, "#ffd27a");
+        this.spawnParticles(e.x, e.y, 8, "#ffd27a");
+        this.addDecal(e.x, e.y, "#ffd27a", 12, "ring");
+        this.sfxAt("coin", e.x, e.y, { gain: 0.7 });
+        if (e.kind === "heart") this.sfxAt("heart", e.x, e.y, { gain: 0.55 });
+        else if (e.kind === "blessing") this.sfxAt("blessing", e.x, e.y, { gain: 0.5 });
+        else if (e.kind === "weapon") this.sfxAt("weapon", e.x, e.y, { gain: 0.55 });
+        else this.sfxAt("levelup", e.x, e.y, { gain: 0.4 });
+        this.patchSellT = 0.6;
         break;
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
@@ -1743,7 +1782,9 @@ export class Game {
         break;
       case "hazardHit": {
         // The floor connected: kind-flavored burst on top of the ordinary playerHurt beat
-        // (which the sim raises separately for the shared hurt juice).
+        // (which the sim raises separately for the shared hurt juice). The toxic pool has
+        // no phase-edge cue, so contact is its manifest moment.
+        if (e.kind === "toxic_pool") waveAudio.play("toxic_pool.enter", { x: e.x, y: e.y });
         const tint = HAZARD_HIT_TINT[e.kind];
         this.spawnPuff(e.x, e.y, 8, tint);
         if (e.kind === "spikes") this.spawnSparks(e.x, e.y, 6, -Math.PI / 2);
@@ -1759,30 +1800,29 @@ export class Game {
       case "lungeTrail":
         this.spawnPuff(e.x, e.y, 1, ENEMY_ARCHETYPES.skeleton.tint);
         break;
+      // chargeCrash / burrowDive / burrowErupt / bossVolley / webPlaced keep their juice
+      // only: the wave-manifest tell watcher already sounds these exact edges
+      // (charger.crash, burrower.submerge/erupt, marrow.stompImpact / choir.strikeImpact,
+      // weaver.latticeFire) — the old repitched library doubles are gone.
       case "chargeCrash":
-        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.7, gain: 0.8 });
         this.spawnParticles(e.x, e.y, 10, "#c9a06a");
         this.spawnSparks(e.x, e.y, 6, 0);
         this.shockwaves.spawn(e.x, e.y, 10, 60, 0.3, "#ffd27a", 3);
         this.addTrauma(0.18);
         break;
       case "burrowDive":
-        this.sfxAt("enemyHit", e.x, e.y, { rate: 0.6, gain: 0.5 });
         this.spawnPuff(e.x, e.y, 8, "#c9a06a");
         break;
       case "burrowErupt":
-        this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.85, gain: 0.8 });
         this.spawnParticles(e.x, e.y, 14, "#c9a06a");
         this.spawnDustRing(e.x, e.y, e.r * 0.7, 10, "#c9a06a");
         this.shockwaves.spawn(e.x, e.y, 10, e.r * 1.4, 0.32, "#ffd27a", 3);
         this.addTrauma(0.14);
         break;
       case "bossVolley":
-        this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.75, gain: 0.55 });
         this.spawnPuff(e.x, e.y, 6, "#dceef5");
         break;
       case "webPlaced":
-        this.sfxAt("enemyHit", e.x, e.y, { rate: 1.4, gain: 0.4 });
         this.spawnPuff(e.x, e.y, 7, "#c98bff");
         this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
         break;
@@ -2132,15 +2172,22 @@ export class Game {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
     if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
-    const w = WEAPONS[this.weapon];
+    this.inspectSlot(index);
+  }
+
+  // Open a slot's stat drawer without equipping — the touch long-press path, and where an
+  // already-equipped activation lands. The drawer renders the SAME WeaponDisplayStats the
+  // hotbar tooltip does (one live mod-adjusted source, so the surfaces can never drift);
+  // DROP is offered only on the equipped weapon (Q semantics), never the final weapon.
+  private inspectSlot(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    const id = owned[index];
     this.hud.openWeaponDrawer({
-      id: w.id,
-      name: w.name,
-      damage: w.damage,
-      rate: 1 / w.fireCd,
-      range: w.melee ? w.melee.reach : w.speed * w.life,
-      isMelee: w.melee !== undefined,
-      onDrop: owned.length > 1
+      id,
+      name: WEAPONS[id].name,
+      stats: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+      onDrop: id === this.weapon && owned.length > 1
         ? () => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeapon" }); }
         : null,
     });
@@ -2500,7 +2547,12 @@ export class Game {
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
-      weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name, isCurrent: id === this.weapon })),
+      // Live per-weapon cards ride each slot (mods + low-HP scalers via the sim's own
+      // helper) so hover tooltips always show what a trigger pull would actually do.
+      weapons: this.p.ownedWeapons.map((id) => ({
+        id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
+        card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+      })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
@@ -2526,28 +2578,36 @@ export class Game {
   // The SEMANTIC contextual action (UI Part4): what the interact input would do right now,
   // as data — action id + target + authoritative progress — never presentation. This is
   // the single source the HUD prompt derives from today and a controller pass maps to its
-  // A-button glyph later; it rides the P0 input-context system (the `interact` sample +
-  // context gates in src/game/input.ts) rather than any parallel input path. The revive
-  // affordance appears while a living local player stands inside a revivable downed
-  // teammate's ring; OUT bodies (down limit spent) never prompt — the sim would refuse
-  // the channel, and the world label already says the rescue is the stairs.
-  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | null {
+  // A-button glyph later; it rides the P0 input-context system (the `interact` sample/
+  // press + context gates in src/game/input.ts) rather than any parallel input path.
+  // Priority: the revive affordance (a living local player inside a revivable downed
+  // teammate's ring — OUT bodies never prompt) outranks the shop affordance (a focused
+  // station in Patch's room), so one E always means one thing.
+  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | { action: "shop"; label: string } | null {
     // A pick overlay pauses the player (sim-shielded, inputs idle) — there IS no
     // contextual action to offer under it.
-    if (this.mode === "solo" || this.isSandbox || !this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
-    let near: RemotePlayer | null = null;
-    for (const r of this.remotes()) {
-      if (!r.isDown || r.isOut) continue;
-      if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
-      if (near === null || r.reviveProgress > near.reviveProgress) near = r;
+    if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
+    if (this.mode !== "solo" && !this.isSandbox) {
+      let near: RemotePlayer | null = null;
+      for (const r of this.remotes()) {
+        if (!r.isDown || r.isOut) continue;
+        if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
+        if (near === null || r.reviveProgress > near.reviveProgress) near = r;
+      }
+      if (near !== null) {
+        const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
+        return {
+          action: "revive",
+          targetName: near.name,
+          progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
+        };
+      }
     }
-    if (near === null) return null;
-    const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
-    return {
-      action: "revive",
-      targetName: near.name,
-      progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
-    };
+    if (!this.shopPanel.isOpen) {
+      const slot = this.focusedShopSlot();
+      if (slot !== null) return { action: "shop", label: shopSlotName(slot).toUpperCase() };
+    }
+    return null;
   }
 
   // The BL prompt presentation over the semantic action. The key cap is the KEYBOARD
@@ -2556,11 +2616,68 @@ export class Game {
   private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
     const act = this.contextualAction();
     if (act === null) return null;
+    if (act.action === "shop") return { key: "E", label: `INSPECT ${act.label}`, isActive: false };
     const name = act.targetName.toUpperCase();
     if (act.progress !== null) {
       return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
     }
     return { key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
+  }
+
+  // ---- Patch's shop (client side) ----
+
+  // The station the local player stands close enough to interact with (highlight, HUD
+  // prompt, panel target). Pure affordance — the buy re-validates authoritatively.
+  private focusedShopSlot(): ShopSlot | null {
+    if (!this.isRunning || this.isDown || this.hp <= 0 || this.isChoosing) return null;
+    return nearestShopSlot(this.world, this.px, this.py, SHOP_FOCUS_RANGE);
+  }
+
+  // The semantic interact PRESS resolved against the world: open the focused station's
+  // compact panel. A revivable teammate in range owns E (the hold channel), so the shop
+  // yields; away from every station the press does nothing. Stepping/touching never
+  // reaches any purchase path — only the panel's BUY sends the buy command.
+  private openFocusedShopStation() {
+    if (this.contextualAction()?.action === "revive") return;
+    const slot = this.focusedShopSlot();
+    if (slot === null) return;
+    this.shopPanel.open(
+      this.shopPanelViewFor(slot),
+      (slotId) => this.transport.requestShopBuy(slotId),
+      () => this.syncInputContext(),
+    );
+    this.syncInputContext();
+  }
+
+  private shopPanelViewFor(slot: ShopSlot) {
+    return shopPanelView(this.world.shop!, slot, shopViewerOf(this.p), this.mods);
+  }
+
+  // Patch's-room upkeep, every tick: the handover pose timer, the one-time waystation
+  // welcome label, and the open panel's honesty — it re-renders from authoritative state
+  // (a teammate's claim flips it to SOLD mid-look) and closes when the world moves on
+  // (floor changed, shop gone, buyer down, or the buyer displaced out of range).
+  private tickShop(dt: number) {
+    if (this.patchSellT > 0) this.patchSellT = Math.max(0, this.patchSellT - dt);
+    const shop = this.world.shop;
+    if (this.shopPanel.isOpen) {
+      const slot = shop?.slots.find((s) => s.id === this.shopPanel.slotId);
+      if (!shop || slot === undefined || this.isDown || this.hp <= 0 || this.isChoosing
+        || Math.hypot(this.px - slot.x, this.py - slot.y) > SHOP_FOCUS_RANGE * 1.5) {
+        this.shopPanel.close();
+      } else {
+        this.shopPanel.update(this.shopPanelViewFor(slot));
+      }
+    }
+    if (!shop || this.isShopWelcomed) return;
+    const room = this.dungeon.rooms.find((r) => r.kind === "shop");
+    if (!room) return;
+    const tx = Math.floor(this.px / TILE), ty = Math.floor(this.py / TILE);
+    if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) {
+      this.isShopWelcomed = true;
+      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
+      this.sfxAt("blessing", shop.keeperX, shop.keeperY, { gain: 0.3, rate: 1.15 });
+    }
   }
 
   // The party blessing gate readout: which members still owe their pick (the descend holds
@@ -2919,6 +3036,7 @@ export class Game {
     this.renderExit();
     this.renderShadows();
     this.renderPropEntities();
+    this.renderShop();
     this.renderChests();
     this.renderPickups();
     this.renderParticles();
@@ -3113,227 +3231,18 @@ export class Game {
   }
 
   private renderTiles() {
-    const { ctx, canvas, cam, tiles } = this;
-    const d = this.dungeon;
-    const biome = this.currentBiome;
-    const [sideL, sideR] = this.wallSideGrads[this.biomeIdx];
-    // +1 tile of margin on each edge so the screen-shake translate never exposes bg.
-    const x0 = Math.max(0, Math.floor(cam.x / TILE) - 1);
-    const y0 = Math.max(0, Math.floor(cam.y / TILE) - 1);
-    const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE) + 1);
-    const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE) + 1);
-
-    // Pass 1: floors (+ detail overlay at the biome's density + cast shadow under walls).
-    // Dedicated per-biome floor art (BIOME_TILE_SOURCES) wins when registered; otherwise
-    // the shared set carries the biome through the grade below.
-    const detailDensity = biome.detailDensity;
-    for (let ty = y0; ty < y1; ty++) {
-      for (let tx = x0; tx < x1; tx++) {
-        if (d.tiles[ty * d.w + tx] !== 0) continue;
-        const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
-        const vHash = tileHash(tx, ty, 1);
-        const biomeArt = tiles.biomeFloor(biome.tileKey, Math.floor(vHash * 61));
-        if (biomeArt) {
-          ctx.drawImage(biomeArt, sx, sy, TILE, TILE);
-        } else if (tiles.ready(floorVariant(vHash))) {
-          ctx.drawImage(tiles.get(floorVariant(vHash)), sx, sy, TILE, TILE);
-        } else {
-          ctx.fillStyle = (tx + ty) % 2 === 0 ? biome.floorA : biome.floorB;
-          ctx.fillRect(sx, sy, TILE, TILE);
-        }
-        // Structural value hierarchy: floor material stays quieter/darker than wall caps.
-        // The biome wash later shifts hue across both, so this per-floor dim preserves a
-        // grayscale walkable-vs-solid distinction independent of palette.
-        ctx.save();
-        ctx.globalCompositeOperation = "source-over";
-        ctx.globalAlpha = 0.28;
-        ctx.fillStyle = "#05030b";
-        ctx.fillRect(sx, sy, TILE, TILE);
-        ctx.restore();
-        const rd = tileHash(tx, ty, 2);
-        if (rd < detailDensity) {
-          const t = rd / detailDensity;
-          // Built-dungeon grates only suit the built bands (the Archive's order, the Ember
-          // works); the living and wrong places crack and grow instead.
-          const hasGrates = this.biomeIdx === 4 || this.biomeIdx === 5;
-          const detail: TileName = t < 0.33 ? "floor_crack" : t < 0.66 ? (hasGrates ? "floor_grate" : "floor_crack") : "floor_moss";
-          if (tiles.ready(detail)) {
-            ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
-            // Deep biomes recolor their growth dressing (frost lichen, ember-lit cracks,
-            // void bloom): the tinted silhouette blends OVER the original at partial
-            // alpha, so the art keeps its texture and only the hue shifts.
-            if (biome.detailTint && detail === "floor_moss") {
-              const tinted = tiles.tinted(detail, biome.detailTint);
-              if (tinted) {
-                ctx.save();
-                ctx.globalAlpha = 0.45;
-                ctx.drawImage(tinted, sx, sy, TILE, TILE);
-                ctx.restore();
-              }
-            }
-          }
-        }
-        // Walkability outline: trace the exact floor/wall collision boundary ON the floor
-        // side. This is structural navigation guidance, visible in grayscale and blur.
-        const wallN = ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 1;
-        const wallS = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 1;
-        const wallW = tx > 0 && d.tiles[ty * d.w + tx - 1] === 1;
-        const wallE = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 1;
-        if (wallN || wallS || wallW || wallE) {
-          ctx.save();
-          ctx.globalAlpha = 0.72;
-          ctx.strokeStyle = biome.accent;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          if (wallN) { ctx.moveTo(sx, sy + 1); ctx.lineTo(sx + TILE, sy + 1); }
-          if (wallS) { ctx.moveTo(sx, sy + TILE - 1); ctx.lineTo(sx + TILE, sy + TILE - 1); }
-          if (wallW) { ctx.moveTo(sx + 1, sy); ctx.lineTo(sx + 1, sy + TILE); }
-          if (wallE) { ctx.moveTo(sx + TILE - 1, sy); ctx.lineTo(sx + TILE - 1, sy + TILE); }
-          ctx.stroke();
-          ctx.restore();
-        }
-        // A wall directly above casts a shadow onto this floor tile — sells the height.
-        if (wallN && tiles.ready("wall_shadow")) {
-          ctx.drawImage(tiles.get("wall_shadow"), sx, sy, TILE, TILE);
-        }
-      }
-    }
-
-    // Room flourishes: per-archetype floor lighting drawn between floors and walls, so
-    // wall tiles crop the edges naturally. Arenas get a fighting-pit spotlight, vaults a
-    // treasure-warm glow, hazard set-piece rooms an ominous accent pool.
-    this.renderRoomFlourishes(x0, y0, x1, y1);
-
-    // Pass 2: walls as extruded blocks — lit top cap, dark front face where a floor sits
-    // directly below, and mid-dark side strips on exposed left/right edges. Corners where
-    // the front meets a side get an extra darken so the cube edge reads.
-    for (let ty = y0; ty < y1; ty++) {
-      for (let tx = x0; tx < x1; tx++) {
-        if (d.tiles[ty * d.w + tx] !== 1) continue;
-        const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
-        const aboveFloor = ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 0;
-        const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
-        const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
-        const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
-        // Per-biome wall art (opt-in) wins outright; the extruded side/corner shading
-        // below still runs over it, so a single authored block reads as a full cube.
-        const biomeWall = tiles.biomeWallTop(biome.tileKey);
-        if (!biomeWall) {
-          // Full 16-piece autotile (AD): pick the block by which of N/E/S/W neighbours are
-          // FLOOR (NESW order). One self-contained piece bakes cap + all exposed faces +
-          // corners — handles thin walls, pillars, and gaps, not just room perimeters.
-          const sides = (aboveFloor ? "N" : "") + (rightFloor ? "E" : "") + (belowFloor ? "S" : "") + (leftFloor ? "W" : "");
-          const wf = ("wf_" + (sides || "top")) as TileName;
-          if (tiles.ready(wf)) { ctx.drawImage(tiles.get(wf), sx, sy, TILE, TILE); continue; }
-        }
-        if (biomeWall) {
-          ctx.drawImage(biomeWall, sx, sy, TILE, TILE);
-          // Lift the authored wall cap as a material plane; floor is darkened separately.
-          ctx.save();
-          ctx.globalCompositeOperation = "screen";
-          ctx.globalAlpha = 0.13;
-          ctx.fillStyle = biome.wallCap;
-          ctx.fillRect(sx, sy, TILE, TILE);
-          ctx.restore();
-        } else if (tiles.ready("wall_top")) {
-          ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
-        } else {
-          ctx.fillStyle = biome.wallFront;
-          ctx.fillRect(sx, sy, TILE, TILE);
-          ctx.fillStyle = biome.wallCap;
-          ctx.fillRect(sx, sy, TILE, 6);
-        }
-        // Universal material hierarchy over every authored/fallback wall: a pale top lip and
-        // hard dark floor-facing edge make collision/walkability readable even in grayscale.
-        // Biome art supplies material; this supplies structural depth.
-        ctx.save();
-        ctx.globalAlpha = 0.72;
-        ctx.fillStyle = biome.wallCap;
-        ctx.fillRect(sx + 2, sy + 1, TILE - 4, 2);
-        ctx.globalAlpha = 0.9;
-        ctx.fillStyle = "#05030b";
-        if (belowFloor) ctx.fillRect(sx, sy + TILE - 6, TILE, 6);
-        if (leftFloor) ctx.fillRect(sx, sy, 3, TILE);
-        if (rightFloor) ctx.fillRect(sx + TILE - 3, sy, 3, TILE);
-        ctx.restore();
-        // Front face (darkest): a real sprite if present, then reinforce the inner edge.
-        if (belowFloor && tiles.ready("wall_face")) {
-          ctx.drawImage(tiles.get("wall_face"), sx, sy, TILE, TILE);
-          ctx.save();
-          ctx.globalAlpha = 0.72;
-          ctx.fillStyle = "#05030b";
-          ctx.fillRect(sx, sy + TILE - 5, TILE, 5);
-          ctx.globalAlpha = 0.65;
-          ctx.fillStyle = biome.wallCap;
-          ctx.fillRect(sx + 2, sy + 2, TILE - 4, 2);
-          ctx.restore();
-        }
-        // Side faces: a translucent gradient strip fading inward from the exposed edge.
-        if (leftFloor && sideL) {
-          ctx.save();
-          ctx.translate(sx, sy);
-          ctx.fillStyle = sideL;
-          ctx.fillRect(0, 0, WALL_SIDE_W, TILE);
-          ctx.restore();
-        }
-        if (rightFloor && sideR) {
-          ctx.save();
-          ctx.translate(sx + TILE - WALL_SIDE_W, sy);
-          ctx.fillStyle = sideR;
-          ctx.fillRect(0, 0, WALL_SIDE_W, TILE);
-          ctx.restore();
-        }
-        // Darken the bottom corners where the front face meets a side face.
-        if (belowFloor && (leftFloor || rightFloor)) {
-          ctx.fillStyle = biome.wallCorner;
-          if (leftFloor) ctx.fillRect(sx, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
-          if (rightFloor) ctx.fillRect(sx + TILE - WALL_SIDE_W, sy + TILE - WALL_SIDE_W, WALL_SIDE_W, WALL_SIDE_W);
-        }
-        // Isolated in-room wall cells are pillars/cover, not floor patches. Give them a
-        // compact raised-block silhouette: dark cast shadow/face, inset lit cap, hard outline.
-        if (aboveFloor && belowFloor && leftFloor && rightFloor) {
-          ctx.save();
-          ctx.globalAlpha = 0.55;
-          ctx.fillStyle = "#05030b";
-          ctx.fillRect(sx + 5, sy + 8, TILE - 4, TILE - 3);
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = biome.wallFront;
-          ctx.fillRect(sx + 3, sy + 3, TILE - 8, TILE - 9);
-          ctx.strokeStyle = "#05030b";
-          ctx.lineWidth = 3;
-          ctx.strokeRect(sx + 2.5, sy + 2.5, TILE - 7, TILE - 8);
-          ctx.fillStyle = biome.wallCap;
-          ctx.fillRect(sx + 5, sy + 5, TILE - 12, 4);
-          ctx.globalAlpha = 0.5;
-          ctx.fillStyle = "#ffffff";
-          ctx.fillRect(sx + 7, sy + 5, TILE - 16, 1);
-          ctx.restore();
-        }
-      }
-    }
-
-    // Two-pass wash so the biome reads at a glance over the purple-baked wall sprites:
-    // a "color" pass to shift hue, then a lighter "overlay" pass to push saturation/warmth
-    // through while preserving the tile shading. Alphas kept tasteful (cohesion, not neon).
-    const wx = x0 * TILE - cam.x, wy = y0 * TILE - cam.y, ww = (x1 - x0) * TILE, wh = (y1 - y0) * TILE;
-    ctx.save();
-    ctx.globalCompositeOperation = "color";
-    ctx.globalAlpha = biome.tintAlpha;
-    ctx.fillStyle = biome.tint;
-    ctx.fillRect(wx, wy, ww, wh);
-    ctx.globalCompositeOperation = "overlay";
-    ctx.globalAlpha = biome.tintAlpha * 0.85;
-    ctx.fillRect(wx, wy, ww, wh);
-    // Depth darkness: the world itself dims band over band (entities draw ABOVE this, so
-    // combat readability never pays for the mood). Ember/Null breathe — the dark swells.
-    if (biome.lightLevel > 0) {
-      ctx.globalCompositeOperation = "source-over";
-      const breathe = biome.pulse > 0 ? biome.pulse * 0.5 * (1 + Math.sin(this.animClock * 1.3)) : 0;
-      ctx.globalAlpha = Math.min(0.5, biome.lightLevel + breathe);
-      ctx.fillStyle = "#020108";
-      ctx.fillRect(wx, wy, ww, wh);
-    }
-    ctx.restore();
+    renderDungeonTiles(this.ctx, {
+      dungeon: this.dungeon,
+      biome: this.currentBiome,
+      biomeIdx: this.biomeIdx,
+      camX: this.cam.x,
+      camY: this.cam.y,
+      viewW: this.canvas.width,
+      viewH: this.canvas.height,
+      art: this.tiles,
+      wallSide: this.wallSideGrads[this.biomeIdx],
+      animClock: this.animClock,
+    });
   }
 
   // ---- floor hazards ----
@@ -3588,50 +3497,6 @@ export class Game {
     ctx.restore();
   }
 
-  // Per-archetype room lighting (screen-cropped, gradient fills only). Cheap: a handful
-  // of rooms intersect the camera and each is one radial fill.
-  private renderRoomFlourishes(x0: number, y0: number, x1: number, y1: number) {
-    const { ctx, cam } = this;
-    const biome = this.currentBiome;
-    for (const room of this.dungeon.rooms) {
-      if (room.x >= x1 || room.y >= y1 || room.x + room.w <= x0 || room.y + room.h <= y0) continue;
-      const cx = (room.cx + 0.5) * TILE - cam.x;
-      const cy = (room.cy + 0.5) * TILE - cam.y;
-      const radius = Math.max(room.w, room.h) * TILE * 0.55;
-      if (room.shape === "arena") {
-        // Fighting-pit spotlight: brightest at the center where the duel happens.
-        const g = ctx.createRadialGradient(cx, cy, radius * 0.15, cx, cy, radius);
-        g.addColorStop(0, "rgba(255,244,214,0.10)");
-        g.addColorStop(1, "rgba(255,244,214,0)");
-        ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = g;
-        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-        ctx.restore();
-      } else if (room.kind === "treasure") {
-        const g = ctx.createRadialGradient(cx, cy, 6, cx, cy, radius * 0.7);
-        g.addColorStop(0, "rgba(255,209,102,0.12)");
-        g.addColorStop(1, "rgba(255,209,102,0)");
-        ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = g;
-        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-        ctx.restore();
-      } else if (room.kind === "hazard") {
-        const [r, g2, b] = hexToRgb(biome.accent);
-        const pulse = 0.05 + 0.03 * Math.sin(this.animClock * 2.1);
-        const g = ctx.createRadialGradient(cx, cy, radius * 0.1, cx, cy, radius);
-        g.addColorStop(0, `rgba(${r},${g2},${b},${pulse})`);
-        g.addColorStop(1, `rgba(${r},${g2},${b},0)`);
-        ctx.save();
-        ctx.globalCompositeOperation = "lighter";
-        ctx.fillStyle = g;
-        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
-        ctx.restore();
-      }
-    }
-  }
-
   // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
   // to the visible window; per-torch phase offset keeps them from flickering in sync.
   private renderProps() {
@@ -3878,66 +3743,174 @@ export class Game {
     ctx.restore();
   }
 
-  // The one dealer item whose full state copy the player is reading right now: the nearest
-  // within approach range. Null when nothing is close (everything wears its compact tag).
-  private focusedDealerId(): number | null {
-    let best: number | null = null;
-    let bestD = 90;
-    for (const p of this.pickups) {
-      if (p.kind !== "dealer_heart" && p.kind !== "dealer_weapon") continue;
-      const d = Math.hypot(this.px - p.x, this.py - p.y);
-      if (d < bestD) { bestD = d; best = p.id; }
+  // ---- Patch's waystation ----
+  // Every station renders from its authoritative slot. The ART hooks (patch sprite +
+  // patch_stall / shop_pedestal / shop_heart_station / shop_reroll_post) take over piece
+  // by piece the moment approved PNGs land; until then each is a clean flat primitive
+  // that claims no final art. Walking near a station HIGHLIGHTS it (ring + prompt) — a
+  // purchase only ever leaves through the panel's BUY.
+  private renderShop() {
+    const shop = this.world.shop;
+    if (!shop) return;
+    const { cam } = this;
+    if (this.isNearCamera(shop.keeperX, shop.keeperY, 140)) {
+      this.drawShopStall(shop.keeperX - cam.x, shop.keeperY - cam.y);
+      this.drawPatch(shop.keeperX - cam.x, shop.keeperY - cam.y - 22);
     }
-    return best;
+    const viewer = shopViewerOf(this.p);
+    const focused = this.focusedShopSlot();
+    for (const slot of shop.slots) {
+      if (!this.isNearCamera(slot.x, slot.y, TILE * 2)) continue;
+      this.drawShopStation(shop, slot, viewer, focused !== null && focused.id === slot.id);
+    }
+  }
+
+  // The fold-out salvage cabinet (coherence gate: built from recovered doors/prop
+  // pieces). Primitive: frame beam, hung panel, counter — flat fills only.
+  private drawShopStall(sx: number, sy: number) {
+    const { ctx } = this;
+    const img = this.sprites.prop("patch_stall");
+    if (img) {
+      ctx.drawImage(img, sx - 48, sy - 44, 96, 64);
+      return;
+    }
+    ctx.save();
+    ctx.fillStyle = "#2c2013";
+    ctx.fillRect(sx - 42, sy - 38, 84, 8);
+    ctx.fillStyle = "#57402a";
+    ctx.fillRect(sx - 38, sy - 30, 76, 5);
+    ctx.fillStyle = "#6b5330";
+    ctx.fillRect(sx - 34, sy + 2, 68, 12);
+    ctx.fillStyle = "#8a6a3c";
+    ctx.fillRect(sx - 34, sy, 68, 3);
+    ctx.restore();
+  }
+
+  // Patch behind the counter: authored idle/handover sheets once patch art lands (see
+  // assets.ts); until then the engine's standard flat streaming disc — deliberately NOT
+  // a procedural character. The nameplate is fixed identity, never a floating price tag.
+  private drawPatch(sx: number, sy: number) {
+    const { ctx } = this;
+    const clip: SheetClip = this.patchSellT > 0 ? "attack" : "idle";
+    if (this.sprites.sheet("patch", clip) !== null || this.sprites.ready("patch")) {
+      this.drawChar("patch", clip, sx, sy, 44, 1, IDENTITY_XFORM, 1, 1, 0, this.animClock);
+    } else {
+      ctx.save();
+      ctx.fillStyle = "#c98a3b";
+      ctx.beginPath(); ctx.arc(sx, sy, 13, 0, 6.28); ctx.fill();
+      ctx.strokeStyle = "#ffd27a";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, 13, 0, 6.28); ctx.stroke();
+      ctx.restore();
+    }
+    this.drawShopText("PATCH", sx, sy - 22, "#ffd27a");
+  }
+
+  private drawShopStation(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, isFocused: boolean) {
+    const { ctx, cam } = this;
+    const sx = slot.x - cam.x, sy = slot.y - cam.y;
+    const status = shopSlotStatusFor(shop, slot, viewer);
+    // The walk-near highlight: an interact affordance ring, never a buy trigger.
+    if (isFocused) {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.25 * Math.sin(this.animClock * 5);
+      ctx.strokeStyle = "#ffe9b0";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, 23, 0, 6.28); ctx.stroke();
+      ctx.restore();
+    }
+    const art = this.sprites.prop(SHOP_STATION_IMG[slot.kind]);
+    if (art) {
+      ctx.drawImage(art, sx - 24, sy - 34, 48, 48);
+    } else {
+      ctx.save();
+      ctx.fillStyle = "#443550";
+      ctx.fillRect(sx - 11, sy - 6, 22, 13);
+      ctx.fillStyle = "#5d4a66";
+      ctx.fillRect(sx - 13, sy - 10, 26, 5);
+      ctx.restore();
+    }
+    // The merchandise floats over the pedestal — and honestly VANISHES once taken: a
+    // claimed shared weapon is gone for everyone; a personal slot empties only for the
+    // viewer who bought theirs.
+    const isEmptied = slot.isShared ? slot.kind === "weapon" && slot.soldTo !== null : status === "sold";
+    if (!isEmptied) {
+      const bob = Math.sin(this.animClock * 2.4 + slot.id * 1.7) * 2;
+      this.drawShopMerch(slot, sx, sy - 24 + bob);
+    }
+    const color = status === "buy" ? "#ffd27a" : status === "broke" ? "#ff8a7a" : "#9a8fb5";
+    this.drawShopText(shopChipCopy(status, slot.price), sx, sy + 15, color);
+  }
+
+  private drawShopMerch(slot: ShopSlot, sx: number, sy: number) {
+    const { ctx } = this;
+    if (slot.kind === "weapon" && slot.weapon !== null) {
+      const img = this.sprites.weaponPickup(slot.weapon);
+      if (img) { ctx.drawImage(img, sx - 17, sy - 17, 34, 34); return; }
+      if (this.sprites.ready("gun")) { ctx.drawImage(this.sprites.get("gun"), sx - 14, sy - 14, 28, 28); return; }
+    }
+    if (slot.kind === "heart" && this.sprites.ready("heart")) {
+      ctx.drawImage(this.sprites.get("heart"), sx - 13, sy - 13, 26, 26);
+      return;
+    }
+    if (slot.kind === "blessing") {
+      const def = itemById(slot.itemId ?? "");
+      const tint = def?.tint ?? "#c98bff";
+      ctx.save();
+      ctx.fillStyle = "rgba(8,6,16,0.85)";
+      ctx.fillRect(sx - 11, sy - 11, 22, 22);
+      ctx.strokeStyle = tint;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx - 11, sy - 11, 22, 22);
+      ctx.fillStyle = tint;
+      ctx.font = '700 12px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(def?.glyph ?? "?", sx, sy + 1);
+      ctx.restore();
+      return;
+    }
+    if (slot.kind === "reroll") {
+      ctx.save();
+      ctx.fillStyle = "#8fd8c8";
+      ctx.font = '700 16px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("\u21bb", sx, sy + 1);
+      ctx.restore();
+      return;
+    }
+    ctx.fillStyle = "#ffd27a";
+    ctx.beginPath(); ctx.arc(sx, sy, 8, 0, 6.28); ctx.fill();
+  }
+
+  // Small world-space shop label with the HUD's standard drop shadow.
+  private drawShopText(text: string, sx: number, sy: number, color: string) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '700 9px "Silkscreen", monospace';
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(8,6,16,0.9)";
+    ctx.fillText(text, sx + 1, sy + 1);
+    ctx.fillStyle = color;
+    ctx.fillText(text, sx, sy);
+    ctx.restore();
   }
 
   private renderPickups() {
     const { ctx, cam } = this;
-    const focusedDealer = this.focusedDealerId();
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
-      const name: SpriteName = p.kind === "weapon" || p.kind === "dealer_weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
+      const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
       ctx.save();
       ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
       const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" || p.kind === "dealer_weapon" ? "#ffd27a" : "#ffb43b");
+      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" ? "#ffd27a" : "#ffb43b");
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      // The Dealer's stock wears its state tag (UI gate): the item the player is ABOUT TO
-      // TOUCH carries the full copy — `HEART · 6 COINS`, `NEED N MORE`, `FULL HEALTH`,
-      // `OWNED` — matching the sim, which never consumes on an invalid touch; its shelf
-      // neighbors wear compact tags (price, or the short blocked word) so a row of stalls
-      // never collides into soup.
-      if (p.kind === "dealer_heart" || p.kind === "dealer_weapon") {
-        const tag = dealerTagCopy(
-          p.kind === "dealer_heart"
-            ? { kind: "heart", name: "Heart", price: p.value ?? DEALER.price }
-            : { kind: "weapon", name: p.weapon ? WEAPONS[p.weapon].name : "Weapon", price: p.value ?? 12 },
-          { coins: this.coins, hp: this.hp, maxHp: this.maxHp, isOwned: p.weapon !== null && this.p.ownedWeapons.includes(p.weapon) },
-        );
-        const isFocused = focusedDealer === p.id;
-        // A neighbor of the focused item yields its tag entirely — the focused full copy
-        // owns the shelf line (compact tags return the moment the player steps away).
-        const focused = focusedDealer !== null ? this.pickups.find((d) => d.id === focusedDealer) : undefined;
-        const isYielding = !isFocused && focused !== undefined
-          && Math.abs(focused.y - p.y) < 14 && Math.abs(focused.x - p.x) < 72;
-        if (!isYielding) {
-          const text = isFocused ? tag.text
-            : tag.state === "blocked" ? (p.kind === "dealer_heart" ? "FULL" : "OWNED")
-            : `${p.value ?? DEALER.price}c`;
-          ctx.save();
-          ctx.font = '700 9px "Silkscreen", monospace';
-          ctx.textAlign = "center";
-          ctx.fillStyle = "rgba(8,6,16,0.9)";
-          ctx.fillText(text, sx + 1, sy - 17);
-          ctx.fillStyle = tag.state === "buy" ? "#ffd27a" : tag.state === "broke" ? "#ff8a7a" : "#9a8fb5";
-          ctx.fillText(text, sx, sy - 18);
-          ctx.restore();
-        }
-      }
       // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
       // spent their one personal claim (teammates still see their own live options).
       if (p.isBossChoice) {
@@ -3955,7 +3928,7 @@ export class Game {
       // Weapon pickups draw their own 64px side-profile sprite so each gun is
       // recognizable on the floor; anything without dedicated art (or not yet loaded)
       // falls back to the generic "gun" sprite, then to a plain dot.
-      const weaponImg = (p.kind === "weapon" || p.kind === "dealer_weapon") && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
+      const weaponImg = p.kind === "weapon" && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
       if (weaponImg) {
         ctx.save();
         ctx.translate(sx, sy);
@@ -5344,6 +5317,8 @@ export class Game {
     for (const e of this.enemies) {
       dots.push({ x: e.x, y: e.y, color: isBossKind(e.kind) ? "#ffb43b" : "#ff6a6a", size: isBossKind(e.kind) ? 3 : 2 });
     }
+    // Patch's waystation: a warm amber marker so the safe room reads on the map at a glance.
+    if (this.world.shop) dots.push({ x: this.world.shop.keeperX, y: this.world.shop.keeperY, color: "#ffd27a", size: 2.5 });
     for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
     this.minimap.render({
       dungeon: this.dungeon,
@@ -5391,10 +5366,10 @@ export class Game {
     return { x: this.px, y: this.py };
   }
 
-  devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean): void {
+  devSpawnEnemies(kind: EnemyKind, count: number, atCursor: boolean, tier?: EnemyTier): void {
     for (let i = 0; i < count; i++) {
       const p = this.devPlacePoint(atCursor);
-      devSpawnEnemy(this.world, kind, p.x, p.y);
+      devSpawnEnemy(this.world, kind, p.x, p.y, tier);
       this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
     }
   }

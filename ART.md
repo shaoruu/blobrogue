@@ -115,3 +115,23 @@ its art lands. Contract locked by `npm run test:facing`.
 
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.
+
+## Patch & the waystation (shop room) — ART GATE, hooks wired, art pending
+**Patch** is the Dealer NPC (studio coherence gate: a *warm amber salvage-hauler* whose
+fold-out cabinet is built from recovered doors/prop pieces). The shop ships behind an art
+gate: every hook below is registered and typed, the renderer runs a clearly-placeholder
+flat primitive per piece, and **no procedural character art stands in** — drop the
+approved PNGs onto these exact names and each piece lights up with zero code changes.
+
+Character (64×64 base + horizontal strips, like every sprite):
+- `patch.png` — static base: stout hauler silhouette, patched amber coat, big salvage
+  pack, standing behind a counter, facing DOWN (the stall faces into the room).
+- `patch_idle.png` — breathing keeper loop (registered `patch.idle`, 6fps).
+- `patch_handover.png` — one-shot handover pose, played over every purchase (registered
+  `patch.attack`, 10fps — the attack slot repurposed; Patch never fights).
+
+Stall & stations (PropSpriteName hooks in `assets.ts`):
+- `patch_stall.png` — 96×64 fold-out salvage cabinet (recovered doors, counter front).
+- `shop_pedestal.png` — 64×64 stone display pedestal (weapon + blessing pedestals).
+- `shop_heart_station.png` — 64×64 heart-glass dispenser.
+- `shop_reroll_post.png` — 64×64 salvage-tag signpost (the reroll control).

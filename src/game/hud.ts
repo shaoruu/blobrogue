@@ -9,6 +9,7 @@ import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.j
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
 import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
+import type { WeaponDisplayStats } from "../sim/weaponStats.js";
 
 export interface HudState {
   hp: number;
@@ -17,7 +18,10 @@ export interface HudState {
   kills: number;
   coins: number;
   // Hotbar slots in inventory order (= the 1-9 selection order); `isCurrent` = equipped.
-  weapons: { id: WeaponId; name: string; isCurrent: boolean }[];
+  // `card` is the LIVE semantic weapon card from the sim's weaponStats helper (role verb,
+  // banded core stats, mechanics — same math real shots resolve with), driving the
+  // hover/focus tooltip on each slot.
+  weapons: { id: WeaponId; name: string; isCurrent: boolean; card: WeaponDisplayStats }[];
   // The authoritative objective feed for the top-center lane: `N ENEMIES LEFT` while the
   // floor fights, `FLOOR CLEAR · GO DOWN` once cleared. A boss hides the line entirely
   // (the boss bar IS the objective), and the dev sandbox has no objective.
@@ -53,17 +57,19 @@ export interface HotbarActions {
   onSlotActivate(index: number): void;
   // Drag/drop finished: move slot `from` to position `to` (indices into the CURRENT order).
   onSlotReorder(from: number, to: number): void;
+  // Touch long-press on a slot: open its full stat drawer WITHOUT equipping (hover
+  // tooltips are unreachable on touch; this is the inspect path for unequipped slots).
+  onSlotInspect(index: number): void;
 }
 
-// The equipped weapon's stat sheet for the tap-to-inspect drawer. onDrop backs the drawer's
-// DROP button (the touch path for Q); null when the weapon can't drop (final weapon).
+// A weapon's stat sheet for the tap-to-inspect drawer. `stats` is the SAME live
+// WeaponDisplayStats the hotbar tooltip renders from — one source, so blessing/modifier
+// values can never drift between the two surfaces. onDrop backs the drawer's DROP button
+// (the touch path for Q); null when this weapon can't drop (unequipped or final weapon).
 export interface WeaponDrawerData {
   id: WeaponId;
   name: string;
-  damage: number;
-  rate: number;    // shots per second
-  range: number;   // px (melee reach or bullet travel)
-  isMelee: boolean;
+  stats: WeaponDisplayStats;
   onDrop: (() => void) | null;
 }
 
@@ -104,22 +110,6 @@ function fmtTime(seconds: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// The Dealer's price-tag copy (UI gate: the state must be readable at a glance BEFORE the
-// touch): what a purchase would cost, why it can't happen, or why it's pointless — and the
-// sim guarantees an invalid touch never consumes anything either way. Pure so the DOM
-// suite locks the matrix. `state` drives the tag tint in the world renderer.
-export interface DealerTag { text: string; state: "buy" | "broke" | "blocked" }
-
-export function dealerTagCopy(
-  item: { kind: "heart" | "weapon"; name: string; price: number },
-  viewer: { coins: number; hp: number; maxHp: number; isOwned: boolean },
-): DealerTag {
-  if (item.kind === "heart" && viewer.hp >= viewer.maxHp) return { text: "FULL HEALTH", state: "blocked" };
-  if (item.kind === "weapon" && viewer.isOwned) return { text: "OWNED", state: "blocked" };
-  if (viewer.coins < item.price) return { text: `NEED ${item.price - viewer.coins} MORE`, state: "broke" };
-  return { text: `${item.name.toUpperCase()} \u00b7 ${item.price} COIN${item.price === 1 ? "" : "S"}`, state: "buy" };
-}
-
 // The one normal-objective copy (UI Director): the authoritative cleared flag decides the
 // line, and an uncleared floor with nothing visible on the board reads as the incoming
 // reinforcement wave rather than a lying "0 ENEMIES LEFT". A party's cleared floor is a
@@ -131,18 +121,176 @@ export function objectiveCopy(isCleared: boolean, enemiesLeft: number, isParty =
   return `${enemiesLeft} ${enemiesLeft === 1 ? "ENEMY" : "ENEMIES"} LEFT`;
 }
 
+// ---- weapon card tooltip copy (pure — the DOM suite locks the formatting) ----
+//
+// The game designer's vocabulary: lead with the room-job verb, then at most five core
+// rows (POWER / CADENCE / REACH / COVERAGE-or-SWEEP / IMPACT), then at most three concise
+// technique/tradeoff lines. All content derives from the sim's WeaponDisplayStats (canonical
+// WeaponDef + live mods) — no hand-written per-weapon tooltip values here.
+
+// One comparison token vs the equipped weapon (the accepted vocabulary): a WORD, never a
+// bare arrow — HEAVIER/LIGHTER, MORE/FEWER SHOTS, MORE/LESS, FASTER/SLOWER,
+// LONGER/SHORTER, SAME/DIFFERENT/WIDER/TIGHTER. `dir` drives the accent (+1/-1
+// directional, 0 neutral); the word itself keeps it grayscale-readable.
+export interface WeaponTipCmp {
+  word: string;
+  dir: -1 | 0 | 1;
+}
+
+// One core stat row. `cmp` is empty on the equipped card itself (comparison hidden) and
+// on band ties (no noise words for impact/cadence/reach).
+export interface WeaponTipRow {
+  k: string;
+  v: string;
+  cmp: WeaponTipCmp[];
+}
+
+// One technique/tradeoff line. `marker` is the mechanics diff vs the equipped weapon:
+// "gains" (new mechanic), "changes" (same mechanic, different magnitude), "loses" (the
+// equipped weapon's mechanic this one lacks), null = shared as-is or no comparison.
+export interface WeaponTipNote {
+  text: string;
+  marker: "gains" | "loses" | "changes" | null;
+}
+
+// Stat numbers read at one decimal, trailing .0 dropped ("2", "1.7", "6.3").
+export function fmtStat(n: number): string {
+  const r = Math.round(n * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
+// ±0.5% dead zone so float noise (mod multiplies) never paints a fake comparison.
+function numDelta(a: number, b: number): -1 | 0 | 1 {
+  if (a > b * 1.005) return 1;
+  if (a < b * 0.995) return -1;
+  return 0;
+}
+
+// The five core rows (accepted vocabulary): POWER exact per-pellet/swing × count (never a
+// guaranteed sum), then IMPACT / CADENCE / REACH as shared bands (reach never shows px),
+// then the behavior-first COVERAGE category. Comparisons vs the equipped weapon are
+// semantic words: POWER splits into HEAVIER/LIGHTER (per-hit) plus a separate MORE/FEWER
+// SHOTS (count) — the two are never summed; IMPACT MORE/LESS, CADENCE FASTER/SLOWER,
+// REACH LONGER/SHORTER by band order (ties say nothing); COVERAGE always answers — SAME,
+// WIDER/TIGHTER within the FOCUSED/BURST/WIDE pattern family, neutral DIFFERENT across
+// behavior categories. The equipped card itself compares against nothing.
+export function weaponTipRows(c: WeaponDisplayStats, vs: WeaponDisplayStats | null): WeaponTipRow[] {
+  const bandCmp = (a: { order: number }, b: { order: number } | undefined, more: string, less: string): WeaponTipCmp[] => {
+    if (!b || a.order === b.order) return [];
+    return a.order > b.order ? [{ word: more, dir: 1 }] : [{ word: less, dir: -1 }];
+  };
+  const powerCmp: WeaponTipCmp[] = [];
+  if (vs) {
+    const perHit = numDelta(c.power.perHit, vs.power.perHit);
+    if (perHit === 1) powerCmp.push({ word: "HEAVIER", dir: 1 });
+    else if (perHit === -1) powerCmp.push({ word: "LIGHTER", dir: -1 });
+    if (c.power.count > vs.power.count) powerCmp.push({ word: "MORE SHOTS", dir: 1 });
+    else if (c.power.count < vs.power.count) powerCmp.push({ word: "FEWER SHOTS", dir: -1 });
+  }
+  const covCmp: WeaponTipCmp[] = [];
+  if (vs) {
+    if (c.coverage.kind === vs.coverage.kind) covCmp.push({ word: "SAME", dir: 0 });
+    else if (c.coverage.patternOrder !== null && vs.coverage.patternOrder !== null) {
+      covCmp.push({ word: c.coverage.patternOrder > vs.coverage.patternOrder ? "WIDER" : "TIGHTER", dir: 0 });
+    } else covCmp.push({ word: "DIFFERENT", dir: 0 });
+  }
+  return [
+    { k: "POWER", v: fmtStat(c.power.perHit) + (c.power.count > 1 ? ` \u00d7${c.power.count}` : ""), cmp: powerCmp },
+    { k: "IMPACT", v: c.impact.band, cmp: bandCmp(c.impact, vs?.impact, "MORE", "LESS") },
+    { k: "CADENCE", v: c.cadence.band, cmp: bandCmp(c.cadence, vs?.cadence, "FASTER", "SLOWER") },
+    { k: "REACH", v: c.reach.band, cmp: bandCmp(c.reach, vs?.reach, "LONGER", "SHORTER") },
+    { k: "COVERAGE", v: c.coverage.kind, cmp: covCmp },
+  ];
+}
+
+// The technique/tradeoff lines, at most three. Against the equipped weapon they read as a
+// mechanics diff: this card's mechanics marked GAINS (equipped lacks the tag) or CHANGES
+// (same tag, different magnitude), unmarked when shared as-is — then LOSES lines for
+// equipped mechanics this weapon gives up (they fill the remaining line budget last).
+export function weaponTipNotes(c: WeaponDisplayStats, vs: WeaponDisplayStats | null): WeaponTipNote[] {
+  const notes: WeaponTipNote[] = c.mechanics.map((m) => {
+    if (!vs) return { text: m.text, marker: null };
+    const other = vs.mechanics.find((o) => o.tag === m.tag);
+    if (!other) return { text: m.text, marker: "gains" as const };
+    return { text: m.text, marker: other.mag !== m.mag ? ("changes" as const) : null };
+  });
+  if (vs) {
+    for (const o of vs.mechanics) {
+      if (!c.mechanics.some((m) => m.tag === o.tag)) notes.push({ text: o.text, marker: "loses" });
+    }
+  }
+  return notes.slice(0, 3);
+}
+
+const NOTE_PREFIX: Record<NonNullable<WeaponTipNote["marker"]>, string> = {
+  gains: "GAINS",
+  loses: "LOSES",
+  changes: "CHANGES",
+};
+
+// Fill the ONE floating tooltip with a weapon's card: pixel icon + name header, the
+// room-job verb, the core rows (arrows vs the equipped card), then the technique lines.
+// Pure DOM building against any container — the DOM suite locks the structure. `vs` is
+// the equipped weapon's card (null on the equipped card itself).
+export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], vs: WeaponDisplayStats | null): void {
+  tip.replaceChildren();
+  const head = el("span", "");
+  head.className = "th";
+  const iconBox = el("span", "");
+  iconBox.className = "ti";
+  const iconEl = weaponIconEl(w.id, w.name);
+  if (iconEl instanceof HTMLImageElement) iconEl.draggable = false;
+  iconBox.appendChild(iconEl);
+  const tipName = el("span", "", w.name.toUpperCase());
+  tipName.className = "tn";
+  head.append(iconBox, tipName);
+  const tipRole = el("span", "", w.card.role);
+  tipRole.className = "tj";
+  tip.append(head, tipRole);
+  for (const row of weaponTipRows(w.card, vs)) {
+    const line = el("span", "");
+    line.className = "tr";
+    const k = el("span", "", row.k);
+    k.className = "tk";
+    const v = el("span", "", row.v);
+    v.className = "tv";
+    line.append(k, v);
+    for (const cmp of row.cmp) {
+      // Directional tokens lead with a shape glyph, then the word — the tint comes third,
+      // so the reading survives grayscale, color-blindness, and busy backgrounds.
+      const glyph = cmp.dir === 1 ? "\u25b2 " : cmp.dir === -1 ? "\u25bc " : "";
+      const d = el("span", "", glyph + cmp.word);
+      d.className = "td " + (cmp.dir === 1 ? "up" : cmp.dir === -1 ? "down" : "eq");
+      line.appendChild(d);
+    }
+    tip.appendChild(line);
+  }
+  for (const note of weaponTipNotes(w.card, vs)) {
+    const line = el("span", "", note.marker ? `${NOTE_PREFIX[note.marker]} \u00b7 ${note.text}` : note.text);
+    line.className = "tm" + (note.marker ? ` ${note.marker}` : "");
+    tip.appendChild(line);
+  }
+  if (w.isCurrent) {
+    const cur = el("span", "", "EQUIPPED");
+    cur.className = "tx";
+    tip.appendChild(cur);
+  }
+}
+
 // One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath. Slots
 // past 9 get no key badge — scroll still cycles to them. Fixed width so switching never
-// resizes anything. Slots are pointer/keyboard interactive (click/Enter/Space equips, drag
-// reorders — see Hud.attachSlotInteractions), so they carry button semantics for a11y.
-// Exported for the DOM suite.
+// resizes anything. Slots are pointer/keyboard interactive (click/Enter/Space equips,
+// drag or Shift+arrows reorder — see Hud.attachSlotInteractions), so they carry button
+// semantics for a11y. The weapon-card tooltip is NOT a slot child: it is the Hud's ONE
+// floating tooltip, shown/anchored per slot on hover/focus (see Hud.showTipFor) and
+// linked via aria-describedby while it describes this slot. No native `title` — it would
+// double up over the custom tip. Exported for the DOM suite.
 export function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
   slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
   slot.tabIndex = 0;
   slot.setAttribute("role", "button");
   slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}`);
-  slot.title = `${w.name} — click to equip, drag to reorder`;
   if (index < 9) {
     const key = el("span", "", String(index + 1));
     key.className = "hb-key";
@@ -270,18 +418,44 @@ const HUD_MARKUP = `
 // In-flight hotbar drag. Exists from pointerdown; isActive flips once the pointer travels
 // past the click threshold (so a plain click never flickers a ghost). `gap` is the insertion
 // index in 0..slotCount — the position the dragged slot would be spliced into.
+//
+// grabX/grabY are the pointer's offset INTO the slot at pointerdown (viewport px, from the
+// slot's client rect) — the ghost is positioned so that exact grab point stays under the
+// pointer for the whole drag, at any slot width (66px vs the equipped 84px), UI zoom, or
+// devicePixelRatio. `scale` is the slot's viewport-px-per-CSS-px factor (the #hud
+// zoom / any transformed ancestor), captured once so per-move rect reads are never needed.
 interface SlotDrag {
   pointerId: number;
   fromIndex: number;
+  slotEl: HTMLElement;
   startX: number;
   startY: number;
+  grabX: number;
+  grabY: number;
+  scale: number;
   isActive: boolean;
   ghost: HTMLElement | null;
   marker: HTMLElement | null;
   gap: number;
+  // Touch only: the pending long-press-to-inspect timer. Cancelled by drag activation,
+  // release, or any teardown — a long-press NEVER equips or reorders.
+  longPress: number | null;
 }
 
 const DRAG_START_PX = 6;
+// A release this far outside the slots row is a cancel, not a reorder ("throw it away"
+// reads as changing your mind, and an edge-of-screen fumble never commits by accident).
+const DROP_OUTSIDE_PX = 72;
+
+// Tooltip interaction timing (UI review spec). Mouse hover debounces both ways — 120ms to
+// show (a pass-over never flashes a tip) and 80ms to hide (crossing the 6px slot gap never
+// flickers); keyboard/controller focus is intent and shows immediately. A quick weapon
+// cycle flashes the new weapon's card for 1.2s; a 350ms touch long-press opens the full
+// drawer without equipping. Exported for the DOM suite.
+export const TIP_SHOW_DELAY_MS = 120;
+export const TIP_HIDE_DELAY_MS = 80;
+export const TIP_CONFIRM_MS = 1200;
+export const LONG_PRESS_MS = 350;
 
 export class Hud {
   private hud: HTMLElement;
@@ -296,10 +470,31 @@ export class Hud {
   private scrimEl: HTMLElement;
   private drawerEl: HTMLElement;
   private lastItems: HudState["items"] = [];
+  private lastWeapons: HudState["weapons"] | null = null;
   private hotbarActions: HotbarActions | null = null;
   private drawerFocus = new FocusScope(); // modal focus capture/restore (same pattern as overlays)
   private drag: SlotDrag | null = null;
   private prevSlotsKey = "";
+  // Keyboard reorder: the inventory index to re-focus once the authoritative rebuild lands
+  // (the reorder round-trips through the transport, so the DOM rebuild is asynchronous).
+  private pendingFocusIndex: number | null = null;
+  // The ONE floating weapon tooltip (root-level, position:fixed) plus what it currently
+  // describes: the anchor slot (aria-describedby linkage), its inventory index, and the
+  // weapon id it was showing (a rebuild re-shows live values only while the same weapon
+  // still sits at that index — never a stale card for a different weapon). hoverSlot
+  // tracks the pointer so blur/leave can fall back to the other input's tip.
+  private tipEl: HTMLElement;
+  private tipAnchor: HTMLElement | null = null;
+  private tipIndex: number | null = null;
+  private tipWeaponId: WeaponId | null = null;
+  private hoverSlot: HTMLElement | null = null;
+  private hoverIndex: number | null = null;
+  // Hover debounce + the transient equip-confirmation timer (see TIP_*_MS). All cleared
+  // on any explicit show/hide so a stale timer can never flicker or hide a fresh tip.
+  private tipShowTimer: number | null = null;
+  private tipHideTimer: number | null = null;
+  private tipConfirmTimer: number | null = null;
+  private prevEquippedId: WeaponId | null = null;
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
@@ -362,6 +557,15 @@ export class Hud {
     this.drawerEl.setAttribute("role", "dialog");
     this.drawerEl.setAttribute("aria-modal", "true");
     root.append(this.scrimEl, this.drawerEl);
+    // The ONE floating weapon tooltip. Root-level like the drawers (outside #hud's
+    // stacking context and any hotbar clipping), position:fixed, pointer-events:none.
+    // Populated + anchored per slot on hover/focus; aria-hidden while down.
+    this.tipEl = el("div", "");
+    this.tipEl.className = "hb-tip";
+    this.tipEl.id = "hb-tip";
+    this.tipEl.setAttribute("role", "tooltip");
+    this.tipEl.setAttribute("aria-hidden", "true");
+    root.appendChild(this.tipEl);
     // The BUILD·N pill (compact/touch summary of the blessing row) taps open the full
     // build drawer; the scrim behind any drawer closes it and swallows the tap.
     this.buildPillEl.addEventListener("click", (e) => { e.stopPropagation(); this.openBuildDrawer(); });
@@ -413,6 +617,15 @@ export class Hud {
       `text-shadow:0 4px 0 var(--dun-0),0 0 18px rgba(255,180,59,0.35);opacity:0;transition:opacity 0.35s ease;`);
     root.appendChild(this.banner);
 
+    // A drag can never outlive the surface it started on: losing the window (blur/tab
+    // hide) or a resize (every captured rect/scale is stale) cancels it cleanly — no stuck
+    // ghost, no half-committed reorder.
+    window.addEventListener("resize", () => this.cancelActiveDrag());
+    window.addEventListener("blur", () => this.cancelActiveDrag());
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.cancelActiveDrag();
+    });
+
     // One-time controls onboarding hint: a subtle, auto-dismissing line above the hotbar
     // (clear of its blessing-chip row). Fixed + opacity-only so it never shifts the layout.
     this.controlsHint = el("div",
@@ -425,6 +638,9 @@ export class Hud {
 
   setVisible(v: boolean) {
     this.hud.style.display = v ? "block" : "none";
+    // The floating tooltip lives on the root (not inside #hud), so it hides explicitly
+    // with the hotbar — no tooltip can outlive its bar.
+    if (!v) this.hideTip();
   }
 
   setHotbarActions(actions: HotbarActions) {
@@ -437,17 +653,69 @@ export class Hud {
 
   private attachSlotInteractions(slot: HTMLElement, index: number) {
     slot.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter" && e.key !== " ") return;
-      e.preventDefault();
-      e.stopPropagation(); // a focused slot owns Enter/Space (Space is also the game's key)
-      this.hotbarActions?.onSlotActivate(index);
+      if (this.drag) return; // a live pointer drag owns the slot — keys can't equip/reorder under it
+      // Escape on a focused slot dismisses its tooltip (blur) and is SWALLOWED — it never
+      // falls through to the pause menu while it still has UI to dismiss.
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        slot.blur();
+        return;
+      }
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation(); // a focused slot owns Enter/Space (Space is also the game's key)
+        this.hotbarActions?.onSlotActivate(index);
+        return;
+      }
+      // Keyboard/controller reorder: Shift+arrow moves this slot one step; a plain arrow
+      // just walks focus along the row. Both stop here so the game never sees them as aim.
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        e.stopPropagation();
+        const dir = e.key === "ArrowLeft" ? -1 : 1;
+        const slots = this.slotEls();
+        if (e.shiftKey) {
+          const to = index + dir;
+          if (to < 0 || to >= slots.length) return;
+          this.pendingFocusIndex = to; // the authoritative rebuild re-focuses the moved slot
+          this.hotbarActions?.onSlotReorder(index, to);
+        } else {
+          slots[index + dir]?.focus();
+        }
+      }
     });
     slot.addEventListener("pointerdown", (e) => {
       if (e.button !== 0 || this.drag) return;
       e.preventDefault();
       e.stopPropagation();
       slot.setPointerCapture(e.pointerId);
-      this.drag = { pointerId: e.pointerId, fromIndex: index, startX: e.clientX, startY: e.clientY, isActive: false, ghost: null, marker: null, gap: index };
+      const r = slot.getBoundingClientRect();
+      // Viewport-px-per-CSS-px on this slot (#hud zoom / transformed ancestors); rect and
+      // offsetWidth are both 0 in headless DOMs, so fall back to 1.
+      const scale = r.width > 0 && slot.offsetWidth > 0 ? r.width / slot.offsetWidth : 1;
+      const drag: SlotDrag = {
+        pointerId: e.pointerId, fromIndex: index, slotEl: slot,
+        startX: e.clientX, startY: e.clientY,
+        grabX: e.clientX - r.left, grabY: e.clientY - r.top, scale,
+        isActive: false, ghost: null, marker: null, gap: index, longPress: null,
+      };
+      this.drag = drag;
+      // Pressing IS intent to act: the tooltip drops immediately (hierarchy — the action
+      // and the board outrank inspection UI) and stays down for any drag that follows.
+      this.hideTip();
+      // Touch: a 350ms still press opens the weapon's full drawer WITHOUT equipping
+      // (hover tooltips are unreachable on touch). Any real drag motion or an earlier
+      // release cancels it; the inspect itself tears the press down, so the following
+      // pointerup can neither equip nor reorder.
+      if (e.pointerType === "touch") {
+        drag.longPress = window.setTimeout(() => {
+          drag.longPress = null;
+          if (this.drag !== drag || drag.isActive) return;
+          this.teardownDrag();
+          this.hotbarActions?.onSlotInspect(index);
+        }, LONG_PRESS_MS);
+      }
     });
     slot.addEventListener("pointermove", (e) => {
       const d = this.drag;
@@ -469,21 +737,157 @@ export class Hud {
       const from = d.fromIndex;
       // Gap -> final index: removing the source first shifts every later gap down by one.
       const to = d.gap > from ? d.gap - 1 : d.gap;
-      this.teardownDrag(slot);
+      const isOutside = isDragRelease && this.isOutsideSlots(e.clientX, e.clientY);
+      this.teardownDrag();
       if (!isDragRelease) this.hotbarActions?.onSlotActivate(index);
-      else if (to !== from) this.hotbarActions?.onSlotReorder(from, to);
+      else if (!isOutside && to !== from) this.hotbarActions?.onSlotReorder(from, to);
     });
-    slot.addEventListener("pointercancel", () => this.teardownDrag(slot));
+    slot.addEventListener("pointercancel", () => this.teardownDrag());
+    // The ONE floating tooltip follows the latest input: hover shows this slot's card
+    // (debounced — see TIP_SHOW/HIDE_DELAY_MS), keyboard/controller focus shows it
+    // identically and immediately, and leaving/blurring falls back to whatever the OTHER
+    // input mode still points at (or hides) — a single element, so a stale duplicate is
+    // structurally impossible.
+    slot.addEventListener("pointerenter", () => {
+      this.hoverSlot = slot;
+      this.hoverIndex = index;
+      if (this.drag) return;
+      this.clearTipTimers();
+      // Already up: retarget instantly (moving along the bar must never blink); otherwise
+      // debounce the show so a pass-over on the way somewhere else never flashes a tip.
+      if (this.isTipShown()) this.showTipFor(slot, index);
+      else {
+        this.tipShowTimer = window.setTimeout(() => {
+          this.tipShowTimer = null;
+          if (this.hoverSlot === slot) this.showTipFor(slot, index);
+        }, TIP_SHOW_DELAY_MS);
+      }
+    });
+    slot.addEventListener("pointerleave", () => {
+      if (this.hoverSlot === slot) { this.hoverSlot = null; this.hoverIndex = null; }
+      if (this.tipShowTimer !== null) { window.clearTimeout(this.tipShowTimer); this.tipShowTimer = null; }
+      if (this.tipHideTimer !== null) window.clearTimeout(this.tipHideTimer);
+      this.tipHideTimer = window.setTimeout(() => {
+        this.tipHideTimer = null;
+        const focused = document.activeElement;
+        if (focused instanceof HTMLElement && focused.classList.contains("hb-slot")) {
+          const i = this.slotEls().indexOf(focused);
+          if (i >= 0) { this.showTipFor(focused, i); return; }
+        }
+        this.hideTip();
+      }, TIP_HIDE_DELAY_MS);
+    });
+    slot.addEventListener("focus", () => {
+      this.clearTipTimers();
+      this.showTipFor(slot, index); // focus is intent — no debounce
+    });
+    slot.addEventListener("blur", () => {
+      if (this.hoverSlot?.isConnected && this.hoverIndex !== null) this.showTipFor(this.hoverSlot, this.hoverIndex);
+      else if (this.tipAnchor === slot) this.hideTip();
+    });
+  }
+
+  private isTipShown(): boolean {
+    return this.tipEl.classList.contains("show");
+  }
+
+  private clearTipTimers() {
+    if (this.tipShowTimer !== null) { window.clearTimeout(this.tipShowTimer); this.tipShowTimer = null; }
+    if (this.tipHideTimer !== null) { window.clearTimeout(this.tipHideTimer); this.tipHideTimer = null; }
+    if (this.tipConfirmTimer !== null) { window.clearTimeout(this.tipConfirmTimer); this.tipConfirmTimer = null; }
+  }
+
+  // ---- the ONE floating weapon tooltip ----
+
+  // Populate the singleton with this slot's live card, link it (aria-describedby), show
+  // it, then measure + anchor it ~10px above the slot, clamped fully onscreen with 12px
+  // viewport margins. Suppressed entirely while a drag is live.
+  private showTipFor(slot: HTMLElement, index: number) {
+    const weapons = this.lastWeapons;
+    if (this.drag || !weapons || index < 0 || index >= weapons.length) return;
+    // A fresh explicit show outlives any pending hide/confirm timer (never hidden from
+    // under a live hover/focus by a stale timer).
+    if (this.tipHideTimer !== null) { window.clearTimeout(this.tipHideTimer); this.tipHideTimer = null; }
+    if (this.tipConfirmTimer !== null) { window.clearTimeout(this.tipConfirmTimer); this.tipConfirmTimer = null; }
+    const w = weapons[index];
+    const equipped = weapons.find((x) => x.isCurrent)?.card ?? null;
+    renderTipInto(this.tipEl, w, w.isCurrent ? null : equipped);
+    if (this.tipAnchor && this.tipAnchor !== slot) this.tipAnchor.removeAttribute("aria-describedby");
+    slot.setAttribute("aria-describedby", this.tipEl.id);
+    this.tipAnchor = slot;
+    this.tipIndex = index;
+    this.tipWeaponId = w.id;
+    this.tipEl.classList.add("show");
+    this.tipEl.setAttribute("aria-hidden", "false");
+    // No vertical room above the bar (very short viewport): the floating tip would have
+    // to cover the hotbar or gameplay — don't; the tap/long-press drawer is the info
+    // surface there.
+    if (!this.positionTip(slot)) this.hideTip();
+  }
+
+  hideTip() {
+    this.clearTipTimers();
+    this.tipEl.classList.remove("show");
+    this.tipEl.setAttribute("aria-hidden", "true");
+    this.tipAnchor?.removeAttribute("aria-describedby");
+    this.tipAnchor = null;
+    this.tipIndex = null;
+    this.tipWeaponId = null;
+  }
+
+  // Anchor the (already visible) tooltip above the slot: horizontally centered on the
+  // card, clamped to 12px viewport margins; 10px above the slot's top. Returns false when
+  // the viewport lacks the vertical room — the tip must never cover the bar or gameplay
+  // (the caller hides it; the drawer remains the info surface). The tooltip carries the
+  // HUD's zoom, so the measured viewport-px position divides back into its own zoomed
+  // coordinate space.
+  private positionTip(slot: HTMLElement): boolean {
+    const margin = 12;
+    const gap = 10;
+    const sr = slot.getBoundingClientRect();
+    const tr = this.tipEl.getBoundingClientRect();
+    const scale = tr.width > 0 && this.tipEl.offsetWidth > 0 ? tr.width / this.tipEl.offsetWidth : 1;
+    let left = sr.left + sr.width / 2 - tr.width / 2;
+    const maxLeft = window.innerWidth - margin - tr.width;
+    if (left > maxLeft) left = maxLeft;
+    if (left < margin) left = margin;
+    const top = sr.top - gap - tr.height;
+    if (tr.height > 0 && top < margin) return false;
+    this.tipEl.style.left = `${Math.round(left / scale)}px`;
+    this.tipEl.style.top = `${Math.round(top / scale)}px`;
+    return true;
+  }
+
+  // Release beyond the slots row + margin = the player changed their mind; never commit a
+  // reorder from an edge-of-screen fumble. Headless rects are 0-sized — treat as inside.
+  private isOutsideSlots(x: number, y: number): boolean {
+    const r = this.slotsEl.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    return x < r.left - DROP_OUTSIDE_PX || x > r.right + DROP_OUTSIDE_PX
+      || y < r.top - DROP_OUTSIDE_PX || y > r.bottom + DROP_OUTSIDE_PX;
   }
 
   private beginDragVisuals(slot: HTMLElement, d: SlotDrag) {
     d.isActive = true;
+    if (d.longPress !== null) { window.clearTimeout(d.longPress); d.longPress = null; } // it's a drag, not an inspect
+    this.hideTip(); // tooltips stay down for the whole drag (showTipFor is drag-gated too)
     const rect = slot.getBoundingClientRect();
     const ghost = slot.cloneNode(true) as HTMLElement;
     ghost.classList.add("hb-ghost");
     ghost.classList.remove("dragging");
-    ghost.style.width = `${rect.width}px`;
-    ghost.style.height = `${rect.height}px`;
+    // The ghost lives on <body> (outside the zoomed #hud), so it positions in raw viewport
+    // px. Its box is the slot's UNSCALED size with the captured zoom re-applied via
+    // scale(), so it matches the on-screen card exactly. Inline transform is the ONLY
+    // positioner: it overrides the equipped card's translateY(-4px), and starts offscreen
+    // so nothing flashes at (0,0) before the first move.
+    ghost.style.width = `${rect.width / d.scale}px`;
+    ghost.style.height = `${rect.height / d.scale}px`;
+    ghost.style.transition = "none";
+    ghost.style.transformOrigin = "0 0";
+    ghost.style.transform = "translate3d(-9999px, -9999px, 0)";
+    const moveTag = el("span", "", "MOVE");
+    moveTag.className = "hb-move"; // the ghost names its verb (grayscale-distinct from a real slot)
+    ghost.appendChild(moveTag);
     document.body.appendChild(ghost);
     d.ghost = ghost;
     const marker = el("span", "");
@@ -493,10 +897,15 @@ export class Hud {
     slot.classList.add("dragging");
   }
 
+  // The ghost's top-left = pointer minus the original grab offset, rounded to whole
+  // viewport px for crisp pixel edges — the grab point stays under the pointer at every
+  // zoom/DPR. No rect reads here: everything was captured at pointerdown.
   private moveGhost(d: SlotDrag, x: number, y: number) {
     if (!d.ghost) return;
-    const r = d.ghost.getBoundingClientRect();
-    d.ghost.style.transform = `translate(${x - r.width / 2}px, ${y - r.height / 2}px)`;
+    const tx = Math.round(x - d.grabX);
+    const ty = Math.round(y - d.grabY);
+    d.ghost.style.transform = `translate3d(${tx}px, ${ty}px, 0)`
+      + (d.scale !== 1 ? ` scale(${d.scale})` : "");
   }
 
   private slotEls(): HTMLElement[] {
@@ -540,16 +949,28 @@ export class Hud {
     d.marker.style.height = `${anchor.height}px`;
   }
 
-  private teardownDrag(slot: HTMLElement) {
+  private teardownDrag() {
     const d = this.drag;
     if (!d) return;
     this.drag = null;
+    if (d.longPress !== null) window.clearTimeout(d.longPress);
     d.ghost?.remove();
     d.marker?.remove();
-    slot.classList.remove("dragging");
+    d.slotEl.classList.remove("dragging");
+    try { d.slotEl.releasePointerCapture(d.pointerId); } catch { /* already released / headless */ }
     // The DOM order may now be stale against authority (reorder in flight / rebuilds were
     // held during the drag) — force a rebuild on the next update.
     this.prevSlotsKey = "";
+  }
+
+  // Abort any in-flight drag without committing anything: Escape, window blur / tab hide,
+  // a resize (every captured rect is stale), or authority changing the slot set under the
+  // drag. Returns whether a drag was actually live, so Escape can stop at "cancel the
+  // drag" instead of falling through to the pause menu.
+  cancelActiveDrag(): boolean {
+    if (!this.drag) return false;
+    this.teardownDrag();
+    return true;
   }
 
   // ---- drawers (touch-first info surfaces — nothing here is hover-only) ----
@@ -626,22 +1047,29 @@ export class Hud {
     });
   }
 
-  // The equipped weapon's stat sheet — the tap path for what hover-only title text showed
-  // (activate an already-equipped slot to open it). Carries the touch DROP action too.
+  // A weapon's stat sheet — the tap/long-press path for what the hover tooltip shows
+  // (activate an already-equipped slot, or long-press any slot, to open it). Renders the
+  // exact same WeaponDisplayStats rows/lines the tooltip does. Carries the touch DROP
+  // action for the equipped weapon.
   openWeaponDrawer(d: WeaponDrawerData) {
     this.openDrawer(d.name.toUpperCase(), (body) => {
+      const role = el("p", "", d.stats.role);
+      role.className = "hd-role";
+      body.appendChild(role);
       const stats = el("div", "");
       stats.className = "hd-stats";
-      const stat = (k: string, v: string) => {
+      for (const row of weaponTipRows(d.stats, null)) {
         const box = el("span", "");
         box.className = "hd-stat";
-        box.append(el("span", "", k), el("b", "", v));
+        box.append(el("span", "", row.k), el("b", "", row.v));
         stats.appendChild(box);
-      };
-      stat("DMG", String(d.damage));
-      stat("RATE", `${d.rate.toFixed(1)}/S`);
-      stat(d.isMelee ? "REACH" : "RANGE", `${Math.round(d.range)} PX`);
+      }
       body.appendChild(stats);
+      for (const note of weaponTipNotes(d.stats, null)) {
+        const line = el("p", "", note.text);
+        line.className = "hd-special";
+        body.appendChild(line);
+      }
       if (d.onDrop) {
         const drop = el("button", "", "DROP (Q)");
         drop.className = "hd-drop";
@@ -666,18 +1094,64 @@ export class Hud {
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
-    // Only rebuild when the set/order or selection changes (cheap string key), and NEVER
-    // mid-drag — replacing the slots would strand the pointer capture; the drag teardown
-    // forces the rebuild instead, realigning the DOM with authority.
-    const slotsKey = s.weapons.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|");
-    if (slotsKey !== this.prevSlotsKey && !this.drag) {
-      this.prevSlotsKey = slotsKey;
-      this.slotsEl.replaceChildren();
-      s.weapons.forEach((w, i) => {
-        const slot = buildSlot(w, i);
-        this.attachSlotInteractions(slot, i);
-        this.slotsEl.appendChild(slot);
-      });
+    // Only rebuild when the set/order or selection changes (cheap string key). A rebuild
+    // mid-drag would strand the pointer capture, so a set/order change UNDER a live drag
+    // (a drop resolving, an online correction) cancels the drag first — the drag's indices
+    // are stale against authority and must never be committed. Tooltip stats ride the same
+    // key so live mod changes (blessing picks, low-HP scalers) refresh the numbers.
+    const slotsKey = s.weapons
+      .map((w) => (w.isCurrent ? "*" : "") + w.id + ":" + JSON.stringify(w.card))
+      .join("|");
+    if (slotsKey !== this.prevSlotsKey) {
+      if (this.drag) {
+        const structureKey = (list: HudState["weapons"] | null) =>
+          list?.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|") ?? "";
+        if (structureKey(s.weapons) !== structureKey(this.lastWeapons)) this.cancelActiveDrag();
+      }
+      if (!this.drag) {
+        this.prevSlotsKey = slotsKey;
+        this.lastWeapons = s.weapons;
+        // The floating tooltip's anchor slot is about to be replaced: re-show it with the
+        // FRESH card only while the same weapon still sits at that index (live mod/equip
+        // updates stay live under the cursor); a different weapon there (pickup/drop
+        // churn) hides it instead — never a stale card, never an orphan.
+        const shownIndex = this.tipIndex;
+        const shownWeapon = this.tipWeaponId;
+        this.slotsEl.replaceChildren();
+        s.weapons.forEach((w, i) => {
+          const slot = buildSlot(w, i);
+          this.attachSlotInteractions(slot, i);
+          this.slotsEl.appendChild(slot);
+        });
+        if (this.pendingFocusIndex !== null) {
+          this.slotEls()[this.pendingFocusIndex]?.focus();
+          this.pendingFocusIndex = null;
+        }
+        if (shownIndex !== null) {
+          const anchor = this.slotEls()[shownIndex];
+          if (anchor && s.weapons[shownIndex]?.id === shownWeapon) this.showTipFor(anchor, shownIndex);
+          else this.hideTip();
+        }
+        // Quick weapon cycling (wheel / number keys): flash the newly equipped weapon's
+        // card for TIP_CONFIRM_MS as a transient confirmation — but never fight a tip the
+        // player is actively holding open via hover or focus.
+        const equippedIndex = s.weapons.findIndex((w) => w.isCurrent);
+        const equippedId = equippedIndex >= 0 ? s.weapons[equippedIndex].id : null;
+        const isPointerOrFocusTip = this.hoverSlot !== null
+          || (document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("hb-slot"));
+        if (this.prevEquippedId !== null && equippedId !== null && equippedId !== this.prevEquippedId
+            && !isPointerOrFocusTip) {
+          const anchor = this.slotEls()[equippedIndex];
+          if (anchor) {
+            this.showTipFor(anchor, equippedIndex);
+            this.tipConfirmTimer = window.setTimeout(() => {
+              this.tipConfirmTimer = null;
+              this.hideTip();
+            }, TIP_CONFIRM_MS);
+          }
+        }
+        this.prevEquippedId = equippedId;
+      }
     }
     // The interaction hint matters once there is something to switch/reorder/drop.
     this.hotbarHintEl.classList.toggle("show", s.weapons.length > 1);
@@ -886,9 +1360,13 @@ export class Hud {
     this.prevMult = 1;
     this.comboPop = 0;
     this.comboBurstEl.classList.remove("fire");
-    this.drag?.ghost?.remove();
-    this.drag?.marker?.remove();
-    this.drag = null;
+    this.cancelActiveDrag();
+    this.hideTip();
+    this.hoverSlot = null;
+    this.hoverIndex = null;
+    this.pendingFocusIndex = null;
+    this.lastWeapons = null;
+    this.prevEquippedId = null;
     this.closeDrawer();
     this.buildPillEl.classList.remove("has");
     this.lastItems = [];

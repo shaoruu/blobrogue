@@ -30,6 +30,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SPECCED` Bottom-center loadout: 2 weapon + 2 addon slots; weapon-local charge/cylinder/heat; hover/focus signed comparisons. `docs/specs/blobrogue_POST_SERVER_LOADOUT_UX_spec.md`.
 - `NEW` Opened chest looked odd. AD redesign pending.
 - `SHIPPED` Chest open SFX volume raised; generated alternate creak+chime candidate held for A/B.
+- `SHIPPED` **Audio de-synthesis (playtest audit):** all runtime oscillator/MIDI-like/procedural audio removed (synth SFX recipes, synth music fallback, wave synth voices/pads). Authored files or safe-reuse fallbacks (rate 0.85–1.15) only; missing assets fail quietly behind explicit hooks. Hazard cues rewired to the wave manifest (spikes telegraph no longer uiClick@1.6). revive/uiClick got asset hooks + authored reuse. Burrow underground = deterministic component emitter (no loop); the Deep = silent bed + near-silent per-channel emitter. Take arrays are SELECTION-DRIVEN (`SELECTED_BURROW_TAKES`/`SELECTED_DEEP_TAKES` mirror the audio-gen selection manifests; rejected/retired takes registry-tested absent). Deep FINAL P0 selection wired (mineral v1/v2, drip r4 v1–v3, `deep.resinStress` = resin_creak_r4_v3, architecture r4 v1/v2; weighted 1.5–3.2s diegetic scheduler on wall cells, per-floor deterministic RNG) — closes P0 material selection (Burrow 6 + Deep 8); binaries land after Ian's human spot-check. Pending-generation inventory: `docs/audio/AUDIO_ASSET_INVENTORY.md`.
 - `SHIPPED` Avatar replaced with authored amber cowboy-blob portrait.
 
 ## Weapons / melee / blessings / economy
@@ -47,6 +48,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SPECCED` Guaranteed melee discovery floor2/floor3 retry + dealer melee until discovered.
 - `SPECCED` Blessing duplicate = explicit LV2/LV3 max3, exact delta; max leaves pool. Coin Magnet L1/L2/L3 meaningful radius/pull acceleration. Current duplicate chooser UX is wrong.
 - `SPECCED` Coins = temporary dealer currency; Amber = persistent. Dealers floors 3/6/9; trade/sell/reroll/heal/blessing/weapons; rarity = authored sidegrades, not huge raw damage.
+- `SHIPPED` **Dealer = Patch's authored shop room** (owner rejected loose walk-over stock + floating tags outright). Dedicated safe `shop` RoomKind on 3/6/9…; 2 shared weapon pedestals (FIRST BUY CLAIMS) + 1 personal blessing on 12/18/24, per-player heart station (6c, +1 HP), shared reroll post (8c ×2); explicit E-interact panel with BUY — touch never purchases; protocol v8 `shopBuy` (authoritative, idempotent, one winner on races). Patch/stall art gated behind typed hooks (ART.md).
 - `LOCKED` Progression: ~4–6× temporary expressive capability; permanent raw-stat ceiling ~20–30%; horizontal boss unlocks; sidegrade gear; mastery/fusion, no level-999 deletion.
 
 ## Enemies / bosses / difficulty
@@ -55,9 +57,10 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `NEW` Ghost flickers / half frames face opposite. Diagnose sheet direction vs renderer flip; normalize authored direction. Owner: main runner/art. `BLOCKED (multiplayer priority)`.
 - `SPECCED` Movement grammar: HUNT/ORBIT/BURROW/ANCHOR/FLOCK/FLEE-BAIT. First trio Rootkite, Knellbat, Seamwalker. Smart low-HP flee/reposition with tell/counter; no input cheating.
 - `SPECCED` Visible threat ladder: normal→large/brute→elite→miniboss, mechanical size/mass/attacks/loot; no HP sponge.
+- `SHIPPED` **Durability pass (playtest: enemy toughness uniformly low):** swarm/standard untouched (fodder still melts, early-melt gates hold); brute 2.4×→3.8× HP (F4 starter-pistol focused ~3.2s), elite 2.0×→2.6× (F6 median ~2.8s, aggro→death ~3.6s); threat costs repriced (brute 2.2→2.8, elite 2.8→3.0) so floors buy fewer tough bodies instead of inflating total HP. Ladder gate: swarm << standard < elite < brute. Boss pacing + co-op scaling gates unchanged.
 - `SHIPPED` Slime King current boss bar/stat buff, but `FAILED PLAYTEST`: still killed in ~3s.
 - `SHIPPED` Balance reset (#25, live): Slime King F5 900 HP, measured ~20-45s TTK (was ~3s), phase floors enforced, threat-budget floors w/ swarm/brute/elite tiers, heart economy halved, leveled blessings w/ raw caps, co-op scaling. `docs/specs/blobrogue_BALANCE_FINAL_impl.md`.
-- `SPECCED` Boss roster: Slime King, Marrow blind charger, Hollow Choir, Weaver, Jet, Gilded Warden. Only Slime King currently implemented.
+- `SHIPPED` Boss roster (#31, weaver has a golden): Slime King (F5), Marrow blind charger (F15), Weaver (F20), Gilded Warden (F25), Hollow Choir (F30) implemented in `src/sim/enemies.ts`. `SPECCED` remaining: Jet (later adaptive endgame boss).
 - `SPECCED` Arena floors: rare sealed center; boss+lieutenant first, duo, gauntlet, survival; overlap scheduler/fairness budget.
 - `LOCKED` Mobs/boss difficulty via techniques/movement/room pressure/scarcity, not only HP.
 

@@ -7,7 +7,7 @@
 // solo is byte-for-byte the current game.
 
 import type { WorldState, WorldOptions } from "../sim/world.js";
-import { createWorld, stepWorld, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld } from "../sim/world.js";
+import { createWorld, stepWorld, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, buyFromShopInWorld } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID, IDLE_INPUT } from "../sim/input.js";
@@ -34,6 +34,8 @@ export interface Transport {
   requestEquip(weapon: WeaponId): void;
   requestReorder(from: number, to: number): void;
   requestDrop(weapon: WeaponId): void;
+  // Shop purchase (Patch's room): the panel's BUY button, and nothing else, calls this.
+  requestShopBuy(slot: number): void;
 }
 
 export class LocalTransport implements Transport {
@@ -77,6 +79,12 @@ export class LocalTransport implements Transport {
     // The drop's weaponDrop event joins the normal event stream so solo plays the same
     // pop/label FX the online reliable channel delivers.
     dropWeaponInWorld(this.state, LOCAL_ID, weapon, this.events);
+  }
+
+  requestShopBuy(slot: number): void {
+    // Same validated sim mutator the server routes shopBuy through — solo and online
+    // purchases share ONE authority path, and an invalid buy mutates nothing here too.
+    buyFromShopInWorld(this.state, LOCAL_ID, slot, this.events);
   }
 
   // Solo lets the client reach the live world for rendering-adjacent reads, co-op target

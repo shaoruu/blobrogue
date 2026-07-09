@@ -12,6 +12,7 @@
 
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
+import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
   AttackMove, PropKind, PickupKind, ChestKind,
@@ -73,7 +74,13 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // snapshot seed), so a v6 client would silently render a DIFFERENT map than the server
 // simulates — the join gate fences the skew into a clean version mismatch. Also adds the
 // hazardHit event for floor-hazard damage juice.
-export const PROTOCOL_VERSION = 7;
+// v8 (intentional bump, Patch's shop room): the Dealer's loose priced pickups are GONE —
+// dealer_heart/dealer_weapon leave the PickupKind wire set (a v7 client would render
+// phantom stock), shop floors generate a dedicated `shop` room (geometry skew, same class
+// as v7's), snapshots carry the authoritative `shop` stall state, purchases ride the new
+// client->server `shopBuy` command (explicit interact -> BUY; touch never purchases), and
+// the shopBuy event joins the reliable stream.
+export const PROTOCOL_VERSION = 8;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -230,6 +237,18 @@ export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; 
 // (they slow PREDICTED movement), so they ride every snapshot unfiltered.
 export interface HazardWire { id: number; k: HazardKind; x: number; y: number; r: number; life: number; max: number }
 
+// Patch's shop stall (shop floors only, ≤5 slots): the authoritative stock every client
+// renders and buys against. Global like hazards — the shop is a shared objective and its
+// SOLD/claim state must never be hidden by interest filtering. sold = the claiming buyer
+// of a shared slot; by = the players who already bought a personal (FOR YOU) slot.
+export interface ShopSlotWire {
+  id: number; k: ShopSlotKind; sh: boolean;
+  wpn: WeaponId | null; it: string | null;
+  pr: number; x: number; y: number;
+  sold: PlayerId | null; by: PlayerId[];
+}
+export interface ShopWire { kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
+
 // ---- messages ----
 
 // Client -> server. The client authors INPUTS/INTENTS ONLY.
@@ -273,6 +292,12 @@ export type ClientMsg =
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
   | { t: "chooseBlessing"; offerId: number; choiceId: string }
+  // Authoritative shop purchase (Patch's room): the EXPLICIT buy intent behind the panel's
+  // BUY button — the only way coins move at the stall (stepping on a pedestal sends
+  // nothing). Names the slot; the sim validates everything (liveness, proximity, price,
+  // the per-viewer status matrix) and an invalid buy mutates nothing. Same cseq
+  // idempotency as equip: a resent command can never double-charge.
+  | { t: "shopBuy"; slot: number; cseq: number }
   // Client netcode telemetry uplink (observability + the lag-comp render-delay sample `dly`,
   // which the server clamps to the adaptive [90,300]ms window — a lie can only mis-rewind the
   // sender's own shots within that bounded window).
@@ -317,6 +342,7 @@ export type ServerMsg =
       pickups: PickupWire[];     // shared loot on the ground
       chests: ChestWire[];       // shared chests (incl. the boss chest)
       hzds: HazardWire[];        // shared ground hazards (the Weaver's webs)
+      shop: ShopWire | null;     // Patch's stall (shop floors only) — stock + claim state
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
@@ -397,7 +423,8 @@ function isEnemyKind(v: unknown): v is EnemyKind {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ENEMY_ARCHETYPES, v);
 }
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
-const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true, dealer_weapon: true };
+const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
+const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = { weapon: true, blessing: true, heart: true, reroll: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
@@ -445,6 +472,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  shopBuy: { scope: "pos", fields: { pid: "str", slot: "num", kind: "str", x: "num", y: "num" } },
   weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
@@ -592,6 +620,12 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "chooseBlessing": {
       exactKeys(o, ["t", "offerId", "choiceId"]);
       return { t: "chooseBlessing", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER), choiceId: shortStr(o, "choiceId", 48) };
+    }
+    case "shopBuy": {
+      // The slot is a small non-negative index; the sim validates it against the live
+      // shop (a bad slot is an "invalid" outcome, never a crash).
+      exactKeys(o, ["t", "slot", "cseq"]);
+      return { t: "shopBuy", slot: intOf(o, "slot", 0, 15), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
     }
     case "stat": {
       exactKeys(o, ["t", "rtt", "jit", "rec", "corr", "dly"]);
@@ -753,6 +787,42 @@ function validateHazardWire(v: unknown): HazardWire {
   };
 }
 
+function validateShopSlotWire(v: unknown): ShopSlotWire {
+  const o = obj(v, "shopSlot");
+  const wpn = o.wpn;
+  if (wpn !== null && !isWeaponId(wpn)) throw new ProtocolError("bad shopSlot.wpn");
+  const it = o.it;
+  if (it !== null && (typeof it !== "string" || it.length < 1 || it.length > 48)) throw new ProtocolError("bad shopSlot.it");
+  const sold = o.sold;
+  if (sold !== null && (typeof sold !== "string" || sold.length < 1 || sold.length > 64)) throw new ProtocolError("bad shopSlot.sold");
+  const by = arr(o.by, "shopSlot.by").map((p) => {
+    if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError("bad shopSlot.by entry");
+    return p;
+  });
+  return {
+    id: intOf(o, "id", 0, 15),
+    k: inSet(SHOP_SLOT_KINDS, o.k, "shopSlot.k"),
+    sh: boolOf(o, "sh"),
+    wpn: wpn as WeaponId | null,
+    it: it as string | null,
+    pr: intOf(o, "pr", 0, 1e6),
+    x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
+    sold: sold as PlayerId | null,
+    by,
+  };
+}
+
+function validateShopWire(v: unknown): ShopWire {
+  const o = obj(v, "shop");
+  const slots = arr(o.slots, "shop.slots").map(validateShopSlotWire);
+  if (slots.length > 16) throw new ProtocolError("bad shop.slots size");
+  return {
+    kx: num(o, "kx", -POS_LIMIT, POS_LIMIT), ky: num(o, "ky", -POS_LIMIT, POS_LIMIT),
+    ru: intOf(o, "ru", 0, 1e4),
+    slots,
+  };
+}
+
 function validateWireEvent(v: unknown): WireEvent {
   const o = obj(v, "wireEvent");
   return { id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), e: validateEvent(o.e) };
@@ -824,6 +894,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         pickups: arr(o.pickups, "pickups").map(validatePickupWire),
         chests: arr(o.chests, "chests").map(validateChestWire),
         hzds: arr(o.hzds, "hzds").map(validateHazardWire),
+        shop: o.shop === null ? null : validateShopWire(o.shop),
         events: arr(o.events, "events").map(validateWireEvent),
       };
     }
@@ -958,6 +1029,29 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
 export function toPropWire(p: Prop): PropWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, brk: p.breakT ?? -1 };
 }
+export function toShopWire(s: ShopState): ShopWire {
+  return {
+    kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
+    slots: s.slots.map((slot): ShopSlotWire => ({
+      id: slot.id, k: slot.kind, sh: slot.isShared,
+      wpn: slot.weapon, it: slot.itemId, pr: slot.price,
+      x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
+    })),
+  };
+}
+export function shopFromWire(w: ShopWire): ShopState {
+  // Field order mirrors buildShopState so a decoded shop is BYTE-identical to the sim's
+  // (the shop suite locks the round-trip with a stringify compare).
+  return {
+    keeperX: w.kx, keeperY: w.ky,
+    slots: w.slots.map((s): ShopSlot => ({
+      id: s.id, kind: s.k, isShared: s.sh,
+      weapon: s.wpn, itemId: s.it, price: s.pr,
+      x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
+    })),
+    rerollsUsed: w.ru,
+  };
+}
 export function toPickupWire(p: Pickup): PickupWire {
   return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1, bch: p.isBossChoice ?? false };
 }
@@ -975,7 +1069,7 @@ export function propFromWire(w: PropWire): Prop {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: PROP_RADIUS, hp: 1, dead: w.brk >= 0, breakT: w.brk < 0 ? undefined : w.brk };
 }
 export function pickupFromWire(w: PickupWire): Pickup {
-  const radius = w.kind === "weapon" ? 16 : w.kind === "dealer_weapon" ? 15 : 13;
+  const radius = w.kind === "weapon" ? 16 : 13;
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined };
 }
 export function chestFromWire(w: ChestWire): Chest {
@@ -1148,6 +1242,9 @@ export function buildSnapshot(
     // Unfiltered by design: hazards are hard-capped in the sim, and PREDICTED movement
     // must know about a web before the player walks into interest range of its center.
     hzds: w.hazards.map(toHazardWire),
+    // Unfiltered too: the stall is a shared objective (≤5 slots, shop floors only) whose
+    // SOLD/claim state every client must agree on regardless of where they stand.
+    shop: w.shop ? toShopWire(w.shop) : null,
     events,
   };
 }

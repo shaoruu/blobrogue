@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -210,6 +210,16 @@ export class GameWorld implements RoomRuntime {
     const ok = dropWeaponInWorld(this.state, pid, weapon, ev);
     for (const e of ev) this.injectedEvents.push(e);
     return ok;
+  }
+
+  tryShopBuy(pid: PlayerId, slot: number): boolean {
+    // Message-handler timing like tryDropWeapon: two buys of one shared slot resolve in
+    // arrival order against the SAME live state, so exactly one wins and the loser's
+    // command reads the honest "sold" — never a double-grant, never a lost coin.
+    const ev: SimEvent[] = [];
+    const outcome = buyFromShopInWorld(this.state, pid, slot, ev);
+    for (const e of ev) this.injectedEvents.push(e);
+    return outcome === "ok";
   }
 
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[] {

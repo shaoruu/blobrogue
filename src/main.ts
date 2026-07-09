@@ -11,6 +11,13 @@ import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor } from "./ui/onlineCopy.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 
+declare global {
+  interface Window {
+    // Dev-server-only QA hook (see bootNormal); never assigned in production builds.
+    __blobdev?: { game: Game; hideMenu: () => void };
+  }
+}
+
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const minimap = document.getElementById("minimap") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLElement;
@@ -78,6 +85,11 @@ async function bootNormal() {
   }
 
   const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result), onExit);
+  // Dev-server-only QA hook (dropped from production builds): lets headless tooling —
+  // screenshot capture, manual floor QA — drive the real game without menu automation.
+  if (import.meta.env.DEV) {
+    window.__blobdev = { game, hideMenu: () => menu.hide() };
+  }
 
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
