@@ -495,7 +495,10 @@
          PLAY ONLINE below stays the only amber-filled element and the first action.
          Every bound here is fixed from first paint, so cosmetics/loading never shift
          anything. */
-      .home-hero{ grid-row:1; display:grid; grid-template-columns:1fr 132px; gap:16px; align-items:center;
+      /* Explicit row AND column: the CUSTOMIZE chip shares this grid cell (grid-placed
+         over the band), and auto-placement must never push the hero into an implicit
+         second column. */
+      .home-hero{ grid-row:1; grid-column:1; display:grid; grid-template-columns:1fr 132px; gap:16px; align-items:center;
         min-height:0; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
       .hero-mark{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; min-width:0; }
       /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height

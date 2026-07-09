@@ -390,7 +390,7 @@ async function main(): Promise<void> {
     check("shell: 150px hero row over minmax(0,1fr), height min(548px,100vh-40px), min 508px",
       /\.menu-home\{ display:grid; grid-template-rows:150px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(548px,calc\(100vh - 40px\)\); min-height:508px; \}/.test(html));
     check("hero band: 1fr wordmark | 132px stage; stage canvas is 96px",
-      /\.home-hero\{ grid-row:1; display:grid; grid-template-columns:1fr 132px;/.test(html)
+      /\.home-hero\{ grid-row:1; grid-column:1; display:grid; grid-template-columns:1fr 132px;/.test(html)
       && /\.home-hero \.blob-stage\{[^}]*width:132px; height:132px;/.test(html)
       && /\.home-hero \.blob-stage \.blob-preview\{[^}]*width:96px; height:96px;/.test(html));
     check("the blob STANDS: radial plinth glow behind + soft ground-shadow ellipse",
