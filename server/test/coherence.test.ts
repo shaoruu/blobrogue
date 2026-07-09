@@ -215,9 +215,11 @@ async function main(): Promise<void> {
       await waitUntil(() => tabTwo.transport.isReady() && (s.server.getWorld("room:TABS")?.playerCount ?? 0) === 1, 3000);
 
       check("exactly ONE player remains for the identity (no ghost blob)", s.server.getWorld("room:TABS")?.playerCount === 1, `players=${s.server.getWorld("room:TABS")?.playerCount}`);
+      await waitUntil(() => tabTwo.transport.getWorldRoster().length === 1, 2000); // next broadcast reflects the kick
       const roster = tabTwo.transport.getWorldRoster();
       check("roster holds the identity once, as the newest tab", roster.length === 1 && roster[0].aid === "dup-id" && roster[0].nm === "TabTwo", JSON.stringify(roster));
-      check("older tab's socket was closed", await waitUntil(() => tabOne.transport.getStatus() === "closed", 2000));
+      check("older tab went terminal as SUPERSEDED (explicit, no reconnect loop)",
+        await waitUntil(() => tabOne.transport.getCloseKind() === "superseded", 2000), `kind=${tabOne.transport.getCloseKind()}`);
       check("the takeover is counted (duplicateIdentityKicks)", s.server.health().counters.duplicateIdentityKicks === 1);
       check("the room's run survived the takeover (same seed — bind before kick)", s.server.getWorld("room:TABS")?.state.seed === seedBefore);
 

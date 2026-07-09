@@ -68,6 +68,18 @@ function main(): void {
     check("default deadline outlives the presence stale window", PARTY_GATE_DEADLINE_MS > 12000, `${PARTY_GATE_DEADLINE_MS}ms`);
   }
 
+  section("a mid-outage member reads as RECONNECTING and is still waited for");
+  {
+    const gate = new PartyGate("host");
+    // Guest joined the world once, then dropped: the server roster holds their seat "away".
+    const v = gate.evaluate(0, [HOST, GUEST], new Set(["host"]), new Set(["guest"]));
+    check("gate keeps waiting for the reconnecting member", v.phase === "waiting");
+    check("their link state is explicit", v.members.find((m) => m.playerId === "guest")?.link === "reconnecting");
+    check("a never-joined member stays plain connecting", gate.evaluate(1, [HOST, GUEST], new Set(["host"])).members.find((m) => m.playerId === "guest")?.link === "connecting");
+    const back = gate.evaluate(2, [HOST, GUEST], new Set(["host", "guest"]));
+    check("their return opens the gate", back.phase === "ready" && back.members.every((m) => m.link === "connected"));
+  }
+
   section("readiness latches once satisfied");
   {
     const gate = new PartyGate("host", 100);
