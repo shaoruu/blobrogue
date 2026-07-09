@@ -1,6 +1,7 @@
 import type { ItemDef, ItemRarity } from "../sim/items.js";
 import { itemDesc } from "../sim/items.js";
 import { itemIconEl } from "../game/hudIcons.js";
+import { FocusScope, currentFocus } from "./focus.js";
 
 // One offered card: the blessing plus the cumulative level this pick would reach (an owned
 // blessing offered again IS its Lv2/Lv3 upgrade).
@@ -27,6 +28,7 @@ export class BlessingOverlay {
   private selected = 0;
   private onPick: ((item: ItemDef) => void) | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
+  private focusScope = new FocusScope();
 
   constructor() {
     const root = document.createElement("div");
@@ -62,19 +64,23 @@ export class BlessingOverlay {
     this.choices = choices;
     this.onPick = onPick;
     this.selected = 0;
+    const previous = currentFocus();
     this.render();
     this.root.classList.remove("hidden");
+    this.focusScope.open(this.cards[this.selected] ?? null, previous);
     this.keyHandler = (e) => this.onKey(e);
     window.addEventListener("keydown", this.keyHandler, true);
   }
 
   hide(): void {
+    const wasOpen = this.keyHandler !== null;
     this.root.classList.add("hidden");
     if (this.keyHandler) {
       window.removeEventListener("keydown", this.keyHandler, true);
       this.keyHandler = null;
     }
     this.onPick = null;
+    if (wasOpen) this.focusScope.close();
   }
 
   private render(): void {
@@ -122,6 +128,8 @@ export class BlessingOverlay {
   private setSelected(i: number): void {
     this.selected = i;
     this.cards.forEach((c, idx) => c.classList.toggle("selected", idx === i));
+    // Keep keyboard focus on the selected card so Enter always activates what's lit.
+    this.cards[i]?.focus();
   }
 
   private onKey(e: KeyboardEvent): void {
