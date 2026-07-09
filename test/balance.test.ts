@@ -21,6 +21,7 @@ import {
   threatCostOf, isBossFloor,
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
+import { WEAPONS } from "../src/sim/weapons.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   CAPS, TIERS,
@@ -114,7 +115,7 @@ function enemyTableGates(): void {
   check("floors beyond 10 clamp to the F10 envelope", enemyHpForFloor("skeleton", 14) === 16);
 }
 
-// ---- gate 1: Slime King TTK (median 35–50s, high-roll ≥20s, floor calibrated at 900) ----
+// ---- gate 1: Slime King TTK (median 35–50s, high-roll ≥20s, floor calibrated at 950) ----
 
 interface TtkResult { seconds: number; killed: boolean; transitions: Array<{ entering: boolean; at: number; queued: number }> }
 
@@ -142,9 +143,9 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
 }
 
 function bossTtkGates(): void {
-  section("gate 1: Slime King solo TTK (900 HP at F5)");
-  check("F5 boss HP is exactly 900", bossHpForFloor(5) === 900, `hp=${bossHpForFloor(5)}`);
-  check("F10 boss stays within the ≤1.5x later-boss ceiling", bossHpForFloor(10) <= 900 * 1.5, `hp=${bossHpForFloor(10)}`);
+  section("gate 1: Slime King solo TTK (950 HP at F5, post spent-round-fix calibration)");
+  check("F5 boss HP is exactly 950", bossHpForFloor(5) === 950, `hp=${bossHpForFloor(5)}`);
+  check("F10 boss stays within the ≤1.5x later-boss ceiling", bossHpForFloor(10) <= 950 * 1.5, `hp=${bossHpForFloor(10)}`);
   check("boss contact damage is 2 (was 3)", ENEMY_ARCHETYPES.boss.touchDamage === 2);
 
   const median = measureBossTtk("pistol", L3("hair_trigger"));
@@ -325,6 +326,77 @@ function normalTtkGates(): void {
   const swarm = createEnemy("slime", 0, 0, 1, new Rng(1), 0, { tier: "swarm" });
   check("swarm = 0.55x HP / 1.15x speed / 0.78x radius", swarm.hp === 2 && swarm.speed === 48
     && Math.abs(swarm.radius - 16 * 0.78) < 1e-9, `hp=${swarm.hp} speed=${swarm.speed}`);
+}
+
+// ---- base-pistol reality check: the tables must actually hold up in live autofire ----
+// Regression net for the "packs melt instantly" bug: a spent pierce-0 round could strike
+// every body overlapping its final segment in the same tick (phantom pierce), so clumped
+// enemies took far more damage than the §3 tables authorize. These gates measure LIVE
+// solo autofire against the sim, so neither that bug nor an HP-table wiring break can
+// come back silently.
+
+function measurePackTtk(kind: EnemyKind, count: number, floor: number): number {
+  const w = createWorld(0x9ACC0, floor, { isSandbox: true });
+  w.isGodMode = true;
+  const p = w.players.get(LOCAL_ID)!;
+  const pack: ReturnType<typeof devSpawnEnemy>[] = [];
+  for (let i = 0; i < count; i++) {
+    const e = devSpawnEnemy(w, kind, p.x + 140 + i * 8, p.y + (i % 3) * 6 - 6);
+    pack.push(e);
+  }
+  let ticks = 0;
+  while (pack.some((e) => !e.dead) && ticks < 60 * 30) {
+    const target = pack.find((e) => !e.dead)!;
+    const aim = Math.atan2(target.y - p.y, target.x - p.x);
+    step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+    ticks++;
+  }
+  return ticks * DT;
+}
+
+function pistolBaselineGates(): void {
+  section("base-pistol baseline: early enemies are a fight, never an instant delete");
+  // Mechanism: one pierce-0 round through a PERFECT stack strikes exactly one body.
+  {
+    const w = createWorld(0x57ACC, 1, { isSandbox: true });
+    const p = w.players.get(LOCAL_ID)!;
+    const stack = [
+      devSpawnEnemy(w, "slime", p.x + 80, p.y),
+      devSpawnEnemy(w, "slime", p.x + 80, p.y),
+      devSpawnEnemy(w, "slime", p.x + 80, p.y),
+    ];
+    w.bullets.push({
+      x: p.x + 40, y: p.y, vx: 560, vy: 0, radius: 6, life: 1.1, friendly: true,
+      owner: LOCAL_ID, damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    });
+    // Fly the round into the stack: the tick it lands, it must stop at the FIRST body
+    // (with the phantom-pierce bug, that same tick struck all three).
+    for (let t = 0; t < 10 && stack.every((e) => e.hp === e.maxHp); t++) stepWorld(w, new Map(), DT);
+    const struck = stack.filter((e) => e.hp < e.maxHp).length;
+    check("a spent pierce-0 round strikes exactly ONE body in a perfect stack (no phantom pierce)",
+      struck === 1, `struck=${struck}/3`);
+  }
+
+  // Table wiring: the starting pistol can never one-shot the tutorial bodies.
+  check("a single base-pistol round never deletes a full-HP F1 slime",
+    enemyHpForFloor("slime", 1) > WEAPONS.pistol.damage,
+    `hp=${enemyHpForFloor("slime", 1)} vs dmg=${WEAPONS.pistol.damage}`);
+  check("an F1 skeleton takes at least three base-pistol rounds",
+    enemyHpForFloor("skeleton", 1) > 2 * WEAPONS.pistol.damage,
+    `hp=${enemyHpForFloor("skeleton", 1)}`);
+
+  // Live autofire TTKs (base pistol, no picks): a beat, not an instant — and still fast
+  // (gate 3's ≤0.9s ceilings hold above). Tick floors per the ship-gate contract.
+  const slime = measureFocusedTtk("slime", 1, "pistol", []);
+  check("F1 slime vs base pistol lives ≥ 20 ticks (0.33s) of live autofire",
+    slime >= 20 * DT, `ttk=${slime.toFixed(2)}s (${Math.round(slime / DT)} ticks)`);
+  const skeleton = measureFocusedTtk("skeleton", 2, "pistol", []);
+  check("F2 skeleton vs base pistol lives ≥ 0.4s of live autofire",
+    skeleton >= 0.4, `ttk=${skeleton.toFixed(2)}s`);
+  const pack = measurePackTtk("skeleton", 10, 2);
+  check("a 10-skeleton F2 pack vs base pistol is a real fight (≥ 5s, ~40 rounds)",
+    pack >= 5, `ttk=${pack.toFixed(2)}s`);
+  process.stdout.write(`  info: base pistol — F1 slime=${slime.toFixed(2)}s, F2 skeleton=${skeleton.toFixed(2)}s, 10-pack=${pack.toFixed(2)}s\n`);
 }
 
 // ---- §4: threat budgets, tier gates, composition guards ----
@@ -627,7 +699,7 @@ function coopScalingGates(): void {
   const duoSkeleton = createEnemy("skeleton", 0, 0, 3, rng, 0, { players: 2 });
   check("duo F3 skeleton HP = round(9 x 1.55)", duoSkeleton.hp === 14, `hp=${duoSkeleton.hp}`);
   const duoBoss = createEnemy("boss", 0, 0, 5, rng, 1, { players: 2 });
-  check("duo F5 boss HP = round10(900 x 1.65)", duoBoss.hp === 1490, `hp=${duoBoss.hp}`);
+  check("duo F5 boss HP = round10(950 x 1.65)", duoBoss.hp === 1570, `hp=${duoBoss.hp}`);
 
   // Snapshot at encounter creation: the floor build carries P; later loads re-snapshot.
   const w = createWorld(0xC0093, 1, { isShared: true, skipLocalPlayer: true });
@@ -682,6 +754,7 @@ function reviveGates(): void {
 
 function main(): void {
   enemyTableGates();
+  pistolBaselineGates();
   bossTtkGates();
   marrowGates();
   deepRosterGates();

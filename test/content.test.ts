@@ -67,10 +67,13 @@ function spawnReady(w: WorldState, kind: EnemyKind, x: number, y: number): Enemy
   return e;
 }
 
-function plantBullet(w: WorldState, x: number, y: number, damage: number, radius = 12): void {
+// `passedThrough` marks bodies this round has already struck (hitList), so a planted
+// execution can slip past a boss standing over its target — the same state a real pierce
+// round leaves behind.
+function plantBullet(w: WorldState, x: number, y: number, damage: number, radius = 12, passedThrough: Enemy[] | null = null): void {
   const b: Bullet = {
     x, y, vx: 1, vy: 0, radius, life: 0.05, friendly: true, owner: LOCAL_ID,
-    damage, color: "#fff", pierce: 0, hitList: null, isCrit: false,
+    damage, color: "#fff", pierce: 0, hitList: passedThrough, isCrit: false,
   };
   w.bullets.push(b);
 }
@@ -307,8 +310,15 @@ function marrowTests(): void {
     // the queued overflow lands — here it double-crosses 30% too, raising beat two.
     stepFor(w, MARROW.shieldMinDuration, ev);
     check("the shield holds through its minimum beat while husks stand", boss.attack.move === "shield");
-    for (const h of husks) plantBullet(w, h.x, h.y, 999, 2); // tiny radius: executes the husk, never splashes the boss
+    // Execute the husks one per tick (they converge while chasing — simultaneous tiny
+    // rounds could spend themselves on the same overlapping body).
     const beforeBreak = ev.filter((x) => x.t === "bossTransition" && !x.entering).length;
+    for (const h of husks) {
+      // A tiny round that already passed through the boss: husks converge on/behind its
+      // body, and a spent round must never be soaked by the wrong target.
+      plantBullet(w, h.x, h.y, 999, 2, [boss]);
+      stepFor(w, 0.05, ev);
+    }
     stepFor(w, 0.3, ev);
     const exits = ev.filter((x) => x.t === "bossTransition" && !x.entering).length;
     check("killing both husks collapses the beat well before its 2.6s cap (overflow lands at the break)",
@@ -326,7 +336,10 @@ function marrowTests(): void {
     check("a clean 65% cross shields without queueing", boss.attack.move === "shield"
       && Math.abs(boss.hp - 0.6 * boss.maxHp) < 1);
     stepFor(w, MARROW.shieldMinDuration);
-    for (const h of w.enemies.filter((e) => e.isSummoned && !e.dead)) plantBullet(w, h.x, h.y, 999, 2);
+    for (const h of w.enemies.filter((e) => e.isSummoned && !e.dead)) {
+      plantBullet(w, h.x, h.y, 999, 2, [boss]);
+      stepFor(w, 0.05);
+    }
     stepFor(w, 0.3);
     check("the interactive break returns it to the fight early (no queued damage, phase 2)",
       boss.attack.move !== "shield" && boss.boss !== null && boss.boss.phase === 2 && !boss.dead,
@@ -567,7 +580,10 @@ function choirTests(): void {
     stepFor(w, 0.1);
     check("the scattered Choir itself cannot be damaged", boss.hp === hpMid);
     stepFor(w, CHOIR.splitMinDuration);
-    for (const wsp of wisps) plantBullet(w, wsp.x, wsp.y, 999, 2);
+    for (const wsp of wisps) {
+      plantBullet(w, wsp.x, wsp.y, 999, 2);
+      stepFor(w, 0.05);
+    }
     stepFor(w, 0.3);
     // The overflow lands at the early re-form and double-crosses 30% — beat two begins
     // immediately with FRESH wisps (the machine resolved beat one well under its cap).

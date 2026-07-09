@@ -150,9 +150,12 @@ export const BIOME_PRESSURE: readonly BiomePressure[] = [
 
 export const BOSS = {
   // bossHP = max(round10(38 × medianPracticalDPS), ceil10((20 − forcedTransitionTime) × P95LegalSustainedDPS))
-  // With median 24 DPS, P95 51 DPS, 2.4s forced transitions → 900 at the F5 encounter.
-  baseHp: 900,
-  baseHpFloor: 5,             // the floor the 900 calibration belongs to
+  // Recalibrated after the spent-round fix (a pierce-0 bullet stops at its first body —
+  // packs/adds no longer leak phantom pierce, which nudged the measured legal DPS): with
+  // measured P95 ≈ 54 DPS and 2.4s forced transitions the anti-burst term dominates and
+  // 950 keeps the F5 encounter inside the §7 gates (median 48.2s ≤ 50, high-roll 22.8s ≥ 20).
+  baseHp: 950,
+  baseHpFloor: 5,             // the floor the 950 calibration belongs to
   contactDamage: 2,           // was 3 — collision hurts, but can't delete half a base bar
   entranceGrace: 1.2,
   attackCd: [0, 3.2, 2.7, 2.25] as readonly number[], // indexed by phase 1..3

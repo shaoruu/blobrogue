@@ -1503,6 +1503,14 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
 
     for (const b of w.bullets) {
       if (isBelowGround || !b.friendly) continue;
+      // A SPENT round stops mattering the instant it lands. Bullets are only culled at the
+      // next updateBullets pass, so without this guard a pierce-0 round that just died on
+      // one body could strike every other body overlapping its final segment in the same
+      // tick — phantom pierce that quietly inflated pack damage (~50% on tight clumps)
+      // past everything the balance tables authorize. Pierce/boomerang/vortex rounds keep
+      // life > 0 by design, so legitimate multi-hits are untouched (chests already apply
+      // this same spent-round rule).
+      if (b.life <= 0) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       // Immutable attribution: the bullet keeps flying and dealing damage after its owner leaves
       // (shooter null) — it just credits no one. Never re-attributed to another live player.
