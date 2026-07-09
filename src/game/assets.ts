@@ -89,13 +89,19 @@ const SOURCES: Record<SpriteName, string> = {
   skeleton: "/sprites/skeleton.png",
   ghost: "/sprites/ghost.png",
   spitter: "/sprites/spitter.png",
-  // Sprite hooks for the content-wave enemies: generate via the locked fal recipe
-  // (tools/gen-sprites.mjs charger burrower marrow) and drop the cutouts here. Until the
-  // art lands, drawChar's tinted-circle fallback keeps them rendering.
+  // Sprite hooks for the content-wave enemies + boss roster: generate via the locked fal
+  // recipe (tools/gen-sprites.mjs charger burrower orbiter shielder marrow choir weaver
+  // gilded) and drop the cutouts here. Until the art lands, drawChar's tinted-disc
+  // fallback keeps every one of them rendering in its identity color.
   charger: "/sprites/charger.png",
   burrower: "/sprites/burrower.png",
+  orbiter: "/sprites/orbiter.png",
+  shielder: "/sprites/shielder.png",
   boss: "/sprites/boss.png",
   marrow: "/sprites/marrow.png",
+  choir: "/sprites/choir.png",
+  weaver: "/sprites/weaver.png",
+  gilded: "/sprites/gilded.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",

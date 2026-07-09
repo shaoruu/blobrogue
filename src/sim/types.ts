@@ -14,18 +14,27 @@ export interface Entity {
 
 export type EnemyKind =
   | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
-  | "boss" | "marrow";
+  | "orbiter" | "shielder"
+  | "boss" | "marrow" | "choir" | "weaver" | "gilded";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
 export type AttackPhase = "none" | "windup" | "active" | "recover";
 // Which move an attacker is mid-executing. The bosses own several; others own one or two.
-// "rush"/"crash" are shared line-charge grammar (charger + Marrow): a telegraphed straight
-// rush whose wall impact swaps the move to "crash" for the longer, punishable stun recover.
-// "dive"/"erupt" are the burrower's underground cycle; "volley"/"spin"/"shield" are Marrow.
+// Shared grammar is deliberately reused across bodies so reads transfer:
+//  - "rush"/"crash": a telegraphed straight rush (charger + MARROW) whose wall impact swaps
+//    the move to "crash" for the longer, punishable stun recover.
+//  - "dive"/"erupt": the burrower's underground cycle.
+//  - "volley"/"spin"/"shield": MARROW's fans, spiral barrage, and husk-shield beat.
+//  - "fade"/"wail"/"split": the Hollow Choir's intangible drift, homing wails, and
+//    wisp-split transition beat.
+//  - "pounce"/"weave": the Weaver's marked leap and web-planting.
+//  - "slam"/"sweep": the Gilded Warden's in-place marked quake and heavy ring waves
+//    (its sanctify beat reuses "roar" — same fixed-beat semantics as the King).
 export type AttackMove =
   | "none" | "lunge" | "spit" | "hopslam" | "radial" | "roar" | "squeeze"
-  | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield";
+  | "rush" | "crash" | "dive" | "erupt" | "volley" | "spin" | "shield"
+  | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -50,22 +59,24 @@ export interface BossRoar {
   queuedBy: PlayerId | null;
 }
 
-// Boss-only extra state (HP-phase tracking + add/attack pacing), shared by both bosses.
+// Boss-only extra state (HP-phase tracking + add/attack pacing), shared by every boss.
 // Phase transitions are driven by damage events (checked after every authoritative hit),
-// never idle polling. The transition beat is the Slime King's roar or MARROW's shield —
-// one anti-burst mechanism (reduction + HP floor + queued overflow), two presentations.
+// never idle polling. The transition beat — the King's roar, MARROW's shield, the Choir's
+// split, the Weaver's molt, the Warden's sanctify — is ONE anti-burst mechanism
+// (reduction + HP floor + queued overflow), five presentations.
 export interface BossState {
   phase: number;           // 1..3
   transitionsDone: number; // 0..2 — which of the two transition beats have fired
-  roar: BossRoar | null;   // non-null while a transition beat (roar/shield) is active
+  roar: BossRoar | null;   // non-null while a transition beat is active
   addTimer: number;        // countdown until the next cadence add spawn
   attackCount: number;     // attacks committed in the current phase (special-move cadence)
-  isNextRadial: boolean;   // King: alternates hop/radial in P2. Marrow: alternates rush/volley.
-  burstParity: number;     // King: radial ring offset. Marrow: spiral spin direction.
-  // Marrow shield beat: the summoned husks' enemy ids — killing them ALL drops the shield
-  // early (the interactive break). Always empty on the Slime King.
-  shieldHuskIds: number[];
-  // Marrow spiral barrage: shard pairs already fired this active window.
+  isNextRadial: boolean;   // per-boss two-move alternation flag (hop/radial, rush/volley, …)
+  burstParity: number;     // per-boss parity scratch (radial offset, spiral direction, …)
+  // Interactive transition beats (MARROW husks, Choir wisps): the beat's summoned add ids —
+  // killing them ALL drops the beat early. Empty on fixed-duration beats (King/Weaver/Warden).
+  beatAddIds: number[];
+  // Sequenced-emission scratch: shard pairs fired this spiral (MARROW), waves released this
+  // sweep (Gilded Warden), pounces chained this commitment (Weaver).
   spinCount: number;
 }
 
@@ -121,6 +132,7 @@ export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
   | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "boomerang"
+  | "beam" | "vortex"
   | "sword" | "longsword" | "spear";
 
 export interface Bullet {
@@ -147,6 +159,10 @@ export interface Bullet {
   // boomerang: outbound seconds left before the turn; <= 0 means it is flying back to its
   // owner (phasing over geometry). It never dies on a hit — each pass re-arms via hitList.
   boomerang?: number;
+  // vortex: pull radius in px — while the orb lives, enemies inside are dragged toward it
+  // (scaled down by their kbResist, so heavies and bosses barely drift). Pull orbs pass
+  // through bodies, damaging each once via hitList.
+  pull?: number;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies
@@ -200,6 +216,21 @@ export interface Prop {
   hp: number;
   dead: boolean;
   breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
+}
+
+// Authored ground hazards (the Weaver's webs). Shared, authoritative floor state like
+// props: placed by boss moves, expire on a timer, rebuilt empty on every floor load.
+// Webs SLOW players standing inside (never enemies — it's their home turf); they never
+// damage, so the pressure is routing, not attrition.
+export type HazardKind = "web";
+
+export interface Hazard {
+  id: number;      // stable per-floor id (wire identity + client anim keying)
+  kind: HazardKind;
+  x: number; y: number;
+  radius: number;
+  life: number;    // seconds until it fades
+  maxLife: number; // authored duration (drives the client's fade render)
 }
 
 // Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are
@@ -272,5 +303,6 @@ export type TileKind = 0 | 1; // 0 = floor, 1 = wall
 // this from assets.ts for its render call sites.
 export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
-  | "boss" | "marrow"
+  | "orbiter" | "shielder"
+  | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "heart" | "coin" | "gun" | "spit";

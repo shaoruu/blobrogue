@@ -1,6 +1,6 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, RemotePlayer } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer } from "../sim/types.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
@@ -8,7 +8,7 @@ import { ENEMY_ARCHETYPES, isBossFloor, isBossKind } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, TIERS } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
@@ -19,7 +19,7 @@ import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/wor
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
-import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR } from "../sim/constants.js";
+import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
@@ -110,6 +110,8 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   nailer: "shootRapid",
   mortar: "cannon",
   boomerang: "meleeSwing",
+  beam: "tesla",
+  vortex: "homing",
   flamer: "shootRapid",
   sword: "meleeSwing",
   longsword: "meleeSwing",
@@ -180,6 +182,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   pistol: 0.12, shotgun: 0.5, rapid: 0.06,
   smg: 0.05, cannon: 0.55, burst: 0.18, ricochet: 0.14, homing: 0.05, tesla: 0.12,
   sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04, mortar: 0.45, boomerang: 0.1,
+  beam: 0.02, vortex: 0.2,
   sword: 0.08, longsword: 0.16, spear: 0.07,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
@@ -188,12 +191,14 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   pistol: 1, shotgun: 1.4, rapid: 0.6,
   smg: 0.5, cannon: 1.6, burst: 0.9, ricochet: 1, homing: 0.4, tesla: 0.7,
   sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3, mortar: 1.4, boomerang: 0.8,
+  beam: 0.15, vortex: 0.9,
   sword: 0.7, longsword: 1.1, spear: 0.6,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
   smg: 1, cannon: 10, burst: 2, ricochet: 3, homing: 0.5, tesla: 1.5,
   sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5, mortar: 7, boomerang: 2,
+  beam: 0.3, vortex: 2,
   sword: 1.5, longsword: 2.5, spear: 1,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
@@ -240,13 +245,20 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   radial: "#c98bff",  // boss burst: violet
   roar: "#ffb43b",    // boss phase change: gold
   squeeze: "#ff5a5a", // boss arena squeeze: closing red ring
-  rush: "#ff8a3b",    // charger / Marrow line charge: hot orange lane
+  rush: "#ff8a3b",    // charger / MARROW line charge: hot orange lane
   crash: "#ffd27a",   // post-crash stun (no windup renders; the dizzy wobble carries it)
   dive: "#c9a06a",    // burrower submerge: earthen shudder
   erupt: "#ff5a5a",   // burrower eruption marker: red danger disc
-  volley: "#dceef5",  // Marrow bone fan: pale bone
-  spin: "#dceef5",    // Marrow spiral barrage
-  shield: "#7fd6ff",  // Marrow transition shield: cold blue
+  volley: "#dceef5",  // MARROW bone fan: pale bone
+  spin: "#dceef5",    // MARROW spiral barrage
+  shield: "#7fd6ff",  // MARROW transition shield: cold blue
+  fade: "#bfe9ff",    // Choir submerging into intangibility: cold mist
+  wail: "#9fd8ff",    // Choir homing wail volley
+  split: "#bfe9ff",   // Choir wisp-split beat
+  pounce: "#c98bff",  // Weaver drop-from-above: Deep violet
+  weave: "#c98bff",   // Weaver web planting
+  slam: "#ffd166",    // Gilded Warden anvil quake: gold
+  sweep: "#ffd166",   // Gilded Warden ring waves
 };
 
 // Fallback disc tint per sprite while its PNG streams in (or before generated art lands):
@@ -420,6 +432,7 @@ export class Game {
   private get bullets(): Bullet[] { return this.world.bullets; }
   private get pickups(): Pickup[] { return this.world.pickups; }
   private get props(): Prop[] { return this.world.props; }
+  private get hazards(): Hazard[] { return this.world.hazards; }
   private get chests(): Chest[] { return this.world.chests; }
 
   private isRunning = false;
@@ -1117,6 +1130,10 @@ export class Game {
         this.spawnSparks(e.x, e.y, 3, e.aim);
         this.spawnSparkFlash(e.x, e.y, e.color);
         break;
+      case "bulletBlocked":
+        this.sfxAt("parry", e.x, e.y, { rate: 1.2, gain: 0.5 });
+        this.spawnSparks(e.x, e.y, 4, e.aim);
+        break;
       case "bulletExpire":
         this.spawnPuff(e.x, e.y, 6, e.color);
         break;
@@ -1174,6 +1191,11 @@ export class Game {
       case "bossVolley":
         this.sfxAt("shootShotgun", e.x, e.y, { rate: 0.75, gain: 0.55 });
         this.spawnPuff(e.x, e.y, 6, "#dceef5");
+        break;
+      case "webPlaced":
+        this.sfxAt("enemyHit", e.x, e.y, { rate: 1.4, gain: 0.4 });
+        this.spawnPuff(e.x, e.y, 7, "#c98bff");
+        this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
         break;
       case "bossSlam":
         this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
@@ -1328,6 +1350,14 @@ export class Game {
         this.spawnPuff(x, y, 10, ENEMY_ARCHETYPES.burrower.tint);
         this.spawnDustRing(x, y, 26, 8, "#c9a06a");
         break;
+      case "orbiter":
+        this.spawnWisps(x, y, 5, ENEMY_ARCHETYPES.orbiter.tint);
+        this.spawnSparks(x, y, 4, 0);
+        break;
+      case "shielder":
+        this.spawnGibs(x, y, 8, "#cfe0d4");
+        this.spawnSparks(x, y, 6, 0);
+        break;
       case "boss":
         this.screenFlash.flash(255, 214, 120, 0.4, 1.4);
         this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd27a", 5);
@@ -1340,6 +1370,25 @@ export class Game {
         this.shockwaves.spawn(x, y, 12, 260, 0.8, "#bfd8e0", 3);
         this.spawnGibs(x, y, 14, "#e8e4d8");
         this.spawnSparkleBurst(x, y, 26, "#dceef5");
+        break;
+      case "choir":
+        this.screenFlash.flash(191, 233, 255, 0.35, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#bfe9ff", 5);
+        this.spawnWisps(x, y, 18, "#dff4ff");
+        this.spawnSparkleBurst(x, y, 22, "#bfe9ff");
+        break;
+      case "weaver":
+        this.screenFlash.flash(201, 139, 255, 0.35, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#c98bff", 5);
+        this.spawnGibs(x, y, 12, "#c98bff");
+        this.spawnSparkleBurst(x, y, 22, "#e0c8ff");
+        break;
+      case "gilded":
+        this.screenFlash.flash(255, 209, 102, 0.45, 1.4);
+        this.shockwaves.spawn(x, y, 24, 150, 0.5, "#ffd166", 5);
+        this.shockwaves.spawn(x, y, 12, 260, 0.8, "#ffb43b", 3);
+        this.spawnGibs(x, y, 14, "#ffe6a0");
+        this.spawnSparkleBurst(x, y, 30, "#ffd166");
         break;
     }
   }
@@ -2035,6 +2084,7 @@ export class Game {
     if (this.isFlowDebug) this.renderFlowDebug();
     this.renderProps();
     this.renderDecals();
+    this.renderHazards();
     this.motes.render(ctx, this.cam.x, this.cam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -2704,19 +2754,38 @@ export class Game {
         this.renderBurrowMound(e, sx, sy, drawSize, anim.clock);
         continue;
       }
+      // The Choir mid-split is GONE — only a reforming shimmer marks where it will return.
+      if (e.kind === "choir" && a.move === "split") {
+        this.renderChoirSplit(e, sx, sy, drawSize, anim.clock);
+        continue;
+      }
+      // The Weaver airborne: no body to shoot — just the falling shadow on its landing mark.
+      if (e.kind === "weaver" && a.move === "pounce" && a.phase === "active") {
+        this.renderDangerDisc(a.markX, a.markY, WEAVER.pounceRadius, 1);
+        this.renderPounceShadow(a.markX, a.markY, drawSize, a.windup);
+        continue;
+      }
 
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
       // The shrinking safe-ring of the boss arena squeeze.
       if (e.kind === "boss" && a.move === "squeeze") this.renderSqueeze(e);
-      // The Marrow's transition shield bubble (the interactive beat: kill the husks).
+      // MARROW's transition shield bubble (the interactive beat: kill the husks).
       if (e.kind === "marrow" && a.move === "shield" && isWindup) this.renderMarrowShield(e, sx, sy, drawSize);
+      // The Weaver's pounce marker while it coils; the Warden's quake ring while it winds.
+      if (e.kind === "weaver" && a.move === "pounce" && isWindup) this.renderDangerDisc(a.markX, a.markY, WEAVER.pounceRadius, a.windup);
+      if (e.kind === "gilded" && a.move === "slam" && (isWindup || a.phase === "active")) {
+        this.renderDangerDisc(a.markX, a.markY, GILDED.slamRadius, a.phase === "active" ? 1 : a.windup);
+      }
       // Brutes/elites carry a colored ground ring so the tier reads before the first hit.
       const ring = TIER_RING_COLOR[e.tier];
       if (ring) this.renderTierRing(sx, sy, drawSize, ring);
 
-      // Ghost solidify reads as an opacity ramp; everyone else uses the archetype alpha.
-      const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup : arch.alpha;
+      // Ghost solidify reads as an opacity ramp; the Choir mid-fade is barely there;
+      // everyone else uses the archetype alpha.
+      const alpha = e.kind === "ghost" ? 0.62 + 0.38 * a.windup
+        : e.kind === "choir" && a.move === "fade" && a.phase === "active" ? 0.3
+        : arch.alpha;
 
       const clip: SheetClip = anim.move > 0.5 ? "walk" : "idle";
       const xf = characterXform(anim, isBoss ? BOSS_STYLE : CHARACTER_STYLE);
@@ -2732,8 +2801,12 @@ export class Game {
         if (isHopSlam && a.phase === "windup") xf.sy -= 0.18 * a.windup; // crouch before the leap
         if (isHopSlam && a.phase === "active") { xf.oy -= Math.sin(a.windup * Math.PI) * BOSS_JUMP_HEIGHT; extra = 1.08; }
       }
-      // The Marrow inflates for its spiral/shield telegraphs.
+      // The MARROW inflates for its spiral/shield telegraphs; the Choir for its fade and
+      // the Warden for its sweep/sanctify; the Weaver coils down before the leap.
       if (e.kind === "marrow" && isWindup && (a.move === "spin" || a.move === "shield")) extra = 1 + a.windup * 0.14;
+      if (e.kind === "choir" && isWindup && a.move === "fade") extra = 1 + a.windup * 0.12;
+      if (e.kind === "gilded" && isWindup && (a.move === "sweep" || a.move === "roar")) extra = 1 + a.windup * 0.14;
+      if (e.kind === "weaver" && isWindup && a.move === "pounce") { xf.sy -= 0.22 * a.windup; xf.sx += 0.14 * a.windup; }
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
@@ -2742,8 +2815,15 @@ export class Game {
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
 
+      // The shielder's guard arc — drawn from the sim's authoritative block angle.
+      if (e.kind === "shielder") this.renderShielderGuard(e, sx, sy, drawSize);
+      // The Warden's plate: a gold sheen while closed, a cracked-open core glow while EXPOSED.
+      if (e.kind === "gilded") this.renderGildedPlate(e, sx, sy, drawSize);
+
       // Shimmer flecks while a ghost is materializing.
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
+      // The Choir mid-fade shimmers like its wisp kin (intangible — hold your fire).
+      if (e.kind === "choir" && a.move === "fade" && a.phase === "active") this.renderGhostShimmer(e, sx, sy);
       // Aura + aim line for a charging attack.
       if (isWindup) this.renderTelegraph(e, sx, sy);
 
@@ -2753,6 +2833,37 @@ export class Game {
       ctx.fillStyle = isBoss ? "#ffb43b" : "#ff5a5a";
       ctx.fillRect(sx - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), 4);
     }
+  }
+
+  // The Weaver's webs: violet ground lattices (spokes + rings) that fade with their life.
+  // Ground FX like the danger markers — the hazard itself is authoritative sim state.
+  private renderHazards() {
+    if (this.hazards.length === 0) return;
+    const { ctx, cam } = this;
+    ctx.save();
+    for (const h of this.hazards) {
+      const sx = h.x - cam.x, sy = h.y - cam.y;
+      const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3); // holds, then fades out
+      ctx.globalAlpha = 0.34 * fade;
+      ctx.strokeStyle = "#c98bff";
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 8; i++) {
+        const ang = (i / 8) * 6.28 + h.id * 0.7;
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + Math.cos(ang) * h.radius, sy + Math.sin(ang) * h.radius);
+        ctx.stroke();
+      }
+      for (let ring = 1; ring <= 2; ring++) {
+        ctx.beginPath();
+        ctx.arc(sx, sy, h.radius * (ring / 2.4), 0, 6.28);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.1 * fade;
+      ctx.fillStyle = "#c98bff";
+      ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+    }
+    ctx.restore();
   }
 
   // The traveling dirt mound of a tunneling burrower: a low earthen bump + kicked specks.
@@ -2792,7 +2903,82 @@ export class Game {
     ctx.restore();
   }
 
-  // The Marrow's bone shield: a cold ring that thins as the beat runs out. Husk deaths
+  // The Choir's split beat: the body is gone; a slow inward spiral of flecks marks the
+  // reforming point (and the wisps you should be shooting are live enemies elsewhere).
+  private renderChoirSplit(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const t = e.attack.windup;
+    ctx.save();
+    ctx.fillStyle = "#dff4ff";
+    for (let i = 0; i < 7; i++) {
+      const ang = clock * 1.6 + (i / 7) * 6.28;
+      const rad = size * (0.65 - 0.35 * t) * (0.7 + 0.3 * Math.sin(clock * 5 + i * 1.3));
+      ctx.globalAlpha = 0.35 + 0.3 * Math.sin(clock * 7 + i);
+      ctx.fillRect(sx + Math.cos(ang) * rad - 2, sy + Math.sin(ang) * rad - 2, 4, 4);
+    }
+    ctx.globalAlpha = 0.12 + 0.1 * t;
+    ctx.strokeStyle = TELEGRAPH_COLOR.split;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.4, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The airborne Weaver's falling shadow: a blob that swells over the landing mark as it
+  // drops — the classic "get out from under it" read.
+  private renderPounceShadow(x: number, y: number, size: number, t: number) {
+    const { ctx, cam } = this;
+    const sx = x - cam.x, sy = y - cam.y;
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.35 * t;
+    ctx.fillStyle = "#1a0f24";
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, size * (0.2 + 0.25 * t), size * (0.1 + 0.13 * t), 0, 0, 6.28);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // The shielder's guard: a braced arc across its authoritative block frontage.
+  private renderShielderGuard(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const half = SHIELDER_BLOCK_ARC / 2;
+    const facing = e.attack.lockedAngle;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#cfe0d4";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.globalAlpha = 0.3;
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = ENEMY_ARCHETYPES.shielder.tint;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.46, facing - half, facing + half);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The Warden's plate state: sealed = a cool gold rim (your shots are chipping); exposed
+  // = the plate hangs open and the amber core blazes — unload.
+  private renderGildedPlate(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const a = e.attack;
+    const isExposed = a.phase === "recover" && (a.move === "slam" || a.move === "sweep");
+    if (isExposed) {
+      const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
+      this.fxLayer("glow_round", "#ffb43b", sx, sy, size * 1.1 * pulse, size * 1.1 * pulse, 0.55, 0);
+      this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.4, size * 0.4, 0.8 * pulse, 0);
+      return;
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.15 * Math.sin(this.animClock * 3);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The MARROW's bone shield: a cold ring that thins as the beat runs out. Husk deaths
   // collapse it early — the ring is the "switch targets" prompt.
   private renderMarrowShield(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
@@ -3077,6 +3263,18 @@ export class Game {
         this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.45, 0);
         this.fxLayer("slug", color, bx, by, R * 4, R * 4, 0.9, this.animClock * 22);
         return this.fxLayer("core_dot", color, bx, by, R * 2, R * 2, 0.9, 0);
+      case "beam":
+        // The lance: rounds so fast and frequent the long warm streaks fuse into one
+        // continuous line of light.
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.4, 0);
+        this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 14), R * 2.4, 0.85, angle);
+        return this.fxLayer("core_dot", "#fff7dd", bx, by, R * 2, R * 2, 1, 0);
+      case "vortex":
+        // The undertow orb: a slow swirl of cold light with a rotating crackle — reads as
+        // a current, not a projectile.
+        this.fxLayer("glow_round", color, bx, by, R * 9, R * 9, 0.4, 0);
+        this.fxLayer("smoke_puff", color, bx, by, R * 6, R * 6, 0.35, -this.animClock * 5);
+        return this.fxLayer("crackle", color, bx, by, R * 4, R * 4, 0.7, -this.animClock * 8);
       default:
         return false;
     }

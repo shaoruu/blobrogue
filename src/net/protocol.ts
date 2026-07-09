@@ -13,8 +13,8 @@
 import type { PlayerSim, WorldState } from "../sim/world.js";
 import { isFloorCleared } from "../sim/world.js";
 import type {
-  Enemy, Bullet, Prop, Pickup, Chest, EnemyKind, WeaponId, AttackPhase, AttackMove,
-  PropKind, PickupKind, ChestKind,
+  Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
+  AttackMove, PropKind, PickupKind, ChestKind,
 } from "../sim/types.js";
 import type { EnemyTier } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
@@ -129,6 +129,9 @@ export interface BulletWire {
 export interface PropWire { id: number; kind: PropKind; x: number; y: number; brk: number } // brk<0 => intact
 export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number } // val<0 => face value
 export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; op: boolean; opt: number } // opt<0 => not yet open
+// Authored ground hazards (webs): bounded (hard sim cap), gameplay-relevant everywhere
+// (they slow PREDICTED movement), so they ride every snapshot unfiltered.
+export interface HazardWire { id: number; k: HazardKind; x: number; y: number; r: number; life: number; max: number }
 
 // ---- messages ----
 
@@ -178,6 +181,7 @@ export type ServerMsg =
       props: PropWire[];         // shared destructibles
       pickups: PickupWire[];     // shared loot on the ground
       chests: ChestWire[];       // shared chests (incl. the boss chest)
+      hzds: HazardWire[];        // shared ground hazards (the Weaver's webs)
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
@@ -260,10 +264,12 @@ function isEnemyKind(v: unknown): v is EnemyKind {
 const PROP_KINDS: Record<PropKind, true> = { crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true, dealer_heart: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
   rush: true, crash: true, dive: true, erupt: true, volley: true, spin: true, shield: true,
+  fade: true, wail: true, split: true, pounce: true, weave: true, slam: true, sweep: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
@@ -303,6 +309,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  bulletBlocked: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   propHit: { scope: "pos", fields: { propId: "num", kind: "str", x: "num", y: "num" } },
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
@@ -315,6 +322,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   bossSlam: { scope: "pos", fields: { x: "num", y: "num" } },
   radialBurst: { scope: "pos", fields: { x: "num", y: "num" } },
   bossVolley: { scope: "pos", fields: { x: "num", y: "num" } },
+  webPlaced: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   bossAddSpawn: { scope: "pos", fields: { eid: "num", x: "num", y: "num", mx: "num", my: "num", spawned: "bool" } },
   // Global: shared-objective transitions every client must see regardless of distance.
   bossPhase: { scope: "global", fields: { eid: "num", x: "num", y: "num" } },
@@ -554,6 +562,16 @@ function validateChestWire(v: unknown): ChestWire {
   };
 }
 
+function validateHazardWire(v: unknown): HazardWire {
+  const o = obj(v, "hazard");
+  return {
+    id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER),
+    k: inSet(HAZARD_KINDS, o.k, "hazard.k"),
+    x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
+    r: num(o, "r", 0, 1e4), life: num(o, "life", 0, 1e4), max: num(o, "max", 0, 1e4),
+  };
+}
+
 function validateWireEvent(v: unknown): WireEvent {
   const o = obj(v, "wireEvent");
   return { id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), e: validateEvent(o.e) };
@@ -588,6 +606,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         props: arr(o.props, "props").map(validatePropWire),
         pickups: arr(o.pickups, "pickups").map(validatePickupWire),
         chests: arr(o.chests, "chests").map(validateChestWire),
+        hzds: arr(o.hzds, "hzds").map(validateHazardWire),
         events: arr(o.events, "events").map(validateWireEvent),
       };
     }
@@ -699,7 +718,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, shieldHuskIds: [], spinCount: 0 }
+      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0 }
       : null,
   };
 }
@@ -712,6 +731,9 @@ export function toPickupWire(p: Pickup): PickupWire {
 }
 export function toChestWire(c: Chest): ChestWire {
   return { id: c.id, kind: c.kind, x: c.x, y: c.y, op: c.opened, opt: c.openT ?? -1 };
+}
+export function toHazardWire(h: Hazard): HazardWire {
+  return { id: h.id, k: h.kind, x: h.x, y: h.y, r: h.radius, life: h.life, max: h.maxLife };
 }
 
 // Radius reconstructed from kind so the wire stays tiny. Matches the sim's placement radii
@@ -726,6 +748,9 @@ export function pickupFromWire(w: PickupWire): Pickup {
 }
 export function chestFromWire(w: ChestWire): Chest {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: w.kind === "boss" ? 18 : 16, opened: w.op, openT: w.opt < 0 ? undefined : w.opt };
+}
+export function hazardFromWire(w: HazardWire): Hazard {
+  return { id: w.id, kind: w.k, x: w.x, y: w.y, radius: w.r, life: w.life, maxLife: w.max };
 }
 
 export function bulletFromWire(b: BulletWire): Bullet {
@@ -863,6 +888,9 @@ export function buildSnapshot(
     props,
     pickups,
     chests,
+    // Unfiltered by design: hazards are hard-capped in the sim, and PREDICTED movement
+    // must know about a web before the player walks into interest range of its center.
+    hzds: w.hazards.map(toHazardWire),
     events,
   };
 }

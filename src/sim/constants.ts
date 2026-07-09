@@ -46,6 +46,7 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   pistol: 4, shotgun: 8, rapid: 2,
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
   sawnoff: 10, railgun: 12, nailer: 3, flamer: 1, mortar: 6, boomerang: 7,
+  beam: 1, vortex: 0,
   sword: 14, longsword: 20, spear: 16,
 };
 export const KB_LAMBDA = 16;
@@ -57,8 +58,14 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
   sawnoff: 26, railgun: 6, nailer: 0, flamer: 0, mortar: 8, boomerang: 0,
+  beam: 0, vortex: 0,
   sword: 0, longsword: 0, spear: 8,
 };
+
+// Vortex (Undertow) pull field: px/s of drag at the orb's center, fading linearly to zero
+// at the pull radius, divided by each body's kbResist (bosses barely drift). Stronger than
+// any swarm/standard walk speed, so the gather decisively beats the chase.
+export const VORTEX_PULL_SPEED = 170;
 
 // Point-blank shotgun hit distance that triggers the (client-side) freeze.
 export const SHOTGUN_FREEZE_RANGE = 96;
@@ -132,6 +139,33 @@ export const BURROW_ERUPT_RADIUS = 52;
 export const BURROW_POP = 0.22;
 export const BURROW_RECOVER = 0.6;
 export const BURROW_CD = 3.2;
+
+// Orbiter: circles the target at ring distance, strafing sideways (rotational tracking —
+// a different aim problem from the spitter's radial kiting), and stops to fire a quick
+// telegraphed bolt. The orbit direction flips on its seeded zig clock.
+export const ORBITER_RING = 170;
+export const ORBITER_RING_SLACK = 30;
+export const ORBITER_FLIP_RATE = 0.45; // zig advance (rad/s); sign of sin(zig) picks the direction
+export const ORBITER_WINDUP = 0.6;
+export const ORBITER_LOCK = 0.3;
+export const ORBITER_RECOVER = 0.5;
+export const ORBITER_CD = 2.2;
+export const ORBITER_BOLT_SPEED = 380;
+export const ORBITER_BOLT_RADIUS = 5;
+export const ORBITER_BOLT_LIFE = 1.6;
+
+// Shielder: a walking wall. Bullets arriving inside its front arc are ABSORBED (the
+// answer is the flank, melee over the top, or splash) — the arc is anchored on the same
+// lockedAngle the wire already carries, so the client renders the exact authoritative
+// guard. Its bash is an ordinary short telegraphed lunge.
+export const SHIELDER_BLOCK_ARC = 2.1;   // radians of protected frontage (~120°)
+export const SHIELDER_TRIGGER = 150;
+export const SHIELDER_WINDUP = 0.6;
+export const SHIELDER_LOCK = 0.3;
+export const SHIELDER_BASH_DUR = 0.22;
+export const SHIELDER_BASH_SPEED = 420;
+export const SHIELDER_RECOVER = 0.55;
+export const SHIELDER_CD = 2.6;
 
 // Destructible props + chests.
 export const PROP_RADIUS = 15;

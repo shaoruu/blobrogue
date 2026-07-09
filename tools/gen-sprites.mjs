@@ -15,12 +15,19 @@ const SUBJECTS = {
   boss: "a huge menacing purple slime KING with a golden crown, glowing red eyes and a big fanged grin",
   charger: "a stocky angular bone-plated boar beast monster with a lowered ram head and heavy shoulders, dull copper and bone colors, small furious red eyes",
   burrower: "a pale dirt-crusted mole-grub monster with oversized digging claws and a segmented earthen back, beady dark eyes",
+  orbiter: "a small floating one-eyed observer wisp monster, pale cold blue, thin trailing fins, a single unblinking eye",
+  shielder: "a squat verdigris-bronze armored monster hiding behind a huge tower shield covering its whole front, only eyes peeking over the rim",
   marrow: "a huge menacing eyeless bone golem brute of fused pale rock and exposed bone, angular bull-like silhouette, empty eye sockets glowing faint red",
+  choir: "a huge tragic ghost boss made of many fused sorrowful translucent pale-blue ghost faces with hollow singing mouths, wispy trailing tendrils",
+  weaver: "a sleek menacing spider-like boss monster, cold indigo and violet, many angular thin legs, glinting cluster of eyes",
+  gilded: "a huge ancient armored golem boss of sacred gilded amber plate armor with ornate geometric engravings, a narrow glowing core seam down the chest",
   heart: "a single glossy bright-red heart health pickup icon",
   coin: "a single shiny gold coin with a star engraved, pickup icon",
   gun: "a single small golden six-shooter revolver pickup icon",
   held_mortar: "a single small chunky bronze grenade launcher with a fat stubby barrel, side profile pointing right, game weapon icon",
   held_boomerang: "a single curved pale-green crescent boomerang blade with a leather grip, side profile, game weapon icon",
+  held_beam: "a single slender golden lance-rifle with a glowing amber crystal at the muzzle, side profile pointing right, game weapon icon",
+  held_vortex: "a single deep-blue orb caster gun with a swirling glass sphere chamber, side profile pointing right, game weapon icon",
 };
 
 async function upload(p){ const buf=readFileSync(p); return await fal.storage.upload(new Blob([buf],{type:"image/png"})); }

@@ -19,7 +19,7 @@ import type { RemotePlayer, WeaponId } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
-  propFromWire, pickupFromWire, chestFromWire,
+  propFromWire, pickupFromWire, chestFromWire, hazardFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
   type ServerMsg,
 } from "../net/protocol.js";
@@ -372,8 +372,10 @@ export class WSTransport implements Transport {
 
     // Props are near-static shared state; mirror them into the PREDICTED world so local movement
     // prediction collides with the same barrels/crates the server does (no rubber-band near
-    // props). They only change on break, so rebuilding per snapshot is cheap.
+    // props). They only change on break, so rebuilding per snapshot is cheap. Hazards mirror for
+    // the same reason: the predicted walk must feel the web slow the server will apply.
     this.predState.props = snap.props.map(propFromWire);
+    this.predState.hazards = snap.hzds.map(hazardFromWire);
 
     // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
     // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep only
@@ -522,6 +524,7 @@ export class WSTransport implements Transport {
     this.renderState.props = this.composeProps();
     this.renderState.pickups = this.composePickups();
     this.renderState.chests = this.composeChests();
+    this.renderState.hazards = this.latestSnap ? this.latestSnap.hzds.map(hazardFromWire) : [];
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
 
     const events = this.events;

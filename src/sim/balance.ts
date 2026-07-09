@@ -255,11 +255,167 @@ export const MARROW = {
   p3ChaseMult: 1.10,
 } as const;
 
-// Alternate boss floors (F20, …) ride the same clamped §3 curve, anchored at the F10
-// calibration (beyond F10 the envelope is flat, so deeper MARROWs stay at the anchor).
+// Deep bosses ride the same clamped §3 curve off their own calibration anchor (beyond F10
+// the envelope is flat, so deeper encounters stay at the anchor).
+function anchoredBossHp(baseHp: number, anchorFloor: number, floor: number): number {
+  return Math.round((baseHp * (floorHpMult(floor) / floorHpMult(anchorFloor))) / 10) * 10;
+}
+
 export function marrowHpForFloor(floor: number): number {
-  const scaled = MARROW.baseHp * (floorHpMult(floor) / floorHpMult(MARROW.baseHpFloor));
-  return Math.round(scaled / 10) * 10;
+  return anchoredBossHp(MARROW.baseHp, MARROW.baseHpFloor, floor);
+}
+
+// ---- §5c THE HOLLOW CHOIR (deep-roster boss) ----
+// The grieving ghost mass: it does not zone you with bodies — it UNMAKES itself. On
+// cadence it fades intangible and drifts through you (a breather you must keep moving
+// through), then rematerializes into a burst; its volleys are slow HOMING wails you juke
+// by turning, not by standing behind cover. Transition beats SPLIT it into three wisps —
+// kill them to force it back together early. Calibrated to the same 30–45s F10 band.
+
+export const CHOIR = {
+  baseHp: 1130,
+  baseHpFloor: 10,
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 3.2, 2.8, 2.4] as readonly number[],
+  // The fade: telegraph, then intangible drift toward the target, then a rematerialize
+  // burst (P2+) into a long recover — the punish window for tracking it through the fade.
+  fadeEvery: 3,
+  fadeWindup: 0.6,
+  fadeDuration: 1.8,
+  fadeSpeedMult: 1.6,
+  fadeRecover: 0.8,
+  burstShards: [0, 0, 8, 10] as readonly number[], // rematerialize ring per phase
+  burstSpeed: 240,
+  // Homing wails: slow, readable seekers with a capped turn rate — orbit them off.
+  wailWindup: 0.7,
+  wailLock: 0.4,
+  wailRecover: 0.6,
+  wailCount: [0, 2, 3, 4] as readonly number[],
+  wailSpread: 0.5,
+  wailSpeed: 150,
+  wailTurnRate: 2.4,
+  wailRadius: 8,
+  wailDamage: 1,
+  wailLife: 2.6,
+  shardRadius: 7,
+  shardDamage: 1,
+  shardLife: 2.6,
+  // Transition beats: the Choir scatters into wisps (it is GONE — untargetable) until the
+  // wisps die or the cap elapses. Queued overflow lands when it reforms, same §5 contract.
+  phaseAt: [0.65, 0.30] as readonly number[],
+  phaseFloor: [0.57, 0.22] as readonly number[],
+  splitDuration: 3.2,
+  splitMinDuration: 1.0,
+  splitWisps: 3,
+  splitBulletClearRadius: 70,
+} as const;
+
+export function choirHpForFloor(floor: number): number {
+  return anchoredBossHp(CHOIR.baseHp, CHOIR.baseHpFloor, floor);
+}
+
+// ---- §5d THE WEAVER (deep-roster boss) ----
+// The duelist that fights the FLOOR: webs are persistent slow-zones that shrink your
+// dance space (never damage — routing pressure), and its pounce is a marked drop from
+// above that chains in later phases. Small, fast, evasive — lower HP because it is hard
+// to pin, exactly like the roster spec's duelist. Same 30–45s F10 band.
+
+export const WEAVER = {
+  baseHp: 1080,
+  baseHpFloor: 10,
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 3.0, 2.7, 2.3] as readonly number[],
+  // Weave: plants a locked pattern of webs on and around the target's position.
+  weaveWindup: 0.7,
+  weaveLock: 0.35,
+  weaveRecover: 0.7,
+  webCount: [0, 3, 3, 4] as readonly number[],
+  webRingDist: 130,
+  webRadius: 62,
+  webLife: 12,
+  webSlow: 0.55,       // player move-speed multiplier inside a web (enemies unaffected)
+  maxWebs: 8,          // hard cap: the arena squeezes, it never fills
+  // Pounce: a marked leap — airborne (untargetable) for a beat, lands center-heavy, and
+  // leaves a web at the crater. P2+ chains a second, shorter-telegraph pounce.
+  pounceWindup: 0.65,
+  pounceLock: 0.3,
+  pounceChainWindup: 0.5,
+  pounceChainLock: 0.2,
+  pounceAir: 0.35,
+  pounceRecover: 0.9,
+  pounceRadius: 74,
+  pounceInnerRadius: 44,
+  pounceCenterDamage: 2,
+  pounceOuterDamage: 1,
+  pounceChains: [0, 1, 2, 2] as readonly number[], // pounces per commitment, per phase
+  pounceWebRadius: 52,
+  // Molt beat: a fixed cocoon (roar semantics) that bursts into a web-bolt ring + broodlings.
+  phaseAt: [0.65, 0.30] as readonly number[],
+  phaseFloor: [0.57, 0.22] as readonly number[],
+  moltDuration: 1.4,
+  moltDamageReduction: 0.35,
+  moltBoltCount: 8,
+  moltBoltSpeed: 260,
+  moltBulletClearRadius: 70,
+  moltAdds: 2,
+  shardRadius: 7,
+  shardDamage: 1,
+  shardLife: 2.6,
+} as const;
+
+export function weaverHpForFloor(floor: number): number {
+  return anchoredBossHp(WEAVER.baseHp, WEAVER.baseHpFloor, floor);
+}
+
+// ---- §5e THE GILDED WARDEN (deep-roster boss) ----
+// The armored tempo boss: its plate chips incoming damage to 30% at ALL times except the
+// EXPOSED window — the long recover after each committed quake/sweep, when the plate
+// hangs open. You do not out-DPS the Warden whenever you like; you dodge the commitment,
+// then unload into the opening. Reduction, never immunity: impatient chip still works,
+// it is just the slow way. Same 30–45s F10 band at the median build.
+
+export const GILDED = {
+  baseHp: 800,
+  baseHpFloor: 10,
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 3.6, 3.2, 2.8] as readonly number[],
+  armorChip: 0.3,       // closed-plate damage multiplier (never zero)
+  // Anvil slam: a marked in-place quake with a directional aftershock line, then the
+  // exposed recover — the fight's core loop.
+  slamWindup: 0.8,
+  slamLock: 0.45,
+  slamActive: 0.3,
+  slamRecover: 2.2,     // the EXPOSED window
+  slamRadius: 110,
+  slamInnerRadius: 66,
+  slamCenterDamage: 2,
+  slamOuterDamage: 1,
+  slamLineShards: 3,
+  slamLineSpeed: 300,
+  slamLineGap: 0.16,    // radians between aftershock shards
+  // Gold sweep: slow, heavy rings you walk through; P3 releases two offset waves.
+  sweepWindup: 0.75,
+  sweepRecover: 2.0,    // also exposed
+  sweepCount: 10,
+  sweepSpeed: 190,
+  sweepWaves: [0, 1, 1, 2] as readonly number[],
+  sweepWaveGap: 0.4,
+  shardRadius: 8,
+  shardDamage: 1,
+  shardLife: 3.0,
+  // Sanctify beat: fixed-duration roar semantics, sturdier thresholds like the King.
+  phaseAt: [0.70, 0.35] as readonly number[],
+  phaseFloor: [0.62, 0.27] as readonly number[],
+  sanctifyDuration: 1.2,
+  sanctifyDamageReduction: 0.35,
+  sanctifyBulletClearRadius: 70,
+} as const;
+
+export function gildedHpForFloor(floor: number): number {
+  return anchoredBossHp(GILDED.baseHp, GILDED.baseHpFloor, floor);
 }
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----

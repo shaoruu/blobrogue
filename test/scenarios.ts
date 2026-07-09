@@ -68,7 +68,7 @@ const movement: Scenario = {
 // cycling through every weapon (ranged then the three melee weapons at the end).
 const WEAPON_CYCLE: WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing",
-  "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "boomerang",
+  "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "boomerang", "beam", "vortex",
   "sword", "longsword", "spear",
 ];
 const combat: Scenario = {
@@ -78,11 +78,11 @@ const combat: Scenario = {
   ticks: 800,
   commands: (() => {
     const cmds: Command[] = [];
-    // Swap weapon every 44 ticks (18 weapons fit inside the 800-tick script).
-    for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 44, weapon: WEAPON_CYCLE[i] });
+    // Swap weapon every 40 ticks (20 weapons fit inside the 800-tick script).
+    for (let i = 0; i < WEAPON_CYCLE.length; i++) cmds.push({ t: "weapon", tick: i * 40, weapon: WEAPON_CYCLE[i] });
     // Keep feeding the full regular-enemy roster to the right of the player.
     for (let tick = 0; tick < 800; tick += 24) {
-      const kinds: EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower"];
+      const kinds: EnemyKind[] = ["slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder"];
       const kind = kinds[(tick / 24) % kinds.length];
       cmds.push({ t: "spawnEnemy", tick, kind, dx: 90 + ((tick / 24) % 3) * 22, dy: ((tick / 24) % 5) * 10 - 20 });
     }
@@ -141,6 +141,35 @@ const marrow: Scenario = {
     return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
   },
 };
+
+// The rest of the boss roster, each hosed down by the same strong Lv3 build so the
+// goldens walk every phase machine tick-for-tick: the Choir's wails/fades/wisp-splits,
+// the Weaver's webs/pounces/molt, the Gilded Warden's plate/quakes/sweeps/sanctifies.
+function bossGolden(name: string, seed: number, kind: EnemyKind): Scenario {
+  return {
+    name,
+    seed,
+    floor: 10,
+    ticks: 2400,
+    commands: (() => {
+      const cmds: Command[] = [];
+      cmds.push({ t: "godmode", tick: 0 });
+      for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
+        for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+      }
+      cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
+      cmds.push({ t: "spawnEnemy", tick: 2, kind, dx: 190, dy: 0 });
+      return cmds;
+    })(),
+    input() {
+      return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    },
+  };
+}
+
+const choir = bossGolden("choir", 0x8888, "choir");
+const weaverScenario = bossGolden("weaver", 0x9999, "weaver");
+const gilded = bossGolden("gilded", 0xAAAA, "gilded");
 
 // Items + synergies: stack pellet/crit/pierce/bounce mods, then verify mod-affected shots
 // against a fed line of enemies (pierce punches through, ricochet bounces off walls).
@@ -217,7 +246,7 @@ const status: Scenario = {
   },
 };
 
-export const SCENARIOS: Scenario[] = [movement, combat, boss, marrow, items, props, status];
+export const SCENARIOS: Scenario[] = [movement, combat, boss, marrow, choir, weaverScenario, gilded, items, props, status];
 
 export const DT = 1 / 60;
 
