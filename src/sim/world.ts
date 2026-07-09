@@ -12,7 +12,8 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
+import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, WeaponId, AttackMove, TileKind } from "./types.js";
+import { placeHazards, isHazardDamaging, hazardPhaseAt, HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
@@ -130,6 +131,12 @@ export interface WorldState {
   pickups: Pickup[];
   props: Prop[];
   chests: Chest[];
+  // Environmental hazards (depth escalation): layout is derived per floor from the seed
+  // (never on the wire); pulse timing keys off hazardClock — accumulated SIM seconds,
+  // monotonic across floors like tick, so solo (60Hz) and the server (20Hz) agree on
+  // cycles in real time and an online client can reconstruct it as tick x FIXED_DT.
+  hazards: Hazard[];
+  hazardClock: number;
   dungeon: Dungeon;
   flow: FlowField;
   flowCd: number;
@@ -219,6 +226,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     pickups: [],
     props: [],
     chests: [],
+    hazards: [],
+    hazardClock: 0,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     flow: new FlowField(),
     flowCd: 0,
@@ -292,7 +301,7 @@ function buildArena(): Dungeon {
       tiles[y * w + x] = isBorder ? 1 : 0;
     }
   }
-  const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal" };
+  const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal", shape: "rect" };
   return { w, h, tiles, rooms: [room], spawn: { x: w >> 1, y: h >> 1 }, exit: { x: w - 3, y: 2 } };
 }
 
@@ -324,6 +333,10 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.flowCd = 0;
   w.flowKey = -1;
   w.pickups = [];
+  // Hazards place FIRST: props/chests/dealer stock then avoid hazard tiles (a barrel on
+  // spikes reads as a bug). hazardClock is NOT reset — it is monotonic sim time (phases
+  // are per-hazard), so an online client can always reconstruct it from the tick.
+  w.hazards = w.isSandbox ? [] : placeHazards(w.dungeon, w.seed, floor);
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) {
@@ -439,7 +452,7 @@ function placeProps(w: WorldState): Prop[] {
       const tx = room.x + rng.int(0, room.w - 1);
       const ty = room.y + rng.int(0, room.h - 1);
       const idx = ty * d.w + tx;
-      if (occupied.has(idx) || d.tiles[idx] !== 0) continue;
+      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasHazardOnTile(w, tx, ty)) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
       occupied.add(idx);
@@ -490,6 +503,7 @@ function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; 
     d.tiles[ty * d.w + tx] !== 0 ||
     used.has(ty * d.w + tx) ||
     hasLivePropOnTile(w, tx, ty) ||
+    hasHazardOnTile(w, tx, ty) ||
     (tx === d.spawn.x && ty === d.spawn.y) ||
     (tx === d.exit.x && ty === d.exit.y);
   if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
@@ -503,6 +517,11 @@ function hasLivePropOnTile(w: WorldState, tx: number, ty: number): boolean {
   for (const p of w.props) {
     if (!p.dead && Math.floor(p.x / TILE) === tx && Math.floor(p.y / TILE) === ty) return true;
   }
+  return false;
+}
+
+function hasHazardOnTile(w: WorldState, tx: number, ty: number): boolean {
+  for (const h of w.hazards) if (h.tx === tx && h.ty === ty) return true;
   return false;
 }
 
@@ -2132,6 +2151,44 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
   w.pickups = remaining;
 }
 
+// Environmental hazards (depth escalation): advance the shared pulse clock, drag players
+// caught by an active void rift toward its core, and land floor damage on any standing
+// player over an active hazard tile. Fairness contract: every pulse hazard has already
+// telegraphed (cycle math in hazards.ts), pools are permanently visible, damage is always
+// 1, and both the dash iframe and post-hit protection gate it — the exact protection
+// rules enemy contact obeys. Hazards never touch enemies: bodies are the encounter
+// designer's pressure, the floor is the player's problem.
+function updateHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
+  w.hazardClock += dt;
+  if (w.hazards.length === 0) return;
+  for (const p of w.players.values()) {
+    if (p.isDown || p.hp <= 0) continue;
+    // Rift drag: escapable pressure (85px/s against a 200px/s walk), through the normal
+    // wall-aware move so it can never push a player into geometry, and line-of-sight
+    // gated so a rift never pulls through a wall.
+    for (const h of w.hazards) {
+      if (h.kind !== "void_rift" || hazardPhaseAt(h, w.hazardClock) !== "active") continue;
+      const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
+      const dx = cx - p.x, dy = cy - p.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1 || dist > RIFT_PULL_RADIUS) continue;
+      if (!hasLineOfSight(w, p.x, p.y, cx, cy)) continue;
+      const step = Math.min(dist, RIFT_PULL_SPEED * dt);
+      const [nx, ny] = moveCircle(w, p.x, p.y, p.pr, (dx / dist) * step, (dy / dist) * step);
+      p.x = nx;
+      p.y = ny;
+    }
+    if (isProtected(p)) continue;
+    const tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
+    for (const h of w.hazards) {
+      if (h.tx !== tx || h.ty !== ty || !isHazardDamaging(h, w.hazardClock)) continue;
+      ev.push({ t: "hazardHit", pid: p.id, kind: h.kind, x: p.x, y: p.y });
+      damagePlayer(w, p, HAZARD_DAMAGE, ev);
+      break;
+    }
+  }
+}
+
 // Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
 // could revive `p`? Drives the authoritative down-vs-gameover decision.
 function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
@@ -2332,6 +2389,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateEnemies(w, dt, ev);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
+  updateHazards(w, dt, ev);
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
   checkStrandedWipe(w, ev);

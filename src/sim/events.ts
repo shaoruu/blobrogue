@@ -8,7 +8,7 @@
 // remote-hurt) are presence-driven CLIENT-only and are NOT SimEvents in Stage A.
 
 import type { PlayerId } from "./input.js";
-import type { WeaponId, EnemyKind, PickupKind, PropKind } from "./types.js";
+import type { WeaponId, EnemyKind, PickupKind, PropKind, HazardKind } from "./types.js";
 
 export type SimEvent =
   // combat — player
@@ -40,6 +40,8 @@ export type SimEvent =
   | { t: "propBreak"; kind: PropKind; x: number; y: number }
   | { t: "explosion"; x: number; y: number; r: number }
   | { t: "chestOpen"; kind: string; x: number; y: number }
+  // A floor hazard damaged a player (kind selects the client's impact FX flavor).
+  | { t: "hazardHit"; pid: PlayerId; kind: HazardKind; x: number; y: number }
   // enemies / boss
   | { t: "spitMuzzle"; x: number; y: number }
   | { t: "lungeTrail"; x: number; y: number }

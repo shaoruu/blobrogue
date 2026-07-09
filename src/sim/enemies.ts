@@ -174,11 +174,19 @@ function weightedPick(rng: Rng, roster: Array<{ kind: EnemyKind; weight: number 
   return roster[roster.length - 1].kind;
 }
 
+// A spawn point on OPEN FLOOR inside the room. Rooms carry interior walls now (pillared
+// halls, cavern edges, vault rings), so a raw rect sample can land inside geometry;
+// resample a few times and fall back to the room center, which the generator guarantees
+// open. Deterministic: same seed -> same draw sequence.
 function pointInRoom(rng: Rng, dungeon: Dungeon, roomIndex: number): { x: number; y: number } {
   const room = dungeon.rooms[roomIndex];
-  const x = (room.x + 1 + rng.next() * Math.max(1, room.w - 2)) * TILE;
-  const y = (room.y + 1 + rng.next() * Math.max(1, room.h - 2)) * TILE;
-  return { x, y };
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const x = (room.x + 1 + rng.next() * Math.max(1, room.w - 2)) * TILE;
+    const y = (room.y + 1 + rng.next() * Math.max(1, room.h - 2)) * TILE;
+    const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+    if (dungeon.tiles[ty * dungeon.w + tx] === 0) return { x, y };
+  }
+  return { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE };
 }
 
 // The floor's spawn set, split into the immediately-active wave and the pending

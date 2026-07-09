@@ -523,6 +523,11 @@ export class WSTransport implements Transport {
     this.renderState.pickups = this.composePickups();
     this.renderState.chests = this.composeChests();
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
+    // Hazard layout already lives in renderState (rebuilt from the authoritative seed);
+    // the pulse clock is reconstructed from the authoritative tick — the server only ever
+    // steps FIXED_DT per tick, so tick x FIXED_DT IS its hazardClock. The renderer smooths
+    // the 20Hz quantization locally.
+    if (this.latestSnap) this.renderState.hazardClock = this.latestSnap.tick * FIXED_DT;
 
     const events = this.events;
     this.events = [];

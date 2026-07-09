@@ -184,6 +184,24 @@ export interface Prop {
   breakT?: number; // seconds into the break clip once destroyed (undefined = intact)
 }
 
+// Environmental hazards — the depth-escalation danger layer. Placed deterministically per
+// floor (seeded from seed+floor, like props) so every client and the server derive the SAME
+// layout with zero wire cost. All hazards are tile-bound (readable, dodgeable areas). Pulse
+// hazards (spikes/vent/rift) cycle idle -> telegraph -> active off the shared hazard clock;
+// pools are static, always-visible damage floors. Cycle math lives in src/sim/hazards.ts.
+export type HazardKind = "spikes" | "toxic_pool" | "fire_vent" | "void_rift";
+
+export interface Hazard {
+  id: number;
+  kind: HazardKind;
+  tx: number; ty: number; // tile coords (damage area = exactly this tile)
+  // Pulse phase offset in seconds. Hazards placed as one formation share a group so their
+  // offsets step together (rows of spikes fire as a travelling wave, a vent channel erupts
+  // in unison) — authored-feeling rhythm instead of random noise.
+  phase: number;
+  group: number;
+}
+
 // Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are
 // local, so each client opens their own chest and gets their own blessing pick, while
 // the coins/hearts/weapons it spawns are ordinary first-come world pickups.

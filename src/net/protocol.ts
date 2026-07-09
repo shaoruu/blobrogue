@@ -38,7 +38,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-export const PROTOCOL_VERSION = 3;
+// v4: depth-progression world (new dungeon generator + biome ladder + floor hazards).
+// Dungeon geometry is derived client-side from the snapshot seed via the SHARED generator,
+// so old/new client-server pairs would silently disagree on the map — the strict join gate
+// must fence them apart. Also adds the hazardHit event.
+export const PROTOCOL_VERSION = 4;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -304,6 +308,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
+  hazardHit: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
   lungeTrail: { scope: "pos", fields: { x: "num", y: "num" } },
   bossSlam: { scope: "pos", fields: { x: "num", y: "num" } },

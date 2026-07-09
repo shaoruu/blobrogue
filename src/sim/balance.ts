@@ -144,6 +144,8 @@ export const BIOME_PRESSURE: readonly BiomePressure[] = [
   { budgetMult: 0.95, packBias: 1.00, complexShare: 1.10, hazardMult: 1.00, reinforceRate: 1.00 }, // Sunless
   { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // Deep
   { budgetMult: 1.05, packBias: 1.00, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.15 }, // Emberreach
+  { budgetMult: 1.00, packBias: 1.00, complexShare: 1.15, hazardMult: 1.10, reinforceRate: 1.05 }, // Fracture
+  { budgetMult: 1.05, packBias: 1.10, complexShare: 1.10, hazardMult: 1.15, reinforceRate: 1.10 }, // Null
 ];
 
 // ---- §5 Slime King (calibrated to ~37.5s median solo, ≥20s absolute floor) ----
