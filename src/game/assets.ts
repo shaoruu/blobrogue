@@ -1,6 +1,7 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId, SpriteName, PetKind } from "../sim/types.js";
+import type { WeaponId, SpriteName } from "../sim/types.js";
+import type { PetSheetKey } from "./petArt.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -82,28 +83,17 @@ const PROP_SOURCES: Record<PropSpriteName, string> = {
   chest_open: "/sprites/chest_open.png",
 };
 
-// ---- companion pet art contract (see ART.md "Companion pets") ----
-// The renderer's typed pose hook: which clip a pet wants each frame. Derived from wire
-// state (motion => walk, attackAnim `at` timer => action), so the art can be dropped in
-// with zero code changes beyond registering the files below.
-export type PetClip = "idle" | "walk" | "action";
-export interface PetPose {
-  clip: PetClip;
-  facing: number; // -1 (left) / 1 (right); art is authored facing RIGHT and mirrored
-}
-
-// Expected filenames, one 64x64 base PNG per pet plus optional horizontal strip sheets
-// (64px square frames, count inferred from width) per clip:
-//   /sprites/pet_ember_pup.png      /sprites/pet_ember_pup_walk.png    /sprites/pet_ember_pup_action.png
-//   /sprites/pet_lantern_wisp.png   /sprites/pet_lantern_wisp_walk.png /sprites/pet_lantern_wisp_action.png
-//   /sprites/pet_bonebird.png       /sprites/pet_bonebird_walk.png     /sprites/pet_bonebird_action.png
-// Registries are EMPTY until the FAL-generated, AD-approved art lands (the SHEETS pattern:
-// nothing is fetched, no 404s). Until then pets render as the minimal tinted silhouette
-// placeholder (src/game/petArt.ts) — a position marker, NOT art (the art rule bans
-// procedural character bodies). To light a pet up, add its entries here — no other code
-// changes anywhere.
-export const PET_SOURCES: Partial<Record<PetKind, string>> = {};
-export const PET_SHEETS: Partial<Record<`${PetKind}.${PetClip}`, SheetDef>> = {};
+// ---- companion pet art registry (contract in src/game/petArt.ts + ART.md) ----
+// Strips keyed `${kind}.${clip}_${facing}` — three authored facings (down/up/side; side
+// faces RIGHT and mirrors for left) per clip, two clips per pet (walk + its role action:
+// burn/collect/mark). Frame 0 of any strip is the idle hold; there are no base statics.
+// EMPTY until the FAL-generated, AD-approved art lands (the SHEETS pattern: nothing is
+// fetched, no 404s) — until then the pet BODY IS HIDDEN in-game and in the panel preview
+// (only the neutral ground shadow / wisp light mark its position; the art rule bans drawn
+// placeholders, circles included). To light a pet up, register its strips here — no other
+// code changes anywhere. Example:
+//   "ember_pup.walk_down": { src: "/sprites/pet_ember_pup_walk_down.png", fps: 10 },
+export const PET_SHEETS: Partial<Record<PetSheetKey, SheetDef>> = {};
 
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
@@ -185,8 +175,7 @@ export class Sprites {
   private fxTintCache = new Map<string, HTMLCanvasElement>();
   private propImages = new Map<PropSpriteName, HTMLImageElement>();
   private propFlashCache = new Map<PropSpriteName, HTMLCanvasElement>();
-  private petImages = new Map<PetKind, HTMLImageElement>();
-  private petSheets = new Map<string, LoadedSheet>();
+  private petSheets = new Map<PetSheetKey, LoadedSheet>();
 
   constructor() {
     for (const name of Object.keys(SOURCES) as SpriteName[]) {
@@ -225,15 +214,8 @@ export class Sprites {
       img.src = PROP_SOURCES[name];
       this.propImages.set(name, img);
     }
-    for (const kind of Object.keys(PET_SOURCES) as PetKind[]) {
-      const src = PET_SOURCES[kind];
-      if (!src) continue;
-      const img = new Image();
-      img.src = src;
-      this.petImages.set(kind, img);
-    }
-    for (const key of Object.keys(PET_SHEETS)) {
-      const def = PET_SHEETS[key as keyof typeof PET_SHEETS];
+    for (const key of Object.keys(PET_SHEETS) as PetSheetKey[]) {
+      const def = PET_SHEETS[key];
       if (!def) continue;
       const img = new Image();
       img.src = def.src;
@@ -241,17 +223,14 @@ export class Sprites {
     }
   }
 
-  // A loaded pet base sprite, or null while it streams in / until the art is registered —
-  // the renderer falls back to the procedural pet body.
-  pet(kind: PetKind): HTMLImageElement | null {
-    const img = this.petImages.get(kind);
-    return img && img.complete && img.naturalWidth > 0 ? img : null;
-  }
-
-  // A loaded pet clip sheet, or null to fall back (action -> walk -> base -> procedural).
-  petSheet(kind: PetKind, clip: PetClip): LoadedSheet | null {
-    const s = this.petSheets.get(`${kind}.${clip}`);
-    if (s && s.img.complete && s.img.naturalWidth > 0) return s;
+  // The first LOADED strip down the pose's fallback ladder ({clip}_{facing} ->
+  // walk_{facing} -> walk_down), or null — in which case the pet body renders NOTHING
+  // (hidden until art loads; the ground shadow / wisp light are the only markers).
+  petSheetResolved(candidates: readonly PetSheetKey[]): LoadedSheet | null {
+    for (const key of candidates) {
+      const s = this.petSheets.get(key);
+      if (s && s.img.complete && s.img.naturalWidth > 0) return s;
+    }
     return null;
   }
 

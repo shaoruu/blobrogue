@@ -48,38 +48,45 @@ for sheet-animated characters the flash is an approximation of the current frame
 
 ## Companion pets (art contract — REAL SPRITES REQUIRED, none shipped yet)
 Character art in blobrogue is **authored sprites only — procedural code-drawn bodies are
-banned**. Until the FAL-generated, AD-approved pet sprites land, the three companions
-(Ember Pup, Lantern Wisp, Bonebird) render as a minimal tinted **silhouette placeholder**
-(`src/game/petArt.ts`): a position/ownership marker, explicitly not final art, and the
-pets PR does not merge as ready until the real sprites below are wired. The sprite hooks
-are typed and live; dropping the art in requires **no code changes beyond registering the
-files** in `src/game/assets.ts`.
+banned, placeholders included (no circles)**. Until the FAL-generated, AD-approved pet
+strips land, a pet's body is simply **not drawn**: its neutral ground shadow (wisp: its
+light pool) marks position, and the pets PR does not merge as ready until the real strips
+below are wired. The typed contract lives in `src/game/petArt.ts`
+(pose/facings/fallbacks, locked by `test/petart.test.ts`); dropping the art in requires
+**no code changes beyond registering the files** in `src/game/assets.ts` `PET_SHEETS`.
 
-**Pose contract** (`PetPose` in `assets.ts`): every frame the renderer derives
-`clip: "idle" | "walk" | "action"` (`action` plays for ~0.3s after a nip/peck, driven by
-the authoritative wire timer) and `facing: -1 | 1`. Author art **facing right**; the
-renderer mirrors for left.
+**Pose contract** (`PetPose` in `petArt.ts`): every frame the renderer derives
+- `clip`: `walk`, or the pet's ONE role action while its authoritative action timer runs
+  (~0.3s after it acts): **Ember Pup `burn` · Lantern Wisp `collect` · Bonebird `mark`**
+- `facing`: `down | up | side` (dominant motion axis, deadzoned) with `mirror` — **side is
+  authored facing RIGHT** and the renderer mirrors it for left (the standard mirror
+  contract heroes/enemies use)
+- `isIdle`: a stationary pet holds **frame 0** of its resolved strip — there are **no idle
+  strips and no base statics**; frame 0 IS the idle pose
 
-**Exact expected filenames** — one 64×64 base PNG per pet, plus optional horizontal strip
-sheets (64×64 frames, count inferred from width) per clip:
+**Fallback ladder** (like the enemy sheet ladder): `{clip}_{facing}` → `walk_{facing}` →
+`walk_down` (the canonical minimum asset) → hidden. Partial drops are fine.
 
-| pet | base | walk | action |
-|---|---|---|---|
-| Ember Pup | `/sprites/pet_ember_pup.png` | `/sprites/pet_ember_pup_walk.png` | `/sprites/pet_ember_pup_action.png` |
-| Lantern Wisp | `/sprites/pet_lantern_wisp.png` | `/sprites/pet_lantern_wisp_walk.png` | `/sprites/pet_lantern_wisp_action.png` |
-| Bonebird | `/sprites/pet_bonebird.png` | `/sprites/pet_bonebird_walk.png` | `/sprites/pet_bonebird_action.png` |
+**Exact canonical filenames** — 18 horizontal strips, 64×64 square frames, count inferred
+from width:
 
-**Enable** (mirrors `SHEETS` — registries are empty by default so nothing 404s):
+| pet | walk | role action |
+|---|---|---|
+| Ember Pup | `pet_ember_pup_walk_down.png` `pet_ember_pup_walk_up.png` `pet_ember_pup_walk_side.png` | `pet_ember_pup_burn_down.png` `pet_ember_pup_burn_up.png` `pet_ember_pup_burn_side.png` |
+| Lantern Wisp | `pet_lantern_wisp_walk_down.png` `pet_lantern_wisp_walk_up.png` `pet_lantern_wisp_walk_side.png` | `pet_lantern_wisp_collect_down.png` `pet_lantern_wisp_collect_up.png` `pet_lantern_wisp_collect_side.png` |
+| Bonebird | `pet_bonebird_walk_down.png` `pet_bonebird_walk_up.png` `pet_bonebird_walk_side.png` | `pet_bonebird_mark_down.png` `pet_bonebird_mark_up.png` `pet_bonebird_mark_side.png` |
+
+All under `public/sprites/`.
+
+**Enable** (mirrors `SHEETS` — the registry is empty by default so nothing 404s):
 
 ```ts
-export const PET_SOURCES: Partial<Record<PetKind, string>> = {
-  ember_pup: "/sprites/pet_ember_pup.png",
-};
-export const PET_SHEETS: Partial<Record<`${PetKind}.${PetClip}`, SheetDef>> = {
-  "ember_pup.walk": { src: "/sprites/pet_ember_pup_walk.png", fps: 10 },
+export const PET_SHEETS: Partial<Record<PetSheetKey, SheetDef>> = {
+  "ember_pup.walk_down": { src: "/sprites/pet_ember_pup_walk_down.png", fps: 10 },
+  "ember_pup.burn_side": { src: "/sprites/pet_ember_pup_burn_side.png", fps: 12 },
 };
 ```
 
-Missing clips fall back `action -> walk -> base -> silhouette placeholder`, so partial
-drops are fine. Pets draw at 30px (about half a hero); accent tints live in
-`src/sim/pets.ts` (`PETS[kind].tint`).
+Pets draw at 30px (about half a hero); accent tints live in `src/sim/pets.ts`
+(`PETS[kind].tint`). The companion panel's 64px preview plays the `walk_down` strip
+(frame 0 idle) the moment it is registered.

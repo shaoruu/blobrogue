@@ -3,10 +3,11 @@ import { TILE } from "../sim/types.js";
 import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, Pet, PetKind, WeaponId, AttackMove, Prop, PropKind, Chest, RemotePlayer } from "../sim/types.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
-import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName, PetPose } from "./assets.js";
+import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { PETS, PET_BALANCE } from "../sim/pets.js";
-import { drawPetPlaceholder } from "./petArt.js";
+import { PET_ACTION, petFacingFrom, petSheetCandidates, petFrame } from "./petArt.js";
+import type { PetPose, PetFacingState } from "./petArt.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
@@ -381,6 +382,8 @@ export class Game {
   private enemyFacing = new Map<number, number>(); // stable L/R facing (velocity-driven + deadzone) to kill mirror-flicker
   private petAnims = new Map<number, Anim>();
   private petAnimPos = new Map<number, { x: number; y: number }>();
+  // Committed 3-facing + mirror state per pet (deadzoned motion, like enemyFacing).
+  private petFacings = new Map<number, PetFacingState>();
   private propAnims = new Map<number, Anim>();
   // Keyed by the sim's stable per-floor id (like enemies/props): online rebuilds pickup/chest
   // objects from each snapshot, so object-identity keying would reset the idle anim 20x/s.
@@ -976,10 +979,11 @@ export class Game {
       const prev = this.petAnimPos.get(pet.id);
       const dx = prev ? pet.x - prev.x : 0, dy = prev ? pet.y - prev.y : 0;
       stepAnim(anim, dt, dx * dx + dy * dy > 0.12, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
+      this.petFacings.set(pet.id, petFacingFrom(dx, dy, this.petFacings.get(pet.id) ?? { facing: "down", mirror: false }));
       this.petAnimPos.set(pet.id, { x: pet.x, y: pet.y });
     }
     if (this.petAnims.size > livePetIds.size) {
-      for (const id of this.petAnims.keys()) if (!livePetIds.has(id)) { this.petAnims.delete(id); this.petAnimPos.delete(id); }
+      for (const id of this.petAnims.keys()) if (!livePetIds.has(id)) { this.petAnims.delete(id); this.petAnimPos.delete(id); this.petFacings.delete(id); }
     }
     const livePropIds = new Set<number>();
     for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
@@ -2989,14 +2993,18 @@ export class Game {
 
   // ---- companion pets (render) ----
 
-  // The typed pose hook (the sprite contract in assets.ts): action while the wire attack
-  // timer runs, walk while the body is moving, idle otherwise.
+  // The typed pose hook (contract in petArt.ts): the pet's ROLE ACTION clip while the wire
+  // attack timer runs (burn/collect/mark), walk otherwise; 3-facing + mirror from committed
+  // motion; a stationary pet holds frame 0 (there are no idle strips).
   private petPose(pet: Pet): PetPose {
     const prev = this.petAnimPos.get(pet.id);
     const isMoving = prev !== undefined && Math.hypot(pet.x - prev.x, pet.y - prev.y) > 0.35;
+    const f = this.petFacings.get(pet.id) ?? { facing: "down" as const, mirror: false };
     return {
-      clip: pet.attackAnim > 0 ? "action" : isMoving ? "walk" : "idle",
-      facing: pet.facing >= 0 ? 1 : -1,
+      clip: pet.attackAnim > 0 ? PET_ACTION[pet.kind] : "walk",
+      facing: f.facing,
+      mirror: f.mirror,
+      isIdle: !isMoving && pet.attackAnim <= 0,
     };
   }
 
@@ -3020,7 +3028,6 @@ export class Game {
       // The peck renders even when its bird is just off-screen (it flies ahead of the body).
       if (pet.peck && this.isNearCamera(pet.peck.x, pet.peck.y, TILE)) this.renderPetPeck(pet);
       if (!this.isNearCamera(pet.x, pet.y, TILE)) continue;
-      const def = PETS[pet.kind];
       const pose = this.petPose(pet);
       const anim = this.animForPet(pet.id);
       if (pet.attackAnim > 0 && anim.recoil <= 0) triggerRecoil(anim, 0.8);
@@ -3036,40 +3043,26 @@ export class Game {
         ctx.stroke();
         ctx.restore();
       }
+      // Body: the pose's resolved strip down the fallback ladder ({clip}_{facing} ->
+      // walk_{facing} -> walk_down), frame 0 while idle, side strips mirrored for left.
+      // NO strip loaded => the body stays HIDDEN (no drawn placeholder of any kind — the
+      // art rule); the ground shadow / wisp light remain the neutral position markers.
       const xf = characterXform(anim, CHARACTER_STYLE);
-      const sheet = this.sprites.petSheet(pet.kind, pose.clip) ?? this.sprites.petSheet(pet.kind, "walk");
-      const img = this.sprites.pet(pet.kind);
-      if (sheet || img) {
+      const sheet = this.sprites.petSheetResolved(petSheetCandidates(pet.kind, pose.clip, pose.facing));
+      if (sheet) {
         const size = 30;
+        const flip = pose.facing === "side" && pose.mirror ? -1 : 1;
         ctx.save();
         ctx.translate(sx + xf.ox, sy + xf.oy);
-        ctx.scale(pose.facing * xf.sx, xf.sy);
-        if (sheet) {
-          const fw = sheet.img.naturalHeight || FRAME;
-          const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
-          const i = frameIndex(count, sheet.fps, anim.clock);
-          ctx.drawImage(sheet.img, i * fw, 0, fw, fw, -size / 2, -size / 2, size, size);
-        } else if (img) {
-          ctx.drawImage(img, -size / 2, -size / 2, size, size);
-        }
+        ctx.scale(flip * xf.sx, xf.sy);
+        const fw = sheet.img.naturalHeight || FRAME;
+        const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
+        const i = petFrame(count, sheet.fps, anim.clock, pose.isIdle);
+        ctx.drawImage(sheet.img, i * fw, 0, fw, fw, -size / 2, -size / 2, size, size);
         ctx.restore();
-      } else {
-        this.renderPetBody(pet, sx, sy, pose, xf, def.tint);
       }
       if (pet.kind === "lantern_wisp") this.renderWispLight(pet, sx, sy);
     }
-  }
-
-  // Placeholder silhouette until the authored sprites land (assets.ts PET_SOURCES; the art
-  // rule bans procedural character bodies — petArt.ts is a marker, not a creature). Shared
-  // with the companion panel previews so neither surface invents its own body art.
-  private renderPetBody(pet: Pet, sx: number, sy: number, pose: PetPose, xf: Xform, tint: string) {
-    const { ctx } = this;
-    ctx.save();
-    ctx.translate(sx + xf.ox, sy + xf.oy);
-    ctx.scale(pose.facing * xf.sx, xf.sy);
-    drawPetPlaceholder(ctx, pet.kind, tint);
-    ctx.restore();
   }
 
   // The wisp's lantern: an additive light pool that also flags what it is FOR — loot
