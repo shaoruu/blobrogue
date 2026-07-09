@@ -951,9 +951,9 @@ function compositionCapGates(): void {
 
 function partyRewardGates(): void {
   section("studio gate §4: pedestal rolls max(1, ceil(P/2)), distinct ids");
-  check("formulas: pedestals 1/1/2/2, boss choices 2/3/4/5",
+  check("formulas: pedestals 1/1/2/2, boss choices 3/3/4/5 (P+1 floored at 3 for early variety)",
     [1, 2, 3, 4].every((p) => pedestalWeaponRolls(p) === Math.max(1, Math.ceil(p / 2)))
-    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, p + 1)));
+    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, Math.max(3, p + 1))));
   for (let players = 1; players <= 4; players++) {
     const w = createWorld(0x9ED5, 1, { skipLocalPlayer: true });
     for (let i = 0; i < players; i++) spawnPlayerInWorld(w, `p${i}`);
@@ -1046,16 +1046,16 @@ function partyRewardGates(): void {
 
   section("studio gate §4: no player goes >2 consecutive non-boss floors without an opportunity");
   {
-    // Pedestals stock every floor from F2 (F1 carries the starter pistol itself), so the
-    // longest dry run is exactly one floor.
+    // Pedestals stock EVERY non-boss floor, floor 1 included (the early-variety fix:
+    // F1 used to carry only the starter pistol), so there is no dry floor at all.
     let ok = true;
-    for (let f = 2; f <= 9; f++) {
+    for (let f = 1; f <= 9; f++) {
       if (isBossFloor(f)) continue;
       const w = createWorld(0x9ED7, 1);
-      descend(w, f, []);
+      if (f > 1) descend(w, f, []);
       if (!w.chests.some((c) => c.weapon !== undefined)) ok = false;
     }
-    check("every non-boss floor F2+ stocks at least one weapon pedestal", ok);
+    check("every non-boss floor F1+ stocks at least one weapon pedestal", ok);
   }
 }
 

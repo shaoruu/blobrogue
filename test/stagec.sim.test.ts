@@ -761,7 +761,7 @@ function chestWeaponTests(): void {
   {
     let looseWeapons = 0, stockedFloors = 0, chestPropOverlaps = 0, floorsChecked = 0;
     for (const seed of [0xF100D, 0x1234, 0xBEEF, 0xC0FFE, 0x5EED5]) {
-      for (let floor = 2; floor <= 6; floor++) {
+      for (let floor = 1; floor <= 6; floor++) { // F1 stocks too (the early-variety fix)
         const w = createWorld(seed, floor, { isShared: true, skipLocalPlayer: true });
         if (w.dungeon.rooms.length <= 2) continue;
         floorsChecked++;

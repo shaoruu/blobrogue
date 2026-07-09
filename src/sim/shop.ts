@@ -62,10 +62,16 @@ function shopRng(seed: number, floor: number, rerollsUsed: number): Rng {
   return new Rng((seed ^ 0x5a1e5b0b) + floor * 92821 + rerollsUsed * 31337);
 }
 
-function rollDistinctShopWeapon(rng: Rng, taken: readonly (WeaponId | null)[]): WeaponId {
-  let pick = rng.pick(PICKUP_WEAPONS);
-  for (let i = 0; i < PICKUP_WEAPONS.length && taken.includes(pick); i++) pick = rng.pick(PICKUP_WEAPONS);
-  return pick;
+// A pedestal weapon roll: distinct from the ids already stalled, and preferring a gun
+// outside `exclude` (weapons the whole party already owns — the same anti-repeat
+// discipline the free-drop bag applies, so Patch never stalls a gun nobody needs while
+// unowned guns remain). Falls back to allowing an owned gun, then any gun, rather than
+// ever failing to stock.
+function rollDistinctShopWeapon(rng: Rng, taken: readonly (WeaponId | null)[], exclude: readonly WeaponId[]): WeaponId {
+  const fresh = PICKUP_WEAPONS.filter((id) => !taken.includes(id) && !exclude.includes(id));
+  if (fresh.length > 0) return rng.pick(fresh);
+  const unstalled = PICKUP_WEAPONS.filter((id) => !taken.includes(id));
+  return unstalled.length > 0 ? rng.pick(unstalled) : rng.pick(PICKUP_WEAPONS);
 }
 
 // The blessing pedestal holds ONE item everyone sees identically (per-player validity is
@@ -79,8 +85,10 @@ function rollShopBlessing(rng: Rng): string {
 // (the generator guarantees the room is at least 11x8 of clean rect floor): Patch's stall
 // on the back wall, the three item pedestals in a mid row with clear per-pedestal
 // approach lanes, the heart station and reroll post flanking the stall. Deterministic
-// from (seed, floor) — every client and the server derive the identical shop.
-export function buildShopState(seed: number, floor: number, room: Room): ShopState {
+// from (seed, floor, exclude) — built once by the authority at floor load and shipped
+// on the wire, so every client reads the identical shop. `exclude` is the guns the
+// whole party already owns at build time (see rollDistinctShopWeapon).
+export function buildShopState(seed: number, floor: number, room: Room, exclude: readonly WeaponId[] = []): ShopState {
   const rng = shopRng(seed, floor, 0);
   const cx = (room.cx + 0.5) * TILE;
   const backY = (room.y + 1.5) * TILE;
@@ -89,7 +97,7 @@ export function buildShopState(seed: number, floor: number, room: Room): ShopSta
   const slots: ShopSlot[] = [];
   for (let i = 0; i < SHOP.pedestalPrices.length; i++) {
     const isWeapon = i < SHOP.weaponPedestals;
-    const weapon = isWeapon ? rollDistinctShopWeapon(rng, weapons) : null;
+    const weapon = isWeapon ? rollDistinctShopWeapon(rng, weapons, exclude) : null;
     if (weapon) weapons.push(weapon);
     slots.push({
       id: i,
@@ -129,13 +137,13 @@ export function hasRestockableSlots(shop: ShopState): boolean {
 // Reroll the unbought item pedestals in place (rerollsUsed must already be incremented by
 // the caller — it keys the deterministic restock stream). Weapon rolls stay distinct from
 // every pedestal weapon still standing, bought or not.
-export function restockShop(shop: ShopState, seed: number, floor: number): void {
+export function restockShop(shop: ShopState, seed: number, floor: number, exclude: readonly WeaponId[] = []): void {
   const rng = shopRng(seed, floor, shop.rerollsUsed);
   const keptWeapons = shop.slots.map((s) => (isRestockable(s) ? null : s.weapon));
   for (const slot of shop.slots) {
     if (!isRestockable(slot)) continue;
     if (slot.kind === "weapon") {
-      slot.weapon = rollDistinctShopWeapon(rng, keptWeapons);
+      slot.weapon = rollDistinctShopWeapon(rng, keptWeapons, exclude);
       keptWeapons.push(slot.weapon);
     } else {
       slot.itemId = rollShopBlessing(rng);
