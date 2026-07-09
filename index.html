@@ -495,7 +495,7 @@
          PLAY ONLINE below stays the only amber-filled element and the first action.
          Every bound here is fixed from first paint, so cosmetics/loading never shift
          anything. */
-      .home-hero{ display:grid; grid-template-columns:1fr 132px; gap:16px; align-items:center;
+      .home-hero{ grid-row:1; display:grid; grid-template-columns:1fr 132px; gap:16px; align-items:center;
         min-height:0; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
       .hero-mark{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; min-width:0; }
       /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
@@ -513,10 +513,11 @@
       .home-hero .blob-stage .blob-preview{ position:relative; z-index:1; width:96px; height:96px;
         image-rendering:pixelated; background:transparent; }
       /* The small closet door beside the blob — the natural place to tap your guy. Quiet
-         secondary chrome, absolutely anchored into the hero band (DOM-last, so PLAY
-         keeps first tab/reading order); opens the closet as an OVERLAY. */
-      .stage-customize{ position:absolute; top:108px; right:140px; z-index:2; min-width:0; width:auto;
-        font-size:8px; letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
+         secondary chrome. DOM-LAST (PLAY keeps first tab/reading order) but grid-placed
+         INTO the hero row, anchored at the blob's feet — no absolute offsets, so the
+         responsive hero variants keep it beside the blob for free. */
+      .stage-customize{ grid-row:1; grid-column:1; justify-self:end; align-self:end; margin:0 140px 12px 0;
+        z-index:2; min-width:0; width:auto; font-size:8px; letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
       .body{ display:flex; gap:20px; align-items:stretch; }
       .home-body{ display:grid; grid-template-columns:1.22fr 0.78fr; gap:20px; flex:1; min-height:0; }
       .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
@@ -580,15 +581,14 @@
         .menu-home{ height:auto; min-height:0; grid-template-rows:auto auto; }
         .body{ flex-direction:column; }
         .home-body{ grid-template-columns:1fr; }
-        /* Narrow: the blob stays VISIBLE but subordinate — a smaller stage beside the
-           left-aligned wordmark, PLAY unobstructed right below in document order. */
-        .home-hero{ grid-template-columns:1fr 96px; gap:10px; align-items:start; }
-        .hero-mark{ align-items:flex-start; text-align:left; }
-        .home-hero .tag{ text-align:left; }
-        .home-hero .blob-stage{ width:96px; height:96px; }
-        .home-hero .blob-stage .blob-preview{ width:72px; height:72px; }
-        .home-hero .blob-stage::after{ bottom:12px; width:44px; height:8px; }
-        .stage-customize{ top:96px; right:2px; }
+        /* Narrow: the hero STACKS (accepted responsive spec) — centered wordmark above a
+           104px stage (80px blob), PLAY immediately below and still the first action
+           above the fold. */
+        .home-hero{ grid-template-columns:1fr; justify-items:center; gap:8px; }
+        .home-hero .blob-stage{ width:104px; height:104px; }
+        .home-hero .blob-stage .blob-preview{ width:80px; height:80px; }
+        .home-hero .blob-stage::after{ bottom:11px; width:50px; height:9px; }
+        .stage-customize{ justify-self:center; margin:0 0 12px 122px; }
         .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; }
         /* .home-left carries the specificity so the later base .lb-preview rule can't
            override this media block (source order vs cascade). */
@@ -596,11 +596,16 @@
         .home-right .identity-card{ height:108px; flex:0 0 108px; }
         .home-right .home-dest{ height:66px; flex:0 0 66px; }
       }
-      /* Short viewports NEVER hide the trusted leaderboard preview: the shell relaxes to
-         auto height (grid rows follow content) and scrolls in document order — the hero
-         stays compact and Play sits right under it. */
+      /* Short viewports (accepted responsive spec): a compact 100px hero row with an
+         88px stage (64px blob) so PLAY + the leaderboard preview stay visible without
+         scrolling Play off-screen; the shell follows content and never hides the glance. */
       @media (max-height:679px){
-        .menu-home{ height:auto; min-height:0; }
+        .menu-home{ height:auto; min-height:0; grid-template-rows:100px minmax(0,1fr); }
+        .home-hero{ grid-template-columns:1fr 88px; }
+        .home-hero .blob-stage{ width:88px; height:88px; }
+        .home-hero .blob-stage .blob-preview{ width:64px; height:64px; }
+        .home-hero .blob-stage::after{ bottom:10px; width:36px; height:7px; }
+        .stage-customize{ margin:0 98px 8px 0; }
       }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===

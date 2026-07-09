@@ -10,11 +10,11 @@ import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { resolveNameInput, rerollBlobName } from "../net/blobName.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
-import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex, bodyItemForPaletteIndex } from "../game/cosmetics.js";
+import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { cosmeticOverlay } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
-import type { BlobLook } from "./blobPreview.js";
+import type { BlobLook, BlobPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
@@ -121,9 +121,12 @@ export class Menu {
   // The title's live identity region: auth settling (an OAuth exchange finishing after the
   // shell painted) re-renders CONTENT inside this reserved box — never the shell around it.
   private identityMount: HTMLElement | null = null;
-  // The title's character stage refresh: identity hydration/auth settle repaints the blob
-  // inside its fixed 104px box (content only — the hero band never moves).
+  // The title's character stage refresh: identity hydration, auth settle, and every
+  // closet equip repaint the blob inside its fixed box (content only — the hero band
+  // never moves). The preview handle itself is kept so the idle loop can be paused
+  // while the title is hidden (in-run) or covered by the closet overlay.
   private titleStageRefresh: (() => void) | null = null;
+  private titleStage: BlobPreview | null = null;
   // The current screen's tab group for controller LB/RB (closet categories, profile views).
   private tabCycle: ((dir: 1 | -1) => void) | null = null;
 
@@ -144,6 +147,8 @@ export class Menu {
 
   hide() {
     this.teardownLobby();
+    // The title (and its idle loop) is fully covered while a run plays — park the rAF.
+    this.titleStage?.setPaused(true);
     this.overlay.classList.add("hidden");
   }
 
@@ -151,6 +156,7 @@ export class Menu {
     this.teardownLobby();
     this.identityMount = null;     // the title re-arms it after its own show()
     this.titleStageRefresh = null; // idem
+    this.titleStage = null;
     this.tabCycle = null;          // screens with tab groups re-arm after their own show()
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
@@ -276,6 +282,7 @@ export class Menu {
       wrap.appendChild(customize);
       this.show(wrap);
       this.titleStageRefresh = refreshStage;
+      this.titleStage = stagePreview;
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
       return;
     }
@@ -320,6 +327,7 @@ export class Menu {
     this.show(wrap);
     this.identityMount = identity;
     this.titleStageRefresh = refreshStage;
+    this.titleStage = stagePreview;
     // Background identity flush (login/adoption) — no home UI depends on its timing; the
     // stage repaints in place once the profile's loadout lands.
     void this.flushTitleIdentity().then(() => this.titleStageRefresh?.());
@@ -341,24 +349,14 @@ export class Menu {
     }
   }
 
-  // The stage's accessible description mirrors exactly what it draws — the equipped
-  // loadout by display name, or the classic default look for a fresh guest.
+  // The stage's accessible description (the accepted copy, exactly): "Your blob", or
+  // "Your blob wearing <hat>, <glasses>" when overlay cosmetics are equipped.
   private stageLabel(): string {
     const loadout = this.session.cosmetics;
-    // The rendered tint: the worn body item, else a legacy party-color pick (the same
-    // fallback lookOf paints with), else the classic amber default.
-    const bodyName = loadout.body !== null
-      ? cosmeticById(loadout.body)?.name
-      : this.session.colorIndex !== null
-        ? bodyItemForPaletteIndex(this.session.colorIndex)?.name
-        : undefined;
     const worn = [loadout.hat, loadout.face]
       .map((id) => (id !== null ? cosmeticById(id)?.name : undefined))
-      .concat(bodyName)
       .filter((name): name is string => name !== undefined);
-    return worn.length > 0
-      ? `your blob \u2014 wearing ${worn.join(", ")}`
-      : "your blob \u2014 the classic amber cowboy look";
+    return worn.length > 0 ? `Your blob wearing ${worn.join(", ")}` : "Your blob";
   }
 
   // A 90px home destination card: the label leads (and IS the button's own text, so focus
@@ -1004,7 +1002,12 @@ export class Menu {
 
     const unlocks = () => this.session.profile?.unlocks ?? [];
     const equippedOf = (slot: CosmeticSlot) => this.session.cosmetics[slot];
-    const syncStage = () => preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+    // ONE shared loadout state (the session) drives every stage: the closet mirror AND —
+    // when the closet rides as an overlay above the title — the title blob, live.
+    const syncStage = () => {
+      preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+      this.titleStageRefresh?.();
+    };
 
     // Optimistic-equip bookkeeping: a per-slot sequence makes rapid switching last-click-
     // wins (a stale response is simply ignored), and the in-flight pick wears the corner
@@ -1163,6 +1166,7 @@ export class Menu {
       this.closetRefresh = null;
       this.tabCycle = null;
       this.titleStageRefresh?.(); // the unchanged title, wearing the updated blob
+      this.titleStage?.setPaused(false); // the idle loop resumes with the title
       scope.close();
     };
     scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
@@ -1174,6 +1178,9 @@ export class Menu {
     this.overlay.appendChild(scrim);
     window.addEventListener("keydown", onKey);
     this.tabCycle = closet.cycleCategory;
+    // The covered title parks its idle loop; equips still repaint it live (static frames)
+    // through titleStageRefresh, so the blob behind the scrim visibly updates.
+    this.titleStage?.setPaused(true);
     scope.open(closeBtn, currentFocus());
     void this.hydrateCloset();
   }

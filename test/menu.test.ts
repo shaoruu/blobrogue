@@ -374,15 +374,14 @@ async function main(): Promise<void> {
     check("the canvas reserves its fixed 96px box from creation", canvasBefore?.width === 96 && canvasBefore?.height === 96);
     check("the stage is a SHOWPIECE, not a control (no button inside it)",
       collect(stage() ?? {}, (n) => n.tagName === "BUTTON").length === 0);
-    check("before hydration a fresh guest shows the DEFAULT blob",
-      stage()?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true, stage()?.getAttribute?.("aria-label") ?? "");
+    check("before hydration a fresh guest shows the DEFAULT blob (accepted copy)",
+      stage()?.getAttribute?.("aria-label") === "Your blob", stage()?.getAttribute?.("aria-label") ?? "");
     const buttonsBefore = buttonsOf(overlay).length;
     await settle();
     check("hydration repaints CONTENT only (same canvas node, zero layout shift)",
       collect(stage() ?? {}, (n) => n.tagName === "CANVAS")[0] === canvasBefore && buttonsOf(overlay).length === buttonsBefore);
-    const label = stage()?.getAttribute?.("aria-label") ?? "";
-    check("the hydrated stage mirrors the EQUIPPED loadout (hat + glasses + body color)",
-      label.includes("Top Hat") && label.includes("Shades") && label.includes("Cyan"), label);
+    check("the hydrated stage mirrors the EQUIPPED loadout (accepted aria copy: hat, glasses)",
+      stage()?.getAttribute?.("aria-label") === "Your blob wearing Top Hat, Shades", stage()?.getAttribute?.("aria-label") ?? "");
     const buttons = buttonsOf(overlay);
     check("PLAY stays the FIRST action; CUSTOMIZE rides DOM-LAST (anchored beside the blob via CSS)",
       (buttons[0] ?? "").includes("PLAY ONLINE") && (buttons[buttons.length - 1] ?? "") === "CUSTOMIZE", buttons.join("|").slice(0, 80));
@@ -391,23 +390,45 @@ async function main(): Promise<void> {
     check("shell: 150px hero row over minmax(0,1fr), height min(548px,100vh-40px), min 508px",
       /\.menu-home\{ display:grid; grid-template-rows:150px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(548px,calc\(100vh - 40px\)\); min-height:508px; \}/.test(html));
     check("hero band: 1fr wordmark | 132px stage; stage canvas is 96px",
-      /\.home-hero\{ display:grid; grid-template-columns:1fr 132px;/.test(html)
+      /\.home-hero\{ grid-row:1; display:grid; grid-template-columns:1fr 132px;/.test(html)
       && /\.home-hero \.blob-stage\{[^}]*width:132px; height:132px;/.test(html)
       && /\.home-hero \.blob-stage \.blob-preview\{[^}]*width:96px; height:96px;/.test(html));
     check("the blob STANDS: radial plinth glow behind + soft ground-shadow ellipse",
       /\.home-hero \.blob-stage::before\{[^}]*radial-gradient/.test(html)
       && /\.home-hero \.blob-stage::after\{[^}]*border-radius:50%; background:rgba\(5,3,11/.test(html));
+    // The accepted responsive rules: narrow stacks the hero (104/80), short viewports
+    // compact it (100px row, 88/64) so Play + the glance stay on screen.
+    const narrowCss = html.slice(html.indexOf("@media (max-width:680px)"), html.indexOf("@media (max-height:679px)"));
+    check("narrow: hero stacks centered with a 104px stage (80px blob)",
+      /\.home-hero\{ grid-template-columns:1fr; justify-items:center; gap:8px; \}/.test(narrowCss)
+      && /width:104px; height:104px/.test(narrowCss) && /width:80px; height:80px/.test(narrowCss));
+    const shortCss = html.slice(html.indexOf("@media (max-height:679px)"));
+    check("short: 100px hero row with an 88px stage (64px blob)",
+      /grid-template-rows:100px minmax\(0,1fr\)/.test(shortCss)
+      && /width:88px; height:88px/.test(shortCss) && /width:64px; height:64px/.test(shortCss));
+    // The accepted rendering-loop rules live in the shared preview: rAF only while
+    // visible, pause on hide/overlay/tab-hide, static idle frame under reduced motion.
+    const previewSrc = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
+    check("the idle loop pauses on tab hide and honors prefers-reduced-motion",
+      previewSrc.includes("visibilitychange") && previewSrc.includes("prefers-reduced-motion") && previewSrc.includes("setPaused"));
+    const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
+    check("the menu parks the title loop while hidden (in-run) and while the overlay covers it",
+      /hide\(\) \{[\s\S]{0,220}setPaused\(true\)/.test(menuSrc) && menuSrc.includes("this.titleStage?.setPaused(true);") && menuSrc.includes("this.titleStage?.setPaused(false);"));
 
-    // Signed-out/guest: the default blob — plus the guest's body-color pick when one exists.
+    // Signed-out/guest: the default blob (amber, no hat/glasses) — never blank; a saved
+    // guest body-color pick still renders through the same shared look resolution.
     const guest = makeMenu({ lb: [] });
     await guest.menu.showTitle();
     await settle();
-    check("a guest with no picks keeps the default look after hydration",
-      byClass(guest.overlay, "blob-stage")[0]?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true);
+    check("a guest with no picks keeps the DEFAULT label after hydration",
+      byClass(guest.overlay, "blob-stage")[0]?.getAttribute?.("aria-label") === "Your blob");
     const picked = makeMenu({ lb: [] });
     void picked.session.setColorIndex(2); // the guest's swatch pick, applied locally at once
     await picked.menu.showTitle();
-    check("a guest body-color pick rides the stage", byClass(picked.overlay, "blob-stage")[0]?.getAttribute?.("aria-label")?.includes("Green") === true);
+    check("a guest body-color pick renders the stage without overlay copy (color is paint, not aria)",
+      byClass(picked.overlay, "blob-stage").length === 1
+      && byClass(picked.overlay, "blob-stage")[0]?.getAttribute?.("aria-label") === "Your blob"
+      && picked.session.cosmetics.body === "body_green");
   }
 
   section("attention hierarchy gate: calm identity, brightest PLAY, no reflow under worst case");
@@ -463,15 +484,19 @@ async function main(): Promise<void> {
     check("the title (and Play) is STILL in the tree behind it — no mode swap",
       collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
     check("the overlay carries the autosave promise in copy", textOf(byClass(overlay, "closet-pop")[0] ?? {}).includes("changes save instantly"));
-    // Equip from the overlay, then close: the SAME title stands, wearing the new blob.
+    // Equip from the overlay: the SHARED loadout state updates the title stage LIVE —
+    // the blob behind the scrim visibly changes before the overlay ever closes.
     byClass(overlay, "cos-card").find((c) => textOf(c).includes("Top Hat"))?.onclick?.();
     check("instant equip works inside the overlay", session.cosmetics.hat === "hat_top");
+    check("...and updates the title stage LIVE (shared CosmeticLoadout state)",
+      byClass(overlay, "blob-stage")[0]?.getAttribute?.("aria-label") === "Your blob wearing Top Hat",
+      byClass(overlay, "blob-stage")[0]?.getAttribute?.("aria-label") ?? "");
     await settle();
     byClass(byClass(overlay, "closet-pop")[0] ?? {}, "panel-close")[0]?.onclick?.();
     check("closing removes the overlay", byClass(overlay, "closet-pop").length === 0 && byClass(overlay, "closet-scrim").length === 0);
     check("...returning to the UNCHANGED title (same Play node, never rebuilt)",
       collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
-    check("...with the stage repainted to the updated blob",
+    check("...still wearing the updated blob",
       byClass(overlay, "blob-stage")[0]?.getAttribute?.("aria-label")?.includes("Top Hat") === true);
     // Escape drives the same overlay close (B on a pad dispatches this exact event).
     collect(overlay, (n) => n.tagName === "BUTTON" && typeof n.className === "string" && n.className.includes("stage-customize"))[0]?.onclick?.();

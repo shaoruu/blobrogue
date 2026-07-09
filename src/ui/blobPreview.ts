@@ -10,8 +10,12 @@ import type { CosmeticXform } from "../game/cosmeticSockets.js";
 // a run.
 //
 // The canvas element is fixed-size from creation (zero layout shift while the sprite
-// streams in — a placeholder disc renders until then), and the animation loop parks itself
-// the moment the canvas leaves the document (menu screens swap via replaceChildren).
+// streams in — a static default-blob silhouette renders until then, never an empty box).
+// The animation loop is the in-game idle clip (stepAnim/characterXform — no bespoke
+// tween) and runs via requestAnimationFrame only while the preview is actually visible:
+// it parks when the canvas leaves the document (screens swap via replaceChildren), when
+// the host pauses it (title hidden, overlay open), when the tab hides (visibilitychange),
+// and permanently under prefers-reduced-motion (a static idle frame stands instead).
 
 // The EFFECTIVE render look: callers resolve the body palette (cosmetic body item or the
 // party-color fallback) into colorIndex before handing it here.
@@ -51,10 +55,14 @@ function sprites(): Sprites {
 export interface BlobPreview {
   el: HTMLCanvasElement;
   setLook(look: BlobLook): void;
+  // Host-driven pause: the menu parks the loop while the title is hidden (in-run) or an
+  // overlay covers it. setLook still repaints a static frame while paused.
+  setPaused(isPaused: boolean): void;
 }
 
 export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPreviewOptions = {}): BlobPreview {
   const el = document.createElement("canvas");
+  // Canvas dimensions are set BEFORE any render — the box is fixed from first paint.
   el.width = size;
   el.height = size;
   el.className = "blob-preview";
@@ -63,6 +71,10 @@ export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPrevie
   const anim = createAnim();
   let last = 0;
   let raf = 0;
+  let isPausedByHost = false;
+  // prefers-reduced-motion holds a static idle frame: draw once (and on every setLook),
+  // never run the animation loop.
+  const isReducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   // The calm-idle gesture clock (seconds of preview time). Blinks and waves are scheduled
   // sparsely at randomized intervals — alive, never busy.
   let clock = 0;
@@ -117,9 +129,18 @@ export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPrevie
     });
   };
 
+  // The loop runs ONLY while the preview can actually be seen: the canvas is in the
+  // document, the host hasn't paused it (title hidden / overlay open), the tab is
+  // visible, and the player hasn't asked for reduced motion.
+  const isRunnable = () => el.isConnected && !isPausedByHost && document.hidden !== true && !isReducedMotion;
+
+  const schedule = () => {
+    if (raf === 0 && isRunnable()) raf = requestAnimationFrame(tick);
+  };
+
   const tick = (now: number) => {
     raf = 0;
-    if (!el.isConnected) return; // screen swapped away — park the loop
+    if (!isRunnable()) { last = 0; return; } // parked; schedule()/visibility resumes
     const dt = Math.min(0.05, last > 0 ? (now - last) / 1000 : 0.016);
     last = now;
     stepAnim(anim, dt, false, 0);
@@ -135,21 +156,33 @@ export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPrevie
       }
     }
     draw();
-    raf = requestAnimationFrame(tick);
+    schedule();
   };
 
-  // First frame immediately (fixed geometry from paint one), then the idle loop once the
-  // canvas is actually in the document.
+  // Tab visibility gates the loop too; the listener retires itself once the canvas has
+  // left the document (screens swap via replaceChildren, so previews are per-screen).
+  const onVisibility = () => {
+    if (!el.isConnected) { document.removeEventListener("visibilitychange", onVisibility); return; }
+    if (document.hidden === true) { cancelAnimationFrame(raf); raf = 0; last = 0; }
+    else schedule();
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+
+  // First frame immediately (fixed geometry from paint one — a static idle frame even
+  // under reduced motion), then the loop once the canvas is actually in the document.
   draw();
-  queueMicrotask(() => {
-    if (raf === 0) raf = requestAnimationFrame(tick);
-  });
+  queueMicrotask(schedule);
 
   return {
     el,
     setLook(next: BlobLook) {
       look = next;
       draw();
+    },
+    setPaused(isPaused: boolean) {
+      isPausedByHost = isPaused;
+      if (isPaused) { cancelAnimationFrame(raf); raf = 0; last = 0; }
+      else schedule();
     },
   };
 }
