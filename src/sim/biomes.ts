@@ -146,8 +146,12 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.16,
     detailTint: "#8a5cff",
     torchesPerRoom: 2,
-    floorDim: 0.44,
-    wallLift: 0.58,
+    // Recalibrated (readability gates): the Deep's authored art measured Δ10.0 — exactly
+    // AT the luma gate, zero margin — so any layout change (the shop room reshapes floor
+    // 18) could tip a viewport under it. A stronger floor dim + wall lift buys real
+    // headroom while staying inside the band's jet-resin grading.
+    floorDim: 0.50,
+    wallLift: 0.66,
   },
   {
     // Floors 21-25 — order, armor, claimed space. The accepted lane: RIGID amber/brass
