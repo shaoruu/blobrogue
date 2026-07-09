@@ -138,6 +138,121 @@ function rootwardTests(): void {
     check("the guard's reach shields the ally in its shadow",
       ally.hp === allyHp && ev.some((x) => x.t === "bulletBlocked"), `allyHp=${ally.hp}/${allyHp}`);
   }
+  section("forkroot bailiff (rootward): raises/MOVES one asymmetric root divider");
+  {
+    const { w, p } = arena(0x4005);
+    p.x = 700; p.y = 600;
+    const e = spawnReady(w, "rootward", 900, 600);
+    let guard = 0;
+    while (e.attack.move !== "build" && guard++ < 400) step(w, idle(w.tick + 1));
+    check("aligned and in range, it commits the raise (build grammar, stationary tell)",
+      e.attack.move === "build" && e.attack.phase === "windup");
+    const bx = e.x, by = e.y;
+    const ev: SimEvent[] = [];
+    stepFor(w, C.BAILIFF_BUILD_WINDUP + 0.05, ev);
+    check("the tell is stationary (an anchor roots to raise)", Math.hypot(e.x - bx, e.y - by) < 1);
+    const wall = w.props.filter((pr) => pr.kind === "root_wall" && !pr.dead);
+    check("the divider rose ahead of the guard, owned by its bailiff",
+      wall.length >= 2 && wall.length <= 4 && wall.every((m) => m.owner === e.id)
+      && wall.every((m) => m.x < e.x), `segs=${wall.length}`);
+    check("the divider is ASYMMETRIC (handed: more segments on one side)", (() => {
+      if (wall.length < 4) return true; // standoffs may trim; asymmetry reads on the full line
+      // Signed projection along the divider line (perpendicular to the frozen guard).
+      const perp = e.attack.lockedAngle + Math.PI / 2;
+      const proj = (m: { x: number; y: number }) =>
+        (m.x - e.attack.markX) * Math.cos(perp) + (m.y - e.attack.markY) * Math.sin(perp);
+      const pos = wall.filter((m) => proj(m) > 4).length;
+      const neg = wall.filter((m) => proj(m) < -4).length;
+      return pos !== neg;
+    })());
+    // Cover for EITHER side: the wall eats an enemy round too (fired from the north,
+    // well clear of both bodies).
+    const seg = wall[0];
+    const enemyRound = plantShot(w, seg.x, seg.y - 60, 0, 300, 1);
+    enemyRound.friendly = false;
+    enemyRound.owner = null;
+    stepFor(w, 0.4);
+    check("the root wall is cover for either side (an enemy round spends on it)",
+      enemyRound.life <= 0
+      && w.props.some((m) => m.kind === "root_wall" && (m.hp < C.PROP_HP.root_wall || m.dead || m.breakT !== undefined)));
+  }
+  {
+    // "MOVES one divider": walking past its wall re-raises at the new front — and the
+    // old construction is REPLACED, never accumulated.
+    const { w, p } = arena(0x4006);
+    p.x = 640; p.y = 600;
+    const e = spawnReady(w, "rootward", 900, 600);
+    let guard = 0;
+    while (!w.props.some((pr) => pr.kind === "root_wall") && guard++ < 500) step(w, idle(w.tick + 1));
+    const firstIds = new Set(w.props.filter((pr) => pr.kind === "root_wall" && !pr.dead).map((pr) => pr.id));
+    check("the first divider stands", firstIds.size >= 2, `segs=${firstIds.size}`);
+    // Teleport the anchor far past its wall (the fight moved on) and force readiness.
+    e.x = 1360; e.y = 600; e.attack.cooldown = 0; e.attack.lockedAngle = Math.PI;
+    p.x = 1120; p.y = 600;
+    guard = 0;
+    while (guard++ < 600) {
+      step(w, idle(w.tick + 1));
+      const live = w.props.filter((pr) => pr.kind === "root_wall" && !pr.dead && pr.breakT === undefined);
+      if (live.length > 0 && live.every((m) => !firstIds.has(m.id))) break;
+    }
+    const live = w.props.filter((pr) => pr.kind === "root_wall" && !pr.dead && pr.breakT === undefined);
+    check("the re-raise MOVED the divider (old segments crumbled, one divider stands)",
+      live.length > 0 && live.length <= 4 && live.every((m) => !firstIds.has(m.id)), `live=${live.length}`);
+  }
+}
+
+// ---- the clinker mason: Emberreach's topology worker ----
+
+function masonTests(): void {
+  section("clinker mason: claims the heat site and masons ONE handed L-corner around it");
+  {
+    const { w, p } = arena(0x4008);
+    p.x = 700; p.y = 600;
+    devSpawnProp(w, "brazier", 1000, 600); // the heat site (a vent stand-in on floor 1)
+    const e = spawnReady(w, "mason", 1050, 640);
+    let guard = 0;
+    while (e.attack.move !== "build" && guard++ < 400) step(w, idle(w.tick + 1));
+    check("at the site it commits the masonry (build grammar, long tell)",
+      e.attack.move === "build" && e.attack.phase === "windup"
+      && Math.hypot(e.attack.markX - 1000, e.attack.markY - 600) < 8);
+    stepFor(w, C.MASON_BUILD_WINDUP + 0.05);
+    const bricks = w.props.filter((pr) => pr.kind === "clinker_brick" && !pr.dead);
+    check("a handed L-corner of clinker bricks rose around the site, owned by its mason",
+      bricks.length >= 3 && bricks.length <= C.MASON_ARM_LONG + C.MASON_ARM_SHORT
+      && bricks.every((m) => m.owner === e.id), `bricks=${bricks.length}`);
+    // The corner apex faces the player (west of the site): the denial face.
+    check("the corner apex points at the player (the open back is the approach lane)",
+      bricks.some((m) => m.x < 1000 - C.MASON_CORNER_DIST * 0.5)
+      && bricks.every((m) => m.x < 1000 + C.MASON_SEG_SPACING * 2));
+  }
+  {
+    // No heat in reach: the mason fortifies its own position instead.
+    const { w, p } = arena(0x4009);
+    p.x = 700; p.y = 600;
+    const e = spawnReady(w, "mason", 1000, 600);
+    let guard = 0;
+    while (e.attack.move !== "build" && guard++ < 400) step(w, idle(w.tick + 1));
+    check("without a vent it fortifies ITSELF (mark = its own ground)",
+      e.attack.move === "build" && Math.hypot(e.attack.markX - e.x, e.attack.markY - e.y) < 8);
+    stepFor(w, C.MASON_BUILD_WINDUP + 0.05);
+    check("the self-corner rose", w.props.some((pr) => pr.kind === "clinker_brick" && !pr.dead));
+  }
+  {
+    // ONE persistent topology edit per room: while the bailiff's divider stands in this
+    // room, the mason's raise is REFUSED outright.
+    const { w, p } = arena(0x400a);
+    p.x = 700; p.y = 600;
+    const bailiff = spawnReady(w, "rootward", 900, 600);
+    let guard = 0;
+    while (!w.props.some((pr) => pr.kind === "root_wall") && guard++ < 500) step(w, idle(w.tick + 1));
+    check("the room's one edit stands (the divider)", w.props.some((pr) => pr.kind === "root_wall" && !pr.dead));
+    bailiff.dead = true; // the construction persists past its builder (persistent topology)
+    const e = spawnReady(w, "mason", 980, 560);
+    guard = 0;
+    while (e.attack.phase !== "recover" && guard++ < 500) step(w, idle(w.tick + 1));
+    check("the mason's raise is refused while another edit holds the room",
+      !w.props.some((pr) => pr.kind === "clinker_brick"), "one persistent topology edit per room");
+  }
 }
 
 // ---- echojack: false noise, then the visible relocation ----
@@ -186,7 +301,7 @@ function echojackTests(): void {
 // ---- seamcutter: the previewed wall-to-wall lane ----
 
 function seamcutterTests(): void {
-  section("seamcutter: previews the seam, locks it, cuts it with timed perpendicular sweeps");
+  section("silt keel (seamcutter): previews the lane, plows it, and RAISES one persistent berm");
   {
     const { w, p } = arena(0x4021);
     p.x = 1100; p.y = 600;
@@ -198,22 +313,47 @@ function seamcutterTests(): void {
     const mark = { x: e.attack.markX, y: e.attack.markY };
     check("the preview reaches wall-to-wall (the mark sits near the east wall)", mark.x > 1450,
       `mark=${mark.x.toFixed(0)},${mark.y.toFixed(0)}`);
-    // The early-cross counter: sidestep after the lock — the seam must not follow.
+    // The early-cross counter: sidestep after the lock — the plow must not follow.
     p.y = 900;
     stepFor(w, C.SEAM_WINDUP - C.SEAM_LOCK + 0.05);
-    check("the cut commits along the LOCKED lane", e.attack.phase === "active"
+    check("the plow commits along the LOCKED lane", e.attack.phase === "active"
       && Math.abs(e.attack.markY - mark.y) < 1e-9);
-    // The counter: get BEHIND the cut (it never turns; the sweeps fly perpendicular).
+    // No projectile payload anymore: the zoning is the BERM (the Silt Keel supersedes
+    // the wave-1 sweep bolts — worker verb, not a sprayer).
     p.x = 500; p.y = 600;
     const ev: SimEvent[] = [];
-    stepFor(w, 1.0, ev);
-    const sweeps = enemyBullets(w);
-    check("the cut throws timed PERPENDICULAR sweep pairs as it travels",
-      sweeps.length >= 4 && sweeps.every((b) => Math.abs(b.vx) < 1 && Math.abs(b.vy) > 100),
-      `sweeps=${sweeps.length}`);
-    stepFor(w, 1.6, ev);
-    check("the far wall ends the cut in the punish recover", e.attack.move === "seam" && e.attack.phase === "recover");
-    check("the player standing behind the cut was never hit", p.hp === p.maxHp);
+    stepFor(w, 2.6, ev);
+    check("the plow spends NO projectiles (the payload is topology)", enemyBullets(w).length === 0);
+    check("the far wall ends the plow in the punish recover", e.attack.move === "seam" && e.attack.phase === "recover");
+    const berm = w.props.filter((pr) => pr.kind === "silt_mound" && !pr.dead && pr.breakT === undefined);
+    check("ONE persistent berm rose beside the furrow", berm.length >= 2 && berm.length <= C.BERM_MAX_SEGS
+      && berm.every((m) => m.owner === e.id), `mounds=${berm.length}`);
+    check("the berm piles to ONE handed side of the lane, off the furrow itself",
+      berm.every((m) => Math.abs(Math.abs(m.y - 600) - C.BERM_SIDE_OFFSET) < 10)
+      && new Set(berm.map((m) => Math.sign(m.y - 600))).size === 1);
+    check("the player standing behind the plow was never hit", p.hp === p.maxHp);
+    // The mounds are honest destructibles: either side spends them.
+    const m0 = berm[0];
+    plantShot(w, m0.x, m0.y - 60, 0, 300, 2);
+    stepFor(w, 0.4);
+    check("a berm mound is breakable cover", m0.dead || m0.breakT !== undefined || m0.hp < C.PROP_HP.silt_mound);
+  }
+  {
+    // The REPLACEMENT rule: a second plow sinks the first berm — one edit, moved.
+    const { w, p } = arena(0x4022);
+    p.x = 1100; p.y = 600;
+    const e = spawnReady(w, "seamcutter", 840, 600);
+    stepFor(w, C.SEAM_WINDUP + 2.6);
+    const firstIds = new Set(w.props.filter((pr) => pr.kind === "silt_mound" && !pr.dead).map((pr) => pr.id));
+    check("the first plow left its berm standing", firstIds.size >= 2, `mounds=${firstIds.size}`);
+    // Walk the fight elsewhere and force the next commitment.
+    e.attack.cooldown = 0;
+    p.x = e.x - 40; p.y = e.y - 300;
+    stepFor(w, C.SEAM_WINDUP + 2.8);
+    const live = w.props.filter((pr) => pr.kind === "silt_mound" && !pr.dead && pr.breakT === undefined);
+    check("the second plow REPLACED the berm (old mounds sank, one berm stands)",
+      live.length > 0 && live.length <= C.BERM_MAX_SEGS && live.every((m) => !firstIds.has(m.id)),
+      `live=${live.length}`);
   }
 }
 
@@ -850,8 +990,9 @@ function navTests(): void {
       if (cutter.attack.move === "seam" && cutter.attack.phase === "active") didCut = true;
     }
     check("the seamcutter committed its cut on obstructed ground", didCut);
-    check("the cut splintered the furniture in its lane (broken props leave the world)",
-      w.props.filter((pr) => !pr.dead).length < 3, `intact=${w.props.filter((pr) => !pr.dead).length}`);
+    check("the plow splintered the furniture in its lane (its own berm may rise after)",
+      w.props.filter((pr) => pr.kind === "crate" && !pr.dead).length < 3,
+      `crates=${w.props.filter((pr) => pr.kind === "crate" && !pr.dead).length}`);
   }
 }
 
@@ -963,6 +1104,7 @@ function clearTests(): void {
 
 function main(): void {
   rootwardTests();
+  masonTests();
   echojackTests();
   seamcutterTests();
   caskbellowsTests();

@@ -328,7 +328,7 @@ function approvedHookTests(): void {
   // Full walk+attack contract for the mobile new kinds (+ the marshal miniboss).
   for (const [sprite, hasAttack] of [
     ["echojack", true], ["seamcutter", true], ["caskbellows", true],
-    ["sinderling", true], ["marshal", true], ["rootward", false],
+    ["sinderling", true], ["marshal", true], ["rootward", true], ["mason", true],
   ] as Array<[string, boolean]>) {
     const walkOk = (["down", "up", "side"] as const).every(
       (f) => SHEETS[`${sprite}.walk_${f}`]?.src === `/sprites/${sprite}_walk_${f}.png`);
@@ -337,8 +337,10 @@ function approvedHookTests(): void {
     check(`${sprite}: directional hooks registered (${hasAttack ? "walk + attack" : "walk only — it has no attack"})`,
       walkOk && attackOk);
   }
-  check("the attackless rootward registers NO attack sheets (a wall never swings)",
-    SHEETS["rootward.attack"] === undefined && SHEETS["rootward.attack_down"] === undefined);
+  // The ecology gate made the rootward the FORKROOT BAILIFF: its directional attack
+  // sheet is the divider RAISE (arms up, roots rising), never a swing.
+  check("the bailiff's raise rides the directional attack hooks",
+    SHEETS["rootward.attack_down"] !== undefined && SHEETS["rootward.attack_side"] !== undefined);
   check("the fragment and The Toll ride the drifting-mass contract (idle + omni attack)",
     SHEETS["fragment.idle"]?.src === "/sprites/fragment_idle.png"
     && SHEETS["fragment.attack"]?.src === "/sprites/fragment_attack.png"
