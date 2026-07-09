@@ -16,12 +16,12 @@ import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
-import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT } from "../ui/onlineCopy.js";
+import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
-import type { InputCmd } from "../sim/input.js";
+import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import { comboTierFor } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
@@ -352,6 +352,9 @@ export class Game {
   private connectDeadline = 0;
   // Edge detector for the outage overlay (drives the BACK ONLINE toast on recovery).
   private isOutageSeen = false;
+  // The authoritative tick when the current online blessing overlay opened (guards the
+  // wait-state watchdog against a fresh offer's snapshot lag).
+  private choosingSinceTick = 0;
 
   // The simulation is owned by the Transport. Solo/co-op run stepWorld in-process
   // (LocalTransport); online routes through WSTransport (predict + reconcile against an
@@ -785,8 +788,11 @@ export class Game {
     if (raw > 0) this.fps += (1 / raw - this.fps) * 0.1; // dev readout only; harmless otherwise
     this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
     // Paused (Esc) or picking a blessing: keep drawing the frozen frame under the
-    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates.
+    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates. An ONLINE
+    // pick still pumps the authoritative stream: the server world keeps ticking under the
+    // overlay, and the offer's TTL expiry must land NOW, not when the overlay closes.
     if (this.isPaused || this.isChoosing) {
+      if (this.isChoosing) this.pumpChoosingOnline();
       this.render();
       this.raf = requestAnimationFrame(this.loop);
       return;
@@ -947,6 +953,42 @@ export class Game {
       }
     }
     this.revealOnlineWorld();
+  }
+
+  // While the blessing overlay is up in an ONLINE run the normal tick is frozen, but the
+  // authoritative world is not: keep the countdown honest from the snapshot's wait state and
+  // drain the event stream so the offer's expiry closes the overlay the moment it happens.
+  // The pick window's cosmetic FX events are deliberately dropped (bounded to the overlay).
+  private pumpChoosingOnline() {
+    if (this.mode !== "online" || !this.wsTransport) return;
+    const selfId = this.wsTransport.getSelfServerId();
+    const mine = this.wsTransport.getPartyWait().find((w) => w.pid === selfId);
+    this.blessing.setCountdown(mine ? mine.s : null);
+    const { events } = this.transport.poll();
+    for (const e of events) {
+      if (e.t === "blessingExpired") this.onOfferExpired(e.pid);
+    }
+    // Watchdog for a LOST expiry event (e.g. it fell into a reconnect's skipped backlog):
+    // the authoritative wait state is on every snapshot — once it no longer lists us (a few
+    // ticks past the offer opening, so a fresh offer's first snapshot can't false-trigger),
+    // the offer is dead server-side and the overlay must not outlive it.
+    const snap = this.wsTransport.getLatestSnapshot();
+    if (this.isChoosing && !mine && snap !== null && snap.tick > this.choosingSinceTick + 2 && selfId !== null) {
+      this.onOfferExpired(selfId);
+    }
+  }
+
+  // The offer's TTL ran out unanswered (pid-scoped: only the owner receives it). Close the
+  // overlay if it is still up, drop any undelivered transport offer, and say so — the run
+  // moved on, and a pick after this point is rejected server-side anyway.
+  private onOfferExpired(pid: PlayerId) {
+    if (this.mode !== "online" || !this.wsTransport || pid !== this.wsTransport.getSelfServerId()) return;
+    this.wsTransport.consumePendingOffer();
+    if (!this.isChoosing) return;
+    this.blessing.hide();
+    this.isChoosing = false;
+    this.syncInputContext();
+    this.hud.showBanner(OFFER_EXPIRED_TOAST);
   }
 
   // Apply the authoritative first world and lift the veil: cosmetic floor load, camera on
@@ -1345,6 +1387,9 @@ export class Game {
         // server-side. Solo/co-op roll their own choices locally.
         if (this.mode !== "online") this.offerBlessing(e.rare);
         break;
+      case "blessingExpired":
+        this.onOfferExpired(e.pid);
+        break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
         else if (e.kind === "heart" || e.kind === "dealer_heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
@@ -1652,6 +1697,7 @@ export class Game {
     if (choices.length === 0 || !this.wsTransport) return;
     this.isChoosing = true;
     this.isPaused = false;
+    this.choosingSinceTick = this.wsTransport.getLatestSnapshot()?.tick ?? 0;
     this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
@@ -2052,12 +2098,16 @@ export class Game {
           : this.isWorldRevealed ? "connected" : "waiting";
       const roster = this.wsTransport.getWorldRoster();
       const connected = roster.filter((r) => r.st === "on").length;
+      const selfId = this.wsTransport.getSelfServerId();
       coopLabel = onlineHudLabel({
         phase,
         roomCode: this.online?.roomCode ?? null,
         worldId: this.wsTransport.getWorldId(),
         connected,
         away: roster.length - connected,
+        // Teammates still deciding a pick — the visible reason a cleared floor isn't
+        // descending yet (own overlay covers the self case).
+        waitingPicks: this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
       });
     }
     const comboTier = this.comboTier();

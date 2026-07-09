@@ -51,6 +51,9 @@ export interface Counters {
   resumesOk: number;
   resumesRejected: number;
   resumesExpired: number;
+  // Blessing offers that ran out their TTL unanswered (pick forfeited, descend gate
+  // released on the same tick). Growth flags AFK parties or a stuck-overlay bug.
+  offersExpired: number;
   malformed: number;
   rateLimited: number;
   droppedSnaps: number;
@@ -62,6 +65,7 @@ export function newCounters(): Counters {
     msgsIn: 0, msgsOut: 0, bytesOut: 0, connsOpened: 0, connsClosed: 0,
     joinsOk: 0, joinsRejected: 0, duplicateIdentityKicks: 0,
     seatsReserved: 0, seatsExpired: 0, seatsDiscarded: 0, resumesOk: 0, resumesRejected: 0, resumesExpired: 0,
+    offersExpired: 0,
     malformed: 0, rateLimited: 0, droppedSnaps: 0, rejectedInputs: 0,
   };
 }

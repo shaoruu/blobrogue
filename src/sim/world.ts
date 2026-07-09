@@ -866,12 +866,18 @@ export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void 
 
 // Tick pending offers on the SIM clock: an unanswered offer expires after BLESSING_OFFER_TTL
 // and the run moves on without the pick, so an AFK/hostile client can never hold the party's
-// descend gate (or their own damage shield) forever.
-function tickPendingBlessings(w: WorldState, dt: number): void {
+// descend gate (or their own damage shield) forever. Expiry is EMITTED, not silent — the
+// authoritative server clears the matching connection/seat offer off the event (both sides
+// resolve on the same tick) and the owning client closes its overlay.
+function tickPendingBlessings(w: WorldState, dt: number, ev: SimEvent[]): void {
   if (w.pendingBlessings.size === 0) return;
   for (const [pid, left] of w.pendingBlessings) {
-    if (left <= dt) w.pendingBlessings.delete(pid);
-    else w.pendingBlessings.set(pid, left - dt);
+    if (left <= dt) {
+      w.pendingBlessings.delete(pid);
+      ev.push({ t: "blessingExpired", pid });
+    } else {
+      w.pendingBlessings.set(pid, left - dt);
+    }
   }
 }
 
@@ -2660,7 +2666,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
   checkStrandedWipe(w, ev);
-  tickPendingBlessings(w, dt);
+  tickPendingBlessings(w, dt, ev);
   updateExit(w, ev);
 
   for (const p of w.players.values()) {

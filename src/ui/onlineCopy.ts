@@ -14,6 +14,7 @@ import type { ReconnectInfo } from "../client/wsTransport.js";
 export const WORLD_MISMATCH_NOTE = "World mismatch \u2014 rejoining the party\u2026";
 export const RUN_ENDED_AWAY_NOTE = "RUN ENDED WHILE AWAY";
 export const BACK_ONLINE_TOAST = "BACK ONLINE";
+export const OFFER_EXPIRED_TOAST = "BLESSING EXPIRED \u2014 the run moves on";
 export const CONNECT_CANCEL_HINT = "ESC \u2014 cancel";
 export const READY_LABEL = "READY";
 export const NOT_READY_LABEL = "NOT READY";
@@ -38,11 +39,14 @@ export interface OnlineHudState {
   worldId: string | null;
   connected: number;       // "on" seats on the server roster
   away: number;            // reserved/reconnecting seats
+  // OTHER players still deciding a blessing offer (the held-descend explanation).
+  waitingPicks?: number;
 }
 
 // Normal play reads `CONNECTED · ABCD · 3 PLAYERS` (the contract's exact shape); transitional
-// phases swap the verb; mid-outage members append explicitly. Debug details (world id / rev /
-// protocol) live in the hold-Tab details panel, not here.
+// phases swap the verb; mid-outage members and teammates mid-blessing-pick append
+// explicitly. Debug details (world id / rev / protocol) live in the hold-Tab details panel,
+// not here.
 export function onlineHudLabel(s: OnlineHudState): string {
   const verb = s.phase === "connected" ? "CONNECTED"
     : s.phase === "reconnecting" ? "RECONNECTING"
@@ -50,7 +54,8 @@ export function onlineHudLabel(s: OnlineHudState): string {
   const where = s.roomCode ?? s.worldId;
   const players = s.connected > 0 ? ` \u00b7 ${s.connected} PLAYER${s.connected === 1 ? "" : "S"}` : "";
   const away = s.away > 0 ? ` \u00b7 ${s.away} RECONNECTING` : "";
-  return `${verb}${where ? ` \u00b7 ${where}` : ""}${players}${away}`;
+  const waiting = (s.waitingPicks ?? 0) > 0 ? ` \u00b7 WAITING ON ${s.waitingPicks} PICK${s.waitingPicks === 1 ? "" : "S"}` : "";
+  return `${verb}${where ? ` \u00b7 ${where}` : ""}${players}${away}${waiting}`;
 }
 
 // The hold-Tab details panel line: authoritative world / revision / protocol version.

@@ -71,13 +71,14 @@ class SnapshotLog {
 }
 
 // The world-content projection two same-room clients must agree on EXACTLY (everything in a
-// snapshot except the per-recipient fields: ackSeq, selfId, self, players, events, evTo).
-type WorldView = Pick<Snap, "tick" | "rev" | "wid" | "seed" | "floor" | "cleared" | "over" | "enemies" | "bullets" | "props" | "pickups" | "chests" | "roster">;
+// snapshot except the per-recipient fields: ackSeq, selfId, self, players, events, evTo, tok).
+type WorldView = Pick<Snap, "tick" | "rev" | "wid" | "seed" | "floor" | "cleared" | "over" | "enemies" | "bullets" | "props" | "pickups" | "chests" | "roster" | "wait">;
 function worldFields(s: Snap): WorldView {
   return {
     tick: s.tick, rev: s.rev, wid: s.wid, seed: s.seed, floor: s.floor, cleared: s.cleared, over: s.over,
     enemies: s.enemies, bullets: s.bullets, props: s.props, pickups: s.pickups, chests: s.chests,
     roster: [...s.roster].sort((a, b) => a.aid.localeCompare(b.aid)),
+    wait: s.wait,
   };
 }
 

@@ -439,6 +439,24 @@ reconciled with the studio balance gate's reconnect contract
   Prompts stay neutral (key names + plain verbs); controller glyphs wait for real
   controller support (enforced by the copy suite).
 
+### Blessing-offer expiry — the descend gate is visible and bounded, never stranded
+
+An unanswered online blessing offer resolves AUTHORITATIVELY when its TTL runs out (60s,
+the sim clock): `tickPendingBlessings` emits `blessingExpired`, and the room clears the
+matching connection AND seat offer on the SAME tick — no half-expired state can survive a
+disconnect, a reconnect, or a late choice, and the party's descend gate can never be held
+past the TTL. The pick is forfeited (no default pick, no reroll — balance gate §4/§6).
+Late/duplicate choices are rejected at every layer: the router (cleared conn offer, stale
+offer ids) and the room itself (`applyBlessing` requires the live sim entry). Every
+snapshot carries the party-wait state (`wait`: who is still choosing + authoritative
+seconds left, identical for all clients): the chooser's overlay shows the countdown, the
+HUD appends `· WAITING ON N PICKS` for teammates, and a watchdog closes an overlay whose
+offer died while its expiry event was unreachable (e.g. inside a reconnect's skipped
+backlog). `server/test/offerexpiry.test.ts` locks it end-to-end: silent expiry -> both
+sides cleared + descend proceeds; late/replayed chooses rejected with no double-apply; a
+three-player gate where two choose and one expires; and expiry during a disconnect where
+the resume resurrects nothing.
+
 `server/test/resume.test.ts` locks all of it with real reconnecting clients: exact-state
 resumes at 4%/20%/96% of the grace window (early blip / mid outage / near-edge return,
 scaled), expiry -> authoritative leave -> explicit `resume_expired`, replayed-token rejection

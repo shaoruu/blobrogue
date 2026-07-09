@@ -94,6 +94,8 @@ export interface RoomRuntime {
   gameOverPlayers(): PlayerId[];
   // Blessing offers raised this tick — the server turns each into a validated offer.
   offerPlayers(): BlessingOfferRequest[];
+  // Offers whose TTL expired this tick (already resolved on both sides) — logging/metrics.
+  expiredOfferPlayers(): PlayerId[];
 }
 
 // One sim-raised blessing offer (descend or boss chest) awaiting server-side rolling.

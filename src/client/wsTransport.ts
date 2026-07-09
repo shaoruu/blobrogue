@@ -21,7 +21,7 @@ import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
-  type RosterWire, type ServerMsg,
+  type RosterWire, type ServerMsg, type WaitWire,
 } from "../net/protocol.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
@@ -547,6 +547,11 @@ export class WSTransport implements Transport {
       console.info("[net] resumed into the authoritative world", { wid: snap.wid, selfId: snap.selfId, over: snap.over });
       this.setStatus("open");
     }
+    // A FULL snapshot re-anchors offer state too: an offer held from before a reconnect may
+    // have expired while we were away (its expiry event is pre-bootstrap backlog, skipped by
+    // design), so it must not survive as a stale prompt — a still-live offer is re-sent by
+    // the server within a tick.
+    if (snap.full) this.pendingOffer = null;
     const prevSnapAt = this.lastSnapAtForJitter;
     this.snapRecvAt = this.now();
     this.snapsRecv++;
@@ -911,6 +916,11 @@ export class WSTransport implements Transport {
   // count.
   getWorldRoster(): readonly RosterWire[] {
     return this.latestSnap?.roster ?? [];
+  }
+  // Players still deciding a blessing offer (pid + authoritative seconds left) — identical
+  // for every client, so the held descend gate is explicit and visibly bounded.
+  getPartyWait(): readonly WaitWire[] {
+    return this.latestSnap?.wait ?? [];
   }
   // Non-null after a terminal world-binding violation (see WSTransportOptions.expectedWorldId).
   getWorldMismatch(): WorldMismatch | null {

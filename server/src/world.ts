@@ -69,6 +69,9 @@ export class GameWorld implements RoomRuntime {
   // Blessing offers raised this tick (descend/boss chest) — the server turns each into a
   // server-decided, validated offer message.
   private offerThisTick: BlessingOfferRequest[] = [];
+  // Offers whose TTL expired this tick (already resolved on BOTH sides here) — surfaced for
+  // the server's logging/metrics.
+  private expiredOffersThisTick: PlayerId[] = [];
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
@@ -207,6 +210,10 @@ export class GameWorld implements RoomRuntime {
   }
 
   applyBlessing(pid: PlayerId, itemId: string): boolean {
+    // The sim's pending entry is THE offer's liveness: once it expired (or was never
+    // raised), a late choice is REJECTED outright — the gate already released, the pause
+    // already lifted, and applying now would grant a blessing the run moved past.
+    if (!this.state.pendingBlessings.has(pid)) return false;
     const def = itemById(itemId);
     if (!def) return false;
     // Resolves the sim's pending offer too: the pick ends the player's pause/damage shield
@@ -244,6 +251,9 @@ export class GameWorld implements RoomRuntime {
   }
   offerPlayers(): BlessingOfferRequest[] {
     return this.offerThisTick;
+  }
+  expiredOfferPlayers(): PlayerId[] {
+    return this.expiredOffersThisTick;
   }
 
   // Advance ONE authoritative tick. The server tick owns simulation time: each connected player
@@ -291,15 +301,39 @@ export class GameWorld implements RoomRuntime {
   }
 
   // Tag this tick's events with monotonic ids, append to the bounded ring, and record any
-  // game-over (full-wipe) players so the server can drive a deterministic leave.
+  // game-over (full-wipe) players so the server can drive a deterministic leave. An expired
+  // blessing offer is resolved on BOTH sides on the SAME tick it expired: the sim map entry
+  // is already gone (tickPendingBlessings emitted the event), and here the matching
+  // connection/seat offer is cleared — no half-expired state can survive a disconnect, a
+  // reconnect, or a late choice, and the descend gate can never be held past the TTL.
   private commitEvents(ev: SimEvent[]): void {
     this.gameOverThisTick = [];
     this.offerThisTick = [];
+    this.expiredOffersThisTick = [];
     for (const e of ev) {
       this.eventLog.push({ id: this.nextEventId++, e });
       if (e.t === "gameOver") this.gameOverThisTick.push(e.pid);
       else if (e.t === "offerBlessing") this.offerThisTick.push({ pid: e.pid, rare: e.rare });
+      else if (e.t === "blessingExpired") {
+        this.clearOfferFor(e.pid);
+        this.expiredOffersThisTick.push(e.pid);
+      }
     }
     if (this.eventLog.length > EVENT_RING) this.eventLog.splice(0, this.eventLog.length - EVENT_RING);
+  }
+
+  // Idempotently drop the server-side offer state for a player whose offer resolved without
+  // them (TTL expiry): the live connection's pending offer, and — for a player mid-outage —
+  // the reserved seat's copy, so a resume can never resurrect an expired offer.
+  private clearOfferFor(pid: PlayerId): void {
+    for (const conn of this.conns.values()) {
+      if (conn.playerId !== pid) continue;
+      conn.pendingOffer = null;
+      conn.offerResendsLeft = 0;
+    }
+    for (const seat of this.seatMap.values()) {
+      if (seat.pid !== pid) continue;
+      seat.pendingOffer = null;
+    }
   }
 }

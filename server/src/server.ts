@@ -141,6 +141,7 @@ export class GameServer {
     }
     for (const room of this.sessions.rooms()) {
       this.applyOffers(room);
+      this.handleExpiredOffers(room);
       this.publisher.sendOffers(room);
       this.publisher.publish(room);
       this.handleGameOver(room);
@@ -187,6 +188,16 @@ export class GameServer {
       conn.offerId++;
       conn.offerResendsLeft = OFFER_RESENDS;
       conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;
+    }
+  }
+
+  // Blessing offers the room expired this tick (the room already cleared both the sim entry
+  // and the conn/seat offers) — observability so a stuck-party report can be answered from
+  // the logs, and a growing counter flags AFK-heavy or overlay-bug behavior.
+  private handleExpiredOffers(room: RoomRuntime): void {
+    for (const pid of room.expiredOfferPlayers()) {
+      this.metrics.counters.offersExpired++;
+      this.log.info("blessing offer expired unanswered (pick forfeited, gate released)", { worldId: room.id, playerId: pid });
     }
   }
 

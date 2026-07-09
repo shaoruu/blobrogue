@@ -144,6 +144,14 @@ export interface RosterWire {
   st: SeatState;
 }
 
+// A player still deciding a blessing offer + the seconds left on its authoritative TTL.
+// Rides every snapshot (tiny, party-sized) so all clients agree on WHO is holding the
+// descend gate and for how long — a wait that is visible and bounded, never a mystery.
+export interface WaitWire {
+  pid: PlayerId;
+  s: number;
+}
+
 // A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
 // ignores ids it already processed) and ack (client reports the max id it has seen; the server
 // resends only unacked events from a bounded ring). This makes one-shot juice (kills/loot/FX)
@@ -240,6 +248,9 @@ export type ServerMsg =
                                  // refuses to play on a mismatch
       roster: RosterWire[];      // every seat in this world (verified identities + on/away),
                                  // interest-INDEPENDENT — drives readiness + the HUD count
+      wait: WaitWire[];          // players still deciding a blessing offer (pid + seconds
+                                 // left) — the party-wait state everyone sees identically,
+                                 // so a held descend gate is explicit and NEVER indefinite
       tok?: string;              // single-use resume token for THIS connection (full snaps
                                  // only) — presented on reconnect to reclaim the seat
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
@@ -370,6 +381,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
+  blessingExpired: { scope: "pid", fields: { pid: "str" } },
   revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
@@ -656,6 +668,11 @@ function validateWireEvent(v: unknown): WireEvent {
 
 const SEAT_STATES: Record<SeatState, true> = { on: true, away: true };
 
+function validateWaitWire(v: unknown): WaitWire {
+  const o = obj(v, "wait");
+  return { pid: shortStr(o, "pid", 64), s: num(o, "s", 0, 1e4) };
+}
+
 function validateRosterWire(v: unknown): RosterWire {
   const o = obj(v, "roster");
   let cl: number | null = null;
@@ -695,6 +712,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         selfId: shortStr(o, "selfId", 64),
         wid: worldIdOf(o),
         roster: arr(o.roster, "roster").map(validateRosterWire),
+        wait: arr(o.wait, "wait").map(validateWaitWire),
         ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
@@ -903,6 +921,16 @@ export interface SnapshotOpts {
   identities?: ReadonlyMap<PlayerId, PlayerIdentity>;
 }
 
+// The party-wait state straight off the sim's pending-blessing map, identical for every
+// client (sorted for determinism; whole seconds — a countdown readout, not a timer source).
+function partyWait(w: WorldState): WaitWire[] {
+  if (w.pendingBlessings.size === 0) return [];
+  const out: WaitWire[] = [];
+  for (const [pid, left] of w.pendingBlessings) out.push({ pid, s: Math.max(0, Math.ceil(left)) });
+  out.sort((a, b) => a.pid.localeCompare(b.pid));
+  return out;
+}
+
 // Interest management: a client always receives its OWN player + globally-relevant state (the
 // boss enemy and the boss chest — the shared objective) and, in addition, the nearby
 // players/enemies/bullets/props/pickups/chests within its interest radius (with exit
@@ -982,6 +1010,7 @@ export function buildSnapshot(
     selfId: selfPid,
     wid: opts.worldId,
     roster: opts.roster ?? [],
+    wait: partyWait(w),
     ...(opts.resumeToken !== undefined ? { tok: opts.resumeToken } : {}),
     seed: w.seed,
     floor: w.floor,

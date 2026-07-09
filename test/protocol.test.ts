@@ -181,13 +181,17 @@ function worldBindingWireTests(): void {
     { pid: "pMe", aid: "player-1", nm: "Ada", cl: 2, st: "on" },
     { pid: "pOther", aid: "guest:abc", nm: "Bob", cl: null, st: "away" },
   ];
+  w.pendingBlessings.set("pMe", 42.3);
+  w.pendingBlessings.set("pOther", 7);
   const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: worldIdForRoomCode("ABCD"), roster, resumeToken: "tok-abc123" });
   if (snap.t !== "snap") { check("snapshot built", false); return; }
   check("snapshot carries the world id", snap.wid === "room:ABCD");
   check("snapshot carries the full roster (interest-independent identities + on/away)", deepEqual(snap.roster, roster));
   check("snapshot carries the resume token when supplied", snap.tok === "tok-abc123");
+  check("snapshot carries the party-wait state (sorted, whole seconds)",
+    deepEqual(snap.wait, [{ pid: "pMe", s: 43 }, { pid: "pOther", s: 7 }]), JSON.stringify(snap.wait));
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
-  check("wid/roster/tok round-trip deep-equal", deepEqual(decoded, snap));
+  check("wid/roster/tok/wait round-trip deep-equal", deepEqual(decoded, snap));
 
   const base = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
   const bad: Array<[string, Record<string, unknown>]> = [
@@ -200,6 +204,9 @@ function worldBindingWireTests(): void {
     ["roster entry with junk color", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: 99999, st: "on" }] }],
     ["roster entry with junk seat state", { ...base, roster: [{ pid: "p1", aid: "a", nm: "x", cl: null, st: "zombie" }] }],
     ["non-string resume token", { ...base, tok: 42 }],
+    ["missing wait", (() => { const o = { ...base }; delete o.wait; return o; })()],
+    ["non-array wait", { ...base, wait: {} }],
+    ["wait entry with junk seconds", { ...base, wait: [{ pid: "p1", s: "soon" }] }],
   ];
   for (const [label, frame] of bad) {
     let rejected = false;
