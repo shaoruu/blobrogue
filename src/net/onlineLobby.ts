@@ -26,6 +26,9 @@ export interface LobbyPlayer {
   // The authoritative world this member is actually connected to (mirrored from the game
   // server's snapshot; null while in the lobby). Drives the roster's readiness readout.
   gsWorldId: string | null;
+  // The lobby READY toggle + the member's own heartbeat-measured ping (roster readout).
+  isReady: boolean;
+  pingMs: number | null;
 }
 
 export class OnlineLobby {
@@ -45,6 +48,7 @@ export class OnlineLobby {
   private unsubPresence: (() => void) | null = null;
   private listeners = new Set<() => void>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastPingMs: number | null = null;
 
   constructor(client: ConvexClient, session: Session) {
     this.client = client;
@@ -136,16 +140,19 @@ export class OnlineLobby {
   // run itself — online play has no gameplay presence sync, so this is the only keepalive).
   // The beat carries the CURRENT identity, so a name/color changed while sitting in the
   // lobby reaches everyone's roster within one beat — the roster and the ticket identity
-  // the next run mints can never disagree.
+  // the next run mints can never disagree. Each beat is also timed: its round trip is the
+  // member's lobby ping, published on the NEXT beat for the roster's ping readout.
   private startHeartbeat(): void {
     this.stopHeartbeat();
     const beat = () => {
       if (!this.roomId || !this.selfPlayerId) return;
+      const sentAt = Date.now();
       this.client.mutation(api.rooms.heartbeat, {
         roomId: this.roomId, playerId: this.selfPlayerId,
         ...(this.session.name ? { name: this.session.name } : {}),
         ...this.colorArg(),
-      }).catch(() => {});
+        ...(this.lastPingMs !== null ? { pingMs: this.lastPingMs } : {}),
+      }).then(() => { this.lastPingMs = Date.now() - sentAt; }).catch(() => {});
     };
     this.heartbeatTimer = setInterval(beat, HEARTBEAT_MS);
     beat();
@@ -172,7 +179,28 @@ export class OnlineLobby {
       .map((r) => ({
         playerId: r.playerId, name: r.name, colorIndex: r.colorIndex,
         isHost: r.playerId === this.hostPlayerId, gsWorldId: r.gsWorldId,
+        isReady: r.isReady, pingMs: r.pingMs,
       }));
+  }
+
+  get isSelfReady(): boolean {
+    return this.presenceRows.find((r) => r.playerId === this.selfPlayerId)?.isReady ?? false;
+  }
+
+  // Every NON-HOST member is ready (the host consents by pressing START). Drives the
+  // all-ready START vs hold-to-START ANYWAY gate in the lobby UI.
+  get isPartyReady(): boolean {
+    return this.players().every((p) => p.isHost || p.isReady);
+  }
+
+  // The lobby READY toggle. Optimistically reflected in the local roster so the button
+  // flips instantly; the subscription confirms it a beat later.
+  setReady(isReady: boolean): void {
+    const playerId = this.selfPlayerId;
+    if (!this.roomId || !playerId) return;
+    const row = this.presenceRows.find((r) => r.playerId === playerId);
+    if (row) { row.isReady = isReady; this.emit(); }
+    this.client.mutation(api.presence.setReady, { roomId: this.roomId, playerId, isReady }).catch(() => {});
   }
 
   // The one authoritative world this room's members are allowed to play in. Tickets are

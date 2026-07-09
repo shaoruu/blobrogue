@@ -94,13 +94,15 @@ function makeMenu(): { menu: Menu; overlay: ShimNode; launches: LaunchRecord[] }
 
 // A lobby double exposing exactly the surface showOnlineLobby reads. Kept as a plain object
 // (cast) so the test controls roster/status without Convex.
-function fakeLobby(code: string): {
+function fakeLobby(code: string, selfId = "player-1"): {
   lobby: OnlineLobby;
   setStatus: (s: "lobby" | "playing" | "ended") => void;
   setPlayers: (p: LobbyPlayer[]) => void;
   fireChange: () => void;
+  readyCalls: boolean[];
 } {
   let onChange: (() => void) | null = null;
+  const readyCalls: boolean[] = [];
   const state = {
     code,
     status: "lobby" as "lobby" | "playing" | "ended",
@@ -113,12 +115,15 @@ function fakeLobby(code: string): {
     get status() { return state.status; },
     get hostPlayerId() { return state.hostPlayerId; },
     get isQuickPlay() { return state.isQuickPlay; },
-    get selfId() { return "player-1"; },
-    get isHost() { return true; },
+    get selfId() { return selfId; },
+    get isHost() { return selfId === state.hostPlayerId; },
     get isActive() { return state.status !== "ended"; },
+    get isSelfReady() { return state.rows.find((r) => r.playerId === selfId)?.isReady ?? false; },
+    get isPartyReady() { return state.rows.every((p) => p.isHost || p.isReady); },
     players: () => state.rows,
     expectedWorldId: () => worldIdForRoomCode(state.code),
     onChange: (cb: () => void) => { onChange = cb; return () => { onChange = null; }; },
+    setReady: (isReady: boolean) => { readyCalls.push(isReady); },
     start: () => Promise.resolve(),
     reopen: () => Promise.resolve(),
     leave: () => {},
@@ -130,6 +135,14 @@ function fakeLobby(code: string): {
     setStatus: (s) => { state.status = s; },
     setPlayers: (p) => { state.rows = p; },
     fireChange: () => onChange?.(),
+    readyCalls,
+  };
+}
+
+function member(playerId: string, name: string, opts: Partial<LobbyPlayer> = {}): LobbyPlayer {
+  return {
+    playerId, name, colorIndex: 2, isHost: playerId === "player-1",
+    gsWorldId: null, isReady: false, pingMs: null, ...opts,
   };
 }
 
@@ -168,27 +181,63 @@ async function main(): Promise<void> {
     check("no startCoop entry remains in the menu host wiring", !menuSrc.includes("startCoop") && !mainSrc.includes("startCoop"));
   }
 
-  section("the room lobby shows authoritative per-member readiness");
+  section("lobby roster: READY/NOT READY consent + ping (the UI Director contract)");
+  {
+    const { menu, overlay } = makeMenu();
+    const f = fakeLobby("ABCD");
+    f.setPlayers([
+      member("player-1", "Ada", { pingMs: 42 }),
+      member("player-2", "Bob", { colorIndex: 5, isReady: true, pingMs: 87 }),
+      member("player-3", "Cye", { colorIndex: 3, isReady: false }),
+    ]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    const text = textOf(overlay);
+    check("a ready member reads READY", /READY \u00b7 87ms/.test(text), text.slice(0, 220));
+    check("an unready member reads NOT READY", text.includes("NOT READY"));
+    check("pings ride the roster chips", text.includes("42ms") && text.includes("87ms"));
+    check("the host row is implicit consent (HOST, no ready toggle)", text.includes("HOST \u00b7 42ms"));
+  }
+
+  section("host start gate: all-ready START RUN, otherwise hold-to-START ANYWAY");
+  {
+    const { menu, overlay } = makeMenu();
+    const f = fakeLobby("ABCD");
+    f.setPlayers([member("player-1", "Ada"), member("player-2", "Bob", { isReady: true })]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    check("everyone ready -> plain START RUN", buttonsOf(overlay).some((b) => b.includes("START RUN")));
+
+    f.setPlayers([member("player-1", "Ada"), member("player-2", "Bob", { isReady: false })]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    const buttons = buttonsOf(overlay);
+    check("someone not ready -> START ANYWAY requires the 3s hold", buttons.some((b) => b === "START ANYWAY \u2014 hold 3s"), buttons.join(" | "));
+    check("no plain START RUN escape hatch remains", !buttons.some((b) => b.includes("START RUN")));
+  }
+
+  section("a non-host member gets the READY UP toggle");
+  {
+    const { menu, overlay } = makeMenu();
+    const f = fakeLobby("ABCD", "player-2");
+    f.setPlayers([member("player-1", "Ada"), member("player-2", "Bob")]);
+    menu.showOnlineLobby(f.lobby, PROFILE);
+    check("READY UP offered while unready", buttonsOf(overlay).some((b) => b.includes("READY UP")));
+    f.setPlayers([member("player-1", "Ada"), member("player-2", "Bob", { isReady: true })]);
+    f.fireChange();
+    check("flips to the unready affordance once ready", buttonsOf(overlay).some((b) => b.includes("tap to unready")));
+  }
+
+  section("the room lobby shows authoritative per-member world state while live");
   {
     const { menu, overlay } = makeMenu();
     const f = fakeLobby("ABCD");
     const wid = worldIdForRoomCode("ABCD");
-    f.setPlayers([
-      { playerId: "player-1", name: "Ada", colorIndex: 2, isHost: true, gsWorldId: null },
-      { playerId: "player-2", name: "Bob", colorIndex: 5, isHost: false, gsWorldId: null },
-    ]);
-    menu.showOnlineLobby(f.lobby, PROFILE);
-    let text = textOf(overlay);
-    check("lobby members show LOBBY before the start", (text.match(/LOBBY/g) ?? []).length >= 2, text.slice(0, 160));
-
     // Mid-run view (a member stepped out): statuses come from the authoritative-world mirror.
     f.setStatus("playing");
     f.setPlayers([
-      { playerId: "player-1", name: "Ada", colorIndex: 2, isHost: true, gsWorldId: null },
-      { playerId: "player-2", name: "Bob", colorIndex: 5, isHost: false, gsWorldId: wid },
+      member("player-1", "Ada"),
+      member("player-2", "Bob", { colorIndex: 5, gsWorldId: wid }),
     ]);
     menu.showOnlineLobby(f.lobby, PROFILE);
-    text = textOf(overlay);
+    const text = textOf(overlay);
     check("a member confirmed in the world shows CONNECTED TO WORLD", text.includes("CONNECTED TO WORLD"));
     check("a member not yet in the world shows CONNECTING", text.includes("CONNECTING"));
     check("a live room offers REJOIN RUN", buttonsOf(overlay).some((b) => b.includes("REJOIN RUN")));
@@ -198,7 +247,7 @@ async function main(): Promise<void> {
   {
     const { menu, launches } = makeMenu();
     const f = fakeLobby("WXYZ");
-    f.setPlayers([{ playerId: "player-1", name: "Ada", colorIndex: 2, isHost: true, gsWorldId: null }]);
+    f.setPlayers([member("player-1", "Ada")]);
     menu.showOnlineLobby(f.lobby, PROFILE);
     check("no launch while the room is in the lobby", launches.length === 0);
     f.setStatus("playing");
@@ -210,7 +259,7 @@ async function main(): Promise<void> {
     const again = makeMenu();
     const live = fakeLobby("WXYZ");
     live.setStatus("playing");
-    live.setPlayers([{ playerId: "player-1", name: "Ada", colorIndex: 2, isHost: true, gsWorldId: null }]);
+    live.setPlayers([member("player-1", "Ada")]);
     again.menu.showOnlineLobby(live.lobby, PROFILE);
     const rejoin = collect(again.overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("REJOIN RUN"))[0] as { __handlers?: unknown } | undefined;
     check("rejoin button rendered for the live room", rejoin !== undefined);

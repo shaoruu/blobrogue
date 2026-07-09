@@ -4,9 +4,11 @@ import type { AuthClient } from "../net/auth.js";
 import type { ProfileDoc } from "../net/api.js";
 import { api } from "../net/api.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
+import type { LobbyPlayer } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { createSettingsControls } from "./settings.js";
+import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -424,7 +426,7 @@ export class Menu {
         dot.style.background = playerColor(p.colorIndex);
         const you = p.playerId === lobby.selfId ? " (you)" : "";
         rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
-        rowEl.appendChild(this.memberStatusChip(lobby, p.gsWorldId));
+        rowEl.appendChild(this.memberStatusChip(lobby, p));
         list.appendChild(rowEl);
       }
       wrap.appendChild(list);
@@ -437,10 +439,9 @@ export class Menu {
         rejoin.addEventListener("click", () => this.launchOnline(lobby, profile, false));
         row.appendChild(rejoin);
       } else if (lobby.isHost) {
-        const start = el("button", "", "\u25be  START RUN");
-        start.addEventListener("click", () => void lobby.start().catch(() => {}));
-        row.appendChild(start);
+        row.appendChild(this.hostStartButton(lobby));
       } else {
+        row.appendChild(this.readyToggleButton(lobby));
         wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
       }
       const leave = el("button", "secondary", "leave");
@@ -459,18 +460,75 @@ export class Menu {
     render();
   }
 
-  // A member's readiness against the AUTHORITATIVE world (mirrored from the game server's
-  // snapshot): CONNECTED TO WORLD when their reported world matches this room's, CONNECTING
-  // while the room is live but they haven't landed, LOBBY otherwise.
-  private memberStatusChip(lobby: OnlineLobby, gsWorldId: string | null): HTMLElement {
-    const isConnected = gsWorldId === lobby.expectedWorldId();
-    const label = isConnected ? "CONNECTED TO WORLD" : lobby.status === "playing" ? "CONNECTING\u2026" : "LOBBY";
-    const chip = el("span", "member-status", label);
+  // A member's roster chip. In the lobby it is the readiness consent (READY / NOT READY,
+  // host implicit) + their measured ping; while the run is live it is their state against
+  // the AUTHORITATIVE world (CONNECTED TO WORLD / CONNECTING…), mirrored from the server's
+  // own snapshot.
+  private memberStatusChip(lobby: OnlineLobby, p: LobbyPlayer): HTMLElement {
+    const ping = p.pingMs !== null ? ` \u00b7 ${p.pingMs}ms` : "";
+    let label: string;
+    let color: string;
+    if (lobby.status === "playing") {
+      const isConnected = p.gsWorldId === lobby.expectedWorldId();
+      label = isConnected ? "CONNECTED TO WORLD" : "CONNECTING\u2026";
+      color = isConnected ? "#7CFC98" : "#ffb43b";
+    } else if (p.isHost) {
+      label = "HOST";
+      color = "#8f87a8";
+    } else {
+      label = p.isReady ? READY_LABEL : NOT_READY_LABEL;
+      color = p.isReady ? "#7CFC98" : "#ffb43b";
+    }
+    const chip = el("span", "member-status", `${label}${ping}`);
     chip.style.marginLeft = "auto";
     chip.style.fontSize = "10px";
     chip.style.letterSpacing = "1px";
-    chip.style.color = isConnected ? "#7CFC98" : lobby.status === "playing" ? "#ffb43b" : "#8f87a8";
+    chip.style.color = color;
     return chip;
+  }
+
+  // A non-host member's readiness consent toggle.
+  private readyToggleButton(lobby: OnlineLobby): HTMLButtonElement {
+    const isReady = lobby.isSelfReady;
+    const btn = el("button", isReady ? "secondary" : "", isReady ? "\u2713 READY \u2014 tap to unready" : "\u25be  READY UP");
+    btn.addEventListener("click", () => lobby.setReady(!lobby.isSelfReady));
+    return btn;
+  }
+
+  // The host's start control. All members ready -> plain START RUN. Someone not ready ->
+  // START ANYWAY, armed only by a full 3s HOLD (releasing cancels) so a party can never be
+  // yanked into a run by a slipped click.
+  private hostStartButton(lobby: OnlineLobby): HTMLButtonElement {
+    if (lobby.isPartyReady) {
+      const start = el("button", "", "\u25be  START RUN");
+      start.addEventListener("click", () => void lobby.start().catch(() => {}));
+      return start;
+    }
+    const btn = el("button", "secondary", START_ANYWAY_IDLE);
+    let holdTimer: ReturnType<typeof setInterval> | null = null;
+    let holdStartedAt = 0;
+    const cancelHold = () => {
+      if (holdTimer !== null) clearInterval(holdTimer);
+      holdTimer = null;
+      btn.textContent = START_ANYWAY_IDLE;
+    };
+    btn.addEventListener("pointerdown", () => {
+      holdStartedAt = Date.now();
+      cancelHold();
+      holdTimer = setInterval(() => {
+        const heldMs = Date.now() - holdStartedAt;
+        if (heldMs >= START_ANYWAY_HOLD_MS) {
+          cancelHold();
+          void lobby.start().catch(() => {});
+          return;
+        }
+        btn.textContent = startAnywayHoldLabel(heldMs);
+      }, 100);
+    });
+    btn.addEventListener("pointerup", cancelHold);
+    btn.addEventListener("pointerleave", cancelHold);
+    btn.addEventListener("pointercancel", cancelHold);
+    return btn;
   }
 
   // The join-by-code screen for online rooms.

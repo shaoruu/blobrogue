@@ -62,6 +62,10 @@ function callNames(calls: Call[]): string[] {
   return calls.map((c) => c.fn);
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function main(): Promise<void> {
   section("create: identity flush lands BEFORE the room exists (color rides the roster row)");
   {
@@ -123,6 +127,40 @@ async function main(): Promise<void> {
     const lobby = new OnlineLobby(client, session);
     await lobby.create();
     check("expectedWorldId is worldIdForRoomCode(code)", lobby.expectedWorldId() === worldIdForRoomCode("ABCD") && lobby.expectedWorldId() === "room:ABCD", lobby.expectedWorldId());
+    lobby.leave();
+  }
+
+  section("setReady: the lobby consent toggle reaches the roster row");
+  {
+    const calls: Call[] = [];
+    const client = fakeConvex(calls);
+    const session = new Session(client);
+    const lobby = new OnlineLobby(client, session);
+    await lobby.create();
+    calls.length = 0;
+    lobby.setReady(true);
+    lobby.setReady(false);
+    await Promise.resolve();
+    const readies = calls.filter((c) => c.fn === "presence:setReady");
+    check("ready ON recorded", readies[0] !== undefined && readies[0].args.isReady === true && readies[0].args.playerId === "player-1", JSON.stringify(readies[0]?.args));
+    check("ready OFF recorded", readies[1] !== undefined && readies[1].args.isReady === false);
+    lobby.leave();
+  }
+
+  section("heartbeat measures and publishes the lobby ping");
+  {
+    const calls: Call[] = [];
+    const client = fakeConvex(calls);
+    const session = new Session(client);
+    const lobby = new OnlineLobby(client, session);
+    await lobby.create(); // first beat fires inside create's subscribe (no ping yet)
+    await sleep(10);
+    calls.length = 0;
+    await (lobby as unknown as { startHeartbeat(): void }).startHeartbeat(); // second beat carries the measured RTT
+    await sleep(10);
+    const beat = calls.find((c) => c.fn === "rooms:heartbeat");
+    check("a later beat publishes the measured round trip", beat !== undefined && typeof beat.args.pingMs === "number" && (beat.args.pingMs as number) >= 0,
+      JSON.stringify(beat?.args));
     lobby.leave();
   }
 

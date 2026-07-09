@@ -88,6 +88,11 @@ export default defineSchema({
     // Convex presence alone means "playing together".
     gsWorldId: v.optional(v.string()),
     gsJoinedAt: v.optional(v.number()),
+    // ONLINE lobby readiness: the member's explicit READY toggle (reset on every lobby
+    // (re)entry and on reopen after a wipe) and their measured lobby round-trip in ms
+    // (reported by their own heartbeat) — the roster's READY/NOT READY + ping readout.
+    isReady: v.optional(v.boolean()),
+    pingMs: v.optional(v.number()),
   })
     .index("by_room", ["roomId"])
     .index("by_room_player", ["roomId", "playerId"]),

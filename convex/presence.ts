@@ -68,7 +68,23 @@ export const list = query({
         updatedAt: r.updatedAt,
         gsWorldId: r.gsWorldId ?? null,
         gsJoinedAt: r.gsJoinedAt ?? null,
+        isReady: r.isReady ?? false,
+        pingMs: r.pingMs ?? null,
       }));
+  },
+});
+
+// The lobby READY toggle (roster shows READY/NOT READY per member; the host's START opens
+// when everyone is ready — see the menu's start gate).
+export const setReady = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), isReady: v.boolean() },
+  handler: async (ctx, { roomId, playerId, isReady }) => {
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!row) return;
+    await ctx.db.patch(row._id, { isReady: isReady ? true : undefined, updatedAt: Date.now() });
   },
 });
 
