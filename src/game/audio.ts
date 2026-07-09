@@ -18,6 +18,10 @@
 // cached (never re-fetched per play), and only cheap node allocation happens per one-shot.
 
 import { settings } from "./settings.js";
+import {
+  MAX_GLOBAL_VOICES, MAX_VOICES_PER_EVENT, BOSS_LOCK_RESERVED_VOICES, WAVE_PRIORITY, WAVE_BUS_GAIN,
+} from "./waveSpec.js";
+import type { WaveBusId, DuckBusId, WaveDuck, WaveSynthSpec, WaveSampleFallback } from "./waveSpec.js";
 
 export type SfxName =
   | "shootPistol"
@@ -58,6 +62,43 @@ export type MusicKind = "dungeon" | "boss" | null;
 export interface SfxOptions {
   gain?: number; // 0..1 scales this play's loudness (used to attenuate far-off co-op events)
   rate?: number; // pitch/speed multiplier; a small per-play jitter is always applied on top
+}
+
+// A fully resolved wave-manifest one-shot: the director (waveAudio.ts) picks the variant,
+// applies jitter/attenuation/cooldowns, and hands the engine pure playback mechanics.
+export interface WavePlayRequest {
+  event: string;
+  bus: WaveBusId;
+  priority: number;
+  gain: number;
+  rate: number;
+  stem: string | null; // wave file path under public/audio/ (null = derive/synth-only row)
+  fallback?: WaveSampleFallback;
+  synth: WaveSynthSpec;
+  duck?: readonly WaveDuck[];
+}
+
+// A wave-manifest loop start; loops are keyed (entity/zone/channel) and stopped explicitly.
+export interface WaveLoopRequest {
+  event: string;
+  bus: WaveBusId;
+  gain: number;
+  stem: string | null;
+  synth: WaveSynthSpec;
+  fadeSec: number;
+}
+
+// The capability surface the wave director drives — the engine's mechanics contract,
+// narrow enough that tests exercise director policy against a scripted stand-in.
+export interface WaveEngine {
+  now(): number;
+  playWave(req: WavePlayRequest): boolean;
+  startWaveLoop(key: string, req: WaveLoopRequest): boolean;
+  stopWaveLoop(key: string, fadeSec?: number): void;
+  hasWaveLoop(key: string): boolean;
+  stopAllWaveLoops(fadeSec?: number): void;
+  duckWaveBus(duck: WaveDuck): void;
+  preloadWave(stems: string[]): void;
 }
 
 // Maps each logical event to a committed sample: `id` is the file stem under
@@ -152,7 +193,28 @@ interface WebkitWindow {
   webkitAudioContext?: typeof AudioContext;
 }
 
-class AudioEngine {
+// A live wave voice — tracked for the manifest's voice budget + priority stealing.
+interface WaveVoice {
+  event: string;
+  priority: number;
+  gain: GainNode;
+  sources: AudioScheduledSourceNode[];
+  pending: number; // sources still sounding; the voice frees when this reaches 0
+}
+
+interface WaveLoopVoice {
+  key: string;
+  gain: GainNode;
+  sources: AudioScheduledSourceNode[];
+}
+
+// Active duck per duckable bus: a deeper concurrent duck wins until it expires.
+interface DuckState {
+  target: number;
+  until: number;
+}
+
+class AudioEngine implements WaveEngine {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
   private sfxBus: GainNode | null = null;
@@ -185,6 +247,20 @@ class AudioEngine {
 
   private sfxActive = new Map<SfxName, number>();
   private sfxLastAt = new Map<SfxName, number>();
+
+  // ---- wave layer state (manifest voices, loops, buses, ducking) ----
+  private voiceTellBus: GainNode | null = null;
+  private ambientBus: GainNode | null = null;
+  private uiBus: GainNode | null = null;
+  private petBus: GainNode | null = null;
+  private waveVoices: WaveVoice[] = [];
+  private waveLoops = new Map<string, WaveLoopVoice>();
+  private waveBuffers = new Map<string, AudioBuffer>();
+  private waveLoading = new Set<string>();
+  private failedWave = new Set<string>();
+  private reversedBuffers = new Map<string, AudioBuffer>();
+  private waveFallbackLogged = new Set<string>();
+  private duckStates = new Map<DuckBusId, DuckState>();
 
   constructor() {
     const onGesture = () => this.unlock();
@@ -271,12 +347,19 @@ class AudioEngine {
     return chosen;
   }
 
+  // BASE_URL is a Vite build constant; headless test runners (tsx) have no import.meta.env,
+  // so read it defensively — the served game always gets the real base.
+  private baseUrl(): string {
+    const env = (import.meta as ImportMeta & { env?: { BASE_URL?: string } }).env;
+    return env?.BASE_URL ?? "/";
+  }
+
   private sfxUrl(fileStem: string): string {
-    return `${import.meta.env.BASE_URL}audio/sfx/${fileStem}.${this.extension()}`;
+    return `${this.baseUrl()}audio/sfx/${fileStem}.${this.extension()}`;
   }
 
   private musicUrl(kind: Exclude<MusicKind, null>): string {
-    return `${import.meta.env.BASE_URL}audio/music/${kind}.${this.extension()}`;
+    return `${this.baseUrl()}audio/music/${kind}.${this.extension()}`;
   }
 
   private fileStems(spec: SampleSpec): string[] {
@@ -404,6 +487,466 @@ class AudioEngine {
     this.playingKind = null;
   }
 
+  // ---- wave layer (manifest-driven voices, loops, buses, ducking) -----------------------
+  // Mechanism only: the director (waveAudio.ts) owns manifest policy (variants, jitter,
+  // cooldowns, attenuation, lifecycle) and hands this engine fully resolved requests.
+
+  // Engine clock in ms, or -1 while no running context exists (callers treat -1 as
+  // "audio off": state machines idle, nothing plays, nothing accrues cooldowns).
+  now(): number {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== "running") return -1;
+    return ctx.currentTime * 1000;
+  }
+
+  busNode(bus: WaveBusId | "music"): GainNode | null {
+    switch (bus) {
+      case "sfx": return this.sfxBus;
+      case "voiceTell": return this.voiceTellBus;
+      case "ambient": return this.ambientBus;
+      case "ui": return this.uiBus;
+      case "pet": return this.petBus;
+      case "music": return this.musicBus;
+    }
+  }
+
+  waveVoiceCount(): number {
+    return this.waveVoices.length;
+  }
+
+  waveVoiceCountFor(event: string): number {
+    let n = 0;
+    for (const v of this.waveVoices) if (v.event === event) n++;
+    return n;
+  }
+
+  isWavePlaying(event: string): boolean {
+    return this.waveVoiceCountFor(event) > 0;
+  }
+
+  playWave(req: WavePlayRequest): boolean {
+    if (settings.isMuted) return false;
+    const ctx = this.ctx;
+    const bus = this.busNode(req.bus);
+    if (!ctx || ctx.state !== "running" || !bus) return false;
+    if (req.gain <= 0.001) return false;
+    if (!this.admitWaveVoice(req.event, req.priority)) return false;
+
+    const voiceGain = ctx.createGain();
+    voiceGain.gain.value = req.gain;
+    voiceGain.connect(bus);
+    const sources = this.buildWaveSources(req, voiceGain);
+    if (sources.length === 0) {
+      voiceGain.disconnect();
+      return false;
+    }
+
+    const voice: WaveVoice = { event: req.event, priority: req.priority, gain: voiceGain, sources, pending: sources.length };
+    for (const src of sources) {
+      src.onended = () => {
+        voice.pending--;
+        if (voice.pending <= 0) {
+          const at = this.waveVoices.indexOf(voice);
+          if (at !== -1) this.waveVoices.splice(at, 1);
+        }
+      };
+    }
+    this.waveVoices.push(voice);
+    if (req.duck) for (const d of req.duck) this.duckWaveBus(d);
+    return true;
+  }
+
+  startWaveLoop(key: string, req: WaveLoopRequest): boolean {
+    if (this.waveLoops.has(key)) return true; // already sounding — NEVER a duplicate voice
+    if (settings.isMuted) return false;
+    const ctx = this.ctx;
+    const bus = this.busNode(req.bus);
+    if (!ctx || ctx.state !== "running" || !bus || !this.noiseBuffer) return false;
+
+    const voiceGain = ctx.createGain();
+    voiceGain.connect(bus);
+    let sources: AudioScheduledSourceNode[];
+    const buf = req.stem !== null ? this.waveBuffers.get(req.stem) : undefined;
+    if (buf) {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.connect(voiceGain);
+      src.start();
+      sources = [src];
+    } else {
+      if (req.stem !== null) this.ensureWaveLoaded([req.stem]); // ready for the NEXT start
+      sources = this.buildLoopPad(req.synth, voiceGain);
+      if (sources.length === 0) { voiceGain.disconnect(); return false; }
+    }
+    const now = ctx.currentTime;
+    if (req.fadeSec > 0.01) {
+      this.rampEqualPower(voiceGain.gain, 0, req.gain, now, req.fadeSec, true);
+    } else {
+      voiceGain.gain.setValueAtTime(req.gain, now);
+    }
+    this.waveLoops.set(key, { key, gain: voiceGain, sources });
+    return true;
+  }
+
+  stopWaveLoop(key: string, fadeSec = 0.12): void {
+    const loop = this.waveLoops.get(key);
+    if (!loop) return;
+    this.waveLoops.delete(key);
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    this.rampEqualPower(loop.gain.gain, loop.gain.gain.value, 0, now, Math.max(0.01, fadeSec), false);
+    for (const src of loop.sources) {
+      try { src.stop(now + fadeSec + 0.02); } catch { /* already stopped */ }
+    }
+  }
+
+  hasWaveLoop(key: string): boolean {
+    return this.waveLoops.has(key);
+  }
+
+  waveLoopKeys(): string[] {
+    return [...this.waveLoops.keys()];
+  }
+
+  stopAllWaveLoops(fadeSec = 0.2): void {
+    for (const key of [...this.waveLoops.keys()]) this.stopWaveLoop(key, fadeSec);
+  }
+
+  // Manifest §1 duck notation: bus gain to base×to, hold, then recover. A deeper duck in
+  // flight wins over a shallower one until it expires — locks never lose their headroom.
+  duckWaveBus(duck: WaveDuck): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== "running") return;
+    const bus = this.busNode(duck.bus);
+    if (!bus) return;
+    const base = this.waveBusBase(duck.bus);
+    const target = base * duck.to;
+    const now = ctx.currentTime;
+    const active = this.duckStates.get(duck.bus);
+    if (active && now < active.until && active.target <= target) return;
+    bus.gain.cancelScheduledValues(now);
+    bus.gain.setTargetAtTime(target, now, 0.02);
+    bus.gain.setTargetAtTime(base, now + duck.hold, Math.max(0.01, duck.recover) / 3);
+    this.duckStates.set(duck.bus, { target, until: now + duck.hold + duck.recover });
+  }
+
+  preloadWave(stems: string[]): void {
+    this.ensureWaveLoaded(stems);
+  }
+
+  isWaveBufferReady(stem: string): boolean {
+    return this.waveBuffers.has(stem);
+  }
+
+  waveFetchFailures(): number {
+    return this.failedWave.size;
+  }
+
+  private waveBusBase(bus: DuckBusId): number {
+    if (bus === "music") return settings.musicVol;
+    return WAVE_BUS_GAIN[bus] * settings.sfxVol;
+  }
+
+  // Voice budget (§10): 24 global, 4 per event, 3 reserved so a bossLock can ALWAYS get a
+  // voice; a full pool steals the lowest-priority strictly-quieter voice.
+  private admitWaveVoice(event: string, priority: number): boolean {
+    if (this.waveVoiceCountFor(event) >= MAX_VOICES_PER_EVENT) return false;
+    const cap = priority >= WAVE_PRIORITY.bossLock ? MAX_GLOBAL_VOICES : MAX_GLOBAL_VOICES - BOSS_LOCK_RESERVED_VOICES;
+    if (this.waveVoices.length < cap) return true;
+    let victim: WaveVoice | null = null;
+    for (const v of this.waveVoices) {
+      if (v.priority >= priority) continue;
+      if (!victim || v.priority < victim.priority) victim = v;
+    }
+    if (!victim) return false;
+    this.stopWaveVoice(victim);
+    return this.waveVoices.length < MAX_GLOBAL_VOICES;
+  }
+
+  private stopWaveVoice(voice: WaveVoice): void {
+    const at = this.waveVoices.indexOf(voice);
+    if (at !== -1) this.waveVoices.splice(at, 1);
+    voice.pending = 0;
+    const ctx = this.ctx;
+    const now = ctx ? ctx.currentTime : 0;
+    voice.gain.gain.cancelScheduledValues(now);
+    voice.gain.gain.setTargetAtTime(0.0001, now, 0.004); // micro-fade, never a click
+    for (const src of voice.sources) {
+      src.onended = null;
+      try { src.stop(now + 0.03); } catch { /* already stopped */ }
+    }
+  }
+
+  // Source resolution: generated wave file when its buffer is ready; else the declared
+  // DERIVE fallback (existing shipped sample through pitch/filters); else the synth
+  // recipe. Missing primaries kick a load so the real file takes over on later plays.
+  private buildWaveSources(req: WavePlayRequest, out: GainNode): AudioScheduledSourceNode[] {
+    const ctx = this.ctx;
+    if (!ctx) return [];
+    if (req.stem !== null) {
+      const buf = this.waveBuffers.get(req.stem);
+      if (buf) {
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = Math.max(0.01, req.rate);
+        src.connect(out);
+        src.start();
+        return [src];
+      }
+      this.ensureWaveLoaded([req.stem]);
+      if (this.failedWave.has(req.stem) && !this.waveFallbackLogged.has(req.stem)) {
+        this.waveFallbackLogged.add(req.stem);
+        console.info(`[audio] wave file missing, using fallback: ${req.stem}`);
+      }
+    }
+    const fb = req.fallback;
+    if (fb) {
+      const spec = SAMPLES[fb.sample];
+      if (spec && !this.failedIds.has(spec.id)) {
+        this.ensureLoaded(spec);
+        const stems = this.fileStems(spec);
+        const stem = stems[Math.floor(Math.random() * stems.length)];
+        let buf = this.buffers.get(stem);
+        if (buf && fb.isReversed) buf = this.reversedOf(stem, buf);
+        if (buf) {
+          const src = ctx.createBufferSource();
+          src.buffer = buf;
+          src.playbackRate.value = Math.max(0.01, req.rate * (fb.rate ?? 1));
+          const tail = this.connectFilters(src, fb.lowpassHz, fb.highpassHz);
+          tail.connect(out);
+          src.start();
+          return [src];
+        }
+      } else if (!spec) {
+        // Synth-only library entries (revive/uiClick): route the legacy recipe through
+        // this voice's gain so budget/steal still govern it. Filters are a no-op here.
+        const t = ctx.currentTime;
+        this.synthInto(fb.sample, t, req.rate * (fb.rate ?? 1), 1, out);
+        return this.drainSynthSources();
+      }
+    }
+    const t = ctx.currentTime;
+    return this.waveSynthVoice(req.synth, t, req.rate, out);
+  }
+
+  private connectFilters(src: AudioNode, lowpassHz?: number, highpassHz?: number): AudioNode {
+    const ctx = this.ctx;
+    if (!ctx) return src;
+    let tail: AudioNode = src;
+    if (lowpassHz !== undefined) {
+      const lp = ctx.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = lowpassHz;
+      tail.connect(lp);
+      tail = lp;
+    }
+    if (highpassHz !== undefined) {
+      const hp = ctx.createBiquadFilter();
+      hp.type = "highpass";
+      hp.frequency.value = highpassHz;
+      tail.connect(hp);
+      tail = hp;
+    }
+    return tail;
+  }
+
+  private reversedOf(stem: string, buf: AudioBuffer): AudioBuffer {
+    const cached = this.reversedBuffers.get(stem);
+    if (cached) return cached;
+    const ctx = this.ctx;
+    if (!ctx) return buf;
+    const out = ctx.createBuffer(buf.numberOfChannels, buf.length, buf.sampleRate);
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const src = buf.getChannelData(ch);
+      const dst = out.getChannelData(ch);
+      for (let i = 0, n = src.length; i < n; i++) dst[i] = src[n - 1 - i];
+    }
+    this.reversedBuffers.set(stem, out);
+    return out;
+  }
+
+  private waveUrl(stem: string): string {
+    return `${this.baseUrl()}audio/${stem}.${this.extension()}`;
+  }
+
+  private ensureWaveLoaded(stems: string[]): void {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== "running") return; // gesture policy: no fetches before unlock
+    for (const stem of stems) {
+      if (this.waveBuffers.has(stem) || this.waveLoading.has(stem) || this.failedWave.has(stem)) continue;
+      this.waveLoading.add(stem);
+      this.fetchDecode(this.waveUrl(stem))
+        .then((buf) => { this.waveBuffers.set(stem, buf); this.waveLoading.delete(stem); })
+        .catch(() => { this.waveLoading.delete(stem); this.failedWave.add(stem); });
+    }
+  }
+
+  // Equal-power fade (manifest loop contract): sin/cos curve so a zone crossfade holds
+  // constant perceived level instead of dipping in the middle.
+  private rampEqualPower(param: AudioParam, from: number, to: number, at: number, dur: number, isIn: boolean): void {
+    const steps = 24;
+    const curve = new Float32Array(steps + 1);
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const shaped = isIn ? Math.sin(t * Math.PI / 2) : Math.cos(t * Math.PI / 2);
+      curve[i] = Math.max(0.0001, from + (to - from) * (isIn ? shaped : 1 - shaped));
+    }
+    param.cancelScheduledValues(at);
+    try {
+      param.setValueCurveAtTime(curve, at, dur);
+    } catch {
+      param.setValueAtTime(from, at);
+      param.linearRampToValueAtTime(to, at + dur);
+    }
+  }
+
+  // ---- wave synth families (last-resort voices; every event audible with zero files) ----
+
+  // blip/noise below write into sfxBus directly; wave voices need their sources routed
+  // through the voice gain for budget/steal control, so family recipes collect sources.
+  private synthSources: AudioScheduledSourceNode[] = [];
+
+  private drainSynthSources(): AudioScheduledSourceNode[] {
+    const out = this.synthSources;
+    this.synthSources = [];
+    return out;
+  }
+
+  private synthInto(name: SfxName, t: number, rate: number, gain: number, out: GainNode): void {
+    this.synthSources = [];
+    this.synthOut = out;
+    this.synth(name, t, rate, gain);
+    this.synthOut = null;
+  }
+
+  private waveSynthVoice(spec: WaveSynthSpec, t: number, rate: number, out: GainNode): AudioScheduledSourceNode[] {
+    this.synthSources = [];
+    this.synthOut = out;
+    switch (spec.kind) {
+      case "tick": {
+        const f = spec.freq * rate;
+        for (let i = 0; i < spec.count; i++) {
+          const at = t + (i * spec.spreadMs) / 1000;
+          this.blip(at, spec.isBright ? "square" : "triangle", f * (1 + i * 0.06), f * 0.92, 0.001, 0.05, 0.4);
+          if (spec.isBright) this.noise(at, "highpass", 2600, 1600, 0.03, 0.14, 1.8, rate);
+        }
+        break;
+      }
+      case "swell": {
+        const dur = spec.durMs / 1000;
+        if (spec.mode === "noise") {
+          this.noise(t, "lowpass", Math.max(spec.fromHz * 6, 200), Math.max(spec.toHz * 6, 200), dur, 0.3, 0.9, rate);
+        } else if (spec.mode === "growl") {
+          this.blip(t, "sawtooth", spec.fromHz * rate, spec.toHz * rate, dur * 0.55, dur * 0.45, 0.3);
+          this.blip(t, "sawtooth", spec.fromHz * 1.03 * rate, spec.toHz * 1.02 * rate, dur * 0.55, dur * 0.45, 0.2);
+          this.noise(t, "lowpass", 900, 380, dur, 0.16, 0.8, rate);
+        } else {
+          for (const det of [1, 1.007, 0.994]) {
+            this.blip(t, "sine", spec.fromHz * det * rate, spec.toHz * det * rate, dur * 0.6, dur * 0.4, 0.16);
+          }
+        }
+        break;
+      }
+      case "impact": {
+        const dur = spec.durMs / 1000;
+        this.noise(t, "lowpass", 1900, 220, Math.min(dur, 0.4), 0.5, 1, rate);
+        this.blip(t, "sine", spec.depthHz * 3 * rate, spec.depthHz * rate, 0.004, dur, 0.5);
+        break;
+      }
+      case "whoosh":
+        this.noise(t, "bandpass", spec.fromHz, spec.toHz, spec.durMs / 1000, 0.3, 1.2, rate);
+        break;
+      case "shimmer": {
+        const dur = spec.durMs / 1000;
+        const f0 = spec.isRising ? spec.freq * 0.82 : spec.freq;
+        const f1 = spec.isRising ? spec.freq : spec.freq * 0.72;
+        this.blip(t, "triangle", f0 * rate, f1 * rate, dur * 0.3, dur * 0.7, 0.22);
+        this.blip(t, "triangle", f0 * 1.008 * rate, f1 * 1.008 * rate, dur * 0.3, dur * 0.7, 0.15);
+        this.noise(t, "highpass", 3400, 2400, dur * 0.5, 0.08, 2.2, rate);
+        break;
+      }
+      case "notes": {
+        const noteDur = spec.noteMs / 1000;
+        for (let i = 0; i < spec.freqs.length; i++) {
+          this.blip(t + (i * spec.stepMs) / 1000, spec.shape, spec.freqs[i] * rate, spec.freqs[i] * rate, 0.005, noteDur, 0.24);
+        }
+        break;
+      }
+      case "knock":
+        for (let i = 0; i < spec.count; i++) {
+          const at = t + i * 0.11;
+          this.blip(at, "square", spec.freq * rate, spec.freq * 0.82 * rate, 0.002, 0.09, 0.32);
+          this.noise(at, "lowpass", 1200, 500, 0.06, 0.18, 0.9, rate);
+        }
+        break;
+      case "burst":
+        this.noise(t, "bandpass", spec.centerHz, spec.centerHz * 0.55, spec.durMs / 1000, 0.34, 1.1, rate);
+        this.blip(t, "sawtooth", spec.centerHz * 0.25 * rate, spec.centerHz * 0.12 * rate, 0.002, Math.min(spec.durMs / 1000, 0.3), 0.24);
+        break;
+      case "loopPad":
+        break; // loop pads are built by buildLoopPad, never as one-shots
+    }
+    this.synthOut = null;
+    return this.drainSynthSources();
+  }
+
+  private buildLoopPad(spec: WaveSynthSpec, out: GainNode): AudioScheduledSourceNode[] {
+    const ctx = this.ctx;
+    if (!ctx || spec.kind !== "loopPad" || !this.noiseBuffer) return [];
+    const sources: AudioScheduledSourceNode[] = [];
+    const level = ctx.createGain();
+    level.gain.value = spec.level;
+    level.connect(out);
+    if (spec.mode === "harmonic") {
+      // Voiced pad (the Sunlance hold): two soft detuned saws under a lowpass.
+      for (const det of [1, 1.5035]) {
+        const osc = ctx.createOscillator();
+        osc.type = "sawtooth";
+        osc.frequency.value = (spec.filterHz / 6) * det;
+        const filter = ctx.createBiquadFilter();
+        filter.type = spec.filterType;
+        filter.frequency.value = spec.filterHz;
+        filter.Q.value = spec.q;
+        osc.connect(filter).connect(level);
+        osc.start();
+        sources.push(osc);
+      }
+    } else {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer;
+      src.loop = true;
+      const filter = ctx.createBiquadFilter();
+      filter.type = spec.filterType;
+      filter.frequency.value = spec.filterHz;
+      filter.Q.value = spec.q;
+      src.connect(filter).connect(level);
+      src.start();
+      sources.push(src);
+      if (spec.mode === "pulse") {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = spec.filterHz * 0.3;
+        const oscLevel = ctx.createGain();
+        oscLevel.gain.value = spec.level * 0.5;
+        osc.connect(oscLevel).connect(out);
+        osc.start();
+        sources.push(osc);
+      }
+    }
+    // Slow LFO breathing so a synth pad never reads as a frozen tone.
+    const lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = spec.lfoHz;
+    const lfoDepth = ctx.createGain();
+    lfoDepth.gain.value = spec.level * 0.45;
+    lfo.connect(lfoDepth).connect(level.gain);
+    lfo.start();
+    sources.push(lfo);
+    return sources;
+  }
+
   // ---- synth fallback -----------------------------------------------------------------
 
   private applySynthMusic(kind: Exclude<MusicKind, null>): void {
@@ -461,6 +1004,18 @@ class AudioEngine {
     if (ctx && this.musicBus) {
       this.musicBus.gain.setTargetAtTime(settings.musicVol, now, 0.02);
     }
+    if (ctx) {
+      const waveBuses: [GainNode | null, number][] = [
+        [this.voiceTellBus, WAVE_BUS_GAIN.voiceTell],
+        [this.ambientBus, WAVE_BUS_GAIN.ambient],
+        [this.uiBus, WAVE_BUS_GAIN.ui],
+        [this.petBus, WAVE_BUS_GAIN.pet],
+      ];
+      for (const [bus, base] of waveBuses) {
+        if (bus) bus.gain.setTargetAtTime(base * settings.sfxVol, now, 0.02);
+      }
+      this.duckStates.clear(); // a slider move resets any in-flight duck to the new base
+    }
     if (settings.isMuted) this.stopMusic();
     else this.applyMusic();
   }
@@ -501,6 +1056,18 @@ class AudioEngine {
     musicBus.gain.value = settings.musicVol;
     musicBus.connect(master);
     this.musicBus = musicBus;
+    // Wave-manifest buses (§1). All scale with the SFX slider — one "sound effects"
+    // control governs everything that is not music, preserving the two-slider model.
+    const makeBus = (base: number): GainNode => {
+      const bus = ctx.createGain();
+      bus.gain.value = base * settings.sfxVol;
+      bus.connect(master);
+      return bus;
+    };
+    this.voiceTellBus = makeBus(WAVE_BUS_GAIN.voiceTell);
+    this.ambientBus = makeBus(WAVE_BUS_GAIN.ambient);
+    this.uiBus = makeBus(WAVE_BUS_GAIN.ui);
+    this.petBus = makeBus(WAVE_BUS_GAIN.pet);
     this.noiseBuffer = this.makeNoise(ctx);
   }
 
@@ -642,10 +1209,14 @@ class AudioEngine {
     }
   }
 
+  // Where blip/noise write: the sfx bus normally, or a wave voice's gain while a wave
+  // synth recipe is being built (set/cleared around each recipe; never left dangling).
+  private synthOut: GainNode | null = null;
+
   // A short enveloped oscillator with an optional exponential frequency sweep.
   private blip(t0: number, type: OscillatorType, f0: number, f1: number, attack: number, decay: number, vol: number): void {
     const ctx = this.ctx;
-    const bus = this.sfxBus;
+    const bus = this.synthOut ?? this.sfxBus;
     if (!ctx || !bus) return;
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
@@ -658,12 +1229,13 @@ class AudioEngine {
     osc.connect(g).connect(bus);
     osc.start(t0);
     osc.stop(t0 + attack + decay + 0.02);
+    if (this.synthOut) this.synthSources.push(osc);
   }
 
   // A filtered white-noise burst with a filter-frequency sweep — our "crunch" primitive.
   private noise(t0: number, filterType: BiquadFilterType, f0: number, f1: number, decay: number, vol: number, q = 0.9, rate = 1): void {
     const ctx = this.ctx;
-    const bus = this.sfxBus;
+    const bus = this.synthOut ?? this.sfxBus;
     if (!ctx || !bus || !this.noiseBuffer) return;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
@@ -678,6 +1250,7 @@ class AudioEngine {
     src.connect(filter).connect(g).connect(bus);
     src.start(t0);
     src.stop(t0 + decay + 0.02);
+    if (this.synthOut) this.synthSources.push(src);
   }
 
   private sfxMaxDur(name: SfxName): number {
@@ -733,6 +1306,8 @@ class AudioEngine {
     osc.stop(t0 + dur + 0.02);
   }
 }
+
+export { AudioEngine };
 
 export const audio = new AudioEngine();
 
