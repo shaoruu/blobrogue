@@ -9,7 +9,8 @@ the seeded regression suite in `test/envelope.test.ts` (`npm run test:envelope`)
 ## Roster capacity
 Up to 24 genuine regular archetypes: 8 simple, 10 complex families (ranged / complex /
 controller verbs), 6 biome specialists. Current occupancy: 4 simple, 9 complex families,
-2 specialists (15 of 24). Bosses, captains and summon-only decoys sit outside the roster.
+3 specialists (16 of 24 — the Clinker Mason claims a specialist slot). Bosses, captains
+and summon-only decoys sit outside the roster.
 
 ## Intro cadence
 At most 2 truly NEW movement/attack modules per 5-floor band, and a remix of an existing
