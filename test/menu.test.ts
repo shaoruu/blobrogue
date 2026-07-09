@@ -1440,6 +1440,20 @@ async function main(): Promise<void> {
     check("no sign-in demand anywhere on the landing", !textOf(guest.overlay).includes("SIGN IN"));
   }
 
+  section("a FIRST-TIME guest invite passes the one-time name gate, then the join continues");
+  {
+    const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    localStorage.removeItem("blobrogue.nameConfirmed");
+    await menu.openInvite("ABCD");
+    check("the identity gate renders BEFORE any join", textOf(overlay).includes("WHAT'S YOUR NAME?"));
+    const play = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
+    play?.onclick?.();
+    await settle();
+    await settle();
+    check("committing the gate continues the invite into the room lobby", textOf(overlay).includes("ROOM ABCD"), textOf(overlay).slice(0, 120));
+    check("the gate latched (next invite skips it)", localStorage.getItem("blobrogue.nameConfirmed") === "1");
+  }
+
   section("COPY INVITE: one tap shares the FULL URL with honest per-outcome confirmation");
   {
     const nav = navigator as unknown as {

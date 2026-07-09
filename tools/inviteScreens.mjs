@@ -29,6 +29,7 @@ const SETUP = `(async () => {
   };
   const session = new Session(fakeClient);
   session.name = "ian";
+  session.markNameConfirmed?.();
   const menu = new Menu(overlay, session, fakeClient, null, { startSolo() {}, startOnline() {} });
   window.__inviteMenu = menu;
   window.__inviteLobby = {

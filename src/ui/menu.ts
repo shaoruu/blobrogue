@@ -1260,7 +1260,10 @@ export class Menu {
     return !(this.auth?.isSignedIn ?? false) && !this.session.isNameConfirmed;
   }
 
-  private showNameGate() {
+  // `onDone` is where the committed identity continues to — the plain online home by
+  // default, or a pending invite join when an invite link brought a first-time guest here
+  // (the gate always runs first; the invite continues the moment it commits).
+  private showNameGate(onDone: () => void = () => void this.showOnlineHome()) {
     const wrap = el("div", "menu name-gate");
     wrap.appendChild(el("h1", "", "WHAT'S YOUR NAME?"));
     wrap.appendChild(el("p", "", "Teammates will see this in your run."));
@@ -1323,7 +1326,7 @@ export class Menu {
       this.session.setColorIndex(selected);
       this.session.markNameConfirmed();
       void this.session.login(name).catch(() => {});
-      void this.showOnlineHome();
+      onDone();
     };
     const row = el("div", "btnrow");
     const play = el("button", "", "PLAY ONLINE \u25b8");
@@ -1407,9 +1410,17 @@ export class Menu {
   // Routes straight into that room's lobby with the join in flight: the online home paints
   // busy with "joining room CODE…" while the SAME server-validated rooms.join a typed code
   // takes runs underneath (capacity, kind, ended — nothing bypassed). Guests join through
-  // the ordinary ensurePlayer identity; an invite never forces sign-in. Every failure
-  // settles THIS screen with a specific reason and the live quick-play/join actions.
+  // the ordinary ensurePlayer identity; an invite never forces sign-in — a FIRST-TIME
+  // guest still passes the one-time name gate, and the invite continues into its join the
+  // moment the gate commits. Every failure settles the online home with a specific reason
+  // and the live quick-play/join actions.
   async openInvite(code: string): Promise<void> {
+    if (!this.client) { await this.showTitle(); return; }
+    if (this.needsNameGate()) { this.showNameGate(() => void this.joinInvite(code)); return; }
+    await this.joinInvite(code);
+  }
+
+  private async joinInvite(code: string): Promise<void> {
     if (!this.client) { await this.showTitle(); return; }
     await this.showOnlineHome(inviteJoiningNote(code), { isBusy: true });
     const client = this.client;
