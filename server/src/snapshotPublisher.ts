@@ -83,12 +83,21 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     return null;
   }
 
-  // The room's verified cosmetic identities (name/color from each join ticket), keyed by
-  // world-scoped player id, so every client's snapshot can label the other players.
+  // The room's verified cosmetic identities (name/color/cosmetics from each join ticket),
+  // keyed by world-scoped player id, so every client's snapshot can label the other
+  // players. Reserved reconnect seats contribute too: an absent body keeps its name and
+  // appearance for the whole grace window instead of degrading to a bare id-labeled ghost.
   private identitiesFor(room: RoomRuntime): Map<string, PlayerIdentity> {
     const out = new Map<string, PlayerIdentity>();
     for (const conn of room.conns.values()) {
-      if (conn.playerId !== null) out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex });
+      if (conn.playerId !== null) {
+        out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex, hat: conn.hat, face: conn.face });
+      }
+    }
+    for (const seat of room.seats()) {
+      if (!out.has(seat.pid)) {
+        out.set(seat.pid, { name: seat.displayName, colorIndex: seat.colorIndex, hat: seat.hat, face: seat.face });
+      }
     }
     return out;
   }

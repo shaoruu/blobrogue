@@ -30,6 +30,8 @@ export interface Seat {
   expiresAt: number;
   displayName: string | null;
   colorIndex: number | null;
+  hat: string | null;
+  face: string | null;
   lastAppliedSeq: number;
   lastCseq: number;
   pendingOffer: string[] | null;

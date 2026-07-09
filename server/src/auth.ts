@@ -11,7 +11,10 @@
 //         client can never assert a world id itself. Absent -> the default/public world.
 //   nm  — the player's display name (shown above their blob to other players).
 //   cl  — a cosmetic color index (player-chosen blob tint).
-// All three are validated/sanitized here before anything trusts them.
+//   ht/fc — cosmetic hat/face ids (visual-only labels; ownership was validated by the
+//           minter's profile system, so this side gates FORMAT only — a short lowercase
+//           token — never the catalog, keeping server deploys independent of catalog adds).
+// All claims are validated/sanitized here before anything trusts them.
 //
 // The signature is HMAC-SHA256 over `v1.<payload>`, so the secret never leaves the server<->
 // minter trust boundary and can be rotated without a client change.
@@ -49,6 +52,8 @@ export interface TicketPayload {
   wld?: string; // authorized world id
   nm?: string;  // display name
   cl?: number;  // cosmetic color index
+  ht?: string;  // cosmetic hat id
+  fc?: string;  // cosmetic face id
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -56,6 +61,8 @@ export interface TicketClaims {
   worldId?: string;
   name?: string;
   colorIndex?: number;
+  hat?: string;
+  face?: string;
 }
 
 export interface AuthResult {
@@ -64,11 +71,17 @@ export interface AuthResult {
   worldId?: string;     // verified world authorization (absent -> default world)
   name?: string;        // sanitized display name
   colorIndex?: number;  // validated cosmetic color index
+  hat?: string;         // format-validated cosmetic hat id
+  face?: string;        // format-validated cosmetic face id
   reason?: string;
 }
 
 const NAME_MAX = 20;
 const COLOR_MAX = 15;
+
+// Cosmetic ids are short lowercase tokens (convex/cosmeticsCore.ts isCosmeticIdFormat) —
+// mirrored here rather than imported so the server keeps zero convex-source deps.
+const COSMETIC_ID_RE = /^[a-z0-9_]{1,24}$/;
 
 // Display names render on other players' screens: strip control characters, collapse
 // whitespace runs, clamp length. Returns null when nothing displayable remains.
@@ -90,12 +103,14 @@ function sign(secret: string, body: string): string {
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
-// (payload keys in the FIXED order pid, exp, wld, nm, cl; see convex/gsTicketCore.ts).
+// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc; see convex/gsTicketCore.ts).
 export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
   if (claims.name !== undefined) payload.nm = claims.name;
   if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
+  if (claims.hat !== undefined) payload.ht = claims.hat;
+  if (claims.face !== undefined) payload.fc = claims.face;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -160,6 +175,14 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
       return { ok: false, reason: "bad_color" };
     }
     out.colorIndex = payload.cl;
+  }
+  if (payload.ht !== undefined) {
+    if (typeof payload.ht !== "string" || !COSMETIC_ID_RE.test(payload.ht)) return { ok: false, reason: "bad_cosmetic" };
+    out.hat = payload.ht;
+  }
+  if (payload.fc !== undefined) {
+    if (typeof payload.fc !== "string" || !COSMETIC_ID_RE.test(payload.fc)) return { ok: false, reason: "bad_cosmetic" };
+    out.face = payload.fc;
   }
   return out;
 }

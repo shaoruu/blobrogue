@@ -54,7 +54,7 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
       // Local-only convenience: mint a ticket for a browser tab without a Convex minter. Enabled
       // ONLY when the dev bypass is on (hard-disabled in production). Mirrors the production
       // minter's optional claims so the two-tab proof covers room-scoped worlds + identity:
-      // ?world=<worldId>&name=<displayName>&color=<index>.
+      // ?world=<worldId>&name=<displayName>&color=<index>&hat=<id>&face=<id>.
       if (!deps.config.auth.allowDev) { res.writeHead(404).end(); return; }
       const playerId = (url.searchParams.get("playerId") ?? "guest-" + Math.random().toString(36).slice(2, 8)).slice(0, 48);
       const claims: TicketClaims = {};
@@ -68,6 +68,10 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
         const color = Number(colorRaw);
         if (Number.isInteger(color) && color >= 0 && color <= 15) claims.colorIndex = color;
       }
+      const hat = url.searchParams.get("hat");
+      if (hat !== null && /^[a-z0-9_]{1,24}$/.test(hat)) claims.hat = hat;
+      const face = url.searchParams.get("face");
+      if (face !== null && /^[a-z0-9_]{1,24}$/.test(face)) claims.face = face;
       const ticket = deps.config.auth.secret
         ? mintTicket(deps.config.auth.secret, playerId, undefined, undefined, claims)
         : "dev:" + playerId + (claims.worldId !== undefined ? "@" + claims.worldId : "");

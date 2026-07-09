@@ -40,6 +40,11 @@ export const mint = action({
     if (profile) {
       claims.name = profile.name;
       if (profile.colorIndex !== null) claims.colorIndex = profile.colorIndex;
+      // Equipped overlay cosmetics ride as verified claims too (visual-only labels; the
+      // profile system already validated ownership + slot at equip time). Body renders
+      // from the party color at launch and titles stay off the wire, so neither claims.
+      if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
+      if (profile.cosmetics.face !== null) claims.face = profile.cosmetics.face;
     }
     if (roomCode !== undefined) {
       if (!profile) throw new Error("join the room before requesting a room ticket");

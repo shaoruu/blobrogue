@@ -6,6 +6,7 @@ import { CONVEX_URL, resolveGsUrl, defaultGsUrl, devTicketUrl, isExplicitGsOverr
 import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
+import { bindMenuGamepad } from "./ui/menuGamepad.js";
 import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor } from "./ui/onlineCopy.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
@@ -47,11 +48,16 @@ async function bootNormal() {
     // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
     // game-over screen offers "back to lobby" / "play again" and owns leaving the room).
     const online = activeOnline;
-    // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
-    const prevBest = session.profile?.deepestFloor ?? 0;
+    // Snapshot the previous best + unlocks before recordRun folds the run, so the results
+    // screen can celebrate a PB and any cosmetics this run just earned.
+    const prevProfile = session.profile;
+    const prevBest = prevProfile?.deepestFloor ?? 0;
     const saved = await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
-    menu.showGameOver(result, saved ?? session.profile, { isNewBest, online });
+    // Only diff unlocks against a KNOWN before-state — a cold start with no prior profile
+    // can't tell "new this run" from "earned long ago", so it stays quiet.
+    const newUnlocks = saved && prevProfile ? saved.unlocks.filter((id) => !prevProfile.unlocks.includes(id)) : [];
+    menu.showGameOver(result, saved ?? session.profile, { isNewBest, online, newUnlocks });
   }
 
   function onExit(reason?: ExitReason, detail?: string) {
@@ -89,7 +95,7 @@ async function bootNormal() {
     startSolo(profile: ProfileDoc | null) {
       leaveOnlineIfAny();
       menu.hide();
-      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex });
+      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics });
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       if (activeOnline && activeOnline !== lobby) activeOnline.leave();
@@ -114,26 +120,36 @@ async function bootNormal() {
         },
         profile,
         selfColorIndex: session.colorIndex,
+        selfCosmetics: session.cosmetics,
       });
     },
   });
 
+  // Controller parity for the menu surfaces: D-pad focus, A activate, B = the guarded
+  // Escape path, LB/RB tab/category cycling. Inert while the overlay is hidden (in-run).
+  bindMenuGamepad(overlay, { onTab: (dir) => menu.cycleTabs(dir) });
+
   // Preload the pixel fonts before any canvas draw — canvas ctx.font silently falls back
   // to a system font if the web font isn't loaded yet at draw time (DOM text reflows on
   // load, canvas does not). Guarantees HUD/GO-DOWN/name labels are pixel from frame 1.
-  void Promise.all([
+  const fontsReady = Promise.all([
     document.fonts.load('10px "Press Start 2P"'),
     document.fonts.load('700 11px "Silkscreen"'),
     document.fonts.load('16px "VT323"'),
     document.fonts.ready,
   ]).catch(() => {});
 
-  // Complete any pending Google OAuth redirect and attach auth before first render,
-  // so the menu shows the correct signed-in/out state immediately (no flicker). Any
-  // failure (e.g. auth backend not deployed) is swallowed — the menu still loads.
-  if (auth) {
-    try { await auth.init(); } catch { /* menu stays usable */ }
-  }
+  // SYNCHRONOUS auth restore (localStorage only — no network): the home shell renders
+  // immediately with the correct signed-in/out state for every ordinary load. The one
+  // async case — returning from Google with `?code=` — paints the identity region in its
+  // reserved "signing you in" state and settles in place when the exchange finishes
+  // (the menu listens on auth.onChange); the shell never waits on the network.
+  if (auth) auth.restoreLocal();
+
+  // Give the pixel fonts a short head start before the title paints: DOM text set in a
+  // fallback font reflows (layout shift) when the web font lands. Cached fonts win the
+  // race instantly; a cold/offline fetch never delays the menu past the cap.
+  await Promise.race([fontsReady, new Promise((resolve) => setTimeout(resolve, 250))]);
 
   // Explicit `?gs=<wsUrl>` override: the DIRECT dev/ops join (two-tab local proof, load
   // harness) — no lobby, tickets minted by that server's own /dev-ticket endpoint (dev-auth
@@ -144,6 +160,9 @@ async function bootNormal() {
       const params = new URLSearchParams({ playerId: `guest-${Math.random().toString(36).slice(2, 8)}` });
       if (session.name) params.set("name", session.name);
       if (session.colorIndex !== null) params.set("color", String(session.colorIndex));
+      const cosmetics = session.cosmetics;
+      if (cosmetics.hat !== null) params.set("hat", cosmetics.hat);
+      if (cosmetics.face !== null) params.set("face", cosmetics.face);
       const res = await fetch(`${devTicketUrl(gsOverride)}?${params}`);
       if (!res.ok) throw new Error(`ticket endpoint ${res.status}`);
       const data = (await res.json()) as { ticket: string };
@@ -157,6 +176,7 @@ async function bootNormal() {
       online: { url: gsOverride, getTicket, roomCode: null, expectedWorldId: null, selfPlayerId: null, party: null },
       profile: null,
       selfColorIndex: session.colorIndex,
+      selfCosmetics: session.cosmetics,
     });
     return;
   }
@@ -166,8 +186,12 @@ async function bootNormal() {
   // link degrades to the plain title (online play needs the ticket minter).
   if (gsOverride && client) {
     await menu.showOnlineHome();
+    if (auth) void auth.completeOAuth();
     return;
   }
 
   void menu.showTitle();
+  // The pending-OAuth exchange (rare: only right after returning from Google) runs AFTER
+  // the shell painted; the identity region settles in place via auth.onChange.
+  if (auth) void auth.completeOAuth();
 }

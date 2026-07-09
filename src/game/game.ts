@@ -22,6 +22,9 @@ import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
+import { drawLoadoutOverlays } from "./cosmeticArt.js";
+import { bodyPaletteIndex } from "./cosmetics.js";
+import type { CosmeticLoadout } from "./cosmetics.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
@@ -63,8 +66,9 @@ import type { TileRenderGradient } from "./tileRender.js";
 
 export interface RunResult {
   floor: number; kills: number; coins: number; durationMs: number;
-  // The run's final build for the results screen (weapons carried + blessings with
-  // levels) — display-only, never persisted.
+  // The run's final build (weapons carried + blessings with levels) for the results screen.
+  // Display-only for gameplay; the id/count subset also rides recordRun so a personal-best
+  // run's build shows on the player's leaderboard profile.
   build?: {
     weapons: { id: WeaponId; name: string }[];
     items: { id: string; name: string; glyph: string; tint: string; count: number }[];
@@ -110,6 +114,10 @@ export interface StartOptions {
   // The player's chosen blob tint (client palette index). Applies to solo + online; classic
   // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
   selfColorIndex?: number | null;
+  // The player's equipped visual-only cosmetic loadout (hat/face overlays + body palette).
+  // Solo + online; never touches the sim — teammates see the overlays via the verified
+  // ticket identity instead, and body renders from the party color at launch.
+  selfCosmetics?: CosmeticLoadout | null;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -437,6 +445,7 @@ export class Game {
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
+  private selfCosmetics: CosmeticLoadout | null = null; // equipped cosmetic loadout (visual-only)
   private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
@@ -731,6 +740,7 @@ export class Game {
     this.profile = opts.profile ?? null;
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
+    this.selfCosmetics = this.mode === "coop" ? null : opts.selfCosmetics ?? null;
     this.online = this.mode === "online" ? opts.online ?? null : null;
     this.spectateId = null;
     this.sentSpectateId = null;
@@ -4761,6 +4771,9 @@ export class Game {
         ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill();
       }
       ctx.restore();
+      // Teammates' verified cosmetic overlays (same transform as their body draw above,
+      // which never uses frame sheets — the procedural xf carries the full deform).
+      this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1, false);
 
       if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
@@ -4777,10 +4790,23 @@ export class Game {
     }
   }
 
-  // The chosen identity tint for the local blob, or null for the natural amber sprite
-  // (palette slot 0 IS the sprite's own coloring, so it never re-tints).
+  // The body tint for the local blob, or null for the natural amber sprite (palette slot 0
+  // IS the sprite's own coloring, so it never re-tints). The cosmetic body item wins;
+  // otherwise the PARTY color is the fallback — the party color always keeps owning the
+  // name label / minimap / roster identity surfaces regardless.
   private selfTint(): string | null {
-    return this.selfColorIndex !== null && this.selfColorIndex > 0 ? playerColor(this.selfColorIndex) : null;
+    const idx = bodyPaletteIndex(this.selfCosmetics?.body ?? null, this.selfColorIndex ?? 0);
+    return idx > 0 ? playerColor(idx) : null;
+  }
+
+  // Draw a blob's equipped cosmetic overlays (hat/face) through THE shared loadout renderer
+  // (drawLoadoutOverlays — the single path every surface uses, so world and menus can never
+  // drift). The hero renders the side-authored orientation, mirrored by the facing flip;
+  // weapon, status, and name/team cues always draw AFTER this pass.
+  private drawCosmetics(hat: string | null, face: string | null, cx: number, cy: number, size: number, facing: number, xf: Xform, alpha: number, isSheetPlaying: boolean, frameIndex = 0) {
+    drawLoadoutOverlays(this.ctx, hat, face, {
+      cx, cy, sizePx: size, facing, orientation: "side", xf, isSheetPlaying, frameIndex, alpha,
+    });
   }
 
   private renderPlayer() {
@@ -4800,6 +4826,17 @@ export class Game {
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
     this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
+    if (this.selfCosmetics) {
+      // Socket determinism: the cosmetic pass reads the SAME frame index the body sheet
+      // shows this tick, so per-frame socket anchors can never drift off the head.
+      const sheet = this.sprites.sheet("hero", clip);
+      let cosmeticFrame = 0;
+      if (sheet) {
+        const fw = sheet.img.naturalHeight || 64;
+        cosmeticFrame = frameIndex(Math.max(1, Math.round(sheet.img.naturalWidth / fw)), sheet.fps, this.playerAnim.clock);
+      }
+      this.drawCosmetics(this.selfCosmetics.hat, this.selfCosmetics.face, psx, psy, 52, this.facing, xf, alpha, !!sheet, cosmeticFrame);
+    }
     if (!this.isDown) {
       // Anchor the held weapon to the blob's VISUAL body offset (lean/bob/hop + recoil nudge)
       // so the gun stays glued to the body while moving. The bullet/muzzle ORIGIN stays at the

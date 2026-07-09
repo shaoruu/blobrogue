@@ -844,6 +844,8 @@ export class WSTransport implements Transport {
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl ?? colorIndexFor(p.id),
+        hat: p.ht,
+        face: p.fc,
         updatedAt: now,
       };
     });

@@ -325,6 +325,10 @@ export interface RemotePlayer {
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   colorIndex: number; // stable palette slot for this player
+  // Equipped visual-only cosmetics from the verified ticket identity (plain id labels here —
+  // the sim never interprets them; the renderer maps ids to overlay art). null = none.
+  hat: string | null;
+  face: string | null;
   updatedAt: number;
 }
 

@@ -41,9 +41,12 @@ export interface Conn {
   authName: string | null;   // the verified identity from the ticket (for logs)
   worldId: string | null;
   // Verified cosmetic identity from the ticket (broadcast to other clients via PlayerWire):
-  // the display name shown above this player's blob, and their chosen blob color.
+  // the display name shown above this player's blob, their chosen blob color, and their
+  // equipped visual-only cosmetics.
   displayName: string | null;
   colorIndex: number | null;
+  hat: string | null;
+  face: string | null;
   // Single-use seat token for THIS connection (minted at join, rotated at resume, delivered
   // on the full snapshot). If the socket dies unexpectedly it moves onto the reserved seat,
   // and presenting it with a fresh ticket reclaims the exact body.
@@ -133,7 +136,7 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "resumeToken"
+  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "resumeToken"
   | "presentedResumeToken" | "isResumeTokenConfirmed" | "isLeaving" | "malformed"
   | "connectedAt" | "lastInboundAt" | "isSoftAbsent" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
@@ -144,7 +147,7 @@ export function newConnState(now: number): Pick<Conn,
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
-    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null,
+    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, hat: null, face: null,
     resumeToken: null, presentedResumeToken: null, isResumeTokenConfirmed: false, isLeaving: false, malformed: 0,
     connectedAt: now, lastInboundAt: now, isSoftAbsent: false, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
