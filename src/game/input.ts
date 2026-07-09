@@ -26,6 +26,8 @@ export type InputContext = "menu" | "gameplay" | "hud" | "pause" | "blessing" | 
 export type GameAction =
   | { kind: "togglePause" }
   | { kind: "selectWeapon"; index: number }
+  // Touch long-press on a hotbar slot: open its stat drawer without equipping.
+  | { kind: "inspectSlot"; index: number }
   | { kind: "cycleWeapon"; dir: 1 | -1 }
   | { kind: "dropWeapon" }
   | { kind: "activateSlot"; index: number }
@@ -46,6 +48,7 @@ const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   cycleWeapon: ["gameplay"],
   dropWeapon: ["gameplay"],
   activateSlot: ["gameplay"],
+  inspectSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
   cycleSpectate: ["spectate"],
   spectateFollow: ["spectate"],

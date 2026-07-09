@@ -21,6 +21,7 @@ import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostO
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
+import { lowHpFrac, liveDamageMult, liveFireRateMult } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
 import type { InputCmd, PlayerId } from "./input.js";
@@ -28,7 +29,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  GAUNTLET, gauntletCaptainHp, CAPS, TIERS, coopBossHpMult,
+  GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
@@ -811,16 +812,13 @@ function settleEnemySpawn(w: WorldState, e: Enemy): void {
 
 // ---- item mods ----
 
-function lowHpFactor(p: PlayerSim): number {
-  return p.maxHp > 0 ? 1 - Math.max(0, p.hp / p.maxHp) : 0;
-}
-// The raw caps (§6) bind the LIVE multipliers too: low-HP scalers (berserk/adrenaline) are
-// expressive risk payoffs but can never push raw damage/fire-rate past the cap.
+// The live damage/fire-rate multipliers (low-HP berserk/adrenaline scalers, capped) live in
+// weaponStats.ts so the HUD's stat readouts share the EXACT math real shots resolve with.
 function currentDamageMult(p: PlayerSim): number {
-  return Math.min(CAPS.damageMult, p.mods.damageMult + p.mods.berserk * lowHpFactor(p));
+  return liveDamageMult(p.mods, lowHpFrac(p.hp, p.maxHp));
 }
 function currentFireRate(p: PlayerSim): number {
-  return Math.max(0.25, Math.min(CAPS.fireRateMult, p.mods.fireRateMult + p.mods.adrenaline * lowHpFactor(p)));
+  return liveFireRateMult(p.mods, lowHpFrac(p.hp, p.maxHp));
 }
 function dashCooldown(p: PlayerSim): number {
   return PLAYER.dashCooldown * p.mods.dashCdMult;

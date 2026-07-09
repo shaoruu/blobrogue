@@ -8,6 +8,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
+import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
@@ -568,6 +569,7 @@ export class Game {
     this.hud.setHotbarActions({
       onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
       onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
+      onSlotInspect: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "inspectSlot", index }); },
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
@@ -628,7 +630,9 @@ export class Game {
   private onInputAction(a: GameAction) {
     switch (a.kind) {
       case "togglePause":
-        // Under the hud context Escape means "dismiss the drawer"; pause is next.
+        // Under the hud context Escape means "abort the HUD gesture": cancel a live hotbar
+        // drag first, then dismiss an open drawer; pause is next.
+        if (this.hud.cancelActiveDrag()) break;
         if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
         // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
         // connection attempt and return to the lobby — never a pause menu over a dead world.
@@ -649,6 +653,9 @@ export class Game {
         break;
       case "activateSlot":
         if (this.isRunning) this.activateSlot(a.index);
+        break;
+      case "inspectSlot":
+        if (this.isRunning) this.inspectSlot(a.index);
         break;
       case "reorderSlots":
         if (this.isRunning) this.reorderSlots(a.from, a.to);
@@ -2105,15 +2112,22 @@ export class Game {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
     if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
-    const w = WEAPONS[this.weapon];
+    this.inspectSlot(index);
+  }
+
+  // Open a slot's stat drawer without equipping — the touch long-press path, and where an
+  // already-equipped activation lands. The drawer renders the SAME WeaponDisplayStats the
+  // hotbar tooltip does (one live mod-adjusted source, so the surfaces can never drift);
+  // DROP is offered only on the equipped weapon (Q semantics), never the final weapon.
+  private inspectSlot(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    const id = owned[index];
     this.hud.openWeaponDrawer({
-      id: w.id,
-      name: w.name,
-      damage: w.damage,
-      rate: 1 / w.fireCd,
-      range: w.melee ? w.melee.reach : w.speed * w.life,
-      isMelee: w.melee !== undefined,
-      onDrop: owned.length > 1
+      id,
+      name: WEAPONS[id].name,
+      stats: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+      onDrop: id === this.weapon && owned.length > 1
         ? () => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeapon" }); }
         : null,
     });
@@ -2473,7 +2487,12 @@ export class Game {
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
-      weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name, isCurrent: id === this.weapon })),
+      // Live per-weapon cards ride each slot (mods + low-HP scalers via the sim's own
+      // helper) so hover tooltips always show what a trigger pull would actually do.
+      weapons: this.p.ownedWeapons.map((id) => ({
+        id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
+        card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+      })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
