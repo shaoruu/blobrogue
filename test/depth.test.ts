@@ -12,7 +12,10 @@ import { flockSteer, flockOut, BAT_FLOCK } from "../src/sim/flock.js";
 import {
   placeHazards, hazardBudgetForFloor, hazardPhaseAt, hazardPhaseFrac, isHazardDamaging,
   HAZARD_TIMING, HAZARD_DAMAGE, RIFT_PULL_SPEED, RIFT_PULL_RADIUS, hazardPeriod,
+  HAZARD_PERIOD, HAZARD_RELEASE_GAP, hazardOnset, hazardOnsetsInRoom,
 } from "../src/sim/hazards.js";
+import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
+import type { Difficulty } from "../src/sim/balance.js";
 import type { Hazard, HazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor } from "../src/sim/biomes.js";
@@ -209,7 +212,10 @@ function hazardPlacementTests(): void {
       const hz = placeHazards(d, seed, floor);
       const again = placeHazards(d, seed, floor);
       if (JSON.stringify(hz) !== JSON.stringify(again)) isLayoutDeterministic = false;
-      if (floor <= 2 && hz.length > 0) isShallowClean = false;
+      // Studio-gate cadence: floor 1 teaches with zero hazards; floor 2 carries only the
+      // half-unit spikes taste; boss floors are boss-authored ONLY (generator places none).
+      if (floor === 1 && hz.length > 0) isShallowClean = false;
+      if (floor === 2 && (hz.length > 2 || hz.some((h) => h.kind !== "spikes"))) isShallowClean = false;
       if (hz.length > hazardBudgetForFloor(floor)) isBudgetOk = false;
       const seenTiles = new Set<number>();
       for (const h of hz) {
@@ -222,11 +228,8 @@ function hazardPlacementTests(): void {
         for (const r of d.rooms) {
           if (Math.abs(h.tx - r.cx) + Math.abs(h.ty - r.cy) <= 1) areCentersClear = false;
         }
-        if (isBossFloor(floor)) {
-          const arena = d.rooms[d.rooms.length - 1];
-          if (h.tx >= arena.x - 1 && h.tx < arena.x + arena.w + 1 && h.ty >= arena.y - 1 && h.ty < arena.y + arena.h + 1) isBossRoomClear = false;
-        }
       }
+      if (isBossFloor(floor) && hz.length > 0) isBossRoomClear = false;
       if (!isBossFloor(floor)) {
         const band = biomeIndexForFloor(floor);
         const agg = bandTiles.get(band) ?? { total: 0, floors: 0 };
@@ -236,13 +239,13 @@ function hazardPlacementTests(): void {
       }
     }
   }
-  check("floors 1-2 are hazard-free (the safe teaching band)", isShallowClean);
+  check("floor 1 is hazard-free; floor 2 carries only the spikes teaching taste", isShallowClean);
   check("hazard tile count never exceeds the floor budget", isBudgetOk);
   check("layout is deterministic per (seed, floor)", isLayoutDeterministic);
   check("hazards sit on open floor, one per tile", isOnFloor && hasNoDupes);
   check("safety radii hold: spawn (3), exit (2)", areRadiiOk);
   check("room centers (chest/dealer ground) stay clear", areCentersClear);
-  check("boss arenas stay hazard-free (the boss IS the danger)", isBossRoomClear);
+  check("boss floors carry ZERO generator hazards (boss-authored only)", isBossRoomClear);
   const bandMeans: number[] = [];
   for (let band = 0; band < BIOMES.length; band++) {
     const agg = bandTiles.get(band);
@@ -268,6 +271,97 @@ function hazardPlacementTests(): void {
     }
   }
   check("spawn -> exit and every room center reachable without touching a pool", arePoolsFair);
+}
+
+// The studio balance gate's hazard rows (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md
+// §1-2): difficulty budget multipliers, per-room simultaneity caps, denial caps, and the
+// 0.30s release-spacing arbiter. Every pulse kind shares ONE cycle period, so proving a
+// room's schedule over a single period proves it for the whole run.
+function studioGateTests(): void {
+  section("studio gate: difficulty hazard rows (0.65x / 1.00x / 1.30x, caps, arbiter)");
+  check("mode table matches the gate: budgets .65/1.00/1.30, caps 1/2/3 units, denial 25/35/45%",
+    HAZARD_DIFFICULTY.casual.budgetMult === 0.65 && HAZARD_DIFFICULTY.standard.budgetMult === 1.0
+    && HAZARD_DIFFICULTY.brutal.budgetMult === 1.3
+    && HAZARD_DIFFICULTY.casual.roomSimultaneousCap === 1 && HAZARD_DIFFICULTY.standard.roomSimultaneousCap === 2
+    && HAZARD_DIFFICULTY.brutal.roomSimultaneousCap === 3
+    && HAZARD_DIFFICULTY.casual.roomDenialCap === 0.25 && HAZARD_DIFFICULTY.standard.roomDenialCap === 0.35
+    && HAZARD_DIFFICULTY.brutal.roomDenialCap === 0.45);
+  check("every pulse kind shares the arbiter's cycle period", (["spikes", "fire_vent", "void_rift"] as const)
+    .every((k) => Math.abs(hazardPeriod(k) - HAZARD_PERIOD) < 1e-9));
+  {
+    let isOrdered = true;
+    for (let f = 3; f <= 30; f++) {
+      if (isBossFloor(f)) continue;
+      const c = hazardBudgetForFloor(f, "casual");
+      const s = hazardBudgetForFloor(f, "standard");
+      const b = hazardBudgetForFloor(f, "brutal");
+      if (!(c <= s && s <= b)) isOrdered = false;
+      if (Math.abs(c - Math.round(0.65 * s)) > 1 || Math.abs(b - Math.round(1.3 * s)) > 1) isOrdered = false;
+    }
+    check("per-floor budgets scale by the mode multipliers (Casual <= Standard <= Brutal)", isOrdered);
+  }
+
+  const MODES: readonly Difficulty[] = ["casual", "standard", "brutal"];
+  let isConcurrencyOk = true, isSpacingOk = true, isDenialOk = true, isModeDeterministic = true;
+  let roomsChecked = 0;
+  const circGap = (a: number, b: number): number => {
+    const raw = Math.abs(a - b) % HAZARD_PERIOD;
+    return Math.min(raw, HAZARD_PERIOD - raw);
+  };
+  for (const mode of MODES) {
+    const rules = HAZARD_DIFFICULTY[mode];
+    for (const seed of SEEDS) {
+      for (const floor of FLOORS) {
+        const d = generateDungeon(seed, floor);
+        const hz = placeHazards(d, seed, floor, mode);
+        if (JSON.stringify(hz) !== JSON.stringify(placeHazards(d, seed, floor, mode))) isModeDeterministic = false;
+        if (hz.length === 0) continue;
+        for (let ri = 0; ri < d.rooms.length; ri++) {
+          const room = d.rooms[ri];
+          const inRoom = hz.filter((h) => h.tx >= room.x && h.tx < room.x + room.w && h.ty >= room.y && h.ty < room.y + room.h);
+          if (inRoom.length === 0) continue;
+          roomsChecked++;
+          // Denial cap: hazard tiles vs the room's walkable floor.
+          let open = 0;
+          for (let ty = room.y; ty < room.y + room.h; ty++) {
+            for (let tx = room.x; tx < room.x + room.w; tx++) {
+              if (d.tiles[ty * d.w + tx] === 0) open++;
+            }
+          }
+          if (inRoom.length > rules.roomDenialCap * Math.max(1, open) + 1e-9) isDenialOk = false;
+          // Simultaneity cap: sample one full shared period; count DISTINCT GROUPS with
+          // any pulse tile active. Arenas get the gate's +1 allowance (Standard/Brutal).
+          const cap = rules.roomSimultaneousCap >= 2 && room.shape === "arena"
+            ? Math.min(3, rules.roomSimultaneousCap + 1)
+            : rules.roomSimultaneousCap;
+          const pulses = inRoom.filter((h) => h.kind !== "toxic_pool");
+          for (let t = 0; t < HAZARD_PERIOD; t += 0.05) {
+            const active = new Set<number>();
+            for (const h of pulses) if (isHazardDamaging(h, t)) active.add(h.group);
+            if (active.size > cap) { isConcurrencyOk = false; break; }
+          }
+          // Release spacing: distinct release instants in this room stay >= 0.30s apart
+          // (circular — the schedule repeats every period). Same-instant releases belong
+          // to one group erupting as one unit (vent channels). Read through the SAME
+          // hook (hazardOnsetsInRoom) the future mob-commitment scheduler will use.
+          const releases = hazardOnsetsInRoom(hz, room);
+          for (let i = 0; i < releases.length; i++) {
+            for (let j = i + 1; j < releases.length; j++) {
+              if (circGap(releases[i], releases[j]) < HAZARD_RELEASE_GAP - 1e-6) isSpacingOk = false;
+            }
+          }
+          for (const h of pulses) {
+            if (!releases.some((r) => Math.abs(r - hazardOnset(h)) < 1e-6)) isSpacingOk = false;
+          }
+        }
+      }
+    }
+  }
+  check("per-room simultaneous ACTIVE hazard groups never exceed the mode cap (+1 in arenas)",
+    isConcurrencyOk, `rooms checked=${roomsChecked}`);
+  check("no two release instants within 0.30s in any room (the overlap arbiter)", isSpacingOk);
+  check("per-room hazard denial stays under the mode cap", isDenialOk);
+  check("every mode is independently deterministic", isModeDeterministic);
 }
 
 function hazardTimingTests(): void {
@@ -645,6 +739,7 @@ function main(): void {
   archetypeDepthTests();
   biomeLadderTests();
   hazardPlacementTests();
+  studioGateTests();
   hazardTimingTests();
   hazardDamageTests();
   riftPullTests();
