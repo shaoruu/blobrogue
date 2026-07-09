@@ -66,7 +66,7 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 **Approved finals already wired (drop the files in, no code changes):**
 - Directional walk + attack sets (`<stem>_walk_{down,up,side}.png` +
   `<stem>_attack_{down,up,side}.png`) for **marrow, burrower, weaver2_px, charger,
-  orbiter**.
+  orbiter, shielder**.
 - **Gilded Warden — side profile BLOCKED** (failed twice; stop): approved DOWN+UP sets
   only (`gilded_{walk,attack}_{down,up}.png`) plus the generic `gilded_attack.png`
   catch-all. The ladder's **vertical hold** keeps its horizontal movement on the nearest
@@ -78,8 +78,7 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 - Thumper pair: pickup `weapon_thumper.png`, held `held_thumper.png`.
 - Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`, plus the `fx/beam_ray.png`
   pure-white alpha mask (code-tinted per shot; `trail_streak` fallback until it lands).
-- The shielder set stays deliberately unregistered (gate pending) — its base sprite
-  fallback holds.
+
 
 **Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
 MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored

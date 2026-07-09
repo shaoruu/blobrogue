@@ -106,6 +106,7 @@ export function registerMoveSheet(
 registerDirectionalSet("charger", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
 registerDirectionalSet("burrower", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
 registerDirectionalSet("orbiter", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("shielder", { walkFps: 8, attackFps: 12, isDirectionalAttack: true });
 registerDirectionalSet("marrow", { walkFps: 8, attackFps: 10, isDirectionalAttack: true });
 registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAttack: true, fileBase: "weaver2_px" });
 // THE GILDED WARDEN's side profile is BLOCKED at the art gate (failed twice — stop):

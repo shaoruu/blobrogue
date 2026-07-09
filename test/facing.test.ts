@@ -269,6 +269,7 @@ function approvedHookTests(): void {
     ["weaver", "weaver2_px"],
     ["charger", "charger"],
     ["orbiter", "orbiter"],
+    ["shielder", "shielder"],
   ];
   for (const [sprite, stem] of actors) {
     const keys: Array<[string, string]> = [
@@ -320,12 +321,9 @@ function approvedHookTests(): void {
     devSpriteManifest().some((a) => a.group === "held weapons" && a.label === "held beam" && a.src === "/sprites/held_beam2_px.png"));
   check("the beam's dedicated ray is a registered code-tinted white mask (beam_ray)",
     devSpriteManifest().some((a) => a.group === "bullet fx" && a.label === "beam_ray" && a.src === "/sprites/fx/beam_ray.png"));
-  // Cut and pending content stays honest: nothing registered for removed weapons
-  // (boomerang, vortex) and the gate-pending shielder keeps its base-sprite fallback.
+  // Cut content stays honest: nothing registered for removed weapons (boomerang, vortex).
   check("no hooks exist for cut weapons (boomerang/vortex removed at the gate)",
     !devSpriteManifest().some((a) => a.label.includes("boomerang") || a.label.includes("vortex")));
-  check("the shielder stays on its base-sprite fallback (gate pending — no directional set)",
-    SHEETS["shielder.walk_down"] === undefined && SHEETS["shielder.attack"] === undefined);
 }
 
 function main(): void {
