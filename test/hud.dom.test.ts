@@ -156,8 +156,9 @@ function weaponTooltipTests(): void {
   check("no comparison at all without an equipped card", weaponTipRows(wcard("pistol"), null).every((r) => r.cmp.length === 0));
   const tipVs = tipFor("shotgun", "Shotgun", false, wcard("pistol"));
   const tokens = [...tipVs.querySelectorAll(".td")].map((d) => `${d.textContent}:${d.className.replace("td ", "")}`);
-  check("comparison words render with directional/neutral classes (grayscale-readable text)",
-    tokens.join("|") === "LIGHTER:down|MORE SHOTS:up|SLOWER:down|SHORTER:down|WIDER:eq", tokens.join("|"));
+  check("directional tokens lead with a shape glyph, then the word, then tint (grayscale/color-blind safe)",
+    tokens.join("|") === "\u25bc LIGHTER:down|\u25b2 MORE SHOTS:up|\u25bc SLOWER:down|\u25bc SHORTER:down|WIDER:eq", tokens.join("|"));
+  check("neutral tokens carry no directional glyph", tokens[4] === "WIDER:eq");
 
   section("weapon card tooltip: mechanics diff as GAINS / LOSES / CHANGES");
   const equipped = wcard("shotgun");

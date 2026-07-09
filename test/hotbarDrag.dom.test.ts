@@ -223,10 +223,24 @@ async function grabPointTests(): Promise<void> {
     const ghost = ghostEl()!;
     check("ghost has transition disabled (never lags the pointer)", ghost.style.transition === "none");
     check("ghost carries no tooltip", ghost.querySelector(".hb-tip, .tip") === null);
+    check("ghost names its verb: a MOVE tag (grayscale-distinct from a real slot)",
+      ghost.querySelector(".hb-move")?.textContent === "MOVE");
     check("equipped-slot transform is overridden by the inline positioner", ghost.style.transform.startsWith("translate3d("));
     check("the tooltip dropped when the drag began", !tipShown(tipEl));
     enter(slots[2]);
     check("hovering mid-drag never resurfaces the tooltip", !tipShown(tipEl));
+    hud.clear(); root.remove();
+  }
+
+  section("P0: pressing hides the tooltip IMMEDIATELY (action outranks inspection)");
+  {
+    const { hud, root, slotsEl, slots, tipEl } = rig();
+    const rects = layoutRow(slotsEl, slots, 1);
+    await hoverShow(slots[2]);
+    check("tooltip up on hover", tipShown(tipEl));
+    slots[2].dispatchEvent(ptr("pointerdown", rects[2].left + 10, rects[2].top + 10));
+    check("pointerdown alone drops the tooltip (before any movement)", !tipShown(tipEl));
+    slots[2].dispatchEvent(ptr("pointerup", rects[2].left + 10, rects[2].top + 10));
     hud.clear(); root.remove();
   }
 }
@@ -473,13 +487,14 @@ async function tooltipClampTests(): Promise<void> {
     hud.clear(); root.remove();
   }
   {
-    // Tiny viewport: a top clip clamps DOWN to the margin as the last resort (it may
-    // overlap its own card — never the rest of the bar).
+    // Tiny viewport: no vertical room above the bar -> the floating tip does NOT render
+    // (it must never cover the bar or gameplay); the tap/long-press drawer is the info
+    // surface there.
     const { hud, root, slotsEl, slots, tipEl } = rig();
-    layoutRow(slotsEl, slots, 1, 300, 40); // slots at y=40, tip is 90 tall
+    layoutRow(slotsEl, slots, 1, 300, 40); // slots at y=40, tip is 90 tall — cannot fit above
     sizeTip(tipEl, 200, 90);
     await hoverShow(slots[0]);
-    check("top clip clamps to the 12px margin (fully onscreen)", tipEl.style.top === "12px", tipEl.style.top);
+    check("no vertical room = the tooltip stays down (drawer is the fallback surface)", !tipShown(tipEl));
     hud.clear(); root.remove();
   }
 }

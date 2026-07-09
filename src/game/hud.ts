@@ -272,7 +272,10 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
     v.className = "tv";
     line.append(k, v);
     for (const cmp of row.cmp) {
-      const d = el("span", "", cmp.word);
+      // Directional tokens lead with a shape glyph, then the word — the tint comes third,
+      // so the reading survives grayscale, color-blindness, and busy backgrounds.
+      const glyph = cmp.dir === 1 ? "\u25b2 " : cmp.dir === -1 ? "\u25bc " : "";
+      const d = el("span", "", glyph + cmp.word);
       d.className = "td " + (cmp.dir === 1 ? "up" : cmp.dir === -1 ? "down" : "eq");
       line.appendChild(d);
     }
@@ -714,6 +717,9 @@ export class Hud {
         isActive: false, ghost: null, marker: null, gap: index, longPress: null,
       };
       this.drag = drag;
+      // Pressing IS intent to act: the tooltip drops immediately (hierarchy — the action
+      // and the board outrank inspection UI) and stays down for any drag that follows.
+      this.hideTip();
       // Touch: a 350ms still press opens the weapon's full drawer WITHOUT equipping
       // (hover tooltips are unreachable on touch). Any real drag motion or an earlier
       // release cancels it; the inspect itself tears the press down, so the following
@@ -829,7 +835,10 @@ export class Hud {
     this.tipWeaponId = w.id;
     this.tipEl.classList.add("show");
     this.tipEl.setAttribute("aria-hidden", "false");
-    this.positionTip(slot);
+    // No vertical room above the bar (very short viewport): the floating tip would have
+    // to cover the hotbar or gameplay — don't; the tap/long-press drawer is the info
+    // surface there.
+    if (!this.positionTip(slot)) this.hideTip();
   }
 
   hideTip() {
@@ -843,11 +852,12 @@ export class Hud {
   }
 
   // Anchor the (already visible) tooltip above the slot: horizontally centered on the
-  // card, clamped to 12px viewport margins; 10px above the slot's top, clamped downward
-  // only as a tiny-viewport last resort (it may then overlap its own card — never the
-  // rest of the bar). The tooltip carries the HUD's zoom, so the measured viewport-px
-  // position divides back into its own zoomed coordinate space.
-  private positionTip(slot: HTMLElement) {
+  // card, clamped to 12px viewport margins; 10px above the slot's top. Returns false when
+  // the viewport lacks the vertical room — the tip must never cover the bar or gameplay
+  // (the caller hides it; the drawer remains the info surface). The tooltip carries the
+  // HUD's zoom, so the measured viewport-px position divides back into its own zoomed
+  // coordinate space.
+  private positionTip(slot: HTMLElement): boolean {
     const margin = 12;
     const gap = 10;
     const sr = slot.getBoundingClientRect();
@@ -857,10 +867,11 @@ export class Hud {
     const maxLeft = window.innerWidth - margin - tr.width;
     if (left > maxLeft) left = maxLeft;
     if (left < margin) left = margin;
-    let top = sr.top - gap - tr.height;
-    if (top < margin) top = margin;
+    const top = sr.top - gap - tr.height;
+    if (tr.height > 0 && top < margin) return false;
     this.tipEl.style.left = `${Math.round(left / scale)}px`;
     this.tipEl.style.top = `${Math.round(top / scale)}px`;
+    return true;
   }
 
   // Release beyond the slots row + margin = the player changed their mind; never commit a
@@ -890,6 +901,9 @@ export class Hud {
     ghost.style.transition = "none";
     ghost.style.transformOrigin = "0 0";
     ghost.style.transform = "translate3d(-9999px, -9999px, 0)";
+    const moveTag = el("span", "", "MOVE");
+    moveTag.className = "hb-move"; // the ghost names its verb (grayscale-distinct from a real slot)
+    ghost.appendChild(moveTag);
     document.body.appendChild(ghost);
     d.ghost = ghost;
     const marker = el("span", "");
