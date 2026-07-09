@@ -6,7 +6,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
+import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
@@ -1797,14 +1797,19 @@ export class Game {
   }
 
   // Collapse owned blessings by id into level-bearing entries (first-seen order), so the
-  // HUD panel shows one chip per distinct blessing with an xN level badge; the chip text
-  // tracks the current level's effect.
+  // HUD strip shows one icon slot per distinct blessing with level pips; desc tracks the
+  // current level's effect and nextDesc the upgrade delta (null once maxed).
   private collapsedItems() {
-    const collapsed = new Map<string, { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }>();
+    const collapsed = new Map<string, { id: string; name: string; desc: string; nextDesc: string | null; glyph: string; tint: string; rarity: string; count: number }>();
     for (const it of this.currentItemDefs()) {
       const seen = collapsed.get(it.id);
-      if (seen) { seen.count++; seen.desc = itemDesc(it, seen.count); }
-      else collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      if (seen) {
+        seen.count++;
+        seen.desc = itemDesc(it, seen.count);
+        seen.nextDesc = seen.count < MAX_ITEM_LEVEL ? itemDesc(it, seen.count + 1) : null;
+      } else {
+        collapsed.set(it.id, { id: it.id, name: it.name, desc: itemDesc(it, 1), nextDesc: itemDesc(it, 2), glyph: it.glyph, tint: it.tint, rarity: it.rarity, count: 1 });
+      }
     }
     return [...collapsed.values()];
   }

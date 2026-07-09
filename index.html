@@ -77,20 +77,30 @@
       .hb-icon img{ width:40px; height:40px; image-rendering:pixelated; }
       .hb-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; line-height:1; color:var(--bone); opacity:.8; max-width:100%; overflow:hidden; white-space:nowrap; }
       .hb-slot.on .hb-name{ color:var(--amber-hi); opacity:1; }
-      /* blessing chips (icon + name + Lv) on the row above the slots. The chips are the
-         only pointer-enabled part of the hotbar: hover shows the level's effect text. */
+      /* blessing slots on the row above the weapon slots: compact icon-only squares (tint
+         border + Lv1-3 pips), so many blessings never wrap into a wall of text. Full name,
+         current effect, and the next-level delta live in the hover/focus tooltip. */
       .hb-buffs{ display:none; flex-wrap:wrap; justify-content:center; gap:4px; pointer-events:auto; }
       .hb-buffs.show{ display:flex; }
-      .hb-buff{ position:relative; display:inline-flex; align-items:center; gap:5px; padding:3px 7px 3px 5px;
-        background:rgba(5,3,11,.66); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 60%, var(--dun-3)); }
-      .hb-buff.rare{ box-shadow:inset 0 0 0 1px var(--t),0 0 8px color-mix(in srgb, var(--t) 35%, transparent); }
-      .hb-buff img{ width:14px; height:14px; image-rendering:pixelated; }
-      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:13px; line-height:1; color:var(--t,var(--cream)); }
-      .hb-buff .bn{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; line-height:1; color:var(--cream); }
-      .hb-buff .bl{ font-family:var(--f-ui); font-size:8px; line-height:1; color:var(--t,var(--dun-4)); }
-      .hb-buff .tip{ position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); white-space:nowrap; z-index:5; display:none;
-        font-family:var(--f-num); font-size:14px; color:var(--bone); background:var(--dun-1); box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:5px 8px; }
-      .hb-buff:hover .tip{ display:block; }
+      .hb-buff{ position:relative; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center;
+        background:rgba(5,3,11,.72); cursor:help;
+        box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)),0 2px 0 rgba(0,0,0,.35); }
+      .hb-buff.rare{ box-shadow:inset 0 0 0 1px var(--t),0 0 8px color-mix(in srgb, var(--t) 35%, transparent),0 2px 0 rgba(0,0,0,.35); }
+      .hb-buff:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
+      .hb-buff img{ width:16px; height:16px; margin-bottom:4px; image-rendering:pixelated; }
+      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:14px; line-height:1; margin-bottom:4px; color:var(--t,var(--cream)); }
+      .hb-buff .pips{ position:absolute; bottom:3px; left:50%; transform:translateX(-50%); display:flex; gap:2px; }
+      .hb-buff .pip{ width:4px; height:4px; background:var(--dun-3); }
+      .hb-buff .pip.lit{ background:var(--t,var(--amber)); box-shadow:0 0 3px color-mix(in srgb, var(--t,var(--amber)) 60%, transparent); }
+      .hb-buff .tip{ position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); z-index:5; display:none;
+        flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:250px;
+        font-family:var(--f-num); font-size:14px; line-height:1.15; color:var(--bone); background:var(--dun-1);
+        box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:6px 9px; }
+      .hb-buff:hover .tip, .hb-buff:focus-visible .tip{ display:flex; }
+      .hb-buff .tip .tn{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--t,var(--amber)); }
+      .hb-buff .tip .tc{ color:var(--cream); }
+      .hb-buff .tip .tx{ color:#9a8fb5; }
+      .hb-buff .tip .tx.max{ color:var(--amber); }
       .dash{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
       .dash .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); }
       .dash .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }

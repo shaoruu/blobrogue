@@ -6,6 +6,7 @@
 // mid-run.
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
+import { MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { WeaponId } from "../sim/types.js";
 
 export interface HudState {
@@ -28,8 +29,9 @@ export interface HudState {
   comboColor: string; // tier accent (drives the mult text + drain bar)
   comboFrac: number;  // 0..1 of the combo window still remaining (drives the drain bar)
   // Collected blessings, duplicates collapsed into a level (count = Lv1-3), shown as
-  // labeled chips above the hotbar.
-  items: { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }[];
+  // compact icon-only slots above the hotbar. desc = the CURRENT level's effect;
+  // nextDesc = the next level's effect (the upgrade delta), null at max level.
+  items: { id: string; name: string; desc: string; nextDesc: string | null; glyph: string; tint: string; rarity: string; count: number }[];
 }
 
 export interface HotbarActions {
@@ -77,7 +79,8 @@ function fmtTime(seconds: number): string {
 // past 9 get no key badge — scroll still cycles to them. Fixed width so switching never
 // resizes anything. Slots are pointer/keyboard interactive (click/Enter/Space equips, drag
 // reorders — see Hud.attachSlotInteractions), so they carry button semantics for a11y.
-function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
+// Exported for the DOM suite.
+export function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
   slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
   slot.tabIndex = 0;
@@ -100,20 +103,46 @@ function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   return slot;
 }
 
-// One blessing chip: tinted icon + name + Lv1-3, with the current level's effect text
-// as a hover tooltip (the chips row is the only pointer-enabled part of the hotbar).
-function buildBuffChip(it: HudState["items"][number]): HTMLElement {
+// One blessing slot: a compact icon-only square with the blessing's tint as its border and
+// LV1-3 shown as pips under the icon — no text in the row itself, so many blessings stay one
+// tidy strip. The full name, the current effect, and the exact next-level delta live in the
+// hover/focus tooltip (and in the aria-label for screen readers). Exported for the DOM suite.
+export function buildBuffChip(it: HudState["items"][number]): HTMLElement {
   const chip = el("span", "");
   chip.className = "hb-buff" + (it.rarity === "rare" ? " rare" : "");
   chip.style.setProperty("--t", it.tint);
+  chip.tabIndex = 0;
+  chip.setAttribute("role", "img");
+  chip.setAttribute("aria-label",
+    `${it.name}, level ${it.count}: ${it.desc}` + (it.nextDesc ? ` Next level: ${it.nextDesc}` : ""));
   chip.appendChild(itemIconEl(it.id, it.glyph));
-  const name = el("span", "", it.name.toUpperCase());
-  name.className = "bn";
-  const lv = el("span", "", "LV" + it.count);
-  lv.className = "bl";
-  const tip = el("span", "", it.desc);
+
+  const pips = el("span", "");
+  pips.className = "pips";
+  for (let lv = 1; lv <= MAX_ITEM_LEVEL; lv++) {
+    const pip = el("span", "");
+    pip.className = "pip" + (lv <= it.count ? " lit" : "");
+    pips.appendChild(pip);
+  }
+  chip.appendChild(pips);
+
+  const tip = el("span", "");
   tip.className = "tip";
-  chip.append(name, lv, tip);
+  const tipName = el("span", "", it.name.toUpperCase());
+  tipName.className = "tn";
+  const tipNow = el("span", "", `LV${it.count} — ${it.desc}`);
+  tipNow.className = "tc";
+  tip.append(tipName, tipNow);
+  if (it.nextDesc) {
+    const tipNext = el("span", "", `NEXT LV${it.count + 1} — ${it.nextDesc}`);
+    tipNext.className = "tx";
+    tip.appendChild(tipNext);
+  } else {
+    const tipMax = el("span", "", "MAX LEVEL");
+    tipMax.className = "tx max";
+    tip.appendChild(tipMax);
+  }
+  chip.appendChild(tip);
   return chip;
 }
 
