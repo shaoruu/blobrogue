@@ -28,60 +28,16 @@ export function liveFireRateMult(mods: PlayerMods, lowHp: number): number {
   return Math.max(0.25, Math.min(CAPS.fireRateMult, mods.fireRateMult + mods.adrenaline * lowHp));
 }
 
-// Player-facing live stats for one weapon card. Every number is what the player would
-// actually get on the next trigger pull (mods applied, caps enforced):
-//   damage  — per pellet / per swing
-//   pellets — volley size (extra-pellet mods included; always 1 for melee)
-//   rate    — attacks per second
-//   range   — bullet travel px (speed × life, mods applied) or melee reach px
-// `special` is the weapon's distinctive behavior line (null for a plain gun) — derived
-// from the canonical Weapon fields, never hand-maintained copy.
-export interface WeaponHudStats {
-  isMelee: boolean;
-  damage: number;
-  pellets: number;
-  rate: number;
-  range: number;
-  special: string | null;
-}
-
-function specialOf(w: Weapon): string | null {
-  const parts: string[] = [];
-  if (w.chain !== undefined) parts.push(`CHAINS TO ${w.chain} MORE`);
-  if (w.bounce !== undefined) parts.push(w.bounce === 1 ? "RICOCHETS ONCE" : `RICOCHETS \u00d7${w.bounce}`);
-  if (w.homing !== undefined) parts.push("HOMING ROUNDS");
-  if (w.blast !== undefined) parts.push(`${w.blast}PX BLAST`);
-  if (w.burn !== undefined) parts.push("SETS TARGETS ABLAZE");
-  if (w.chill !== undefined) parts.push("CHILLS ON HIT");
-  if (w.shock !== undefined) parts.push("SHOCKS ON HIT");
-  if (w.basePierce !== undefined && w.basePierce > 0)
-    parts.push(w.basePierce === 1 ? "PIERCES 1 BODY" : `PIERCES ${w.basePierce} BODIES`);
-  if (w.melee?.isThrust) parts.push("PIERCING THRUST");
-  else if (w.melee !== undefined && w.melee.arc >= 1.5) parts.push("WIDE SWEEP");
-  return parts.length > 0 ? parts.join(" \u00b7 ") : null;
-}
-
-export function weaponHudStats(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponHudStats {
-  const w = WEAPONS[id];
-  const isMelee = w.melee !== undefined;
-  return {
-    isMelee,
-    damage: w.damage * liveDamageMult(mods, lowHp),
-    pellets: isMelee ? 1 : w.pellets + mods.extraPellets,
-    rate: (1 / w.fireCd) * liveFireRateMult(mods, lowHp),
-    range: isMelee ? w.melee!.reach : w.speed * mods.bulletSpeedMult * w.life * mods.bulletLifeMult,
-    special: specialOf(w),
-  };
-}
-
-// ---- the weapon CARD model (game-designer tooltip vocabulary) ----
+// ---- the ONE weapon display-stats model (game-designer tooltip vocabulary) ----
 //
-// The hotbar tooltip leads with the weapon's room job (a verb, derived from canonical
+// WeaponDisplayStats is the single effective-stats source BOTH the hotbar tooltip and the
+// tap-to-inspect drawer render from (so blessing/modifier values can never drift between
+// surfaces). It leads with the weapon's room job (a verb, derived from canonical
 // WeaponDef fields by rules — never hand-written per weapon), then at most five core rows
 // (POWER exact, CADENCE / REACH / COVERAGE-or-SWEEP / IMPACT as categorical bands), then
 // concise technique/tradeoff lines for real mechanics only. Everything derives from
 // WEAPONS + the balance/constants tables + the player's live mods, so upgrades read
-// honestly and no tooltip value can drift from the sim.
+// honestly and no displayed value can drift from the sim.
 
 // A banded categorical stat: `band` is the player-facing word, `order` ranks bands for
 // sidegrade arrows (higher = more of the quality), `num` is the underlying live number
@@ -100,7 +56,7 @@ export interface WeaponMechanic {
   mag: number;
 }
 
-export interface WeaponCard {
+export interface WeaponDisplayStats {
   isMelee: boolean;
   role: string;                    // the room-job verb line
   power: { perHit: number; count: number }; // exact, per-pellet × volley — never aggregate DPS
@@ -206,7 +162,7 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   return m;
 }
 
-export function weaponCard(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponCard {
+export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponDisplayStats {
   const w = WEAPONS[id];
   const isMelee = w.melee !== undefined;
   const rate = (1 / w.fireCd) * liveFireRateMult(mods, lowHp);

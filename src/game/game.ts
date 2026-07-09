@@ -8,7 +8,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { weaponHudStats, weaponCard, lowHpFrac } from "../sim/weaponStats.js";
+import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
@@ -569,6 +569,7 @@ export class Game {
     this.hud.setHotbarActions({
       onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
       onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
+      onSlotInspect: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "inspectSlot", index }); },
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
@@ -652,6 +653,9 @@ export class Game {
         break;
       case "activateSlot":
         if (this.isRunning) this.activateSlot(a.index);
+        break;
+      case "inspectSlot":
+        if (this.isRunning) this.inspectSlot(a.index);
         break;
       case "reorderSlots":
         if (this.isRunning) this.reorderSlots(a.from, a.to);
@@ -2108,20 +2112,22 @@ export class Game {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
     if (owned[index] !== this.weapon) { this.transport.requestEquip(owned[index]); return; }
-    const w = WEAPONS[this.weapon];
-    // Live mod-adjusted stats (the same sim helper the fire math uses), so the drawer
-    // matches what the next trigger pull actually does.
-    const stats = weaponHudStats(w.id, this.mods, lowHpFrac(this.hp, this.maxHp));
+    this.inspectSlot(index);
+  }
+
+  // Open a slot's stat drawer without equipping — the touch long-press path, and where an
+  // already-equipped activation lands. The drawer renders the SAME WeaponDisplayStats the
+  // hotbar tooltip does (one live mod-adjusted source, so the surfaces can never drift);
+  // DROP is offered only on the equipped weapon (Q semantics), never the final weapon.
+  private inspectSlot(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    const id = owned[index];
     this.hud.openWeaponDrawer({
-      id: w.id,
-      name: w.name,
-      damage: stats.damage,
-      pellets: stats.pellets,
-      rate: stats.rate,
-      range: stats.range,
-      isMelee: stats.isMelee,
-      special: stats.special,
-      onDrop: owned.length > 1
+      id,
+      name: WEAPONS[id].name,
+      stats: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+      onDrop: id === this.weapon && owned.length > 1
         ? () => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeapon" }); }
         : null,
     });
@@ -2485,7 +2491,7 @@ export class Game {
       // helper) so hover tooltips always show what a trigger pull would actually do.
       weapons: this.p.ownedWeapons.map((id) => ({
         id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
-        card: weaponCard(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+        card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
       })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").

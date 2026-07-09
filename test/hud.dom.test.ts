@@ -26,14 +26,14 @@ Object.assign(globalThis, {
 const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
-const { weaponCard } = await import("../src/sim/weaponStats.js");
+const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
 type WeaponId = HudState["weapons"][number]["id"];
 
 // Unmodified live weapon card (fresh mods, full HP) — the shape game.ts feeds.
 function wcard(id: WeaponId) {
-  return weaponCard(id, createMods(), 0);
+  return weaponDisplayStats(id, createMods(), 0);
 }
 function wslot(id: WeaponId, name: string, isCurrent: boolean) {
   return { id, name, isCurrent, card: wcard(id) };
@@ -131,13 +131,19 @@ function weaponTooltipTests(): void {
     }));
 
   section("weapon card tooltip: sidegrade arrows only where honest");
-  const equipped = wcard("shotgun"); // volley 8.5, CADENCE SLOW, REACH SHORT
+  const equipped = wcard("shotgun"); // 1.7 ×5, CADENCE SLOW, REACH SHORT
   const cannonRows = weaponTipRows(wcard("cannon"), equipped);
-  check("bigger volley POWER marks up (per-volley, never per-pellet)", cannonRows[0].delta === 1);
+  // Product decision: POWER never compares a guaranteed-total aggregate. Different volley
+  // sizes (1 vs 5 pellets) are an ambiguous tradeoff — neutral, no arrow.
+  check("POWER across different volley sizes stays NEUTRAL (no aggregate comparison)", cannonRows[0].delta === null);
+  check("POWER between equal volley sizes compares per-hit honestly",
+    weaponTipRows(wcard("cannon"), wcard("railgun"))[0].delta === -1  // 9 vs 11, both single
+    && weaponTipRows(wcard("railgun"), wcard("cannon"))[0].delta === 1
+    && weaponTipRows(wcard("sword"), wcard("cannon"))[0].delta === -1); // 3.5 vs 9, both per-hit singles
   check("same CADENCE band = no arrow (band ties never paint noise)", cannonRows[1].delta === 0);
   check("longer REACH band marks up", cannonRows[2].delta === 1);
   const rapidRows = weaponTipRows(wcard("rapid"), equipped);
-  check("faster CADENCE band marks up, weaker volley marks down", rapidRows[1].delta === 1 && rapidRows[0].delta === -1);
+  check("faster CADENCE band marks up; cross-volley POWER stays neutral", rapidRows[1].delta === 1 && rapidRows[0].delta === null);
   const swordVs = weaponTipRows(wcard("sword"), equipped);
   check("melee REACH is NEVER compared against bullet travel (incomparable classes)", swordVs[2].delta === null);
   check("COVERAGE/SWEEP/IMPACT are shape tradeoffs — never arrows",
@@ -146,7 +152,7 @@ function weaponTooltipTests(): void {
   check("no-equipped comparison yields null deltas", weaponTipRows(wcard("pistol"), null).every((r) => r.delta === null));
   const tipVs = tipFor("cannon", "Thunderbolt", false, equipped);
   const arrows = [...tipVs.querySelectorAll(".td")].map((d) => `${d.textContent}${d.classList.contains("up") ? "+" : "-"}`);
-  check("arrows render with up/down classes (POWER up, REACH up)", arrows.join(",") === "\u25b2+,\u25b2+", arrows.join(","));
+  check("arrows render as distinct glyphs with up/down classes (grayscale-readable)", arrows.join(",") === "\u25b2+", arrows.join(","));
 
   section("weapon card tooltip: mechanics diff as GAINS / LOSES / CHANGES");
   const vsShotgun = weaponTipNotes(wcard("tesla"), equipped);
@@ -167,16 +173,16 @@ function weaponTooltipTests(): void {
   const mods = createMods();
   mods.damageMult = 1.5;
   mods.extraPellets = 2;
-  const modded = weaponCard("shotgun", mods, 0);
+  const modded = weaponDisplayStats("shotgun", mods, 0);
   const moddedRows = weaponTipRows(modded, null);
   check("POWER reflects the damage mult and the modded volley", moddedRows[0].v === `${fmtStat(1.7 * 1.5)} \u00d77`, moddedRows[0].v);
-  const moddedPistol = weaponCard("pistol", mods, 0);
+  const moddedPistol = weaponDisplayStats("pistol", mods, 0);
   check("extra pellets surface a COVERAGE row on a previously-tight gun",
     weaponTipRows(moddedPistol, null).some((r) => r.k === "COVERAGE"));
   const pierceMods = createMods();
   pierceMods.pierce = 1;
   check("pierce mods surface a live PIERCES line",
-    weaponTipNotes(weaponCard("pistol", pierceMods, 0), null).some((n) => n.text === "PIERCES 1 BODY"));
+    weaponTipNotes(weaponDisplayStats("pistol", pierceMods, 0), null).some((n) => n.text === "PIERCES 1 BODY"));
   check("fmtStat trims to one decimal", fmtStat(6.25) === "6.3" && fmtStat(2) === "2" && fmtStat(1.9230769) === "1.9");
 
   section("weapon card tooltip: QA gates — rendered content is never nonsense, arrows stay semantic");
@@ -305,28 +311,25 @@ function drawerTests(): void {
   root.querySelector<HTMLButtonElement>(".hd-close")!.click();
   check("CLOSE dismisses the drawer and releases the context", !hud.isDrawerOpen() && !hud.isInteractionActive());
 
-  section("UI Part4: weapon stat drawer replaces hover-only info (tap the equipped slot)");
+  section("UI Part4: weapon stat drawer renders the SAME WeaponDisplayStats as the tooltip");
   let dropCalls = 0;
-  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", damage: 2, pellets: 1, rate: 1.9, range: 160, isMelee: false, special: null, onDrop: () => dropCalls++ });
+  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", stats: wcard("shotgun"), onDrop: () => dropCalls++ });
   check("weapon drawer opens", hud.isDrawerOpen());
   check("drawer titles the weapon", root.querySelector(".hd-head span")?.textContent === "SHOTGUN");
+  check("drawer leads with the room job", root.querySelector(".hd-role")?.textContent === "SHRED UP CLOSE");
   const statTexts = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
-  check("stat sheet shows DMG / RATE / RANGE", statTexts.join("|") === "DMG2|RATE1.9/S|RANGE160 PX", statTexts.join("|"));
-  check("plain gun carries no special line", root.querySelector(".hd-special") === null);
+  check("stat boxes are the tooltip's card rows (shared vocabulary, one source)",
+    statTexts.join("|") === "POWER1.7 \u00d75|CADENCESLOW|REACHSHORT|COVERAGEWIDE FAN|IMPACTSHOVES FOES", statTexts.join("|"));
+  check("drawer carries the technique lines", root.querySelector(".hd-special")?.textContent === "KICKS YOU BACK");
   const dropBtn = root.querySelector<HTMLButtonElement>(".hd-drop")!;
   check("touch DROP action present", dropBtn.textContent === "DROP (Q)");
   dropBtn.click();
   check("DROP releases the input context BEFORE acting, then acts once", dropCalls === 1 && !hud.isDrawerOpen());
 
-  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, pellets: 1, rate: 6.3, range: 616, isMelee: false, special: null, onDrop: null });
-  check("final weapon offers no DROP action", root.querySelector(".hd-drop") === null);
-
-  hud.openWeaponDrawer({ id: "tesla", name: "Tesla", damage: 3, pellets: 3, rate: 2.5, range: 450, isMelee: false, special: "CHAINS TO 3 MORE", onDrop: null });
-  const teslaStats = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
-  check("volley weapons read DMG \u00d7N in the drawer", teslaStats[0] === "DMG3 \u00d73", teslaStats[0]);
-  check("drawer carries the weapon's special line", root.querySelector(".hd-special")?.textContent === "CHAINS TO 3 MORE");
-  hud.closeDrawer();
-  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, pellets: 1, rate: 6.3, range: 616, isMelee: false, special: null, onDrop: null });
+  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", stats: wcard("pistol"), onDrop: null });
+  check("no DROP action when the weapon can't drop", root.querySelector(".hd-drop") === null);
+  check("plain gun's drawer omits default rows and technique lines",
+    [...root.querySelectorAll(".hd-stat")].length === 3 && root.querySelector(".hd-special") === null);
 
   section("UI Part4: the scrim swallows the tap and closes the drawer");
   check("scrim shown while open", root.querySelector(".hb-scrim")!.classList.contains("show"));

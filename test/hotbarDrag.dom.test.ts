@@ -28,9 +28,9 @@ Object.assign(globalThis, {
 (dom.window.HTMLElement.prototype as unknown as { setPointerCapture(id: number): void }).setPointerCapture = () => {};
 (dom.window.HTMLElement.prototype as unknown as { releasePointerCapture(id: number): void }).releasePointerCapture = () => {};
 
-const { Hud } = await import("../src/game/hud.js");
+const { Hud, TIP_SHOW_DELAY_MS, TIP_HIDE_DELAY_MS, TIP_CONFIRM_MS, LONG_PRESS_MS } = await import("../src/game/hud.js");
 const { createMods } = await import("../src/sim/items.js");
-const { weaponCard } = await import("../src/sim/weaponStats.js");
+const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
 type WeaponId = HudState["weapons"][number]["id"];
@@ -57,7 +57,7 @@ const FIVE: { id: WeaponId; name: string }[] = [
 function mkState(currentIndex = 1, ids = FIVE): HudState {
   return {
     hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
-    weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponCard(w.id, createMods(), 0) })),
+    weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponDisplayStats(w.id, createMods(), 0) })),
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
@@ -94,16 +94,17 @@ function layoutRow(slotsEl: HTMLElement, slots: HTMLElement[], zoom: number, ori
   return rects;
 }
 
-type Actions = { activates: number[]; reorders: [number, number][] };
+type Actions = { activates: number[]; reorders: [number, number][]; inspects: number[] };
 
 function rig(currentIndex = 1): { hud: InstanceType<HudModule["Hud"]>; root: HTMLElement; slotsEl: HTMLElement; slots: HTMLElement[]; tipEl: HTMLElement; acts: Actions } {
   const root = document.createElement("div");
   document.body.appendChild(root);
   const hud = new Hud(root);
-  const acts: Actions = { activates: [], reorders: [] };
+  const acts: Actions = { activates: [], reorders: [], inspects: [] };
   hud.setHotbarActions({
     onSlotActivate: (i) => acts.activates.push(i),
     onSlotReorder: (from, to) => acts.reorders.push([from, to]),
+    onSlotInspect: (i) => acts.inspects.push(i),
   });
   hud.update(mkState(currentIndex));
   const slotsEl = root.querySelector<HTMLElement>("[data-hb-slots]")!;
@@ -121,6 +122,19 @@ function enter(slot: HTMLElement): void {
 }
 function leave(slot: HTMLElement): void {
   slot.dispatchEvent(new dom.window.MouseEvent("pointerleave", { bubbles: false }));
+}
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// Hover and wait out the 120ms show debounce.
+async function hoverShow(slot: HTMLElement): Promise<void> {
+  enter(slot);
+  await wait(TIP_SHOW_DELAY_MS + 40);
+}
+// Leave and wait out the 80ms hide grace.
+async function leaveSettle(slot: HTMLElement): Promise<void> {
+  leave(slot);
+  await wait(TIP_HIDE_DELAY_MS + 40);
 }
 
 function ptr(type: string, x: number, y: number, pointerId = 1): Event {
@@ -145,7 +159,7 @@ function expectTransform(x2: number, y2: number, gx: number, gy: number, scale: 
   return scale !== 1 ? `${base} scale(${scale})` : base;
 }
 
-function grabPointTests(): void {
+async function grabPointTests(): Promise<void> {
   section("P0: the ghost pins the ORIGINAL grab point under the pointer (no center snap)");
   for (const [label, gxFrac, gyFrac] of [["center", 0.5, 0.5], ["top-left corner", 0.06, 0.1], ["bottom-right corner", 0.94, 0.9]] as const) {
     // Normal 66px slot (index 0) and the wider equipped 84px slot (index 1) — the width
@@ -197,7 +211,7 @@ function grabPointTests(): void {
   {
     const { hud, root, slotsEl, slots, tipEl } = rig();
     const r = layoutRow(slotsEl, slots, 1)[1];
-    enter(slots[1]); // hover tooltip up before the press
+    await hoverShow(slots[1]); // hover tooltip up before the press
     check("hover shows the floating tooltip before the drag", tipShown(tipEl));
     // Cross the threshold with the FIRST move event: beginDragVisuals runs, then moveGhost
     // repositions in the same handler — but the initial style must start offscreen.
@@ -289,7 +303,7 @@ function markerAndReorderTests(): void {
   }
 }
 
-function cancelTests(): void {
+async function cancelTests(): Promise<void> {
   const begin = (currentIndex = 1) => {
     const r = rig(currentIndex);
     const rects = layoutRow(r.slotsEl, r.slots, 1);
@@ -304,9 +318,9 @@ function cancelTests(): void {
     check("cancelActiveDrag reports the live drag", hud.cancelActiveDrag() === true);
     check("ghost + marker removed", ghostEl() === null && slotsEl.querySelector(".hb-ins") === null);
     check("input context released", !hud.isInteractionActive());
-    enter(slots[1]);
+    await hoverShow(slots[1]);
     check("tooltips work again after the cancel", tipShown(tipEl));
-    leave(slots[1]);
+    await leaveSettle(slots[1]);
     slots[0].dispatchEvent(ptr("pointerup", rects[3].left + 10, rects[3].top + 10));
     check("the release after a cancel neither reorders nor equips", acts.reorders.length === 0 && acts.activates.length === 0);
     check("cancelActiveDrag is idempotent", hud.cancelActiveDrag() === false);
@@ -413,13 +427,13 @@ function sizeTip(tipEl: HTMLElement, w: number, h: number, cssWidth = w): void {
   setRect(tipEl, { left: 0, top: 0, width: w, height: h }, cssWidth);
 }
 
-function tooltipClampTests(): void {
+async function tooltipClampTests(): Promise<void> {
   section("floating tooltip anchoring: centered ~10px above the slot, 12px viewport clamps");
   {
     const { hud, root, slotsEl, slots, tipEl } = rig();
     const rects = layoutRow(slotsEl, slots, 1); // slot 0: left 300, top 600, w 66
     sizeTip(tipEl, 200, 90);
-    enter(slots[0]);
+    await hoverShow(slots[0]);
     check("anchored centered above the slot with a 10px gap",
       tipEl.style.left === `${Math.round(rects[0].left + 33 - 100)}px` && tipEl.style.top === `${600 - 10 - 90}px`,
       `left=${tipEl.style.left} top=${tipEl.style.top}`);
@@ -429,7 +443,7 @@ function tooltipClampTests(): void {
     const { hud, root, slotsEl, slots, tipEl } = rig();
     layoutRow(slotsEl, slots, 1, 4); // row hugs the viewport's left edge
     sizeTip(tipEl, 200, 90);
-    enter(slots[0]); // desired left would be 4+33-100 = -63
+    await hoverShow(slots[0]); // desired left would be 4+33-100 = -63
     check("left edge clamps to the 12px viewport margin", tipEl.style.left === "12px", tipEl.style.left);
     hud.clear(); root.remove();
   }
@@ -437,7 +451,7 @@ function tooltipClampTests(): void {
     const { hud, root, slotsEl, slots, tipEl } = rig();
     const rects = layoutRow(slotsEl, slots, 1, dom.window.innerWidth - 360); // row hugs the right edge
     sizeTip(tipEl, 200, 90);
-    enter(slots[4]);
+    await hoverShow(slots[4]);
     const desired = rects[4].left + rects[4].width / 2 - 100;
     const max = dom.window.innerWidth - 12 - 200;
     check("right edge clamps to the 12px viewport margin",
@@ -450,7 +464,7 @@ function tooltipClampTests(): void {
     const { hud, root, slotsEl, slots, tipEl } = rig();
     const rects = layoutRow(slotsEl, slots, 2);
     sizeTip(tipEl, 200, 90, 100);
-    enter(slots[0]);
+    await hoverShow(slots[0]);
     const wantLeft = Math.round((rects[0].left + rects[0].width / 2 - 100) / 2);
     const wantTop = Math.round((rects[0].top - 10 - 90) / 2);
     check("200% zoom divides the anchored position into zoomed px",
@@ -464,20 +478,20 @@ function tooltipClampTests(): void {
     const { hud, root, slotsEl, slots, tipEl } = rig();
     layoutRow(slotsEl, slots, 1, 300, 40); // slots at y=40, tip is 90 tall
     sizeTip(tipEl, 200, 90);
-    enter(slots[0]);
+    await hoverShow(slots[0]);
     check("top clip clamps to the 12px margin (fully onscreen)", tipEl.style.top === "12px", tipEl.style.top);
     hud.clear(); root.remove();
   }
 }
 
-function qaGateTests(): void {
+async function qaGateTests(): Promise<void> {
   section("QA gate: ONE floating tooltip across input modes — identical content, no duplicate");
   {
     const { hud, root, slots, tipEl } = rig();
-    enter(slots[0]);
+    await hoverShow(slots[0]);
     check("hover shows the hovered weapon", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "PISTOL");
     const hoverHTML = tipEl.innerHTML;
-    leave(slots[0]);
+    await leaveSettle(slots[0]);
     slots[0].focus();
     check("keyboard focus shows IDENTICAL content for the same slot", tipShown(tipEl) && tipEl.innerHTML === hoverHTML);
     check("focus links the tooltip accessibly (aria-describedby)", slots[0].getAttribute("aria-describedby") === "hb-tip");
@@ -485,10 +499,10 @@ function qaGateTests(): void {
     check("focus moving re-points the ONE tooltip (no stale duplicate)",
       tipEl.querySelector(".tn")?.textContent === "CUTLASS" && root.querySelectorAll(".hb-tip").length === 1
       && slots[0].getAttribute("aria-describedby") === null && slots[3].getAttribute("aria-describedby") === "hb-tip");
-    enter(slots[2]);
+    enter(slots[2]); // tip already up: pointer retargets instantly, no debounce
     check("pointer takeover swaps the same element's content", tipEl.querySelector(".tn")?.textContent === "TESLA");
-    leave(slots[2]);
-    check("pointer leaving falls back to the still-focused slot's card", tipEl.querySelector(".tn")?.textContent === "CUTLASS");
+    await leaveSettle(slots[2]);
+    check("pointer leaving falls back to the still-focused slot's card", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "CUTLASS");
     slots[3].blur();
     check("blur with no hover hides the tooltip (aria-hidden)", !tipShown(tipEl) && tipEl.getAttribute("aria-hidden") === "true");
     hud.clear(); root.remove();
@@ -516,12 +530,12 @@ function qaGateTests(): void {
     const { hud, root, slots, tipEl } = rig();
     check("exactly one root-level tooltip, outside #hud clipping",
       root.querySelectorAll(".hb-tip").length === 1 && tipEl.parentElement === root && root.querySelector("#hud .hb-tip") === null);
-    enter(slots[0]);
+    await hoverShow(slots[0]);
     check("tooltip up", tipShown(tipEl));
     hud.setVisible(false);
     check("hiding the hotbar hides the tooltip with it", !tipShown(tipEl));
     hud.setVisible(true);
-    enter(root.querySelector<HTMLElement>(".hb-slot")!);
+    await hoverShow(root.querySelector<HTMLElement>(".hb-slot")!);
     check("tooltip shows pistol again", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "PISTOL");
     hud.update(mkState(0, FIVE.slice(1))); // the pistol vanished; a different weapon now sits at index 0
     check("churn that replaces the anchored weapon HIDES the tooltip (never a stale card)", !tipShown(tipEl));
@@ -531,11 +545,11 @@ function qaGateTests(): void {
   section("QA gate: live values re-render under the cursor; rapid cycling leaks nothing");
   {
     const { hud, root, slotsEl, slots, tipEl } = rig();
-    enter(slots[0]);
+    await hoverShow(slots[0]);
     check("baseline pistol POWER 2", tipEl.querySelector(".tv")?.textContent === "2");
     const mods = createMods();
     mods.damageMult = 2;
-    hud.update({ ...mkState(), weapons: FIVE.map((w, i) => ({ ...w, isCurrent: i === 1, card: weaponCard(w.id, mods, 0) })) });
+    hud.update({ ...mkState(), weapons: FIVE.map((w, i) => ({ ...w, isCurrent: i === 1, card: weaponDisplayStats(w.id, mods, 0) })) });
     check("a mod change re-renders the SHOWING tooltip live (same weapon, fresh values)",
       tipShown(tipEl) && tipEl.querySelector(".tv")?.textContent === "4", tipEl.querySelector(".tv")?.textContent ?? "");
 
@@ -562,16 +576,106 @@ function qaGateTests(): void {
   }
 }
 
-function main(): void {
-  grabPointTests();
+async function tipTimingTests(): Promise<void> {
+  section("tooltip timing: 120ms show / 80ms hide debounce with cancellation, focus immediate");
+  {
+    const { hud, root, slots, tipEl } = rig();
+    enter(slots[0]);
+    check("no tip synchronously on enter", !tipShown(tipEl));
+    await wait(50);
+    check("still down before the 120ms debounce", !tipShown(tipEl));
+    leave(slots[0]);
+    await wait(TIP_SHOW_DELAY_MS + 80);
+    check("a pass-over (leave before 120ms) NEVER flashes a tip", !tipShown(tipEl));
+
+    await hoverShow(slots[0]);
+    check("a settled hover shows after 120ms", tipShown(tipEl));
+    leave(slots[0]);
+    check("leaving keeps the tip for the 80ms grace (no flicker)", tipShown(tipEl));
+    await wait(30);
+    enter(slots[0]); // back within 80ms
+    await wait(TIP_HIDE_DELAY_MS + 40);
+    check("re-entering within 80ms cancels the hide", tipShown(tipEl));
+
+    enter(slots[2]); // already shown: crossing to a neighbor retargets instantly
+    check("slot-to-slot movement retargets instantly while shown", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "TESLA");
+    await leaveSettle(slots[2]);
+    check("tip hides 80ms after the pointer leaves for good", !tipShown(tipEl));
+
+    slots[1].focus();
+    check("keyboard focus shows immediately (no debounce)", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "SHOTGUN");
+    slots[1].blur();
+    hud.clear(); root.remove();
+  }
+
+  section(`tooltip timing: quick weapon cycling flashes a ${TIP_CONFIRM_MS}ms confirmation`);
+  {
+    const { hud, root, tipEl } = rig(0); // pistol equipped
+    check("no confirmation on the first render", !tipShown(tipEl));
+    hud.update(mkState(1)); // cycled to the shotgun, no hover/focus anywhere
+    check("equip change flashes the NEW weapon's card", tipShown(tipEl)
+      && tipEl.querySelector(".tn")?.textContent === "SHOTGUN" && tipEl.querySelector(".tx")?.textContent === "EQUIPPED");
+    hud.update(mkState(2)); // cycled again before the flash expired
+    check("cycling again re-targets the confirmation", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "TESLA");
+    await wait(TIP_CONFIRM_MS + 80);
+    check("the confirmation hides itself", !tipShown(tipEl));
+    hud.clear(); root.remove();
+  }
+}
+
+async function longPressTests(): Promise<void> {
+  section(`touch long-press (${LONG_PRESS_MS}ms): inspect drawer without equipping`);
+  const touchPtr = (type: string, x: number, y: number) => {
+    const e = ptr(type, x, y);
+    Object.defineProperty(e, "pointerType", { value: "touch" });
+    return e;
+  };
+  {
+    const { hud, root, slotsEl, slots, acts } = rig();
+    const rects = layoutRow(slotsEl, slots, 1);
+    slots[3].dispatchEvent(touchPtr("pointerdown", rects[3].left + 10, rects[3].top + 10));
+    await wait(LONG_PRESS_MS + 60);
+    check("a still 350ms touch press requests the inspect", acts.inspects.length === 1 && acts.inspects[0] === 3, JSON.stringify(acts.inspects));
+    check("the press state tore down (no drag, no context)", !hud.isInteractionActive());
+    slots[3].dispatchEvent(touchPtr("pointerup", rects[3].left + 10, rects[3].top + 10));
+    check("the release after an inspect NEVER equips", acts.activates.length === 0);
+    hud.clear(); root.remove();
+  }
+  {
+    const { hud, root, slotsEl, slots, acts } = rig();
+    const rects = layoutRow(slotsEl, slots, 1);
+    slots[0].dispatchEvent(touchPtr("pointerdown", rects[0].left + 20, rects[0].top + 20));
+    slots[0].dispatchEvent(touchPtr("pointermove", rects[0].left + 40, rects[0].top + 20)); // real drag motion
+    await wait(LONG_PRESS_MS + 60);
+    check("drag motion cancels the pending long-press", acts.inspects.length === 0);
+    check("the drag itself is live instead", hud.isInteractionActive() && ghostEl() !== null);
+    slots[0].dispatchEvent(touchPtr("pointerup", rects[0].left + 40, rects[0].top + 20));
+    hud.clear(); root.remove();
+  }
+  {
+    const { hud, root, slotsEl, slots, acts } = rig();
+    const rects = layoutRow(slotsEl, slots, 1);
+    slots[2].dispatchEvent(ptr("pointerdown", rects[2].left + 10, rects[2].top + 10)); // mouse, not touch
+    await wait(LONG_PRESS_MS + 60);
+    check("a held MOUSE press never long-presses", acts.inspects.length === 0);
+    slots[2].dispatchEvent(ptr("pointerup", rects[2].left + 10, rects[2].top + 10));
+    check("the mouse release still click-equips", acts.activates.length === 1 && acts.activates[0] === 2);
+    hud.clear(); root.remove();
+  }
+}
+
+async function main(): Promise<void> {
+  await grabPointTests();
   markerAndReorderTests();
-  cancelTests();
+  await cancelTests();
   keyboardReorderTests();
-  tooltipClampTests();
-  qaGateTests();
+  await tooltipClampTests();
+  await tipTimingTests();
+  await longPressTests();
+  await qaGateTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll hotbar drag assertions passed.\n");
 }
 
-main();
+await main();
