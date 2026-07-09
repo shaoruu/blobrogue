@@ -1,10 +1,11 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, RemotePlayer } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, Pet, PetKind, WeaponId, AttackMove, Prop, PropKind, Chest, RemotePlayer } from "../sim/types.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
-import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
+import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName, PetPose } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor } from "../sim/enemies.js";
+import { PETS, PET_BALANCE } from "../sim/pets.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
@@ -14,7 +15,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared, spawnPetInWorld } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -40,7 +41,9 @@ import { BlessingOverlay } from "../ui/blessing.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
 
-export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
+// deepestBossKill: the deepest floor whose boss this run's party defeated (0 = none) —
+// the milestone the account's pet-unlock requirements evaluate against.
+export interface RunResult { floor: number; kills: number; coins: number; deepestBossKill: number; durationMs: number; }
 
 // Why a run exited without a game over: the player quit, or an online connection never came
 // up (lets the menu land back on the lobby with an explanation instead of silence).
@@ -64,6 +67,10 @@ export interface StartOptions {
   // The player's chosen blob tint (client palette index). Applies to solo + online; classic
   // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
   selfColorIndex?: number | null;
+  // The signed-in account's equipped companion, spawned into the LOCAL sim for solo/co-op.
+  // Online ignores it — there the pet rides the verified join ticket and the server spawns
+  // it authoritatively. null = none (every guest).
+  petKind?: PetKind | null;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -366,6 +373,8 @@ export class Game {
   private enemyAnims = new Map<number, Anim>();
   private enemyAnimPos = new Map<number, { x: number; y: number }>();
   private enemyFacing = new Map<number, number>(); // stable L/R facing (velocity-driven + deadzone) to kill mirror-flicker
+  private petAnims = new Map<number, Anim>();
+  private petAnimPos = new Map<number, { x: number; y: number }>();
   private propAnims = new Map<number, Anim>();
   // Keyed by the sim's stable per-floor id (like enemies/props): online rebuilds pickup/chest
   // objects from each snapshot, so object-identity keying would reset the idle anim 20x/s.
@@ -400,6 +409,7 @@ export class Game {
   private get dungeon(): Dungeon { return this.world.dungeon; }
   private get floor(): number { return this.world.floor; }
   private get enemies(): Enemy[] { return this.world.enemies; }
+  private get pets(): Map<string, Pet> { return this.world.pets; }
   private get bullets(): Bullet[] { return this.world.bullets; }
   private get pickups(): Pickup[] { return this.world.pickups; }
   private get props(): Prop[] { return this.world.props; }
@@ -407,6 +417,10 @@ export class Game {
 
   private isRunning = false;
   private last = 0;
+  // Deepest boss floor this run's party defeated (0 = none). Fed by the enemyKill(boss)
+  // event and, belt-and-suspenders, by descending past a boss floor (the exit only opens
+  // once its boss is dead) — so an interest-filtered kill event can't lose the milestone.
+  private runDeepestBossKill = 0;
   private simAccum = 0; // fixed-timestep accumulator (seconds) for smooth framerate-independent sim
   private renderPrevX = 0; private renderPrevY = 0; // player pos before the last sim step (render interpolation)
   private hasRenderPrev = false;
@@ -540,7 +554,11 @@ export class Game {
       this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
     }
     this.world = this.transport.poll().state;
+    // Solo/co-op run the sim locally, so the equipped companion spawns here; online the
+    // server owns pets (they arrive in snapshots off the verified ticket claim).
+    if (this.mode !== "online" && opts.petKind) spawnPetInWorld(this.world, LOCAL_ID, opts.petKind);
     this.inputSeq = 0;
+    this.runDeepestBossKill = 0;
     this.blessingRng = new Rng(this.seed ^ 0x0b1e55);
     this.ownedItemDefs = [];
     this.isAutoFiring = false;
@@ -618,6 +636,8 @@ export class Game {
     this.enemyAnims.clear();
     this.enemyAnimPos.clear();
     this.enemyFacing.clear();
+    this.petAnims.clear();
+    this.petAnimPos.clear();
     this.propAnims.clear();
     this.pickupAnims.clear();
     this.chestAnims.clear();
@@ -872,6 +892,18 @@ export class Game {
     if (this.enemyAnims.size > liveEnemyIds.size) {
       for (const id of this.enemyAnims.keys()) if (!liveEnemyIds.has(id)) { this.enemyAnims.delete(id); this.enemyAnimPos.delete(id); this.enemyFacing.delete(id); }
     }
+    const livePetIds = new Set<number>();
+    for (const pet of this.pets.values()) {
+      livePetIds.add(pet.id);
+      const anim = this.animForPet(pet.id);
+      const prev = this.petAnimPos.get(pet.id);
+      const dx = prev ? pet.x - prev.x : 0, dy = prev ? pet.y - prev.y : 0;
+      stepAnim(anim, dt, dx * dx + dy * dy > 0.12, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
+      this.petAnimPos.set(pet.id, { x: pet.x, y: pet.y });
+    }
+    if (this.petAnims.size > livePetIds.size) {
+      for (const id of this.petAnims.keys()) if (!livePetIds.has(id)) { this.petAnims.delete(id); this.petAnimPos.delete(id); }
+    }
     const livePropIds = new Set<number>();
     for (const prop of this.props) { livePropIds.add(prop.id); stepAnim(this.animForProp(prop), dt, false, 0); }
     if (this.propAnims.size > livePropIds.size) for (const id of this.propAnims.keys()) if (!livePropIds.has(id)) this.propAnims.delete(id);
@@ -1029,6 +1061,7 @@ export class Game {
       case "enemyKill": {
         const arch = ENEMY_ARCHETYPES[e.kind];
         const big = e.kind === "boss";
+        if (big) this.runDeepestBossKill = Math.max(this.runDeepestBossKill, this.floor);
         if (big) audio.setMusic("dungeon"); // the intense boss track relaxes after the kill
         this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
         this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
@@ -1175,7 +1208,17 @@ export class Game {
         if (this.isNearCamera(e.x, e.y)) sfx("enemyHit", { gain: 0.4, rate: 0.7 });
         break;
       }
+      case "petTeleport": {
+        const tint = PETS[e.kind].tint;
+        this.spawnPuff(e.ox, e.oy, 5, tint);
+        this.spawnPuff(e.x, e.y, 7, tint);
+        if (this.isNearCamera(e.x, e.y)) sfx("dash", { rate: 1.5, gain: 0.35 });
+        break;
+      }
       case "descend":
+        // Leaving a boss floor proves its boss died (the exit only opens on a cleared
+        // floor) — covers a client whose interest filter missed the kill event itself.
+        if (isBossFloor(e.toFloor - 1)) this.runDeepestBossKill = Math.max(this.runDeepestBossKill, e.toFloor - 1);
         sfx("descend");
         this.addTrauma(TRAUMA_DESCEND);
         // Online, the structural floor load is driven by the authoritative world rebuild
@@ -1225,6 +1268,11 @@ export class Game {
   private animForPropId(id: number): Anim {
     let a = this.propAnims.get(id);
     if (!a) { a = createAnim(); this.propAnims.set(id, a); }
+    return a;
+  }
+  private animForPet(id: number): Anim {
+    let a = this.petAnims.get(id);
+    if (!a) { a = createAnim(); this.petAnims.set(id, a); }
     return a;
   }
 
@@ -1794,7 +1842,7 @@ export class Game {
     this.hud.hideStats();
     this.hud.clear();
     this.hud.setVisible(false);
-    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
+    this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, deepestBossKill: this.runDeepestBossKill, durationMs: performance.now() - this.runStart });
   }
 
   // Online transport terminal states end the run cleanly instead of freezing the last frame:
@@ -1990,6 +2038,7 @@ export class Game {
     this.shockwaves.render(ctx, this.cam.x, this.cam.y);
     this.renderCorpses();
     this.renderEnemies();
+    this.renderPets();
     this.renderBullets();
     this.renderTracers();
     this.renderRemotePlayers();
@@ -2264,6 +2313,10 @@ export class Game {
       const size = this.enemyDrawSize(e);
       if (this.isNearCamera(e.x, e.y, TILE)) this.shadow(e.x - cam.x, e.y - cam.y + size * 0.3, size * 0.62);
     }
+    // companion pets (the wisp floats — no ground shadow)
+    for (const t of this.pets.values()) {
+      if (t.kind !== "lantern_wisp" && this.isNearCamera(t.x, t.y, TILE)) this.shadow(t.x - cam.x, t.y - cam.y + 9, 18);
+    }
     // remote players (co-op presence or authoritative server)
     for (const r of this.remotes()) {
       if (!r.isDown) this.shadow(r.x - cam.x, r.y - cam.y + 15, 34);
@@ -2406,9 +2459,18 @@ export class Game {
 
   private renderPickups() {
     const { ctx, cam } = this;
+    // Lantern-wisp loot reveal: pickups inside any wisp's light get a bright halo + a
+    // sparkle so they read from across the room (pure client cosmetics off shared state —
+    // every player sees the same reveal).
+    let wisps: Pet[] | null = null;
+    for (const t of this.pets.values()) if (t.kind === "lantern_wisp") (wisps ??= []).push(t);
+    const revealR2 = PET_BALANCE.lantern_wisp.revealRadius ** 2;
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
+      if (wisps && wisps.some((t) => (t.x - p.x) ** 2 + (t.y - p.y) ** 2 <= revealR2)) {
+        this.renderLootReveal(p, sx, sy, clock);
+      }
       const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
       ctx.save();
       ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
@@ -2454,6 +2516,26 @@ export class Game {
         ctx.beginPath(); ctx.arc(sx, sy, 10, 0, 6.28); ctx.fill();
       }
     }
+  }
+
+  // The wisp's find-the-loot flourish: an additive halo + a slow-orbit sparkle over a
+  // revealed pickup. Distinct from the pickup's own soft idle glow (bigger, brighter, cool
+  // lantern-light hue) so "the wisp sees something" reads at a glance.
+  private renderLootReveal(p: Pickup, sx: number, sy: number, clock: number) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const r = 26 + Math.sin(clock * 5) * 3;
+    const g = ctx.createRadialGradient(sx, sy, 2, sx, sy, r);
+    g.addColorStop(0, "rgba(170,230,255,0.4)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+    const a = clock * 2.2 + p.id;
+    ctx.fillStyle = "#eafaff";
+    ctx.globalAlpha = 0.7 + 0.3 * Math.sin(clock * 9);
+    ctx.beginPath(); ctx.arc(sx + Math.cos(a) * 15, sy + Math.sin(a) * 9, 1.6, 0, 6.28); ctx.fill();
+    ctx.restore();
   }
 
   private renderCorpses() {
@@ -2669,6 +2751,8 @@ export class Game {
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
+      // The bonebird's mark: a bobbing chevron over the target while players deal bonus damage.
+      if (e.petMark > 0) this.renderPetMark(e, sx, sy, drawSize);
 
       // Shimmer flecks while a ghost is materializing.
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
@@ -2693,6 +2777,167 @@ export class Game {
     ctx.beginPath();
     ctx.ellipse(sx, sy + size * 0.3, size * 0.44, size * 0.2, 0, 0, 6.28);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- companion pets (render) ----
+
+  // The typed pose hook (the sprite contract in assets.ts): action while the wire attack
+  // timer runs, walk while the body is moving, idle otherwise.
+  private petPose(pet: Pet): PetPose {
+    const prev = this.petAnimPos.get(pet.id);
+    const isMoving = prev !== undefined && Math.hypot(pet.x - prev.x, pet.y - prev.y) > 0.35;
+    return {
+      clip: pet.attackAnim > 0 ? "action" : isMoving ? "walk" : "idle",
+      facing: pet.facing >= 0 ? 1 : -1,
+    };
+  }
+
+  // The pet's owner accent color: your pick for your own pet, the owner's broadcast color
+  // (or stable palette slot) for a teammate's.
+  private petOwnerColor(pet: Pet): string {
+    const isMine = this.mode === "online" ? pet.ownerId === this.wsTransport?.getSelfServerId() : pet.ownerId === LOCAL_ID;
+    if (isMine) return playerColor(this.selfColorIndex ?? 0);
+    const r = this.remotes().find((rp) => rp.playerId === pet.ownerId);
+    return playerColor(r ? r.colorIndex : 0);
+  }
+
+  private renderPets() {
+    if (this.pets.size === 0) return;
+    const { ctx, cam } = this;
+    for (const pet of this.pets.values()) {
+      // The peck renders even when its bird is just off-screen (it flies ahead of the body).
+      if (pet.peck && this.isNearCamera(pet.peck.x, pet.peck.y, TILE)) this.renderPetPeck(pet);
+      if (!this.isNearCamera(pet.x, pet.y, TILE)) continue;
+      const def = PETS[pet.kind];
+      const pose = this.petPose(pet);
+      const anim = this.animForPet(pet.id);
+      if (pet.attackAnim > 0 && anim.recoil <= 0) triggerRecoil(anim, 0.8);
+      const sx = pet.x - cam.x, sy = pet.y - cam.y;
+      // Owner link: a soft accent ring under the pet in the owner's blob color.
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = this.petOwnerColor(pet);
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + 10, 12, 5, 0, 0, 6.28);
+      ctx.stroke();
+      ctx.restore();
+      const xf = characterXform(anim, CHARACTER_STYLE);
+      const sheet = this.sprites.petSheet(pet.kind, pose.clip) ?? this.sprites.petSheet(pet.kind, "walk");
+      const img = this.sprites.pet(pet.kind);
+      if (sheet || img) {
+        const size = 30;
+        ctx.save();
+        ctx.translate(sx + xf.ox, sy + xf.oy);
+        ctx.scale(pose.facing * xf.sx, xf.sy);
+        if (sheet) {
+          const fw = sheet.img.naturalHeight || FRAME;
+          const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
+          const i = frameIndex(count, sheet.fps, anim.clock);
+          ctx.drawImage(sheet.img, i * fw, 0, fw, fw, -size / 2, -size / 2, size, size);
+        } else if (img) {
+          ctx.drawImage(img, -size / 2, -size / 2, size, size);
+        }
+        ctx.restore();
+      } else {
+        this.renderPetBody(pet, sx, sy, pose, xf, def.tint);
+      }
+      if (pet.kind === "lantern_wisp") this.renderWispLight(pet, sx, sy);
+    }
+  }
+
+  // Procedural pet bodies until the authored sprites land (assets.ts PET_SOURCES): each
+  // kind gets a distinct silhouette drawn in code — the same no-extra-art philosophy as
+  // the muzzle flashes and telegraphs, never a fake placeholder PNG.
+  private renderPetBody(pet: Pet, sx: number, sy: number, pose: PetPose, xf: Xform, tint: string) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.translate(sx + xf.ox, sy + xf.oy);
+    ctx.scale(pose.facing * xf.sx, xf.sy);
+    if (pet.kind === "ember_pup") {
+      ctx.fillStyle = tint;
+      ctx.beginPath(); ctx.arc(0, 0, 9, 0, 6.28); ctx.fill();          // body
+      ctx.beginPath(); ctx.arc(7, -3, 5, 0, 6.28); ctx.fill();         // snout
+      ctx.beginPath();                                                  // ear
+      ctx.moveTo(-2, -7); ctx.lineTo(2, -13); ctx.lineTo(5, -6); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#3a1c08";
+      ctx.beginPath(); ctx.arc(8, -4, 1.4, 0, 6.28); ctx.fill();       // eye
+      ctx.fillStyle = "#ffd27a";
+      ctx.beginPath();                                                  // tail flame tip
+      ctx.moveTo(-8, 1); ctx.lineTo(-13, -3); ctx.lineTo(-9, 5); ctx.closePath(); ctx.fill();
+    } else if (pet.kind === "bonebird") {
+      ctx.fillStyle = tint;
+      ctx.beginPath(); ctx.ellipse(0, 0, 8, 6.5, 0, 0, 6.28); ctx.fill();  // body
+      ctx.beginPath(); ctx.arc(6, -5, 4.5, 0, 6.28); ctx.fill();           // head
+      ctx.fillStyle = "#b9a24f";
+      ctx.beginPath();                                                      // beak
+      ctx.moveTo(9, -5); ctx.lineTo(15, -4); ctx.lineTo(9, -2); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#2a2438";
+      ctx.beginPath(); ctx.arc(7, -6, 1.3, 0, 6.28); ctx.fill();            // eye
+      ctx.fillStyle = "#c9bfa8";
+      const flap = Math.sin(this.animClock * 10) * 3;
+      ctx.beginPath(); ctx.ellipse(-2, -2, 5, 3, -0.5 + flap * 0.08, 0, 6.28); ctx.fill(); // wing
+    } else {
+      // Lantern wisp: a floating core inside its own glow (drawn by renderWispLight).
+      ctx.fillStyle = "#eafaff";
+      ctx.beginPath(); ctx.arc(0, 0, 5, 0, 6.28); ctx.fill();
+      ctx.strokeStyle = tint;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath(); ctx.arc(0, 0, 7.5 + Math.sin(this.animClock * 5) * 1.2, 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // The wisp's lantern: an additive light pool that also flags what it is FOR — loot
+  // inside the reveal radius gets its own highlight in renderPickups.
+  private renderWispLight(pet: Pet, sx: number, sy: number) {
+    const { ctx } = this;
+    const r = 44 + Math.sin(this.animClock * 3 + pet.id) * 4;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createRadialGradient(sx, sy, 2, sx, sy, r);
+    g.addColorStop(0, "rgba(160,225,255,0.34)");
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
+    ctx.restore();
+  }
+
+  private renderPetPeck(pet: Pet) {
+    const pk = pet.peck;
+    if (!pk) return;
+    const { ctx, cam } = this;
+    const sx = pk.x - cam.x, sy = pk.y - cam.y;
+    const ang = Math.atan2(pk.vy, pk.vx);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(ang);
+    ctx.fillStyle = PETS.bonebird.tint;
+    ctx.beginPath(); ctx.ellipse(0, 0, 6, 2.4, 0, 0, 6.28); ctx.fill();
+    ctx.globalAlpha = 0.4;
+    ctx.beginPath(); ctx.ellipse(-7, 0, 4, 1.6, 0, 0, 6.28); ctx.fill();
+    ctx.restore();
+  }
+
+  // The bonebird's mark over its target: a bobbing chevron in the bird's tint, visible to
+  // the whole party (the enemy takes bonus damage from every player while it lasts).
+  private renderPetMark(e: Enemy, sx: number, sy: number, drawSize: number) {
+    const { ctx } = this;
+    const bob = Math.sin(this.animClock * 6) * 2.5;
+    const y = sy - drawSize / 2 - 16 + bob;
+    const fade = Math.min(1, e.petMark / 0.5); // eases out over the mark's last half second
+    ctx.save();
+    ctx.globalAlpha = 0.9 * fade;
+    ctx.fillStyle = PETS.bonebird.tint;
+    ctx.beginPath();
+    ctx.moveTo(sx - 6, y - 6); ctx.lineTo(sx + 6, y - 6); ctx.lineTo(sx, y); ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 0.5 * fade;
+    ctx.beginPath();
+    ctx.moveTo(sx - 6, y - 12); ctx.lineTo(sx + 6, y - 12); ctx.lineTo(sx, y - 6); ctx.closePath();
+    ctx.fill();
     ctx.restore();
   }
 
@@ -3382,6 +3627,13 @@ export class Game {
   devSpawnChest(atCursor: boolean): void {
     const p = this.devPlacePoint(atCursor);
     devSpawnChest(this.world, p.x, p.y);
+  }
+
+  // Equip a companion on the sandbox player (replaces any current one), or clear with null.
+  devSetPet(kind: PetKind | null): void {
+    if (kind === null) { this.world.pets.delete(LOCAL_ID); return; }
+    const pet = spawnPetInWorld(this.world, LOCAL_ID, kind);
+    if (pet) this.spawnPuff(pet.x, pet.y, 7, PETS[kind].tint);
   }
 
   devGiveWeapon(id: WeaponId): void {

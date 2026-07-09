@@ -1,6 +1,6 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId, SpriteName } from "../sim/types.js";
+import type { WeaponId, SpriteName, PetKind } from "../sim/types.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -82,6 +82,27 @@ const PROP_SOURCES: Record<PropSpriteName, string> = {
   chest_open: "/sprites/chest_open.png",
 };
 
+// ---- companion pet art contract (see ART.md "Companion pets") ----
+// The renderer's typed pose hook: which clip a pet wants each frame. Derived from wire
+// state (motion => walk, attackAnim `at` timer => action), so the art can be dropped in
+// with zero code changes beyond registering the files below.
+export type PetClip = "idle" | "walk" | "action";
+export interface PetPose {
+  clip: PetClip;
+  facing: number; // -1 (left) / 1 (right); art is authored facing RIGHT and mirrored
+}
+
+// Expected filenames, one 64x64 base PNG per pet plus optional horizontal strip sheets
+// (64px square frames, count inferred from width) per clip:
+//   /sprites/pet_ember_pup.png      /sprites/pet_ember_pup_walk.png    /sprites/pet_ember_pup_action.png
+//   /sprites/pet_lantern_wisp.png   /sprites/pet_lantern_wisp_walk.png /sprites/pet_lantern_wisp_action.png
+//   /sprites/pet_bonebird.png       /sprites/pet_bonebird_walk.png     /sprites/pet_bonebird_action.png
+// Registries are EMPTY until the art lands (the SHEETS pattern: nothing is fetched, no
+// 404s); the renderer draws a fully procedural body per kind until then. To light a pet
+// up, add its entries here — no other code changes.
+export const PET_SOURCES: Partial<Record<PetKind, string>> = {};
+export const PET_SHEETS: Partial<Record<`${PetKind}.${PetClip}`, SheetDef>> = {};
+
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
   slime: "/sprites/slime.png",
@@ -162,6 +183,8 @@ export class Sprites {
   private fxTintCache = new Map<string, HTMLCanvasElement>();
   private propImages = new Map<PropSpriteName, HTMLImageElement>();
   private propFlashCache = new Map<PropSpriteName, HTMLCanvasElement>();
+  private petImages = new Map<PetKind, HTMLImageElement>();
+  private petSheets = new Map<string, LoadedSheet>();
 
   constructor() {
     for (const name of Object.keys(SOURCES) as SpriteName[]) {
@@ -200,6 +223,34 @@ export class Sprites {
       img.src = PROP_SOURCES[name];
       this.propImages.set(name, img);
     }
+    for (const kind of Object.keys(PET_SOURCES) as PetKind[]) {
+      const src = PET_SOURCES[kind];
+      if (!src) continue;
+      const img = new Image();
+      img.src = src;
+      this.petImages.set(kind, img);
+    }
+    for (const key of Object.keys(PET_SHEETS)) {
+      const def = PET_SHEETS[key as keyof typeof PET_SHEETS];
+      if (!def) continue;
+      const img = new Image();
+      img.src = def.src;
+      this.petSheets.set(key, { img, fps: def.fps });
+    }
+  }
+
+  // A loaded pet base sprite, or null while it streams in / until the art is registered —
+  // the renderer falls back to the procedural pet body.
+  pet(kind: PetKind): HTMLImageElement | null {
+    const img = this.petImages.get(kind);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  // A loaded pet clip sheet, or null to fall back (action -> walk -> base -> procedural).
+  petSheet(kind: PetKind, clip: PetClip): LoadedSheet | null {
+    const s = this.petSheets.get(`${kind}.${clip}`);
+    if (s && s.img.complete && s.img.naturalWidth > 0) return s;
+    return null;
   }
 
   // A loaded prop/chest image (break sheet or static), or null while it streams in so the

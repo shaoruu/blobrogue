@@ -20,6 +20,8 @@ export interface LobbyPlayer {
   name: string;
   colorIndex: number;
   isHost: boolean;
+  // The member's equipped companion (a PetKind string), for the roster chip; null = none.
+  pet: string | null;
 }
 
 export class OnlineLobby {
@@ -156,7 +158,7 @@ export class OnlineLobby {
     return this.presenceRows
       .slice()
       .sort((a, b) => (a.playerId === this.hostPlayerId ? -1 : b.playerId === this.hostPlayerId ? 1 : a.name.localeCompare(b.name)))
-      .map((r) => ({ playerId: r.playerId, name: r.name, colorIndex: r.colorIndex, isHost: r.playerId === this.hostPlayerId }));
+      .map((r) => ({ playerId: r.playerId, name: r.name, colorIndex: r.colorIndex, isHost: r.playerId === this.hostPlayerId, pet: r.pet }));
   }
 
   // Host flips the lobby live; every subscribed member sees status "playing" and connects.

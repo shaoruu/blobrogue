@@ -6,6 +6,7 @@ import { Game } from "../game/game.js";
 import type { DevSnapshot } from "../game/game.js";
 import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
 import { ITEMS } from "../sim/items.js";
+import { PETS, PET_KINDS } from "../sim/pets.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { injectDevStyles } from "./styles.js";
 
@@ -156,6 +157,18 @@ function buildPanel(game: Game): void {
   }
   itemSec.appendChild(itemRow);
   panel.appendChild(itemSec);
+
+  // ---- companion pets ----
+  const petSec = section("Companions");
+  const petRow = h("div", "dev-row");
+  for (const kind of PET_KINDS) {
+    const b = btn(PETS[kind].name, () => game.devSetPet(kind), "mini");
+    b.title = PETS[kind].role;
+    petRow.appendChild(b);
+  }
+  petRow.appendChild(btn("None", () => game.devSetPet(null), "mini"));
+  petSec.appendChild(petRow);
+  panel.appendChild(petSec);
 
   // ---- player / loadout ----
   const playerSec = section("Player");

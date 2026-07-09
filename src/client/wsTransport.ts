@@ -18,13 +18,13 @@ import { LOCAL_ID } from "../sim/input.js";
 import type { RemotePlayer, WeaponId } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
-  jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
+  jsonCodec, applySelfWire, enemyFromWire, petFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
   type ServerMsg,
 } from "../net/protocol.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
-import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
+import type { Enemy, Bullet, Prop, Pickup, Chest, Pet } from "../sim/types.js";
 
 // A server blessing offer as surfaced to the game: the id must be echoed back with the choice
 // so the server can validate the answer against exactly this offer.
@@ -368,6 +368,11 @@ export class WSTransport implements Transport {
       live.add(key);
       this.interp.ingest(key, snap.tick, p.x, p.y, p.aim, now);
     }
+    for (const t of snap.pets) {
+      const key = "pet" + t.id;
+      live.add(key);
+      this.interp.ingest(key, snap.tick, t.x, t.y, 0, now);
+    }
     this.interp.retain(live);
 
     // Props are near-static shared state; mirror them into the PREDICTED world so local movement
@@ -518,6 +523,7 @@ export class WSTransport implements Transport {
     rp.y = pp.y + (pp.y - this.prevPredY) * frac + this.smoothY;
 
     this.renderState.enemies = this.composeEnemies();
+    this.renderState.pets = this.composePets();
     this.renderState.bullets = this.composeBullets();
     this.renderState.props = this.composeProps();
     this.renderState.pickups = this.composePickups();
@@ -537,6 +543,25 @@ export class WSTransport implements Transport {
     for (const w of snap.enemies) {
       const pose = this.interp.sample("e" + w.id, now);
       out.push(enemyFromWire(w, pose ? pose.x : w.x, pose ? pose.y : w.y));
+    }
+    return out;
+  }
+
+  private composePets(): Map<PlayerId, Pet> {
+    const snap = this.latestSnap;
+    const out = new Map<PlayerId, Pet>();
+    if (!snap) return out;
+    // Pecks dead-reckon by velocity from snapshot age (like bullets); bodies interpolate.
+    const age = Math.max(0, (this.now() - this.snapRecvAt) / 1000);
+    const now = this.now();
+    for (const w of snap.pets) {
+      const pose = this.interp.sample("pet" + w.id, now);
+      const pet = petFromWire(w, pose ? pose.x : w.x, pose ? pose.y : w.y);
+      if (pet.peck) {
+        pet.peck.x += pet.peck.vx * age;
+        pet.peck.y += pet.peck.vy * age;
+      }
+      out.set(pet.ownerId, pet);
     }
     return out;
   }

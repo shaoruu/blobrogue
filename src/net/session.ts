@@ -1,6 +1,7 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { ProfileDoc } from "./api.js";
+import type { PetKind } from "../sim/types.js";
 import type { RunResult } from "../game/game.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
@@ -99,10 +100,23 @@ export class Session {
         floor: result.floor,
         kills: result.kills,
         coins: result.coins,
+        deepestBossKill: result.deepestBossKill,
       });
     } catch {
       // Never let a stats-save failure interrupt the play loop.
     }
+    return this.profile;
+  }
+
+  // The equipped companion, readable only off a live profile (pets are account progression;
+  // there is deliberately no local fallback a guest could set).
+  get activePet(): PetKind | null {
+    return this.profile?.activePet ?? null;
+  }
+
+  async setActivePet(pet: PetKind | null): Promise<ProfileDoc | null> {
+    if (!this.client) return null;
+    this.profile = await this.client.mutation(api.players.setActivePet, { clientId: this.clientId, pet });
     return this.profile;
   }
 }

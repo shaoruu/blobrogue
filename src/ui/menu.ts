@@ -7,6 +7,8 @@ import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
+import { PETS, PET_KINDS, isPetKind } from "../sim/pets.js";
+import type { PetKind } from "../sim/types.js";
 import { createSettingsControls } from "./settings.js";
 
 export interface MenuHost {
@@ -20,6 +22,8 @@ export interface GameOverContext {
   wasCoop: boolean;
   isNewBest: boolean;
   online: OnlineLobby | null;
+  // Companions this run's milestones just unlocked (empty for guests / nothing new).
+  newPets: PetKind[];
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -48,6 +52,7 @@ export class Menu {
   private countupRaf = 0;
   private gameOverKeys: ((e: KeyboardEvent) => void) | null = null;
   private syncColorRow: (() => void) | null = null;
+  private petBox: HTMLElement | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -173,7 +178,7 @@ export class Menu {
   // The right-column identity block. Signed in: a Google account chip (avatar + name
   // + sign out). Signed out: the guest name input plus an optional "Sign in with
   // Google" button. Guest play is always available either way; the blob-color pick
-  // shows for both.
+  // shows for both, and the companion picker shows the roster (locked for guests).
   private identitySection(): HTMLElement {
     const wrap = el("div", "identity");
     if (this.auth && this.auth.isSignedIn) {
@@ -182,8 +187,55 @@ export class Menu {
       wrap.appendChild(this.nameRow());
     }
     wrap.appendChild(this.colorRow());
+    wrap.appendChild(this.petSection());
     if (this.auth && !this.auth.isSignedIn) wrap.appendChild(this.googleRow());
     return wrap;
+  }
+
+  // The companion picker: the full pet roster with live lock state off the profile.
+  // Unlocked rows equip/unequip (the mutation re-validates unlock ownership server-side);
+  // locked rows surface their exact milestone; guests see everything locked behind a
+  // sign-in nudge — pets are ACCOUNT progression, deliberately nothing local to fake.
+  private petSection(): HTMLElement {
+    const box = el("div", "namerow");
+    this.renderPetPicker(box);
+    this.petBox = box;
+    return box;
+  }
+
+  private renderPetPicker(box: HTMLElement) {
+    const profile = this.session.profile;
+    const isAccount = profile?.isAccount ?? false;
+    const unlocked = new Set(profile?.unlockedPets ?? []);
+    const list = el("div", "pets");
+    const note = el("p", "pet-note");
+    let isBusy = false;
+    for (const kind of PET_KINDS) {
+      const def = PETS[kind];
+      const isUnlocked = isAccount && unlocked.has(kind);
+      const isActive = this.session.activePet === kind;
+      const b = el("button", "secondary pet-btn" + (isUnlocked ? "" : " locked") + (isActive ? " sel" : ""));
+      b.type = "button";
+      const dot = el("span", "pet-dot");
+      dot.style.background = def.tint;
+      b.appendChild(dot);
+      b.appendChild(el("span", "pet-name", def.name));
+      b.appendChild(el("span", "pet-state", isActive ? "equipped" : isUnlocked ? "equip" : "locked"));
+      b.title = def.role;
+      b.addEventListener("click", () => {
+        if (!isAccount) { note.textContent = "sign in with Google to unlock companions"; return; }
+        if (!isUnlocked) { note.textContent = def.requirement.label; return; }
+        if (isBusy) return;
+        isBusy = true;
+        note.textContent = "";
+        // Toggle: clicking the equipped pet dismisses it. The re-render reflects truth.
+        void this.session.setActivePet(isActive ? null : kind)
+          .catch(() => { note.textContent = "could not save the pick — try again"; })
+          .finally(() => this.renderPetPicker(box));
+      });
+      list.appendChild(b);
+    }
+    box.replaceChildren(el("label", "", "companion"), list, note);
   }
 
   private accountChip(): HTMLElement {
@@ -258,8 +310,10 @@ export class Menu {
     } catch {
       return;
     }
-    // Login may have adopted an account's saved color pick; reflect it in the swatches.
+    // Login may have adopted an account's saved color pick; reflect it in the swatches,
+    // and re-render the companion picker now that unlock state is real.
     this.syncColorRow?.();
+    if (this.petBox) this.renderPetPicker(this.petBox);
     if (!profile || profile.gamesPlayed === 0) return;
     box.replaceChildren();
     box.appendChild(el("div", "col-h", `${profile.name} \u2014 all time`));
@@ -414,10 +468,20 @@ export class Menu {
         dot.style.background = playerColor(p.colorIndex);
         const you = p.playerId === lobby.selfId ? " (you)" : "";
         rowEl.append(dot, el("span", "", `${p.name}${you}${p.isHost ? " \u2014 host" : ""}`));
+        // The member's equipped companion, so the party sees who brings what.
+        if (p.pet !== null && isPetKind(p.pet)) rowEl.appendChild(el("span", "pet-chip", `+ ${PETS[p.pet].name}`));
         list.appendChild(rowEl);
       }
       wrap.appendChild(list);
       wrap.appendChild(el("p", "muted", `${players.length} player${players.length === 1 ? "" : "s"} in the room`));
+
+      // Companion swap while waiting: same picker as the title screen; the roster chip
+      // above refreshes on the next heartbeat.
+      if (lobby.status === "lobby") {
+        const petBox = el("div", "namerow");
+        this.renderPetPicker(petBox);
+        wrap.appendChild(petBox);
+      }
 
       const row = el("div", "btnrow");
       if (lobby.status === "playing") {
@@ -635,6 +699,13 @@ export class Menu {
       best.style.fontWeight = "700";
       best.style.letterSpacing = "1px";
       wrap.appendChild(best);
+    }
+    for (const kind of ctx.newPets) {
+      const line = el("p", "", `\u2726 COMPANION UNLOCKED \u2014 ${PETS[kind].name} (equip it on the title screen)`);
+      line.style.color = PETS[kind].tint;
+      line.style.fontWeight = "700";
+      line.style.letterSpacing = "1px";
+      wrap.appendChild(line);
     }
     if (profile) {
       wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins \u00b7 ${profile.gamesPlayed} runs`));

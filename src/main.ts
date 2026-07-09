@@ -41,11 +41,14 @@ async function bootNormal() {
     // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
     // game-over screen offers "back to lobby" / "play again" and owns leaving the room).
     const online = activeOnline;
-    // Snapshot the previous best before recordRun bumps it, so we can celebrate a PB.
+    // Snapshot the previous best + pet roster before recordRun folds the run, so the
+    // game-over screen can celebrate a PB and any freshly unlocked companion.
     const prevBest = session.profile?.deepestFloor ?? 0;
+    const prevPets = new Set(session.profile?.unlockedPets ?? []);
     const saved = await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
-    menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online });
+    const newPets = (saved?.unlockedPets ?? []).filter((kind) => !prevPets.has(kind));
+    menu.showGameOver(result, saved ?? session.profile, { wasCoop, isNewBest, online, newPets });
   }
 
   function onExit(reason?: ExitReason) {
@@ -72,13 +75,15 @@ async function bootNormal() {
       activeCoop = null;
       leaveOnlineIfAny();
       menu.hide();
-      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex });
+      // The equipped companion joins local runs straight off the validated profile; online
+      // runs get it from the server via the signed ticket instead.
+      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, petKind: profile?.activePet ?? null });
     },
     startCoop(mp: Multiplayer, profile: ProfileDoc | null) {
       activeCoop = mp;
       leaveOnlineIfAny();
       menu.hide();
-      game.start({ mode: "coop", coop: mp, profile });
+      game.start({ mode: "coop", coop: mp, profile, petKind: profile?.activePet ?? null });
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null) {
       activeCoop = null;

@@ -1,4 +1,5 @@
 import { makeFunctionReference } from "convex/server";
+import type { PetKind } from "../sim/types.js";
 
 // Typed references to the Convex functions in /convex, built with
 // makeFunctionReference so the client never depends on the generated `convex/_generated`
@@ -21,6 +22,12 @@ export interface ProfileDoc {
   totalCoins: number;
   gamesPlayed: number;
   unlocks: string[];
+  // Deepest floor whose boss this player's party ever defeated (0 = never).
+  deepestBossKill: number;
+  // Companion pets: the account's earned roster and the one equipped. Guests always read
+  // empty/null — unlocks persist only on signed-in accounts.
+  unlockedPets: PetKind[];
+  activePet: PetKind | null;
   // Present when the profile is account-backed (Google avatar URL).
   image?: string;
   // True when this stats row is linked to a signed-in account.
@@ -73,6 +80,8 @@ export interface PresenceDoc {
   kills: number;
   colorIndex: number;
   reviveNonce: number;
+  // The member's equipped companion (shown as a lobby roster chip); null = none.
+  pet: string | null;
   updatedAt: number;
 }
 
@@ -97,7 +106,10 @@ export const api = {
     ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
-    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number }, ProfileDoc | null>("players:recordRun"),
+    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number; deepestBossKill?: number }, ProfileDoc | null>("players:recordRun"),
+    // Equip (or clear, with null) the signed-in account's active companion. Rejects for
+    // guests and for pets outside the account's unlock set.
+    setActivePet: makeFunctionReference<"mutation", { clientId: string; pet: string | null }, ProfileDoc | null>("players:setActivePet"),
   },
   auth: {
     signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),
