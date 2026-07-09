@@ -81,6 +81,9 @@ export interface Conn {
   // Set when this player's run ended (full wipe); the server sends the final snapshot then
   // deterministically closes the socket (no lingering post-game-over connection).
   gameOver: boolean;
+  // Set once this connection's run result has been handed to the reporter, so the death
+  // path (handleGameOver -> closeConn) can never double-submit with the disconnect path.
+  isRunReported: boolean;
 
   // Per-client interest view (enter/exit hysteresis over stable entity ids) + the derived
   // position events are filtered against.
@@ -108,6 +111,7 @@ export function newConnState(now: number): Pick<Conn,
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
   | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline" | "gameOver"
+  | "isRunReported"
   | "view" | "bytesSent" | "droppedSnaps" | "cliRttMs" | "cliJitterMs" | "cliInterpDelayMs"
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
@@ -117,6 +121,7 @@ export function newConnState(now: number): Pick<Conn,
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,
     closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0, gameOver: false,
+    isRunReported: false,
     view: createInterestView(),
     bytesSent: 0, droppedSnaps: 0,
     cliRttMs: 0, cliJitterMs: 0, cliInterpDelayMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,

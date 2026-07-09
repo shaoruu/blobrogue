@@ -41,12 +41,15 @@ export interface Counters {
   rateLimited: number;
   droppedSnaps: number;
   rejectedInputs: number;
+  runReports: number;        // run results handed to the reporter
+  runReportFailures: number; // reports that exhausted retries / were rejected
 }
 
 export function newCounters(): Counters {
   return {
     msgsIn: 0, msgsOut: 0, bytesOut: 0, connsOpened: 0, connsClosed: 0,
     joinsOk: 0, joinsRejected: 0, malformed: 0, rateLimited: 0, droppedSnaps: 0, rejectedInputs: 0,
+    runReports: 0, runReportFailures: 0,
   };
 }
 

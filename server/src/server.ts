@@ -20,6 +20,7 @@ import { WorldRegistry } from "./worldRegistry.js";
 import { WsSnapshotPublisher } from "./snapshotPublisher.js";
 import { MessageRouter, DEFAULT_WORLD_ID, OFFER_RESENDS } from "./messageRouter.js";
 import { createHttpHandler } from "./httpEndpoints.js";
+import { RunReporter, buildRunReport, isReportWorthy } from "./runReport.js";
 import type { SessionStore, SnapshotPublisher, RoomRuntime } from "./ports.js";
 
 const TICK_MS = 1000 / TICK_HZ;
@@ -37,6 +38,7 @@ export interface ServerDeps {
   clock?: Clock;
   sessions?: SessionStore;
   publisher?: SnapshotPublisher;
+  reporter?: RunReporter;
 }
 
 export class GameServer {
@@ -49,6 +51,7 @@ export class GameServer {
   private sessions: SessionStore;
   private publisher: SnapshotPublisher;
   private router: MessageRouter;
+  private reporter: RunReporter;
   private metrics = new Metrics();
 
   private conns = new Map<number, Conn>();
@@ -78,6 +81,12 @@ export class GameServer {
       sessions: this.sessions, publisher: this.publisher, codec: jsonCodec,
       reject: (conn, code, reason) => this.rejectJoin(conn, code, reason),
       close: (conn, code, reason) => this.closeConn(conn, code, reason),
+    });
+    this.reporter = deps.reporter ?? new RunReporter({
+      url: cfg.runResultsUrl,
+      secret: cfg.auth.secret,
+      log: this.log,
+      onSettled: (isOk) => { if (!isOk) this.metrics.counters.runReportFailures++; },
     });
 
     this.http = createServer(createHttpHandler({ config: cfg, health: () => this.health() }));
@@ -111,6 +120,8 @@ export class GameServer {
     }
     await new Promise<void>((resolve) => this.wss.close(() => resolve()));
     await new Promise<void>((resolve) => this.http.close(() => resolve()));
+    // Let in-flight run reports settle (shutdown closes report every live run as abandons).
+    await this.reporter.drain();
     this.log.info("closed");
   }
 
@@ -258,6 +269,10 @@ export class GameServer {
   private closeConn(conn: Conn, code: number, reason: string): void {
     if (conn.closing) return;
     conn.closing = true;
+    // Report the run end BEFORE unbind removes the player from the world (the report reads
+    // the live PlayerSim). One hook covers both endings: a game-over close (the world is
+    // terminal -> "death") and a mid-run disconnect ("abandon").
+    this.reportRunEnd(conn);
     try { conn.ws.close(code, reason); } catch { /* already closing */ }
     this.sessions.unbind(conn);
     this.conns.delete(conn.id);
@@ -268,6 +283,23 @@ export class GameServer {
     }
     this.metrics.counters.connsClosed++;
     conn.log.info("conn close", { code, reason, bytesSent: conn.bytesSent, droppedSnaps: conn.droppedSnaps });
+  }
+
+  // Hand this connection's finished run to the reporter exactly once. Reads the server's
+  // OWN sim state (never anything client-claimed) and the VERIFIED ticket identity. Arena
+  // (measurement) worlds and unconfigured deployments never report.
+  private reportRunEnd(conn: Conn): void {
+    if (!this.reporter.isEnabled || this.cfg.arena) return;
+    if (conn.isRunReported || !conn.authed || conn.playerId === null || conn.worldId === null || conn.authName === null) return;
+    const room = this.sessions.room(conn.worldId);
+    const p = room?.state.players.get(conn.playerId);
+    if (!room || !p) return;
+    conn.isRunReported = true;
+    const result = conn.gameOver || room.state.isRunOver ? "death" : "abandon";
+    const payload = buildRunReport(room.state, p, conn.authName, room.id, result, this.clock.now());
+    if (!isReportWorthy(payload)) return;
+    this.metrics.counters.runReports++;
+    this.reporter.submit(payload);
   }
 
   health(): HealthReport {

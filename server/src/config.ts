@@ -38,6 +38,10 @@ export interface ServerConfig {
   offerTtlMs: number;
   // interest management: per-client snapshot radius in px (0 disables filtering)
   interestRadius: number;
+  // Authoritative run-result reporting: the Convex HTTP inbox this server POSTs finished
+  // runs to (https://<deployment>.convex.site/gs/run-result), signed with GS_AUTH_SECRET.
+  // null (unset) disables reporting — a dev server without Convex runs exactly as before.
+  runResultsUrl: string | null;
   // Measurement mode: build an OPEN arena world (no dungeon walls) so the load harness can move a
   // probe in a straight monotonic line for render-latency correlation. Production runs the real
   // dungeon (same stepWorld/tick/netcode); this only changes map geometry. Default off.
@@ -80,6 +84,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     maxStarveTicks: intEnv(env, "GS_MAX_STARVE_TICKS", 10, 0, 1000),
     offerTtlMs: intEnv(env, "GS_OFFER_TTL_MS", 60000, 1000, 3600000),
     interestRadius: intEnv(env, "GS_INTEREST_RADIUS", 1100, 0, 100000), // ~1.5x viewport half-extent; 0 = off
+    runResultsUrl: urlEnv(env, "GS_RUN_RESULTS_URL"),
     arena: env.GS_ARENA === "1",
   };
+}
+
+// Strict URL env parse: unset/empty disables the feature; anything else must be http(s) or
+// the server refuses to start (same fail-fast rule as intEnv).
+function urlEnv(env: NodeJS.ProcessEnv, key: string): string | null {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return null;
+  if (!/^https?:\/\//.test(raw)) throw new Error(`invalid ${key}=${JSON.stringify(raw)} (expected an http(s) URL)`);
+  return raw;
 }
