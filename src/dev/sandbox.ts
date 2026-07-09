@@ -4,6 +4,7 @@
 
 import { Game } from "../game/game.js";
 import type { DevSnapshot } from "../game/game.js";
+import type { EnemyTier } from "../sim/balance.js";
 import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
 import { ITEMS } from "../sim/items.js";
 import { WEAPONS } from "../sim/weapons.js";
@@ -101,12 +102,26 @@ function buildPanel(game: Game): void {
 
   // ---- spawning ----
   const spawnSec = section("Spawn Enemies");
+  // Durability-tier selector: spawns land as the chosen tier so the tier ladder
+  // (swarm/standard/elite/brute) can be A/B'd in a controlled arena.
+  const tierSel = h("select", "dev-btn") as HTMLSelectElement;
+  for (const tier of ["standard", "swarm", "elite", "brute"]) {
+    const opt = h("option", "", tier) as HTMLOptionElement;
+    opt.value = tier;
+    tierSel.appendChild(opt);
+  }
+  const tierRow = h("div", "dev-row");
+  const tierLabel = h("label", "dev-chk");
+  tierLabel.append(document.createTextNode("Tier "), tierSel);
+  tierRow.appendChild(tierLabel);
+  spawnSec.appendChild(tierRow);
+  const pickedTier = (): EnemyTier => tierSel.value as EnemyTier;
   for (const kind of ENEMY_KINDS) {
     const row = h("div", "dev-row");
     row.appendChild(h("span", "dev-lbl", kind));
-    row.appendChild(btn("1", () => game.devSpawnEnemies(kind, 1, isCursor()), "mini"));
-    row.appendChild(btn("5", () => game.devSpawnEnemies(kind, 5, isCursor()), "mini"));
-    row.appendChild(btn("10", () => game.devSpawnEnemies(kind, 10, isCursor()), "mini"));
+    row.appendChild(btn("1", () => game.devSpawnEnemies(kind, 1, isCursor(), pickedTier()), "mini"));
+    row.appendChild(btn("5", () => game.devSpawnEnemies(kind, 5, isCursor(), pickedTier()), "mini"));
+    row.appendChild(btn("10", () => game.devSpawnEnemies(kind, 10, isCursor(), pickedTier()), "mini"));
     spawnSec.appendChild(row);
   }
   const clearRow = h("div", "dev-row");

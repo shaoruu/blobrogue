@@ -1,20 +1,36 @@
 // The CURRENT WAVE SOUND MANIFEST (docs/audio/WAVE_SOUND_MANIFEST.md) as typed data — the
 // single source of truth binding semantic gameplay events to audio: file stems the
 // generation pipeline ships to, per-event mix (gain/bus/priority/ducking), trigger
-// hygiene (cooldowns, spatialization, jitter lanes), and the fallback every event keeps
-// until its generated file lands (an existing shipped sample, transformed, else a synth
-// recipe). Pure data + pure functions only: no DOM, no audio context, no engine imports —
-// the whole contract is testable headless and reviewable row-by-row against the manifest.
+// hygiene (cooldowns, spatialization, jitter lanes), and each event's AUTHORED fallback.
+// Pure data + pure functions only: no DOM, no audio context, no engine imports — the
+// whole contract is testable headless and reviewable row-by-row against the manifest.
+//
+// AUTHORED-ONLY CONTRACT (playtest audit):
+//   - There are no synth recipes. An event sounds through its shipped wave file, or its
+//     declared safe-reuse fallback (an existing AUTHORED library sample through mild
+//     pitch/filter transforms), or not at all. Runtime oscillators are banned.
+//   - Safe reuse: every fallback rate sits inside [SAFE_DERIVE_RATE_MIN, SAFE_DERIVE_RATE_MAX]
+//     (0.85–1.15). Anything that needed a more extreme transform lost its fallback and
+//     keeps only the asset hook — those rows fail quietly until their file lands.
+//   - Variant counts advertise EXACTLY the files shipped under public/audio/ (or, for a
+//     pure hook whose files are all pending, the generation target). Partial takes are
+//     pinned to their explicit _vN stem so a trigger never rolls a missing take.
+//     The full pending list lives in docs/audio/AUDIO_ASSET_INVENTORY.md.
 //
 // File layout contract (generation box): a stem `boss/marrow_lock` ships as
 // public/audio/boss/marrow_lock.ogg + .mp3; a stem with variants N > 1 ships _v1.._vN.
 // `stem: null` rows are REUSE/DERIVE-only by Audio Director decision — never fetched,
-// never generated; they play through their fallback/synth forever.
+// never generated; they play through their authored fallback forever.
 
 import type { SfxName } from "./audio.js";
 
 export type WaveBusId = "sfx" | "voiceTell" | "ambient" | "ui" | "pet";
 export type DuckBusId = "music" | "ambient" | "pet";
+
+// The safe runtime-repitch band for reusing an authored sample. The anti-repeat jitter
+// (≤5%) rides on top of this; anything outside needs a dedicated offline asset.
+export const SAFE_DERIVE_RATE_MIN = 0.85;
+export const SAFE_DERIVE_RATE_MAX = 1.15;
 
 // Manifest §1 duck notation `targetBus:multiplier / hold / recover` (seconds).
 export interface WaveDuck {
@@ -25,33 +41,26 @@ export interface WaveDuck {
 }
 
 // An existing shipped-library sample played through optional pitch/filter transforms —
-// the manifest's DERIVE lane (§0), used verbatim as the pre-generation fallback.
+// the manifest's safe-reuse DERIVE lane (§0), used verbatim as the pre-generation
+// fallback. `rate` must sit inside the safe band above (registry-tested).
 export interface WaveSampleFallback {
   readonly sample: SfxName;
   readonly rate?: number;
   readonly lowpassHz?: number;
   readonly highpassHz?: number;
-  readonly isReversed?: boolean;
 }
-
-// Last-resort procedural voice per event family; parameters keep each event readable and
-// distinct even with ZERO audio files on disk (fresh checkout, CDN failure, dev server).
-export type WaveSynthSpec =
-  | { readonly kind: "tick"; readonly freq: number; readonly count: number; readonly spreadMs: number; readonly isBright: boolean }
-  | { readonly kind: "swell"; readonly durMs: number; readonly fromHz: number; readonly toHz: number; readonly mode: "noise" | "voice" | "growl" }
-  | { readonly kind: "impact"; readonly durMs: number; readonly depthHz: number }
-  | { readonly kind: "whoosh"; readonly durMs: number; readonly fromHz: number; readonly toHz: number }
-  | { readonly kind: "shimmer"; readonly durMs: number; readonly freq: number; readonly isRising: boolean }
-  | { readonly kind: "notes"; readonly freqs: readonly number[]; readonly stepMs: number; readonly noteMs: number; readonly shape: "sine" | "square" | "triangle" | "sawtooth" }
-  | { readonly kind: "knock"; readonly freq: number; readonly count: number }
-  | { readonly kind: "burst"; readonly durMs: number; readonly centerHz: number }
-  | { readonly kind: "loopPad"; readonly mode: "noise" | "harmonic" | "pulse"; readonly filterType: "lowpass" | "bandpass" | "highpass"; readonly filterHz: number; readonly q: number; readonly lfoHz: number; readonly level: number };
 
 // Manifest §10 WaveSoundSpec, extended with the trigger-hygiene fields §1 prescribes in
 // prose (jitter lanes, per-entity cooldowns, off-camera cap exemption, combat gating).
 export interface WaveSoundSpec {
   readonly stem: string | null;
   readonly variants: number;
+  // Selection-driven take list (audio-gen selection manifest): the EXPLICIT file stems
+  // this event may play, overriding the stem/variants naming derivation. Only selected
+  // takes are ever referenced or preloaded — never "every generated file". An EMPTY
+  // array is a registered hook awaiting selection: the event stays silent and its
+  // emitter channel never schedules.
+  readonly takes?: readonly string[];
   readonly gain: number;
   readonly bus: WaveBusId;
   readonly priority: number;
@@ -62,9 +71,12 @@ export interface WaveSoundSpec {
   readonly spatial?: boolean;
   readonly isOffCameraUncapped?: boolean;
   readonly isCombatSuppressed?: boolean;
+  // Audio-director-decided silence: the row is reachable and stays registered, but it
+  // ships NO file and never sounds (the Deep's continuous bed) — distinct from a
+  // pending-asset hook.
+  readonly isAuthoredSilence?: boolean;
   readonly duck?: readonly WaveDuck[];
   readonly fallback?: WaveSampleFallback;
-  readonly synth: WaveSynthSpec;
 }
 
 // Manifest §1 priority ladder. bossLock also gates the voice-reserve + pet sidechain.
@@ -107,125 +119,128 @@ export const BOSS_LOCK_RESERVED_VOICES = 3;
 const dM = (to: number, hold: number, recover: number): WaveDuck => ({ bus: "music", to, hold, recover });
 const dA = (to: number, hold: number, recover: number): WaveDuck => ({ bus: "ambient", to, hold, recover });
 
+// ---- audio-gen take selection (mirrors audio-gen-p0-components/selected_components.json) --
+// The audio director's per-component selection: only these takes ship / are referenced.
+// REJECTED takes (burrow dirt_grind_v1, pebble_v3, underground_thud_v1) and the
+// superseded burrow_track/deep_loop files must never appear anywhere.
+export const SELECTED_BURROW_TAKES = {
+  dirtGrind: ["enemy/burrow_dirt_grind_v2"],
+  pebble: ["enemy/burrow_pebble_v1", "enemy/burrow_pebble_v2"],
+  shellScrape: ["enemy/burrow_shell_v1", "enemy/burrow_shell_v2"],
+  thud: ["enemy/burrow_underground_thud_v2"],
+} as const;
+
+// Deep FINAL P0 selection (audio-gen-p0-deep-final/selected_deep_manifest.json — this
+// closes P0 material selection, Burrow 6 + Deep 8; binaries ship after Ian's human
+// spot-check). The r4 replacement takes are authoritative: the old
+// `deep_architecture_shift_v1` take is retired and must never be referenced. The
+// resin "creak" category is renamed resinStress — it is a sticky stress/release,
+// not a beam creak. The continuous bed stays authored silence.
+export const SELECTED_DEEP_TAKES = {
+  resinStress: ["amb/deep_resin_creak_r4_v3"],
+  mineralTick: ["amb/deep_mineral_tick_v1", "amb/deep_mineral_tick_v2"],
+  architectureShift: ["amb/deep_architecture_shift_r4_v1", "amb/deep_architecture_shift_r4_v2"],
+  resinDrip: ["amb/deep_resin_drip_r4_v1", "amb/deep_resin_drip_r4_v2", "amb/deep_resin_drip_r4_v3"],
+} as const;
+
 export const WAVE_SOUNDS = {
   // ---- §2 MARROW — bone/shale + sub impact ------------------------------------------
+  // Shipped: one listen take, one charge take (pinned to their _v1 stems until the full
+  // variant sets land). No fallback for the growl rows: the old enemyAttack/dash
+  // transforms sat far outside the safe band.
   "marrow.listenStart": {
-    stem: "boss/marrow_listen", variants: 2, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    stem: "boss/marrow_listen_v1", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.65, 0.2, 0.35)],
-    fallback: { sample: "enemyAttack", rate: 0.55, lowpassHz: 900 },
-    synth: { kind: "swell", durMs: 700, fromHz: 55, toHz: 130, mode: "growl" },
   },
   "marrow.aimLock": {
     stem: "boss/marrow_lock", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.35, 0.15, 0.45)],
-    fallback: { sample: "meleeHit", rate: 0.7, lowpassHz: 3200 },
-    synth: { kind: "tick", freq: 2400, count: 2, spreadMs: 60, isBright: false },
+    fallback: { sample: "meleeHit", rate: 0.85, lowpassHz: 3200 }, // dry crack, darkened inside the safe band
   },
   "marrow.chargeStart": {
-    stem: "boss/marrow_charge", variants: 2, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    stem: "boss/marrow_charge_v1", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "dash", rate: 0.55 },
-    synth: { kind: "swell", durMs: 650, fromHz: 90, toHz: 60, mode: "growl" },
   },
   "marrow.wallImpact": {
     stem: "boss/marrow_wall", variants: 3, gain: 1.0, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true,
     duck: [dM(0.45, 0.18, 0.55)],
-    fallback: { sample: "cannon", rate: 0.72 }, // manifest DERIVE: cannon pitch .72
-    synth: { kind: "impact", durMs: 850, depthHz: 48 },
+    fallback: { sample: "cannon", rate: 0.85 }, // heavy authored boom at the band floor
   },
   "marrow.stompWindup": {
     stem: "boss/marrow_stomp_warn", variants: 1, gain: 0.78, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "enemyAttack", rate: 0.5, lowpassHz: 600 },
-    synth: { kind: "swell", durMs: 600, fromHz: 45, toHz: 90, mode: "noise" },
   },
   "marrow.stompImpact": {
     stem: "boss/marrow_stomp", variants: 2, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true,
     duck: [dM(0.55, 0.15, 0.45)],
-    fallback: { sample: "cannon", rate: 0.78, lowpassHz: 1400 }, // manifest DERIVE: cannon lowpass + pitch .78
-    synth: { kind: "impact", durMs: 700, depthHz: 55 },
+    fallback: { sample: "cannon", rate: 0.85, lowpassHz: 1400 },
   },
+  // Phase/death: the manifest bans the generic bossRoar beyond entrances, and every prior
+  // transform (bossSpawn ±20-45%, enemyDeath slowed >2×) was outside the safe band — pure
+  // asset hooks, silent until their files land.
   "marrow.phase": {
     stem: "boss/marrow_phase", variants: 1, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.3, 0.35, 0.8)],
-    fallback: { sample: "bossSpawn", rate: 0.8, lowpassHz: 2200 },
-    synth: { kind: "swell", durMs: 1100, fromHz: 50, toHz: 180, mode: "growl" },
   },
   "marrow.death": {
     stem: "boss/marrow_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.25, 0.8, 1.2)],
-    fallback: { sample: "enemyDeath", rate: 0.45, lowpassHz: 1000 },
-    synth: { kind: "impact", durMs: 2000, depthHz: 40 },
   },
 
   // ---- §2 HOLLOW CHOIR — fused nonverbal voices + cyan electricity -------------------
   "choir.strikeWarn": {
-    stem: "boss/choir_strike_warn", variants: 2, gain: 0.82, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
+    stem: "boss/choir_strike_warn_v1", variants: 1, gain: 0.82, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.6, 0.15, 0.4)],
-    fallback: { sample: "tesla", rate: 0.6, highpassHz: 800 },
-    synth: { kind: "swell", durMs: 900, fromHz: 220, toHz: 440, mode: "voice" },
   },
   "choir.strikeLock": {
     stem: "boss/choir_strike_lock", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.35, 0.12, 0.35)],
-    fallback: { sample: "tesla", rate: 1.6, highpassHz: 1500 }, // manifest DERIVE lane: high-pass/shorten tesla
-    synth: { kind: "tick", freq: 3200, count: 1, spreadMs: 0, isBright: true },
+    fallback: { sample: "tesla", rate: 1.15, highpassHz: 1500 }, // electric snap, safe-band brightened
   },
   "choir.strikeImpact": {
     stem: "boss/choir_strike", variants: 3, gain: 0.86, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true,
-    fallback: { sample: "tesla", rate: 1.2, highpassHz: 600 },
-    synth: { kind: "burst", durMs: 550, centerHz: 2600 },
+    fallback: { sample: "tesla", rate: 1.15, highpassHz: 600 },
   },
   "choir.swellWarn": {
     stem: "boss/choir_swell_warn", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.55, 0.2, 0.5)],
-    fallback: { sample: "enemyAttack", rate: 0.8, highpassHz: 400 },
-    synth: { kind: "swell", durMs: 800, fromHz: 180, toHz: 520, mode: "voice" },
+    fallback: { sample: "enemyAttack", rate: 0.85, highpassHz: 400 },
   },
   "choir.swellFire": {
     stem: "boss/choir_swell", variants: 2, gain: 0.92, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true,
     duck: [dM(0.5, 0.12, 0.5)],
-    fallback: { sample: "shootShotgun", rate: 0.6 },
-    synth: { kind: "burst", durMs: 900, centerHz: 900 },
   },
   "choir.floorCharge": {
     stem: "boss/choir_floor_warn", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.25, 0.4, 0.8)],
-    fallback: { sample: "tesla", rate: 0.45, lowpassHz: 2000 },
-    synth: { kind: "swell", durMs: 1200, fromHz: 90, toHz: 700, mode: "voice" },
   },
   "choir.floorDischarge": {
     stem: "boss/choir_floor_blast", variants: 1, gain: 1.0, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.2, 0.35, 1.0)],
-    fallback: { sample: "cannon", rate: 0.62 },
-    synth: { kind: "impact", durMs: 1200, depthHz: 52 },
+    fallback: { sample: "cannon", rate: 0.85 },
   },
   "choir.phase": {
     stem: "boss/choir_phase", variants: 2, gain: 0.95, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.25, 0.45, 1.0)],
-    fallback: { sample: "bossSpawn", rate: 1.2, highpassHz: 300 },
-    synth: { kind: "swell", durMs: 1400, fromHz: 260, toHz: 170, mode: "voice" },
   },
   "choir.death": {
     stem: "boss/choir_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.2, 1.0, 1.5)],
-    fallback: { sample: "enemyDeath", rate: 0.6, highpassHz: 250 },
-    synth: { kind: "notes", freqs: [523, 466, 392, 311, 233], stepMs: 220, noteMs: 500, shape: "sine" },
   },
 
   // ---- §2 WEAVER — silk tension + cold glass/knife transients ------------------------
@@ -233,55 +248,44 @@ export const WAVE_SOUNDS = {
     stem: "boss/weaver_blink_warn", variants: 3, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.55, 0.1, 0.3)],
-    fallback: { sample: "parry", rate: 1.5, highpassHz: 2000 },
-    synth: { kind: "shimmer", durMs: 350, freq: 2800, isRising: true },
+    fallback: { sample: "parry", rate: 1.15, highpassHz: 2000 }, // cold metallic shimmer inside the band
   },
   "weaver.blinkDepart": {
     stem: "boss/weaver_blink_out", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.weapon,
-    jitter: 0.03, spatial: true,
-    fallback: { sample: "dash", rate: 1.35, highpassHz: 1500, isReversed: true }, // manifest DERIVE: reverse+pitch dash
-    synth: { kind: "whoosh", durMs: 250, fromHz: 1500, toHz: 5200 },
+    jitter: 0.03, spatial: true, // the reversed-dash derive was a runtime transform — asset hook only now
   },
   "weaver.blinkArriveStrike": {
     stem: "boss/weaver_strike", variants: 3, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true,
     duck: [dM(0.65, 0.08, 0.3)],
-    fallback: { sample: "meleeHit", rate: 1.35, highpassHz: 900 },
-    synth: { kind: "tick", freq: 3600, count: 2, spreadMs: 35, isBright: true },
+    fallback: { sample: "meleeHit", rate: 1.15, highpassHz: 900 },
   },
   "weaver.latticeWarn": {
     stem: "boss/weaver_lattice_warn", variants: 1, gain: 0.82, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.6, 0.15, 0.4)],
-    fallback: { sample: "parry", rate: 1.25, highpassHz: 1500 },
-    synth: { kind: "shimmer", durMs: 700, freq: 1900, isRising: true },
+    fallback: { sample: "parry", rate: 1.15, highpassHz: 1500 },
   },
   "weaver.latticeFire": {
     stem: "boss/weaver_lattice", variants: 2, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true,
-    fallback: { sample: "meleeSwing", rate: 1.5, highpassHz: 1000 },
-    synth: { kind: "whoosh", durMs: 650, fromHz: 4200, toHz: 1600 },
+    fallback: { sample: "meleeSwing", rate: 1.15, highpassHz: 1000 },
   },
   "weaver.feint": {
     stem: "boss/weaver_feint", variants: 1, gain: 0.86, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.55, 0.12, 0.35)],
-    fallback: { sample: "parry", rate: 1.7, highpassHz: 2400 },
-    synth: { kind: "shimmer", durMs: 450, freq: 3400, isRising: false },
   },
   "weaver.phase": {
     stem: "boss/weaver_phase", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.35, 0.25, 0.7)],
-    fallback: { sample: "bossSpawn", rate: 1.45, highpassHz: 600 },
-    synth: { kind: "notes", freqs: [880, 1046, 1244, 1567, 1864], stepMs: 90, noteMs: 220, shape: "triangle" },
   },
   "weaver.death": {
     stem: "boss/weaver_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.25, 0.7, 1.1)],
     fallback: { sample: "enemyDeath", rate: 0.85, highpassHz: 500 },
-    synth: { kind: "notes", freqs: [1864, 1567, 1244, 932, 622], stepMs: 160, noteMs: 380, shape: "triangle" },
   },
 
   // ---- §2 GILDED WARDEN — amber crystal + orderly bell geometry -----------------------
@@ -292,210 +296,213 @@ export const WAVE_SOUNDS = {
     stem: "boss/warden_turret_place", variants: 2, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true,
     fallback: { sample: "blessing", rate: 0.9 },
-    synth: { kind: "notes", freqs: [740, 932, 1108], stepMs: 110, noteMs: 240, shape: "triangle" },
   },
   "warden.turretLock": {
     stem: "boss/warden_turret_lock", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossLock,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.65, 0.1, 0.3)],
-    fallback: { sample: "coin", rate: 1.3, highpassHz: 1200 },
-    synth: { kind: "tick", freq: 2100, count: 2, spreadMs: 90, isBright: true },
+    fallback: { sample: "coin", rate: 1.15, highpassHz: 1200 }, // bright bell tick inside the band
   },
   "warden.turretFire": {
     stem: "boss/warden_turret_fire", variants: 3, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true,
     fallback: { sample: "homing", rate: 1.1, lowpassHz: 4000 },
-    synth: { kind: "burst", durMs: 420, centerHz: 1400 },
   },
   "warden.glyphWarn": {
     stem: "boss/warden_glyph_warn", variants: 2, gain: 0.84, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.6, 0.18, 0.4)],
-    fallback: { sample: "blessing", rate: 0.7, lowpassHz: 3000 },
-    synth: { kind: "shimmer", durMs: 850, freq: 1560, isRising: false },
+    fallback: { sample: "blessing", rate: 0.85, lowpassHz: 3000 },
   },
   "warden.glyphSet": {
     stem: "boss/warden_glyph_set", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true,
     duck: [dM(0.55, 0.1, 0.4)],
     fallback: { sample: "parry", rate: 0.9 },
-    synth: { kind: "tick", freq: 1800, count: 3, spreadMs: 55, isBright: false },
   },
   "warden.prisonWarn": {
     stem: "boss/warden_prison_warn", variants: 1, gain: 0.92, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.25, 0.4, 0.8)],
-    fallback: { sample: "enemyAttack", rate: 0.45, lowpassHz: 1500 },
-    synth: { kind: "swell", durMs: 1300, fromHz: 120, toHz: 480, mode: "voice" },
   },
   "warden.prisonClose": {
     stem: "boss/warden_prison_close", variants: 1, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true,
     duck: [dM(0.4, 0.2, 0.65)],
-    fallback: { sample: "parry", rate: 0.55, lowpassHz: 3500 },
-    synth: { kind: "impact", durMs: 900, depthHz: 70 },
   },
   "warden.phase": {
     stem: "boss/warden_phase", variants: 1, gain: 0.92, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0.03, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.3, 0.4, 0.85)],
-    fallback: { sample: "blessing", rate: 0.55 },
-    synth: { kind: "notes", freqs: [523, 659, 784, 1046], stepMs: 140, noteMs: 420, shape: "triangle" },
   },
   "warden.death": {
     stem: "boss/warden_death", variants: 1, gain: 1.0, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 1000, isPerEntityCooldown: true,
     duck: [dM(0.2, 0.9, 1.3)],
-    fallback: { sample: "parry", rate: 0.42 },
-    synth: { kind: "notes", freqs: [1046, 987, 830, 622, 415], stepMs: 200, noteMs: 460, shape: "triangle" },
   },
 
   // ---- §3 standard archetype cues ------------------------------------------------------
   "charger.windup": {
-    stem: "enemy/charger_warn", variants: 3, gain: 0.72, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    stem: "enemy/charger_warn_v1", variants: 1, gain: 0.72, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "enemyAttack", rate: 0.75 },
-    synth: { kind: "swell", durMs: 550, fromHz: 110, toHz: 220, mode: "growl" },
+    fallback: { sample: "enemyAttack", rate: 0.85 },
   },
   "charger.lock": {
     stem: "enemy/charger_lock", variants: 1, gain: 0.85, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
     jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.8, 0.05, 0.2)],
     fallback: { sample: "meleeHit", rate: 1.1, highpassHz: 800 },
-    synth: { kind: "tick", freq: 2000, count: 1, spreadMs: 0, isBright: false },
   },
-  // Bound to the content-wave chargeCrash punish window; DERIVE-only per §0's
-  // "low-pass/pitch-down cannon for rubble/rock impact" lane — no new generation.
+  // Bound to the content-wave chargeCrash punish window; §0's rubble/rock derive lane,
+  // brought inside the safe band.
   "charger.crash": {
-    stem: null, variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    stem: "enemy/charger_crash", variants: 1, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "cannon", rate: 0.8, lowpassHz: 1600 },
-    synth: { kind: "impact", durMs: 500, depthHz: 60 },
+    fallback: { sample: "cannon", rate: 0.85, lowpassHz: 1600 },
   },
   "burrower.submerge": {
-    stem: "enemy/burrow_down", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    stem: "enemy/burrow_down_v1", variants: 1, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "dash", rate: 0.7, lowpassHz: 1200 },
-    synth: { kind: "whoosh", durMs: 550, fromHz: 1600, toHz: 300 },
+    fallback: { sample: "dash", rate: 0.85, lowpassHz: 1200 },
   },
-  "burrower.track": {
-    stem: "enemy/burrow_track", variants: 1, gain: 0.42, bus: "sfx", priority: WAVE_PRIORITY.pet,
-    jitter: 0, loop: true, spatial: true,
-    synth: { kind: "loopPad", mode: "noise", filterType: "bandpass", filterHz: 320, q: 2.2, lfoHz: 3.1, level: 0.5 },
+  // Burrow underground presence (audio director FINAL): NO continuous loop. A
+  // deterministic keyed positional emitter (director, stepBurrowEmitter) schedules these
+  // authored component one-shots while the burrower tunnels; the thud fires exactly once
+  // per commitment, on the direction-lock edge. Takes are SELECTION-DRIVEN (see
+  // SELECTED_BURROW_TAKES): ±3% jitter max, deterministic variants, no immediate repeat.
+  "burrow.dirtGrind": {
+    stem: null, takes: SELECTED_BURROW_TAKES.dirtGrind, variants: 1, gain: 0.22, bus: "sfx", priority: WAVE_PRIORITY.pet,
+    jitter: 0.03, spatial: true,
+  },
+  "burrow.pebble": {
+    stem: null, takes: SELECTED_BURROW_TAKES.pebble, variants: 2, gain: 0.14, bus: "sfx", priority: WAVE_PRIORITY.pet,
+    jitter: 0.03, spatial: true,
+  },
+  "burrow.shellScrape": {
+    stem: null, takes: SELECTED_BURROW_TAKES.shellScrape, variants: 2, gain: 0.18, bus: "sfx", priority: WAVE_PRIORITY.pet,
+    jitter: 0.03, spatial: true,
+  },
+  "burrow.thud": {
+    stem: null, takes: SELECTED_BURROW_TAKES.thud, variants: 1, gain: 0.28, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.03, spatial: true,
   },
   "burrower.lock": {
     stem: "enemy/burrow_lock", variants: 1, gain: 0.86, bus: "voiceTell", priority: WAVE_PRIORITY.enemyLock,
     jitter: 0, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.75, 0.08, 0.25)],
-    fallback: { sample: "enemyHit", rate: 1.25 },
-    synth: { kind: "tick", freq: 1500, count: 3, spreadMs: 70, isBright: false },
+    fallback: { sample: "enemyHit", rate: 1.15 },
   },
   "burrower.erupt": {
-    stem: "enemy/burrow_erupt", variants: 3, gain: 0.78, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    stem: "enemy/burrow_erupt_v1", variants: 1, gain: 0.78, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
     fallback: { sample: "barrel", rate: 1.15, lowpassHz: 2600 },
-    synth: { kind: "burst", durMs: 650, centerHz: 700 },
   },
   "orbiter.enterBand": {
     stem: "enemy/orbiter_acquire", variants: 2, gain: 0.45, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
     jitter: 0.05, spatial: true, cooldownMs: 600000, isPerEntityCooldown: true, // once per entity (§3)
     fallback: { sample: "homing", rate: 0.85, highpassHz: 600 },
-    synth: { kind: "shimmer", durMs: 380, freq: 980, isRising: true },
   },
   "orbiter.diveWarn": {
     stem: "enemy/orbiter_dive_warn", variants: 3, gain: 0.72, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "dash", rate: 1.5 },
-    synth: { kind: "whoosh", durMs: 450, fromHz: 3400, toHz: 900 },
+    fallback: { sample: "dash", rate: 1.15 },
   },
   "shielder.raise": {
-    stem: "enemy/shield_raise", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
+    stem: "enemy/shield_raise_v1", variants: 1, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.enemyTell,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
-    fallback: { sample: "chest", rate: 0.6, lowpassHz: 1800 },
-    synth: { kind: "knock", freq: 190, count: 2 },
+    fallback: { sample: "chest", rate: 0.85, lowpassHz: 1800 },
   },
   "shielder.block": {
     stem: "enemy/shield_block", variants: 3, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true, // manifest rate limit 120ms
-    fallback: { sample: "parry", rate: 0.85, lowpassHz: 5000 }, // manifest: parry .75–.95, lowpass 5k, reduced gain
-    synth: { kind: "tick", freq: 1200, count: 1, spreadMs: 0, isBright: false },
+    fallback: { sample: "parry", rate: 0.85, lowpassHz: 5000 }, // manifest: parry .85–.95, lowpass 5k, reduced gain
   },
   "shielder.break": {
     stem: "enemy/shield_break", variants: 1, gain: 0.82, bus: "sfx", priority: WAVE_PRIORITY.hazardActive,
     jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
     duck: [dM(0.8, 0.08, 0.3)],
-    fallback: { sample: "parry", rate: 0.72, lowpassHz: 4000 }, // manifest DERIVE: parry pitch-down shield break
-    synth: { kind: "impact", durMs: 700, depthHz: 90 },
+    fallback: { sample: "parry", rate: 0.85, lowpassHz: 4000 },
   },
 
   // ---- §4 Thumper (mortar) / Sunlance (beam) ------------------------------------------
   "shootMortar": {
-    stem: "sfx/thumper_fire", variants: 3, gain: 0.82, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    stem: "sfx/thumper_fire_v1", variants: 1, gain: 0.82, bus: "sfx", priority: WAVE_PRIORITY.weapon,
     jitter: 0.05, spatial: true,
     duck: [dM(0.8, 0.06, 0.2)],
     fallback: { sample: "cannon", rate: 1.12, lowpassHz: 1100 }, // launch thump, not an explosion
-    synth: { kind: "impact", durMs: 380, depthHz: 110 },
   },
   "mortarDetonate": {
-    stem: "sfx/thumper_impact", variants: 3, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    stem: "sfx/thumper_impact_v1", variants: 1, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true,
     duck: [dM(0.75, 0.08, 0.3)],
     fallback: { sample: "barrel", rate: 0.9, lowpassHz: 2800 },
-    synth: { kind: "impact", durMs: 780, depthHz: 58 },
   },
   "beamStart": {
     stem: "sfx/sunlance_start", variants: 2, gain: 0.58, bus: "sfx", priority: WAVE_PRIORITY.weapon,
     jitter: 0,
-    fallback: { sample: "crit", rate: 0.7 },
-    synth: { kind: "shimmer", durMs: 380, freq: 1320, isRising: true },
+    fallback: { sample: "crit", rate: 0.85 },
   },
   "beamLoop": {
     stem: "sfx/sunlance_loop", variants: 1, gain: 0.34, bus: "sfx", priority: WAVE_PRIORITY.weapon,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "harmonic", filterType: "lowpass", filterHz: 2400, q: 0.8, lfoHz: 0.9, level: 0.55 },
   },
   "beamStop": {
     stem: "sfx/sunlance_stop", variants: 1, gain: 0.34, bus: "sfx", priority: WAVE_PRIORITY.weapon,
     jitter: 0,
-    synth: { kind: "shimmer", durMs: 280, freq: 1320, isRising: false },
   },
   "beamHit": {
     stem: "sfx/sunlance_hit", variants: 2, gain: 0.42, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true, // manifest: 120ms per target
-    fallback: { sample: "enemyHit", rate: 1.45, highpassHz: 900 },
-    synth: { kind: "tick", freq: 2900, count: 1, spreadMs: 0, isBright: true },
+    fallback: { sample: "enemyHit", rate: 1.15, highpassHz: 900 },
   },
 
   // ---- §5 six audio zones (ambient bus loops; never one full-volume global loop) -------
+  // Pure loop hooks: an ambient bed sounds only once its authored file is decoded.
   "ambient.verdant": {
     stem: "amb/verdant_loop", variants: 1, gain: 0.24, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "noise", filterType: "lowpass", filterHz: 420, q: 0.7, lfoHz: 0.07, level: 0.5 },
   },
   "ambient.sunless": {
     stem: "amb/sunless_loop", variants: 1, gain: 0.25, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "noise", filterType: "lowpass", filterHz: 260, q: 1.4, lfoHz: 0.05, level: 0.5 },
   },
+  // The Deep's continuous bed is authored SILENCE (audio director FINAL — the rejected
+  // deep_loop file is gone): its ambience is the sparse positional DEEP_EMITTER below.
   "ambient.deep": {
-    stem: "amb/deep_loop", variants: 1, gain: 0.22, bus: "ambient", priority: WAVE_PRIORITY.ambient,
-    jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "noise", filterType: "bandpass", filterHz: 180, q: 2.6, lfoHz: 0.04, level: 0.55 },
+    stem: null, variants: 1, gain: 0.22, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    jitter: 0, loop: true, isAuthoredSilence: true,
   },
   "ambient.ember": {
     stem: "amb/ember_loop", variants: 1, gain: 0.28, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "noise", filterType: "bandpass", filterHz: 130, q: 1.8, lfoHz: 0.16, level: 0.6 },
   },
   "ambient.fracture": {
     stem: "amb/fracture_loop", variants: 1, gain: 0.2, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "noise", filterType: "highpass", filterHz: 5600, q: 0.9, lfoHz: 0.06, level: 0.35 },
+  },
+  // The Deep's sparse positional ambience (audio director FINAL + P0 selection): per-
+  // channel scheduled authored one-shots, near-silent by design — cadence, weights and
+  // gain ranges live in DEEP_EMITTER below. Row gain = the channel's max gain (the
+  // emitter scales each play down into its authored range deterministically).
+  "deep.resinStress": {
+    stem: null, takes: SELECTED_DEEP_TAKES.resinStress, variants: 1, gain: 0.12, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    jitter: 0.02, spatial: true, // the stress/release take carries the ±2% lane
+  },
+  "deep.mineralTick": {
+    stem: null, takes: SELECTED_DEEP_TAKES.mineralTick, variants: 2, gain: 0.11, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    jitter: 0, spatial: true,
+  },
+  "deep.architectureShift": {
+    stem: null, takes: SELECTED_DEEP_TAKES.architectureShift, variants: 2, gain: 0.13, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    jitter: 0, spatial: true,
+  },
+  "deep.resinDrip": {
+    stem: null, takes: SELECTED_DEEP_TAKES.resinDrip, variants: 3, gain: 0.1, bus: "ambient", priority: WAVE_PRIORITY.ambient,
+    jitter: 0, spatial: true,
   },
   "ambient.null": {
     stem: "amb/null_loop", variants: 1, gain: 0.18, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "pulse", filterType: "lowpass", filterHz: 140, q: 1.1, lfoHz: 0.11, level: 0.6 },
   },
 
   // ---- §6 canonical hazards (depth-progression kinds/cycles) ---------------------------
@@ -504,94 +511,77 @@ export const WAVE_SOUNDS = {
     jitter: 0.05, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.65, 0.12, 0.35), dA(0.45, 0.9, 0.3)],
     fallback: { sample: "ricochet", rate: 1.15, highpassHz: 1000 },
-    synth: { kind: "tick", freq: 1700, count: 3, spreadMs: 90, isBright: false },
   },
   "spikes.active": {
     stem: "hazard/spikes_fire", variants: 3, gain: 0.76, bus: "sfx", priority: WAVE_PRIORITY.hazardActive,
     jitter: 0.05, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
-    fallback: { sample: "meleeSwing", rate: 1.5, highpassHz: 700 },
-    synth: { kind: "whoosh", durMs: 300, fromHz: 800, toHz: 4200 },
+    fallback: { sample: "meleeSwing", rate: 1.15, highpassHz: 700 },
   },
   "toxic_pool.enter": {
     stem: "hazard/toxic_enter", variants: 1, gain: 0.44, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 800,
-    fallback: { sample: "enemyDeath", rate: 1.3, lowpassHz: 1800 },
-    synth: { kind: "burst", durMs: 350, centerHz: 500 },
+    fallback: { sample: "enemyDeath", rate: 1.15, lowpassHz: 1800 },
   },
   "toxic_pool.loop": {
     stem: "hazard/toxic_loop", variants: 1, gain: 0.18, bus: "ambient", priority: WAVE_PRIORITY.ambient,
     jitter: 0, loop: true, // proximity-gated by the caller; max one mixed voice by loop key
-    synth: { kind: "loopPad", mode: "noise", filterType: "lowpass", filterHz: 600, q: 1.6, lfoHz: 1.9, level: 0.5 },
   },
   "fire_vent.telegraph": {
     stem: "hazard/vent_warn", variants: 2, gain: 0.74, bus: "voiceTell", priority: WAVE_PRIORITY.hazardWarn,
     jitter: 0.05, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.65, 0.12, 0.35), dA(0.45, 1.0, 0.3)],
-    fallback: { sample: "enemyAttack", rate: 0.7, lowpassHz: 1200 },
-    synth: { kind: "swell", durMs: 1000, fromHz: 90, toHz: 900, mode: "noise" },
+    fallback: { sample: "enemyAttack", rate: 0.85, lowpassHz: 1200 },
   },
   "fire_vent.active": {
     stem: "hazard/vent_blast", variants: 2, gain: 0.84, bus: "sfx", priority: WAVE_PRIORITY.hazardActive,
     jitter: 0.05, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
-    fallback: { sample: "barrel", rate: 1.3, highpassHz: 300 },
-    synth: { kind: "burst", durMs: 1100, centerHz: 1100 },
+    fallback: { sample: "barrel", rate: 1.15, highpassHz: 300 },
   },
   "void_rift.telegraph": {
+    // The reversed low groan needs its dedicated asset — no library sample reads as a
+    // rift warning inside the safe band. Hook only.
     stem: "hazard/rift_warn", variants: 2, gain: 0.78, bus: "voiceTell", priority: WAVE_PRIORITY.hazardWarn,
     jitter: 0.05, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.65, 0.12, 0.35), dA(0.45, 1.1, 0.3)],
-    fallback: { sample: "enemyAttack", rate: 0.4, lowpassHz: 900 },
-    synth: { kind: "swell", durMs: 1100, fromHz: 160, toHz: 55, mode: "growl" },
   },
   "void_rift.active": {
     stem: "hazard/rift_open", variants: 2, gain: 0.8, bus: "sfx", priority: WAVE_PRIORITY.hazardActive,
     jitter: 0.05, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
-    fallback: { sample: "dash", rate: 0.45, lowpassHz: 800 }, // inward air, never an electric zap
-    synth: { kind: "whoosh", durMs: 1300, fromHz: 2400, toHz: 120 },
+    fallback: { sample: "dash", rate: 0.85, lowpassHz: 800 }, // inward air, never an electric zap
   },
 
   // ---- §7 pets (species-neutral state cues) --------------------------------------------
   "pet.summon": {
     stem: "pet/summon", variants: 1, gain: 0.38, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05,
-    fallback: { sample: "blessing", rate: 1.3 },
-    synth: { kind: "notes", freqs: [660, 990], stepMs: 90, noteMs: 260, shape: "sine" },
+    fallback: { sample: "blessing", rate: 1.15 },
   },
   "pet.attack": {
     stem: "pet/attack", variants: 3, gain: 0.32, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05, spatial: true, cooldownMs: 150,
-    fallback: { sample: "enemyHit", rate: 1.7, highpassHz: 1200 },
-    synth: { kind: "tick", freq: 1900, count: 1, spreadMs: 0, isBright: false },
   },
   "pet.abilityReady": {
     stem: "pet/ready", variants: 1, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0,
     fallback: { sample: "coin", rate: 1.15 },
-    synth: { kind: "notes", freqs: [880, 1174], stepMs: 80, noteMs: 160, shape: "sine" },
   },
   "pet.hurt": {
     stem: "pet/hurt", variants: 2, gain: 0.34, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05, cooldownMs: 1000, // manifest: cooldown 1s
-    fallback: { sample: "enemyHit", rate: 1.5, lowpassHz: 2500 },
-    synth: { kind: "tick", freq: 1300, count: 1, spreadMs: 0, isBright: false },
   },
   "pet.down": {
     stem: "pet/down", variants: 1, gain: 0.42, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0,
-    fallback: { sample: "blessing", rate: 0.65 },
-    synth: { kind: "notes", freqs: [784, 622, 466], stepMs: 150, noteMs: 320, shape: "sine" },
+    fallback: { sample: "blessing", rate: 0.85 },
   },
   "pet.revive": {
     stem: "pet/revive", variants: 1, gain: 0.38, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0,
-    fallback: { sample: "revive", rate: 1.26, highpassHz: 250 }, // manifest DERIVE: revive +4 semitones, HP 250Hz
-    synth: { kind: "notes", freqs: [415, 831], stepMs: 100, noteMs: 300, shape: "triangle" },
+    fallback: { sample: "revive", rate: 1.15, highpassHz: 250 },
   },
   "pet.idle": {
     stem: "pet/idle", variants: 3, gain: 0.16, bus: "pet", priority: 25,
     jitter: 0.05, cooldownMs: 8000, isCombatSuppressed: true, // manifest: random ≥8s, suppressed in combat
-    fallback: { sample: "dash", rate: 1.9, highpassHz: 2000 },
-    synth: { kind: "shimmer", durMs: 350, freq: 2200, isRising: true },
   },
 
   // ---- §8 co-op states -----------------------------------------------------------------
@@ -600,157 +590,136 @@ export const WAVE_SOUNDS = {
     jitter: 0, spatial: true, isOffCameraUncapped: true,
     duck: [dM(0.8, 0.1, 0.3)],
     fallback: { sample: "heart", rate: 0.85 },
-    synth: { kind: "notes", freqs: [392, 523], stepMs: 140, noteMs: 340, shape: "sine" },
   },
   "revive.channelLoop": {
     stem: "coop/revive_loop", variants: 1, gain: 0.42, bus: "sfx", priority: WAVE_PRIORITY.revive,
     jitter: 0, loop: true,
-    synth: { kind: "loopPad", mode: "pulse", filterType: "lowpass", filterHz: 700, q: 0.9, lfoHz: 1.4, level: 0.6 },
   },
   "revive.cancel": {
     stem: "coop/revive_cancel", variants: 1, gain: 0.62, bus: "sfx", priority: WAVE_PRIORITY.revive,
     jitter: 0,
-    fallback: { sample: "parry", rate: 0.6, lowpassHz: 2000 },
-    synth: { kind: "notes", freqs: [523, 392], stepMs: 90, noteMs: 180, shape: "triangle" },
+    fallback: { sample: "parry", rate: 0.85, lowpassHz: 2000 },
   },
-  // revive.complete REUSES the existing `revive` sample/synth verbatim (played by the
-  // existing SimEvent handler); the director only stops the channel loop + applies the
-  // manifest's music duck (.5/.18/.55) around it.
+  // revive.complete REUSES the existing `revive` sample verbatim (played by the existing
+  // SimEvent handler); the director only stops the channel loop + applies the manifest's
+  // music duck (.5/.18/.55) around it.
   "spectate.enter": {
     stem: "coop/spectate_enter", variants: 1, gain: 0.55, bus: "ui", priority: WAVE_PRIORITY.impact,
     jitter: 0,
     duck: [dM(0.75, 0.1, 0.4)],
-    fallback: { sample: "dash", rate: 0.5, lowpassHz: 1400 },
-    synth: { kind: "whoosh", durMs: 650, fromHz: 1400, toHz: 300 },
+    fallback: { sample: "dash", rate: 0.85, lowpassHz: 1400 },
   },
   "spectate.switch": {
     stem: null, variants: 1, gain: 0.35, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0, cooldownMs: 100,
     fallback: { sample: "uiClick", rate: 1.0, lowpassHz: 5000 }, // manifest DERIVE: uiClick lowpass 5k
-    synth: { kind: "tick", freq: 750, count: 1, spreadMs: 0, isBright: false },
   },
   "reconnect.lost": {
     stem: "coop/disconnect", variants: 1, gain: 0.65, bus: "ui", priority: WAVE_PRIORITY.hazardActive,
     jitter: 0,
     duck: [dM(0.75, 0.1, 0.5)],
-    fallback: { sample: "uiClick", rate: 0.55 },
-    synth: { kind: "notes", freqs: [440, 330], stepMs: 160, noteMs: 200, shape: "square" },
+    fallback: { sample: "uiClick", rate: 0.85 },
   },
   "reconnect.try": {
     stem: null, variants: 1, gain: 0.28, bus: "ui", priority: 40,
     jitter: 0, cooldownMs: 2000, // manifest: max 1 per 2s
     fallback: { sample: "uiClick", rate: 0.89 }, // manifest DERIVE: uiClick pitch -2, no jitter
-    synth: { kind: "tick", freq: 640, count: 1, spreadMs: 0, isBright: false },
   },
   "reconnect.restored": {
     stem: "coop/reconnect_ok", variants: 1, gain: 0.65, bus: "ui", priority: WAVE_PRIORITY.hazardActive,
     jitter: 0,
     duck: [dM(0.75, 0.1, 0.45)],
     fallback: { sample: "levelup", rate: 0.9, lowpassHz: 4000 },
-    synth: { kind: "notes", freqs: [392, 523, 659], stepMs: 130, noteMs: 300, shape: "sine" },
   },
   "party.readyOn": {
     stem: "coop/ready_on", variants: 1, gain: 0.45, bus: "ui", priority: 55,
     jitter: 0,
     fallback: { sample: "coin", rate: 0.95 },
-    synth: { kind: "notes", freqs: [587, 880], stepMs: 90, noteMs: 200, shape: "triangle" },
   },
   "party.readyOff": {
     stem: "coop/ready_off", variants: 1, gain: 0.38, bus: "ui", priority: 55,
     jitter: 0,
-    fallback: { sample: "coin", rate: 0.75 },
-    synth: { kind: "notes", freqs: [659, 587], stepMs: 90, noteMs: 180, shape: "triangle" },
+    fallback: { sample: "coin", rate: 0.85 },
   },
   "party.allReady": {
     stem: "coop/all_ready", variants: 1, gain: 0.7, bus: "ui", priority: WAVE_PRIORITY.weapon,
     jitter: 0,
     duck: [dM(0.7, 0.1, 0.45)],
     fallback: { sample: "levelup", rate: 1.05 },
-    synth: { kind: "notes", freqs: [523, 659, 784], stepMs: 120, noteMs: 320, shape: "triangle" },
   },
 
   // ---- §9 difficulty / UI / profile / leaderboard ---------------------------------------
+  // The uiClick sample is itself an asset hook (sfx/uiClick pending) with an authored
+  // coin-chime reuse behind it — see SAMPLES in audio.ts.
   "ui.hover": {
     stem: null, variants: 1, gain: 0.1, bus: "ui", priority: WAVE_PRIORITY.uiHover,
     jitter: 0, cooldownMs: 80, // manifest: UI hover ≥80ms
-    synth: { kind: "tick", freq: 900, count: 1, spreadMs: 0, isBright: false },
+    fallback: { sample: "uiClick", rate: 1.1 },
   },
   "ui.click": {
     stem: null, variants: 1, gain: 0.22, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
     fallback: { sample: "uiClick" },
-    synth: { kind: "tick", freq: 700, count: 1, spreadMs: 0, isBright: false },
   },
   "ui.confirm": {
     stem: "ui/confirm", variants: 1, gain: 0.38, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
-    fallback: { sample: "uiClick", rate: 1.25 },
-    synth: { kind: "notes", freqs: [660, 990], stepMs: 70, noteMs: 160, shape: "triangle" },
+    fallback: { sample: "uiClick", rate: 1.15 },
   },
   "ui.back": {
     stem: null, variants: 1, gain: 0.3, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
-    fallback: { sample: "uiClick", rate: 0.79 }, // manifest DERIVE: confirm pitch -4
-    synth: { kind: "tick", freq: 520, count: 1, spreadMs: 0, isBright: false },
+    fallback: { sample: "uiClick", rate: 0.85 },
   },
   "ui.error": {
     stem: "ui/error", variants: 1, gain: 0.45, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
-    fallback: { sample: "uiClick", rate: 0.6 },
-    synth: { kind: "knock", freq: 220, count: 2 },
+    fallback: { sample: "uiClick", rate: 0.85 },
   },
   "difficulty.change": {
     stem: null, variants: 1, gain: 0.32, bus: "ui", priority: WAVE_PRIORITY.ui,
-    jitter: 0, cooldownMs: 90, // caller maps rate: Easy -2 / Normal 0 / Hard +2 / Nightmare +5 semitones
+    jitter: 0, cooldownMs: 90,
     fallback: { sample: "uiClick" },
-    synth: { kind: "tick", freq: 820, count: 1, spreadMs: 0, isBright: false },
   },
   "difficulty.confirm": {
     stem: "ui/difficulty_confirm", variants: 1, gain: 0.5, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
     fallback: { sample: "blessing", rate: 0.85 },
-    synth: { kind: "notes", freqs: [440, 554, 659], stepMs: 110, noteMs: 260, shape: "triangle" },
   },
   "profile.open": {
     stem: "ui/profile_open", variants: 1, gain: 0.28, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
-    fallback: { sample: "chest", rate: 1.5, highpassHz: 400 },
-    synth: { kind: "tick", freq: 1100, count: 2, spreadMs: 110, isBright: false },
+    fallback: { sample: "chest", rate: 1.15, highpassHz: 400 },
   },
   "profile.statMilestone": {
     stem: null, variants: 1, gain: 0.55, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0, cooldownMs: 1000, // true milestones only, never every stat update
     fallback: { sample: "levelup" }, // manifest REUSE at gain .55
-    synth: { kind: "notes", freqs: [392, 494, 587, 784], stepMs: 70, noteMs: 200, shape: "triangle" },
   },
   "profile.save": {
     stem: "ui/profile_save", variants: 1, gain: 0.3, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
     fallback: { sample: "uiClick", rate: 0.9 },
-    synth: { kind: "knock", freq: 340, count: 1 },
   },
   "leaderboard.open": {
     stem: "ui/leaderboard_open", variants: 1, gain: 0.3, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
-    fallback: { sample: "chest", rate: 1.7, highpassHz: 600 },
-    synth: { kind: "notes", freqs: [740, 880, 1046], stepMs: 60, noteMs: 130, shape: "triangle" },
+    fallback: { sample: "chest", rate: 1.15, highpassHz: 600 },
   },
   "leaderboard.rowMove": {
     stem: null, variants: 1, gain: 0.08, bus: "ui", priority: WAVE_PRIORITY.uiHover,
     jitter: 0, cooldownMs: 100, // manifest: rate limit 100ms, never per network update
-    synth: { kind: "tick", freq: 900, count: 1, spreadMs: 0, isBright: false },
+    fallback: { sample: "uiClick", rate: 1.1 },
   },
   "leaderboard.personalBest": {
     stem: "ui/personal_best", variants: 1, gain: 0.55, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
     fallback: { sample: "levelup" },
-    synth: { kind: "notes", freqs: [523, 659, 784, 1046], stepMs: 100, noteMs: 300, shape: "triangle" },
   },
   "leaderboard.topRank": {
     stem: "ui/top_rank", variants: 1, gain: 0.65, bus: "ui", priority: WAVE_PRIORITY.ui,
     jitter: 0,
     fallback: { sample: "floorClear", rate: 0.9 },
-    synth: { kind: "notes", freqs: [523, 659, 784, 1046, 1318], stepMs: 120, noteMs: 380, shape: "triangle" },
   },
 } as const satisfies Record<string, WaveSoundSpec>;
 
@@ -822,7 +791,8 @@ export const WAVE_BOSS_DEATH: Readonly<Record<string, WaveEventId>> = {
   marrow: "marrow.death", choir: "choir.death", weaver: "weaver.death", gilded: "warden.death",
 };
 
-// Every event a boss kind can raise — its preload group (§10: preload the next boss).
+// Every event a boss OR regular archetype kind can raise — its preload group (§10:
+// preload before the encounter can trigger it).
 export function bossWaveEvents(kind: string): WaveEventId[] {
   const out: WaveEventId[] = [];
   const moves = WAVE_TELLS[kind];
@@ -833,6 +803,11 @@ export function bossWaveEvents(kind: string): WaveEventId[] {
         if (ev && out.indexOf(ev) === -1) out.push(ev);
       }
     }
+  }
+  if (kind === "orbiter") out.push("orbiter.enterBand");
+  if (kind === "burrower") {
+    for (const ch of BURROW_EMITTER) out.push(ch.event);
+    out.push(BURROW_THUD_EVENT);
   }
   const phase = WAVE_BOSS_PHASE[kind];
   if (phase) out.push(phase);
@@ -859,6 +834,13 @@ export const WAVE_HAZARDS: Readonly<Record<string, HazardWaveCues>> = {
 export const HAZARD_WAVE_EVENTS: readonly WaveEventId[] = [
   "spikes.telegraph", "spikes.active", "toxic_pool.enter", "toxic_pool.loop",
   "fire_vent.telegraph", "fire_vent.active", "void_rift.telegraph", "void_rift.active",
+];
+
+// Weapon + co-op cues reachable on ANY floor (player-driven) — part of every floor's
+// preload plan so a first trigger never races its decode.
+export const ALWAYS_REACHABLE_EVENTS: readonly WaveEventId[] = [
+  "shootMortar", "mortarDetonate", "beamStart", "beamLoop", "beamStop", "beamHit",
+  "revive.channelStart", "revive.channelLoop", "revive.cancel",
 ];
 
 // PR #31 WeaponIds -> wave fire events; beam is EXCLUDED on purpose (its lifecycle is
@@ -927,7 +909,91 @@ export function tellCuesFor(kind: string, prev: TellSnapshot | null, next: TellS
   return out;
 }
 
-// Whether a burrower-style underground tracking loop should be sounding for this state.
-export function isTrackLoopHeld(kind: string, state: TellSnapshot): boolean {
+// Whether a burrower is tunnelling underground in this state — the window the keyed
+// positional burrow emitter runs (audio director FINAL: no continuous loop).
+export function isBurrowUnderground(kind: string, state: TellSnapshot): boolean {
   return kind === "burrower" && state.phase === "active" && state.move === "dive";
+}
+
+// ---- deterministic positional emitters (audio director FINAL) ---------------------------
+// Scheduling and layering AUTHORED files is allowed; waveform synthesis is not. Both
+// emitters run on a seeded LCG so a given entity id / floor entry always produces the
+// same event/variant/timing sequence (headless-testable, replay-stable).
+
+// mulberry32 step: pure, deterministic, good-enough distribution for scheduling.
+export function emitterRand(state: number): { value: number; state: number } {
+  let s = (state + 0x6D2B79F5) | 0;
+  let t = Math.imul(s ^ (s >>> 15), 1 | s);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return { value: ((t ^ (t >>> 14)) >>> 0) / 4294967296, state: s };
+}
+
+// Burrow underground presence: three independent authored component channels, each on
+// its own deterministic cadence, positional at the tunnelling body. The thud channel is
+// edge-only (direction-lock), never scheduled.
+export interface BurrowEmitterChannel {
+  readonly event: WaveEventId;
+  readonly minGapSec: number;
+  readonly maxGapSec: number;
+}
+
+export const BURROW_EMITTER: readonly BurrowEmitterChannel[] = [
+  { event: "burrow.dirtGrind", minGapSec: 1.0, maxGapSec: 1.4 },
+  { event: "burrow.pebble", minGapSec: 0.35, maxGapSec: 0.75 },
+  { event: "burrow.shellScrape", minGapSec: 1.3, maxGapSec: 2.0 },
+];
+
+export const BURROW_THUD_EVENT: WaveEventId = "burrow.thud";
+
+// The Deep's sparse positional ambience scheduler — near-silent by design (audio
+// director FINAL P0 contract). TWO-LEVEL cadence: one global opportunity every
+// 1.5–3.2s draws ONE category by weight; the drawn category sounds only if its own
+// re-arm window has elapsed — otherwise that opportunity is authored silence, never
+// rerolled onto another category (categories never fill in for each other). Each play
+// gets a deterministic gain inside the category's range and a deterministic position
+// on the 160–520px ring around the camera, accepted only on valid wall/material cells
+// (diegetic sources in the Deep's fabric — never centered on the listener).
+export interface DeepEmitterChannel {
+  readonly event: WaveEventId;
+  readonly weight: number;       // share of global opportunities this category wins
+  readonly minGapSec: number;    // re-arm window between two sounds of THIS category
+  readonly maxGapSec: number;
+  readonly gainMin: number;
+  readonly gainMax: number;
+  // Per-take draw weights / gain trims, aligned with the row's `takes` array.
+  readonly takeWeights?: readonly number[];
+  readonly takeGainMult?: readonly number[];
+}
+
+export const DEEP_EMITTER = {
+  globalMinGapSec: 1.5,
+  globalMaxGapSec: 3.2,
+  channels: [
+    { event: "deep.mineralTick", weight: 0.35, minGapSec: 2, maxGapSec: 4.5, gainMin: 0.07, gainMax: 0.11 },
+    { event: "deep.resinDrip", weight: 0.25, minGapSec: 2.5, maxGapSec: 5, gainMin: 0.06, gainMax: 0.10, takeWeights: [0.5, 1, 1] },
+    { event: "deep.resinStress", weight: 0.20, minGapSec: 3.5, maxGapSec: 6.5, gainMin: 0.08, gainMax: 0.12 },
+    { event: "deep.architectureShift", weight: 0.20, minGapSec: 5, maxGapSec: 9, gainMin: 0.09, gainMax: 0.13, takeGainMult: [0.8, 1] },
+  ] as readonly DeepEmitterChannel[],
+  // Never more than ONE Deep event sounding at a time: a due opportunity holds through
+  // the overlap window until the previous event has faded.
+  maxOverlap: 1,
+  overlapWindowSec: 1.2,
+  // Suppress ±250ms around lock/critical cues (enemy/boss lock tells and hazard
+  // warnings, priority ≥ enemyLock); the trailing side is enforceable, the leading
+  // side is unknowable without clairvoyance.
+  lockMuteMs: 250,
+  // Deterministic diegetic placement ring around the camera center.
+  minDistPx: 160,
+  maxDistPx: 520,
+  placementTries: 6, // deterministic ring draws before an opportunity gives up (silence)
+} as const;
+
+// The explicit take stems an event may play (selection-driven when `takes` is present).
+export function takeStemsOf(spec: WaveSoundSpec): readonly string[] {
+  if (spec.takes !== undefined) return spec.takes;
+  if (spec.stem === null) return [];
+  if (spec.variants <= 1) return [spec.stem];
+  const out: string[] = [];
+  for (let v = 1; v <= spec.variants; v++) out.push(`${spec.stem}_v${v}`);
+  return out;
 }

@@ -143,9 +143,20 @@ export class FakeBufferSourceNode extends FakeSourceNode {
   buffer: FakeAudioBuffer | null = null;
   loop = false;
   playbackRate = new FakeAudioParam(1);
+  private startCtx: FakeAudioContext;
 
   constructor(ctx: FakeAudioContext) {
     super("bufferSource", ctx);
+    this.startCtx = ctx;
+  }
+
+  // Like the real node, a non-looping buffer source ends by itself when its buffer runs
+  // out — that natural end is how the engine's voice budget frees one-shot voices.
+  start(at?: number): void {
+    super.start(at);
+    if (this.buffer && !this.loop) {
+      this.stop((at ?? this.startCtx.currentTime) + this.buffer.duration / Math.max(0.01, this.playbackRate.value));
+    }
   }
 }
 
@@ -175,6 +186,9 @@ export class FakeAudioContext {
   currentTime = 0;
   destination = new FakeNode("destination");
   created: FakeNode[] = [];
+  // Programmatic buffer construction (createBuffer) is the synthesis tell the authored-only
+  // acceptance gates on — decoded buffers arrive through decodeAudioData instead.
+  locallyCreatedBuffers = 0;
 
   createGain(): FakeGainNode {
     const n = new FakeGainNode();
@@ -207,6 +221,7 @@ export class FakeAudioContext {
   }
 
   createBuffer(channels: number, length: number, sampleRate: number): FakeAudioBuffer {
+    this.locallyCreatedBuffers++;
     return new FakeAudioBuffer(channels, length, sampleRate);
   }
 
