@@ -1,6 +1,6 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId, SpriteName } from "../sim/types.js";
+import type { WeaponId, SpriteName, HazardKind } from "../sim/types.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -396,14 +396,63 @@ const TILE_SOURCES: Record<TileName, string> = {
   wf_NESW: "/sprites/walls_full/wall_NESW.png",
 };
 
+// ---- per-biome tile art (opt-in, like SHEETS) ----
+// Keyed by Biome.tileKey (src/sim/biomes.ts). EMPTY BY DEFAULT so nothing extra is
+// fetched (no 404s): a biome without an entry renders the shared tile set graded by its
+// palette (the renderer's fallback). Drop 48x48 seamless tiles into
+// /public/tiles/biomes/<key>/ (generated via the locked fal recipe: falgen flux ->
+// pixelize --tile) and list them here to light a biome up — no other code changes.
+// Example:
+//   verdant: { floors: ["/tiles/biomes/verdant/floor.png", "/tiles/biomes/verdant/floor2.png"],
+//              wallTop: "/tiles/biomes/verdant/wall_top.png" },
+export interface BiomeTileArt {
+  floors: string[];    // floor variants, hash-picked per tile (>= 1)
+  wallTop?: string;    // 48x48 wall block used when the full autotile set is absent
+}
+
+export const BIOME_TILE_SOURCES: Partial<Record<string, BiomeTileArt>> = {};
+
+// ---- hazard body art (opt-in) ----
+// 64x64 PNG (or a 1xN 64px strip; frame count inferred from width) per hazard kind:
+//   spikes: 3 frames (retracted / arming / extended), toxic_pool: 2-frame slow boil,
+//   fire_vent: 3 frames (grate / smolder / erupting base), void_rift: 2-frame maw.
+// EMPTY BY DEFAULT: until art lands, the renderer draws each hazard in the same
+// primitive telegraph language as the boss slam marker (see game.ts renderHazards).
+export const HAZARD_SOURCES: Partial<Record<HazardKind, string>> = {};
+
 export class TileSet {
   private images = new Map<TileName, HTMLImageElement>();
+  private biomeFloors = new Map<string, HTMLImageElement[]>();
+  private biomeWallTops = new Map<string, HTMLImageElement>();
+  private hazardImages = new Map<HazardKind, HTMLImageElement>();
+  private tintCache = new Map<string, HTMLCanvasElement>();
 
   constructor() {
     for (const name of Object.keys(TILE_SOURCES) as TileName[]) {
       const img = new Image();
       img.src = TILE_SOURCES[name];
       this.images.set(name, img);
+    }
+    for (const key of Object.keys(BIOME_TILE_SOURCES)) {
+      const art = BIOME_TILE_SOURCES[key];
+      if (!art) continue;
+      this.biomeFloors.set(key, art.floors.map((src) => {
+        const img = new Image();
+        img.src = src;
+        return img;
+      }));
+      if (art.wallTop) {
+        const img = new Image();
+        img.src = art.wallTop;
+        this.biomeWallTops.set(key, img);
+      }
+    }
+    for (const kind of Object.keys(HAZARD_SOURCES) as HazardKind[]) {
+      const src = HAZARD_SOURCES[kind];
+      if (!src) continue;
+      const img = new Image();
+      img.src = src;
+      this.hazardImages.set(kind, img);
     }
   }
 
@@ -414,6 +463,46 @@ export class TileSet {
   ready(name: TileName): boolean {
     const img = this.images.get(name);
     return !!img && img.complete && img.naturalWidth > 0;
+  }
+
+  // A loaded biome floor variant (hash-picked), or null to fall back to the shared set.
+  biomeFloor(tileKey: string, pick: number): HTMLImageElement | null {
+    const list = this.biomeFloors.get(tileKey);
+    if (!list || list.length === 0) return null;
+    const img = list[Math.abs(pick) % list.length];
+    return img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  biomeWallTop(tileKey: string): HTMLImageElement | null {
+    const img = this.biomeWallTops.get(tileKey);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  // A loaded hazard body sheet for this kind, or null for the primitive fallback.
+  hazard(kind: HazardKind): HTMLImageElement | null {
+    const img = this.hazardImages.get(kind);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  // A recolored copy of a tile/prop image (shape from alpha, hue from `color`), cached
+  // per name+color. Lets one authored glow/detail asset serve every biome palette.
+  tinted(name: TileName, color: string): HTMLCanvasElement | null {
+    const key = `${name}|${color}`;
+    const cached = this.tintCache.get(key);
+    if (cached) return cached;
+    const img = this.images.get(name);
+    if (!img || !img.complete || img.naturalWidth === 0) return null;
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.drawImage(img, 0, 0);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = color;
+    g.fillRect(0, 0, c.width, c.height);
+    this.tintCache.set(key, c);
+    return c;
   }
 }
 

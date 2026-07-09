@@ -61,12 +61,15 @@ def run(inp,out,grid,export,family_dark=None,tile=False):
         for x in range(grid):
             if fin[x,y][3]==255: colors.add(fin[x,y][:3])
     print(f"wrote {out} — {len(colors)} colors, grid {grid}")
-def run_tile(inp,out,grid,export):
-    """Floor/wall tile enforce: dungeon-ramp palette only, NO outline, opaque, seamless edge-wrap."""
+def run_tile(inp,out,grid,export,ramp=None):
+    """Floor/wall tile enforce: 5-color dark-ramp palette only, NO outline, opaque, seamless edge-wrap.
+    --ramp "hex,hex,hex,hex,hex" pins a per-biome ramp (defaults to the shared dungeon ramp),
+    so each biome's floor/wall art keeps the art bible's ramp discipline in its own palette."""
+    RAMP=[tuple(int(h.strip().lstrip("#")[i:i+2],16) for i in (0,2,4)) for h in ramp.split(",")] if ramp else DUNGEON_RAMP
     im=Image.open(inp).convert("RGB").resize((grid,grid),Image.LANCZOS);sp=im.load()
     def nearest_ramp(c):
         r,g,b=c
-        return min(DUNGEON_RAMP,key=lambda p:(p[0]-r)**2+(p[1]-g)**2+(p[2]-b)**2)
+        return min(RAMP,key=lambda p:(p[0]-r)**2+(p[1]-g)**2+(p[2]-b)**2)
     for y in range(grid):
         for x in range(grid):
             sp[x,y]=nearest_ramp(sp[x,y])
@@ -80,5 +83,7 @@ def run_tile(inp,out,grid,export):
     print(f"wrote {out} (tile) — {colors} colors, grid {grid}, seamless edges")
 
 if __name__=="__main__":
-    ap=argparse.ArgumentParser();ap.add_argument("inp");ap.add_argument("out");ap.add_argument("--grid",type=int,default=32);ap.add_argument("--export",type=int,default=64);ap.add_argument("--family-dark",default=None);ap.add_argument("--tile",action="store_true")
-    a=ap.parse_args();run(a.inp,a.out,a.grid,a.export,a.family_dark,a.tile)
+    ap=argparse.ArgumentParser();ap.add_argument("inp");ap.add_argument("out");ap.add_argument("--grid",type=int,default=32);ap.add_argument("--export",type=int,default=64);ap.add_argument("--family-dark",default=None);ap.add_argument("--tile",action="store_true");ap.add_argument("--ramp",default=None)
+    a=ap.parse_args()
+    if a.tile: run_tile(a.inp,a.out,a.grid,a.export,a.ramp)
+    else: run(a.inp,a.out,a.grid,a.export,a.family_dark)
