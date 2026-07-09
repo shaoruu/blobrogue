@@ -134,10 +134,11 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       }
       // Structural value hierarchy: floor material stays quieter/darker than wall caps.
       // The biome wash later shifts hue across both, so this per-floor dim preserves a
-      // grayscale walkable-vs-solid distinction independent of palette.
+      // grayscale walkable-vs-solid distinction independent of palette. Alpha is biome
+      // data, calibrated per band against its authored art (see Biome.floorDim).
       ctx.save();
       ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = 0.28;
+      ctx.globalAlpha = biome.floorDim;
       ctx.fillStyle = "#05030b";
       ctx.fillRect(sx, sy, TILE, TILE);
       ctx.restore();
@@ -221,9 +222,11 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
       if (biomeWall) {
         ctx.drawImage(biomeWall, sx, sy, TILE, TILE);
         // Lift the authored wall cap as a material plane; floor is darkened separately.
+        // Alpha is biome data (Biome.wallLift): bands whose authored wall art sits at
+        // floor luminance need a stronger lift to stay readable as solid.
         ctx.save();
         ctx.globalCompositeOperation = "screen";
-        ctx.globalAlpha = 0.13;
+        ctx.globalAlpha = biome.wallLift;
         ctx.fillStyle = biome.wallCap;
         ctx.fillRect(sx, sy, TILE, TILE);
         ctx.restore();

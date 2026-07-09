@@ -32,6 +32,13 @@ export interface Biome {
   readonly detailDensity: number; // floor-detail overlay frequency 0..1 (deeper = busier)
   readonly detailTint: string | null; // recolor for detail overlays (null = as-authored)
   readonly torchesPerRoom: number;
+  // ---- structural value grade (client-consumed, data-only) ----
+  // Walkability is a VALUE read before it is a hue read: floors sit darker than wall
+  // caps in every band. These per-biome alphas calibrate that hierarchy against the
+  // band's authored art (test/readability.test.ts gates the resulting grayscale
+  // separation), preserving each material's hue and texture.
+  readonly floorDim: number;  // alpha of the floor darkening layer
+  readonly wallLift: number;  // alpha of the screen-blend cap lift over authored wall art
 }
 
 const FLOORS_PER_BIOME = 5;
@@ -60,6 +67,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.09,
     detailTint: null,
     torchesPerRoom: 1,
+    floorDim: 0.28,
+    wallLift: 0.13,
   },
   {
     // Floors 6-10 — the same living ecology as Amberwild grown DENSE and darker; the
@@ -85,6 +94,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.11,
     detailTint: "#6b8a2e",
     torchesPerRoom: 1,
+    floorDim: 0.28,
+    wallLift: 0.13,
   },
   {
     // Floors 11-15 — sound and momentum: shale, bone dust, charge lanes, echoing dark.
@@ -109,6 +120,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.13,
     detailTint: "#3e6a8a",
     torchesPerRoom: 2,
+    floorDim: 0.38,
+    wallLift: 0.26,
   },
   {
     // Floors 16-20 — fracture and wrong geometry: jet resin, load seams, offsets that
@@ -133,6 +146,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.16,
     detailTint: "#8a5cff",
     torchesPerRoom: 2,
+    floorDim: 0.44,
+    wallLift: 0.58,
   },
   {
     // Floors 21-25 — order, armor, claimed space. The accepted lane: RIGID amber/brass
@@ -158,6 +173,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.19,
     detailTint: "#d9b03b",
     torchesPerRoom: 3,
+    floorDim: 0.28,
+    wallLift: 0.13,
   },
   {
     // Floors 26-30 — convection and pressure: clinker, vents, thermal lanes, the dark
@@ -165,9 +182,9 @@ export const BIOMES: readonly Biome[] = [
     name: "Emberreach",
     tileKey: "ember",
     bgColor: "#120a08",
-    floorA: "#1f1410",
-    floorB: "#241816",
-    wallFront: "#301c14",
+    floorA: "#1a110e",
+    floorB: "#1e1412",
+    wallFront: "#3a2318",
     wallCap: "#4a2820",
     wallSideRgb: "40,24,18",
     wallCorner: "rgba(14,8,6,0.5)",
@@ -182,6 +199,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.23,
     detailTint: "#ff7a3b",
     torchesPerRoom: 3,
+    floorDim: 0.28,
+    wallLift: 0.16,
   },
   {
     // Floors 31+ — the Null: the approved post-F30 expansion slot (curriculum: "Null/Jet
@@ -192,7 +211,7 @@ export const BIOMES: readonly Biome[] = [
     bgColor: "#05030b",
     floorA: "#0a0714",
     floorB: "#0d0918",
-    wallFront: "#140e24",
+    wallFront: "#241a44",
     wallCap: "#241a40",
     wallSideRgb: "16,11,30",
     wallCorner: "rgba(2,1,6,0.6)",
@@ -207,6 +226,8 @@ export const BIOMES: readonly Biome[] = [
     detailDensity: 0.27,
     detailTint: "#ff4ad8",
     torchesPerRoom: 3,
+    floorDim: 0.3,
+    wallLift: 0.44,
   },
 ];
 
