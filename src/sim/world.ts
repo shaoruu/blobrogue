@@ -12,7 +12,7 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
+import type { Vec2, Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
@@ -480,12 +480,27 @@ function placeDealerHearts(w: WorldState): void {
   for (let i = 0; i < weaponStock; i++) kinds.push(rng.pick(PICKUP_WEAPONS));
   const stocked = diversifyWeaponSet(kinds, partyOwnedWeapons(w));
   for (let i = 0; i < stocked.length; i++) {
+    const spot = dealerWeaponSpot(w, (room.cx + 0.5) * TILE, (room.cy + 0.5) * TILE, i, stocked.length);
     w.pickups.push({
       id: w.nextPickupId++, kind: "dealer_weapon",
-      x: (room.cx + 0.5) * TILE + (i - (stocked.length - 1) / 2) * 34, y: (room.cy + 0.5) * TILE + 30,
+      x: spot.x, y: spot.y,
       radius: 15, weapon: stocked[i], value: WEAPON_ECONOMY.dealerWeaponPrice,
     });
   }
+}
+
+// A standable stall spot for one dealer weapon: the row under the hearts, walking a fixed
+// candidate ladder (deterministic) until the spot is real floor clear of props/chests — a
+// shop nobody can reach isn't a shop.
+function dealerWeaponSpot(w: WorldState, cx: number, cy: number, slot: number, count: number): Vec2 {
+  const baseX = cx + (slot - (count - 1) / 2) * 34;
+  const candidates: ReadonlyArray<readonly [number, number]> = [
+    [baseX, cy + 30], [baseX, cy + 56], [baseX - 22, cy + 30], [baseX + 22, cy + 30], [baseX, cy - 54], [cx, cy + 30],
+  ];
+  for (const [x, y] of candidates) {
+    if (isStandableSpot(w, x, y, 18)) return { x, y };
+  }
+  return { x: baseX, y: cy + 30 };
 }
 
 // Deep floors bias hazard density (§4 biome pressure): a wider explosive-barrel band.
