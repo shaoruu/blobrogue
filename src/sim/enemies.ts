@@ -4,7 +4,7 @@ import { TILE } from "./types.js";
 import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
-  TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED,
+  TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
@@ -169,14 +169,13 @@ export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
 }
 
-// The authored ladder (studio gate §2): every run walks the same five encounters in the
-// same teaching order — the King's telegraph tutorial, MARROW's lanes, the Weaver's floor
-// fight, the F20 armored tempo boss (the approved Gilded Warden in the gate's "Jet" slot),
-// and the Hollow Choir finale.
-const AUTHORED_BOSS_LADDER: readonly EnemyKind[] = ["boss", "marrow", "weaver", "gilded", "choir"];
+// The canonical first-clear chain (curriculum §0, FINAL): Slime King F5 → Miniboss
+// Gauntlet F10 (a non-boss milestone — see world.ts's gauntlet controller) → Marrow F15 →
+// Weaver F20 → Gilded Warden F25 → Hollow Choir F30. `null` marks the gauntlet slot.
+const AUTHORED_BOSS_LADDER: readonly (EnemyKind | null)[] = ["boss", null, "marrow", "weaver", "gilded", "choir"];
 
-// Beyond the authored table (F30+), boss floors draw from the full roster, seeded per
-// run — variety between runs, identical across a run's clients/restarts.
+// Beyond the authored chain (F35+ endgame), boss floors draw from the full roster, seeded
+// per run — variety between runs, identical across a run's clients/restarts.
 const DEEP_BOSS_ROSTER: readonly EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss"];
 
 // Each boss floor's kin — the floor's ambient minions and its cadence/beat adds.
@@ -184,9 +183,16 @@ export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   boss: "slime", marrow: "skeleton", choir: "ghost", weaver: "bat", gilded: "shielder",
 };
 
-// Which boss holds each boss floor: the authored F5–F25 ladder, then the seeded deep
-// rotation with no immediate repeats (its first pick also never repeats the F25 Choir).
-export function bossKindForFloor(seed: number, floor: number): EnemyKind {
+// The F10 Arena Gauntlet floor (curriculum §2): sequential authored minibosses instead of
+// a boss. The stage machine lives in world.ts; spawn/clear plumbing branches here.
+export function isGauntletFloor(floor: number): boolean {
+  return floor === GAUNTLET.floor;
+}
+
+// Which boss holds each boss-cadence floor: the authored F5–F30 chain (null = the F10
+// gauntlet), then the seeded deep rotation with no immediate repeats (its first pick also
+// never repeats the F30 Choir finale).
+export function bossKindForFloor(seed: number, floor: number): EnemyKind | null {
   const ladder = Math.floor(floor / BOSS_EVERY);
   if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
   return DEEP_BOSS_ROSTER[deepBossIndex(seed, ladder - AUTHORED_BOSS_LADDER.length - 1)];
@@ -196,7 +202,7 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind {
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
 // treats the authored finale (the Choir) as its predecessor.
 function deepBossIndex(seed: number, step: number): number {
-  let prev = DEEP_BOSS_ROSTER.indexOf(AUTHORED_BOSS_LADDER[AUTHORED_BOSS_LADDER.length - 1]);
+  let prev = DEEP_BOSS_ROSTER.indexOf("choir");
   for (let s = 0; ; s++) {
     let pick = new Rng((seed ^ 0xB055ED) + s * 2654435761).int(0, DEEP_BOSS_ROSTER.length - 1);
     if (pick === prev) pick = (pick + 1) % DEEP_BOSS_ROSTER.length;
@@ -306,32 +312,36 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt,
 };
 
-// Entry floors follow the studio gate §2 cadence table: F1 establishes with Slime +
-// Spitter, F2 expands (Bat, Skeleton), F3 decides (+Ghost), F4 proves the base five and
-// lands the first guaranteed brute (the charger's long lane graduates the skeleton's
-// lunge), F6 adds the orbiter's rotational pressure, and F7 is the adapt floor — the
-// burrower (the gate's Rattleback) plus the shielder wall.
+// The curriculum's one-new-lesson-per-floor family introductions (spec §2), mapped onto
+// the runtime roster. Every floor introduces AT MOST one new family; the in-between
+// floors are synthesize/remix floors by design.
+//   F1  slime     — HUNT establishes.
+//   F2  bat       — FLOCK discovers (the skeleton rides along as the HUNT family's
+//                    "guaranteed melee" escalation, not a new family).
+//   F3  spitter   — the ranged CHOOSE lesson (the first Dealer also lands on F3).
+//   F7  ghost     — the evasive drifter holds the curriculum's FLEE/BAIT lesson slot
+//                    (Knellbat has no runtime kind yet — see PR notes).
+//   F8  shielder  — SHIELD counter-lesson, exactly the curriculum floor.
+//   F11 charger   — HUNT-commit introduced alone (Sunless arrival), exactly per spec.
+//   F12 burrower  — BURROW / Rattleback ground-reading, exactly per spec.
+//   F17 orbiter   — the ORBIT track lesson slot (Seamwalker's floor in the spec).
+export const FAMILY_INTRO_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = {
+  slime: 1, bat: 2, skeleton: 2, spitter: 3, ghost: 7, shielder: 8,
+  charger: 11, burrower: 12, orbiter: 17,
+};
+
 function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
   const roster: Array<{ kind: EnemyKind; weight: number }> = [{ kind: "slime", weight: 5 }];
-  // Ranged threat from the very first room (gate §2 F1: "Slime + Spitter") — rare at
-  // first, a bit more common from floor 3 once the melee reads are learned. Sunless
-  // raises the complex share.
-  roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
-  if (floor >= 2) {
-    roster.push({ kind: "bat", weight: 3 });
-    roster.push({ kind: "skeleton", weight: 2 });
-  }
-  if (floor >= 3) roster.push({ kind: "ghost", weight: 2 * complexShare });
-  if (floor >= 4) roster.push({ kind: "charger", weight: 2 });
-  // The orbiter joins once dodging straight shots is learned — its circling bolt asks for
-  // rotational tracking instead.
-  if (floor >= 6) roster.push({ kind: "orbiter", weight: 2 * complexShare });
-  // F7, the adapt floor: the burrower denies the "stand at range" answer the moment it has
-  // formed, and the shielder wall asks for the flank/melee/splash answers owned by now.
-  if (floor >= 7) {
-    roster.push({ kind: "burrower", weight: 2 * complexShare });
-    roster.push({ kind: "shielder", weight: 2 });
-  }
+  const has = (kind: EnemyKind): boolean => floor >= (FAMILY_INTRO_FLOOR[kind] ?? Infinity);
+  if (has("bat")) roster.push({ kind: "bat", weight: 3 });
+  if (has("skeleton")) roster.push({ kind: "skeleton", weight: 2 });
+  // Ranged pressure grows once the melee reads are learned; Sunless raises the share.
+  if (has("spitter")) roster.push({ kind: "spitter", weight: (floor >= 5 ? 2 : 1) * complexShare });
+  if (has("ghost")) roster.push({ kind: "ghost", weight: 2 * complexShare });
+  if (has("shielder")) roster.push({ kind: "shielder", weight: 2 });
+  if (has("charger")) roster.push({ kind: "charger", weight: 2 });
+  if (has("burrower")) roster.push({ kind: "burrower", weight: 2 * complexShare });
+  if (has("orbiter")) roster.push({ kind: "orbiter", weight: 2 * complexShare });
   return roster;
 }
 
@@ -343,6 +353,98 @@ function weightedPick(rng: Rng, roster: Array<{ kind: EnemyKind; weight: number 
     if (roll <= 0) return r.kind;
   }
   return roster[roster.length - 1].kind;
+}
+
+// ---- the encounter deck (curriculum §4) ----
+// Each combat room draws one CARD from a seeded shuffle bag; the card decides the room's
+// composition flavor. Simple cards host only simple families; a complex card is the only
+// place its family may land. The bag is drawn without replacement (an exact card cannot
+// repeat until the bag turns over), never deals the same card twice in a row across a
+// reshuffle, never deals more than two complex cards consecutively, keeps ≥30% of the
+// floor's rooms simple (dropping complexity before repeating pressure, §4's own remedy),
+// and deals an authored BREATHER as the first room after a milestone floor.
+
+export type EncounterCard = "breather" | "pack" | "hunt" | "ranged" | "mover" | "wall";
+
+const COMPLEX_CARDS: readonly EncounterCard[] = ["ranged", "mover", "wall"];
+
+function isComplexCard(card: EncounterCard): boolean {
+  return COMPLEX_CARDS.indexOf(card) !== -1;
+}
+
+// Which card a complex family plays under (simple families fit any room).
+function cardOfKind(kind: EnemyKind): EncounterCard | null {
+  switch (kind) {
+    case "spitter": case "orbiter": return "ranged";
+    case "charger": case "burrower": return "mover";
+    case "shielder": return "wall";
+    default: return null;
+  }
+}
+
+function availableCards(floor: number): EncounterCard[] {
+  const has = (kind: EnemyKind): boolean => floor >= (FAMILY_INTRO_FLOOR[kind] ?? Infinity);
+  const cards: EncounterCard[] = ["pack", "hunt"];
+  if (has("spitter") || has("orbiter")) cards.push("ranged");
+  if (has("charger") || has("burrower")) cards.push("mover");
+  if (has("shielder")) cards.push("wall");
+  return cards;
+}
+
+// The deck is a pure function of (seed, floor, combatRoomCount) — its own derived Rng
+// stream, shared by the planner and the cadence tests.
+export function encounterDeckForFloor(seed: number, floor: number, combatRoomCount: number): EncounterCard[] {
+  const rng = new Rng((seed ^ 0xDECCB4A9) + floor * 92821);
+  const pool = availableCards(floor);
+  const bag: EncounterCard[] = [];
+  const cards: EncounterCard[] = [];
+  let complexRun = 0;
+  for (let i = 0; i < combatRoomCount; i++) {
+    // The first room after a milestone floor (boss or gauntlet) is the authored breather.
+    if (i === 0 && floor > 1 && isBossFloor(floor - 1)) {
+      cards.push("breather");
+      complexRun = 0;
+      continue;
+    }
+    if (bag.length === 0) {
+      bag.push(...pool);
+      // Fisher-Yates off the seeded stream.
+      for (let k = bag.length - 1; k > 0; k--) {
+        const j = rng.int(0, k);
+        [bag[k], bag[j]] = [bag[j], bag[k]];
+      }
+      // Never deal the same card twice in a row across the reshuffle boundary.
+      if (cards.length > 0 && bag[bag.length - 1] === cards[cards.length - 1] && bag.length > 1) {
+        [bag[bag.length - 1], bag[0]] = [bag[0], bag[bag.length - 1]];
+      }
+    }
+    // Max two complex cards consecutively: prefer the topmost simple card when the run
+    // would exceed the limit; if the bag holds only pressure, deal a simple filler
+    // instead (drop complexity before repeating it — §4's remedy) and keep the bag.
+    // Every path also refuses to deal the same card back-to-back.
+    const last = cards.length > 0 ? cards[cards.length - 1] : null;
+    let take = -1;
+    for (let k = bag.length - 1; k >= 0; k--) {
+      if (bag[k] === last) continue;
+      if (complexRun >= 2 && isComplexCard(bag[k])) continue;
+      take = k;
+      break;
+    }
+    const card = take === -1 ? (last === "hunt" ? "pack" : "hunt") : bag.splice(take, 1)[0];
+    complexRun = isComplexCard(card) ? complexRun + 1 : 0;
+    cards.push(card);
+  }
+  // ≥30% simple/mastery rooms: drop complexity from the tail before repeating pressure,
+  // picking whichever simple card keeps neighbors distinct.
+  const simpleQuota = Math.ceil(combatRoomCount * 0.30);
+  let simple = cards.filter((c) => !isComplexCard(c)).length;
+  for (let i = cards.length - 1; i >= 0 && simple < simpleQuota; i--) {
+    if (!isComplexCard(cards[i])) continue;
+    const neighbors = [cards[i - 1], cards[i + 1]];
+    cards[i] = (["hunt", "pack", "breather"] as const).find((c) => !neighbors.includes(c)) ?? "hunt";
+    simple++;
+  }
+  return cards;
 }
 
 function pointInRoom(rng: Rng, dungeon: Dungeon, roomIndex: number): { x: number; y: number } {
@@ -367,6 +469,8 @@ interface PlannedUnit {
 
 // Per-room composition bookkeeping for the §4 readability guards.
 interface RoomLoad {
+  card: EncounterCard;
+  units: number;
   complex: number;
   burrowers: number;
   hasBrute: boolean;
@@ -376,13 +480,15 @@ interface RoomLoad {
 // Deterministic threat-budget floor composition (§4): spend FloorThreat on a tiered unit
 // mix instead of counting bodies. Elites/brutes are planned first (they anchor the opening
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
-function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: number): PlannedUnit[] {
+function planFloorUnits(rng: Rng, seed: number, floor: number, roomCount: number, players: number): PlannedUnit[] {
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
   let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
   const roster = floorRoster(floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
 
-  // Combat rooms: 3–5 of the non-spawn rooms carry the floor's threat.
+  // Combat rooms: 3–5 of the non-spawn rooms carry the floor's threat, in PROGRESSION
+  // order (ascending room index) so the deck's sequencing rules — breather first after a
+  // milestone, complex-run limits — read along the player's actual path.
   const candidates: number[] = [];
   for (let i = 1; i < roomCount; i++) candidates.push(i);
   const combatRoomCount = Math.min(5, Math.max(Math.min(3, candidates.length), Math.floor(candidates.length * 0.75)));
@@ -390,12 +496,27 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
   while (combatRooms.length < combatRoomCount && candidates.length > 0) {
     combatRooms.push(candidates.splice(rng.int(0, candidates.length - 1), 1)[0]);
   }
+  combatRooms.sort((a, b) => a - b);
+  const deck = encounterDeckForFloor(seed, floor, combatRooms.length);
   const load = new Map<number, RoomLoad>();
-  for (const r of combatRooms) load.set(r, { complex: 0, burrowers: 0, hasBrute: false, hasElite: false });
+  for (let i = 0; i < combatRooms.length; i++) {
+    load.set(combatRooms[i], { card: deck[i], units: 0, complex: 0, burrowers: 0, hasBrute: false, hasElite: false });
+  }
+  // §4: at most 35% of the floor's rooms may carry TWO complex units.
+  let twoComplexRooms = 0;
+  const twoComplexCap = Math.floor(combatRooms.length * 0.35);
 
   const roomFits = (room: number, unit: { kind: EnemyKind; tier: EnemyTier }): boolean => {
     const l = load.get(room)!;
-    if (ENEMY_ARCHETYPES[unit.kind].threat > 1 && l.complex >= MAX_COMPLEX_PER_ROOM) return false;
+    const family = cardOfKind(unit.kind);
+    // A complex family may only land in a room playing ITS card; breathers stay small
+    // and simple (the curriculum's mastery/recovery room).
+    if (family !== null && l.card !== family) return false;
+    if (l.card === "breather" && (family !== null || unit.tier === "elite" || unit.tier === "brute" || l.units >= 3)) return false;
+    if (ENEMY_ARCHETYPES[unit.kind].threat > 1) {
+      if (l.complex >= MAX_COMPLEX_PER_ROOM) return false;
+      if (l.complex === 1 && twoComplexRooms >= twoComplexCap) return false;
+    }
     if (unit.kind === "burrower" && l.burrowers >= MAX_BURROWERS_PER_ROOM) return false;
     if (floor < BRUTE_ELITE_COMBO_FLOOR) {
       if (unit.tier === "brute" && l.hasElite) return false;
@@ -406,7 +527,11 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
 
   const claimRoom = (room: number, unit: { kind: EnemyKind; tier: EnemyTier }): number => {
     const l = load.get(room)!;
-    if (ENEMY_ARCHETYPES[unit.kind].threat > 1) l.complex++;
+    l.units++;
+    if (ENEMY_ARCHETYPES[unit.kind].threat > 1) {
+      l.complex++;
+      if (l.complex === 2) twoComplexRooms++;
+    }
     if (unit.kind === "burrower") l.burrowers++;
     if (unit.tier === "brute") l.hasBrute = true;
     if (unit.tier === "elite") l.hasElite = true;
@@ -436,9 +561,27 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
     return true;
   };
 
+  // Every complex card's room is anchored by ONE unit of its family first — the card IS
+  // that room's lesson; the fill loop then textures around the anchors.
+  for (const room of combatRooms) {
+    const l = load.get(room)!;
+    if (!isComplexCard(l.card)) continue;
+    const anchors = roster.filter((r) => cardOfKind(r.kind) === l.card);
+    if (anchors.length === 0) continue;
+    const kind = anchors.length === 1 ? anchors[0].kind : weightedPick(rng, anchors);
+    const cost = threatCostOf(kind, "standard");
+    if (cost > budget || !roomFits(room, { kind, tier: "standard" })) continue;
+    claimRoom(room, { kind, tier: "standard" });
+    budget -= cost;
+    plan.push({ kind, tier: "standard", room });
+  }
+
   if (floor >= TIERS.elite.minFloor) {
     const elites = floor >= 9 ? 2 : 1;
-    for (let i = 0; i < elites; i++) add(weightedPick(rng, roster), "elite");
+    for (let i = 0; i < elites; i++) {
+      // Up to three rolls: an elite of a complex family needs a room playing its card.
+      for (let roll = 0; roll < 3 && !add(weightedPick(rng, roster), "elite"); roll++) { /* reroll */ }
+    }
   }
   if (floor >= TIERS.brute.minFloor) {
     const brutes = floor >= 7 ? 2 : 1;
@@ -457,17 +600,22 @@ function planFloorUnits(rng: Rng, floor: number, roomCount: number, players: num
       const pack = rng.int(2, 3);
       const room = pickRoom({ kind, tier: "swarm" });
       if (room === null) continue;
-      let packSpent = 0;
-      for (let i = 0; i < pack; i++) {
+      let packSpent = threatCostOf(kind, "swarm");
+      budget -= packSpent;
+      plan.push({ kind, tier: "swarm", room });
+      for (let i = 1; i < pack; i++) {
         const cost = threatCostOf(kind, "swarm");
         if (cost > budget || packSpent + cost > packSpendCap) break;
+        // Each extra pack body re-checks the room's guards (a breather stays small).
+        if (!roomFits(room, { kind, tier: "swarm" })) break;
+        claimRoom(room, { kind, tier: "swarm" });
         budget -= cost;
         packSpent += cost;
         plan.push({ kind, tier: "swarm", room });
       }
     } else if (!add(kind, "standard")) {
-      // Too expensive for the remainder — a swarm unit may still fit.
-      if (!isSwarmable || !add(kind, "swarm")) break;
+      // No compatible room (or too expensive) — reroll; a swarm unit may still fit.
+      if (isSwarmable) add(kind, "swarm");
     }
   }
   return plan;
@@ -478,12 +626,26 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
   const roomCount = dungeon.rooms.length;
   if (roomCount <= 1) return { active: [], pending: [] };
 
+  if (isGauntletFloor(floor)) {
+    // The F10 Arena Gauntlet: the arena (last room) starts EMPTY — the world's gauntlet
+    // controller stages the sequential minibosses — while the approach rooms carry a
+    // light flock escort sprinkle (the region's kin, never the arena's pressure).
+    const active: Enemy[] = [];
+    const minions = 2 + Math.floor(floor / BOSS_EVERY);
+    for (let i = 0; i < minions; i++) {
+      const roomIndex = 1 + rng.int(0, Math.max(1, roomCount - 2) - 1);
+      const p = pointInRoom(rng, dungeon, roomIndex);
+      active.push(createEnemy("bat", p.x, p.y, floor, rng, active.length, { players }));
+    }
+    return { active, pending: [] };
+  }
+
   if (isBossFloor(floor)) {
     // The floor's boss lives in the last room (next to the exit), with a few of its own
     // kin for company (slimes under the King, skeletons under MARROW, ghosts under the
     // Choir, bats under the Weaver, shielders under the Gilded Warden).
     const active: Enemy[] = [];
-    const bossKind = bossKindForFloor(seed, floor);
+    const bossKind = bossKindForFloor(seed, floor) ?? "boss";
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
@@ -497,7 +659,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     return { active, pending: [] };
   }
 
-  const plan = planFloorUnits(rng, floor, roomCount, players);
+  const plan = planFloorUnits(rng, seed, floor, roomCount, players);
   const cap = activeThreatCap(floor) * coopThreatMult(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];

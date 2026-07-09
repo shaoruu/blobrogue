@@ -12,11 +12,15 @@ export interface Biome {
   readonly accent: string;
 }
 
-const FLOORS_PER_BIOME = 3;
+// The canonical 30-floor spine (docs/specs/blobrogue_ENCOUNTER_CURRICULUM_spec.md §0):
+// six regions of five floors, each closed by its milestone — Amberwild/Slime King,
+// Rootbound Warrens/the F10 Miniboss Gauntlet, Sunless Caves/Marrow, The Deep/Weaver,
+// Gilded Archive/Warden, Emberreach/Hollow Choir. Past F30 the bands cycle.
+const FLOORS_PER_BIOME = 5;
 
 export const BIOMES: readonly Biome[] = [
   {
-    name: "Verdant Hollow",
+    name: "Amberwild",
     bgColor: "#0a120e",
     floorA: "#141f18",
     floorB: "#182419",
@@ -27,6 +31,20 @@ export const BIOMES: readonly Biome[] = [
     tint: "#3d6b50",
     tintAlpha: 0.24,
     accent: "#5fbf7a",
+  },
+  {
+    // Same living ecology as Amberwild, denser and darker — root-choked formation floors.
+    name: "Rootbound Warrens",
+    bgColor: "#0b0f0a",
+    floorA: "#151b12",
+    floorB: "#191f14",
+    wallFront: "#20291a",
+    wallCap: "#2e3c24",
+    wallSideRgb: "26,32,20",
+    wallCorner: "rgba(9,12,7,0.5)",
+    tint: "#4a5c34",
+    tintAlpha: 0.24,
+    accent: "#9fbf5f",
   },
   {
     name: "Sunless Caves",
@@ -55,6 +73,20 @@ export const BIOMES: readonly Biome[] = [
     accent: "#a24bff",
   },
   {
+    // Ordered amber-and-gold stacks — the Warden's archive of claimed space.
+    name: "Gilded Archive",
+    bgColor: "#120e08",
+    floorA: "#1f1a10",
+    floorB: "#242014",
+    wallFront: "#302818",
+    wallCap: "#4a3c20",
+    wallSideRgb: "40,32,20",
+    wallCorner: "rgba(14,11,6,0.5)",
+    tint: "#8b6f2a",
+    tintAlpha: 0.20,
+    accent: "#ffd166",
+  },
+  {
     name: "Emberreach",
     bgColor: "#120a08",
     floorA: "#1f1410",
@@ -80,7 +112,8 @@ export function biomeIndexForFloor(floor: number): number {
   return Math.floor((f - 1) / FLOORS_PER_BIOME) % BIOMES.length;
 }
 
-export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isDescend?: boolean }): string {
+export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
+  if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";
   if (opts?.isBoss) return "BOSS FLOOR";
   const name = biomeForFloor(floor).name.toUpperCase();
   if (opts?.isDescend) return `${name} · DOWN TO FLOOR ${floor}`;

@@ -9,6 +9,8 @@
 // Engine-mechanical constants that are not balance (pathfinding cadence, knockback physics,
 // status-system plumbing) stay in constants.ts.
 
+import type { EnemyKind, WeaponId } from "./types.js";
+
 export const BALANCE_VERSION = 2;
 
 // ---- §1 player constants ----
@@ -164,16 +166,19 @@ export const REINFORCE_STAGGER = 0.9;
 // Biome pressure (§4): bodies/hazard modifiers, never HP. Indexed by biomeIndexForFloor.
 export interface BiomePressure {
   budgetMult: number;      // threat-budget multiplier
-  packBias: number;        // extra swarm-pack likelihood (Verdant +15% pack units)
+  packBias: number;        // extra swarm-pack likelihood (Amberwild +15% pack units)
   complexShare: number;    // ranged/kiter weight multiplier (Sunless 1.10×)
   hazardMult: number;      // explosive-prop bias (Deep 1.15×)
   reinforceRate: number;   // reinforcement release-rate multiplier (Emberreach 1.15×)
 }
 
+// Six entries matching the curriculum's six regions (biomeIndexForFloor keys them).
 export const BIOME_PRESSURE: readonly BiomePressure[] = [
-  { budgetMult: 1.00, packBias: 1.15, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.00 }, // Verdant
-  { budgetMult: 0.95, packBias: 1.00, complexShare: 1.10, hazardMult: 1.00, reinforceRate: 1.00 }, // Sunless
-  { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // Deep
+  { budgetMult: 1.00, packBias: 1.15, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.00 }, // Amberwild
+  { budgetMult: 1.00, packBias: 1.20, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.05 }, // Rootbound Warrens (formation density)
+  { budgetMult: 0.95, packBias: 1.00, complexShare: 1.10, hazardMult: 1.00, reinforceRate: 1.00 }, // Sunless Caves
+  { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // The Deep
+  { budgetMult: 0.95, packBias: 1.00, complexShare: 1.05, hazardMult: 1.00, reinforceRate: 1.00 }, // Gilded Archive (order/claimed space)
   { budgetMult: 1.05, packBias: 1.00, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.15 }, // Emberreach
 ];
 
@@ -236,7 +241,7 @@ export function bossHpForFloor(floor: number): number {
   return Math.round(scaled / 10) * 10;
 }
 
-// ---- §5b MARROW (studio gate §3: F10, initial 1,260, median 38–52s, high-roll 22–28s) ----
+// ---- §5b MARROW (curriculum F15 milestone; gate §3 initial 1,260, median 38–52s, high-roll 22–28s) ----
 // A LINE fight, not an area fight: sidestep the charge lanes, weave the volleys/spiral,
 // and punish the wall crash. Its transition beat is a bone SHIELD instead of a roar:
 // identical anti-burst plumbing (damage reduction + hard HP floor + queued overflow), but
@@ -245,9 +250,11 @@ export function bossHpForFloor(floor: number): number {
 
 export const MARROW = {
   // Gate §3 initial Standard-solo calibration, verified by Stage-C telemetry against the
-  // F10 median build (Hair Trigger Lv3 + Glass Cannon Lv2 pistol) — see balance tests.
+  // depth's median build (Hair Trigger Lv3 + Glass Cannon Lv2 pistol) — see balance
+  // tests. The curriculum slots Marrow at F15; the §3 HP curve clamps at F10, so the
+  // calibrated value holds unchanged at the deeper floor.
   baseHp: 1260,
-  baseHpFloor: 10,
+  baseHpFloor: 15,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // indexed by phase 1..3
@@ -313,7 +320,7 @@ export function marrowHpForFloor(floor: number): number {
   return anchoredBossHp(MARROW.baseHp, MARROW.baseHpFloor, floor);
 }
 
-// ---- §5c THE HOLLOW CHOIR (studio gate §3: F25, initial 1,800, median 45–65s, high-roll 25–35s) ----
+// ---- §5c THE HOLLOW CHOIR (curriculum F30 finale; gate §3 initial 1,800, median 45–65s, high-roll 25–35s) ----
 // The grieving ghost mass: it does not zone you with bodies — it UNMAKES itself. On
 // cadence it fades intangible and drifts through you (a breather you must keep moving
 // through), then rematerializes into a burst; its volleys are slow HOMING wails you juke
@@ -321,10 +328,10 @@ export function marrowHpForFloor(floor: number): number {
 // kill them to force it back together early (the wisps ARE the boss during the beat).
 
 export const CHOIR = {
-  // Gate §3 initial Standard-solo calibration at the F25 finale, verified by telemetry
-  // against the F25 median build — see balance tests.
+  // Gate §3 initial Standard-solo calibration at the run's finale (curriculum F30),
+  // verified by telemetry against the depth's median build — see balance tests.
   baseHp: 1800,
-  baseHpFloor: 25,
+  baseHpFloor: 30,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.2, 2.8, 2.4] as readonly number[],
@@ -369,19 +376,19 @@ export function choirHpForFloor(floor: number): number {
   return anchoredBossHp(CHOIR.baseHp, CHOIR.baseHpFloor, floor);
 }
 
-// ---- §5d THE WEAVER (studio gate §3: F15, initial 1,340, median 40–55s, high-roll 22–30s) ----
+// ---- §5d THE WEAVER (curriculum F20 milestone; gate §3 median 40–55s, high-roll 22–30s) ----
 // The duelist that fights the FLOOR: webs are persistent slow-zones that shrink your
 // dance space (never damage — routing pressure), and its pounce is a marked drop from
 // above that chains in later phases. Small, fast, evasive — hard to pin, exactly like
 // the roster spec's duelist.
 
 export const WEAVER = {
-  // Gate §3 lists 1,340 as the F15 initial, assuming ≈28 median DPS; measured Stage-C
-  // telemetry at the F15 median build runs ≈34 DPS, so the gate's own recalibration rule
-  // (§3: telemetry over sheet DPS) lands 1,500 — median ≈44s, inside the 40–55 band with
-  // margin on both edges (see balance tests).
+  // Gate §3 lists 1,340 as the initial, assuming ≈28 median DPS; measured Stage-C
+  // telemetry at the depth's median build runs ≈34 DPS, so the gate's own recalibration
+  // rule (§3: telemetry over sheet DPS) lands 1,500 — median ≈44s, inside the 40–55 band
+  // with margin on both edges (see balance tests). Curriculum floor: F20 (curve clamps).
   baseHp: 1500,
-  baseHpFloor: 15,
+  baseHpFloor: 20,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.7, 2.3] as readonly number[],
@@ -434,22 +441,22 @@ export function weaverHpForFloor(floor: number): number {
   return anchoredBossHp(WEAVER.baseHp, WEAVER.baseHpFloor, floor);
 }
 
-// ---- §5e THE GILDED WARDEN (studio gate §3 F20 slot: initial formula-calibrated, median 42–58s, high-roll 24–32s) ----
+// ---- §5e THE GILDED WARDEN (curriculum F25 milestone; gate §3 formula-calibrated, median 42–58s, high-roll 24–32s) ----
 // The armored tempo boss: its plate chips incoming damage to 30% at ALL times except the
 // EXPOSED window — the long recover after each committed quake/sweep, when the plate
 // hangs open. You do not out-DPS the Warden whenever you like; you dodge the commitment,
 // then unload into the opening. Reduction, never immunity: impatient chip still works,
 // it is just the slow way.
-// NOTE: the gate names this slot "Jet" — the approved product roster ships the Gilded
-// Warden here instead (see PR notes); its HP is recalibrated via the gate §3 formula.
-// The gate's raw 1,520 assumes an unarmored body; the plate's 0.3 chip outside exposed
-// windows raises effective health ≈1.35×, so the raw anchor lands lower — telemetry at
-// the F20 median build (Hair Trigger Lv3 + Glass Cannon Lv3) calibrates 1,280 into the
-// 42–58s median band with margin (see balance tests).
+// NOTE: the balance gate named a "Jet" slot — the curriculum overrides: Jet is later
+// post-F30 endgame content, and the Gilded Warden holds the F25 milestone. HP rides the
+// gate §3 formula: its raw 1,520 assumes an unarmored body; the plate's 0.3 chip outside
+// exposed windows raises effective health ≈1.35×, so the raw anchor lands lower —
+// telemetry at the depth's median build (Hair Trigger Lv3 + Glass Cannon Lv3) calibrates
+// 1,280 into the 42–58s median band with margin (see balance tests).
 
 export const GILDED = {
   baseHp: 1280,
-  baseHpFloor: 20,
+  baseHpFloor: 25,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.6, 3.2, 2.8] as readonly number[],
@@ -489,6 +496,34 @@ export const GILDED = {
 export function gildedHpForFloor(floor: number): number {
   return anchoredBossHp(GILDED.baseHp, GILDED.baseHpFloor, floor);
 }
+
+// ---- §5f the F10 MINIBOSS GAUNTLET (curriculum §2 F10 + §5) ----
+// The Rootbound Warrens close on an authored Arena Gauntlet, not a boss: three sequential
+// minibosses — the Flock Commander (an elite bat leading a small escort), an Orbiter
+// elite, and a Shielder brute — with an authored breath between stages, NEVER
+// simultaneous. Each miniboss carries 45–70% of the depth's boss-effective HP (§5:
+// authored arena only, 1–2 moves, never a random-room roll), and the last stage drops
+// the floor's premium boss chest.
+
+export interface GauntletStage {
+  kind: EnemyKind;
+  tier: EnemyTier;
+  hpFrac: number; // fraction of bossHpForFloor(GAUNTLET.floor), §5's 45–70% band
+  escort: number; // swarm-kin escort spawned WITH the stage (part of the stage's clear)
+}
+
+export const GAUNTLET = {
+  floor: 10,
+  breath: 1.2, // seconds between a stage's last death and the next stage's entrance
+  stages: [
+    { kind: "bat", tier: "elite", hpFrac: 0.45, escort: 4 },
+    { kind: "orbiter", tier: "elite", hpFrac: 0.45, escort: 0 },
+    { kind: "shielder", tier: "brute", hpFrac: 0.50, escort: 0 },
+  ] as readonly GauntletStage[],
+  // The premium reward: the gauntlet's boss chest bakes the Burst rifle — Rootbound's
+  // formation-fire signature (no full boss signature is duplicated).
+  chestWeapon: "burst" as WeaponId,
+} as const;
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----
 // The 4–6× strong-run fantasy is EXPRESSIVE capability (pellets/pierce/status/crit/

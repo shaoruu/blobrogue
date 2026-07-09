@@ -4,7 +4,7 @@ import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, A
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor, isBossKind } from "../sim/enemies.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
@@ -666,7 +666,7 @@ export class Game {
       this.loadFloorClient();
       this.cam.x = this.px - this.canvas.width / 2;
       this.cam.y = this.py - this.canvas.height / 2;
-      this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+      this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
     }
     this.hud.setVisible(true);
     // First run ever: briefly surface the core controls, then never nag again.
@@ -892,7 +892,7 @@ export class Game {
         this.isWorldRevealed = true;
         this.seed = rebuilt.seed;
         this.loadFloorClient();
-        this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor) }));
+        this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor), isGauntlet: isGauntletFloor(rebuilt.floor) }));
         // The run properly begins at the first reveal (the connect veil isn't run time).
         if (isFirstReveal) this.runStart = performance.now();
       }
@@ -1375,7 +1375,7 @@ export class Game {
         // (consumeWorldRebuilt in tick) — the event only carries the juice. Solo/co-op load here.
         if (this.mode !== "online") {
           this.loadFloorClient();
-          this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isDescend: true }));
+          this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor), isDescend: true }));
         }
         break;
       case "reachExit":
@@ -4026,7 +4026,7 @@ export class Game {
   devSetFloor(floor: number): void {
     loadFloorIntoWorld(this.world, Math.max(1, Math.floor(floor)));
     this.loadFloorClient();
-    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
   }
 
   devToggleFlowDebug(): boolean {

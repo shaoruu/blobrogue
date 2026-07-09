@@ -14,11 +14,14 @@ import type { InputCmd } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { createEnemy, spawnFloorEnemies, isBossKind, bossKindForFloor, ENEMY_ARCHETYPES, BOSS_KIN } from "../src/sim/enemies.js";
+import {
+  createEnemy, spawnFloorEnemies, isBossKind, bossKindForFloor, ENEMY_ARCHETYPES, BOSS_KIN,
+  isGauntletFloor, isBossFloor, encounterDeckForFloor, FAMILY_INTRO_FLOOR,
+} from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
-  MARROW, CHOIR, WEAVER, GILDED,
-  marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
+  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
+  marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor, bossHpForFloor,
 } from "../src/sim/balance.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import { Rng } from "../src/sim/rng.js";
@@ -235,17 +238,14 @@ function marrowTests(): void {
   check("marrow is a boss kind (chest/interest/death machinery)", isBossKind("marrow") && !isBossKind("charger"));
   check("F10 Marrow HP matches its calibration anchor", marrowHpForFloor(10) === MARROW.baseHp, `hp=${marrowHpForFloor(10)}`);
   {
-    // Find a seed whose F10 rolls MARROW, then confirm the natural floor spawns it with
-    // its skeleton kin (the seeded deep roster is covered in its own section).
-    let seed = 0;
-    for (let s = 1; s < 200 && seed === 0; s++) {
-      if (bossKindForFloor(s, 10) === "marrow") seed = s;
-    }
-    check("some seed rolls MARROW on floor 10", seed !== 0, `seed=${seed}`);
-    const d = generateDungeon(seed, 10);
-    const spawns = spawnFloorEnemies(d, seed, 10);
+    // The curriculum chain slots MARROW at F15: the natural floor spawns it with its
+    // skeleton kin for every seed.
+    const seed = 7;
+    check("floor 15 is ALWAYS Marrow (curriculum chain)", bossKindForFloor(seed, 15) === "marrow");
+    const d = generateDungeon(seed, 15);
+    const spawns = spawnFloorEnemies(d, seed, 15);
     const boss = spawns.active.find((e) => isBossKind(e.kind));
-    check("the natural floor-10 boss room holds a Marrow with skeleton kin",
+    check("the natural floor-15 boss room holds a Marrow with skeleton kin",
       boss !== undefined && boss.kind === "marrow" && spawns.active.some((e) => e.kind === "skeleton"),
       boss ? `boss=${boss.kind}` : "no boss spawned");
   }
@@ -492,7 +492,7 @@ function choirSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy } 
 function choirTests(): void {
   section("Hollow Choir: identity + anchors");
   check("choir is a boss kind", isBossKind("choir"));
-  check("F25 Choir HP matches its calibration anchor", choirHpForFloor(25) === CHOIR.baseHp, `hp=${choirHpForFloor(25)}`);
+  check("F30 Choir HP matches its calibration anchor", choirHpForFloor(30) === CHOIR.baseHp, `hp=${choirHpForFloor(30)}`);
 
   section("Hollow Choir: homing wails you juke by turning");
   {
@@ -591,7 +591,7 @@ function weaverSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
 function weaverTests(): void {
   section("Weaver: identity + anchors");
   check("weaver is a boss kind", isBossKind("weaver"));
-  check("F15 Weaver HP matches its calibration anchor", weaverHpForFloor(15) === WEAVER.baseHp, `hp=${weaverHpForFloor(15)}`);
+  check("F20 Weaver HP matches its calibration anchor", weaverHpForFloor(20) === WEAVER.baseHp, `hp=${weaverHpForFloor(20)}`);
 
   section("Weaver: webs — persistent slow-zones, never damage");
   {
@@ -694,7 +694,7 @@ function gildedSetup(seed: number): { w: WorldState; p: PlayerSim; boss: Enemy }
 function gildedTests(): void {
   section("Gilded Warden: identity + anchors");
   check("gilded is a boss kind", isBossKind("gilded"));
-  check("F20 Warden HP matches its calibration anchor", gildedHpForFloor(20) === GILDED.baseHp, `hp=${gildedHpForFloor(20)}`);
+  check("F25 Warden HP matches its calibration anchor", gildedHpForFloor(25) === GILDED.baseHp, `hp=${gildedHpForFloor(25)}`);
 
   section("Gilded Warden: the plate — chip while closed, full while EXPOSED");
   {
@@ -851,55 +851,182 @@ function gatePressureTests(): void {
   }
 }
 
+// ---- the encounter curriculum: cadence, deck, family intros, the F10 gauntlet ----
+
+function curriculumTests(): void {
+  section("curriculum §2: one new family lesson per floor (the authored intro ladder)");
+  {
+    const byFloor = new Map<number, EnemyKind[]>();
+    for (const [kind, floor] of Object.entries(FAMILY_INTRO_FLOOR) as Array<[EnemyKind, number]>) {
+      byFloor.set(floor, [...(byFloor.get(floor) ?? []), kind]);
+    }
+    let oneLessonOk = true;
+    for (const [floor, kinds] of byFloor) {
+      // F2 is the documented exception: the skeleton rides along as the HUNT family's
+      // "guaranteed melee" escalation, not a new family (curriculum §2 F2).
+      const allowed = floor === 2 ? 2 : 1;
+      if (kinds.length > allowed) oneLessonOk = false;
+    }
+    check("no floor introduces more than one new family (F2's skeleton = HUNT escalation)", oneLessonOk);
+    check("the curriculum intro floors hold (spitter F3, ghost F7, shielder F8, charger F11, burrower F12, orbiter F17)",
+      FAMILY_INTRO_FLOOR.spitter === 3 && FAMILY_INTRO_FLOOR.ghost === 7 && FAMILY_INTRO_FLOOR.shielder === 8
+      && FAMILY_INTRO_FLOOR.charger === 11 && FAMILY_INTRO_FLOOR.burrower === 12 && FAMILY_INTRO_FLOOR.orbiter === 17);
+    // The plans respect the ladder live: no kind spawns before its intro floor.
+    let introOk = true;
+    for (let i = 0; i < 10 && introOk; i++) {
+      const seed = 0xC0DE + i * 4241;
+      for (let floor = 1; floor <= 18 && introOk; floor++) {
+        if (isBossFloor(floor)) continue;
+        const d = generateDungeon(seed, floor);
+        for (const e of [...spawnFloorEnemies(d, seed, floor).active, ...spawnFloorEnemies(d, seed, floor).pending]) {
+          if (floor < (FAMILY_INTRO_FLOOR[e.kind] ?? 0)) introOk = false;
+        }
+      }
+    }
+    check("no family ever spawns before its authored intro floor (10 seeds × F1–18)", introOk);
+  }
+
+  section("curriculum §4: the deterministic anti-repeat encounter deck");
+  {
+    let deterministic = true;
+    let noRepeat = true;
+    let runOk = true;
+    let quotaOk = true;
+    let breatherOk = true;
+    const isSimple = (c: string): boolean => c === "breather" || c === "pack" || c === "hunt";
+    for (let i = 0; i < 24; i++) {
+      const seed = 0xDECC + i * 769;
+      for (let floor = 2; floor <= 24; floor++) {
+        if (isBossFloor(floor)) continue;
+        const a = encounterDeckForFloor(seed, floor, 5);
+        const b = encounterDeckForFloor(seed, floor, 5);
+        if (a.join() !== b.join()) deterministic = false;
+        let run = 0;
+        for (let k = 0; k < a.length; k++) {
+          if (k > 0 && a[k] === a[k - 1]) noRepeat = false;
+          run = isSimple(a[k]) ? 0 : run + 1;
+          if (run > 2) runOk = false;
+        }
+        if (a.filter(isSimple).length < Math.ceil(a.length * 0.30)) quotaOk = false;
+        if (floor > 1 && isBossFloor(floor - 1) && a[0] !== "breather") breatherOk = false;
+      }
+    }
+    check("the deck is a pure function of (seed, floor, rooms)", deterministic);
+    check("an exact card never repeats back-to-back (shuffle-bag anti-repetition)", noRepeat);
+    check("never more than two complex cards consecutively", runOk);
+    check("every floor keeps ≥30% simple/mastery rooms", quotaOk);
+    check("the first room after a milestone floor is the authored breather", breatherOk);
+  }
+
+  section("curriculum §2 F10: the sequential Miniboss Gauntlet");
+  {
+    const w = createWorld(0xF10A, 10);
+    w.isGodMode = true;
+    check("the F10 world arms the gauntlet machine", w.gauntlet !== null && w.gauntlet.stage === 0);
+    check("the arena starts without a boss (non-boss milestone)", w.enemies.every((e) => !isBossKind(e.kind)));
+
+    const entrances: Array<{ kind: EnemyKind; tier: string; at: number; maxHp: number }> = [];
+    let lastKillAt = 0;
+    const gaps: number[] = [];
+    let maxMinibosses = 0;
+    let clearedEarly = false;
+    for (let t = 0; t < 60 * 60 && !isFloorCleared(w); t++) {
+      for (const e of w.enemies) {
+        if (!e.dead) plantBullet(w, e.x, e.y, 5000, 18);
+      }
+      const evs = step(w, idle(t + 1));
+      for (const e of evs) {
+        if (e.t === "enemySpawn") {
+          const spawned = w.enemies.find((x) => x.id === e.eid)!;
+          if (spawned.tier === "elite" || spawned.tier === "brute") {
+            gaps.push(t * DT - lastKillAt);
+            entrances.push({ kind: spawned.kind, tier: spawned.tier, at: t * DT, maxHp: spawned.maxHp });
+          }
+        }
+        if (e.t === "enemyKill") lastKillAt = t * DT;
+      }
+      const minibosses = w.enemies.filter((e) => !e.dead && (e.tier === "elite" || e.tier === "brute")).length;
+      maxMinibosses = Math.max(maxMinibosses, minibosses);
+      if (isFloorCleared(w) && w.gauntlet !== null && !w.gauntlet.isRewarded) clearedEarly = true;
+    }
+    check("the gauntlet stages the authored sequence (Flock Commander -> Orbiter elite -> Shielder brute)",
+      entrances.map((e) => `${e.kind}/${e.tier}`).join(" ") === "bat/elite orbiter/elite shielder/brute",
+      entrances.map((e) => `${e.kind}/${e.tier}`).join(" "));
+    check("stages are NEVER simultaneous (max one miniboss alive)", maxMinibosses === 1, `max=${maxMinibosses}`);
+    check("every entrance waits the authored 1.2s breath after the previous clear",
+      gaps.slice(1).every((g) => g >= GAUNTLET.breath - 2 * DT),
+      gaps.map((g) => g.toFixed(2)).join(","));
+    check("each miniboss carries 45-70% of the depth's boss-effective HP (§5)",
+      entrances.every((e) => e.maxHp >= 0.45 * bossHpForFloor(10) - 10 && e.maxHp <= 0.70 * bossHpForFloor(10) + 10),
+      entrances.map((e) => e.maxHp).join(","));
+    check("the floor never reads cleared before the sequence resolves", !clearedEarly);
+    check("the final clear drops the premium boss chest with the gauntlet signature",
+      isFloorCleared(w) && w.chests.some((c) => c.kind === "boss" && c.weapon === GAUNTLET.chestWeapon));
+
+    // The premium chest behaves like every boss chest: P+1 personal choices + rare offer.
+    const chest = w.chests.find((c) => c.kind === "boss")!;
+    const p = w.players.get(LOCAL_ID)!;
+    p.x = chest.x; p.y = chest.y;
+    const evs = step(w, idle(9999));
+    check("opening it raises the rare blessing offer and the P+1 choice set",
+      evs.some((e) => e.t === "offerBlessing" && e.rare)
+      && w.pickups.filter((k) => k.isBossChoice).length === 2
+      && w.pickups.some((k) => k.isBossChoice && k.weapon === GAUNTLET.chestWeapon));
+  }
+}
+
 // ---- the boss ladder: seeded rotation ----
 
 function rotationTests(): void {
-  section("boss ladder: the authored F5-F25 table, then the seeded deep rotation");
+  section("the curriculum chain: King F5 / Gauntlet F10 / Marrow F15 / Weaver F20 / Warden F25 / Choir F30");
   {
-    // Studio gate §2 cadence: every run walks the same authored encounters in order.
-    const ladder: Array<[number, EnemyKind]> = [[5, "boss"], [10, "marrow"], [15, "weaver"], [20, "gilded"], [25, "choir"]];
+    // Curriculum §0 (FINAL): the first-clear chain is locked for every seed.
+    const ladder: Array<[number, EnemyKind | null]> = [
+      [5, "boss"], [10, null], [15, "marrow"], [20, "weaver"], [25, "gilded"], [30, "choir"],
+    ];
     let authoredOk = true;
     for (let s = 0; s < 40; s++) {
       for (const [floor, kind] of ladder) {
         if (bossKindForFloor(0xAAA + s * 131, floor) !== kind) authoredOk = false;
       }
     }
-    check("F5/10/15/20/25 are ALWAYS King/Marrow/Weaver/Warden/Choir (gate §2, Warden in the F20 slot)", authoredOk);
+    check("the locked first-clear chain holds for every seed (F10 is the gauntlet, not a boss)", authoredOk);
+    check("F10 is the authored Miniboss Gauntlet floor", isGauntletFloor(10) && !isGauntletFloor(15));
   }
   {
-    // Beyond the authored table: seeded, deterministic, varied, no immediate repeats —
-    // including the F25 Choir -> F30 boundary.
+    // Beyond the authored chain (F35+ endgame): seeded, deterministic, varied, no
+    // immediate repeats — including the F30 Choir finale boundary.
     const seen = new Set<EnemyKind>();
     let deterministic = true;
     let noRepeats = true;
     for (let s = 0; s < 60; s++) {
       const seed = 0x5EED + s * 977;
-      let prev: EnemyKind = "choir";
-      for (let floor = 30; floor <= 60; floor += 5) {
+      let prev: EnemyKind | null = "choir";
+      for (let floor = 35; floor <= 65; floor += 5) {
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
-        if (a === prev) noRepeats = false;
-        seen.add(a);
+        if (a === null || a === prev) noRepeats = false;
+        if (a !== null) seen.add(a);
         prev = a;
       }
     }
     check("the deep pick is a pure function of (seed, floor)", deterministic);
-    check("no boss repeats back-to-back deep (nor against the F25 finale)", noRepeats);
+    check("no boss repeats back-to-back deep (nor against the F30 finale)", noRepeats);
     check("all five bosses appear across deep seeds", seen.size === 5, [...seen].join(","));
   }
   {
-    // Every deep boss floor spawns its boss with the matching kin.
+    // Every authored boss floor spawns its boss with the matching kin.
     let kinOk = true;
-    for (let s = 0; s < 6; s++) {
-      const seed = 0xFACE + s * 313;
-      const d = generateDungeon(seed, 10);
-      const spawns = spawnFloorEnemies(d, seed, 10);
+    for (const floor of [15, 20, 25, 30]) {
+      const seed = 0xFACE + floor * 313;
+      const d = generateDungeon(seed, floor);
+      const spawns = spawnFloorEnemies(d, seed, floor);
       const boss = spawns.active.find((e) => isBossKind(e.kind));
       if (!boss) { kinOk = false; break; }
       const minions = spawns.active.filter((e) => !isBossKind(e.kind));
       if (minions.length === 0 || !minions.every((m) => m.kind === BOSS_KIN[boss.kind])) kinOk = false;
     }
-    check("each deep floor spawns the rolled boss with its own kin", kinOk);
+    check("each authored boss floor spawns its boss with its own kin", kinOk);
   }
 }
 
@@ -1002,11 +1129,11 @@ function weaponTests(): void {
 function rosterTests(): void {
   section("roster: the new enemies join the §4 floor plan");
   {
-    // Across seeds, deep floors should actually field chargers and burrowers.
+    // Across seeds, the Sunless floors should actually field chargers and burrowers.
     let sawCharger = false, sawBurrower = false;
     for (let i = 0; i < 12 && !(sawCharger && sawBurrower); i++) {
       const seed = 0xF00 + i * 131;
-      for (const floor of [4, 6, 7]) {
+      for (const floor of [12, 13, 14]) {
         const d = generateDungeon(seed, floor);
         const spawns = spawnFloorEnemies(d, seed, floor);
         for (const e of [...spawns.active, ...spawns.pending]) {
@@ -1020,16 +1147,16 @@ function rosterTests(): void {
   }
   check("charger/burrower carry the gate's ×2 complex-movement cost (threat 2.0)",
     ENEMY_ARCHETYPES.charger.threat === 2.0 && ENEMY_ARCHETYPES.burrower.threat === 2.0);
-  check("neither new enemy appears before its gate §2 intro floor (charger F4, burrower F7)",
+  check("neither new enemy appears before its curriculum intro floor (charger F11, burrower F12)",
     (() => {
       for (let i = 0; i < 8; i++) {
         const seed = 0xABC + i * 977;
-        for (const floor of [1, 2, 3, 4, 6]) {
+        for (const floor of [1, 2, 3, 4, 6, 7, 8, 9, 11]) {
           const d = generateDungeon(seed, floor);
           const spawns = spawnFloorEnemies(d, seed, floor);
           for (const e of [...spawns.active, ...spawns.pending]) {
             if (e.kind === "burrower") return false;
-            if (e.kind === "charger" && floor < 4) return false;
+            if (e.kind === "charger" && floor < 11) return false;
           }
         }
       }
@@ -1191,6 +1318,7 @@ function main(): void {
   weaverTests();
   gildedTests();
   gatePressureTests();
+curriculumTests();
 rotationTests();
   bossChestTests();
   weaponTests();

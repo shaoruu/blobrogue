@@ -176,40 +176,40 @@ const BOSS_GATE_ROWS: readonly BossGateRow[] = [
     forcedEach: BOSS.roarDuration, beatCap: BOSS.roarDuration,
   },
   {
-    kind: "marrow", floor: 10, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    kind: "marrow", floor: 15, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
     medianBand: [38, 52], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 22,
     forcedEach: MARROW.shieldMinDuration, beatCap: MARROW.shieldDuration,
   },
   {
-    kind: "weaver", floor: 15, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
+    kind: "weaver", floor: 20, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
     medianBand: [40, 55], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 22,
     forcedEach: WEAVER.moltDuration, beatCap: WEAVER.moltDuration,
   },
   {
-    kind: "gilded", floor: 20, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    kind: "gilded", floor: 25, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
     medianBand: [42, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 24,
     forcedEach: GILDED.sanctifyDuration, beatCap: GILDED.sanctifyDuration,
   },
   {
-    kind: "choir", floor: 25, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
+    kind: "choir", floor: 30, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
     medianBand: [45, 65], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 25,
     forcedEach: CHOIR.splitMinDuration, beatCap: CHOIR.splitDuration,
   },
 ];
 
 function bossLadderGates(): void {
-  section("studio gate §3: initial Standard-solo HP anchors at the authored floors");
+  section("gate §3 HP anchors at the curriculum's authored floors (curve clamps at F10)");
   check("F5 King HP is 950 (gate initial 900 recalibrated by arsenal telemetry — see PR)",
     bossHpForFloor(5) === BOSS.baseHp && BOSS.baseHp === 950, `hp=${bossHpForFloor(5)}`);
-  check("F10 Marrow HP is exactly the gate's 1,260 initial", marrowHpForFloor(10) === 1260, `hp=${marrowHpForFloor(10)}`);
-  check("F15 Weaver anchor holds at its floor", weaverHpForFloor(15) === WEAVER.baseHp, `hp=${weaverHpForFloor(15)}`);
-  check("F20 Warden anchor holds at its floor", gildedHpForFloor(20) === GILDED.baseHp, `hp=${gildedHpForFloor(20)}`);
-  check("F25 Choir HP is exactly the gate's 1,800 initial", choirHpForFloor(25) === 1800, `hp=${choirHpForFloor(25)}`);
+  check("F15 Marrow HP is exactly the gate's 1,260 initial", marrowHpForFloor(15) === 1260, `hp=${marrowHpForFloor(15)}`);
+  check("F20 Weaver anchor holds at its curriculum floor", weaverHpForFloor(20) === WEAVER.baseHp, `hp=${weaverHpForFloor(20)}`);
+  check("F25 Warden anchor holds at its curriculum floor", gildedHpForFloor(25) === GILDED.baseHp, `hp=${gildedHpForFloor(25)}`);
+  check("F30 Choir HP is exactly the gate's 1,800 initial", choirHpForFloor(30) === 1800, `hp=${choirHpForFloor(30)}`);
   check("every boss deals 2 contact damage (authored integer, never scales)",
     (["boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[]).every((k) => ENEMY_ARCHETYPES[k].touchDamage === 2));
   check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
-    bossHpForFloor(30) <= BOSS.baseHp * 1.5 && marrowHpForFloor(30) <= 1260 * 1.5,
-    `king@30=${bossHpForFloor(30)} marrow@30=${marrowHpForFloor(30)}`);
+    bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= 1260 * 1.5,
+    `king@35=${bossHpForFloor(35)} marrow@35=${marrowHpForFloor(35)}`);
 
   for (const row of BOSS_GATE_ROWS) {
     section(`gate §3 ${row.kind} @F${row.floor}: median ${row.medianBand[0]}–${row.medianBand[1]}s, high-roll ≥${row.highRollMin}s, forced ${row.forcedEach}s×2`);
@@ -760,8 +760,8 @@ function reviveGates(): void {
 function earlyMeltGates(): void {
   section("studio gate §7.1 early-melt: entry-floor focused TTK in the 0.45–1.40s Standard band");
   const entries: Array<[EnemyKind, number]> = [
-    ["slime", 1], ["spitter", 1], ["bat", 2], ["skeleton", 2], ["ghost", 3],
-    ["charger", 4], ["orbiter", 6], ["burrower", 7],
+    ["slime", 1], ["bat", 2], ["skeleton", 2], ["spitter", 3], ["ghost", 7],
+    ["charger", 11], ["burrower", 12], ["orbiter", 17],
   ];
   for (const [kind, floor] of entries) {
     const t = measureFocusedTtk(kind, floor, "pistol", []);
@@ -772,9 +772,9 @@ function earlyMeltGates(): void {
   // straight-line measure never lands: assert its unblocked burn-down instead — landed
   // hits at the base pistol's cadence keep it inside the same band.
   {
-    const shots = Math.ceil(enemyHpForFloor("shielder", 7) / WEAPONS.pistol.damage);
+    const shots = Math.ceil(enemyHpForFloor("shielder", 8) / WEAPONS.pistol.damage);
     const burn = (shots - 1) * WEAPONS.pistol.fireCd + 0.25; // cadence + ~140px flight
-    check("shielder F7 unblocked burn-down sits in [0.45, 1.40]s (front arc adds the rest)",
+    check("shielder F8 unblocked burn-down sits in [0.45, 1.40]s (front arc adds the rest)",
       burn >= 0.45 && burn <= 1.40, `burn=${burn.toFixed(2)}s (${shots} landed rounds)`);
   }
 }
@@ -793,7 +793,7 @@ function compositionCapGates(): void {
   let splitMoverOk = true;
   for (let seedIdx = 0; seedIdx < 30; seedIdx++) {
     const seed = 0xCA9E + seedIdx * 6151;
-    for (let floor = 7; floor <= 24; floor++) {
+    for (let floor = 8; floor <= 24; floor++) {
       if (isBossFloor(floor)) continue;
       const d = generateDungeon(seed, floor);
       const spawns = spawnFloorEnemies(d, seed, floor);

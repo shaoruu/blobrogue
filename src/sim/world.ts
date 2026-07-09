@@ -16,7 +16,7 @@ import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
-import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover } from "./enemies.js";
+import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover, isGauntletFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
@@ -27,7 +27,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  CAPS, TIERS,
+  GAUNTLET, CAPS, TIERS, bossHpForFloor, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, ELITE_SPLIT_COUNT, BRUTE_HEAVY_DAMAGE,
   MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
@@ -145,6 +145,10 @@ export interface WorldState {
   // two releases may pincer the same escape lane inside one reaction window.
   recentReleases: Array<{ x: number; y: number; radius: number; t: number }>;
   nextRubbleLane: number;
+  // The F10 Arena Gauntlet stage machine (curriculum §2): `stage` counts spawned stages,
+  // `breath` is the authored 1.2s beat between a clear and the next entrance, and
+  // `isRewarded` latches once the premium chest has dropped. Null on ordinary floors.
+  gauntlet: { stage: number; breath: number; isRewarded: boolean } | null;
   dungeon: Dungeon;
   // Dynamic-obstacle navigation caches (prop clearance grid + per-class flow fields).
   // Derived data only — never on the wire; every consumer rebuilds lazily off
@@ -246,6 +250,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     hazards: [],
     recentReleases: [],
     nextRubbleLane: 0,
+    gauntlet: null,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     nav: createNav(),
     obstacleRev: 0,
@@ -338,6 +343,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.hazards = [];
   w.recentReleases = [];
   w.nextRubbleLane = 0;
+  w.gauntlet = !w.isSandbox && isGauntletFloor(floor) ? { stage: 0, breath: 0, isRewarded: false } : null;
   w.nextEnemyId = 0;
   w.nextPropId = 0;
   w.nextPickupId = 0;
@@ -387,6 +393,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
 // Floor cleared = every active enemy dead AND no reinforcements still queued. The exit,
 // the snapshot `cleared` flag, and the client HUD/minimap all read this one predicate.
 export function isFloorCleared(w: WorldState): boolean {
+  if (w.gauntlet !== null && (w.gauntlet.stage < GAUNTLET.stages.length || !w.gauntlet.isRewarded)) return false;
   return w.enemies.length === 0 && w.pendingSpawns.length === 0;
 }
 
@@ -3332,6 +3339,64 @@ function rushSmashEnvironment(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   enemySmashEnvironment(w, e.x, e.y, e.radius + RUSH_SMASH_PAD, ev);
 }
 
+// ---- the F10 Miniboss Gauntlet (curriculum §2 F10 + §5) ----
+// A stage machine, not a boss: once the floor's living pressure is cleared, an authored
+// 1.2s breath passes and the next miniboss ENTERS the arena — the Flock Commander with
+// its escort, then the Orbiter elite, then the Shielder brute, strictly sequential and
+// never simultaneous. Each miniboss carries its authored fraction of the depth's
+// boss-effective HP (co-op scaled like a boss). The final clear drops the premium boss
+// chest (P+1 weapon choices led by the gauntlet's signature + the rare blessing offer).
+
+function updateGauntlet(w: WorldState, dt: number, ev: SimEvent[]): void {
+  const g = w.gauntlet;
+  if (!g || w.isRunOver || g.isRewarded) return;
+  if (w.enemies.some((e) => !e.dead) || w.pendingSpawns.length > 0) {
+    g.breath = GAUNTLET.breath;
+    return;
+  }
+  g.breath -= dt;
+  if (g.breath > 0) return;
+  if (g.stage < GAUNTLET.stages.length) {
+    spawnGauntletStage(w, GAUNTLET.stages[g.stage], ev);
+    g.stage++;
+    return;
+  }
+  // Sequence complete: the premium reward stands where the last miniboss fell.
+  g.isRewarded = true;
+  const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
+  w.chests.push({
+    id: w.nextChestId++, kind: "boss",
+    x: (arena.cx + 0.5) * TILE, y: (arena.cy + 0.5) * TILE,
+    radius: 18, opened: false, weapon: GAUNTLET.chestWeapon,
+  });
+  ev.push({ t: "cue", name: "bossSpawn", x: (arena.cx + 0.5) * TILE, y: (arena.cy + 0.5) * TILE, rate: 1.3, gain: 0.8, trauma: 0.1 });
+}
+
+function spawnGauntletStage(w: WorldState, stage: (typeof GAUNTLET.stages)[number], ev: SimEvent[]): void {
+  const arena = w.dungeon.rooms[w.dungeon.rooms.length - 1];
+  const cx = (arena.cx + 0.5) * TILE, cy = (arena.cy + 0.5) * TILE;
+  const spawnAt = (kind: Enemy["kind"], tier: Enemy["tier"], x: number, y: number, isSummoned: boolean): Enemy | null => {
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[kind].radius)) return null;
+    const e = createEnemy(kind, settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      tier, isSummoned, players: w.encounterPlayers,
+    });
+    w.enemies.push(e);
+    ev.push({ t: "enemySpawn", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y });
+    return e;
+  };
+  const boss = spawnAt(stage.kind, stage.tier, cx, cy, false);
+  if (boss) {
+    // §5 miniboss calibration: an authored fraction of the depth's boss-effective HP.
+    const hp = Math.round((stage.hpFrac * bossHpForFloor(GAUNTLET.floor) * coopBossHpMult(w.encounterPlayers)) / 10) * 10;
+    boss.hp = boss.maxHp = hp;
+    ev.push({ t: "cue", name: "bossSpawn", x: boss.x, y: boss.y, rate: 0.8, gain: 0.9, trauma: 0.15 });
+  }
+  for (let i = 0; i < stage.escort; i++) {
+    const ang = (i / stage.escort) * Math.PI * 2;
+    spawnAt("bat", "swarm", cx + Math.cos(ang) * 70, cy + Math.sin(ang) * 70, true);
+  }
+}
+
 // ---- hazards (the Weaver's webs, MARROW's rubble lanes) ----
 
 function webSlowMult(w: WorldState, x: number, y: number): number {
@@ -3975,6 +4040,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   recordHistory(w);
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
+  updateGauntlet(w, dt, ev);
   updateHazards(w, dt);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);

@@ -108,11 +108,14 @@ export interface MoteStyle {
   isFlicker: boolean; // embers pulse brightness; dust stays steady
 }
 
-// Indexed by biome index (see src/sim/biomes.ts): Verdant, Caves, Deep, Ember.
+// Indexed by biome index (see src/sim/biomes.ts): the curriculum's six regions —
+// Amberwild, Rootbound Warrens, Sunless Caves, The Deep, Gilded Archive, Emberreach.
 const MOTE_STYLES: readonly MoteStyle[] = [
   { color: "#9fdc7a", rise: -13, sway: 11, swayFreq: 0.5, alpha: 0.32, count: 34, isFlicker: false },
+  { color: "#b6cc6e", rise: -10, sway: 13, swayFreq: 0.42, alpha: 0.3, count: 36, isFlicker: false },
   { color: "#8fc2e8", rise: 9, sway: 7, swayFreq: 0.35, alpha: 0.28, count: 30, isFlicker: false },
   { color: "#b98aff", rise: -7, sway: 15, swayFreq: 0.28, alpha: 0.3, count: 34, isFlicker: false },
+  { color: "#ffd166", rise: -9, sway: 6, swayFreq: 0.3, alpha: 0.3, count: 28, isFlicker: true },
   { color: "#ffb43b", rise: -26, sway: 9, swayFreq: 0.7, alpha: 0.38, count: 30, isFlicker: true },
 ];
 
