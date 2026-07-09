@@ -24,12 +24,18 @@ export interface ExpectedMember {
   colorIndex: number;
 }
 
+// A member's live connection state against the server's world roster: connected ("on"
+// seat), reconnecting (an "away" seat is reserved for them mid-outage), or still connecting
+// (no seat at all yet).
+export type MemberLinkState = "connecting" | "connected" | "reconnecting";
+
 export interface PartyMemberView {
   playerId: string;
   name: string;
   colorIndex: number;
   isSelf: boolean;
   isConnected: boolean;
+  link: MemberLinkState;
 }
 
 export type PartyPhase = "waiting" | "ready" | "failed";
@@ -46,6 +52,8 @@ export interface PartyGateView {
 // claiming the room but never reached the world (e.g. their game-server connect failed).
 export const PARTY_GATE_DEADLINE_MS = 20000;
 
+const EMPTY_SET: ReadonlySet<string> = new Set();
+
 export class PartyGate {
   private readonly selfPlayerId: string;
   private readonly deadlineMs: number;
@@ -57,7 +65,10 @@ export class PartyGate {
     this.deadlineMs = deadlineMs;
   }
 
-  evaluate(nowMs: number, expected: readonly ExpectedMember[], connectedAuthIds: ReadonlySet<string>): PartyGateView {
+  // awayAuthIds: members whose seat is reserved mid-outage (server roster "away") — shown as
+  // RECONNECTING and still waited for (they joined once; their return is imminent or the
+  // deadline names them).
+  evaluate(nowMs: number, expected: readonly ExpectedMember[], connectedAuthIds: ReadonlySet<string>, awayAuthIds: ReadonlySet<string> = EMPTY_SET): PartyGateView {
     if (this.startedAt === null) this.startedAt = nowMs;
     const members: PartyMemberView[] = expected.map((m) => ({
       playerId: m.playerId,
@@ -65,6 +76,7 @@ export class PartyGate {
       colorIndex: m.colorIndex,
       isSelf: m.playerId === this.selfPlayerId,
       isConnected: connectedAuthIds.has(m.playerId),
+      link: connectedAuthIds.has(m.playerId) ? "connected" as const : awayAuthIds.has(m.playerId) ? "reconnecting" as const : "connecting" as const,
     }));
     const isSelfExpected = members.some((m) => m.isSelf);
     const isAssembled = isSelfExpected && members.every((m) => m.isConnected);

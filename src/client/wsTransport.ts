@@ -20,7 +20,7 @@ import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire,
-  STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
+  STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
   type RosterWire, type ServerMsg,
 } from "../net/protocol.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
@@ -37,12 +37,22 @@ export interface SocketLike {
   readyState: number;
   bufferedAmount: number;
   onopen: (() => void) | null;
-  onclose: (() => void) | null;
+  // The close event's code (when the implementation surfaces one) distinguishes the server's
+  // deliberate lifecycle closes (game over, superseded) from network death.
+  onclose: ((ev?: { code?: number }) => void) | null;
   onerror: ((err: unknown) => void) | null;
   onmessage: ((ev: { data: unknown }) => void) | null;
 }
 
-export type ConnStatus = "connecting" | "open" | "closed" | "error";
+export type ConnStatus = "connecting" | "open" | "reconnecting" | "closed" | "error";
+
+// Why the transport reached a terminal state after having played — drives the game's exit:
+//   game_over       — the server ended the run and closed the socket (the ONLY death path)
+//   superseded      — another connection with this identity took the body over (second tab)
+//   resume_rejected — the server refused our resume token (replay/forgery signal)
+//   connection_lost — the reconnect window ran out or the seat was gone (grace expired /
+//                     world released / server restarted): the run is unreachable, NOT a death
+export type CloseKind = "game_over" | "superseded" | "resume_rejected" | "connection_lost";
 
 export interface WSTransportOptions {
   url: string;
@@ -55,6 +65,12 @@ export interface WSTransportOptions {
   socketFactory?: (url: string) => SocketLike;
   now?: () => number;
   onStatus?: (s: ConnStatus) => void;
+  // Reconnect backoff tuning (tests tighten these; production keeps the defaults).
+  reconnectBaseDelayMs?: number;
+  reconnectMaxDelayMs?: number;
+  // How long the server holds our seat — the reconnect loop gives up (terminal
+  // connection_lost) once this window plus slack is exhausted.
+  resumeGraceMs?: number;
 }
 
 // A world-binding violation: the server bound this connection to a world other than the one
@@ -64,7 +80,21 @@ export interface WorldMismatch {
   got: string;
 }
 
+// Live reconnect readout for the CONNECTION LOST overlay: which attempt is in flight and
+// when the server-side grace runs out (countdown display).
+export interface ReconnectInfo {
+  isReconnecting: boolean;
+  attempt: number;
+  graceEndsAtMs: number;
+}
+
 const SOCKET_OPEN = 1;
+// Reconnect backoff: 400ms, 800ms, 1.6s, 3.2s, then 5s steps — ~8 attempts inside the 25s
+// server grace. Slack past the grace covers one final in-flight attempt against a seat that
+// is already gone (it resolves as resume_expired, an explicit answer).
+const RECONNECT_BASE_DELAY_MS = 400;
+const RECONNECT_MAX_DELAY_MS = 5000;
+const RECONNECT_GRACE_SLACK_MS = 3000;
 // A correction smaller than this glides over a few frames (invisible); anything larger is a
 // genuine divergence (knockback/teleport) and snaps immediately.
 const SMOOTH_MAX_PX = 96;
@@ -132,6 +162,20 @@ export class WSTransport implements Transport {
   private joinTicket: string | null = null;
   private lastJoinAt = 0;
 
+  // ---- reconnect grace / session resume ----
+  // The server's single-use seat token (from full snapshots). Presented on reconnect to
+  // reclaim the same body; rotated by the server on every join.
+  private resumeToken: string | null = null;
+  private isReconnecting = false;
+  private reconnectAttempt = 0;
+  private graceEndsAt = 0;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private isEverReady = false;        // auto-reconnect only after we actually had a world
+  private closeKind: CloseKind | null = null;
+  // Reject codes arrive as error FRAMES before the socket closes; latch them so the close
+  // handler can route to the right terminal state.
+  private rejectCode: string | null = null;
+
   private interp = new RemoteInterp();
   private events: SimEvent[] = [];
   private smoothX = 0;
@@ -166,6 +210,9 @@ export class WSTransport implements Transport {
   private isWorldRebuilt = false;
   // Terminal world-binding violation (expectedWorldId asserted against snapshot wid).
   private worldMismatch: WorldMismatch | null = null;
+  // Whether a snapshot arrived on the CURRENT socket — drives the lost-join resend (the
+  // handshake frame itself can be dropped under packet loss, on first join and on resume).
+  private isSnapSeenOnSocket = false;
   // A server-decided blessing offer waiting to be shown (consumed by the game each frame).
   private pendingOffer: BlessingOffer | null = null;
 
@@ -222,19 +269,41 @@ export class WSTransport implements Transport {
     this.cseq = 0;
     this.isWorldRebuilt = false;
     this.worldMismatch = null;
+    this.resumeToken = null;
+    this.isReconnecting = false;
+    this.reconnectAttempt = 0;
+    this.graceEndsAt = 0;
+    this.isEverReady = false;
+    this.closeKind = null;
+    this.rejectCode = null;
+    if (this.reconnectTimer !== null) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     const lp = this.predState.players.get(LOCAL_ID)!;
     this.prevPredX = lp.x; this.prevPredY = lp.y;
     this.stopped = false;
+    // The browser announces returning connectivity — attempt a resume IMMEDIATELY instead of
+    // waiting out the current backoff step (this is what makes a near-grace-length outage
+    // still resume in time). No-op wherever the event never fires (Node harness).
+    const g = globalThis as { addEventListener?: (type: string, cb: () => void) => void };
+    g.addEventListener?.("online", this.onOnline);
     void this.connect();
   }
 
+  private onOnline = (): void => {
+    this.retryReconnectNow();
+  };
+
   private async connect(): Promise<void> {
-    this.setStatus("connecting");
+    this.setStatus(this.isReconnecting ? "reconnecting" : "connecting");
     let ticket: string;
     try {
+      // Always a FRESH ticket (short TTL): a reconnect re-mints through the same trusted
+      // path, so the identity/room proof is never stale even after a long outage.
       ticket = await this.opts.getTicket();
     } catch (err) {
       this.lastError = "ticket: " + String(err);
+      if (this.stopped) return;
+      // A mint hiccup during an outage IS the outage — count the attempt and keep trying.
+      if (this.isReconnecting) { this.scheduleReconnect(); return; }
       this.setStatus("error");
       return;
     }
@@ -245,18 +314,95 @@ export class WSTransport implements Transport {
       sock = factory(this.opts.url);
     } catch (err) {
       this.lastError = "socket: " + String(err);
+      if (this.isReconnecting) { this.scheduleReconnect(); return; }
       this.setStatus("error");
       return;
     }
     this.socket = sock;
     this.joinTicket = ticket;
     sock.onopen = () => {
-      this.setStatus("open");
+      if (!this.isReconnecting) this.setStatus("open");
       this.sendJoin();
     };
     sock.onmessage = (ev) => this.onMessage(ev.data);
-    sock.onclose = () => { this.socket = null; this.setStatus("closed"); };
-    sock.onerror = (err) => { this.lastError = String(err); this.setStatus("error"); };
+    sock.onclose = (ev) => { this.socket = null; this.onSocketGone(ev?.code); };
+    sock.onerror = (err) => {
+      this.lastError = String(err);
+      // Mid-outage errors resolve through onclose (the next attempt is already the answer);
+      // a first-connect error stays terminal exactly as before.
+      if (!this.isReconnecting && !this.isEverReady) this.setStatus("error");
+    };
+  }
+
+  // The socket died. Deliberate lifecycle closes (game over, superseded) and terminal
+  // rejects surface immediately; everything else after we had a world is a NETWORK ACCIDENT:
+  // the server is holding our seat, so reconnect with backoff instead of declaring death.
+  private onSocketGone(code?: number): void {
+    if (this.stopped) { this.setStatus("closed"); return; }
+    if (code === 4008 || this.latestSnap?.over === true) {
+      this.closeKind = "game_over";
+      this.setStatus("closed");
+      return;
+    }
+    if (code === 4009) {
+      this.closeKind = "superseded";
+      this.lastError = "superseded: another session with this identity took over";
+      this.setStatus("error");
+      return;
+    }
+    if (this.rejectCode === "resume") {
+      this.closeKind = "resume_rejected";
+      this.setStatus("error");
+      return;
+    }
+    if (this.rejectCode === "resume_expired") {
+      this.closeKind = "connection_lost";
+      this.setStatus("closed");
+      return;
+    }
+    if (this.isEverReady) { this.scheduleReconnect(); return; }
+    this.setStatus("closed");
+  }
+
+  // Exponential backoff toward the seat's grace deadline. The first drop anchors the grace
+  // countdown; once the window (plus one-attempt slack) is spent, the run is unreachable and
+  // the transport goes terminal — connection_lost, never a fabricated game over.
+  private scheduleReconnect(): void {
+    if (this.stopped) return;
+    if (!this.isReconnecting) {
+      this.isReconnecting = true;
+      this.reconnectAttempt = 0;
+      this.graceEndsAt = this.now() + (this.opts.resumeGraceMs ?? RESUME_GRACE_MS);
+      console.warn("[net] connection lost — reconnecting with resume token", { graceMs: this.graceEndsAt - this.now() });
+    }
+    if (this.now() > this.graceEndsAt + RECONNECT_GRACE_SLACK_MS) {
+      this.isReconnecting = false;
+      this.closeKind = "connection_lost";
+      this.lastError = "reconnect window exhausted";
+      this.setStatus("closed");
+      return;
+    }
+    const base = this.opts.reconnectBaseDelayMs ?? RECONNECT_BASE_DELAY_MS;
+    const max = this.opts.reconnectMaxDelayMs ?? RECONNECT_MAX_DELAY_MS;
+    const delay = Math.min(max, base * Math.pow(2, this.reconnectAttempt));
+    this.reconnectAttempt++;
+    this.setStatus("reconnecting");
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect();
+    }, delay);
+  }
+
+  // Connectivity just returned (the browser's `online` event, or a test's network restore):
+  // skip the remaining backoff and attempt NOW. This is what lets an outage lasting almost
+  // the whole grace window still resume in time — the retry cadence stops mattering the
+  // moment the network is back.
+  retryReconnectNow(): void {
+    if (!this.isReconnecting || this.stopped || this.reconnectTimer === null) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    void this.connect();
   }
 
   private setStatus(s: ConnStatus): void {
@@ -270,7 +416,17 @@ export class WSTransport implements Transport {
   private sendJoin(): void {
     if (!this.joinTicket) return;
     this.lastJoinAt = this.now();
-    this.sendMsg({ t: "join", ticket: this.joinTicket, protocol: PROTOCOL_VERSION });
+    // A fresh socket is a fresh server-side connection: inputs in flight on the dead socket
+    // were lost (the seat preserved the server's ack watermark, so our seq counter keeps
+    // counting), and preserved offers will be resent with ids that must re-prompt.
+    this.isSnapSeenOnSocket = false;
+    this.pending = [];
+    this.lastOfferId = 0;
+    if (this.resumeToken !== null) {
+      this.sendMsg({ t: "join", ticket: this.joinTicket, protocol: PROTOCOL_VERSION, resume: this.resumeToken });
+    } else {
+      this.sendMsg({ t: "join", ticket: this.joinTicket, protocol: PROTOCOL_VERSION });
+    }
   }
 
   private sendMsg(msg: Parameters<typeof jsonCodec.encodeClient>[0]): void {
@@ -303,6 +459,9 @@ export class WSTransport implements Transport {
     }
     if (msg.t === "error") {
       this.lastError = `${msg.code}: ${msg.msg}`;
+      // Terminal join rejects (resume replay/forgery, expired seat) arrive as error frames
+      // just before the server closes the socket — latch so the close routes correctly.
+      if (msg.code === "resume" || msg.code === "resume_expired") this.rejectCode = msg.code;
       return;
     }
     if (msg.t === "offer") {
@@ -366,6 +525,16 @@ export class WSTransport implements Transport {
     this.lastSnapTick = snap.tick;
     this.maybeRebuildWorld(snap.seed, snap.floor);
     this.latestSnap = snap;
+    this.isEverReady = true;
+    this.isSnapSeenOnSocket = true;
+    // The seat token for the NEXT reconnect (single-use; the server rotates it every join).
+    if (snap.tok !== undefined) this.resumeToken = snap.tok;
+    if (this.isReconnecting) {
+      this.isReconnecting = false;
+      this.reconnectAttempt = 0;
+      console.info("[net] resumed into the authoritative world", { wid: snap.wid, selfId: snap.selfId });
+      this.setStatus("open");
+    }
     const prevSnapAt = this.lastSnapAtForJitter;
     this.snapRecvAt = this.now();
     this.snapsRecv++;
@@ -469,10 +638,10 @@ export class WSTransport implements Transport {
   }
 
   advance(dt: number): void {
-    // A lost join handshake (packet loss on connect) would otherwise strand the client. While
-    // connected but not yet acknowledged (no snapshot), resend the join periodically.
+    // A lost join handshake (packet loss on connect OR on a resume socket) would otherwise
+    // strand the client. While connected but unacknowledged on THIS socket, resend the join.
     const sock = this.socket;
-    if (sock && sock.readyState === SOCKET_OPEN && !this.isReady() && this.now() - this.lastJoinAt > 500) {
+    if (sock && sock.readyState === SOCKET_OPEN && !this.isSnapSeenOnSocket && this.now() - this.lastJoinAt > 500) {
       this.sendJoin();
     }
 
@@ -619,6 +788,7 @@ export class WSTransport implements Transport {
         hp: p.hp, maxHp: p.mhp,
         weapon: p.wpn, floor: snap.floor,
         isDown: p.down,
+        isAbsent: p.ab,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl ?? colorIndexFor(p.id),
@@ -705,6 +875,18 @@ export class WSTransport implements Transport {
   getWorldMismatch(): WorldMismatch | null {
     return this.worldMismatch;
   }
+  // Live reconnect state for the CONNECTION LOST overlay (attempt counter + grace countdown).
+  getReconnectInfo(): ReconnectInfo {
+    return { isReconnecting: this.isReconnecting, attempt: this.reconnectAttempt, graceEndsAtMs: this.graceEndsAt };
+  }
+  // Why the transport went terminal after having played (null while healthy / pre-world).
+  getCloseKind(): CloseKind | null {
+    return this.closeKind;
+  }
+  // The current single-use seat token (tests assert rotation; the game never reads it).
+  getResumeToken(): string | null {
+    return this.resumeToken;
+  }
   // The current predicted local-player position (true prediction, pre-smoothing).
   getPredictedSelf(): { x: number; y: number } {
     const p = this.predState.players.get(LOCAL_ID)!;
@@ -742,9 +924,19 @@ export class WSTransport implements Transport {
 
   stop(): void {
     this.stopped = true;
+    const g = globalThis as { removeEventListener?: (type: string, cb: () => void) => void };
+    g.removeEventListener?.("online", this.onOnline);
+    if (this.reconnectTimer !== null) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    this.isReconnecting = false;
     const sock = this.socket;
     this.socket = null;
     if (sock) {
+      // A deliberate goodbye: tell the server NOT to reserve a reconnect seat for this
+      // close (quit to lobby / run end are not network accidents). Best-effort — if the
+      // frame is lost the seat simply expires on its own.
+      if (sock.readyState === SOCKET_OPEN) {
+        try { sock.send(jsonCodec.encodeClient({ t: "leave" })); } catch { /* closing */ }
+      }
       try { sock.close(); } catch { /* ignore */ }
     }
   }
