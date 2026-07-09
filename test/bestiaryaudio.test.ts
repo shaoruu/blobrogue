@@ -22,7 +22,7 @@ import {
 } from "../src/game/bestiaryAudio.js";
 import { WaveAudioDirector } from "../src/game/waveAudio.js";
 import type { WaveFrameEnemy, WaveListener } from "../src/game/waveAudio.js";
-import type { WaveEngine, WavePlayRequest, WaveLoopRequest, WaveDuck } from "../src/game/audio.js";
+import type { WaveEngine, WavePlayRequest, WaveLoopRequest, WaveDuck, SfxName } from "../src/game/audio.js";
 import { ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
 import { ENEMY_MOVESET } from "../src/sim/bestiary.js";
 import type { EnemyKind } from "../src/sim/types.js";
@@ -63,6 +63,8 @@ class ScriptEngine implements WaveEngine {
   stopAllWaveLoops(): void { for (const key of [...this.live]) this.stopWaveLoop(key); }
   duckWaveBus(_duck: WaveDuck): void { /* policy suite covers ducks */ }
   preloadWave(stems: string[]): void { this.preloaded.push(...stems); }
+  preloadSamples(samples: readonly SfxName[]): void { this.preloadedSamples.push(...samples); }
+  preloadedSamples: SfxName[] = [];
   playsFor(event: string): WavePlayRequest[] { return this.plays.filter((p) => p.event === event); }
 }
 
@@ -134,6 +136,17 @@ function manifestGates(): void {
 
 // ---- 2. row hygiene: no stem:null, same-material fallbacks, sane rates, dry locks ----
 
+// Rows the AUTHORED-ONLY pass (durability/audio audit) deliberately stripped of their
+// fallback: the old transforms sat far outside the safe derive band, so these boss rows
+// fail quietly until their generated file lands. The bestiary fallback law exempts them
+// rather than re-introducing an out-of-band transform.
+const DE_FALLBACKED_ROWS: ReadonlySet<WaveEventId> = new Set<WaveEventId>([
+  "marrow.listenStart", "marrow.chargeStart", "marrow.phase", "marrow.death", "marrow.stompWindup",
+  "choir.strikeWarn", "choir.swellFire", "choir.phase", "choir.death",
+  "weaver.blinkDepart", "weaver.phase",
+  "warden.prisonWarn", "warden.prisonClose", "warden.phase", "warden.death",
+]);
+
 function rowHygieneGates(): void {
   section("row hygiene: stems, fallbacks, rates, dry positional locks");
   const surface = bestiarySurface();
@@ -143,8 +156,12 @@ function rowHygieneGates(): void {
   let isLockOk = true;
   for (const id of surface) {
     const spec: WaveSoundSpec = waveSpecOf(id);
-    if (spec.stem === null) { isStemOk = false; process.stdout.write(`    stem:null — ${id}\n`); }
-    if (spec.loop !== true && spec.fallback === undefined) {
+    // Selection-driven rows (explicit shipped take lists, e.g. the burrow emitter
+    // components) are authored by construction: their files are the selected takes.
+    const isSelectionDriven = spec.takes !== undefined && spec.takes.length > 0;
+    if (spec.stem === null && !isSelectionDriven) { isStemOk = false; process.stdout.write(`    stem:null — ${id}\n`); }
+    if (spec.loop !== true && spec.fallback === undefined && !isSelectionDriven
+      && !DE_FALLBACKED_ROWS.has(id)) {
       isFallbackOk = false;
       process.stdout.write(`    no sample fallback — ${id}\n`);
     }
@@ -261,18 +278,17 @@ function arbiterGates(): void {
     check("the empty field releases the bed", eng.loopStops.includes(`flock.bed#${GROUP_LOOP_KEY}`));
   }
   {
-    // The burrower underground: a component EMITTER — one-shots on a cadence, no loop.
+    // The burrower underground: a component EMITTER — seeded authored one-shots
+    // (burrow.dirtGrind/pebble/shellScrape), never a loop voice.
     const eng = new ScriptEngine();
     const dir = new WaveAudioDirector(eng);
-    const under = enemyAt(9, "burrower", snap("active", "dive"), 40, 0);
-    dir.frame({ listener, enemies: [under], players: [] });
-    dir.frame({ listener, enemies: [under], players: [] });
-    check("no continuous loop, one emitter shot at t0",
-      eng.loopStarts.every((l) => !l.key.startsWith("burrower.track"))
-      && eng.playsFor("burrower.track").length === 1);
-    eng.nowMs += 500;
-    dir.frame({ listener, enemies: [under], players: [] });
-    check("the emitter re-triggers on its authored cadence", eng.playsFor("burrower.track").length === 2);
+    for (let t = 0; t <= 3000; t += 50) {
+      eng.nowMs = t;
+      dir.frame({ listener, enemies: [enemyAt(9, "burrower", snap("active", "dive"), 40, 0)], players: [] });
+    }
+    const emitterPlays = eng.plays.filter((p) => p.event.startsWith("burrow.") && p.event !== "burrow.thud");
+    check("no continuous loop ever starts for the underground body", eng.loopStarts.length === 0);
+    check("the emitter schedules authored component one-shots on its cadence", emitterPlays.length >= 3);
   }
   {
     // Hurt/death cues rate-limit through their rows.

@@ -5,14 +5,21 @@
 //   line(i)   = "<sha256hex(file_i)>  <relpath_i>\n"   (two spaces — sha256sum format)
 //   checksum  = sha256hex( concat(lines sorted by relpath, C locale) )
 //
+// Per-file hashes MUST be computed over the file's exact bytes (sha256sum semantics). A utf8
+// read + re-encode is lossy for binary files (sprite PNGs, native addons), so callers hash the
+// Uint8Array from FileSystemPort.readFileBytes, never a decoded string.
+//
 // The build script writes `checksum` into manifest.json; the verifier recomputes it from the
 // on-box files and rejects any mismatch. A drift between the two implementations would fail the
 // integration test that packs + verifies a real tree.
 
 import { createHash } from "node:crypto";
 
-export function sha256Hex(data: string): string {
-  return createHash("sha256").update(data, "utf8").digest("hex");
+export function sha256Hex(data: string | Uint8Array): string {
+  const hash = createHash("sha256");
+  if (typeof data === "string") hash.update(data, "utf8");
+  else hash.update(data);
+  return hash.digest("hex");
 }
 
 export interface FileDigest {

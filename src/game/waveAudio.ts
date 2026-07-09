@@ -13,13 +13,14 @@
 //      animation frames), so PR #31's bosses/mobs sound right with zero sim changes.
 
 import { audio } from "./audio.js";
-import type { WaveEngine } from "./audio.js";
+import type { SfxName, WaveEngine } from "./audio.js";
 import {
-  isWaveEventId, waveSpecOf, spatialGainFor, tellCuesFor, isTrackLoopHeld,
+  isWaveEventId, waveSpecOf, spatialGainFor, tellCuesFor, isBurrowUnderground,
   bossWaveEvents, PET_SIDECHAIN, BOSS_LOCK_AMBIENT_MUTE_MS, WAVE_PRIORITY,
   WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE, WAVE_WEAPON_FIRE,
   AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS,
-  BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS,
+  ALWAYS_REACHABLE_EVENTS, BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS,
+  BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, takeStemsOf, emitterRand,
 } from "./waveSpec.js";
 import {
   MAX_CONCURRENT_MOB_LOCKS, MOB_LOCK_WINDOW_MS, GROUP_LOOP_KEY,
@@ -35,6 +36,10 @@ export interface WavePlayOpts {
   entityId?: number | string;
   gain?: number;
   rate?: number;
+  // Deterministic variant selection (the seeded emitters); absent = Math.random.
+  variantRoll?: number;
+  // Exact take index (weighted emitter draws own the pick AND the anti-repeat rule).
+  variantIndex?: number;
 }
 
 // Camera-space listener (the local player + view rect); drives attenuation + combat gating.
@@ -70,6 +75,9 @@ export interface WaveFrameInput {
   readonly listener: WaveListener;
   readonly enemies: Iterable<WaveFrameEnemy>;
   readonly players: Iterable<WaveFramePlayer>;
+  // Whether a world position is a valid wall/material cell for diegetic ambience
+  // placement (the Deep emitter). Absent = every ring position is acceptable.
+  readonly isMaterialCellAt?: (x: number, y: number) => boolean;
 }
 
 // Mirrors the content-wave orbiter ring (ORBITER_RING/SLACK) for the once-per-entity
@@ -95,11 +103,31 @@ interface BeamState {
   holdMs: number; // stop hysteresis — wider for remote beams fed by ~10Hz presence sync
 }
 
+// Per-burrower deterministic underground emitter: each authored component channel keeps
+// its own next-fire clock; the whole pattern is a pure function of the entity id.
+interface BurrowEmitterState {
+  rngState: number;
+  nextAtMs: number[];
+}
+
+// The Deep's sparse ambience scheduler (one per director; active only in the Deep zone).
+// One GLOBAL opportunity clock; per-channel re-arm clocks and last-take memory; recent
+// starts are shared (the max-one-active cap).
+interface DeepEmitterState {
+  seed: number;     // the arming seed (floor identity), immutable
+  rngState: number; // the live LCG cursor
+  nextOpportunityAtMs: number;
+  rearmAtMs: number[];
+  lastTake: number[];
+  recentAtMs: number[]; // recent event starts, pruned to the overlap window
+}
+
 class WaveAudioDirector {
   private engine: WaveEngine;
   private listener: WaveListener | null = null;
   private isInCombat = false;
   private lastBossLockAtMs = -Infinity;
+  private lastCombatLockAtMs = -Infinity;
   private cooldownAt = new Map<string, number>();
   // MOB lock concurrency (bestiary audio contract): at most MAX_CONCURRENT_MOB_LOCKS
   // enemy-lock cues inside one audible window. Boss locks are exempt (their own band).
@@ -110,6 +138,8 @@ class WaveAudioDirector {
   private reviveChannels = new Set<string>();
   private ambientZone: number | null = null;
   private seenIdsScratch = new Set<number>();
+  private burrowEmitters = new Map<number, BurrowEmitterState>();
+  private deepEmitter: DeepEmitterState | null = null;
 
   constructor(engine: WaveEngine) {
     this.engine = engine;
@@ -141,7 +171,7 @@ class WaveAudioDirector {
     }
     if (gain < 0.02) return false;
 
-    const variantIndex = this.pickVariant(event, spec);
+    const variantIndex = this.pickVariant(event, spec, opts?.variantRoll, opts?.variantIndex);
     const rate = (opts?.rate ?? 1) * (1 + (Math.random() * 2 - 1) * spec.jitter);
     const isPlayed = this.engine.playWave({
       event,
@@ -151,7 +181,6 @@ class WaveAudioDirector {
       rate,
       stem: this.stemForVariant(spec, variantIndex),
       fallback: spec.fallback,
-      synth: spec.synth,
       duck: spec.duck,
     });
     if (!isPlayed) return false;
@@ -162,6 +191,9 @@ class WaveAudioDirector {
       this.lastBossLockAtMs = nowMs;
       this.engine.duckWaveBus(PET_SIDECHAIN); // §1: pet cues never overlap boss locks
     }
+    // Combat locks (enemy/boss lock tells, hazard warnings) open the Deep emitter's
+    // ±250ms ambience mute window.
+    if (spec.priority >= WAVE_PRIORITY.enemyLock) this.lastCombatLockAtMs = nowMs;
     return true;
   }
 
@@ -175,13 +207,12 @@ class WaveAudioDirector {
 
   startLoop(event: WaveEventId, key = "", opts?: { gain?: number; fadeSec?: number }): boolean {
     const spec = waveSpecOf(event);
-    if (!spec.loop) return false;
+    if (!spec.loop || spec.stem === null) return false; // authored silence never starts a voice
     return this.engine.startWaveLoop(this.loopKey(event, key), {
       event,
       bus: spec.bus,
       gain: spec.gain * (opts?.gain ?? 1),
       stem: spec.stem,
-      synth: spec.synth,
       fadeSec: opts?.fadeSec ?? 0.06,
     });
   }
@@ -203,9 +234,18 @@ class WaveAudioDirector {
 
   // ---- ambient zones (§5) ----
 
-  setAmbientZone(zoneIndex: number | null): void {
+  // `ambientSeed` is the deterministic biome-ambient RNG seed (the caller derives it
+  // from the run seed + floor): the same floor always schedules the same Deep pattern,
+  // different floors get different ones. Absent = a fixed default.
+  setAmbientZone(zoneIndex: number | null, ambientSeed?: number): void {
     if (zoneIndex !== null && (zoneIndex < 0 || zoneIndex >= AMBIENT_ZONE_EVENTS.length)) zoneIndex = null;
-    if (zoneIndex === this.ambientZone) return;
+    const seed = (ambientSeed ?? 0x0DEE9) | 0;
+    if (zoneIndex === this.ambientZone) {
+      // Same zone, new floor: the bed crossfades nothing, but the Deep scheduler
+      // re-seeds so its deterministic pattern follows the floor.
+      if (this.deepEmitter !== null && this.deepEmitter.seed !== seed) this.deepEmitter = this.armDeepEmitter(seed);
+      return;
+    }
     if (this.ambientZone !== null) {
       this.stopLoop(AMBIENT_ZONE_EVENTS[this.ambientZone], "zone", AMBIENT_CROSSFADE_SEC);
     }
@@ -213,6 +253,22 @@ class WaveAudioDirector {
     if (zoneIndex !== null) {
       this.startLoop(AMBIENT_ZONE_EVENTS[zoneIndex], "zone", { fadeSec: AMBIENT_CROSSFADE_SEC });
     }
+    // The Deep has no bed (authored silence): entering it arms the sparse positional
+    // scheduler from the deterministic ambient seed.
+    this.deepEmitter = zoneIndex !== null && AMBIENT_ZONE_EVENTS[zoneIndex] === "ambient.deep"
+      ? this.armDeepEmitter(seed)
+      : null;
+  }
+
+  private armDeepEmitter(seed: number): DeepEmitterState {
+    return {
+      seed,
+      rngState: seed,
+      nextOpportunityAtMs: -1,
+      rearmAtMs: DEEP_EMITTER.channels.map(() => 0),
+      lastTake: DEEP_EMITTER.channels.map(() => -1),
+      recentAtMs: [],
+    };
   }
 
   // ---- weapons (§4) ----
@@ -298,21 +354,28 @@ class WaveAudioDirector {
       if (dist < COMBAT_RADIUS) isInCombat = true;
       if (e.kind === "bat" && dist < FLOCK_BED_RADIUS) flockNear++;
       if (e.kind === "orbiter" && dist < ORBIT_LOOP_RADIUS) orbitNear++;
-      this.observeEnemy(e, dist);
+      this.observeEnemy(e, dist, nowMs);
     }
     this.isInCombat = isInCombat;
     // The flock is ONE aggregate bed and the orbit ring ONE hum: a single group-keyed
     // loop each, held while any member is near — never a voice per body.
     this.holdLoop("flock.bed", GROUP_LOOP_KEY, flockNear > 0, { gain: Math.min(1, 0.5 + 0.12 * flockNear) });
     this.holdLoop("orbit.loop", GROUP_LOOP_KEY, orbitNear > 0);
-    for (const id of [...this.tells.keys()]) {
-      if (!seen.has(id)) this.tells.delete(id);
+    for (const [id] of this.tells) {
+      if (seen.has(id)) continue;
+      this.burrowEmitters.delete(id); // despawn stops the underground emitter
+      this.tells.delete(id);
     }
 
     this.observeRevives(input.players);
 
     for (const [key, beam] of this.beams) {
-      if (nowMs - beam.lastShotAtMs <= beam.holdMs) continue;
+      if (nowMs - beam.lastShotAtMs <= beam.holdMs) {
+        // Held: keep asking for the loop. A no-op while it sounds; the graceful late
+        // start when its authored buffer decoded after the trigger (loops never synth).
+        this.startLoop("beamLoop", key, { gain: beam.gain });
+        continue;
+      }
       this.beams.delete(key);
       this.stopLoop("beamLoop", key);
       this.play("beamStop", { gain: beam.gain });
@@ -322,9 +385,11 @@ class WaveAudioDirector {
     if (this.ambientZone !== null) {
       this.startLoop(AMBIENT_ZONE_EVENTS[this.ambientZone], "zone", { fadeSec: AMBIENT_CROSSFADE_SEC });
     }
+
+    this.stepDeepEmitter(nowMs, input.listener, input.isMaterialCellAt);
   }
 
-  private observeEnemy(e: WaveFrameEnemy, distToListener: number): void {
+  private observeEnemy(e: WaveFrameEnemy, distToListener: number, nowMs: number): void {
     const prev = this.tells.get(e.id) ?? null;
     const cues = tellCuesFor(e.kind, prev, e.attack);
     for (const cue of cues) this.play(cue, { x: e.x, y: e.y, entityId: e.id });
@@ -336,15 +401,18 @@ class WaveAudioDirector {
       hasAcquired = true;
     }
 
-    // The underground tracker is a COMPONENT EMITTER (bestiary audio contract): the
-    // row's per-entity cooldown IS the cadence — re-trigger while held, never a loop.
-    if (isTrackLoopHeld(e.kind, e.attack)) {
-      this.play("burrower.track", { x: e.x, y: e.y, entityId: e.id });
-    }
-
     // The flock's close pass: a body crossing from OUTER to INNER of the listener.
     if (e.kind === "bat" && prev && prev.lastDist > FLOCK_PASS_OUTER && distToListener < FLOCK_PASS_INNER) {
       this.play("flock.pass", { x: e.x, y: e.y, entityId: e.id });
+    }
+
+    if (e.kind === "burrower") {
+      // The underground thud fires exactly once per commitment, on the direction-lock
+      // edge (the same authoritative edge as the burrower.lock tell).
+      if (cues.indexOf("burrower.lock") !== -1) {
+        this.play(BURROW_THUD_EVENT, { x: e.x, y: e.y, entityId: e.id });
+      }
+      this.stepBurrowEmitter(e, nowMs);
     }
 
     if (prev) {
@@ -361,6 +429,120 @@ class WaveAudioDirector {
     }
   }
 
+  // ---- deterministic positional emitters (audio director FINAL: no synthesis, only
+  // scheduled authored one-shots) ----
+
+  // Burrow underground presence: three authored component channels on independent seeded
+  // cadences (dirt grind 1.0–1.4s, pebble 0.35–0.75s, shell scrape 1.3–2.0s), positional
+  // at the tunnelling body. Stops the instant the burrower locks its eruption (leaves the
+  // dive) or despawns — the state simply drops; there is no loop voice to kill.
+  private stepBurrowEmitter(e: WaveFrameEnemy, nowMs: number): void {
+    if (!isBurrowUnderground(e.kind, e.attack)) {
+      this.burrowEmitters.delete(e.id);
+      return;
+    }
+    let st = this.burrowEmitters.get(e.id);
+    if (!st) {
+      st = { rngState: (0xB0770 ^ Math.imul(e.id + 1, 2654435761)) | 0, nextAtMs: [] };
+      for (const ch of BURROW_EMITTER) st.nextAtMs.push(nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec));
+      this.burrowEmitters.set(e.id, st);
+    }
+    for (let i = 0; i < BURROW_EMITTER.length; i++) {
+      if (nowMs < st.nextAtMs[i]) continue;
+      const ch = BURROW_EMITTER[i];
+      const roll = emitterRand(st.rngState);
+      st.rngState = roll.state;
+      this.play(ch.event, { x: e.x, y: e.y, entityId: e.id, variantRoll: roll.value });
+      st.nextAtMs[i] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
+    }
+  }
+
+  // The Deep's near-silent sparse ambience (FINAL P0 contract): ONE global opportunity
+  // every 1.5–3.2s draws one category by weight (mineral 35 / drip 25 / stress 20 /
+  // architecture 20). The drawn category sounds only if its own re-arm window elapsed —
+  // otherwise the opportunity is authored silence, never rerolled (categories never
+  // fill in for each other). Every play lands on a deterministic 160–520px ring
+  // position around the camera, accepted only on valid wall/material cells (diegetic —
+  // never centered on the listener); at most ONE Deep event sounds at a time, and a
+  // due opportunity holds (not rescheduled) through the ±250ms lock/critical-cue mute.
+  private stepDeepEmitter(nowMs: number, l: WaveListener, isMaterialCellAt?: (x: number, y: number) => boolean): void {
+    const st = this.deepEmitter;
+    if (!st) return;
+    if (st.nextOpportunityAtMs < 0) {
+      st.nextOpportunityAtMs = nowMs + this.drawGapMs(st, DEEP_EMITTER.globalMinGapSec, DEEP_EMITTER.globalMaxGapSec);
+    }
+    if (nowMs < st.nextOpportunityAtMs) return;
+    if (nowMs - this.lastCombatLockAtMs < DEEP_EMITTER.lockMuteMs) return; // hold
+    st.recentAtMs = st.recentAtMs.filter((t) => nowMs - t < DEEP_EMITTER.overlapWindowSec * 1000);
+    if (st.recentAtMs.length >= DEEP_EMITTER.maxOverlap) return; // hold
+
+    // Weighted category draw (one per opportunity).
+    const catRoll = this.drawRand(st);
+    const totalWeight = DEEP_EMITTER.channels.reduce((s, c) => s + c.weight, 0);
+    let r = catRoll * totalWeight;
+    let index = DEEP_EMITTER.channels.length - 1;
+    for (let i = 0; i < DEEP_EMITTER.channels.length; i++) {
+      r -= DEEP_EMITTER.channels[i].weight;
+      if (r <= 0) { index = i; break; }
+    }
+    const ch = DEEP_EMITTER.channels[index];
+    const spec = waveSpecOf(ch.event);
+    const takes = takeStemsOf(spec);
+    if (takes.length > 0 && nowMs >= st.rearmAtMs[index]) {
+      // Weighted take pick with the anti-repeat rule owned here (per-channel memory).
+      const takeIndex = this.pickWeightedTake(st, index, takes.length, ch.takeWeights);
+      const target = (ch.gainMin + this.drawRand(st) * (ch.gainMax - ch.gainMin)) * (ch.takeGainMult?.[takeIndex] ?? 1);
+      // Diegetic placement: deterministic ring draws, accepted only on material cells.
+      let pos: { x: number; y: number } | null = null;
+      for (let attempt = 0; attempt < DEEP_EMITTER.placementTries && pos === null; attempt++) {
+        const angle = this.drawRand(st) * Math.PI * 2;
+        const distance = DEEP_EMITTER.minDistPx + this.drawRand(st) * (DEEP_EMITTER.maxDistPx - DEEP_EMITTER.minDistPx);
+        const x = l.x + Math.cos(angle) * distance;
+        const y = l.y + Math.sin(angle) * distance;
+        if (isMaterialCellAt === undefined || isMaterialCellAt(x, y)) pos = { x, y };
+      }
+      if (pos !== null) {
+        const isPlayed = this.play(ch.event, {
+          x: pos.x, y: pos.y,
+          // The row's gain is the channel max; scale this play into its authored range
+          // (deterministic), before the ordinary distance attenuation.
+          gain: target / spec.gain,
+          variantIndex: takeIndex,
+        });
+        if (isPlayed) {
+          st.recentAtMs.push(nowMs);
+          st.lastTake[index] = takeIndex;
+          st.rearmAtMs[index] = nowMs + this.drawGapMs(st, ch.minGapSec, ch.maxGapSec);
+        }
+      }
+    }
+    st.nextOpportunityAtMs = nowMs + this.drawGapMs(st, DEEP_EMITTER.globalMinGapSec, DEEP_EMITTER.globalMaxGapSec);
+  }
+
+  private pickWeightedTake(st: DeepEmitterState, channelIndex: number, count: number, weights?: readonly number[]): number {
+    if (count <= 1) return 0;
+    const last = st.lastTake[channelIndex];
+    const weightOf = (i: number): number => (i === last ? 0 : weights?.[i] ?? 1);
+    let total = 0;
+    for (let i = 0; i < count; i++) total += weightOf(i);
+    let r = this.drawRand(st) * total;
+    for (let i = 0; i < count; i++) {
+      r -= weightOf(i);
+      if (weightOf(i) > 0 && r <= 0) return i;
+    }
+    return (last + 1) % count;
+  }
+
+  private drawRand(st: { rngState: number }): number {
+    const r = emitterRand(st.rngState);
+    st.rngState = r.state;
+    return r.value;
+  }
+
+  private drawGapMs(st: { rngState: number }, minSec: number, maxSec: number): number {
+    return (minSec + this.drawRand(st) * (maxSec - minSec)) * 1000;
+  }
+
   private observeRevives(players: Iterable<WaveFramePlayer>): void {
     const live = new Set<string>();
     for (const p of players) {
@@ -371,6 +553,8 @@ class WaveAudioDirector {
         this.reviveChannels.add(p.id);
         this.play("revive.channelStart", { x: p.x, y: p.y, entityId: p.id });
         this.startLoop("revive.channelLoop", p.id);
+      } else if (isChanneling) {
+        this.startLoop("revive.channelLoop", p.id); // idempotent hold + late decode start
       } else if (!isChanneling && wasChanneling) {
         this.reviveChannels.delete(p.id);
         this.stopLoop("revive.channelLoop", p.id);
@@ -384,20 +568,44 @@ class WaveAudioDirector {
     }
   }
 
-  // ---- preload (§10: current biome + the floor's boss; the rest lazy-loads) ----
+  // ---- preload (§10 + first-trigger contract) ----
+  // Decode every cue this floor can REACH before it can trigger: the biome bed, the
+  // hazard kit, the boss actually here, every spawned archetype's tells, and the
+  // always-reachable player-driven set (weapons, revive channel). Each event's authored
+  // fallback sample is decoded too, so even a pending-asset row's first trigger plays a
+  // ready authored buffer instead of racing its load.
 
-  preloadForFloor(zoneIndex: number, bossKind: string | null, encounterKinds: readonly string[] = []): void {
+  preloadForFloor(zoneIndex: number, bossKind: string | null, enemyKinds?: Iterable<string>): void {
     const stems: string[] = [];
+    const samples: SfxName[] = [];
+    const collect = (event: WaveEventId): void => {
+      this.collectStems(event, stems);
+      const fb = waveSpecOf(event).fallback;
+      if (fb && samples.indexOf(fb.sample) === -1) samples.push(fb.sample);
+    };
     const zoneEvent = AMBIENT_ZONE_EVENTS[zoneIndex];
-    if (zoneEvent) this.collectStems(zoneEvent, stems);
-    for (const event of HAZARD_WAVE_EVENTS) this.collectStems(event, stems);
-    if (bossKind) for (const event of bossWaveEvents(bossKind)) this.collectStems(event, stems);
+    if (zoneEvent) collect(zoneEvent);
+    // The Deep's bed is authored silence — its sparse emitter channels load instead
+    // (channels awaiting selection contribute no stems).
+    if (zoneEvent === "ambient.deep") for (const ch of DEEP_EMITTER.channels) collect(ch.event);
+    for (const event of HAZARD_WAVE_EVENTS) collect(event);
+    for (const event of ALWAYS_REACHABLE_EVENTS) collect(event);
+    if (bossKind) for (const event of bossWaveEvents(bossKind)) collect(event);
     // The floor's actual encounter kinds preload alongside the boss (contract): the
-    // first rootward on a floor never announces itself through a fallback.
-    for (const kind of encounterKinds) {
-      for (const event of bestiaryPreloadEvents(kind as EnemyKind)) this.collectStems(event, stems);
+    // first rootward on a floor never announces itself through a fallback. Both cue
+    // surfaces load — the tell-watcher rows (bossWaveEvents) and the bestiary hook
+    // manifest (bestiaryPreloadEvents).
+    if (enemyKinds) {
+      const seen = new Set<string>();
+      for (const kind of enemyKinds) {
+        if (seen.has(kind) || kind === bossKind) continue;
+        seen.add(kind);
+        for (const event of bossWaveEvents(kind)) collect(event);
+        for (const event of bestiaryPreloadEvents(kind as EnemyKind)) collect(event);
+      }
     }
     this.engine.preloadWave(stems);
+    this.engine.preloadSamples(samples);
   }
 
   // The bespoke entrance for a boss-grade body (bosses at floor load, captains on spawn).
@@ -415,43 +623,45 @@ class WaveAudioDirector {
     this.tells.clear();
     this.beams.clear();
     this.reviveChannels.clear();
+    this.burrowEmitters.clear();
+    this.deepEmitter = null;
     this.ambientZone = null;
     this.isInCombat = false;
   }
 
   onFloorLoad(): void {
-    // Entity ids restart per floor: drop tell memory and every entity-keyed loop, keep the
-    // ambient zone (setAmbientZone crossfades it) and self-keyed beam state. Group beds
-    // (flock/orbit) release themselves on the first empty frame.
+    // Entity ids restart per floor: drop tell memory, every entity-keyed loop, and every
+    // entity-keyed emitter; keep the ambient zone (setAmbientZone crossfades it) and
+    // self-keyed beam state. Group beds (flock/orbit) are stopped explicitly.
     this.stopLoop("flock.bed", GROUP_LOOP_KEY);
     this.stopLoop("orbit.loop", GROUP_LOOP_KEY);
     this.tells.clear();
+    this.burrowEmitters.clear();
     for (const pid of this.reviveChannels) this.stopLoop("revive.channelLoop", pid);
     this.reviveChannels.clear();
   }
 
-  private pickVariant(event: WaveEventId, spec: WaveSoundSpec): number {
-    if (spec.variants <= 1) return 0;
+  // Variant selection over the event's SELECTED take set: an exact index wins (weighted
+  // emitter draws own their pick AND anti-repeat rule); seeded emitters may pass a
+  // deterministic roll; everything else rides Math.random. The uniform paths never play
+  // the same take back-to-back (single-take selections necessarily repeat).
+  private pickVariant(event: WaveEventId, spec: WaveSoundSpec, roll?: number, exactIndex?: number): number {
+    const count = takeStemsOf(spec).length;
+    if (count <= 1) return 0;
+    if (exactIndex !== undefined) return Math.min(count - 1, Math.max(0, exactIndex));
     const last = this.lastVariant.get(event);
-    let index = Math.floor(Math.random() * spec.variants);
-    if (index === last) index = (index + 1) % spec.variants; // never the same take twice
+    let index = Math.floor((roll ?? Math.random()) * count) % count;
+    if (index === last) index = (index + 1) % count; // never the same take twice
     return index;
   }
 
   private stemForVariant(spec: WaveSoundSpec, variantIndex: number): string | null {
-    if (spec.stem === null) return null;
-    if (spec.variants <= 1) return spec.stem;
-    return `${spec.stem}_v${variantIndex + 1}`;
+    const takes = takeStemsOf(spec);
+    return takes[variantIndex] ?? null;
   }
 
   private collectStems(event: WaveEventId, out: string[]): void {
-    const spec = waveSpecOf(event);
-    if (spec.stem === null) return;
-    if (spec.variants <= 1) {
-      out.push(spec.stem);
-      return;
-    }
-    for (let v = 1; v <= spec.variants; v++) out.push(`${spec.stem}_v${v}`);
+    out.push(...takeStemsOf(waveSpecOf(event)));
   }
 
   private loopKey(event: WaveEventId, key: string): string {

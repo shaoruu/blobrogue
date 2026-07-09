@@ -73,6 +73,7 @@ function clientRoundTripTests(): void {
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
     { t: "drop", weapon: "railgun", cseq: 7 },
+    { t: "shopBuy", slot: 2, cseq: 8 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
     { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
@@ -120,6 +121,12 @@ function unknownFieldTests(): void {
     ["drop with an unknown weapon id", { t: "drop", weapon: "bfg9000", cseq: 1 }],
     ["drop with a smuggled extra field", { t: "drop", weapon: "pistol", cseq: 1, x: 10 }],
     ["drop without cseq", { t: "drop", weapon: "pistol" }],
+    // A tampered buy can name a slot, but never smuggle a price/outcome or dodge cseq.
+    ["shopBuy with a smuggled price", { t: "shopBuy", slot: 0, cseq: 1, price: 0 }],
+    ["shopBuy with a negative slot", { t: "shopBuy", slot: -1, cseq: 1 }],
+    ["shopBuy with a float slot", { t: "shopBuy", slot: 0.5, cseq: 1 }],
+    ["shopBuy with an oversized slot", { t: "shopBuy", slot: 999, cseq: 1 }],
+    ["shopBuy without cseq", { t: "shopBuy", slot: 0 }],
   ];
   for (const [label, frame] of badInventoryFrames) {
     let isRejected = false;
@@ -158,6 +165,37 @@ function serverRoundTripTests(): void {
     check(`round-trip ${m.t}`, deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(m)), m));
   }
 
+  section("v8: the shop stall rides shop-floor snapshots and validates strictly");
+  {
+    const ws = createWorld(0x5B0B, 3, { isShared: true, skipLocalPlayer: true });
+    const buyer = spawnPlayerInWorld(ws, "pBuyer");
+    spawnPlayerInWorld(ws, "pMate");
+    // A claimed shared slot + a personal buyer, so sold/by round-trip non-empty.
+    ws.shop!.slots[0].soldTo = "pBuyer";
+    ws.shop!.slots.find((s) => s.kind === "heart")!.buyers.push("pBuyer", "pMate");
+    ws.shop!.rerollsUsed = 1;
+    const shopSnap = buildSnapshot(ws, buyer.id, 0, [], 0, false, { worldId: "w-test" });
+    if (shopSnap.t !== "snap") { check("shop snapshot built", false); return; }
+    check("a shop floor's snapshot carries the stall", shopSnap.shop !== null && shopSnap.shop.slots.length === 5);
+    check("shop snapshot round-trips deep-equal", deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(shopSnap)), shopSnap));
+    const shopBase = JSON.parse(jsonCodec.encodeServer(shopSnap)) as Record<string, unknown>;
+    const shopWire = (over: Record<string, unknown>): Record<string, unknown> =>
+      ({ ...shopBase, shop: { ...(shopBase.shop as Record<string, unknown>), ...over } });
+    const badShop: Array<[string, Record<string, unknown>]> = [
+      ["missing shop field", (() => { const o = { ...shopBase }; delete o.shop; return o; })()],
+      ["non-object shop", { ...shopBase, shop: 42 }],
+      ["junk slot kind", shopWire({ slots: [{ id: 0, k: "cheat", sh: true, wpn: null, it: null, pr: 1, x: 0, y: 0, sold: null, by: [] }] })],
+      ["junk slot weapon id", shopWire({ slots: [{ id: 0, k: "weapon", sh: true, wpn: "bfg9000", it: null, pr: 1, x: 0, y: 0, sold: null, by: [] }] })],
+      ["negative price", shopWire({ slots: [{ id: 0, k: "weapon", sh: true, wpn: "pistol", it: null, pr: -1, x: 0, y: 0, sold: null, by: [] }] })],
+      ["junk rerolls counter", shopWire({ ru: "many" })],
+    ];
+    for (const [label, frame] of badShop) {
+      let rejected = false;
+      try { jsonCodec.decodeServer(JSON.stringify(frame)); } catch (err) { rejected = err instanceof ProtocolError; }
+      check(`${label} is a protocol error`, rejected);
+    }
+  }
+
   section("corrupt server frames are ProtocolError, never NaN state");
   const snapObj = JSON.parse(jsonCodec.encodeServer(snap)) as Record<string, unknown>;
   const corrupt = [
@@ -183,7 +221,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + the bestiary wave (v8)", PROTOCOL_VERSION === 8, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + Patch's shop AND the bestiary wave (v8)", PROTOCOL_VERSION === 8, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

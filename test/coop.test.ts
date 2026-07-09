@@ -23,7 +23,7 @@ import { domCanvas, domMinimap, domOverlay } from "./harness/domShim.js";
 
 import {
   createWorld, spawnPlayerInWorld, removePlayerFromWorld, loadFloorIntoWorld, devSpawnEnemy,
-  stepWorldPhase, chooseBlessingInWorld, acquireWeaponInWorld, playersAtExit,
+  stepWorldPhase, chooseBlessingInWorld, acquireWeaponInWorld, playersAtExit, buyFromShopInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -31,14 +31,14 @@ import type { Bullet, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
 import {
-  REVIVE, DEALER,
-  pedestalWeaponRolls, dealerWeaponStock, bossWeaponChoices,
+  REVIVE, SHOP,
+  pedestalWeaponRolls, bossWeaponChoices,
 } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import * as C from "../src/sim/constants.js";
 import {
-  buildSnapshot, jsonCodec, eventScope, type ServerMsg,
+  buildSnapshot, jsonCodec, eventScope, toShopWire, type ServerMsg,
 } from "../src/net/protocol.js";
 import { livingTeammates, resolveSpectateTarget, cycleSpectateTarget } from "../src/game/spectate.js";
 import { Game } from "../src/game/game.js";
@@ -581,7 +581,7 @@ function weaponEconomyTests(): void {
       const { w } = partyWorld(0xF100D, 3, size);
       return JSON.stringify({
         chests: w.chests.map((c) => [c.x, c.y, c.weapon ?? null]),
-        dealer: w.pickups.filter((p) => p.kind === "dealer_weapon").map((p) => [p.x, p.y, p.weapon, p.value]),
+        shop: w.shop ? toShopWire(w.shop) : null,
       });
     };
     for (const size of [1, 2, 4]) {
@@ -589,69 +589,76 @@ function weaponEconomyTests(): void {
     }
   }
 
-  section("economy: the Dealer stocks max(2,P) distinct stalls at 12/18/24 — purchases PERSONAL");
+  section("economy: Patch's shop room stalls 2 shared weapons + 1 personal blessing on 12/18/24");
   {
     for (const size of [1, 2, 3, 4]) {
       const { w } = partyWorld(0xDEA1, 3, size);
-      const stock = w.pickups.filter((p) => p.kind === "dealer_weapon");
-      const hearts = w.pickups.filter((p) => p.kind === "dealer_heart");
-      check(`P${size}: dealer stocks ${dealerWeaponStock(size)} stall(s) + ${size} heart(s)`,
-        stock.length === dealerWeaponStock(size) && hearts.length === size,
-        `weapons=${stock.length} hearts=${hearts.length}`);
-      check(`P${size}: stall kinds distinct, slot prices 12/18/24 (4th holds at 24)`,
-        new Set(stock.map((s) => s.weapon)).size === stock.length
-        && stock.every((s, i) => s.value === DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)]),
-        stock.map((s) => `${s.weapon}@${s.value}`).join(","));
+      const weapons = w.shop!.slots.filter((s) => s.kind === "weapon");
+      const blessings = w.shop!.slots.filter((s) => s.kind === "blessing");
+      const hearts = w.shop!.slots.filter((s) => s.kind === "heart");
+      check(`P${size}: 2 weapon pedestals + 1 blessing pedestal + 1 heart station`,
+        weapons.length === SHOP.weaponPedestals && blessings.length === 1 && hearts.length === 1);
+      check(`P${size}: weapon kinds distinct, pedestal prices ride the unchanged ladder`,
+        new Set(weapons.map((s) => s.weapon)).size === weapons.length
+        && weapons.every((s, i) => s.price === SHOP.pedestalPrices[i])
+        && blessings[0].price === SHOP.pedestalPrices[SHOP.weaponPedestals],
+        weapons.map((s) => `${s.weapon}@${s.price}`).join(","));
     }
-    // Personal-purchase flow on a P2 world: broke walks past; a buyer pays and the stall
-    // STAYS; the buyer can't rebuy (owns it); a teammate buys the SAME stall.
+    // The P2 buy flow (the accepted ownership call): a shared weapon claims ONCE with an
+    // honest SOLD for the teammate; the personal blessing serves both without depleting.
     const { w, ps } = partyWorld(0xDEA1, 3, 2);
     w.enemies = []; w.pendingSpawns = [];
-    const stall = w.pickups.find((p) => p.kind === "dealer_weapon")!;
+    const stall = w.shop!.slots.find((s) => s.kind === "weapon")!;
     const merch = stall.weapon!;
-    const price = stall.value!;
+    const price = stall.price;
     const [a, b] = ps;
     a.coins = 0;
     a.x = stall.x; a.y = stall.y;
-    stepWorldPhase(w, DT, []);
-    check("broke player walks past the stall", w.pickups.includes(stall) && !a.ownedWeapons.includes(merch));
+    check("a broke buy is rejected without consuming",
+      buyFromShopInWorld(w, a.id, stall.id, []) === "broke" && !a.ownedWeapons.includes(merch) && stall.soldTo === null);
     a.coins = price;
-    stepWorldPhase(w, DT, []);
-    check("a funded buyer pays the slot price and the stall STAYS (personal purchase)",
-      w.pickups.includes(stall) && a.ownedWeapons.includes(merch) && a.coins === 0,
+    check("a funded buy claims the SHARED pedestal (weapon granted, coins paid, slot claimed)",
+      buyFromShopInWorld(w, a.id, stall.id, []) === "ok" && a.ownedWeapons.includes(merch) && a.coins === 0
+      && stall.soldTo === a.id,
       `owned=${a.ownedWeapons.join(",")} coins=${a.coins}`);
-    // Exactly the first stall's price again: a rebuy would spend it, and the pricier
-    // neighbor stall (18) stays out of reach — unchanged coins prove the ownership block.
     a.coins = price;
-    stepWorldPhase(w, DT, []);
-    check("an owner never rebuys their own stall", a.coins === price, `coins=${a.coins}`);
+    check("an owner never rebuys their own claim", buyFromShopInWorld(w, a.id, stall.id, []) === "owned" && a.coins === price);
     b.coins = price;
     b.x = stall.x; b.y = stall.y;
-    stepWorldPhase(w, DT, []);
-    check("a teammate buys the SAME stall (no depletion race)",
-      w.pickups.includes(stall) && b.ownedWeapons.includes(merch) && b.coins === 0);
+    check("the teammate reads the honest SOLD — exactly one winner, coins untouched",
+      buyFromShopInWorld(w, b.id, stall.id, []) === "sold" && !b.ownedWeapons.includes(merch) && b.coins === price);
+    const blessing = w.shop!.slots.find((s) => s.kind === "blessing")!;
+    a.coins = blessing.price; b.coins = blessing.price;
+    a.x = blessing.x; a.y = blessing.y; b.x = blessing.x; b.y = blessing.y;
+    check("the FOR-YOU blessing pedestal serves BOTH buyers (personal, never depletes)",
+      buyFromShopInWorld(w, a.id, blessing.id, []) === "ok" && buyFromShopInWorld(w, b.id, blessing.id, []) === "ok"
+      && a.ownedItemIds.includes(blessing.itemId!) && b.ownedItemIds.includes(blessing.itemId!));
   }
 
-  section("economy: the Dealer heart — an INVALID touch never consumes (UI gate)");
+  section("economy: the heart station — an invalid BUY never consumes, and touch never buys");
   {
     const { w, ps } = partyWorld(0xDEA1, 3, 2);
     w.enemies = []; w.pendingSpawns = [];
-    const heart = w.pickups.find((p) => p.kind === "dealer_heart")!;
+    const heart = w.shop!.slots.find((s) => s.kind === "heart")!;
     const [a] = ps;
-    // Full health with plenty of coins: the touch must neither heal, charge, nor consume
-    // (the loose-heart full-HP coin conversion must NOT apply to the Dealer's stock).
+    // Full health with plenty of coins: standing on the station AND buying must both be
+    // inert (the loose-heart full-HP coin conversion never applies to the shop).
     a.coins = 50;
     a.x = heart.x; a.y = heart.y;
     stepWorldPhase(w, DT, []);
-    check("FULL HEALTH touch consumes nothing", w.pickups.includes(heart) && a.coins === 50 && a.hp === a.maxHp);
+    check("FULL HEALTH: the touch consumes nothing", a.coins === 50 && a.hp === a.maxHp);
+    check("FULL HEALTH: the buy is rejected without consuming",
+      buyFromShopInWorld(w, a.id, heart.id, []) === "fullHealth" && a.coins === 50);
     a.hp = 1;
-    a.coins = DEALER.price - 1;
+    a.coins = SHOP.heartPrice - 1;
+    check("broke: the buy is rejected without consuming",
+      buyFromShopInWorld(w, a.id, heart.id, []) === "broke" && a.coins === SHOP.heartPrice - 1 && a.hp === 1);
+    a.coins = SHOP.heartPrice;
     stepWorldPhase(w, DT, []);
-    check("broke touch consumes nothing", w.pickups.includes(heart) && a.coins === DEALER.price - 1 && a.hp === 1);
-    a.coins = DEALER.price;
-    stepWorldPhase(w, DT, []);
-    check("a valid touch pays the price for exactly +1 HP",
-      !w.pickups.includes(heart) && a.coins === 0 && a.hp === 2);
+    check("standing on the station with exact coins still buys NOTHING (regression)",
+      a.coins === SHOP.heartPrice && a.hp === 1);
+    check("the explicit buy pays the price for exactly +1 HP",
+      buyFromShopInWorld(w, a.id, heart.id, []) === "ok" && a.coins === 0 && a.hp === 2);
   }
 
   section("economy: the boss reward is min(P+1,5) personal CHOICES via pedestals (gate §4)");
@@ -718,13 +725,19 @@ function weaponEconomyTests(): void {
 
   section("economy: options scale, scarcity holds — the measured §4 table");
   {
+    // Weapon opportunities PER PERSON: chest pedestals + shared shop pedestals are one
+    // object each; the personal blessing/heart slots instance per player, so they count
+    // P times in the party total.
     const total = (size: number): number => {
       let n = 0;
       for (const seed of seeds) {
         for (let floor = 2; floor <= 6; floor++) {
           const { w } = partyWorld(seed, floor, size);
           n += chestWeaponCount(w);
-          n += w.pickups.filter((p) => p.kind === "dealer_weapon").length;
+          if (w.shop) {
+            n += w.shop.slots.filter((s) => s.kind === "weapon").length;
+            n += w.shop.slots.filter((s) => !s.isShared && s.kind !== "reroll").length * size;
+          }
           if (floor === 5) n += bossWeaponChoices(size);
         }
       }
@@ -733,7 +746,7 @@ function weaponEconomyTests(): void {
     const t1 = total(1), t2 = total(2), t3 = total(3), t4 = total(4);
     check("P4 offers stay well under 4x solo (per-person scarcity)", t4 < 4 * t1, `P1=${t1} P4=${t4}`);
     check("P4 offers meaningfully exceed solo (the playtest fix)", t4 > t1 + 10, `P1=${t1} P4=${t4}`);
-    process.stdout.write(`  measured §4 offers (pedestals + stalls + boss choices, floors 2-6 x ${seeds.length} seeds): P1=${t1} P2=${t2} P3=${t3} P4=${t4}\n`);
+    process.stdout.write(`  measured §4 offers (pedestals + shop slots + boss choices, floors 2-6 x ${seeds.length} seeds): P1=${t1} P2=${t2} P3=${t3} P4=${t4}\n`);
     process.stdout.write(`  per person: P1=${t1.toFixed(1)} P2=${(t2 / 2).toFixed(1)} P3=${(t3 / 3).toFixed(1)} P4=${(t4 / 4).toFixed(1)}\n`);
   }
 }

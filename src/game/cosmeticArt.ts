@@ -1,0 +1,266 @@
+// Procedural pixel art for the cosmetic overlays — no image files, exactly like the
+// procedural audio engine. Each cosmetic renders once onto a cached 64x64 canvas aligned
+// to the hero sprite's frame (hat brim rows ~16-23 spanning x10-53, eye bars at ~x20-26 and
+// ~x38-44 around y26-38), so callers draw it with the SAME transform as the body sprite and
+// the overlay inherits squash/stretch/bob for free.
+//
+// Replacement hats are drawn with an opaque skirt over the baked-in cowboy hat's full
+// extent so equipping one reads as "wearing this hat", never "two hats"; the halo floats
+// above and deliberately keeps the cowboy hat. Unknown ids return null and render nothing —
+// the defensive posture for ids minted by a newer catalog.
+
+import { COSMETIC_ASSET_SOURCES, socketFor, capCosmeticXform } from "./cosmeticSockets.js";
+import type { CosmeticOrientation, SocketPoint, CosmeticXform } from "./cosmeticSockets.js";
+import { COSMETICS } from "../../convex/cosmeticsCore.js";
+
+const FRAME = 64;
+
+type Painter = (g: CanvasRenderingContext2D) => void;
+
+function px(g: CanvasRenderingContext2D, color: string, x: number, y: number, w: number, h: number): void {
+  g.fillStyle = color;
+  g.fillRect(x, y, w, h);
+}
+
+const INK = "#120a24";
+
+// Opaque cover over the baked cowboy hat (crown rows 8-15 x18-45, brim rows 16-23 x10-53)
+// in the replacement hat's own base color, so no brown peeks out under any deform.
+function coverCowboyHat(g: CanvasRenderingContext2D, color: string): void {
+  px(g, color, 18, 8, 28, 8);
+  px(g, color, 10, 16, 44, 8);
+}
+
+const topHat: Painter = (g) => {
+  coverCowboyHat(g, "#1a1426");
+  // brim
+  px(g, INK, 8, 20, 48, 2);
+  px(g, "#1a1426", 9, 16, 46, 5);
+  px(g, "#2a2140", 9, 16, 46, 1);
+  // cylinder
+  px(g, "#1a1426", 17, 0, 30, 17);
+  px(g, "#2a2140", 17, 0, 2, 17); // left sheen
+  px(g, INK, 45, 0, 2, 17);       // right shade
+  px(g, INK, 17, 0, 30, 1);       // top edge
+  // amber band
+  px(g, "#ffb43b", 17, 12, 30, 4);
+  px(g, "#b06e12", 17, 15, 30, 1);
+};
+
+const partyCone: Painter = (g) => {
+  coverCowboyHat(g, "#5ad1ff");
+  // striped cone: widening rows from the apex down to a brim that covers the cowboy hat
+  const stripes = ["#ff5a5a", "#ffe9b0", "#5ad1ff"];
+  for (let y = 2; y < 24; y++) {
+    const t = (y - 2) / 22;
+    const halfW = 2 + t * 21; // 2px at the tip -> 23px at the base (x9..x55)
+    const color = stripes[Math.floor((y - 2) / 5) % stripes.length];
+    px(g, color, Math.round(32 - halfW), y, Math.round(halfW * 2), 1);
+  }
+  px(g, INK, 9, 23, 46, 1); // base edge
+  // pompom
+  px(g, "#ffe9b0", 29, 0, 6, 4);
+  px(g, "#fff", 30, 0, 2, 2);
+};
+
+const crown: Painter = (g) => {
+  coverCowboyHat(g, "#ffd166");
+  // band (tall enough to fully cover the cowboy crown + brim)
+  px(g, "#ffd166", 11, 8, 42, 16);
+  px(g, "#b06e12", 11, 21, 42, 3);  // base shadow
+  px(g, INK, 11, 23, 42, 1);
+  px(g, "#ffe9b0", 11, 8, 42, 2);   // top sheen
+  // prongs
+  for (const x of [11, 24, 37, 47]) px(g, "#ffd166", x, 2, 6, 7);
+  for (const x of [11, 24, 37, 47]) px(g, "#ffe9b0", x, 2, 2, 2);
+  // jewels
+  px(g, "#ff5a5a", 30, 13, 4, 4);
+  px(g, "#5ad1ff", 18, 14, 3, 3);
+  px(g, "#7fdd5a", 43, 14, 3, 3);
+};
+
+const halo: Painter = (g) => {
+  // Floats above the head — the classic cowboy hat stays visible under it.
+  px(g, "#ffe9b0", 20, 0, 24, 2);
+  px(g, "#ffd166", 16, 2, 6, 2);
+  px(g, "#ffd166", 42, 2, 6, 2);
+  px(g, "#ffe9b0", 20, 4, 24, 2);
+  px(g, "#fff", 24, 0, 4, 2); // glint
+};
+
+function lens(g: CanvasRenderingContext2D, cx: number, cy: number, r: number, rim: string, glass: string): void {
+  px(g, rim, cx - r, cy - r + 2, r * 2, r * 2 - 4);
+  px(g, rim, cx - r + 2, cy - r, r * 2 - 4, r * 2);
+  px(g, glass, cx - r + 2, cy - r + 2, r * 2 - 4, r * 2 - 4);
+}
+
+const roundSpecs: Painter = (g) => {
+  lens(g, 23, 32, 7, INK, "rgba(200,230,255,0.55)");
+  lens(g, 41, 32, 7, INK, "rgba(200,230,255,0.55)");
+  px(g, INK, 29, 30, 6, 2);  // bridge
+  px(g, INK, 12, 30, 4, 2);  // temples
+  px(g, INK, 48, 30, 4, 2);
+  px(g, "#fff", 19, 28, 2, 2); // glints
+  px(g, "#fff", 37, 28, 2, 2);
+};
+
+const shades: Painter = (g) => {
+  px(g, INK, 12, 26, 40, 11); // visor
+  px(g, INK, 10, 26, 44, 3);  // top bar + temples
+  px(g, "#5ad1ff", 15, 28, 14, 2); // reflections
+  px(g, "#5ad1ff", 35, 28, 14, 2);
+  px(g, "#2a2140", 12, 35, 40, 2); // lower fade
+};
+
+const monocle: Painter = (g) => {
+  lens(g, 41, 32, 8, "#ffd166", "rgba(220,240,255,0.5)");
+  px(g, "#ffe9b0", 41 - 6, 32 - 8, 4, 2); // rim sheen
+  // chain
+  px(g, "#ffd166", 49, 38, 2, 3);
+  px(g, "#ffd166", 51, 42, 2, 4);
+  px(g, "#ffd166", 53, 47, 2, 5);
+  px(g, "#fff", 35, 29, 2, 2); // glint
+};
+
+const PAINTERS: Record<string, Painter> = {
+  hat_top: topHat,
+  hat_party: partyCone,
+  hat_crown: crown,
+  hat_halo: halo,
+  face_round: roundSpecs,
+  face_shades: shades,
+  face_monocle: monocle,
+};
+
+const cache = new Map<string, HTMLCanvasElement | null>();
+
+// The 64x64 overlay canvas for a cosmetic id, cached; null for unknown ids (nothing renders)
+// or when a 2d context is unavailable (headless harness).
+export function cosmeticOverlay(id: string): HTMLCanvasElement | null {
+  const cached = cache.get(id);
+  if (cached !== undefined) return cached;
+  const paint = PAINTERS[id];
+  if (!paint) { cache.set(id, null); return null; }
+  const c = document.createElement("canvas");
+  c.width = FRAME;
+  c.height = FRAME;
+  const g = c.getContext("2d");
+  if (!g) { cache.set(id, null); return null; }
+  paint(g);
+  cache.set(id, c);
+  return c;
+}
+
+// Which ids have real art — the catalog test asserts every hat/face entry does, so a new
+// overlay row can never ship invisible (body renders as tint, titles as text).
+export function hasCosmeticArt(id: string): boolean {
+  return PAINTERS[id] !== undefined;
+}
+
+// ---- generated-asset layer (the socket pipeline's art side) ------------------------------
+// Assets are ASSET-FIRST with graceful degradation: a cosmetic whose assetKey has a loaded
+// oriented image renders that image anchored on its socket; while the file is absent /
+// still streaming / failed, the item's procedural painter (when it has one) keeps working,
+// and an asset-only item simply renders nothing. No placeholder art is ever fabricated.
+
+interface AssetSlot {
+  img: HTMLImageElement;
+  isFailed: boolean;
+}
+
+const assetCache = new Map<string, AssetSlot>();
+
+function assetSlot(key: string, orientation: CosmeticOrientation): AssetSlot {
+  const def = COSMETIC_ASSET_SOURCES[key];
+  const cacheKey = `${key}|${orientation}`;
+  let slot = assetCache.get(cacheKey);
+  if (!slot) {
+    const img = new Image();
+    slot = { img, isFailed: false };
+    img.addEventListener("error", () => { slot!.isFailed = true; });
+    img.src = def.src[orientation];
+    assetCache.set(cacheKey, slot);
+  }
+  return slot;
+}
+
+// Catalog id -> generated-asset key (built once; ids without a hook fall straight through
+// to their procedural painter).
+const ASSET_KEY_BY_ID = new Map<string, string>(
+  COSMETICS.filter((c) => c.assetKey !== undefined).map((c) => [c.id, c.assetKey as string]),
+);
+
+// The drawable overlay for a cosmetic, resolved asset-first. `frame` overlays fill the
+// hero's 64px frame (the procedural art); `socket` overlays are generated assets centered
+// on their deterministic socket for the given orientation/frame.
+export type OverlayResolved =
+  | { mode: "frame"; source: CanvasImageSource }
+  | { mode: "socket"; source: CanvasImageSource; socket: SocketPoint; sizePx: number };
+
+export function resolveOverlay(
+  id: string,
+  orientation: CosmeticOrientation,
+  frameIndex: number,
+): OverlayResolved | null {
+  const assetKey = ASSET_KEY_BY_ID.get(id);
+  if (assetKey !== undefined && COSMETIC_ASSET_SOURCES[assetKey] !== undefined) {
+    const def = COSMETIC_ASSET_SOURCES[assetKey];
+    const slot = assetSlot(assetKey, orientation);
+    if (!slot.isFailed && slot.img.complete && slot.img.naturalWidth > 0) {
+      const socket = socketFor(def.socket, orientation, frameIndex);
+      if (!socket.isVisible) return null;
+      return { mode: "socket", source: slot.img, socket, sizePx: def.sizePx };
+    }
+  }
+  const painted = cosmeticOverlay(id);
+  return painted ? { mode: "frame", source: painted } : null;
+}
+
+// ---- THE shared loadout renderer ----------------------------------------------------------
+// Every surface that draws a blob's worn cosmetics — the world (self + teammates), the menu
+// previews, the profile stages, the closet mirror — goes through THIS one function, so the
+// look can never drift between surfaces. It owns the capped transform, the orientation
+// resolution, and the frame/socket draw math.
+
+export interface LoadoutDrawOpts {
+  cx: number;
+  cy: number;
+  sizePx: number;               // the body sprite's drawn size (64px frame scaled)
+  facing: number;               // 1 right / -1 left (mirrors the side-authored orientation)
+  orientation: CosmeticOrientation;
+  xf: CosmeticXform;            // the BODY transform; capped internally for the cosmetic pass
+  isSheetPlaying: boolean;      // frame sheets bake the deform — neutralize procedural scale
+  frameIndex: number;           // the body sheet's current frame (socket anchors track it)
+  alpha: number;
+}
+
+export function drawLoadoutOverlays(
+  ctx: CanvasRenderingContext2D,
+  hat: string | null,
+  face: string | null,
+  o: LoadoutDrawOpts,
+): void {
+  if (hat === null && face === null) return;
+  const capped = capCosmeticXform(o.xf);
+  const half = o.sizePx / 2;
+  const scale = o.sizePx / 64; // frame space -> drawn px
+  ctx.save();
+  ctx.globalAlpha = o.alpha;
+  ctx.translate(o.cx + capped.ox, o.cy + capped.oy);
+  ctx.rotate(capped.rot);
+  ctx.scale(o.isSheetPlaying ? o.facing : o.facing * capped.sx, o.isSheetPlaying ? 1 : capped.sy);
+  for (const id of [face, hat]) {
+    if (id === null) continue;
+    const overlay = resolveOverlay(id, o.orientation, o.frameIndex);
+    if (!overlay) continue;
+    if (overlay.mode === "frame") {
+      ctx.drawImage(overlay.source, -half, -half, o.sizePx, o.sizePx);
+    } else {
+      const drawSize = overlay.sizePx * scale;
+      const sx = (overlay.socket.x - 32) * scale;
+      const sy = (overlay.socket.y - 32) * scale;
+      ctx.drawImage(overlay.source, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
+    }
+  }
+  ctx.restore();
+}

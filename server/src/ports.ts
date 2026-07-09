@@ -30,6 +30,8 @@ export interface Seat {
   expiresAt: number;
   displayName: string | null;
   colorIndex: number | null;
+  hat: string | null;
+  face: string | null;
   lastAppliedSeq: number;
   lastCseq: number;
   pendingOffer: string[] | null;
@@ -89,6 +91,10 @@ export interface RoomRuntime {
   // Weapon drop: ownership + player-state + last-weapon rule validated; the room spawns the
   // shared pickup and emits the drop event through its reliable channel.
   tryDropWeapon(pid: PlayerId, weapon: WeaponId): boolean;
+  // Shop purchase (Patch's room): the sim validates everything — liveness, proximity to
+  // the station, price, and the per-viewer status matrix (sold/owned/max/full/broke).
+  // Exactly one concurrent buyer can win a shared slot; every rejection mutates nothing.
+  tryShopBuy(pid: PlayerId, slot: number): boolean;
   // Rolls against the player's owned levels (maxed blessings leave the pool; new ones weigh
   // 3× an upgrade); rare = the boss-chest Rare-pool reward.
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[];

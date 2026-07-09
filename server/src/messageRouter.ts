@@ -56,6 +56,7 @@ function classOf(t: ClientMsg["t"]): MsgClass {
     case "equip":
     case "reorder":
     case "drop":
+    case "shopBuy":
     case "chooseBlessing":
     case "spec":
       return "control";
@@ -83,6 +84,7 @@ export class MessageRouter {
       case "equip": this.onEquip(conn, msg); return;
       case "reorder": this.onReorder(conn, msg); return;
       case "drop": this.onDrop(conn, msg); return;
+      case "shopBuy": this.onShopBuy(conn, msg); return;
       case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
       case "spec": this.onSpectate(conn, msg); return;
       default: assertNever(msg); // exhaustive — a new variant won't compile until handled
@@ -122,6 +124,8 @@ export class MessageRouter {
     conn.authName = auth.playerId;
     conn.displayName = auth.name ?? null;
     conn.colorIndex = auth.colorIndex ?? null;
+    conn.hat = auth.hat ?? null;
+    conn.face = auth.face ?? null;
     // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
     // player proved membership in that room, so friends sharing a code land in the same
     // isolated world and a client can never assert a world id. No claim -> the public default.
@@ -356,6 +360,17 @@ export class MessageRouter {
     conn.lastCseq = msg.cseq;
     const room = this.ctx.sessions.room(conn.worldId);
     if (room && !room.tryDropWeapon(conn.playerId, msg.weapon)) this.ctx.metrics.counters.rejectedInputs++;
+  }
+
+  private onShopBuy(conn: Conn, msg: Extract<ClientMsg, { t: "shopBuy" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    // The shared cseq stream makes a resent BUY idempotent: a duplicate can never charge
+    // twice, and the sim's own validation (buyFromShopInWorld) makes a stale one honest —
+    // it resolves to the slot's post-purchase status and mutates nothing.
+    if (msg.cseq <= conn.lastCseq) return;
+    conn.lastCseq = msg.cseq;
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (room && !room.tryShopBuy(conn.playerId, msg.slot)) this.ctx.metrics.counters.rejectedInputs++;
   }
 
   private onChooseBlessing(conn: Conn, msg: Extract<ClientMsg, { t: "chooseBlessing" }>): void {

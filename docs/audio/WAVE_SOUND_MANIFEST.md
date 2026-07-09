@@ -79,7 +79,7 @@ Sonic separation: **Marrow = bone/shale + sub impact**; **Choir = fused nonverba
 |`charger.windup` 0.5–0.7s|`enemy/charger_warn_vN`|0.55|.72|—|3|NEW: `A medium enemy digs in then commits to a forward charge, scraping claws and a short rising body growl, direction-readable warning, [suffix]`|
 |`charger.lock`|`enemy/charger_lock`|0.20|.85|music:.8/.05/.2|1|NEW: `One sharp claw scrape and hard body click, immediate charge commitment cue, [suffix]`|
 |`burrower.submerge`|`enemy/burrow_down_vN`|0.55|.6|—|2|NEW: `A stone-shelled creature rapidly digs under loose shale, dry dirt and small rock chatter moving downward, [suffix]`|
-|`burrower.track` loop while underground (max .9s)|`enemy/burrow_track`|0.90|.42|—|1|NEW(loop): `Continuous close underground scrape moving beneath loose shale, tiny stones ticking, no impact, seamless short loop, mono`|
+|`burrower.track` SUPERSEDED (audio director FINAL): no continuous loop. Deterministic keyed positional emitter while burrowed — dirt grind every 1.0–1.4s @.22, pebble 0.35–0.75s @.14, shell scrape 1.3–2.0s @.18, underground thud only on direction-lock @.28; ±3% jitter max, no immediate repeat|SELECTED takes only (selected_components.json): `enemy/burrow_dirt_grind_v2`, `enemy/burrow_pebble_v1/_v2`, `enemy/burrow_shell_v1/_v2`, `enemy/burrow_underground_thud_v2`|≤0.5 each|see left|—|1/2/2/1|REJECTED, never reference: `dirt_grind_v1`, `pebble_v3`, `underground_thud_v1`, `burrow_track`. Dry mono transient-forward components; no tails, they overlap by design.|
 |`burrower.lock` 0.4s pre-erupt|`enemy/burrow_lock`|0.28|.86|music:.75/.08/.25|1|NEW: `Three stones lift and crack in a fast rising pattern, clear eruption lock warning, [suffix]`|
 |`burrower.erupt`|`enemy/burrow_erupt_vN`|0.65|.78|—|3|NEW: `A stone-shelled creature erupts through the ground, sharp dirt burst and rock crack with short body snap, [suffix]`|
 |`orbiter.enterBand` once/entity|`enemy/orbiter_acquire_vN`|0.38|.45|—|2|NEW: `A cold angular creature enters orbit, one soft Doppler-like mineral hum circling left or right, subtle positional cue, [suffix]`|
@@ -105,7 +105,7 @@ All ambience is stereo, `ambient` bus, positional emitter layers; never one full
 |---|---|---:|---|
 |Verdant Hollow|`amb/verdant_loop`|.24|`Seamless dark fantasy forest-dungeon ambience, damp roots, soft leaf movement, distant hollow wood creaks, tiny insects, occasional amber sap drip, alive and deceptively safe, no music, no birdsong melody, restrained, 60 seconds`|
 |Sunless Caves|`amb/sunless_loop`|.25|`Seamless underground cave ambience, resonant shale chamber, sparse falling pebbles, distant bone taps, cold air and long subtle echoes, lonely and dark, no creatures close, no music, 60 seconds`|
-|The Deep|`amb/deep_loop`|.22|`Seamless cursed subterranean ambience, faint jet-black resin creaks, cold mineral seams, broken architecture settling at wrong angles, very distant low pressure, eerie sparse, no voices, no music, 60 seconds`|
+|The Deep — FINAL P0 (closes material selection; ships after Ian's spot-check): continuous bed is authored SILENCE (no `deep_loop`). Weighted diegetic emitter: one category every 1.5–3.2s, max ONE active — mineral 35% (re-arm 2–4.5s, .07–.11) / drip 25% (2.5–5s, .06–.10, v1 take-weight .5) / stress 20% (3.5–6.5s, .08–.12, ±2%) / architecture 20% (5–9s, .09–.13, r4_v1 ×.8). Deterministic per-floor ambient RNG; ±250ms lock mute; 160–520px camera ring on wall/material cells only|SELECTED takes: `amb/deep_mineral_tick_v1/_v2`, `amb/deep_resin_drip_r4_v1/_v2/_v3`, `amb/deep_resin_creak_r4_v3` (event `deep.resinStress`), `amb/deep_architecture_shift_r4_v1/_v2`|.06–.13|RETIRED: pre-r4 `deep_architecture_shift_v1`. Do NOT generate `deep_loop`.|
 |Emberreach|`amb/ember_loop`|.28|`Seamless volcanic dungeon ambience, low lava movement, glassy slag ticks, distant vents breathing, sparse ember crackle and heat pressure, dangerous but not loud, no music, 60 seconds`|
 |The Fracture (floors21–25)|`amb/fracture_loop`|.20|`Seamless dark fantasy fracture biome ambience, near-black teal crystal and glass under tension, sparse lateral shard glints, off-axis mineral clicks, unnaturally wide quiet spaces, cold and alien, no voices, no music, 60 seconds`|
 |The Null (floor26+)|`amb/null_loop`|.18|`Seamless terminal void-dungeon ambience, anti-light purple pressure, tiny particles drifting toward the listener, very low gravitational hum and rare reversed mineral whispers, empty and oppressive, no voices, no melody, no music, 60 seconds`|
@@ -241,8 +241,9 @@ rate-limited rows (`mob.hurt` 90ms, `mob.death` 120ms). Locks are dry + position
 
 **Minimum hooks per behavior** (all resolved in `BESTIARY_CUES`, gated by the QA suite):
 HUNT move/commit; FLOCK bed/windup/lock/pass/leaderBreak/rally; CHARGE plant/lock/rush/
-crash/dazed; BURROW dive/emitter/lock/erupt/recover — the underground tracker is a
-COMPONENT EMITTER (`burrower.track`, 450ms per-entity cadence), no continuous loop;
+crash/dazed; BURROW dive/emitter/lock/erupt/recover — the underground tracker is the
+deterministic COMPONENT EMITTER (`burrow.dirtGrind`/`pebble`/`shellScrape`, audio
+director FINAL: `burrower.track` is superseded), no continuous loop;
 ORBIT acquire/loop/warn/lock/fire; SHIELD raise/block/bash/guardBreak/rearHurt;
 ANCHOR place/laneWarn/lock/active/deflate. Boss-grade bodies (King, Marrow, Choir,
 Weaver, Warden, Marshal, Toll) carry windup+lock+active/impact+recover per attack plus
@@ -250,10 +251,13 @@ bespoke entrance/phase/special/death; the Slime King joined the wave manifest
 (`king.*` rows) as the last legacy-only boss.
 
 **Hygiene.** No `stem: null` anywhere on the bestiary surface (charger.crash got a real
-stem). Every one-shot row declares a SAME-MATERIAL shipped-sample fallback
-(`MATERIAL_FALLBACK_SAMPLES`) inside rate [0.4, 2.0]; synth recipes remain the zero-file
-rung only. Preload covers biome bed + hazards + the floor's boss (entrance included) +
-every encounter kind on the floor.
+stem) except selection-driven rows, whose explicit shipped take lists are authored by
+construction. Every one-shot row declares a SAME-MATERIAL shipped-sample fallback
+(`MATERIAL_FALLBACK_SAMPLES`) inside the authored-only safe derive band [0.85, 1.15],
+except the boss rows the de-synthesis audit deliberately de-fallbacked (they fail quietly
+until their file lands); there are NO synth recipes anywhere (authored-only contract).
+Preload covers biome bed + hazards + the floor's boss (entrance included) + every
+encounter kind on the floor.
 
 **Wire hooks.** `bulletBlocked` carries the blocker's `kind` so blocks voice in the right
 material (shielder wood / living root / bulwark plate); the commander's rally, panic and

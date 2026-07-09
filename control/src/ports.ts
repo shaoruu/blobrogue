@@ -30,7 +30,8 @@ export interface DirEntry {
 // A minimal filesystem seam. All paths are constructed by the domain layer (releases root +
 // validated releaseId), never taken verbatim from a request.
 export interface FileSystemPort {
-  readFile(path: string): Promise<string | null>; // null when absent
+  readFile(path: string): Promise<string | null>; // utf8 text, null when absent
+  readFileBytes(path: string): Promise<Uint8Array | null>; // exact bytes (for hashing), null when absent
   writeFileAtomic(path: string, data: string, mode?: number): Promise<void>;
   appendFile(path: string, data: string, mode?: number): Promise<void>;
   ensureDir(path: string, mode?: number): Promise<void>;

@@ -3,6 +3,21 @@
 ## Sprites
 Every sprite is a **64×64 transparent PNG** in `public/sprites/`
 (`hero`, `slime`, `bat`, `skeleton`, `ghost`, `boss`, `heart`, `coin`, `gun`).
+
+## Cosmetic layer assets (socket pipeline)
+Generated cosmetic layers (see the art environment's `fal-art/COSMETIC_LAYER_SPEC.md`)
+drop into `public/sprites/cosmetics/` as square transparent PNGs, one per orientation:
+`<assetKey>_down.png`, `<assetKey>_up.png`, `<assetKey>_side.png` (side authored FACING
+RIGHT; the renderer mirrors left). Register the key + socket + authored size in
+`src/game/cosmeticSockets.ts` `COSMETIC_ASSET_SOURCES`, then point a catalog item at it via
+`assetKey` (`convex/cosmeticsCore.ts`). Resolution is asset-first with graceful
+degradation: absent/failed files fall back to the item's procedural painter (when it has
+one), else render nothing — never a placeholder. Anchors come from the deterministic
+socket tables in the same module (head/face/back, per orientation, per frame); cosmetics
+inherit the body's bob/lean/squash only up to the readability caps and always draw BELOW
+weapon, status, and name cues. The gated first pair is `cowboy_hat_classic` (plus the
+layered bald base `hero_base_bald.png`) and `round_glasses` — broader content waits until
+that pair passes the socket gate across facings/animations/biomes/weapons.
 They are registered in `src/game/assets.ts` (`SOURCES`).
 
 ## Everything is animated (procedural, no extra art)
@@ -142,3 +157,23 @@ up, bricks rising). The bailiff (`rootward`) now also declares directional ATTAC
 (`rootward_attack_*` = the divider raise, arms up, roots surging). FAL recipes for both
 live in `tools/gen-sprites.mjs`; the missing-asset ladder (tinted block/disc fallback)
 covers every hook until approved art lands.
+
+## Patch & the waystation (shop room) — ART GATE, hooks wired, art pending
+**Patch** is the Dealer NPC (studio coherence gate: a *warm amber salvage-hauler* whose
+fold-out cabinet is built from recovered doors/prop pieces). The shop ships behind an art
+gate: every hook below is registered and typed, the renderer runs a clearly-placeholder
+flat primitive per piece, and **no procedural character art stands in** — drop the
+approved PNGs onto these exact names and each piece lights up with zero code changes.
+
+Character (64×64 base + horizontal strips, like every sprite):
+- `patch.png` — static base: stout hauler silhouette, patched amber coat, big salvage
+  pack, standing behind a counter, facing DOWN (the stall faces into the room).
+- `patch_idle.png` — breathing keeper loop (registered `patch.idle`, 6fps).
+- `patch_handover.png` — one-shot handover pose, played over every purchase (registered
+  `patch.attack`, 10fps — the attack slot repurposed; Patch never fights).
+
+Stall & stations (PropSpriteName hooks in `assets.ts`):
+- `patch_stall.png` — 96×64 fold-out salvage cabinet (recovered doors, counter front).
+- `shop_pedestal.png` — 64×64 stone display pedestal (weapon + blessing pedestals).
+- `shop_heart_station.png` — 64×64 heart-glass dispenser.
+- `shop_reroll_post.png` — 64×64 salvage-tag signpost (the reroll control).

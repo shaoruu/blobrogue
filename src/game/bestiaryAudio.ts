@@ -14,9 +14,10 @@
 //    arbiter), at most MAX_CONCURRENT_MOB_LOCKS mob locks in one audible window, the
 //    flock sounds as ONE aggregate bed, and hurt/death cues are rate-limited rows.
 //  - Lock cues are DRY and positional (spatial, zero jitter) so they localize.
-//  - No `stem: null` anywhere in the bestiary surface; fallbacks are SAME-MATERIAL
-//    shipped samples only, inside a sane rate window (no oscillator identities, no
-//    extreme pitching).
+//  - No `stem: null` anywhere in the bestiary surface EXCEPT selection-driven rows
+//    (explicit shipped take lists — the burrow emitter components), which are authored
+//    by construction; fallbacks are SAME-MATERIAL shipped samples only, inside a sane
+//    rate window (no oscillator identities, no extreme pitching).
 //
 // This module is manifest + resolution only; authored asset generation stays with the
 // main agent's locked pipeline.
@@ -194,7 +195,10 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   ghost: { move: "slime.move", commit: "slime.commit" }, // drift-hunter: goo-mist shared hunt bank until its own lands
   spitter: { warn: "orbiter.diveWarn", lock: "seamcutter.lock", fire: "orbiter.fire" },
   charger: { plant: "charger.windup", lock: "charger.lock", rush: "charger.rush", crash: "charger.crash", dazed: "charger.dazed" },
-  burrower: { dive: "burrower.submerge", emitter: "burrower.track", lock: "burrower.lock", erupt: "burrower.erupt", recover: "burrower.recover" },
+  // The underground emitter hook resolves to the authored component set's signature
+  // channel (audio director FINAL: burrow_track is retired; stepBurrowEmitter schedules
+  // dirtGrind/pebble/shellScrape on seeded cadences, all preloaded via bossWaveEvents).
+  burrower: { dive: "burrower.submerge", emitter: "burrow.dirtGrind", lock: "burrower.lock", erupt: "burrower.erupt", recover: "burrower.recover" },
   orbiter: { acquire: "orbiter.enterBand", loop: "orbit.loop", warn: "orbiter.diveWarn", lock: "orbiter.lock", fire: "orbiter.fire" },
   shielder: { raise: "shielder.raise", block: "shielder.block", bash: "shielder.bash", guardBreak: "guard.break", rearHurt: "shielder.rearHurt" },
   rootward: {

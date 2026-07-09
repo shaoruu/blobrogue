@@ -16,16 +16,47 @@ export interface ProfileDoc {
   name: string;
   // Chosen blob tint (client palette index); null until the player picks one.
   colorIndex: number | null;
+  // Equipped visual-only cosmetic loadout; null slots render the classic blob.
+  cosmetics: { hat: string | null; face: string | null; body: string | null; title: string | null };
   totalKills: number;
   deepestFloor: number;
   totalCoins: number;
   gamesPlayed: number;
+  // Earned cosmetic/unlock ids (granted by recordRun; starter items are owned implicitly).
   unlocks: string[];
   // Present when the profile is account-backed (Google avatar URL).
   image?: string;
   // True when this stats row is linked to a signed-in account.
   isAccount: boolean;
 }
+
+// One public leaderboard entry: a player's best run plus the appearance snapshot AS WORN
+// for that run (later re-equips never rewrite it; only the display name stays current).
+// Privacy-safe by construction — name/appearance/run data only, no ids of any kind.
+export interface LeaderboardEntryDoc {
+  name: string;
+  colorIndex: number | null;
+  hat: string | null;
+  face: string | null;
+  body: string | null;
+  title: string | null;
+  floor: number;
+  kills: number;
+  coins: number;
+  durationMs: number;
+  weapons: string[];
+  items: Array<{ id: string; count: number }>;
+  achievedAt: number;
+}
+
+// The run-build subset recordRun persists for the leaderboard profile (ids only).
+export type RunBuildArg = {
+  weapons: string[];
+  items: Array<{ id: string; count: number }>;
+};
+
+// Explicit per-slot loadout picks for ensurePlayer ("none" clears a slot; absent = keep).
+export type CosmeticsArg = { hat?: string; face?: string; body?: string; title?: string };
 
 export interface CurrentUserDoc {
   name: string | null;
@@ -102,10 +133,18 @@ export type PresenceUpdateArgs = {
 
 export const api = {
   players: {
-    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number }, ProfileDoc>("players:ensurePlayer"),
+    ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
-    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number }, ProfileDoc | null>("players:recordRun"),
+    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number; durationMs?: number; build?: RunBuildArg }, ProfileDoc | null>("players:recordRun"),
+  },
+  leaderboard: {
+    // The global top-N best runs (deepest floor, kills tie-break), public fields only.
+    top: makeFunctionReference<"query", { limit?: number }, LeaderboardEntryDoc[]>("leaderboard:top"),
+    // The caller's OWN charted standing (rank null = below the ranked window).
+    standing: makeFunctionReference<"query", { clientId: string }, { floor: number; kills: number; rank: number | null } | null>("leaderboard:standing"),
+    // The caller's OWN full charted entry + window rank (the own-profile Top Run card).
+    mine: makeFunctionReference<"query", { clientId: string }, { entry: LeaderboardEntryDoc; rank: number | null } | null>("leaderboard:mine"),
   },
   auth: {
     signIn: makeFunctionReference<"action", AuthSignInArgs, AuthSignInResult>("auth:signIn"),

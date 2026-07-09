@@ -26,19 +26,59 @@ export default defineSchema({
     // Account identity. Set once the row is linked to a signed-in Convex Auth user.
     userId: v.optional(v.id("users")),
     name: v.string(),
-    // Chosen blob tint (index into the client palette). Optional: absent until the
-    // player explicitly picks one, so a fresh browser never clobbers an account's pick.
+    // The player's PARTY color (index into the client palette): the network identity color
+    // for name labels, minimap dots, and lobby roster — deliberately separate from the
+    // cosmetic body palette (cosmeticLoadout.body), though the closet keeps them in step
+    // at launch. Optional: absent until the player explicitly picks one, so a fresh
+    // browser never clobbers an account's pick.
     colorIndex: v.optional(v.number()),
+    // Equipped visual-only cosmetic loadout (ids from convex/cosmeticsCore.ts; one field
+    // per shipped slot). A missing field is the empty slot; only OWNED ids are ever
+    // written (players.ts validates ownership + slot). Absent on pre-cosmetics rows —
+    // everything defaults safely.
+    cosmeticLoadout: v.optional(v.object({
+      hat: v.optional(v.string()),
+      face: v.optional(v.string()),
+      body: v.optional(v.string()),
+      title: v.optional(v.string()),
+    })),
     totalKills: v.number(),
     deepestFloor: v.number(),
     totalCoins: v.number(),
     gamesPlayed: v.number(),
+    // Earned cosmetic/unlock ids. Seeded [] since day one; recordRun grants earned
+    // cosmetics into it (see cosmeticsCore.earnedCosmeticsFor).
     unlocks: v.array(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
   })
     .index("by_clientId", ["clientId"])
     .index("by_userId", ["userId"]),
+
+  // Global leaderboard: ONE row per player — their best run (deepest floor, kills as the
+  // tie-break) — folded in by players.recordRun. The row SNAPSHOTS the run's build and the
+  // player's cosmetic loadout separately from the mutable profile, so the leaderboard
+  // profile view needs no join against players (and can never leak account fields:
+  // name/appearance/run stats only, by construction).
+  leaderboard: defineTable({
+    playerId: v.id("players"),
+    name: v.string(),
+    colorIndex: v.optional(v.number()),
+    hat: v.optional(v.string()),
+    face: v.optional(v.string()),
+    body: v.optional(v.string()),
+    title: v.optional(v.string()),
+    floor: v.number(),
+    kills: v.number(),
+    coins: v.number(),
+    durationMs: v.number(),
+    // The run's final build: owned weapon ids + collapsed blessing ids with levels.
+    weapons: v.array(v.string()),
+    items: v.array(v.object({ id: v.string(), count: v.number() })),
+    achievedAt: v.number(),
+  })
+    .index("by_player", ["playerId"])
+    .index("by_floor", ["floor"]),
 
   // A lobby / running game. The two kinds NEVER cross-match:
   //   "coop"   — classic peer-synced co-op (each client simulates from the shared seed/floor;

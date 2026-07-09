@@ -23,11 +23,25 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
-const { ITEMS, itemDesc } = await import("../src/sim/items.js");
+const { ShopPanel } = await import("../src/ui/shopPanel.js");
+const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView } = await import("../src/ui/shopCopy.js");
+const { buildShopState, shopViewerOf } = await import("../src/sim/shop.js");
+const { generateDungeon } = await import("../src/sim/dungeon.js");
+const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
+const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
+type WeaponId = HudState["weapons"][number]["id"];
+
+// Unmodified live weapon card (fresh mods, full HP) — the shape game.ts feeds.
+function wcard(id: WeaponId) {
+  return weaponDisplayStats(id, createMods(), 0);
+}
+function wslot(id: WeaponId, name: string, isCurrent: boolean) {
+  return { id, name, isCurrent, card: wcard(id) };
+}
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -43,9 +57,9 @@ function mkState(over: Partial<HudState> = {}): HudState {
   return {
     hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
     weapons: [
-      { id: "pistol", name: "Pistol", isCurrent: false },
-      { id: "shotgun", name: "Shotgun", isCurrent: true },
-      { id: "tesla", name: "Tesla", isCurrent: false },
+      wslot("pistol", "Pistol", false),
+      wslot("shotgun", "Shotgun", true),
+      wslot("tesla", "Tesla", false),
     ],
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
@@ -66,14 +80,140 @@ const ITEM_MAX = {
 
 function weaponSlotTests(): void {
   section("weapon slots keep their labeled, accessible shape");
-  const slot = buildSlot({ id: "shotgun", name: "Shotgun", isCurrent: true }, 1);
+  const slot = buildSlot(wslot("shotgun", "Shotgun", true), 1);
   check("slot keeps its select-key badge", slot.querySelector(".hb-key")?.textContent === "2");
   check("slot keeps its weapon-name label", slot.querySelector(".hb-name")?.textContent === "SHOTGUN");
   check("slot is a tabbable button", slot.tabIndex === 0 && slot.getAttribute("role") === "button");
-  check("slot aria-label names weapon + slot + equipped state", slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped");
+  check("slot aria-label stays concise (the card rides the linked tooltip on focus)",
+    slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped", slot.getAttribute("aria-label") ?? "");
+  check("slot carries no native title and no embedded tooltip (the floating singleton owns it)",
+    slot.getAttribute("title") === null && slot.querySelector(".tip, .hb-tip") === null);
   check("equipped slot is lit", slot.classList.contains("on"));
-  const tenth = buildSlot({ id: "tesla", name: "Tesla", isCurrent: false }, 9);
+  const tenth = buildSlot(wslot("tesla", "Tesla", false), 9);
   check("slots past 9 carry no key badge", tenth.querySelector(".hb-key") === null);
+}
+
+// Render the floating tooltip's content for one weapon (the pure builder the Hud
+// singleton uses), against an optional equipped card.
+function tipFor(id: WeaponId, name: string, isCurrent = false, vs: ReturnType<typeof wcard> | null = null): HTMLElement {
+  const tip = document.createElement("div");
+  renderTipInto(tip, wslot(id, name, isCurrent), isCurrent ? null : vs);
+  return tip;
+}
+
+function weaponTooltipTests(): void {
+  section("weapon card tooltip: pixel icon + name header, room-job verb, core rows");
+  const tip = tipFor("shotgun", "Shotgun", true);
+  check("header carries the pixel-rendered weapon icon", tip.querySelector(".th .ti img, .th .ti .glyphfb") !== null);
+  check("header names the weapon", tip.querySelector(".th .tn")?.textContent === "SHOTGUN");
+  check("the room job leads the card", tip.querySelector(".tj")?.textContent === "SHRED UP CLOSE");
+  const rows = [...tip.querySelectorAll(".tr")].map((r) =>
+    `${r.querySelector(".tk")?.textContent}=${r.querySelector(".tv")?.textContent}`);
+  check("core rows: exact per-pellet POWER, then IMPACT/CADENCE/REACH bands + COVERAGE category",
+    rows.join("|") === "POWER=1.7 \u00d75|IMPACT=SOLID|CADENCE=STEADY|REACH=CLOSE|COVERAGE=WIDE", rows.join("|"));
+  check("tradeoff line: the shotgun's self-kick", [...tip.querySelectorAll(".tm")].map((n) => n.textContent).join("|") === "KICKS YOU BACK");
+  check("equipped card marks itself EQUIPPED and hides ALL comparison words",
+    tip.querySelector(".tx")?.textContent === "EQUIPPED" && tip.querySelector(".td") === null);
+
+  section("weapon card tooltip: five rows always, px never displayed");
+  const pistol = tipFor("pistol", "Pistol");
+  check("plain gun renders all five rows (FOCUSED is its coverage)",
+    [...pistol.querySelectorAll(".tr .tk")].map((k) => k.textContent).join(",") === "POWER,IMPACT,CADENCE,REACH,COVERAGE"
+    && pistol.querySelectorAll(".tr")[4].querySelector(".tv")?.textContent === "FOCUSED");
+  check("plain pistol carries zero technique lines", pistol.querySelectorAll(".tm").length === 0);
+  check("band/category rows never leak a number (no px, no internals)",
+    (["pistol", "railgun", "sword", "mortar"] as WeaponId[]).every((id) =>
+      [...tipFor(id, id).querySelectorAll(".tr")].slice(1).every((r) => !/\d/.test(r.querySelector(".tv")?.textContent ?? "0"))));
+  const sword = tipFor("sword", "Cutlass");
+  check("melee coverage reads its geometry", sword.querySelectorAll(".tr")[4].querySelector(".tv")?.textContent === "SWEEP");
+  const spear = tipFor("spear", "Pike");
+  check("a thrust reads THRUST and keeps its technique line",
+    spear.querySelectorAll(".tr")[4].querySelector(".tv")?.textContent === "THRUST"
+    && [...spear.querySelectorAll(".tm")].some((n) => n.textContent === "PIERCING THRUST"));
+  check("row budget holds: exactly five stat rows + at most three technique lines",
+    (["shotgun", "sawnoff", "mortar", "tesla", "longsword", "flamer"] as WeaponId[]).every((id) => {
+      const t = tipFor(id, id, false, wcard("shotgun"));
+      return t.querySelectorAll(".tr").length === 5 && t.querySelectorAll(".tm").length <= 3;
+    }));
+
+  section("weapon card tooltip: comparison WORDS vs the equipped slot (accepted vocabulary)");
+  const cmpWords = (rowsVs: ReturnType<typeof weaponTipRows>) => rowsVs.map((r) => r.cmp.map((c) => c.word).join("+"));
+  // Shotgun hovered while the pistol is equipped: lighter per pellet but more of them —
+  // the two POWER facts stay separate, never summed into a fake total.
+  const sgVsPistol = cmpWords(weaponTipRows(wcard("shotgun"), wcard("pistol")));
+  check("POWER splits into LIGHTER + MORE SHOTS (never a guaranteed sum)", sgVsPistol[0] === "LIGHTER+MORE SHOTS", sgVsPistol[0]);
+  check("IMPACT tie says nothing (both SOLID)", sgVsPistol[1] === "");
+  check("CADENCE reads SLOWER", sgVsPistol[2] === "SLOWER");
+  check("REACH reads SHORTER", sgVsPistol[3] === "SHORTER");
+  check("COVERAGE within the pattern family reads WIDER", sgVsPistol[4] === "WIDER");
+  const rgVsCannon = cmpWords(weaponTipRows(wcard("railgun"), wcard("cannon")));
+  check("equal volley sizes: HEAVIER with no shots word", rgVsCannon[0] === "HEAVIER");
+  check("REACH reads LONGER; identical coverage reads SAME", rgVsCannon[3] === "LONGER" && rgVsCannon[4] === "SAME");
+  check("IMPACT compares MORE/LESS by band",
+    cmpWords(weaponTipRows(wcard("railgun"), wcard("pistol")))[1] === "MORE"
+    && cmpWords(weaponTipRows(wcard("rapid"), wcard("pistol")))[1] === "LESS");
+  check("behavior coverage across categories stays neutral DIFFERENT",
+    cmpWords(weaponTipRows(wcard("tesla"), wcard("shotgun")))[4] === "DIFFERENT");
+  check("BURST vs WIDE reads TIGHTER", cmpWords(weaponTipRows(wcard("burst"), wcard("shotgun")))[4] === "TIGHTER");
+  check("melee reach compares on the shared scale (sword vs railgun: SHORTER)",
+    cmpWords(weaponTipRows(wcard("sword"), wcard("railgun")))[3] === "SHORTER");
+  check("no comparison at all without an equipped card", weaponTipRows(wcard("pistol"), null).every((r) => r.cmp.length === 0));
+  const tipVs = tipFor("shotgun", "Shotgun", false, wcard("pistol"));
+  const tokens = [...tipVs.querySelectorAll(".td")].map((d) => `${d.textContent}:${d.className.replace("td ", "")}`);
+  check("directional tokens lead with a shape glyph, then the word, then tint (grayscale/color-blind safe)",
+    tokens.join("|") === "\u25bc LIGHTER:down|\u25b2 MORE SHOTS:up|\u25bc SLOWER:down|\u25bc SHORTER:down|WIDER:eq", tokens.join("|"));
+  check("neutral tokens carry no directional glyph", tokens[4] === "WIDER:eq");
+
+  section("weapon card tooltip: mechanics diff as GAINS / LOSES / CHANGES");
+  const equipped = wcard("shotgun");
+  const vsShotgun = weaponTipNotes(wcard("tesla"), equipped);
+  check("new mechanic reads GAINS", vsShotgun.some((n) => n.marker === "gains" && n.text === "CHAINS TO 3 MORE"), JSON.stringify(vsShotgun));
+  check("the equipped weapon's dropped mechanic reads LOSES",
+    vsShotgun.some((n) => n.marker === "loses" && n.text === "KICKS YOU BACK"), JSON.stringify(vsShotgun));
+  const ricochetVsNailer = weaponTipNotes(wcard("ricochet"), wcard("nailer"));
+  check("same mechanic at a new magnitude reads CHANGES",
+    ricochetVsNailer.some((n) => n.marker === "changes" && n.text === "RICOCHETS \u00d72"), JSON.stringify(ricochetVsNailer));
+  const flamerVsFlamer = weaponTipNotes(wcard("flamer"), wcard("flamer"));
+  check("shared mechanics stay unmarked", flamerVsFlamer.every((n) => n.marker === null));
+  check("no comparison = plain technique lines", weaponTipNotes(wcard("mortar"), null).every((n) => n.marker === null));
+  const teslaTip = tipFor("tesla", "Tesla", false, equipped);
+  const noteLines = [...teslaTip.querySelectorAll(".tm")].map((n) => `${n.className}:${n.textContent}`);
+  check("diff lines render marked with the prefix", noteLines.join("|") === "tm gains:GAINS \u00b7 CHAINS TO 3 MORE|tm loses:LOSES \u00b7 KICKS YOU BACK", noteLines.join("|"));
+
+  section("weapon card tooltip: live mod-adjusted values (never raw balance constants)");
+  const mods = createMods();
+  mods.damageMult = 1.5;
+  mods.extraPellets = 2;
+  const modded = weaponDisplayStats("shotgun", mods, 0);
+  const moddedRows = weaponTipRows(modded, null);
+  check("POWER reflects the damage mult and the modded volley", moddedRows[0].v === `${fmtStat(1.7 * 1.5)} \u00d77`, moddedRows[0].v);
+  check("damage mods move the IMPACT band live", moddedRows[1].v === "HEAVY", moddedRows[1].v); // 1.7 -> 2.55
+  const moddedPistol = weaponDisplayStats("pistol", mods, 0);
+  check("extra pellets move a FOCUSED gun's coverage to BURST live",
+    weaponTipRows(moddedPistol, null)[4].v === "BURST");
+  const pierceMods = createMods();
+  pierceMods.pierce = 1;
+  check("pierce mods surface a live PIERCES line",
+    weaponTipNotes(weaponDisplayStats("pistol", pierceMods, 0), null).some((n) => n.text === "PIERCES 1 BODY"));
+  check("fmtStat trims to one decimal", fmtStat(6.25) === "6.3" && fmtStat(2) === "2" && fmtStat(1.9230769) === "1.9");
+
+  section("weapon card tooltip: QA gates — rendered content is never nonsense, arrows stay semantic");
+  const allIds = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
+    "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"] as WeaponId[];
+  check("no tooltip ever renders NaN / undefined / N/A (all weapons, with and without comparison)",
+    allIds.every((id) => {
+      const text = tipFor(id, id, false, wcard("shotgun")).textContent ?? "";
+      const plain = tipFor(id, id, false, null).textContent ?? "";
+      return [text, plain].every((t) => !t.includes("NaN") && !t.includes("undefined") && !t.includes("N/A"));
+    }));
+  // CADENCE derives from fireCd, a lower-is-better raw stat: the word must follow the
+  // semantic direction (lower fireCd = FASTER), never the raw number's direction.
+  const fasterRaw = weaponTipRows(wcard("rapid"), wcard("railgun")); // fireCd 0.07 vs 0.85
+  check("lower-is-better raw (fireCd) reads FASTER on the semantic CADENCE row",
+    fasterRaw[2].cmp.length === 1 && fasterRaw[2].cmp[0].word === "FASTER" && fasterRaw[2].cmp[0].dir === 1);
+  check("self-comparison stays silent except a neutral coverage SAME",
+    weaponTipRows(wcard("shotgun"), wcard("shotgun")).every((r, i) =>
+      i === 4 ? r.cmp.length === 1 && r.cmp[0].word === "SAME" && r.cmp[0].dir === 0 : r.cmp.length === 0));
 }
 
 function buffChipTests(): void {
@@ -185,20 +325,25 @@ function drawerTests(): void {
   root.querySelector<HTMLButtonElement>(".hd-close")!.click();
   check("CLOSE dismisses the drawer and releases the context", !hud.isDrawerOpen() && !hud.isInteractionActive());
 
-  section("UI Part4: weapon stat drawer replaces hover-only info (tap the equipped slot)");
+  section("UI Part4: weapon stat drawer renders the SAME WeaponDisplayStats as the tooltip");
   let dropCalls = 0;
-  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", damage: 2, rate: 1.9, range: 160, isMelee: false, onDrop: () => dropCalls++ });
+  hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", stats: wcard("shotgun"), onDrop: () => dropCalls++ });
   check("weapon drawer opens", hud.isDrawerOpen());
   check("drawer titles the weapon", root.querySelector(".hd-head span")?.textContent === "SHOTGUN");
+  check("drawer leads with the room job", root.querySelector(".hd-role")?.textContent === "SHRED UP CLOSE");
   const statTexts = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
-  check("stat sheet shows DMG / RATE / RANGE", statTexts.join("|") === "DMG2|RATE1.9/S|RANGE160 PX", statTexts.join("|"));
+  check("stat boxes are the tooltip's card rows (shared vocabulary, one source)",
+    statTexts.join("|") === "POWER1.7 \u00d75|IMPACTSOLID|CADENCESTEADY|REACHCLOSE|COVERAGEWIDE", statTexts.join("|"));
+  check("drawer carries the technique lines", root.querySelector(".hd-special")?.textContent === "KICKS YOU BACK");
   const dropBtn = root.querySelector<HTMLButtonElement>(".hd-drop")!;
   check("touch DROP action present", dropBtn.textContent === "DROP (Q)");
   dropBtn.click();
   check("DROP releases the input context BEFORE acting, then acts once", dropCalls === 1 && !hud.isDrawerOpen());
 
-  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", damage: 1, rate: 6.3, range: 616, isMelee: false, onDrop: null });
-  check("final weapon offers no DROP action", root.querySelector(".hd-drop") === null);
+  hud.openWeaponDrawer({ id: "pistol", name: "Pistol", stats: wcard("pistol"), onDrop: null });
+  check("no DROP action when the weapon can't drop", root.querySelector(".hd-drop") === null);
+  check("plain gun still shows all five rows and no technique lines",
+    [...root.querySelectorAll(".hd-stat")].length === 5 && root.querySelector(".hd-special") === null);
 
   section("UI Part4: the scrim swallows the tap and closes the drawer");
   check("scrim shown while open", root.querySelector(".hb-scrim")!.classList.contains("show"));
@@ -227,9 +372,9 @@ function hudIntegrationTests(): void {
   // A reorder (same set, new order) rebuilds the slots to match.
   hud.update(mkState({
     weapons: [
-      { id: "tesla", name: "Tesla", isCurrent: false },
-      { id: "pistol", name: "Pistol", isCurrent: false },
-      { id: "shotgun", name: "Shotgun", isCurrent: true },
+      wslot("tesla", "Tesla", false),
+      wslot("pistol", "Pistol", false),
+      wslot("shotgun", "Shotgun", true),
     ],
     items: [ITEM_LV2, ITEM_MAX],
   }));
@@ -299,19 +444,6 @@ function hierarchyTests(): void {
   check("clear() resets lane + prompt states",
     !objective.classList.contains("show") && !lane.classList.contains("boss") && !prompt.classList.contains("show"));
 
-  section("dealerTagCopy: the Dealer's at-a-glance state matrix (UI gate)");
-  const buyer = { coins: 10, hp: 3, maxHp: 6, isOwned: false };
-  check("affordable heart reads HEART \u00b7 6 COINS",
-    JSON.stringify(dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, buyer)) === JSON.stringify({ text: "HEART \u00b7 6 COINS", state: "buy" }));
-  check("affordable stall reads NAME \u00b7 PRICE COINS",
-    dealerTagCopy({ kind: "weapon", name: "Railgun", price: 12 }, { ...buyer, coins: 12 }).text === "RAILGUN \u00b7 12 COINS");
-  check("broke reads NEED N MORE (the exact shortfall)",
-    JSON.stringify(dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, { ...buyer, coins: 4 })) === JSON.stringify({ text: "NEED 2 MORE", state: "broke" }));
-  check("full health outranks coins (the touch would be pointless)",
-    dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, { ...buyer, hp: 6 }).text === "FULL HEALTH");
-  check("an owned stall reads OWNED (party ownership explicit)",
-    dealerTagCopy({ kind: "weapon", name: "Railgun", price: 12 }, { ...buyer, coins: 50, isOwned: true }).text === "OWNED");
-
   section("objectiveCopy: the canonical strings");
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");
   check("FLOOR CLEAR \u00b7 GO DOWN", objectiveCopy(true, 0) === "FLOOR CLEAR \u00b7 GO DOWN");
@@ -319,14 +451,114 @@ function hierarchyTests(): void {
   check("party cleared copy points at the MEET", objectiveCopy(true, 0, true) === "FLOOR CLEAR \u00b7 MEET AT EXIT");
 }
 
+// ---- Patch's shop: the state-copy matrix + the compact panel (accepted UX call) ----
+
+function shopCopyTests(): void {
+  section("shopActionCopy: the accepted state matrix, exact strings");
+  check("affordable reads BUY \u00b7 N COINS", shopActionCopy("buy", 12, 30) === "BUY \u00b7 12 COINS");
+  check("a 1-coin price stays grammatical", shopActionCopy("buy", 1, 30) === "BUY \u00b7 1 COIN");
+  check("broke reads NEED N MORE (the exact shortfall)", shopActionCopy("broke", 12, 9) === "NEED 3 MORE");
+  check("sold reads SOLD", shopActionCopy("sold", 12, 30) === "SOLD");
+  check("owned reads OWNED", shopActionCopy("owned", 12, 30) === "OWNED");
+  check("maxed blessing reads MAX LV", shopActionCopy("maxLevel", 24, 30) === "MAX LV");
+  check("full-HP heart reads FULL HEALTH", shopActionCopy("fullHealth", 6, 30) === "FULL HEALTH");
+  check("spent reroll reads NO REROLLS LEFT", shopActionCopy("exhausted", 8, 30) === "NO REROLLS LEFT");
+
+  section("shopOwnershipCopy: ownership is EXPLICIT, never ambiguous");
+  const shop = buildShopState(0xDEA1, 3, generateDungeon(0xDEA1, 3).rooms.find((r) => r.kind === "shop")!);
+  const weapon = shop.slots.find((s) => s.kind === "weapon")!;
+  const blessing = shop.slots.find((s) => s.kind === "blessing")!;
+  const heart = shop.slots.find((s) => s.kind === "heart")!;
+  const reroll = shop.slots.find((s) => s.kind === "reroll")!;
+  check("shared weapon pedestal: SHARED \u2014 FIRST BUY CLAIMS", shopOwnershipCopy(weapon) === "SHARED \u2014 FIRST BUY CLAIMS");
+  check("personal blessing pedestal: FOR YOU", shopOwnershipCopy(blessing) === "FOR YOU");
+  check("heart station: FOR YOU", shopOwnershipCopy(heart) === "FOR YOU");
+  check("reroll post: SHARED \u2014 RESTOCKS FOR EVERYONE", shopOwnershipCopy(reroll) === "SHARED \u2014 RESTOCKS FOR EVERYONE");
+
+  section("shopChipCopy: pedestal shelf chips — price when for sale, the state word when not");
+  check("buyable chip is the bare price", shopChipCopy("buy", 12) === "12c" && shopChipCopy("broke", 12) === "12c");
+  check("blocked chips carry the state word",
+    shopChipCopy("sold", 12) === "SOLD" && shopChipCopy("owned", 12) === "OWNED"
+    && shopChipCopy("maxLevel", 24) === "MAX LV" && shopChipCopy("fullHealth", 6) === "FULL HEALTH");
+}
+
+function shopPanelTests(): void {
+  section("shop panel: compact, labeled, keyboard-first, aria-correct");
+  const shop = buildShopState(0xDEA1, 3, generateDungeon(0xDEA1, 3).rooms.find((r) => r.kind === "shop")!);
+  const weapon = shop.slots.find((s) => s.kind === "weapon")!;
+  const viewerOf = (coins: number) => shopViewerOf({
+    id: "local", coins, hp: 4, maxHp: 6, ownedWeapons: ["pistol"], ownedItemIds: [],
+  });
+  const mods = createMods();
+
+  const panel = new ShopPanel();
+  const bought: number[] = [];
+  let closes = 0;
+  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods), (slot) => bought.push(slot), () => closes++);
+  const root = document.querySelector<HTMLElement>(".shop-panel")!;
+  const buy = root.querySelector<HTMLButtonElement>(".shop-buy")!;
+  check("opens as a labeled dialog", panel.isOpen && root.getAttribute("role") === "dialog"
+    && root.getAttribute("aria-labelledby") === "shop-item-name");
+  // The stat line derives from weaponDisplayStats (the ONE live model the hotbar tooltip
+  // reads): role verb first, then POWER + the shared CADENCE/REACH/COVERAGE bands.
+  const expectedStats = weaponDisplayStats(weapon.weapon!, createMods(), 0);
+  const lineTexts = [...root.querySelectorAll(".shop-lines p")].map((p) => p.textContent!);
+  check("the item is fully labeled: name + kind + ownership + the tooltip-model stat line",
+    root.textContent!.includes("WEAPON") && root.textContent!.includes("SHARED \u2014 FIRST BUY CLAIMS")
+    && lineTexts[0] === expectedStats.role
+    && new RegExp(`^POWER [\\d.]+.* \\u00b7 ${expectedStats.cadence.band} \\u00b7 ${expectedStats.reach.band} \\u00b7 ${expectedStats.coverage.kind}$`).test(lineTexts[1]));
+  check("the action row is a real focusable button with a live region",
+    buy.tagName === "BUTTON" && buy.getAttribute("aria-live") === "polite" && document.activeElement === buy);
+  check("affordable: BUY \u00b7 12 COINS, enabled", buy.textContent === "BUY \u00b7 12 COINS" && !buy.disabled);
+
+  buy.click();
+  check("clicking BUY sends exactly one buy intent for the focused slot",
+    bought.length === 1 && bought[0] === weapon.id);
+
+  // The authoritative claim lands (a teammate won the race): the open panel re-renders
+  // to an honest SOLD and the buy control disables — no ambiguous depletion.
+  weapon.soldTo = "teammate";
+  panel.update(shopPanelView(shop, weapon, viewerOf(30), mods));
+  check("a mid-look claim flips the row to SOLD and disables it", buy.textContent === "SOLD" && buy.disabled);
+  buy.click();
+  check("a disabled row sends nothing", bought.length === 1);
+
+  weapon.soldTo = null;
+  panel.update(shopPanelView(shop, weapon, viewerOf(3), mods));
+  check("broke re-render reads NEED 9 MORE, disabled", buy.textContent === "NEED 9 MORE" && buy.disabled);
+
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  check("Escape closes and fires onClose exactly once", !panel.isOpen && closes === 1);
+
+  // Keyboard purchase: Enter on the focused (buyable) row buys.
+  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods), (slot) => bought.push(slot), () => closes++);
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  check("Enter buys from the keyboard", bought.length === 2 && bought[1] === weapon.id);
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
+  check("E closes the panel too (the same key that opened it)", !panel.isOpen && closes === 2);
+
+  // The blessing view carries the pick-card language (NEW/UPGRADE + exact effect).
+  const blessing = shop.slots.find((s) => s.kind === "blessing")!;
+  const bView = shopPanelView(shop, blessing, viewerOf(30), mods);
+  check("a fresh blessing is tagged NEW with its exact Lv1 effect line",
+    bView.tag === "NEW" && bView.lines.length >= 1 && bView.ownership === "FOR YOU");
+  const upView = shopPanelView(shop, blessing, shopViewerOf({
+    id: "local", coins: 30, hp: 4, maxHp: 6, ownedWeapons: ["pistol"], ownedItemIds: [blessing.itemId!],
+  }), mods);
+  check("an owned blessing is tagged UPGRADE LV2 (the level this buy reaches)", upView.tag === "UPGRADE LV2");
+}
+
 function main(): void {
   weaponSlotTests();
+  weaponTooltipTests();
   buffChipTests();
   buffOverflowTests();
   blessingCardTests();
   drawerTests();
   hudIntegrationTests();
   hierarchyTests();
+  shopCopyTests();
+  shopPanelTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll HUD DOM assertions passed.\n");
