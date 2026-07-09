@@ -268,22 +268,34 @@ never a client-asserted string:
    a room (roster + status only; Convex owns NO gameplay for this kind). Online and classic
    co-op rooms never cross-match. The lobby screen shows the code + live roster (names,
    colors, host) and the host's START control; joining a room whose run is live drops
-   straight in, and a wipe regroups the party in the same lobby (`rooms.reopen`).
+   straight in, and a wipe regroups the party in the same lobby (`rooms.reopen`). The host
+   also picks the room's **difficulty** (CASUAL / STANDARD / BRUTAL) here — `rooms.setDifficulty`
+   is host-only, lobby-status-only, and never for public quick-play rooms (the pool is always
+   STANDARD). Every member sees the same control (read-only for non-hosts), and the pick
+   persists on the room row across wipes until the host changes it.
 2. **Ticket (Convex → signed claim).** On connect, [`convex/gsTicket.ts`](convex/gsTicket.ts)
    `mint({ clientId, roomCode })` verifies the caller actually SITS in that online room
    (`rooms.membership`), then binds `wld: "room:<CODE>"` into the HMAC ticket payload —
-   along with the display name (`nm`) and chosen blob color (`cl`).
+   along with the display name (`nm`), chosen blob color (`cl`), and the room's
+   host-selected difficulty (`df`, read from ROOM state — a client can neither pass nor
+   alter it).
 3. **Join (game server).** The join message is unchanged (`{ t:"join", ticket, protocol }`);
    the server verifies the ticket (`server/src/auth.ts`) and binds the connection to exactly
-   the ticket's world: `sessions.bind(conn, worldId)`. Same code → same world; different
-   codes → fully isolated runs (own seed/floor/enemies). No claim → the public default
-   world. Emptied room worlds are reset AND released, so codes never leak server memory.
-4. **Identity on the wire.** The verified name/color ride each snapshot's `PlayerWire`
-   (`nm`/`cl`), so names render above blobs and everyone sees your chosen tint. Both fields
-   are decode-optional with fallbacks — old/new client/server pairs interoperate.
+   the ticket's world: `sessions.bind(conn, worldId, difficulty)`. Same code → same world;
+   different codes → fully isolated runs (own seed/floor/enemies). The verified `df` claim
+   applies only when the room's world is CREATED — an existing world's difficulty always
+   wins, and run resets retain it, so a run's mode is immutable while it is live. No claim
+   → the public default world at STANDARD (which also keeps every pre-difficulty ticket and
+   dev ticket working unchanged). Emptied room worlds are reset AND released, so codes
+   never leak server memory.
+4. **Identity + mode on the wire.** The verified name/color ride each snapshot's `PlayerWire`
+   (`nm`/`cl`), so names render above blobs and everyone sees your chosen tint; the room's
+   difficulty rides each snapshot as `dif` (the HUD readout, and what a reconnecting client
+   trusts). All three are decode-optional with fallbacks (`dif` → standard) — old/new
+   client/server pairs interoperate.
 
-The mint/verify byte agreement (now including the `wld`/`nm`/`cl` claims) is locked by
-`server/test/ticket.test.ts`; the room isolation + identity flow end-to-end by
+The mint/verify byte agreement (now including the `wld`/`nm`/`cl`/`df` claims) is locked by
+`server/test/ticket.test.ts`; the room isolation + identity + difficulty flow end-to-end by
 `server/test/rooms.test.ts`.
 
 ### Ticket sources
@@ -294,7 +306,7 @@ The mint/verify byte agreement (now including the `wld`/`nm`/`cl` claims) is loc
   `guest:<clientId>`. Guest play never requires sign-in.
 - **Dev / ops (`?gs=<wsUrl>` direct join):** that server's local `/dev-ticket` endpoint
   (dev auth only; hard-disabled in production), which accepts the same optional
-  `world`/`name`/`color` params for the two-tab room proof — see `server/README.md`.
+  `world`/`name`/`color`/`df` params for the two-tab room proof — see `server/README.md`.
 
 **Operator setup for production join:**
 

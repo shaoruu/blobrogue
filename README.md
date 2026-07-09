@@ -29,6 +29,10 @@ Clear a floor of enemies, then step into the glowing exit to descend. See how de
   art needed). Optional drop-in frame spritesheets are supported too — see [ART.md](ART.md).
 - **Enemy variety** — slimes (chase), bats (fast zigzag), skeletons (tanky), ghosts (drift
   through walls), and a **slime-king boss every 5th floor** that spawns minions.
+- **Difficulty modes** — CASUAL / STANDARD / BRUTAL, picked at run setup: on the title
+  screen for solo (persisted), or by the room host in the online lobby (authoritative room
+  state everyone sees). Same mechanics and telegraphs in every mode — the knobs are enemy/boss
+  HP, threat density, heart drops, and spawn grace. BRUTAL is the classic full-pressure balance.
 - **Weapons & pickups** — pistol, shotgun (spread), and rapid-fire; hearts heal, coins are
   currency, and gun pickups swap your weapon. Weapon shown in the HUD.
 - **Minimap + stats HUD** — top-right minimap (rooms, exit, enemies, teammates), a clean
