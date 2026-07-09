@@ -13,7 +13,7 @@ const ENEMY_KINDS: readonly EnemyKind[] = [
   "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
   "boss", "marrow", "choir", "weaver", "gilded",
 ];
-const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer", "sword", "longsword", "spear"];
+const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"];
 const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
@@ -22,6 +22,7 @@ const PROP_LABEL: Record<PropKind, string> = {
 // Sprite filenames mostly follow WeaponId; melee uses its display-name art filenames.
 const WEAPON_ART_ID: Partial<Record<WeaponId, string>> = {
   sword: "cutlass", longsword: "claymore", spear: "pike",
+  mortar: "thumper", beam: "beam2_px",
 };
 const weaponArtId = (id: WeaponId) => WEAPON_ART_ID[id] ?? id;
 
