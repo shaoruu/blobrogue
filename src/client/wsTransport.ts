@@ -21,7 +21,7 @@ import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT,
-  type ServerMsg,
+  type RosterWire, type ServerMsg,
 } from "../net/protocol.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
@@ -47,9 +47,21 @@ export type ConnStatus = "connecting" | "open" | "closed" | "error";
 export interface WSTransportOptions {
   url: string;
   getTicket: () => Promise<string>;
+  // The world this connection is ALLOWED to play in (worldIdForRoomCode of the lobby's room
+  // code). Every snapshot's authoritative `wid` is asserted against it: a mismatch closes
+  // the socket before any state is accepted — the client must never play in a world it did
+  // not expect (the Sev-0 failure mode). Omitted/null: no assertion (dev ?gs= direct joins).
+  expectedWorldId?: string | null;
   socketFactory?: (url: string) => SocketLike;
   now?: () => number;
   onStatus?: (s: ConnStatus) => void;
+}
+
+// A world-binding violation: the server bound this connection to a world other than the one
+// the lobby promised. Terminal — the transport closes itself and never becomes ready.
+export interface WorldMismatch {
+  expected: string;
+  got: string;
 }
 
 const SOCKET_OPEN = 1;
@@ -152,6 +164,8 @@ export class WSTransport implements Transport {
   private curSeed = -1;
   private curFloor = -1;
   private isWorldRebuilt = false;
+  // Terminal world-binding violation (expectedWorldId asserted against snapshot wid).
+  private worldMismatch: WorldMismatch | null = null;
   // A server-decided blessing offer waiting to be shown (consumed by the game each frame).
   private pendingOffer: BlessingOffer | null = null;
 
@@ -207,6 +221,7 @@ export class WSTransport implements Transport {
     this.lastAckSeq = 0;
     this.cseq = 0;
     this.isWorldRebuilt = false;
+    this.worldMismatch = null;
     const lp = this.predState.players.get(LOCAL_ID)!;
     this.prevPredX = lp.x; this.prevPredY = lp.y;
     this.stopped = false;
@@ -245,8 +260,11 @@ export class WSTransport implements Transport {
   }
 
   private setStatus(s: ConnStatus): void {
-    this.status = s;
-    this.opts.onStatus?.(s);
+    // A world-binding mismatch is terminal: the socket close that follows it must not
+    // soften the reported state from "error" back to a plain "closed".
+    const status: ConnStatus = this.worldMismatch !== null ? "error" : s;
+    this.status = status;
+    this.opts.onStatus?.(status);
   }
 
   private sendJoin(): void {
@@ -325,6 +343,18 @@ export class WSTransport implements Transport {
   }
 
   private ingestSnapshot(snap: Extract<ServerMsg, { t: "snap" }>): void {
+    // World-binding assertion FIRST, before any state is accepted: the lobby promised a
+    // specific room world, and if the server bound us anywhere else, playing would put this
+    // player in a different run than their party (the Sev-0 bug). Close and never play.
+    const expected = this.opts.expectedWorldId;
+    if (expected != null && snap.wid !== expected) {
+      this.worldMismatch = { expected, got: snap.wid };
+      this.lastError = `world mismatch: expected ${expected}, got ${snap.wid}`;
+      console.error(`[net] ${this.lastError} — closing the connection`);
+      this.stop();
+      this.setStatus("error");
+      return;
+    }
     // Reject stale / out-of-order snapshots: a full (join) snapshot always resyncs; otherwise
     // ignore anything from an older world revision or an older/duplicate tick (defends against
     // reordering under the adversity shim; on real ordered TCP this is belt-and-suspenders).
@@ -660,6 +690,20 @@ export class WSTransport implements Transport {
   // ---- read-only introspection (HUD / harness / tests) ----
   getSelfServerId(): PlayerId | null {
     return this.selfServerId;
+  }
+  // The authoritative world id this connection is bound to (from the latest snapshot).
+  getWorldId(): string | null {
+    return this.latestSnap?.wid ?? null;
+  }
+  // Everyone actually connected to this world (verified identities, interest-independent).
+  // The readiness veil matches these against the lobby's expected roster; the HUD shows the
+  // count.
+  getWorldRoster(): readonly RosterWire[] {
+    return this.latestSnap?.roster ?? [];
+  }
+  // Non-null after a terminal world-binding violation (see WSTransportOptions.expectedWorldId).
+  getWorldMismatch(): WorldMismatch | null {
+    return this.worldMismatch;
   }
   // The current predicted local-player position (true prediction, pre-smoothing).
   getPredictedSelf(): { x: number; y: number } {

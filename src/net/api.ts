@@ -74,6 +74,11 @@ export interface PresenceDoc {
   colorIndex: number;
   reviveNonce: number;
   updatedAt: number;
+  // ONLINE rooms: the authoritative world this member is actually connected to (mirrored
+  // from the game server's snapshot after a verified join; null while in the lobby). The
+  // lobby roster derives LOBBY / CONNECTING / CONNECTED TO WORLD from it.
+  gsWorldId: string | null;
+  gsJoinedAt: number | null;
 }
 
 // A type alias (not an interface) so it satisfies Convex's `DefaultFunctionArgs`
@@ -124,5 +129,8 @@ export const api = {
     update: makeFunctionReference<"mutation", PresenceUpdateArgs, null>("presence:update"),
     list: makeFunctionReference<"query", { roomId: string }, PresenceDoc[]>("presence:list"),
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
+    // Mirror of the authoritative game-server connection state (ONLINE rooms): worldId after
+    // a verified world join, null on leaving. Powers the lobby's per-member readiness readout.
+    reportWorld: makeFunctionReference<"mutation", { roomId: string; playerId: string; worldId: string | null }, null>("presence:reportWorld"),
   },
 };
