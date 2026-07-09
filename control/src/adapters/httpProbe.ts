@@ -27,7 +27,9 @@ import type {
 // PROTOCOL_VERSION (the control build cannot import across its rootDir, so the value is
 // mirrored here); control/test/integration.test.ts locks the two together and additionally
 // joins a REAL gs, so drift fails loudly.
-export const SYNTHETIC_JOIN_PROTOCOL = 6;
+// v7: the depth-progression world (new shared dungeon generator + seeded floor hazards
+// + hazardHit event) on top of the co-op experience pass (v6).
+export const SYNTHETIC_JOIN_PROTOCOL = 7;
 
 export interface HttpProbeConfig {
   baseUrl: string;

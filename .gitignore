@@ -29,3 +29,4 @@ __pycache__/
 
 # Python bytecode (tools/ scripts)
 __pycache__/
+*.pyc

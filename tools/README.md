@@ -34,6 +34,12 @@ after `source /workspace/.secrets/env.sh` (loads FAL_KEY etc.).
   - Tested by `tools/test_pixelize.py` (runs in `npm test` via `npm run test:tools`).
   ⚠️ Do NOT run on an already-assembled multi-frame STRIP (it collapses the sheet — this
   caused the slime_walk bug). Pixelize single frames, then assemble the strip.
+  `--tile` mode (floors/walls) now takes `--ramp "hex,hex,hex,hex,hex"` to pin a
+  PER-BIOME 5-color dark ramp (defaults to the shared dungeon ramp) — same ramp
+  discipline, six biome palettes. Register outputs in `BIOME_TILE_SOURCES` (assets.ts).
+- **`mapview.mjs [floor] [seed] | --ladder [seed]`** — ASCII previewer for the dungeon
+  generator + hazard layer (rooms by shape glyph, S/E, ^ spikes, o pools, v vents,
+  @ rifts). The level-design iteration loop without booting the client.
 - **`add_shadow.py`**, **`faledit.mjs`** — grounding shadow / fal image edit helpers.
 
 ## Audio generation (fal → ElevenLabs / Stable Audio)

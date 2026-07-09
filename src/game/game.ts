@@ -1,6 +1,8 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind } from "../sim/types.js";
+import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
+import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
@@ -42,7 +44,7 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
-import { ShockwaveField, ScreenFlash, MoteField } from "./vfx.js";
+import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
@@ -346,6 +348,31 @@ const PROP_TINT: Record<PropKind, string> = {
 // reads as a solid object, not a jelly.
 const PROP_STYLE: XformStyle = { freq: 2.1, bob: 0.7, squash: 0.03, hop: 0, lean: 0 };
 
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.startsWith("#") ? hex.slice(1) : hex;
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+}
+
+// ---- hazard render tables (see renderHazards) ----
+// Spike socket centers within the 48px tile (a 2x2 trap plate).
+const SPIKE_SOCKETS: ReadonlyArray<[number, number]> = [[14, 15], [34, 15], [14, 35], [34, 35]];
+// Toxic-pool liquid palette per curriculum band (wet roots, warren murk, cave water,
+// jet resin, gilded amber, slag, anti-light).
+interface PoolStyle { base: string; edge: string; sheen: string }
+const POOL_STYLES: readonly PoolStyle[] = [
+  { base: "#14301e", edge: "#3fbf5f", sheen: "#8fffa8" },
+  { base: "#1a2a10", edge: "#6b8a2e", sheen: "#c8e86a" },
+  { base: "#12262e", edge: "#2a5a6a", sheen: "#57b6ff" },
+  { base: "#1a1430", edge: "#46356b", sheen: "#a24bff" },
+  { base: "#241c08", edge: "#8a6b1f", sheen: "#ffd166" },
+  { base: "#20140e", edge: "#7a3d12", sheen: "#ffb43b" },
+  { base: "#220c26", edge: "#6a2fb0", sheen: "#ff4ad8" },
+];
+// Hazard impact tint for the hazardHit event juice.
+const HAZARD_HIT_TINT: Record<FloorHazardKind, string> = {
+  spikes: "#c9c9de", toxic_pool: "#3fbf5f", fire_vent: "#ff8a3b", void_rift: "#d9a6ff",
+};
+
 // Stable per-tile hash -> 0..1. Salted so different features (variant vs. detail) draw
 // from independent streams, and identical every frame so tiles never shimmer.
 function tileHash(x: number, y: number, salt: number): number {
@@ -451,10 +478,23 @@ export class Game {
   // Client-only VFX subsystems (see vfx.ts) — pure cosmetics over the sim's event stream.
   private shockwaves = new ShockwaveField();
   private screenFlash = new ScreenFlash();
-  private motes = new MoteField();
+  private motes = new AmbienceField();
+  // Smoothed local mirror of the sim's hazardClock: advances every render frame and eases
+  // onto the authoritative clock, so 20Hz online snapshots (or a hit-stop) never make a
+  // telegraph animation stutter. Purely visual — damage reads the SIM clock.
+  private hazardVisClock = 0;
+  // Last seen cycle phase per hazard id — fires the client-side eruption cues (sound +
+  // burst particles) exactly on the idle->telegraph->active edges.
+  private hazardPhases = new Map<number, FloorHazardPhase>();
+  // Tile indices holding toxic pools this floor, so adjacent pool tiles render merged
+  // into one liquid body. Rebuilt per floor load.
+  private poolTiles = new Set<number>();
   private meleeFlipDir = 1;      // alternates the visual sweep direction per swing (hitbox is symmetric)
   private footstepCd = 0;        // spacing timer for run-dust kicks
   private hurtDir: number | null = null; // world angle toward the last damage source (screen-edge hint)
+  // Previous-frame player position -> velocity for the reactive ambience layer.
+  private lastPx = 0;
+  private lastPy = 0;
   private isClearCelebrated = false; // edge detector for the floor-clear flourish
   // Client-side cosmetic anim, split out of the now-pure sim structs. Enemies/props key by
   // their stable sim id; pickups/chests key by object identity (LocalTransport shares the
@@ -521,6 +561,9 @@ export class Game {
   private wallSideGrads: [CanvasGradient, CanvasGradient][] = [];
   private currentBiome: Biome = biomeForFloor(1);
   private biomeIdx = 0;
+  // Cached screen-space vignette (rebuilt on resize / biome change): the depth mood that
+  // closes in band over band. One cached gradient fill per frame — flat cost.
+  private vignetteCache: { canvas: HTMLCanvasElement; w: number; h: number } | null = null;
   private torches: { tx: number; ty: number }[] = []; // wall-mounted torch cells, per floor
   private freeze = 0; // hit-stop timer (seconds); while > 0 gameplay updates pause
   private trauma = 0; // screen-shake trauma, 0..1
@@ -794,8 +837,24 @@ export class Game {
   // props/chests) is built by the sim (createWorld / descend); this only mirrors the
   // presentation side.
   private loadFloorClient() {
+    const prevBiomeIdx = this.biomeIdx;
     this.biomeIdx = biomeIndexForFloor(this.floor);
     this.currentBiome = biomeForFloor(this.floor);
+    // Crossing into a NEW band is a reveal beat: a soft wash in the biome's light color
+    // sells "you are somewhere else now" the moment the floor fades in.
+    if (this.biomeIdx !== prevBiomeIdx && this.floor > 1) {
+      const glow = hexToRgb(this.currentBiome.glow);
+      this.screenFlash.flash(glow[0], glow[1], glow[2], 0.16, 1.6);
+    }
+    this.vignetteCache = null;
+    this.hazardPhases.clear();
+    this.hazardVisClock = this.world.floorHazardClock;
+    this.poolTiles.clear();
+    for (const h of this.world.floorHazards) {
+      if (h.kind === "toxic_pool") this.poolTiles.add(h.ty * this.dungeon.w + h.tx);
+    }
+    this.lastPx = this.px;
+    this.lastPy = this.py;
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
@@ -828,18 +887,22 @@ export class Game {
     waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null);
   }
 
-  // Mount a torch on the wall directly above each room (facing into it), at a
-  // deterministic column. Roughly one per room -> a handful on screen, no per-frame cost.
+  // Mount torches on the wall directly above each room (facing into it), at deterministic
+  // columns. Deeper biomes hang MORE lights (biome.torchesPerRoom) — the darker the band,
+  // the more its little fires matter. Same seeded stream shape as before; no per-frame cost.
   private placeTorches(d: Dungeon): { tx: number; ty: number }[] {
     const list: { tx: number; ty: number }[] = [];
     const rng = new Rng((this.seed ^ 0x7f4a7c15) + this.floor * 92821);
+    const perRoom = this.currentBiome.torchesPerRoom;
     for (const room of d.rooms) {
       const ty = room.y - 1;
       if (ty < 0) continue;
-      const tx = room.x + 1 + rng.int(0, Math.max(0, room.w - 3));
-      const isWall = d.tiles[ty * d.w + tx] === 1;
-      const isFloorBelow = d.tiles[(ty + 1) * d.w + tx] === 0;
-      if (isWall && isFloorBelow) list.push({ tx, ty });
+      for (let i = 0; i < perRoom; i++) {
+        const tx = room.x + 1 + rng.int(0, Math.max(0, room.w - 3));
+        const isWall = d.tiles[ty * d.w + tx] === 1;
+        const isFloorBelow = d.tiles[(ty + 1) * d.w + tx] === 0;
+        if (isWall && isFloorBelow && !list.some((t) => t.tx === tx && t.ty === ty)) list.push({ tx, ty });
+      }
     }
     return list;
   }
@@ -1342,7 +1405,13 @@ export class Game {
       this.cam.x += (tx - this.cam.x) * k;
       this.cam.y += (ty - this.cam.y) * k;
     }
-    this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height);
+    // Player velocity for the reactive ambience (pollen scatters as you run through it).
+    const pvx = dt > 0 ? (this.px - this.lastPx) / dt : 0;
+    const pvy = dt > 0 ? (this.py - this.lastPy) / dt : 0;
+    this.lastPx = this.px;
+    this.lastPy = this.py;
+    this.motes.update(dt, this.cam.x, this.cam.y, this.canvas.width, this.canvas.height, this.px, this.py, pvx, pvy);
+    this.updateHazardCosmetics(dt);
 
     // Wave-audio observation pass: authoritative attack-state tells (windup/lock/active/
     // recover edges), revive-channel lifecycle, beam stop hysteresis, entity loop sweep.
@@ -1366,6 +1435,61 @@ export class Game {
     }
     for (const r of this.remotes()) {
       yield { id: r.playerId, x: r.x, y: r.y, isDown: r.isDown, reviveProgress: r.reviveProgress };
+    }
+  }
+
+  // Ease the visual hazard clock onto the sim's authoritative one (online snapshots step
+  // it at 20Hz; hit-stop pauses it) and fire the idle->telegraph->active edge cues:
+  // an arming tick and an eruption burst per hazard, positional and camera-gated. All
+  // cosmetic — damage resolves in the sim off the REAL clock.
+  private updateHazardCosmetics(dt: number) {
+    const target = this.world.floorHazardClock;
+    this.hazardVisClock += dt;
+    const drift = target - this.hazardVisClock;
+    if (Math.abs(drift) > 0.6) this.hazardVisClock = target;
+    else this.hazardVisClock += drift * Math.min(1, dt * 8);
+
+    const hazards = this.world.floorHazards;
+    if (hazards.length === 0) {
+      if (this.hazardPhases.size > 0) this.hazardPhases.clear();
+      return;
+    }
+    for (const h of hazards) {
+      const phase = floorHazardPhaseAt(h, this.hazardVisClock);
+      const prev = this.hazardPhases.get(h.id);
+      this.hazardPhases.set(h.id, phase);
+      if (prev === undefined || phase === prev) continue;
+      const x = (h.tx + 0.5) * TILE, y = (h.ty + 0.5) * TILE;
+      if (!this.isNearCamera(x, y)) continue;
+      if (phase === "telegraph") {
+        if (h.kind === "spikes") this.sfxAt("uiClick", x, y, { rate: 1.6, gain: 0.5 });
+        else if (h.kind === "fire_vent") this.sfxAt("enemyAttack", x, y, { rate: 0.7, gain: 0.3 });
+        else if (h.kind === "void_rift") this.sfxAt("enemyAttack", x, y, { rate: 0.4, gain: 0.3 });
+      } else if (phase === "active") {
+        switch (h.kind) {
+          case "spikes":
+            this.sfxAt("meleeSwing", x, y, { rate: 1.5, gain: 0.4 });
+            this.spawnPuff(x, y, 3, "#c9c9de");
+            break;
+          case "fire_vent":
+            this.sfxAt("barrel", x, y, { rate: 1.3, gain: 0.35 });
+            this.spawnEmberAt(x, y - 6, 8);
+            this.spawnPuff(x, y - 10, 4, "#ff8a3b");
+            break;
+          case "void_rift":
+            this.sfxAt("tesla", x, y, { rate: 0.6, gain: 0.3 });
+            this.spawnSparkleBurst(x, y, 6, this.currentBiome.accent);
+            break;
+          default:
+            break;
+        }
+      }
+    }
+    if (this.hazardPhases.size > hazards.length * 2) {
+      // Floor changed underneath us: drop stale ids so the map stays bounded.
+      const live = new Set<number>();
+      for (const h of hazards) live.add(h.id);
+      for (const id of this.hazardPhases.keys()) if (!live.has(id)) this.hazardPhases.delete(id);
     }
   }
 
@@ -1607,6 +1731,17 @@ export class Game {
         this.addDecal(e.x, e.y, "#ffd27a", 20, "ring");
         this.addTrauma(0.18);
         break;
+      case "hazardHit": {
+        // The floor connected: kind-flavored burst on top of the ordinary playerHurt beat
+        // (which the sim raises separately for the shared hurt juice).
+        const tint = HAZARD_HIT_TINT[e.kind];
+        this.spawnPuff(e.x, e.y, 8, tint);
+        if (e.kind === "spikes") this.spawnSparks(e.x, e.y, 6, -Math.PI / 2);
+        if (e.kind === "fire_vent") this.spawnEmberAt(e.x, e.y, 10);
+        if (e.kind === "void_rift") this.spawnSparkleBurst(e.x, e.y, 8, tint);
+        this.addDecal(e.x, e.y, tint, 12, "ring");
+        break;
+      }
       case "spitMuzzle":
         this.sfxAt("shootRapid", e.x, e.y, { rate: 0.55, gain: 0.7 });
         this.spawnPuff(e.x, e.y, 6, "#ff5a7a");
@@ -1890,6 +2025,9 @@ export class Game {
       default:
         break;
     }
+    // Biome-flavored debris: a thin accent haze rides every break, so smashed cover
+    // kicks up spores in the Hollow, ember dust in Emberreach, void light in the Null.
+    if (kind !== "barrel_explosive") this.spawnPuff(x, y, 3, this.currentBiome.accent);
   }
 
   // Present three blessings and freeze until the player picks one (per client; items are
@@ -2765,7 +2903,8 @@ export class Game {
     if (this.isFlowDebug) this.renderFlowDebug();
     this.renderProps();
     this.renderDecals();
-    this.renderHazards();
+    this.renderFloorHazards(); // floor-level danger: over decals, under the ambient air + entities
+    this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
     this.motes.render(ctx, this.cam.x, this.cam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -2788,6 +2927,7 @@ export class Game {
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     this.renderWorldLabels();
     ctx.restore();
+    this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
     this.renderDownOverlay();
@@ -2795,6 +2935,36 @@ export class Game {
     this.renderReticle();
     this.renderMinimap();
     this.renderReconnectOverlay();
+  }
+
+  // The depth mood: a biome-colored vignette that closes in band over band (10% of the
+  // frame edge in the Hollow, nearly half-frame in the Null), breathing very slightly in
+  // the pulsing biomes. Cached gradient — one drawImage per frame.
+  private renderBiomeVignette() {
+    const { ctx, canvas } = this;
+    const biome = this.currentBiome;
+    if (biome.vignette <= 0.01) return;
+    if (!this.vignetteCache || this.vignetteCache.w !== canvas.width || this.vignetteCache.h !== canvas.height) {
+      const off = document.createElement("canvas");
+      off.width = canvas.width;
+      off.height = canvas.height;
+      const g = off.getContext("2d");
+      if (!g) return;
+      const cx = canvas.width / 2, cy = canvas.height / 2;
+      const inner = Math.min(cx, cy) * (1 - biome.vignette);
+      const outer = Math.hypot(cx, cy);
+      const [r, gg, b] = hexToRgb(biome.vignetteColor);
+      const grad = g.createRadialGradient(cx, cy, inner, cx, cy, outer);
+      grad.addColorStop(0, `rgba(${r},${gg},${b},0)`);
+      grad.addColorStop(1, `rgba(${r},${gg},${b},${Math.min(0.9, biome.vignette + 0.34)})`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, off.width, off.height);
+      this.vignetteCache = { canvas: off, w: canvas.width, h: canvas.height };
+    }
+    ctx.save();
+    ctx.globalAlpha = biome.pulse > 0 ? 1 - biome.pulse * 0.5 * (1 + Math.sin(this.animClock * 1.7)) : 1;
+    ctx.drawImage(this.vignetteCache.canvas, 0, 0);
+    ctx.restore();
   }
 
   // Mid-run outage overlay over the frozen world, following the UI contract's state
@@ -2943,22 +3113,46 @@ export class Game {
     const x1 = Math.min(d.w, Math.ceil((cam.x + canvas.width) / TILE) + 1);
     const y1 = Math.min(d.h, Math.ceil((cam.y + canvas.height) / TILE) + 1);
 
-    // Pass 1: floors (+ occasional detail overlay + cast shadow under walls).
+    // Pass 1: floors (+ detail overlay at the biome's density + cast shadow under walls).
+    // Dedicated per-biome floor art (BIOME_TILE_SOURCES) wins when registered; otherwise
+    // the shared set carries the biome through the grade below.
+    const detailDensity = biome.detailDensity;
     for (let ty = y0; ty < y1; ty++) {
       for (let tx = x0; tx < x1; tx++) {
         if (d.tiles[ty * d.w + tx] !== 0) continue;
         const sx = tx * TILE - cam.x, sy = ty * TILE - cam.y;
-        const variant = floorVariant(tileHash(tx, ty, 1));
-        if (tiles.ready(variant)) {
-          ctx.drawImage(tiles.get(variant), sx, sy, TILE, TILE);
+        const vHash = tileHash(tx, ty, 1);
+        const biomeArt = tiles.biomeFloor(biome.tileKey, Math.floor(vHash * 61));
+        if (biomeArt) {
+          ctx.drawImage(biomeArt, sx, sy, TILE, TILE);
+        } else if (tiles.ready(floorVariant(vHash))) {
+          ctx.drawImage(tiles.get(floorVariant(vHash)), sx, sy, TILE, TILE);
         } else {
           ctx.fillStyle = (tx + ty) % 2 === 0 ? biome.floorA : biome.floorB;
           ctx.fillRect(sx, sy, TILE, TILE);
         }
         const rd = tileHash(tx, ty, 2);
-        if (rd < 0.09) {
-          const detail: TileName = rd < 0.03 ? "floor_crack" : rd < 0.06 ? "floor_grate" : "floor_moss";
-          if (tiles.ready(detail)) ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
+        if (rd < detailDensity) {
+          const t = rd / detailDensity;
+          // Built-dungeon grates only suit the built bands (the Archive's order, the Ember
+          // works); the living and wrong places crack and grow instead.
+          const hasGrates = this.biomeIdx === 4 || this.biomeIdx === 5;
+          const detail: TileName = t < 0.33 ? "floor_crack" : t < 0.66 ? (hasGrates ? "floor_grate" : "floor_crack") : "floor_moss";
+          if (tiles.ready(detail)) {
+            ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
+            // Deep biomes recolor their growth dressing (frost lichen, ember-lit cracks,
+            // void bloom): the tinted silhouette blends OVER the original at partial
+            // alpha, so the art keeps its texture and only the hue shifts.
+            if (biome.detailTint && detail === "floor_moss") {
+              const tinted = tiles.tinted(detail, biome.detailTint);
+              if (tinted) {
+                ctx.save();
+                ctx.globalAlpha = 0.45;
+                ctx.drawImage(tinted, sx, sy, TILE, TILE);
+                ctx.restore();
+              }
+            }
+          }
         }
         // A wall directly above casts a shadow onto this floor tile — sells the height.
         if (ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 1 && tiles.ready("wall_shadow")) {
@@ -2966,6 +3160,11 @@ export class Game {
         }
       }
     }
+
+    // Room flourishes: per-archetype floor lighting drawn between floors and walls, so
+    // wall tiles crop the edges naturally. Arenas get a fighting-pit spotlight, vaults a
+    // treasure-warm glow, hazard set-piece rooms an ominous accent pool.
+    this.renderRoomFlourishes(x0, y0, x1, y1);
 
     // Pass 2: walls as extruded blocks — lit top cap, dark front face where a floor sits
     // directly below, and mid-dark side strips on exposed left/right edges. Corners where
@@ -2978,13 +3177,20 @@ export class Game {
         const belowFloor = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 0;
         const leftFloor = tx > 0 && d.tiles[ty * d.w + tx - 1] === 0;
         const rightFloor = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 0;
-        // Full 16-piece autotile (AD): pick the block by which of N/E/S/W neighbours are
-        // FLOOR (NESW order). One self-contained piece bakes cap + all exposed faces +
-        // corners — handles thin walls, pillars, and gaps, not just room perimeters.
-        const sides = (aboveFloor ? "N" : "") + (rightFloor ? "E" : "") + (belowFloor ? "S" : "") + (leftFloor ? "W" : "");
-        const wf = ("wf_" + (sides || "top")) as TileName;
-        if (tiles.ready(wf)) { ctx.drawImage(tiles.get(wf), sx, sy, TILE, TILE); continue; }
-        if (tiles.ready("wall_top")) {
+        // Per-biome wall art (opt-in) wins outright; the extruded side/corner shading
+        // below still runs over it, so a single authored block reads as a full cube.
+        const biomeWall = tiles.biomeWallTop(biome.tileKey);
+        if (!biomeWall) {
+          // Full 16-piece autotile (AD): pick the block by which of N/E/S/W neighbours are
+          // FLOOR (NESW order). One self-contained piece bakes cap + all exposed faces +
+          // corners — handles thin walls, pillars, and gaps, not just room perimeters.
+          const sides = (aboveFloor ? "N" : "") + (rightFloor ? "E" : "") + (belowFloor ? "S" : "") + (leftFloor ? "W" : "");
+          const wf = ("wf_" + (sides || "top")) as TileName;
+          if (tiles.ready(wf)) { ctx.drawImage(tiles.get(wf), sx, sy, TILE, TILE); continue; }
+        }
+        if (biomeWall) {
+          ctx.drawImage(biomeWall, sx, sy, TILE, TILE);
+        } else if (tiles.ready("wall_top")) {
           ctx.drawImage(tiles.get("wall_top"), sx, sy, TILE, TILE);
         } else {
           ctx.fillStyle = biome.wallFront;
@@ -3033,7 +3239,312 @@ export class Game {
     ctx.globalCompositeOperation = "overlay";
     ctx.globalAlpha = biome.tintAlpha * 0.85;
     ctx.fillRect(wx, wy, ww, wh);
+    // Depth darkness: the world itself dims band over band (entities draw ABOVE this, so
+    // combat readability never pays for the mood). Ember/Null breathe — the dark swells.
+    if (biome.lightLevel > 0) {
+      ctx.globalCompositeOperation = "source-over";
+      const breathe = biome.pulse > 0 ? biome.pulse * 0.5 * (1 + Math.sin(this.animClock * 1.3)) : 0;
+      ctx.globalAlpha = Math.min(0.5, biome.lightLevel + breathe);
+      ctx.fillStyle = "#020108";
+      ctx.fillRect(wx, wy, ww, wh);
+    }
     ctx.restore();
+  }
+
+  // ---- floor hazards ----
+  // Every hazard renders its full cycle so danger is ALWAYS readable: a visible resting
+  // body, an arming telegraph, and an unmistakable active burst. When authored art lands
+  // in HAZARD_SOURCES the sheet replaces the body; the primitive fallback below speaks
+  // the game's existing telegraph language (the boss-slam-marker family), so hazards are
+  // fair on day one.
+  private renderFloorHazards() {
+    const hazards = this.world.floorHazards;
+    if (hazards.length === 0) return;
+    const { cam, tiles } = this;
+    const clock = this.hazardVisClock;
+    for (const h of hazards) {
+      const wx = (h.tx + 0.5) * TILE, wy = (h.ty + 0.5) * TILE;
+      if (!this.isNearCamera(wx, wy, TILE)) continue;
+      const sx = h.tx * TILE - cam.x, sy = h.ty * TILE - cam.y;
+      const phase = floorHazardPhaseAt(h, clock);
+      const frac = floorHazardPhaseFrac(h, clock);
+      const sheet = tiles.hazard(h.kind);
+      if (sheet) {
+        this.drawFloorHazardSheet(sheet, phase, sx, sy);
+        continue;
+      }
+      switch (h.kind) {
+        case "spikes": this.drawSpikes(sx, sy, phase, frac); break;
+        case "toxic_pool": this.drawPool(sx, sy, h); break;
+        case "fire_vent": this.drawVent(sx, sy, phase, frac, h); break;
+        case "void_rift": this.drawRift(sx, sy, phase, frac); break;
+      }
+    }
+  }
+
+  // Authored hazard art: a 64px 1xN strip — 3 frames map idle/telegraph/active, 2 frames
+  // map rest/active, 1 frame is a static body under the same telegraph overlays.
+  private drawFloorHazardSheet(sheet: HTMLImageElement, phase: FloorHazardPhase, sx: number, sy: number) {
+    const frames = Math.max(1, Math.floor(sheet.width / sheet.height));
+    const idx = frames >= 3 ? (phase === "idle" ? 0 : phase === "telegraph" ? 1 : 2)
+      : frames === 2 ? (phase === "active" ? 1 : 0) : 0;
+    this.ctx.drawImage(sheet, idx * sheet.height, 0, sheet.height, sheet.height, sx, sy, TILE, TILE);
+  }
+
+  private drawSpikes(sx: number, sy: number, phase: FloorHazardPhase, frac: number) {
+    const { ctx } = this;
+    // Resting body: a recessed trap plate with four sockets — visible even when dormant.
+    ctx.save();
+    ctx.fillStyle = "rgba(5,3,11,0.42)";
+    ctx.fillRect(sx + 4, sy + 4, TILE - 8, TILE - 8);
+    ctx.fillStyle = "rgba(5,3,11,0.8)";
+    for (const [ox, oy] of SPIKE_SOCKETS) ctx.fillRect(sx + ox - 2, sy + oy - 1, 4, 3);
+    if (phase === "telegraph") {
+      // Arming: the plate glows hot and the tips peek out — your cue to step off.
+      ctx.globalAlpha = 0.25 + 0.45 * frac;
+      ctx.strokeStyle = "#ff6a5a";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx + 4.5, sy + 4.5, TILE - 9, TILE - 9);
+      ctx.globalAlpha = 1;
+      this.drawSpikeSet(sx, sy, 3 + 3 * frac, 0.9);
+    } else if (phase === "active") {
+      // Sprung: full spikes with a fast pop and a late retract.
+      const pop = frac < 0.15 ? frac / 0.15 : frac > 0.8 ? (1 - frac) / 0.2 : 1;
+      this.drawSpikeSet(sx, sy, 4 + 12 * pop, 1);
+    }
+    ctx.restore();
+  }
+
+  private drawSpikeSet(sx: number, sy: number, height: number, alpha: number) {
+    const { ctx } = this;
+    ctx.globalAlpha = alpha;
+    for (const [ox, oy] of SPIKE_SOCKETS) {
+      const bx = sx + ox, by = sy + oy + 1;
+      ctx.beginPath();
+      ctx.moveTo(bx - 4, by);
+      ctx.lineTo(bx + 4, by);
+      ctx.lineTo(bx, by - height);
+      ctx.closePath();
+      ctx.fillStyle = "#c9c9de";
+      ctx.fill();
+      ctx.strokeStyle = "#05030b";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+  }
+
+  private drawPool(sx: number, sy: number, h: FloorHazard) {
+    const { ctx } = this;
+    const style = POOL_STYLES[Math.min(this.biomeIdx, POOL_STYLES.length - 1)];
+    const cx = sx + TILE / 2, cy = sy + TILE / 2;
+    const left = this.poolTiles.has(h.ty * this.dungeon.w + h.tx - 1) ? 0 : 3;
+    const right = this.poolTiles.has(h.ty * this.dungeon.w + h.tx + 1) ? 0 : 3;
+    const top = this.poolTiles.has((h.ty - 1) * this.dungeon.w + h.tx) ? 0 : 3;
+    const bottom = this.poolTiles.has((h.ty + 1) * this.dungeon.w + h.tx) ? 0 : 3;
+    ctx.save();
+    // Recessed basin: a dark sink under the liquid so it reads carved INTO the floor,
+    // merged with orthogonal pool neighbors so a blob is ONE body.
+    ctx.fillStyle = "rgba(2,1,6,0.72)";
+    ctx.fillRect(sx + left, sy + top, TILE - left - right, TILE - top - bottom);
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = style.base;
+    ctx.fillRect(sx + left + 1, sy + top + 1, TILE - left - right - 2, TILE - top - bottom - 2);
+    // Rim highlight on the OUTER edges only (merged sides stay open water).
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = style.edge;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (top > 0) { ctx.moveTo(sx + left, sy + top + 0.5); ctx.lineTo(sx + TILE - right, sy + top + 0.5); }
+    if (bottom > 0) { ctx.moveTo(sx + left, sy + TILE - bottom - 0.5); ctx.lineTo(sx + TILE - right, sy + TILE - bottom - 0.5); }
+    if (left > 0) { ctx.moveTo(sx + left + 0.5, sy + top); ctx.lineTo(sx + left + 0.5, sy + TILE - bottom); }
+    if (right > 0) { ctx.moveTo(sx + TILE - right - 0.5, sy + top); ctx.lineTo(sx + TILE - right - 0.5, sy + TILE - bottom); }
+    ctx.stroke();
+    // Meniscus sheen, slowly wandering — liquid, not paint.
+    const t = this.animClock * 0.7 + h.phase;
+    const g = ctx.createRadialGradient(cx + Math.sin(t) * 8, cy + Math.cos(t * 0.8) * 6, 2, cx, cy, TILE * 0.62);
+    g.addColorStop(0, style.sheen);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.globalAlpha = 0.10 + 0.04 * Math.sin(t * 1.7);
+    ctx.globalCompositeOperation = "lighter";
+    ctx.fillStyle = g;
+    ctx.fillRect(sx, sy, TILE, TILE);
+    // Bubbles: two seeded risers that swell and pop.
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = style.sheen;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 2; i++) {
+      const seed = tileHash(h.tx, h.ty, 7 + i);
+      const cycle = (this.animClock * (0.35 + seed * 0.3) + seed * 7) % 1;
+      const bx = sx + 10 + seed * (TILE - 20);
+      const by = sy + TILE - 10 - cycle * (TILE - 22);
+      ctx.beginPath();
+      ctx.arc(bx, by, 1.2 + cycle * 2.2, 0, 6.28);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  private drawVent(sx: number, sy: number, phase: FloorHazardPhase, frac: number, h: FloorHazard) {
+    const { ctx } = this;
+    const cx = sx + TILE / 2, cy = sy + TILE / 2;
+    ctx.save();
+    // Body: a scorched grate — three slots on a dark disc.
+    ctx.fillStyle = "rgba(10,5,3,0.75)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, 15, 0, 6.28);
+    ctx.fill();
+    ctx.strokeStyle = "#4a2820";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = "#05030b";
+    for (let i = -1; i <= 1; i++) ctx.fillRect(cx - 8, cy + i * 6 - 1, 16, 2);
+    if (phase === "telegraph") {
+      // Coals glowing through the slots, swelling toward the blast.
+      const glow = this.sprites.fxTinted("glow_round", "#ff6a2a");
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 0.2 + 0.55 * frac;
+      if (glow) ctx.drawImage(glow, cx - 14, cy - 14, 28, 28);
+      else {
+        const g = ctx.createRadialGradient(cx, cy, 1, cx, cy, 14);
+        g.addColorStop(0, "#ff8a3b");
+        g.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(cx - 14, cy - 14, 28, 28);
+      }
+    } else if (phase === "active") {
+      // The eruption: a flickering flame column + floor bloom.
+      const flick = 0.75 + 0.25 * Math.sin(this.animClock * 23 + h.phase * 9);
+      const sway = Math.sin(this.animClock * 9 + h.phase * 5) * 2.5;
+      const fade = frac > 0.75 ? (1 - frac) / 0.25 : 1;
+      ctx.globalCompositeOperation = "lighter";
+      const bloom = ctx.createRadialGradient(cx, cy, 4, cx, cy, 34);
+      bloom.addColorStop(0, "rgba(255,140,60,0.5)");
+      bloom.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.globalAlpha = 0.8 * fade;
+      ctx.fillStyle = bloom;
+      ctx.fillRect(cx - 34, cy - 34, 68, 68);
+      const flame = this.sprites.fxTinted("flame_puff", "#ff8a3b") ?? this.sprites.fxTinted("glow_round", "#ff8a3b");
+      const core = this.sprites.fxTinted("glow_round", "#ffd166");
+      for (let i = 0; i < 3; i++) {
+        const size = (34 - i * 8) * flick;
+        const oy = -6 - i * 13;
+        ctx.globalAlpha = (0.55 - i * 0.12) * fade;
+        if (flame) ctx.drawImage(flame, cx + sway * (i + 1) * 0.4 - size / 2, cy + oy - size / 2, size, size);
+      }
+      if (core) {
+        ctx.globalAlpha = 0.8 * fade * flick;
+        ctx.drawImage(core, cx - 8, cy - 16, 16, 16);
+      }
+    }
+    ctx.restore();
+  }
+
+  private drawRift(sx: number, sy: number, phase: FloorHazardPhase, frac: number) {
+    const { ctx } = this;
+    const accent = this.currentBiome.accent;
+    const cx = sx + TILE / 2, cy = sy + TILE / 2;
+    ctx.save();
+    // Body: a tear lying on the floor — dark lens + faint standing ring.
+    ctx.fillStyle = "rgba(2,1,6,0.85)";
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 10, 6, 0, 0, 6.28);
+    ctx.fill();
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = accent;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 13, 8, 0, 0, 6.28);
+    ctx.stroke();
+    if (phase === "telegraph") {
+      // Ingathering: a ring collapses inward while stray light is dragged in.
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 0.25 + 0.5 * frac;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.5;
+      const r = 26 - 16 * frac;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 6.28);
+      ctx.stroke();
+      ctx.fillStyle = accent;
+      for (let i = 0; i < 4; i++) {
+        const a = this.animClock * 2.2 + i * (Math.PI / 2);
+        const rr = r * (0.6 + 0.4 * ((1 - frac + i * 0.25) % 1));
+        ctx.fillRect(cx + Math.cos(a) * rr - 1, cy + Math.sin(a) * rr - 1, 2, 2);
+      }
+    } else if (phase === "active") {
+      // Open: rotating accretion arcs, inward streaks, and the honest pull-range hint.
+      ctx.globalCompositeOperation = "lighter";
+      const spin = this.animClock * 3.1;
+      ctx.strokeStyle = accent;
+      for (let i = 0; i < 3; i++) {
+        const r = 9 + i * 6;
+        ctx.globalAlpha = 0.55 - i * 0.13;
+        ctx.lineWidth = 2 - i * 0.5;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, spin * (i % 2 === 0 ? 1 : -1) + i, spin * (i % 2 === 0 ? 1 : -1) + i + 3.6);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.5;
+      for (let i = 0; i < 4; i++) {
+        const a = spin * 0.7 + i * (Math.PI / 2);
+        const r0 = 24, r1 = 13;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+        ctx.lineTo(cx + Math.cos(a) * r1, cy + Math.sin(a) * r1);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 0.07 + 0.03 * Math.sin(this.animClock * 4);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(cx, cy, RIFT_PULL_RADIUS, 0, 6.28);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Per-archetype room lighting (screen-cropped, gradient fills only). Cheap: a handful
+  // of rooms intersect the camera and each is one radial fill.
+  private renderRoomFlourishes(x0: number, y0: number, x1: number, y1: number) {
+    const { ctx, cam } = this;
+    const biome = this.currentBiome;
+    for (const room of this.dungeon.rooms) {
+      if (room.x >= x1 || room.y >= y1 || room.x + room.w <= x0 || room.y + room.h <= y0) continue;
+      const cx = (room.cx + 0.5) * TILE - cam.x;
+      const cy = (room.cy + 0.5) * TILE - cam.y;
+      const radius = Math.max(room.w, room.h) * TILE * 0.55;
+      if (room.shape === "arena") {
+        // Fighting-pit spotlight: brightest at the center where the duel happens.
+        const g = ctx.createRadialGradient(cx, cy, radius * 0.15, cx, cy, radius);
+        g.addColorStop(0, "rgba(255,244,214,0.10)");
+        g.addColorStop(1, "rgba(255,244,214,0)");
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = g;
+        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+        ctx.restore();
+      } else if (room.kind === "treasure") {
+        const g = ctx.createRadialGradient(cx, cy, 6, cx, cy, radius * 0.7);
+        g.addColorStop(0, "rgba(255,209,102,0.12)");
+        g.addColorStop(1, "rgba(255,209,102,0)");
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = g;
+        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+        ctx.restore();
+      } else if (room.kind === "hazard") {
+        const [r, g2, b] = hexToRgb(biome.accent);
+        const pulse = 0.05 + 0.03 * Math.sin(this.animClock * 2.1);
+        const g = ctx.createRadialGradient(cx, cy, radius * 0.1, cx, cy, radius);
+        g.addColorStop(0, `rgba(${r},${g2},${b},${pulse})`);
+        g.addColorStop(1, `rgba(${r},${g2},${b},0)`);
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = g;
+        ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+        ctx.restore();
+      }
+    }
   }
 
   // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
@@ -3045,15 +3556,18 @@ export class Game {
     const hasGlow = tiles.ready("torch_glow");
     const hasFlame = tiles.ready(flame);
     if (!hasGlow && !hasFlame) return;
+    // The light itself takes the biome's color (amber home fires, arcane violet, the
+    // Fracture's cold crystal, the Null's wrong pink) — one authored glow, six moods.
+    const glowImg = hasGlow ? (tiles.tinted("torch_glow", this.currentBiome.glow) ?? tiles.get("torch_glow")) : null;
     for (const t of this.torches) {
       const sx = t.tx * TILE - cam.x, sy = t.ty * TILE - cam.y;
       if (sx <= -TILE || sy <= -TILE || sx >= canvas.width || sy >= canvas.height) continue;
-      if (hasGlow) {
+      if (glowImg) {
         const flick = 0.75 + 0.25 * Math.sin(clock * 11 + t.tx * 1.7 + t.ty * 0.9);
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
         ctx.globalAlpha = 0.5 * flick;
-        ctx.drawImage(tiles.get("torch_glow"), sx + TILE / 2 - 48, sy + TILE / 2 - 48, 96, 96);
+        ctx.drawImage(glowImg, sx + TILE / 2 - 48, sy + TILE / 2 - 48, 96, 96);
         ctx.restore();
       }
       if (hasFlame) ctx.drawImage(tiles.get(flame), sx, sy, TILE, TILE);
@@ -4841,9 +5355,34 @@ export class Game {
     this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor), isGauntlet: isGauntletFloor(this.floor) }));
   }
 
+  // Rebuild as a REAL generated floor (full biome/architecture/hazards/enemies) at any
+  // depth — the level-design eyeball tool. Leaves sandbox mode so the world populates;
+  // toggles god mode ON so a deep floor can be toured without instant deletion.
+  devLoadRealFloor(floor: number): void {
+    this.isSandbox = false;
+    this.world.isSandbox = false;
+    if (!this.isGodMode) this.devToggleGod();
+    loadFloorIntoWorld(this.world, Math.max(1, Math.floor(floor)));
+    this.loadFloorClient();
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+  }
+
   devToggleFlowDebug(): boolean {
     this.isFlowDebug = !this.isFlowDebug;
     return this.isFlowDebug;
+  }
+
+  // Teleport the local player (QA capture rigs aim the camera at a spot of interest).
+  devTeleport(x: number, y: number): void {
+    this.p.x = x;
+    this.p.y = y;
+    this.lastPx = x;
+    this.lastPy = y;
+  }
+
+  // Read-only world access for QA scripting (hazard positions, room rects).
+  devWorld(): WorldState {
+    return this.world;
   }
 
   devSnapshot(): DevSnapshot {

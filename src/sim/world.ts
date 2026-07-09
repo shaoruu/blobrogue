@@ -14,7 +14,8 @@ import type { FlowField } from "./pathfind.js";
 import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, WeaponId, AttackMove, TileKind } from "./types.js";
+import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind } from "./types.js";
+import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover, isGauntletFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
@@ -167,9 +168,17 @@ export interface WorldState {
   // Authored ground hazards (the Weaver's webs): shared authoritative floor state, capped
   // and self-expiring; rebuilt empty on every floor load.
   hazards: Hazard[];
+  // Environmental FLOOR hazards (depth escalation) — distinct from the boss webs above:
+  // layout is derived per floor from the seed (never on the wire); pulse timing keys off
+  // floorHazardClock — accumulated SIM seconds, monotonic across floors like tick, so
+  // solo (60Hz) and the server (20Hz) agree on cycles in real time and an online client
+  // can reconstruct it as tick x FIXED_DT.
+  floorHazards: FloorHazard[];
+  floorHazardClock: number;
   // Overlap arbiter (studio gate §2): damage releases mobs committed in the last 0.30s.
   // A new mob release whose area overlaps a recent one HOLDS until the window clears — no
-  // two releases may pincer the same escape lane inside one reaction window.
+  // two releases may pincer the same escape lane inside one reaction window. (Seeded
+  // floor-hazard groups arbitrate the same rule at placement time — see hazards.ts.)
   recentReleases: Array<{ x: number; y: number; radius: number; t: number }>;
   // The F10 Arena Gauntlet stage machine (curriculum §2): `stage` counts spawned stages,
   // `breath` is the authored 1.2s beat between a clear and the next entrance, and
@@ -277,6 +286,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     props: [],
     chests: [],
     hazards: [],
+    floorHazards: [],
+    floorHazardClock: 0,
     recentReleases: [],
     gauntlet: null,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
@@ -369,7 +380,7 @@ function buildArena(): Dungeon {
       tiles[y * w + x] = isBorder ? 1 : 0;
     }
   }
-  const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal" };
+  const room: Room = { x: 1, y: 1, w: w - 2, h: h - 2, cx: w >> 1, cy: h >> 1, kind: "normal", shape: "rect" };
   return { w, h, tiles, rooms: [room], spawn: { x: w >> 1, y: h >> 1 }, exit: { x: w - 3, y: 2 } };
 }
 
@@ -400,6 +411,10 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.flowKey = -1;
   w.pickups = [];
   for (const p of w.players.values()) p.hasClaimedBossChoice = false;
+  // Floor hazards place FIRST: props/chests/dealer stock then avoid hazard tiles (a
+  // barrel on spikes reads as a bug). floorHazardClock is NOT reset — it is monotonic
+  // sim time (phases are per-hazard), so an online client reconstructs it from the tick.
+  w.floorHazards = w.isSandbox ? [] : placeFloorHazards(w.dungeon, w.seed, floor);
   // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
   // footprint, and the obstacle revision must already name this floor's layout. The
   // ordering is free — every placement draws from its own seeded stream.
@@ -515,7 +530,18 @@ function placeDealerStock(w: WorldState): void {
   const d = w.dungeon;
   if (d.rooms.length < 3) return;
   const rng = new Rng((w.seed ^ 0x0dea1e12) + w.floor * 68927);
-  const room = d.rooms.find((r) => r.kind === "treasure") ?? d.rooms[1 + rng.int(0, d.rooms.length - 3)];
+  // The stall row needs clean ground: never a sealed vault's sanctum (its center IS the
+  // chest tile — a buyer's touch would pop the chest mid-purchase) and never any room
+  // whose center already holds a chest, for the same reason.
+  const hasCenterChest = (r: Room): boolean =>
+    w.chests.some((c) => Math.floor(c.x / TILE) === r.cx && Math.floor(c.y / TILE) === r.cy);
+  const treasure = d.rooms.find((r) => r.kind === "treasure");
+  let room = treasure && treasure.shape !== "vault" && !hasCenterChest(treasure) ? treasure : null;
+  if (!room) {
+    const candidates = d.rooms.slice(1, d.rooms.length - 1).filter((r) => r.shape !== "vault" && !hasCenterChest(r));
+    if (candidates.length === 0) return;
+    room = candidates[rng.int(0, candidates.length - 1)];
+  }
   const stock = w.encounterPlayers;
   for (let i = 0; i < stock; i++) {
     w.pickups.push({
@@ -554,19 +580,50 @@ function placeProps(w: WorldState): Prop[] {
   const hazardMult = BIOME_PRESSURE[biomeIndexForFloor(w.floor)].hazardMult;
   const list: Prop[] = [];
   const occupied = new Set<number>();
+  const addProp = (kind: Prop["kind"], tx: number, ty: number) => {
+    occupied.add(ty * d.w + tx);
+    list.push({ id: w.nextPropId++, kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+  };
+
+  // Boss arenas stage an AUTHORED ring of destructible cover just outside the squeeze's
+  // final safe radius: real cover to fight from, and real physics when the boss's slams,
+  // charges and body smash through it (enemySmashEnvironment). Explosive barrels in the
+  // ring make slamming a fuel cluster the boss's own problem.
+  const arena = isBossFloor(w.floor) ? d.rooms[d.rooms.length - 1] : null;
+  if (arena) {
+    const ringR = Math.min(arena.w, arena.h) * TILE * 0.3;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + rng.range(-0.25, 0.25);
+      const tx = Math.floor(((arena.cx + 0.5) * TILE + Math.cos(a) * ringR) / TILE);
+      const ty = Math.floor(((arena.cy + 0.5) * TILE + Math.sin(a) * ringR) / TILE);
+      const idx = ty * d.w + tx;
+      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasFloorHazardOnTile(w, tx, ty)) continue;
+      if (Math.abs(tx - arena.cx) + Math.abs(ty - arena.cy) <= 1) continue; // exit tile ground
+      const r = rng.next();
+      addProp(r < 0.5 ? "crate" : r < 0.8 ? "barrel" : "barrel_explosive", tx, ty);
+    }
+  }
+
   for (const room of d.rooms) {
-    const target = rng.int(3, 6);
+    if (room === arena) continue; // the arena's cover is authored above
+    // Room-aware density: pillared halls and fighting pits carry more cover; hazard
+    // set-piece rooms stay lean — their floor is the obstacle, and flocks/dodges need
+    // the open lanes.
+    const target = room.kind === "hazard" ? rng.int(1, 2)
+      : (room.shape === "pillars" || room.shape === "arena") ? rng.int(4, 7)
+      : rng.int(3, 6);
     for (let i = 0; i < target; i++) {
       const tx = room.x + rng.int(0, room.w - 1);
       const ty = room.y + rng.int(0, room.h - 1);
       const idx = ty * d.w + tx;
-      if (occupied.has(idx) || d.tiles[idx] !== 0) continue;
+      if (occupied.has(idx) || d.tiles[idx] !== 0 || hasFloorHazardOnTile(w, tx, ty)) continue;
       if (isCorridorMouth(d, tx, ty)) continue;
+      // Room centers are reserved ground: chests and dealer stock land there (a vault's
+      // chest belongs INSIDE its ring, not wherever a crate left space).
+      if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
-      occupied.add(idx);
-      const kind = rollPropKind(rng, hazardMult);
-      list.push({ id: w.nextPropId++, kind, x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+      addProp(rollPropKind(rng, hazardMult), tx, ty);
     }
   }
   return list;
@@ -631,6 +688,7 @@ function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; 
     d.tiles[ty * d.w + tx] !== 0 ||
     used.has(ty * d.w + tx) ||
     hasLivePropOnTile(w, tx, ty) ||
+    hasFloorHazardOnTile(w, tx, ty) ||
     (tx === d.spawn.x && ty === d.spawn.y) ||
     (tx === d.exit.x && ty === d.exit.y);
   if (!isBad(room.cx, room.cy)) return { tx: room.cx, ty: room.cy };
@@ -644,6 +702,11 @@ function hasLivePropOnTile(w: WorldState, tx: number, ty: number): boolean {
   for (const p of w.props) {
     if (!p.dead && Math.floor(p.x / TILE) === tx && Math.floor(p.y / TILE) === ty) return true;
   }
+  return false;
+}
+
+function hasFloorHazardOnTile(w: WorldState, tx: number, ty: number): boolean {
+  for (const h of w.floorHazards) if (h.tx === tx && h.ty === ty) return true;
   return false;
 }
 
@@ -1935,6 +1998,9 @@ function updateSkeleton(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): vo
     a.time += dt;
     const step = C.SKELETON_LUNGE_SPEED * dt;
     moveEnemyBy(w, e, Math.cos(a.lockedAngle) * step, Math.sin(a.lockedAngle) * step);
+    // A committed charge is a physical object: crates and barrels in its path shatter.
+    // Cover absorbs the telegraphed hit — and is spent doing it.
+    enemySmashEnvironment(w, e.x, e.y, e.radius + 4, ev);
     ev.push({ t: "lungeTrail", x: e.x, y: e.y });
     if (a.time >= C.SKELETON_LUNGE_DUR) enterRecover(e);
     return;
@@ -2361,7 +2427,7 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   }
 
   if (a.cooldown === 0 && e.spawnTimer === 0) { bossBeginAttack(e, ev); return; }
-  bossChase(w, e, dt);
+  bossChase(w, e, dt, ev);
 }
 
 // Living boss-summoned adds (the cadence cap counts only summons, never floor enemies).
@@ -2483,12 +2549,16 @@ function bossRadialFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   }
 }
 
-function bossChase(w: WorldState, e: Enemy, dt: number): void {
+function bossChase(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (!findTarget(w, e.x, e.y)) return;
   const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
   const mult = e.boss && e.boss.phase >= 3 ? BOSS.p3ChaseMult : 1;
   const step = e.speed * mult * dt;
   moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
+  // The boss does not walk around cover — it walks THROUGH it. The crush reach extends
+  // just past moveCircle's prop-block ring (prop.radius * 0.8 off the body), so a crate
+  // can never body-block the boss: whatever stops its step is destroyed by it.
+  enemySmashEnvironment(w, e.x, e.y, e.radius + 2, ev);
 }
 
 // Spawn one summoned add at `angle` off the boss's edge — each boss raises its own kin
@@ -3488,8 +3558,18 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (p.kind === "brazier") continue;
     for (const b of w.bullets) {
-      if (!b.friendly || b.life <= 0) continue;
+      if (b.life <= 0) continue;
       if (!sweptBulletHit(b, p.x, p.y, b.radius + p.radius)) continue;
+      if (!b.friendly) {
+        // Standing props are COVER: enemy fire is stopped by them — and spends them.
+        // Ducking behind a crate against a spitter volley is a real play, with a real
+        // cost. An enemy-detonated explosive barrel credits no one (destroyProp rules).
+        p.hp -= b.damage;
+        ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: sweptHit.x, y: sweptHit.y });
+        b.life = 0;
+        if (p.hp <= 0) { destroyProp(w, p, ev); break; }
+        continue;
+      }
       p.hp -= b.damage;
       ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: sweptHit.x, y: sweptHit.y });
       if (b.pierce <= 0) b.life = 0;
@@ -3524,6 +3604,7 @@ function dashBreakProps(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     if (Math.hypot(p.x - prop.x, p.y - prop.y) < p.pr + prop.radius) destroyProp(w, prop, ev, p);
   }
 }
+
 
 // `by` is the player who destroyed the prop (bullet owner / melee / dash / chain source), so an
 // explosive barrel credits its kills to the right player. A departed destroyer (undefined)
@@ -3883,6 +3964,47 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
   }
 }
 
+// Environmental hazards (depth escalation): advance the shared pulse clock, drag players
+// caught by an active void rift toward its core, and land floor damage on any standing
+// player over an active hazard tile. Fairness contract: every pulse hazard has already
+// telegraphed (cycle math in hazards.ts), pools are permanently visible, damage is always
+// 1, and both the dash iframe and post-hit protection gate it — the exact protection
+// rules enemy contact obeys. Hazards never touch enemies: bodies are the encounter
+// designer's pressure, the floor is the player's problem.
+function updateFloorHazards(w: WorldState, dt: number, ev: SimEvent[]): void {
+  w.floorHazardClock += dt;
+  if (w.floorHazards.length === 0) return;
+  for (const p of w.players.values()) {
+    // A blessing-picking player is fully paused AND shielded (see stepPlayerPhase /
+    // damagePlayer); the rift drag must respect the same freeze — nothing may move a
+    // player who cannot answer.
+    if (p.isDown || p.hp <= 0 || w.pendingBlessings.has(p.id)) continue;
+    // Rift drag: escapable pressure (85px/s against a 200px/s walk), through the normal
+    // wall-aware move so it can never push a player into geometry, and line-of-sight
+    // gated so a rift never pulls through a wall.
+    for (const h of w.floorHazards) {
+      if (h.kind !== "void_rift" || floorHazardPhaseAt(h, w.floorHazardClock) !== "active") continue;
+      const cx = (h.tx + 0.5) * TILE, cy = (h.ty + 0.5) * TILE;
+      const dx = cx - p.x, dy = cy - p.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1 || dist > RIFT_PULL_RADIUS) continue;
+      if (!hasLineOfSight(w, p.x, p.y, cx, cy)) continue;
+      const step = Math.min(dist, RIFT_PULL_SPEED * dt);
+      const [nx, ny] = moveCircle(w, p.x, p.y, p.pr, (dx / dist) * step, (dy / dist) * step);
+      p.x = nx;
+      p.y = ny;
+    }
+    if (isProtected(p)) continue;
+    const tx = Math.floor(p.x / TILE), ty = Math.floor(p.y / TILE);
+    for (const h of w.floorHazards) {
+      if (h.tx !== tx || h.ty !== ty || !isFloorHazardDamaging(h, w.floorHazardClock)) continue;
+      ev.push({ t: "hazardHit", pid: p.id, kind: h.kind, x: p.x, y: p.y });
+      damagePlayer(w, p, FLOOR_HAZARD_DAMAGE, ev);
+      break;
+    }
+  }
+}
+
 // Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
 // could revive `p`? Drives the authoritative down-vs-gameover decision. Network-absent bodies
 // are EXCLUDED from the wipe calculus entirely (studio balance gate §6: "pending reconnect
@@ -4185,6 +4307,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateHazards(w, dt);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
+  updateFloorHazards(w, dt, ev);
   updatePickups(w, dt, ev);
   updateRevives(w, dt, ev);
   checkStrandedWipe(w, dt, ev);
@@ -4220,9 +4343,11 @@ export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: 
   w.enemies.push(e);
   return e;
 }
-export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: number): void {
-  w.props.push({ id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false });
+export function devSpawnProp(w: WorldState, kind: Prop["kind"], x: number, y: number): Prop {
+  const p: Prop = { id: w.nextPropId++, kind, x, y, radius: C.PROP_RADIUS, hp: C.PROP_HP[kind], dead: false };
+  w.props.push(p);
   w.obstacleRev++;
+  return p;
 }
 export function devSpawnChest(w: WorldState, x: number, y: number): void {
   w.chests.push({ id: w.nextChestId++, kind: "wood", x, y, radius: 16, opened: false });

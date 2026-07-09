@@ -59,15 +59,21 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // equality is what turns that skew into a clean "update your client" instead of a
 // mid-run desync. NOTE: the control plane's synthetic VERIFY join mirrors this constant
 // (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-// v6 (this branch, the co-op experience pass — client->server messages changed, so the
-// strict join gate bumps): input carries the interact intent (`act`, the explicit
-// revive-channel key), a semantic `spec` message names a downed player's spectate target
-// (the server centers that client's interest view on it), PlayerWire carries `rv`
-// (authoritative revive progress for the reviver-side ring) and `out` (past the floor's
-// down limit — unrevivable until the descent rescue), SelfWire carries `out`, and
-// snapshots carry `exr` (the living present players standing at the cleared exit — the
-// descend gate's own readiness predicate, driving the party coordination readout).
-export const PROTOCOL_VERSION = 6;
+// v6 (the co-op experience pass — client->server messages changed, so the strict join
+// gate bumps): input carries the interact intent (`act`, the explicit revive-channel
+// key), a semantic `spec` message names a downed player's spectate target (the server
+// centers that client's interest view on it), PlayerWire carries `rv` (authoritative
+// revive progress for the reviver-side ring) and `out` (past the floor's down limit —
+// unrevivable until the descent rescue), SelfWire carries `out`, and snapshots carry
+// `exr` (the living present players standing at the cleared exit — the descend gate's
+// own readiness predicate, driving the party coordination readout).
+// v7 (intentional bump, the depth-progression world): dungeon geometry now comes from a
+// NEW shared generator (journey-chained rooms, shape archetypes, curriculum cadence) and
+// seeded FLOOR hazards (spikes/pools/vents/rifts — never on the wire, derived from the
+// snapshot seed), so a v6 client would silently render a DIFFERENT map than the server
+// simulates — the join gate fences the skew into a clean version mismatch. Also adds the
+// hazardHit event for floor-hazard damage juice.
+export const PROTOCOL_VERSION = 7;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -445,6 +451,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
+  hazardHit: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
   lungeTrail: { scope: "pos", fields: { x: "num", y: "num" } },
   chargeCrash: { scope: "pos", fields: { x: "num", y: "num" } },

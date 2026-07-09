@@ -202,7 +202,30 @@ export interface BiomePressure {
   reinforceRate: number;   // reinforcement release-rate multiplier (Emberreach 1.15×)
 }
 
-// Six entries matching the curriculum's six regions (biomeIndexForFloor keys them).
+// ---- studio gate: difficulty modes (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1) ----
+// Standard is the authored experience; Casual is forgiveness, Brutal is pressure — never
+// sponges, never shortened tells. Only the HAZARD rows are implemented here (the hazard
+// system consumes them today, mode-parameterized and gate-tested); the combat rows
+// (HP/threat/cooldown/heart multipliers) land with the difficulty system itself,
+// extending this same table.
+
+export type Difficulty = "casual" | "standard" | "brutal";
+
+export interface HazardModeRules {
+  budgetMult: number;         // scales the floor's hazard-unit budget (§1 hazard row)
+  roomSimultaneousCap: number; // max hazard groups active at one instant in one room (§2)
+  roomDenialCap: number;       // max fraction of a room's open floor claimed by hazards (§2)
+}
+
+export const HAZARD_DIFFICULTY: Record<Difficulty, HazardModeRules> = {
+  casual: { budgetMult: 0.65, roomSimultaneousCap: 1, roomDenialCap: 0.25 },
+  standard: { budgetMult: 1.00, roomSimultaneousCap: 2, roomDenialCap: 0.35 },
+  brutal: { budgetMult: 1.30, roomSimultaneousCap: 3, roomDenialCap: 0.45 },
+};
+
+// Rows follow the canonical curriculum bands (blobrogue_ENCOUNTER_CURRICULUM_spec.md §0),
+// plus the terminal post-F30 Null expansion band. Content's accepted values win where
+// the two branches tuned the same region (Gilded Archive).
 export const BIOME_PRESSURE: readonly BiomePressure[] = [
   { budgetMult: 1.00, packBias: 1.15, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.00 }, // Amberwild
   { budgetMult: 1.00, packBias: 1.20, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.05 }, // Rootbound Warrens (formation density)
@@ -210,6 +233,7 @@ export const BIOME_PRESSURE: readonly BiomePressure[] = [
   { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // The Deep
   { budgetMult: 0.95, packBias: 1.00, complexShare: 1.05, hazardMult: 1.00, reinforceRate: 1.00 }, // Gilded Archive (order/claimed space)
   { budgetMult: 1.05, packBias: 1.00, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.15 }, // Emberreach
+  { budgetMult: 1.05, packBias: 1.10, complexShare: 1.10, hazardMult: 1.15, reinforceRate: 1.10 }, // The Null
 ];
 
 // ---- §5 Slime King (studio gate §3: F5, 900 HP, median 35–50s, high-roll 20–25s) ----

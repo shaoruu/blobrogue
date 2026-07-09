@@ -75,6 +75,10 @@ export function bootSandbox(canvas: HTMLCanvasElement, minimap: HTMLCanvasElemen
   );
   game.devStartSandbox();
 
+  // QA scripting handle (dev page only, never the play bundle): lets headless capture
+  // rigs drive floors/teleports without brittle UI automation.
+  (window as Window & { __game?: Game }).__game = game;
+
   buildPanel(game);
 }
 
@@ -205,6 +209,14 @@ function buildPanel(game: Game): void {
   floorRow.appendChild(btn("Next floor", () => setFloor(floor + 1), "mini"));
   floorRow.appendChild(btn("Boss (5)", () => setFloor(5), "mini"));
   floorSec.appendChild(floorRow);
+  // Real generated floors (full biome + architecture + hazards + enemies), one per band —
+  // the depth-progression eyeball row. God mode flips on so deep floors are tourable.
+  const realRow = h("div", "dev-row");
+  for (const [label, f] of [["Amber 3", 3], ["Roots 8", 8], ["Caves 13", 13], ["Deep 18", 18], ["Gild 23", 23], ["Ember 28", 28], ["Null 33", 33]] as const) {
+    realRow.appendChild(btn(label, () => { floor = f; game.devLoadRealFloor(f); }, "mini"));
+  }
+  realRow.appendChild(btn("Real here", () => game.devLoadRealFloor(floor), "mini"));
+  floorSec.appendChild(realRow);
   panel.appendChild(floorSec);
 
   // ---- props + inspect ----

@@ -1366,7 +1366,10 @@ function strandedDownTests(): void {
     const w = createWorld(0xD0EE, 1, { isShared: true, skipLocalPlayer: true });
     const a = spawnPlayerInWorld(w, "pA");
     const b = spawnPlayerInWorld(w, "pB");
-    a.x = 200; a.y = 200; b.x = 900; b.y = 700;
+    // Anchor to the dungeon spawn (guaranteed open floor on any generated layout) so the
+    // planted bullet can't die on a wall before reaching A; keep B out of its radius.
+    a.x = w.dungeon.spawn.x * TILE + TILE / 2; a.y = w.dungeon.spawn.y * TILE + TILE / 2;
+    b.x = a.x + 90; b.y = a.y;
     // A goes down while B stands.
     a.hp = 1; a.invuln = 0;
     plantEnemyBullet(w, a, 5);

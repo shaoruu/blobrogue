@@ -82,9 +82,9 @@ def resolve_palette(lane="global",palette_hex=None,family_dark=None):
     clamp_dark=rgb(family_dark) if family_dark else lane_dark
     return pal,clamp_dark
 
-def run(inp,out,grid,export,family_dark=None,tile=False,lane="global",palette_hex=None):
+def run(inp,out,grid,export,family_dark=None,tile=False,lane="global",palette_hex=None,ramp=None):
     if tile:
-        return run_tile(inp,out,grid,export)
+        return run_tile(inp,out,grid,export,ramp)
     pal,clamp_dark=resolve_palette(lane,palette_hex,family_dark)
     im=Image.open(inp).convert("RGBA");px=im.load();w,h=im.size
     for y in range(h):
@@ -129,12 +129,15 @@ def run(inp,out,grid,export,family_dark=None,tile=False,lane="global",palette_he
     label="custom-hex" if palette_hex else lane
     print(f"wrote {out} — {len(colors)} colors, grid {grid}, lane {label}")
 
-def run_tile(inp,out,grid,export):
-    """Floor/wall tile enforce: dungeon-ramp palette only, NO outline, opaque, seamless edge-wrap."""
+def run_tile(inp,out,grid,export,ramp=None):
+    """Floor/wall tile enforce: dark-ramp palette only, NO outline, opaque, seamless edge-wrap.
+    --ramp "hex,hex,hex,hex,hex" pins a PER-BIOME ramp (defaults to the shared dungeon ramp) —
+    the tile counterpart of the sprite lanes: same ramp discipline, six biome palettes."""
+    RAMP=[rgb(h) for h in ramp.split(",") if h.strip()] if ramp else DUNGEON_RAMP
     im=Image.open(inp).convert("RGB").resize((grid,grid),Image.LANCZOS);sp=im.load()
     def nearest_ramp(c):
         r,g,b=c
-        return min(DUNGEON_RAMP,key=lambda p:(p[0]-r)**2+(p[1]-g)**2+(p[2]-b)**2)
+        return min(RAMP,key=lambda q:(q[0]-r)**2+(q[1]-g)**2+(q[2]-b)**2)
     for y in range(grid):
         for x in range(grid):
             sp[x,y]=nearest_ramp(sp[x,y])
@@ -152,8 +155,10 @@ if __name__=="__main__":
     ap.add_argument("inp");ap.add_argument("out")
     ap.add_argument("--grid",type=int,default=32);ap.add_argument("--export",type=int,default=64)
     ap.add_argument("--family-dark",default=None);ap.add_argument("--tile",action="store_true")
+    ap.add_argument("--ramp",default=None,help="--tile only: comma-separated hex dark ramp (per-biome tiles)")
     g=ap.add_mutually_exclusive_group()
     g.add_argument("--lane",choices=sorted(LANES),default="global",help="family palette lane (new assets MUST pass one)")
     g.add_argument("--palette-hex",default=None,help="comma-separated hex colors for one-off explicit palettes")
     a=ap.parse_args()
-    run(a.inp,a.out,a.grid,a.export,a.family_dark,a.tile,a.lane,a.palette_hex)
+    if a.tile: run_tile(a.inp,a.out,a.grid,a.export,a.ramp)
+    else: run(a.inp,a.out,a.grid,a.export,a.family_dark,False,a.lane,a.palette_hex)

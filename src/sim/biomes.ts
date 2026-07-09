@@ -1,5 +1,18 @@
+// The descent's biome ladder — the CANONICAL 30-floor six-region spine from
+// docs/specs/blobrogue_ENCOUNTER_CURRICULUM_spec.md §0, plus the terminal Null band as
+// the approved post-F30 expansion slot. Five floors per band, each capped by its
+// milestone (Slime King F5, the F10 Miniboss Gauntlet, then Marrow F15 / Weaver F20 /
+// Gilded Warden F25 / Hollow Choir F30). The ladder is ONE-WAY; past floor 30 the run
+// holds in the Null forever. Everything here is plain data consumed by both the pure sim
+// (biome pressure / hazard palettes key off biomeIndexForFloor) and the client renderer
+// (palette, lighting, ambience), so it stays in src/sim.
+
 export interface Biome {
   readonly name: string;
+  // Per-biome tile-art registry key (client assets opt-in: /tiles/biomes/<tileKey>/...).
+  // Art lands per biome without code changes; until then the renderer grades the shared
+  // tile set with this biome's palette.
+  readonly tileKey: string;
   readonly bgColor: string;
   readonly floorA: string;
   readonly floorB: string;
@@ -10,17 +23,25 @@ export interface Biome {
   readonly tint: string;
   readonly tintAlpha: number;
   readonly accent: string;
+  // ---- lighting / mood (client-consumed, data-only) ----
+  readonly glow: string;          // torch / ambient light tint
+  readonly lightLevel: number;    // 0..1 multiply-darken over floors (deeper = dimmer)
+  readonly vignette: number;      // 0..1 screen-edge darkness closing in with depth
+  readonly vignetteColor: string;
+  readonly pulse: number;         // ambient breathing amplitude (Ember heat, Null throb)
+  readonly detailDensity: number; // floor-detail overlay frequency 0..1 (deeper = busier)
+  readonly detailTint: string | null; // recolor for detail overlays (null = as-authored)
+  readonly torchesPerRoom: number;
 }
 
-// The canonical 30-floor spine (docs/specs/blobrogue_ENCOUNTER_CURRICULUM_spec.md §0):
-// six regions of five floors, each closed by its milestone — Amberwild/Slime King,
-// Rootbound Warrens/the F10 Miniboss Gauntlet, Sunless Caves/Marrow, The Deep/Weaver,
-// Gilded Archive/Warden, Emberreach/Hollow Choir. Past F30 the bands cycle.
 const FLOORS_PER_BIOME = 5;
 
 export const BIOMES: readonly Biome[] = [
   {
+    // Floors 1-5 — living, elastic, warm. Wet roots and amber torchlight: the safe-ish
+    // home under the home. Capped by the Slime King.
     name: "Amberwild",
+    tileKey: "amberwild",
     bgColor: "#0a120e",
     floorA: "#141f18",
     floorB: "#182419",
@@ -31,11 +52,21 @@ export const BIOMES: readonly Biome[] = [
     tint: "#3d6b50",
     tintAlpha: 0.24,
     accent: "#5fbf7a",
+    glow: "#ffc86b",
+    lightLevel: 0,
+    vignette: 0.10,
+    vignetteColor: "#050b07",
+    pulse: 0,
+    detailDensity: 0.09,
+    detailTint: null,
+    torchesPerRoom: 1,
   },
   {
-    // Same living ecology as Amberwild, denser and darker — the accepted lane is deep
-    // GREEN-BROWN braided roots threaded with amber channels (the accent).
+    // Floors 6-10 — the same living ecology as Amberwild grown DENSE and darker; the
+    // accepted lane is deep GREEN-BROWN braided roots threaded with amber channels (the
+    // accent). Capped by the F10 Miniboss Gauntlet.
     name: "Rootbound Warrens",
+    tileKey: "rootbound",
     bgColor: "#0d0e09",
     floorA: "#171a10",
     floorB: "#1c1e12",
@@ -46,9 +77,20 @@ export const BIOMES: readonly Biome[] = [
     tint: "#565232",
     tintAlpha: 0.24,
     accent: "#d9a24a",
+    glow: "#ffd166",
+    lightLevel: 0.06,
+    vignette: 0.14,
+    vignetteColor: "#070905",
+    pulse: 0,
+    detailDensity: 0.11,
+    detailTint: "#6b8a2e",
+    torchesPerRoom: 1,
   },
   {
+    // Floors 11-15 — sound and momentum: shale, bone dust, charge lanes, echoing dark.
+    // Capped by Marrow.
     name: "Sunless Caves",
+    tileKey: "sunless",
     bgColor: "#0a0e14",
     floorA: "#141820",
     floorB: "#181c26",
@@ -57,11 +99,22 @@ export const BIOMES: readonly Biome[] = [
     wallSideRgb: "22,28,40",
     wallCorner: "rgba(8,10,16,0.5)",
     tint: "#4a6080",
-    tintAlpha: 0.24,
+    tintAlpha: 0.26,
     accent: "#7aa8c8",
+    glow: "#9fd4ff",
+    lightLevel: 0.12,
+    vignette: 0.20,
+    vignetteColor: "#04070c",
+    pulse: 0,
+    detailDensity: 0.13,
+    detailTint: "#3e6a8a",
+    torchesPerRoom: 2,
   },
   {
+    // Floors 16-20 — fracture and wrong geometry: jet resin, load seams, offsets that
+    // should not hold. Capped by the Weaver.
     name: "The Deep",
+    tileKey: "deep",
     bgColor: "#0e0b1a",
     floorA: "#171227",
     floorB: "#1b1530",
@@ -69,14 +122,24 @@ export const BIOMES: readonly Biome[] = [
     wallCap: "#2f2350",
     wallSideRgb: "27,21,48",
     wallCorner: "rgba(9,6,18,0.5)",
-    tint: "#3d2a5c",
-    tintAlpha: 0.10,
+    tint: "#4a2f78",
+    tintAlpha: 0.28,
     accent: "#a24bff",
+    glow: "#b06bff",
+    lightLevel: 0.18,
+    vignette: 0.28,
+    vignetteColor: "#070313",
+    pulse: 0.03,
+    detailDensity: 0.16,
+    detailTint: "#8a5cff",
+    torchesPerRoom: 2,
   },
   {
-    // The accepted lane: RIGID amber/brass + cold mineral — dead honey and tarnished
-    // metal, order turned to imprisonment (never the Camp's warm gold).
+    // Floors 21-25 — order, armor, claimed space. The accepted lane: RIGID amber/brass
+    // + cold mineral — dead honey and tarnished metal, order turned to imprisonment
+    // (never the Camp's warm gold). Capped by the Gilded Warden.
     name: "Gilded Archive",
+    tileKey: "gilded",
     bgColor: "#100e09",
     floorA: "#1d1a11",
     floorB: "#222016",
@@ -85,11 +148,22 @@ export const BIOMES: readonly Biome[] = [
     wallSideRgb: "38,33,22",
     wallCorner: "rgba(13,11,7,0.5)",
     tint: "#7d6a3a",
-    tintAlpha: 0.20,
+    tintAlpha: 0.24,
     accent: "#e8c265",
+    glow: "#ffe9b0",
+    lightLevel: 0.24,
+    vignette: 0.34,
+    vignetteColor: "#0a0703",
+    pulse: 0.04,
+    detailDensity: 0.19,
+    detailTint: "#d9b03b",
+    torchesPerRoom: 3,
   },
   {
+    // Floors 26-30 — convection and pressure: clinker, vents, thermal lanes, the dark
+    // glowing from below. Capped by the Hollow Choir — the first-clear finale.
     name: "Emberreach",
+    tileKey: "ember",
     bgColor: "#120a08",
     floorA: "#1f1410",
     floorB: "#241816",
@@ -97,22 +171,68 @@ export const BIOMES: readonly Biome[] = [
     wallCap: "#4a2820",
     wallSideRgb: "40,24,18",
     wallCorner: "rgba(14,8,6,0.5)",
-    tint: "#8b3a20",
-    tintAlpha: 0.24,
+    tint: "#a63c14",
+    tintAlpha: 0.34,
     accent: "#ffb43b",
+    glow: "#ff8a3b",
+    lightLevel: 0.30,
+    vignette: 0.42,
+    vignetteColor: "#0c0402",
+    pulse: 0.08,
+    detailDensity: 0.23,
+    detailTint: "#ff7a3b",
+    torchesPerRoom: 3,
+  },
+  {
+    // Floors 31+ — the Null: the approved post-F30 expansion slot (curriculum: "Null/Jet
+    // is a later post-F30 expansion"). Near-black, void-bright seams, light that falls
+    // upward. Terminal: the ladder holds here forever.
+    name: "The Null",
+    tileKey: "nullvoid",
+    bgColor: "#05030b",
+    floorA: "#0a0714",
+    floorB: "#0d0918",
+    wallFront: "#140e24",
+    wallCap: "#241a40",
+    wallSideRgb: "16,11,30",
+    wallCorner: "rgba(2,1,6,0.6)",
+    tint: "#5a1a80",
+    tintAlpha: 0.36,
+    accent: "#ff4ad8",
+    glow: "#d9a6ff",
+    lightLevel: 0.36,
+    vignette: 0.48,
+    vignetteColor: "#010004",
+    pulse: 0.12,
+    detailDensity: 0.27,
+    detailTint: "#ff4ad8",
+    torchesPerRoom: 3,
   },
 ];
 
-export function biomeForFloor(floor: number): Biome {
-  const f = Math.max(1, Math.floor(floor));
-  const index = Math.floor((f - 1) / FLOORS_PER_BIOME) % BIOMES.length;
-  return BIOMES[index];
-}
-
 export function biomeIndexForFloor(floor: number): number {
   const f = Math.max(1, Math.floor(floor));
-  return Math.floor((f - 1) / FLOORS_PER_BIOME) % BIOMES.length;
+  return Math.min(Math.floor((f - 1) / FLOORS_PER_BIOME), BIOMES.length - 1);
 }
+
+export function biomeForFloor(floor: number): Biome {
+  return BIOMES[biomeIndexForFloor(floor)];
+}
+
+// How deep into its biome band a floor sits, 0..1 (floor 6 -> 0, floor 10 -> 1). The
+// terminal band clamps at 1. Drives within-band escalation: hazard density, room-shape
+// drama and ambience all thicken as the band's milestone floor approaches — the
+// curriculum's teach -> remix -> prove ramp, expressed by the level itself.
+export function biomeDepthForFloor(floor: number): number {
+  const f = Math.max(1, Math.floor(floor));
+  const idx = biomeIndexForFloor(f);
+  if (idx >= BIOMES.length - 1) {
+    const over = f - FLOORS_PER_BIOME * (BIOMES.length - 1) - 1;
+    return Math.min(1, over / (FLOORS_PER_BIOME - 1));
+  }
+  return ((f - 1) % FLOORS_PER_BIOME) / (FLOORS_PER_BIOME - 1);
+}
+
 
 export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
   if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";

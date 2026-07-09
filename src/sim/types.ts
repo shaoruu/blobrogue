@@ -240,6 +240,26 @@ export interface Hazard {
   maxLife: number; // authored duration (drives the client's fade render)
 }
 
+// Environmental FLOOR hazards — the depth-escalation danger layer, DISTINCT from the
+// dynamic boss hazards above: placed deterministically per floor (seeded from
+// seed+floor+difficulty, like props) so every client and the server derive the SAME
+// layout with zero wire cost — they never ride the snapshot. All floor hazards are
+// tile-bound (readable, dodgeable areas). Pulse hazards (spikes/vent/rift) cycle
+// idle -> telegraph -> active off the shared floor-hazard clock; pools are static,
+// always-visible damage floors. Cycle math lives in src/sim/hazards.ts.
+export type FloorHazardKind = "spikes" | "toxic_pool" | "fire_vent" | "void_rift";
+
+export interface FloorHazard {
+  id: number;
+  kind: FloorHazardKind;
+  tx: number; ty: number; // tile coords (damage area = exactly this tile)
+  // Pulse phase offset in seconds. Hazards placed as one formation share a group so their
+  // offsets step together (rows of spikes fire as a travelling wave, a vent channel erupts
+  // in unison) — authored-feeling rhythm instead of random noise.
+  phase: number;
+  group: number;
+}
+
 // Touch-to-open treasure. Placement is seeded (shared layout); `opened` + `openT` are
 // local, so each client opens their own chest and gets their own blessing pick, while
 // the coins/hearts/weapons it spawns are ordinary first-come world pickups.

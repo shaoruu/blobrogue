@@ -1,6 +1,6 @@
 // Central sprite registry. Every sprite is a 64x64 transparent PNG in /public/sprites.
 
-import type { WeaponId, SpriteName } from "../sim/types.js";
+import type { WeaponId, SpriteName, FloorHazardKind } from "../sim/types.js";
 import { resolveClip } from "./facing.js";
 import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice, Facing4 } from "./facing.js";
 
@@ -516,14 +516,78 @@ const TILE_SOURCES: Record<TileName, string> = {
   wf_NESW: "/sprites/walls_full/wall_NESW.png",
 };
 
+// ---- per-biome tile art (opt-in, like SHEETS) ----
+// Keyed by Biome.tileKey (src/sim/biomes.ts). A biome without an entry renders the
+// shared tile set graded by its palette (the renderer's fallback); a listed biome lights
+// up the moment its PNGs exist — no other code changes. Loading is graceful: a listed
+// but not-yet-copied file just 404s once and the fallback holds.
+//
+// The entries below are the AD's APPROVED set (filenames verbatim from the approval, so
+// the ship step is exactly `cp /workspace/fal-art/biomes/*.png public/tiles/biomes/`).
+// Band mapping per the canon re-band: the approved "verdant" art IS the Amberwild band's
+// living-roots identity. Rootbound (same ecology per curriculum §10) and Gilded Archive
+// have no approved art yet and stay on the graded fallback; the approved fracture_* set
+// predates the re-band and stays uncopied unless the AD re-purposes it.
+export interface BiomeTileArt {
+  floors: string[];    // floor variants, hash-picked per tile (>= 1)
+  wallTop?: string;    // 48x48 wall block used when the full autotile set is absent
+}
+
+export const BIOME_TILE_SOURCES: Partial<Record<string, BiomeTileArt>> = {
+  amberwild: { floors: ["/tiles/biomes/verdant_floor_px.png"], wallTop: "/tiles/biomes/verdant_wall_px.png" },
+  sunless: { floors: ["/tiles/biomes/sunless_floor_px.png"], wallTop: "/tiles/biomes/sunless_wall_px.png" },
+  deep: { floors: ["/tiles/biomes/deep_floor_px.png"], wallTop: "/tiles/biomes/deep_wall2_final_px.png" },
+  ember: { floors: ["/tiles/biomes/ember_floor_px.png"], wallTop: "/tiles/biomes/ember_wall2_final_px.png" },
+  nullvoid: { floors: ["/tiles/biomes/nullvoid_floor2_final_px.png"], wallTop: "/tiles/biomes/nullvoid_wall2_final_px.png" },
+};
+
+// ---- hazard body art (opt-in) ----
+// 64x64 PNG (or a 1xN 64px strip; frame count inferred from width) per hazard kind:
+//   spikes: 3 frames (retracted / arming / extended), toxic_pool: 2-frame slow boil,
+//   fire_vent: 3 frames (grate / smolder / erupting base), void_rift: 2-frame maw.
+// Approved sheets (ship step: `cp /workspace/fal-art/hazards/*.png public/tiles/hazards/`).
+// Until the copy lands, the renderer draws each hazard in the same primitive telegraph
+// language as the boss slam marker (see game.ts renderHazards).
+export const HAZARD_SOURCES: Partial<Record<FloorHazardKind, string>> = {
+  spikes: "/tiles/hazards/spikes_sheet.png",
+  fire_vent: "/tiles/hazards/fire_vent_sheet.png",
+  toxic_pool: "/tiles/hazards/toxic2_sheet.png",
+  void_rift: "/tiles/hazards/rift2_sheet.png",
+};
+
 export class TileSet {
   private images = new Map<TileName, HTMLImageElement>();
+  private biomeFloors = new Map<string, HTMLImageElement[]>();
+  private biomeWallTops = new Map<string, HTMLImageElement>();
+  private hazardImages = new Map<FloorHazardKind, HTMLImageElement>();
+  private tintCache = new Map<string, HTMLCanvasElement>();
 
   constructor() {
     for (const name of Object.keys(TILE_SOURCES) as TileName[]) {
       const img = new Image();
       img.src = TILE_SOURCES[name];
       this.images.set(name, img);
+    }
+    for (const key of Object.keys(BIOME_TILE_SOURCES)) {
+      const art = BIOME_TILE_SOURCES[key];
+      if (!art) continue;
+      this.biomeFloors.set(key, art.floors.map((src) => {
+        const img = new Image();
+        img.src = src;
+        return img;
+      }));
+      if (art.wallTop) {
+        const img = new Image();
+        img.src = art.wallTop;
+        this.biomeWallTops.set(key, img);
+      }
+    }
+    for (const kind of Object.keys(HAZARD_SOURCES) as FloorHazardKind[]) {
+      const src = HAZARD_SOURCES[kind];
+      if (!src) continue;
+      const img = new Image();
+      img.src = src;
+      this.hazardImages.set(kind, img);
     }
   }
 
@@ -534,6 +598,46 @@ export class TileSet {
   ready(name: TileName): boolean {
     const img = this.images.get(name);
     return !!img && img.complete && img.naturalWidth > 0;
+  }
+
+  // A loaded biome floor variant (hash-picked), or null to fall back to the shared set.
+  biomeFloor(tileKey: string, pick: number): HTMLImageElement | null {
+    const list = this.biomeFloors.get(tileKey);
+    if (!list || list.length === 0) return null;
+    const img = list[Math.abs(pick) % list.length];
+    return img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  biomeWallTop(tileKey: string): HTMLImageElement | null {
+    const img = this.biomeWallTops.get(tileKey);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  // A loaded hazard body sheet for this kind, or null for the primitive fallback.
+  hazard(kind: FloorHazardKind): HTMLImageElement | null {
+    const img = this.hazardImages.get(kind);
+    return img && img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  // A recolored copy of a tile/prop image (shape from alpha, hue from `color`), cached
+  // per name+color. Lets one authored glow/detail asset serve every biome palette.
+  tinted(name: TileName, color: string): HTMLCanvasElement | null {
+    const key = `${name}|${color}`;
+    const cached = this.tintCache.get(key);
+    if (cached) return cached;
+    const img = this.images.get(name);
+    if (!img || !img.complete || img.naturalWidth === 0) return null;
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    const g = c.getContext("2d");
+    if (!g) return null;
+    g.drawImage(img, 0, 0);
+    g.globalCompositeOperation = "source-in";
+    g.fillStyle = color;
+    g.fillRect(0, 0, c.width, c.height);
+    this.tintCache.set(key, c);
+    return c;
   }
 }
 

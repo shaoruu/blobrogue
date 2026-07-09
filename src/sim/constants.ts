@@ -199,6 +199,10 @@ export const PROP_RADIUS = 15;
 export const PROP_HP: Record<PropKind, number> = {
   crate: 4, pot: 1, barrel: 3, barrel_explosive: 3, brazier: 0,
 };
+// Physical world impacts (damagePropsInRadius): a committed charge or slam does not chip
+// cover, it obliterates it — one figure comfortably above every PROP_HP entry.
+export const CHARGE_PROP_DAMAGE = 100;
+export const SLAM_PROP_DAMAGE = 100;
 export const PROP_BREAK_DUR = 0.25;
 export const CHEST_OPEN_DUR = 0.4;
 // Chest loot ejection (see ejectChestLoot). Every drop a chest produces — coin, heart or
