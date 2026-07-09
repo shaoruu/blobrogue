@@ -1286,7 +1286,7 @@
 ["sparks 890.98 596.62 5"]
 ["sparks 2602 936.06 5"]
 []
-["dmg 2432.78 906 3 1 ","freeze 0.03","particles 2384.49 948.94 8 #a855f7","particles 2442 936 1 #ffe6a0","particles 2445.73 887.71 8 #a855f7","particles 2468.14 971.36 8 #a855f7","puff 2442 936 9 #fff3c4","sfx bossSpawn 1 1","sfx crit 1 0.6","sfx enemyHit 0.6 0.5","sfx enemyHit 0.6 0.5","sfx enemyHit 0.6 0.5","sfx enemyHit 1 0.65","sfx smg 1 1","shell 2424 930 0","sparkfx 2442 936 #fff3c4","trauma 0.05","trauma 0.4","trauma 0.4","trauma 0.4","trauma 0.5"]
+["dmg 2432.78 906 3 1 ","freeze 0.03","particles 2384.49 948.94 8 #a855f7","particles 2442 936 1 #ffe6a0","particles 2445.73 887.71 8 #a855f7","particles 2468.14 971.36 8 #a855f7","puff 2442 936 9 #fff3c4","sfx crit 1 0.6","sfx enemyHit 0.6 0.5","sfx enemyHit 0.6 0.5","sfx enemyHit 0.6 0.5","sfx enemyHit 1 0.65","sfx smg 1 1","shell 2424 930 0","sparkfx 2442 936 #fff3c4","trauma 0.05","trauma 0.4","trauma 0.4","trauma 0.4","trauma 0.5"]
 []
 ["sparks 2602 936.71 5"]
 []

@@ -46,6 +46,8 @@ function classOf(t: ClientMsg["t"]): MsgClass {
     case "stat": return "stat";
     case "join":
     case "equip":
+    case "reorder":
+    case "drop":
     case "chooseBlessing":
       return "control";
     default: return assertNever(t);
@@ -69,6 +71,8 @@ export class MessageRouter {
       case "pong": this.onPong(conn, msg); return;
       case "stat": this.onStat(conn, msg); return;
       case "equip": this.onEquip(conn, msg); return;
+      case "reorder": this.onReorder(conn, msg); return;
+      case "drop": this.onDrop(conn, msg); return;
       case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
       default: assertNever(msg); // exhaustive — a new variant won't compile until handled
     }
@@ -164,6 +168,24 @@ export class MessageRouter {
     conn.lastCseq = msg.cseq;
     const room = this.ctx.sessions.room(conn.worldId);
     if (room && !room.trySwitchWeapon(conn.playerId, msg.weapon)) this.ctx.metrics.counters.rejectedInputs++;
+  }
+
+  private onReorder(conn: Conn, msg: Extract<ClientMsg, { t: "reorder" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    // Same idempotency contract as equip: one monotonic cseq stream per connection covers
+    // every inventory command, so a resent/reordered command can never re-apply.
+    if (msg.cseq <= conn.lastCseq) return;
+    conn.lastCseq = msg.cseq;
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (room && !room.tryReorderWeapons(conn.playerId, msg.from, msg.to)) this.ctx.metrics.counters.rejectedInputs++;
+  }
+
+  private onDrop(conn: Conn, msg: Extract<ClientMsg, { t: "drop" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    if (msg.cseq <= conn.lastCseq) return;
+    conn.lastCseq = msg.cseq;
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (room && !room.tryDropWeapon(conn.playerId, msg.weapon)) this.ctx.metrics.counters.rejectedInputs++;
   }
 
   private onChooseBlessing(conn: Conn, msg: Extract<ClientMsg, { t: "chooseBlessing" }>): void {

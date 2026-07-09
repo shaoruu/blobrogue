@@ -38,14 +38,17 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-// v4 (intentional bump, the content wave): the snapshot grew the `hzds` hazard list
-// (webs slow PREDICTED movement, so clients must know it) and the enemy wire's closed
-// kind/move sets grew (charger/burrower/orbiter/shielder + the boss roster; a v3 client
-// would reject any snapshot carrying them as a ProtocolError). The join gate enforcing
+// v4: hotbar inventory commands — client->server `reorder` (move an inventory slot) and
+// `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event. New CLIENT
+// message types change the wire contract, so the strict join gate bumps.
+// v5 (intentional bump, the content wave): the snapshot grew the `hzds` hazard list
+// (webs/rubble slow PREDICTED movement, so clients must know them), boss-choice/dealer
+// pickup flags + the personal-claim player flag, and the enemy wire's closed kind/move
+// sets grew (charger/burrower/orbiter/shielder + the boss roster; a v4 client would
+// reject any snapshot carrying them as a ProtocolError). The join gate enforcing
 // equality is what turns that skew into a clean "update your client" instead of a
-// mid-run desync. NOTE: control/src/adapters/httpProbe.ts pins this in its synthetic
-// VERIFY join — keep them in lockstep.
-export const PROTOCOL_VERSION = 4;
+// mid-run desync. NOTE: the control plane's synthetic VERIFY join imports this constant.
+export const PROTOCOL_VERSION = 5;
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -158,6 +161,16 @@ export type ClientMsg =
   // the server ignores stale/duplicate commands so a resent equip can never double-apply or
   // regress a newer choice. Never carries any outcome.
   | { t: "equip"; weapon: WeaponId; cseq: number }
+  // Authoritative inventory reorder: move the hotbar slot at `from` to position `to` (all
+  // other slots keep relative order). The server validates both indices against the CURRENT
+  // authoritative inventory — a stale index (inventory changed in flight) rejects, never
+  // misplaces. Same cseq idempotency as equip. Never carries weapon ids or any outcome.
+  | { t: "reorder"; from: number; to: number; cseq: number }
+  // Authoritative weapon drop: request dropping an OWNED weapon into the world. Named by id
+  // (not slot index) so a drop racing a reorder can never discard the wrong weapon. The
+  // server validates ownership + player state and picks the spawn spot itself; the pickup
+  // and the updated inventory flow back via snapshot. Same cseq idempotency as equip.
+  | { t: "drop"; weapon: WeaponId; cseq: number }
   // Authoritative blessing choice: names the server offer it answers (offerId) + the chosen
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
@@ -315,6 +328,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
@@ -428,6 +442,23 @@ function decodeClientMsg(raw: string): ClientMsg {
       // The weapon id must be a KNOWN weapon; the server further validates it is actually owned.
       exactKeys(o, ["t", "weapon", "cseq"]);
       return { t: "equip", weapon: weaponOf(o, "weapon"), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
+    }
+    case "reorder": {
+      // Slot indices are small non-negative integers; the server further validates them
+      // against the player's actual inventory length.
+      exactKeys(o, ["t", "from", "to", "cseq"]);
+      return {
+        t: "reorder",
+        from: intOf(o, "from", 0, 63),
+        to: intOf(o, "to", 0, 63),
+        cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER),
+      };
+    }
+    case "drop": {
+      // The weapon id must be a KNOWN weapon; the server further validates ownership, player
+      // state (not downed/pending/terminal), and the never-drop-the-last-weapon rule.
+      exactKeys(o, ["t", "weapon", "cseq"]);
+      return { t: "drop", weapon: weaponOf(o, "weapon"), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
     }
     case "chooseBlessing": {
       exactKeys(o, ["t", "offerId", "choiceId"]);

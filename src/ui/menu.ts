@@ -153,13 +153,18 @@ export class Menu {
     const buttons: HTMLButtonElement[] = [];
     const sync = () => {
       const current = this.session.colorIndex ?? 0;
-      buttons.forEach((b, i) => b.classList.toggle("sel", i === current));
+      buttons.forEach((b, i) => {
+        b.classList.toggle("sel", i === current);
+        b.setAttribute("aria-pressed", String(i === current));
+      });
     };
     for (let i = 0; i < PLAYER_COLORS.length; i++) {
       const b = el("button", "swatch");
       b.type = "button";
       b.style.background = PLAYER_COLORS[i];
       b.title = i === 0 ? "amber (classic)" : "";
+      // Icon-only button: the swatch has no text, so name it for screen readers.
+      b.setAttribute("aria-label", i === 0 ? "blob color amber (classic)" : `blob color ${i + 1}`);
       b.addEventListener("click", () => { this.session.setColorIndex(i); sync(); });
       buttons.push(b);
       swatches.appendChild(b);
