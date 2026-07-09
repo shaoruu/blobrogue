@@ -3198,10 +3198,30 @@ export class Game {
           ctx.fillStyle = biome.wallCap;
           ctx.fillRect(sx, sy, TILE, 6);
         }
-        // Front face (darkest): a real sprite if present, else the wall_face_left/right
-        // swap-ready fallback is the shaded strips below.
+        // Universal material hierarchy over every authored/fallback wall: a pale top lip and
+        // hard dark floor-facing edge make collision/walkability readable even in grayscale.
+        // Biome art supplies material; this supplies structural depth.
+        ctx.save();
+        ctx.globalAlpha = 0.72;
+        ctx.fillStyle = biome.wallCap;
+        ctx.fillRect(sx + 2, sy + 1, TILE - 4, 2);
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = "#05030b";
+        if (belowFloor) ctx.fillRect(sx, sy + TILE - 6, TILE, 6);
+        if (leftFloor) ctx.fillRect(sx, sy, 3, TILE);
+        if (rightFloor) ctx.fillRect(sx + TILE - 3, sy, 3, TILE);
+        ctx.restore();
+        // Front face (darkest): a real sprite if present, then reinforce the inner edge.
         if (belowFloor && tiles.ready("wall_face")) {
           ctx.drawImage(tiles.get("wall_face"), sx, sy, TILE, TILE);
+          ctx.save();
+          ctx.globalAlpha = 0.72;
+          ctx.fillStyle = "#05030b";
+          ctx.fillRect(sx, sy + TILE - 5, TILE, 5);
+          ctx.globalAlpha = 0.65;
+          ctx.fillStyle = biome.wallCap;
+          ctx.fillRect(sx + 2, sy + 2, TILE - 4, 2);
+          ctx.restore();
         }
         // Side faces: a translucent gradient strip fading inward from the exposed edge.
         if (leftFloor && sideL) {
