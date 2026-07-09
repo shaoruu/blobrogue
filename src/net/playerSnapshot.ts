@@ -49,7 +49,10 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - shotSeq:     legacy presence-driven remote-shot FX counter (server FX ride events instead)
 // - rewindTicks: server-internal lag-comp bookkeeping, meaningless to a client
 // - meleeSwing:  derived swing state; the client's own prediction recreates it from inputs
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing";
+// - isAbsent:    connection-lifecycle bookkeeping (reserved reconnect seat). The OWNING client
+//                is by definition connected whenever it can receive a SelfWire, so it would
+//                always read false there; other clients see it via PlayerWire.ab instead.
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isAbsent";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim

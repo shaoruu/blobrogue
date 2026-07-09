@@ -93,6 +93,14 @@ export interface PlayerSim {
   facing: number; aimAngle: number; weapon: WeaponId;
   ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
   shotSeq: number; isDown: boolean;
+  // Network-absent (authoritative server only): the player's connection dropped and their body
+  // is RESERVED for the reconnect grace window. An absent body is paused and safe — it cannot
+  // act, take damage, attract enemies, collect loot, or open chests — and it is excluded from
+  // the exit/blessing gates so it can neither trigger nor deadlock a party transition. It
+  // still counts as ALIVE for the wipe checks (a resumed player can revive the party), which
+  // is exactly what keeps a brief Wi-Fi drop from reading as a death. Solo/co-op/prediction
+  // never set this.
+  isAbsent: boolean;
   // Seconds a teammate has been reviving this downed player (authoritative revive hold). 0 when
   // up or when no one is reviving. Solo never downs, so this stays 0.
   reviveProgress: number;
@@ -194,7 +202,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     fireCd: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
-    shotSeq: 0, isDown: false, reviveProgress: 0, rewindTicks: 0,
+    shotSeq: 0, isDown: false, isAbsent: false, reviveProgress: 0, rewindTicks: 0,
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
@@ -272,13 +280,24 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
   return p;
 }
 
-// Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
-// no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
-// Their pending blessing offer (if any) dies with them so the descend gate can't be held
-// by a player who is no longer in the world.
+// Remove a player from a live world (authoritative server: deliberate leave, or the reconnect
+// grace expiring). Returns whether a player was actually removed. Their pending blessing offer
+// (if any) dies with them so the descend gate can't be held by a player who is no longer in
+// the world.
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   w.pendingBlessings.delete(id);
   return w.players.delete(id);
+}
+
+// Flip a player's network-absence (authoritative server: socket dropped -> reserved seat;
+// resume -> back). Returning from absence grants the spawn-grace mercy window: the world kept
+// moving while they were gone, and materializing into a surrounding pack un-hittable-for-a-
+// beat beats materializing already dying.
+export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean): void {
+  const p = w.players.get(id);
+  if (!p || p.isAbsent === isAbsent) return;
+  p.isAbsent = isAbsent;
+  if (!isAbsent) p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
 }
 
 // A single open walled rectangle for the dev sandbox — reuses the Dungeon/Room shape so
@@ -1101,7 +1120,7 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
     if (!b.friendly) {
       for (const p of w.players.values()) {
-        if (!isProtected(p) && !p.isDown && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
+        if (!isProtected(p) && !p.isDown && !p.isAbsent && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
           b.life = 0;
           ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color });
           damagePlayer(w, p, b.damage, ev);
@@ -1265,7 +1284,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     e.hopClock += dt * (1 + e.hopMove * 1.5);
 
     for (const victim of w.players.values()) {
-      if (!isProtected(victim) && !victim.isDown && victim.hp > 0
+      if (!isProtected(victim) && !victim.isDown && !victim.isAbsent && victim.hp > 0
         && Math.hypot(victim.x - e.x, victim.y - e.y) < victim.pr + e.radius && canTouchDamage(e)) {
         damagePlayer(w, victim, contactDamageOf(e), ev);
         if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
@@ -1590,7 +1609,7 @@ function bossSqueezeActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]):
   a.windup = t;
   const safeR = BOSS.squeezeStartRadius + (BOSS.squeezeEndRadius - BOSS.squeezeStartRadius) * t;
   for (const p of w.players.values()) {
-    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
     if (Math.hypot(p.x - e.x, p.y - e.y) > safeR) damagePlayer(w, p, BOSS.squeezeDamage, ev);
   }
   if (a.time >= BOSS.squeezeDuration) enterIdle(e);
@@ -1601,7 +1620,7 @@ function bossLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const x = a.markX, y = a.markY;
   // Slam center hits for 2; the outer shockwave ring for 1 (spec §5 damage table).
   for (const p of w.players.values()) {
-    if (isProtected(p) || p.isDown || p.hp <= 0) continue;
+    if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
     const d = Math.hypot(p.x - x, p.y - y);
     if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev);
     else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev);
@@ -1656,7 +1675,7 @@ function spawnBossAdd(w: WorldState, e: Enemy, angle: number, ev: SimEvent[]): v
 function findTarget(w: WorldState, x: number, y: number): boolean {
   let bestD = Infinity, found = false;
   for (const p of w.players.values()) {
-    if (p.isDown || p.hp <= 0) continue;
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
     const dx = p.x - x, dy = p.y - y, d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; w.targetX = p.x; w.targetY = p.y; found = true; }
   }
@@ -1692,7 +1711,7 @@ function refreshFlowField(w: WorldState, dt: number): void {
   let keyHash = 0;
   let anyUp = false;
   for (const pl of w.players.values()) {
-    if (pl.isDown || pl.hp <= 0) continue;
+    if (pl.isDown || pl.isAbsent || pl.hp <= 0) continue;
     anyUp = true;
     keyHash = (Math.imul(keyHash, 31) + Math.floor(pl.y / TILE) * d.w + Math.floor(pl.x / TILE)) | 0;
   }
@@ -1709,7 +1728,7 @@ function refreshFlowField(w: WorldState, dt: number): void {
   const srcs = w.flowSources;
   srcs.length = 0;
   for (const pl of w.players.values()) {
-    if (pl.isDown || pl.hp <= 0) continue;
+    if (pl.isDown || pl.isAbsent || pl.hp <= 0) continue;
     const tx = Math.floor(pl.x / TILE), ty = Math.floor(pl.y / TILE);
     if (tx < 0 || ty < 0 || tx >= d.w || ty >= d.h) continue;
     srcs.push(ty * d.w + tx);
@@ -1965,7 +1984,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
     if (e.hp <= 0 && !e.dead) killEnemy(w, p, e, ev);
   }
   for (const victim of w.players.values()) {
-    if (!isProtected(victim) && !victim.isDown && victim.hp > 0
+    if (!isProtected(victim) && !victim.isDown && !victim.isAbsent && victim.hp > 0
       && Math.hypot(victim.x - source.x, victim.y - source.y) <= r) {
       damagePlayer(w, victim, C.BARREL_EXPLOSION_SELF_DMG, ev);
     }
@@ -2008,7 +2027,7 @@ function updateChests(w: WorldState, dt: number, ev: SimEvent[]): void {
       continue;
     }
     for (const p of w.players.values()) {
-      if (!p.isDown && p.hp > 0 && Math.hypot(p.x - c.x, p.y - c.y) < p.pr + c.radius) {
+      if (!p.isDown && !p.isAbsent && p.hp > 0 && Math.hypot(p.x - c.x, p.y - c.y) < p.pr + c.radius) {
         openChest(w, p, c, ev);
         break;
       }
@@ -2154,6 +2173,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
   for (const p of w.pickups) {
     let collected = false;
     for (const player of w.players.values()) {
+      if (player.isAbsent) continue; // a reserved body neither magnets nor collects loot
       if (player.mods.coinMagnet > 0 && p.kind === "coin" && !player.isDown) {
         const dx = player.x - p.x, dy = player.y - p.y;
         const d = Math.hypot(dx, dy);
@@ -2195,7 +2215,11 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
 }
 
 // Is there another player (or, on the legacy Convex co-op path, a remote target) still up who
-// could revive `p`? Drives the authoritative down-vs-gameover decision.
+// could revive `p`? Drives the authoritative down-vs-gameover decision. A network-absent body
+// DELIBERATELY counts as standing while it is alive: its player may resume within the grace
+// window and channel the revive — treating them as gone here is exactly the false-wipe the
+// reconnect grace exists to prevent. If they never return, the seat expiry removes them and
+// checkStrandedWipe ends the run then.
 function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
   for (const other of w.players.values()) {
     if (other === p) continue;
@@ -2206,6 +2230,10 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
 
 function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
+  // A network-absent body is reserved, not playing: it cannot be hurt while its player has
+  // no way to react (the reconnect-grace contract). Collision paths skip absent bodies too;
+  // this is the belt-and-suspenders gate on the one damage funnel.
+  if (p.isAbsent) return;
   // A player mid-blessing-pick cannot be hurt. Offers are only raised on the safe side of a
   // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
   // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
@@ -2243,9 +2271,11 @@ function endRun(w: WorldState, ev: SimEvent[]): void {
   for (const other of w.players.values()) ev.push({ t: "gameOver", pid: other.id });
 }
 
-// Shared-world safety net: if the last STANDING player leaves (disconnect, not death), the
-// remaining downed players have no possible revive — end the run for them instead of stranding
-// them on the floor forever. damagePlayer covers the death path; this covers the leave path.
+// Shared-world safety net: if the last STANDING player leaves (an expired seat or a deliberate
+// leave, not death), the remaining downed players have no possible revive — end the run for
+// them instead of stranding them on the floor forever. damagePlayer covers the death path;
+// this covers the leave path. An absent-but-alive body counts as up (same reasoning as
+// hasStandingAlly), so a mere disconnect can never wipe the party inside the grace window.
 function checkStrandedWipe(w: WorldState, ev: SimEvent[]): void {
   if (!w.isShared || w.isRunOver || w.players.size === 0) return;
   let anyUp = false;
@@ -2267,7 +2297,9 @@ function updateRevives(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (!downed.isDown) continue;
     let reviver: PlayerSim | undefined;
     for (const other of w.players.values()) {
-      if (other === downed || other.isDown || other.hp <= 0) continue;
+      // An absent body cannot channel a revive; an absent DOWNED body can still be revived
+      // (a kindness that survives the reconnect — they resume upright).
+      if (other === downed || other.isDown || other.isAbsent || other.hp <= 0) continue;
       if (Math.hypot(other.x - downed.x, other.y - downed.y) <= REVIVE.radius) { reviver = other; break; }
     }
     if (reviver) {
@@ -2296,10 +2328,15 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   // Party-wide gate: descend only when EVERY living (up) player stands at the exit. Solo has one
   // player, so this is identical to the old single-player check. The authoritative server owns
   // this decision entirely off server positions — no client triggers the transition.
+  // Network-absent bodies are excluded on BOTH sides of the gate: they can neither hold the
+  // party hostage for the whole grace window (they cannot walk to the exit) nor stand in as a
+  // phantom "player at the exit". At least one PRESENT living player must be at the exit, so an
+  // all-absent world never descends by itself; a reserved body is carried down with the party
+  // (descend repositions every player) and resumes on the new floor.
   let anyLiving = false;
   let allAtExit = true;
   for (const p of w.players.values()) {
-    if (p.isDown || p.hp <= 0) continue;
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;
     anyLiving = true;
     if (Math.hypot(p.x - ex, p.y - ey) >= TILE) { allAtExit = false; break; }
   }
@@ -2317,7 +2354,10 @@ function updateExit(w: WorldState, ev: SimEvent[]): void {
   // A boss floor's reward was its chest (the Rare pick), so leaving it offers nothing.
   if (!w.isBlessingOfferedThisFloor && !isBossFloor(w.floor)) {
     w.isBlessingOfferedThisFloor = true;
-    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
+    // No offer for a network-absent body: it cannot answer, and its pending entry would hold
+    // the party's descend for the full offer TTL. The trade (documented) is that a player
+    // absent across the exit gate misses that floor's pick.
+    for (const p of w.players.values()) if (!p.isAbsent) raiseBlessingOffer(w, p.id, false, ev);
     return;
   }
   if (w.pendingBlessings.size > 0) return;
@@ -2358,7 +2398,7 @@ export function descend(w: WorldState, nextFloor: number, ev: SimEvent[]): void 
   ev.push({ t: "descend", toFloor: nextFloor });
   loadFloorIntoWorld(w, nextFloor);
   if (isOfferDue) {
-    for (const p of w.players.values()) raiseBlessingOffer(w, p.id, false, ev);
+    for (const p of w.players.values()) if (!p.isAbsent) raiseBlessingOffer(w, p.id, false, ev);
   }
 }
 
