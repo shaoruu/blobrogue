@@ -720,22 +720,17 @@ function equipWeapon(p: PlayerSim, id: WeaponId): void {
 }
 
 // Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
-// and by dev/grant. The client's keyboard/scroll switching calls equipWeaponInWorld.
+// and by dev/grant. Manual switching (1-9 / scroll / hotbar) goes through the validated
+// switchWeaponInWorld below on every path (LocalTransport and the server).
 function acquireWeapon(p: PlayerSim, id: WeaponId): void {
   if (!p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
   equipWeapon(p, id);
 }
 
-// Client-driven weapon switch (1-9 / Q / scroll). Equips an already-owned slot.
-export function equipWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
-  const p = w.players.get(pid);
-  if (p) equipWeapon(p, id);
-}
-
-// Authoritative, validated weapon switch (the server's switch-input handler). Equips only a
-// slot the player actually owns; an unowned id is ignored (a tampered client can't equip a
-// weapon it never picked up). Returns whether the switch was accepted. equipWeapon resets the
-// fire cooldown and cancels any in-progress melee swing server-side.
+// Authoritative, validated weapon switch (LocalTransport + the server's equip handler).
+// Equips only a slot the player actually owns; an unowned id is ignored (a tampered client
+// can't equip a weapon it never picked up). Returns whether the switch was accepted.
+// equipWeapon resets the fire cooldown and cancels any in-progress melee swing.
 export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): boolean {
   const p = w.players.get(pid);
   if (!p || !p.ownedWeapons.includes(id)) return false;
@@ -747,6 +742,68 @@ export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId):
 export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
   if (p) acquireWeapon(p, id);
+}
+
+export function reorderWeaponsInWorld(w: WorldState, pid: PlayerId, from: number, to: number): boolean {
+  // Authoritative inventory reorder (drag/drop on the hotbar). Moves the slot at `from` to
+  // position `to`; every other slot keeps its relative order. The equipped weapon is tracked
+  // by ID (p.weapon), so it survives any reorder — only the 1-9 key mapping changes. Both
+  // indices must name real slots; a stale index (inventory changed in flight) is rejected.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  const n = p.ownedWeapons.length;
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return false;
+  if (from < 0 || from >= n || to < 0 || to >= n) return false;
+  if (from === to) return true; // no-op reorder is valid (idempotent)
+  const [moved] = p.ownedWeapons.splice(from, 1);
+  p.ownedWeapons.splice(to, 0, moved);
+  return true;
+}
+
+export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev: SimEvent[]): boolean {
+  // Authoritative weapon drop (Q / inventory UI): remove an OWNED weapon from the player's
+  // inventory and spawn it as a shared world pickup on a safe, reachable spot. Gates:
+  //  - never while the run is over, the player is downed, or a blessing pick is pending
+  //    (those states pause the player; a drop there would be a free action or a dupe window);
+  //  - never the final weapon — the player always keeps at least one (the default pistol
+  //    if that is all they own). Any weapon may be dropped while another remains.
+  // If the dropped weapon was equipped, the adjacent slot (same index, else the new last)
+  // is equipped so the hand is never empty. Rejected drops mutate nothing.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  if (w.isRunOver || p.isDown || w.pendingBlessings.has(pid)) return false;
+  if (p.ownedWeapons.length <= 1) return false;
+  const idx = p.ownedWeapons.indexOf(id);
+  if (idx < 0) return false;
+  const spot = weaponDropSpot(w, p);
+  if (!spot) return false; // fully boxed in: keep the weapon rather than spawn it unreachable
+  p.ownedWeapons.splice(idx, 1);
+  if (p.weapon === id) equipWeapon(p, p.ownedWeapons[Math.min(idx, p.ownedWeapons.length - 1)]);
+  const [x, y] = spot;
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
+  ev.push({ t: "weaponDrop", weapon: id, x, y });
+  return true;
+}
+
+function weaponDropSpot(w: WorldState, p: PlayerSim): [number, number] | null {
+  // Deterministic candidate scan for a player-initiated drop, sharing the chest-loot safety
+  // rules: the spot must be standable (walkable floor with wall margin, prop-free,
+  // chest-free) AND straight-line reachable from the dropper, so the pickup is always
+  // collectible. Candidates prefer the aim direction (drop lands where the player faces),
+  // then fan out; radii walk inner-to-outer starting past pickup range (no instant
+  // re-collect). Null when everything nearby is blocked — the caller keeps the weapon.
+  const angles = C.CHEST_EJECT_ANGLES;
+  for (const radius of C.WEAPON_DROP_RADII) {
+    for (const da of angles) {
+      const a = p.aimAngle + da;
+      const x = p.x + Math.cos(a) * radius;
+      const y = p.y + Math.sin(a) * radius;
+      if (!isStandableSpot(w, x, y, p.pr)) continue;
+      if (!isPathOpen(w, p.x, p.y, x, y, p.pr)) continue;
+      return [x, y];
+    }
+  }
+  return null;
 }
 
 // Apply a picked blessing to a player: append the pick to the level history, RECOMPUTE the

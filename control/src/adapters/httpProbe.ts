@@ -8,6 +8,11 @@
 import { createHmac } from "node:crypto";
 import { WebSocket } from "ws";
 
+// Mirrors PROTOCOL_VERSION in src/net/protocol.ts (control stays standalone — no game-code
+// imports — per its build boundary). Drift fails the control integration test, which drives
+// a REAL synthetic join against the in-process game server.
+const GS_PROTOCOL_VERSION = 4;
+
 import { redactFields } from "../redact.js";
 import type { GameServerLifecycleAction, GameServerProbe } from "../ports.js";
 import type {
@@ -129,7 +134,7 @@ export class HttpGameServerProbe implements GameServerProbe {
       ws.on("open", () => {
         if (secret !== null) {
           const ticket = mintGsTicket(secret, "synthetic-verify", 60);
-          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: 3 })); } catch { finish(false, "ws_liveness", "send_failed"); }
+          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: GS_PROTOCOL_VERSION })); } catch { finish(false, "ws_liveness", "send_failed"); }
         }
         // Without a secret, receiving ANY server frame (e.g. a heartbeat ping) proves the WS
         // server + tick/heartbeat loop are alive.

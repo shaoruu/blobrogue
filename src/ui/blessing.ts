@@ -102,14 +102,22 @@ export class BlessingOverlay {
       icon.appendChild(itemIconEl(item.id, item.glyph));
       el.appendChild(icon);
 
+      // UI Director gate: choice cards stay FULLY labeled (never icon-only, unlike the HUD
+      // strip) — 56px icon, name, an explicit NEW / UPGRADE LVn tag, the rarity, the exact
+      // effect the pick would grant, and the 1/2/3 input glyph.
       const name = document.createElement("span");
       name.className = "bc-name";
-      name.textContent = nextLevel > 1 ? `${item.name} Lv${nextLevel}` : item.name;
+      name.textContent = item.name;
       el.appendChild(name);
+
+      const tag = document.createElement("span");
+      tag.className = "bc-tag" + (nextLevel > 1 ? " up" : " new");
+      tag.textContent = nextLevel > 1 ? `UPGRADE LV${nextLevel}` : "NEW";
+      el.appendChild(tag);
 
       const rarity = document.createElement("span");
       rarity.className = `bc-rarity ${item.rarity}`;
-      rarity.textContent = nextLevel > 1 ? "UPGRADE" : RARITY_LABEL[item.rarity];
+      rarity.textContent = RARITY_LABEL[item.rarity];
       el.appendChild(rarity);
 
       const desc = document.createElement("span");
