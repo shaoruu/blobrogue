@@ -14,7 +14,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -3460,10 +3460,11 @@ export class Game {
   }
 
   // Flow-field inspector: an arrow per open tile pointing downhill toward the player,
-  // plus a marker on source/unreachable tiles. Reads the shared field the AI already
-  // built this frame (see updateEnemies), so it costs nothing until toggled on.
+  // plus a marker on source/unreachable/prop-blocked tiles. Reads the standard-class
+  // prop-aware chase field the AI shares (cached — see nav.ts), so it costs one lazy
+  // build at most and nothing until toggled on.
   private renderFlowDebug(): void {
-    const flow = this.world.flow;
+    const flow = navDebugField(this.world);
     if (!flow.isReady()) return;
     const { ctx, cam, canvas } = this;
     const d = this.dungeon;

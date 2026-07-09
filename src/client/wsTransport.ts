@@ -372,8 +372,11 @@ export class WSTransport implements Transport {
 
     // Props are near-static shared state; mirror them into the PREDICTED world so local movement
     // prediction collides with the same barrels/crates the server does (no rubber-band near
-    // props). They only change on break, so rebuilding per snapshot is cheap.
+    // props). They only change on break, so rebuilding per snapshot is cheap. The obstacle
+    // revision rides along so any local navigation cache (the dev flow inspector) never
+    // reads routes through a stale prop set.
     this.predState.props = snap.props.map(propFromWire);
+    this.predState.obstacleRev++;
 
     // Reliable event channel: events are id-tagged. Dedupe (skip ids already processed — a resent
     // event after a dropped snapshot arrives again) and advance the ack high-water mark. Keep only
@@ -520,6 +523,7 @@ export class WSTransport implements Transport {
     this.renderState.enemies = this.composeEnemies();
     this.renderState.bullets = this.composeBullets();
     this.renderState.props = this.composeProps();
+    this.renderState.obstacleRev++; // keep the dev flow inspector's clearance fresh
     this.renderState.pickups = this.composePickups();
     this.renderState.chests = this.composeChests();
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
