@@ -105,56 +105,62 @@ function weaponTooltipTests(): void {
   check("the room job leads the card", tip.querySelector(".tj")?.textContent === "SHRED UP CLOSE");
   const rows = [...tip.querySelectorAll(".tr")].map((r) =>
     `${r.querySelector(".tk")?.textContent}=${r.querySelector(".tv")?.textContent}`);
-  check("core rows: exact per-pellet POWER, banded CADENCE/REACH/COVERAGE/IMPACT",
-    rows.join("|") === "POWER=1.7 \u00d75|CADENCE=SLOW|REACH=SHORT|COVERAGE=WIDE FAN|IMPACT=SHOVES FOES", rows.join("|"));
+  check("core rows: exact per-pellet POWER, then IMPACT/CADENCE/REACH bands + COVERAGE category",
+    rows.join("|") === "POWER=1.7 \u00d75|IMPACT=SOLID|CADENCE=STEADY|REACH=CLOSE|COVERAGE=WIDE", rows.join("|"));
   check("tradeoff line: the shotgun's self-kick", [...tip.querySelectorAll(".tm")].map((n) => n.textContent).join("|") === "KICKS YOU BACK");
-  check("equipped card marks itself EQUIPPED and carries no arrows",
+  check("equipped card marks itself EQUIPPED and hides ALL comparison words",
     tip.querySelector(".tx")?.textContent === "EQUIPPED" && tip.querySelector(".td") === null);
 
-  section("weapon card tooltip: irrelevant/default rows are omitted, never nonsense");
+  section("weapon card tooltip: five rows always, px never displayed");
   const pistol = tipFor("pistol", "Pistol");
-  const pistolRows = [...pistol.querySelectorAll(".tr .tk")].map((k) => k.textContent);
-  check("tight single shot has no COVERAGE row; ordinary hits no IMPACT row",
-    pistolRows.join(",") === "POWER,CADENCE,REACH", pistolRows.join(","));
+  check("plain gun renders all five rows (FOCUSED is its coverage)",
+    [...pistol.querySelectorAll(".tr .tk")].map((k) => k.textContent).join(",") === "POWER,IMPACT,CADENCE,REACH,COVERAGE"
+    && pistol.querySelectorAll(".tr")[4].querySelector(".tv")?.textContent === "FOCUSED");
   check("plain pistol carries zero technique lines", pistol.querySelectorAll(".tm").length === 0);
+  check("band/category rows never leak a number (no px, no internals)",
+    (["pistol", "railgun", "sword", "mortar"] as WeaponId[]).every((id) =>
+      [...tipFor(id, id).querySelectorAll(".tr")].slice(1).every((r) => !/\d/.test(r.querySelector(".tv")?.textContent ?? "0"))));
   const sword = tipFor("sword", "Cutlass");
-  const swordRows = [...sword.querySelectorAll(".tr .tk")].map((k) => k.textContent);
-  check("melee shows SWEEP (never COVERAGE)", swordRows.join(",") === "POWER,CADENCE,REACH,SWEEP,IMPACT", swordRows.join(","));
+  check("melee coverage reads its geometry", sword.querySelectorAll(".tr")[4].querySelector(".tv")?.textContent === "SWEEP");
   const spear = tipFor("spear", "Pike");
-  check("a thrust has no SWEEP row — the technique line carries it",
-    [...spear.querySelectorAll(".tr .tk")].every((k) => k.textContent !== "SWEEP")
+  check("a thrust reads THRUST and keeps its technique line",
+    spear.querySelectorAll(".tr")[4].querySelector(".tv")?.textContent === "THRUST"
     && [...spear.querySelectorAll(".tm")].some((n) => n.textContent === "PIERCING THRUST"));
-  check("row budget holds: never more than five stat rows + three technique lines",
+  check("row budget holds: exactly five stat rows + at most three technique lines",
     (["shotgun", "sawnoff", "mortar", "tesla", "longsword", "flamer"] as WeaponId[]).every((id) => {
       const t = tipFor(id, id, false, wcard("shotgun"));
-      return t.querySelectorAll(".tr").length <= 5 && t.querySelectorAll(".tm").length <= 3;
+      return t.querySelectorAll(".tr").length === 5 && t.querySelectorAll(".tm").length <= 3;
     }));
 
-  section("weapon card tooltip: sidegrade arrows only where honest");
-  const equipped = wcard("shotgun"); // 1.7 ×5, CADENCE SLOW, REACH SHORT
-  const cannonRows = weaponTipRows(wcard("cannon"), equipped);
-  // Product decision: POWER never compares a guaranteed-total aggregate. Different volley
-  // sizes (1 vs 5 pellets) are an ambiguous tradeoff — neutral, no arrow.
-  check("POWER across different volley sizes stays NEUTRAL (no aggregate comparison)", cannonRows[0].delta === null);
-  check("POWER between equal volley sizes compares per-hit honestly",
-    weaponTipRows(wcard("cannon"), wcard("railgun"))[0].delta === -1  // 9 vs 11, both single
-    && weaponTipRows(wcard("railgun"), wcard("cannon"))[0].delta === 1
-    && weaponTipRows(wcard("sword"), wcard("cannon"))[0].delta === -1); // 3.5 vs 9, both per-hit singles
-  check("same CADENCE band = no arrow (band ties never paint noise)", cannonRows[1].delta === 0);
-  check("longer REACH band marks up", cannonRows[2].delta === 1);
-  const rapidRows = weaponTipRows(wcard("rapid"), equipped);
-  check("faster CADENCE band marks up; cross-volley POWER stays neutral", rapidRows[1].delta === 1 && rapidRows[0].delta === null);
-  const swordVs = weaponTipRows(wcard("sword"), equipped);
-  check("melee REACH is NEVER compared against bullet travel (incomparable classes)", swordVs[2].delta === null);
-  check("COVERAGE/SWEEP/IMPACT are shape tradeoffs — never arrows",
-    weaponTipRows(wcard("sawnoff"), equipped).slice(3).every((r) => r.delta === null)
-    && weaponTipRows(wcard("longsword"), wcard("sword")).slice(3).every((r) => r.delta === null));
-  check("no-equipped comparison yields null deltas", weaponTipRows(wcard("pistol"), null).every((r) => r.delta === null));
-  const tipVs = tipFor("cannon", "Thunderbolt", false, equipped);
-  const arrows = [...tipVs.querySelectorAll(".td")].map((d) => `${d.textContent}${d.classList.contains("up") ? "+" : "-"}`);
-  check("arrows render as distinct glyphs with up/down classes (grayscale-readable)", arrows.join(",") === "\u25b2+", arrows.join(","));
+  section("weapon card tooltip: comparison WORDS vs the equipped slot (accepted vocabulary)");
+  const cmpWords = (rowsVs: ReturnType<typeof weaponTipRows>) => rowsVs.map((r) => r.cmp.map((c) => c.word).join("+"));
+  // Shotgun hovered while the pistol is equipped: lighter per pellet but more of them —
+  // the two POWER facts stay separate, never summed into a fake total.
+  const sgVsPistol = cmpWords(weaponTipRows(wcard("shotgun"), wcard("pistol")));
+  check("POWER splits into LIGHTER + MORE SHOTS (never a guaranteed sum)", sgVsPistol[0] === "LIGHTER+MORE SHOTS", sgVsPistol[0]);
+  check("IMPACT tie says nothing (both SOLID)", sgVsPistol[1] === "");
+  check("CADENCE reads SLOWER", sgVsPistol[2] === "SLOWER");
+  check("REACH reads SHORTER", sgVsPistol[3] === "SHORTER");
+  check("COVERAGE within the pattern family reads WIDER", sgVsPistol[4] === "WIDER");
+  const rgVsCannon = cmpWords(weaponTipRows(wcard("railgun"), wcard("cannon")));
+  check("equal volley sizes: HEAVIER with no shots word", rgVsCannon[0] === "HEAVIER");
+  check("REACH reads LONGER; identical coverage reads SAME", rgVsCannon[3] === "LONGER" && rgVsCannon[4] === "SAME");
+  check("IMPACT compares MORE/LESS by band",
+    cmpWords(weaponTipRows(wcard("railgun"), wcard("pistol")))[1] === "MORE"
+    && cmpWords(weaponTipRows(wcard("rapid"), wcard("pistol")))[1] === "LESS");
+  check("behavior coverage across categories stays neutral DIFFERENT",
+    cmpWords(weaponTipRows(wcard("tesla"), wcard("shotgun")))[4] === "DIFFERENT");
+  check("BURST vs WIDE reads TIGHTER", cmpWords(weaponTipRows(wcard("burst"), wcard("shotgun")))[4] === "TIGHTER");
+  check("melee reach compares on the shared scale (sword vs railgun: SHORTER)",
+    cmpWords(weaponTipRows(wcard("sword"), wcard("railgun")))[3] === "SHORTER");
+  check("no comparison at all without an equipped card", weaponTipRows(wcard("pistol"), null).every((r) => r.cmp.length === 0));
+  const tipVs = tipFor("shotgun", "Shotgun", false, wcard("pistol"));
+  const tokens = [...tipVs.querySelectorAll(".td")].map((d) => `${d.textContent}:${d.className.replace("td ", "")}`);
+  check("comparison words render with directional/neutral classes (grayscale-readable text)",
+    tokens.join("|") === "LIGHTER:down|MORE SHOTS:up|SLOWER:down|SHORTER:down|WIDER:eq", tokens.join("|"));
 
   section("weapon card tooltip: mechanics diff as GAINS / LOSES / CHANGES");
+  const equipped = wcard("shotgun");
   const vsShotgun = weaponTipNotes(wcard("tesla"), equipped);
   check("new mechanic reads GAINS", vsShotgun.some((n) => n.marker === "gains" && n.text === "CHAINS TO 3 MORE"), JSON.stringify(vsShotgun));
   check("the equipped weapon's dropped mechanic reads LOSES",
@@ -176,9 +182,10 @@ function weaponTooltipTests(): void {
   const modded = weaponDisplayStats("shotgun", mods, 0);
   const moddedRows = weaponTipRows(modded, null);
   check("POWER reflects the damage mult and the modded volley", moddedRows[0].v === `${fmtStat(1.7 * 1.5)} \u00d77`, moddedRows[0].v);
+  check("damage mods move the IMPACT band live", moddedRows[1].v === "HEAVY", moddedRows[1].v); // 1.7 -> 2.55
   const moddedPistol = weaponDisplayStats("pistol", mods, 0);
-  check("extra pellets surface a COVERAGE row on a previously-tight gun",
-    weaponTipRows(moddedPistol, null).some((r) => r.k === "COVERAGE"));
+  check("extra pellets move a FOCUSED gun's coverage to BURST live",
+    weaponTipRows(moddedPistol, null)[4].v === "BURST");
   const pierceMods = createMods();
   pierceMods.pierce = 1;
   check("pierce mods surface a live PIERCES line",
@@ -194,12 +201,14 @@ function weaponTooltipTests(): void {
       const plain = tipFor(id, id, false, null).textContent ?? "";
       return [text, plain].every((t) => !t.includes("NaN") && !t.includes("undefined") && !t.includes("N/A"));
     }));
-  // CADENCE derives from fireCd, a lower-is-better raw stat: the arrow must follow the
-  // semantic direction (faster = up), never the raw number's direction.
+  // CADENCE derives from fireCd, a lower-is-better raw stat: the word must follow the
+  // semantic direction (lower fireCd = FASTER), never the raw number's direction.
   const fasterRaw = weaponTipRows(wcard("rapid"), wcard("railgun")); // fireCd 0.07 vs 0.85
-  check("lower-is-better raw (fireCd) reads as an UP arrow on the semantic CADENCE row", fasterRaw[1].delta === 1);
-  check("equal bands and self-comparison stay neutral",
-    weaponTipRows(wcard("shotgun"), wcard("shotgun")).every((r) => r.delta === 0 || r.delta === null));
+  check("lower-is-better raw (fireCd) reads FASTER on the semantic CADENCE row",
+    fasterRaw[2].cmp.length === 1 && fasterRaw[2].cmp[0].word === "FASTER" && fasterRaw[2].cmp[0].dir === 1);
+  check("self-comparison stays silent except a neutral coverage SAME",
+    weaponTipRows(wcard("shotgun"), wcard("shotgun")).every((r, i) =>
+      i === 4 ? r.cmp.length === 1 && r.cmp[0].word === "SAME" && r.cmp[0].dir === 0 : r.cmp.length === 0));
 }
 
 function buffChipTests(): void {
@@ -319,7 +328,7 @@ function drawerTests(): void {
   check("drawer leads with the room job", root.querySelector(".hd-role")?.textContent === "SHRED UP CLOSE");
   const statTexts = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
   check("stat boxes are the tooltip's card rows (shared vocabulary, one source)",
-    statTexts.join("|") === "POWER1.7 \u00d75|CADENCESLOW|REACHSHORT|COVERAGEWIDE FAN|IMPACTSHOVES FOES", statTexts.join("|"));
+    statTexts.join("|") === "POWER1.7 \u00d75|IMPACTSOLID|CADENCESTEADY|REACHCLOSE|COVERAGEWIDE", statTexts.join("|"));
   check("drawer carries the technique lines", root.querySelector(".hd-special")?.textContent === "KICKS YOU BACK");
   const dropBtn = root.querySelector<HTMLButtonElement>(".hd-drop")!;
   check("touch DROP action present", dropBtn.textContent === "DROP (Q)");
@@ -328,8 +337,8 @@ function drawerTests(): void {
 
   hud.openWeaponDrawer({ id: "pistol", name: "Pistol", stats: wcard("pistol"), onDrop: null });
   check("no DROP action when the weapon can't drop", root.querySelector(".hd-drop") === null);
-  check("plain gun's drawer omits default rows and technique lines",
-    [...root.querySelectorAll(".hd-stat")].length === 3 && root.querySelector(".hd-special") === null);
+  check("plain gun still shows all five rows and no technique lines",
+    [...root.querySelectorAll(".hd-stat")].length === 5 && root.querySelector(".hd-special") === null);
 
   section("UI Part4: the scrim swallows the tap and closes the drawer");
   check("scrim shown while open", root.querySelector(".hb-scrim")!.classList.contains("show"));

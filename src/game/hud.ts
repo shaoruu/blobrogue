@@ -144,14 +144,21 @@ export function objectiveCopy(isCleared: boolean, enemiesLeft: number, isParty =
 // technique/tradeoff lines. All content derives from the sim's WeaponDisplayStats (canonical
 // WeaponDef + live mods) — no hand-written per-weapon tooltip values here.
 
-// One core stat row. `delta` is the restrained sidegrade comparison against the EQUIPPED
-// weapon: +1 more / -1 less / 0 same / null = not compared (the equipped card itself, an
-// ambiguous-tradeoff field like coverage/sweep/impact, or reach across classes — melee
-// reach vs bullet travel would mislead).
+// One comparison token vs the equipped weapon (the accepted vocabulary): a WORD, never a
+// bare arrow — HEAVIER/LIGHTER, MORE/FEWER SHOTS, MORE/LESS, FASTER/SLOWER,
+// LONGER/SHORTER, SAME/DIFFERENT/WIDER/TIGHTER. `dir` drives the accent (+1/-1
+// directional, 0 neutral); the word itself keeps it grayscale-readable.
+export interface WeaponTipCmp {
+  word: string;
+  dir: -1 | 0 | 1;
+}
+
+// One core stat row. `cmp` is empty on the equipped card itself (comparison hidden) and
+// on band ties (no noise words for impact/cadence/reach).
 export interface WeaponTipRow {
   k: string;
   v: string;
-  delta: -1 | 0 | 1 | null;
+  cmp: WeaponTipCmp[];
 }
 
 // One technique/tradeoff line. `marker` is the mechanics diff vs the equipped weapon:
@@ -168,44 +175,48 @@ export function fmtStat(n: number): string {
   return Number.isInteger(r) ? String(r) : r.toFixed(1);
 }
 
-// ±0.5% dead zone so float noise (mod multiplies) never paints a fake arrow.
+// ±0.5% dead zone so float noise (mod multiplies) never paints a fake comparison.
 function numDelta(a: number, b: number): -1 | 0 | 1 {
   if (a > b * 1.005) return 1;
   if (a < b * 0.995) return -1;
   return 0;
 }
 
-function bandDelta(a: number, b: number): -1 | 0 | 1 {
-  return a > b ? 1 : a < b ? -1 : 0;
-}
-
-// The core rows, at most five. POWER is exact and per-pellet ("1.7 ×5" — never a fake
-// aggregate); its arrow compares the full volley. CADENCE/REACH are categorical bands
-// with arrows from band order (a band tie never paints an arrow over noise); reach only
-// compares within the same class. COVERAGE/SWEEP/IMPACT are shape tradeoffs, not ladders
-// — never an arrow. Default/irrelevant rows (tight single shot, ordinary impact) are
-// omitted entirely. This game has no ammo/reload, so those rows don't exist.
+// The five core rows (accepted vocabulary): POWER exact per-pellet/swing × count (never a
+// guaranteed sum), then IMPACT / CADENCE / REACH as shared bands (reach never shows px),
+// then the behavior-first COVERAGE category. Comparisons vs the equipped weapon are
+// semantic words: POWER splits into HEAVIER/LIGHTER (per-hit) plus a separate MORE/FEWER
+// SHOTS (count) — the two are never summed; IMPACT MORE/LESS, CADENCE FASTER/SLOWER,
+// REACH LONGER/SHORTER by band order (ties say nothing); COVERAGE always answers — SAME,
+// WIDER/TIGHTER within the FOCUSED/BURST/WIDE pattern family, neutral DIFFERENT across
+// behavior categories. The equipped card itself compares against nothing.
 export function weaponTipRows(c: WeaponDisplayStats, vs: WeaponDisplayStats | null): WeaponTipRow[] {
-  const rows: WeaponTipRow[] = [
-    {
-      k: "POWER",
-      v: fmtStat(c.power.perHit) + (c.power.count > 1 ? ` \u00d7${c.power.count}` : ""),
-      // Product decision: POWER is per-pellet × count, honestly — a guaranteed-total
-      // aggregate is never headlined OR compared (pellets don't all land). Arrows only
-      // between equal volley sizes; different shot patterns are an ambiguous tradeoff.
-      delta: vs && c.power.count === vs.power.count ? numDelta(c.power.perHit, vs.power.perHit) : null,
-    },
-    { k: "CADENCE", v: c.cadence.band, delta: vs ? bandDelta(c.cadence.order, vs.cadence.order) : null },
-    {
-      k: "REACH",
-      v: c.reach.band,
-      delta: vs && vs.isMelee === c.isMelee ? bandDelta(c.reach.order, vs.reach.order) : null,
-    },
+  const bandCmp = (a: { order: number }, b: { order: number } | undefined, more: string, less: string): WeaponTipCmp[] => {
+    if (!b || a.order === b.order) return [];
+    return a.order > b.order ? [{ word: more, dir: 1 }] : [{ word: less, dir: -1 }];
+  };
+  const powerCmp: WeaponTipCmp[] = [];
+  if (vs) {
+    const perHit = numDelta(c.power.perHit, vs.power.perHit);
+    if (perHit === 1) powerCmp.push({ word: "HEAVIER", dir: 1 });
+    else if (perHit === -1) powerCmp.push({ word: "LIGHTER", dir: -1 });
+    if (c.power.count > vs.power.count) powerCmp.push({ word: "MORE SHOTS", dir: 1 });
+    else if (c.power.count < vs.power.count) powerCmp.push({ word: "FEWER SHOTS", dir: -1 });
+  }
+  const covCmp: WeaponTipCmp[] = [];
+  if (vs) {
+    if (c.coverage.kind === vs.coverage.kind) covCmp.push({ word: "SAME", dir: 0 });
+    else if (c.coverage.patternOrder !== null && vs.coverage.patternOrder !== null) {
+      covCmp.push({ word: c.coverage.patternOrder > vs.coverage.patternOrder ? "WIDER" : "TIGHTER", dir: 0 });
+    } else covCmp.push({ word: "DIFFERENT", dir: 0 });
+  }
+  return [
+    { k: "POWER", v: fmtStat(c.power.perHit) + (c.power.count > 1 ? ` \u00d7${c.power.count}` : ""), cmp: powerCmp },
+    { k: "IMPACT", v: c.impact.band, cmp: bandCmp(c.impact, vs?.impact, "MORE", "LESS") },
+    { k: "CADENCE", v: c.cadence.band, cmp: bandCmp(c.cadence, vs?.cadence, "FASTER", "SLOWER") },
+    { k: "REACH", v: c.reach.band, cmp: bandCmp(c.reach, vs?.reach, "LONGER", "SHORTER") },
+    { k: "COVERAGE", v: c.coverage.kind, cmp: covCmp },
   ];
-  if (c.coverage) rows.push({ k: "COVERAGE", v: c.coverage.band, delta: null });
-  if (c.sweep) rows.push({ k: "SWEEP", v: c.sweep.band, delta: null });
-  if (c.impact) rows.push({ k: "IMPACT", v: c.impact.band, delta: null });
-  return rows.slice(0, 5);
 }
 
 // The technique/tradeoff lines, at most three. Against the equipped weapon they read as a
@@ -260,9 +271,9 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
     const v = el("span", "", row.v);
     v.className = "tv";
     line.append(k, v);
-    if (row.delta === 1 || row.delta === -1) {
-      const d = el("span", "", row.delta === 1 ? "\u25b2" : "\u25bc");
-      d.className = "td " + (row.delta === 1 ? "up" : "down");
+    for (const cmp of row.cmp) {
+      const d = el("span", "", cmp.word);
+      d.className = "td " + (cmp.dir === 1 ? "up" : cmp.dir === -1 ? "down" : "eq");
       line.appendChild(d);
     }
     tip.appendChild(line);

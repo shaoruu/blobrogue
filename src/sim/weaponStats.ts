@@ -11,7 +11,7 @@ import type { Weapon } from "./weapons.js";
 import type { WeaponId } from "./types.js";
 import type { PlayerMods } from "./items.js";
 import { CAPS } from "./balance.js";
-import { MIN_MULTI_SPREAD, WEAPON_KB, FIRE_KNOCKBACK } from "./constants.js";
+import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
 
 // 0 at full HP -> 1 at death's door; scales the berserk/adrenaline payoffs.
 export function lowHpFrac(hp: number, maxHp: number): number {
@@ -56,15 +56,27 @@ export interface WeaponMechanic {
   mag: number;
 }
 
+// Behavior-first coverage category (the accepted vocabulary): what the shot DOES to space.
+// THRUST/SWEEP are melee geometry; AREA/CHAIN/TRACKING/RICOCHET are behavior fields; the
+// spread-pattern family FOCUSED < BURST < WIDE carries `patternOrder` so those three may
+// compare as tighter/wider (behavior categories never rank against each other).
+export type CoverageKind =
+  | "THRUST" | "SWEEP" | "AREA" | "CHAIN" | "TRACKING" | "RICOCHET"
+  | "WIDE" | "BURST" | "FOCUSED";
+
+export interface WeaponCoverage {
+  kind: CoverageKind;
+  patternOrder: number | null; // 0 FOCUSED / 1 BURST / 2 WIDE; null for behavior kinds
+}
+
 export interface WeaponDisplayStats {
   isMelee: boolean;
   role: string;                    // the room-job verb line
-  power: { perHit: number; count: number }; // exact, per-pellet × volley — never aggregate DPS
+  power: { perHit: number; count: number }; // exact, per-pellet/swing × count — never a guaranteed sum
+  impact: BandedStat;              // weight class of one hit (effective per-pellet/swing damage)
   cadence: BandedStat;
-  reach: BandedStat;               // melee reach bands are a separate class from bullet travel
-  coverage: BandedStat | null;     // ranged shot pattern; null = tight single shot (default, omitted)
-  sweep: BandedStat | null;        // melee arc; null for thrusts (the mechanic line carries it)
-  impact: BandedStat | null;       // blast / notable per-hit knockback; null = ordinary (omitted)
+  reach: BandedStat;               // banded from internal px — the px number is never displayed
+  coverage: WeaponCoverage;
   mechanics: WeaponMechanic[];
 }
 
@@ -89,56 +101,45 @@ function roleOf(w: Weapon): string {
   return "HANDLE ANYTHING";
 }
 
+// The accepted shared band tables (UI designer sign-off). All thresholds are on LIVE
+// effective numbers, so mods can move a weapon between bands honestly.
+
+// Weight class of a single hit: effective per-pellet / per-swing damage.
+function impactBand(perHit: number): BandedStat {
+  if (perHit < 1) return { band: "LIGHT", order: 0, num: perHit };
+  if (perHit < 2.5) return { band: "SOLID", order: 1, num: perHit };
+  if (perHit < 6) return { band: "HEAVY", order: 2, num: perHit };
+  return { band: "CRUSHING", order: 3, num: perHit };
+}
+
 function cadenceBand(rate: number): BandedStat {
-  if (rate >= 12) return { band: "TORRENT", order: 5, num: rate };
-  if (rate >= 8) return { band: "VERY FAST", order: 4, num: rate };
-  if (rate >= 4) return { band: "FAST", order: 3, num: rate };
-  if (rate >= 2) return { band: "STEADY", order: 2, num: rate };
-  if (rate >= 1.2) return { band: "SLOW", order: 1, num: rate };
-  return { band: "HEAVY", order: 0, num: rate };
+  if (rate < 1.8) return { band: "SLOW", order: 0, num: rate };
+  if (rate < 5) return { band: "STEADY", order: 1, num: rate };
+  if (rate < 10) return { band: "FAST", order: 2, num: rate };
+  return { band: "RAPID", order: 3, num: rate };
 }
 
-function rangedReachBand(px: number): BandedStat {
-  if (px < 140) return { band: "POINT BLANK", order: 0, num: px };
-  if (px < 320) return { band: "SHORT", order: 1, num: px };
-  if (px < 620) return { band: "MID", order: 2, num: px };
-  if (px < 1000) return { band: "LONG", order: 3, num: px };
-  return { band: "VERY LONG", order: 4, num: px };
+// One reach scale for everything (internal px — melee reach and bullet travel are both
+// "how far a hit lands"); the px number itself is NEVER displayed.
+function reachBand(px: number): BandedStat {
+  if (px < 180) return { band: "CLOSE", order: 0, num: px };
+  if (px < 520) return { band: "MID", order: 1, num: px };
+  if (px < 950) return { band: "LONG", order: 2, num: px };
+  return { band: "EXTREME", order: 3, num: px };
 }
 
-function meleeReachBand(px: number): BandedStat {
-  if (px < 55) return { band: "ARM'S LENGTH", order: 0, num: px };
-  if (px < 70) return { band: "EXTENDED", order: 1, num: px };
-  return { band: "POLE LENGTH", order: 2, num: px };
-}
-
-// Shot-pattern coverage: only exists once the volley actually spreads (multi-pellet or a
-// real cone). The live spread mirrors resolveShot: a multi-pellet volley widens to the
-// MIN_MULTI_SPREAD floor plus any spread mods.
-function coverageBand(spread: number, pellets: number): BandedStat | null {
-  if (pellets <= 1 && spread < 0.15) return null;
-  if (spread >= 0.7) return { band: "WALL", order: 3, num: spread };
-  if (spread >= 0.45) return { band: "WIDE FAN", order: 2, num: spread };
-  if (spread >= 0.15) return { band: "NARROW FAN", order: 1, num: spread };
-  return { band: "TIGHT CLUSTER", order: 0, num: spread };
-}
-
-function sweepBand(w: Weapon): BandedStat | null {
-  if (!w.melee || w.melee.isThrust) return null;
-  return w.melee.arc >= 1.5
-    ? { band: "WIDE SWEEP", order: 1, num: w.melee.arc }
-    : { band: "FORWARD ARC", order: 0, num: w.melee.arc };
-}
-
-// Notable hit feel only: a blast zone, or a per-hit knockback (canonical WEAPON_KB) big
-// enough to move the fight. Ordinary impulse is the default and stays off the card.
-function impactBand(w: Weapon): BandedStat | null {
-  if (w.blast !== undefined) return { band: "AREA BLAST", order: 3, num: w.blast };
-  const kb = WEAPON_KB[w.id];
-  if (kb >= 16) return { band: "LAUNCHES FOES", order: 2, num: kb };
-  if (kb >= 12) return { band: "STAGGERS FOES", order: 1, num: kb };
-  if (kb >= 8) return { band: "SHOVES FOES", order: 0, num: kb };
-  return null;
+// Behavior-first coverage: melee geometry, then the defining behavior field, then the
+// live shot pattern (a modded multi-pellet volley moves FOCUSED -> BURST/WIDE honestly).
+function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage {
+  if (w.melee) return { kind: w.melee.isThrust ? "THRUST" : "SWEEP", patternOrder: null };
+  if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
+  if (w.chain !== undefined) return { kind: "CHAIN", patternOrder: null };
+  if (w.homing !== undefined) return { kind: "TRACKING", patternOrder: null };
+  if (w.bounce !== undefined) return { kind: "RICOCHET", patternOrder: null };
+  if (pellets > 1) {
+    return spread >= 0.45 ? { kind: "WIDE", patternOrder: 2 } : { kind: "BURST", patternOrder: 1 };
+  }
+  return { kind: "FOCUSED", patternOrder: 0 };
 }
 
 // Technique/tradeoff mechanics, in priority order. Live pierce includes the player's
@@ -168,17 +169,15 @@ export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number
   const rate = (1 / w.fireCd) * liveFireRateMult(mods, lowHp);
   const pellets = isMelee ? 1 : w.pellets + mods.extraPellets;
   const spread = !isMelee && pellets > 1 ? Math.max(w.spread, MIN_MULTI_SPREAD) + mods.spreadAdd : w.spread;
+  const perHit = w.damage * liveDamageMult(mods, lowHp);
   return {
     isMelee,
     role: roleOf(w),
-    power: { perHit: w.damage * liveDamageMult(mods, lowHp), count: pellets },
+    power: { perHit, count: pellets },
+    impact: impactBand(perHit),
     cadence: cadenceBand(rate),
-    reach: isMelee
-      ? meleeReachBand(w.melee!.reach)
-      : rangedReachBand(w.speed * mods.bulletSpeedMult * w.life * mods.bulletLifeMult),
-    coverage: isMelee ? null : coverageBand(spread, pellets),
-    sweep: sweepBand(w),
-    impact: impactBand(w),
+    reach: reachBand(isMelee ? w.melee!.reach : w.speed * mods.bulletSpeedMult * w.life * mods.bulletLifeMult),
+    coverage: coverageOf(w, pellets, spread),
     mechanics: mechanicsOf(w, mods),
   };
 }

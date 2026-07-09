@@ -159,24 +159,42 @@ function cardTests(): void {
   ];
   for (const [id, role] of roles) check(`${id} -> ${role}`, card(id).role === role, card(id).role);
 
-  section("card: categorical bands for cadence/reach/coverage/impact; power stays exact");
-  check("pistol: FAST cadence, MID reach", card("pistol").cadence.band === "FAST" && card("pistol").reach.band === "MID");
-  check("railgun: HEAVY cadence, VERY LONG reach", card("railgun").cadence.band === "HEAVY" && card("railgun").reach.band === "VERY LONG");
-  check("beam: TORRENT cadence", card("beam").cadence.band === "TORRENT");
-  check("sawnoff: POINT BLANK reach, WALL coverage", card("sawnoff").reach.band === "POINT BLANK" && card("sawnoff").coverage?.band === "WALL");
-  check("shotgun: WIDE FAN coverage, SHOVES FOES impact", card("shotgun").coverage?.band === "WIDE FAN" && card("shotgun").impact?.band === "SHOVES FOES");
-  check("mortar: AREA BLAST impact", card("mortar").impact?.band === "AREA BLAST");
-  check("longsword: LAUNCHES FOES impact, WIDE SWEEP", card("longsword").impact?.band === "LAUNCHES FOES" && card("longsword").sweep?.band === "WIDE SWEEP");
+  section("card: the ACCEPTED band tables (impact/cadence/reach) on live effective numbers");
+  // IMPACT: LIGHT <1, SOLID <2.5, HEAVY <6, CRUSHING >=6 (effective per-pellet/swing damage)
+  check("impact LIGHT under 1", card("flamer").impact.band === "LIGHT" && card("beam").impact.band === "LIGHT");
+  check("impact SOLID under 2.5", card("pistol").impact.band === "SOLID" && card("shotgun").impact.band === "SOLID");
+  check("impact HEAVY under 6", card("tesla").impact.band === "HEAVY" && card("sword").impact.band === "HEAVY");
+  check("impact CRUSHING at 6+", card("mortar").impact.band === "CRUSHING" && card("railgun").impact.band === "CRUSHING"
+    && card("longsword").impact.band === "CRUSHING");
+  // CADENCE: SLOW <1.8/s, STEADY <5, FAST <10, RAPID >=10
+  check("cadence SLOW under 1.8/s", card("railgun").cadence.band === "SLOW" && card("sawnoff").cadence.band === "SLOW");
+  check("cadence STEADY under 5/s", card("shotgun").cadence.band === "STEADY" && card("sword").cadence.band === "STEADY");
+  check("cadence FAST under 10/s", card("pistol").cadence.band === "FAST" && card("nailer").cadence.band === "FAST");
+  check("cadence RAPID at 10+/s", card("smg").cadence.band === "RAPID" && card("beam").cadence.band === "RAPID");
+  // REACH: CLOSE <180, MID <520, LONG <950, EXTREME >=950 — internal px, one scale for all
+  check("reach CLOSE under 180", card("shotgun").reach.band === "CLOSE" && card("sawnoff").reach.band === "CLOSE");
+  check("melee lives on the same reach scale (all CLOSE)",
+    (["sword", "longsword", "spear"] as WeaponId[]).every((id) => card(id).reach.band === "CLOSE"));
+  check("reach MID under 520", card("tesla").reach.band === "MID" && card("mortar").reach.band === "MID" && card("beam").reach.band === "MID");
+  check("reach LONG under 950", card("pistol").reach.band === "LONG" && card("cannon").reach.band === "LONG");
+  check("reach EXTREME at 950+", card("railgun").reach.band === "EXTREME" && card("ricochet").reach.band === "EXTREME");
   check("power is exact per-pellet \u00d7 count, never aggregate", card("shotgun").power.perHit === 1.7 && card("shotgun").power.count === 5);
-  check("melee reach uses its own class bands",
-    card("sword").reach.band === "ARM'S LENGTH" && card("longsword").reach.band === "EXTENDED" && card("spear").reach.band === "POLE LENGTH");
 
-  section("card: defaults are omitted — no coverage on tight singles, no impact on ordinary hits");
-  check("pistol omits coverage + impact", card("pistol").coverage === null && card("pistol").impact === null);
-  check("tesla omits coverage (spread 0, one pellet)", card("tesla").coverage === null);
-  check("melee never carries a coverage row", card("sword").coverage === null && card("spear").coverage === null);
-  check("thrust omits the sweep row (the mechanic line carries it)", card("spear").sweep === null
-    && card("spear").mechanics.some((m) => m.tag === "THRUST"));
+  section("card: behavior-first COVERAGE categories");
+  const cov = (id: WeaponId) => card(id).coverage.kind;
+  check("melee: THRUST / SWEEP", cov("spear") === "THRUST" && cov("sword") === "SWEEP" && cov("longsword") === "SWEEP");
+  check("blast is AREA", cov("mortar") === "AREA");
+  check("chain lightning is CHAIN", cov("tesla") === "CHAIN");
+  check("homing rounds are TRACKING", cov("homing") === "TRACKING");
+  check("bouncing rounds are RICOCHET", cov("ricochet") === "RICOCHET" && cov("nailer") === "RICOCHET");
+  check("wide fans are WIDE", cov("shotgun") === "WIDE" && cov("sawnoff") === "WIDE" && cov("flamer") === "WIDE");
+  check("tight multi-shot is BURST", cov("burst") === "BURST");
+  check("single tight rounds are FOCUSED",
+    (["pistol", "rapid", "smg", "cannon", "railgun", "beam"] as WeaponId[]).every((id) => cov(id) === "FOCUSED"));
+  check("pattern family carries an order, behavior kinds do not",
+    card("pistol").coverage.patternOrder === 0 && card("burst").coverage.patternOrder === 1
+    && card("shotgun").coverage.patternOrder === 2 && card("tesla").coverage.patternOrder === null);
+  check("thrust still carries its mechanic line", card("spear").mechanics.some((m) => m.tag === "THRUST"));
 
   section("card: technique/tradeoff mechanics from canonical fields (incl. self-kick)");
   const tags = (id: WeaponId) => card(id).mechanics.map((m) => m.tag).join(",");
@@ -196,11 +214,13 @@ function cardTests(): void {
   const mods = createMods();
   mods.extraPellets = 2;
   mods.pierce = 1;
-  mods.fireRateMult = 1.5;
+  mods.fireRateMult = 1.7;
+  mods.damageMult = 1.5;
   const modded = weaponDisplayStats("pistol", mods, 0);
-  check("extra pellets grow the volley and surface coverage", modded.power.count === 3 && modded.coverage !== null);
+  check("extra pellets grow the volley and move coverage FOCUSED -> BURST", modded.power.count === 3 && modded.coverage.kind === "BURST");
   check("pierce mods surface a live PIERCE mechanic", modded.mechanics.some((m) => m.tag === "PIERCE" && m.mag === 1));
-  check("fire-rate mods can move the cadence band", modded.cadence.band === "VERY FAST", modded.cadence.band); // 6.25 -> 9.4
+  check("fire-rate mods can move the cadence band", modded.cadence.band === "RAPID", modded.cadence.band); // 6.25 -> 10.6
+  check("damage mods can move the impact band", modded.impact.band === "HEAVY", modded.impact.band); // 2 -> 3
   check("melee ignores pellet mods on the card", weaponDisplayStats("sword", mods, 0).power.count === 1);
 }
 
@@ -221,11 +241,12 @@ function integrityTests(): void {
     for (let pi = 0; pi < profiles.length; pi++) {
       for (const lowHp of [0, 0.5, 1, lowHpFrac(1, 0)]) {
         const c = weaponDisplayStats(id, profiles[pi], lowHp);
-        const nums = [c.power.perHit, c.power.count, c.cadence.num, c.cadence.order, c.reach.num, c.reach.order,
-          ...(c.coverage ? [c.coverage.num] : []), ...(c.sweep ? [c.sweep.num] : []), ...(c.impact ? [c.impact.num] : [])];
+        const nums = [c.power.perHit, c.power.count, c.impact.num, c.impact.order, c.cadence.num, c.cadence.order,
+          c.reach.num, c.reach.order, ...(c.coverage.patternOrder !== null ? [c.coverage.patternOrder] : [])];
         const ok = nums.every((n) => Number.isFinite(n))
           && c.power.count >= 1
-          && c.role.length > 0 && c.cadence.band.length > 0 && c.reach.band.length > 0
+          && c.role.length > 0 && c.impact.band.length > 0 && c.cadence.band.length > 0
+          && c.reach.band.length > 0 && c.coverage.kind.length > 0
           && c.mechanics.every((m) => m.text.length > 0 && Number.isFinite(m.mag))
           && !JSON.stringify(c).includes("NaN") && !JSON.stringify(c).includes("undefined");
         if (!ok) { bad++; details.push(`${id} profile=${pi} lowHp=${lowHp}`); }
