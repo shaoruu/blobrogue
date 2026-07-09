@@ -135,6 +135,10 @@ export class GameWorld implements RoomRuntime {
       pid: conn.playerId,
       authName: conn.authName,
       token: conn.resumeToken,
+      // Rotation-ack ordering: if this connection died before the client confirmed receipt of
+      // the rotated token, the token it PRESENTED stays armed as the fallback credential —
+      // otherwise the client would be locked out of its own seat by a rotation it never saw.
+      prevToken: conn.isResumeTokenConfirmed ? null : conn.presentedResumeToken,
       reservedAt: nowMs,
       expiresAt: nowMs + ttlMs,
       displayName: conn.displayName,
@@ -156,10 +160,12 @@ export class GameWorld implements RoomRuntime {
       this.dropSeat(seat);
       return { ok: false, reason: "expired" };
     }
-    if (!resumeTokensEqual(seat.token, token)) return { ok: false, reason: "token_mismatch" };
+    const isCurrent = resumeTokensEqual(seat.token, token);
+    const isPrev = !isCurrent && seat.prevToken !== null && resumeTokensEqual(seat.prevToken, token);
+    if (!isCurrent && !isPrev) return { ok: false, reason: "token_mismatch" };
     this.seatMap.delete(authName);
     setPlayerAbsence(this.state, seat.pid, false);
-    return { ok: true, seat };
+    return { ok: true, seat, isViaPrevToken: isPrev };
   }
 
   discardSeat(authName: string): boolean {

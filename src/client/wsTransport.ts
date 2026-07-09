@@ -275,6 +275,7 @@ export class WSTransport implements Transport {
     this.cseq = 0;
     this.isWorldRebuilt = false;
     this.worldMismatch = null;
+    this.isSnapSeenOnSocket = false;
     this.resumeToken = null;
     this.isReconnecting = false;
     this.reconnectAttempt = 0;
@@ -328,13 +329,22 @@ export class WSTransport implements Transport {
     }
     this.socket = sock;
     this.joinTicket = ticket;
+    // Every handler is guarded against a STALE socket: a lingering previous socket that fires
+    // late (a deliberate server close such as 4009 arriving on a link we already replaced)
+    // must never tear down or contaminate the CURRENT connection.
     sock.onopen = () => {
+      if (this.socket !== sock) return;
       if (!this.isReconnecting) this.setStatus("open");
       this.sendJoin();
     };
-    sock.onmessage = (ev) => this.onMessage(ev.data);
-    sock.onclose = (ev) => { this.socket = null; this.onSocketGone(ev?.code); };
+    sock.onmessage = (ev) => { if (this.socket === sock) this.onMessage(ev.data); };
+    sock.onclose = (ev) => {
+      if (this.socket !== sock) return;
+      this.socket = null;
+      this.onSocketGone(ev?.code);
+    };
     sock.onerror = (err) => {
+      if (this.socket !== sock) return;
       this.lastError = String(err);
       // Mid-outage errors resolve through onclose (the next attempt is already the answer);
       // a first-connect error stays terminal exactly as before.
@@ -678,7 +688,11 @@ export class WSTransport implements Transport {
       this.prevPredX = p.x; this.prevPredY = p.y;
       const cmd = this.nextInput ?? { seq: 0, moveX: 0, moveY: 0, aim: p.aimAngle, firing: false, dash: false };
       const scratch: SimEvent[] = [];
-      if (this.isReady()) {
+      // Inputs flow only once a snapshot arrived ON THIS SOCKET — never off stale readiness
+      // from before a reconnect. This is both correctness (don't drive a world we haven't
+      // resynced with) and the server's token-rotation receipt proof: snapshots carry the
+      // rotated seat token, so our first input tells the server we hold the current one.
+      if (this.isReady() && this.isSnapSeenOnSocket) {
         const seq = ++this.seq;
         const stamped: InputCmd = { ...cmd, seq };
         this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
@@ -686,7 +700,8 @@ export class WSTransport implements Transport {
         this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, ackEv: this.lastEventId });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
       } else {
-        // Pre-join: predict locally for instant feel; don't send before the join is acknowledged.
+        // Pre-join / mid-resume: predict locally for instant feel; don't send before the
+        // (re)join is acknowledged by an authoritative snapshot.
         stepPlayerPhase(this.predState, p, cmd, FIXED_DT, scratch);
       }
     }

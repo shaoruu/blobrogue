@@ -21,6 +21,11 @@ export interface Seat {
   pid: PlayerId;
   authName: string;
   token: string;
+  // The token the seat's client last DEMONSTRABLY held, when that differs from `token`: the
+  // connection died between the server rotating the token and the client receiving it (the
+  // token-rotation ack window), so the client's only credential is still the previous one.
+  // null once receipt of `token` was confirmed — a confirmed-then-replayed token stays dead.
+  prevToken: string | null;
   reservedAt: number;
   expiresAt: number;
   displayName: string | null;
@@ -33,7 +38,9 @@ export interface Seat {
 }
 
 export type TakeSeatResult =
-  | { ok: true; seat: Seat }
+  // isViaPrevToken: the claim matched the armed previous token (an unconfirmed rotation was
+  // healed) rather than the current one — surfaced for the resumesPrevToken metric.
+  | { ok: true; seat: Seat; isViaPrevToken: boolean }
   | { ok: false; reason: "none" | "expired" | "token_mismatch" };
 
 // The authoritative simulation runtime for ONE room/world. Owns the WorldState + its connected

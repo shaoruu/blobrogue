@@ -386,6 +386,19 @@ reconciled with the studio balance gate's reconnect contract
   `resumesRejected`); tokens rotate on every successful join, so a captured token replays
   exactly zero times. A matching token against a still-live connection (half-dead socket the
   server has not noticed) takes the body over in place.
+- **Token rotation-ack ordering.** The server rotates the seat token the moment a join is
+  processed, but the client only learns the new one from a snapshot — so a connection that
+  dies inside that window (a flapping link dropping the resume handshake itself) would
+  otherwise strand the client with only its PREVIOUS token and lock it out of its own seat
+  as a "replay". The token the client PRESENTED therefore stays honored as the fallback
+  credential until receipt of the rotated one is CONFIRMED, and the confirmation is the
+  client's first input frame: the transport sends inputs only after ingesting a snapshot on
+  the current socket, and every per-connection snapshot carries the token. Once confirmed,
+  the previous token is dead — a confirmed-then-replayed token is still rejected outright,
+  so single-use replay protection holds everywhere outside the unavoidable handshake window
+  (where a takeover would additionally require a valid same-identity ticket, which already
+  grants a plain-join takeover on its own). Resumes healed by the fallback are counted in
+  `resumesPrevToken`.
 - **Client auto-reconnect.** The transport reconnects with exponential backoff (0.4s -> 5s
   steps) inside the grace window, re-minting tickets as needed, and retries IMMEDIATELY when
   the browser announces connectivity returned (`online` event) — which is what lets an outage
@@ -464,8 +477,10 @@ with an undisturbed victim, drops while downed / mid-blessing / standing on the 
 false descend, no deadlock, offer survives), the silent-link pause + restore, the
 no-boss/party-rescale invariants, teammates playing through an outage with the wipe applying
 immediately once every connected player is down (reservations never block it), a
-flaky-network convergence run (latency + jitter + 25% loss + repeated kills), and a real
-server-restart round trip.
+flaky-network convergence run (latency + jitter + 25% loss + repeated kills), a seeded
+stress gate whose drop schedules sweep the whole reconnect handshake (the token
+rotation-ack window included) demanding zero rejections (`GS_TEST_STRESS_SEEDS` raises the
+iteration count for soak runs), and a real server-restart round trip.
 
 **Balance-gate items deliberately NOT in this PR** (they depend on systems blobrogue does not
 have yet, and belong to those features): post-expiry *spectator mode* (today: lobby with a

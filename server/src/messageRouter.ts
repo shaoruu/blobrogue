@@ -170,10 +170,17 @@ export class MessageRouter {
       const taken = room.takeSeat(authName, token, this.ctx.clock.now());
       if (taken.ok) {
         this.adoptSeat(conn, taken.seat);
+        conn.presentedResumeToken = token;
         this.ctx.sessions.attach(conn, room);
         this.ctx.metrics.counters.resumesOk++;
+        if (taken.isViaPrevToken) {
+          // The previous connection died inside the rotation-ack window (rotated token never
+          // reached the client) — the armed previous token healed the resume. Counted so a
+          // spike in unconfirmed rotations is visible in ops.
+          this.ctx.metrics.counters.resumesPrevToken++;
+        }
         conn.log.info("resume ok (seat reclaimed)", {
-          authName, worldId: room.id, playerId: conn.playerId ?? "",
+          authName, worldId: room.id, playerId: conn.playerId ?? "", viaPrevToken: taken.isViaPrevToken,
           awayMs: this.ctx.clock.now() - taken.seat.reservedAt, worldPlayers: room.playerCount,
         });
         this.finishJoin(conn, room, auth, "join ok (resumed)");
@@ -187,13 +194,20 @@ export class MessageRouter {
       }
       // No seat — the connection may still be live (half-dead socket the server has not
       // noticed yet). A matching token takes the body over in place; a mismatch rejects.
+      // The live connection's UNCONFIRMED presented token is honored exactly like a seat's
+      // prevToken: the client may never have received the rotated one.
       for (const other of room.conns.values()) {
         if (other.id === conn.id || other.closing || other.authName !== authName) continue;
-        if (other.resumeToken !== null && resumeTokensEqual(other.resumeToken, token)) {
+        const isCurrent = other.resumeToken !== null && resumeTokensEqual(other.resumeToken, token);
+        const isPrev = !isCurrent && !other.isResumeTokenConfirmed
+          && other.presentedResumeToken !== null && resumeTokensEqual(other.presentedResumeToken, token);
+        if (isCurrent || isPrev) {
           this.adoptLiveConn(conn, other);
+          conn.presentedResumeToken = token;
           this.ctx.sessions.attach(conn, room);
           this.ctx.metrics.counters.resumesOk++;
-          conn.log.info("resume ok (live connection taken over)", { authName, worldId: room.id, playerId: conn.playerId ?? "" });
+          if (isPrev) this.ctx.metrics.counters.resumesPrevToken++;
+          conn.log.info("resume ok (live connection taken over)", { authName, worldId: room.id, playerId: conn.playerId ?? "", viaPrevToken: isPrev });
           this.ctx.close(other, 4009, "superseded");
           this.finishJoin(conn, room, auth, "join ok (resumed)");
           return;
@@ -265,6 +279,10 @@ export class MessageRouter {
   private onInput(conn: Conn, msg: Extract<ClientMsg, { t: "input" }>): void {
     // Inputs before the join binding are expected under reordering; drop (don't kill the conn).
     if (!conn.authed || !conn.worldId) { this.ctx.metrics.counters.rejectedInputs++; return; }
+    // An input is the token-receipt proof: a conforming client sends inputs only after
+    // ingesting a snapshot on this socket, and every per-connection snapshot carries the
+    // rotated token. From here the previous token is dead (single-use fully restored).
+    conn.isResumeTokenConfirmed = true;
     const room = this.ctx.sessions.room(conn.worldId);
     if (!room) return;
     room.queueInput(conn, inputToIntent(msg), this.ctx.config.maxInputQueue);
