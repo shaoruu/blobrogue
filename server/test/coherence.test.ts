@@ -96,14 +96,14 @@ async function main(): Promise<void> {
 
       const ticks = logA.sharedTicks(logB);
       check("clients share a comparable tick stream", ticks.length >= 10, `shared=${ticks.length}`);
-      let worldAgrees = true;
+      let isWorldAgreed = true;
       let firstDiff = "";
       for (const t of ticks) {
         const a = worldFields(logA.byTick.get(t)!);
         const b = worldFields(logB.byTick.get(t)!);
-        if (!deepEqual(a, b)) { worldAgrees = false; firstDiff = `tick ${t}`; break; }
+        if (!deepEqual(a, b)) { isWorldAgreed = false; firstDiff = `tick ${t}`; break; }
       }
-      check("world content identical on EVERY shared tick (seed/floor/rev/wid/cleared/enemies/bullets/props/pickups/chests/roster)", worldAgrees, firstDiff);
+      check("world content identical on EVERY shared tick (seed/floor/rev/wid/cleared/enemies/bullets/props/pickups/chests/roster)", isWorldAgreed, firstDiff);
 
       const sample = logA.byTick.get(ticks[ticks.length - 1])!;
       check("snapshots carry the room's world id", sample.wid === "room:PAIR", `wid=${sample.wid}`);
@@ -149,15 +149,15 @@ async function main(): Promise<void> {
       const connectedNow = () => new Set(host.transport.getWorldRoster().map((r) => r.aid));
 
       const gate = new PartyGate("host-id", 700);
-      let sawReady = false;
+      let isReadySeen = false;
       const t0 = Date.now();
       let view = gate.evaluate(t0, expected, connectedNow());
       while (Date.now() - t0 < 650) {
         await sleep(50);
         view = gate.evaluate(Date.now(), expected, connectedNow());
-        if (view.phase === "ready") sawReady = true;
+        if (view.phase === "ready") isReadySeen = true;
       }
-      check("gate never opened while the guest was absent (host never plays alone)", !sawReady && view.phase === "waiting", `phase=${view.phase}`);
+      check("gate never opened while the guest was absent (host never plays alone)", !isReadySeen && view.phase === "waiting", `phase=${view.phase}`);
       check("host shows CONNECTED, guest shows not-connected", view.members.find((m) => m.playerId === "host-id")?.isConnected === true
         && view.members.find((m) => m.playerId === "guest-id")?.isConnected === false);
 
@@ -169,8 +169,8 @@ async function main(): Promise<void> {
       const guest = new Bot({ url: s.url, secret: s.secret, playerId: "guest-id", world: "room:GATE", name: "Guest", colorIndex: 3, script: () => idle() });
       guest.start();
       const gate2 = new PartyGate("host-id");
-      const opened = await waitUntil(() => gate2.evaluate(Date.now(), expected, connectedNow()).phase === "ready", 3000);
-      check("gate opens once every expected member is connected to the world", opened);
+      const isOpened = await waitUntil(() => gate2.evaluate(Date.now(), expected, connectedNow()).phase === "ready", 3000);
+      check("gate opens once every expected member is connected to the world", isOpened);
       check("both clients are bound to the same authoritative world", host.transport.getWorldId() === "room:GATE" && guest.transport.getWorldId() === "room:GATE");
       check("one shared world holds both players", s.server.getWorld("room:GATE")?.playerCount === 2);
 
@@ -195,8 +195,8 @@ async function main(): Promise<void> {
       check("mismatch detected and recorded", deepEqual(transport.getWorldMismatch(), { expected: "room:WANT", got: "room:OTHER" }), JSON.stringify(transport.getWorldMismatch()));
       check("transport never became ready (no frame of wrong-world gameplay)", !transport.isReady());
       check("transport is terminally errored", transport.getStatus() === "error", `status=${transport.getStatus()}`);
-      const gone = await waitUntil(() => s.server.getWorld("room:OTHER") === undefined, 2000);
-      check("server saw the socket close (wrong world emptied + released)", gone);
+      const isReleased = await waitUntil(() => s.server.getWorld("room:OTHER") === undefined, 2000);
+      check("server saw the socket close (wrong world emptied + released)", isReleased);
       transport.stop();
     } finally { await s.close(); }
   });
@@ -240,13 +240,13 @@ async function main(): Promise<void> {
       await sleep(700);
       const ticks1 = logA.sharedTicks(logB);
       check("co-located clients share ticks", ticks1.length >= 5, `shared=${ticks1.length}`);
-      let sameSets = true;
+      let isSetsIdentical = true;
       for (const t of ticks1) {
         const a = logA.byTick.get(t)!;
         const b = logB.byTick.get(t)!;
-        if (!deepEqual(a.enemies, b.enemies) || !deepEqual(a.props, b.props) || !deepEqual(a.pickups, b.pickups) || !deepEqual(a.chests, b.chests)) { sameSets = false; break; }
+        if (!deepEqual(a.enemies, b.enemies) || !deepEqual(a.props, b.props) || !deepEqual(a.pickups, b.pickups) || !deepEqual(a.chests, b.chests)) { isSetsIdentical = false; break; }
       }
-      check("co-located clients see IDENTICAL filtered sets", sameSets);
+      check("co-located clients see IDENTICAL filtered sets", isSetsIdentical);
 
       // Phase 2 — separate Bob to the walkable tile FARTHEST from Ada (server-authoritative
       // teleport): views may now differ, but ONLY by distance, and every global fact stays
