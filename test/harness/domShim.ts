@@ -35,7 +35,7 @@ function makeStyle(): any {
   return new Proxy(
     {},
     {
-      get: () => "",
+      get: (_t, p) => (p === "setProperty" || p === "removeProperty" ? noop : ""),
       set: () => true,
     }
   );
