@@ -750,12 +750,17 @@ section("buses and boss-lock ducking");
 
   dir.frame(frameInput([]));
   const isPlayed = dir.play("marrow.aimLock", { entityId: 1 });
-  const musicTargets = asFakeGain(engine.busNode("music")).gain.targetsSet();
-  const petTargets = asFakeGain(engine.busNode("pet")).gain.targetsSet();
+  // Ducks write the category's DUCK node (a multiplier resting at 1.0), never the user
+  // slider node — that separation is what keeps slider moves and ducks from clobbering
+  // each other's ramps.
+  const musicDuckTargets = asFakeGain(engine.duckNode("music")).gain.targetsSet();
+  const petDuckTargets = asFakeGain(engine.duckNode("pet")).gain.targetsSet();
   check("aimLock plays through its decoded authored fallback", isPlayed && engine.isWavePlaying("marrow.aimLock"));
-  check("boss lock ducks music to .35× and recovers", musicTargets.some((v) => Math.abs(v - 0.5 * 0.35) < 1e-6)
-    && musicTargets.some((v) => Math.abs(v - 0.5) < 1e-6));
-  check("boss lock sidechains the pet bus to silence (§1)", petTargets.some((v) => v === 0));
+  check("boss lock ducks music to .35× and recovers to unity", musicDuckTargets.some((v) => Math.abs(v - 0.35) < 1e-6)
+    && musicDuckTargets.some((v) => v === 1));
+  check("boss lock sidechains the pet bus to silence (§1)", petDuckTargets.some((v) => v === 0));
+  check("ducks never touch the user slider nodes", asFakeGain(engine.busNode("music")).gain.targetsSet().length === 0
+    && asFakeGain(engine.busNode("pet")).gain.targetsSet().length === 0);
 
   const voiceTellBus = asFakeGain(engine.busNode("voiceTell"));
   const voiceGain = ctx.nodesOf<FakeGainNode>("gain").find((g) => g.targets.includes(voiceTellBus));

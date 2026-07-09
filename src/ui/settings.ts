@@ -19,27 +19,43 @@ function toggleButton(label: string, read: () => boolean, toggle: () => void): H
   return btn;
 }
 
-function sliderRow(label: string, min: number, max: number, step: number, read: () => number, write: (v: number) => void): HTMLElement {
+interface SliderRow {
+  row: HTMLElement;
+  range: HTMLInputElement;
+}
+
+function sliderRow(label: string, min: number, max: number, step: number, read: () => number, write: (v: number) => void): SliderRow {
   const row = document.createElement("label");
   row.className = "settings-shake";
   const text = document.createElement("span");
   text.className = "settings-label";
   const val = document.createElement("span");
   val.className = "settings-val";
-  const syncVal = () => { val.textContent = `${Math.round(read() * 100)}%`; };
+  const syncVal = () => {
+    const pct = `${Math.round(read() * 100)}%`;
+    val.textContent = pct;
+    range.setAttribute("aria-valuetext", pct);
+  };
   text.append(document.createTextNode(`${label} `), val);
   const range = document.createElement("input");
   range.type = "range";
   range.min = String(min); range.max = String(max); range.step = String(step);
   range.value = String(Math.round(read() * 100));
-  range.setAttribute("aria-label", `${label} intensity`);
+  range.setAttribute("aria-label", label);
   syncVal();
   range.addEventListener("input", () => {
     write(Number(range.value) / 100);
     syncVal();
   });
   row.append(text, range);
-  return row;
+  return { row, range };
+}
+
+function groupHeader(label: string): HTMLElement {
+  const h = document.createElement("div");
+  h.className = "settings-group-h";
+  h.textContent = label;
+  return h;
 }
 
 const FLASH_ORDER: FlashLevel[] = ["full", "low", "off"];
@@ -49,23 +65,53 @@ export function createSettingsControls(): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "settings";
 
+  // ---- audio ----
+  // Mute is a real instant toggle (the audio engine forces master bus gain to 0 while
+  // muted and restores the stored master on unmute) — it never zeroes the slider values,
+  // so the stored mix survives a mute round-trip untouched.
   const mute = document.createElement("button");
   mute.className = "secondary settings-mute";
-  const syncMute = () => {
-    mute.textContent = settings.isMuted ? "sound: off" : "sound: on";
-    mute.setAttribute("aria-pressed", String(!settings.isMuted));
-  };
-  syncMute();
   mute.addEventListener("click", () => {
     settings.toggleMuted();
     audio.unlock(); // this click is a gesture — resume the context so unmuting is instant
-    syncMute();
+    syncMuted();
   });
 
+  const master = sliderRow("master volume", 0, 100, 5, () => settings.masterVol, (v) => {
+    audio.unlock(); // slider drag is a gesture — resume the context so the change is audible now
+    if (settings.isMuted && v > 0) {
+      settings.setMuted(false); // raising master while muted means "I want sound" — unmute
+      syncMuted();
+    }
+    settings.setMasterVol(v);
+  });
+  const music = sliderRow("music", 0, 100, 5, () => settings.musicVol, (v) => settings.setMusicVol(v));
+  const sfxVol = sliderRow("sfx", 0, 100, 5, () => settings.sfxVol, (v) => settings.setSfxVol(v));
+
+  // The note line is ALWAYS in flow (reserved height, blank when unmuted) so toggling
+  // mute never shifts the groups below it.
+  const mutedNote = document.createElement("p");
+  mutedNote.className = "settings-note settings-muted-note";
+  const volumeRows = [master, music, sfxVol];
+  const syncMuted = () => {
+    const isMuted = settings.isMuted;
+    mute.textContent = isMuted ? "sound: off" : "sound: on";
+    mute.setAttribute("aria-pressed", String(!isMuted));
+    for (const { row, range } of volumeRows) {
+      row.classList.toggle("is-muted", isMuted);
+      range.setAttribute("aria-disabled", String(isMuted));
+    }
+    mutedNote.textContent = isMuted ? "muted — sliders keep your mix until sound is back on" : "";
+  };
+  syncMuted();
+
+  // ---- game feel ----
   const autofire = toggleButton("autofire", () => settings.isAutofire, () => settings.toggleAutofire());
   autofire.classList.add("settings-autofire");
 
   const shake = sliderRow("screen shake", 0, 100, 5, () => settings.shakeIntensity, (v) => settings.setShakeIntensity(v));
+  const recoil = sliderRow("recoil & kick", 0, 100, 5, () => settings.recoilIntensity, (v) => settings.setRecoilIntensity(v));
+  const uiScale = sliderRow("ui scale", 75, 150, 5, () => settings.uiScale, (v) => settings.setUiScale(v));
 
   // ---- accessibility ----
   const reducedMotion = toggleButton("reduced motion", () => settings.isReducedMotion, () => settings.setReducedMotion(!settings.isReducedMotion));
@@ -88,10 +134,11 @@ export function createSettingsControls(): HTMLElement {
     syncFlash();
   });
 
-  const recoil = sliderRow("recoil & kick", 0, 100, 5, () => settings.recoilIntensity, (v) => settings.setRecoilIntensity(v));
-  const uiScale = sliderRow("ui scale", 75, 150, 5, () => settings.uiScale, (v) => settings.setUiScale(v));
-
-  wrap.append(mute, autofire, shake, reducedMotion, hitstop, flash, flashNote, recoil, uiScale);
+  wrap.append(
+    groupHeader("audio"), mute, master.row, music.row, sfxVol.row, mutedNote,
+    groupHeader("game feel"), autofire, shake.row, recoil.row, uiScale.row,
+    groupHeader("accessibility"), reducedMotion, hitstop, flash, flashNote,
+  );
   return wrap;
 }
 
