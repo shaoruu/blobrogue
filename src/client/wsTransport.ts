@@ -80,11 +80,13 @@ export interface WorldMismatch {
   got: string;
 }
 
-// Live reconnect readout for the CONNECTION LOST overlay: which attempt is in flight and
-// when the server-side grace runs out (countdown display).
+// Live reconnect readout for the CONNECTION LOST overlay: which attempt is in flight, when
+// the outage began (the overlay's calm-then-detailed state machine), and when the
+// server-side grace runs out (countdown display).
 export interface ReconnectInfo {
   isReconnecting: boolean;
   attempt: number;
+  startedAtMs: number;
   graceEndsAtMs: number;
 }
 
@@ -168,7 +170,11 @@ export class WSTransport implements Transport {
   private resumeToken: string | null = null;
   private isReconnecting = false;
   private reconnectAttempt = 0;
+  private reconnectStartedAt = 0;
   private graceEndsAt = 0;
+  // The resume's first snapshot said the run was ALREADY over: the wipe happened while this
+  // player was away. The game shows RUN ENDED WHILE AWAY — never a fabricated YOU DIED.
+  private isResumedIntoOver = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private isEverReady = false;        // auto-reconnect only after we actually had a world
   private closeKind: CloseKind | null = null;
@@ -272,8 +278,10 @@ export class WSTransport implements Transport {
     this.resumeToken = null;
     this.isReconnecting = false;
     this.reconnectAttempt = 0;
+    this.reconnectStartedAt = 0;
     this.graceEndsAt = 0;
     this.isEverReady = false;
+    this.isResumedIntoOver = false;
     this.closeKind = null;
     this.rejectCode = null;
     if (this.reconnectTimer !== null) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
@@ -372,7 +380,8 @@ export class WSTransport implements Transport {
     if (!this.isReconnecting) {
       this.isReconnecting = true;
       this.reconnectAttempt = 0;
-      this.graceEndsAt = this.now() + (this.opts.resumeGraceMs ?? RESUME_GRACE_MS);
+      this.reconnectStartedAt = this.now();
+      this.graceEndsAt = this.reconnectStartedAt + (this.opts.resumeGraceMs ?? RESUME_GRACE_MS);
       console.warn("[net] connection lost — reconnecting with resume token", { graceMs: this.graceEndsAt - this.now() });
     }
     if (this.now() > this.graceEndsAt + RECONNECT_GRACE_SLACK_MS) {
@@ -532,7 +541,10 @@ export class WSTransport implements Transport {
     if (this.isReconnecting) {
       this.isReconnecting = false;
       this.reconnectAttempt = 0;
-      console.info("[net] resumed into the authoritative world", { wid: snap.wid, selfId: snap.selfId });
+      // The world we came back to may already be finished (the party wiped while we were
+      // away) — a distinct, explicit state, never conflated with a live death.
+      if (snap.over) this.isResumedIntoOver = true;
+      console.info("[net] resumed into the authoritative world", { wid: snap.wid, selfId: snap.selfId, over: snap.over });
       this.setStatus("open");
     }
     const prevSnapAt = this.lastSnapAtForJitter;
@@ -906,7 +918,11 @@ export class WSTransport implements Transport {
   }
   // Live reconnect state for the CONNECTION LOST overlay (attempt counter + grace countdown).
   getReconnectInfo(): ReconnectInfo {
-    return { isReconnecting: this.isReconnecting, attempt: this.reconnectAttempt, graceEndsAtMs: this.graceEndsAt };
+    return { isReconnecting: this.isReconnecting, attempt: this.reconnectAttempt, startedAtMs: this.reconnectStartedAt, graceEndsAtMs: this.graceEndsAt };
+  }
+  // The resume landed in an already-finished run (the wipe happened while away).
+  getIsResumedIntoOver(): boolean {
+    return this.isResumedIntoOver;
   }
   // Why the transport went terminal after having played (null while healthy / pre-world).
   getCloseKind(): CloseKind | null {

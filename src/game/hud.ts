@@ -73,6 +73,9 @@ export interface StatsPanelData {
   weaponName: string;
   profile: ProfileStats | null;
   roster: RosterEntry[] | null;
+  // Online connection debug details (authoritative world / revision / protocol) — the UI
+  // contract keeps these OFF the always-on HUD and in this hold-Tab panel.
+  netInfo?: string | null;
   items: { name: string; desc: string; glyph: string; tint: string }[];
 }
 
@@ -697,6 +700,9 @@ export class Hud {
       line("weapon", d.weaponName),
       line("run time", fmtTime(d.runTime)),
     );
+    if (d.netInfo) {
+      this.statsBody.appendChild(el("div", "color:#9a8fb5;font-size:12px;letter-spacing:0.5px;", d.netInfo));
+    }
     if (d.items.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
       this.statsBody.appendChild(el("div", "color:var(--amber);font-size:12px;letter-spacing:1px;", `BLESSINGS \u00b7 ${d.items.length}`));

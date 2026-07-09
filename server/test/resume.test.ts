@@ -337,6 +337,8 @@ async function main(): Promise<void> {
       bob.restoreNetwork();
       const isBackToOver = await waitUntil(() => bob.transport.getLatestSnapshot()?.over === true, 5000);
       check("the reserved member resumes into the over-state (sees the wipe, no divergent run)", isBackToOver);
+      check("the transport flags it as RESUMED-INTO-OVER (the game shows RUN ENDED WHILE AWAY, records nothing)",
+        bob.transport.getIsResumedIntoOver() === true);
       ada.stop(); bob.stop();
     } finally { await s.close(); }
   });

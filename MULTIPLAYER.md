@@ -408,7 +408,30 @@ reconciled with the studio balance gate's reconnect contract
   accepted trade until worlds get durable state.
 - **Readiness integration.** The party gate treats an `away` member as RECONNECTING — still
   expected (their return is imminent or the gate deadline names them), shown amber on the
-  veil; the HUD label appends `· n reconnecting`; `/worlds` lists `away` occupants for ops.
+  veil; the HUD label appends `· N RECONNECTING`; `/worlds` lists `away` occupants for ops.
+
+### The UI contract (P0 copy + states — src/ui/onlineCopy.ts, locked by test/onlinecopy.test.ts)
+
+- **Lobby roster:** every member shows READY / NOT READY (host is implicit consent — HOST)
+  plus their heartbeat-measured ping. Non-hosts get the READY UP toggle (reset on every
+  lobby entry and on reopen after a wipe). The host's START RUN appears only when everyone
+  is ready; otherwise the button is `START ANYWAY — hold 3s`, armed only by an uninterrupted
+  3s hold (releasing cancels) — a party can never be yanked into a run by a slipped click.
+- **Normal HUD:** `CONNECTED · ROOM CODE · N PLAYERS` (server-roster truth; `· N
+  RECONNECTING` appended mid-outage). Debug details — authoritative world id, revision,
+  protocol version — live in the hold-Tab details panel, not the always-on HUD.
+- **World mismatch:** the run refuses to play and the lobby shows exactly
+  `World mismatch — rejoining the party…`.
+- **Reconnect states:** 0-3s a calm `CONNECTION LOST` / `Reconnecting…`; from 3s the
+  attempt counter, the `ESC — cancel` affordance, and the seat-grace countdown. Recovery
+  shows a `BACK ONLINE` toast. A resume that fails terminally lands on the room lobby with
+  its explicit note and the REJOIN RUN / leave choice; if the room itself is gone (or the
+  run finished during the outage) the player sees `RUN ENDED WHILE AWAY` — and a network
+  loss is NEVER recorded as a death or a finished run (only the server's own game-over
+  close records).
+- **No infinite veils:** the connect handshake has a hard 15s deadline (explicit failure),
+  the party gate its 20s deadline, and ESC cancels either veil (and an in-progress
+  reconnect) back to the lobby at any time.
 
 `server/test/resume.test.ts` locks all of it with real reconnecting clients: exact-state
 resumes at 4%/20%/96% of the grace window (early blip / mid outage / near-edge return,

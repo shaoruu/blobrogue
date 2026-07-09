@@ -13,9 +13,11 @@ import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
+import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT } from "../ui/onlineCopy.js";
+import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
@@ -47,13 +49,14 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
-// Why a run exited without a game over: the player quit, an online connection never came up,
-// the server bound us to a world other than the room's (world_mismatch — refuse to play),
-// the party never assembled behind the readiness veil (party_incomplete), the reconnect
-// window ran out (connection_lost — the run is unreachable, NOT a death), or another session
-// with this identity took the body over (superseded). Lets the menu land back on the lobby
-// with an explicit explanation instead of silence.
-export type ExitReason = "quit" | "connect_failed" | "world_mismatch" | "party_incomplete" | "connection_lost" | "superseded";
+// Why a run exited without a game over: the player quit/cancelled, an online connection
+// never came up, the server bound us to a world other than the room's (world_mismatch —
+// refuse to play), the party never assembled behind the readiness veil (party_incomplete),
+// the reconnect window ran out (connection_lost — the run is unreachable, NOT a death),
+// another session took the body over (superseded), or the run finished while this player
+// was mid-outage (run_ended_away — they see RUN ENDED WHILE AWAY, never a fabricated
+// death). The copy contract for every reason lives in src/ui/onlineCopy.ts.
+export type ExitReason = OnlineExitReason;
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -115,6 +118,10 @@ interface Afterimage { x: number; y: number; facing: number; t: number; }
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
+// The online handshake (connect -> ticket -> join -> first snapshot) must resolve within
+// this window or the veil exits explicitly — never an infinite ENTERING THE DUNGEON hold.
+// Generous: covers a slow Convex mint + a TLS handshake; the transport retries inside it.
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 15000;
 
 // Client FX magnitudes / tables the event handler + render read (the sim emits the events;
 // the client decides the juice). Sim-side tuning lives in src/sim/constants.ts.
@@ -340,6 +347,11 @@ export class Game {
   // The authoritative geometry that arrived while the veil was up, applied at reveal.
   private pendingWorld: { seed: number; floor: number } | null = null;
   private isWorldReported = false; // the lobby mirror heard about this world join
+  // Handshake deadline: the CONNECTING veil may never sit forever — if no authoritative
+  // snapshot arrives by this wall-clock time, the run exits with an explicit failure.
+  private connectDeadline = 0;
+  // Edge detector for the outage overlay (drives the BACK ONLINE toast on recovery).
+  private isOutageSeen = false;
 
   // The simulation is owned by the Transport. Solo/co-op run stepWorld in-process
   // (LocalTransport); online routes through WSTransport (predict + reconcile against an
@@ -552,8 +564,15 @@ export class Game {
     switch (a.kind) {
       case "togglePause":
         // Under the hud context Escape means "dismiss the drawer"; pause is next.
-        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
-        else this.togglePause();
+        if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
+        // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
+        // connection attempt and return to the lobby — never a pause menu over a dead world.
+        if (this.mode === "online" && this.wsTransport
+          && (this.isAwaitingOnlineWorld() || this.wsTransport.getReconnectInfo().isReconnecting)) {
+          this.quitToMenu("quit");
+          break;
+        }
+        this.togglePause();
         break;
       case "selectWeapon":
         if (this.isRunning) this.equipSlot(a.index);
@@ -647,6 +666,8 @@ export class Game {
     this.partyView = null;
     this.pendingWorld = null;
     this.isWorldReported = false;
+    this.connectDeadline = performance.now() + CONNECT_HANDSHAKE_TIMEOUT_MS;
+    this.isOutageSeen = false;
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
@@ -871,7 +892,18 @@ export class Game {
   private tickOnlineVeil(dt: number) {
     const t = this.wsTransport!;
     this.transport.advance(dt);
-    if (!t.isReady()) { this.updateHud(); return; } // still connecting — no snapshot yet
+    if (!t.isReady()) {
+      // No infinite entering veil: a handshake that produces no authoritative snapshot in
+      // time is a failed connect — exit explicitly (the lobby shows the reason; ESC cancels
+      // sooner). The transport keeps its own retries INSIDE this window.
+      if (performance.now() > this.connectDeadline) {
+        console.warn("[net] handshake timeout — no authoritative snapshot inside the window");
+        this.quitToMenu("connect_failed");
+        return;
+      }
+      this.updateHud();
+      return;
+    }
     // First authoritative contact: mirror the verified world join onto the lobby roster.
     if (!this.isWorldReported) {
       this.isWorldReported = true;
@@ -945,8 +977,19 @@ export class Game {
     // prediction drift — and let the CONNECTION LOST overlay carry the state. Never a game
     // over; the terminal paths route through onOnlineStatus if the window runs out.
     if (this.mode === "online" && this.wsTransport?.getReconnectInfo().isReconnecting) {
+      this.isOutageSeen = true;
       this.updateHud();
       return;
+    }
+    if (this.mode === "online" && this.wsTransport && this.isOutageSeen) {
+      this.isOutageSeen = false;
+      // The run may have FINISHED while we were away (the party wiped): an explicit RUN
+      // ENDED WHILE AWAY exit — no recorded death, no YOU DIED — per the UI contract.
+      if (this.wsTransport.getIsResumedIntoOver()) {
+        this.quitToMenu("run_ended_away");
+        return;
+      }
+      this.hud.showBanner(BACK_ONLINE_TOAST);
     }
 
     if (this.coop) this.syncCoop(dt);
@@ -1987,18 +2030,21 @@ export class Game {
       const count = this.coop.remotePlayers().length + 1;
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     } else if (this.mode === "online" && this.wsTransport) {
-      // Authoritative debugging surface: the world id the SERVER bound us to (never a local
-      // assumption) + how many seats that world actually holds (and how many are mid-outage)
-      // — exactly the facts whose disagreement was the Sev-0. Falls back to the room code
-      // until the first snap.
-      const live = this.wsTransport.getReconnectInfo().isReconnecting ? "RECONNECTING"
-        : !this.wsTransport.isReady() ? "CONNECTING"
-          : this.isWorldRevealed ? "ONLINE" : "WAITING";
-      const wid = this.wsTransport.getWorldId() ?? (this.online?.roomCode ? `room:${this.online.roomCode}` : null);
+      // The UI contract's normal HUD: CONNECTED · ROOM CODE · N PLAYERS (server-roster
+      // truth; away members appended explicitly). World/rev/protocol debug details live in
+      // the hold-Tab panel, not here.
+      const phase: OnlinePhase = this.wsTransport.getReconnectInfo().isReconnecting ? "reconnecting"
+        : !this.wsTransport.isReady() ? "connecting"
+          : this.isWorldRevealed ? "connected" : "waiting";
       const roster = this.wsTransport.getWorldRoster();
       const connected = roster.filter((r) => r.st === "on").length;
-      const away = roster.length - connected;
-      coopLabel = `${live}${wid ? ` \u00b7 ${wid}` : ""}${connected > 0 ? ` \u00b7 ${connected} connected` : ""}${away > 0 ? ` \u00b7 ${away} reconnecting` : ""}`;
+      coopLabel = onlineHudLabel({
+        phase,
+        roomCode: this.online?.roomCode ?? null,
+        worldId: this.wsTransport.getWorldId(),
+        connected,
+        away: roster.length - connected,
+      });
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -2067,6 +2113,10 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
+      // The details panel owns the connection debug surface (world / rev / protocol).
+      netInfo: this.mode === "online" && this.wsTransport
+        ? netDetailsLine(this.wsTransport.getWorldId(), this.wsTransport.getLatestSnapshot()?.rev ?? null, PROTOCOL_VERSION)
+        : null,
       items: this.collapsedItems().map((it) => ({ name: it.count > 1 ? `${it.name} Lv${it.count}` : it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
     });
   }
@@ -2315,14 +2365,15 @@ export class Game {
     this.renderReconnectOverlay();
   }
 
-  // Mid-run outage overlay: the world stays visible (frozen on the last authoritative
-  // frame), and the banner states exactly what is happening — the connection dropped, the
-  // attempt counter is live, and the server-side grace countdown shows how long the body is
-  // held. Explicitly NOT a game-over screen.
+  // Mid-run outage overlay over the frozen world, following the UI contract's state
+  // machine: the first 3s are a calm CONNECTION LOST / Reconnecting… (most blips end
+  // there); from 3s the attempt counter, the ESC cancel affordance, and the seat-grace
+  // countdown appear. Explicitly NOT a game-over screen.
   private renderReconnectOverlay() {
     if (this.mode !== "online" || !this.wsTransport) return;
     const info = this.wsTransport.getReconnectInfo();
     if (!info.isReconnecting) return;
+    const copy = reconnectOverlayCopy(Date.now(), info);
     const { ctx, canvas } = this;
     const cx = canvas.width / 2;
     const cy = canvas.height / 2;
@@ -2335,12 +2386,15 @@ export class Game {
     ctx.globalAlpha = pulse;
     ctx.fillStyle = "#ffb43b";
     ctx.font = '700 14px "Silkscreen", monospace';
-    ctx.fillText(`CONNECTION LOST \u00b7 RECONNECTING (${info.attempt})`, cx, cy - 16);
+    ctx.fillText(copy.title, cx, cy - 22);
     ctx.globalAlpha = 1;
-    const graceLeft = Math.max(0, Math.ceil((info.graceEndsAtMs - Date.now()) / 1000));
     ctx.fillStyle = "#e8e2f4";
     ctx.font = '16px "VT323", monospace';
-    ctx.fillText(`your blob is safe \u00b7 the server holds your run for ${graceLeft}s`, cx, cy + 14);
+    ctx.fillText(copy.line, cx, cy + 4);
+    if (copy.hint) {
+      ctx.fillStyle = "#8f87a8";
+      ctx.fillText(copy.hint, cx, cy + 28);
+    }
     ctx.restore();
   }
 
@@ -2364,6 +2418,10 @@ export class Game {
       ctx.fillStyle = "#ffb43b";
       ctx.font = '700 14px "Silkscreen", monospace';
       ctx.fillText("ENTERING THE DUNGEON\u2026", cx, cy);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#8f87a8";
+      ctx.font = '16px "VT323", monospace';
+      ctx.fillText(CONNECT_CANCEL_HINT, cx, cy + 28);
       ctx.restore();
       return;
     }
@@ -2400,7 +2458,7 @@ export class Game {
     }
     ctx.fillStyle = "#8f87a8";
     ctx.font = '16px "VT323", monospace';
-    ctx.fillText("the run starts when everyone is in \u00b7 absent players drop out automatically", cx, top + rows.length * rowH + 30);
+    ctx.fillText(`the run starts when everyone is in \u00b7 absent players drop out automatically \u00b7 ${CONNECT_CANCEL_HINT}`, cx, top + rows.length * rowH + 30);
     ctx.restore();
   }
 

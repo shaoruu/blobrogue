@@ -7,6 +7,7 @@ import { Session } from "./net/session.js";
 import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
 import { bindUiScale } from "./ui/settings.js";
+import { exitNoteFor } from "./ui/onlineCopy.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 
 const canvas = document.getElementById("game") as HTMLCanvasElement;
@@ -46,27 +47,23 @@ async function bootNormal() {
     menu.showGameOver(result, saved ?? session.profile, { isNewBest, online });
   }
 
-  // The explicit, human-readable reason a run ended without a game over — shown on the room
-  // lobby so a failed start is never silent (the Sev-0 was exactly a silent divergence).
-  function exitNote(reason?: ExitReason, detail?: string): string {
-    switch (reason) {
-      case "connect_failed": return "couldn't reach the game server \u2014 try again in a moment";
-      case "world_mismatch": return `joined the wrong world \u2014 left for safety (${detail ?? "world mismatch"})`;
-      case "party_incomplete": return `the party never assembled${detail ? ` \u2014 still waiting on ${detail}` : ""} \u2014 regroup and start again`;
-      case "connection_lost": return `connection lost and the reconnect window ran out${detail ? ` (${detail})` : ""} \u2014 REJOIN RUN if the party is still going`;
-      case "superseded": return "another tab or device took over this player \u2014 this session stepped aside";
-      default: return "";
-    }
-  }
-
   function onExit(reason?: ExitReason, detail?: string) {
-    // Stepping out of an online run (Esc, a failed start, or an unreachable server) lands
-    // back in the room lobby, not the title — the run may still be live for friends.
+    // Stepping out of an online run (Esc/cancel, a failed start, an outage) lands back in
+    // the room lobby, not the title — the run may still be live for friends (the lobby's
+    // REJOIN RUN / leave buttons are the contract's resume-failed choices). The exact copy
+    // for every reason lives in src/ui/onlineCopy.ts.
     if (activeOnline && activeOnline.isActive) {
-      menu.showOnlineLobby(activeOnline, session.profile, exitNote(reason, detail));
+      menu.showOnlineLobby(activeOnline, session.profile, exitNoteFor(reason, detail));
       return;
     }
+    // The room itself is GONE (ended/expired while we were away): surface RUN ENDED WHILE
+    // AWAY on the online home instead of silently dropping to the title.
+    const isOnlineEnding = reason === "connection_lost" || reason === "run_ended_away" || reason === "superseded";
     activeOnline = null;
+    if (isOnlineEnding && client) {
+      void menu.showOnlineHome(exitNoteFor("run_ended_away"));
+      return;
+    }
     void menu.showTitle();
   }
 
