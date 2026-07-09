@@ -58,6 +58,8 @@ import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
+import { LightingRenderer } from "./lighting.js";
+import type { StaticLightSpec } from "./lighting.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
@@ -134,6 +136,8 @@ export interface DevSnapshot {
   weapon: WeaponId;
   isGodMode: boolean;
   isFlowDebug: boolean;
+  isLighting: boolean;
+  lightingMs: number;
   enemies: number;
   bullets: number;
   particles: number;
@@ -383,6 +387,34 @@ const AIM_SOLID: number[] = [];
 // Animated prop frame tables (indexed by frameIndex), hoisted so the tile loop never allocates.
 const TORCH_FRAMES: TileName[] = ["torch_f0", "torch_f1", "torch_f2"];
 
+// ---- dynamic light recipes (see lighting.ts; spec §3 benchmark radii) ----
+// The hero's amber identity glow: a readability floor around the player, never off.
+// The small stain keeps walkable ground visibly lit even where the biome's floor art
+// is darker than the ambient grade could ever account for (the Null's near-black).
+const HERO_GLOW_RADIUS = 110;
+const HERO_GLOW_CUT = 0.55;
+const HERO_GLOW_STAIN = 0.24;
+const HERO_GLOW_COLOR = "#ffc86b";
+const REMOTE_GLOW_RADIUS = 96;
+const REMOTE_GLOW_CUT = 0.45;
+const REMOTE_GLOW_STAIN = 0.18;
+const MUZZLE_LIGHT_RADIUS = 74;
+const EXIT_LIGHT_RADIUS = 96;
+// Luminous projectiles ONLY (restraint: plain slugs carry their streak art, no light).
+// The Wisp (homing) is the cold seeker glow; the Sunlance (beam) the hot line.
+const BULLET_LIGHTS: Partial<Record<WeaponId, { radius: number; cut: number }>> = {
+  beam: { radius: 70, cut: 0.6 },
+  tesla: { radius: 55, cut: 0.5 },
+  flamer: { radius: 48, cut: 0.5 },
+  railgun: { radius: 62, cut: 0.55 },
+  homing: { radius: 55, cut: 0.45 },
+  mortar: { radius: 50, cut: 0.45 },
+  cannon: { radius: 45, cut: 0.4 },
+};
+// Explosion light pulse (spec: full pulse then fast falloff, capped radius).
+const EXPLOSION_LIGHT_MAX = 240;
+const EXPLOSION_LIGHT_DUR = 0.42;
+
 // ---- destructible props + treasure chests ----
 // Placement is seeded per floor (co-op layout agreement); destruction resolves on the
 // shared floor state via bullets/explosions, exactly like enemies. Reward rolls use the
@@ -554,6 +586,9 @@ export class Game {
   private shockwaves = new ShockwaveField();
   private screenFlash = new ScreenFlash();
   private motes = new AmbienceField();
+  // Ambient occlusion + authored local lighting (see lighting.ts) — cached per floor,
+  // rendered under entities so the mood never taxes combat readability.
+  private lighting = new LightingRenderer();
   // Smoothed local mirror of the sim's hazardClock: advances every render frame and eases
   // onto the authoritative clock, so 20Hz online snapshots (or a hit-stop) never make a
   // telegraph animation stutter. Purely visual — damage reads the SIM clock.
@@ -960,6 +995,7 @@ export class Game {
     this.patchSellT = 0;
     this.shopBoughtT = 0;
     this.torches = this.placeTorches(this.dungeon);
+    this.rebakeLighting();
     this.particles = [];
     this.dmgNumbers = [];
     this.worldLabels = [];
@@ -1000,6 +1036,24 @@ export class Game {
     for (const e of this.world.enemies) floorKinds.add(e.kind);
     for (const e of this.world.pendingSpawns) floorKinds.add(e.kind);
     waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null, floorKinds);
+  }
+
+  // Bake this floor's static light set: torches (emitting from the wall FACE into their
+  // room, so the pool can never leak behind the mounting wall), standing braziers, and
+  // the ember-resting hazards. Deterministic from the same floor state on every client.
+  private rebakeLighting() {
+    const specs: StaticLightSpec[] = [];
+    for (const t of this.torches) {
+      specs.push({ x: (t.tx + 0.5) * TILE, y: (t.ty + 1) * TILE + 6, kind: "torch" });
+    }
+    for (const p of this.props) {
+      if (p.kind === "brazier" && !p.dead) specs.push({ x: p.x, y: p.y, kind: "brazier" });
+    }
+    for (const h of this.world.floorHazards) {
+      if (h.kind === "fire_vent") specs.push({ x: (h.tx + 0.5) * TILE, y: (h.ty + 0.5) * TILE, kind: "vent" });
+      else if (h.kind === "void_rift") specs.push({ x: (h.tx + 0.5) * TILE, y: (h.ty + 0.5) * TILE, kind: "rift" });
+    }
+    this.lighting.loadFloor(this.dungeon, this.biomeIdx, this.currentBiome, specs);
   }
 
   // Mount torches on the wall directly above each room (facing into it), at deterministic
@@ -2019,6 +2073,7 @@ export class Game {
         if (!(impactCue !== undefined && waveAudio.cueAt(impactCue, e.x, e.y))) {
           this.sfxAt("barrel", e.x, e.y, { rate: 0.7 });
         }
+        this.lighting.addPulse(e.x, e.y, Math.min(EXPLOSION_LIGHT_MAX, e.r * 2), 0.85 * settings.flashFactor, "#ffb43b", EXPLOSION_LIGHT_DUR);
         this.addFreeze(FREEZE_HEAVY);
         this.addTrauma(0.6);
         this.spawnGibs(e.x, e.y, 18, "#ff8a3b");
@@ -3426,11 +3481,15 @@ export class Game {
     // world-space pass below (tiles, props, pickups, hazards, enemies, fx, player) subtracts
     // this single fractional value and nothing re-rounds it, so the whole scene translates
     // together — zero relative jitter as the camera pans, at any display refresh rate.
+    // The lighting/AO grade subtracts the SAME renderCam, so the light field pans with
+    // the smoothed world instead of stepping against it.
     {
       const a = this.hasRenderPrev ? this.renderAlpha : 1;
       this.renderCam.x = this.camPrevX + (this.cam.x - this.camPrevX) * a;
       this.renderCam.y = this.camPrevY + (this.cam.y - this.camPrevY) * a;
     }
+    this.lighting.beginFrame(this.animClock);
+    if (this.lighting.isEnabled) this.collectDynamicLights();
     ctx.fillStyle = this.currentBiome.bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     // trauma² shake, scaled by the player's intensity setting (zeroed under reduced
@@ -3481,6 +3540,61 @@ export class Game {
     this.renderReticle();
     this.renderMinimap();
     this.renderReconnectOverlay();
+  }
+
+  // Per-frame dynamic light sources, written into the lighting layer's fixed pool (no
+  // allocation): the hero/teammate identity glows (occluded — a wall between you and the
+  // next room keeps that room dark), the muzzle flash, luminous projectiles only, hazard
+  // eruption pulses, and the cleared exit. Everything is derived from render-side state;
+  // nothing here touches the sim.
+  private collectDynamicLights() {
+    const flash = settings.flashFactor;
+    if (this.isRunning && this.isWorldRevealed) {
+      if (!this.isDown) this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
+      for (const r of this.remotes()) {
+        if (!r.isDown && !r.isAbsent && this.isNearCamera(r.x, r.y, REMOTE_GLOW_RADIUS)) {
+          this.lighting.pushDynamic(r.x, r.y, REMOTE_GLOW_RADIUS, REMOTE_GLOW_CUT, HERO_GLOW_COLOR, REMOTE_GLOW_STAIN, true);
+        }
+      }
+    }
+    if (this.muzzle.t > 0 && flash > 0) {
+      this.lighting.pushDynamic(this.muzzle.x, this.muzzle.y, MUZZLE_LIGHT_RADIUS, 0.55 * (this.muzzle.t / MUZZLE_DUR) * flash, this.muzzle.color);
+    }
+    for (const b of this.bullets) {
+      if (!b.friendly || b.fx === undefined) continue;
+      const light = BULLET_LIGHTS[b.fx];
+      if (!light || !this.isNearCamera(b.x, b.y, light.radius)) continue;
+      this.lighting.pushDynamic(b.x, b.y, light.radius, light.cut, b.color);
+    }
+    // Hazard eruptions: the vent brightens through its telegraph and blazes while
+    // active; the rift's open maw deepens its wrong-colored resting light. Both stain
+    // the ground in their own hue — light IS the pressure tell (spec §5, Emberreach).
+    const clock = this.hazardVisClock;
+    for (const h of this.world.floorHazards) {
+      if (h.kind !== "fire_vent" && h.kind !== "void_rift") continue;
+      const wx = (h.tx + 0.5) * TILE, wy = (h.ty + 0.5) * TILE;
+      if (!this.isNearCamera(wx, wy, 160)) continue;
+      const phase = floorHazardPhaseAt(h, clock);
+      if (phase === "idle") continue;
+      const frac = floorHazardPhaseFrac(h, clock);
+      if (h.kind === "fire_vent") {
+        if (phase === "telegraph") {
+          this.lighting.pushDynamic(wx, wy, 70 + 30 * frac, 0.25 + 0.35 * frac, "#ff6a2a", 0.55);
+        } else {
+          const flick = settings.isReducedMotion ? 0.9 : 0.8 + 0.2 * Math.sin(this.animClock * 23 + h.phase * 9);
+          const fade = frac > 0.75 ? (1 - frac) / 0.25 : 1;
+          this.lighting.pushDynamic(wx, wy, 130, 0.8 * flick * fade, "#ff8a3b", 0.55);
+        }
+      } else if (phase === "active") {
+        this.lighting.pushDynamic(wx, wy, 100, 0.45, this.currentBiome.accent, 0.55);
+      }
+    }
+    if (this.isCurrentFloorCleared()) {
+      const ex = (this.dungeon.exit.x + 0.5) * TILE, ey = (this.dungeon.exit.y + 0.5) * TILE;
+      if (this.isNearCamera(ex, ey, EXIT_LIGHT_RADIUS)) {
+        this.lighting.pushDynamic(ex, ey, EXIT_LIGHT_RADIUS, 0.5, "#8affc0");
+      }
+    }
   }
 
   // The depth mood: a biome-colored vignette that closes in band over band (10% of the
@@ -3660,7 +3774,17 @@ export class Game {
       art: this.tiles,
       wallSide: this.wallSideGrads[this.biomeIdx],
       animClock: this.animClock,
+      // The lighting layer supplies the ambient depth darkness (shaped by light pools)
+      // in the grade below; the tile pass's flat fill only runs when the layer is off.
+      isAmbientGraded: this.lighting.isEnabled,
     });
+    // The ambient grade: contact AO + biome darkness with authored light cut out of it
+    // (torch pools, hero glow, eruptions), then the light's own color stained onto the
+    // ground it reaches. Everything after this — hazards, telegraphs, entities, HUD —
+    // draws above the grade, so the depth mood can never darken a tell. Subtracts the
+    // same render-clock camera as every other world pass (the shared-camera smoothing
+    // invariant), so the light field pans with the world instead of stepping against it.
+    this.lighting.renderGrade(this.ctx, this.renderCam.x, this.renderCam.y, this.canvas.width, this.canvas.height, this.animClock);
   }
 
   // ---- floor hazards ----
@@ -3915,8 +4039,11 @@ export class Game {
     ctx.restore();
   }
 
-  // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
-  // to the visible window; per-torch phase offset keeps them from flickering in sync.
+  // Wall-mounted torches: an additive emissive halo behind a 3-frame flickering flame.
+  // Culled to the visible window; per-torch phase offset keeps them from flickering in
+  // sync, and reduced motion holds the flicker at its midpoint. The halo takes the biome
+  // light grammar's tint + throw (warm home fires, a beacon against the cold caves, the
+  // Null's wrong lavender) — one authored glow asset, every mood.
   private renderProps() {
     const { ctx, renderCam: cam, canvas, tiles } = this;
     const clock = this.animClock;
@@ -3924,18 +4051,17 @@ export class Game {
     const hasGlow = tiles.ready("torch_glow");
     const hasFlame = tiles.ready(flame);
     if (!hasGlow && !hasFlame) return;
-    // The light itself takes the biome's color (amber home fires, arcane violet, the
-    // Fracture's cold crystal, the Null's wrong pink) — one authored glow, six moods.
-    const glowImg = hasGlow ? (tiles.tinted("torch_glow", this.currentBiome.glow) ?? tiles.get("torch_glow")) : null;
+    const halo = this.lighting.torchHalo();
+    const glowImg = hasGlow ? (tiles.tinted("torch_glow", halo.color) ?? tiles.get("torch_glow")) : null;
     for (const t of this.torches) {
       const sx = t.tx * TILE - cam.x, sy = t.ty * TILE - cam.y;
       if (sx <= -TILE || sy <= -TILE || sx >= canvas.width || sy >= canvas.height) continue;
       if (glowImg) {
-        const flick = 0.75 + 0.25 * Math.sin(clock * 11 + t.tx * 1.7 + t.ty * 0.9);
+        const flick = settings.isReducedMotion ? 0.875 : 0.75 + 0.25 * Math.sin(clock * 11 + t.tx * 1.7 + t.ty * 0.9);
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
         ctx.globalAlpha = 0.5 * flick;
-        ctx.drawImage(glowImg, sx + TILE / 2 - 48, sy + TILE / 2 - 48, 96, 96);
+        ctx.drawImage(glowImg, sx + TILE / 2 - halo.size / 2, sy + TILE / 2 - halo.size / 2, halo.size, halo.size);
         ctx.restore();
       }
       if (hasFlame) ctx.drawImage(tiles.get(flame), sx, sy, TILE, TILE);
@@ -3987,16 +4113,32 @@ export class Game {
     }
   }
 
-  // Soft drop-shadow ellipses under everything so entities sit ON the floor, not float.
-  // One cheap pass on the floor layer (before sprites) — dark, low-alpha, no per-entity cost.
+  // Soft contact shadows under everything so entities sit ON the floor, not float. With
+  // the lighting layer up, each shadow samples the baked light field: it slides a few px
+  // AWAY from the light and firms up on brightly lit ground, so bodies read grounded in
+  // a torch pool without their silhouettes ever changing. One cheap pass on the floor
+  // layer (before sprites) — a sampled gradient blob, no per-entity allocation.
   private shadow(cx: number, cy: number, w: number) {
     const { ctx } = this;
+    if (!this.lighting.isEnabled) {
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = "#05030b";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, w * 0.42, w * 0.18, 0, 0, 6.28);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+    // Screen -> world through the same render-clock camera the callers subtracted.
+    const s = this.lighting.sampleLight(cx + this.renderCam.x, cy + this.renderCam.y);
+    const mag = Math.hypot(s.dx, s.dy);
+    const push = Math.min(4, mag * 22);
+    const ox = mag > 0.001 ? (-s.dx / mag) * push : 0;
+    const oy = mag > 0.001 ? (-s.dy / mag) * push : 0;
     ctx.save();
-    ctx.globalAlpha = 0.28;
-    ctx.fillStyle = "#05030b";
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, w * 0.42, w * 0.18, 0, 0, 6.28);
-    ctx.fill();
+    ctx.globalAlpha = 0.30 + 0.18 * Math.min(1, s.intensity * 1.6);
+    ctx.drawImage(this.lighting.shadowSprite(), cx + ox - w * 0.5, cy + oy - w * 0.21, w, w * 0.42);
     ctx.restore();
   }
 
@@ -4047,17 +4189,20 @@ export class Game {
   }
 
   // Brazier: the static base with the animated torch flame layered on top and the shared
-  // torch glow composited additively — a mood + light-source prop, no new art.
+  // torch glow composited additively — a mood + light-source prop, no new art. Halo tint
+  // and throw come from the biome light grammar, like the wall torches.
   private renderBrazier(p: Prop, sx: number, sy: number, xf: Xform) {
     const { ctx, tiles } = this;
     this.drawPropImage("brazier", 0, sx, sy, PROP_DRAW, xf, 0);
     const clock = this.animClock;
     if (tiles.ready("torch_glow")) {
-      const flick = 0.75 + 0.25 * Math.sin(clock * 11 + p.x * 0.03 + p.y * 0.02);
+      const halo = this.lighting.brazierHalo();
+      const glowImg = tiles.tinted("torch_glow", halo.color) ?? tiles.get("torch_glow");
+      const flick = settings.isReducedMotion ? 0.875 : 0.75 + 0.25 * Math.sin(clock * 11 + p.x * 0.03 + p.y * 0.02);
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = 0.5 * flick;
-      ctx.drawImage(tiles.get("torch_glow"), sx - 48, sy - 52, 96, 96);
+      ctx.drawImage(glowImg, sx - halo.size / 2, sy - 4 - halo.size / 2, halo.size, halo.size);
       ctx.restore();
     }
     const flame = TORCH_FRAMES[frameIndex(TORCH_FRAMES.length, 8, clock)];
@@ -6233,6 +6378,8 @@ export class Game {
   devSpawnProp(kind: PropKind, atCursor: boolean): void {
     const p = this.devPlacePoint(atCursor);
     devSpawnProp(this.world, kind, p.x, p.y);
+    // A spawned brazier is a new static light source: fold it into the baked field.
+    if (kind === "brazier") this.rebakeLighting();
   }
 
   devSpawnChest(atCursor: boolean): void {
@@ -6311,6 +6458,17 @@ export class Game {
     return this.isFlowDebug;
   }
 
+  // A/B the whole AO + lighting layer (legacy flat depth fill returns while off).
+  devToggleLighting(): boolean {
+    this.lighting.isEnabled = !this.lighting.isEnabled;
+    return this.lighting.isEnabled;
+  }
+
+  // Direct lighting-layer access for QA rigs + the headless visual-metrics tests.
+  devLighting(): LightingRenderer {
+    return this.lighting;
+  }
+
   // Teleport the local player (QA capture rigs aim the camera at a spot of interest).
   devTeleport(x: number, y: number): void {
     this.p.x = x;
@@ -6333,6 +6491,8 @@ export class Game {
       weapon: this.weapon,
       isGodMode: this.isGodMode,
       isFlowDebug: this.isFlowDebug,
+      isLighting: this.lighting.isEnabled,
+      lightingMs: this.lighting.stats.frameMs,
       enemies: this.enemies.length,
       bullets: this.bullets.length,
       particles: this.particles.length,
