@@ -189,19 +189,18 @@ export interface Bullet {
   prevY?: number;
 }
 
-// dealer_heart: the Dealer's purchasable heart (floors 3/6/9, …) — walking over it with
-// enough coins buys +1 HP; `value` carries the coin price.
-export type PickupKind = "heart" | "coin" | "weapon" | "dealer_heart" | "dealer_weapon";
+// Free world loot only. Anything PRICED lives in Patch's shop room (src/sim/shop.ts)
+// behind an explicit buy command — walking over a pickup never spends a coin.
+export type PickupKind = "heart" | "coin" | "weapon";
 
 export interface Pickup {
   id: number;      // stable per-floor id (wire identity: interest view + client anim keying)
   kind: PickupKind;
   x: number; y: number;
   radius: number;
-  weapon: WeaponId | null; // set when kind === "weapon" | "dealer_weapon"
+  weapon: WeaponId | null; // set when kind === "weapon"
   // Coins: the coin worth baked in at drop time (combo multiplier applied then); undefined
   // falls back to the collector's base coin gain, so non-kill coins stay at face value.
-  // Dealer hearts/weapons: the coin PRICE.
   value?: number;
   // Boss weapon reward (studio gate §4): one of the chest's P+1 personal CHOICES. Each
   // player claims exactly one; a claim never removes a teammate's options, so the pedestal
@@ -341,4 +340,5 @@ export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
+  | "patch"
   | "heart" | "coin" | "gun" | "spit";

@@ -21,7 +21,7 @@
 //   - Boss floors carry NO generator hazards (gate: boss-authored only); floor 1 carries
 //     none, floor 2 a half-unit taste.
 //   - Placement keeps a clean radius around the spawn, the exit, and every room center
-//     (chests/dealer stock land on centers).
+//     (chests land on centers), and never touches the shop room (sanctuary contract).
 //   - Static pools never seal a path: the no-hazard floor graph must keep spawn->exit
 //     connected — placement enforces it, test/depth.test.ts proves it per seed batch.
 //
@@ -285,10 +285,10 @@ function isOpenFloor(d: Dungeon, tx: number, ty: number): boolean {
 }
 
 // A tile a hazard may claim: open floor, unclaimed, outside the spawn/exit safety radii,
-// and off every room center's 2-tile neighborhood — chests, dealer stalls and their
-// side stock all land on that ground, and shopping must never hurt (the co-op economy
-// suite stands a full party on the stall row). Boss floors never reach placement at all
-// (their budget is zero: boss-authored only).
+// off every room center's 2-tile neighborhood (chests land on that ground), and never
+// inside the shop room — Patch's waystation is sanctuary by contract (shopping must
+// never hurt; the shop suite stands a full party on every station). Boss floors never
+// reach placement at all (their budget is zero: boss-authored only).
 function isPlaceable(ctx: PlacementCtx, tx: number, ty: number): boolean {
   const { d } = ctx;
   if (!isOpenFloor(d, tx, ty)) return false;
@@ -297,6 +297,7 @@ function isPlaceable(ctx: PlacementCtx, tx: number, ty: number): boolean {
   if (Math.max(Math.abs(tx - d.exit.x), Math.abs(ty - d.exit.y)) <= EXIT_CLEAR) return false;
   for (const room of d.rooms) {
     if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 2) return false;
+    if (room.kind === "shop" && tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) return false;
   }
   return true;
 }
@@ -484,10 +485,10 @@ export function placeFloorHazards(d: Dungeon, seed: number, floor: number, diffi
     }
   }
 
-  // Scatter pass: everything else, spread across eligible rooms (never spawn/treasure).
-  // Rooms whose arbiter or denial budget is saturated simply absorb no more — the caps
-  // are ceilings, never targets, so a floor may land under budget on Casual.
-  const eligible = d.rooms.filter((r) => r.kind !== "spawn" && r.kind !== "treasure");
+  // Scatter pass: everything else, spread across eligible rooms (never spawn/treasure/
+  // shop). Rooms whose arbiter or denial budget is saturated simply absorb no more — the
+  // caps are ceilings, never targets, so a floor may land under budget on Casual.
+  const eligible = d.rooms.filter((r) => r.kind !== "spawn" && r.kind !== "treasure" && r.kind !== "shop");
   let guard = 0;
   while (budget > 0 && eligible.length > 0 && guard++ < 40) {
     const room = eligible[rng.int(0, eligible.length - 1)];

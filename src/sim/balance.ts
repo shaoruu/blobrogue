@@ -43,20 +43,29 @@ export const SUSTAIN = {
   pityLowHpFrac: 0.5,
 } as const;
 
-// Dealer: a purchasable heart on every third floor (3/6/9, …). +1 HP, never a full heal.
-// Co-op stocks P hearts (§8). Studio gate §4: the Dealer also stocks max(2, P) DISTINCT
-// weapons at the fixed 12/18/24 price ladder — purchases are personal and never deplete a
-// teammate's stock (an owned weapon is simply walked past).
-export const DEALER = {
+// The Dealer is Patch's authored SHOP ROOM (owner call: no loose priced pickups, no
+// touch-to-buy — see docs/specs/blobrogue_STUDIO_COHERENCE_GATE.md "Dealer hook"). Every
+// third depth (3/6/9, … — never a boss floor) is a secured relay niche hosting a dedicated
+// safe `shop` room: Patch's stall, THREE item pedestals on the unchanged 12/18/24 ladder
+// (slots 0-1 physical weapons, slot 2 a blessing), a heart station, and a reroll post.
+// Every purchase is an EXPLICIT validated buy command (interact -> panel -> BUY) — walking
+// over a station never spends a coin.
+// Ownership is explicit, never ambiguous (studio UX call, supersedes the old §4
+// personal-stall rule for the shop room):
+//   - physical weapon pedestals are SHARED — one real object, first buy claims it (SOLD);
+//   - the blessing pedestal and heart station are FOR YOU — per-player instanced, one buy
+//     each per player per shop, so a teammate's purchase never depletes yours.
+// Party scaling rides the personal slots (P players = P blessing + P heart opportunities,
+// matching the old P-heart stock) — quantity buys options, never rarity (§4).
+export const SHOP = {
   floorInterval: 3,
-  price: 6,
-  heal: 1,
-  weaponPrices: [12, 18, 24, 24] as readonly number[], // by stock slot; 4th holds at 24
+  pedestalPrices: [12, 18, 24] as readonly number[], // by pedestal slot (2 weapons, then the blessing)
+  weaponPedestals: 2,
+  heartPrice: 6,
+  heartHeal: 1, // +1 HP, never a full heal (§2)
+  rerollCost: 8,
+  rerollLimit: 2, // per shop; restocks only pedestals nobody has bought
 } as const;
-
-export function dealerWeaponStock(players: number): number {
-  return Math.max(2, clampPlayers(players));
-}
 
 // Studio gate §4 weapon-opportunity rules: party size buys OPTIONS, never rarity/power.
 // Normal floor pedestal rolls (weapons stocked into the floor's chests): P1–2 roll 1,
@@ -694,9 +703,6 @@ export function coopHeartRateMult(players: number): number {
 // (golden-locked); a shared world applies §4 at every P including 1.
 
 export const WEAPON_ECONOMY = {
-  // Dealer stall prices by slot (gate: "prices unchanged 12/18/24") — a fourth stall (P4)
-  // clamps to the last price. Purchases are PERSONAL: a stall never depletes for teammates.
-  dealerPrices: [12, 18, 24] as readonly number[],
   // Boss reward choices are capped regardless of party size.
   bossChoiceCap: 5,
   // Boss weapon claims expire on the sim clock like blessing offers (the descend gate must
@@ -712,16 +718,6 @@ export const WEAPON_ECONOMY = {
 // the pool permits. The pedestal COUNT per floor stays the solo cadence.
 export function pedestalWeaponsFor(players: number): number {
   return Math.max(1, Math.ceil(clampPlayers(players) / 2));
-}
-
-// Dealer weapon stalls (gate: `max(2,P)` distinct weapons) — Stage C shared worlds only.
-export function dealerWeaponStockFor(players: number): number {
-  return Math.max(2, clampPlayers(players));
-}
-
-export function dealerWeaponPriceFor(slot: number): number {
-  const prices = WEAPON_ECONOMY.dealerPrices;
-  return prices[Math.min(Math.max(0, slot), prices.length - 1)];
 }
 
 // Boss weapon reward (gate: `P+1` distinct choices, capped 5): every member claims ONE

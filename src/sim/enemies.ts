@@ -506,9 +506,12 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
 
   // Combat rooms: 3–5 of the non-spawn rooms carry the floor's threat, in PROGRESSION
   // order (ascending room index) so the deck's sequencing rules — breather first after a
-  // milestone, complex-run limits — read along the player's actual path.
+  // milestone, complex-run limits — read along the player's actual path. The shop room
+  // is sanctuary ground and never a candidate (Patch's waystation hosts no encounter).
   const candidates: number[] = [];
-  for (let i = 1; i < roomCount; i++) candidates.push(i);
+  for (let i = 1; i < roomCount; i++) {
+    if (dungeon.rooms[i].kind !== "shop") candidates.push(i);
+  }
   const combatRoomCount = Math.min(5, Math.max(Math.min(3, candidates.length), Math.floor(candidates.length * 0.75)));
   const combatRooms: number[] = [];
   while (combatRooms.length < combatRoomCount && candidates.length > 0) {

@@ -20,7 +20,7 @@ import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor, isBossKind, isComplexMover, isGauntletFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
-import { createMods, recomputeMods, itemLevelsOf, MAX_ITEM_LEVEL } from "./items.js";
+import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
@@ -28,15 +28,17 @@ import type { InputCmd, PlayerId } from "./input.js";
 import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
-  PLAYER, SUSTAIN, DEALER, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
+  PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
-  MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
+  MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 import { biomeIndexForFloor } from "./biomes.js";
+import { buildShopState, restockShop, shopSlotStatusFor, shopViewerOf, SHOP_BUY_RANGE } from "./shop.js";
+import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
 export interface MeleeSwing {
@@ -186,6 +188,10 @@ export interface WorldState {
   // `breath` is the authored 1.2s beat between a clear and the next entrance, and
   // `isRewarded` latches once the premium chest has dropped. Null on ordinary floors.
   gauntlet: { stage: number; breath: number; isRewarded: boolean } | null;
+  // Patch's shop (the authored Dealer room): authoritative stall state on shop floors,
+  // null everywhere else. Built deterministically per floor (buildShopState) and mutated
+  // ONLY by the validated buy command (buyFromShopInWorld) — never by touch/contact.
+  shop: ShopState | null;
   dungeon: Dungeon;
   // Dynamic-obstacle navigation caches (prop clearance grid + per-class flow fields).
   // Derived data only — never on the wire; every consumer rebuilds lazily off
@@ -292,6 +298,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     floorHazardClock: 0,
     recentReleases: [],
     gauntlet: null,
+    shop: null,
     dungeon: { w: 0, h: 0, tiles: [], rooms: [], spawn: { x: 0, y: 0 }, exit: { x: 0, y: 0 } },
     nav: createNav(),
     obstacleRev: 0,
@@ -413,19 +420,20 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.flowKey = -1;
   w.pickups = [];
   for (const p of w.players.values()) p.hasClaimedBossChoice = false;
-  // Floor hazards place FIRST: props/chests/dealer stock then avoid hazard tiles (a
-  // barrel on spikes reads as a bug). floorHazardClock is NOT reset — it is monotonic
-  // sim time (phases are per-hazard), so an online client reconstructs it from the tick.
+  // Floor hazards place FIRST: props/chests then avoid hazard tiles (a barrel on spikes
+  // reads as a bug). floorHazardClock is NOT reset — it is monotonic sim time (phases
+  // are per-hazard), so an online client reconstructs it from the tick.
   w.floorHazards = w.isSandbox ? [] : placeFloorHazards(w.dungeon, w.seed, floor);
   // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
   // footprint, and the obstacle revision must already name this floor's layout. The
   // ordering is free — every placement draws from its own seeded stream.
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
-  if (!w.isSandbox) {
-    stockWeaponChests(w);
-    placeDealerStock(w);
-  }
+  if (!w.isSandbox) stockWeaponChests(w);
+  // Patch's shop: built off the generator's dedicated shop room (deterministic from
+  // seed+floor, party-size-invariant so a mid-floor join never shifts the stall).
+  const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
+  w.shop = !w.isSandbox && shopRoom !== undefined ? buildShopState(w.seed, floor, shopRoom) : null;
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
@@ -522,49 +530,6 @@ function rollDistinctWeapon(rng: Rng, taken: readonly WeaponId[]): WeaponId {
   return pick;
 }
 
-// The Dealer's stock (§2 + studio gate §4): on every third floor, P purchasable hearts
-// plus max(2, P) DISTINCT weapons at the fixed 12/18/24 price ladder, near a mid-run room
-// center. Hearts buy exactly +1 HP — never a full heal. Weapon purchases are PERSONAL:
-// buying one never depletes a teammate's stock (see updatePickups), and prices/stats are
-// identical solo and co-op.
-function placeDealerStock(w: WorldState): void {
-  if (w.floor % DEALER.floorInterval !== 0 || isBossFloor(w.floor)) return;
-  const d = w.dungeon;
-  if (d.rooms.length < 3) return;
-  const rng = new Rng((w.seed ^ 0x0dea1e12) + w.floor * 68927);
-  // The stall row needs clean ground: never a sealed vault's sanctum (its center IS the
-  // chest tile — a buyer's touch would pop the chest mid-purchase) and never any room
-  // whose center already holds a chest, for the same reason.
-  const hasCenterChest = (r: Room): boolean =>
-    w.chests.some((c) => Math.floor(c.x / TILE) === r.cx && Math.floor(c.y / TILE) === r.cy);
-  const treasure = d.rooms.find((r) => r.kind === "treasure");
-  let room = treasure && treasure.shape !== "vault" && !hasCenterChest(treasure) ? treasure : null;
-  if (!room) {
-    const candidates = d.rooms.slice(1, d.rooms.length - 1).filter((r) => r.shape !== "vault" && !hasCenterChest(r));
-    if (candidates.length === 0) return;
-    room = candidates[rng.int(0, candidates.length - 1)];
-  }
-  const stock = w.encounterPlayers;
-  for (let i = 0; i < stock; i++) {
-    w.pickups.push({
-      id: w.nextPickupId++, kind: "dealer_heart",
-      x: (room.cx + 0.5) * TILE + (i - (stock - 1) / 2) * 30, y: (room.cy + 0.5) * TILE - 26,
-      radius: 13, weapon: null, value: DEALER.price,
-    });
-  }
-  const weapons: WeaponId[] = [];
-  const weaponStock = dealerWeaponStock(w.encounterPlayers);
-  for (let i = 0; i < weaponStock; i++) {
-    const weapon = rollDistinctWeapon(rng, weapons);
-    weapons.push(weapon);
-    w.pickups.push({
-      id: w.nextPickupId++, kind: "dealer_weapon",
-      x: (room.cx + 0.5) * TILE + (i - (weaponStock - 1) / 2) * 34, y: (room.cy + 0.5) * TILE + 14,
-      radius: 15, weapon, value: DEALER.weaponPrices[Math.min(i, DEALER.weaponPrices.length - 1)],
-    });
-  }
-}
-
 // Deep floors bias hazard density (§4 biome pressure): a wider explosive-barrel band.
 function rollPropKind(rng: Rng, hazardMult: number): Prop["kind"] {
   const r = rng.next();
@@ -608,6 +573,7 @@ function placeProps(w: WorldState): Prop[] {
 
   for (const room of d.rooms) {
     if (room === arena) continue; // the arena's cover is authored above
+    if (room.kind === "shop") continue; // Patch's waystation keeps its authored floor plan
     // Room-aware density: pillared halls and fighting pits carry more cover; hazard
     // set-piece rooms stay lean — their floor is the obstacle, and flocks/dodges need
     // the open lanes.
@@ -620,8 +586,8 @@ function placeProps(w: WorldState): Prop[] {
       const idx = ty * d.w + tx;
       if (occupied.has(idx) || d.tiles[idx] !== 0 || hasFloorHazardOnTile(w, tx, ty)) continue;
       if (isCorridorMouth(d, tx, ty)) continue;
-      // Room centers are reserved ground: chests and dealer stock land there (a vault's
-      // chest belongs INSIDE its ring, not wherever a crate left space).
+      // Room centers are reserved ground: chests land there (a vault's chest belongs
+      // INSIDE its ring, not wherever a crate left space).
       if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
@@ -683,8 +649,10 @@ function placeChests(w: WorldState): Chest[] {
 
 // A free tile for a chest: open floor, unused, not the spawn/exit tile, and not a tile a
 // prop already occupies (props are placed first, and a chest materializing on a barrel is
-// the same stacked-loot eyesore as a gun on a chest).
+// the same stacked-loot eyesore as a gun on a chest). The shop room takes no chests at
+// all — its floor plan is authored by the shop layout.
 function chestTile(w: WorldState, room: Room, used: Set<number>): { tx: number; ty: number } | null {
+  if (room.kind === "shop") return null;
   const d = w.dungeon;
   const isBad = (tx: number, ty: number) =>
     d.tiles[ty * d.w + tx] !== 0 ||
@@ -770,15 +738,24 @@ function isBodyClear(w: WorldState, x: number, y: number, r: number): boolean {
 // Shared scratch for settleSpawnPoint (read immediately by callers).
 const settlePoint = { x: 0, y: 0 };
 
+// Whether a tile lies inside the floor's shop room. Every caller below is an ENEMY spawn
+// path — the sanctuary contract says no enemy may ever materialize on shop ground, even
+// via a relocation scan that started in a neighboring room.
+function isShopTile(w: WorldState, tx: number, ty: number): boolean {
+  const room = w.dungeon.rooms.find((r) => r.kind === "shop");
+  return room !== undefined && tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h;
+}
+
 // Validate a spawn point for a body of radius `r`, or deterministically relocate it: the
 // intended point stands when it is body-clear AND its tile has a route to the playable
 // region; otherwise the scan walks outward over Chebyshev tile rings (fixed order — no
 // RNG, so spawn placement never shifts any seeded stream) and takes the first reachable,
-// body-clear tile center. Returns false when even the bounded scan finds nothing.
+// body-clear tile center. Shop-room tiles are never accepted (all callers spawn enemies;
+// the shop is sanctuary). Returns false when even the bounded scan finds nothing.
 function settleSpawnPoint(w: WorldState, x: number, y: number, r: number): boolean {
   const reach = reachFieldFor(w, r);
   const tx0 = Math.floor(x / TILE), ty0 = Math.floor(y / TILE);
-  if (isBodyClear(w, x, y, r) && reach.distAt(tx0, ty0) >= 0) {
+  if (isBodyClear(w, x, y, r) && reach.distAt(tx0, ty0) >= 0 && !isShopTile(w, tx0, ty0)) {
     settlePoint.x = x;
     settlePoint.y = y;
     return true;
@@ -789,6 +766,7 @@ function settleSpawnPoint(w: WorldState, x: number, y: number, r: number): boole
         if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
         const tx = tx0 + dx, ty = ty0 + dy;
         if (reach.distAt(tx, ty) < 0) continue; // wall / prop-blocked / unreachable pocket
+        if (isShopTile(w, tx, ty)) continue;
         const cx = (tx + 0.5) * TILE, cy = (ty + 0.5) * TILE;
         if (!isBodyClear(w, cx, cy, r)) continue; // off-center prop ring / chest footprint
         settlePoint.x = cx;
@@ -1009,6 +987,74 @@ export function chooseBlessingInWorld(w: WorldState, pid: PlayerId, item: ItemDe
 // there is nothing to choose and the pause/gate must not wait out the TTL.
 export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void {
   w.pendingBlessings.delete(pid);
+}
+
+// ---- Patch's shop: the ONE purchase path ----
+
+// Everything a buy can resolve to. "ok" mutated state; every other outcome mutated
+// NOTHING — an invalid purchase never consumes coins and never depletes stock. The
+// non-"invalid" rejections mirror shopSlotStatusFor exactly, so the copy a client showed
+// ("SOLD", "NEED N MORE", …) is also the reason the authority refused.
+export type ShopBuyOutcome = "ok" | "invalid" | Exclude<ShopSlotStatus, "buy">;
+
+// The validated, authoritative shop purchase — the ONLY way coins leave a player at the
+// stall (LocalTransport routes the solo panel here; the server routes the shopBuy command
+// here). Walking over a station never reaches this function, let alone buys.
+// Gates, in order: a live shop and slot; a present, standing, unpaused buyer; physical
+// proximity to the station (a tampered client cannot buy from across the map); then the
+// same per-viewer status matrix every UI surface renders. Success is idempotent by
+// construction — a repeated buy of the same slot resolves to its post-purchase status
+// (sold/owned/…) and consumes nothing further.
+export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number, ev: SimEvent[]): ShopBuyOutcome {
+  const shop = w.shop;
+  if (!shop || w.isRunOver) return "invalid";
+  const p = w.players.get(pid);
+  if (!p || p.isDown || p.isAbsent || p.hp <= 0 || w.pendingBlessings.has(pid)) return "invalid";
+  const slot = shop.slots.find((s) => s.id === slotId);
+  if (!slot) return "invalid";
+  if (Math.hypot(p.x - slot.x, p.y - slot.y) > SHOP_BUY_RANGE) return "invalid";
+  const status = shopSlotStatusFor(shop, slot, shopViewerOf(p));
+  if (status !== "buy") return status;
+  p.coins -= slot.price;
+  switch (slot.kind) {
+    case "weapon": {
+      slot.soldTo = pid;
+      acquireWeapon(p, slot.weapon!);
+      break;
+    }
+    case "blessing": {
+      slot.buyers.push(pid);
+      const item = itemById(slot.itemId!);
+      if (item) for (const e of applyItemToWorld(w, pid, item)) ev.push(e);
+      break;
+    }
+    case "heart": {
+      slot.buyers.push(pid);
+      p.hp = Math.min(p.maxHp, p.hp + SHOP.heartHeal);
+      break;
+    }
+    case "reroll": {
+      shop.rerollsUsed++;
+      restockShop(shop, w.seed, w.floor);
+      break;
+    }
+  }
+  ev.push({ t: "shopBuy", pid, slot: slot.id, kind: slot.kind, x: slot.x, y: slot.y });
+  return "ok";
+}
+
+// The station a player is standing near enough to interact with (highlight + prompt +
+// panel target): the nearest slot within range, or null. Client affordance only — the
+// buy itself re-validates proximity authoritatively.
+export function nearestShopSlot(w: WorldState, x: number, y: number, range: number): ShopSlot | null {
+  if (!w.shop) return null;
+  let best: ShopSlot | null = null;
+  let bestD = range;
+  for (const slot of w.shop.slots) {
+    const d = Math.hypot(x - slot.x, y - slot.y);
+    if (d < bestD) { bestD = d; best = slot; }
+  }
+  return best;
 }
 
 // Tick pending offers on the SIM clock: an unanswered offer expires after BLESSING_OFFER_TTL
@@ -3906,26 +3952,6 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); }
           else { player.coins += SUSTAIN.fullHpHeartCoins; ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); }
           collected = true; break;
-        }
-        if (p.kind === "dealer_heart") {
-          // The Dealer sells exactly +1 HP for coins; broke or full-health players walk past.
-          if (player.hp < player.maxHp && player.coins >= (p.value ?? DEALER.price)) {
-            player.coins -= p.value ?? DEALER.price;
-            player.hp += DEALER.heal;
-            ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y });
-            collected = true; break;
-          }
-          continue;
-        }
-        if (p.kind === "dealer_weapon") {
-          // Gate §4: purchases are PERSONAL and never deplete the stock — an owner (or a
-          // broke player) walks past; a buyer pays and the pedestal stays for teammates.
-          if (p.weapon && !player.ownedWeapons.includes(p.weapon) && player.coins >= (p.value ?? 0)) {
-            player.coins -= p.value ?? 0;
-            acquireWeapon(player, p.weapon);
-            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
-          }
-          continue;
         }
         if (p.kind === "weapon" && p.weapon) {
           if (p.isBossChoice) {

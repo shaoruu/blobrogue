@@ -19,9 +19,11 @@ import { settings } from "./settings.js";
 //               drawer) — gameplay reads idle so a UI gesture can never fire/dash
 //  - pause:     Esc overlay up
 //  - blessing:  between-floor choice overlay up (the overlay owns 1/2/3/arrows/enter)
+//  - shop:      the shop panel is up on a focused station in Patch's room (the panel owns
+//               Enter/Esc/E) — gameplay reads idle, so browsing can never fire or move
 //  - reconnect: online run waiting for the authoritative world (connecting veil)
 //  - spectate:  local player downed in a party run (watching, not acting)
-export type InputContext = "menu" | "gameplay" | "hud" | "pause" | "blessing" | "reconnect" | "spectate";
+export type InputContext = "menu" | "gameplay" | "hud" | "pause" | "blessing" | "shop" | "reconnect" | "spectate";
 
 export type GameAction =
   | { kind: "togglePause" }
@@ -32,6 +34,10 @@ export type GameAction =
   | { kind: "dropWeapon" }
   | { kind: "activateSlot"; index: number }
   | { kind: "reorderSlots"; from: number; to: number }
+  // The semantic interact PRESS (E edge; a controller's A button later): the game resolves
+  // it against the world — today that is "open the focused shop station's panel". Distinct
+  // from the revive channel, which is the HELD `interact` bit on the gameplay sample.
+  | { kind: "interact" }
   | { kind: "cycleSpectate"; dir: 1 | -1 }
   // Spectate follow toggle (F): watched teammate <-> your own body (see who's coming).
   | { kind: "spectateFollow" }
@@ -39,17 +45,19 @@ export type GameAction =
 
 // Per-action context allow-list. togglePause stays available while paused (Esc resumes),
 // spectating (quit out while down), reconnecting (escape a dead connect), and under the
-// hud context (the game routes it to close-the-drawer first); weapon/inventory actions
-// and fire exist only in live gameplay; cycling the spectated teammate exists only while
-// downed — so a spectator structurally cannot reach any gameplay action.
+// hud/shop contexts (the game routes it to close-the-surface first); weapon/inventory
+// actions, interact, and fire exist only in live gameplay; cycling the spectated teammate
+// exists only while downed — so a spectator structurally cannot reach any gameplay action,
+// and an open shop panel structurally cannot leak movement/fire/equips.
 const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
-  togglePause: ["gameplay", "hud", "pause", "spectate", "reconnect"],
+  togglePause: ["gameplay", "hud", "pause", "spectate", "reconnect", "shop"],
   selectWeapon: ["gameplay"],
   cycleWeapon: ["gameplay"],
   dropWeapon: ["gameplay"],
   activateSlot: ["gameplay"],
   inspectSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
+  interact: ["gameplay"],
   cycleSpectate: ["spectate"],
   spectateFollow: ["spectate"],
   stats: ["gameplay", "spectate"],
@@ -135,6 +143,11 @@ export class InputController {
     if (!isRepeat) {
       if (k >= "1" && k <= "9") this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
       if (k === "q") this.emit({ kind: "dropWeapon" }); // Q drops the equipped weapon
+      // E is ONE physical key, three semantic meanings, disambiguated purely by context +
+      // world state: the interact PRESS below (gameplay — the game opens the focused shop
+      // station), the revive HOLD (the level `interact` bit on the gameplay sample), and
+      // the spectate step (downed). The context gate makes exactly one reachable.
+      if (k === "e") this.emit({ kind: "interact" });
       // Downed: Q/E and the arrows step the spectated teammate instead (the context gate
       // keeps these dead everywhere else, and gameplay keys dead here). A controller's
       // bumpers would dispatch the same action.

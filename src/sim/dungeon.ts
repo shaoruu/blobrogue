@@ -7,7 +7,7 @@
 // pock the open rooms). Fully deterministic from (seed, floor).
 //
 // Hard invariants the rest of the game leans on (test/depth.test.ts locks them):
-//   - Every room's center tile is open floor (chest/dealer stock, corridor anchors,
+//   - Every room's center tile is open floor (chests, corridor anchors, the shop layout,
 //     enemy-spawn fallback all target centers).
 //   - Every floor tile is reachable from the spawn (a final flood-fill pass converts any
 //     sealed pocket back to wall, so the invariant holds by construction).
@@ -16,8 +16,13 @@
 import type { TileKind } from "./types.js";
 import { Rng } from "./rng.js";
 import { isBossFloor } from "./enemies.js";
+import { isShopFloor } from "./shop.js";
 
-export type RoomKind = "spawn" | "normal" | "large" | "treasure" | "exit" | "hazard";
+// "shop": Patch's waystation — the dedicated safe room on every shop floor (3/6/9, …).
+// The whole content pipeline treats it as sanctuary ground: no enemies, no hazards, no
+// props, no chests ever place inside it (world.ts / enemies.ts / hazards.ts all filter on
+// this kind), and the shop layout itself is authored by src/sim/shop.ts off its geometry.
+export type RoomKind = "spawn" | "normal" | "large" | "treasure" | "exit" | "hazard" | "shop";
 
 // Visual/architectural archetype. The sim reads it for hazard set-dressing ("hazard"
 // rooms host dense formations); the client reads it for per-room presentation.
@@ -339,9 +344,10 @@ function erodeRubble(c: Carver, rand: Rng, rooms: Room[], floor: number): void {
   let guard = 0;
   while (placed < count && guard++ < count * 12) {
     const room = rooms[rand.int(0, rooms.length - 1)];
-    // Spawn and exit rooms stay clear (the descend gathering, and on boss floors the
-    // exit room IS the fight arena — the squeeze needs clean lanes to the safe radius).
-    if (room.kind === "spawn" || room.kind === "exit" || room.shape === "vault" || room.shape === "cell") continue;
+    // Spawn, exit and shop rooms stay clear (the descend gathering; on boss floors the
+    // exit room IS the fight arena — the squeeze needs clean lanes to the safe radius;
+    // and Patch's waystation keeps its authored floor plan).
+    if (room.kind === "spawn" || room.kind === "exit" || room.kind === "shop" || room.shape === "vault" || room.shape === "cell") continue;
     const tx = room.x + 2 + rand.int(0, Math.max(0, room.w - 5));
     const ty = room.y + 2 + rand.int(0, Math.max(0, room.h - 5));
     if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 2) continue;
@@ -392,7 +398,7 @@ function sealUnreachable(c: Carver, spawn: { x: number; y: number }): void {
 
 // ---- role assignment ----
 
-function assignKinds(rand: Rng, rooms: Room[], floor: number): void {
+function assignKinds(rand: Rng, rooms: Room[], floor: number, shopRoom: Room | null): void {
   for (const room of rooms) {
     room.kind = room.shape === "vault" ? "treasure"
       : (room.w >= 9 || room.h >= 8) ? "large"
@@ -400,12 +406,15 @@ function assignKinds(rand: Rng, rooms: Room[], floor: number): void {
   }
   rooms[0].kind = "spawn";
   rooms[rooms.length - 1].kind = "exit";
+  // The shop room's kind is claimed before the hazard pass so a shop can never double as
+  // an authored danger room (the caller only passes a mid-chain room, never spawn/exit).
+  if (shopRoom !== null) shopRoom.kind = "shop";
   // Hazard set-piece rooms (floor 6+): up to two mid-chain rooms become authored danger
   // — gauntlets first (spike lanes down a long hall are the classic), then any large room.
   if (floor >= 6 && rooms.length >= 5) {
     const want = floor >= 16 ? 2 : 1;
     let marked = 0;
-    const candidates = rooms.slice(1, rooms.length - 1).filter((r) => r.kind !== "treasure");
+    const candidates = rooms.slice(1, rooms.length - 1).filter((r) => r.kind !== "treasure" && r.kind !== "shop");
     candidates.sort((a, b) => (a.shape === "gauntlet" ? -1 : 0) - (b.shape === "gauntlet" ? -1 : 0));
     for (const room of candidates) {
       if (marked >= want) break;
@@ -485,6 +494,22 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
       rooms.push(bossArena);
     }
   }
+  // Shop floors host Patch's waystation: a dedicated LARGER room, placed first (like the
+  // arena) so it always fits, on plain rect floor — the shop layout needs clean ground
+  // and the safe-room read needs a calm silhouette. Boss floors never carry one, so the
+  // arena and the shop never compete for first placement.
+  let shopRoom: Room | null = null;
+  if (isShopFloor(floor)) {
+    const sw = 11 + rand.int(0, 2);
+    const sh = 8 + rand.int(0, 2);
+    for (let attempt = 0; attempt < 80 && !shopRoom; attempt++) {
+      const rx = 2 + rand.int(0, w - sw - 4);
+      const ry = 2 + rand.int(0, h - sh - 4);
+      if (overlaps(rooms, rx, ry, sw, sh)) continue;
+      shopRoom = makeRoom(rx, ry, sw, sh, "rect");
+      rooms.push(shopRoom);
+    }
+  }
 
   const wantRooms = isBoss ? 4 + rand.int(0, 2) : 6 + rand.int(0, 3) + Math.min(floor, 6);
   const isVaultWanted = !isBoss && floor >= 2;
@@ -516,6 +541,22 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
       if (i === 0 || i === chain.length - 1) {
         const j = Math.floor(chain.length / 2);
         const t = chain[i]; chain[i] = chain[j]; chain[j] = t;
+      }
+    }
+    // The shop is a mid-journey stop, never the spawn or the exit room: the descend
+    // gathering and the stairs both need their ground, and sanctuary hosting the exit
+    // would break the fight-to-the-stairs cadence. Swapped toward the middle, walking
+    // outward past any slot the vault already claimed.
+    if (shopRoom !== null) {
+      const at = chain.indexOf(shopRoom);
+      if (at === 0 || at === chain.length - 1) {
+        const mid = Math.floor(chain.length / 2);
+        for (let off = 0; off < chain.length; off++) {
+          const j = mid + (off % 2 === 0 ? off / 2 : -(off + 1) / 2);
+          if (j <= 0 || j >= chain.length - 1 || chain[j].shape === "vault") continue;
+          const t = chain[at]; chain[at] = chain[j]; chain[j] = t;
+          break;
+        }
       }
     }
   }
@@ -554,7 +595,13 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
   }
 
   // ---- set dressing: vault ring (re-seals corridor punctures), erosion, sealing ----
-  assignKinds(rand, chain, floor);
+  // Degenerate guard: should the tiny-chain fallback have left the shop pinned at an end
+  // (placement starved the floor down to almost nothing), the floor simply hosts no shop
+  // rather than a shop-spawn or shop-exit hybrid.
+  const shopMid = shopRoom !== null && chain.indexOf(shopRoom) > 0 && chain.indexOf(shopRoom) < chain.length - 1
+    ? shopRoom
+    : null;
+  assignKinds(rand, chain, floor, shopMid);
   for (const room of chain) {
     if (room.kind === "treasure" && room.shape === "vault") carveVaultRing(c, rand, room, floor);
   }

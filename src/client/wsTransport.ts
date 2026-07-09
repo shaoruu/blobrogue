@@ -19,7 +19,7 @@ import type { RemotePlayer, WeaponId } from "../sim/types.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
-  propFromWire, pickupFromWire, chestFromWire, hazardFromWire,
+  propFromWire, pickupFromWire, chestFromWire, hazardFromWire, shopFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
   type RosterWire, type ServerMsg, type WaitWire,
 } from "../net/protocol.js";
@@ -762,6 +762,10 @@ export class WSTransport implements Transport {
     this.renderState.pickups = this.composePickups();
     this.renderState.chests = this.composeChests();
     this.renderState.hazards = this.latestSnap ? this.latestSnap.hzds.map(hazardFromWire) : [];
+    // Patch's stall: authoritative wire state only — the client never rolls or mutates
+    // stock (its locally-rebuilt geometry still names the shop ROOM; the snapshot names
+    // what is on the pedestals and who claimed what).
+    this.renderState.shop = this.latestSnap?.shop ? shopFromWire(this.latestSnap.shop) : null;
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
     // Hazard layout already lives in renderState (rebuilt from the authoritative seed);
     // the pulse clock is reconstructed from the authoritative tick — the server only ever
@@ -895,6 +899,15 @@ export class WSTransport implements Transport {
   // that offer's set, then applies the mods authoritatively (they flow back via SelfWire).
   sendChooseBlessing(offerId: number, choiceId: string): void {
     this.sendMsg({ t: "chooseBlessing", offerId, choiceId });
+  }
+
+  // Request an authoritative shop purchase (the panel's BUY). Never predicted: coins are
+  // server-owned and the outcome (coins/stock/SOLD) flows back via snapshot — the panel
+  // simply keeps rendering authoritative state, so a lost race shows an honest SOLD and
+  // never a phantom grant. cseq makes a resend idempotent (no double charge).
+  requestShopBuy(slot: number): void {
+    if (!this.latestSnap?.shop?.slots.some((s) => s.id === slot)) return;
+    this.sendMsg({ t: "shopBuy", slot, cseq: ++this.cseq });
   }
 
   // Name the teammate a downed local player is spectating, so the server centers this
