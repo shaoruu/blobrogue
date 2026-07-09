@@ -196,7 +196,17 @@ export class Menu {
   // first paint — skeletons fill in place, so nothing below them ever moves.
 
   async showTitle(focus?: TitleFocus) {
-    const wrap = el("div", "menu title");
+    // THE canonical home markup (finalized; supersedes every earlier shell variant):
+    //   .menu-home
+    //     .hero                          logo + tagline
+    //     .home-body
+    //       .home-left                   Play heading, PLAY ONLINE, PLAY SOLO,
+    //                                    fixed .home-status line, fixed leaderboard
+    //                                    preview (exactly 3 rows + state line)
+    //       .home-right                  reserved .identity-card, then the PROFILE and
+    //                                    SETTINGS destinations
+    // No home footer, no Controls button, no right-side Leaderboard destination.
+    const wrap = el("div", "menu menu-home");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
     // Hero banner: logo + tagline, divider under it. The logo carries its intrinsic
@@ -214,119 +224,85 @@ export class Menu {
 
     if (!this.client) {
       // Offline build: no profile/multiplayer — single centered actions column, no split.
-      const colA = el("div", "col-actions");
-      colA.appendChild(this.soloButton("\u25be  PLAY"));
-      colA.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
+      const left = el("div", "home-left");
+      left.appendChild(this.soloButton("\u25be  PLAY"));
+      left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       const nav = el("div", "navrow");
       const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
       const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
       focusTargets.set("profile", profileBtn);
       focusTargets.set("settings", settingsBtn);
       nav.append(profileBtn, settingsBtn);
-      colA.appendChild(nav);
-      wrap.appendChild(colA);
-    } else {
-      const body = el("div", "body");
-
-      // LEFT column: the play actions own the top; the quiet top-runs glance fills the
-      // space under them (hairline chrome, fixed row geometry, subordinate to Play).
-      const colA = el("div", "col-actions");
-      colA.appendChild(el("div", "col-h", "Play"));
-      const onlineBtn = el("button", "btn-quick primary");
-      onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
-      onlineBtn.appendChild(el("span", "sub", "rooms & quick play on the live server"));
-      onlineBtn.addEventListener("click", () => void this.showOnlineHome());
-      focusTargets.set("online", onlineBtn);
-      colA.appendChild(onlineBtn);
-      const solo = this.soloButton("PLAY SOLO");
-      solo.classList.add("play-solo");
-      colA.appendChild(solo);
-      colA.appendChild(this.leaderboardPreview(focusTargets));
-      body.appendChild(colA);
-
-      // RIGHT column: the reserved identity card, the passive identity/progress strip,
-      // then the PROFILE / SETTINGS destinations (the leaderboard's explicit door is the
-      // VIEW LEADERBOARD action on the glance itself — the right side stays about YOU).
-      const colB = el("div", "col-side");
-      const identity = this.identitySection();
-      colB.appendChild(identity);
-      const you = this.youStrip();
-      colB.appendChild(you.strip);
-      const nav = el("div", "navrow");
-      const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
-      const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
-      focusTargets.set("profile", profileBtn);
-      focusTargets.set("settings", settingsBtn);
-      nav.append(profileBtn, settingsBtn);
-      colB.appendChild(nav);
-      body.appendChild(colB);
-
-      wrap.appendChild(body);
-      wrap.appendChild(el("p", "foot", CONTROLS));
+      left.appendChild(nav);
+      wrap.appendChild(left);
       this.show(wrap);
-      this.identityMount = identity;
-      void this.hydrateTitle(you);
-      // Back/Escape focus restore: land keyboard focus on the destination that was used
-      // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
-      if (focus?.lbRow !== undefined) this.pendingLbRowFocus = focus.lbRow;
       return;
     }
 
-    wrap.appendChild(el("p", "foot", CONTROLS));
+    const body = el("div", "home-body");
+
+    // LEFT: the play actions own the top; a fixed status line and the quiet leaderboard
+    // glance fill the space under them (fixed row geometry, subordinate to Play).
+    const left = el("div", "home-left");
+    left.appendChild(el("div", "col-h", "Play"));
+    const onlineBtn = el("button", "btn-quick primary");
+    onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
+    onlineBtn.appendChild(el("span", "sub", "rooms & quick play on the live server"));
+    onlineBtn.addEventListener("click", () => void this.showOnlineHome());
+    focusTargets.set("online", onlineBtn);
+    left.appendChild(onlineBtn);
+    const solo = this.soloButton("PLAY SOLO");
+    solo.classList.add("play-solo");
+    left.appendChild(solo);
+    // The fixed home status line: reserved from first paint; any boot/exit note swaps
+    // content inside it, never the layout around it.
+    left.appendChild(el("p", "home-status", ""));
+    left.appendChild(this.leaderboardPreview(focusTargets));
+    body.appendChild(left);
+
+    // RIGHT: the reserved identity card, then the PROFILE / SETTINGS destinations (the
+    // leaderboard's explicit door is the VIEW LEADERBOARD action on the glance itself).
+    const right = el("div", "home-right");
+    const identity = this.identitySection();
+    right.appendChild(identity);
+    const nav = el("div", "navrow");
+    const profileBtn = this.navButton("PROFILE", () => void this.showProfile());
+    const settingsBtn = this.navButton("SETTINGS", () => void this.showSettings());
+    focusTargets.set("profile", profileBtn);
+    focusTargets.set("settings", settingsBtn);
+    nav.append(profileBtn, settingsBtn);
+    right.appendChild(nav);
+    body.appendChild(right);
+
+    wrap.appendChild(body);
     this.show(wrap);
+    this.identityMount = identity;
+    // Background identity flush (login/adoption) — no home UI depends on its timing.
+    void this.flushTitleIdentity();
+    // Back/Escape focus restore: land keyboard focus on the destination that was used
+    // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
     if (focus?.dest) focusTargets.get(focus.dest)?.focus();
+    if (focus?.lbRow !== undefined) this.pendingLbRowFocus = focus.lbRow;
   }
 
-  // One hydration pass for the title: login/refresh the profile (fills the you-card stats in
-  // place) — never lets an unreachable backend break the title screen. A hang surfaces the
-  // unavailable state after the timeout; a late answer still fills the same box.
-  private async hydrateTitle(you: { setProfile: (p: ProfileDoc | null, isError?: boolean) => void }) {
-    let profile: ProfileDoc | null = null;
+  // The title's one hydration duty: flush/adopt the identity row (name, color, cosmetics)
+  // so lobby tickets and the profile surfaces never race a stale write. Never lets an
+  // unreachable backend break the home screen.
+  private async flushTitleIdentity() {
     try {
       const signedIn = this.auth?.isSignedIn ?? false;
-      const load = (this.session.name || signedIn)
-        ? this.session.login(this.session.name || "blob")
-        : this.session.refreshProfile();
-      profile = await onHydrateTimeout(load, () => you.setProfile(null, true));
+      if (this.session.name || signedIn) await this.session.login(this.session.name || "blob");
+      else await this.session.refreshProfile();
     } catch {
-      you.setProfile(null, true);
-      return;
+      // the home shell stands
     }
-    you.setProfile(profile);
   }
 
   private navButton(label: string, go: () => void): HTMLButtonElement {
     const btn = el("button", "secondary nav-btn", label);
     btn.addEventListener("click", go);
     return btn;
-  }
-
-  // The passive identity/progress strip: live blob preview + name + a one-line stat
-  // readout. Pure display (the PROFILE destination below is the door — one obvious way in,
-  // no competing click target). Fixed height; the stat line hydrates in place.
-  private youStrip(): { strip: HTMLElement; setProfile: (p: ProfileDoc | null, isError?: boolean) => void } {
-    const strip = el("div", "you-strip");
-    const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 48);
-    const info = el("div", "you-info");
-    const name = el("span", "you-name", this.session.name || "blob");
-    const stats = el("span", "you-stats skel", "\u2014");
-    info.append(name, stats);
-    strip.append(preview.el, info);
-    const setProfile = (p: ProfileDoc | null, isError = false) => {
-      stats.classList.remove("skel");
-      if (p) {
-        name.textContent = p.name;
-        stats.textContent = p.gamesPlayed > 0
-          ? `deepest ${p.deepestFloor} \u00b7 ${p.gamesPlayed} runs`
-          : "no runs yet";
-        preview.setLook(lookOf(p.cosmetics, p.colorIndex ?? this.session.colorIndex));
-      } else {
-        // No profile row yet is a fresh blob, not a failure; only a thrown fetch is.
-        stats.textContent = isError ? "stats unavailable" : "no runs yet";
-      }
-    };
-    return { strip, setProfile };
   }
 
   private nameRow(): HTMLElement {
@@ -349,7 +325,7 @@ export class Menu {
   // inside the SAME reserved geometry (.identity min-height), content-swapped in place —
   // and guest play is never gated on signing in.
   private identitySection(): HTMLElement {
-    const wrap = el("div", "identity");
+    const wrap = el("div", "identity-card");
     this.renderIdentityInto(wrap);
     return wrap;
   }

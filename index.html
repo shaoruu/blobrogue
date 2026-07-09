@@ -369,10 +369,10 @@
          attributes so the space is reserved before the file streams in). */
       .logo-img{ image-rendering:pixelated; height:56px; width:329px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
       .hero .tag{ font-family:var(--f-ui); font-size:11px; line-height:1.5; letter-spacing:.5px; color:var(--dun-4); max-width:540px; min-height:33px; text-transform:none; margin:0; }
-      .menu.title .body{ min-height:352px; }
-      .body{ display:flex; gap:20px; align-items:stretch; }
-      .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
-      .col-side{ flex:1; display:flex; flex-direction:column; gap:12px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
+      .home-body{ min-height:352px; }
+      .body, .home-body{ display:flex; gap:20px; align-items:stretch; }
+      .col-actions, .home-left{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
+      .home-right{ flex:1; display:flex; flex-direction:column; gap:12px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
       .col-h{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
       .btn-quick{ width:100%; flex-direction:column; gap:5px; padding:17px 22px; font-size:17px; min-width:0; }
       .btn-quick .sub{ font-family:var(--f-ui); font-weight:400; font-size:9px; letter-spacing:.3px; text-transform:none; opacity:.85; text-shadow:none; }
@@ -389,7 +389,7 @@
       .swatch:active{ transform:translateY(1px); box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }
       .swatch.sel, .swatch.sel:hover{ box-shadow:inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--cream); }
       /* --- Optional Google sign-in (right column identity) --- */
-      .identity{ display:flex; flex-direction:column; gap:8px; align-items:stretch; }
+      
       .authrow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; }
       .btn-google{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; font-size:11px; padding:9px 12px; min-width:0; text-transform:none; letter-spacing:1px; }
       .btn-google svg{ display:block; flex:0 0 auto; }
@@ -415,7 +415,7 @@
       .settings-shake .lab{ display:flex; justify-content:space-between; } .settings-val{ color:var(--amber); }
       .menu input[type=range]{ -webkit-appearance:none; appearance:none; width:160px; width:100%; height:6px; background:rgba(255,180,59,.22); cursor:pointer; border-radius:0; }
       .foot{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); text-align:center; text-transform:none; min-height:20px; padding-top:6px; border-top:2px solid var(--dun-3); margin:0; }
-      @media (max-width:640px){ .body{ flex-direction:column; } .col-side{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; } }
+      @media (max-width:640px){ .body, .home-body{ flex-direction:column; } .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; } }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===
          Attention order is explicit: (1) the amber PLAY actions, (2) the identity card +
@@ -470,12 +470,12 @@
       @media (max-height:680px){
         .lb-preview{ height:48px; padding:0 10px; justify-content:center; }
         .lb-preview .lb-rows, .lb-preview .lb-standing{ display:none; }
-        .menu.title .body{ min-height:0; }
+        .home-body{ min-height:0; }
       }
 
       /* --- reserved identity card (right column): guest CTA and account chip share ONE
          geometry so signed-in/out/loading/error never move anything below --- */
-      .identity{ display:flex; flex-direction:column; gap:9px; align-items:stretch; min-height:158px;
+      .identity-card{ display:flex; flex-direction:column; gap:9px; align-items:stretch; min-height:158px;
         padding:11px 12px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
       .id-note{ font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:var(--dun-4); text-transform:none; line-height:1.5; margin:0; text-align:left; }
       /* Mid-OAuth placeholder: the identity card's "signing you in" state, centered in the
@@ -490,14 +490,14 @@
          error, and retry copy swap INSIDE this box — the buttons around it never move. */
       .status-line{ min-height:36px; margin:0; display:flex; align-items:center; justify-content:center; }
 
-      /* --- the identity/progress strip: passive, fixed-height (the PROFILE destination
-         below is the one door — no competing click target, no warm accent) --- */
-      .you-strip{ display:flex; align-items:center; gap:10px; width:100%; min-width:0; height:64px; padding:7px 11px;
-        background:#0d0819; color:var(--cream); box-shadow:inset 0 0 0 1px var(--dun-3); }
-      .you-strip .blob-preview{ flex:0 0 48px; width:48px; height:48px; image-rendering:pixelated; }
       .you-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; text-align:left; }
       .you-name{ font-family:var(--f-ui); font-size:11px; color:var(--cream); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .you-stats{ font-family:var(--f-ui); font-size:9px; color:#8f87a8; min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      /* The fixed home status line: reserved from first paint (boot/exit notes swap
+         content inside it; single line, ellipsized). */
+      .menu p.home-status{ height:18px; flex:0 0 18px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
+        color:#8f87a8; text-transform:none; line-height:18px; margin:0; text-align:left;
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .navrow{ display:flex; gap:8px; }
       .navrow .nav-btn{ flex:1; min-width:0; font-size:9px; padding:10px 4px; letter-spacing:1px; }
 
@@ -625,7 +625,7 @@
       .unlock-line{ color:var(--amber-hi); font-weight:700; letter-spacing:.5px; }
 
       @media (max-width:640px){
-        .identity{ min-height:0; }
+        .identity-card{ min-height:0; }
         .pp-top{ flex-direction:column; gap:12px; }
       }
       /* Touch-friendly rows on the FULL leaderboard screen for narrow/coarse-pointer

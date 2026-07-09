@@ -277,9 +277,16 @@ async function main(): Promise<void> {
     const all = textOf(overlay);
     check("no inline settings controls on the title (sound/shake live behind SETTINGS)",
       !all.includes("sound:") && !all.includes("screen shake"), all.slice(0, 160));
-    // The identity/progress strip is PASSIVE display — one door to the profile, not two.
-    const strip = byClass(overlay, "you-strip")[0];
-    check("the identity/progress strip exists and is not a button", strip !== undefined && strip.tagName !== "BUTTON", strip?.tagName);
+    // Canonical home markup: home-body > home-left/home-right; reserved identity card;
+    // fixed home-status; NO footer, NO right-side leaderboard door.
+    check("canonical shell classes render", byClass(overlay, "menu-home").length === 1
+      && byClass(overlay, "home-body").length === 1
+      && byClass(overlay, "home-left").length === 1
+      && byClass(overlay, "home-right").length === 1);
+    check("the reserved identity card exists", byClass(overlay, "identity-card").length === 1);
+    check("the fixed home-status line exists (reserved, empty)", byClass(overlay, "home-status").length === 1 && textOf(byClass(overlay, "home-status")[0]) === "");
+    check("no home footer", byClass(overlay, "foot").length === 0);
+    check("no Controls button", !buttonsOf(overlay).some((b) => /controls/i.test(b)));
   }
 
   section("top-runs glance: FINAL geometry from first paint; hydration fills in place");
