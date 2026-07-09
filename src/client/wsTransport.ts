@@ -585,7 +585,7 @@ export class WSTransport implements Transport {
     for (const p of snap.players) {
       const key = "p" + p.id;
       live.add(key);
-      this.interp.ingest(key, snap.tick, p.x, p.y, p.aim, now);
+      this.interp.ingest(key, snap.tick, p.x, p.y, p.aim, now, p.dti > 0);
     }
     this.interp.retain(live);
 
@@ -835,6 +835,13 @@ export class WSTransport implements Transport {
         reviveProgress: p.rv,
         isOut: p.out,
         isAbsent: p.ab,
+        // Dash keyed to the RENDERED pose (not the latest snapshot), so the FX play exactly
+        // where/when the interpolated blob makes its crisp move.
+        isDashing: pose ? pose.isDashing : p.dti > 0,
+        dashDirX: p.ddx,
+        dashDirY: p.ddy,
+        invuln: p.inv,
+        dashInvuln: p.dnv,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl,

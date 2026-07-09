@@ -20,7 +20,7 @@ import { ShopPanel } from "../ui/shopPanel.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { drawLoadoutOverlays } from "./cosmeticArt.js";
 import { bodyPaletteIndex } from "./cosmetics.js";
@@ -142,13 +142,24 @@ export interface DevSnapshot {
 
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
-interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
+// detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
+interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing: boolean; dashImgCd: number; dashDustCd: number; }
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
-interface Afterimage { x: number; y: number; facing: number; t: number; }
+// color carries a REMOTE dasher's party tint; null means the local player's own tint.
+interface Afterimage { x: number; y: number; facing: number; t: number; color: string | null; }
+
+// The i-frame blink: sim invulnerability (post-hit or the dash's own i-frame window)
+// renders as a 10Hz alpha flicker keyed to the window's remaining seconds. One predicate
+// for the local player AND remotes, mirroring the sim's isInvulnerable (either window).
+export function isInvulnBlinkFrame(invulnSec: number, dashInvulnSec: number): boolean {
+  const s = Math.max(invulnSec, dashInvulnSec);
+  return s > 0 && Math.floor(s * 20) % 2 === 0;
+}
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
@@ -1442,7 +1453,7 @@ export class Game {
     // Dash afterimages (pure ghost trail): spaced by dashImgCd while the sim reports a dash.
     if (this.p.dashTime > 0) {
       this.dashImgCd -= dt;
-      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0 }); this.dashImgCd = 0.04; }
+      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0, color: null }); this.dashImgCd = 0.04; }
     }
 
     this.updateFootstepDust(dt);
@@ -1456,7 +1467,7 @@ export class Game {
     this.shockwaves.update(dt);
     this.screenFlash.update(dt);
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
-    if (this.coop) this.updateRemoteAnims(dt);
+    this.updateRemoteAnims(dt);
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
@@ -2479,21 +2490,51 @@ export class Game {
     this.corpses = this.corpses.filter((c) => c.t < 1);
   }
 
+  // Advance every teammate's client-side cosmetics from whichever remote source is active
+  // (legacy co-op presence OR the authoritative server): walk/idle anim + the remote dash FX.
   private updateRemoteAnims(dt: number) {
-    if (!this.coop) return;
-    const remotes = this.coop.remotePlayers();
+    const remotes = this.remotes();
+    if (remotes.length === 0 && this.remoteAnims.size === 0) return;
     for (const r of remotes) {
       let entry = this.remoteAnims.get(r.playerId);
-      if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y }; this.remoteAnims.set(r.playerId, entry); }
+      if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y, isDashing: false, dashImgCd: 0, dashDustCd: 0 }; this.remoteAnims.set(r.playerId, entry); }
       const moving = Math.hypot(r.x - entry.lastX, r.y - entry.lastY) > 0.35;
       const lean = r.x - entry.lastX;
       stepAnim(entry.anim, dt, moving, lean < 0 ? -1 : lean > 0 ? 1 : 0);
       entry.lastX = r.x; entry.lastY = r.y;
+      this.updateRemoteDashFx(r, entry, dt);
     }
     if (this.remoteAnims.size > remotes.length) {
       const live = new Set<string>();
       for (const r of remotes) live.add(r.playerId);
       for (const id of this.remoteAnims.keys()) if (!live.has(id)) this.remoteAnims.delete(id);
+    }
+  }
+
+  // A teammate's dash, driven off the authoritative PlayerWire dash state (isDashing is
+  // aligned with the interpolated pose, so the juice lands where the blob visibly lunges).
+  // The SAME reads as the local dash: takeoff puff + ring + sfx on the rising edge, then the
+  // afterimage ghost trail and one dust mote per authoritative tick while the dash is live.
+  // The dasher's own dashStart/dashTrail events stay pid-scoped, so nothing double-plays.
+  private updateRemoteDashFx(r: RemotePlayer, entry: RemoteAnimEntry, dt: number) {
+    if (r.isDashing && !entry.isDashing && !r.isAbsent) {
+      this.spawnParticles(r.x, r.y, 10, "#ffd27a");
+      this.addDecal(r.x, r.y, "#ffd27a", 16, "ring");
+      sfx("dash", { gain: 0.5 });
+      entry.dashImgCd = 0;
+      entry.dashDustCd = 0;
+    }
+    entry.isDashing = r.isDashing && !r.isAbsent;
+    if (!entry.isDashing) return;
+    entry.dashImgCd -= dt;
+    if (entry.dashImgCd <= 0) {
+      this.afterimages.push({ x: r.x, y: r.y, facing: r.facing, t: 0, color: playerColor(r.colorIndex) });
+      entry.dashImgCd = 0.04;
+    }
+    entry.dashDustCd -= dt;
+    if (entry.dashDustCd <= 0) {
+      this.spawnParticles(r.x, r.y, 1, "#ffd27a");
+      entry.dashDustCd = FIXED_DT;
     }
   }
 
@@ -5055,8 +5096,10 @@ export class Game {
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
       // A network-absent teammate renders as an explicit ghost (their body is reserved for
-      // the reconnect grace) — never mistakable for a live player or a corpse.
-      ctx.globalAlpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1;
+      // the reconnect grace) — never mistakable for a live player or a corpse. A live one
+      // blinks through its authoritative i-frames exactly like the local blob does.
+      const alpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : isInvulnBlinkFrame(r.invuln, r.dashInvuln) ? 0.4 : 1;
+      ctx.globalAlpha = alpha;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
       ctx.scale(r.facing * xf.sx, xf.sy);
@@ -5069,7 +5112,7 @@ export class Game {
       ctx.restore();
       // Teammates' verified cosmetic overlays (same transform as their body draw above,
       // which never uses frame sheets — the procedural xf carries the full deform).
-      this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1, false);
+      this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, alpha, false);
 
       if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
@@ -5134,7 +5177,7 @@ export class Game {
     const psx = ipx - cam.x, psy = ipy - cam.y;
     let alpha = 1;
     if (this.isDown) alpha = 0.4;
-    else if (this.invuln > 0 && Math.floor(this.invuln * 20) % 2 === 0) alpha = 0.4;
+    else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
     // Directional recoil: nudge the blob back against its aim as it fires.
@@ -5589,15 +5632,17 @@ export class Game {
     const { ctx, renderCam: cam } = this;
     const isReady = this.sprites.ready("hero");
     const tint = this.selfTint();
-    const heroImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
+    const selfImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
     for (const a of this.afterimages) {
       const k = 1 - a.t; // 1..0
+      // A remote dasher's ghost carries their party tint; the local ghost keeps self tint.
+      const img = a.color ? this.sprites.tintedHero(a.color) ?? selfImg : selfImg;
       ctx.save();
       ctx.globalAlpha = k * 0.4;
       ctx.translate(a.x - cam.x, a.y - cam.y);
       ctx.scale(a.facing, 1);
-      if (isReady) ctx.drawImage(heroImg, -26, -26, 52, 52);
-      else { ctx.fillStyle = "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
+      if (isReady) ctx.drawImage(img, -26, -26, 52, 52);
+      else { ctx.fillStyle = a.color ?? "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
       ctx.restore();
     }
     ctx.globalAlpha = 1;
