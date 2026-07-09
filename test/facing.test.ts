@@ -165,24 +165,62 @@ function ladderTests(): void {
 // The AD's approved-final assets are drop-ins: the hooks must carry these EXACT
 // filenames so wiring the art is a pure file copy, never a code change.
 function approvedHookTests(): void {
-  section("approved asset hooks: exact final filenames (weaver2 / beam2 pair)");
+  section("approved asset hooks: every actor's directional walk + attack set");
+  // Approved actor queue, each with the full walk_{down,up,side} + attack_{down,up,side}
+  // contract off its manifest file stem (the Weaver ships on the versioned weaver2_px).
+  const actors: Array<[string, string]> = [
+    ["marrow", "marrow"],
+    ["burrower", "burrower"],
+    ["weaver", "weaver2_px"],
+    ["gilded", "gilded"],
+    ["charger", "charger"],
+    ["orbiter", "orbiter"],
+  ];
+  for (const [sprite, stem] of actors) {
+    const keys: Array<[string, string]> = [
+      [`${sprite}.walk_down`, `/sprites/${stem}_walk_down.png`],
+      [`${sprite}.walk_up`, `/sprites/${stem}_walk_up.png`],
+      [`${sprite}.walk_side`, `/sprites/${stem}_walk_side.png`],
+      [`${sprite}.attack_down`, `/sprites/${stem}_attack_down.png`],
+      [`${sprite}.attack_up`, `/sprites/${stem}_attack_up.png`],
+      [`${sprite}.attack_side`, `/sprites/${stem}_attack_side.png`],
+    ];
+    check(`${sprite}: directional walk + attack hooks derive from the '${stem}' stem`,
+      keys.every(([key, src]) => SHEETS[key]?.src === src),
+      keys.map(([key]) => SHEETS[key]?.src ?? "missing").join(", "));
+  }
   check("the Weaver's base sprite hook expects weaver2_px.png",
     devSpriteManifest().some((a) => a.group === "sprites" && a.label === "weaver" && a.src === "/sprites/weaver2_px.png"));
-  const dirs: Array<[string, string]> = [
-    ["weaver.walk_down", "/sprites/weaver2_px_walk_down.png"],
-    ["weaver.walk_up", "/sprites/weaver2_px_walk_up.png"],
-    ["weaver.walk_side", "/sprites/weaver2_px_walk_side.png"],
-    ["weaver.attack", "/sprites/weaver2_px_attack.png"],
-  ];
-  check("the Weaver directional/attack contract derives from the weaver2_px stem",
-    dirs.every(([key, src]) => SHEETS[key]?.src === src),
-    dirs.map(([key]) => SHEETS[key]?.src ?? "missing").join(", "));
+  check("the stationary Choir carries an idle loop + omni attack (no walk triplet)",
+    SHEETS["choir.idle"]?.src === "/sprites/choir_idle.png"
+    && SHEETS["choir.attack"]?.src === "/sprites/choir_attack.png"
+    && SHEETS["choir.walk_down"] === undefined);
+  {
+    // The stationary-boss ladder: a drifting Choir with only an idle sheet keeps
+    // breathing while it moves instead of dropping to the static base.
+    const has = (clip: SelectableClip) => clip === "idle" || clip === "attack";
+    const drifting = resolveClip(has, poseOf({ isMoving: true, facing: "down" }));
+    check("a moving body with idle-only art keeps its idle loop", drifting.clip === "idle");
+    const attacking = resolveClip(has, poseOf({ isAttacking: true, facing: "up" }));
+    check("its omni attack sheet still wins while attacking", attacking.clip === "attack");
+  }
+
+  section("approved asset hooks: weapon pairs + fx masks");
+  check("the Thumper pickup hook expects weapon_thumper.png",
+    devSpriteManifest().some((a) => a.group === "weapon pickups" && a.label === "pickup mortar" && a.src === "/sprites/weapon_thumper.png"));
+  check("the Thumper held hook expects held_thumper.png",
+    devSpriteManifest().some((a) => a.group === "held weapons" && a.label === "held mortar" && a.src === "/sprites/held_thumper.png"));
   check("the Beam pickup hook expects beam2_px.png",
     devSpriteManifest().some((a) => a.group === "weapon pickups" && a.label === "pickup beam" && a.src === "/sprites/beam2_px.png"));
   check("the Beam held hook expects held_beam2_px.png",
     devSpriteManifest().some((a) => a.group === "held weapons" && a.label === "held beam" && a.src === "/sprites/held_beam2_px.png"));
   check("the beam's dedicated ray is a registered code-tinted white mask (beam_ray)",
     devSpriteManifest().some((a) => a.group === "bullet fx" && a.label === "beam_ray" && a.src === "/sprites/fx/beam_ray.png"));
+  // Pending gates stay honest: no vortex pair, no shielder set, no boomerang anything.
+  check("the Undertow keeps its fallback hooks (AD decision pending — nothing registered)",
+    !devSpriteManifest().some((a) => a.label === "pickup vortex" || a.label === "held vortex"));
+  check("the shielder stays on its base-sprite fallback (gate pending — no directional set)",
+    SHEETS["shielder.walk_down"] === undefined && SHEETS["shielder.attack"] === undefined);
 }
 
 function main(): void {

@@ -56,20 +56,24 @@ locked angle). The pose — facing, motion, move, phase, 0..1 windup, aim — is
 - `<name>_attack.png` — omni windup/strike strip, or `<name>_attack_{down,up,side}.png`
   for full directional attacks.
 
-**Enable a whole set with one line** in `src/game/assets.ts` (only once the PNGs exist);
-the optional 4th arg covers AD-versioned finals whose file stem differs from the sprite name:
+**Enable a whole set with one line** in `src/game/assets.ts` (once the filenames are
+approved); `fileBase` covers AD-versioned finals whose stem differs from the sprite name:
 ```ts
-registerDirectionalSet("charger", 10);              // the walk triplet
-registerDirectionalSet("marrow", 8, 12);            // + marrow_attack.png at 12fps
-registerDirectionalSet("weaver", 12, 12, "weaver2_px"); // approved final stem
+registerDirectionalSet("charger", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAttack: true, fileBase: "weaver2_px" });
 ```
 
 **Approved finals already wired (drop the files in, no code changes):**
-- Weaver base `weaver2_px.png` + directional/attack contract
-  `weaver2_px_walk_{down,up,side}.png`, `weaver2_px_attack.png` (12fps).
-- Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`.
-- Beam ray FX `fx/beam_ray.png` — a pure-white alpha mask like every fx primitive;
-  the code tints it per shot and falls back to `trail_streak` until it lands.
+- Directional walk + attack sets (`<stem>_walk_{down,up,side}.png` +
+  `<stem>_attack_{down,up,side}.png`) for **marrow, burrower, weaver2_px, gilded,
+  charger, orbiter**.
+- The stationary Hollow Choir: `choir_idle.png` (breathing loop, plays even while it
+  drifts) + `choir_attack.png` (omni).
+- Thumper pair: pickup `weapon_thumper.png`, held `held_thumper.png`.
+- Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`, plus the `fx/beam_ray.png`
+  pure-white alpha mask (code-tinted per shot; `trail_streak` fallback until it lands).
+- Pending gates keep their fallbacks: Undertow pair and the shielder set are deliberately
+  unregistered until the AD's final call.
 
 Selection degrades one deliberate step at a time — `attack_<facing>` → `attack` →
 `walk_<facing>` → legacy `walk`/`idle` → static PNG + procedural juice — so partial sets

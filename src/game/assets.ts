@@ -41,26 +41,49 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   "boss.death": { src: "/sprites/boss_death.png", fps: 12 },
 };
 
-// One-line registration for an AD directional set (the art/render contract convention):
-//   registerDirectionalSet("charger", 10)      -> charger_walk_{down,up,side}.png
-//   registerDirectionalSet("charger", 10, 12)  -> + charger_attack.png at 12fps
-// `fileBase` covers AD-versioned finals whose file stem differs from the sprite name
-// (e.g. the approved weaver2_px set). Directional ATTACK variants
-// (`<base>_attack_{down,up,side}.png`) are rarer and get explicit SHEETS entries when
-// authored. Side sheets are authored facing RIGHT (the renderer mirrors for left);
-// frame 0 of each walk sheet doubles as that facing's idle pose. Registration happens
-// once the PNGs are approved with exact names — the clip-selection ladder
-// (facing.ts resolveClip) routes around any sheet that has not landed/loaded yet.
-export function registerDirectionalSet(name: SpriteName, walkFps: number, attackFps?: number, fileBase: string = name): void {
-  SHEETS[`${name}.walk_down`] = { src: `/sprites/${fileBase}_walk_down.png`, fps: walkFps };
-  SHEETS[`${name}.walk_up`] = { src: `/sprites/${fileBase}_walk_up.png`, fps: walkFps };
-  SHEETS[`${name}.walk_side`] = { src: `/sprites/${fileBase}_walk_side.png`, fps: walkFps };
-  if (attackFps !== undefined) SHEETS[`${name}.attack`] = { src: `/sprites/${fileBase}_attack.png`, fps: attackFps };
+// One-line registration for an AD directional set (the art/render contract convention).
+// Side sheets are authored facing RIGHT (the renderer mirrors for left); frame 0 of each
+// walk sheet doubles as that facing's idle pose. Registration happens once the PNGs are
+// approved with exact names — the clip-selection ladder (facing.ts resolveClip) routes
+// around any sheet that has not landed/loaded yet, so a set can ship file-by-file.
+export interface DirectionalSetDef {
+  walkFps: number;
+  // Registers the attack sheet(s) when set: the full `<base>_attack_{down,up,side}.png`
+  // triplet with isDirectionalAttack, or one omni `<base>_attack.png` without it.
+  attackFps?: number;
+  isDirectionalAttack?: boolean;
+  // AD-versioned finals whose file stem differs from the sprite name (e.g. weaver2_px).
+  fileBase?: string;
 }
 
-// AD-approved finals (drop-in): the Weaver ships on the weaver2 base per the content
-// manifest — walk triplet + attack sheet derive from that stem via gen-walk.
-registerDirectionalSet("weaver", 12, 12, "weaver2_px");
+export function registerDirectionalSet(name: SpriteName, def: DirectionalSetDef): void {
+  const base = def.fileBase ?? name;
+  SHEETS[`${name}.walk_down`] = { src: `/sprites/${base}_walk_down.png`, fps: def.walkFps };
+  SHEETS[`${name}.walk_up`] = { src: `/sprites/${base}_walk_up.png`, fps: def.walkFps };
+  SHEETS[`${name}.walk_side`] = { src: `/sprites/${base}_walk_side.png`, fps: def.walkFps };
+  if (def.attackFps === undefined) return;
+  if (def.isDirectionalAttack) {
+    SHEETS[`${name}.attack_down`] = { src: `/sprites/${base}_attack_down.png`, fps: def.attackFps };
+    SHEETS[`${name}.attack_up`] = { src: `/sprites/${base}_attack_up.png`, fps: def.attackFps };
+    SHEETS[`${name}.attack_side`] = { src: `/sprites/${base}_attack_side.png`, fps: def.attackFps };
+  } else {
+    SHEETS[`${name}.attack`] = { src: `/sprites/${base}_attack.png`, fps: def.attackFps };
+  }
+}
+
+// AD-approved directional sets (final art gate): exact file stems per the content
+// manifest — Ian copies the approved box files onto these names, no code changes.
+// Fps values are start points the AD can tune per line.
+registerDirectionalSet("charger", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("burrower", { walkFps: 10, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("orbiter", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
+registerDirectionalSet("marrow", { walkFps: 8, attackFps: 10, isDirectionalAttack: true });
+registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAttack: true, fileBase: "weaver2_px" });
+registerDirectionalSet("gilded", { walkFps: 6, attackFps: 10, isDirectionalAttack: true });
+// The Hollow Choir is the stationary drifting mass: one breathing idle loop + one omni
+// attack sheet (no walk triplet — the selection ladder falls from walk to idle for it).
+SHEETS["choir.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
+SHEETS["choir.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -158,7 +181,9 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/held_railgun.png",
   nailer: "/sprites/held_nailer.png",
   flamer: "/sprites/held_flamer.png",
-  // AD-approved final (content manifest: beam2 pair) — drop-in exact filename.
+  // AD-approved finals (content manifest) — drop-in exact filenames. The Undertow's
+  // pair stays unregistered pending the AD's final decision (pistol/gun fallbacks hold).
+  mortar: "/sprites/held_thumper.png",
   beam: "/sprites/held_beam2_px.png",
   // Melee (WeaponId -> AD's blade art: cutlass/claymore/pike).
   sword: "/sprites/held_cutlass.png",
@@ -183,7 +208,8 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/weapon_railgun.png",
   nailer: "/sprites/weapon_nailer.png",
   flamer: "/sprites/weapon_flamer.png",
-  // AD-approved final (content manifest: beam2 pair) — drop-in exact filename.
+  // AD-approved finals (content manifest) — drop-in exact filenames (Undertow pending).
+  mortar: "/sprites/weapon_thumper.png",
   beam: "/sprites/beam2_px.png",
   sword: "/sprites/weapon_cutlass.png",
   longsword: "/sprites/weapon_claymore.png",

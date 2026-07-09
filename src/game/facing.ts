@@ -131,7 +131,11 @@ export function resolveClip(hasClip: (clip: SelectableClip) => boolean, pose: En
   }
   const dirWalk: SelectableClip = `walk_${pose.facing}`;
   if (hasClip(dirWalk)) return { clip: dirWalk, isMirrored: isSideMirror, isHoldFirstFrame: !pose.isMoving };
-  // Legacy tier: exactly the pre-contract behavior for sprites without directional art.
-  const legacy: SelectableClip = pose.isMoving ? "walk" : "idle";
-  return { clip: legacy, isMirrored: pose.isMirrored, isHoldFirstFrame: false };
+  // Legacy tier: exactly the pre-contract behavior for sprites without directional art —
+  // except that a MOVING body with no walk sheet keeps its idle loop when one exists
+  // (the Hollow Choir's stationary-boss contract: a drifting mass breathes, it never
+  // "walks"), rather than dropping all the way to the static base.
+  if (pose.isMoving && hasClip("walk")) return { clip: "walk", isMirrored: pose.isMirrored, isHoldFirstFrame: false };
+  if (pose.isMoving && !hasClip("idle")) return { clip: "walk", isMirrored: pose.isMirrored, isHoldFirstFrame: false };
+  return { clip: "idle", isMirrored: pose.isMirrored, isHoldFirstFrame: false };
 }
