@@ -868,8 +868,8 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   for (const b of w.bullets) {
     if (Math.hypot(b.x - e.x, b.y - e.y) <= def.bulletClearRadius) b.life = 0;
   }
-  // The beat's adds at opposite marked edges. The Marrow REMEMBERS its husks: killing
-  // them all collapses the shield early (see marrowShieldTick).
+  // The beat's adds at opposite marked edges. MARROW remembers its husks: killing them
+  // all collapses the shield early (the "shield" branch of marrowWindup).
   boss.shieldHuskIds.length = 0;
   const edgeAngle = w.rng.next() * Math.PI * 2;
   for (let i = 0; i < def.addCount; i++) {
