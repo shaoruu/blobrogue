@@ -2,7 +2,7 @@
 
 import type { WeaponId, SpriteName } from "../sim/types.js";
 import { resolveClip } from "./facing.js";
-import type { SelectableClip, EnemyPose, ClipChoice } from "./facing.js";
+import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice } from "./facing.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -68,6 +68,28 @@ export function registerDirectionalSet(name: SpriteName, def: DirectionalSetDef)
     SHEETS[`${name}.attack_side`] = { src: `/sprites/${base}_attack_side.png`, fps: def.attackFps };
   } else {
     SHEETS[`${name}.attack`] = { src: `/sprites/${base}_attack.png`, fps: def.attackFps };
+  }
+}
+
+// Move-specific telegraph sheets (the multi-move boss contract): registers
+// `<sprite>.<move>_<phase>[_<facing>]` -> `/sprites/<base>_<move>_<phase>[_<facing>].png`,
+// which OUTRANKS the generic attack tiers in the selection ladder (facing.ts). Entirely
+// optional and per-sheet: author only the beats that need bespoke poses (a charge windup,
+// a quake active, a crash-stun recover) and everything else keeps resolving through the
+// generic set. `phase` spans windup/active/recover.
+export function registerMoveSheet(
+  name: SpriteName,
+  clip: MovePhaseClip,
+  fps: number,
+  opts: { isDirectional?: boolean; fileBase?: string } = {},
+): void {
+  const base = opts.fileBase ?? name;
+  if (opts.isDirectional) {
+    SHEETS[`${name}.${clip}_down`] = { src: `/sprites/${base}_${clip}_down.png`, fps };
+    SHEETS[`${name}.${clip}_up`] = { src: `/sprites/${base}_${clip}_up.png`, fps };
+    SHEETS[`${name}.${clip}_side`] = { src: `/sprites/${base}_${clip}_side.png`, fps };
+  } else {
+    SHEETS[`${name}.${clip}`] = { src: `/sprites/${base}_${clip}.png`, fps };
   }
 }
 

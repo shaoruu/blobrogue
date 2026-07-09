@@ -75,10 +75,23 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 - Pending gates keep their fallbacks: Undertow pair and the shielder set are deliberately
   unregistered until the AD's final call.
 
-Selection degrades one deliberate step at a time — `attack_<facing>` → `attack` →
+**Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
+MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored
+move+phase sheet outranks the generic tiers. Convention:
+`<stem>_<move>_<phase>[_<facing>].png` with phase ∈ windup/active/recover (recover means
+authored punish poses — a crash-stun dizzy sheet — are first-class). Register per beat:
+```ts
+registerMoveSheet("marrow", "rush_windup", 12, { isDirectional: true });
+registerMoveSheet("gilded", "slam_active", 10);
+registerMoveSheet("weaver", "pounce_active", 12, { fileBase: "weaver2_px" });
+```
+
+Selection degrades one deliberate step at a time —
+`<move>_<phase>_<facing>` → `<move>_<phase>` → `attack_<facing>` → `attack` →
 `walk_<facing>` → legacy `walk`/`idle` → static PNG + procedural juice — so partial sets
-ship safely and every existing sprite keeps today's exact look until its directional art
-lands. Contract locked by `npm run test:facing`.
+ship safely: author only the beats that need bespoke poses and every other state keeps
+resolving through the generic set. Every existing sprite keeps today's exact look until
+its art lands. Contract locked by `npm run test:facing`.
 
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.

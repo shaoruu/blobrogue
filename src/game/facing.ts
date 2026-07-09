@@ -106,9 +106,17 @@ export type DirectionalClip =
   | "walk_down" | "walk_up" | "walk_side"
   | "attack_down" | "attack_up" | "attack_side" | "attack";
 
+// MOVE-SPECIFIC telegraph sheets: a generic attack sheet cannot express a multi-move
+// boss (MARROW's charge is not its volley; the Warden's quake is not its sweep), so any
+// authored move+phase — `<sprite>.<move>_<phase>[_<facing>]`, e.g. "rush_windup_side" or
+// "slam_active" — outranks the generic tiers. Phase includes "recover", so authored
+// punish-window poses (the crash stun's dizzy sheet) have a first-class slot too.
+export type MovePhaseClip = `${Exclude<AttackMove, "none">}_${Exclude<AttackPhase, "none">}`;
+export type MoveClip = MovePhaseClip | `${MovePhaseClip}_${Facing4}`;
+
 // Every clip the selection ladder can request (the "death" one-shot lives outside the
 // ladder — corpses are their own render pass).
-export type SelectableClip = "idle" | "walk" | DirectionalClip;
+export type SelectableClip = "idle" | "walk" | DirectionalClip | MoveClip;
 
 export interface ClipChoice {
   clip: SelectableClip;      // absent sheets additionally fall through in drawChar
@@ -118,12 +126,21 @@ export interface ClipChoice {
 
 // Resolve the best available clip for a pose against whatever sheets have actually
 // loaded, degrading one deliberate step at a time:
-//   attack_<facing>  ->  attack  ->  walk_<facing> (frame 0 idles)  ->  legacy walk/idle
+//   <move>_<phase>_<facing>  ->  <move>_<phase>  ->  attack_<facing>  ->  attack
+//   ->  walk_<facing> (frame 0 idles)  ->  legacy walk/idle
 //   ->  static base sprite + procedural juice (today's look, untouched).
-// Directional art only mirrors on side-left; legacy art keeps the persistent 1-D mirror
-// existing enemies have always used.
+// Every tier is optional — a sprite with only a base PNG, only a walk set, one generic
+// attack sheet, or a full per-move library all resolve cleanly. Directional art only
+// mirrors on side-left; legacy art keeps the persistent 1-D mirror existing enemies have
+// always used.
 export function resolveClip(hasClip: (clip: SelectableClip) => boolean, pose: EnemyPose): ClipChoice {
   const isSideMirror = pose.facing === "side" && pose.isMirrored;
+  if (pose.move !== "none" && pose.phase !== "none") {
+    const movePhase: SelectableClip = `${pose.move}_${pose.phase}`;
+    const movePhaseFacing: SelectableClip = `${movePhase}_${pose.facing}`;
+    if (hasClip(movePhaseFacing)) return { clip: movePhaseFacing, isMirrored: isSideMirror, isHoldFirstFrame: false };
+    if (hasClip(movePhase)) return { clip: movePhase, isMirrored: isSideMirror, isHoldFirstFrame: false };
+  }
   if (pose.isAttacking) {
     const dirAttack: SelectableClip = `attack_${pose.facing}`;
     if (hasClip(dirAttack)) return { clip: dirAttack, isMirrored: isSideMirror, isHoldFirstFrame: false };

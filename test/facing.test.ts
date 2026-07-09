@@ -10,7 +10,7 @@ import {
   AIMED_MOVES, FACING_DEADZONE, FACING_AXIS_BIAS,
 } from "../src/game/facing.js";
 import type { EnemyPose, SelectableClip } from "../src/game/facing.js";
-import { SHEETS, devSpriteManifest } from "../src/game/assets.js";
+import { SHEETS, registerMoveSheet, devSpriteManifest } from "../src/game/assets.js";
 import { createEnemy } from "../src/sim/enemies.js";
 import type { Enemy, AttackMove } from "../src/sim/types.js";
 import { Rng } from "../src/sim/rng.js";
@@ -162,6 +162,72 @@ function ladderTests(): void {
   }
 }
 
+// Multi-move bosses need more than one generic attack sheet: any authored move+phase
+// outranks the generic tiers, and every absence falls through cleanly. Exercised with
+// each boss's REAL move ids (the AD language maps: Marrow charge/stomp -> rush/volley,
+// Weaver pounce/lattice -> pounce/weave, Warden slam/prison/turret-sweep -> slam/roar/
+// sweep, Choir sing/swell -> wail/fade).
+function moveSheetTests(): void {
+  section("move-specific telegraphs: authored move+phase outranks the generic attack");
+  const withSheets = (available: SelectableClip[]) => (clip: SelectableClip) => available.includes(clip);
+  {
+    // MARROW: a charge windup and a volley windup select DIFFERENT authored sheets.
+    const has = withSheets(["rush_windup_side", "rush_windup", "volley_windup", "attack_side", "attack"]);
+    const charge = resolveClip(has, poseOf({ isAttacking: true, move: "rush", phase: "windup", facing: "side", isMirrored: true }));
+    check("Marrow charge windup picks its own directional sheet", charge.clip === "rush_windup_side" && charge.isMirrored);
+    const volley = resolveClip(has, poseOf({ isAttacking: true, move: "volley", phase: "windup", facing: "side" }));
+    check("Marrow volley windup picks the volley sheet, never the charge's", volley.clip === "volley_windup");
+    const spin = resolveClip(has, poseOf({ isAttacking: true, move: "spin", phase: "windup", facing: "side" }));
+    check("an unauthored move (spin) falls back to the directional generic attack", spin.clip === "attack_side");
+  }
+  {
+    // WEAVER: pounce vs lattice-weave, plus phase specificity within one move.
+    const has = withSheets(["pounce_active", "weave_windup", "attack"]);
+    const pounce = resolveClip(has, poseOf({ isAttacking: true, move: "pounce", phase: "active", facing: "up" }));
+    check("Weaver pounce (airborne) picks its authored active sheet", pounce.clip === "pounce_active");
+    const weave = resolveClip(has, poseOf({ isAttacking: true, move: "weave", phase: "windup", facing: "up" }));
+    check("Weaver lattice-weave picks its own windup sheet", weave.clip === "weave_windup");
+    const pounceWindup = resolveClip(has, poseOf({ isAttacking: true, move: "pounce", phase: "windup", facing: "up" }));
+    check("the same move in an unauthored PHASE falls to the generic attack", pounceWindup.clip === "attack");
+  }
+  {
+    // GILDED WARDEN: three distinct commitments resolve three distinct sheets, and the
+    // authored EXPOSED recover (the punish pose) wins during recovery.
+    const has = withSheets(["slam_active", "sweep_active", "roar_windup", "slam_recover", "walk_down", "idle"]);
+    const slam = resolveClip(has, poseOf({ isAttacking: true, move: "slam", phase: "active", facing: "down" }));
+    const sweep = resolveClip(has, poseOf({ isAttacking: true, move: "sweep", phase: "active", facing: "down" }));
+    const sanctify = resolveClip(has, poseOf({ isAttacking: true, move: "roar", phase: "windup", facing: "down" }));
+    check("Warden quake / sweep / sanctify each select their own sheet",
+      slam.clip === "slam_active" && sweep.clip === "sweep_active" && sanctify.clip === "roar_windup");
+    const exposed = resolveClip(has, poseOf({ isAttacking: false, move: "slam", phase: "recover", facing: "down", isMoving: false }));
+    check("the EXPOSED recover pose is first-class (move+recover outranks idle)", exposed.clip === "slam_recover");
+  }
+  {
+    // CHOIR: sing (wail) vs swell (fade) — and with nothing authored, the ladder is
+    // byte-identical to the pre-contract behavior.
+    const has = withSheets(["wail_windup", "fade_active", "idle", "attack"]);
+    const sing = resolveClip(has, poseOf({ isAttacking: true, move: "wail", phase: "windup", facing: "side" }));
+    const swell = resolveClip(has, poseOf({ isAttacking: true, move: "fade", phase: "active", facing: "side" }));
+    check("Choir sing vs swell select different authored sheets", sing.clip === "wail_windup" && swell.clip === "fade_active");
+    const bare = resolveClip(withSheets(["walk", "idle"]), poseOf({ isAttacking: true, move: "wail", phase: "windup", isMoving: true }));
+    check("with no move or attack sheets at all, the legacy ladder is unchanged", bare.clip === "walk");
+  }
+  {
+    // The registration helper writes the exact key/filename contract, omni and directional.
+    registerMoveSheet("marrow", "rush_windup", 12, { isDirectional: true });
+    registerMoveSheet("gilded", "slam_active", 10);
+    registerMoveSheet("weaver", "pounce_active", 12, { fileBase: "weaver2_px" });
+    check("registerMoveSheet writes directional move keys off the stem",
+      SHEETS["marrow.rush_windup_side"]?.src === "/sprites/marrow_rush_windup_side.png"
+      && SHEETS["marrow.rush_windup_down"]?.src === "/sprites/marrow_rush_windup_down.png"
+      && SHEETS["marrow.rush_windup_up"]?.src === "/sprites/marrow_rush_windup_up.png");
+    check("registerMoveSheet writes omni move keys",
+      SHEETS["gilded.slam_active"]?.src === "/sprites/gilded_slam_active.png");
+    check("registerMoveSheet honors AD-versioned stems",
+      SHEETS["weaver.pounce_active"]?.src === "/sprites/weaver2_px_pounce_active.png");
+  }
+}
+
 // The AD's approved-final assets are drop-ins: the hooks must carry these EXACT
 // filenames so wiring the art is a pure file copy, never a code change.
 function approvedHookTests(): void {
@@ -227,6 +293,7 @@ function main(): void {
   facingTests();
   poseTests();
   ladderTests();
+  moveSheetTests();
   approvedHookTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
