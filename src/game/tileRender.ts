@@ -164,12 +164,17 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
           }
         }
       }
-      // Walkability outline: trace the exact floor/wall collision boundary ON the floor
-      // side. This is structural navigation guidance, visible in grayscale and blur.
+      // A wall directly above casts a shadow onto this floor tile — sells the height.
       const wallN = ty > 0 && d.tiles[(ty - 1) * d.w + tx] === 1;
       const wallS = ty + 1 < d.h && d.tiles[(ty + 1) * d.w + tx] === 1;
       const wallW = tx > 0 && d.tiles[ty * d.w + tx - 1] === 1;
       const wallE = tx + 1 < d.w && d.tiles[ty * d.w + tx + 1] === 1;
+      if (wallN && tiles.ready("wall_shadow")) {
+        ctx.drawImage(tiles.get("wall_shadow"), sx, sy, TILE, TILE);
+      }
+      // Walkability outline: trace the exact floor/wall collision boundary ON the floor
+      // side. This is structural navigation guidance, visible in grayscale and blur, so
+      // it draws ABOVE the cast shadow — under it, every north boundary loses its line.
       if (wallN || wallS || wallW || wallE) {
         ctx.save();
         ctx.globalAlpha = 0.72;
@@ -182,10 +187,6 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
         if (wallE) { ctx.moveTo(sx + TILE - 1, sy); ctx.lineTo(sx + TILE - 1, sy + TILE); }
         ctx.stroke();
         ctx.restore();
-      }
-      // A wall directly above casts a shadow onto this floor tile — sells the height.
-      if (wallN && tiles.ready("wall_shadow")) {
-        ctx.drawImage(tiles.get("wall_shadow"), sx, sy, TILE, TILE);
       }
     }
   }
