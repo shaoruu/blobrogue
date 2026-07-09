@@ -45,10 +45,12 @@ import type { Biome } from "../sim/biomes.js";
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
 // Why a run exited without a game over: the player quit, an online connection never came up,
-// the server bound us to a world other than the room's (world_mismatch — refuse to play), or
-// the party never assembled behind the readiness veil (party_incomplete). Lets the menu land
-// back on the lobby with an explicit explanation instead of silence.
-export type ExitReason = "quit" | "connect_failed" | "world_mismatch" | "party_incomplete";
+// the server bound us to a world other than the room's (world_mismatch — refuse to play),
+// the party never assembled behind the readiness veil (party_incomplete), the reconnect
+// window ran out (connection_lost — the run is unreachable, NOT a death), or another session
+// with this identity took the body over (superseded). Lets the menu land back on the lobby
+// with an explicit explanation instead of silence.
+export type ExitReason = "quit" | "connect_failed" | "world_mismatch" | "party_incomplete" | "connection_lost" | "superseded";
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -805,9 +807,11 @@ export class Game {
     t.poll();
 
     if (this.partyGate && this.online?.party) {
-      const connected = new Set(t.getWorldRoster().map((r) => r.aid));
+      const roster = t.getWorldRoster();
+      const connected = new Set(roster.filter((r) => r.st === "on").map((r) => r.aid));
+      const away = new Set(roster.filter((r) => r.st === "away").map((r) => r.aid));
       const expected = this.online.party();
-      const view = this.partyGate.evaluate(Date.now(), expected, connected);
+      const view = this.partyGate.evaluate(Date.now(), expected, connected, away);
       this.partyView = view;
       if (view.phase === "failed") {
         console.warn("[net] party never assembled — returning to the lobby", {
@@ -853,6 +857,14 @@ export class Game {
     // Behind the readiness veil: no gameplay runs and nothing of the world shows.
     if (this.isAwaitingOnlineWorld()) {
       this.tickOnlineVeil(dt);
+      return;
+    }
+    // Mid-run outage: the transport is resuming with its seat token and the server is holding
+    // our body safe. Freeze gameplay on the last authoritative frame — no inputs, no local
+    // prediction drift — and let the CONNECTION LOST overlay carry the state. Never a game
+    // over; the terminal paths route through onOnlineStatus if the window runs out.
+    if (this.mode === "online" && this.wsTransport?.getReconnectInfo().isReconnecting) {
+      this.updateHud();
       return;
     }
 
@@ -1801,12 +1813,17 @@ export class Game {
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     } else if (this.mode === "online" && this.wsTransport) {
       // Authoritative debugging surface: the world id the SERVER bound us to (never a local
-      // assumption) + how many connections that world actually holds — exactly the two facts
-      // whose disagreement was the Sev-0. Falls back to the room code until the first snap.
-      const live = !this.wsTransport.isReady() ? "CONNECTING" : this.isWorldRevealed ? "ONLINE" : "WAITING";
+      // assumption) + how many seats that world actually holds (and how many are mid-outage)
+      // — exactly the facts whose disagreement was the Sev-0. Falls back to the room code
+      // until the first snap.
+      const live = this.wsTransport.getReconnectInfo().isReconnecting ? "RECONNECTING"
+        : !this.wsTransport.isReady() ? "CONNECTING"
+          : this.isWorldRevealed ? "ONLINE" : "WAITING";
       const wid = this.wsTransport.getWorldId() ?? (this.online?.roomCode ? `room:${this.online.roomCode}` : null);
-      const connected = this.wsTransport.getWorldRoster().length;
-      coopLabel = `${live}${wid ? ` \u00b7 ${wid}` : ""}${connected > 0 ? ` \u00b7 ${connected} connected` : ""}`;
+      const roster = this.wsTransport.getWorldRoster();
+      const connected = roster.filter((r) => r.st === "on").length;
+      const away = roster.length - connected;
+      coopLabel = `${live}${wid ? ` \u00b7 ${wid}` : ""}${connected > 0 ? ` \u00b7 ${connected} connected` : ""}${away > 0 ? ` \u00b7 ${away} reconnecting` : ""}`;
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -1891,18 +1908,30 @@ export class Game {
     this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
   }
 
-  // Online transport terminal states end the run cleanly instead of freezing the last frame:
-  // once we were PLAYING in the authoritative world, a closed/errored socket IS the end of
-  // this run (the server also closes the socket after a game over — same path). Before the
-  // reveal — connect failure, a world-binding mismatch, or a drop while the readiness veil
-  // was up — return to the lobby with the explicit reason instead: no run happened.
-  private onOnlineStatus(s: "connecting" | "open" | "closed" | "error") {
+  // Online transport terminal states end the run cleanly instead of freezing the last frame.
+  // The ONLY path that reads as a death is the server's own game-over close — a network
+  // outage that exhausts the reconnect window is connection_lost (back to the lobby, the run
+  // may still be live for friends), never a fabricated YOU DIED. Pre-reveal failures return
+  // to the lobby with their explicit reason: no run happened. "reconnecting" is not terminal
+  // — the freeze in tick() and the overlay own that state.
+  private onOnlineStatus(s: "connecting" | "open" | "reconnecting" | "closed" | "error") {
     if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
     if (s !== "closed" && s !== "error") return;
-    if (this.wsTransport.isReady() && this.isWorldRevealed) { this.gameOver(); return; }
+    const kind = this.wsTransport.getCloseKind();
+    if (kind === "game_over" && this.wsTransport.isReady() && this.isWorldRevealed) { this.gameOver(); return; }
     const mismatch = this.wsTransport.getWorldMismatch();
-    if (mismatch) this.quitToMenu("world_mismatch", `expected ${mismatch.expected}, got ${mismatch.got}`);
-    else this.quitToMenu("connect_failed");
+    if (mismatch) { this.quitToMenu("world_mismatch", `expected ${mismatch.expected}, got ${mismatch.got}`); return; }
+    switch (kind) {
+      case "connection_lost": this.quitToMenu("connection_lost"); return;
+      case "superseded": this.quitToMenu("superseded"); return;
+      case "resume_rejected": this.quitToMenu("connection_lost", "resume rejected"); return;
+      // The run ended while we were still behind the veil — nothing was played; regroup.
+      case "game_over": this.quitToMenu("connection_lost", "the run ended before you got in"); return;
+      case null: break;
+    }
+    // No classified cause (defensive): a dead mid-run socket is an OUTAGE, never a death.
+    if (this.wsTransport.isReady() && this.isWorldRevealed) { this.quitToMenu("connection_lost"); return; }
+    this.quitToMenu("connect_failed");
   }
 
   // True when a world point is on (or near) the visible screen — used to gate audio
@@ -2100,6 +2129,36 @@ export class Game {
     this.renderHurtVignette();
     this.renderReticle();
     this.renderMinimap();
+    this.renderReconnectOverlay();
+  }
+
+  // Mid-run outage overlay: the world stays visible (frozen on the last authoritative
+  // frame), and the banner states exactly what is happening — the connection dropped, the
+  // attempt counter is live, and the server-side grace countdown shows how long the body is
+  // held. Explicitly NOT a game-over screen.
+  private renderReconnectOverlay() {
+    if (this.mode !== "online" || !this.wsTransport) return;
+    const info = this.wsTransport.getReconnectInfo();
+    if (!info.isReconnecting) return;
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(13, 10, 24, 0.72)";
+    ctx.fillRect(0, cy - 58, canvas.width, 116);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const pulse = 0.6 + 0.3 * Math.sin(this.animClock * 4);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffb43b";
+    ctx.font = '700 14px "Silkscreen", monospace';
+    ctx.fillText(`CONNECTION LOST \u00b7 RECONNECTING (${info.attempt})`, cx, cy - 16);
+    ctx.globalAlpha = 1;
+    const graceLeft = Math.max(0, Math.ceil((info.graceEndsAtMs - Date.now()) / 1000));
+    ctx.fillStyle = "#e8e2f4";
+    ctx.font = '16px "VT323", monospace';
+    ctx.fillText(`your blob is safe \u00b7 the server holds your run for ${graceLeft}s`, cx, cy + 14);
+    ctx.restore();
   }
 
   // The pre-reveal online frame: a plain dark hold, never the placeholder dungeon — showing
@@ -2145,13 +2204,13 @@ export class Game {
       ctx.fillStyle = "#e8e2f4";
       ctx.fillText(`${m.name}${m.isSelf ? " (you)" : ""}`, cx - 136, y);
       ctx.textAlign = "right";
-      if (m.isConnected) {
+      if (m.link === "connected") {
         ctx.fillStyle = "#7CFC98";
         ctx.fillText("CONNECTED TO WORLD", cx + 150, y);
       } else {
         ctx.fillStyle = "#ffb43b";
         ctx.globalAlpha = pulse;
-        ctx.fillText("CONNECTING\u2026", cx + 150, y);
+        ctx.fillText(m.link === "reconnecting" ? "RECONNECTING\u2026" : "CONNECTING\u2026", cx + 150, y);
         ctx.globalAlpha = 1;
       }
       ctx.textAlign = "center";
@@ -3152,7 +3211,9 @@ export class Game {
       const entry = this.remoteAnims.get(r.playerId);
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
-      ctx.globalAlpha = r.isDown ? 0.4 : 1;
+      // A network-absent teammate renders as an explicit ghost (their body is reserved for
+      // the reconnect grace) — never mistakable for a live player or a corpse.
+      ctx.globalAlpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
       ctx.scale(r.facing * xf.sx, xf.sy);
@@ -3164,7 +3225,7 @@ export class Game {
       }
       ctx.restore();
 
-      if (!r.isDown) {
+      if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
         else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
       }
@@ -3172,7 +3233,9 @@ export class Game {
       ctx.fillStyle = color;
       ctx.font = '700 11px "Silkscreen", monospace';
       ctx.textAlign = "center";
-      ctx.fillText(r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.globalAlpha = r.isAbsent ? 0.8 : 1;
+      ctx.fillText(r.isAbsent ? `${r.name} (reconnecting\u2026)` : r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.globalAlpha = 1;
       ctx.textAlign = "left";
     }
   }

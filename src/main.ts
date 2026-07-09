@@ -51,6 +51,8 @@ async function bootNormal() {
       case "connect_failed": return "couldn't reach the game server \u2014 try again in a moment";
       case "world_mismatch": return `joined the wrong world \u2014 left for safety (${detail ?? "world mismatch"})`;
       case "party_incomplete": return `the party never assembled${detail ? ` \u2014 still waiting on ${detail}` : ""} \u2014 regroup and start again`;
+      case "connection_lost": return `connection lost and the reconnect window ran out${detail ? ` (${detail})` : ""} \u2014 REJOIN RUN if the party is still going`;
+      case "superseded": return "another tab or device took over this player \u2014 this session stepped aside";
       default: return "";
     }
   }
