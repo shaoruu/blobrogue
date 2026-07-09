@@ -655,7 +655,8 @@ function holdRevive(w: WorldState, reviver: PlayerSim, downed: PlayerSim, second
 
 function difficultyGates(): void {
   section("studio gate §1: three exact modes, standard default, strict validation");
-  check("exactly casual/standard/brutal, in order", DIFFICULTY_IDS.join(",") === "casual,standard,brutal");
+  check("OWNER DECISION: exactly THREE modes casual/standard/brutal (curriculum §7; never a Standard/Veteran pair)",
+    DIFFICULTY_IDS.length === 3 && DIFFICULTY_IDS.join(",") === "casual,standard,brutal");
   check("the compatibility default is STANDARD", DEFAULT_DIFFICULTY === "standard");
   check("isDifficulty accepts exactly the three ids",
     DIFFICULTY_IDS.every((id) => isDifficulty(id))

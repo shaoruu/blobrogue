@@ -11,6 +11,12 @@ export const BALANCE_VERSION = 3;
 
 // ---- §0.5 difficulty modes (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §1) ----
 //
+// OWNER DECISION (after Game Designer review): exactly THREE modes — casual, standard,
+// brutal — per the committed studio-gate matrix, also recorded as the encounter
+// curriculum's §7 "Three explicit difficulty modes (owner decision)". Any spec draft
+// that names a two-mode Standard/Veteran split is superseded by this main-runner
+// contract; do not reduce, rename, or add modes without a new owner decision.
+//
 // ONE typed definition per mode, consumed at the deterministic floor-build/sim seams.
 // The gate's core rule: ALL modes use identical enemy/boss HP, tier HP, weapon DPS,
 // damage, phase thresholds/floors, windups, locks and recoveries — focused TTK stays
