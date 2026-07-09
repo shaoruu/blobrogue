@@ -333,17 +333,43 @@ export class Menu {
     return wrap;
   }
 
+  // The identity card's states share ONE 112px reserved box (108px mobile), all right-
+  // column-only and visually junior to Play (no amber fill, no pulse, no glow):
+  //   guest      — SAVE YOUR BLOB / value copy / SIGN IN WITH GOOGLE / "Optional" note
+  //   busy       — the CTA reads OPENING GOOGLE… (Play stays enabled throughout)
+  //   error      — the note says guest progress is still safe; the CTA becomes TRY AGAIN;
+  //                a cancelled sign-in simply restores this guest card — no punishment
+  //   signed-in  — avatar/name chip, "Progress saved across devices", VIEW PROFILE
+  //                (sign-out lives in Profile, never here)
   private renderIdentityInto(wrap: HTMLElement) {
     wrap.replaceChildren();
     if (this.auth && this.auth.isSignedIn) {
       wrap.appendChild(this.accountChip());
-      wrap.appendChild(el("p", "id-note", "progress, cosmetics & leaderboard runs are saved to this account — manage it in PROFILE"));
-    } else if (this.auth && this.auth.isCompletingSignIn) {
-      wrap.appendChild(el("p", "id-note id-pending", "signing you in with Google\u2026"));
-    } else {
-      wrap.appendChild(this.nameRow());
-      if (this.auth) wrap.appendChild(this.googleCta());
+      wrap.appendChild(el("p", "id-value", "Progress saved across devices"));
+      const view = el("button", "secondary id-view", "VIEW PROFILE ▸");
+      view.type = "button";
+      view.onclick = () => void this.showProfile();
+      wrap.appendChild(view);
+      wrap.appendChild(el("p", "id-note", "Signed in with Google"));
+      return;
     }
+    if (this.auth && this.auth.isCompletingSignIn) {
+      wrap.appendChild(el("p", "id-note id-pending", "signing you in with Google…"));
+      return;
+    }
+    wrap.appendChild(el("div", "id-title", "SAVE YOUR BLOB"));
+    wrap.appendChild(el("p", "id-value", "Keep progress, cosmetics, and ranked runs across devices."));
+    const note = el("p", "id-note", "Optional · Play anytime as guest.");
+    if (this.auth) {
+      const cta = el("button", "secondary btn-google");
+      cta.type = "button";
+      cta.appendChild(googleMark());
+      const label = el("span", "", "SIGN IN WITH GOOGLE");
+      cta.appendChild(label);
+      cta.onclick = () => void this.doSignIn(cta, label, note);
+      wrap.appendChild(cta);
+    }
+    wrap.appendChild(note);
   }
 
   // The account chip is pure DISPLAY (avatar + name). Sign-out lives on the own-profile
@@ -376,28 +402,20 @@ export class Menu {
     }
   }
 
-  // The guest sign-in CTA: one strong, honest pitch in the identity card. The error line
-  // reserves its height so a failed attempt never shifts the card.
-  private googleCta(): HTMLElement {
-    const wrap = el("div", "gcta");
-    const btn = el("button", "secondary btn-google");
-    btn.appendChild(googleMark());
-    btn.appendChild(el("span", "", "Sign in with Google"));
-    const benefits = el("p", "gcta-benefits", SIGNIN_BENEFITS);
-    const status = el("p", "muted auth-status");
-    btn.addEventListener("click", () => void this.doSignIn(status));
-    wrap.append(btn, benefits, status);
-    return wrap;
-  }
-
-  private async doSignIn(status: HTMLElement) {
+  // Kick off the redirect. Busy/error states swap CONTENT inside the same boxes: the CTA
+  // label flips to OPENING GOOGLE\u2026 (Play is never disabled), a failure flips it to TRY
+  // AGAIN with the note reassuring that guest progress is untouched.
+  private async doSignIn(cta: HTMLButtonElement, label: HTMLElement, note: HTMLElement) {
     if (!this.auth) return;
-    status.textContent = "";
+    label.textContent = "OPENING GOOGLE\u2026";
+    cta.disabled = true;
     try {
       await this.auth.signInWithGoogle();
       // On success the browser navigates to Google; control returns via ?code=.
     } catch (err) {
-      status.textContent = "sign-in unavailable \u2014 server not configured yet";
+      label.textContent = "TRY AGAIN";
+      cta.disabled = false;
+      note.textContent = "Sign-in didn\u2019t complete \u2014 your guest progress is still safe.";
       console.warn("[menu] Google sign-in failed", err);
     }
   }
@@ -777,6 +795,9 @@ export class Menu {
       out.addEventListener("click", () => void this.doSignOut());
       account.appendChild(out);
     } else {
+      // Guests manage their display name HERE (identity lives on the profile surface;
+      // the home identity card is the sign-in pitch).
+      account.appendChild(this.nameRow());
       account.appendChild(el("p", "muted id-note",
         this.client
           ? "playing as guest \u2014 sign in from the title screen to keep this blob across devices"
@@ -1441,8 +1462,9 @@ export class Menu {
     const status = el("p", "muted auth-status");
     const signin = el("button", "secondary btn-google");
     signin.appendChild(googleMark());
-    signin.appendChild(el("span", "", "Sign in with Google"));
-    signin.addEventListener("click", () => void this.doSignIn(status));
+    const signinLabel = el("span", "", "Sign in with Google");
+    signin.appendChild(signinLabel);
+    signin.addEventListener("click", () => void this.doSignIn(signin, signinLabel, status));
     const later = el("button", "secondary nudge-later", "not now");
     later.addEventListener("click", () => {
       recordNudgeDismissed(localStorage);

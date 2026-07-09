@@ -153,7 +153,7 @@ function fakeConvex(opts: FakeOpts = {}): ConvexClient {
   return fake as unknown as ConvexClient;
 }
 
-type FakeAuth = AuthClient & { fire(): void; setSignedIn(v: boolean): void; setCompleting(v: boolean): void };
+type FakeAuth = AuthClient & { fire(): void; setSignedIn(v: boolean): void; setCompleting(v: boolean): void; signInWithGoogle: () => Promise<void> };
 
 function fakeAuth(isSignedIn: boolean, isCompletingSignIn = false): FakeAuth {
   const listeners = new Set<() => void>();
@@ -161,7 +161,7 @@ function fakeAuth(isSignedIn: boolean, isCompletingSignIn = false): FakeAuth {
   const auth = {
     get isSignedIn() { return state.isSignedIn; },
     get isCompletingSignIn() { return state.isCompletingSignIn; },
-    signInWithGoogle: () => Promise.resolve(),
+    signInWithGoogle: (() => Promise.resolve()) as () => Promise<void>,
     signOut: () => Promise.resolve(),
     onChange: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
     fire: () => { for (const cb of listeners) cb(); },
@@ -487,7 +487,7 @@ async function main(): Promise<void> {
     const { menu, overlay } = makeMenu({ auth, lb: LB_ENTRIES.slice(0, 2) });
     await menu.showTitle();
     check("pending state renders in the reserved identity card", textOf(overlay).includes("signing you in"));
-    check("no guest CTA while the exchange is pending", !buttonsOf(overlay).some((b) => b.includes("Sign in with Google")));
+    check("no guest CTA while the exchange is pending", !buttonsOf(overlay).some((b) => b.includes("SIGN IN WITH GOOGLE")));
     const playBefore = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
     auth.setCompleting(false);
     auth.setSignedIn(true);
@@ -502,7 +502,7 @@ async function main(): Promise<void> {
     await failed.menu.showTitle();
     failAuth.setCompleting(false);
     failAuth.fire();
-    check("a failed exchange settles into the guest CTA", buttonsOf(failed.overlay).some((b) => b.includes("Sign in with Google")));
+    check("a failed exchange settles into the guest CTA", buttonsOf(failed.overlay).some((b) => b.includes("SIGN IN WITH GOOGLE")));
   }
 
   section("failure/retry geometry: action-screen status lines are reserved boxes");
@@ -529,16 +529,40 @@ async function main(): Promise<void> {
     const guest = makeMenu({ auth: fakeAuth(false) });
     await guest.menu.showTitle();
     const guestText = textOf(guest.overlay);
-    check("guest sees the Google CTA", buttonsOf(guest.overlay).some((b) => b.includes("Sign in with Google")));
-    check("CTA pitches concrete benefits", guestText.includes("cosmetics & leaderboard runs") && guestText.includes("across devices"));
-    check("guest keeps the name input (play is never gated)", collect(guest.overlay, (n) => n.tagName === "INPUT").length === 1);
+    check("guest card title is SAVE YOUR BLOB", guestText.includes("SAVE YOUR BLOB"));
+    check("guest sees the Google CTA", buttonsOf(guest.overlay).some((b) => b.includes("SIGN IN WITH GOOGLE")));
+    check("value copy is the accepted line", guestText.includes("Keep progress, cosmetics, and ranked runs across devices."));
+    check("the optional note keeps guest play un-gated", guestText.includes("Optional \u00b7 Play anytime as guest."));
+    check("the HOME carries no name input (identity edits live in Profile)", collect(guest.overlay, (n) => n.tagName === "INPUT").length === 0);
+    // Busy: the CTA flips to OPENING GOOGLE… and Play stays enabled.
+    const hangAuth = fakeAuth(false);
+    hangAuth.signInWithGoogle = () => new Promise(() => {});
+    const busy = makeMenu({ auth: hangAuth });
+    await busy.menu.showTitle();
+    const cta = collect(busy.overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("SIGN IN WITH GOOGLE"))[0];
+    cta?.onclick?.();
+    check("busy CTA reads OPENING GOOGLE\u2026", textOf(busy.overlay).includes("OPENING GOOGLE"));
+    const playBtn = collect(busy.overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
+    check("Play stays enabled while the CTA is busy", playBtn?.disabled !== true);
+    // Error: honest reassurance + TRY AGAIN, same boxes; guest state untouched.
+    const failAuth2 = fakeAuth(false);
+    failAuth2.signInWithGoogle = () => Promise.reject(new Error("popup closed"));
+    const errored = makeMenu({ auth: failAuth2 });
+    await errored.menu.showTitle();
+    collect(errored.overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("SIGN IN WITH GOOGLE"))[0]?.onclick?.();
+    await settle();
+    const errText = textOf(errored.overlay);
+    check("a failed sign-in reassures that guest progress is safe", errText.includes("guest progress is still safe"));
+    check("...and offers TRY AGAIN in the same box", buttonsOf(errored.overlay).some((b) => b.includes("TRY AGAIN")));
 
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
     check("signed-in shows the account chip (display only)", byClass(signed.overlay, "account").length === 1);
     check("sign-out does NOT live on the title (it belongs to the profile)", !buttonsOf(signed.overlay).some((b) => b === "sign out"));
-    check("signed-in has NO sign-in CTA", !buttonsOf(signed.overlay).some((b) => b.includes("Sign in with Google")));
-    check("signed-in states what the account holds", textOf(signed.overlay).includes("saved to this account"));
+    check("signed-in has NO sign-in CTA", !buttonsOf(signed.overlay).some((b) => b.includes("SIGN IN WITH GOOGLE")));
+    check("signed-in value line", textOf(signed.overlay).includes("Progress saved across devices"));
+    check("signed-in offers VIEW PROFILE", buttonsOf(signed.overlay).some((b) => b.includes("VIEW PROFILE")));
+    check("signed-in note", textOf(signed.overlay).includes("Signed in with Google"));
   }
 
   section("own profile Overview: the same fixed surface, owner extras, real data only");
@@ -567,6 +591,7 @@ async function main(): Promise<void> {
     const freshAll = textOf(fresh.overlay);
     check("uncharted profile keeps the card with honest states", byClass(fresh.overlay, "profile-card").length === 1 && freshAll.includes("no charted run yet"));
     check("guest account region is the honest guest line", freshAll.includes("playing as guest"));
+    check("the guest NAME INPUT lives here (moved off the home card)", collect(fresh.overlay, (n) => n.tagName === "INPUT").length === 1);
 
     // Failed own-run fetch: same geometry, honest note.
     const broken = makeMenu({ mine: "fail" });
