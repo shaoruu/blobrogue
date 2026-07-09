@@ -5,6 +5,7 @@
 
 import type { WebSocket } from "ws";
 import type { PlayerId } from "../../src/sim/input.js";
+import type { PetKind } from "../../src/sim/types.js";
 import type { InterestView } from "../../src/net/protocol.js";
 import { createInterestView } from "../../src/net/protocol.js";
 
@@ -43,6 +44,9 @@ export interface Conn {
   // the display name shown above this player's blob, and their chosen blob color.
   displayName: string | null;
   colorIndex: number | null;
+  // Verified equipped companion from the ticket (minted only from an account profile that
+  // unlocked it); spawned into the sim at bind time. null = no pet (every guest).
+  petKind: PetKind | null;
   malformed: number;         // count of malformed messages (kick threshold)
 
   connectedAt: number;
@@ -103,7 +107,7 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "malformed"
+  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "petKind" | "malformed"
   | "connectedAt" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
@@ -112,7 +116,7 @@ export function newConnState(now: number): Pick<Conn,
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
-    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, malformed: 0,
+    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, petKind: null, malformed: 0,
     connectedAt: now, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,

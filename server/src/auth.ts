@@ -11,7 +11,10 @@
 //         client can never assert a world id itself. Absent -> the default/public world.
 //   nm  — the player's display name (shown above their blob to other players).
 //   cl  — a cosmetic color index (player-chosen blob tint).
-// All three are validated/sanitized here before anything trusts them.
+//   pt  — the player's equipped companion pet. Convex mints it only from a signed-in
+//         profile whose unlock set contains it, so a client can never assert a pet —
+//         account progression is the sole source. Absent -> no pet (every guest).
+// All four are validated/sanitized here before anything trusts them.
 //
 // The signature is HMAC-SHA256 over `v1.<payload>`, so the secret never leaves the server<->
 // minter trust boundary and can be rotated without a client change.
@@ -22,6 +25,8 @@
 // worlds too. It is off by default — production requires a real signed ticket.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { isPetKind } from "../../src/sim/pets.js";
+import type { PetKind } from "../../src/sim/types.js";
 
 export interface TicketPayload {
   pid: string;  // authenticated playerId
@@ -29,6 +34,7 @@ export interface TicketPayload {
   wld?: string; // authorized world id
   nm?: string;  // display name
   cl?: number;  // cosmetic color index
+  pt?: string;  // equipped companion pet (a PetKind)
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -36,6 +42,7 @@ export interface TicketClaims {
   worldId?: string;
   name?: string;
   colorIndex?: number;
+  pet?: string;
 }
 
 export interface AuthResult {
@@ -44,6 +51,7 @@ export interface AuthResult {
   worldId?: string;     // verified world authorization (absent -> default world)
   name?: string;        // sanitized display name
   colorIndex?: number;  // validated cosmetic color index
+  pet?: PetKind;        // validated equipped companion pet
   reason?: string;
 }
 
@@ -77,12 +85,13 @@ function sign(secret: string, body: string): string {
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
-// (payload keys in the FIXED order pid, exp, wld, nm, cl; see convex/gsTicketCore.ts).
+// (payload keys in the FIXED order pid, exp, wld, nm, cl, pt; see convex/gsTicketCore.ts).
 export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
   if (claims.name !== undefined) payload.nm = claims.name;
   if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
+  if (claims.pet !== undefined) payload.pt = claims.pet;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -147,6 +156,10 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
       return { ok: false, reason: "bad_color" };
     }
     out.colorIndex = payload.cl;
+  }
+  if (payload.pt !== undefined) {
+    if (!isPetKind(payload.pt)) return { ok: false, reason: "bad_pet" };
+    out.pet = payload.pt;
   }
   return out;
 }

@@ -44,7 +44,7 @@ async function main(): Promise<void> {
       check(`byte equality for pid=${JSON.stringify(pid.slice(0, 24))}`, fromConvex === fromServer);
     }
     // Every optional-claim combination must serialize identically on both sides (the fixed
-    // pid,exp,wld,nm,cl key order is the byte contract).
+    // pid,exp,wld,nm,cl,pt key order is the byte contract).
     const claimVariants: Array<[string, GsTicketClaims]> = [
       ["world only", { worldId: "room:ABCD" }],
       ["world+name", { worldId: "room:ABCD", name: "Ada" }],
@@ -52,6 +52,8 @@ async function main(): Promise<void> {
       ["name only (quick play identity)", { name: "blob" }],
       ["unicode name", { worldId: "room:WXYZ", name: "\u00e9\u00e8-bl\u00f6b \u2764", colorIndex: 5 }],
       ["color 0 (explicit amber)", { name: "amber", colorIndex: 0 }],
+      ["pet only", { pet: "ember_pup" }],
+      ["every claim (world+name+color+pet)", { worldId: "room:ABCD", name: "Ada", colorIndex: 3, pet: "bonebird" }],
     ];
     for (const [label, claims] of claimVariants) {
       const fromConvex = await mintGsTicket(secret, "player-1", 120, now, claims);
@@ -88,6 +90,15 @@ async function main(): Promise<void> {
     check("oversized world id rejects", verifyTicket(cfg, longWorld, now).ok === false);
     const badColor = await mintGsTicket(secret, "player-1", 120, now, { colorIndex: 99 });
     check("out-of-range color rejects (bad_color)", verifyTicket(cfg, badColor, now).reason === "bad_color");
+
+    // The companion-pet claim: verifies back out for a real kind, absent means none, and a
+    // signed-but-unknown kind rejects (progression is minted, never asserted).
+    const petful = await mintGsTicket(secret, "player-1", 120, now, { pet: "lantern_wisp" });
+    const petRes = verifyTicket(cfg, petful, now);
+    check("pet claim round-trips", petRes.ok === true && petRes.pet === "lantern_wisp", `got=${petRes.pet}`);
+    check("claimless ticket verifies with NO pet", verifyTicket(cfg, await mintGsTicket(secret, "player-1", 120, now), now).pet === undefined);
+    const badPet = await mintGsTicket(secret, "player-1", 120, now, { pet: "dragon" });
+    check("unknown pet kind rejects (bad_pet)", verifyTicket(cfg, badPet, now).reason === "bad_pet");
 
     // Tampering with the world claim (world-hop attempt) breaks the signature.
     const [head, payload] = ticket.split(".");

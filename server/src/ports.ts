@@ -7,7 +7,7 @@
 // reconciliation/interp/lag-comp stays untouched.
 
 import type { WorldState } from "../../src/sim/world.js";
-import type { WeaponId } from "../../src/sim/types.js";
+import type { PetKind, WeaponId } from "../../src/sim/types.js";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { WireEvent } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
@@ -21,7 +21,9 @@ export interface RoomRuntime {
   readonly conns: Map<number, Conn>;
   readonly playerCount: number;
 
-  addPlayer(pid: PlayerId): void;
+  // pet: the player's verified companion claim from their join ticket (spawned with them;
+  // removed with them). null/omitted = none.
+  addPlayer(pid: PlayerId, pet?: PetKind | null): void;
   removePlayer(pid: PlayerId): void;
 
   // Reset to a fresh run (new seed, floor 1). The session store calls this when the room

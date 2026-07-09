@@ -42,10 +42,11 @@ export class WorldRegistry implements SessionStore {
     return n;
   }
 
-  // Bind a connection to a room: add its player + register the conn on the room.
+  // Bind a connection to a room: add its player (+ their verified companion pet, if the
+  // ticket carried one) + register the conn on the room.
   bind(conn: Conn, roomId: string): RoomRuntime {
     const room = this.ensureRoom(roomId);
-    room.addPlayer(conn.playerId!);
+    room.addPlayer(conn.playerId!, conn.petKind);
     room.conns.set(conn.id, conn);
     conn.worldId = room.id;
     return room;

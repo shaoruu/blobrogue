@@ -139,11 +139,55 @@ async function main(): Promise<void> {
     } finally { await s.close(); }
   });
 
+  await test("companion pets: the verified ticket claim spawns a shared, owner-linked pet", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "pup-owner", world: "room:PETS", name: "Ada", pet: "ember_pup", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "no-pet", world: "room:PETS", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+
+      const world = s.server.getWorld("room:PETS");
+      check("the pet exists in the authoritative sim", world?.state.pets.size === 1);
+
+      // BOTH clients receive the same pet, bound to A's world-scoped player id.
+      await waitUntil(() => (b.transport.getLatestSnapshot()?.pets.length ?? 0) === 1, 3000);
+      const aSelfId = a.transport.getSelfServerId();
+      const seenByB = b.transport.getLatestSnapshot()?.pets[0];
+      const seenByA = a.transport.getLatestSnapshot()?.pets[0];
+      check("teammate sees the pet with kind + owner id", seenByB?.kind === "ember_pup" && seenByB?.own === aSelfId, `kind=${seenByB?.kind} own=${seenByB?.own} owner=${aSelfId}`);
+      check("the owner's own snapshot carries the pet too", seenByA?.own === aSelfId);
+      check("the petless player spawned no pet", ![...(world?.state.pets.values() ?? [])].some((t) => t.ownerId === b.transport.getSelfServerId()));
+
+      // The pet leaves with its owner; the teammate's next snapshots drop it.
+      a.stop();
+      const gone = await waitUntil(() => (b.transport.getLatestSnapshot()?.pets.length ?? -1) === 0 && world?.state.pets.size === 0, 3000);
+      check("disconnect removes the owner's pet everywhere", gone);
+      b.stop();
+    } finally { await s.close(); }
+  });
+
+  await test("a signed ticket with a junk pet claim is REJECTED (progression can't be asserted)", async () => {
+    const s = await startTestServer();
+    try {
+      const ws = await rawSocket(s.url);
+      let isRejected = false;
+      ws.on("message", (data: Buffer) => {
+        const msg = JSON.parse(data.toString("utf8")) as { t?: string; code?: string };
+        if (msg.t === "error" && msg.code === "auth") isRejected = true;
+      });
+      ws.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "sneaky", 120, Date.now(), { pet: "dragon" }), protocol: PROTOCOL_VERSION }));
+      await waitUntil(() => isRejected, 2000);
+      check("junk pet kind rejects the join", isRejected);
+      ws.close();
+    } finally { await s.close(); }
+  });
+
   await test("/dev-ticket mints the same claims (two-tab local proof covers rooms + identity)", async () => {
     const s = await startTestServer();
     try {
       const httpBase = s.url.replace(/^ws/, "http").replace(/\/ws$/, "");
-      const res = await fetch(`${httpBase}/dev-ticket?playerId=devgal&world=room:DEVX&name=DevGal&color=4`);
+      const res = await fetch(`${httpBase}/dev-ticket?playerId=devgal&world=room:DEVX&name=DevGal&color=4&pet=lantern_wisp`);
       check("dev-ticket endpoint responds", res.ok);
       const { ticket } = (await res.json()) as { ticket: string };
 
@@ -163,6 +207,7 @@ async function main(): Promise<void> {
       const conn = world ? [...world.conns.values()][0] : undefined;
       check("dev ticket carried the display name", conn?.displayName === "DevGal", `name=${conn?.displayName}`);
       check("dev ticket carried the color", conn?.colorIndex === 4, `color=${conn?.colorIndex}`);
+      check("dev ticket carried the pet", conn?.petKind === "lantern_wisp", `pet=${conn?.petKind}`);
       ws.close();
     } finally { await s.close(); }
   });

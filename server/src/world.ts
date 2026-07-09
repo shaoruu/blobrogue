@@ -9,11 +9,11 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, spawnPetInWorld, removePlayerFromWorld, switchWeaponInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
-import { TILE, type WeaponId } from "../../src/sim/types.js";
+import { TILE, type PetKind, type WeaponId } from "../../src/sim/types.js";
 import { Rng, randomSeed } from "../../src/sim/rng.js";
 import { rollItemChoicesWith, itemById } from "../../src/sim/items.js";
 import { LAGCOMP_MAX_TICKS } from "../../src/sim/constants.js";
@@ -103,8 +103,9 @@ export class GameWorld implements RoomRuntime {
     return this.state.players.size;
   }
 
-  addPlayer(pid: PlayerId): void {
+  addPlayer(pid: PlayerId, pet?: PetKind | null): void {
     spawnPlayerInWorld(this.state, pid);
+    if (pet) spawnPetInWorld(this.state, pid, pet);
   }
 
   removePlayer(pid: PlayerId): void {

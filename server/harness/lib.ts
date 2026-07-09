@@ -83,11 +83,12 @@ export interface BotOptions {
   // When set, the bot reads the latest snapshot each frame and aims+fires at the boss (or the
   // nearest enemy), overriding the script's aim/firing. Movement still comes from the script.
   attack?: "boss" | "nearest";
-  // Optional ticket claims (room-scoped world + cosmetic identity), minted into the join
-  // ticket exactly like the production Convex minter does.
+  // Optional ticket claims (room-scoped world + cosmetic identity + companion pet), minted
+  // into the join ticket exactly like the production Convex minter does.
   world?: string;
   name?: string;
   colorIndex?: number;
+  pet?: string;
 }
 
 export class Bot {
@@ -120,6 +121,7 @@ export class Bot {
         worldId: o.world,
         name: o.name,
         colorIndex: o.colorIndex,
+        pet: o.pet,
       })),
       socketFactory: (url) => new LatencySocket(url, net),
       now: () => Date.now(),
