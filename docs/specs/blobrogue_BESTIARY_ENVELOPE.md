@@ -73,3 +73,32 @@ suite alongside the shipped balance gates.
 - Band 1 module cadence grandfathered (shipped curriculum gate).
 - The F1–4 HP ramp exceeds +12%/floor by authored design; the cap binds from F5.
 - Hazard budgeting stays under its own studio gate rather than the generic threat costs.
+
+## The creative ecology gate (two waves over raw taxonomy)
+
+**Wave A (common decks)** — predators + supports + at most ONE truly new topology/
+material WORKER per biome band, each editing the room persistently:
+- **Forkroot Bailiff** (Rootbound, consolidates the wave-1 Rootward): the slow guard
+  stays its defense; its one commitment raises/MOVES an asymmetric root divider.
+- **Silt Keel** (the Deep, consolidates the wave-1 Seamcutter): the previewed oblique
+  plow now raises ONE persistent silt berm beside the furrow — the sweep-bolt payload is
+  superseded (zoning by topology, not projectiles).
+- **Clinker Mason** (Emberreach, new): masons one handed L-corner of clinker bricks
+  around a heat vent — the sinderling's feeding ground — apex toward the player, open
+  back as the approach lane.
+
+**Topology law** (enforced in sim + `test/ecology.test.ts`): one persistent topology
+edit per room (planner seats ≤1 worker/room; a raise is refused while another owner's
+edit stands); explicit escape route (wall/exit standoffs guarantee end gaps; everything
+destructible; the suite BFS-verifies player→exit reachability through live fights); old
+construction REPLACED whenever a worker builds anew (and it persists past its builder).
+
+**Wave B (rare, never in common decks)** — the elite affixes (a layer over Wave-A
+chassis), the summon bodies (echo, knell) and the lieutenants (Root Marshal, The Toll),
+each declared in `WAVE_B_SYNTHESIS` as a synthesis of verbs Wave A taught earlier.
+
+**Considered, not landed (reported):** Amber Grazer (band-1 curriculum stays locked;
+its either-side cover gimmick is inherent to ALL constructions — props block both
+sides); Ribsnare (closing a corridor conflicts with the enforced escape-route law until
+door-state plumbing exists); Vellum Grafter (Sunless already carries two commons and the
+±2-modules-per-band cadence; its flee verb overlaps the echojack).

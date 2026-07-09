@@ -260,3 +260,8 @@ material (shielder wood / living root / bulwark plate); the commander's rally, p
 surge-landing, the bulwark's plate shatter, the sinderling burst, the fragment pulse and
 the toll's lure plant are semantic sim cues (`elite.rally`, `elite.panic`, `flock.surge`,
 `guard.break`, `sinderling.burst`, `fragment.pulse`, `knell.fuse`).
+
+Ecology-wave worker rows (same contract): `root.divider` (the bailiff's wall slamming
+up, root material), `keel.berm` (silt piling, sim cue at the berm's rise), and
+`mason.survey`/`mason.raise` (trowel-tap tell / bricks landing, stone material). The
+worker tells ride `WAVE_TELLS` build grammar (windup -> release).

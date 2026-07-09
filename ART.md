@@ -123,3 +123,22 @@ its art lands. Contract locked by `npm run test:facing`.
 
 Note: the hit-flash overlay uses a cached white silhouette of the **static** sprite, so
 for sheet-animated characters the flash is an approximation of the current frame.
+
+## Ecology-wave worker hooks (constructions + the mason)
+
+The topology workers raise real destructible props; each prop kind ships as a 64px
+horizontal sheet, frame 0 = intact, frames 1-2 = breaking (the crate contract):
+
+- `/sprites/root_wall_break.png` — the Forkroot Bailiff's woven root-wall segment
+  (mossy green, living bark; tint `#86c06c` carries the fallback block until it lands).
+- `/sprites/silt_mound_break.png` — the Silt Keel's plowed berm mound (wet grey-brown
+  silt ridge; tint `#b8a888`).
+- `/sprites/clinker_brick_break.png` — the Clinker Mason's ember-brick stack (dark
+  clinker with glowing mortar seams; tint `#c9743f`).
+
+New body: `mason` (`/sprites/mason.png` + the full directional walk/attack set —
+`mason_walk_*` / `mason_attack_*`, where the attack sheets are the RAISE: trowel hands
+up, bricks rising). The bailiff (`rootward`) now also declares directional ATTACK hooks
+(`rootward_attack_*` = the divider raise, arms up, roots surging). FAL recipes for both
+live in `tools/gen-sprites.mjs`; the missing-asset ladder (tinted block/disc fallback)
+covers every hook until approved art lands.
