@@ -244,7 +244,10 @@ export class Menu {
       });
       list.appendChild(b);
     }
-    box.replaceChildren(el("label", "", "companion"), list, note);
+    // The label carries the collection identity: signed-in players see their roster
+    // progress at a glance; guests see the plain label until pets are theirs to earn.
+    const label = isAccount ? `companion \u00b7 ${unlocked.size}/${PET_KINDS.length}` : "companion";
+    box.replaceChildren(el("label", "", label), list, note);
   }
 
   private accountChip(): HTMLElement {

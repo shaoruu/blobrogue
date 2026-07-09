@@ -3011,6 +3011,9 @@ export class Game {
   private renderPets() {
     if (this.pets.size === 0) return;
     const { ctx, cam } = this;
+    // The owner ring exists to answer "whose pet is that?" — a question that only exists
+    // with teammates on screen. Solo drops it (enrich, don't clutter).
+    const isOwnerRingUseful = this.remotes().length > 0;
     for (const pet of this.pets.values()) {
       if (pet.isDormant) continue; // disappeared with its downed owner
       // The peck renders even when its bird is just off-screen (it flies ahead of the body).
@@ -3021,15 +3024,17 @@ export class Game {
       const anim = this.animForPet(pet.id);
       if (pet.attackAnim > 0 && anim.recoil <= 0) triggerRecoil(anim, 0.8);
       const sx = pet.x - cam.x, sy = pet.y - cam.y;
-      // Owner link: a soft accent ring under the pet in the owner's blob color.
-      ctx.save();
-      ctx.globalAlpha = 0.35;
-      ctx.strokeStyle = this.petOwnerColor(pet);
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.ellipse(sx, sy + 10, 12, 5, 0, 0, 6.28);
-      ctx.stroke();
-      ctx.restore();
+      if (isOwnerRingUseful) {
+        // Owner link: a soft accent ring under the pet in the owner's blob color.
+        ctx.save();
+        ctx.globalAlpha = 0.35;
+        ctx.strokeStyle = this.petOwnerColor(pet);
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.ellipse(sx, sy + 10, 12, 5, 0, 0, 6.28);
+        ctx.stroke();
+        ctx.restore();
+      }
       const xf = characterXform(anim, CHARACTER_STYLE);
       const sheet = this.sprites.petSheet(pet.kind, pose.clip) ?? this.sprites.petSheet(pet.kind, "walk");
       const img = this.sprites.pet(pet.kind);
