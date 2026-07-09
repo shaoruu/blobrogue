@@ -131,8 +131,7 @@ export interface Enemy extends Entity {
 export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
-  | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "boomerang"
-  | "beam" | "vortex"
+  | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "beam" | "vortex"
   | "sword" | "longsword" | "spear";
 
 export interface Bullet {
@@ -156,9 +155,6 @@ export interface Bullet {
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
   blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
-  // boomerang: outbound seconds left before the turn; <= 0 means it is flying back to its
-  // owner (phasing over geometry). It never dies on a hit — each pass re-arms via hitList.
-  boomerang?: number;
   // vortex: pull radius in px — while the orb lives, enemies inside are dragged toward it
   // (scaled down by their kbResist, so heavies and bosses barely drift). Pull orbs pass
   // through bodies, damaging each once via hitList.

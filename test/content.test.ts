@@ -1,7 +1,8 @@
-// Content-wave sim assertions: the two new regular enemies (charger, burrower), the
-// second boss (MARROW) and the two new weapons (Thumper mortar, Swallow
-// boomerang), all exercised headlessly on the pure sim — behavior grammar, telegraphs,
-// untargetable windows, phase machinery, and weapon room-verbs.
+// Content-wave sim assertions: the new regular enemies (charger, burrower, orbiter,
+// shielder), the boss roster (MARROW, Hollow Choir, Weaver, Gilded Warden) and the new
+// weapons (Thumper mortar, Sunlance beam, Undertow vortex), all exercised headlessly on
+// the pure sim — behavior grammar, telegraphs, untargetable windows, phase machinery,
+// and weapon room-verbs.
 //
 // Run: npm run test:content
 
@@ -475,26 +476,6 @@ function shielderTests(): void {
     stepFor(w, 0.8);
     check("a mortar blast splashes straight past the guard", e.hp < 40, `hp=${e.hp}`);
   }
-  {
-    // The boomerang: an outbound blade thrown into the guard clinks off it into an early
-    // return — spent against THIS body, but never lost like a plain bullet.
-    const { w, p } = arena(0x51E4);
-    p.x = 700; p.y = 600;
-    acquireWeaponInWorld(w, LOCAL_ID, "boomerang");
-    const e = spawnReady(w, "shielder", 880, 600);
-    e.attack.cooldown = 9; // hold the bash: the guard geometry is what's under test
-    e.hp = e.maxHp = 40;
-    stepFor(w, 0.15);
-    const ev: SimEvent[] = [];
-    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
-    stepFor(w, 1.2, ev);
-    // The guard eats the outbound pass; the TURNED blade leaves past its back, where the
-    // flank rule applies — so at most the single return slice ever lands.
-    check("the outbound blade clinks off the guard (never a full punch-through)",
-      ev.some((x) => x.t === "bulletBlocked") && e.hp >= 40 - WEAPONS.boomerang.damage,
-      `hp=${e.hp}`);
-    check("the clinked blade still came home (turned, not eaten)", w.bullets.length === 0);
-  }
 }
 
 // ---- THE HOLLOW CHOIR ----
@@ -826,7 +807,7 @@ function rotationTests(): void {
 function bossChestTests(): void {
   section("boss chests: each boss bakes its signature weapon");
   const expected: Array<[EnemyKind, string]> = [
-    ["boss", "mortar"], ["marrow", "boomerang"], ["choir", "beam"], ["weaver", "vortex"], ["gilded", "cannon"],
+    ["boss", "mortar"], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "vortex"], ["gilded", "cannon"],
   ];
   for (const [kind, weapon] of expected) {
     const w = createWorld(0xC4E57 ^ kind.length, 10, { isSandbox: true });
@@ -892,7 +873,7 @@ function beamVortexTests(): void {
   check("beam and vortex sit in the pickup pool", PICKUP_WEAPONS.includes("beam") && PICKUP_WEAPONS.includes("vortex"));
 }
 
-// ---- the weapons: Thumper (AoE mortar) and Swallow (returning boomerang) ----
+// ---- the weapon: Thumper (AoE mortar) ----
 
 function weaponTests(): void {
   section("Thumper: one shell converts a pack into a blast (and chains barrels)");
@@ -930,34 +911,7 @@ function weaponTests(): void {
       && !ev.some((x) => x.t === "bulletWall"));
   }
 
-  section("Swallow: the line, twice — outbound and return passes");
-  {
-    const { w, p } = arena(0x5A11);
-    p.x = 800; p.y = 600;
-    acquireWeaponInWorld(w, LOCAL_ID, "boomerang");
-    const e = spawnReady(w, "slime", 950, 600);
-    e.hp = e.maxHp = 50;
-    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
-    stepFor(w, 0.3);
-    const afterOut = e.hp;
-    check("the outbound pass hits once", afterOut < 50 && afterOut > 50 - 2 * WEAPONS.boomerang.damage,
-      `hp=${afterOut}`);
-    stepFor(w, 1.2);
-    check("the return pass hits the same body again", e.hp < afterOut, `hp=${e.hp}`);
-    check("the blade returned to the hand and despawned", w.bullets.length === 0, `bullets=${w.bullets.length}`);
-  }
-  {
-    // A wall clink turns the blade instead of killing it.
-    const { w, p } = arena(0x5A12);
-    p.x = 1480; p.y = 600; // the east wall is inside the outbound leg
-    acquireWeaponInWorld(w, LOCAL_ID, "boomerang");
-    const ev: SimEvent[] = [];
-    step(w, { seq: 1, moveX: 0, moveY: 0, aim: 0, firing: true, dash: false });
-    stepFor(w, 1.2, ev);
-    check("the wall clink turns the blade (bounce, not death)", ev.some((x) => x.t === "bulletBounce"));
-    check("the turned blade still made it home", w.bullets.length === 0);
-  }
-  check("both new weapons sit in the pickup pool", PICKUP_WEAPONS.includes("mortar") && PICKUP_WEAPONS.includes("boomerang"));
+  check("the Thumper sits in the pickup pool", PICKUP_WEAPONS.includes("mortar"));
 }
 
 // ---- roster integration ----

@@ -592,7 +592,6 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     chain: wep.chain,
     chainRange: wep.chainRange,
     blast: wep.blast,
-    boomerang: wep.boomerang,
     pull: wep.pull,
     burn: wep.burn,
     chill: wep.chill,
@@ -1009,11 +1008,11 @@ function endBossDanger(w: WorldState, boss: Enemy, ev: SimEvent[]): void {
 }
 
 // Each boss's authored chest weapon: its fight's answer, handed to you for the road.
-// The King's zoning begets the Thumper; blind MARROW throws you its bone blade; the
-// Choir leaves a lance of light; the Weaver's pull becomes yours; the Warden yields the
-// heavy Thunderbolt its plate shrugged off.
+// The King's zoning begets the Thumper; blind MARROW yields the Longshot (its own line,
+// straightened into a slug); the Choir leaves a lance of light; the Weaver's pull becomes
+// yours; the Warden gives up the heavy Thunderbolt its plate shrugged off.
 const BOSS_SIGNATURE_WEAPON: Readonly<Partial<Record<Enemy["kind"], WeaponId>>> = {
-  boss: "mortar", marrow: "boomerang", choir: "beam", weaver: "vortex", gilded: "cannon",
+  boss: "mortar", marrow: "railgun", choir: "beam", weaver: "vortex", gilded: "cannon",
 };
 
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
@@ -1188,22 +1187,11 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.friendly) steerHoming(w, b, dt);
       else steerEnemyHoming(w, b, dt); // the Choir's wails seek the nearest standing player
     }
-    if (b.friendly && b.boomerang !== undefined) steerBoomerang(w, b, dt, ev);
     if (b.friendly && b.pull !== undefined) applyVortexPull(w, b, dt);
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
     // A mortar shell that reaches the end of its arc airbursts instead of vanishing.
     if (b.life <= 0 && b.friendly && b.blast !== undefined) { detonateBullet(w, b, b.x, b.y, ev); continue; }
     if (isWall(w, b.x, b.y)) {
-      // Outbound boomerangs clink off the wall into their return; returning ones already
-      // fly over geometry (their wall test is skipped below).
-      if (b.friendly && b.boomerang !== undefined) {
-        if (b.boomerang > 0) {
-          b.x = b.prevX ?? b.x; b.y = b.prevY ?? b.y;
-          beginBoomerangReturn(b);
-          ev.push({ t: "bulletBounce", x: b.x, y: b.y, aim: Math.atan2(-b.vy, -b.vx), color: b.color });
-        }
-        continue;
-      }
       if (b.friendly && b.blast !== undefined) {
         // Shells burst ON the wall face (the last in-bounds point), not inside it.
         detonateBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
@@ -1224,40 +1212,6 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
     }
   }
   w.bullets = w.bullets.filter((b) => b.life > 0);
-}
-
-// Boomerang flight: `boomerang` counts down the outbound leg; at zero (or a wall clink)
-// the blade turns and homes on its OWNER's current hand at constant speed, arcing over all
-// geometry, and despawns on the catch. The hitList re-arms at the turn so the return pass
-// hits each body once more. A departed owner has no hand to return to — the blade expires
-// at the turn point (immutable attribution: never redirected to another live player).
-function steerBoomerang(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): void {
-  if (b.boomerang !== undefined && b.boomerang > 0) {
-    b.boomerang -= dt;
-    if (b.boomerang > 0) return;
-    beginBoomerangReturn(b);
-  }
-  const owner = ownerOf(w, b.owner);
-  if (!owner) {
-    b.life = 0;
-    ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color });
-    return;
-  }
-  const dx = owner.x - b.x, dy = owner.y - b.y;
-  const dist = Math.hypot(dx, dy);
-  const speed = Math.hypot(b.vx, b.vy) || 1;
-  if (dist < owner.pr + b.radius + speed * dt) {
-    b.life = 0;
-    ev.push({ t: "bulletExpire", x: owner.x, y: owner.y, color: b.color });
-    return;
-  }
-  b.vx = (dx / dist) * speed;
-  b.vy = (dy / dist) * speed;
-}
-
-function beginBoomerangReturn(b: Bullet): void {
-  b.boomerang = 0;
-  b.hitList = null;
 }
 
 // Mortar detonation: the shell's ONE payload, applied as an ordinary strike (attribution,
@@ -1507,7 +1461,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // next updateBullets pass, so without this guard a pierce-0 round that just died on
       // one body could strike every other body overlapping its final segment in the same
       // tick — phantom pierce that quietly inflated pack damage (~50% on tight clumps)
-      // past everything the balance tables authorize. Pierce/boomerang/vortex rounds keep
+      // past everything the balance tables authorize. Pierce/vortex rounds keep
       // life > 0 by design, so legitimate multi-hits are untouched (chests already apply
       // this same spent-round rule).
       if (b.life <= 0) continue;
@@ -1527,11 +1481,8 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           continue;
         }
         // The shielder's front arc swallows the shot: no damage, the round is spent.
-        // An outbound boomerang clinks off the guard into its return instead; a
-        // RETURNING blade arcs overhead and ignores the guard entirely.
-        if (isShieldBlocked(e, b.vx, b.vy) && !(b.boomerang !== undefined && b.boomerang <= 0)) {
-          if (b.boomerang !== undefined) beginBoomerangReturn(b);
-          else b.life = 0;
+        if (isShieldBlocked(e, b.vx, b.vy)) {
+          b.life = 0;
           ev.push({ t: "bulletBlocked", x: sweptHit.x, y: sweptHit.y, aim: Math.atan2(-b.vy, -b.vx) });
           continue;
         }
@@ -1540,9 +1491,8 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
-        if (b.boomerang !== undefined || b.pull !== undefined) {
-          // Boomerangs and vortex orbs fly on through — each body is tapped once per pass
-          // (the boomerang's hitList re-arms at the turn).
+        if (b.pull !== undefined) {
+          // Vortex orbs fly on through — each body is tapped once.
           (b.hitList ??= []).push(e);
         } else if (b.chain !== undefined && b.chain > 0) {
           (b.hitList ??= []).push(e);

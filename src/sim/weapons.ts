@@ -30,7 +30,6 @@ export interface Weapon {
   chain?: number;      // tesla: lightning jumps after the first hit
   chainRange?: number; // tesla: max px per chain jump
   blast?: number;      // mortar: AoE radius — the shell detonates on impact/wall/expiry
-  boomerang?: number;  // boomerang: outbound seconds before the blade arcs back to the thrower
   pull?: number;       // vortex: drag-field radius — enemies inside drift toward the orb
   // Elemental status the weapon stamps on every round (seconds of the effect). The
   // flamethrower is the only base weapon that carries one; item blessings roll the
@@ -118,15 +117,6 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     damage: 6, pellets: 1, spread: 0, bulletRadius: 8, color: "#ffc46a", muzzle: 5,
     blast: 64,
   },
-  // Tier B — carries the `boomerang` field: a thrown blade that flies out, turns (or
-  // clinks off a wall), and arcs back to your hand over all geometry, hitting on BOTH
-  // passes. The room verb is the LINE, twice: reposition while it's out so the return
-  // sweep rakes a second rank. Never dies on a hit.
-  boomerang: {
-    id: "boomerang", name: "Swallow", fireCd: 0.6, speed: 540, life: 2.6,
-    damage: 3.5, pellets: 1, spread: 0, bulletRadius: 9, color: "#7fe0b8", muzzle: 3,
-    boomerang: 0.4,
-  },
   // Tier A — pure data. A sustained lance of light: near-instant thin rounds at a very
   // fast cadence blur into a continuous beam (the render draws the streak). The room verb
   // is TRACKING: hold the line on one target and melt it — no spread, no travel time to
@@ -167,7 +157,7 @@ export const DEFAULT_WEAPON: WeaponId = "pistol";
 // Weapons that can appear as floor pickups (the pistol is the always-owned default).
 export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
-  "sawnoff", "railgun", "nailer", "flamer", "mortar", "boomerang", "beam", "vortex",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "vortex",
   "sword", "longsword", "spear",
 ];
 
@@ -192,7 +182,6 @@ export interface ShotSpec {
   chain?: number;
   chainRange?: number;
   blast?: number;
-  boomerang?: number;
   pull?: number;
   burn?: number;
   chill?: number;
@@ -230,7 +219,6 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       chain: spec.chain,
       chainRange: spec.chainRange,
       blast: spec.blast,
-      boomerang: spec.boomerang,
       pull: spec.pull,
       burn: spec.burn,
       chill: spec.chill,
