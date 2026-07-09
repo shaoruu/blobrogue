@@ -49,7 +49,10 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - shotSeq:     legacy presence-driven remote-shot FX counter (server FX ride events instead)
 // - rewindTicks: server-internal lag-comp bookkeeping, meaningless to a client
 // - meleeSwing:  derived swing state; the client's own prediction recreates it from inputs
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing";
+// - runStats:    per-run stat accumulation. The AUTHORITATIVE copy lives where the sim runs
+//                (server online, client solo/co-op) and is reported through the signed
+//                run-result path — never snapshot-synced, so a client can't overwrite it.
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "runStats";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim

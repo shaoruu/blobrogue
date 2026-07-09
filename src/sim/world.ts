@@ -77,6 +77,41 @@ interface StrikeInfo {
   fxWeapon: WeaponId | null;
 }
 
+// Per-run stat accumulation, updated ONLY at the authoritative points the sim already owns
+// (damageEnemy / damagePlayer / killEnemy / pickup collection / stepWorldPhase). Pure counters —
+// they never branch gameplay or consume RNG, so determinism (golden master) is untouched. The
+// same accumulation therefore runs identically for solo (local sim) and the authoritative
+// server, which reports it through the signed run-result path. Never on the snapshot wire.
+export interface RunStats {
+  timeAliveSecs: number;   // authoritative sim time this player has existed in the run
+  startFloor: number;      // floor when this player entered the world (1 = a full run)
+  damageDealt: number;     // damage actually applied to enemies (post roar-floor reduction)
+  damageTaken: number;
+  bestCombo: number;       // highest kill-chain reached
+  coinsEarned: number;     // all coin income (pickups, full-HP heart conversions)
+  coinsSpent: number;      // dealer purchases
+  bossKills: number;       // bosses this player landed the killing blow on
+  bossKillFloors: number[];// the floor of each boss kill, in order
+  firstBossKillSecs: number; // timeAliveSecs at the first boss kill; -1 until then
+  killsByWeapon: Partial<Record<WeaponId, number>>; // killing-blow weapon (the killer's equipped weapon)
+}
+
+export function createRunStats(startFloor: number): RunStats {
+  return {
+    timeAliveSecs: 0,
+    startFloor,
+    damageDealt: 0,
+    damageTaken: 0,
+    bestCombo: 0,
+    coinsEarned: 0,
+    coinsSpent: 0,
+    bossKills: 0,
+    bossKillFloors: [],
+    firstBossKillSecs: -1,
+    killsByWeapon: {},
+  };
+}
+
 export interface PlayerSim {
   id: PlayerId;
   x: number; y: number; pr: number;
@@ -103,6 +138,7 @@ export interface PlayerSim {
   kills: number; coins: number; combo: number; comboTimer: number;
   ownedItemIds: string[];
   meleeSwing: MeleeSwing | null;
+  runStats: RunStats;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -184,7 +220,7 @@ export interface WorldState {
   targetY: number;
 }
 
-export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
+export function createPlayer(id: PlayerId, x: number, y: number, startFloor = 1): PlayerSim {
   return {
     id, x, y, pr: 18,
     hp: PLAYER.baseMaxHp, maxHp: PLAYER.baseMaxHp,
@@ -198,6 +234,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     kills: 0, coins: 0, combo: 0, comboTimer: 0,
     ownedItemIds: [],
     meleeSwing: null,
+    runStats: createRunStats(startFloor),
   };
 }
 
@@ -252,7 +289,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
   loadFloorIntoWorld(w, floor);
   if (!opts.skipLocalPlayer) {
     const spawn = w.dungeon.spawn;
-    const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+    const p = createPlayer(LOCAL_ID, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2, floor);
     // Run start is a floor entry too: the same spawn grace every descend grants (the
     // reposition loop in loadFloorIntoWorld ran before this player existed).
     p.invuln = C.PLAYER_SPAWN_GRACE;
@@ -267,7 +304,9 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
   const existing = w.players.get(id);
   if (existing) return existing;
   const spawn = w.dungeon.spawn;
-  const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2);
+  // startFloor stamps whether this is a full run (floor 1) or a mid-run join — the run-result
+  // consumer uses it to gate leaderboard eligibility (a floor-8 drop-in isn't a floor-8 run).
+  const p = createPlayer(id, spawn.x * TILE + TILE / 2, spawn.y * TILE + TILE / 2, w.floor);
   w.players.set(id, p);
   return p;
 }
@@ -533,15 +572,24 @@ function blockedByProp(w: WorldState, x: number, y: number, r: number): boolean 
 
 // ---- item mods ----
 
-function lowHpFactor(p: PlayerSim): number {
+// The slice of a player the shot/melee math reads. Narrow + structural so the HUD's weapon
+// tooltip (src/sim/weaponStats.ts) computes effective stats through the EXACT same functions
+// the authoritative sim fires with — one implementation, no drift.
+export interface ShotContext {
+  mods: PlayerMods;
+  hp: number;
+  maxHp: number;
+}
+
+function lowHpFactor(p: ShotContext): number {
   return p.maxHp > 0 ? 1 - Math.max(0, p.hp / p.maxHp) : 0;
 }
 // The raw caps (§6) bind the LIVE multipliers too: low-HP scalers (berserk/adrenaline) are
 // expressive risk payoffs but can never push raw damage/fire-rate past the cap.
-function currentDamageMult(p: PlayerSim): number {
+export function currentDamageMult(p: ShotContext): number {
   return Math.min(CAPS.damageMult, p.mods.damageMult + p.mods.berserk * lowHpFactor(p));
 }
-function currentFireRate(p: PlayerSim): number {
+export function currentFireRate(p: ShotContext): number {
   return Math.max(0.25, Math.min(CAPS.fireRateMult, p.mods.fireRateMult + p.mods.adrenaline * lowHpFactor(p)));
 }
 function dashCooldown(p: PlayerSim): number {
@@ -562,7 +610,17 @@ function comboCoinValue(p: PlayerSim): number {
   return Math.max(1, Math.round(coinGain(p) * comboMult(p)));
 }
 
-function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
+// The two wallet mutation points, so earned/spent accumulate exactly with the wallet.
+function gainCoins(p: PlayerSim, amount: number): void {
+  p.coins += amount;
+  p.runStats.coinsEarned += amount;
+}
+function spendCoins(p: PlayerSim, amount: number): void {
+  p.coins -= amount;
+  p.runStats.coinsSpent += amount;
+}
+
+export function resolveShot(p: ShotContext, weapon: WeaponId): ShotSpec {
   const wep = WEAPONS[weapon];
   const pellets = wep.pellets + p.mods.extraPellets;
   const spread = pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + p.mods.spreadAdd : wep.spread;
@@ -788,7 +846,18 @@ function arcLightning(w: WorldState, p: PlayerSim | null, origin: Enemy, jumps: 
 // EVERY authoritative point of enemy damage funnels through here, so the boss's phase
 // thresholds are evaluated after every damage event (spec §5) — bullets, melee, burn ticks,
 // arcs, thorns and barrels alike — and its transition roar can reduce/floor/queue uniformly.
+// It is therefore also the one place damage-dealt is credited: the amount actually subtracted
+// (post roar reduction/floor; queued overflow credits when it applies via endBossTransition).
 function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[]): void {
+  const hpBefore = e.hp;
+  applyEnemyDamage(w, by, e, dmg, ev);
+  if (by !== null && e.hp < hpBefore) {
+    const dealer = w.players.get(by);
+    if (dealer) dealer.runStats.damageDealt += hpBefore - e.hp;
+  }
+}
+
+function applyEnemyDamage(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[]): void {
   if (!e.boss) {
     e.hp -= dmg;
     return;
@@ -888,6 +957,16 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.kills++;
     p.combo++;
     p.comboTimer = C.COMBO_WINDOW;
+    const rs = p.runStats;
+    if (p.combo > rs.bestCombo) rs.bestCombo = p.combo;
+    // Killing-blow weapon = the killer's equipped weapon (a DoT/arc kill after a switch
+    // credits the new weapon — an accepted approximation for the favorite-weapon stat).
+    rs.killsByWeapon[p.weapon] = (rs.killsByWeapon[p.weapon] ?? 0) + 1;
+    if (e.kind === "boss") {
+      rs.bossKills++;
+      rs.bossKillFloors.push(w.floor);
+      if (rs.firstBossKillSecs < 0) rs.firstBossKillSecs = rs.timeAliveSecs;
+    }
   }
   const big = e.kind === "boss";
   ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
@@ -2168,18 +2247,18 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         }
       }
       if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + p.radius) {
-        if (p.kind === "coin") { player.coins += p.value ?? coinGain(player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "coin") { gainCoins(player, p.value ?? coinGain(player)); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
         if (p.kind === "heart") {
           // At full HP the heart is consumed and converts to coins (§2) — no backtracking
           // stockpile of floor hearts.
           if (player.hp < player.maxHp) { player.hp++; ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y }); }
-          else { player.coins += SUSTAIN.fullHpHeartCoins; ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); }
+          else { gainCoins(player, SUSTAIN.fullHpHeartCoins); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); }
           collected = true; break;
         }
         if (p.kind === "dealer_heart") {
           // The Dealer sells exactly +1 HP for coins; broke or full-health players walk past.
           if (player.hp < player.maxHp && player.coins >= (p.value ?? DEALER.price)) {
-            player.coins -= p.value ?? DEALER.price;
+            spendCoins(player, p.value ?? DEALER.price);
             player.hp += DEALER.heal;
             ev.push({ t: "pickup", pid: player.id, kind: "heart", x: p.x, y: p.y });
             collected = true; break;
@@ -2211,6 +2290,7 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
   if (w.pendingBlessings.has(p.id)) return;
   p.hp -= amount;
+  p.runStats.damageTaken += amount;
   p.invuln = PLAYER.postHitInvuln;
   // Any damage cancels a revive channel the victim was holding (§2): reviving is a real
   // commitment, not something you tank through.
@@ -2406,6 +2486,9 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
       if (p.comboTimer <= 0) { p.comboTimer = 0; p.combo = 0; }
     }
     if (p.fangCd > 0) p.fangCd = p.fangCd > dt ? p.fangCd - dt : 0;
+    // Authoritative run clock (fixed-step sim time, immune to client dt) — drives the
+    // fastest-boss timing and the reported run duration.
+    p.runStats.timeAliveSecs += dt;
   }
 }
 
