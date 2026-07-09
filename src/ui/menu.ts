@@ -15,6 +15,7 @@ import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmeti
 import { cosmeticOverlay } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
 import type { BlobLook } from "./blobPreview.js";
+import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
@@ -205,46 +206,56 @@ export class Menu {
   async showTitle(focus?: TitleFocus) {
     // THE canonical home markup (finalized; supersedes every earlier shell variant):
     //   .menu-home
-    //     .hero                          the live .home-stage (the player's ACTUAL blob,
-    //                                    drawn by the shared loadout renderer), then the
-    //                                    logo + tagline
+    //     .hero                          logo + tagline
     //     .home-body
-    //       .home-left                   Play heading, PLAY ONLINE, PLAY SOLO,
-    //                                    fixed .home-status line, fixed leaderboard
-    //                                    preview (exactly 3 rows + state line)
-    //       .home-right                  reserved .identity-card, then the PROFILE and
-    //                                    SETTINGS destinations
+    //       .home-left                   the ONE glance stack: the .home-camp character
+    //                                    stage (YOUR blob on its amber-camp plinth, calm
+    //                                    idle, with the small CUSTOMIZE affordance), then
+    //                                    PLAY ONLINE, PLAY SOLO, and the fixed
+    //                                    .home-status line. Eye lands on the blob, drops
+    //                                    to PLAY — and PLAY stays FIRST in DOM/tab order
+    //                                    (the camp is lifted visually via CSS order).
+    //       .home-right                  reserved .identity-card, the PROFILE + SETTINGS
+    //                                    destination pair, then the fixed leaderboard
+    //                                    glance (exactly 3 rows + state line)
     // No home footer, no Controls button, no right-side Leaderboard destination.
     const wrap = el("div", "menu menu-home");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
-    // Hero band: the character stage on the left, logo + tagline centered (a matching
-    // empty grid track on the right keeps the wordmark on the shell's axis). The stage
-    // shows YOUR blob — equipped hat/glasses/body color through the exact renderer the
-    // world and closet use, idling — inside a fixed 104px box reserved from first paint.
-    // It is display only (no button, aria description instead), so PLAY stays the first
-    // and dominant action.
+    // Hero banner: logo + tagline, divider under it. The logo carries its intrinsic
+    // dimensions (1128x192) so the box is reserved before the file streams in.
     const hero = el("div", "hero");
-    const stageBox = el("div", "home-stage");
-    stageBox.setAttribute("role", "img");
-    stageBox.setAttribute("aria-label", this.stageLabel());
-    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 104);
-    stageBox.appendChild(stagePreview.el);
-    hero.appendChild(stageBox);
-    const heroText = el("div", "hero-text");
-    // The logo carries its intrinsic dimensions (1128x192) so the box is reserved before
-    // the file streams in.
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
     logo.className = "logo-img";
     logo.alt = "BLOBROGUE";
     logo.width = 1128;
     logo.height = 192;
-    heroText.appendChild(logo);
-    heroText.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
-    hero.appendChild(heroText);
+    hero.appendChild(logo);
+    hero.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
     wrap.appendChild(hero);
-    // Hydration repaints the blob inside the same fixed box — content only, zero shift.
+
+    // The camp stage: YOUR blob — equipped hat/glasses/body color through the exact
+    // renderer the world and closet use — standing slightly off-center on the authored
+    // plinth, breathing with an occasional blink/wave. Fixed reserved bounds (the camp
+    // block and the 128px canvas are sized from first paint), display-only chrome, no
+    // glow, no looping VFX: calm identity FIRST in the eye's path, with the brightest
+    // interactive mass (PLAY) directly below and never obstructed.
+    const camp = el("div", "home-camp");
+    const stageBox = el("div", "home-stage");
+    stageBox.setAttribute("role", "img");
+    stageBox.setAttribute("aria-label", this.stageLabel());
+    stageBox.appendChild(el("span", "home-plinth"));
+    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 128, { isCalmIdle: true });
+    stageBox.appendChild(stagePreview.el);
+    camp.appendChild(stageBox);
+    // The natural place to tap your guy: a small, quiet closet door beside the blob. It
+    // opens the closet as an OVERLAY — the title (and Play) never leaves the screen.
+    const customize = el("button", "secondary stage-customize", "CUSTOMIZE");
+    customize.type = "button";
+    customize.onclick = () => this.openClosetOverlay();
+    camp.appendChild(customize);
+    // Hydration repaints the blob inside the same fixed bounds — content only, zero shift.
     // (Armed after show(); show() clears the previous screen's hook.)
     const refreshStage = () => {
       stagePreview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
@@ -252,9 +263,11 @@ export class Menu {
     };
 
     if (!this.client) {
-      // Offline build: no profile/multiplayer — single centered actions column, no split.
+      // Offline build: no profile/multiplayer — single actions column, the same camp
+      // stack on top (the closet saves on this device).
       const left = el("div", "home-left");
       left.appendChild(this.soloButton("\u25be  PLAY"));
+      left.appendChild(camp);
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       const nav = el("div", "navrow");
       const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
@@ -272,10 +285,10 @@ export class Menu {
 
     const body = el("div", "home-body");
 
-    // LEFT: the play actions own the top; a fixed status line and the quiet leaderboard
-    // glance fill the space under them (fixed row geometry, subordinate to Play).
+    // LEFT: the glance stack. PLAY ONLINE / PLAY SOLO lead the DOM (first in tab order,
+    // the brightest interactive mass); the camp stage is lifted ABOVE them visually via
+    // CSS order, so the eye lands on the blob and drops straight to PLAY.
     const left = el("div", "home-left");
-    left.appendChild(el("div", "col-h", "Play"));
     const onlineBtn = el("button", "btn-quick primary");
     onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
     onlineBtn.appendChild(el("span", "sub", "rooms & quick play on the live server"));
@@ -285,14 +298,14 @@ export class Menu {
     const solo = this.soloButton("PLAY SOLO");
     solo.classList.add("play-solo");
     left.appendChild(solo);
+    left.appendChild(camp);
     // The fixed home status line: reserved from first paint; any boot/exit note swaps
     // content inside it, never the layout around it.
     left.appendChild(el("p", "home-status", ""));
-    left.appendChild(this.leaderboardPreview(focusTargets));
     body.appendChild(left);
 
-    // RIGHT: the reserved identity card, then the PROFILE / SETTINGS destinations (the
-    // leaderboard's explicit door is the VIEW LEADERBOARD action on the glance itself).
+    // RIGHT: the reserved identity card, the PROFILE / SETTINGS destination pair, then
+    // the quiet leaderboard glance (its explicit door is VIEW LEADERBOARD on the glance).
     const right = el("div", "home-right");
     const identity = this.identitySection();
     right.appendChild(identity);
@@ -303,6 +316,7 @@ export class Menu {
     focusTargets.set("settings", settingsBtn);
     nav.append(profileBtn, settingsBtn);
     right.appendChild(nav);
+    right.appendChild(this.leaderboardPreview(focusTargets));
     body.appendChild(right);
 
     wrap.appendChild(body);
@@ -1129,6 +1143,42 @@ export class Menu {
     } catch {
       // locked states stand
     }
+  }
+
+  // ---- the closet OVERLAY (the title's CUSTOMIZE affordance) ---------------------------
+  // The closet rides ABOVE the title as a panel — never a mode swap: Play stays on screen
+  // behind the translucent scrim, and closing (X / Esc / B / scrim tap) returns to the
+  // SAME title nodes with only the blob repainted. There is nothing else to sync back:
+  // instant equip already saved every change server-side as it happened.
+  private openClosetOverlay() {
+    const scrim = el("div", "closet-scrim");
+    const pop = el("div", "menu closet-pop");
+    const scope = new FocusScope();
+    let isClosed = false;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+    };
+    const close = () => {
+      if (isClosed) return;
+      isClosed = true;
+      window.removeEventListener("keydown", onKey);
+      this.overlay.removeChild(scrim);
+      this.closetRefresh = null;
+      this.tabCycle = null;
+      this.titleStageRefresh?.(); // the unchanged title, wearing the updated blob
+      scope.close();
+    };
+    scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+    const closeBtn = this.closeButton(close);
+    pop.appendChild(closeBtn);
+    pop.appendChild(el("div", "col-h closet-pop-h", "closet \u2014 changes save instantly"));
+    const closet = this.buildCloset(pop);
+    scrim.appendChild(pop);
+    this.overlay.appendChild(scrim);
+    window.addEventListener("keydown", onKey);
+    this.tabCycle = closet.cycleCategory;
+    scope.open(closeBtn, currentFocus());
+    void this.hydrateCloset();
   }
 
   // ---- SETTINGS -----------------------------------------------------------------------
