@@ -390,15 +390,111 @@ function keyboardReorderTests(): void {
 }
 
 function tooltipClampTests(): void {
-  section("tooltip viewport clamp: an edge slot's tip shifts inward instead of going off-screen");
+  section("tooltip viewport clamp: an edge slot's tip shifts fully onscreen instead of clipping");
   {
     const { hud, root, slotsEl, slots } = rig();
     layoutRow(slotsEl, slots, 1, 4); // row starts almost at the viewport's left edge
     const tip = slots[0].querySelector<HTMLElement>(".tip")!;
     setRect(tip, { left: -20, top: 520, width: 180, height: 60 });
     slots[0].dispatchEvent(new dom.window.MouseEvent("pointerenter", { bubbles: false }));
-    check("overflowing tip gets a corrective --tip-shift", tip.style.getPropertyValue("--tip-shift") === "26px",
+    check("left overflow gets a corrective --tip-shift", tip.style.getPropertyValue("--tip-shift") === "26px",
       tip.style.getPropertyValue("--tip-shift"));
+    check("no vertical overflow = no vertical shift", tip.style.getPropertyValue("--tip-shift-y") === "0px");
+    hud.clear(); root.remove();
+  }
+  {
+    // 200% zoom on the right edge: the shift divides by the slot's zoom scale (it applies
+    // in zoomed local px), and a top clip on a tiny viewport shifts the tip DOWN.
+    const { hud, root, slotsEl, slots } = rig();
+    layoutRow(slotsEl, slots, 2);
+    const tip = slots[4].querySelector<HTMLElement>(".tip")!;
+    const overRight = dom.window.innerWidth - 6 + 30; // 30px past the right margin
+    setRect(tip, { left: overRight - 180, top: -8, width: 180, height: 60 });
+    slots[4].dispatchEvent(new dom.window.MouseEvent("pointerenter", { bubbles: false }));
+    check("right overflow at 200% zoom shifts inward by overflow/scale", tip.style.getPropertyValue("--tip-shift") === "-15px",
+      tip.style.getPropertyValue("--tip-shift"));
+    check("top overflow shifts the tip down (fully onscreen)", tip.style.getPropertyValue("--tip-shift-y") === "7px",
+      tip.style.getPropertyValue("--tip-shift-y"));
+    hud.clear(); root.remove();
+  }
+}
+
+function qaGateTests(): void {
+  section("QA gate: one tooltip across input modes — no stale duplicate on switching");
+  {
+    const { hud, root, slotsEl, slots } = rig();
+    layoutRow(slotsEl, slots, 1);
+    slots[1].focus();
+    slots[1].dispatchEvent(new dom.window.Event("focus")); // jsdom fires focus, but be explicit
+    check("keyboard focus flags the row keyboard-driven (mutes resting-hover tips)", slotsEl.classList.contains("kb-tips"));
+    slots[3].dispatchEvent(new dom.window.MouseEvent("pointerenter", { bubbles: false }));
+    check("pointer takeover drops the keyboard flag", !slotsEl.classList.contains("kb-tips"));
+    check("pointer takeover dismisses the focused sibling's tip (blur)", document.activeElement !== slots[1],
+      (document.activeElement as HTMLElement | null)?.className ?? "none");
+    hud.clear(); root.remove();
+  }
+
+  section("QA gate: Escape dismisses the focused tooltip and never leaks to pause");
+  {
+    const { hud, root, slots, acts } = rig();
+    slots[2].focus();
+    check("slot holds focus", document.activeElement === slots[2]);
+    const esc = new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    let reachedWindow = false;
+    const windowSpy = () => { reachedWindow = true; };
+    dom.window.addEventListener("keydown", windowSpy);
+    slots[2].dispatchEvent(esc);
+    dom.window.removeEventListener("keydown", windowSpy);
+    check("Escape blurs the slot (tip dismissed)", document.activeElement !== slots[2]);
+    check("Escape was swallowed at the slot (no pause fall-through)", esc.defaultPrevented && !reachedWindow);
+    check("Escape triggered no hotbar action", acts.activates.length === 0 && acts.reorders.length === 0);
+    hud.clear(); root.remove();
+  }
+
+  section("QA gate: tooltips live inside the slots — hidden with the hotbar, never orphaned");
+  {
+    const { hud, root, slotsEl } = rig();
+    check("every tip is a slot child inside #hud (hidden with it, occlusion-scoped)",
+      root.querySelectorAll(".hb-slot .tip").length === 5 && document.querySelectorAll("body > .tip").length === 0);
+    hud.setVisible(false);
+    check("hotbar hidden = tips hidden with it (one display gate)",
+      root.querySelector<HTMLElement>("#hud")!.style.display === "none");
+    hud.setVisible(true);
+    const oldTip = slotsEl.querySelector(".hb-slot .tip")!;
+    hud.update(mkState(0, FIVE.slice(1))); // pickup/equip churn: the slot set changes
+    check("a rebuild never strands a tip (old node disconnected)", !oldTip.isConnected);
+    check("tip count tracks the new slot count exactly", slotsEl.querySelectorAll(".hb-slot .tip").length === 4);
+    hud.clear(); root.remove();
+  }
+
+  section("QA gate: live values re-render through mod/pickup churn; rapid cycling leaks nothing");
+  {
+    const { hud, root, slotsEl, slots } = rig();
+    const before = slots[0].getAttribute("aria-label")!;
+    const mods = createMods();
+    mods.damageMult = 2;
+    hud.update({ ...mkState(), weapons: FIVE.map((w, i) => ({ ...w, isCurrent: i === 1, card: weaponCard(w.id, mods, 0) })) });
+    const after = slotsEl.querySelector<HTMLElement>(".hb-slot")!.getAttribute("aria-label")!;
+    check("a mod change re-renders the card values", before !== after && after.includes("POWER 4"), after);
+
+    // Rapid equip/pickup cycling: no window/document listener growth, no DOM growth.
+    let winAdds = 0, docAdds = 0;
+    const winOrig = dom.window.addEventListener.bind(dom.window);
+    const docOrig = document.addEventListener.bind(document);
+    (dom.window as unknown as { addEventListener: typeof winOrig }).addEventListener = ((...a: Parameters<typeof winOrig>) => { winAdds++; winOrig(...a); }) as typeof winOrig;
+    (document as unknown as { addEventListener: typeof docOrig }).addEventListener = ((...a: Parameters<typeof docOrig>) => { docAdds++; docOrig(...a); }) as typeof docOrig;
+    for (let i = 0; i < 60; i++) {
+      hud.update(mkState(i % 2 === 0 ? 0 : 1, i % 3 === 0 ? FIVE.slice(1) : FIVE));
+      const cur = [...slotsEl.querySelectorAll<HTMLElement>(".hb-slot")];
+      cur[0]?.dispatchEvent(new dom.window.MouseEvent("pointerenter", { bubbles: false }));
+      cur[1]?.focus();
+    }
+    (dom.window as unknown as { addEventListener: typeof winOrig }).addEventListener = winOrig;
+    (document as unknown as { addEventListener: typeof docOrig }).addEventListener = docOrig;
+    check("60 rebuild/hover/focus cycles add ZERO window/document listeners", winAdds === 0 && docAdds === 0, `win=${winAdds} doc=${docAdds}`);
+    check("DOM stays exactly one slot set (no accumulation)", slotsEl.querySelectorAll(".hb-slot").length === 5
+      && slotsEl.querySelectorAll(".hb-slot .tip").length === 5);
+    check("no stray ghost after the churn", ghostEl() === null);
     hud.clear(); root.remove();
   }
 }
@@ -409,6 +505,7 @@ function main(): void {
   cancelTests();
   keyboardReorderTests();
   tooltipClampTests();
+  qaGateTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll hotbar drag assertions passed.\n");

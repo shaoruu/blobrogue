@@ -222,11 +222,46 @@ function cardTests(): void {
   check("melee ignores pellet mods on the card", weaponCard("sword", mods, 0).power.count === 1);
 }
 
+// QA gate: no card field may ever be NaN/undefined/empty for ANY weapon under ANY mod
+// profile or HP state — the tooltip must never render nonsense.
+function integrityTests(): void {
+  section("QA gate: every card is finite and complete across weapons \u00d7 builds \u00d7 HP states");
+  const capped = createMods();
+  capped.damageMult = 99; capped.fireRateMult = 99; capped.extraPellets = 4; capped.spreadAdd = 0.4;
+  capped.bulletSpeedMult = 1.3; capped.bulletLifeMult = 1.3; capped.pierce = 9;
+  capped.berserk = 3; capped.adrenaline = 2;
+  const risky = createMods();
+  risky.berserk = 1.2; risky.adrenaline = 0.8;
+  const profiles = [createMods(), capped, risky];
+  let bad = 0;
+  const details: string[] = [];
+  for (const id of Object.keys(WEAPONS) as WeaponId[]) {
+    for (let pi = 0; pi < profiles.length; pi++) {
+      for (const lowHp of [0, 0.5, 1, lowHpFrac(1, 0)]) {
+        const c = weaponCard(id, profiles[pi], lowHp);
+        const nums = [c.power.perHit, c.power.count, c.cadence.num, c.cadence.order, c.reach.num, c.reach.order,
+          ...(c.coverage ? [c.coverage.num] : []), ...(c.sweep ? [c.sweep.num] : []), ...(c.impact ? [c.impact.num] : [])];
+        const ok = nums.every((n) => Number.isFinite(n))
+          && c.power.count >= 1
+          && c.role.length > 0 && c.cadence.band.length > 0 && c.reach.band.length > 0
+          && c.mechanics.every((m) => m.text.length > 0 && Number.isFinite(m.mag))
+          && !JSON.stringify(c).includes("NaN") && !JSON.stringify(c).includes("undefined");
+        if (!ok) { bad++; details.push(`${id} profile=${pi} lowHp=${lowHp}`); }
+      }
+    }
+  }
+  check("no NaN / undefined / empty band anywhere", bad === 0, details.slice(0, 3).join("; "));
+  check("caps hold even under an absurd build",
+    weaponCard("pistol", capped, 1).power.perHit === 2 * CAPS.damageMult
+    && weaponCard("pistol", capped, 1).cadence.num <= (1 / WEAPONS.pistol.fireCd) * CAPS.fireRateMult + 1e-9);
+}
+
 function main(): void {
   baseStatTests();
   modTests();
   specialTests();
   cardTests();
+  integrityTests();
   antiDriftTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

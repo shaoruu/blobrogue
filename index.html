@@ -68,11 +68,16 @@
       /* weapon stat tooltip: same pixel chrome as the blessing tips, anchored above the
          card. --tip-shift is the JS viewport clamp (edge slots shift inward, never off
          screen), and .no-tips suppresses every tip while a drag is live. */
-      .hb-slot .tip{ position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(calc(-50% + var(--tip-shift,0px))); z-index:7; display:none;
-        flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:250px;
+      .hb-slot .tip{ position:absolute; bottom:calc(100% + 7px); left:50%;
+        transform:translate(calc(-50% + var(--tip-shift,0px)), var(--tip-shift-y,0px)); z-index:7; display:none;
+        flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:250px; overflow-wrap:anywhere;
         font-family:var(--f-num); font-size:14px; line-height:1.15; color:var(--bone); background:var(--dun-1);
         box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:6px 9px; pointer-events:none; }
       .hb-slot:hover .tip, .hb-slot:focus-visible .tip{ display:flex; }
+      /* one tip at a time across input modes: while the keyboard/controller is driving
+         (.kb-tips, set on focus), a mouse merely RESTING on another slot shows nothing;
+         pointer movement takes the row back (the class drops on pointerenter). */
+      .hb-slots.kb-tips .hb-slot:hover:not(:focus-visible) .tip{ display:none; }
       .hb-slots.no-tips .hb-slot .tip{ display:none !important; }
       .hb-slot .tip .tn{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--amber); }
       .hb-slot .tip .tj{ font-family:var(--f-ui); font-size:7px; letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }

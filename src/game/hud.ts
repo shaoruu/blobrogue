@@ -613,6 +613,14 @@ export class Hud {
   private attachSlotInteractions(slot: HTMLElement, index: number) {
     slot.addEventListener("keydown", (e) => {
       if (this.drag) return; // a live pointer drag owns the slot — keys can't equip/reorder under it
+      // Escape on a focused slot dismisses its tooltip (blur) and is SWALLOWED — it never
+      // falls through to the pause menu while it still has UI to dismiss.
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        slot.blur();
+        return;
+      }
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         e.stopPropagation(); // a focused slot owns Enter/Space (Space is also the game's key)
@@ -678,11 +686,21 @@ export class Hud {
       else if (!isOutside && to !== from) this.hotbarActions?.onSlotReorder(from, to);
     });
     slot.addEventListener("pointercancel", () => this.teardownDrag());
-    // Keep the hover tooltip on-screen: shift it inward when the slot sits near a viewport
-    // edge (the equipped card can be wide, and narrow windows push end slots to the edge).
-    const clampTip = () => this.clampSlotTip(slot);
-    slot.addEventListener("pointerenter", clampTip);
-    slot.addEventListener("focus", clampTip);
+    // Exactly ONE tooltip at a time across input modes: keyboard focus flags the row as
+    // keyboard-driven (CSS then mutes the resting mouse's hover tip); the pointer entering
+    // a slot takes the row back and dismisses any focused sibling's tip — so switching
+    // between mouse / keyboard / controller never leaves a stale duplicate behind. Both
+    // paths re-clamp the tip to the viewport.
+    slot.addEventListener("focus", () => {
+      this.slotsEl.classList.add("kb-tips");
+      this.clampSlotTip(slot);
+    });
+    slot.addEventListener("pointerenter", () => {
+      this.slotsEl.classList.remove("kb-tips");
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && focused !== slot && focused.classList.contains("hb-slot")) focused.blur();
+      this.clampSlotTip(slot);
+    });
   }
 
   // Release beyond the slots row + margin = the player changed their mind; never commit a
@@ -694,22 +712,26 @@ export class Hud {
       || y < r.top - DROP_OUTSIDE_PX || y > r.bottom + DROP_OUTSIDE_PX;
   }
 
-  // Nudge a slot's tooltip back into the viewport via --tip-shift (CSS translates by it).
-  // The shift is applied in the slot's LOCAL px, so it is divided by the zoom scale.
+  // Nudge a slot's tooltip fully back into the viewport via --tip-shift/--tip-shift-y
+  // (CSS translates by them). Horizontal: edge slots shift inward. Vertical: on a very
+  // short viewport the tip would clip past the top, so it shifts DOWN just enough to stay
+  // fully onscreen (it may then overlap its own card — never the rest of the hotbar).
+  // Shifts are applied in the slot's LOCAL px, so they divide by the zoom scale.
   private clampSlotTip(slot: HTMLElement) {
     const tip = slot.querySelector<HTMLElement>(".tip");
     if (!tip) return;
     tip.style.setProperty("--tip-shift", "0px");
+    tip.style.setProperty("--tip-shift-y", "0px");
     const r = tip.getBoundingClientRect();
     if (r.width <= 0) return; // hidden or headless
     const margin = 6;
+    const sr = slot.getBoundingClientRect();
+    const scale = sr.width > 0 && slot.offsetWidth > 0 ? sr.width / slot.offsetWidth : 1;
     let shift = 0;
     if (r.left < margin) shift = margin - r.left;
     else if (r.right > window.innerWidth - margin) shift = window.innerWidth - margin - r.right;
-    if (shift === 0) return;
-    const sr = slot.getBoundingClientRect();
-    const scale = sr.width > 0 && slot.offsetWidth > 0 ? sr.width / slot.offsetWidth : 1;
-    tip.style.setProperty("--tip-shift", `${shift / scale}px`);
+    if (shift !== 0) tip.style.setProperty("--tip-shift", `${shift / scale}px`);
+    if (r.top < margin) tip.style.setProperty("--tip-shift-y", `${(margin - r.top) / scale}px`);
   }
 
   private beginDragVisuals(slot: HTMLElement, d: SlotDrag) {

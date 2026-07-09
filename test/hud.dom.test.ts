@@ -171,6 +171,21 @@ function weaponTooltipTests(): void {
   check("pierce mods surface a live PIERCES line",
     weaponTipNotes(weaponCard("pistol", pierceMods, 0), null).some((n) => n.text === "PIERCES 1 BODY"));
   check("fmtStat trims to one decimal", fmtStat(6.25) === "6.3" && fmtStat(2) === "2" && fmtStat(1.9230769) === "1.9");
+
+  section("weapon card tooltip: QA gates — rendered content is never nonsense, arrows stay semantic");
+  const allIds = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
+    "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"] as WeaponId[];
+  check("no slot ever renders NaN / undefined / N/A (all weapons, with and without comparison)",
+    allIds.every((id) => {
+      const text = buildSlot(wslot(id, id, false), 0, wcard("shotgun")).textContent ?? "";
+      return !text.includes("NaN") && !text.includes("undefined") && !text.includes("N/A");
+    }));
+  // CADENCE derives from fireCd, a lower-is-better raw stat: the arrow must follow the
+  // semantic direction (faster = up), never the raw number's direction.
+  const fasterRaw = weaponTipRows(wcard("rapid"), wcard("railgun")); // fireCd 0.07 vs 0.85
+  check("lower-is-better raw (fireCd) reads as an UP arrow on the semantic CADENCE row", fasterRaw[1].delta === 1);
+  check("equal bands and self-comparison stay neutral",
+    weaponTipRows(wcard("shotgun"), wcard("shotgun")).every((r) => r.delta === 0 || r.delta === null));
 }
 
 function buffChipTests(): void {
