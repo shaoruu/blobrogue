@@ -453,6 +453,9 @@ function placeProps(w: WorldState): Prop[] {
       const ty = room.y + rng.int(0, room.h - 1);
       const idx = ty * d.w + tx;
       if (occupied.has(idx) || d.tiles[idx] !== 0 || hasHazardOnTile(w, tx, ty)) continue;
+      // Room centers are reserved ground: chests and dealer stock land there (a vault's
+      // chest belongs INSIDE its ring, not wherever a crate left space).
+      if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 1) continue;
       if (Math.abs(tx - d.spawn.x) <= 1 && Math.abs(ty - d.spawn.y) <= 1) continue;
       if (Math.abs(tx - d.exit.x) <= 1 && Math.abs(ty - d.exit.y) <= 1) continue;
       occupied.add(idx);

@@ -2261,16 +2261,18 @@ export class Game {
           const t = rd / detailDensity;
           const detail: TileName = t < 0.33 ? "floor_crack" : t < 0.66 ? "floor_grate" : "floor_moss";
           if (tiles.ready(detail)) {
-            // Deep biomes recolor their detail dressing (frost-blue lichen in the Caves,
-            // ember-lit cracks, void-pink growth) — one authored asset, six moods.
-            const tinted = biome.detailTint && detail === "floor_moss" ? tiles.tinted(detail, biome.detailTint) : null;
-            if (tinted) {
-              ctx.save();
-              ctx.globalAlpha = 0.75;
-              ctx.drawImage(tinted, sx, sy, TILE, TILE);
-              ctx.restore();
-            } else {
-              ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
+            ctx.drawImage(tiles.get(detail), sx, sy, TILE, TILE);
+            // Deep biomes recolor their growth dressing (frost lichen, ember-lit cracks,
+            // void bloom): the tinted silhouette blends OVER the original at partial
+            // alpha, so the art keeps its texture and only the hue shifts.
+            if (biome.detailTint && detail === "floor_moss") {
+              const tinted = tiles.tinted(detail, biome.detailTint);
+              if (tinted) {
+                ctx.save();
+                ctx.globalAlpha = 0.45;
+                ctx.drawImage(tinted, sx, sy, TILE, TILE);
+                ctx.restore();
+              }
             }
           }
         }
@@ -2457,26 +2459,40 @@ export class Game {
     const { ctx } = this;
     const style = POOL_STYLES[Math.min(this.biomeIdx, POOL_STYLES.length - 1)];
     const cx = sx + TILE / 2, cy = sy + TILE / 2;
-    ctx.save();
-    // Body: merged with orthogonal pool neighbors so a blob reads as ONE basin.
-    ctx.fillStyle = style.base;
     const left = this.poolTiles.has(h.ty * this.dungeon.w + h.tx - 1) ? 0 : 3;
     const right = this.poolTiles.has(h.ty * this.dungeon.w + h.tx + 1) ? 0 : 3;
     const top = this.poolTiles.has((h.ty - 1) * this.dungeon.w + h.tx) ? 0 : 3;
     const bottom = this.poolTiles.has((h.ty + 1) * this.dungeon.w + h.tx) ? 0 : 3;
+    ctx.save();
+    // Recessed basin: a dark sink under the liquid so it reads carved INTO the floor,
+    // merged with orthogonal pool neighbors so a blob is ONE body.
+    ctx.fillStyle = "rgba(2,1,6,0.72)";
     ctx.fillRect(sx + left, sy + top, TILE - left - right, TILE - top - bottom);
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = style.base;
+    ctx.fillRect(sx + left + 1, sy + top + 1, TILE - left - right - 2, TILE - top - bottom - 2);
+    // Rim highlight on the OUTER edges only (merged sides stay open water).
+    ctx.globalAlpha = 0.55;
+    ctx.strokeStyle = style.edge;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (top > 0) { ctx.moveTo(sx + left, sy + top + 0.5); ctx.lineTo(sx + TILE - right, sy + top + 0.5); }
+    if (bottom > 0) { ctx.moveTo(sx + left, sy + TILE - bottom - 0.5); ctx.lineTo(sx + TILE - right, sy + TILE - bottom - 0.5); }
+    if (left > 0) { ctx.moveTo(sx + left + 0.5, sy + top); ctx.lineTo(sx + left + 0.5, sy + TILE - bottom); }
+    if (right > 0) { ctx.moveTo(sx + TILE - right - 0.5, sy + top); ctx.lineTo(sx + TILE - right - 0.5, sy + TILE - bottom); }
+    ctx.stroke();
     // Meniscus sheen, slowly wandering — liquid, not paint.
     const t = this.animClock * 0.7 + h.phase;
     const g = ctx.createRadialGradient(cx + Math.sin(t) * 8, cy + Math.cos(t * 0.8) * 6, 2, cx, cy, TILE * 0.62);
     g.addColorStop(0, style.sheen);
     g.addColorStop(1, "rgba(0,0,0,0)");
-    ctx.globalAlpha = 0.16 + 0.05 * Math.sin(t * 1.7);
+    ctx.globalAlpha = 0.10 + 0.04 * Math.sin(t * 1.7);
     ctx.globalCompositeOperation = "lighter";
     ctx.fillStyle = g;
     ctx.fillRect(sx, sy, TILE, TILE);
     // Bubbles: two seeded risers that swell and pop.
     ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = style.edge;
+    ctx.strokeStyle = style.sheen;
     ctx.lineWidth = 1;
     for (let i = 0; i < 2; i++) {
       const seed = tileHash(h.tx, h.ty, 7 + i);
@@ -3914,6 +3930,19 @@ export class Game {
   devToggleFlowDebug(): boolean {
     this.isFlowDebug = !this.isFlowDebug;
     return this.isFlowDebug;
+  }
+
+  // Teleport the local player (QA capture rigs aim the camera at a spot of interest).
+  devTeleport(x: number, y: number): void {
+    this.p.x = x;
+    this.p.y = y;
+    this.lastPx = x;
+    this.lastPy = y;
+  }
+
+  // Read-only world access for QA scripting (hazard positions, room rects).
+  devWorld(): WorldState {
+    return this.world;
   }
 
   devSnapshot(): DevSnapshot {

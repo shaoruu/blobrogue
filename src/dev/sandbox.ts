@@ -71,6 +71,10 @@ export function bootSandbox(canvas: HTMLCanvasElement, minimap: HTMLCanvasElemen
   );
   game.devStartSandbox();
 
+  // QA scripting handle (dev page only, never the play bundle): lets headless capture
+  // rigs drive floors/teleports without brittle UI automation.
+  (window as unknown as { __game: Game }).__game = game;
+
   buildPanel(game);
 }
 

@@ -286,7 +286,9 @@ function erodeRubble(c: Carver, rand: Rng, rooms: Room[], floor: number): void {
   let guard = 0;
   while (placed < count && guard++ < count * 12) {
     const room = rooms[rand.int(0, rooms.length - 1)];
-    if (room.kind === "spawn" || room.shape === "vault" || room.shape === "cell") continue;
+    // Spawn and exit rooms stay clear (the descend gathering, and on boss floors the
+    // exit room IS the fight arena — the squeeze needs clean lanes to the safe radius).
+    if (room.kind === "spawn" || room.kind === "exit" || room.shape === "vault" || room.shape === "cell") continue;
     const tx = room.x + 2 + rand.int(0, Math.max(0, room.w - 5));
     const ty = room.y + 2 + rand.int(0, Math.max(0, room.h - 5));
     if (Math.abs(tx - room.cx) + Math.abs(ty - room.cy) <= 2) continue;
