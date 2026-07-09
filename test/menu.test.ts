@@ -354,21 +354,26 @@ async function main(): Promise<void> {
     check("no Controls DESTINATION (the settings card may describe controls)", !buttonsOf(overlay).some((b) => /^controls\b/i.test(b.trim())));
   }
 
-  section("the camp stage: YOUR blob on the plinth above PLAY — one glance stack");
+  section("the hero blob stage: identity showpiece in the raised hero band");
   {
     // A dressed profile: the stage must mirror the ACTUAL equipped loadout once hydrated.
     const dressed = makeProfile({ cosmetics: { hat: "hat_top", face: "face_shades", body: "body_cyan", title: null }, colorIndex: 1 });
     const { menu, overlay } = makeMenu({ profile: dressed, lb: LB_ENTRIES.slice(0, 2) });
     await menu.showTitle();
-    const camp = () => byClass(overlay, "home-camp")[0];
-    const stage = () => byClass(overlay, "home-stage")[0];
-    check("the camp stage lives in the LEFT column with Play (one stack)",
-      camp() !== undefined && byClass(byClass(overlay, "home-left")[0] ?? {}, "home-camp").length === 1);
-    check("the blob stands on the authored plinth", byClass(camp() ?? {}, "home-plinth").length === 1);
+    const hero = () => byClass(overlay, "home-hero")[0];
+    const stage = () => byClass(hero() ?? {}, "blob-stage")[0];
+    check("the two-column hero band renders: wordmark | blob stage",
+      byClass(hero() ?? {}, "hero-mark").length === 1 && stage() !== undefined);
+    check("the body columns are untouched: glance under Play, identity/destinations right",
+      byClass(byClass(overlay, "home-left")[0] ?? {}, "lb-preview").length === 1
+      && byClass(byClass(overlay, "home-right")[0] ?? {}, "identity-card").length === 1
+      && byClass(overlay, "lb-row").length === 3);
     check("it draws through the shared preview renderer (the world/closet code path)",
       byClass(stage() ?? {}, "blob-preview").length === 1);
     const canvasBefore = collect(stage() ?? {}, (n) => n.tagName === "CANVAS")[0];
-    check("the canvas reserves its fixed 128px box from creation", canvasBefore?.width === 128 && canvasBefore?.height === 128);
+    check("the canvas reserves its fixed 96px box from creation", canvasBefore?.width === 96 && canvasBefore?.height === 96);
+    check("the stage is a SHOWPIECE, not a control (no button inside it)",
+      collect(stage() ?? {}, (n) => n.tagName === "BUTTON").length === 0);
     check("before hydration a fresh guest shows the DEFAULT blob",
       stage()?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true, stage()?.getAttribute?.("aria-label") ?? "");
     const buttonsBefore = buttonsOf(overlay).length;
@@ -378,22 +383,31 @@ async function main(): Promise<void> {
     const label = stage()?.getAttribute?.("aria-label") ?? "";
     check("the hydrated stage mirrors the EQUIPPED loadout (hat + glasses + body color)",
       label.includes("Top Hat") && label.includes("Shades") && label.includes("Cyan"), label);
-    check("PLAY stays the FIRST action in DOM/tab order (the camp lifts visually via CSS order)",
-      (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE") && (buttonsOf(overlay)[1] ?? "").includes("PLAY SOLO"));
-    check("the CUSTOMIZE affordance rides beside the blob", byClass(camp() ?? {}, "stage-customize").length === 1);
-    check("the glance moved with the stack intact: 3 fixed leaderboard rows still render",
-      byClass(overlay, "lb-preview").length === 1 && byClass(overlay, "lb-row").length === 3);
+    const buttons = buttonsOf(overlay);
+    check("PLAY stays the FIRST action; CUSTOMIZE rides DOM-LAST (anchored beside the blob via CSS)",
+      (buttons[0] ?? "").includes("PLAY ONLINE") && (buttons[buttons.length - 1] ?? "") === "CUSTOMIZE", buttons.join("|").slice(0, 80));
+    // The accepted shell + stage geometry, verbatim from the placement decision.
+    const html = readFileSync(join(ROOT, "index.html"), "utf8");
+    check("shell: 150px hero row over minmax(0,1fr), height min(548px,100vh-40px), min 508px",
+      /\.menu-home\{ display:grid; grid-template-rows:150px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(548px,calc\(100vh - 40px\)\); min-height:508px; \}/.test(html));
+    check("hero band: 1fr wordmark | 132px stage; stage canvas is 96px",
+      /\.home-hero\{ display:grid; grid-template-columns:1fr 132px;/.test(html)
+      && /\.home-hero \.blob-stage\{[^}]*width:132px; height:132px;/.test(html)
+      && /\.home-hero \.blob-stage \.blob-preview\{[^}]*width:96px; height:96px;/.test(html));
+    check("the blob STANDS: radial plinth glow behind + soft ground-shadow ellipse",
+      /\.home-hero \.blob-stage::before\{[^}]*radial-gradient/.test(html)
+      && /\.home-hero \.blob-stage::after\{[^}]*border-radius:50%; background:rgba\(5,3,11/.test(html));
 
     // Signed-out/guest: the default blob — plus the guest's body-color pick when one exists.
     const guest = makeMenu({ lb: [] });
     await guest.menu.showTitle();
     await settle();
     check("a guest with no picks keeps the default look after hydration",
-      byClass(guest.overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true);
+      byClass(guest.overlay, "blob-stage")[0]?.getAttribute?.("aria-label")?.includes("classic amber cowboy") === true);
     const picked = makeMenu({ lb: [] });
     void picked.session.setColorIndex(2); // the guest's swatch pick, applied locally at once
     await picked.menu.showTitle();
-    check("a guest body-color pick rides the stage", byClass(picked.overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("Green") === true);
+    check("a guest body-color pick rides the stage", byClass(picked.overlay, "blob-stage")[0]?.getAttribute?.("aria-label")?.includes("Green") === true);
   }
 
   section("attention hierarchy gate: calm identity, brightest PLAY, no reflow under worst case");
@@ -411,7 +425,7 @@ async function main(): Promise<void> {
     const { menu, overlay } = makeMenu({ profile: flashy, lb: LB_ENTRIES, standing: { floor: 22, kills: 900, rank: 7 }, auth });
     await menu.showTitle();
     const playNode = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0];
-    const stageCanvas = collect(byClass(overlay, "home-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0];
+    const stageCanvas = collect(byClass(overlay, "blob-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0];
     const nodesBefore = collect(overlay, () => true).length;
     const buttonsBefore = buttonsOf(overlay).length;
     await settle();
@@ -421,14 +435,16 @@ async function main(): Promise<void> {
     check("the Play node is the SAME node after the flashy loadout landed",
       collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
     check("the stage canvas never resizes (fixed reserved bounds)",
-      collect(byClass(overlay, "home-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0] === stageCanvas && stageCanvas?.width === 128);
+      collect(byClass(overlay, "blob-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0] === stageCanvas && stageCanvas?.width === 96);
     check("PLAY is still the first action in order", (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE"));
-    // The stage chrome is CSS-quiet by construction: no animation, no glow shadows — the
-    // calm idle lives canvas-side (blink/wave under the cosmetic transform caps), so an
-    // equipped set can never emit motion or glow that outranks Play.
+    // The stage chrome stays quiet by construction: no CSS animation and no amber FILL
+    // anywhere on it (the plinth glow is a low-alpha wash, never a competing highlight);
+    // the calm idle lives canvas-side (blink/wave under the cosmetic transform caps), so
+    // an equipped set can never emit motion or glow that outranks Play.
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
-    const stageCss = html.slice(html.indexOf("THE CAMP STAGE"), html.indexOf(".body{"));
-    check("stage/plinth CSS carries no animation and no glow", !/animation:/.test(stageCss) && !/box-shadow:0 0 \d/.test(stageCss), "");
+    const stageCss = html.slice(html.indexOf("THE HERO BLOB STAGE"), html.indexOf(".body{"));
+    check("stage CSS carries no animation and no amber fill (Play stays the only amber mass)",
+      !/animation:/.test(stageCss) && !/background:var\(--amber\)/.test(stageCss), "");
     const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
     check("the title stage opts into the CALM idle (blink/wave, capped)", menuSrc.includes("isCalmIdle: true"));
     const previewSrc = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
@@ -456,7 +472,7 @@ async function main(): Promise<void> {
     check("...returning to the UNCHANGED title (same Play node, never rebuilt)",
       collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
     check("...with the stage repainted to the updated blob",
-      byClass(overlay, "home-stage")[0]?.getAttribute?.("aria-label")?.includes("Top Hat") === true);
+      byClass(overlay, "blob-stage")[0]?.getAttribute?.("aria-label")?.includes("Top Hat") === true);
     // Escape drives the same overlay close (B on a pad dispatches this exact event).
     collect(overlay, (n) => n.tagName === "BUTTON" && typeof n.className === "string" && n.className.includes("stage-customize"))[0]?.onclick?.();
     check("re-opened for the Escape path", byClass(overlay, "closet-pop").length === 1);

@@ -205,56 +205,53 @@ export class Menu {
 
   async showTitle(focus?: TitleFocus) {
     // THE canonical home markup (finalized; supersedes every earlier shell variant):
-    //   .menu-home
-    //     .hero                          logo + tagline
+    //   .menu-home                       grid rows 150px / minmax(0,1fr)
+    //     .home-hero                     the two-column hero band: .hero-mark (logo +
+    //                                    tagline) | .blob-stage (the 132x132 identity
+    //                                    showpiece: YOUR blob at 96px via the shared
+    //                                    loadout renderer, calm idle, plinth glow +
+    //                                    ground shadow — no button chrome, no amber)
     //     .home-body
-    //       .home-left                   the ONE glance stack: the .home-camp character
-    //                                    stage (YOUR blob on its amber-camp plinth, calm
-    //                                    idle, with the small CUSTOMIZE affordance), then
-    //                                    PLAY ONLINE, PLAY SOLO, and the fixed
-    //                                    .home-status line. Eye lands on the blob, drops
-    //                                    to PLAY — and PLAY stays FIRST in DOM/tab order
-    //                                    (the camp is lifted visually via CSS order).
-    //       .home-right                  reserved .identity-card, the PROFILE + SETTINGS
-    //                                    destination pair, then the fixed leaderboard
-    //                                    glance (exactly 3 rows + state line)
+    //       .home-left                   PLAY ONLINE, PLAY SOLO, fixed .home-status
+    //                                    line, fixed leaderboard preview (exactly 3
+    //                                    rows + state line)
+    //       .home-right                  reserved .identity-card, then the PROFILE and
+    //                                    SETTINGS destinations
+    //     .stage-customize               the small closet door beside the blob —
+    //                                    absolutely anchored into the hero band, DOM-last
+    //                                    so PLAY stays first in tab/reading order
     // No home footer, no Controls button, no right-side Leaderboard destination.
     const wrap = el("div", "menu menu-home");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
-    // Hero banner: logo + tagline, divider under it. The logo carries its intrinsic
-    // dimensions (1128x192) so the box is reserved before the file streams in.
-    const hero = el("div", "hero");
+    // HERO BAND. Left: the wordmark (intrinsic 1128x192 logo so its box is reserved
+    // before the file streams in) + tagline. Right: the blob stage — an identity
+    // SHOWPIECE, not a control: no button affordance, no amber fill, no arrow. Play
+    // Online below remains the only amber-filled element and the first action.
+    const hero = el("div", "home-hero");
+    const mark = el("div", "hero-mark");
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
     logo.className = "logo-img";
     logo.alt = "BLOBROGUE";
     logo.width = 1128;
     logo.height = 192;
-    hero.appendChild(logo);
-    hero.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
-    wrap.appendChild(hero);
-
-    // The camp stage: YOUR blob — equipped hat/glasses/body color through the exact
-    // renderer the world and closet use — standing slightly off-center on the authored
-    // plinth, breathing with an occasional blink/wave. Fixed reserved bounds (the camp
-    // block and the 128px canvas are sized from first paint), display-only chrome, no
-    // glow, no looping VFX: calm identity FIRST in the eye's path, with the brightest
-    // interactive mass (PLAY) directly below and never obstructed.
-    const camp = el("div", "home-camp");
-    const stageBox = el("div", "home-stage");
+    mark.appendChild(logo);
+    mark.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    hero.appendChild(mark);
+    const stageBox = el("div", "blob-stage");
     stageBox.setAttribute("role", "img");
     stageBox.setAttribute("aria-label", this.stageLabel());
-    stageBox.appendChild(el("span", "home-plinth"));
-    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 128, { isCalmIdle: true });
+    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96, { isCalmIdle: true });
     stageBox.appendChild(stagePreview.el);
-    camp.appendChild(stageBox);
+    hero.appendChild(stageBox);
+    wrap.appendChild(hero);
     // The natural place to tap your guy: a small, quiet closet door beside the blob. It
     // opens the closet as an OVERLAY — the title (and Play) never leaves the screen.
+    // Appended to the wrap LAST (absolute position anchors it into the hero band).
     const customize = el("button", "secondary stage-customize", "CUSTOMIZE");
     customize.type = "button";
     customize.onclick = () => this.openClosetOverlay();
-    camp.appendChild(customize);
     // Hydration repaints the blob inside the same fixed bounds — content only, zero shift.
     // (Armed after show(); show() clears the previous screen's hook.)
     const refreshStage = () => {
@@ -263,11 +260,10 @@ export class Menu {
     };
 
     if (!this.client) {
-      // Offline build: no profile/multiplayer — single actions column, the same camp
-      // stack on top (the closet saves on this device).
+      // Offline build: no profile/multiplayer — single actions column under the same
+      // hero band (the closet saves on this device).
       const left = el("div", "home-left");
       left.appendChild(this.soloButton("\u25be  PLAY"));
-      left.appendChild(camp);
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       const nav = el("div", "navrow");
       const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
@@ -277,6 +273,7 @@ export class Menu {
       nav.append(profileBtn, settingsBtn);
       left.appendChild(nav);
       wrap.appendChild(left);
+      wrap.appendChild(customize);
       this.show(wrap);
       this.titleStageRefresh = refreshStage;
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
@@ -285,9 +282,9 @@ export class Menu {
 
     const body = el("div", "home-body");
 
-    // LEFT: the glance stack. PLAY ONLINE / PLAY SOLO lead the DOM (first in tab order,
-    // the brightest interactive mass); the camp stage is lifted ABOVE them visually via
-    // CSS order, so the eye lands on the blob and drops straight to PLAY.
+    // LEFT: the play actions own the top (first in DOM/tab order — the eye drops from
+    // the hero blob straight onto them); a fixed status line and the quiet leaderboard
+    // glance fill the space under them (fixed row geometry, subordinate to Play).
     const left = el("div", "home-left");
     const onlineBtn = el("button", "btn-quick primary");
     onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
@@ -298,14 +295,14 @@ export class Menu {
     const solo = this.soloButton("PLAY SOLO");
     solo.classList.add("play-solo");
     left.appendChild(solo);
-    left.appendChild(camp);
     // The fixed home status line: reserved from first paint; any boot/exit note swaps
     // content inside it, never the layout around it.
     left.appendChild(el("p", "home-status", ""));
+    left.appendChild(this.leaderboardPreview(focusTargets));
     body.appendChild(left);
 
-    // RIGHT: the reserved identity card, the PROFILE / SETTINGS destination pair, then
-    // the quiet leaderboard glance (its explicit door is VIEW LEADERBOARD on the glance).
+    // RIGHT: the reserved identity card, then the PROFILE / SETTINGS destinations (the
+    // leaderboard's explicit door is the VIEW LEADERBOARD action on the glance itself).
     const right = el("div", "home-right");
     const identity = this.identitySection();
     right.appendChild(identity);
@@ -316,10 +313,10 @@ export class Menu {
     focusTargets.set("settings", settingsBtn);
     nav.append(profileBtn, settingsBtn);
     right.appendChild(nav);
-    right.appendChild(this.leaderboardPreview(focusTargets));
     body.appendChild(right);
 
     wrap.appendChild(body);
+    wrap.appendChild(customize);
     this.show(wrap);
     this.identityMount = identity;
     this.titleStageRefresh = refreshStage;

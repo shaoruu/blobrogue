@@ -476,52 +476,56 @@
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
         padding:22px 26px 20px; width:min(840px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
         display:flex; flex-direction:column; gap:16px; align-items:stretch; }
-      /* CANONICAL HOME GEOMETRY: 840x520 shell, 86px hero (logo + tagline), 1.22fr/0.78fr
-         body. LEFT is the ONE glance stack: the 192px camp stage lifted visually above
-         PLAY ONLINE 82 / PLAY SOLO 54 / status 12 (+ 3 x 10px gaps = 370). RIGHT: 112px
-         identity card, the 64px destination pair, then the fixed 154px leaderboard
-         glance. Fixed on desktop; media queries below relax it for narrow/short
-         viewports. */
-      .menu-home{ height:520px; }
-      .hero{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; height:86px; flex:0 0 86px; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
+      /* CANONICAL HOME GEOMETRY (the accepted placement): the shell is a grid of a
+         RAISED 150px hero row + minmax(0,1fr) body at height min(548px,100vh-40px),
+         min-height 508px. Only the hero row grew — the body boxes are UNCHANGED from
+         the shipped launchpad: left rows 82/54/16/154 (PLAY ONLINE / PLAY SOLO /
+         status / glance), right 112px identity card + two stacked 82px destinations —
+         so every zero-CLS box below the hero stays identical. Desktop budget closes
+         exactly: 548 - 48 chrome = 500 = 150 hero + 14 row gap + 336 body
+         (= 82+54+16+154 + 3 x 10 column gaps). */
+      .menu-home{ display:grid; grid-template-rows:150px minmax(0,1fr); gap:14px;
+        height:min(548px,calc(100vh - 40px)); min-height:508px; }
+      /* --- THE HERO BLOB STAGE (identity showpiece) ---
+         Two-column hero band: the wordmark left, the 132x132 .blob-stage right. The
+         stage holds a 96px canvas rendered by the shared CosmeticLoadout renderer with
+         the calm idle (canvas-side blink/wave, capped) over a quiet radial plinth glow
+         and a soft ground-shadow ellipse — the blob STANDS, it never floats. Deliberate
+         non-chrome: NO button affordance, NO amber fill, NO arrow, no CSS animation —
+         PLAY ONLINE below stays the only amber-filled element and the first action.
+         Every bound here is fixed from first paint, so cosmetics/loading never shift
+         anything. */
+      .home-hero{ display:grid; grid-template-columns:1fr 132px; gap:16px; align-items:center;
+        min-height:0; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
+      .hero-mark{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; min-width:0; }
       /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
          attributes so the space is reserved before the file streams in). */
       .logo-img{ image-rendering:pixelated; height:40px; width:235px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
-      .hero .tag{ font-family:var(--f-ui); font-size:10px; line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
-      /* --- THE CAMP STAGE (attention slot #1: calm identity) ---
-         YOUR blob, slightly off-center on the authored amber-camp plinth, breathing with
-         an occasional blink/wave (canvas-side, capped) — warm and alive but visually
-         QUIET: no animation in this CSS, no glow, no bright VFX, so the amber PLAY mass
-         directly below stays the brightest interactive thing on the surface. The camp
-         block, the 128px canvas, and the CUSTOMIZE chip are all fixed reserved bounds
-         from first paint — cosmetics, loading names, or badges can never reflow Play.
-         DOM order keeps PLAY first (tab/reading order); this block is lifted above it
-         visually via `order`. */
-      .home-camp{ position:relative; order:-1; height:192px; flex:0 0 192px; min-width:0; overflow:hidden; }
-      .home-stage{ position:absolute; left:50%; bottom:0; width:128px; height:158px; transform:translateX(-58%); }
-      /* Transparent canvas: the blob stands in the open on its plinth (the global canvas
-         backdrop is for the game surface, not the camp). */
-      .home-stage .blob-preview{ position:absolute; left:0; bottom:12px; width:128px; height:128px; image-rendering:pixelated; background:transparent; }
-      /* The authored plinth: a stepped leather-amber platform with two pixel pebbles —
-         quiet camp dressing, zero animation. */
-      .home-plinth{ position:absolute; left:8px; bottom:6px; width:112px; height:12px; background:var(--lea-1);
-        box-shadow:inset 0 2px 0 var(--lea-2), inset 0 -3px 0 var(--lea-0), 0 3px 0 var(--ink),
-          0 -4px 0 -2px var(--lea-2); }
-      .home-plinth::before{ content:""; position:absolute; left:-16px; bottom:-3px; width:7px; height:4px; background:var(--dun-3); }
-      .home-plinth::after{ content:""; position:absolute; right:-18px; bottom:-1px; width:5px; height:3px; background:var(--dun-3); }
+      .home-hero .tag{ font-family:var(--f-ui); font-size:10px; line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
+      .home-hero .blob-stage{ position:relative; flex:none; width:132px; height:132px;
+        background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
+      /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
+      .home-hero .blob-stage::before{ content:""; position:absolute; inset:6px; border-radius:50%;
+        background:radial-gradient(closest-side, rgba(255,180,59,.16), rgba(255,180,59,.05) 55%, transparent 74%); }
+      /* the soft ground-shadow ellipse under the feet — standing, not floating */
+      .home-hero .blob-stage::after{ content:""; position:absolute; left:50%; bottom:15px; width:60px; height:10px;
+        transform:translateX(-50%); border-radius:50%; background:rgba(5,3,11,.55); }
+      .home-hero .blob-stage .blob-preview{ position:relative; z-index:1; width:96px; height:96px;
+        image-rendering:pixelated; background:transparent; }
       /* The small closet door beside the blob — the natural place to tap your guy. Quiet
-         secondary chrome; opens the closet as an OVERLAY (Play never leaves the screen). */
-      .stage-customize{ position:absolute; left:calc(50% + 58px); bottom:10px; min-width:0; width:auto;
+         secondary chrome, absolutely anchored into the hero band (DOM-last, so PLAY
+         keeps first tab/reading order); opens the closet as an OVERLAY. */
+      .stage-customize{ position:absolute; top:100px; right:140px; z-index:2; min-width:0; width:auto;
         font-size:8px; letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
       .body{ display:flex; gap:20px; align-items:stretch; }
       .home-body{ display:grid; grid-template-columns:1.22fr 0.78fr; gap:20px; flex:1; min-height:0; }
       .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
-      /* Exact left rows: 192 camp (visual top) / 82 online / 54 solo / 12 status
-         (+ 3 x 10px gaps = 370, the body height under the 86px hero). */
+      /* Exact left rows: 82 online / 54 solo / 16 status / 154 glance (+ 3 x 10px gaps
+         = 336, the body row under the 150px hero). */
       .home-left{ display:flex; flex-direction:column; gap:10px; min-width:0; }
       .home-left .btn-quick{ height:82px; flex:0 0 82px; padding:0 22px; }
       .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; }
-      .home-right .lb-preview{ margin-top:0; }
+      .home-left .lb-preview{ margin-top:0; }
       .home-right{ flex:1; display:flex; flex-direction:column; gap:10px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
       .col-h{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
       .btn-quick{ width:100%; flex-direction:column; gap:5px; padding:17px 22px; font-size:17px; min-width:0; }
@@ -573,27 +577,30 @@
          (identity stays 176, destinations stay 90); the glance stays exactly 3 rows at a
          fixed 142px (5 pad + 18 head + 4 gap + 88 rows + 4 gap + 18 state + 5 pad). */
       @media (max-width:680px){
-        .menu-home{ height:auto; }
+        .menu-home{ height:auto; min-height:0; grid-template-rows:auto auto; }
         .body{ flex-direction:column; }
         .home-body{ grid-template-columns:1fr; }
-        /* Tight viewports: the blob sits higher in a SHORTER reserved camp block, still
-           above an unobstructed PLAY; the home scrolls in document order. */
-        .home-camp{ height:132px; flex:0 0 132px; }
-        .home-stage{ width:96px; height:120px; }
-        .home-stage .blob-preview{ width:96px; height:96px; bottom:10px; }
-        .home-plinth{ left:6px; bottom:4px; width:84px; height:10px; }
+        /* Narrow: the blob stays VISIBLE but subordinate — a smaller stage beside the
+           left-aligned wordmark, PLAY unobstructed right below in document order. */
+        .home-hero{ grid-template-columns:1fr 96px; gap:10px; align-items:start; }
+        .hero-mark{ align-items:flex-start; text-align:left; }
+        .home-hero .tag{ text-align:left; }
+        .home-hero .blob-stage{ width:96px; height:96px; }
+        .home-hero .blob-stage .blob-preview{ width:72px; height:72px; }
+        .home-hero .blob-stage::after{ bottom:12px; width:44px; height:8px; }
+        .stage-customize{ top:96px; right:2px; }
         .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; }
-        /* .home-right carries the specificity so the later base .lb-preview rule can't
+        /* .home-left carries the specificity so the later base .lb-preview rule can't
            override this media block (source order vs cascade). */
-        .home-right .lb-preview{ height:142px; padding:5px 10px; gap:4px; }
+        .home-left .lb-preview{ height:142px; padding:5px 10px; gap:4px; }
         .home-right .identity-card{ height:108px; flex:0 0 108px; }
-        .home-right .home-dest{ height:66px; flex:1 1 0; }
+        .home-right .home-dest{ height:66px; flex:0 0 66px; }
       }
       /* Short viewports NEVER hide the trusted leaderboard preview: the shell relaxes to
-         auto height and home-body scrolls in document order — Play is the first content
-         and stays above the fold. */
+         auto height (grid rows follow content) and scrolls in document order — the hero
+         stays compact and Play sits right under it. */
       @media (max-height:679px){
-        .menu-home{ height:auto; }
+        .menu-home{ height:auto; min-height:0; }
       }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===
@@ -605,8 +612,8 @@
       /* Skeletons are QUIET: a static muted block, no animation anywhere on the shell. */
       .skel{ position:relative; color:transparent !important; background:var(--dun-2); box-shadow:inset 0 0 0 1px var(--dun-3); min-width:64px; opacity:.7; }
 
-      /* --- the top-runs GLANCE (right column, under the destinations) — the accepted
-         FIXED shape --- Total panel height is EXACTLY 154px, composed top to bottom:
+      /* --- the top-runs GLANCE (left column, under PLAY) — the accepted FIXED shape ---
+         Total panel height is EXACTLY 154px, composed top to bottom:
            9 pad + 18 head + 6 gap + (3 rows x 28 + 2 x 2 row-gap = 88) + 6 gap + 18 state + 9 pad
          Dark, quiet, no animation, no amber fill — only the #1 rank numeral wears amber.
          Every box exists from first paint; hydration replaces contents only. */
@@ -686,15 +693,14 @@
       .you-stats{ font-family:var(--f-ui); font-size:9px; color:#8f87a8; min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The fixed home status line: reserved from first paint (boot/exit notes swap
          content inside it; single line, ellipsized). */
-      .menu p.home-status{ height:12px; flex:0 0 12px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
-        color:#8f87a8; text-transform:none; line-height:12px; margin:0; text-align:left;
+      .menu p.home-status{ height:16px; flex:0 0 16px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
+        color:#8f87a8; text-transform:none; line-height:16px; margin:0; text-align:left;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      /* The PROFILE / SETTINGS destination pair, side by side under the identity card. */
-      .navrow{ display:flex; flex-direction:row; gap:10px; }
-      .home-dest{ height:64px; flex:1 1 0; min-width:0; flex-direction:column; gap:5px; justify-content:center;
-        font-size:11px; letter-spacing:1px; padding:0 8px; }
-      .home-dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:7px; letter-spacing:.2px; text-transform:none; opacity:.8; text-shadow:none;
-        overflow:hidden; max-height:20px; }
+      /* The two 82px home destinations, stacked (10px grid gaps). */
+      .navrow{ display:flex; flex-direction:column; gap:10px; }
+      .home-dest{ height:82px; flex:0 0 82px; min-width:0; width:100%; flex-direction:column; gap:6px; justify-content:center;
+        font-size:12px; letter-spacing:1px; padding:0 16px; }
+      .home-dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:8px; letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; }
 
       /* --- profile screens (the shared fixed card + the own wardrobe) --- */
       /* Worn title under the name: reserved line, so titled and untitled render at the
