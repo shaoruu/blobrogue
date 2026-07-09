@@ -33,18 +33,19 @@ export const BIOMES: readonly Biome[] = [
     accent: "#5fbf7a",
   },
   {
-    // Same living ecology as Amberwild, denser and darker — root-choked formation floors.
+    // Same living ecology as Amberwild, denser and darker — the accepted lane is deep
+    // GREEN-BROWN braided roots threaded with amber channels (the accent).
     name: "Rootbound Warrens",
-    bgColor: "#0b0f0a",
-    floorA: "#151b12",
-    floorB: "#191f14",
-    wallFront: "#20291a",
-    wallCap: "#2e3c24",
-    wallSideRgb: "26,32,20",
-    wallCorner: "rgba(9,12,7,0.5)",
-    tint: "#4a5c34",
+    bgColor: "#0d0e09",
+    floorA: "#171a10",
+    floorB: "#1c1e12",
+    wallFront: "#242718",
+    wallCap: "#383a22",
+    wallSideRgb: "30,31,19",
+    wallCorner: "rgba(10,11,7,0.5)",
+    tint: "#565232",
     tintAlpha: 0.24,
-    accent: "#9fbf5f",
+    accent: "#d9a24a",
   },
   {
     name: "Sunless Caves",
@@ -73,18 +74,19 @@ export const BIOMES: readonly Biome[] = [
     accent: "#a24bff",
   },
   {
-    // Ordered amber-and-gold stacks — the Warden's archive of claimed space.
+    // The accepted lane: RIGID amber/brass + cold mineral — dead honey and tarnished
+    // metal, order turned to imprisonment (never the Camp's warm gold).
     name: "Gilded Archive",
-    bgColor: "#120e08",
-    floorA: "#1f1a10",
-    floorB: "#242014",
-    wallFront: "#302818",
-    wallCap: "#4a3c20",
-    wallSideRgb: "40,32,20",
-    wallCorner: "rgba(14,11,6,0.5)",
-    tint: "#8b6f2a",
+    bgColor: "#100e09",
+    floorA: "#1d1a11",
+    floorB: "#222016",
+    wallFront: "#2d2819",
+    wallCap: "#453c24",
+    wallSideRgb: "38,33,22",
+    wallCorner: "rgba(13,11,7,0.5)",
+    tint: "#7d6a3a",
     tintAlpha: 0.20,
-    accent: "#ffd166",
+    accent: "#e8c265",
   },
   {
     name: "Emberreach",
