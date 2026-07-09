@@ -119,6 +119,12 @@ SHEETS["gilded.attack"] = { src: "/sprites/gilded_attack.png", fps: 10 };
 // attack sheet (no walk triplet — the selection ladder falls from walk to idle for it).
 SHEETS["choir.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
 SHEETS["choir.attack"] = { src: "/sprites/choir_attack.png", fps: 10 };
+// PATCH's authored poses (art gate — exact hooks, generated separately; nothing here is
+// procedural). idle: the breathing keeper loop behind the counter. attack REPURPOSED as
+// the one-shot HANDOVER pose (Patch never fights): played over a purchase. Facing is
+// fixed (the stall faces down-room), so both are omni single strips.
+SHEETS["patch.idle"] = { src: "/sprites/patch_idle.png", fps: 6 };
+SHEETS["patch.attack"] = { src: "/sprites/patch_handover.png", fps: 10 };
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -155,9 +161,17 @@ const FX_SOURCES: Record<FxName, string> = {
 // The break/chest sheets are 3-frame 192x64 horizontal strips (frame 0 = intact/closed);
 // barrel_explosive + brazier are 64x64 statics. The renderer slices frames itself, so no
 // SpriteName/SheetClip unions are polluted and nothing extra is fetched if unused.
+//
+// SHOP FURNITURE HOOKS (art gate — Patch's waystation): patch_stall is the fold-out
+// salvage cabinet (96x64: built from recovered doors/prop pieces, warm amber, counter
+// front), shop_pedestal a 64x64 stone display pedestal, shop_heart_station a 64x64
+// heart-glass dispenser, shop_reroll_post a 64x64 salvage-tag signpost. Until the
+// approved PNGs land, the renderer draws each station as a clean flat primitive that
+// makes no claim to final art (see game.ts renderShop).
 export type PropSpriteName =
   | "crate_break" | "pot_break" | "barrel_break" | "barrel_explosive_break"
-  | "barrel_explosive" | "brazier" | "chest_open";
+  | "barrel_explosive" | "brazier" | "chest_open"
+  | "patch_stall" | "shop_pedestal" | "shop_heart_station" | "shop_reroll_post";
 
 const PROP_SOURCES: Record<PropSpriteName, string> = {
   crate_break: "/sprites/crate_break.png",
@@ -167,6 +181,10 @@ const PROP_SOURCES: Record<PropSpriteName, string> = {
   barrel_explosive: "/sprites/barrel_explosive.png",
   brazier: "/sprites/brazier.png",
   chest_open: "/sprites/chest_open.png",
+  patch_stall: "/sprites/patch_stall.png",
+  shop_pedestal: "/sprites/shop_pedestal.png",
+  shop_heart_station: "/sprites/shop_heart_station.png",
+  shop_reroll_post: "/sprites/shop_reroll_post.png",
 };
 
 const SOURCES: Record<SpriteName, string> = {
@@ -190,6 +208,11 @@ const SOURCES: Record<SpriteName, string> = {
   // AD-approved final base (content manifest: weaver2_px) — drop-in exact filename.
   weaver: "/sprites/weaver2_px.png",
   gilded: "/sprites/gilded.png",
+  // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
+  // generated separately via the locked FAL recipe; until patch.png lands the renderer
+  // shows the flagged placeholder silhouette (never procedural character art). Poses ship
+  // as SHEETS hooks — see the registrations below + ART.md "Patch & the waystation".
+  patch: "/sprites/patch.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",

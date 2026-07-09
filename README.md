@@ -11,6 +11,7 @@ with friends. Inspired by Soul Knight.
 - **Mouse** — aim
 - **Click / hold** — shoot
 - **Shift** — dash (brief i-frames)
+- **E** — interact (inspect a shop station in Patch's waystation; BUY lives in the panel)
 - **E (hold)** — revive a downed teammate (stand inside their ring)
 - **Q/E, arrows, or scroll (while down)** — cycle which teammate you spectate
 - **Tab (hold)** — run + all-time stats

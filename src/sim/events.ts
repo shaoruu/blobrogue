@@ -9,6 +9,7 @@
 
 import type { PlayerId } from "./input.js";
 import type { WeaponId, EnemyKind, PickupKind, PropKind, FloorHazardKind } from "./types.js";
+import type { ShopSlotKind } from "./shop.js";
 
 export type SimEvent =
   // combat — player
@@ -36,6 +37,10 @@ export type SimEvent =
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }
+  // A validated shop purchase landed (Patch's room): positional register-chime juice for
+  // everyone browsing the stall. kind selects the buyer-side flavor (heart vs weapon vs
+  // blessing vs reroll); the authoritative outcome itself rides STATE, never this event.
+  | { t: "shopBuy"; pid: PlayerId; slot: number; kind: ShopSlotKind; x: number; y: number }
   // a player deliberately dropped an owned weapon back into the world (Q / inventory UI);
   // clients near the spot play a small pop + a weapon-name label over the new pickup.
   // Positional like lootDrop — no pid, so EVERY nearby client (not just the dropper) sees it

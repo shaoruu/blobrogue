@@ -110,22 +110,6 @@ function fmtTime(seconds: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// The Dealer's price-tag copy (UI gate: the state must be readable at a glance BEFORE the
-// touch): what a purchase would cost, why it can't happen, or why it's pointless — and the
-// sim guarantees an invalid touch never consumes anything either way. Pure so the DOM
-// suite locks the matrix. `state` drives the tag tint in the world renderer.
-export interface DealerTag { text: string; state: "buy" | "broke" | "blocked" }
-
-export function dealerTagCopy(
-  item: { kind: "heart" | "weapon"; name: string; price: number },
-  viewer: { coins: number; hp: number; maxHp: number; isOwned: boolean },
-): DealerTag {
-  if (item.kind === "heart" && viewer.hp >= viewer.maxHp) return { text: "FULL HEALTH", state: "blocked" };
-  if (item.kind === "weapon" && viewer.isOwned) return { text: "OWNED", state: "blocked" };
-  if (viewer.coins < item.price) return { text: `NEED ${item.price - viewer.coins} MORE`, state: "broke" };
-  return { text: `${item.name.toUpperCase()} \u00b7 ${item.price} COIN${item.price === 1 ? "" : "S"}`, state: "buy" };
-}
-
 // The one normal-objective copy (UI Director): the authoritative cleared flag decides the
 // line, and an uncleared floor with nothing visible on the board reads as the incoming
 // reinforcement wave rather than a lying "0 ENEMIES LEFT". A party's cleared floor is a

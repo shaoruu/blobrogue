@@ -29,7 +29,9 @@ import type {
 // joins a REAL gs, so drift fails loudly.
 // v7: the depth-progression world (new shared dungeon generator + seeded floor hazards
 // + hazardHit event) on top of the co-op experience pass (v6).
-export const SYNTHETIC_JOIN_PROTOCOL = 7;
+// v8: Patch's shop room (dealer pickups off the wire, `shop` snapshot state, the shopBuy
+// command + event).
+export const SYNTHETIC_JOIN_PROTOCOL = 8;
 
 export interface HttpProbeConfig {
   baseUrl: string;

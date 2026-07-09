@@ -23,8 +23,12 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
+const { ShopPanel } = await import("../src/ui/shopPanel.js");
+const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView } = await import("../src/ui/shopCopy.js");
+const { buildShopState, shopViewerOf } = await import("../src/sim/shop.js");
+const { generateDungeon } = await import("../src/sim/dungeon.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
 const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
@@ -440,24 +444,108 @@ function hierarchyTests(): void {
   check("clear() resets lane + prompt states",
     !objective.classList.contains("show") && !lane.classList.contains("boss") && !prompt.classList.contains("show"));
 
-  section("dealerTagCopy: the Dealer's at-a-glance state matrix (UI gate)");
-  const buyer = { coins: 10, hp: 3, maxHp: 6, isOwned: false };
-  check("affordable heart reads HEART \u00b7 6 COINS",
-    JSON.stringify(dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, buyer)) === JSON.stringify({ text: "HEART \u00b7 6 COINS", state: "buy" }));
-  check("affordable stall reads NAME \u00b7 PRICE COINS",
-    dealerTagCopy({ kind: "weapon", name: "Railgun", price: 12 }, { ...buyer, coins: 12 }).text === "RAILGUN \u00b7 12 COINS");
-  check("broke reads NEED N MORE (the exact shortfall)",
-    JSON.stringify(dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, { ...buyer, coins: 4 })) === JSON.stringify({ text: "NEED 2 MORE", state: "broke" }));
-  check("full health outranks coins (the touch would be pointless)",
-    dealerTagCopy({ kind: "heart", name: "Heart", price: 6 }, { ...buyer, hp: 6 }).text === "FULL HEALTH");
-  check("an owned stall reads OWNED (party ownership explicit)",
-    dealerTagCopy({ kind: "weapon", name: "Railgun", price: 12 }, { ...buyer, coins: 50, isOwned: true }).text === "OWNED");
-
   section("objectiveCopy: the canonical strings");
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");
   check("FLOOR CLEAR \u00b7 GO DOWN", objectiveCopy(true, 0) === "FLOOR CLEAR \u00b7 GO DOWN");
   check("cleared wins regardless of a stale count", objectiveCopy(true, 3) === "FLOOR CLEAR \u00b7 GO DOWN");
   check("party cleared copy points at the MEET", objectiveCopy(true, 0, true) === "FLOOR CLEAR \u00b7 MEET AT EXIT");
+}
+
+// ---- Patch's shop: the state-copy matrix + the compact panel (accepted UX call) ----
+
+function shopCopyTests(): void {
+  section("shopActionCopy: the accepted state matrix, exact strings");
+  check("affordable reads BUY \u00b7 N COINS", shopActionCopy("buy", 12, 30) === "BUY \u00b7 12 COINS");
+  check("a 1-coin price stays grammatical", shopActionCopy("buy", 1, 30) === "BUY \u00b7 1 COIN");
+  check("broke reads NEED N MORE (the exact shortfall)", shopActionCopy("broke", 12, 9) === "NEED 3 MORE");
+  check("sold reads SOLD", shopActionCopy("sold", 12, 30) === "SOLD");
+  check("owned reads OWNED", shopActionCopy("owned", 12, 30) === "OWNED");
+  check("maxed blessing reads MAX LV", shopActionCopy("maxLevel", 24, 30) === "MAX LV");
+  check("full-HP heart reads FULL HEALTH", shopActionCopy("fullHealth", 6, 30) === "FULL HEALTH");
+  check("spent reroll reads NO REROLLS LEFT", shopActionCopy("exhausted", 8, 30) === "NO REROLLS LEFT");
+
+  section("shopOwnershipCopy: ownership is EXPLICIT, never ambiguous");
+  const shop = buildShopState(0xDEA1, 3, generateDungeon(0xDEA1, 3).rooms.find((r) => r.kind === "shop")!);
+  const weapon = shop.slots.find((s) => s.kind === "weapon")!;
+  const blessing = shop.slots.find((s) => s.kind === "blessing")!;
+  const heart = shop.slots.find((s) => s.kind === "heart")!;
+  const reroll = shop.slots.find((s) => s.kind === "reroll")!;
+  check("shared weapon pedestal: SHARED \u2014 FIRST BUY CLAIMS", shopOwnershipCopy(weapon) === "SHARED \u2014 FIRST BUY CLAIMS");
+  check("personal blessing pedestal: FOR YOU", shopOwnershipCopy(blessing) === "FOR YOU");
+  check("heart station: FOR YOU", shopOwnershipCopy(heart) === "FOR YOU");
+  check("reroll post: SHARED \u2014 RESTOCKS FOR EVERYONE", shopOwnershipCopy(reroll) === "SHARED \u2014 RESTOCKS FOR EVERYONE");
+
+  section("shopChipCopy: pedestal shelf chips — price when for sale, the state word when not");
+  check("buyable chip is the bare price", shopChipCopy("buy", 12) === "12c" && shopChipCopy("broke", 12) === "12c");
+  check("blocked chips carry the state word",
+    shopChipCopy("sold", 12) === "SOLD" && shopChipCopy("owned", 12) === "OWNED"
+    && shopChipCopy("maxLevel", 24) === "MAX LV" && shopChipCopy("fullHealth", 6) === "FULL HEALTH");
+}
+
+function shopPanelTests(): void {
+  section("shop panel: compact, labeled, keyboard-first, aria-correct");
+  const shop = buildShopState(0xDEA1, 3, generateDungeon(0xDEA1, 3).rooms.find((r) => r.kind === "shop")!);
+  const weapon = shop.slots.find((s) => s.kind === "weapon")!;
+  const viewerOf = (coins: number) => shopViewerOf({
+    id: "local", coins, hp: 4, maxHp: 6, ownedWeapons: ["pistol"], ownedItemIds: [],
+  });
+  const mods = createMods();
+
+  const panel = new ShopPanel();
+  const bought: number[] = [];
+  let closes = 0;
+  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods), (slot) => bought.push(slot), () => closes++);
+  const root = document.querySelector<HTMLElement>(".shop-panel")!;
+  const buy = root.querySelector<HTMLButtonElement>(".shop-buy")!;
+  check("opens as a labeled dialog", panel.isOpen && root.getAttribute("role") === "dialog"
+    && root.getAttribute("aria-labelledby") === "shop-item-name");
+  // The stat line derives from weaponDisplayStats (the ONE live model the hotbar tooltip
+  // reads): role verb first, then POWER + the shared CADENCE/REACH/COVERAGE bands.
+  const expectedStats = weaponDisplayStats(weapon.weapon!, createMods(), 0);
+  const lineTexts = [...root.querySelectorAll(".shop-lines p")].map((p) => p.textContent!);
+  check("the item is fully labeled: name + kind + ownership + the tooltip-model stat line",
+    root.textContent!.includes("WEAPON") && root.textContent!.includes("SHARED \u2014 FIRST BUY CLAIMS")
+    && lineTexts[0] === expectedStats.role
+    && new RegExp(`^POWER [\\d.]+.* \\u00b7 ${expectedStats.cadence.band} \\u00b7 ${expectedStats.reach.band} \\u00b7 ${expectedStats.coverage.kind}$`).test(lineTexts[1]));
+  check("the action row is a real focusable button with a live region",
+    buy.tagName === "BUTTON" && buy.getAttribute("aria-live") === "polite" && document.activeElement === buy);
+  check("affordable: BUY \u00b7 12 COINS, enabled", buy.textContent === "BUY \u00b7 12 COINS" && !buy.disabled);
+
+  buy.click();
+  check("clicking BUY sends exactly one buy intent for the focused slot",
+    bought.length === 1 && bought[0] === weapon.id);
+
+  // The authoritative claim lands (a teammate won the race): the open panel re-renders
+  // to an honest SOLD and the buy control disables — no ambiguous depletion.
+  weapon.soldTo = "teammate";
+  panel.update(shopPanelView(shop, weapon, viewerOf(30), mods));
+  check("a mid-look claim flips the row to SOLD and disables it", buy.textContent === "SOLD" && buy.disabled);
+  buy.click();
+  check("a disabled row sends nothing", bought.length === 1);
+
+  weapon.soldTo = null;
+  panel.update(shopPanelView(shop, weapon, viewerOf(3), mods));
+  check("broke re-render reads NEED 9 MORE, disabled", buy.textContent === "NEED 9 MORE" && buy.disabled);
+
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  check("Escape closes and fires onClose exactly once", !panel.isOpen && closes === 1);
+
+  // Keyboard purchase: Enter on the focused (buyable) row buys.
+  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods), (slot) => bought.push(slot), () => closes++);
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+  check("Enter buys from the keyboard", bought.length === 2 && bought[1] === weapon.id);
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
+  check("E closes the panel too (the same key that opened it)", !panel.isOpen && closes === 2);
+
+  // The blessing view carries the pick-card language (NEW/UPGRADE + exact effect).
+  const blessing = shop.slots.find((s) => s.kind === "blessing")!;
+  const bView = shopPanelView(shop, blessing, viewerOf(30), mods);
+  check("a fresh blessing is tagged NEW with its exact Lv1 effect line",
+    bView.tag === "NEW" && bView.lines.length >= 1 && bView.ownership === "FOR YOU");
+  const upView = shopPanelView(shop, blessing, shopViewerOf({
+    id: "local", coins: 30, hp: 4, maxHp: 6, ownedWeapons: ["pistol"], ownedItemIds: [blessing.itemId!],
+  }), mods);
+  check("an owned blessing is tagged UPGRADE LV2 (the level this buy reaches)", upView.tag === "UPGRADE LV2");
 }
 
 function main(): void {
@@ -469,6 +557,8 @@ function main(): void {
   drawerTests();
   hudIntegrationTests();
   hierarchyTests();
+  shopCopyTests();
+  shopPanelTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll HUD DOM assertions passed.\n");

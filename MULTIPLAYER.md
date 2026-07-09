@@ -590,9 +590,17 @@ weapon stats are identical solo/co-op, and every count is deterministic per
 
 - **Pedestals**: `max(1, ceil(P/2))` distinct weapon rolls per floor (P1–2: one, P3–4:
   two), stocked into wood chests on the solo cadence.
-- **The Dealer** stocks `max(2, P)` distinct stalls priced **12/18/24** by slot. Purchases
-  are **personal**: a stall never depletes — every member can buy the same stall once
-  (ownership blocks a rebuy), so there is no shared-drop race at the shop.
+- **Patch's shop room** (protocol v8 — the Dealer's loose touch-buy stalls are gone):
+  every third depth hosts a dedicated safe `shop` room whose stall rides every snapshot
+  (`shop` wire state). Three item pedestals on the unchanged **12/18/24** ladder — two
+  physical weapons that are **SHARED — FIRST BUY CLAIMS** (one real object; concurrent
+  buys resolve to exactly one winner, everyone else reads an honest **SOLD**) and one
+  blessing that is **FOR YOU** (per-player instanced, one buy each) — plus a per-player
+  heart station and a shared reroll post (8 coins, 2 per shop, restocks only unbought
+  pedestals). Every purchase is the explicit, cseq-idempotent `shopBuy` command behind
+  the interact panel's BUY; walking over a station never spends a coin, an invalid buy
+  never consumes, coins are server-owned, and a reconnect resumes into the identical
+  stall (claims + reroll counter ride the snapshot).
 - **The boss reward** is `min(P+1, 5)` distinct choice PEDESTALS spilled from the chest
   (the boss's authored signature weapon first). Each member **claims exactly one by
   touch** (`isBossChoice` pickups + the per-player claim flag); a claim removes nothing

@@ -11,8 +11,12 @@ import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS } from "../sim/balance.js";
 import type { EnemyTier } from "../sim/balance.js";
+import { shopViewerOf, shopSlotStatusFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
+import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
+import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
+import { ShopPanel } from "../ui/shopPanel.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
@@ -22,7 +26,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, nearestShopSlot } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
@@ -31,7 +35,7 @@ import { comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
-import { Hud, dealerTagCopy } from "./hud.js";
+import { Hud } from "./hud.js";
 import type { ProfileStats } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
@@ -339,6 +343,14 @@ const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
 const PROP_TINT: Record<PropKind, string> = {
   crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
 };
+// Patch's station art hooks per slot kind (assets.ts PROP_SOURCES); flat primitives
+// stand in until the approved PNGs land.
+const SHOP_STATION_IMG: Record<ShopSlot["kind"], PropSpriteName> = {
+  weapon: "shop_pedestal",
+  blessing: "shop_pedestal",
+  heart: "shop_heart_station",
+  reroll: "shop_reroll_post",
+};
 // Subtle idle bob/flash for props + chests — a fraction of the character juice so a crate
 // reads as a solid object, not a jelly.
 const PROP_STYLE: XformStyle = { freq: 2.1, bob: 0.7, squash: 0.03, hop: 0, lean: 0 };
@@ -376,6 +388,11 @@ export class Game {
   private onExit: (reason?: ExitReason, detail?: string) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
+  private shopPanel: ShopPanel;
+  // Patch's handover pose timer (seconds left in the one-shot sell clip) and the per-floor
+  // "welcome" latch (the first step into the waystation names it once).
+  private patchSellT = 0;
+  private isShopWelcomed = false;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
   // Online: whether gameplay has been revealed yet. Until then the run sits behind the
@@ -575,6 +592,7 @@ export class Game {
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
+    this.shopPanel = new ShopPanel();
     this.buildWallGradients();
     this.bindInput();
     this.resize();
@@ -631,9 +649,11 @@ export class Game {
     switch (a.kind) {
       case "togglePause":
         // Under the hud context Escape means "abort the HUD gesture": cancel a live hotbar
-        // drag first, then dismiss an open drawer; pause is next.
+        // drag first, then dismiss an open drawer; under the shop context it means "close
+        // the panel"; pause is next.
         if (this.hud.cancelActiveDrag()) break;
         if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
+        if (this.shopPanel.isOpen) { this.shopPanel.close(); break; }
         // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
         // connection attempt and return to the lobby — never a pause menu over a dead world.
         if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
@@ -641,6 +661,9 @@ export class Game {
           break;
         }
         this.togglePause();
+        break;
+      case "interact":
+        if (this.isRunning) this.openFocusedShopStation();
         break;
       case "selectWeapon":
         if (this.isRunning) this.equipSlot(a.index);
@@ -689,6 +712,9 @@ export class Game {
     // connection can never accumulate inputs or keep an autofire latch alive.
     if (this.isAwaitingOnlineWorld() || this.isOnlineOutage()) return "reconnect";
     if (this.isDown) return "spectate";
+    // Browsing a shop station: the panel owns Enter/Esc/E; gameplay samples idle so the
+    // buy flow can never fire a shot or walk the buyer off the pedestal.
+    if (this.shopPanel.isOpen) return "shop";
     // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
     if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
@@ -759,6 +785,7 @@ export class Game {
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
+    this.shopPanel.close();
     audio.unlock();
     waveAudio.reset();
     resetAnim(this.playerAnim);
@@ -794,6 +821,7 @@ export class Game {
   stop() {
     this.isRunning = false;
     this.transport.stop();
+    this.shopPanel.close();
     cancelAnimationFrame(this.raf);
     // Leaving the world (quit, wipe, or a dead socket): clear the lobby's readiness mirror
     // so the roster shows this member back at LOBBY instead of a phantom CONNECTED.
@@ -826,6 +854,9 @@ export class Game {
     }
     this.lastPx = this.px;
     this.lastPy = this.py;
+    this.shopPanel.close();
+    this.isShopWelcomed = false;
+    this.patchSellT = 0;
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
@@ -1208,6 +1239,7 @@ export class Game {
     // Dev combo-freeze holds the chain full so the HUD can be screenshotted at a tier.
     if (this.comboFreeze && this.combo > 0) this.p.comboTimer = COMBO_WINDOW;
 
+    this.tickShop(dt);
     this.tickCosmetics(dt, cmd);
 
     if (this.coop) this.publishPresence();
@@ -1645,6 +1677,9 @@ export class Game {
         this.addTrauma(TRAUMA_HURT);
         this.hurtFlash = 1;
         this.hurtDir = this.findThreatDir(); // point the vignette at whatever just hit us
+        // Taking a hit closes the shop panel: browsing must never hold a player's inputs
+        // idle while something that chased them into the room is chewing on them.
+        this.shopPanel.close();
         break;
       case "itemPicked":
         // The pick SOUND (blessing vs levelup) plays at choice time in the blessing overlay,
@@ -1665,8 +1700,23 @@ export class Game {
         break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
-        else if (e.kind === "heart" || e.kind === "dealer_heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
+        else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
         else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); sfx("weapon"); }
+        break;
+      case "shopBuy":
+        // The register moment: positional (everyone browsing the stall sees a teammate's
+        // claim land), with the buyer's kind selecting the flavor. Patch plays the
+        // handover pose over it. The OUTCOME itself is authoritative state — coins/stock/
+        // SOLD flow via snapshot; this is purely the chime.
+        this.spawnSparkleBurst(e.x, e.y, 10, "#ffd27a");
+        this.spawnParticles(e.x, e.y, 8, "#ffd27a");
+        this.addDecal(e.x, e.y, "#ffd27a", 12, "ring");
+        this.sfxAt("coin", e.x, e.y, { gain: 0.7 });
+        if (e.kind === "heart") this.sfxAt("heart", e.x, e.y, { gain: 0.55 });
+        else if (e.kind === "blessing") this.sfxAt("blessing", e.x, e.y, { gain: 0.5 });
+        else if (e.kind === "weapon") this.sfxAt("weapon", e.x, e.y, { gain: 0.55 });
+        else this.sfxAt("levelup", e.x, e.y, { gain: 0.4 });
+        this.patchSellT = 0.6;
         break;
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
@@ -2518,28 +2568,36 @@ export class Game {
   // The SEMANTIC contextual action (UI Part4): what the interact input would do right now,
   // as data — action id + target + authoritative progress — never presentation. This is
   // the single source the HUD prompt derives from today and a controller pass maps to its
-  // A-button glyph later; it rides the P0 input-context system (the `interact` sample +
-  // context gates in src/game/input.ts) rather than any parallel input path. The revive
-  // affordance appears while a living local player stands inside a revivable downed
-  // teammate's ring; OUT bodies (down limit spent) never prompt — the sim would refuse
-  // the channel, and the world label already says the rescue is the stairs.
-  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | null {
+  // A-button glyph later; it rides the P0 input-context system (the `interact` sample/
+  // press + context gates in src/game/input.ts) rather than any parallel input path.
+  // Priority: the revive affordance (a living local player inside a revivable downed
+  // teammate's ring — OUT bodies never prompt) outranks the shop affordance (a focused
+  // station in Patch's room), so one E always means one thing.
+  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | { action: "shop"; label: string } | null {
     // A pick overlay pauses the player (sim-shielded, inputs idle) — there IS no
     // contextual action to offer under it.
-    if (this.mode === "solo" || this.isSandbox || !this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
-    let near: RemotePlayer | null = null;
-    for (const r of this.remotes()) {
-      if (!r.isDown || r.isOut) continue;
-      if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
-      if (near === null || r.reviveProgress > near.reviveProgress) near = r;
+    if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
+    if (this.mode !== "solo" && !this.isSandbox) {
+      let near: RemotePlayer | null = null;
+      for (const r of this.remotes()) {
+        if (!r.isDown || r.isOut) continue;
+        if (Math.hypot(this.px - r.x, this.py - r.y) > REVIVE.radius) continue;
+        if (near === null || r.reviveProgress > near.reviveProgress) near = r;
+      }
+      if (near !== null) {
+        const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
+        return {
+          action: "revive",
+          targetName: near.name,
+          progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
+        };
+      }
     }
-    if (near === null) return null;
-    const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
-    return {
-      action: "revive",
-      targetName: near.name,
-      progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
-    };
+    if (!this.shopPanel.isOpen) {
+      const slot = this.focusedShopSlot();
+      if (slot !== null) return { action: "shop", label: shopSlotName(slot).toUpperCase() };
+    }
+    return null;
   }
 
   // The BL prompt presentation over the semantic action. The key cap is the KEYBOARD
@@ -2548,11 +2606,68 @@ export class Game {
   private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
     const act = this.contextualAction();
     if (act === null) return null;
+    if (act.action === "shop") return { key: "E", label: `INSPECT ${act.label}`, isActive: false };
     const name = act.targetName.toUpperCase();
     if (act.progress !== null) {
       return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
     }
     return { key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
+  }
+
+  // ---- Patch's shop (client side) ----
+
+  // The station the local player stands close enough to interact with (highlight, HUD
+  // prompt, panel target). Pure affordance — the buy re-validates authoritatively.
+  private focusedShopSlot(): ShopSlot | null {
+    if (!this.isRunning || this.isDown || this.hp <= 0 || this.isChoosing) return null;
+    return nearestShopSlot(this.world, this.px, this.py, SHOP_FOCUS_RANGE);
+  }
+
+  // The semantic interact PRESS resolved against the world: open the focused station's
+  // compact panel. A revivable teammate in range owns E (the hold channel), so the shop
+  // yields; away from every station the press does nothing. Stepping/touching never
+  // reaches any purchase path — only the panel's BUY sends the buy command.
+  private openFocusedShopStation() {
+    if (this.contextualAction()?.action === "revive") return;
+    const slot = this.focusedShopSlot();
+    if (slot === null) return;
+    this.shopPanel.open(
+      this.shopPanelViewFor(slot),
+      (slotId) => this.transport.requestShopBuy(slotId),
+      () => this.syncInputContext(),
+    );
+    this.syncInputContext();
+  }
+
+  private shopPanelViewFor(slot: ShopSlot) {
+    return shopPanelView(this.world.shop!, slot, shopViewerOf(this.p), this.mods);
+  }
+
+  // Patch's-room upkeep, every tick: the handover pose timer, the one-time waystation
+  // welcome label, and the open panel's honesty — it re-renders from authoritative state
+  // (a teammate's claim flips it to SOLD mid-look) and closes when the world moves on
+  // (floor changed, shop gone, buyer down, or the buyer displaced out of range).
+  private tickShop(dt: number) {
+    if (this.patchSellT > 0) this.patchSellT = Math.max(0, this.patchSellT - dt);
+    const shop = this.world.shop;
+    if (this.shopPanel.isOpen) {
+      const slot = shop?.slots.find((s) => s.id === this.shopPanel.slotId);
+      if (!shop || slot === undefined || this.isDown || this.hp <= 0 || this.isChoosing
+        || Math.hypot(this.px - slot.x, this.py - slot.y) > SHOP_FOCUS_RANGE * 1.5) {
+        this.shopPanel.close();
+      } else {
+        this.shopPanel.update(this.shopPanelViewFor(slot));
+      }
+    }
+    if (!shop || this.isShopWelcomed) return;
+    const room = this.dungeon.rooms.find((r) => r.kind === "shop");
+    if (!room) return;
+    const tx = Math.floor(this.px / TILE), ty = Math.floor(this.py / TILE);
+    if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) {
+      this.isShopWelcomed = true;
+      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
+      this.sfxAt("blessing", shop.keeperX, shop.keeperY, { gain: 0.3, rate: 1.15 });
+    }
   }
 
   // The party blessing gate readout: which members still owe their pick (the descend holds
@@ -2911,6 +3026,7 @@ export class Game {
     this.renderExit();
     this.renderShadows();
     this.renderPropEntities();
+    this.renderShop();
     this.renderChests();
     this.renderPickups();
     this.renderParticles();
@@ -3617,66 +3733,174 @@ export class Game {
     ctx.restore();
   }
 
-  // The one dealer item whose full state copy the player is reading right now: the nearest
-  // within approach range. Null when nothing is close (everything wears its compact tag).
-  private focusedDealerId(): number | null {
-    let best: number | null = null;
-    let bestD = 90;
-    for (const p of this.pickups) {
-      if (p.kind !== "dealer_heart" && p.kind !== "dealer_weapon") continue;
-      const d = Math.hypot(this.px - p.x, this.py - p.y);
-      if (d < bestD) { bestD = d; best = p.id; }
+  // ---- Patch's waystation ----
+  // Every station renders from its authoritative slot. The ART hooks (patch sprite +
+  // patch_stall / shop_pedestal / shop_heart_station / shop_reroll_post) take over piece
+  // by piece the moment approved PNGs land; until then each is a clean flat primitive
+  // that claims no final art. Walking near a station HIGHLIGHTS it (ring + prompt) — a
+  // purchase only ever leaves through the panel's BUY.
+  private renderShop() {
+    const shop = this.world.shop;
+    if (!shop) return;
+    const { cam } = this;
+    if (this.isNearCamera(shop.keeperX, shop.keeperY, 140)) {
+      this.drawShopStall(shop.keeperX - cam.x, shop.keeperY - cam.y);
+      this.drawPatch(shop.keeperX - cam.x, shop.keeperY - cam.y - 22);
     }
-    return best;
+    const viewer = shopViewerOf(this.p);
+    const focused = this.focusedShopSlot();
+    for (const slot of shop.slots) {
+      if (!this.isNearCamera(slot.x, slot.y, TILE * 2)) continue;
+      this.drawShopStation(shop, slot, viewer, focused !== null && focused.id === slot.id);
+    }
+  }
+
+  // The fold-out salvage cabinet (coherence gate: built from recovered doors/prop
+  // pieces). Primitive: frame beam, hung panel, counter — flat fills only.
+  private drawShopStall(sx: number, sy: number) {
+    const { ctx } = this;
+    const img = this.sprites.prop("patch_stall");
+    if (img) {
+      ctx.drawImage(img, sx - 48, sy - 44, 96, 64);
+      return;
+    }
+    ctx.save();
+    ctx.fillStyle = "#2c2013";
+    ctx.fillRect(sx - 42, sy - 38, 84, 8);
+    ctx.fillStyle = "#57402a";
+    ctx.fillRect(sx - 38, sy - 30, 76, 5);
+    ctx.fillStyle = "#6b5330";
+    ctx.fillRect(sx - 34, sy + 2, 68, 12);
+    ctx.fillStyle = "#8a6a3c";
+    ctx.fillRect(sx - 34, sy, 68, 3);
+    ctx.restore();
+  }
+
+  // Patch behind the counter: authored idle/handover sheets once patch art lands (see
+  // assets.ts); until then the engine's standard flat streaming disc — deliberately NOT
+  // a procedural character. The nameplate is fixed identity, never a floating price tag.
+  private drawPatch(sx: number, sy: number) {
+    const { ctx } = this;
+    const clip: SheetClip = this.patchSellT > 0 ? "attack" : "idle";
+    if (this.sprites.sheet("patch", clip) !== null || this.sprites.ready("patch")) {
+      this.drawChar("patch", clip, sx, sy, 44, 1, IDENTITY_XFORM, 1, 1, 0, this.animClock);
+    } else {
+      ctx.save();
+      ctx.fillStyle = "#c98a3b";
+      ctx.beginPath(); ctx.arc(sx, sy, 13, 0, 6.28); ctx.fill();
+      ctx.strokeStyle = "#ffd27a";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, 13, 0, 6.28); ctx.stroke();
+      ctx.restore();
+    }
+    this.drawShopText("PATCH", sx, sy - 22, "#ffd27a");
+  }
+
+  private drawShopStation(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, isFocused: boolean) {
+    const { ctx, cam } = this;
+    const sx = slot.x - cam.x, sy = slot.y - cam.y;
+    const status = shopSlotStatusFor(shop, slot, viewer);
+    // The walk-near highlight: an interact affordance ring, never a buy trigger.
+    if (isFocused) {
+      ctx.save();
+      ctx.globalAlpha = 0.45 + 0.25 * Math.sin(this.animClock * 5);
+      ctx.strokeStyle = "#ffe9b0";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(sx, sy, 23, 0, 6.28); ctx.stroke();
+      ctx.restore();
+    }
+    const art = this.sprites.prop(SHOP_STATION_IMG[slot.kind]);
+    if (art) {
+      ctx.drawImage(art, sx - 24, sy - 34, 48, 48);
+    } else {
+      ctx.save();
+      ctx.fillStyle = "#443550";
+      ctx.fillRect(sx - 11, sy - 6, 22, 13);
+      ctx.fillStyle = "#5d4a66";
+      ctx.fillRect(sx - 13, sy - 10, 26, 5);
+      ctx.restore();
+    }
+    // The merchandise floats over the pedestal — and honestly VANISHES once taken: a
+    // claimed shared weapon is gone for everyone; a personal slot empties only for the
+    // viewer who bought theirs.
+    const isEmptied = slot.isShared ? slot.kind === "weapon" && slot.soldTo !== null : status === "sold";
+    if (!isEmptied) {
+      const bob = Math.sin(this.animClock * 2.4 + slot.id * 1.7) * 2;
+      this.drawShopMerch(slot, sx, sy - 24 + bob);
+    }
+    const color = status === "buy" ? "#ffd27a" : status === "broke" ? "#ff8a7a" : "#9a8fb5";
+    this.drawShopText(shopChipCopy(status, slot.price), sx, sy + 15, color);
+  }
+
+  private drawShopMerch(slot: ShopSlot, sx: number, sy: number) {
+    const { ctx } = this;
+    if (slot.kind === "weapon" && slot.weapon !== null) {
+      const img = this.sprites.weaponPickup(slot.weapon);
+      if (img) { ctx.drawImage(img, sx - 17, sy - 17, 34, 34); return; }
+      if (this.sprites.ready("gun")) { ctx.drawImage(this.sprites.get("gun"), sx - 14, sy - 14, 28, 28); return; }
+    }
+    if (slot.kind === "heart" && this.sprites.ready("heart")) {
+      ctx.drawImage(this.sprites.get("heart"), sx - 13, sy - 13, 26, 26);
+      return;
+    }
+    if (slot.kind === "blessing") {
+      const def = itemById(slot.itemId ?? "");
+      const tint = def?.tint ?? "#c98bff";
+      ctx.save();
+      ctx.fillStyle = "rgba(8,6,16,0.85)";
+      ctx.fillRect(sx - 11, sy - 11, 22, 22);
+      ctx.strokeStyle = tint;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(sx - 11, sy - 11, 22, 22);
+      ctx.fillStyle = tint;
+      ctx.font = '700 12px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(def?.glyph ?? "?", sx, sy + 1);
+      ctx.restore();
+      return;
+    }
+    if (slot.kind === "reroll") {
+      ctx.save();
+      ctx.fillStyle = "#8fd8c8";
+      ctx.font = '700 16px "Silkscreen", monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("\u21bb", sx, sy + 1);
+      ctx.restore();
+      return;
+    }
+    ctx.fillStyle = "#ffd27a";
+    ctx.beginPath(); ctx.arc(sx, sy, 8, 0, 6.28); ctx.fill();
+  }
+
+  // Small world-space shop label with the HUD's standard drop shadow.
+  private drawShopText(text: string, sx: number, sy: number, color: string) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '700 9px "Silkscreen", monospace';
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(8,6,16,0.9)";
+    ctx.fillText(text, sx + 1, sy + 1);
+    ctx.fillStyle = color;
+    ctx.fillText(text, sx, sy);
+    ctx.restore();
   }
 
   private renderPickups() {
     const { ctx, cam } = this;
-    const focusedDealer = this.focusedDealerId();
     for (const p of this.pickups) {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
-      const name: SpriteName = p.kind === "weapon" || p.kind === "dealer_weapon" ? "gun" : p.kind === "dealer_heart" ? "heart" : p.kind;
+      const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
       ctx.save();
       ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
       const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" || p.kind === "dealer_heart" || p.kind === "dealer_weapon" ? "#ffd27a" : "#ffb43b");
+      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" ? "#ffd27a" : "#ffb43b");
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
       ctx.restore();
-      // The Dealer's stock wears its state tag (UI gate): the item the player is ABOUT TO
-      // TOUCH carries the full copy — `HEART · 6 COINS`, `NEED N MORE`, `FULL HEALTH`,
-      // `OWNED` — matching the sim, which never consumes on an invalid touch; its shelf
-      // neighbors wear compact tags (price, or the short blocked word) so a row of stalls
-      // never collides into soup.
-      if (p.kind === "dealer_heart" || p.kind === "dealer_weapon") {
-        const tag = dealerTagCopy(
-          p.kind === "dealer_heart"
-            ? { kind: "heart", name: "Heart", price: p.value ?? DEALER.price }
-            : { kind: "weapon", name: p.weapon ? WEAPONS[p.weapon].name : "Weapon", price: p.value ?? 12 },
-          { coins: this.coins, hp: this.hp, maxHp: this.maxHp, isOwned: p.weapon !== null && this.p.ownedWeapons.includes(p.weapon) },
-        );
-        const isFocused = focusedDealer === p.id;
-        // A neighbor of the focused item yields its tag entirely — the focused full copy
-        // owns the shelf line (compact tags return the moment the player steps away).
-        const focused = focusedDealer !== null ? this.pickups.find((d) => d.id === focusedDealer) : undefined;
-        const isYielding = !isFocused && focused !== undefined
-          && Math.abs(focused.y - p.y) < 14 && Math.abs(focused.x - p.x) < 72;
-        if (!isYielding) {
-          const text = isFocused ? tag.text
-            : tag.state === "blocked" ? (p.kind === "dealer_heart" ? "FULL" : "OWNED")
-            : `${p.value ?? DEALER.price}c`;
-          ctx.save();
-          ctx.font = '700 9px "Silkscreen", monospace';
-          ctx.textAlign = "center";
-          ctx.fillStyle = "rgba(8,6,16,0.9)";
-          ctx.fillText(text, sx + 1, sy - 17);
-          ctx.fillStyle = tag.state === "buy" ? "#ffd27a" : tag.state === "broke" ? "#ff8a7a" : "#9a8fb5";
-          ctx.fillText(text, sx, sy - 18);
-          ctx.restore();
-        }
-      }
       // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
       // spent their one personal claim (teammates still see their own live options).
       if (p.isBossChoice) {
@@ -3694,7 +3918,7 @@ export class Game {
       // Weapon pickups draw their own 64px side-profile sprite so each gun is
       // recognizable on the floor; anything without dedicated art (or not yet loaded)
       // falls back to the generic "gun" sprite, then to a plain dot.
-      const weaponImg = (p.kind === "weapon" || p.kind === "dealer_weapon") && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
+      const weaponImg = p.kind === "weapon" && p.weapon ? this.sprites.weaponPickup(p.weapon) : null;
       if (weaponImg) {
         ctx.save();
         ctx.translate(sx, sy);
@@ -5056,6 +5280,8 @@ export class Game {
     for (const e of this.enemies) {
       dots.push({ x: e.x, y: e.y, color: isBossKind(e.kind) ? "#ffb43b" : "#ff6a6a", size: isBossKind(e.kind) ? 3 : 2 });
     }
+    // Patch's waystation: a warm amber marker so the safe room reads on the map at a glance.
+    if (this.world.shop) dots.push({ x: this.world.shop.keeperX, y: this.world.shop.keeperY, color: "#ffd27a", size: 2.5 });
     for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
     this.minimap.render({
       dungeon: this.dungeon,
