@@ -4,7 +4,7 @@ import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, A
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
-import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
+import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
@@ -2517,7 +2517,7 @@ export class Game {
     for (const r of this.coop.remotePlayers()) {
       const seen = this.remoteShotSeen.get(r.playerId) ?? r.shotSeq;
       if (r.shotSeq > seen) {
-        this.remoteTracers.push({ x: r.x, y: r.y, angle: r.aimAngle, life: 0.12, color: playerColor(r.colorIndex) });
+        this.remoteTracers.push({ x: r.x, y: r.y, angle: r.aimAngle, life: 0.12, color: playerColorOr(r.colorIndex) });
         this.spawnParticles(r.x + Math.cos(r.aimAngle) * 18, r.y + Math.sin(r.aimAngle) * 18, 2, "#ffe6a0");
         const entry = this.remoteAnims.get(r.playerId);
         if (entry) triggerRecoil(entry.anim);
@@ -2847,7 +2847,7 @@ export class Game {
     if (this.coop) {
       roster = [
         { name: "you", isYou: true, color: playerColor(this.coop.selfColorIndex()), isDown: this.isDown, isOut: false, isAtExit: false, isReconnecting: false },
-        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isOut: false, isAtExit: false, isReconnecting: false })),
+        ...this.coop.remotePlayers().map((r) => ({ name: r.name, isYou: false, color: playerColorOr(r.colorIndex), isDown: r.isDown, isOut: false, isAtExit: false, isReconnecting: false })),
       ];
     } else if (this.mode === "online" && this.wsTransport) {
       const exr = this.wsTransport.exitReadyParty();
@@ -2856,7 +2856,7 @@ export class Game {
       roster = [
         { name: "you", isYou: true, color: playerColor(this.selfColorIndex ?? 0), isDown: this.isDown, isOut: isSelfOut, isAtExit: selfId !== null && exr.includes(selfId), isReconnecting: false },
         ...this.wsTransport.remotePlayers().map((r) => ({
-          name: r.name, isYou: false, color: playerColor(r.colorIndex), isDown: r.isDown, isOut: r.isOut,
+          name: r.name, isYou: false, color: playerColorOr(r.colorIndex), isDown: r.isDown, isOut: r.isOut,
           isAtExit: exr.includes(r.playerId), isReconnecting: isReconnectingTeammate(r),
         })),
       ];
@@ -4978,6 +4978,13 @@ export class Game {
     const { ctx, cam } = this;
     for (const r of remotes) {
       const sx = r.x - cam.x, sy = r.y - cam.y;
+      // Identity still unresolved (no verified color claim yet): an explicit NEUTRAL
+      // placeholder at the exact body/label geometry the real render uses, so the resolve
+      // happens in place. Never a guessed color that pops to the real one later.
+      if (r.colorIndex === null) {
+        this.renderUnresolvedRemote(sx, sy);
+        continue;
+      }
       const color = playerColor(r.colorIndex);
       const tinted = this.sprites.tintedHero(color);
       const entry = this.remoteAnims.get(r.playerId);
@@ -5032,6 +5039,26 @@ export class Game {
     drawLoadoutOverlays(this.ctx, hat, face, {
       cx, cy, sizePx: size, facing, orientation: "side", xf, isSheetPlaying, frameIndex, alpha,
     });
+  }
+
+  // The neutral stand-in for a teammate whose identity color has not resolved: a grey ring
+  // at the body position and a grey "…" at the name-label baseline — the same geometry the
+  // real render uses, so the resolve swaps in place with zero shift.
+  private renderUnresolvedRemote(sx: number, sy: number) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.strokeStyle = NEUTRAL_PLAYER_COLOR;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.arc(sx, sy, this.pr, 0, 6.28);
+    ctx.stroke();
+    ctx.fillStyle = NEUTRAL_PLAYER_COLOR;
+    ctx.font = '700 11px "Silkscreen", monospace';
+    ctx.textAlign = "center";
+    ctx.fillText("\u2026", sx, sy - 32);
+    ctx.restore();
+    ctx.textAlign = "left";
   }
 
   private renderPlayer() {
@@ -5544,7 +5571,7 @@ export class Game {
     }
     // Patch's waystation: a warm amber marker so the safe room reads on the map at a glance.
     if (this.world.shop) dots.push({ x: this.world.shop.keeperX, y: this.world.shop.keeperY, color: "#ffd27a", size: 2.5 });
-    for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColor(r.colorIndex), size: 2.5 });
+    for (const r of this.remotes()) dots.push({ x: r.x, y: r.y, color: playerColorOr(r.colorIndex), size: 2.5 });
     this.minimap.render({
       dungeon: this.dungeon,
       playerX: this.px, playerY: this.py,

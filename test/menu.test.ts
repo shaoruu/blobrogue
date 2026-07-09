@@ -179,6 +179,9 @@ function makeMenu(opts: FakeOpts & { auth?: AuthClient | null } = {}): { menu: M
   localStorage.removeItem("blobrogue.cosmetics");
   localStorage.removeItem("blobrogue.color");
   localStorage.removeItem("blobrogue.closet.seenUnlocks");
+  // Sections run as an already-confirmed guest so online flows land on the surfaces under
+  // test; the one-time name gate has its own sections (which clear this latch explicitly).
+  localStorage.setItem("blobrogue.nameConfirmed", "1");
   const overlay = document.createElement("div") as unknown as ShimNode;
   const client = fakeConvex(opts);
   const session = new Session(client);
@@ -782,6 +785,90 @@ async function main(): Promise<void> {
     check("no classic co-op on the online home", !/classic/i.test(textOf(overlay)));
   }
 
+  section("the one-time name gate: a guest's FIRST online start sets name+color in one place");
+  {
+    localStorage.removeItem("blobrogue.name");
+    // The profile echoes the gate's pick (a real backend stores and returns it), so the
+    // authority reconcile keeps the committed body item.
+    const { menu, overlay, session } = makeMenu({
+      auth: fakeAuth(false),
+      profile: makeProfile({ colorIndex: 3, cosmetics: { hat: null, face: null, body: "body_pink", title: null } }),
+    });
+    localStorage.removeItem("blobrogue.nameConfirmed");
+    await menu.showTitle();
+    check("the gate never renders on the title", !textOf(overlay).includes("WHAT'S YOUR NAME?"));
+    await menu.showOnlineHome();
+    const all = textOf(overlay);
+    check("an unconfirmed guest's online start opens the gate", all.includes("WHAT'S YOUR NAME?"));
+    check("the gate reuses the canonical menu shell", byClass(overlay, "menu").length === 1 && byClass(overlay, "name-gate").length === 1);
+    check("the sub-line explains who sees the name", all.includes("Teammates will see this in your run."));
+    check("the change-later note is present", all.includes("You can change this later in Profile."));
+    const input = collect(overlay, (n) => n.tagName === "INPUT")[0] as ShimNode & { value?: string };
+    check("the input is pre-filled with the generated default",
+      typeof input?.value === "string" && input.value === session.name && input.value.length > 0 && input.value.toLowerCase() !== "blob",
+      String(input?.value));
+    const swatches = byClass(overlay, "swatch");
+    check("the color swatches render here too (the full party palette)", swatches.length === 6, String(swatches.length));
+    const selected = swatches.filter((s) => (s.className ?? "").split(" ").includes("sel"));
+    check("exactly one swatch wears the SELECTED state", selected.length === 1);
+    check("the selected state is GEOMETRY (check glyph), not hue", textOf(selected[0] ?? {}).includes("\u2713"));
+    check("a live blob preview reflects the pick", byClass(overlay, "blob-preview").length === 1);
+
+    const before = String(input.value);
+    byClass(overlay, "gate-dice")[0]?.onclick?.();
+    check("the dice rerolls another generated default", String(input.value) !== before && String(input.value).includes("Blob"), String(input.value));
+
+    byClass(overlay, "swatch")[3]?.onclick?.();
+    const selIdx = byClass(overlay, "swatch").findIndex((s) => (s.className ?? "").split(" ").includes("sel"));
+    check("clicking a swatch moves the SELECTED state (rebuilt in place)", selIdx === 3, String(selIdx));
+
+    (input as { value?: string }).value = "  Zippy\u200b  Zap  ";
+    collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0]?.onclick?.();
+    await settle();
+    check("PLAY ONLINE commits the sanitized typed name", session.name === "Zippy Zap", session.name);
+    check("...and the picked color (party color + body item together)", session.colorIndex === 3 && session.cosmetics.body === "body_pink", `${session.colorIndex}/${session.cosmetics.body}`);
+    check("...and latches nameConfirmed", localStorage.getItem("blobrogue.nameConfirmed") === "1");
+    check("...and proceeds to the online home", buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")));
+    await menu.showOnlineHome();
+    check("a confirmed guest skips straight to online (never re-prompted)",
+      buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")) && !textOf(overlay).includes("WHAT'S YOUR NAME?"));
+  }
+
+  section("name gate validation: junk input keeps the generated default — never empty, never 'blob'");
+  {
+    localStorage.removeItem("blobrogue.name");
+    const { menu, overlay, session } = makeMenu({ auth: fakeAuth(false) });
+    localStorage.removeItem("blobrogue.nameConfirmed");
+    const generated = session.name;
+    await menu.showOnlineHome();
+    const input = collect(overlay, (n) => n.tagName === "INPUT")[0] as ShimNode & { value?: string };
+    input.value = "  \u200b\u0007  ";
+    collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0]?.onclick?.();
+    await settle();
+    check("junk input keeps the generated default", session.name === generated, session.name);
+    check("the committed name is never 'blob'", session.name.toLowerCase() !== "blob");
+    check("the gate still proceeds", buttonsOf(overlay).some((b) => b.includes("QUICK PLAY")));
+  }
+
+  section("name gate routing: back declines without latching; signed-in players skip");
+  {
+    const declined = makeMenu({ auth: fakeAuth(false) });
+    localStorage.removeItem("blobrogue.nameConfirmed");
+    await declined.menu.showOnlineHome();
+    check("gate open", textOf(declined.overlay).includes("WHAT'S YOUR NAME?"));
+    collect(declined.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "back")[0]?.onclick?.();
+    await settle();
+    check("back returns to the title", buttonsOf(declined.overlay).some((b) => b.includes("PLAY SOLO")));
+    check("declining does not latch the confirmation", localStorage.getItem("blobrogue.nameConfirmed") === null);
+
+    const signed = makeMenu({ auth: fakeAuth(true) });
+    localStorage.removeItem("blobrogue.nameConfirmed");
+    await signed.menu.showOnlineHome();
+    check("signed-in players use their Google name and skip the prompt",
+      buttonsOf(signed.overlay).some((b) => b.includes("QUICK PLAY")) && !textOf(signed.overlay).includes("WHAT'S YOUR NAME?"));
+    localStorage.setItem("blobrogue.nameConfirmed", "1");
+  }
+
   section("no client entry point can reach the removed peer-synced path");
   {
     check("src/net/multiplayer.ts (the peer-synced session) is deleted", !existsSync(join(ROOT, "src/net/multiplayer.ts")));
@@ -794,7 +881,7 @@ async function main(): Promise<void> {
 
   section("lobby roster: READY/NOT READY consent + ping (the UI Director contract)");
   {
-    const { menu, overlay } = makeMenu();
+    const { menu, overlay, session } = makeMenu();
     const f = fakeLobby("ABCD");
     f.setPlayers([
       member("player-1", "Ada", { pingMs: 42 }),
@@ -807,6 +894,11 @@ async function main(): Promise<void> {
     check("an unready member reads NOT READY", text.includes("NOT READY"));
     check("pings ride the roster chips", text.includes("42ms") && text.includes("87ms"));
     check("the host row is implicit consent (HOST, no ready toggle)", text.includes("HOST \u00b7 42ms"));
+    // The header confirms the identity THIS player joins as: YOU: [swatch] <name>.
+    const you = byClass(overlay, "lobby-you");
+    check("the lobby header carries the YOU confirmation", you.length === 1 && textOf(you[0]).includes("YOU:"), textOf(you[0] ?? {}));
+    check("...with this player's actual name", textOf(you[0] ?? {}).includes(session.name), session.name);
+    check("...and their committed color swatch", byClass(you[0] ?? {}, "you-swatch").length === 1);
   }
 
   section("host start gate: all-ready START RUN, otherwise hold-to-START ANYWAY");

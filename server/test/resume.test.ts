@@ -116,6 +116,9 @@ async function main(): Promise<void> {
           && Math.abs(self.x - wantX) < 1 && Math.abs(self.y - wantY) < 1,
           `hp=${self?.hp} coins=${self?.coins}`);
         check(`[${outageMs}ms] body is present again (targetable/damageable)`, world.state.players.get(pid)?.isAbsent === false);
+        const seat = bot.transport.getWorldRoster().find((r) => r.aid === "resume-id");
+        check(`[${outageMs}ms] the resumed player keeps their real identity (name + chosen color)`,
+          seat?.nm === "Blipper" && seat?.cl === 3, `nm=${seat?.nm} cl=${seat?.cl}`);
         check(`[${outageMs}ms] run was never reset`, world.state.seed === seedBefore);
       }
       const lastToken = bot.transport.getResumeToken();
@@ -309,7 +312,7 @@ async function main(): Promise<void> {
     const s = await startTestServer({ resumeGraceMs: graceMs });
     try {
       const ada = new Bot({ url: s.url, secret: s.secret, playerId: "wipe-a", world: "room:WIPE", name: "Ada", script: () => idle() });
-      const bob = new Bot({ url: s.url, secret: s.secret, playerId: "wipe-b", world: "room:WIPE", name: "Bob", script: () => idle(), reconnect: { ...FAST, graceMs } });
+      const bob = new Bot({ url: s.url, secret: s.secret, playerId: "wipe-b", world: "room:WIPE", name: "Bob", colorIndex: 5, script: () => idle(), reconnect: { ...FAST, graceMs } });
       ada.start(); bob.start();
       await waitUntil(() => ada.transport.isReady() && bob.transport.isReady(), 3000);
       const world = s.server.getWorld("room:WIPE")!;
@@ -325,8 +328,12 @@ async function main(): Promise<void> {
         return remote?.isAbsent === true;
       }, 2000);
       check("Ada sees Bob as an explicit reconnecting ghost (ab on the wire)", isGhostSeen);
+      const ghost = ada.transport.remotePlayers().find((r) => r.playerId === bobPid);
+      check("the ghost keeps Bob's verified identity (name + color, never a degraded/guessed tint)",
+        ghost?.name === "Bob" && ghost?.colorIndex === 5, `nm=${ghost?.name} cl=${ghost?.colorIndex}`);
       const rosterAway = ada.transport.getWorldRoster().find((r) => r.aid === "wipe-b");
       check("the roster shows Bob AWAY (readiness integrates the outage)", rosterAway?.st === "away", `st=${rosterAway?.st}`);
+      check("the AWAY seat keeps Bob's color for the whole grace window", rosterAway?.cl === 5, `cl=${rosterAway?.cl}`);
       check("Bob's mere disconnect wiped nothing (an absent body is not a death)", world.state.isRunOver === false);
       await sleep(200);
       check("world kept simulating through the outage", world.state.tick > tickAtDrop);

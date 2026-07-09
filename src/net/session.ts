@@ -4,9 +4,11 @@ import type { ProfileDoc } from "./api.js";
 import type { RunResult } from "../game/game.js";
 import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
+import { generatedBlobName, sanitizeBlobName } from "./blobName.js";
 
 const CLIENT_ID_KEY = "blobrogue.clientId";
 const NAME_KEY = "blobrogue.name";
+const NAME_CONFIRMED_KEY = "blobrogue.nameConfirmed";
 const COLOR_KEY = "blobrogue.color";
 const COSMETICS_KEY = "blobrogue.cosmetics";
 
@@ -77,13 +79,28 @@ export class Session {
     this.clientId = readOrMintClientId();
     let stored = "";
     try { stored = localStorage.getItem(NAME_KEY) ?? ""; } catch { stored = ""; }
-    this.name = stored;
+    // A guest is NEVER nameless (and never the literal "blob"): with no stored pick, the
+    // deterministic clientId-hashed default is assigned once and persisted, so a returning
+    // guest keeps the same generated identity across sessions.
+    const clean = sanitizeBlobName(stored);
+    this.name = clean.length > 0 && clean.toLowerCase() !== "blob" ? clean : generatedBlobName(this.clientId);
+    if (this.name !== stored) { try { localStorage.setItem(NAME_KEY, this.name); } catch { /* ignore */ } }
     this.colorIndex = readStoredColor();
     this.cosmeticPicks = readStoredCosmetics();
   }
 
   get playerId(): string | null {
     return this.profile?.playerId ?? null;
+  }
+
+  // The one-time online name gate's latch: once the player confirmed (or a signed-in
+  // account made the prompt moot), online starts skip straight through.
+  get isNameConfirmed(): boolean {
+    try { return localStorage.getItem(NAME_CONFIRMED_KEY) === "1"; } catch { return false; }
+  }
+
+  markNameConfirmed(): void {
+    try { localStorage.setItem(NAME_CONFIRMED_KEY, "1"); } catch { /* ignore */ }
   }
 
   // Drop the cached profile (called on sign-out) so no prior-user data — name, stats,
@@ -119,7 +136,7 @@ export class Session {
     const bodyItem = bodyItemForPaletteIndex(colorIndex);
     this.recordCosmeticPick("body", bodyItem?.id ?? null);
     // Persist the pick onto the profile in the background; the local value already applies.
-    if (this.client) void this.login(this.name || "blob").catch(() => {});
+    this.flushInBackground();
   }
 
   private recordCosmeticPick(slot: CosmeticSlot, id: string | null) {
@@ -131,17 +148,40 @@ export class Session {
   // onto the profile in the background exactly like the color pick.
   setCosmetic(slot: CosmeticSlot, id: string | null) {
     this.recordCosmeticPick(slot, id);
-    if (this.client) void this.login(this.name || "blob").catch(() => {});
+    this.flushInBackground();
   }
 
-  async login(name: string): Promise<ProfileDoc | null> {
-    this.persistName(name);
+  // The latest in-flight background identity write. Background picks never block the UI,
+  // but the JOIN paths must be able to await them: flushIdentity() below is what guarantees
+  // a room ticket can never be minted ahead of the pick it should carry (the remote-color
+  // Sev — teammates rendering a stale/default tint).
+  private pendingFlush: Promise<void> = Promise.resolve();
+
+  private flushInBackground(): void {
+    if (this.client) this.pendingFlush = this.login().then(() => undefined, () => undefined);
+  }
+
+  // Settle every backgrounded identity write, then land one final flush of the CURRENT
+  // name/color/cosmetics — awaited by every room operation and ticket mint, so the
+  // authoritative profile (and therefore the ticket/roster identity) always carries the
+  // player's latest picks before anyone else can observe them.
+  async flushIdentity(): Promise<void> {
+    await this.pendingFlush;
+    await this.login();
+  }
+
+  // Upsert the caller's profile row with the CURRENT identity. A passed name is sanitized
+  // first; one that sanitizes away (or is the retired literal "blob" placeholder) keeps the
+  // standing name — a login can never blank a name or resurrect the "blob" collision.
+  async login(name: string = this.name): Promise<ProfileDoc | null> {
+    const clean = sanitizeBlobName(name);
+    this.persistName(clean.length > 0 && clean.toLowerCase() !== "blob" ? clean : this.name);
     if (!this.client) return null;
     const sent: StoredCosmetics = { ...this.cosmeticPicks };
     const hasPicks = COSMETIC_PICK_SLOTS.some((slot) => sent[slot] !== undefined);
     this.profile = await this.client.mutation(api.players.ensurePlayer, {
       clientId: this.clientId,
-      name,
+      name: this.name,
       // Only explicit local picks are sent — undefined never overwrites a saved pick.
       ...(this.colorIndex !== null ? { colorIndex: this.colorIndex } : {}),
       ...(hasPicks ? { cosmetics: sent } : {}),

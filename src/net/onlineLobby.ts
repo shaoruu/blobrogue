@@ -69,15 +69,20 @@ export class OnlineLobby {
     return id;
   }
 
-  private colorArg(): { colorIndex: number } | Record<string, never> {
-    return this.session.colorIndex !== null ? { colorIndex: this.session.colorIndex } : {};
+  // The EFFECTIVE identity color for the lobby roster row: the player's pick, else 0 — the
+  // amber default look their own screen already shows. Always sent, so the roster dot can
+  // never disagree with the ticket claim the game server will broadcast (which defaults the
+  // same way in convex/gsTicket.ts), and Convex never has to invent a color.
+  private colorArg(): { colorIndex: number } {
+    return { colorIndex: this.session.colorIndex ?? 0 };
   }
 
   // Ticket identity is read server-side from the persisted profile. Color picks persist in the
   // background, so a fast CREATE/JOIN -> START could mint before that write finished and other
-  // clients would see the old/default tint. Flush identity before room/ticket operations.
+  // clients would see the old/default tint. Flush identity (awaiting any in-flight background
+  // write first) before every room/ticket operation.
   private async flushIdentity(): Promise<void> {
-    await this.session.login(this.session.name || "blob");
+    await this.session.flushIdentity();
   }
 
   // Create a private room and get a shareable code.

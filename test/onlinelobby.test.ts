@@ -28,12 +28,25 @@ function section(name: string): void {
 
 interface Call { fn: string; args: Record<string, unknown> }
 
+interface FakeConvexOpts {
+  // The profile's saved color (null = never picked). Default mirrors the original fixture.
+  profileColor?: number | null;
+  // Delay every ensurePlayer resolution, so ordering tests can prove the mint truly AWAITS
+  // an in-flight identity flush rather than racing past it.
+  ensureDelayMs?: number;
+}
+
 // A Convex client double that records every call in order and answers with canned rows.
-function fakeConvex(calls: Call[]): ConvexClient {
+function fakeConvex(calls: Call[], opts: FakeConvexOpts = {}): ConvexClient {
+  const profileColor = opts.profileColor === undefined ? 4 : opts.profileColor;
   const respond = (fn: string): unknown => {
     switch (fn) {
       case "players:ensurePlayer":
-        return { playerId: "player-1", name: "Ada", colorIndex: 4, totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0, unlocks: [], isAccount: false };
+        return {
+          playerId: "player-1", name: "Ada", colorIndex: profileColor,
+          cosmetics: { hat: null, face: null, body: null, title: null },
+          totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0, unlocks: [], isAccount: false,
+        };
       case "rooms:create":
         return { roomId: "room-doc-1", code: "ABCD", seed: 1, floor: 1 };
       case "rooms:join":
@@ -47,6 +60,9 @@ function fakeConvex(calls: Call[]): ConvexClient {
   const record = (ref: unknown, args: Record<string, unknown>): Promise<unknown> => {
     const fn = getFunctionName(ref as Parameters<typeof getFunctionName>[0]);
     calls.push({ fn, args });
+    if (fn === "players:ensurePlayer" && opts.ensureDelayMs !== undefined) {
+      return new Promise((resolve) => setTimeout(() => resolve(respond(fn)), opts.ensureDelayMs));
+    }
     return Promise.resolve(respond(fn));
   };
   const fake = {
@@ -116,6 +132,45 @@ async function main(): Promise<void> {
     await lobby.create();
     const first = calls.find((c) => c.fn === "rooms:heartbeat");
     check("the join-time beat carries the current pick", first !== undefined && first.args.colorIndex === 1, JSON.stringify(first?.args));
+    lobby.leave();
+  }
+
+  section("mintTicket AWAITS the in-flight background pick flush (a ticket never races a pick)");
+  {
+    const calls: Call[] = [];
+    const client = fakeConvex(calls, { ensureDelayMs: 15 });
+    const session = new Session(client);
+    const lobby = new OnlineLobby(client, session);
+    await lobby.create();
+    calls.length = 0;
+    // The exact live-playtest shape: pick a color, immediately join — the pick's own flush
+    // is still in flight when the ticket is requested.
+    session.setColorIndex(5);
+    await lobby.mintTicket();
+    const names = callNames(calls);
+    const mintIdx = names.indexOf("gsTicket:mint");
+    const flushes = names.slice(0, mintIdx === -1 ? 0 : mintIdx).filter((n) => n === "players:ensurePlayer").length;
+    check("the mint is the LAST call — after the background pick flush AND the final flush",
+      mintIdx === names.length - 1 && flushes >= 2, names.join(" -> "));
+    const lastFlush = calls.filter((c) => c.fn === "players:ensurePlayer").pop();
+    check("the flush the ticket reads carries the just-picked color", lastFlush?.args.colorIndex === 5, JSON.stringify(lastFlush?.args));
+    lobby.leave();
+  }
+
+  section("an unpicked color joins as the explicit amber default (0) — the roster row can never be invented");
+  {
+    localStorage.removeItem("blobrogue.color");
+    localStorage.removeItem("blobrogue.cosmetics");
+    const calls: Call[] = [];
+    const client = fakeConvex(calls, { profileColor: null });
+    const session = new Session(client);
+    const lobby = new OnlineLobby(client, session);
+    await lobby.create();
+    const createArgs = calls.find((c) => c.fn === "rooms:create")?.args;
+    check("rooms:create carries colorIndex 0 (the amber default the player's own screen shows)",
+      createArgs?.colorIndex === 0, JSON.stringify(createArgs));
+    const beat = calls.find((c) => c.fn === "rooms:heartbeat");
+    check("the heartbeat carries the same effective color", beat?.args.colorIndex === 0, JSON.stringify(beat?.args));
     lobby.leave();
   }
 
