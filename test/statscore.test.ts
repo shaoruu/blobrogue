@@ -7,7 +7,7 @@
 
 import {
   validateRun, parseServerSubmission, scoreForRun, foldRunIntoAggregates, emptyAggregates,
-  favoriteWeapon, improvedBests, isBoardEligibleRun, bossIdForFloor,
+  favoriteWeapon, improvedBests, isBoardEligibleRun, bossIdForFloor, partyBucketFor,
   DEFAULT_DIFFICULTY, SUBMISSION_MAX_AGE_MS,
 } from "../convex/statsCore.js";
 import type { CleanRun, JsonValue } from "../convex/statsCore.js";
@@ -100,6 +100,17 @@ section("validation: death cause is bounded and optional");
   check("overlong cause truncates", mustValidate(baseRun({ deathCause: "x".repeat(100) })).deathCause === "x".repeat(48));
   const bad = validateRun(baseRun({ deathCause: 7 }));
   check("non-string cause rejects", !bad.ok && bad.reason === "bad_cause");
+}
+
+section("validation: party size clamps; the board bucket splits at 2");
+{
+  check("absent party -> 1", mustValidate(baseRun({ partySize: undefined })).partySize === 1);
+  check("party preserved", mustValidate(baseRun({ partySize: 4 })).partySize === 4);
+  check("party clamps into [1,8]", mustValidate(baseRun({ partySize: 99 })).partySize === 8
+    && mustValidate(baseRun({ partySize: 0 })).partySize === 1);
+  check("non-number party rejects", !validateRun(baseRun({ partySize: "four" })).ok);
+  check("bucket: 1 -> solo", partyBucketFor(1) === "solo");
+  check("bucket: 2+ -> party", partyBucketFor(2) === "party" && partyBucketFor(4) === "party");
 }
 
 section("score: derived, deterministic, floor-dominated, difficulty-normalized");

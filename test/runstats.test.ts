@@ -7,8 +7,8 @@
 // Run: npx tsx test/runstats.test.ts
 
 import {
-  createWorld, spawnPlayerInWorld, devSpawnEnemy, stepWorldPhase, stepPlayerPhase,
-  acquireWeaponInWorld, loadFloorIntoWorld,
+  createWorld, spawnPlayerInWorld, removePlayerFromWorld, devSpawnEnemy, stepWorldPhase,
+  stepPlayerPhase, acquireWeaponInWorld, loadFloorIntoWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { Bullet, Enemy } from "../src/sim/types.js";
@@ -273,6 +273,26 @@ function clockAndJoinTests(): void {
     const before = b.runStats.bestCombo;
     loadFloorIntoWorld(w, 2);
     check("bestCombo survived the floor build", b.runStats.bestCombo === before && before === 1);
+  }
+
+  section("party size: authoritative high-water mark of co-present players");
+  {
+    const solo = createWorld(0xBEEF, 1, { isShared: true, skipLocalPlayer: true });
+    const lone = spawnPlayerInWorld(solo, "pLone");
+    stepWorldPhase(solo, 1 / 20, []);
+    check("a lone run stays party 1", lone.runStats.maxParty === 1);
+
+    const { w, a, b } = twoPlayerArena();
+    stepWorldPhase(w, 1 / 20, []);
+    check("both players see party 2", a.runStats.maxParty === 2 && b.runStats.maxParty === 2);
+    const c = spawnPlayerInWorld(w, "pC");
+    stepWorldPhase(w, 1 / 20, []);
+    check("a third joiner raises everyone to 3", a.runStats.maxParty === 3 && c.runStats.maxParty === 3);
+    removePlayerFromWorld(w, c.id);
+    removePlayerFromWorld(w, b.id);
+    stepWorldPhase(w, 1 / 20, []);
+    check("the high-water mark never recedes after leavers", a.runStats.maxParty === 3,
+      `maxParty=${a.runStats.maxParty}`);
   }
 }
 

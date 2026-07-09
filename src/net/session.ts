@@ -75,6 +75,7 @@ function localRunArgs(clientId: string, result: RunResult): LocalRunArgs {
     weapons: result.weapons,
     blessings: result.blessings,
     ...(result.stats.deathCause !== null ? { deathCause: result.stats.deathCause } : {}),
+    partySize: Math.max(1, Math.round(result.stats.partySize)),
   };
 }
 
@@ -196,6 +197,7 @@ export class Session {
       weapons: run.weapons,
       blessings: run.blessings,
       deathCause: run.deathCause,
+      partySize: run.partySize,
       score: scoreForRun(run),
       endedAt: Date.now(),
     };
@@ -212,6 +214,7 @@ export class Session {
         isAccount: false,
         aggregates,
         favoriteWeapon: favoriteWeapon(aggregates.killsByWeapon),
+        hasExtendedStats: true, // the mirror only ever holds post-tracking runs
       },
       runs: readJson<RunHistoryEntryDoc[]>(LOCAL_RUNS_KEY) ?? [],
     };

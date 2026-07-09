@@ -14,7 +14,7 @@ import { verifyRunBody } from "../../convex/gsSignCore.js";
 import { parseServerSubmission } from "../../convex/statsCore.js";
 import type { ServerSubmission } from "../../convex/statsCore.js";
 import { createLogger } from "../src/logger.js";
-import { createWorld, spawnPlayerInWorld } from "../../src/sim/world.js";
+import { createWorld, spawnPlayerInWorld, stepWorldPhase } from "../../src/sim/world.js";
 
 let passed = 0;
 let failed = 0;
@@ -155,9 +155,13 @@ async function main(): Promise<void> {
     const world = createWorld(7, 1, { isShared: true, skipLocalPlayer: true });
     const p = spawnPlayerInWorld(world, "pX");
     p.kills = 2;
+    spawnPlayerInWorld(world, "pMate");
+    stepWorldPhase(world, 1 / 20, []);
     const payload = buildRunReport(world, p, "players|abc", "room:TEST", "death", Date.now());
     check("buildRunReport carries identity + world + result", payload.playerId === "players|abc"
       && payload.worldId === "room:TEST" && payload.result === "death" && payload.kills === 2);
+    check("party size reported from the sim's high-water mark", payload.partySize === 2,
+      `party=${payload.partySize}`);
     check("submissionId minted per report", payload.submissionId.length >= 8
       && buildRunReport(world, p, "players|abc", "room:TEST", "death", Date.now()).submissionId !== payload.submissionId);
 

@@ -47,6 +47,7 @@ interface RunOverrides {
   bossKills?: number;
   bossKillFloors?: number[];
   firstBossKillMs?: number;
+  partySize?: number;
 }
 
 function serverRunArgs(playerId: string, o: RunOverrides = {}) {
@@ -74,6 +75,7 @@ function serverRunArgs(playerId: string, o: RunOverrides = {}) {
     weapons: ["pistol"],
     blessings: ["hair_trigger"],
     deathCause: "boss_slam",
+    partySize: o.partySize ?? 1,
   };
 }
 
@@ -113,7 +115,7 @@ describe("applyServerRun (authoritative path)", () => {
     await t.mutation(internal.stats.applyServerRun, serverRunArgs(guestId, { floor: 11 }));
 
     const board = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(board.entries).toHaveLength(1);
     expect(board.entries[0].playerId).toBe(accountId);
@@ -129,7 +131,7 @@ describe("applyServerRun (authoritative path)", () => {
     const { playerId } = await makeAccount(t, "ada", "cid-join");
     await t.mutation(internal.stats.applyServerRun, serverRunArgs(playerId, { floor: 40, startFloor: 12 }));
     const board = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(board.entries).toHaveLength(0);
     const stats = await t.query(api.stats.getMyStats, { clientId: "cid-join" });
@@ -156,11 +158,11 @@ describe("applyServerRun (authoritative path)", () => {
     await t.mutation(internal.stats.applyServerRun, serverRunArgs(playerId, { floor: 9, firstBossKillMs: 100000 }));
     await t.mutation(internal.stats.applyServerRun, serverRunArgs(playerId, { floor: 3, firstBossKillMs: 300000 }));
     const deepest = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(deepest.entries[0].value).toBe(9);
     const fastest = await t.query(api.leaderboard.top, {
-      category: "fastestBoss", difficulty: "standard", cursor: null, numItems: 10,
+      category: "fastestBoss", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(fastest.entries[0].value).toBe(100000);
   });
@@ -185,7 +187,7 @@ describe("recordLocalRun (untrusted client path)", () => {
 
     // Even a monster local run never touches a board — the untrusted path is stats-only.
     for (const category of ["deepestFloor", "fastestBoss", "bossKills", "score", "combo"] as const) {
-      const board = await t.query(api.leaderboard.top, { category, difficulty: "standard", cursor: null, numItems: 10 });
+      const board = await t.query(api.leaderboard.top, { category, difficulty: "standard", party: "solo", cursor: null, numItems: 10 });
       expect(board.entries).toHaveLength(0);
     }
   });
@@ -204,7 +206,7 @@ describe("recordLocalRun (untrusted client path)", () => {
     });
     expect(result?.isAccount).toBe(true);
     const board = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(board.entries).toHaveLength(0);
   });
@@ -251,12 +253,12 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
       { name: "low", floor: 4, firstBossKillMs: 310000 },
     ]);
     const deepest = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(deepest.entries.map((e) => e.value)).toEqual([15, 9, 4]);
     expect(deepest.entries.map((e) => e.name)).toEqual(["top", "mid", "low"]);
     const fastest = await t.query(api.leaderboard.top, {
-      category: "fastestBoss", difficulty: "standard", cursor: null, numItems: 10,
+      category: "fastestBoss", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(fastest.entries.map((e) => e.value)).toEqual([90000, 220000, 310000]);
   });
@@ -268,12 +270,12 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
       { name: "second", floor: 9, firstBossKillMs: 100000 },
     ]);
     const deepest = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     // Descending boards reverse the whole index — the newer row leads inside a tie.
     expect(deepest.entries.map((e) => e.name)).toEqual(["second", "first"]);
     const fastest = await t.query(api.leaderboard.top, {
-      category: "fastestBoss", difficulty: "standard", cursor: null, numItems: 10,
+      category: "fastestBoss", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     // Ascending boards read index order — the earlier row leads inside a tie.
     expect(fastest.entries.map((e) => e.name)).toEqual(["first", "second"]);
@@ -286,16 +288,16 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
       { name: "p4", floor: 11 }, { name: "p5", floor: 7 },
     ]);
     const page1 = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 2,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 2,
     });
     expect(page1.entries.map((e) => e.value)).toEqual([21, 17]);
     expect(page1.isDone).toBe(false);
     const page2 = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: page1.continueCursor, numItems: 2,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: page1.continueCursor, numItems: 2,
     });
     expect(page2.entries.map((e) => e.value)).toEqual([13, 11]);
     const page3 = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: page2.continueCursor, numItems: 2,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: page2.continueCursor, numItems: 2,
     });
     expect(page3.entries.map((e) => e.value)).toEqual([7]);
     expect(page3.isDone).toBe(true);
@@ -311,15 +313,15 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
       { name: "brutalbee", floor: 5, difficulty: "brutal" },
     ]);
     const standard = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(standard.entries.map((e) => e.name)).toEqual(["standardsam"]);
     const casual = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "casual", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "casual", party: "solo", cursor: null, numItems: 10,
     });
     expect(casual.entries.map((e) => e.name)).toEqual(["casualcat"]);
     const brutal = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "brutal", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "brutal", party: "solo", cursor: null, numItems: 10,
     });
     expect(brutal.entries.map((e) => e.name)).toEqual(["brutalbee"]);
 
@@ -327,12 +329,12 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
     // weights: casual 3/4, standard 1, brutal 5/4) — never submitted, always derived.
     const brutalBase = 5 * 1000 + 1 * 500 + 20 * 10 + 12 * 20 + 60;
     const brutalScore = await t.query(api.leaderboard.top, {
-      category: "score", difficulty: "brutal", cursor: null, numItems: 10,
+      category: "score", difficulty: "brutal", party: "solo", cursor: null, numItems: 10,
     });
     expect(brutalScore.entries[0].value).toBe(Math.round((brutalBase * 5) / 4));
     const casualBase = 30 * 1000 + 1 * 500 + 20 * 10 + 12 * 20 + 60;
     const casualScore = await t.query(api.leaderboard.top, {
-      category: "score", difficulty: "casual", cursor: null, numItems: 10,
+      category: "score", difficulty: "casual", party: "solo", cursor: null, numItems: 10,
     });
     expect(casualScore.entries[0].value).toBe(Math.round((casualBase * 3) / 4));
   });
@@ -344,20 +346,20 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
       floor: 6, bossKills: 0, bossKillFloors: [], bestCombo: 0, firstBossKillMs: undefined,
     }));
     const bossBoard = await t.query(api.leaderboard.top, {
-      category: "bossKills", difficulty: "standard", cursor: null, numItems: 10,
+      category: "bossKills", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(bossBoard.entries).toHaveLength(0);
     const comboBoard = await t.query(api.leaderboard.top, {
-      category: "combo", difficulty: "standard", cursor: null, numItems: 10,
+      category: "combo", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(comboBoard.entries).toHaveLength(0);
     const deepest = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(deepest.entries).toHaveLength(1);
   });
 
-  test("the caller's own standing rides along even when off the page", async () => {
+  test("the caller's own standing rides along with a computed rank even when off the page", async () => {
     const t = freshBackend();
     await seedAccounts(t, [
       { name: "p1", floor: 30 }, { name: "p2", floor: 25 },
@@ -365,11 +367,42 @@ describe("leaderboard.top ordering / ties / pagination / difficulty", () => {
     const { playerId, asUser } = await makeAccount(t, "me", "cid-me");
     await t.mutation(internal.stats.applyServerRun, serverRunArgs(playerId, { floor: 2, bossKills: 0, bossKillFloors: [], firstBossKillMs: undefined }));
     const page = await asUser.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 2, clientId: "cid-me",
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 2, clientId: "cid-me",
     });
     expect(page.entries.map((e) => e.name)).toEqual(["p1", "p2"]);
     expect(page.me?.playerId).toBe(playerId);
     expect(page.me?.value).toBe(2);
+    // Standard competition rank: two strictly better entries -> #3 (drives the pinned row).
+    expect(page.me?.rank).toBe(3);
+  });
+
+  test("boards split by party: a party run never competes with solo runs", async () => {
+    const t = freshBackend();
+    const { playerId: soloist } = await makeAccount(t, "soloist", "cid-solo-b");
+    const { playerId: grouper } = await makeAccount(t, "grouper", "cid-party-b");
+    await t.mutation(internal.stats.applyServerRun, serverRunArgs(soloist, { floor: 6 }));
+    await t.mutation(internal.stats.applyServerRun, serverRunArgs(grouper, { floor: 22, partySize: 3 }));
+    const solo = await t.query(api.leaderboard.top, {
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
+    });
+    expect(solo.entries.map((e) => e.name)).toEqual(["soloist"]);
+    const party = await t.query(api.leaderboard.top, {
+      category: "deepestFloor", difficulty: "standard", party: "party", cursor: null, numItems: 10,
+    });
+    expect(party.entries.map((e) => e.name)).toEqual(["grouper"]);
+    // One player keeps SEPARATE bests per bucket: a deep party run can't inflate solo.
+    await t.mutation(internal.stats.applyServerRun, serverRunArgs(soloist, { floor: 40, partySize: 4 }));
+    const soloAfter = await t.query(api.leaderboard.top, {
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
+    });
+    expect(soloAfter.entries.find((e) => e.name === "soloist")?.value).toBe(6);
+    const partyAfter = await t.query(api.leaderboard.top, {
+      category: "deepestFloor", difficulty: "standard", party: "party", cursor: null, numItems: 10,
+    });
+    expect(partyAfter.entries.map((e) => e.value)).toEqual([40, 22]);
+    // Party size lands in the run history too.
+    const runs = await t.query(api.stats.listMyRuns, { clientId: "cid-party-b", cursor: null, numItems: 5 });
+    expect(runs.page[0].partySize).toBe(3);
   });
 });
 
@@ -410,7 +443,7 @@ describe("run history + legacy compatibility", () => {
     // The next server run (same pid the ticket already carries) NOW charts globally.
     await t.mutation(internal.stats.applyServerRun, serverRunArgs(guestId, { floor: 9 }));
     const board = await t.query(api.leaderboard.top, {
-      category: "deepestFloor", difficulty: "standard", cursor: null, numItems: 10,
+      category: "deepestFloor", difficulty: "standard", party: "solo", cursor: null, numItems: 10,
     });
     expect(board.entries.map((e) => e.value)).toEqual([9]);
   });

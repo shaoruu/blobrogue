@@ -1,7 +1,7 @@
 import type { ConvexClient } from "convex/browser";
 import type { Session } from "../net/session.js";
 import type { AuthClient } from "../net/auth.js";
-import type { ProfileDoc, PlayerStatsDoc, RunHistoryEntryDoc, LeaderboardCategory, Difficulty, LeaderboardEntryDoc } from "../net/api.js";
+import type { ProfileDoc, PlayerStatsDoc, RunHistoryEntryDoc, LeaderboardCategory, Difficulty, PartyBucket, LeaderboardEntryDoc } from "../net/api.js";
 import { api } from "../net/api.js";
 import { Multiplayer } from "../net/multiplayer.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
@@ -262,6 +262,11 @@ export class Menu {
     await this.showTitle();
   }
 
+  // The title mini-profile, per the UI Director's contract: a fresh player reads NEW BLOB
+  // (a real empty state, not a blank box); with data the labels are exactly DEEPEST /
+  // KILLS / COINS FOUND / RUNS; and a persistence line tells the truth about where the
+  // stats live — guests "saved on this browser" (the sign-in button above is the CTA),
+  // accounts "saved across devices". Only real recorded data is ever shown.
   private async hydrateProfile(box: HTMLElement) {
     // Signed in: always run the upsert so the account row exists (and any unowned
     // guest stats migrate) before the first run is recorded. Guest: unchanged.
@@ -277,8 +282,17 @@ export class Menu {
     }
     // Login may have adopted an account's saved color pick; reflect it in the swatches.
     this.syncColorRow?.();
-    if (!profile || profile.gamesPlayed === 0) return;
     box.replaceChildren();
+    const isAccount = profile?.isAccount ?? false;
+    const savedLine = () => el("p", "saveline", isAccount
+      ? "\u2713 saved across devices"
+      : "saved on this browser \u2014 sign in to keep it everywhere");
+    if (!profile || profile.gamesPlayed === 0) {
+      box.appendChild(el("div", "col-h", "NEW BLOB"));
+      box.appendChild(el("p", "muted newblob", "no runs yet \u2014 the depths await"));
+      box.appendChild(savedLine());
+      return;
+    }
     box.appendChild(el("div", "col-h", `${profile.name} \u2014 all time`));
     const grid = el("div", "profile-grid");
     const stat = (label: string, value: number) => {
@@ -292,10 +306,11 @@ export class Menu {
     grid.append(
       stat("deepest", profile.deepestFloor),
       stat("kills", profile.totalKills),
-      stat("coins", profile.totalCoins),
+      stat("coins found", profile.totalCoins),
       stat("runs", profile.gamesPlayed),
     );
     box.appendChild(grid);
+    box.appendChild(savedLine());
   }
 
   private soloButton(label: string): HTMLButtonElement {
@@ -654,8 +669,8 @@ export class Menu {
     const head = el("div", "panel-h");
     head.appendChild(el("h1", "", stats.name.toUpperCase()));
     head.appendChild(el("span", "panel-sub", isLocalFallback
-      ? "this browser only"
-      : stats.isAccount ? "account \u00b7 global" : "guest \u00b7 this browser"));
+      ? "saved on this browser"
+      : stats.isAccount ? "account \u00b7 saved across devices" : "guest \u00b7 saved on this browser"));
     wrap.appendChild(head);
 
     const a = stats.aggregates;
@@ -667,18 +682,21 @@ export class Menu {
       cell.append(v, el("span", "stat-label", label));
       grid.appendChild(cell);
     };
-    stat("deepest floor", String(a.deepestFloor), true);
+    // Only real available data: legacy rows predate the extended counters, so those cells
+    // read "no data" ("—") instead of fabricated zeros. The four legacy fields are always real.
+    const ext = (value: string, isReal = stats.hasExtendedStats) => (isReal ? value : "\u2014");
+    stat("deepest", String(a.deepestFloor), true);
     stat("runs", String(a.gamesPlayed));
-    stat("wins", String(a.wins));
-    stat("deaths", String(a.deaths));
-    stat("total kills", String(a.totalKills));
-    stat("bosses slain", String(a.bossKills));
-    stat("best combo", a.bestCombo > 0 ? `x${a.bestCombo}` : "\u2014");
-    stat("playtime", fmtPlaytime(a.playtimeMs));
-    stat("damage dealt", fmtBig(a.damageDealt));
-    stat("damage taken", fmtBig(a.damageTaken));
-    stat("coins earned", fmtBig(a.coinsEarned));
-    stat("coins spent", fmtBig(a.coinsSpent));
+    stat("wins", ext(String(a.wins)));
+    stat("deaths", ext(String(a.deaths)));
+    stat("kills", String(a.totalKills));
+    stat("bosses slain", ext(String(a.bossKills)));
+    stat("best combo", ext(a.bestCombo > 0 ? `x${a.bestCombo}` : "\u2014"));
+    stat("playtime", ext(fmtPlaytime(a.playtimeMs)));
+    stat("damage dealt", ext(fmtBig(a.damageDealt)));
+    stat("damage taken", ext(fmtBig(a.damageTaken)));
+    stat("coins found", String(a.totalCoins));
+    stat("coins spent", ext(fmtBig(a.coinsSpent)));
     wrap.appendChild(grid);
 
     const details: string[] = [];
@@ -734,7 +752,7 @@ export class Menu {
 
   // ---- GLOBAL LEADERBOARDS panel ---------------------------------------------------------
 
-  async showLeaderboardPanel(category: LeaderboardCategory = "deepestFloor", difficulty: Difficulty = DEFAULT_DIFFICULTY) {
+  async showLeaderboardPanel(category: LeaderboardCategory = "deepestFloor", difficulty: Difficulty = DEFAULT_DIFFICULTY, party: PartyBucket = "solo") {
     if (!this.client) { await this.showTitle(); return; }
     const client = this.client;
     const wrap = el("div", "menu");
@@ -753,23 +771,33 @@ export class Menu {
     ];
     for (const t of tabDefs) {
       const b = el("button", "secondary tab" + (t.id === category ? " on" : ""), t.label);
-      b.addEventListener("click", () => void this.showLeaderboardPanel(t.id, difficulty));
+      b.addEventListener("click", () => void this.showLeaderboardPanel(t.id, difficulty, party));
       tabs.appendChild(b);
     }
     wrap.appendChild(tabs);
 
-    const diffRow = el("div", "diffrow");
-    diffRow.appendChild(el("span", "lab", "difficulty"));
+    // Mode/party + difficulty filters: every board is a distinct (category, difficulty,
+    // party) shard — solo runs and party runs never compete.
+    const filterRow = el("div", "diffrow");
+    filterRow.appendChild(el("span", "lab", "party"));
+    for (const p of ["solo", "party"] as const) {
+      const b = el("button", "secondary tab" + (p === party ? " on" : ""), p.toUpperCase());
+      b.addEventListener("click", () => void this.showLeaderboardPanel(category, difficulty, p));
+      filterRow.appendChild(b);
+    }
+    filterRow.appendChild(el("span", "lab gap", "difficulty"));
     for (const d of DIFFICULTIES) {
       const b = el("button", "secondary tab" + (d === difficulty ? " on" : ""), d.toUpperCase());
-      b.addEventListener("click", () => void this.showLeaderboardPanel(category, d));
-      diffRow.appendChild(b);
+      b.addEventListener("click", () => void this.showLeaderboardPanel(category, d, party));
+      filterRow.appendChild(b);
     }
-    wrap.appendChild(diffRow);
+    wrap.appendChild(filterRow);
 
     const list = el("div", "lb-list");
+    const pin = el("div", "lb-list pin");
     const status = el("p", "muted", "loading\u2026");
     wrap.appendChild(list);
+    wrap.appendChild(pin);
     wrap.appendChild(status);
 
     const row = el("div", "btnrow");
@@ -789,24 +817,34 @@ export class Menu {
 
     let cursor: string | null = null;
     let rank = 0;
+    let isSelfOnPage = false;
     const selfId = this.session.playerId;
     const loadPage = async () => {
       more.disabled = true;
       status.textContent = rank === 0 ? "loading\u2026" : "";
       try {
         const page = await client.query(api.leaderboard.top, {
-          category, difficulty, cursor, numItems: 25,
+          category, difficulty, party, cursor, numItems: 25,
           clientId: this.session.clientId,
         });
-        for (const e of page.entries) list.appendChild(lbRow(++rank, e, category, e.playerId === selfId));
+        for (const e of page.entries) {
+          const isYou = e.playerId === selfId;
+          isSelfOnPage = isSelfOnPage || isYou;
+          list.appendChild(lbRow(++rank, e, category, isYou));
+        }
         cursor = page.continueCursor;
         more.style.display = page.isDone ? "none" : "";
         if (rank === 0) {
-          list.appendChild(el("p", "lb-empty", "no entries yet \u2014 be the first: sign in and clear a run online"));
+          list.appendChild(el("p", "lb-empty",
+            `no ${party} runs on this board yet \u2014 signed-in ${difficulty} runs on the live server land here`));
         }
-        status.textContent = page.me && !page.entries.some((e) => e.playerId === selfId)
-          ? `your best \u2014 ${fmtBoardValue(page.me.value, category)}`
-          : "";
+        // Own row pinned: when the caller charts but isn't on the visible page, their
+        // standing stays pinned under the list with its computed rank.
+        pin.replaceChildren();
+        if (page.me && !isSelfOnPage) {
+          pin.appendChild(lbRow(page.me.rank, page.me, category, true));
+        }
+        status.textContent = "";
       } catch {
         status.textContent = "leaderboards unavailable \u2014 try again in a moment";
       } finally {
@@ -1113,7 +1151,8 @@ function runRow(r: RunHistoryEntryDoc): HTMLElement {
   const r1 = el("div", "r1");
   const fl = el("span", "fl", `FL ${r.floor}`);
   const res = el("span", `res ${r.result}`, r.result);
-  const meta = el("span", "", `${fmtClock(r.durationMs / 1000)} \u00b7 ${r.difficulty}`);
+  const partyBit = r.partySize > 1 ? ` \u00b7 ${r.partySize}P party` : "";
+  const meta = el("span", "", `${fmtClock(r.durationMs / 1000)} \u00b7 ${r.difficulty}${partyBit}`);
   const src = el("span", `src ${r.source}`, r.source === "server" ? "server" : "local");
   src.title = r.source === "server"
     ? "authoritative online run \u2014 counts toward global leaderboards"
@@ -1141,11 +1180,11 @@ function runRow(r: RunHistoryEntryDoc): HTMLElement {
 // (markers/titles on the boards, never gameplay power), so this is the whole reward.
 const CROWN_MAP = ["X..X..X", "X.XXX.X", "XXXXXXX", "XXXXXXX"] as const;
 
-function lbRow(rank: number, e: LeaderboardEntryDoc, category: LeaderboardCategory, isYou: boolean): HTMLElement {
+function lbRow(rank: number | null, e: LeaderboardEntryDoc, category: LeaderboardCategory, isYou: boolean): HTMLElement {
   const row = el("div", "lb-row" + (isYou ? " you" : "") + (rank === 1 ? " r1" : ""));
-  const rankEl = el("span", "rank" + (rank <= 3 ? ` r${rank}` : ""));
+  const rankEl = el("span", "rank" + (rank !== null && rank <= 3 ? ` r${rank}` : ""));
   if (rank === 1) rankEl.appendChild(pxIcon(CROWN_MAP, { X: "#ffd166" }, 2));
-  rankEl.appendChild(el("span", "", `#${rank}`));
+  rankEl.appendChild(el("span", "", rank !== null ? `#${rank}` : "#1000+"));
   row.appendChild(rankEl);
   const dot = el("span", "dot");
   dot.style.background = playerColor(e.colorIndex ?? 0);

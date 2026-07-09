@@ -104,6 +104,10 @@ export interface RunStats {
   killsByWeapon: Partial<Record<WeaponId, number>>; // killing-blow weapon (the killer's equipped weapon)
   // The last blow that put this player at 0 HP (down or death); null while unharmed.
   deathCause: DeathCause | null;
+  // Most players simultaneously in this run while this player was present (1 = a true solo
+  // run). Authoritative party size for the mode/party leaderboard split — the classic
+  // presence-synced co-op counts its remote targets so its history reads honestly too.
+  maxParty: number;
 }
 
 export function createRunStats(startFloor: number): RunStats {
@@ -120,6 +124,7 @@ export function createRunStats(startFloor: number): RunStats {
     firstBossKillSecs: -1,
     killsByWeapon: {},
     deathCause: null,
+    maxParty: 1,
   };
 }
 
@@ -2494,6 +2499,9 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   tickPendingBlessings(w, dt);
   updateExit(w, ev);
 
+  // Present-party headcount: the shared world's live players, plus the presence-synced
+  // remotes on the legacy co-op path (its world holds only the one local player).
+  const present = w.players.size + (w.isCoop ? w.remoteTargets.length : 0);
   for (const p of w.players.values()) {
     if (p.comboTimer > 0) {
       p.comboTimer -= dt;
@@ -2503,6 +2511,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
     // Authoritative run clock (fixed-step sim time, immune to client dt) — drives the
     // fastest-boss timing and the reported run duration.
     p.runStats.timeAliveSecs += dt;
+    if (present > p.runStats.maxParty) p.runStats.maxParty = present;
   }
 }
 

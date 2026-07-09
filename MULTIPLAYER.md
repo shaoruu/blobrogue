@@ -329,6 +329,14 @@ Global leaderboards (`leaderboardBest` + `leaderboard:top`) additionally require
 - the run's **score is derived in Convex** (`statsCore.scoreForRun`) from the validated
   fields — no submitter, including the game server, ever sends a score.
 
+Boards are additionally **split by mode/party**: every board is a distinct
+(category, difficulty, solo|party) shard, because a lone run and a party run aren't
+comparable (co-op scaling, revives). The bucket comes from the sim's authoritative
+high-water headcount (`RunStats.maxParty` — the most players simultaneously present
+while the reporting player was in the world), never a client claim. Each player keeps
+separate bests per bucket, the caller's own row is pinned under the list with a computed
+rank when off-page, and every empty board states exactly what lands on it.
+
 Clients can therefore not invent score/depth/kills: the online path never accepts a
 client payload at all (the server reports from its own sim), and the local path can only
 lie to itself. Signed-in solo runs are intentionally **excluded** from the boards (marked

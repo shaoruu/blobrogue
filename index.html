@@ -275,6 +275,8 @@
       .account-out{ flex:0 0 auto; font-size:9px; padding:6px 9px; min-width:0; text-transform:uppercase; }
       .profile{ display:flex; flex-direction:column; gap:8px; align-items:stretch; }
       .profile:empty{ display:none; }
+      .profile .saveline{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; margin:0; text-align:left; }
+      .profile .newblob{ font-family:var(--f-num); font-size:16px; text-align:left; }
       .profile-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
       .stat{ background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 9px; display:flex; flex-direction:column; gap:1px; align-items:flex-start; }
       .stat-value{ font-family:var(--f-num); font-size:21px; color:var(--cream); line-height:1; }
@@ -301,9 +303,13 @@
       .tabrow{ display:flex; flex-wrap:wrap; gap:6px; justify-content:center; }
       .tabrow .tab{ min-width:0; font-size:9px; padding:7px 10px; letter-spacing:1px; }
       .tabrow .tab.on{ --c:#ffb43b; --c-hi:#ffd166; --c-lo:#b06e12; --tx:#120a24; }
-      .diffrow{ display:flex; gap:6px; justify-content:center; align-items:center; }
+      .diffrow{ display:flex; gap:6px; justify-content:center; align-items:center; flex-wrap:wrap; }
       .diffrow .lab{ font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
+      .diffrow .lab.gap{ margin-left:12px; }
       .lb-list{ display:flex; flex-direction:column; gap:4px; width:100%; }
+      /* pinned own-row (off-page standing): separated from the list by a dashed rule */
+      .lb-list.pin{ border-top:2px dashed var(--dun-3); padding-top:6px; }
+      .lb-list.pin:empty{ display:none; border:0; padding:0; }
       .lb-row{ display:flex; align-items:center; gap:10px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 10px; }
       .lb-row.you{ box-shadow:inset 0 0 0 2px var(--amber); background:#171027; }
       .lb-row .rank{ display:inline-flex; align-items:center; gap:4px; font-family:var(--f-logo); font-size:10px; color:var(--dun-4); min-width:44px; }

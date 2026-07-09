@@ -41,6 +41,7 @@ export interface RunReportPayload {
   weapons: string[];
   blessings: string[];
   deathCause: string | null;
+  partySize: number;
 }
 
 // Build the payload from the server's own sim state. `authPlayerId` is the VERIFIED ticket
@@ -82,6 +83,7 @@ export function buildRunReport(
     weapons: p.ownedWeapons.slice(),
     blessings: p.ownedItemIds.slice(),
     deathCause: rs.deathCause,
+    partySize: rs.maxParty,
   };
 }
 

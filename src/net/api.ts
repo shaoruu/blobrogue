@@ -40,6 +40,7 @@ export type RunMode = "solo" | "coop" | "online";
 export type RunOutcome = "death" | "victory" | "abandon";
 export type RunSource = "server" | "local";
 export type LeaderboardCategory = "deepestFloor" | "fastestBoss" | "bossKills" | "score" | "combo";
+export type PartyBucket = "solo" | "party";
 
 // The client-submitted local-run payload (solo/co-op sim results; never leaderboard-eligible).
 export type LocalRunArgs = {
@@ -65,6 +66,7 @@ export type LocalRunArgs = {
   weapons: string[];
   blessings: string[];
   deathCause?: string;
+  partySize?: number;
 };
 
 export interface PlayerAggregatesDoc {
@@ -92,6 +94,8 @@ export interface PlayerStatsDoc {
   isAccount: boolean;
   aggregates: PlayerAggregatesDoc;
   favoriteWeapon: string | null;
+  // False for legacy rows whose extended counters were never recorded (see convex/stats.ts).
+  hasExtendedStats: boolean;
 }
 
 export interface RunHistoryEntryDoc {
@@ -114,6 +118,7 @@ export interface RunHistoryEntryDoc {
   weapons: string[];
   blessings: string[];
   deathCause: string | null;
+  partySize: number;
   score: number;
   endedAt: number;
 }
@@ -132,9 +137,13 @@ export interface LeaderboardEntryDoc {
   achievedAt: number | null;
 }
 
+export interface LeaderboardSelfDoc extends LeaderboardEntryDoc {
+  rank: number | null;
+}
+
 export interface LeaderboardPageDoc {
   entries: LeaderboardEntryDoc[];
-  me: LeaderboardEntryDoc | null;
+  me: LeaderboardSelfDoc | null;
   isDone: boolean;
   continueCursor: string | null;
 }
@@ -215,7 +224,7 @@ export const api = {
     listMyRuns: makeFunctionReference<"query", { clientId: string; cursor: string | null; numItems: number }, RunHistoryPageDoc>("stats:listMyRuns"),
   },
   leaderboard: {
-    top: makeFunctionReference<"query", { category: LeaderboardCategory; difficulty: Difficulty; cursor: string | null; numItems: number; clientId?: string }, LeaderboardPageDoc>("leaderboard:top"),
+    top: makeFunctionReference<"query", { category: LeaderboardCategory; difficulty: Difficulty; party: PartyBucket; cursor: string | null; numItems: number; clientId?: string }, LeaderboardPageDoc>("leaderboard:top"),
   },
   gsTicket: {
     // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).

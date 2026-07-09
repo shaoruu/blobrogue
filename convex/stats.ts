@@ -19,7 +19,7 @@ import type { Doc } from "./_generated/dataModel";
 import { findByClientId, ensureAccountRow, resolveRow } from "./players";
 import {
   validateRun, scoreForRun, foldRunIntoAggregates, emptyAggregates, favoriteWeapon,
-  improvedBests, isBoardEligibleRun, DEFAULT_DIFFICULTY,
+  improvedBests, isBoardEligibleRun, partyBucketFor, DEFAULT_DIFFICULTY,
 } from "./statsCore";
 import type { CleanRun, PlayerAggregates, RunSource, Difficulty, RunMode, RunOutcome } from "./statsCore";
 
@@ -48,6 +48,7 @@ const runFields = {
   weapons: v.array(v.string()),
   blessings: v.array(v.string()),
   deathCause: v.optional(v.string()),
+  partySize: v.optional(v.number()),
 };
 
 type RunArgs = {
@@ -71,6 +72,7 @@ type RunArgs = {
   weapons: string[];
   blessings: string[];
   deathCause?: string;
+  partySize?: number;
 };
 
 function cleanRunFromArgs(args: RunArgs): CleanRun | null {
@@ -79,6 +81,7 @@ function cleanRunFromArgs(args: RunArgs): CleanRun | null {
     difficulty: args.difficulty ?? DEFAULT_DIFFICULTY,
     firstBossKillMs: args.firstBossKillMs ?? null,
     deathCause: args.deathCause ?? null,
+    partySize: args.partySize ?? 1,
   });
   return validated.ok ? validated.run : null;
 }
@@ -147,6 +150,7 @@ async function persistRun(
     weapons: run.weapons,
     blessings: run.blessings,
     ...(run.deathCause !== null ? { deathCause: run.deathCause } : {}),
+    partySize: run.partySize,
     score,
     endedAt: now,
   });
@@ -173,11 +177,13 @@ async function persistRun(
   });
 
   // Global boards: signed-in accounts only (doc.userId), authoritative source only, full
-  // runs only. Guests keep their personal stats above but never surface publicly.
+  // runs only. Guests keep their personal stats above but never surface publicly. Boards
+  // are split by mode/party — a run competes only in its own bucket.
   if (doc.userId !== undefined && isBoardEligibleRun(source, run)) {
+    const party = partyBucketFor(run.partySize);
     const best = await ctx.db
       .query("leaderboardBest")
-      .withIndex("by_player_difficulty", (q) => q.eq("playerId", doc._id).eq("difficulty", run.difficulty))
+      .withIndex("by_player_board", (q) => q.eq("playerId", doc._id).eq("difficulty", run.difficulty).eq("party", party))
       .unique();
     const patch = improvedBests(
       best
@@ -195,6 +201,7 @@ async function persistRun(
       await ctx.db.insert("leaderboardBest", {
         playerId: doc._id,
         difficulty: run.difficulty,
+        party,
         deepestFloor: patch.deepestFloor ?? run.floor,
         deepestFloorAt: now,
         ...(patch.fastestBossMs !== undefined ? { fastestBossMs: patch.fastestBossMs, fastestBossAt: now } : {}),
@@ -277,6 +284,10 @@ export interface PlayerStats {
   isAccount: boolean;
   aggregates: PlayerAggregates;
   favoriteWeapon: string | null;
+  // False for legacy rows created before extended tracking existed: their extended
+  // counters read 0 because the data was never recorded, not because nothing happened —
+  // the UI shows "no data" instead of inventing zeros (only real available data).
+  hasExtendedStats: boolean;
 }
 
 function statsOf(doc: Doc<"players">): PlayerStats {
@@ -287,6 +298,8 @@ function statsOf(doc: Doc<"players">): PlayerStats {
     isAccount: doc.userId !== undefined,
     aggregates,
     favoriteWeapon: favoriteWeapon(aggregates.killsByWeapon),
+    // persistRun writes every extended field together, so one sentinel decides.
+    hasExtendedStats: doc.playtimeMs !== undefined,
   };
 }
 
@@ -319,6 +332,7 @@ export interface RunHistoryEntry {
   weapons: string[];
   blessings: string[];
   deathCause: string | null;
+  partySize: number;
   score: number;
   endedAt: number;
 }
@@ -358,6 +372,7 @@ export const listMyRuns = query({
       weapons: r.weapons,
       blessings: r.blessings,
       deathCause: r.deathCause ?? null,
+      partySize: r.partySize ?? 1,
       score: r.score,
       endedAt: r.endedAt,
     }));

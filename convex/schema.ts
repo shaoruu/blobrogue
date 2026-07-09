@@ -86,6 +86,8 @@ export default defineSchema({
     blessings: v.array(v.string()),
     // The sim's DeathCause id for the killing blow (descriptive; absent when unknown).
     deathCause: v.optional(v.string()),
+    // Most players simultaneously present during the run (absent on early rows -> 1).
+    partySize: v.optional(v.number()),
     // Derived by statsCore.scoreForRun from the validated fields — never submitted.
     score: v.number(),
     endedAt: v.number(),
@@ -93,15 +95,19 @@ export default defineSchema({
     .index("by_submission", ["submissionId"])
     .index("by_player", ["playerId"]),
 
-  // One row per (signed-in player, difficulty): their best-ever value per leaderboard
-  // category. Written ONLY from validated server submissions of full runs (startFloor 1)
-  // on account-backed player rows — guests and local/solo-sim results never appear here.
-  // Each category has its own index so every board reads straight off an index scan:
-  // ties share the value and fall back to the row's _creationTime (the first submission
-  // that put the player on the board), which keeps pagination stable and total.
+  // One row per (signed-in player, difficulty, party bucket): their best-ever value per
+  // leaderboard category. Written ONLY from validated server submissions of full runs
+  // (startFloor 1) on account-backed player rows — guests and local/solo-sim results never
+  // appear here. Boards split by mode/party (solo vs party runs aren't comparable), so the
+  // bucket rides every index. Each category has its own index so every board reads straight
+  // off an index scan: ties share the value and fall back to the row's _creationTime (the
+  // first submission that put the player on the board), keeping pagination stable and total.
   leaderboardBest: defineTable({
     playerId: v.id("players"),
     difficulty: v.union(v.literal("casual"), v.literal("standard"), v.literal("brutal")),
+    // Optional only for pre-split scratch rows; every write sets it (absent rows never
+    // match a board filter, so they simply stop charting until their next run).
+    party: v.optional(v.union(v.literal("solo"), v.literal("party"))),
     deepestFloor: v.number(),
     deepestFloorAt: v.optional(v.number()),
     fastestBossMs: v.optional(v.number()),
@@ -114,12 +120,12 @@ export default defineSchema({
     bestComboAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
-    .index("by_player_difficulty", ["playerId", "difficulty"])
-    .index("by_deepest", ["difficulty", "deepestFloor"])
-    .index("by_fastest_boss", ["difficulty", "fastestBossMs"])
-    .index("by_boss_kills", ["difficulty", "mostBossKills"])
-    .index("by_score", ["difficulty", "bestScore"])
-    .index("by_combo", ["difficulty", "bestCombo"]),
+    .index("by_player_board", ["playerId", "difficulty", "party"])
+    .index("by_deepest", ["difficulty", "party", "deepestFloor"])
+    .index("by_fastest_boss", ["difficulty", "party", "fastestBossMs"])
+    .index("by_boss_kills", ["difficulty", "party", "mostBossKills"])
+    .index("by_score", ["difficulty", "party", "bestScore"])
+    .index("by_combo", ["difficulty", "party", "bestCombo"]),
 
   // A lobby / running game. The two kinds NEVER cross-match:
   //   "coop"   — classic peer-synced co-op (each client simulates from the shared seed/floor;

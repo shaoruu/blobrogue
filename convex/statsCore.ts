@@ -44,6 +44,18 @@ export interface CleanRun {
   blessings: string[];
   // The sim's DeathCause id for the killing blow (descriptive only; null when unknown).
   deathCause: string | null;
+  // Most players simultaneously present during the run (authoritative; 1 = true solo).
+  partySize: number;
+}
+
+// The mode/party leaderboard split: a lone run and a party run aren't comparable (co-op
+// scaling, revives), so every board is bucketed. Two buckets keep the surface honest
+// without fragmenting small populations across 2/3/4-player shards.
+export type PartyBucket = "solo" | "party";
+export const PARTY_BUCKETS: readonly PartyBucket[] = ["solo", "party"];
+
+export function partyBucketFor(partySize: number): PartyBucket {
+  return partySize <= 1 ? "solo" : "party";
 }
 
 // Hard bounds. Values outside are CLAMPED (a legitimate outlier saturates rather than
@@ -59,6 +71,7 @@ const LIMITS = {
   listLen: 64,
   blessingsLen: 200,
   idLen: 48,
+  partySize: 8,
 } as const;
 
 function clampInt(v: JsonValue | undefined, lo: number, hi: number): number | null {
@@ -158,6 +171,9 @@ export function validateRun(raw: Record<string, JsonValue | undefined>): Validat
     deathCause = clean.length > 0 ? clean : null;
   }
 
+  const partySize = clampInt(raw.partySize ?? 1, 1, LIMITS.partySize);
+  if (partySize === null) return fail("bad_party");
+
   return {
     ok: true,
     run: {
@@ -168,6 +184,7 @@ export function validateRun(raw: Record<string, JsonValue | undefined>): Validat
       damageDealt, damageTaken, bestCombo, bossKills, bossKillFloors,
       firstBossKillMs, killsByWeapon, weapons, blessings,
       deathCause,
+      partySize,
     },
   };
 }

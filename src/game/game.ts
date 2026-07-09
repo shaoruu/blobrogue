@@ -59,6 +59,8 @@ export interface RunResultStats {
   // What landed the final blow (sim DeathCause id). Known for locally simulated runs;
   // null online (the client doesn't simulate its own death — the server's report has it).
   deathCause: string | null;
+  // Most players simultaneously present during the run (1 = true solo).
+  partySize: number;
 }
 
 export interface RunResult {
@@ -1859,6 +1861,7 @@ export class Game {
         killsByWeapon: { ...rs.killsByWeapon },
         startFloor: rs.startFloor,
         deathCause: this.mode === "online" ? null : rs.deathCause,
+        partySize: rs.maxParty,
       },
       weapons: this.p.ownedWeapons.slice(),
       blessings: this.p.ownedItemIds.slice(),
