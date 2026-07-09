@@ -73,6 +73,7 @@ function serverRunArgs(playerId: string, o: RunOverrides = {}) {
     killsByWeapon: { pistol: 20 },
     weapons: ["pistol"],
     blessings: ["hair_trigger"],
+    deathCause: "boss_slam",
   };
 }
 
@@ -99,6 +100,7 @@ describe("applyServerRun (authoritative path)", () => {
     const runs = await t.query(api.stats.listMyRuns, { clientId: "cid-ada", cursor: null, numItems: 10 });
     expect(runs.page).toHaveLength(1);
     expect(runs.page[0].source).toBe("server");
+    expect(runs.page[0].deathCause).toBe("boss_slam");
     // Score is DERIVED server-side, never submitted.
     expect(runs.page[0].score).toBe(6 * 1000 + 1 * 500 + 20 * 10 + 12 * 20 + 60);
   });

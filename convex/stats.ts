@@ -47,6 +47,7 @@ const runFields = {
   killsByWeapon: v.record(v.string(), v.number()),
   weapons: v.array(v.string()),
   blessings: v.array(v.string()),
+  deathCause: v.optional(v.string()),
 };
 
 type RunArgs = {
@@ -69,6 +70,7 @@ type RunArgs = {
   killsByWeapon: Record<string, number>;
   weapons: string[];
   blessings: string[];
+  deathCause?: string;
 };
 
 function cleanRunFromArgs(args: RunArgs): CleanRun | null {
@@ -76,6 +78,7 @@ function cleanRunFromArgs(args: RunArgs): CleanRun | null {
     ...args,
     difficulty: args.difficulty ?? DEFAULT_DIFFICULTY,
     firstBossKillMs: args.firstBossKillMs ?? null,
+    deathCause: args.deathCause ?? null,
   });
   return validated.ok ? validated.run : null;
 }
@@ -143,6 +146,7 @@ async function persistRun(
     killsByWeapon: run.killsByWeapon,
     weapons: run.weapons,
     blessings: run.blessings,
+    ...(run.deathCause !== null ? { deathCause: run.deathCause } : {}),
     score,
     endedAt: now,
   });
@@ -314,6 +318,7 @@ export interface RunHistoryEntry {
   firstBossKillMs: number | null;
   weapons: string[];
   blessings: string[];
+  deathCause: string | null;
   score: number;
   endedAt: number;
 }
@@ -352,6 +357,7 @@ export const listMyRuns = query({
       firstBossKillMs: r.firstBossKillMs ?? null,
       weapons: r.weapons,
       blessings: r.blessings,
+      deathCause: r.deathCause ?? null,
       score: r.score,
       endedAt: r.endedAt,
     }));

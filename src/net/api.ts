@@ -64,6 +64,7 @@ export type LocalRunArgs = {
   killsByWeapon: Record<string, number>;
   weapons: string[];
   blessings: string[];
+  deathCause?: string;
 };
 
 export interface PlayerAggregatesDoc {
@@ -112,6 +113,7 @@ export interface RunHistoryEntryDoc {
   firstBossKillMs: number | null;
   weapons: string[];
   blessings: string[];
+  deathCause: string | null;
   score: number;
   endedAt: number;
 }

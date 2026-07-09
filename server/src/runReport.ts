@@ -40,6 +40,7 @@ export interface RunReportPayload {
   killsByWeapon: Record<string, number>;
   weapons: string[];
   blessings: string[];
+  deathCause: string | null;
 }
 
 // Build the payload from the server's own sim state. `authPlayerId` is the VERIFIED ticket
@@ -80,6 +81,7 @@ export function buildRunReport(
     killsByWeapon: Object.fromEntries(Object.entries(rs.killsByWeapon).map(([k, n]) => [k, n ?? 0])),
     weapons: p.ownedWeapons.slice(),
     blessings: p.ownedItemIds.slice(),
+    deathCause: rs.deathCause,
   };
 }
 

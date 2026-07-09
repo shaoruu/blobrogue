@@ -42,6 +42,8 @@ export interface CleanRun {
   killsByWeapon: Record<string, number>;
   weapons: string[];
   blessings: string[];
+  // The sim's DeathCause id for the killing blow (descriptive only; null when unknown).
+  deathCause: string | null;
 }
 
 // Hard bounds. Values outside are CLAMPED (a legitimate outlier saturates rather than
@@ -149,6 +151,13 @@ export function validateRun(raw: Record<string, JsonValue | undefined>): Validat
   const blessings = cleanIdList(raw.blessings ?? [], LIMITS.blessingsLen);
   if (blessings === null) return fail("bad_blessings");
 
+  let deathCause: string | null = null;
+  if (raw.deathCause !== undefined && raw.deathCause !== null) {
+    if (typeof raw.deathCause !== "string") return fail("bad_cause");
+    const clean = raw.deathCause.slice(0, LIMITS.idLen);
+    deathCause = clean.length > 0 ? clean : null;
+  }
+
   return {
     ok: true,
     run: {
@@ -158,6 +167,7 @@ export function validateRun(raw: Record<string, JsonValue | undefined>): Validat
       kills, coins, coinsEarned, coinsSpent, durationMs,
       damageDealt, damageTaken, bestCombo, bossKills, bossKillFloors,
       firstBossKillMs, killsByWeapon, weapons, blessings,
+      deathCause,
     },
   };
 }

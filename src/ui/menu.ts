@@ -9,8 +9,8 @@ import type { RunResult } from "../game/game.js";
 import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { createSettingsControls } from "./settings.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { itemById } from "../sim/items.js";
-import { pxIcon } from "../game/hudIcons.js";
+import { itemById, itemDesc } from "../sim/items.js";
+import { pxIcon, weaponIconEl, itemIconEl } from "../game/hudIcons.js";
 import { BOSS_NAMES, DIFFICULTIES, DEFAULT_DIFFICULTY } from "../../convex/statsCore.js";
 
 export interface MenuHost {
@@ -829,15 +829,25 @@ export class Menu {
     return box;
   }
 
+  // The run-end screen, per the UI Director's contract, in this exact order:
+  //   1. status + cause   2. the 2x2 stat grid   3. YOUR BUILD (weapon/blessing icons + Lv)
+  //   4. new best / unlocks   5. mode-specific actions — with a 500ms input lock so combat
+  // spam can never click/keypress through the transition.
   showGameOver(result: RunResult, profile: ProfileDoc | null, ctx: GameOverContext) {
     const wrap = el("div", "menu");
+
+    // 1. Status + cause. The cause names the killing blow when the sim knows it (local
+    // runs; online clients don't simulate their own death — the server's record has it).
     wrap.appendChild(el("h1", "died", "YOU DIED"));
-    const flavor = ctx.online
-      ? "The run is over \u2014 regroup and go again."
-      : ctx.wasCoop ? "The party fights on without you." : "The depths claim another blob.";
+    const cause = causeLabel(result.stats.deathCause);
+    const flavor = cause !== null
+      ? `${cause[0].toUpperCase()}${cause.slice(1)} on floor ${result.floor}.`
+      : ctx.online
+        ? "The run is over \u2014 regroup and go again."
+        : ctx.wasCoop ? "The party fights on without you." : "The depths claim another blob.";
     wrap.appendChild(el("p", "", flavor));
 
-    // A run summary that counts its numbers up. Each cell reserves width so the
+    // 2. The 2x2 run summary that counts its numbers up. Each cell reserves width so the
     // count-up never nudges the layout (tabular-nums keeps digits fixed-width too).
     const grid = el("div", "profile-grid");
     const counts: Array<{ node: HTMLElement; to: number; fmt: (v: number) => string }> = [];
@@ -863,6 +873,10 @@ export class Menu {
     if (s.bossKills > 0) bits.push(`${s.bossKills} boss${s.bossKills > 1 ? "es" : ""} slain`);
     wrap.appendChild(el("p", "muted", bits.join(" \u00b7 ")));
 
+    // 3. YOUR BUILD — the final loadout as icons (weapons, then blessings with their Lv).
+    wrap.appendChild(buildSection(result));
+
+    // 4. New best (+ the unlock celebration slots in here once the unlock system grants any).
     if (ctx.isNewBest) {
       const best = el("p", "", "\u2605 NEW BEST \u2014 your deepest run yet");
       best.style.color = "#ffb43b";
@@ -874,19 +888,42 @@ export class Menu {
       wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins \u00b7 ${profile.gamesPlayed} runs`));
     }
 
+    // 5. Mode-specific actions.
     const row = el("div", "btnrow");
     let primary: () => void;
     let hint: string;
     const online = ctx.online;
     if (online && online.isActive && !online.isQuickPlay) {
-      // Private room: the party regroups in the same lobby, same code, ready to go again.
-      primary = () => { void online.reopen(); this.showOnlineLobby(online, profile); };
-      const backBtn = el("button", "", "back to lobby \u21b5");
-      backBtn.addEventListener("click", () => primary());
+      // Private room. Contract wording: PLAY AGAIN / BACK TO LOBBY. The host's PLAY AGAIN
+      // reopens the room and starts a fresh run in one motion; everyone else regroups in
+      // the lobby (same code) — only the host can start.
+      const toLobby = () => { void online.reopen(); this.showOnlineLobby(online, profile); };
+      if (online.isHost) {
+        primary = () => void (async () => {
+          try {
+            await online.reopen();
+            await online.start();
+            this.launchOnline(online, profile);
+          } catch {
+            this.showOnlineLobby(online, profile);
+          }
+        })();
+        const again = el("button", "", "play again \u21b5");
+        again.addEventListener("click", () => primary());
+        const backBtn = el("button", "secondary", "back to lobby");
+        backBtn.addEventListener("click", () => toLobby());
+        row.append(again, backBtn);
+        hint = "press ENTER to play again";
+      } else {
+        primary = toLobby;
+        const backBtn = el("button", "", "back to lobby \u21b5");
+        backBtn.addEventListener("click", () => primary());
+        row.append(backBtn);
+        hint = "press ENTER for the lobby";
+      }
       const leaveBtn = el("button", "secondary", "leave room");
       leaveBtn.addEventListener("click", () => { online.leave(); void this.showTitle(); });
-      row.append(backBtn, leaveBtn);
-      hint = "press ENTER for the lobby";
+      row.append(leaveBtn);
     } else if (online) {
       // Quick play (or a room that ended underneath us): matchmake again.
       primary = () => void this.retryQuickPlayOnline(online);
@@ -929,10 +966,20 @@ export class Menu {
     this.show(wrap);
     this.runCountups(counts);
 
+    // 500ms input lock (UI contract): combat spam — a held ENTER, an R mash, a click mid
+    // burst — must never trigger an action through the transition. Pointer + keys both gate.
+    const openedAt = performance.now();
+    const isLocked = () => performance.now() - openedAt < 500;
+    row.classList.add("locked");
+    window.setTimeout(() => row.classList.remove("locked"), 500);
+
     // One-key retention loop: ENTER always triggers the primary action (R also, solo only).
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if (k === "enter" || (k === "r" && !ctx.wasCoop && !ctx.online)) { e.preventDefault(); primary(); }
+      if (k === "enter" || (k === "r" && !ctx.wasCoop && !ctx.online)) {
+        e.preventDefault();
+        if (!isLocked()) primary();
+      }
     };
     this.gameOverKeys = onKey;
     window.addEventListener("keydown", onKey);
@@ -982,6 +1029,51 @@ export class Menu {
 
 function weaponName(id: string): string {
   return (WEAPONS as Partial<Record<string, { name: string }>>)[id]?.name ?? id;
+}
+
+// Plain-English labels for the sim's DeathCause ids (run-end cause line + history).
+const CAUSE_LABELS: Record<string, string> = {
+  slime: "smothered by a slime",
+  bat: "clipped by a bat",
+  skeleton: "run through by a skeleton",
+  ghost: "chilled by a ghost's touch",
+  spitter: "splattered by a spitter",
+  boss: `crushed by ${BOSS_NAMES.slime_king}`,
+  shot: "shot down by enemy fire",
+  boss_slam: `flattened by ${BOSS_NAMES.slime_king}'s slam`,
+  boss_squeeze: "caught outside the safe ring",
+  barrel: "blown up by an explosive barrel",
+};
+
+function causeLabel(cause: string | null): string | null {
+  return cause !== null ? CAUSE_LABELS[cause] ?? null : null;
+}
+
+// YOUR BUILD — the run's final loadout as icon tiles: every owned weapon (real hotbar art
+// with its pixel-gun fallback) and every blessing (tinted item icon + Lv badge).
+function buildSection(result: RunResult): HTMLElement {
+  const box = el("div", "go-build");
+  box.appendChild(el("div", "col-h", "YOUR BUILD"));
+  const rowEl = el("div", "go-build-row");
+  for (const id of result.weapons) {
+    const tile = el("span", "go-tile");
+    tile.title = weaponName(id);
+    tile.appendChild(weaponIconEl(id, weaponName(id)));
+    rowEl.appendChild(tile);
+  }
+  const levels = new Map<string, number>();
+  for (const id of result.blessings) levels.set(id, (levels.get(id) ?? 0) + 1);
+  for (const [id, lv] of levels) {
+    const def = itemById(id);
+    const tile = el("span", "go-tile blessing");
+    tile.style.setProperty("--t", def?.tint ?? "var(--dun-4)");
+    tile.title = def ? `${def.name} Lv${lv} \u2014 ${itemDesc(def, lv)}` : id;
+    tile.appendChild(itemIconEl(id, def?.glyph ?? "?"));
+    tile.appendChild(el("span", "lv", `L${lv}`));
+    rowEl.appendChild(tile);
+  }
+  box.appendChild(rowEl);
+  return box;
 }
 
 function fmtPlaytime(ms: number): string {
@@ -1039,7 +1131,9 @@ function runRow(r: RunHistoryEntryDoc): HTMLElement {
     const def = itemById(id);
     build.push(`${def?.name ?? id}${lv > 1 ? ` Lv${lv}` : ""}`);
   }
-  row.appendChild(el("div", "r3", `${fmtWhen(r.endedAt)}${build.length ? " \u00b7 " + build.join(", ") : ""}`));
+  const cause = r.result === "death" ? causeLabel(r.deathCause) : null;
+  const fine = [fmtWhen(r.endedAt), ...(cause !== null ? [cause] : []), ...(build.length ? [build.join(", ")] : [])];
+  row.appendChild(el("div", "r3", fine.join(" \u00b7 ")));
   return row;
 }
 

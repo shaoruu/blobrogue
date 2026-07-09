@@ -12,7 +12,7 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
+import type { Enemy, EnemyKind, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
@@ -82,6 +82,14 @@ interface StrikeInfo {
 // they never branch gameplay or consume RNG, so determinism (golden master) is untouched. The
 // same accumulation therefore runs identically for solo (local sim) and the authoritative
 // server, which reports it through the signed run-result path. Never on the snapshot wire.
+// What dealt the blow that dropped a player to 0 HP (contact = the enemy kind). Feeds the
+// run-end screen's cause line + the run history; purely descriptive, never gameplay.
+export type DeathCause =
+  | EnemyKind        // contact damage from that enemy
+  | "shot"           // enemy projectile
+  | "boss_slam" | "boss_squeeze"
+  | "barrel";
+
 export interface RunStats {
   timeAliveSecs: number;   // authoritative sim time this player has existed in the run
   startFloor: number;      // floor when this player entered the world (1 = a full run)
@@ -94,6 +102,8 @@ export interface RunStats {
   bossKillFloors: number[];// the floor of each boss kill, in order
   firstBossKillSecs: number; // timeAliveSecs at the first boss kill; -1 until then
   killsByWeapon: Partial<Record<WeaponId, number>>; // killing-blow weapon (the killer's equipped weapon)
+  // The last blow that put this player at 0 HP (down or death); null while unharmed.
+  deathCause: DeathCause | null;
 }
 
 export function createRunStats(startFloor: number): RunStats {
@@ -109,6 +119,7 @@ export function createRunStats(startFloor: number): RunStats {
     bossKillFloors: [],
     firstBossKillSecs: -1,
     killsByWeapon: {},
+    deathCause: null,
   };
 }
 
@@ -1183,7 +1194,7 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
         if (!isProtected(p) && !p.isDown && p.hp > 0 && Math.hypot(p.x - b.x, p.y - b.y) < p.pr + b.radius) {
           b.life = 0;
           ev.push({ t: "bulletExpire", x: b.x, y: b.y, color: b.color });
-          damagePlayer(w, p, b.damage, ev);
+          damagePlayer(w, p, b.damage, ev, "shot");
           break;
         }
       }
@@ -1346,7 +1357,7 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
     for (const victim of w.players.values()) {
       if (!isProtected(victim) && !victim.isDown && victim.hp > 0
         && Math.hypot(victim.x - e.x, victim.y - e.y) < victim.pr + e.radius && canTouchDamage(e)) {
-        damagePlayer(w, victim, contactDamageOf(e), ev);
+        damagePlayer(w, victim, contactDamageOf(e), ev, e.kind);
         if (e.kind === "skeleton" && e.attack.phase === "active") lungeImpact(w, victim, e, ev);
         applyThorns(w, victim, victim, e, ev);
         // Solo aborts the enemy loop on death (game over). Co-op and the authoritative shared
@@ -1670,7 +1681,7 @@ function bossSqueezeActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]):
   const safeR = BOSS.squeezeStartRadius + (BOSS.squeezeEndRadius - BOSS.squeezeStartRadius) * t;
   for (const p of w.players.values()) {
     if (isProtected(p) || p.isDown || p.hp <= 0) continue;
-    if (Math.hypot(p.x - e.x, p.y - e.y) > safeR) damagePlayer(w, p, BOSS.squeezeDamage, ev);
+    if (Math.hypot(p.x - e.x, p.y - e.y) > safeR) damagePlayer(w, p, BOSS.squeezeDamage, ev, "boss_squeeze");
   }
   if (a.time >= BOSS.squeezeDuration) enterIdle(e);
 }
@@ -1682,8 +1693,8 @@ function bossLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   for (const p of w.players.values()) {
     if (isProtected(p) || p.isDown || p.hp <= 0) continue;
     const d = Math.hypot(p.x - x, p.y - y);
-    if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev);
-    else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev);
+    if (d < BOSS.slamInnerRadius) damagePlayer(w, p, BOSS.slamCenterDamage, ev, "boss_slam");
+    else if (d < BOSS.slamRadius) damagePlayer(w, p, BOSS.slamOuterDamage, ev, "boss_slam");
   }
   ev.push({ t: "bossSlam", x, y });
   if (boss && boss.phase >= 3) {
@@ -2046,7 +2057,7 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
   for (const victim of w.players.values()) {
     if (!isProtected(victim) && !victim.isDown && victim.hp > 0
       && Math.hypot(victim.x - source.x, victim.y - source.y) <= r) {
-      damagePlayer(w, victim, C.BARREL_EXPLOSION_SELF_DMG, ev);
+      damagePlayer(w, victim, C.BARREL_EXPLOSION_SELF_DMG, ev, "barrel");
     }
   }
   for (const other of w.props) {
@@ -2283,7 +2294,7 @@ function hasStandingAlly(w: WorldState, p: PlayerSim): boolean {
   return w.isCoop && w.remoteTargets.some((r) => !r.isDown);
 }
 
-function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[]): void {
+function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[], cause: DeathCause): void {
   if (w.isGodMode) return; // dev god mode; never set outside the sandbox
   // A player mid-blessing-pick cannot be hurt. Offers are only raised on the safe side of a
   // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
@@ -2301,6 +2312,9 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
+    // The blow that dropped them — a later revive + re-down overwrites it, so at run end
+    // this always names the LAST thing that put the player on the floor.
+    p.runStats.deathCause = cause;
     if (hasStandingAlly(w, p)) {
       // A teammate can still revive: go DOWN, not out. reviveProgress accrues in updateRevives.
       p.isDown = true;

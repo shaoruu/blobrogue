@@ -74,6 +74,7 @@ function localRunArgs(clientId: string, result: RunResult): LocalRunArgs {
     killsByWeapon: Object.fromEntries(Object.entries(result.stats.killsByWeapon).map(([k, n]) => [k, n ?? 0])),
     weapons: result.weapons,
     blessings: result.blessings,
+    ...(result.stats.deathCause !== null ? { deathCause: result.stats.deathCause } : {}),
   };
 }
 
@@ -194,6 +195,7 @@ export class Session {
       firstBossKillMs: run.firstBossKillMs,
       weapons: run.weapons,
       blessings: run.blessings,
+      deathCause: run.deathCause,
       score: scoreForRun(run),
       endedAt: Date.now(),
     };

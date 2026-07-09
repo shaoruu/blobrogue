@@ -85,6 +85,30 @@ function damageAttributionTests(): void {
     check("victim A took 2", a.runStats.damageTaken === 2, `A=${a.runStats.damageTaken}`);
     check("B took nothing", b.runStats.damageTaken === 0);
   }
+
+  section("death cause: the blow that dropped the player is named");
+  {
+    const { w, a } = twoPlayerArena();
+    check("unharmed player has no cause", a.runStats.deathCause === null);
+    plantEnemyBullet(w, a, 1);
+    stepWorldPhase(w, 1 / 20, []);
+    check("a non-lethal hit records no cause", a.runStats.deathCause === null);
+    a.invuln = 0;
+    plantEnemyBullet(w, a, 99);
+    stepWorldPhase(w, 1 / 20, []);
+    check("a lethal projectile records 'shot'", a.runStats.deathCause === "shot",
+      `cause=${a.runStats.deathCause}`);
+  }
+  {
+    const { w, a } = twoPlayerArena();
+    const e = devSpawnEnemy(w, "slime", a.x, a.y); // on top: contact damage next tick
+    e.spawnTimer = 0;
+    a.hp = 1;
+    a.invuln = 0;
+    stepWorldPhase(w, 1 / 20, []);
+    check("a lethal contact hit records the enemy kind", a.runStats.deathCause === "slime",
+      `cause=${a.runStats.deathCause} hp=${a.hp}`);
+  }
 }
 
 function bossTests(): void {

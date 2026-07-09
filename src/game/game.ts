@@ -56,6 +56,9 @@ export interface RunResultStats {
   firstBossKillMs: number | null;
   killsByWeapon: Partial<Record<WeaponId, number>>;
   startFloor: number;
+  // What landed the final blow (sim DeathCause id). Known for locally simulated runs;
+  // null online (the client doesn't simulate its own death — the server's report has it).
+  deathCause: string | null;
 }
 
 export interface RunResult {
@@ -70,9 +73,11 @@ export interface RunResult {
   blessings: string[];   // final pick history (an id's count = its level)
 }
 
-// Why a run exited without a game over: the player quit, or an online connection never came
-// up (lets the menu land back on the lobby with an explanation instead of silence).
-export type ExitReason = "quit" | "connect_failed";
+// Why a run exited without a game over: the player quit, an online connection never came
+// up, or a LIVE online connection dropped mid-run. Connection loss is NEVER a death (UI
+// contract): the menu lands back on the lobby with a rejoin note, and nothing records a
+// death — the server logs the disconnect as an abandon from its own state.
+export type ExitReason = "quit" | "connect_failed" | "connection_lost";
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -1853,20 +1858,23 @@ export class Game {
         firstBossKillMs: rs.firstBossKillSecs >= 0 ? Math.round(rs.firstBossKillSecs * 1000) : null,
         killsByWeapon: { ...rs.killsByWeapon },
         startFloor: rs.startFloor,
+        deathCause: this.mode === "online" ? null : rs.deathCause,
       },
       weapons: this.p.ownedWeapons.slice(),
       blessings: this.p.ownedItemIds.slice(),
     });
   }
 
-  // Online transport terminal states end the run cleanly instead of freezing the last frame:
-  // once we were in the authoritative world, a closed/errored socket IS the end of this run
-  // (the server also closes the socket after a game over — same path). If the connection never
-  // became ready (server unreachable / rejected), return to the menu instead.
+  // Online transport terminal states end the run cleanly instead of freezing the last frame.
+  // A closed socket is a real GAME OVER only when the server's final snapshot said the run is
+  // over (it sends that snapshot, then closes) — anything else is a CONNECTION LOSS: the run
+  // may still be live, so land back on the lobby (REJOIN RUN) and never show/record a death
+  // (UI contract; the server records the disconnect as an abandon from its own state).
   private onOnlineStatus(s: "connecting" | "open" | "closed" | "error") {
     if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
     if (s !== "closed" && s !== "error") return;
-    if (this.wsTransport.isReady()) this.gameOver();
+    if (this.wsTransport.isRunOver()) this.gameOver();
+    else if (this.wsTransport.isReady()) this.quitToMenu("connection_lost");
     else this.quitToMenu("connect_failed");
   }
 

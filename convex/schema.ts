@@ -84,6 +84,8 @@ export default defineSchema({
     killsByWeapon: v.record(v.string(), v.number()),
     weapons: v.array(v.string()),
     blessings: v.array(v.string()),
+    // The sim's DeathCause id for the killing blow (descriptive; absent when unknown).
+    deathCause: v.optional(v.string()),
     // Derived by statsCore.scoreForRun from the validated fields — never submitted.
     score: v.number(),
     endedAt: v.number(),

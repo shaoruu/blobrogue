@@ -56,10 +56,15 @@ async function bootNormal() {
 
   function onExit(reason?: ExitReason) {
     if (activeCoop) { activeCoop.leave(); activeCoop = null; }
-    // Stepping out of an online run (Esc, or the server was unreachable) lands back in the
-    // room lobby, not the title — the run may still be live for friends (REJOIN RUN).
+    // Stepping out of an online run (Esc, connection loss, or the server was unreachable)
+    // lands back in the room lobby, not the title — the run may still be live for friends
+    // (REJOIN RUN). A connection loss is explicitly NOT a death (UI contract).
     if (activeOnline && activeOnline.isActive) {
-      const note = reason === "connect_failed" ? "couldn't reach the game server \u2014 try again in a moment" : "";
+      const note = reason === "connect_failed"
+        ? "couldn't reach the game server \u2014 try again in a moment"
+        : reason === "connection_lost"
+          ? "connection lost \u2014 the run may still be live, hit REJOIN RUN"
+          : "";
       menu.showOnlineLobby(activeOnline, session.profile, note);
       return;
     }

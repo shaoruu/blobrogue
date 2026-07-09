@@ -65,6 +65,7 @@ http.route({
       killsByWeapon: sub.run.killsByWeapon,
       weapons: sub.run.weapons,
       blessings: sub.run.blessings,
+      ...(sub.run.deathCause !== null ? { deathCause: sub.run.deathCause } : {}),
     });
     if (!outcome.ok) return json(422, { ok: false, reason: outcome.reason ?? "rejected" });
     return json(200, { ok: true, isDuplicate: outcome.isDuplicate ?? false, isSkipped: outcome.isSkipped ?? false });

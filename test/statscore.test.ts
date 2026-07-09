@@ -34,6 +34,7 @@ function baseRun(overrides: Record<string, JsonValue | undefined> = {}): Record<
     bossKills: 1, bossKillFloors: [5], firstBossKillMs: 210000,
     killsByWeapon: { pistol: 20, shotgun: 22 }, weapons: ["pistol", "shotgun"],
     blessings: ["hair_trigger", "hair_trigger"],
+    deathCause: "boss_slam",
     ...overrides,
   };
 }
@@ -89,6 +90,16 @@ section("validation: incoherent boss time is dropped, lists are bounded");
   check("weapons list truncates to 64", many.weapons.length === 64);
   check("junk killsByWeapon rejects", !validateRun(baseRun({ killsByWeapon: { pistol: "lots" } })).ok);
   check("non-string weapon entries reject", !validateRun(baseRun({ weapons: [7] })).ok);
+}
+
+section("validation: death cause is bounded and optional");
+{
+  check("cause preserved", mustValidate(baseRun()).deathCause === "boss_slam");
+  check("absent cause -> null", mustValidate(baseRun({ deathCause: undefined })).deathCause === null);
+  check("null cause -> null", mustValidate(baseRun({ deathCause: null })).deathCause === null);
+  check("overlong cause truncates", mustValidate(baseRun({ deathCause: "x".repeat(100) })).deathCause === "x".repeat(48));
+  const bad = validateRun(baseRun({ deathCause: 7 }));
+  check("non-string cause rejects", !bad.ok && bad.reason === "bad_cause");
 }
 
 section("score: derived, deterministic, floor-dominated, difficulty-normalized");

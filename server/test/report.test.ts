@@ -100,6 +100,8 @@ async function main(): Promise<void> {
           && post.sub.run.damageDealt === 55, JSON.stringify({ k: post.sub.run.kills, c: post.sub.run.bestCombo }));
         check("difficulty defaults to standard (seam for the difficulty feature)", post.sub.run.difficulty === "standard");
         check("mode is online", post.sub.run.mode === "online");
+        check("death cause named from the server sim", post.sub.run.deathCause === "shot",
+          `cause=${post.sub.run.deathCause}`);
       }
       // The socket close that follows the game over must NOT produce a second submission.
       await sleep(400);
