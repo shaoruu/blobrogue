@@ -8,7 +8,7 @@
 // remote-hurt) are presence-driven CLIENT-only and are NOT SimEvents in Stage A.
 
 import type { PlayerId } from "./input.js";
-import type { WeaponId, EnemyKind, PickupKind, PropKind } from "./types.js";
+import type { WeaponId, EnemyKind, PetKind, PickupKind, PropKind } from "./types.js";
 
 export type SimEvent =
   // combat — player
@@ -52,6 +52,9 @@ export type SimEvent =
   | { t: "bossTransition"; eid: number; phase: number; entering: boolean; queued: number; hpFrac: number }
   // A reinforcement wave release or an elite split coming active (client plays a spawn puff).
   | { t: "enemySpawn"; eid: number; kind: EnemyKind; tier: string; x: number; y: number }
+  // A companion pet's safe-teleport failsafe fired: it vanished at (ox,oy) and reappeared at
+  // (x,y) beside its owner. Clients puff both ends so the snap reads as intentional.
+  | { t: "petTeleport"; kind: PetKind; ox: number; oy: number; x: number; y: number }
   // flow / run
   | { t: "descend"; toFloor: number }
   | { t: "reachExit"; toFloor: number } // co-op: client requests a shared-floor descend

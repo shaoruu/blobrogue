@@ -14,6 +14,37 @@ export interface Entity {
 
 export type EnemyKind = "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "boss";
 
+// Companion-pet roster. The union lives here (like EnemyKind) so the pure sim, the wire
+// protocol, Convex, and the client all share one closed set; the catalog/balance sits in
+// pets.ts (like enemies.ts holds the enemy archetypes).
+export type PetKind = "ember_pup" | "lantern_wisp" | "bonebird";
+
+// A bonebird peck in flight. One per bird at most (the cooldown outlasts the flight), so it
+// rides the pet itself rather than the world bullet list — pet combat stays fully inside the
+// pet system and can never entangle player-bullet ownership/mods rules.
+export interface PetPeck {
+  x: number; y: number;
+  vx: number; vy: number;
+  life: number; // seconds of flight left
+}
+
+// A companion pet: a server-owned, non-blocking follower bound to one player. Pets have no
+// HP and no collision footprint for others (they never block players or enemies); they slide
+// along walls/props themselves so they can't visually clip into geometry. All fields are
+// plain sim state — cosmetics (sprite/pose) stay client-side, driven off the wire struct.
+export interface Pet {
+  id: number;          // stable per-world id (client keys interp + cosmetic anim by this)
+  kind: PetKind;
+  ownerId: PlayerId;   // the player this pet belongs to (identity link; one pet per player)
+  x: number; y: number;
+  vx: number; vy: number; // spring-follow velocity
+  facing: number;      // -1/1, committed on real horizontal motion (deadzoned)
+  attackCd: number;    // seconds until the pet may attack again
+  attackAnim: number;  // action-pose timer (counts down from PET_BALANCE.attackAnimTime)
+  stuckTime: number;   // seconds of blocked-while-far progress (safe-teleport failsafe)
+  peck: PetPeck | null; // bonebird only; null otherwise / while none in flight
+}
+
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
 export type AttackPhase = "none" | "windup" | "active" | "recover";
@@ -99,6 +130,9 @@ export interface Enemy extends Entity {
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn
   // tick that finishes a kill credits the correct player's combo/loot. null before any burn.
   burnOwner: PlayerId | null;
+  // Bonebird mark: seconds this enemy takes amplified damage from PLAYER strikes (a small,
+  // capped team-utility bonus — see pets.ts). Never amplifies pet damage itself.
+  petMark: number;
   attack: AttackState;
   boss: BossState | null; // set only on the boss
 }

@@ -12,7 +12,8 @@ import { generateDungeon } from "./dungeon.js";
 import type { Dungeon, Room } from "./dungeon.js";
 import { FlowField } from "./pathfind.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, WeaponId, AttackMove, TileKind } from "./types.js";
+import type { Enemy, Bullet, Pickup, Prop, Chest, Pet, PetKind, WeaponId, AttackMove, TileKind } from "./types.js";
+import { PET_BALANCE } from "./pets.js";
 import { Rng } from "./rng.js";
 import { ENEMY_ARCHETYPES, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor } from "./enemies.js";
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
@@ -125,6 +126,10 @@ export interface WorldState {
   // derivable from STATE, not only from the transient gameOver event.
   isRunOver: boolean;
   players: Map<PlayerId, PlayerSim>;
+  // Companion pets, keyed by owner (one pet per player, lifecycle bound to the player's).
+  // Insertion order (= join order) drives the deterministic update/serialization order,
+  // exactly like the players map itself.
+  pets: Map<PlayerId, Pet>;
   enemies: Enemy[];
   bullets: Bullet[];
   pickups: Pickup[];
@@ -154,6 +159,9 @@ export interface WorldState {
   nextPropId: number;
   nextPickupId: number;
   nextChestId: number;
+  // Pet ids are run-scoped, NOT reset per floor (pets persist across descents like players),
+  // so the client's interp/anim keys stay stable for a pet's whole life.
+  nextPetId: number;
   // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
   // recent record). histHead is the ring slot of the most recent record; histCount is how many
   // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
@@ -214,6 +222,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     rev: 0,
     isRunOver: false,
     players: new Map(),
+    pets: new Map(),
     enemies: [],
     bullets: [],
     pickups: [],
@@ -236,6 +245,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     nextPropId: 0,
     nextPickupId: 0,
     nextChestId: 0,
+    nextPetId: 0,
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
@@ -275,10 +285,35 @@ export function spawnPlayerInWorld(w: WorldState, id: PlayerId): PlayerSim {
 // Remove a player from a live world (authoritative server: on disconnect). B is ephemeral —
 // no grace/resume yet (that is Stage D). Returns whether a player was actually removed.
 // Their pending blessing offer (if any) dies with them so the descend gate can't be held
-// by a player who is no longer in the world.
+// by a player who is no longer in the world, and their companion pet leaves with them
+// (a rejoin spawns a fresh one from the new join's verified ticket claim).
 export function removePlayerFromWorld(w: WorldState, id: PlayerId): boolean {
   w.pendingBlessings.delete(id);
+  w.pets.delete(id);
   return w.players.delete(id);
+}
+
+// Bind a companion pet to a player (authoritative server: from the verified join-ticket pet
+// claim; solo: from the signed-in profile). Replaces any existing pet for that owner, so an
+// equip change between runs can never stack companions. No-ops without the owner.
+export function spawnPetInWorld(w: WorldState, ownerId: PlayerId, kind: PetKind): Pet | null {
+  const owner = w.players.get(ownerId);
+  if (!owner) return null;
+  const pet: Pet = {
+    id: w.nextPetId++,
+    kind,
+    ownerId,
+    x: owner.x - owner.facing * PET_BALANCE.followBehind,
+    y: owner.y - PET_BALANCE.followRaise,
+    vx: 0, vy: 0,
+    facing: owner.facing,
+    attackCd: 0,
+    attackAnim: 0,
+    stuckTime: 0,
+    peck: null,
+  };
+  w.pets.set(ownerId, pet);
+  return pet;
 }
 
 // A single open walled rectangle for the dev sandbox — reuses the Dungeon/Room shape so
@@ -337,6 +372,17 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
     p.x = spawn.x * TILE + TILE / 2;
     p.y = spawn.y * TILE + TILE / 2;
     p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
+  }
+  // Pets ride the transition with their owners: hard reposition (a floor build is a teleport
+  // for everything), in-flight pecks fizzle, and the stuck failsafe resets.
+  for (const pet of w.pets.values()) {
+    const owner = w.players.get(pet.ownerId);
+    if (!owner) continue;
+    pet.x = owner.x - owner.facing * PET_BALANCE.followBehind;
+    pet.y = owner.y - PET_BALANCE.followRaise;
+    pet.vx = 0; pet.vy = 0;
+    pet.stuckTime = 0;
+    pet.peck = null;
   }
 }
 
@@ -744,6 +790,7 @@ function applyHitStatuses(w: WorldState, p: PlayerSim | null, e: Enemy, src: Str
 function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (e.chill > 0) e.chill = e.chill > dt ? e.chill - dt : 0;
   if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
+  if (e.petMark > 0) e.petMark = e.petMark > dt ? e.petMark - dt : 0;
   if (e.burn > 0) {
     e.burn = e.burn > dt ? e.burn - dt : 0;
     e.statusTick += dt;
@@ -865,7 +912,13 @@ function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 // credited to any player.
 function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
   const frozen = isFrozen(e);
-  const dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
+  // The bonebird's mark is a small team-utility amp on PLAYER strikes only (every bullet and
+  // melee swing routes through here); pet damage itself goes through petStrike and is never
+  // amplified, so pets can't compound each other.
+  const dmg = hit.damage
+    * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1)
+    * (frozen ? C.FROZEN_DMG_MULT : 1)
+    * (e.petMark > 0 ? PET_BALANCE.bonebird.markDamageMult : 1);
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit);
@@ -1154,9 +1207,7 @@ function bounceOffWall(w: WorldState, b: Bullet, dt: number, ev: SimEvent[]): vo
 // comes back in `sweptHit` (per-query scratch, like w.targetX/targetY) so impact FX land ON
 // the target instead of wherever the bullet ended up.
 const sweptHit = { x: 0, y: 0 };
-function sweptBulletHit(b: Bullet, cx: number, cy: number, r: number): boolean {
-  const x1 = b.x, y1 = b.y;
-  const x0 = b.prevX ?? x1, y0 = b.prevY ?? y1;
+function segmentHitsCircle(x0: number, y0: number, x1: number, y1: number, cx: number, cy: number, r: number): boolean {
   const dx = x1 - x0, dy = y1 - y0;
   const len2 = dx * dx + dy * dy;
   const t = len2 > 0 ? Math.max(0, Math.min(1, ((cx - x0) * dx + (cy - y0) * dy) / len2)) : 0;
@@ -1166,6 +1217,9 @@ function sweptBulletHit(b: Bullet, cx: number, cy: number, r: number): boolean {
   sweptHit.x = px;
   sweptHit.y = py;
   return true;
+}
+function sweptBulletHit(b: Bullet, cx: number, cy: number, r: number): boolean {
+  return segmentHitsCircle(b.prevX ?? b.x, b.prevY ?? b.y, b.x, b.y, cx, cy, r);
 }
 
 // Record every enemy's current position into the ring (one entry per world tick). Called at the
@@ -1873,6 +1927,244 @@ function spawnEnemyBullet(w: WorldState, x: number, y: number, angle: number, sp
   });
 }
 
+// ---- companion pets ----
+// Self-contained system (data/unlocks in pets.ts): pets follow their owner on a damped
+// spring with boids-style separation, never block anyone, and are steered by plain world
+// state only — no sim RNG — so their presence can never perturb loot/spawn streams. All pet
+// damage funnels through petStrike (damageEnemy + killEnemy with the owner's credit,
+// standard combo/loot rules), and is deliberately independent of the owner's mods/weapon:
+// pet power is the fixed PET_BALANCE numbers, capped by PET_CAPS.
+
+// A passive owner (down, dead, mid-blessing-pick, or a finished run) pauses the pet: it
+// keeps following/returning but starts no attacks. It resumes the moment the owner does
+// (revive, pick resolved). A DISCONNECTED owner removes the pet outright
+// (removePlayerFromWorld); a reconnect spawns a fresh one from the new join ticket.
+function isPetOwnerActive(w: WorldState, owner: PlayerSim): boolean {
+  return !owner.isDown && owner.hp > 0 && !w.isRunOver && !w.pendingBlessings.has(owner.id);
+}
+
+function nearestEnemyWithin(w: WorldState, x: number, y: number, range: number): Enemy | null {
+  let best: Enemy | null = null;
+  let bestD = range * range;
+  for (const e of w.enemies) {
+    if (e.dead) continue;
+    const dx = e.x - x, dy = e.y - y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  return best;
+}
+
+// Where this pet wants to hover: an ember pup with a live target hunts it; everything else
+// heels at a per-kind offset around the owner (wisp lights the way ahead, the others trail).
+function petAnchor(w: WorldState, pet: Pet, owner: PlayerSim): { x: number; y: number } {
+  if (pet.kind === "ember_pup" && isPetOwnerActive(w, owner)) {
+    const target = nearestEnemyWithin(w, owner.x, owner.y, PET_BALANCE.ember_pup.engageRange);
+    if (target) return { x: target.x, y: target.y };
+  }
+  if (pet.kind === "lantern_wisp") {
+    return { x: owner.x + owner.facing * (PET_BALANCE.followBehind * 0.7), y: owner.y - PET_BALANCE.followRaise * 2 };
+  }
+  return { x: owner.x - owner.facing * PET_BALANCE.followBehind, y: owner.y - PET_BALANCE.followRaise };
+}
+
+function stepPetMotion(w: WorldState, pet: Pet, owner: PlayerSim, dt: number, ev: SimEvent[]): void {
+  const B = PET_BALANCE;
+  const anchor = petAnchor(w, pet, owner);
+  // Damped spring toward the anchor…
+  let ax = (anchor.x - pet.x) * B.spring - pet.vx * B.damping;
+  let ay = (anchor.y - pet.y) * B.spring - pet.vy * B.damping;
+  // …plus boids-style separation from the other pets, so a full party's companions fan out
+  // instead of stacking into one sprite pile. An EXACT overlap (four owners piled on the
+  // spawn tile) has no push direction, so each pet flees along its own id-keyed golden-angle
+  // ray — deterministic, and distinct per pet, so the pile always resolves.
+  for (const other of w.pets.values()) {
+    if (other === pet) continue;
+    const dx = pet.x - other.x, dy = pet.y - other.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= B.separation) continue;
+    if (d === 0) {
+      const a = pet.id * 2.399963;
+      ax += Math.cos(a) * B.separationPush;
+      ay += Math.sin(a) * B.separationPush;
+    } else {
+      const push = (1 - d / B.separation) * B.separationPush;
+      ax += (dx / d) * push;
+      ay += (dy / d) * push;
+    }
+  }
+  // …plus a gentle push out of the owner's body (never sit inside the blob). A degenerate
+  // exact overlap (the spawn tick) resolves deterministically behind the owner's facing.
+  const odx = pet.x - owner.x, ody = pet.y - owner.y;
+  const od = Math.hypot(odx, ody);
+  if (od === 0) {
+    ax -= owner.facing * B.separationPush;
+  } else if (od < B.ownerClearance) {
+    const push = (1 - od / B.ownerClearance) * B.separationPush;
+    ax += (odx / od) * push;
+    ay += (ody / od) * push;
+  }
+  pet.vx += ax * dt;
+  pet.vy += ay * dt;
+  const speed = Math.hypot(pet.vx, pet.vy);
+  if (speed > B.maxSpeed) {
+    const s = B.maxSpeed / speed;
+    pet.vx *= s; pet.vy *= s;
+  }
+  // Clearance-aware move: the pet slides along walls/props like any body — but nothing ever
+  // collides WITH a pet (players and enemies pass straight through).
+  const x0 = pet.x, y0 = pet.y;
+  const wantX = pet.vx * dt, wantY = pet.vy * dt;
+  [pet.x, pet.y] = moveCircle(w, pet.x, pet.y, B.radius, wantX, 0);
+  [pet.x, pet.y] = moveCircle(w, pet.x, pet.y, B.radius, 0, wantY);
+  if (pet.vx > 12) pet.facing = 1;
+  else if (pet.vx < -12) pet.facing = -1;
+
+  // Safe-teleport failsafe: separated hard (exit takes the party across the map, a prop ring
+  // wedges the path), or blocked beyond the patience threshold while far -> reappear on a
+  // verified-open spot beside the owner. Never inside a wall or a prop (petSpotNear checks),
+  // and the petTeleport event gives every client the same visible puff at both ends.
+  const distOwner = Math.hypot(pet.x - owner.x, pet.y - owner.y);
+  const moved = Math.hypot(pet.x - x0, pet.y - y0);
+  const want = Math.hypot(wantX, wantY);
+  const isBlocked = distOwner > B.stuckFarDist && want > 1 && moved < want * B.stuckProgress;
+  pet.stuckTime = isBlocked ? pet.stuckTime + dt : 0;
+  if (distOwner > B.teleportDist || pet.stuckTime >= B.stuckAfter) {
+    const [tx, ty] = petSpotNear(w, owner);
+    ev.push({ t: "petTeleport", kind: pet.kind, ox: pet.x, oy: pet.y, x: tx, y: ty });
+    pet.x = tx; pet.y = ty;
+    pet.vx = 0; pet.vy = 0;
+    pet.stuckTime = 0;
+  }
+}
+
+// A pet-sized open spot beside the owner: margin-checked open floor, outside every live
+// prop ring. Deterministic candidate order (radii inner-to-outer, fixed angle fan around the
+// owner's back). The owner's own position is the guaranteed fallback — they stand on open
+// floor by construction, and pets block nothing, so overlap is safe.
+function petSpotNear(w: WorldState, owner: PlayerSim): [number, number] {
+  const r = PET_BALANCE.radius;
+  const back = Math.atan2(0, -owner.facing);
+  for (const dist of [26, 40, 54]) {
+    for (const off of [0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2, Math.PI]) {
+      const a = back + off;
+      const x = owner.x + Math.cos(a) * dist;
+      const y = owner.y + Math.sin(a) * dist;
+      if (isWall(w, x, y) || isWall(w, x - r, y) || isWall(w, x + r, y) || isWall(w, x, y - r) || isWall(w, x, y + r)) continue;
+      if (blockedByProp(w, x, y, r)) continue;
+      return [x, y];
+    }
+  }
+  return [owner.x, owner.y];
+}
+
+// Every point of pet damage: standard credit rules (damageEnemy funnel -> boss phases work;
+// killEnemy -> the owner's kills/combo/loot, exactly like their thorns or burn already do),
+// with NO knockback and NO owner-mod rolls — a pet's output never scales with the build.
+function petStrike(w: WorldState, ownerId: PlayerId, e: Enemy, dmg: number, burnSecs: number, ev: SimEvent[]): void {
+  damageEnemy(w, ownerId, e, dmg, ev);
+  if (burnSecs > 0) applyBurn(e, burnSecs, ownerId);
+  const killed = e.hp <= 0 && !e.dead;
+  ev.push({
+    t: "enemyHit", eid: e.id, dmgX: e.x, dmgY: e.y - e.radius, dmg, crit: false,
+    puffX: e.x, puffY: e.y, puffColor: ENEMY_ARCHETYPES[e.kind].tint, melee: false, closeShotgun: false, killed,
+  });
+  if (killed) killEnemy(w, ownerOf(w, ownerId), e, ev);
+}
+
+function updateEmberPup(w: WorldState, pet: Pet, owner: PlayerSim, ev: SimEvent[]): void {
+  if (pet.attackCd > 0) return;
+  const P = PET_BALANCE.ember_pup;
+  const target = nearestEnemyWithin(w, owner.x, owner.y, P.engageRange);
+  if (!target) return;
+  const reach = PET_BALANCE.radius + target.radius + P.nipReach;
+  if (Math.hypot(target.x - pet.x, target.y - pet.y) > reach) return;
+  pet.attackCd = P.nipCd;
+  pet.attackAnim = PET_BALANCE.attackAnimTime;
+  petStrike(w, pet.ownerId, target, P.nipDamage, P.burnSecs, ev);
+}
+
+function updateBonebird(w: WorldState, pet: Pet, owner: PlayerSim): void {
+  if (pet.peck || pet.attackCd > 0) return;
+  const P = PET_BALANCE.bonebird;
+  const target = nearestEnemyWithin(w, owner.x, owner.y, P.range);
+  if (!target || !hasLineOfSight(w, pet.x, pet.y, target.x, target.y)) return;
+  const a = Math.atan2(target.y - pet.y, target.x - pet.x);
+  const cos = Math.cos(a), sin = Math.sin(a);
+  pet.peck = {
+    x: pet.x + cos * (PET_BALANCE.radius + 2),
+    y: pet.y + sin * (PET_BALANCE.radius + 2),
+    vx: cos * P.peckSpeed,
+    vy: sin * P.peckSpeed,
+    life: P.peckLife,
+  };
+  pet.attackCd = P.peckCd;
+  pet.attackAnim = PET_BALANCE.attackAnimTime;
+  pet.facing = cos >= 0 ? 1 : -1;
+}
+
+// An in-flight peck keeps flying even if the owner goes down mid-flight (it was already
+// loosed); only STARTING attacks is gated on an active owner.
+function stepPetPeck(w: WorldState, pet: Pet, dt: number, ev: SimEvent[]): void {
+  const pk = pet.peck;
+  if (!pk) return;
+  const P = PET_BALANCE.bonebird;
+  const x0 = pk.x, y0 = pk.y;
+  pk.x += pk.vx * dt;
+  pk.y += pk.vy * dt;
+  pk.life -= dt;
+  if (isWall(w, pk.x, pk.y)) {
+    ev.push({ t: "bulletWall", x: pk.x, y: pk.y, aim: Math.atan2(-pk.vy, -pk.vx) });
+    pet.peck = null;
+    return;
+  }
+  for (const e of w.enemies) {
+    if (e.dead) continue;
+    if (!segmentHitsCircle(x0, y0, pk.x, pk.y, e.x, e.y, e.radius + P.peckRadius)) continue;
+    e.petMark = P.markSecs;
+    petStrike(w, pet.ownerId, e, P.peckDamage, 0, ev);
+    pet.peck = null;
+    return;
+  }
+  if (pk.life <= 0) pet.peck = null;
+}
+
+// The wisp's coin assist: coins near the WISP drift toward its OWNER, per-axis wall-safe
+// exactly like the Coin Magnet blessing (a coin slides along walls, never through them).
+// Deliberately weaker than Coin Magnet Lv1 (PET_CAPS.coinPullSpeed) — an assist, not the
+// blessing for free. Runs before updatePickups, which does the actual collection.
+function updateWispPull(w: WorldState, pet: Pet, owner: PlayerSim, dt: number): void {
+  const P = PET_BALANCE.lantern_wisp;
+  for (const p of w.pickups) {
+    if (p.kind !== "coin") continue;
+    const wx = p.x - pet.x, wy = p.y - pet.y;
+    if (wx * wx + wy * wy > P.pullRadius * P.pullRadius) continue;
+    const dx = owner.x - p.x, dy = owner.y - p.y;
+    const d = Math.hypot(dx, dy);
+    if (d <= 0.5) continue;
+    const pull = Math.min(d, P.pullSpeed * dt);
+    const sx = (dx / d) * pull, sy = (dy / d) * pull;
+    if (!isWall(w, p.x + sx, p.y)) p.x += sx;
+    if (!isWall(w, p.x, p.y + sy)) p.y += sy;
+  }
+}
+
+function updatePets(w: WorldState, dt: number, ev: SimEvent[]): void {
+  if (w.pets.size === 0) return;
+  for (const pet of w.pets.values()) {
+    const owner = w.players.get(pet.ownerId);
+    if (!owner) continue; // unreachable: removePlayerFromWorld removes the pet with its owner
+    if (pet.attackCd > 0) pet.attackCd = pet.attackCd > dt ? pet.attackCd - dt : 0;
+    if (pet.attackAnim > 0) pet.attackAnim = pet.attackAnim > dt ? pet.attackAnim - dt : 0;
+    stepPetMotion(w, pet, owner, dt, ev);
+    if (isPetOwnerActive(w, owner)) {
+      if (pet.kind === "ember_pup") updateEmberPup(w, pet, owner, ev);
+      else if (pet.kind === "bonebird") updateBonebird(w, pet, owner);
+      else updateWispPull(w, pet, owner, dt);
+    }
+    stepPetPeck(w, pet, dt, ev);
+  }
+}
+
 // ---- props / chests / pickups ----
 
 function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
@@ -2392,6 +2684,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   recordHistory(w);
   updateBullets(w, dt, ev);
   updateEnemies(w, dt, ev);
+  updatePets(w, dt, ev);
   updateProps(w, dt, ev);
   updateChests(w, dt, ev);
   updatePickups(w, dt, ev);

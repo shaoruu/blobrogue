@@ -139,6 +139,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     avoidSide: 0,
     avoidTime: 0,
     burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0, burnOwner: null,
+    petMark: 0,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
       // The boss waits a beat after its dramatic entrance before its first slam.
