@@ -257,7 +257,9 @@ export const SINDER_STOKE_WINDUP = 1.3;
 export const SINDER_ARMED_SPEED_MULT = 1.3;
 export const SINDER_JET_TRIGGER = 300;
 export const SINDER_JET_WINDUP = 0.6;
-export const SINDER_JET_LOCK = 0.35;
+// Locks early enough to keep the §4 ≥0.30s post-lock dodge window the envelope's
+// acceptance manifest records (0.6 − 0.3).
+export const SINDER_JET_LOCK = 0.3;
 export const SINDER_JET_SPEED = 420;
 export const SINDER_JET_DUR = 0.45;
 export const SINDER_JET_RECOVER = 0.5;

@@ -146,15 +146,86 @@ export interface TierDef {
   attackCdMult: number; // elite: one affix + 20% shorter commit cooldowns
 }
 
+// Tier threat costs follow the bestiary balance envelope's ladder (swarm 0.5 / brute 3 /
+// elite 4, superseding the in-flight 0.55 / 2.2 / 2.8): heavies price what they deny,
+// so a budget buys readable pressure, never soup. Elite costs additionally clamp at
+// ELITE_COST_CAP on complex chassis (see threatCostOf).
 export const TIERS: Record<EnemyTier, TierDef> = {
-  swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.55, minFloor: 1, attackCdMult: 1 },
+  swarm: { hpMult: 0.55, speedMult: 1.15, radiusMult: 0.78, drawMult: 0.78, threatCost: 0.5, minFloor: 1, attackCdMult: 1 },
   standard: { hpMult: 1.00, speedMult: 1.00, radiusMult: 1.00, drawMult: 1.00, threatCost: 1.0, minFloor: 1, attackCdMult: 1 },
-  brute: { hpMult: 2.40, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 2.2, minFloor: 4, attackCdMult: 1 },
+  brute: { hpMult: 2.40, speedMult: 0.82, radiusMult: 1.30, drawMult: 1.35, threatCost: 3.0, minFloor: 4, attackCdMult: 1 },
   // Balancer final: elites are 2.0× their chassis (retired: the 1.7× multiple AND the
   // interim uniform pool). The elite identity is the visible BRACE commitment (below),
   // not an HP wall: focused 1.5–2.5s, aggro→death 2.5–5.5s.
-  elite: { hpMult: 2.0, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 2.8, minFloor: 6, attackCdMult: 0.8 },
+  elite: { hpMult: 2.0, speedMult: 1.12, radiusMult: 1.08, drawMult: 1.12, threatCost: 4.0, minFloor: 6, attackCdMult: 0.8 },
 };
+
+// An elite on a complex/controller chassis never prices past this (envelope: "elite 4,
+// + complex chassis ≤ 6") — the affix is one visible behavior, not a doubled tax.
+export const ELITE_COST_CAP = 6;
+
+// ---- the bestiary balance envelope (roster capacity, cadence, composition, pacing) ----
+// The governance layer over ALL bestiary growth. Numbers here are the contract the
+// planner enforces at build time and test/envelope.test.ts regresses seeded; the
+// identity layer (roles, modules, acceptance manifests) lives in src/sim/bestiary.ts.
+
+export const ENVELOPE = {
+  // Roster capacity: how large the regular bestiary may ever grow — 8 simple bodies,
+  // 10 complex families (ranged/complex/controller verbs), 6 biome specialists.
+  capacity: { simple: 8, complexFamilies: 10, biomeSpecialists: 6 },
+  // Intro cadence: at most this many TRULY NEW movement/attack modules per 5-floor
+  // band, and a remix of an existing module only after a teaching floor. Band 1
+  // (F1–5) is the shipped curriculum's teaching prologue and is grandfathered — it
+  // deliberately front-loads the primer verbs per the corrected gate's cadence table.
+  maxNewModulesPerBand: 2,
+  firstEnvelopeBand: 1, // bands ≥ this index (F6+) obey the module cadence
+  // Composition exposure caps (planner-enforced): distinct regular archetypes per
+  // floor and per room, on top of the §4 complex/tier guards.
+  floorArchetypeCap: 7,
+  roomArchetypeCap: 4,
+  roomControllerCap: 1,
+  // Deck quota: at least this share of a floor's rooms stay simple/mastery (raised
+  // from the interim 30%), with the existing ≤2-consecutive-complex rule unchanged.
+  simpleRoomShare: 0.35,
+  // The envelope's threat-cost ladder (documented here; the sim realizes it through
+  // ENEMY_ARCHETYPES.threat × TIERS.threatCost + ELITE_COST_CAP + MINIBOSS.threatCost).
+  // Hazard units are budgeted by the hazard system's own studio gate (tile budgets +
+  // denial/simultaneity caps); the equivalent costs are recorded for composition math.
+  threatCost: {
+    swarm: 0.5, simple: 1.0, ranged: 1.5, complex: 2.0, controller: 2.25,
+    brute: 3.0, elite: 4.0, eliteComplexCap: 6.0,
+    minibossMin: 8, minibossMax: 12,
+    hazardUnit: 1.5, hazardArena: 4.0,
+  },
+  // Room-clear P50 targets (seconds) for the band-median reference build, and the
+  // pressure ceiling (simultaneous live enemy projectiles: sustained / hard).
+  roomTtkP50: { early: [12, 22], mid: [18, 32], late: [24, 40] } as Record<string, readonly number[]>,
+  pressure: { sustained: 50, hard: 60 },
+  // Escalation regression: per-floor effective-HP growth ≤ +12% (the F1–4 teaching
+  // ramp is steeper by authored design and grandfathered), damage taken ≤ +10%
+  // (enemy damage never scales with floor at all — the spec's stronger rule).
+  hpGrowthCapPerFloor: 0.12,
+  hpGrowthCapFromFloor: 5,
+  damageGrowthCapPerFloor: 0.10,
+} as const;
+
+// Live-simultaneity caps (envelope): enforced at the spawn split AND at every
+// reinforcement release, per class, on top of the threat-based activeThreatCap.
+// Summons count — a decoy or a ward occupies real live budget (its threat cost).
+export const LIVE_CAPS = {
+  bodies: 24,
+  complexMovers: 2, // +1 at a full P4 party (see activeMoverCapFor)
+  brutes: 2,
+  elites: 2,
+  controllers: 2,
+} as const;
+
+// Co-op: the extra threat budget buys MOSTLY SIMPLE BODIES (the heavy share of a floor
+// is capped at the solo budget — see planFloorUnits), and the live complex-mover cap
+// grows by exactly one only at a full four-player party.
+export function activeMoverCapFor(players: number): number {
+  return MAX_COMPLEX_MOVERS_ACTIVE + (clampPlayers(players) >= 4 ? 1 : 0);
+}
 
 // The elite's one visible affix COMMITMENT (balancer final): a braced defensive
 // reposition — 0.9s slide away from the attacker at ≤25% damage reduction (never
@@ -230,9 +301,10 @@ export const ELITE_ECHOED = {
 // §3 floor curve and party-scaled at spawn.
 export const MINIBOSS = {
   firstFloor: 13,
-  // The floor's ordinary threat plan keeps this share of its budget — the miniboss IS
-  // the rest of the room's pressure, so the floor never reads as "a boss plus a full mob".
-  budgetShare: 0.6,
+  // The captain's ENVELOPE threat cost (band 8–12): paid straight out of the floor's
+  // budget, so a miniboss floor spends real pressure on its beat — never "a boss plus
+  // a full mob". Max one per band by construction (the cadence is one floor per band).
+  threatCost: 10,
   hpFrac: { marshal: 0.30, toll: 0.34 } as Readonly<Partial<Record<string, number>>>,
 } as const;
 

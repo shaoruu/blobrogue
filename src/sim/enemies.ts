@@ -5,15 +5,16 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
-  MINIBOSS, ELITE_BULWARK,
+  MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
-  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR, MAX_COMPLEX_MOVERS_ACTIVE,
+  MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_ROOTWARDS_PER_ROOM,
   FLOCK_THREAT_SHARE_MAX,
 } from "./balance.js";
 import type { EnemyTier, EliteAffix } from "./balance.js";
+import { isControllerKind, ENEMY_MODULE } from "./bestiary.js";
 
 export type Movement = "chase" | "flock" | "drift" | "kite" | "charge" | "burrow" | "orbit" | "boss";
 
@@ -81,7 +82,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   charger: {
     kind: "charger", sprite: "charger", movement: "charge", isPhasing: false,
     radius: 17, drawSize: 48, alpha: 1, tint: "#d9a066", kbResist: 1.8,
-    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 1.5,
+    baseHp: 5, baseSpeed: 46, touchDamage: 1, threat: 2.0,
   },
   // Kite-denial: dives underground (untargetable, bounded), tunnels to the target, and
   // erupts on a marked, telegraphed circle. You cannot outrange it — you dodge its marker
@@ -90,7 +91,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   burrower: {
     kind: "burrower", sprite: "burrower", movement: "burrow", isPhasing: false,
     radius: 15, drawSize: 44, alpha: 1, tint: "#caa27e", kbResist: 1.2,
-    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 1.5,
+    baseHp: 4, baseSpeed: 40, touchDamage: 1, threat: 2.0,
   },
   // Ring strafer: circles the target at mid range (rotational tracking — a different aim
   // problem from the spitter's straight kiting) and stops to fire a quick telegraphed bolt.
@@ -108,7 +109,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   shielder: {
     kind: "shielder", sprite: "shielder", movement: "chase", isPhasing: false,
     radius: 16, drawSize: 46, alpha: 1, tint: "#9fb4a8", kbResist: 2.2,
-    baseHp: 5, baseSpeed: 50, touchDamage: 1, threat: 1.5,
+    baseHp: 5, baseSpeed: 50, touchDamage: 1, threat: 2.0,
   },
   // Formation anchor: a slow moving wall whose frontal guard eats non-piercing bullets
   // and turns SLOWLY (unlike the shielder's snap guard) — flanking is a real answer, so
@@ -118,7 +119,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   rootward: {
     kind: "rootward", sprite: "rootward", movement: "chase", isPhasing: false,
     radius: 17, drawSize: 48, alpha: 1, tint: "#86c06c", kbResist: 2.6,
-    baseHp: 7, baseSpeed: 34, touchDamage: 1, threat: 1.5,
+    baseHp: 7, baseSpeed: 34, touchDamage: 1, threat: 2.0,
   },
   // Flee support / trickster: keeps its distance, plants a 1-HP false-noise decoy on a
   // telegraphed beat, then blinks perpendicular — visible, never a teleport. The decoy
@@ -127,7 +128,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   echojack: {
     kind: "echojack", sprite: "echojack", movement: "kite", isPhasing: false,
     radius: 13, drawSize: 42, alpha: 1, tint: "#d7b8ff", kbResist: 0.9,
-    baseHp: 4, baseSpeed: 95, touchDamage: 1, threat: 2.0,
+    baseHp: 4, baseSpeed: 95, touchDamage: 1, threat: 2.25,
   },
   // The lane: previews a wall-to-wall seam, then cuts along it at a flat speed, throwing
   // timed PERPENDICULAR sweep bolts as it travels. Cross the seam early (post-lock the
@@ -137,7 +138,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   seamcutter: {
     kind: "seamcutter", sprite: "seamcutter", movement: "charge", isPhasing: false,
     radius: 15, drawSize: 46, alpha: 1, tint: "#e88fb1", kbResist: 1.5,
-    baseHp: 6, baseSpeed: 55, touchDamage: 1, threat: 1.5,
+    baseHp: 6, baseSpeed: 55, touchDamage: 1, threat: 2.0,
   },
   // Stationary lane sentry: locks a target, fires a 3-shot volley down the locked lane,
   // and staggers hard (crash grammar) when a round lands on its rear crank mid-attack —
@@ -156,7 +157,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   sinderling: {
     kind: "sinderling", sprite: "sinderling", movement: "chase", isPhasing: false,
     radius: 13, drawSize: 40, alpha: 1, tint: "#ff8a3b", kbResist: 0.9,
-    baseHp: 4, baseSpeed: 80, touchDamage: 1, threat: 1.5,
+    baseHp: 4, baseSpeed: 80, touchDamage: 1, threat: 2.0,
   },
   // The tethered voice (the Null's echo of the F30 Choir): binds to the nearest other
   // enemy in line of sight and, on cadence, HARMONIZES — the tether line becomes a
@@ -165,8 +166,8 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   // TODO(art): needs a dedicated sprite — see PR notes (fal recipe: fragment).
   fragment: {
     kind: "fragment", sprite: "fragment", movement: "drift", isPhasing: false,
-    radius: 13, drawSize: 40, alpha: 0.75, tint: "#bfe9ff", kbResist: 1.0,
-    baseHp: 3, baseSpeed: 60, touchDamage: 1, threat: 1.5,
+    radius: 13, drawSize: 40, alpha: 0.75, tint: "#a9d4f0", kbResist: 1.0,
+    baseHp: 3, baseSpeed: 60, touchDamage: 1, threat: 2.25,
   },
   // The echojack's false-noise decoy: a stationary 1-HP fake body. It attacks nothing
   // and touches for nothing; it exists to be shot at (and to soak homing fire). Expires
@@ -174,14 +175,14 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   echo: {
     kind: "echo", sprite: "echo", movement: "drift", isPhasing: false,
     radius: 13, drawSize: 40, alpha: 0.7, tint: "#d7b8ff", kbResist: 3.0,
-    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0,
+    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
   // The Toll's noise-lure: a planted 1-HP bell-bomb. Harmless until its fuse (aux) runs
   // out, then it tolls its own ring. Shoot the noise or leave its radius. Summon-only.
   knell: {
     kind: "knell", sprite: "knell", movement: "drift", isPhasing: false,
     radius: 12, drawSize: 36, alpha: 0.9, tint: "#c9b458", kbResist: 3.0,
-    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0,
+    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
   // ROOT MARSHAL (miniboss template: the formation fight). P1: a wide slow-turning
   // guard + a live rootward formation it raises and rallies. At 50% the shield SHATTERS
@@ -384,9 +385,12 @@ export function enemySpeedForFloor(kind: EnemyKind, floor: number): number {
   return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseSpeed * floorSpeedMult(floor));
 }
 
-// §4 threat-budget cost of one unit: archetype cost × tier cost.
+// §4 threat-budget cost of one unit: archetype cost × tier cost, with the envelope's
+// elite clamp — an elite on a complex/controller chassis never prices past
+// ELITE_COST_CAP (the affix is one behavior, not a doubled tax).
 export function threatCostOf(kind: EnemyKind, tier: EnemyTier): number {
-  return ENEMY_ARCHETYPES[kind].threat * TIERS[tier].threatCost;
+  const cost = ENEMY_ARCHETYPES[kind].threat * TIERS[tier].threatCost;
+  return tier === "elite" ? Math.min(cost, ELITE_COST_CAP) : cost;
 }
 
 // The complex MOVERS of studio gate §1: the movement verbs that deny standard answers
@@ -610,9 +614,10 @@ export function encounterDeckForFloor(seed: number, floor: number, combatRoomCou
     complexRun = isComplexCard(card) ? complexRun + 1 : 0;
     cards.push(card);
   }
-  // ≥30% simple/mastery rooms: drop complexity from the tail before repeating pressure,
-  // picking whichever simple card keeps neighbors distinct.
-  const simpleQuota = Math.ceil(combatRoomCount * 0.30);
+  // ≥35% simple/mastery rooms (envelope; raised from the interim 30%): drop complexity
+  // from the tail before repeating pressure, picking whichever simple card keeps
+  // neighbors distinct.
+  const simpleQuota = Math.ceil(combatRoomCount * ENVELOPE.simpleRoomShare);
   let simple = cards.filter((c) => !isComplexCard(c)).length;
   for (let i = cards.length - 1; i >= 0 && simple < simpleQuota; i--) {
     if (!isComplexCard(cards[i])) continue;
@@ -654,7 +659,8 @@ interface PlannedUnit {
   isMiniboss?: boolean;
 }
 
-// Per-room composition bookkeeping for the §4 readability guards.
+// Per-room composition bookkeeping for the §4 readability guards + the envelope's
+// exposure caps (≤4 distinct archetypes, ≤1 controller, no control+denial pairing).
 interface RoomLoad {
   card: EncounterCard;
   units: number;
@@ -662,6 +668,9 @@ interface RoomLoad {
   burrowers: number;
   shielders: number;
   rootwards: number;
+  controllers: number;
+  hasDenial: boolean; // a guard-module wall (shielder/rootward) holds this room
+  kinds: Set<EnemyKind>;
   hasBrute: boolean;
   hasElite: boolean;
 }
@@ -712,17 +721,31 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   let minibossRoom = -1;
   if (minibossKind !== null && combatRooms.length >= 2) {
     minibossRoom = combatRooms.pop()!;
-    budget *= MINIBOSS.budgetShare;
+    // The captain pays its ENVELOPE threat cost (8–12 band) straight out of the floor's
+    // budget; a small floor of simple bodies always remains so the approach isn't empty.
+    budget = Math.max(2, budget - MINIBOSS.threatCost);
   }
 
   const deck = encounterDeckForFloor(seed, floor, combatRooms.length);
   const load = new Map<number, RoomLoad>();
   for (let i = 0; i < combatRooms.length; i++) {
-    load.set(combatRooms[i], { card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, rootwards: 0, hasBrute: false, hasElite: false });
+    load.set(combatRooms[i], {
+      card: deck[i], units: 0, complex: 0, burrowers: 0, shielders: 0, rootwards: 0,
+      controllers: 0, hasDenial: false, kinds: new Set<EnemyKind>(), hasBrute: false, hasElite: false,
+    });
   }
   // §4: at most 35% of the floor's rooms may carry TWO complex units.
   let twoComplexRooms = 0;
   const twoComplexCap = Math.floor(combatRooms.length * 0.35);
+  // Envelope exposure cap: a floor exposes at most floorArchetypeCap distinct regular
+  // archetypes — depth grows the POOL, never one floor's simultaneous vocabulary.
+  const exposure = new Set<EnemyKind>();
+  // Envelope co-op rule: the party's EXTRA threat buys mostly simple bodies — the
+  // floor's heavy spend (any unit costing more than a simple standard) is capped at
+  // the SOLO budget, so P>1 scales pressure with bodies, not stacked verbs. At P1 the
+  // whole budget IS the solo budget, so the constraint never binds solo.
+  const soloBudget = floorThreat(floor) * pressure.budgetMult;
+  let heavySpent = 0;
 
   // Swarm placement (flock spacing, gate: flocks need open air): combat rooms with real
   // open floor host the packs; the ordinary card-constrained draw is the fallback. Room
@@ -744,6 +767,22 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     if (unit.kind === "burrower" && l.burrowers >= MAX_BURROWERS_PER_ROOM) return false;
     if (unit.kind === "shielder" && l.shielders >= MAX_SHIELDERS_PER_ROOM) return false;
     if (unit.kind === "rootward" && l.rootwards >= MAX_ROOTWARDS_PER_ROOM) return false;
+    // Envelope exposure caps: ≤ roomArchetypeCap distinct kinds per room, ≤ 7 per
+    // floor; ≤ 1 controller per room; a controller NEVER shares a room with a
+    // guard-module wall (the banned control+denial pairing — a room that both lies to
+    // you and denies your fire has no honest answer).
+    if (!l.kinds.has(unit.kind) && l.kinds.size >= ENVELOPE.roomArchetypeCap) return false;
+    if (!exposure.has(unit.kind) && exposure.size >= ENVELOPE.floorArchetypeCap) return false;
+    const isDenial = ENEMY_MODULE[unit.kind] === "guard";
+    if (isControllerKind(unit.kind)) {
+      if (l.controllers >= ENVELOPE.roomControllerCap) return false;
+      if (l.hasDenial) return false;
+    } else if (isDenial && l.controllers > 0) {
+      return false;
+    }
+    // Envelope co-op rule: heavy spend (cost > 1) caps at the solo budget.
+    const cost = threatCostOf(unit.kind, unit.tier);
+    if (cost > 1 && heavySpent + cost > soloBudget) return false;
     // Corrected gate §2 tier cadence: one brute and one elite per room.
     if (unit.tier === "brute" && l.hasBrute) return false;
     if (unit.tier === "elite" && l.hasElite) return false;
@@ -764,6 +803,12 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
     if (unit.kind === "burrower") l.burrowers++;
     if (unit.kind === "shielder") l.shielders++;
     if (unit.kind === "rootward") l.rootwards++;
+    if (isControllerKind(unit.kind)) l.controllers++;
+    if (ENEMY_MODULE[unit.kind] === "guard") l.hasDenial = true;
+    l.kinds.add(unit.kind);
+    exposure.add(unit.kind);
+    const cost = threatCostOf(unit.kind, unit.tier);
+    if (cost > 1) heavySpent += cost;
     if (unit.tier === "brute") l.hasBrute = true;
     if (unit.tier === "elite") l.hasElite = true;
     return room;
@@ -909,10 +954,14 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
 
   const plan = planFloorUnits(rng, dungeon, seed, floor, players);
   const cap = activeThreatCap(floor) * coopThreatMult(players);
+  const moverCap = activeMoverCapFor(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
   let activeThreat = 0;
   let activeComplexMovers = 0;
+  let activeBrutes = 0;
+  let activeElites = 0;
+  let activeControllers = 0;
   let id = 0;
   for (const unit of plan) {
     const p = pointInRoom(rng, dungeon, unit.room);
@@ -932,11 +981,19 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     }
     const cost = threatCostOf(unit.kind, unit.tier);
     const isMover = isComplexMover(unit.kind);
-    // Never exceed the ActiveThreatCap simultaneously, and never field more than the
-    // gate's complex-mover budget at once: overflow becomes reinforcements.
-    if (activeThreat + cost <= cap && (!isMover || activeComplexMovers < MAX_COMPLEX_MOVERS_ACTIVE)) {
+    // The envelope's LIVE caps: never exceed the ActiveThreatCap, the body cap, or any
+    // per-class simultaneity cap (movers — +1 only at a full P4 party — brutes, elites,
+    // controllers). Overflow becomes reinforcements, released under the same gates.
+    const fitsClasses = (!isMover || activeComplexMovers < moverCap)
+      && (unit.tier !== "brute" || activeBrutes < LIVE_CAPS.brutes)
+      && (unit.tier !== "elite" || activeElites < LIVE_CAPS.elites)
+      && (!isControllerKind(unit.kind) || activeControllers < LIVE_CAPS.controllers);
+    if (activeThreat + cost <= cap && active.length < LIVE_CAPS.bodies && fitsClasses) {
       activeThreat += cost;
       if (isMover) activeComplexMovers++;
+      if (unit.tier === "brute") activeBrutes++;
+      if (unit.tier === "elite") activeElites++;
+      if (isControllerKind(unit.kind)) activeControllers++;
       active.push(enemy);
     } else {
       pending.push(enemy);

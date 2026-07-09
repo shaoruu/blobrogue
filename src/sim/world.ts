@@ -36,8 +36,9 @@ import {
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
-  MAX_COMPLEX_MOVERS_ACTIVE, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
+  LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, dealerWeaponStock,
 } from "./balance.js";
+import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
@@ -1758,21 +1759,37 @@ function releaseReinforcements(w: WorldState, dt: number, ev: SimEvent[]): void 
   w.spawnReleaseCd -= dt;
   if (w.spawnReleaseCd > 0) return;
   let living = 0;
+  let livingBodies = 0;
   let livingMovers = 0;
+  let livingBrutes = 0;
+  let livingElites = 0;
+  let livingControllers = 0;
   for (const e of w.enemies) {
     if (e.dead || isBossKind(e.kind)) continue;
+    // Summons count too (envelope: summons cost threat) — a decoy or a ward holds real
+    // live budget until it resolves.
     living += threatCostOf(e.kind, e.tier);
+    livingBodies++;
     if (isComplexMover(e.kind)) livingMovers++;
+    if (e.tier === "brute") livingBrutes++;
+    if (e.tier === "elite") livingElites++;
+    if (isControllerKind(e.kind)) livingControllers++;
   }
   const cap = activeThreatCap(w.floor) * coopThreatMult(w.encounterPlayers);
-  // The head of the queue releases when it fits BOTH budgets (threat cap + the gate's
-  // complex-mover cap). A blocked complex mover never head-blocks the queue: the first
-  // releasable unit behind it goes instead, preserving order otherwise.
+  const moverCap = activeMoverCapFor(w.encounterPlayers);
+  // The head of the queue releases when it fits EVERY live budget (threat cap, body
+  // cap, and the envelope's per-class simultaneity caps). A blocked unit never
+  // head-blocks the queue: the first releasable unit behind it goes instead,
+  // preserving order otherwise.
   let idx = -1;
   for (let i = 0; i < w.pendingSpawns.length; i++) {
     const cand = w.pendingSpawns[i];
     if (living + threatCostOf(cand.kind, cand.tier) > cap) continue;
-    if (isComplexMover(cand.kind) && livingMovers >= MAX_COMPLEX_MOVERS_ACTIVE) continue;
+    if (livingBodies >= LIVE_CAPS.bodies) continue;
+    if (isComplexMover(cand.kind) && livingMovers >= moverCap) continue;
+    if (cand.tier === "brute" && livingBrutes >= LIVE_CAPS.brutes) continue;
+    if (cand.tier === "elite" && livingElites >= LIVE_CAPS.elites) continue;
+    if (isControllerKind(cand.kind) && livingControllers >= LIVE_CAPS.controllers) continue;
     idx = i;
     break;
   }
