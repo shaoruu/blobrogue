@@ -66,7 +66,44 @@ export const list = query({
         colorIndex: r.colorIndex,
         reviveNonce: r.reviveNonce,
         updatedAt: r.updatedAt,
+        gsWorldId: r.gsWorldId ?? null,
+        gsJoinedAt: r.gsJoinedAt ?? null,
+        isReady: r.isReady ?? false,
+        pingMs: r.pingMs ?? null,
       }));
+  },
+});
+
+// The lobby READY toggle (roster shows READY/NOT READY per member; the host's START opens
+// when everyone is ready — see the menu's start gate).
+export const setReady = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), isReady: v.boolean() },
+  handler: async (ctx, { roomId, playerId, isReady }) => {
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!row) return;
+    await ctx.db.patch(row._id, { isReady: isReady ? true : undefined, updatedAt: Date.now() });
+  },
+});
+
+// Mirror of the authoritative game-server connection state onto this member's presence row
+// (ONLINE rooms): worldId = the world the server's snapshot says we are bound to (set after
+// a verified join), null = left the world. Self-reported, but derived from the server's own
+// snapshot — it powers the lobby's per-member LOBBY / CONNECTING / CONNECTED readout, while
+// in-run readiness always keys on the server's snapshot roster directly.
+export const reportWorld = mutation({
+  args: { roomId: v.id("rooms"), playerId: v.id("players"), worldId: v.union(v.string(), v.null()) },
+  handler: async (ctx, { roomId, playerId, worldId }) => {
+    const row = await ctx.db
+      .query("presence")
+      .withIndex("by_room_player", (q) => q.eq("roomId", roomId).eq("playerId", playerId))
+      .unique();
+    if (!row) return;
+    const now = Date.now();
+    if (worldId === null) await ctx.db.patch(row._id, { gsWorldId: undefined, gsJoinedAt: undefined, updatedAt: now });
+    else await ctx.db.patch(row._id, { gsWorldId: worldId, gsJoinedAt: now, updatedAt: now });
   },
 });
 

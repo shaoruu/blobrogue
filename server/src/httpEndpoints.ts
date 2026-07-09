@@ -1,16 +1,29 @@
-// HTTP endpoints (loopback only; never proxied publicly): /healthz, /metrics, and a local-only
-// /dev-ticket. Extracted from the socket server as a pure request handler over injected deps, so
-// observability + the dev mint aren't tangled into the transport. /metrics + /healthz bind
-// loopback and must not be exposed to the internet (ops spec §7).
+// HTTP endpoints (loopback only; never proxied publicly): /healthz, /metrics, /worlds, and a
+// local-only /dev-ticket. Extracted from the socket server as a pure request handler over
+// injected deps, so observability + the dev mint aren't tangled into the transport. None of
+// these bind beyond loopback and none are exposed to the internet (ops spec §7).
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { mintTicket, isValidWorldId, sanitizeDisplayName, type TicketClaims } from "./auth.js";
 import type { ServerConfig } from "./config.js";
 import type { HealthReport } from "./metrics.js";
 
+// One live world, as exposed to the control panel: which world exists, how many players it
+// holds, its tick, WHO is connected (display names, ordered by join), and whose seats are
+// reserved for a reconnect — the ops-facing view that answers "did both room members
+// actually land in one world?" and "who is mid-outage?" without log spelunking.
+export interface WorldReport {
+  id: string;
+  players: number;
+  tick: number;
+  names: string[];
+  away: string[];
+}
+
 export interface HttpDeps {
   config: ServerConfig;
   health: () => HealthReport;
+  worlds: () => WorldReport[];
 }
 
 export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: ServerResponse) => void {
@@ -29,6 +42,11 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
       // Flat JSON of every metric (counters + tick/snapshot/rtt/reconciliation gauges). A
       // Prometheus text exposition is a trivial later reformat behind the same numbers.
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status, ...scalars, ...counters }));
+      return;
+    }
+
+    if (url.pathname === "/worlds") {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ worlds: deps.worlds() }));
       return;
     }
 

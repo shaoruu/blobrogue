@@ -142,8 +142,8 @@ function main(): void {
   check("blessings PERSIST across the descend", a.ownedItemIds.includes(dmgItem.id) && b.ownedItemIds.includes(speedItem.id));
 
   section("wire coherence: both players' snapshots agree on the new authoritative world");
-  const snapA = buildSnapshot(w, "pA", 0, [], 0, false, {});
-  const snapB = buildSnapshot(w, "pB", 0, [], 0, false, {});
+  const snapA = buildSnapshot(w, "pA", 0, [], 0, false, { worldId: "w-test" });
+  const snapB = buildSnapshot(w, "pB", 0, [], 0, false, { worldId: "w-test" });
   if (snapA.t === "snap" && snapB.t === "snap") {
     check("same seed on both wires", snapA.seed === snapB.seed && snapA.seed === SEED);
     check("same floor on both wires", snapA.floor === 3 && snapB.floor === 3);

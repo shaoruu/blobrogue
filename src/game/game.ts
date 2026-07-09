@@ -13,11 +13,15 @@ import type { EnemyTier } from "../sim/balance.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
+import { PartyGate } from "../net/partyGate.js";
+import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
+import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
+import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
-import type { InputCmd } from "../sim/input.js";
+import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import { comboTierFor } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
@@ -45,9 +49,14 @@ import type { Biome } from "../sim/biomes.js";
 
 export interface RunResult { floor: number; kills: number; coins: number; durationMs: number; }
 
-// Why a run exited without a game over: the player quit, or an online connection never came
-// up (lets the menu land back on the lobby with an explanation instead of silence).
-export type ExitReason = "quit" | "connect_failed";
+// Why a run exited without a game over: the player quit/cancelled, an online connection
+// never came up, the server bound us to a world other than the room's (world_mismatch —
+// refuse to play), the party never assembled behind the readiness veil (party_incomplete),
+// the reconnect window ran out (connection_lost — the run is unreachable, NOT a death),
+// another session took the body over (superseded), or the run finished while this player
+// was mid-outage (run_ended_away — they see RUN ENDED WHILE AWAY, never a fabricated
+// death). The copy contract for every reason lives in src/ui/onlineCopy.ts.
+export type ExitReason = OnlineExitReason;
 
 // Online (authoritative WS) start config. Solo/co-op are unchanged; online is opt-in behind
 // explicit config and routes through WSTransport instead of LocalTransport.
@@ -57,6 +66,18 @@ export interface OnlineOptions {
   // The lobby room code this run belongs to (shown in the HUD so friends can be invited
   // mid-run); null for direct dev joins.
   roomCode: string | null;
+  // The ONLY world this run is allowed to play in (worldIdForRoomCode of the lobby's code).
+  // Every snapshot's authoritative world id is asserted against it — a mismatch closes the
+  // socket and returns to the lobby. null for direct dev joins (no room expectation).
+  expectedWorldId: string | null;
+  // This player's lobby identity (matches the server roster's verified `aid`); null for dev.
+  selfPlayerId: string | null;
+  // The live lobby expectation for a PARTY-STARTED run: who should be in this world before
+  // gameplay reveals. null = no readiness gate (quick play, drop-in join, rejoin, dev).
+  party: (() => ExpectedMember[]) | null;
+  // Mirrors the authoritative connection state onto the lobby roster (worldId once the
+  // server's snapshot confirms the join, null on leaving) — best-effort UI plumbing.
+  onWorldPresence?: (worldId: string | null) => void;
 }
 
 export interface StartOptions {
@@ -97,6 +118,10 @@ interface Afterimage { x: number; y: number; facing: number; t: number; }
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
+// The online handshake (connect -> ticket -> join -> first snapshot) must resolve within
+// this window or the veil exits explicitly — never an infinite ENTERING THE DUNGEON hold.
+// Generous: covers a slow Convex mint + a TLS handshake; the transport retries inside it.
+const CONNECT_HANDSHAKE_TIMEOUT_MS = 15000;
 
 // Client FX magnitudes / tables the event handler + render read (the sim emits the events;
 // the client decides the juice). Sim-side tuning lives in src/sim/constants.ts.
@@ -306,14 +331,30 @@ export class Game {
   private minimap: Minimap;
   private hud: Hud;
   private onGameOver: (result: RunResult) => void;
-  private onExit: (reason?: ExitReason) => void;
+  private onExit: (reason?: ExitReason, detail?: string) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
-  // Online: whether the first authoritative snapshot has revealed the real world yet. Until
-  // then the run sits behind a connecting veil (the local world is a placeholder).
+  // Online: whether gameplay has been revealed yet. Until then the run sits behind the
+  // readiness veil: first CONNECTING (no authoritative snapshot), then — for a party-started
+  // run — WAITING FOR PARTY until the server's own roster contains every expected member.
   private isWorldRevealed = false;
+  // The readiness gate for a party-started run (null = ungated: quick play/drop-in/dev) and
+  // its latest evaluation (drives the veil's member list).
+  private partyGate: PartyGate | null = null;
+  private partyView: PartyGateView | null = null;
+  // The authoritative geometry that arrived while the veil was up, applied at reveal.
+  private pendingWorld: { seed: number; floor: number } | null = null;
+  private isWorldReported = false; // the lobby mirror heard about this world join
+  // Handshake deadline: the CONNECTING veil may never sit forever — if no authoritative
+  // snapshot arrives by this wall-clock time, the run exits with an explicit failure.
+  private connectDeadline = 0;
+  // Edge detector for the outage overlay (drives the BACK ONLINE toast on recovery).
+  private isOutageSeen = false;
+  // The authoritative tick when the current online blessing overlay opened (guards the
+  // wait-state watchdog against a fresh offer's snapshot lag).
+  private choosingSinceTick = 0;
 
   // The simulation is owned by the Transport. Solo/co-op run stepWorld in-process
   // (LocalTransport); online routes through WSTransport (predict + reconcile against an
@@ -337,7 +378,7 @@ export class Game {
   // player (client-only cosmetics)
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
-  private onlineRoomCode: string | null = null; // lobby room code for the HUD label (online only)
+  private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
@@ -444,7 +485,7 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason) => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason, detail?: string) => void) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
@@ -526,8 +567,14 @@ export class Game {
     switch (a.kind) {
       case "togglePause":
         // Under the hud context Escape means "dismiss the drawer"; pause is next.
-        if (this.hud.isDrawerOpen()) this.hud.closeDrawer();
-        else this.togglePause();
+        if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
+        // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
+        // connection attempt and return to the lobby — never a pause menu over a dead world.
+        if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
+          this.quitToMenu("quit");
+          break;
+        }
+        this.togglePause();
         break;
       case "selectWeapon":
         if (this.isRunning) this.equipSlot(a.index);
@@ -562,11 +609,19 @@ export class Game {
     if (!this.isRunning) return "menu";
     if (this.isChoosing) return "blessing";
     if (this.isPaused) return "pause";
-    if (this.isAwaitingOnlineWorld()) return "reconnect";
+    // Both no-world-yet (connecting/readiness veil) AND a mid-run outage are the reconnect
+    // context: gameplay actions and fire samples are blocked at the controller, so a dead
+    // connection can never accumulate inputs or keep an autofire latch alive.
+    if (this.isAwaitingOnlineWorld() || this.isOnlineOutage()) return "reconnect";
     if (this.isDown) return "spectate";
     // A live hotbar drag or an open drawer: the HUD owns input, gameplay samples idle.
     if (this.hud.isInteractionActive()) return "hud";
     return "gameplay";
+  }
+
+  // Mid-run connection outage: the transport is auto-resuming with its seat token.
+  private isOnlineOutage(): boolean {
+    return this.mode === "online" && this.wsTransport !== null && this.wsTransport.getReconnectInfo().isReconnecting;
   }
 
   start(opts: StartOptions) {
@@ -575,23 +630,30 @@ export class Game {
     this.profile = opts.profile ?? null;
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
-    this.onlineRoomCode = opts.online?.roomCode ?? null;
+    this.online = this.mode === "online" ? opts.online ?? null : null;
     let floor: number;
     if (this.mode === "online" && opts.online) {
       // Online: the SERVER owns the world (seed/floor/dungeon). WSTransport boots a placeholder
       // world for pre-join prediction; the first snapshot's authoritative seed/floor/rev rebuilds
-      // it (consumeWorldRebuilt below refreshes the cosmetic floor state to match). A transport
-      // terminal state (closed/error) while running ends the run — never a stranded session.
+      // it (the readiness veil applies it at reveal). Every snapshot's world id is asserted
+      // against the room's expected world — a mismatch is terminal, never played through. A
+      // transport terminal state (closed/error) while running ends the run — never a stranded
+      // session.
       this.wsTransport = new WSTransport({
         url: opts.online.url,
         getTicket: opts.online.getTicket,
+        expectedWorldId: opts.online.expectedWorldId,
         onStatus: (s) => this.onOnlineStatus(s),
       });
+      this.partyGate = opts.online.party && opts.online.selfPlayerId
+        ? new PartyGate(opts.online.selfPlayerId)
+        : null;
       this.seed = STAGE_B_SEED;
       floor = STAGE_B_FLOOR;
       this.transport.start(this.seed, floor, { isSandbox: true, isCoop: false });
     } else {
       this.wsTransport = null;
+      this.partyGate = null;
       floor = this.coop ? this.coop.getFloor() : 1;
       this.seed = this.coop ? this.coop.getSeed() : randomSeed();
       this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
@@ -611,6 +673,11 @@ export class Game {
     this.isPaused = false;
     this.isChoosing = false;
     this.isWorldRevealed = this.mode !== "online";
+    this.partyView = null;
+    this.pendingWorld = null;
+    this.isWorldReported = false;
+    this.connectDeadline = performance.now() + CONNECT_HANDSHAKE_TIMEOUT_MS;
+    this.isOutageSeen = false;
     this.pendingDescend = 0;
     this.pause.hide();
     this.blessing.hide();
@@ -650,6 +717,12 @@ export class Game {
     this.isRunning = false;
     this.transport.stop();
     cancelAnimationFrame(this.raf);
+    // Leaving the world (quit, wipe, or a dead socket): clear the lobby's readiness mirror
+    // so the roster shows this member back at LOBBY instead of a phantom CONNECTED.
+    if (this.isWorldReported) {
+      this.isWorldReported = false;
+      this.online?.onWorldPresence?.(null);
+    }
   }
 
   // Cosmetic floor-load: biome + torches + music + the boss-floor entry cue, plus a reset
@@ -715,8 +788,11 @@ export class Game {
     if (raw > 0) this.fps += (1 / raw - this.fps) * 0.1; // dev readout only; harmless otherwise
     this.animClock = t / 1000; // ambient props keep flickering even while paused/frozen
     // Paused (Esc) or picking a blessing: keep drawing the frozen frame under the
-    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates.
+    // overlay, run no sim. Reuses the exact freeze path co-op already tolerates. An ONLINE
+    // pick still pumps the authoritative stream: the server world keeps ticking under the
+    // overlay, and the offer's TTL expiry must land NOW, not when the overlay closes.
     if (this.isPaused || this.isChoosing) {
+      if (this.isChoosing) this.pumpChoosingOnline();
       this.render();
       this.raf = requestAnimationFrame(this.loop);
       return;
@@ -764,7 +840,7 @@ export class Game {
     }
   }
 
-  private quitToMenu(reason?: ExitReason) {
+  private quitToMenu(reason?: ExitReason, detail?: string) {
     this.setPaused(false);
     this.stop();
     this.syncInputContext();
@@ -772,7 +848,7 @@ export class Game {
     waveAudio.reset();
     this.hud.hideStats();
     this.hud.clear();
-    this.onExit(reason);
+    this.onExit(reason, detail);
   }
 
   private addFreeze(seconds: number) {
@@ -816,11 +892,118 @@ export class Game {
     return a;
   }
 
-  // Online, before the first authoritative snapshot: the local world is a placeholder built
-  // for pre-join prediction — the wrong dungeon, the wrong spawn. Nothing of it may run or
-  // render, or the player sees themselves spawn there and teleport once truth arrives.
+  // Online, before gameplay is revealed: the local world is either the pre-join prediction
+  // placeholder (wrong dungeon, wrong spawn) or the real world still gated on party
+  // readiness. Nothing of it may run or render, or the player sees themselves spawn there
+  // and teleport once truth arrives — or worse, start a run their party never joined.
   private isAwaitingOnlineWorld(): boolean {
-    return this.mode === "online" && this.wsTransport !== null && !this.wsTransport.isReady();
+    return this.mode === "online" && this.wsTransport !== null && !this.isWorldRevealed;
+  }
+
+  // The veil frame for an online run: keep the handshake/inputs alive, and reveal gameplay
+  // only when the world AND (for a party-started run) the whole expected roster are in.
+  private tickOnlineVeil(dt: number) {
+    const t = this.wsTransport!;
+    this.transport.advance(dt);
+    if (!t.isReady()) {
+      // No infinite entering veil: a handshake that produces no authoritative snapshot in
+      // time is a failed connect — exit explicitly (the lobby shows the reason; ESC cancels
+      // sooner). The transport keeps its own retries INSIDE this window.
+      if (performance.now() > this.connectDeadline) {
+        console.warn("[net] handshake timeout — no authoritative snapshot inside the window");
+        this.quitToMenu("connect_failed");
+        return;
+      }
+      this.updateHud();
+      return;
+    }
+    // First authoritative contact: mirror the verified world join onto the lobby roster.
+    if (!this.isWorldReported) {
+      this.isWorldReported = true;
+      this.online?.onWorldPresence?.(t.getWorldId());
+    }
+    // Latch the authoritative geometry; the reveal applies it. Events that arrive while
+    // veiled are join-time bootstrap noise for a player who cannot see the world yet — poll
+    // to keep the reliable-event acks advancing, discard the cosmetics.
+    const rebuilt = t.consumeWorldRebuilt();
+    if (rebuilt) this.pendingWorld = rebuilt;
+    t.poll();
+
+    if (this.partyGate && this.online?.party) {
+      const roster = t.getWorldRoster();
+      const connected = new Set(roster.filter((r) => r.st === "on").map((r) => r.aid));
+      const away = new Set(roster.filter((r) => r.st === "away").map((r) => r.aid));
+      const expected = this.online.party();
+      const view = this.partyGate.evaluate(Date.now(), expected, connected, away);
+      this.partyView = view;
+      if (view.phase === "failed") {
+        console.warn("[net] party never assembled — returning to the lobby", {
+          worldId: t.getWorldId(), expected: expected.map((m) => m.playerId), connected: [...connected],
+        });
+        this.quitToMenu("party_incomplete", view.missingNames.join(", "));
+        return;
+      }
+      // Safety valve: the world found us while we waited (spawn damage). An invisible fight
+      // is worse than an early reveal — surface the game and let the veil's warning stand.
+      const self = t.getLatestSnapshot()?.self;
+      const isHurt = self != null && self.hp < self.mhp;
+      if (view.phase === "waiting" && !isHurt) { this.updateHud(); return; }
+      if (view.phase === "waiting" && isHurt) {
+        console.warn("[net] revealing before the full party — took damage while waiting");
+      }
+    }
+    this.revealOnlineWorld();
+  }
+
+  // While the blessing overlay is up in an ONLINE run the normal tick is frozen, but the
+  // authoritative world is not: keep the countdown honest from the snapshot's wait state and
+  // drain the event stream so the offer's expiry closes the overlay the moment it happens.
+  // The pick window's cosmetic FX events are deliberately dropped (bounded to the overlay).
+  private pumpChoosingOnline() {
+    if (this.mode !== "online" || !this.wsTransport) return;
+    const selfId = this.wsTransport.getSelfServerId();
+    const mine = this.wsTransport.getPartyWait().find((w) => w.pid === selfId);
+    this.blessing.setCountdown(mine ? mine.s : null);
+    const { events } = this.transport.poll();
+    for (const e of events) {
+      if (e.t === "blessingExpired") this.onOfferExpired(e.pid);
+    }
+    // Watchdog for a LOST expiry event (e.g. it fell into a reconnect's skipped backlog):
+    // the authoritative wait state is on every snapshot — once it no longer lists us (a few
+    // ticks past the offer opening, so a fresh offer's first snapshot can't false-trigger),
+    // the offer is dead server-side and the overlay must not outlive it.
+    const snap = this.wsTransport.getLatestSnapshot();
+    if (this.isChoosing && !mine && snap !== null && snap.tick > this.choosingSinceTick + 2 && selfId !== null) {
+      this.onOfferExpired(selfId);
+    }
+  }
+
+  // The offer's TTL ran out unanswered (pid-scoped: only the owner receives it). Close the
+  // overlay if it is still up, drop any undelivered transport offer, and say so — the run
+  // moved on, and a pick after this point is rejected server-side anyway.
+  private onOfferExpired(pid: PlayerId) {
+    if (this.mode !== "online" || !this.wsTransport || pid !== this.wsTransport.getSelfServerId()) return;
+    this.wsTransport.consumePendingOffer();
+    if (!this.isChoosing) return;
+    this.blessing.hide();
+    this.isChoosing = false;
+    this.syncInputContext();
+    this.hud.showBanner(OFFER_EXPIRED_TOAST);
+  }
+
+  // Apply the authoritative first world and lift the veil: cosmetic floor load, camera on
+  // the true spawn, banner, and the run clock starting at the first playable frame.
+  private revealOnlineWorld() {
+    this.isWorldRevealed = true;
+    this.partyView = null;
+    const world = this.pendingWorld;
+    this.pendingWorld = null;
+    if (world) this.seed = world.seed;
+    this.loadFloorClient();
+    this.cam.x = this.px - this.canvas.width / 2;
+    this.cam.y = this.py - this.canvas.height / 2;
+    this.hud.showBanner(floorBannerText(this.floor, { isBoss: isBossFloor(this.floor) }));
+    this.runStart = performance.now();
   }
 
   // One client frame: sample input -> drive the sim through the transport -> replay the
@@ -833,12 +1016,36 @@ export class Game {
     // Snapshot player pos BEFORE this sim step so the renderer can interpolate between the
     // last two sim positions (smooth motion at any frame rate vs the fixed sim rate).
     this.renderPrevX = this.px; this.renderPrevY = this.py; this.hasRenderPrev = true;
-    // Awaiting the authoritative world: keep the handshake alive (join resends live in
-    // advance) but run no gameplay — there is nothing real to play in yet.
+    // Behind the readiness veil: no gameplay runs and nothing of the world shows.
     if (this.isAwaitingOnlineWorld()) {
-      this.transport.advance(dt);
+      this.tickOnlineVeil(dt);
+      return;
+    }
+    // Mid-run outage: the transport is resuming with its seat token and the server is holding
+    // our body safe. Freeze gameplay on the last authoritative frame — no inputs, no local
+    // prediction drift — and let the CONNECTION LOST overlay carry the state. Never a game
+    // over; the terminal paths route through onOnlineStatus if the window runs out.
+    if (this.isOnlineOutage()) {
+      if (!this.isOutageSeen) {
+        // Loss edge: same policy as window blur — drop everything held (keys, mouse, the
+        // autofire latch, the stats hold) so nothing carries across the outage and resuming
+        // always requires fresh input. The context flip to "reconnect" (above) blocks any
+        // new gameplay action for the duration.
+        this.input.releaseAll();
+      }
+      this.isOutageSeen = true;
       this.updateHud();
       return;
+    }
+    if (this.mode === "online" && this.wsTransport && this.isOutageSeen) {
+      this.isOutageSeen = false;
+      // The run may have FINISHED while we were away (the party wiped): an explicit RUN
+      // ENDED WHILE AWAY exit — no recorded death, no YOU DIED — per the UI contract.
+      if (this.wsTransport.getIsResumedIntoOver()) {
+        this.quitToMenu("run_ended_away");
+        return;
+      }
+      this.hud.showBanner(BACK_ONLINE_TOAST);
     }
 
     if (this.coop) this.syncCoop(dt);
@@ -848,18 +1055,14 @@ export class Game {
     this.transport.sendInput(cmd);
     this.transport.advance(dt);
 
-    // Online: the authoritative world geometry changed (initial join / party descend) — refresh
-    // the seed-keyed cosmetic floor state (biome/torches/music/banner) BEFORE replaying events.
+    // Online: the authoritative world geometry changed (party descend) — refresh the
+    // seed-keyed cosmetic floor state (biome/torches/music/banner) BEFORE replaying events.
     if (this.mode === "online" && this.wsTransport) {
       const rebuilt = this.wsTransport.consumeWorldRebuilt();
       if (rebuilt) {
-        const isFirstReveal = !this.isWorldRevealed;
-        this.isWorldRevealed = true;
         this.seed = rebuilt.seed;
         this.loadFloorClient();
         this.hud.showBanner(floorBannerText(rebuilt.floor, { isBoss: isBossFloor(rebuilt.floor) }));
-        // The run properly begins at the first reveal (the connect veil isn't run time).
-        if (isFirstReveal) this.runStart = performance.now();
       }
     }
 
@@ -1184,6 +1387,9 @@ export class Game {
         // server-side. Solo/co-op roll their own choices locally.
         if (this.mode !== "online") this.offerBlessing(e.rare);
         break;
+      case "blessingExpired":
+        this.onOfferExpired(e.pid);
+        break;
       case "pickup":
         if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
         else if (e.kind === "heart" || e.kind === "dealer_heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
@@ -1491,6 +1697,7 @@ export class Game {
     if (choices.length === 0 || !this.wsTransport) return;
     this.isChoosing = true;
     this.isPaused = false;
+    this.choosingSinceTick = this.wsTransport.getLatestSnapshot()?.tick ?? 0;
     this.syncInputContext();
     this.blessing.show(this.toBlessingCards(choices), (item) => {
       this.playBlessingPickSfx(item);
@@ -1883,11 +2090,25 @@ export class Game {
       const count = this.coop.remotePlayers().length + 1;
       coopLabel = `CO-OP \u00b7 ${this.coop.roomCode} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
     } else if (this.mode === "online" && this.wsTransport) {
-      const count = this.wsTransport.remotePlayers().length + 1;
-      const live = this.wsTransport.isReady() ? "ONLINE" : "CONNECTING";
-      // Surface the room code mid-run so a friend can still be invited into this world.
-      const room = this.onlineRoomCode ? ` \u00b7 ${this.onlineRoomCode}` : "";
-      coopLabel = `${live}${room} \u00b7 ${count} player${count === 1 ? "" : "s"}`;
+      // The UI contract's normal HUD: CONNECTED · ROOM CODE · N PLAYERS (server-roster
+      // truth; away members appended explicitly). World/rev/protocol debug details live in
+      // the hold-Tab panel, not here.
+      const phase: OnlinePhase = this.wsTransport.getReconnectInfo().isReconnecting ? "reconnecting"
+        : !this.wsTransport.isReady() ? "connecting"
+          : this.isWorldRevealed ? "connected" : "waiting";
+      const roster = this.wsTransport.getWorldRoster();
+      const connected = roster.filter((r) => r.st === "on").length;
+      const selfId = this.wsTransport.getSelfServerId();
+      coopLabel = onlineHudLabel({
+        phase,
+        roomCode: this.online?.roomCode ?? null,
+        worldId: this.wsTransport.getWorldId(),
+        connected,
+        away: roster.length - connected,
+        // Teammates still deciding a pick — the visible reason a cleared floor isn't
+        // descending yet (own overlay covers the self case).
+        waitingPicks: this.wsTransport.getPartyWait().filter((w) => w.pid !== selfId).length,
+      });
     }
     const comboTier = this.comboTier();
     this.hud.update({
@@ -1956,6 +2177,10 @@ export class Game {
       weaponName: WEAPONS[this.weapon].name,
       profile: this.profile,
       roster,
+      // The details panel owns the connection debug surface (world / rev / protocol).
+      netInfo: this.mode === "online" && this.wsTransport
+        ? netDetailsLine(this.wsTransport.getWorldId(), this.wsTransport.getLatestSnapshot()?.rev ?? null, PROTOCOL_VERSION)
+        : null,
       items: this.collapsedItems().map((it) => ({ name: it.count > 1 ? `${it.name} Lv${it.count}` : it.name, desc: it.desc, glyph: it.glyph, tint: it.tint })),
     });
   }
@@ -1978,15 +2203,30 @@ export class Game {
     this.onGameOver({ floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart });
   }
 
-  // Online transport terminal states end the run cleanly instead of freezing the last frame:
-  // once we were in the authoritative world, a closed/errored socket IS the end of this run
-  // (the server also closes the socket after a game over — same path). If the connection never
-  // became ready (server unreachable / rejected), return to the menu instead.
-  private onOnlineStatus(s: "connecting" | "open" | "closed" | "error") {
+  // Online transport terminal states end the run cleanly instead of freezing the last frame.
+  // The ONLY path that reads as a death is the server's own game-over close — a network
+  // outage that exhausts the reconnect window is connection_lost (back to the lobby, the run
+  // may still be live for friends), never a fabricated YOU DIED. Pre-reveal failures return
+  // to the lobby with their explicit reason: no run happened. "reconnecting" is not terminal
+  // — the freeze in tick() and the overlay own that state.
+  private onOnlineStatus(s: "connecting" | "open" | "reconnecting" | "closed" | "error") {
     if (this.mode !== "online" || !this.isRunning || !this.wsTransport) return;
     if (s !== "closed" && s !== "error") return;
-    if (this.wsTransport.isReady()) this.gameOver();
-    else this.quitToMenu("connect_failed");
+    const kind = this.wsTransport.getCloseKind();
+    if (kind === "game_over" && this.wsTransport.isReady() && this.isWorldRevealed) { this.gameOver(); return; }
+    const mismatch = this.wsTransport.getWorldMismatch();
+    if (mismatch) { this.quitToMenu("world_mismatch", `expected ${mismatch.expected}, got ${mismatch.got}`); return; }
+    switch (kind) {
+      case "connection_lost": this.quitToMenu("connection_lost"); return;
+      case "superseded": this.quitToMenu("superseded"); return;
+      case "resume_rejected": this.quitToMenu("connection_lost", "resume rejected"); return;
+      // The run ended while we were still behind the veil — nothing was played; regroup.
+      case "game_over": this.quitToMenu("connection_lost", "the run ended before you got in"); return;
+      case null: break;
+    }
+    // No classified cause (defensive): a dead mid-run socket is an OUTAGE, never a death.
+    if (this.wsTransport.isReady() && this.isWorldRevealed) { this.quitToMenu("connection_lost"); return; }
+    this.quitToMenu("connect_failed");
   }
 
   // True when a world point is on (or near) the visible screen — used to gate audio
@@ -2186,22 +2426,103 @@ export class Game {
     this.renderHurtVignette();
     this.renderReticle();
     this.renderMinimap();
+    this.renderReconnectOverlay();
   }
 
-  // The pre-world online frame: a plain dark hold with a pulsing status line. Never the
-  // placeholder dungeon — showing it is exactly the spawn-then-teleport artifact.
+  // Mid-run outage overlay over the frozen world, following the UI contract's state
+  // machine: the first 3s are a calm CONNECTION LOST / Reconnecting… (most blips end
+  // there); from 3s the attempt counter, the ESC cancel affordance, and the seat-grace
+  // countdown appear. Explicitly NOT a game-over screen.
+  private renderReconnectOverlay() {
+    if (this.mode !== "online" || !this.wsTransport) return;
+    const info = this.wsTransport.getReconnectInfo();
+    if (!info.isReconnecting) return;
+    const copy = reconnectOverlayCopy(Date.now(), info);
+    const { ctx, canvas } = this;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    ctx.save();
+    ctx.fillStyle = "rgba(13, 10, 24, 0.72)";
+    ctx.fillRect(0, cy - 58, canvas.width, 116);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const pulse = 0.6 + 0.3 * Math.sin(this.animClock * 4);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = "#ffb43b";
+    ctx.font = '700 14px "Silkscreen", monospace';
+    ctx.fillText(copy.title, cx, cy - 22);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#e8e2f4";
+    ctx.font = '16px "VT323", monospace';
+    ctx.fillText(copy.line, cx, cy + 4);
+    if (copy.hint) {
+      ctx.fillStyle = "#8f87a8";
+      ctx.fillText(copy.hint, cx, cy + 28);
+    }
+    ctx.restore();
+  }
+
+  // The pre-reveal online frame: a plain dark hold, never the placeholder dungeon — showing
+  // it is exactly the spawn-then-teleport artifact. A party-started run additionally lists
+  // every expected room member with their live server-verified status, so "only the host
+  // made it in" is an explicit, visible state instead of a silent solo run.
   private renderConnectingVeil() {
     const { ctx, canvas } = this;
     ctx.fillStyle = "#0d0a18";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
     const pulse = 0.55 + 0.35 * Math.sin(this.animClock * 4);
+    const view = this.partyView;
     ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    if (!view) {
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = "#ffb43b";
+      ctx.font = '700 14px "Silkscreen", monospace';
+      ctx.fillText("ENTERING THE DUNGEON\u2026", cx, cy);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "#8f87a8";
+      ctx.font = '16px "VT323", monospace';
+      ctx.fillText(CONNECT_CANCEL_HINT, cx, cy + 28);
+      ctx.restore();
+      return;
+    }
+    const rows = view.members;
+    const rowH = 26;
+    const top = cy - (rows.length * rowH) / 2;
     ctx.globalAlpha = pulse;
     ctx.fillStyle = "#ffb43b";
     ctx.font = '700 14px "Silkscreen", monospace';
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("ENTERING THE DUNGEON\u2026", canvas.width / 2, canvas.height / 2);
+    ctx.fillText("WAITING FOR PARTY\u2026", cx, top - 44);
+    ctx.globalAlpha = 1;
+    ctx.font = '700 11px "Silkscreen", monospace';
+    for (let i = 0; i < rows.length; i++) {
+      const m = rows[i];
+      const y = top + i * rowH;
+      ctx.fillStyle = playerColor(m.colorIndex);
+      ctx.beginPath();
+      ctx.arc(cx - 150, y, 4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#e8e2f4";
+      ctx.fillText(`${m.name}${m.isSelf ? " (you)" : ""}`, cx - 136, y);
+      ctx.textAlign = "right";
+      if (m.link === "connected") {
+        ctx.fillStyle = "#7CFC98";
+        ctx.fillText("CONNECTED TO WORLD", cx + 150, y);
+      } else {
+        ctx.fillStyle = "#ffb43b";
+        ctx.globalAlpha = pulse;
+        ctx.fillText(m.link === "reconnecting" ? "RECONNECTING\u2026" : "CONNECTING\u2026", cx + 150, y);
+        ctx.globalAlpha = 1;
+      }
+      ctx.textAlign = "center";
+    }
+    ctx.fillStyle = "#8f87a8";
+    ctx.font = '16px "VT323", monospace';
+    ctx.fillText(`the run starts when everyone is in \u00b7 absent players drop out automatically \u00b7 ${CONNECT_CANCEL_HINT}`, cx, top + rows.length * rowH + 30);
     ctx.restore();
   }
 
@@ -3216,7 +3537,9 @@ export class Game {
       const entry = this.remoteAnims.get(r.playerId);
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
-      ctx.globalAlpha = r.isDown ? 0.4 : 1;
+      // A network-absent teammate renders as an explicit ghost (their body is reserved for
+      // the reconnect grace) — never mistakable for a live player or a corpse.
+      ctx.globalAlpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
       ctx.scale(r.facing * xf.sx, xf.sy);
@@ -3228,7 +3551,7 @@ export class Game {
       }
       ctx.restore();
 
-      if (!r.isDown) {
+      if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
         else this.renderHeldWeapon(sx, sy, r.aimAngle, r.weapon, 1);
       }
@@ -3236,7 +3559,9 @@ export class Game {
       ctx.fillStyle = color;
       ctx.font = '700 11px "Silkscreen", monospace';
       ctx.textAlign = "center";
-      ctx.fillText(r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.globalAlpha = r.isAbsent ? 0.8 : 1;
+      ctx.fillText(r.isAbsent ? `${r.name} (reconnecting\u2026)` : r.isDown ? `${r.name} (down)` : r.name, sx, sy - 32);
+      ctx.globalAlpha = 1;
       ctx.textAlign = "left";
     }
   }

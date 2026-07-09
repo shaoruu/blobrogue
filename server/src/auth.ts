@@ -21,7 +21,27 @@
 // `dev:<playerId>@<worldId>` so the zero-secret two-tab local proof can exercise room-scoped
 // worlds too. It is off by default — production requires a real signed ticket.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { isValidWorldId } from "../../src/net/protocol.js";
+
+export { isValidWorldId };
+
+// ---- resume tokens (reconnect seats) ----
+// A seat token is NOT a ticket: it is a single-use, server-minted random capability that
+// proves connection CONTINUITY (this is the same client session that held the seat), on top
+// of the ticket's identity/room proof. 192 random bits, unforgeable by construction; rotated
+// on every successful resume, so a captured token replays exactly zero times.
+
+export function mintResumeToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+// Constant-time comparison (length leak is fine — every real token is the same length).
+export function resumeTokensEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  return bufA.length === bufB.length && bufA.length > 0 && timingSafeEqual(bufA, bufB);
+}
 
 export interface TicketPayload {
   pid: string;  // authenticated playerId
@@ -47,15 +67,8 @@ export interface AuthResult {
   reason?: string;
 }
 
-// World ids are minter-controlled but still bounded/charset-checked so a compromised minter
-// can't inject log-breaking or unbounded ids ("room:ABCD", "arena-1", ...).
-const WORLD_ID_RE = /^[a-zA-Z0-9:_-]{1,40}$/;
 const NAME_MAX = 20;
 const COLOR_MAX = 15;
-
-export function isValidWorldId(id: string): boolean {
-  return WORLD_ID_RE.test(id);
-}
 
 // Display names render on other players' screens: strip control characters, collapse
 // whitespace runs, clamp length. Returns null when nothing displayable remains.

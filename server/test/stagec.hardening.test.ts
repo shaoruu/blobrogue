@@ -58,8 +58,9 @@ async function main(): Promise<void> {
     const s = await startTestServer({ maxConnsPerIp: 2 }); // loopback is trusted by default
     try {
       // Three connections carrying DISTINCT client IPs via XFF -> distinct buckets, all allowed.
+      // (Distinct identities too — same-identity joins now supersede each other by design.)
       const distinct = [await rawSocket(s.url, { "x-forwarded-for": "1.1.1.1" }), await rawSocket(s.url, { "x-forwarded-for": "2.2.2.2" }), await rawSocket(s.url, { "x-forwarded-for": "3.3.3.3" })];
-      for (const w of distinct) w.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "u"), protocol: PROTOCOL_VERSION }));
+      distinct.forEach((w, i) => w.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, `u${i}`), protocol: PROTOCOL_VERSION })));
       await sleep(200);
       check("3 distinct-IP clients all admitted (proxy did not collapse them)", s.server.getWorld()?.playerCount === 3, `players=${s.server.getWorld()?.playerCount}`);
       for (const w of distinct) w.close();

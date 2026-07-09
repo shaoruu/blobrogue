@@ -238,6 +238,9 @@ export interface RemotePlayer {
   weapon: WeaponId;
   floor: number;
   isDown: boolean;
+  // Network-absent: their connection dropped and the server is holding their body for the
+  // reconnect grace window. Rendered as a ghost with an explicit RECONNECTING label.
+  isAbsent: boolean;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   colorIndex: number; // stable palette slot for this player
