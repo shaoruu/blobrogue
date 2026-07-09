@@ -22,6 +22,7 @@ import {
 } from "./harness/raster.js";
 import type { HarnessGame, Canvas } from "./harness/raster.js";
 import { LightingRenderer } from "../src/game/lighting.js";
+import { settings } from "../src/game/settings.js";
 import { BIOMES } from "../src/sim/biomes.js";
 import { TILE } from "../src/sim/types.js";
 import type { Dungeon } from "../src/sim/dungeon.js";
@@ -384,6 +385,27 @@ function standNear(game: HarnessGame, wx: number, wy: number): { x: number; y: n
   return null;
 }
 
+// High-contrast accessibility: the setting must lift the ambient grade — unlit far
+// floor reads measurably brighter in the darkest band with the toggle on.
+function highContrastTest(game: HarnessGame, canvas: Canvas): void {
+  loadDeterministicFloor(game, SEED, 33);
+  const w = game.devWorld();
+  settleAt(game, (w.dungeon.spawn.x + 0.5) * TILE, (w.dungeon.spawn.y + 0.5) * TILE, VIEW_W, VIEW_H);
+  const far = findSite(game, "open", { nearX: (w.dungeon.spawn.x + 0.5) * TILE, nearY: (w.dungeon.spawn.y + 0.5) * TILE });
+  if (!far) {
+    check("high-contrast-site", false, "no quiet far tile near the null spawn");
+    return;
+  }
+  const fx = screenX(game, (far.tx + 0.5) * TILE - 12);
+  const fy = screenY(game, (far.ty + 0.5) * TILE - 12);
+  const normal = patchLum(renderFrame(game, canvas), fx, fy, 24, 24);
+  settings.setHighContrast(true);
+  const lifted = patchLum(renderFrame(game, canvas), fx, fy, 24, 24);
+  settings.setHighContrast(false);
+  check("high-contrast-lifts-grade", lifted > normal + 0.8,
+    `null far floor ${normal.toFixed(1)} -> ${lifted.toFixed(1)} with high contrast on`);
+}
+
 // Fire-vent tell preservation on an Emberreach floor: with the grade up, the vent's
 // telegraph/active glow must read at (or above) its lighting-off strength.
 function tellTest(game: HarnessGame, canvas: Canvas): void {
@@ -496,6 +518,7 @@ async function main(): Promise<void> {
     check("null-hero-glow-floor", nul.heroLum >= 12, `darkest band hero-ring luminance ${nul.heroLum.toFixed(1)}`);
   }
 
+  highContrastTest(game, canvas);
   tellTest(game, canvas);
   perfTest(game, canvas);
 

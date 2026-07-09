@@ -108,8 +108,8 @@ async function main(): Promise<void> {
     loadDeterministicFloor(game, SEED, 18);
     const stand = findStand(game);
     settleAt(game, stand.x, stand.y, VIEW_W, VIEW_H);
-    const input = (game as object as { input: { mouseX: number; mouseY: number; isMouseDown: boolean } }).input;
-    (game as object as { devGiveWeapon(id: string): void }).devGiveWeapon("beam");
+    const input = privates(game).input;
+    game.devGiveWeapon("beam");
     input.mouseX = VIEW_W / 2 + 300;
     input.mouseY = VIEW_H / 2 - 40;
     input.isMouseDown = true;

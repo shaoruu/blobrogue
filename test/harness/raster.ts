@@ -87,8 +87,7 @@ export interface HarnessGame {
   devLoadRealFloor(floor: number): void;
   devTeleport(x: number, y: number): void;
   devToggleLighting(): boolean;
-  devToggleGod(): boolean;
-  devSpawnEnemies(kind: string, count: number, atCursor: boolean): void;
+  devGiveWeapon(id: string): void;
   devWorld(): {
     seed: number;
     floor: number;
@@ -107,7 +106,7 @@ interface HarnessPrivates {
   seed: number;
   cam: { x: number; y: number };
   torches: { tx: number; ty: number }[];
-  loadFloorClient(): void;
+  input: { mouseX: number; mouseY: number; isMouseDown: boolean };
   motes: { reseed(): void; update(): void; render(): void };
 }
 
