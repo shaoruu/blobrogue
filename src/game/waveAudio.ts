@@ -17,9 +17,16 @@ import type { WaveEngine } from "./audio.js";
 import {
   isWaveEventId, waveSpecOf, spatialGainFor, tellCuesFor, isTrackLoopHeld,
   bossWaveEvents, PET_SIDECHAIN, BOSS_LOCK_AMBIENT_MUTE_MS, WAVE_PRIORITY,
-  WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_WEAPON_FIRE, AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS,
+  WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE, WAVE_WEAPON_FIRE,
+  AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS,
   BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS,
 } from "./waveSpec.js";
+import {
+  MAX_CONCURRENT_MOB_LOCKS, MOB_LOCK_WINDOW_MS, GROUP_LOOP_KEY,
+  FLOCK_BED_RADIUS, ORBIT_LOOP_RADIUS, FLOCK_PASS_OUTER, FLOCK_PASS_INNER,
+  bestiaryPreloadEvents,
+} from "./bestiaryAudio.js";
+import type { EnemyKind } from "../sim/types.js";
 import type { WaveEventId, WaveSoundSpec, TellSnapshot } from "./waveSpec.js";
 
 export interface WavePlayOpts {
@@ -79,6 +86,7 @@ interface TellMemory {
   move: string;
   isAimLocked: boolean;
   hasAcquired: boolean;
+  lastDist: number; // listener distance last frame (the flock close-pass edge)
 }
 
 interface BeamState {
@@ -93,6 +101,9 @@ class WaveAudioDirector {
   private isInCombat = false;
   private lastBossLockAtMs = -Infinity;
   private cooldownAt = new Map<string, number>();
+  // MOB lock concurrency (bestiary audio contract): at most MAX_CONCURRENT_MOB_LOCKS
+  // enemy-lock cues inside one audible window. Boss locks are exempt (their own band).
+  private mobLockAtMs: number[] = [];
   private lastVariant = new Map<string, number>();
   private tells = new Map<number, TellMemory>();
   private beams = new Map<string, BeamState>();
@@ -115,6 +126,10 @@ class WaveAudioDirector {
     if (spec.cooldownMs !== undefined) {
       const lastAt = this.cooldownAt.get(cdKey);
       if (lastAt !== undefined && nowMs - lastAt < spec.cooldownMs) return false;
+    }
+    if (spec.priority === WAVE_PRIORITY.enemyLock) {
+      this.mobLockAtMs = this.mobLockAtMs.filter((t) => nowMs - t < MOB_LOCK_WINDOW_MS);
+      if (this.mobLockAtMs.length >= MAX_CONCURRENT_MOB_LOCKS) return false;
     }
 
     let gain = spec.gain * (opts?.gain ?? 1);
@@ -141,6 +156,7 @@ class WaveAudioDirector {
     });
     if (!isPlayed) return false;
     if (spec.cooldownMs !== undefined) this.cooldownAt.set(cdKey, nowMs);
+    if (spec.priority === WAVE_PRIORITY.enemyLock) this.mobLockAtMs.push(nowMs);
     this.lastVariant.set(event, variantIndex);
     if (spec.priority >= WAVE_PRIORITY.bossLock) {
       this.lastBossLockAtMs = nowMs;
@@ -273,17 +289,25 @@ class WaveAudioDirector {
     const seen = this.seenIdsScratch;
     seen.clear();
     let isInCombat = false;
+    let flockNear = 0;
+    let orbitNear = 0;
     for (const e of input.enemies) {
       if (e.dead) continue;
       seen.add(e.id);
       const dist = Math.hypot(e.x - input.listener.x, e.y - input.listener.y);
       if (dist < COMBAT_RADIUS) isInCombat = true;
+      if (e.kind === "bat" && dist < FLOCK_BED_RADIUS) flockNear++;
+      if (e.kind === "orbiter" && dist < ORBIT_LOOP_RADIUS) orbitNear++;
       this.observeEnemy(e, dist);
     }
     this.isInCombat = isInCombat;
+    // The flock is ONE aggregate bed and the orbit ring ONE hum: a single group-keyed
+    // loop each, held while any member is near — never a voice per body.
+    this.holdLoop("flock.bed", GROUP_LOOP_KEY, flockNear > 0, { gain: Math.min(1, 0.5 + 0.12 * flockNear) });
+    this.holdLoop("orbit.loop", GROUP_LOOP_KEY, orbitNear > 0);
     for (const [id, memory] of this.tells) {
       if (seen.has(id)) continue;
-      if (memory.kind === "burrower") this.stopLoop("burrower.track", String(id));
+      void memory;
       this.tells.delete(id);
     }
 
@@ -314,10 +338,15 @@ class WaveAudioDirector {
       hasAcquired = true;
     }
 
-    if (prev && isTrackLoopHeld(e.kind, prev) !== isTrackLoopHeld(e.kind, e.attack)) {
-      this.holdLoop("burrower.track", String(e.id), isTrackLoopHeld(e.kind, e.attack));
-    } else if (!prev && isTrackLoopHeld(e.kind, e.attack)) {
-      this.holdLoop("burrower.track", String(e.id), true);
+    // The underground tracker is a COMPONENT EMITTER (bestiary audio contract): the
+    // row's per-entity cooldown IS the cadence — re-trigger while held, never a loop.
+    if (isTrackLoopHeld(e.kind, e.attack)) {
+      this.play("burrower.track", { x: e.x, y: e.y, entityId: e.id });
+    }
+
+    // The flock's close pass: a body crossing from OUTER to INNER of the listener.
+    if (e.kind === "bat" && prev && prev.lastDist > FLOCK_PASS_OUTER && distToListener < FLOCK_PASS_INNER) {
+      this.play("flock.pass", { x: e.x, y: e.y, entityId: e.id });
     }
 
     if (prev) {
@@ -325,10 +354,11 @@ class WaveAudioDirector {
       prev.move = e.attack.move;
       prev.isAimLocked = e.attack.isAimLocked;
       prev.hasAcquired = hasAcquired;
+      prev.lastDist = distToListener;
     } else {
       this.tells.set(e.id, {
         kind: e.kind, phase: e.attack.phase, move: e.attack.move,
-        isAimLocked: e.attack.isAimLocked, hasAcquired,
+        isAimLocked: e.attack.isAimLocked, hasAcquired, lastDist: distToListener,
       });
     }
   }
@@ -358,13 +388,26 @@ class WaveAudioDirector {
 
   // ---- preload (§10: current biome + the floor's boss; the rest lazy-loads) ----
 
-  preloadForFloor(zoneIndex: number, bossKind: string | null): void {
+  preloadForFloor(zoneIndex: number, bossKind: string | null, encounterKinds: readonly string[] = []): void {
     const stems: string[] = [];
     const zoneEvent = AMBIENT_ZONE_EVENTS[zoneIndex];
     if (zoneEvent) this.collectStems(zoneEvent, stems);
     for (const event of HAZARD_WAVE_EVENTS) this.collectStems(event, stems);
     if (bossKind) for (const event of bossWaveEvents(bossKind)) this.collectStems(event, stems);
+    // The floor's actual encounter kinds preload alongside the boss (contract): the
+    // first rootward on a floor never announces itself through a fallback.
+    for (const kind of encounterKinds) {
+      for (const event of bestiaryPreloadEvents(kind as EnemyKind)) this.collectStems(event, stems);
+    }
     this.engine.preloadWave(stems);
+  }
+
+  // The bespoke entrance for a boss-grade body (bosses at floor load, captains on spawn).
+  bossEntrance(kind: string, x?: number, y?: number, entityId?: number): boolean {
+    const event = WAVE_BOSS_ENTRANCE[kind];
+    if (!event) return false;
+    this.play(event, { x, y, entityId });
+    return true;
   }
 
   // Fresh run / floor teardown: silence every keyed loop and drop per-entity memory.
@@ -380,10 +423,10 @@ class WaveAudioDirector {
 
   onFloorLoad(): void {
     // Entity ids restart per floor: drop tell memory and every entity-keyed loop, keep the
-    // ambient zone (setAmbientZone crossfades it) and self-keyed beam state.
-    for (const [id, memory] of this.tells) {
-      if (memory.kind === "burrower") this.stopLoop("burrower.track", String(id));
-    }
+    // ambient zone (setAmbientZone crossfades it) and self-keyed beam state. Group beds
+    // (flock/orbit) release themselves on the first empty frame.
+    this.stopLoop("flock.bed", GROUP_LOOP_KEY);
+    this.stopLoop("orbit.loop", GROUP_LOOP_KEY);
     this.tells.clear();
     for (const pid of this.reviveChannels) this.stopLoop("revive.channelLoop", pid);
     this.reviveChannels.clear();
