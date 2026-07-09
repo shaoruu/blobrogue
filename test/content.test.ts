@@ -7,6 +7,7 @@
 
 import {
   createWorld, stepWorld, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared,
+  bossChestWeaponFor,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -20,7 +21,7 @@ import {
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
-  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
+  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET, KING_REWARD_TABLE, bossWeaponChoices,
   marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor, bossHpForFloor,
 } from "../src/sim/balance.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
@@ -872,14 +873,15 @@ function curriculumTests(): void {
     check("the final clear drops the premium boss chest with the gauntlet signature",
       isFloorCleared(w) && w.chests.some((c) => c.kind === "boss" && c.weapon === GAUNTLET.chestWeapon));
 
-    // The premium chest behaves like every boss chest: P+1 personal choices + rare offer.
+    // The premium chest behaves like every boss chest: the min(max(3,P+1),5) personal
+    // choices + rare offer.
     const chest = w.chests.find((c) => c.kind === "boss")!;
     const p = w.players.get(LOCAL_ID)!;
     p.x = chest.x; p.y = chest.y;
     const evs = step(w, idle(9999));
-    check("opening it raises the rare blessing offer and the P+1 choice set (no blessing before the full clear)",
+    check("opening it raises the rare blessing offer and the boss choice set (no blessing before the full clear)",
       evs.some((e) => e.t === "offerBlessing" && e.rare)
-      && w.pickups.filter((k) => k.isBossChoice).length === 2
+      && w.pickups.filter((k) => k.isBossChoice).length === bossWeaponChoices(1)
       && w.pickups.some((k) => k.isBossChoice && k.weapon === GAUNTLET.chestWeapon));
   }
 
@@ -972,12 +974,16 @@ function rotationTests(): void {
 // ---- the authored boss chests ----
 
 function bossChestTests(): void {
-  section("boss chests: each boss bakes its signature weapon");
-  const expected: Array<[EnemyKind, string]> = [
-    ["boss", "mortar"], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "tesla"], ["gilded", "cannon"],
+  section("boss chests: deep bosses bake their signature; the King rolls a seeded preference");
+  // Deep bosses keep their single authored signature. The King's chest is the run's first
+  // boss reward and rolls a seeded weighted preference (KING_REWARD_TABLE, mortar most
+  // likely) so the post-boss gun varies run to run — pinned via bossChestWeaponFor.
+  const expected: Array<[EnemyKind, string | null]> = [
+    ["boss", null], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "tesla"], ["gilded", "cannon"],
   ];
   for (const [kind, weapon] of expected) {
-    const w = createWorld(0xC4E57 ^ kind.length, 10, { isSandbox: true });
+    const seed = 0xC4E57 ^ kind.length;
+    const w = createWorld(seed, 10, { isSandbox: true });
     w.isGodMode = true;
     const p = w.players.get(LOCAL_ID)!;
     const boss = devSpawnEnemy(w, kind, p.x + 150, p.y);
@@ -987,9 +993,13 @@ function bossChestTests(): void {
       step(w, idle(w.tick + 1));
     }
     const chest = w.chests.find((c) => c.kind === "boss");
-    check(`${kind} chest carries ${weapon}`, boss.dead && chest !== undefined && chest.weapon === weapon,
+    const want = weapon ?? bossChestWeaponFor(seed, 10, kind);
+    check(`${kind} chest carries ${want}`, boss.dead && chest !== undefined && chest.weapon === want,
       chest ? `weapon=${chest.weapon}` : "no chest");
   }
+  check("the King's seeded preference always lands inside its authored table",
+    [0x1, 0x22, 0x333, 0x4444, 0x55555].every((s) =>
+      KING_REWARD_TABLE.some((row) => row.weapon === bossChestWeaponFor(s, 5, "boss"))));
 }
 
 // ---- the weapon: Sunlance (beam) ----

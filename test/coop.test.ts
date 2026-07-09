@@ -558,7 +558,7 @@ function weaponEconomyTests(): void {
   {
     let countBreaks = 0, dupes = 0, cells = 0;
     for (const seed of gateSeeds) {
-      for (let floor = 2; floor <= 6; floor++) {
+      for (let floor = 1; floor <= 6; floor++) { // F1 stocks too (the early-variety fix)
         if (floor === 5) continue; // boss floor: the reward is the chest's choice set
         for (const size of [1, 2, 3, 4]) {
           const { w } = partyWorld(seed, floor, size);

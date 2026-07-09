@@ -21,7 +21,7 @@ import {
   ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
   isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
 } from "./enemies.js";
-import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
+import { WEAPONS, DEFAULT_WEAPON, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult } from "./weaponStats.js";
@@ -37,13 +37,15 @@ import {
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
-  LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices,
+  LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import { buildShopState, restockShop, shopSlotStatusFor, shopViewerOf, SHOP_BUY_RANGE } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
+import { createWeaponBag, drawWeaponFromBag } from "./weaponBag.js";
+import type { WeaponBag } from "./weaponBag.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
 export interface MeleeSwing {
@@ -211,6 +213,11 @@ export interface WorldState {
   flowKey: number;
   flowSources: number[];
   rng: Rng;
+  // The per-run weapon deal (see weaponBag.ts): every free weapon roll — pedestals, boss
+  // chest alternates, wood chests, owned-claim rerolls — draws from this seeded shuffled
+  // bag so the early floors hand out DISTINCT guns. Reset with the run (never per floor);
+  // advanced only by the authority, so it lives off the wire like w.rng itself.
+  weaponBag: WeaponBag;
   // Co-op encounter snapshot (§8): living players at floor build, clamped 1–4. Drives
   // enemy HP / threat budget / heart-rate scaling; NEVER rescales living enemies mid-floor.
   encounterPlayers: number;
@@ -311,6 +318,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     flowKey: -1,
     flowSources: [],
     rng: new Rng(seed ^ 0x53696d21),
+    weaponBag: createWeaponBag(seed),
     encounterPlayers: 1,
     pendingSpawns: [],
     spawnReleaseCd: 0,
@@ -435,10 +443,14 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) stockWeaponChests(w);
-  // Patch's shop: built off the generator's dedicated shop room (deterministic from
-  // seed+floor, party-size-invariant so a mid-floor join never shifts the stall).
+  // Patch's shop: built off the generator's dedicated shop room. Layout/prices are pure
+  // (seed, floor) and party-size-invariant so a mid-floor join never shifts the stall;
+  // the weapon stock additionally dodges guns the whole party owns at build time
+  // (authority-only state, shipped on the wire like the rest of the shop).
   const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
-  w.shop = !w.isSandbox && shopRoom !== undefined ? buildShopState(w.seed, floor, shopRoom) : null;
+  w.shop = !w.isSandbox && shopRoom !== undefined
+    ? buildShopState(w.seed, floor, shopRoom, [...weaponsOwnedByAll(w)])
+    : null;
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
@@ -477,6 +489,7 @@ export function isFloorCleared(w: WorldState): boolean {
 export function resetRunInWorld(w: WorldState, seed: number): void {
   w.seed = seed;
   w.rng = new Rng(seed ^ 0x53696d21);
+  w.weaponBag = createWeaponBag(seed);
   w.isRunOver = false;
   w.pityStreak = 0;
   w.isPityHeartArmed = false;
@@ -504,14 +517,22 @@ function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
 //
 // Studio gate §4 pedestal rolls: max(1, ceil(P/2)) physical weapons per floor (P1–2
 // roll 1, P3–4 roll 2), DISTINCT ids when the pool permits. Party size buys options,
-// never rarity — the roll table is identical solo and co-op.
+// never rarity — the roll table is identical solo and co-op. Floor 1 stocks too (the
+// early-variety fix: it used to start at F2, leaving a solo player ~3 guaranteed guns
+// before the F5 boss), and the ids come from the run's shuffled bag, skipping guns the
+// whole party already owns, so early floors deal different weapons run to run and a
+// pedestal is never wasted on a universal duplicate.
 function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
-  if (w.floor < 2 || d.rooms.length <= 2) return;
+  if (d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
+  const exclude = weaponsOwnedByAll(w);
   const kinds: WeaponId[] = [];
   for (let i = 0; i < pedestalWeaponRolls(w.encounterPlayers); i++) {
-    kinds.push(rollDistinctWeapon(rng, kinds));
+    const pick = drawWeaponFromBag(w.weaponBag, exclude);
+    if (kinds.includes(pick)) break; // pool saturated (everything owned): no dup pedestals
+    kinds.push(pick);
+    exclude.add(pick);
   }
   const used = new Set<number>();
   for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
@@ -527,12 +548,22 @@ function stockWeaponChests(w: WorldState): void {
   }
 }
 
-// A weapon roll that avoids the ids already taken this batch (distinct while the pool
-// permits — with a 17-weapon pool the retry loop is a formality, but bounded regardless).
-function rollDistinctWeapon(rng: Rng, taken: readonly WeaponId[]): WeaponId {
-  let pick = rng.pick(PICKUP_WEAPONS);
-  for (let i = 0; i < PICKUP_WEAPONS.length && taken.includes(pick); i++) pick = rng.pick(PICKUP_WEAPONS);
-  return pick;
+// Weapons owned by EVERY player — the set a fresh drop would waste (nobody left to
+// collect it; updatePickups leaves a universally-owned weapon lying as a dead pickup).
+// A gun only SOME players own stays rollable: the others can still claim it. Empty when
+// the world has no players yet (server floor build before the first join).
+function weaponsOwnedByAll(w: WorldState): Set<WeaponId> {
+  const owned = new Set<WeaponId>();
+  let isFirst = true;
+  for (const p of w.players.values()) {
+    if (isFirst) {
+      for (const id of p.ownedWeapons) owned.add(id);
+      isFirst = false;
+      continue;
+    }
+    for (const id of [...owned]) if (!p.ownedWeapons.includes(id)) owned.delete(id);
+  }
+  return owned;
 }
 
 // Deep floors bias hazard density (§4 biome pressure): a wider explosive-barrel band.
@@ -1079,7 +1110,7 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     }
     case "reroll": {
       shop.rerollsUsed++;
-      restockShop(shop, w.seed, w.floor);
+      restockShop(shop, w.seed, w.floor, [...weaponsOwnedByAll(w)]);
       break;
     }
   }
@@ -1463,11 +1494,29 @@ const BOSS_SIGNATURE_WEAPON: Readonly<Partial<Record<Enemy["kind"], WeaponId>>> 
   boss: "mortar", marrow: "railgun", choir: "beam", weaver: "tesla", gilded: "cannon",
 };
 
+// The lead weapon a boss chest bakes. Deep bosses hand their single authored signature;
+// the Slime King — the run's FIRST boss, the one every player sees every run — rolls a
+// seeded weighted preference over KING_REWARD_TABLE instead (mortar most likely, never
+// guaranteed), keyed by (seed, floor) so it is fixed per run and identical on every
+// authority regardless of when the boss dies. Exported for the variety regression tests.
+export function bossChestWeaponFor(seed: number, floor: number, kind: Enemy["kind"]): WeaponId | undefined {
+  if (kind !== "boss") return BOSS_SIGNATURE_WEAPON[kind];
+  const rng = new Rng((seed ^ 0x4b1e9d07) + floor * 68909);
+  let total = 0;
+  for (const row of KING_REWARD_TABLE) total += row.weight;
+  let roll = rng.next() * total;
+  for (const row of KING_REWARD_TABLE) {
+    roll -= row.weight;
+    if (roll < 0) return row.weapon;
+  }
+  return BOSS_SIGNATURE_WEAPON[kind];
+}
+
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   if (isBossKind(e.kind)) {
     w.chests.push({
       id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false,
-      weapon: BOSS_SIGNATURE_WEAPON[e.kind],
+      weapon: bossChestWeaponFor(w.seed, w.floor, e.kind),
     });
     return;
   }
@@ -5051,8 +5100,15 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     // (Only signature-bearing chests — every real boss drop — carry the choice set.)
     if (c.weapon !== undefined) {
       const choices: WeaponId[] = [c.weapon];
+      // Alternates come from the run's shuffled bag, skipping the signature, this set,
+      // and guns the whole party already owns — every pedestal is a real option.
+      const exclude = weaponsOwnedByAll(w);
+      exclude.add(c.weapon);
       while (choices.length < bossWeaponChoices(w.encounterPlayers)) {
-        choices.push(rollDistinctWeapon(w.rng, choices));
+        const pick = drawWeaponFromBag(w.weaponBag, exclude);
+        if (choices.includes(pick)) break; // pool saturated: no duplicate pedestals
+        choices.push(pick);
+        exclude.add(pick);
       }
       for (const weapon of choices) loot.push({ kind: "weapon", weapon, isBossChoice: true });
     }
@@ -5198,9 +5254,11 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
   const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
   if (r < heartChance) return [{ kind: "heart" }];
   // The ambient weapon window is IDENTICAL solo/co-op (gate §4: party quantity increases
-  // options through the §4 counts only — never through drop rates).
+  // options through the §4 counts only — never through drop rates). The id rides the
+  // run's shuffled bag and skips universally-owned guns, so the rare ambient gun is
+  // never a wasted duplicate while unowned guns remain.
   if (r < heartChance + SUSTAIN.woodChestWeapon) {
-    return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
+    return [{ kind: "weapon", weapon: drawWeaponFromBag(w.weaponBag, weaponsOwnedByAll(w)) }];
   }
   const n = 3 + Math.floor(w.rng.next() * 4);
   const coins: ChestLoot[] = [];
@@ -5244,7 +5302,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
             if (player.hasClaimedBossChoice) continue;
             player.hasClaimedBossChoice = true;
             const grant = player.ownedWeapons.includes(p.weapon)
-              ? rollDistinctWeapon(w.rng, player.ownedWeapons)
+              ? drawWeaponFromBag(w.weaponBag, new Set(player.ownedWeapons))
               : p.weapon;
             acquireWeapon(player, grant);
             ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });

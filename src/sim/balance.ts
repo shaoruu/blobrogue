@@ -74,11 +74,39 @@ export function pedestalWeaponRolls(players: number): number {
   return Math.max(1, Math.ceil(clampPlayers(players) / 2));
 }
 
-// Boss weapon reward: P+1 distinct personal CHOICES (capped 5). Each player claims one;
-// a claim never removes a teammate's options.
+// Boss weapon reward: P+1 distinct personal CHOICES, floored at 3 and capped 5. Each
+// player claims one; a claim never removes a teammate's options. The floor is the
+// early-variety fix: the gate's raw P+1 gave a solo player TWO options (the signature +
+// one roll), so the post-boss gun was near-identical every run — three choices keep the
+// pick a real decision without touching the P3-4 counts.
 export function bossWeaponChoices(players: number): number {
-  return Math.min(5, clampPlayers(players) + 1);
+  return Math.min(5, Math.max(WEAPON_VARIETY.bossChoiceMin, clampPlayers(players) + 1));
 }
+
+// The early-game weapon deal (playtest: "I keep getting the same few guns before the
+// slime boss"). Free weapon sources draw from a per-run seeded SHUFFLED BAG of
+// PICKUP_WEAPONS (see weaponBag.ts) instead of uniform-with-replacement, and every roll
+// skips guns the drop would waste (owned by the whole party) while unowned guns remain.
+export const WEAPON_VARIETY = {
+  // Dealt-weapon history a freshly refilled bag avoids re-dealing immediately, so the
+  // last gun of one pass never opens the next.
+  recentDrops: 3,
+  // Minimum boss-chest choice count (see bossWeaponChoices).
+  bossChoiceMin: 3,
+} as const;
+
+// The Slime King's chest reward: mortar stays the PREFERRED signature (the zoning
+// fight's area answer) but no longer a hard lock — the lead choice is a seeded weighted
+// pick per (seed, floor), so the post-boss gun varies run to run. Every entry answers
+// the King's zoning with an area/spread verb, and none duplicates another boss's
+// signature (railgun/beam/tesla/cannon) or the gauntlet's burst. Deep bosses keep their
+// single authored signatures — their identity is the reward.
+export const KING_REWARD_TABLE: ReadonlyArray<{ weapon: WeaponId; weight: number }> = [
+  { weapon: "mortar", weight: 3 },
+  { weapon: "shotgun", weight: 1 },
+  { weapon: "flamer", weight: 1 },
+  { weapon: "sawnoff", weight: 1 },
+];
 
 // Revive (studio balance gate §6, Standard baseline): 1.5s UNINTERRUPTED channel — any
 // reviver damage, dash, attack, or leaving the radius cancels the whole channel (hard
