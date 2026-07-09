@@ -65,8 +65,14 @@ registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAtta
 
 **Approved finals already wired (drop the files in, no code changes):**
 - Directional walk + attack sets (`<stem>_walk_{down,up,side}.png` +
-  `<stem>_attack_{down,up,side}.png`) for **marrow, burrower, weaver2_px, gilded,
-  charger, orbiter**.
+  `<stem>_attack_{down,up,side}.png`) for **marrow, burrower, weaver2_px, charger,
+  orbiter**.
+- **Gilded Warden — side profile BLOCKED** (failed twice; stop): approved DOWN+UP sets
+  only (`gilded_{walk,attack}_{down,up}.png`) plus the generic `gilded_attack.png`
+  catch-all. The ladder's **vertical hold** keeps its horizontal movement on the nearest
+  approved down/up sheet (unmirrored) — no `gilded_*_side` file is registered or ever
+  requested, and there is no fake side slide. Register partial facings via
+  `facings: ["down", "up"]` on `registerDirectionalSet`.
 - The stationary Hollow Choir: `choir_idle.png` (breathing loop, plays even while it
   drifts) + `choir_attack.png` (omni).
 - Thumper pair: pickup `weapon_thumper.png`, held `held_thumper.png`.

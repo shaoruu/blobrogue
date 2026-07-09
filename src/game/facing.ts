@@ -11,14 +11,17 @@ export type Facing4 = "down" | "up" | "side";
 
 // Per-entity persistent facing. `isMirrored` is the L/R memory: it drives the side
 // sheet's mirror AND remains the legacy 1-D flip for sprites without directional art,
-// so existing enemies keep their exact current look.
+// so existing enemies keep their exact current look. `lastVertical` remembers the most
+// recent down/up facing — the art contract's "nearest approved vertical" for bodies whose
+// side profile is blocked (they hold that pose while strafing, never a fake side slide).
 export interface FacingState {
   facing: Facing4;
   isMirrored: boolean;
+  lastVertical: "down" | "up";
 }
 
 export function createFacing(): FacingState {
-  return { facing: "down", isMirrored: false };
+  return { facing: "down", isMirrored: false, lastVertical: "down" };
 }
 
 // px/s below which facing holds its last value — knockback dribbles, interpolation noise
@@ -34,12 +37,17 @@ export function updateFacing(f: FacingState, vx: number, vy: number): void {
   // The L/R memory follows any committed horizontal motion, whatever the facing axis.
   if (ax >= FACING_DEADZONE) f.isMirrored = vx < 0;
   if (f.facing === "side") {
-    if (ay > ax * FACING_AXIS_BIAS && ay >= FACING_DEADZONE) f.facing = vy >= 0 ? "down" : "up";
+    if (ay > ax * FACING_AXIS_BIAS && ay >= FACING_DEADZONE) setVertical(f, vy);
   } else if (ax > ay * FACING_AXIS_BIAS && ax >= FACING_DEADZONE) {
     f.facing = "side";
   } else if (ay >= FACING_DEADZONE) {
-    f.facing = vy >= 0 ? "down" : "up";
+    setVertical(f, vy);
   }
+}
+
+function setVertical(f: FacingState, vy: number): void {
+  f.facing = vy >= 0 ? "down" : "up";
+  f.lastVertical = f.facing;
 }
 
 // Snap facing to an explicit intent angle (no deadzone — an aim is always meaningful).
@@ -49,7 +57,7 @@ export function facingFromAngle(f: FacingState, angle: number): void {
     f.facing = "side";
     f.isMirrored = c < 0;
   } else {
-    f.facing = s >= 0 ? "down" : "up";
+    setVertical(f, s);
   }
 }
 
@@ -70,6 +78,9 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
 export interface EnemyPose {
   facing: Facing4;
   isMirrored: boolean;
+  // The most recent down/up facing — the "nearest approved vertical" a body with a
+  // blocked side profile holds while it strafes.
+  verticalFacing: "down" | "up";
   isMoving: boolean;
   isAttacking: boolean;
   move: AttackMove;
@@ -88,6 +99,7 @@ export function computeEnemyPose(e: Enemy, f: FacingState, vx: number, vy: numbe
   return {
     facing: f.facing,
     isMirrored: f.isMirrored,
+    verticalFacing: f.lastVertical,
     isMoving,
     isAttacking,
     move: a.move,
@@ -148,6 +160,13 @@ export function resolveClip(hasClip: (clip: SelectableClip) => boolean, pose: En
   }
   const dirWalk: SelectableClip = `walk_${pose.facing}`;
   if (hasClip(dirWalk)) return { clip: dirWalk, isMirrored: isSideMirror, isHoldFirstFrame: !pose.isMoving };
+  // A blocked/missing SIDE profile holds the nearest approved vertical sheet during
+  // horizontal movement (the Warden's art contract: down/up only, never a mirrored side
+  // fake or a static slide). Down/up art never mirrors.
+  if (pose.facing === "side") {
+    const vertWalk: SelectableClip = `walk_${pose.verticalFacing}`;
+    if (hasClip(vertWalk)) return { clip: vertWalk, isMirrored: false, isHoldFirstFrame: !pose.isMoving };
+  }
   // Legacy tier: exactly the pre-contract behavior for sprites without directional art —
   // except that a MOVING body with no walk sheet keeps its idle loop when one exists
   // (the Hollow Choir's stationary-boss contract: a drifting mass breathes, it never

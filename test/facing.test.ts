@@ -31,7 +31,7 @@ function testEnemy(): Enemy {
 
 function poseOf(overrides: Partial<EnemyPose> = {}): EnemyPose {
   return {
-    facing: "side", isMirrored: false, isMoving: true, isAttacking: false,
+    facing: "side", isMirrored: false, verticalFacing: "down", isMoving: true, isAttacking: false,
     move: "none", phase: "none", windup: 0, aimAngle: 0,
     ...overrides,
   };
@@ -149,6 +149,35 @@ function ladderTests(): void {
     check("down/up directional art NEVER mirrors (only side does)", !down.isMirrored);
   }
   {
+    // The blocked-side contract (the Gilded Warden): DOWN+UP sets only — horizontal
+    // movement HOLDS the nearest approved vertical sheet, unmirrored, and side-facing
+    // attacks resolve to the approved generic strip. No fake side slide.
+    const has = withSheets(["walk_down", "walk_up", "attack_down", "attack_up", "attack"]);
+    const strafeAfterDown = resolveClip(has, poseOf({ facing: "side", verticalFacing: "down", isMirrored: true }));
+    check("a blocked side profile strafing after walking DOWN holds walk_down (never mirrored)",
+      strafeAfterDown.clip === "walk_down" && !strafeAfterDown.isMirrored);
+    const strafeAfterUp = resolveClip(has, poseOf({ facing: "side", verticalFacing: "up" }));
+    check("…and after walking UP it holds walk_up (the nearest approved vertical)",
+      strafeAfterUp.clip === "walk_up");
+    const idleSide = resolveClip(has, poseOf({ facing: "side", verticalFacing: "up", isMoving: false }));
+    check("standing side-on holds frame 0 of the vertical sheet (no slide, no mirror)",
+      idleSide.clip === "walk_up" && idleSide.isHoldFirstFrame && !idleSide.isMirrored);
+    const sideAttack = resolveClip(has, poseOf({ isAttacking: true, facing: "side" }));
+    check("a side-facing attack resolves to the approved generic strip", sideAttack.clip === "attack");
+    const downAttack = resolveClip(has, poseOf({ isAttacking: true, facing: "down" }));
+    check("a down-facing attack still picks its approved directional sheet", downAttack.clip === "attack_down");
+  }
+  {
+    // The vertical-hold memory lives in the tracker: strafing preserves the last vertical.
+    const f = createFacing();
+    updateFacing(f, 0, -140);       // walk up
+    updateFacing(f, 200, 20);       // hard strafe right
+    check("the tracker remembers the last vertical while strafing", f.facing === "side" && f.lastVertical === "up");
+    updateFacing(f, 30, 180);       // turn down
+    updateFacing(f, -200, 10);      // strafe left
+    check("…and updates it when the vertical changes", f.facing === "side" && f.lastVertical === "down");
+  }
+  {
     // The legacy tier: exactly today's behavior for every existing enemy.
     const has = withSheets(["walk", "idle"]);
     const walk = resolveClip(has, poseOf({ facing: "down", isMirrored: true, isMoving: true }));
@@ -238,7 +267,6 @@ function approvedHookTests(): void {
     ["marrow", "marrow"],
     ["burrower", "burrower"],
     ["weaver", "weaver2_px"],
-    ["gilded", "gilded"],
     ["charger", "charger"],
     ["orbiter", "orbiter"],
   ];
@@ -257,6 +285,16 @@ function approvedHookTests(): void {
   }
   check("the Weaver's base sprite hook expects weaver2_px.png",
     devSpriteManifest().some((a) => a.group === "sprites" && a.label === "weaver" && a.src === "/sprites/weaver2_px.png"));
+  // The Gilded Warden's side profile is BLOCKED (art gate, failed twice): DOWN+UP sets +
+  // the generic attack strip only — no side file is registered or ever requested.
+  check("gilded: approved DOWN+UP walk/attack + generic attack hooks only",
+    SHEETS["gilded.walk_down"]?.src === "/sprites/gilded_walk_down.png"
+    && SHEETS["gilded.walk_up"]?.src === "/sprites/gilded_walk_up.png"
+    && SHEETS["gilded.attack_down"]?.src === "/sprites/gilded_attack_down.png"
+    && SHEETS["gilded.attack_up"]?.src === "/sprites/gilded_attack_up.png"
+    && SHEETS["gilded.attack"]?.src === "/sprites/gilded_attack.png");
+  check("gilded: NO side files are registered (side profile blocked)",
+    SHEETS["gilded.walk_side"] === undefined && SHEETS["gilded.attack_side"] === undefined);
   check("the stationary Choir carries an idle loop + omni attack (no walk triplet)",
     SHEETS["choir.idle"]?.src === "/sprites/choir_idle.png"
     && SHEETS["choir.attack"]?.src === "/sprites/choir_attack.png"

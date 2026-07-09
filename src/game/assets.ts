@@ -2,7 +2,7 @@
 
 import type { WeaponId, SpriteName } from "../sim/types.js";
 import { resolveClip } from "./facing.js";
-import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice } from "./facing.js";
+import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice, Facing4 } from "./facing.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -48,24 +48,31 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
 // around any sheet that has not landed/loaded yet, so a set can ship file-by-file.
 export interface DirectionalSetDef {
   walkFps: number;
-  // Registers the attack sheet(s) when set: the full `<base>_attack_{down,up,side}.png`
-  // triplet with isDirectionalAttack, or one omni `<base>_attack.png` without it.
+  // Registers the attack sheet(s) when set: the `<base>_attack_<facing>.png` variants
+  // with isDirectionalAttack, or one omni `<base>_attack.png` without it.
   attackFps?: number;
   isDirectionalAttack?: boolean;
   // AD-versioned finals whose file stem differs from the sprite name (e.g. weaver2_px).
   fileBase?: string;
+  // The APPROVED facings only (defaults to all three). A body whose side profile is
+  // blocked at the art gate registers ["down", "up"]; the selection ladder's vertical
+  // hold covers its horizontal movement (facing.ts — never a mirrored side fake).
+  facings?: readonly Facing4[];
 }
+
+const ALL_FACINGS: readonly Facing4[] = ["down", "up", "side"];
 
 export function registerDirectionalSet(name: SpriteName, def: DirectionalSetDef): void {
   const base = def.fileBase ?? name;
-  SHEETS[`${name}.walk_down`] = { src: `/sprites/${base}_walk_down.png`, fps: def.walkFps };
-  SHEETS[`${name}.walk_up`] = { src: `/sprites/${base}_walk_up.png`, fps: def.walkFps };
-  SHEETS[`${name}.walk_side`] = { src: `/sprites/${base}_walk_side.png`, fps: def.walkFps };
+  const facings = def.facings ?? ALL_FACINGS;
+  for (const facing of facings) {
+    SHEETS[`${name}.walk_${facing}`] = { src: `/sprites/${base}_walk_${facing}.png`, fps: def.walkFps };
+  }
   if (def.attackFps === undefined) return;
   if (def.isDirectionalAttack) {
-    SHEETS[`${name}.attack_down`] = { src: `/sprites/${base}_attack_down.png`, fps: def.attackFps };
-    SHEETS[`${name}.attack_up`] = { src: `/sprites/${base}_attack_up.png`, fps: def.attackFps };
-    SHEETS[`${name}.attack_side`] = { src: `/sprites/${base}_attack_side.png`, fps: def.attackFps };
+    for (const facing of facings) {
+      SHEETS[`${name}.attack_${facing}`] = { src: `/sprites/${base}_attack_${facing}.png`, fps: def.attackFps };
+    }
   } else {
     SHEETS[`${name}.attack`] = { src: `/sprites/${base}_attack.png`, fps: def.attackFps };
   }
@@ -101,7 +108,12 @@ registerDirectionalSet("burrower", { walkFps: 10, attackFps: 12, isDirectionalAt
 registerDirectionalSet("orbiter", { walkFps: 12, attackFps: 12, isDirectionalAttack: true });
 registerDirectionalSet("marrow", { walkFps: 8, attackFps: 10, isDirectionalAttack: true });
 registerDirectionalSet("weaver", { walkFps: 12, attackFps: 12, isDirectionalAttack: true, fileBase: "weaver2_px" });
-registerDirectionalSet("gilded", { walkFps: 6, attackFps: 10, isDirectionalAttack: true });
+// THE GILDED WARDEN's side profile is BLOCKED at the art gate (failed twice — stop):
+// approved DOWN+UP sets only, plus the approved generic attack strip as the side-facing
+// attack catch-all. Its horizontal movement holds the nearest vertical sheet via the
+// ladder's vertical hold — no gilded_*_side file is ever requested.
+registerDirectionalSet("gilded", { walkFps: 6, attackFps: 10, isDirectionalAttack: true, facings: ["down", "up"] });
+SHEETS["gilded.attack"] = { src: "/sprites/gilded_attack.png", fps: 10 };
 // The Hollow Choir is the stationary drifting mass: one breathing idle loop + one omni
 // attack sheet (no walk triplet — the selection ladder falls from walk to idle for it).
 SHEETS["choir.idle"] = { src: "/sprites/choir_idle.png", fps: 6 };
