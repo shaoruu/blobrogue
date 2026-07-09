@@ -8,7 +8,7 @@
 //
 // Run: npm run test:weaponstats
 
-import { weaponHudStats, liveDamageMult, liveFireRateMult, lowHpFrac } from "../src/sim/weaponStats.js";
+import { weaponHudStats, weaponCard, liveDamageMult, liveFireRateMult, lowHpFrac } from "../src/sim/weaponStats.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { createMods } from "../src/sim/items.js";
 import { CAPS } from "../src/sim/balance.js";
@@ -161,10 +161,72 @@ function antiDriftTests(): void {
   }
 }
 
+// The designer's card model: room-job verbs, categorical bands, and technique lines all
+// derive from canonical WeaponDef fields by rule — never hand-written per weapon.
+function cardTests(): void {
+  const card = (id: WeaponId) => weaponCard(id, createMods(), 0);
+
+  section("card: the room job derives from the weapon's defining behavior field");
+  const roles: [WeaponId, string][] = [
+    ["pistol", "HANDLE ANYTHING"], ["shotgun", "SHRED UP CLOSE"], ["sawnoff", "SHRED UP CLOSE"],
+    ["rapid", "HOSE THEM DOWN"], ["smg", "HOSE THEM DOWN"], ["beam", "MELT ONE TARGET"],
+    ["cannon", "BREAK A LINE"], ["railgun", "DELETE A TARGET"],
+    ["homing", "SEEK TARGETS"], ["tesla", "ARC THE PACK"], ["mortar", "BLAST THE CHOKEPOINT"],
+    ["flamer", "TORCH THE PACK"], ["ricochet", "WORK THE CORNERS"], ["nailer", "WORK THE CORNERS"],
+    ["sword", "DUEL UP CLOSE"], ["longsword", "CLEAR YOUR FLANKS"], ["spear", "HOLD A LANE"],
+  ];
+  for (const [id, role] of roles) check(`${id} -> ${role}`, card(id).role === role, card(id).role);
+
+  section("card: categorical bands for cadence/reach/coverage/impact; power stays exact");
+  check("pistol: FAST cadence, MID reach", card("pistol").cadence.band === "FAST" && card("pistol").reach.band === "MID");
+  check("railgun: HEAVY cadence, VERY LONG reach", card("railgun").cadence.band === "HEAVY" && card("railgun").reach.band === "VERY LONG");
+  check("beam: TORRENT cadence", card("beam").cadence.band === "TORRENT");
+  check("sawnoff: POINT BLANK reach, WALL coverage", card("sawnoff").reach.band === "POINT BLANK" && card("sawnoff").coverage?.band === "WALL");
+  check("shotgun: WIDE FAN coverage, SHOVES FOES impact", card("shotgun").coverage?.band === "WIDE FAN" && card("shotgun").impact?.band === "SHOVES FOES");
+  check("mortar: AREA BLAST impact", card("mortar").impact?.band === "AREA BLAST");
+  check("longsword: LAUNCHES FOES impact, WIDE SWEEP", card("longsword").impact?.band === "LAUNCHES FOES" && card("longsword").sweep?.band === "WIDE SWEEP");
+  check("power is exact per-pellet \u00d7 count, never aggregate", card("shotgun").power.perHit === 1.7 && card("shotgun").power.count === 5);
+  check("melee reach uses its own class bands",
+    card("sword").reach.band === "ARM'S LENGTH" && card("longsword").reach.band === "EXTENDED" && card("spear").reach.band === "POLE LENGTH");
+
+  section("card: defaults are omitted — no coverage on tight singles, no impact on ordinary hits");
+  check("pistol omits coverage + impact", card("pistol").coverage === null && card("pistol").impact === null);
+  check("tesla omits coverage (spread 0, one pellet)", card("tesla").coverage === null);
+  check("melee never carries a coverage row", card("sword").coverage === null && card("spear").coverage === null);
+  check("thrust omits the sweep row (the mechanic line carries it)", card("spear").sweep === null
+    && card("spear").mechanics.some((m) => m.tag === "THRUST"));
+
+  section("card: technique/tradeoff mechanics from canonical fields (incl. self-kick)");
+  const tags = (id: WeaponId) => card(id).mechanics.map((m) => m.tag).join(",");
+  check("cannon: PIERCE", tags("cannon") === "PIERCE");
+  check("tesla: CHAIN", tags("tesla") === "CHAIN");
+  check("ricochet/nailer: RICOCHET at different magnitudes",
+    tags("ricochet") === "RICOCHET" && tags("nailer") === "RICOCHET"
+    && card("ricochet").mechanics[0].mag === 2 && card("nailer").mechanics[0].mag === 1);
+  check("homing: SEEKING", tags("homing") === "SEEKING");
+  check("mortar: BLAST", tags("mortar") === "BLAST");
+  check("flamer: BURN", tags("flamer") === "BURN");
+  check("shotgun/sawnoff: the big self-kick surfaces as KICK", tags("shotgun") === "KICK" && tags("sawnoff") === "KICK");
+  check("plain weapons carry no mechanics", (["pistol", "rapid", "smg", "burst", "sword", "longsword"] as WeaponId[])
+    .every((id) => card(id).mechanics.length === 0));
+
+  section("card: live mods reshape the card honestly");
+  const mods = createMods();
+  mods.extraPellets = 2;
+  mods.pierce = 1;
+  mods.fireRateMult = 1.5;
+  const modded = weaponCard("pistol", mods, 0);
+  check("extra pellets grow the volley and surface coverage", modded.power.count === 3 && modded.coverage !== null);
+  check("pierce mods surface a live PIERCE mechanic", modded.mechanics.some((m) => m.tag === "PIERCE" && m.mag === 1));
+  check("fire-rate mods can move the cadence band", modded.cadence.band === "VERY FAST", modded.cadence.band); // 6.25 -> 9.4
+  check("melee ignores pellet mods on the card", weaponCard("sword", mods, 0).power.count === 1);
+}
+
 function main(): void {
   baseStatTests();
   modTests();
   specialTests();
+  cardTests();
   antiDriftTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

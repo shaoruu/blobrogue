@@ -9,7 +9,7 @@ import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.j
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
 import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
-import type { WeaponHudStats } from "../sim/weaponStats.js";
+import type { WeaponCard } from "../sim/weaponStats.js";
 
 export interface HudState {
   hp: number;
@@ -18,9 +18,10 @@ export interface HudState {
   kills: number;
   coins: number;
   // Hotbar slots in inventory order (= the 1-9 selection order); `isCurrent` = equipped.
-  // `stats` are the LIVE mod-adjusted numbers from the sim's weaponStats helper (the same
-  // math real shots resolve with), driving the hover/focus stat tooltip on each card.
-  weapons: { id: WeaponId; name: string; isCurrent: boolean; stats: WeaponHudStats }[];
+  // `card` is the LIVE semantic weapon card from the sim's weaponStats helper (role verb,
+  // banded core stats, mechanics — same math real shots resolve with), driving the
+  // hover/focus tooltip on each slot.
+  weapons: { id: WeaponId; name: string; isCurrent: boolean; card: WeaponCard }[];
   // The authoritative objective feed for the top-center lane: `N ENEMIES LEFT` while the
   // floor fights, `FLOOR CLEAR · GO DOWN` once cleared. A boss hides the line entirely
   // (the boss bar IS the objective), and the dev sandbox has no objective.
@@ -137,15 +138,29 @@ export function objectiveCopy(isCleared: boolean, enemiesLeft: number, isParty =
   return `${enemiesLeft} ${enemiesLeft === 1 ? "ENEMY" : "ENEMIES"} LEFT`;
 }
 
-// ---- weapon stat tooltip copy (pure — the DOM suite locks the formatting) ----
+// ---- weapon card tooltip copy (pure — the DOM suite locks the formatting) ----
+//
+// The game designer's vocabulary: lead with the room-job verb, then at most five core
+// rows (POWER / CADENCE / REACH / COVERAGE-or-SWEEP / IMPACT), then at most three concise
+// technique/tradeoff lines. All content derives from the sim's WeaponCard (canonical
+// WeaponDef + live mods) — no hand-written per-weapon tooltip values here.
 
-// One tooltip stat line. `delta` is the restrained comparison against the EQUIPPED weapon:
-// +1 better / -1 worse / 0 within noise / null = not compared (the equipped card itself,
-// or a field that would mislead across classes — melee reach vs bullet travel).
+// One core stat row. `delta` is the restrained sidegrade comparison against the EQUIPPED
+// weapon: +1 more / -1 less / 0 same / null = not compared (the equipped card itself, an
+// ambiguous-tradeoff field like coverage/sweep/impact, or reach across classes — melee
+// reach vs bullet travel would mislead).
 export interface WeaponTipRow {
   k: string;
   v: string;
   delta: -1 | 0 | 1 | null;
+}
+
+// One technique/tradeoff line. `marker` is the mechanics diff vs the equipped weapon:
+// "gains" (new mechanic), "changes" (same mechanic, different magnitude), "loses" (the
+// equipped weapon's mechanic this one lacks), null = shared as-is or no comparison.
+export interface WeaponTipNote {
+  text: string;
+  marker: "gains" | "loses" | "changes" | null;
 }
 
 // Stat numbers read at one decimal, trailing .0 dropped ("2", "1.7", "6.3").
@@ -155,52 +170,90 @@ export function fmtStat(n: number): string {
 }
 
 // ±0.5% dead zone so float noise (mod multiplies) never paints a fake arrow.
-function deltaOf(a: number, b: number): -1 | 0 | 1 {
+function numDelta(a: number, b: number): -1 | 0 | 1 {
   if (a > b * 1.005) return 1;
   if (a < b * 0.995) return -1;
   return 0;
 }
 
-// The card's stat rows. DMG shows per-hit ×volley ("1.7 ×5"); its delta compares the full
-// volley (damage × pellets), never the misleading per-pellet number. RANGE relabels to
-// REACH on melee, and range/reach are only compared within the same class. This game has
-// no ammo/reload, so those rows simply don't exist.
-export function weaponTipRows(s: WeaponHudStats, vs: WeaponHudStats | null): WeaponTipRow[] {
-  return [
-    {
-      k: "DMG",
-      v: fmtStat(s.damage) + (s.pellets > 1 ? ` \u00d7${s.pellets}` : ""),
-      delta: vs ? deltaOf(s.damage * s.pellets, vs.damage * vs.pellets) : null,
-    },
-    { k: "RATE", v: `${fmtStat(s.rate)}/S`, delta: vs ? deltaOf(s.rate, vs.rate) : null },
-    {
-      k: s.isMelee ? "REACH" : "RANGE",
-      v: `${Math.round(s.range)} PX`,
-      delta: vs && vs.isMelee === s.isMelee ? deltaOf(s.range, vs.range) : null,
-    },
-  ];
+function bandDelta(a: number, b: number): -1 | 0 | 1 {
+  return a > b ? 1 : a < b ? -1 : 0;
 }
 
+// The core rows, at most five. POWER is exact and per-pellet ("1.7 ×5" — never a fake
+// aggregate); its arrow compares the full volley. CADENCE/REACH are categorical bands
+// with arrows from band order (a band tie never paints an arrow over noise); reach only
+// compares within the same class. COVERAGE/SWEEP/IMPACT are shape tradeoffs, not ladders
+// — never an arrow. Default/irrelevant rows (tight single shot, ordinary impact) are
+// omitted entirely. This game has no ammo/reload, so those rows don't exist.
+export function weaponTipRows(c: WeaponCard, vs: WeaponCard | null): WeaponTipRow[] {
+  const rows: WeaponTipRow[] = [
+    {
+      k: "POWER",
+      v: fmtStat(c.power.perHit) + (c.power.count > 1 ? ` \u00d7${c.power.count}` : ""),
+      delta: vs ? numDelta(c.power.perHit * c.power.count, vs.power.perHit * vs.power.count) : null,
+    },
+    { k: "CADENCE", v: c.cadence.band, delta: vs ? bandDelta(c.cadence.order, vs.cadence.order) : null },
+    {
+      k: "REACH",
+      v: c.reach.band,
+      delta: vs && vs.isMelee === c.isMelee ? bandDelta(c.reach.order, vs.reach.order) : null,
+    },
+  ];
+  if (c.coverage) rows.push({ k: "COVERAGE", v: c.coverage.band, delta: null });
+  if (c.sweep) rows.push({ k: "SWEEP", v: c.sweep.band, delta: null });
+  if (c.impact) rows.push({ k: "IMPACT", v: c.impact.band, delta: null });
+  return rows.slice(0, 5);
+}
+
+// The technique/tradeoff lines, at most three. Against the equipped weapon they read as a
+// mechanics diff: this card's mechanics marked GAINS (equipped lacks the tag) or CHANGES
+// (same tag, different magnitude), unmarked when shared as-is — then LOSES lines for
+// equipped mechanics this weapon gives up (they fill the remaining line budget last).
+export function weaponTipNotes(c: WeaponCard, vs: WeaponCard | null): WeaponTipNote[] {
+  const notes: WeaponTipNote[] = c.mechanics.map((m) => {
+    if (!vs) return { text: m.text, marker: null };
+    const other = vs.mechanics.find((o) => o.tag === m.tag);
+    if (!other) return { text: m.text, marker: "gains" as const };
+    return { text: m.text, marker: other.mag !== m.mag ? ("changes" as const) : null };
+  });
+  if (vs) {
+    for (const o of vs.mechanics) {
+      if (!c.mechanics.some((m) => m.tag === o.tag)) notes.push({ text: o.text, marker: "loses" });
+    }
+  }
+  return notes.slice(0, 3);
+}
+
+const NOTE_PREFIX: Record<NonNullable<WeaponTipNote["marker"]>, string> = {
+  gains: "GAINS",
+  loses: "LOSES",
+  changes: "CHANGES",
+};
+
 // One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath, and the
-// hover/focus stat tooltip (same .tip pattern as the blessing chips). Slots past 9 get no
-// key badge — scroll still cycles to them. Fixed width so switching never resizes anything.
-// Slots are pointer/keyboard interactive (click/Enter/Space equips, drag or Shift+arrows
-// reorder — see Hud.attachSlotInteractions), so they carry button semantics for a11y.
-// `equippedStats` drives the directional deltas on unequipped cards. Exported for the DOM suite.
+// hover/focus weapon-card tooltip (same .tip pattern as the blessing chips). Slots past 9
+// get no key badge — scroll still cycles to them. Fixed width so switching never resizes
+// anything. Slots are pointer/keyboard interactive (click/Enter/Space equips, drag or
+// Shift+arrows reorder — see Hud.attachSlotInteractions), so they carry button semantics
+// for a11y. `equippedCard` drives the sidegrade arrows + mechanics diff on unequipped
+// cards. Exported for the DOM suite.
 export function buildSlot(
   w: HudState["weapons"][number],
   index: number,
-  equippedStats: WeaponHudStats | null = null,
+  equippedCard: WeaponCard | null = null,
 ): HTMLElement {
   const slot = el("span", "");
   slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
   slot.tabIndex = 0;
   slot.setAttribute("role", "button");
-  const rows = weaponTipRows(w.stats, w.isCurrent ? null : equippedStats);
+  const vs = w.isCurrent ? null : equippedCard;
+  const rows = weaponTipRows(w.card, vs);
+  const notes = weaponTipNotes(w.card, vs);
   slot.setAttribute("aria-label",
-    `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}. `
+    `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}. ${w.card.role}. `
     + rows.map((r) => `${r.k} ${r.v}`).join(", ")
-    + (w.stats.special ? `. ${w.stats.special}` : ""));
+    + notes.map((n) => `. ${n.marker ? NOTE_PREFIX[n.marker] + " " : ""}${n.text}`).join(""));
   if (index < 9) {
     const key = el("span", "", String(index + 1));
     key.className = "hb-key";
@@ -215,14 +268,17 @@ export function buildSlot(
   name.className = "hb-name";
   slot.append(icon, name);
 
-  // The stat tooltip (no native `title` — it would double up over this). CSS shows it on
-  // :hover / :focus-visible and hides every tip while a drag is live (.hb-slots.no-tips).
+  // The weapon-card tooltip (no native `title` — it would double up over this). CSS shows
+  // it on :hover / :focus-visible and hides every tip while a drag is live
+  // (.hb-slots.no-tips). Structure: name, room-job verb, core rows, technique lines.
   const tip = el("span", "");
   tip.className = "tip";
   tip.setAttribute("role", "tooltip");
   const tipName = el("span", "", w.name.toUpperCase());
   tipName.className = "tn";
-  tip.appendChild(tipName);
+  const tipRole = el("span", "", w.card.role);
+  tipRole.className = "tj";
+  tip.append(tipName, tipRole);
   for (const row of rows) {
     const line = el("span", "");
     line.className = "tr";
@@ -238,10 +294,10 @@ export function buildSlot(
     }
     tip.appendChild(line);
   }
-  if (w.stats.special) {
-    const special = el("span", "", w.stats.special);
-    special.className = "ts";
-    tip.appendChild(special);
+  for (const note of notes) {
+    const line = el("span", "", note.marker ? `${NOTE_PREFIX[note.marker]} \u00b7 ${note.text}` : note.text);
+    line.className = "tm" + (note.marker ? ` ${note.marker}` : "");
+    tip.appendChild(line);
   }
   if (w.isCurrent) {
     const cur = el("span", "", "EQUIPPED");
@@ -884,7 +940,7 @@ export class Hud {
     // are stale against authority and must never be committed. Tooltip stats ride the same
     // key so live mod changes (blessing picks, low-HP scalers) refresh the numbers.
     const slotsKey = s.weapons
-      .map((w) => (w.isCurrent ? "*" : "") + w.id + ":" + JSON.stringify(w.stats))
+      .map((w) => (w.isCurrent ? "*" : "") + w.id + ":" + JSON.stringify(w.card))
       .join("|");
     if (slotsKey !== this.prevSlotsKey) {
       if (this.drag) {
@@ -895,7 +951,7 @@ export class Hud {
       if (!this.drag) {
         this.prevSlotsKey = slotsKey;
         this.lastWeapons = s.weapons;
-        const equipped = s.weapons.find((w) => w.isCurrent)?.stats ?? null;
+        const equipped = s.weapons.find((w) => w.isCurrent)?.card ?? null;
         this.slotsEl.replaceChildren();
         s.weapons.forEach((w, i) => {
           const slot = buildSlot(w, i, equipped);

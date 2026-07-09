@@ -23,20 +23,20 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, fmtStat } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, dealerTagCopy, weaponTipRows, weaponTipNotes, fmtStat } = await import("../src/game/hud.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
-const { weaponHudStats } = await import("../src/sim/weaponStats.js");
+const { weaponCard } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
 type WeaponId = HudState["weapons"][number]["id"];
 
-// Unmodified live stats for a weapon (fresh mods, full HP) — the shape game.ts feeds.
-function wstat(id: WeaponId) {
-  return weaponHudStats(id, createMods(), 0);
+// Unmodified live weapon card (fresh mods, full HP) — the shape game.ts feeds.
+function wcard(id: WeaponId) {
+  return weaponCard(id, createMods(), 0);
 }
 function wslot(id: WeaponId, name: string, isCurrent: boolean) {
-  return { id, name, isCurrent, stats: wstat(id) };
+  return { id, name, isCurrent, card: wcard(id) };
 }
 
 let passed = 0, failed = 0;
@@ -80,8 +80,8 @@ function weaponSlotTests(): void {
   check("slot keeps its select-key badge", slot.querySelector(".hb-key")?.textContent === "2");
   check("slot keeps its weapon-name label", slot.querySelector(".hb-name")?.textContent === "SHOTGUN");
   check("slot is a tabbable button", slot.tabIndex === 0 && slot.getAttribute("role") === "button");
-  check("slot aria-label names weapon + slot + equipped state + live stats",
-    slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped. DMG 1.7 \u00d75, RATE 1.9/S, RANGE 160 PX",
+  check("slot aria-label names weapon + slot + equipped state + the full card",
+    slot.getAttribute("aria-label") === "Shotgun, slot 2, equipped. SHRED UP CLOSE. POWER 1.7 \u00d75, CADENCE SLOW, REACH SHORT, COVERAGE WIDE FAN, IMPACT SHOVES FOES. KICKS YOU BACK",
     slot.getAttribute("aria-label") ?? "");
   check("equipped slot is lit", slot.classList.contains("on"));
   const tenth = buildSlot(wslot("tesla", "Tesla", false), 9);
@@ -89,50 +89,87 @@ function weaponSlotTests(): void {
 }
 
 function weaponTooltipTests(): void {
-  section("weapon stat tooltip: name + live DMG/RATE/RANGE rows in the pixel tip chrome");
+  section("weapon card tooltip: room-job verb leads, then core rows in the pixel tip chrome");
   const slot = buildSlot(wslot("shotgun", "Shotgun", true), 1);
   const tip = slot.querySelector(".tip")!;
   check("slot carries a tooltip element", tip !== null && tip.getAttribute("role") === "tooltip");
   check("no native title attribute (would double the custom tip)", slot.getAttribute("title") === null);
   check("tooltip names the weapon", tip.querySelector(".tn")?.textContent === "SHOTGUN");
+  check("the room job leads the card", tip.querySelector(".tj")?.textContent === "SHRED UP CLOSE");
   const rows = [...tip.querySelectorAll(".tr")].map((r) =>
     `${r.querySelector(".tk")?.textContent}=${r.querySelector(".tv")?.textContent}`);
-  check("rows read DMG \u00d7volley / RATE / RANGE", rows.join("|") === "DMG=1.7 \u00d75|RATE=1.9/S|RANGE=160 PX", rows.join("|"));
-  check("equipped card marks itself EQUIPPED and carries no deltas",
+  check("core rows: exact per-pellet POWER, banded CADENCE/REACH/COVERAGE/IMPACT",
+    rows.join("|") === "POWER=1.7 \u00d75|CADENCE=SLOW|REACH=SHORT|COVERAGE=WIDE FAN|IMPACT=SHOVES FOES", rows.join("|"));
+  check("tradeoff line: the shotgun's self-kick", [...tip.querySelectorAll(".tm")].map((n) => n.textContent).join("|") === "KICKS YOU BACK");
+  check("equipped card marks itself EQUIPPED and carries no arrows",
     tip.querySelector(".tx")?.textContent === "EQUIPPED" && tip.querySelector(".td") === null);
-  check("plain gun shows no special line", tip.querySelector(".ts") === null);
 
-  section("weapon stat tooltip: melee relabels RANGE to REACH; specials derive from weapon data");
+  section("weapon card tooltip: irrelevant/default rows are omitted, never nonsense");
+  const pistol = buildSlot(wslot("pistol", "Pistol", false), 0);
+  const pistolRows = [...pistol.querySelectorAll(".tr .tk")].map((k) => k.textContent);
+  check("tight single shot has no COVERAGE row; ordinary hits no IMPACT row",
+    pistolRows.join(",") === "POWER,CADENCE,REACH", pistolRows.join(","));
+  check("plain pistol carries zero technique lines", pistol.querySelectorAll(".tm").length === 0);
   const sword = buildSlot(wslot("sword", "Cutlass", false), 0);
-  check("melee row reads REACH", [...sword.querySelectorAll(".tr .tk")].map((k) => k.textContent).join(",") === "DMG,RATE,REACH");
-  const tesla = buildSlot(wslot("tesla", "Tesla", false), 2);
-  check("tesla names its chain", tesla.querySelector(".ts")?.textContent === "CHAINS TO 3 MORE");
+  const swordRows = [...sword.querySelectorAll(".tr .tk")].map((k) => k.textContent);
+  check("melee shows SWEEP (never COVERAGE)", swordRows.join(",") === "POWER,CADENCE,REACH,SWEEP,IMPACT", swordRows.join(","));
   const spear = buildSlot(wslot("spear", "Pike", false), 3);
-  check("thrust melee names its verb", spear.querySelector(".ts")?.textContent === "PIERCING THRUST");
+  check("a thrust has no SWEEP row — the technique line carries it",
+    [...spear.querySelectorAll(".tr .tk")].every((k) => k.textContent !== "SWEEP")
+    && [...spear.querySelectorAll(".tm")].some((n) => n.textContent === "PIERCING THRUST"));
+  check("row budget holds: never more than five stat rows + three technique lines",
+    (["shotgun", "sawnoff", "mortar", "tesla", "longsword", "flamer"] as WeaponId[]).every((id) => {
+      const s = buildSlot(wslot(id, id, false), 0, wcard("shotgun"));
+      return s.querySelectorAll(".tr").length <= 5 && s.querySelectorAll(".tm").length <= 3;
+    }));
 
-  section("weapon stat tooltip: restrained deltas vs the equipped weapon");
-  const equipped = wstat("shotgun"); // volley 1.7×5 = 8.5, rate 1.9, range 160
-  const cannonRows = weaponTipRows(wstat("cannon"), equipped); // 9 dmg, slow, long range
-  check("bigger volley damage marks up", cannonRows[0].delta === 1);
-  check("slower rate marks down", cannonRows[1].delta === -1);
-  check("longer range marks up", cannonRows[2].delta === 1);
-  const swordRows = weaponTipRows(wstat("sword"), equipped);
-  check("melee reach is NEVER compared against bullet range (incomparable classes)", swordRows[2].delta === null);
-  check("melee damage/rate still compare", swordRows[0].delta !== null && swordRows[1].delta !== null);
-  const selfRows = weaponTipRows(wstat("shotgun"), wstat("shotgun"));
-  check("identical stats read as no delta (dead zone)", selfRows.every((r) => r.delta === 0));
-  check("no-equipped comparison yields null deltas", weaponTipRows(wstat("pistol"), null).every((r) => r.delta === null));
+  section("weapon card tooltip: sidegrade arrows only where honest");
+  const equipped = wcard("shotgun"); // volley 8.5, CADENCE SLOW, REACH SHORT
+  const cannonRows = weaponTipRows(wcard("cannon"), equipped);
+  check("bigger volley POWER marks up (per-volley, never per-pellet)", cannonRows[0].delta === 1);
+  check("same CADENCE band = no arrow (band ties never paint noise)", cannonRows[1].delta === 0);
+  check("longer REACH band marks up", cannonRows[2].delta === 1);
+  const rapidRows = weaponTipRows(wcard("rapid"), equipped);
+  check("faster CADENCE band marks up, weaker volley marks down", rapidRows[1].delta === 1 && rapidRows[0].delta === -1);
+  const swordVs = weaponTipRows(wcard("sword"), equipped);
+  check("melee REACH is NEVER compared against bullet travel (incomparable classes)", swordVs[2].delta === null);
+  check("COVERAGE/SWEEP/IMPACT are shape tradeoffs — never arrows",
+    weaponTipRows(wcard("sawnoff"), equipped).slice(3).every((r) => r.delta === null)
+    && weaponTipRows(wcard("longsword"), wcard("sword")).slice(3).every((r) => r.delta === null));
+  check("no-equipped comparison yields null deltas", weaponTipRows(wcard("pistol"), null).every((r) => r.delta === null));
   const slotVs = buildSlot(wslot("cannon", "Thunderbolt", false), 0, equipped);
   const arrows = [...slotVs.querySelectorAll(".td")].map((d) => `${d.textContent}${d.classList.contains("up") ? "+" : "-"}`);
-  check("delta arrows render with up/down classes", arrows.join(",") === "\u25b2+,\u25bc-,\u25b2+", arrows.join(","));
+  check("arrows render with up/down classes (POWER up, REACH up)", arrows.join(",") === "\u25b2+,\u25b2+", arrows.join(","));
 
-  section("weapon stat tooltip: live mod-adjusted values (never raw balance constants)");
+  section("weapon card tooltip: mechanics diff as GAINS / LOSES / CHANGES");
+  const vsShotgun = weaponTipNotes(wcard("tesla"), equipped);
+  check("new mechanic reads GAINS", vsShotgun.some((n) => n.marker === "gains" && n.text === "CHAINS TO 3 MORE"), JSON.stringify(vsShotgun));
+  check("the equipped weapon's dropped mechanic reads LOSES",
+    vsShotgun.some((n) => n.marker === "loses" && n.text === "KICKS YOU BACK"), JSON.stringify(vsShotgun));
+  const ricochetVsNailer = weaponTipNotes(wcard("ricochet"), wcard("nailer"));
+  check("same mechanic at a new magnitude reads CHANGES",
+    ricochetVsNailer.some((n) => n.marker === "changes" && n.text === "RICOCHETS \u00d72"), JSON.stringify(ricochetVsNailer));
+  const flamerVsFlamer = weaponTipNotes(wcard("flamer"), wcard("flamer"));
+  check("shared mechanics stay unmarked", flamerVsFlamer.every((n) => n.marker === null));
+  check("no comparison = plain technique lines", weaponTipNotes(wcard("mortar"), null).every((n) => n.marker === null));
+  const teslaSlot = buildSlot(wslot("tesla", "Tesla", false), 2, equipped);
+  const noteLines = [...teslaSlot.querySelectorAll(".tm")].map((n) => `${n.className}:${n.textContent}`);
+  check("diff lines render marked with the prefix", noteLines.join("|") === "tm gains:GAINS \u00b7 CHAINS TO 3 MORE|tm loses:LOSES \u00b7 KICKS YOU BACK", noteLines.join("|"));
+
+  section("weapon card tooltip: live mod-adjusted values (never raw balance constants)");
   const mods = createMods();
   mods.damageMult = 1.5;
   mods.extraPellets = 2;
-  const modded = weaponHudStats("shotgun", mods, 0);
+  const modded = weaponCard("shotgun", mods, 0);
   const moddedRows = weaponTipRows(modded, null);
-  check("damage row reflects the damage mult", moddedRows[0].v === `${fmtStat(1.7 * 1.5)} \u00d77`, moddedRows[0].v);
+  check("POWER reflects the damage mult and the modded volley", moddedRows[0].v === `${fmtStat(1.7 * 1.5)} \u00d77`, moddedRows[0].v);
+  const moddedPistol = weaponCard("pistol", mods, 0);
+  check("extra pellets surface a COVERAGE row on a previously-tight gun",
+    weaponTipRows(moddedPistol, null).some((r) => r.k === "COVERAGE"));
+  const pierceMods = createMods();
+  pierceMods.pierce = 1;
+  check("pierce mods surface a live PIERCES line",
+    weaponTipNotes(weaponCard("pistol", pierceMods, 0), null).some((n) => n.text === "PIERCES 1 BODY"));
   check("fmtStat trims to one decimal", fmtStat(6.25) === "6.3" && fmtStat(2) === "2" && fmtStat(1.9230769) === "1.9");
 }
 

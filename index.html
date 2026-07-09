@@ -75,11 +75,13 @@
       .hb-slot:hover .tip, .hb-slot:focus-visible .tip{ display:flex; }
       .hb-slots.no-tips .hb-slot .tip{ display:none !important; }
       .hb-slot .tip .tn{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--amber); }
+      .hb-slot .tip .tj{ font-family:var(--f-ui); font-size:7px; letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }
       .hb-slot .tip .tr{ display:flex; align-items:baseline; gap:7px; }
-      .hb-slot .tip .tk{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); min-width:34px; }
+      .hb-slot .tip .tk{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); min-width:52px; }
       .hb-slot .tip .tv{ color:var(--cream); }
       .hb-slot .tip .td{ font-size:10px; } .hb-slot .tip .td.up{ color:var(--grn); } .hb-slot .tip .td.down{ color:var(--red); }
-      .hb-slot .tip .ts{ color:var(--blu); }
+      .hb-slot .tip .tm{ color:var(--blu); }
+      .hb-slot .tip .tm.gains{ color:var(--grn); } .hb-slot .tip .tm.loses{ color:var(--red); } .hb-slot .tip .tm.changes{ color:var(--amber); }
       .hb-slot .tip .tx{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--amber); }
       /* drag/drop feedback: dimmed source slot, floating ghost under the cursor, and an
          amber insertion bar at the drop gap. Ghost + bar are overlays — zero layout shift.

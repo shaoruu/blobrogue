@@ -8,7 +8,7 @@ import { Sprites, TileSet, playerColor, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor } from "../sim/enemies.js";
 import { WEAPONS } from "../sim/weapons.js";
-import { weaponHudStats, lowHpFrac } from "../sim/weaponStats.js";
+import { weaponHudStats, weaponCard, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, DEALER } from "../sim/balance.js";
@@ -2481,11 +2481,11 @@ export class Game {
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
-      // Live per-weapon stats ride each slot (mods + low-HP scalers via the sim's own
+      // Live per-weapon cards ride each slot (mods + low-HP scalers via the sim's own
       // helper) so hover tooltips always show what a trigger pull would actually do.
       weapons: this.p.ownedWeapons.map((id) => ({
         id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
-        stats: weaponHudStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
+        card: weaponCard(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
       })),
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").

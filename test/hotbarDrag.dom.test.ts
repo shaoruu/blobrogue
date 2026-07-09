@@ -30,7 +30,7 @@ Object.assign(globalThis, {
 
 const { Hud } = await import("../src/game/hud.js");
 const { createMods } = await import("../src/sim/items.js");
-const { weaponHudStats } = await import("../src/sim/weaponStats.js");
+const { weaponCard } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
 type WeaponId = HudState["weapons"][number]["id"];
@@ -57,7 +57,7 @@ const FIVE: { id: WeaponId; name: string }[] = [
 function mkState(currentIndex = 1, ids = FIVE): HudState {
   return {
     hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
-    weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, stats: weaponHudStats(w.id, createMods(), 0) })),
+    weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponCard(w.id, createMods(), 0) })),
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
