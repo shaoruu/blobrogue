@@ -155,10 +155,10 @@ export class Session {
   // but the JOIN paths must be able to await them: flushIdentity() below is what guarantees
   // a room ticket can never be minted ahead of the pick it should carry (the remote-color
   // Sev — teammates rendering a stale/default tint).
-  private pendingFlush: Promise<unknown> = Promise.resolve();
+  private pendingFlush: Promise<void> = Promise.resolve();
 
   private flushInBackground(): void {
-    if (this.client) this.pendingFlush = this.login().catch(() => {});
+    if (this.client) this.pendingFlush = this.login().then(() => undefined, () => undefined);
   }
 
   // Settle every backgrounded identity write, then land one final flush of the CURRENT
