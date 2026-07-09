@@ -36,7 +36,7 @@ import { getFunctionName } from "convex/server";
 import { worldIdForRoomCode } from "../src/net/protocol.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
-import { NUDGE_DISMISSED_AT_KEY } from "../src/ui/signinNudge.js";
+import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { padActions } from "../src/ui/menuGamepad.js";
 
 let passed = 0, failed = 0;
@@ -593,6 +593,15 @@ async function main(): Promise<void> {
     check("guest account region is the honest guest line", freshAll.includes("playing as guest"));
     check("the guest NAME INPUT lives here (moved off the home card)", collect(fresh.overlay, (n) => n.tagName === "INPUT").length === 1);
 
+    // Manual sign-in is ALWAYS available from the Profile, independent of nudge cooldowns.
+    localStorage.setItem(NUDGE_DISMISSED_AT_KEY, String(Date.now()));
+    const cooled = makeMenu({ auth: fakeAuth(false), mine: null });
+    await cooled.menu.showProfile();
+    await settle();
+    check("Profile offers manual SIGN IN even under a nudge cooldown",
+      buttonsOf(cooled.overlay).some((b) => b.includes("SIGN IN WITH GOOGLE")));
+    localStorage.removeItem(NUDGE_DISMISSED_AT_KEY);
+
     // Failed own-run fetch: same geometry, honest note.
     const broken = makeMenu({ mine: "fail" });
     await broken.menu.showProfile();
@@ -728,6 +737,7 @@ async function main(): Promise<void> {
   section("post-run sign-in nudge: guests once per session, cooldown-guarded, honest copy");
   {
     localStorage.removeItem(NUDGE_DISMISSED_AT_KEY);
+    localStorage.removeItem(NUDGE_SHOWN_AT_KEY);
     const guest = makeMenu({ auth: fakeAuth(false) });
     guest.menu.showGameOver(RUN, PROFILE, { isNewBest: false, online: null, newUnlocks: ["hat_crown"] });
     const text = textOf(guest.overlay);
@@ -735,6 +745,13 @@ async function main(): Promise<void> {
     check("nudge offers 'not now'", buttonsOf(guest.overlay).some((b) => b === "not now"));
     check("the earned cosmetic strengthens the pitch", text.includes("Crown") && text.includes("only lives in this browser"));
     check("unlock banner celebrates the earn", text.includes("NEW COSMETIC UNLOCKED"));
+    check("rendering the nudge records the shown-cooldown", localStorage.getItem(NUDGE_SHOWN_AT_KEY) !== null);
+    // Without the earn, the pitch references the ACTUAL unsynced run.
+    localStorage.removeItem(NUDGE_SHOWN_AT_KEY);
+    const plain = makeMenu({ auth: fakeAuth(false) });
+    plain.menu.showGameOver(RUN, PROFILE, { isNewBest: false, online: null });
+    check("the plain pitch names the banked run", textOf(plain.overlay).includes(`your floor ${RUN.floor} run only lives in this browser`));
+    localStorage.removeItem(NUDGE_SHOWN_AT_KEY);
 
     guest.menu.showGameOver(RUN, PROFILE, { isNewBest: false, online: null });
     check("never twice in one session", !buttonsOf(guest.overlay).some((b) => b === "not now"));

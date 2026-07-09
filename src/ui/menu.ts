@@ -15,7 +15,7 @@ import { cosmeticOverlay } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
 import type { BlobLook } from "./blobPreview.js";
 import { createSettingsControls } from "./settings.js";
-import { shouldShowSigninNudge, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
+import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
@@ -796,12 +796,24 @@ export class Menu {
       account.appendChild(out);
     } else {
       // Guests manage their display name HERE (identity lives on the profile surface;
-      // the home identity card is the sign-in pitch).
+      // the home identity card is the sign-in pitch) — and the manual sign-in door is
+      // ALWAYS available here regardless of any nudge cooldown.
       account.appendChild(this.nameRow());
-      account.appendChild(el("p", "muted id-note",
-        this.client
-          ? "playing as guest \u2014 sign in from the title screen to keep this blob across devices"
-          : "offline build \u2014 your closet is saved on this device"));
+      if (this.auth) {
+        const note = el("p", "muted id-note", "Optional \u00b7 keeps this blob across devices.");
+        const cta = el("button", "secondary btn-google pc-signin");
+        cta.type = "button";
+        cta.appendChild(googleMark());
+        const label = el("span", "", "SIGN IN WITH GOOGLE");
+        cta.appendChild(label);
+        cta.onclick = () => void this.doSignIn(cta, label, note);
+        account.append(cta, note);
+      } else {
+        account.appendChild(el("p", "muted id-note",
+          this.client
+            ? "playing as guest \u2014 sign in to keep this blob across devices"
+            : "offline build \u2014 your closet is saved on this device"));
+      }
     }
     wrap.appendChild(account);
   }
@@ -1420,8 +1432,9 @@ export class Menu {
 
     // Contextual sign-in nudge: guests who just banked meaningful progress (a saved run —
     // extra pull when it earned a cosmetic) get ONE quiet pitch, session-latched and
-    // cooldown-guarded. It renders with the screen (zero shift) and never takes focus.
-    const nudge = this.signinNudgeBlock(profile, ctx);
+    // cooldown-guarded, placed AFTER the run stats and unlock reveal in reading order.
+    // It renders with the screen (zero shift) and never takes focus.
+    const nudge = this.signinNudgeBlock(result, profile, ctx);
     if (nudge) wrap.appendChild(nudge);
 
     wrap.appendChild(el("p", "hint", hint));
@@ -1441,7 +1454,7 @@ export class Menu {
   // The post-run guest nudge block, or null when the policy says stay quiet. Dismissing
   // swaps the content INSIDE the reserved block (no shift) and starts the persistent
   // cooldown; the buttons never receive focus automatically.
-  private signinNudgeBlock(profile: ProfileDoc | null, ctx: GameOverContext): HTMLElement | null {
+  private signinNudgeBlock(result: RunResult, profile: ProfileDoc | null, ctx: GameOverContext): HTMLElement | null {
     const isEligible = shouldShowSigninNudge(localStorage, {
       isSignInAvailable: this.auth !== null,
       isSignedIn: this.auth?.isSignedIn ?? false,
@@ -1451,12 +1464,15 @@ export class Menu {
     });
     if (!isEligible) return null;
     this.isNudgeShownThisSession = true;
+    recordNudgeShown(localStorage); // merely seeing it starts the shown-cooldown
 
     const box = el("div", "nudge");
+    // The pitch names the ACTUAL unsynced value: the cosmetic this run earned, else the
+    // concrete run that was just banked on this browser only.
     const earned = (ctx.newUnlocks ?? []).map((id) => cosmeticById(id)?.name).filter((n): n is string => n !== undefined);
     const pitch = earned.length > 0
       ? `that ${earned[0]} you just earned only lives in this browser \u2014 ${SIGNIN_BENEFITS}`
-      : `this run only lives in this browser \u2014 ${SIGNIN_BENEFITS}`;
+      : `your floor ${result.floor} run only lives in this browser \u2014 ${SIGNIN_BENEFITS}`;
     box.appendChild(el("p", "nudge-copy", pitch));
     const row = el("div", "nudge-row");
     const status = el("p", "muted auth-status");

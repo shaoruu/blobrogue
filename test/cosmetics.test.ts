@@ -30,7 +30,8 @@ import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js"
 import { IDLE_INPUT } from "../src/sim/input.js";
 import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import {
-  shouldShowSigninNudge, recordNudgeDismissed, NUDGE_COOLDOWN_MS, NUDGE_DISMISSED_AT_KEY,
+  shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed,
+  NUDGE_COOLDOWN_MS, NUDGE_SHOWN_COOLDOWN_MS, NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY,
 } from "../src/ui/signinNudge.js";
 import type { NudgeStore } from "../src/ui/signinNudge.js";
 
@@ -339,6 +340,26 @@ function nudgeTests(): void {
   const junk = fakeStore();
   junk.setItem(NUDGE_DISMISSED_AT_KEY, "not-a-number");
   check("junk stored timestamp fails open (shows)", shouldShowSigninNudge(junk, base, t0));
+
+  // Merely SEEING the prompt (no dismissal) starts the shorter shown-cooldown, so a
+  // multi-run day is nagged at most once per window.
+  const seen = fakeStore();
+  recordNudgeShown(seen, t0);
+  check("shownAt persists", seen.data.get(NUDGE_SHOWN_AT_KEY) === String(t0));
+  check("suppressed inside the shown-cooldown (multi-run day)", !shouldShowSigninNudge(seen, base, t0 + NUDGE_SHOWN_COOLDOWN_MS - 1));
+  check("eligible again after the shown-cooldown", shouldShowSigninNudge(seen, base, t0 + NUDGE_SHOWN_COOLDOWN_MS + 1));
+  check("the dismissal cooldown is the LONGER of the two", NUDGE_COOLDOWN_MS > NUDGE_SHOWN_COOLDOWN_MS);
+}
+
+// OAuth/token hygiene: the code parameter is stripped from the URL immediately, the PKCE
+// verifier is consumed (removed) on use, and no token variable is ever logged.
+function authHygieneTests(): void {
+  section("auth hygiene: PKCE verifier consumed, ?code stripped, no tokens in logs");
+  const src = readFileSync(join(ROOT, "src/net/auth.ts"), "utf8");
+  check("completeOAuth strips ?code= from the URL before the exchange", src.includes("this.stripCodeFromUrl()"));
+  check("the PKCE verifier is removed once read", src.includes("safeRemove(this.key(VERIFIER_KEY))"));
+  check("tokens are never logged", !/console\.(log|warn|error)\([^)]*token/i.test(src));
+  check("the URL is rewritten without the code (replaceState)", src.includes("window.history.replaceState"));
 }
 
 function main(): void {
@@ -353,6 +374,7 @@ function main(): void {
   publicSchemaTests();
   socketGateTests();
   nudgeTests();
+  authHygieneTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll cosmetics launch-slice assertions passed.\n");

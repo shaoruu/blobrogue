@@ -125,9 +125,14 @@ const ZERO_STATS = {
 
 // Fold an unowned guest row into an EXISTING account row (the second-device sign-in path:
 // the account already has its row, but this browser accrued guest progress before signing
-// in). Stats sum/max, unlocks union, appearance fills only empty account slots, and the
-// guest's charted run merges — then the guest row is DELETED, which is what makes the merge
-// idempotent (a re-run finds no guest row) and prevents duplicated progress.
+// in). The merge policy is DETERMINISTIC and never silently drops the richer side: stats
+// sum/max, unlocks union, appearance fills only EMPTY account slots (an account's own
+// loadout wins; the guest's items stay owned via the union), and the guest's charted run
+// merges by the same better-run rule the leaderboard uses. The guest row is then DELETED —
+// that single transactional delete is what makes the link exactly-once/idempotent AND
+// multi-tab safe: Convex serializes mutations, so a second tab's concurrent link finds no
+// guest row and no-ops instead of double-crediting. A mid-link failure aborts the whole
+// transaction, leaving the guest save untouched (there is no partially-merged state).
 async function absorbGuestRow(
   ctx: MutationCtx,
   account: Doc<"players">,
