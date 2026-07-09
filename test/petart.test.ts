@@ -51,24 +51,24 @@ check("registry keys pair kind with clip_facing",
   && petSheetKey("ember_pup", "walk", "up") === "ember_pup.walk_up");
 
 section("facing derivation: dominant axis, side mirrors for left, deadzone holds");
-const start = { facing: "down" as const, mirror: false };
+const start = { facing: "down" as const, isMirrored: false };
 check("rightward motion -> side, unmirrored", (() => {
   const f = petFacingFrom(3, 0.5, start);
-  return f.facing === "side" && !f.mirror;
+  return f.facing === "side" && !f.isMirrored;
 })());
 check("leftward motion -> side, MIRRORED (side art is authored facing right)", (() => {
   const f = petFacingFrom(-3, 0.5, start);
-  return f.facing === "side" && f.mirror;
+  return f.facing === "side" && f.isMirrored;
 })());
 check("downward motion -> down", petFacingFrom(0.2, 3, start).facing === "down");
-check("upward motion -> up", petFacingFrom(0.2, -3, { facing: "side", mirror: true }).facing === "up");
-check("up/down never mirror", !petFacingFrom(0.2, -3, { facing: "side", mirror: true }).mirror);
+check("upward motion -> up", petFacingFrom(0.2, -3, { facing: "side", isMirrored: true }).facing === "up");
+check("up/down never mirror", !petFacingFrom(0.2, -3, { facing: "side", isMirrored: true }).isMirrored);
 check("a diagonal picks the dominant axis", petFacingFrom(1, 4, start).facing === "down"
   && petFacingFrom(-4, 1, start).facing === "side");
 check("an exact diagonal tie goes to side (the most-read facing)",
   petFacingFrom(2, 2, start).facing === "side");
 check("sub-deadzone drift holds the previous facing (no flicker while heeling)", (() => {
-  const prev = { facing: "up" as const, mirror: false };
+  const prev = { facing: "up" as const, isMirrored: false };
   const eps = PET_FACING_DEADZONE * 0.6;
   const f = petFacingFrom(eps * 0.7, eps * 0.7, prev);
   return f === prev;

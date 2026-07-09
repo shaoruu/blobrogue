@@ -979,7 +979,7 @@ export class Game {
       const prev = this.petAnimPos.get(pet.id);
       const dx = prev ? pet.x - prev.x : 0, dy = prev ? pet.y - prev.y : 0;
       stepAnim(anim, dt, dx * dx + dy * dy > 0.12, dx < -0.05 ? -1 : dx > 0.05 ? 1 : 0);
-      this.petFacings.set(pet.id, petFacingFrom(dx, dy, this.petFacings.get(pet.id) ?? { facing: "down", mirror: false }));
+      this.petFacings.set(pet.id, petFacingFrom(dx, dy, this.petFacings.get(pet.id) ?? { facing: "down", isMirrored: false }));
       this.petAnimPos.set(pet.id, { x: pet.x, y: pet.y });
     }
     if (this.petAnims.size > livePetIds.size) {
@@ -2999,11 +2999,11 @@ export class Game {
   private petPose(pet: Pet): PetPose {
     const prev = this.petAnimPos.get(pet.id);
     const isMoving = prev !== undefined && Math.hypot(pet.x - prev.x, pet.y - prev.y) > 0.35;
-    const f = this.petFacings.get(pet.id) ?? { facing: "down" as const, mirror: false };
+    const f = this.petFacings.get(pet.id) ?? { facing: "down" as const, isMirrored: false };
     return {
       clip: pet.attackAnim > 0 ? PET_ACTION[pet.kind] : "walk",
       facing: f.facing,
-      mirror: f.mirror,
+      isMirrored: f.isMirrored,
       isIdle: !isMoving && pet.attackAnim <= 0,
     };
   }
@@ -3051,7 +3051,7 @@ export class Game {
       const sheet = this.sprites.petSheetResolved(petSheetCandidates(pet.kind, pose.clip, pose.facing));
       if (sheet) {
         const size = 30;
-        const flip = pose.facing === "side" && pose.mirror ? -1 : 1;
+        const flip = pose.facing === "side" && pose.isMirrored ? -1 : 1;
         ctx.save();
         ctx.translate(sx + xf.ox, sy + xf.oy);
         ctx.scale(flip * xf.sx, xf.sy);

@@ -45,20 +45,20 @@ export const PET_ACTION: Record<PetKind, PetActionName> = {
 export interface PetPose {
   clip: PetClipName;
   facing: PetFacing;
-  mirror: boolean; // meaningful only for "side": authored RIGHT, mirrored for left
+  isMirrored: boolean; // meaningful only for "side": authored RIGHT, mirrored for left
   isIdle: boolean;
 }
 
 // Deadzoned dominant-axis facing from a motion delta; anything under the deadzone keeps
 // the previous facing (no flicker while heeling). Ties go to "side" so lateral strips —
 // the most-read facing in a side-scrolling brawl — win ambiguous diagonals.
-export interface PetFacingState { facing: PetFacing; mirror: boolean }
+export interface PetFacingState { facing: PetFacing; isMirrored: boolean }
 export const PET_FACING_DEADZONE = 0.35;
 
 export function petFacingFrom(dx: number, dy: number, prev: PetFacingState): PetFacingState {
   if (Math.hypot(dx, dy) < PET_FACING_DEADZONE) return prev;
-  if (Math.abs(dx) >= Math.abs(dy)) return { facing: "side", mirror: dx < 0 };
-  return { facing: dy > 0 ? "down" : "up", mirror: false };
+  if (Math.abs(dx) >= Math.abs(dy)) return { facing: "side", isMirrored: dx < 0 };
+  return { facing: dy > 0 ? "down" : "up", isMirrored: false };
 }
 
 // Registry keys + canonical filenames.
