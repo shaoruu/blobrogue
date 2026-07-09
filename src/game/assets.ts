@@ -479,7 +479,7 @@ export type TileName =
   | "stairs_f0" | "stairs_f1"
   | "wf_top" | "wf_N" | "wf_E" | "wf_S" | "wf_W" | "wf_NE" | "wf_ES" | "wf_SW" | "wf_NW" | "wf_EW" | "wf_NS" | "wf_NES" | "wf_ESW" | "wf_NEW" | "wf_NSW" | "wf_NESW";
 
-const TILE_SOURCES: Record<TileName, string> = {
+export const TILE_SOURCES: Record<TileName, string> = {
   floor: "/tiles/floor.png",
   floor2: "/tiles/floor2.png",
   floor3: "/tiles/floor3.png",
