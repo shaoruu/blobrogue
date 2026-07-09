@@ -470,7 +470,7 @@ function splitAndAddCase(): void {
   });
   stepWorld(w, idleInputs, DT);
   const children = w.enemies.filter((e) => e.tier === "swarm");
-  check("both split children spawned (wall-side rolls no longer swallow them)", children.length === 2, `children=${children.length}`);
+  check("both split children spawned and survived the pocket kill", children.length === 2, `children=${children.length}`);
   const reach = oracleReachable(w.dungeon, w.props, children[0]?.radius ?? 13);
   let isOutsideOk = true;
   let isReachOk = true;
