@@ -14,7 +14,7 @@ import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR } from "../net/protocol.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, equipWeaponInWorld, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd } from "../sim/input.js";
@@ -85,6 +85,8 @@ export interface DevSnapshot {
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
+interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
@@ -337,6 +339,7 @@ export class Game {
 
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
+  private worldLabels: WorldLabel[] = []; // floating text popups (visual only; e.g. drop names)
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
@@ -442,6 +445,12 @@ export class Game {
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
     this.hud = new Hud(hudRoot);
+    // Hotbar UI -> the same public inventory handlers keyboard input uses (and a future
+    // controller/touch layer would use): click/Enter/Space equips, drag/drop reorders.
+    this.hud.setHotbarActions({
+      onSlotActivate: (index) => this.equipSlot(index),
+      onSlotReorder: (from, to) => this.reorderSlots(from, to),
+    });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
@@ -487,8 +496,8 @@ export class Game {
       if ([" ", "shift", "tab"].includes(k)) e.preventDefault();
       if (k === "tab" && !this.isStatsHeld) { this.isStatsHeld = true; this.openStats(); }
       // Weapon switch: number keys 1-9 select that inventory slot directly.
-      if (k >= "1" && k <= "9") { const i = parseInt(k, 10) - 1; if (this.isRunning) this.selectWeapon(i); }
-      if (k === "q") this.cycleWeapon(-1); // Q cycles back a slot
+      if (k >= "1" && k <= "9") this.equipSlot(parseInt(k, 10) - 1);
+      if (k === "q") this.dropEquippedWeapon(); // Q drops the equipped weapon into the world
     });
     window.addEventListener("keyup", (e) => {
       const k = e.key.toLowerCase();
@@ -604,6 +613,7 @@ export class Game {
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
+    this.worldLabels = [];
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
@@ -891,6 +901,7 @@ export class Game {
     this.updateFootstepDust(dt);
     this.updateParticles(dt);
     this.updateDmgNumbers(dt);
+    this.updateWorldLabels(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
@@ -1092,6 +1103,14 @@ export class Game {
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
         this.spawnPuff(e.x, e.y, 5, e.color);
+        break;
+      case "weaponDrop":
+        // A deliberate drop lands with a small pop and names itself, so every nearby player
+        // (including the dropper) reads what just hit the floor.
+        this.addDecal(e.x, e.y, "#ffb43b", 14, "ring");
+        this.spawnPuff(e.x, e.y, 6, "#ffb43b");
+        this.spawnWorldLabel(e.x, e.y - 22, WEAPONS[e.weapon].name.toUpperCase(), "#ffd166");
+        this.sfxAt("weapon", e.x, e.y, { rate: 0.8, gain: 0.5 });
         break;
       case "bulletWall":
         this.spawnSparks(e.x, e.y, 5, e.aim);
@@ -1400,29 +1419,46 @@ export class Game {
     return e.kind !== "boss" && e.chill >= FREEZE_AT;
   }
 
-  // Weapon switching (1-9 / Q / scroll): resolves the target slot client-side, then equips
-  // it in the sim. All local — no networking. Switching resets fire cooldown + cancels any
-  // in-progress swing (in the sim).
-  private selectWeapon(index: number) {
+  // ---- inventory action handlers (keyboard, mouse wheel, hotbar UI; a future controller/
+  // mobile layer calls the same three public methods). All of them route through the ONE
+  // transport seam: solo/co-op apply through the validated sim mutators in LocalTransport;
+  // online sends the authoritative command and the snapshot confirms — there is NO
+  // client-local inventory mutation on the online path.
+
+  // Equip the weapon in hotbar slot `index` (number keys 1-9, hotbar click/Enter/Space).
+  equipSlot(index: number) {
+    if (!this.canActOnInventory()) return;
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
-    this.equipOrRequest(owned[index]);
+    this.transport.requestEquip(owned[index]);
+  }
+
+  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
+  // the resulting order, because they index the same authoritative ownedWeapons array.
+  reorderSlots(from: number, to: number) {
+    if (!this.canActOnInventory()) return;
+    const n = this.p.ownedWeapons.length;
+    if (from === to || from < 0 || to < 0 || from >= n || to >= n) return;
+    this.transport.requestReorder(from, to);
+  }
+
+  // Drop the currently equipped weapon into the world (Q). The final weapon never drops;
+  // the authority (sim or server) additionally rejects downed/pending/terminal states.
+  dropEquippedWeapon() {
+    if (!this.canActOnInventory()) return;
+    if (this.isDown || this.p.ownedWeapons.length < 2) return;
+    this.transport.requestDrop(this.weapon);
+  }
+
+  private canActOnInventory(): boolean {
+    return this.isRunning && !this.isPaused && !this.isChoosing && !this.isAwaitingOnlineWorld();
   }
 
   private cycleWeapon(dir: number) {
     const owned = this.p.ownedWeapons;
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
-    const next = (cur + dir + owned.length) % owned.length;
-    this.equipOrRequest(owned[next]);
-  }
-
-  // Solo/co-op equip in the local sim (authoritative locally); online sends an authoritative
-  // equip command — the server validates ownership + equips, and the result returns via SelfWire.
-  // There is NO client-local inventory mutation on the online path.
-  private equipOrRequest(weapon: WeaponId) {
-    if (this.mode === "online" && this.wsTransport) this.wsTransport.sendEquip(weapon);
-    else equipWeaponInWorld(this.world, LOCAL_ID, weapon);
+    this.equipSlot((cur + dir + owned.length) % owned.length);
   }
 
 
@@ -1543,6 +1579,22 @@ export class Game {
     }
     if (this.dmgNumbers.some((n) => n.life <= 0)) {
       this.dmgNumbers = this.dmgNumbers.filter((n) => n.life > 0);
+    }
+  }
+
+  private spawnWorldLabel(x: number, y: number, text: string, color: string) {
+    if (this.worldLabels.length >= 12) this.worldLabels.shift();
+    this.worldLabels.push({ x, y, vy: -22, life: 1.1, maxLife: 1.1, text, color });
+  }
+
+  private updateWorldLabels(dt: number) {
+    for (const l of this.worldLabels) {
+      l.y += l.vy * dt;
+      l.vy *= 0.9;
+      l.life -= dt;
+    }
+    if (this.worldLabels.some((l) => l.life <= 0)) {
+      this.worldLabels = this.worldLabels.filter((l) => l.life > 0);
     }
   }
 
@@ -1998,6 +2050,7 @@ export class Game {
     this.renderPlayer();
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
+    this.renderWorldLabels();
     ctx.restore();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
@@ -2591,6 +2644,27 @@ export class Game {
       ctx.fillText(label, sx - 1, sy + 1);
       ctx.fillStyle = n.color;
       ctx.fillText(label, sx, sy);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  private renderWorldLabels() {
+    if (this.worldLabels.length === 0) return;
+    const { ctx, cam } = this;
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 10px "Silkscreen", monospace`;
+    for (const l of this.worldLabels) {
+      const a = l.life / l.maxLife;
+      if (a <= 0) continue;
+      const sx = l.x - cam.x, sy = l.y - cam.y;
+      ctx.globalAlpha = Math.min(1, a * 1.4);
+      ctx.fillStyle = "rgba(8,6,16,0.9)";
+      ctx.fillText(l.text, sx + 1, sy + 1);
+      ctx.fillStyle = l.color;
+      ctx.fillText(l.text, sx, sy);
     }
     ctx.restore();
     ctx.globalAlpha = 1;

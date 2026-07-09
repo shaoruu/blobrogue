@@ -32,6 +32,13 @@ export interface HudState {
   items: { id: string; name: string; desc: string; glyph: string; tint: string; rarity: string; count: number }[];
 }
 
+export interface HotbarActions {
+  // Click / Enter / Space on a slot: equip that inventory index.
+  onSlotActivate(index: number): void;
+  // Drag/drop finished: move slot `from` to position `to` (indices into the CURRENT order).
+  onSlotReorder(from: number, to: number): void;
+}
+
 export interface ProfileStats {
   name: string;
   deepestFloor: number;
@@ -67,11 +74,16 @@ function fmtTime(seconds: number): string {
 }
 
 // One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath. Slots
-// past 9 get no key badge — Q/scroll still cycles to them. Fixed width so switching
-// never resizes anything.
+// past 9 get no key badge — scroll still cycles to them. Fixed width so switching never
+// resizes anything. Slots are pointer/keyboard interactive (click/Enter/Space equips, drag
+// reorders — see Hud.attachSlotInteractions), so they carry button semantics for a11y.
 function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
   slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
+  slot.tabIndex = 0;
+  slot.setAttribute("role", "button");
+  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}`);
+  slot.title = `${w.name} — click to equip, drag to reorder`;
   if (index < 9) {
     const key = el("span", "", String(index + 1));
     key.className = "hb-key";
@@ -79,7 +91,9 @@ function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   }
   const icon = el("span", "");
   icon.className = "hb-icon";
-  icon.appendChild(weaponIconEl(w.id, w.name));
+  const iconEl = weaponIconEl(w.id, w.name);
+  if (iconEl instanceof HTMLImageElement) iconEl.draggable = false; // never the native image drag — ours
+  icon.appendChild(iconEl);
   const name = el("span", "", w.name.toUpperCase());
   name.className = "hb-name";
   slot.append(icon, name);
@@ -126,6 +140,7 @@ const HUD_MARKUP = `
   <div class="hotbar">
     <div class="hb-buffs" data-hb-buffs></div>
     <div class="hb-slots" data-hb-slots></div>
+    <div class="hb-hint" data-hb-hint>CLICK EQUIP &middot; DRAG REORDER &middot; Q DROP</div>
   </div>
   <div class="combo" data-combo>
     <div class="combo-badge">
@@ -137,6 +152,22 @@ const HUD_MARKUP = `
   </div>
 `;
 
+// In-flight hotbar drag. Exists from pointerdown; isActive flips once the pointer travels
+// past the click threshold (so a plain click never flickers a ghost). `gap` is the insertion
+// index in 0..slotCount — the position the dragged slot would be spliced into.
+interface SlotDrag {
+  pointerId: number;
+  fromIndex: number;
+  startX: number;
+  startY: number;
+  isActive: boolean;
+  ghost: HTMLElement | null;
+  marker: HTMLElement | null;
+  gap: number;
+}
+
+const DRAG_START_PX = 6;
+
 export class Hud {
   private hud: HTMLElement;
   private heartsEl: HTMLElement;
@@ -145,6 +176,9 @@ export class Hud {
   private coinsEl: HTMLElement;
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
+  private hotbarHintEl: HTMLElement;
+  private hotbarActions: HotbarActions | null = null;
+  private drag: SlotDrag | null = null;
   private prevSlotsKey = "";
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
@@ -186,6 +220,7 @@ export class Hud {
     this.coinsEl = hud.querySelector("[data-coins]")!;
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
+    this.hotbarHintEl = hud.querySelector("[data-hb-hint]")!;
     this.dashEl = hud.querySelector(".dash")!;
     this.dashFillEl = hud.querySelector(".dash .bar i")!;
     this.coopEl = hud.querySelector("[data-coop]")!;
@@ -241,6 +276,131 @@ export class Hud {
     this.hud.style.display = v ? "block" : "none";
   }
 
+  setHotbarActions(actions: HotbarActions) {
+    this.hotbarActions = actions;
+  }
+
+  // ---- hotbar slot interactions (click equip, drag/drop reorder, keyboard activate) ----
+  // Every pointer event is stopped at the slot so a hotbar press can never leak into the
+  // game canvas as aim/fire; the rest of the HUD stays pointer-transparent.
+
+  private attachSlotInteractions(slot: HTMLElement, index: number) {
+    slot.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      e.stopPropagation(); // a focused slot owns Enter/Space (Space is also the game's key)
+      this.hotbarActions?.onSlotActivate(index);
+    });
+    slot.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || this.drag) return;
+      e.preventDefault();
+      e.stopPropagation();
+      slot.setPointerCapture(e.pointerId);
+      this.drag = { pointerId: e.pointerId, fromIndex: index, startX: e.clientX, startY: e.clientY, isActive: false, ghost: null, marker: null, gap: index };
+    });
+    slot.addEventListener("pointermove", (e) => {
+      const d = this.drag;
+      if (!d || e.pointerId !== d.pointerId) return;
+      e.stopPropagation();
+      if (!d.isActive) {
+        if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < DRAG_START_PX) return;
+        this.beginDragVisuals(slot, d);
+      }
+      this.moveGhost(d, e.clientX, e.clientY);
+      d.gap = this.insertionGapAt(e.clientX, e.clientY);
+      this.placeInsertionMarker(d);
+    });
+    slot.addEventListener("pointerup", (e) => {
+      const d = this.drag;
+      if (!d || e.pointerId !== d.pointerId) return;
+      e.stopPropagation();
+      const wasDrag = d.isActive;
+      const from = d.fromIndex;
+      // Gap -> final index: removing the source first shifts every later gap down by one.
+      const to = d.gap > from ? d.gap - 1 : d.gap;
+      this.teardownDrag(slot);
+      if (!wasDrag) this.hotbarActions?.onSlotActivate(index);
+      else if (to !== from) this.hotbarActions?.onSlotReorder(from, to);
+    });
+    slot.addEventListener("pointercancel", () => this.teardownDrag(slot));
+  }
+
+  private beginDragVisuals(slot: HTMLElement, d: SlotDrag) {
+    d.isActive = true;
+    const rect = slot.getBoundingClientRect();
+    const ghost = slot.cloneNode(true) as HTMLElement;
+    ghost.classList.add("hb-ghost");
+    ghost.classList.remove("dragging");
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    document.body.appendChild(ghost);
+    d.ghost = ghost;
+    const marker = el("span", "");
+    marker.className = "hb-ins";
+    this.slotsEl.appendChild(marker);
+    d.marker = marker;
+    slot.classList.add("dragging");
+  }
+
+  private moveGhost(d: SlotDrag, x: number, y: number) {
+    if (!d.ghost) return;
+    const r = d.ghost.getBoundingClientRect();
+    d.ghost.style.transform = `translate(${x - r.width / 2}px, ${y - r.height / 2}px)`;
+  }
+
+  private slotEls(): HTMLElement[] {
+    return [...this.slotsEl.querySelectorAll<HTMLElement>(".hb-slot")];
+  }
+
+  private insertionGapAt(x: number, y: number): number {
+    // Insertion gap under the pointer, row-aware (the strip wraps past ~10 slots): pick the
+    // row whose vertical center is nearest, then count that row's slots left of the pointer.
+    const slots = this.slotEls();
+    if (slots.length === 0) return 0;
+    const rects = slots.map((s) => s.getBoundingClientRect());
+    const rowTops: number[] = [];
+    for (const r of rects) if (!rowTops.some((t) => Math.abs(t - r.top) < 4)) rowTops.push(r.top);
+    let rowTop = rowTops[0];
+    let best = Infinity;
+    for (const t of rowTops) {
+      const h = rects.find((r) => Math.abs(r.top - t) < 4)!.height;
+      const dist = Math.abs(t + h / 2 - y);
+      if (dist < best) { best = dist; rowTop = t; }
+    }
+    let gap = 0;
+    for (let i = 0; i < rects.length; i++) {
+      const r = rects[i];
+      if (r.top < rowTop - 4) { gap = i + 1; continue; }         // full rows above the target
+      if (Math.abs(r.top - rowTop) < 4 && r.left + r.width / 2 < x) gap = i + 1;
+    }
+    return gap;
+  }
+
+  private placeInsertionMarker(d: SlotDrag) {
+    if (!d.marker) return;
+    const slots = this.slotEls();
+    if (slots.length === 0) return;
+    const parent = this.slotsEl.getBoundingClientRect();
+    const before = d.gap < slots.length ? slots[d.gap].getBoundingClientRect() : null;
+    const anchor = before ?? slots[slots.length - 1].getBoundingClientRect();
+    const xEdge = before ? anchor.left - 4 : anchor.right + 1;
+    d.marker.style.left = `${xEdge - parent.left}px`;
+    d.marker.style.top = `${anchor.top - parent.top}px`;
+    d.marker.style.height = `${anchor.height}px`;
+  }
+
+  private teardownDrag(slot: HTMLElement) {
+    const d = this.drag;
+    if (!d) return;
+    this.drag = null;
+    d.ghost?.remove();
+    d.marker?.remove();
+    slot.classList.remove("dragging");
+    // The DOM order may now be stale against authority (reorder in flight / rebuilds were
+    // held during the drag) — force a rebuild on the next update.
+    this.prevSlotsKey = "";
+  }
+
   update(s: HudState) {
     if (s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp) {
       renderHearts(this.heartsEl, s.hp, s.maxHp);
@@ -251,13 +411,21 @@ export class Hud {
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
-    // Only rebuild when the set or selection changes (cheap string key).
+    // Only rebuild when the set/order or selection changes (cheap string key), and NEVER
+    // mid-drag — replacing the slots would strand the pointer capture; the drag teardown
+    // forces the rebuild instead, realigning the DOM with authority.
     const slotsKey = s.weapons.map((w) => (w.isCurrent ? "*" : "") + w.id).join("|");
-    if (slotsKey !== this.prevSlotsKey) {
+    if (slotsKey !== this.prevSlotsKey && !this.drag) {
       this.prevSlotsKey = slotsKey;
       this.slotsEl.replaceChildren();
-      s.weapons.forEach((w, i) => this.slotsEl.appendChild(buildSlot(w, i)));
+      s.weapons.forEach((w, i) => {
+        const slot = buildSlot(w, i);
+        this.attachSlotInteractions(slot, i);
+        this.slotsEl.appendChild(slot);
+      });
     }
+    // The interaction hint matters once there is something to switch/reorder/drop.
+    this.hotbarHintEl.classList.toggle("show", s.weapons.length > 1);
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
@@ -413,8 +581,12 @@ export class Hud {
     this.prevMult = 1;
     this.comboPop = 0;
     this.comboBurstEl.classList.remove("fire");
+    this.drag?.ghost?.remove();
+    this.drag?.marker?.remove();
+    this.drag = null;
     this.slotsEl.replaceChildren();
     this.prevSlotsKey = "";
+    this.hotbarHintEl.classList.remove("show");
     this.buffsEl.replaceChildren();
     this.buffsEl.classList.remove("show");
     this.prevItemsCount = -1;
