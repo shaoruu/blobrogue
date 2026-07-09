@@ -368,23 +368,52 @@ export class Menu {
     return btn;
   }
 
-  private nameRow(): HTMLElement {
-    const row = el("div", "namerow");
-    const label = el("label", "", "name");
-    const input = el("input");
+  // The editable blob name on the own Overview. Guests edit + SAVE anytime — the write
+  // rides the SAME sanitized session.login path the name gate uses (trim/collapse/strip,
+  // cap 20, never empty, never the literal "blob"), so lobby rosters and future
+  // leaderboard rows pick the new name up. Signed-in accounts are named by Google on the
+  // server (ensurePlayer overwrites with the account name), so the field goes READ-ONLY
+  // with honest copy — an editable box that silently reverts would be a lie.
+  private nameEditor(onSaved: (name: string) => void): { box: HTMLElement; input: HTMLInputElement } {
+    const box = el("div", "pc-nameedit");
+    box.appendChild(el("label", "col-h", "blob name"));
+    const row = el("div", "pc-namerow");
+    const input = el("input", "pc-nameinput");
     input.type = "text";
     input.maxLength = 20;
     input.placeholder = "your blob name";
     input.value = this.session.name;
-    // An emptied/junk input keeps the standing name (typed or generated) — a profile edit
-    // can never blank a name or resurrect the literal "blob".
-    input.addEventListener("change", () => {
-      const name = resolveNameInput(input.value, this.session.name);
-      input.value = name;
-      void this.session.login(name).catch(() => {});
-    });
-    row.append(label, input);
-    return row;
+    const note = el("p", "muted pc-name-note", "");
+    if (this.auth?.isSignedIn ?? false) {
+      input.disabled = true;
+      note.textContent = "named by your Google account";
+      row.appendChild(input);
+    } else {
+      note.textContent = "shows in lobbies & on the leaderboard";
+      const save = el("button", "secondary pc-name-save", "SAVE");
+      save.type = "button";
+      // An emptied/junk input keeps the standing name (typed or generated) — a profile
+      // edit can never blank a name or resurrect the literal "blob".
+      const commit = async () => {
+        const name = resolveNameInput(input.value, this.session.name);
+        input.value = name;
+        save.disabled = true;
+        note.textContent = "saving\u2026";
+        const profile = await this.session.login(name).catch(() => null);
+        save.disabled = false;
+        note.textContent = !this.client
+          ? "saved on this device"
+          : profile !== null
+            ? "saved \u2014 shows in lobbies & future runs"
+            : "saved on this device \u2014 syncs when you're online";
+        onSaved(this.session.name);
+      };
+      save.onclick = () => void commit();
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") void commit(); });
+      row.append(input, save);
+    }
+    box.append(row, note);
+    return { box, input };
   }
 
   // The right-column identity card. Signed in: the Google account chip + a quiet
@@ -856,6 +885,7 @@ export class Menu {
   // hydrates inside its reserved box (top run + build from the caller's own charted entry,
   // lifetime from the profile), and unavailable states stay honest.
   private ownCard: ReturnType<Menu["profileCard"]> | null = null;
+  private ownNameInput: HTMLInputElement | null = null;
 
   private buildOwnOverview(wrap: HTMLElement) {
     const card = this.profileCard(
@@ -864,13 +894,20 @@ export class Menu {
       this.session.cosmetics.title,
     );
     this.ownCard = card;
+    // The username editor lives ON the card, right under the appearance stage — the
+    // owner's identity block (name + look) in one place, above the closet door.
+    const editor = this.nameEditor((name) => {
+      card.nameEl.textContent = (name.trim() || "blob").toUpperCase();
+    });
+    this.ownNameInput = editor.input;
     const customize = el("button", "secondary pc-customize", "CUSTOMIZE BLOB");
     customize.addEventListener("click", () => void this.showProfile("closet"));
-    card.leftSlot.appendChild(customize);
+    card.leftSlot.append(editor.box, customize);
     wrap.appendChild(card.card);
 
     // The account region (owner-only): chip + sign-out for accounts, the honest guest /
-    // offline line otherwise. Reserved height either way.
+    // offline line otherwise. Reserved height either way. (Name edits live on the card
+    // above — this strip is purely the account relationship.)
     const account = el("div", "pc-account");
     if (this.auth?.isSignedIn) {
       account.appendChild(this.accountChip());
@@ -878,10 +915,7 @@ export class Menu {
       out.addEventListener("click", () => void this.doSignOut());
       account.appendChild(out);
     } else {
-      // Guests manage their display name HERE (identity lives on the profile surface;
-      // the home identity card is the sign-in pitch) — and the manual sign-in door is
-      // ALWAYS available here regardless of any nudge cooldown.
-      account.appendChild(this.nameRow());
+      // The manual sign-in door is ALWAYS available here regardless of any nudge cooldown.
       if (this.auth) {
         const note = el("p", "muted id-note", "Optional \u00b7 keeps this blob across devices.");
         const cta = el("button", "secondary btn-google pc-signin");
@@ -918,6 +952,12 @@ export class Menu {
         card.titleEl.textContent = titleTextOf(profile.cosmetics.title);
         card.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
         card.setLifetime(profile);
+        // Sync the name editor in place: accounts adopt the server's (Google) name; a
+        // guest's field follows the session unless they're mid-edit right now.
+        if (this.ownNameInput) {
+          if (this.auth?.isSignedIn ?? false) this.ownNameInput.value = profile.name;
+          else if (document.activeElement !== this.ownNameInput) this.ownNameInput.value = this.session.name;
+        }
       }
     } catch {
       card.setLifetime({ note: "stats unavailable \u2014 check your connection" });

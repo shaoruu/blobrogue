@@ -30,6 +30,23 @@
          never shift the layout under the title menu. */
       #game { width: min(100vw, 2560px); height: min(100vh, 1440px); }
 
+      /* === GLOBAL PIXEL SCROLLBAR ===
+         ONE scrollbar for every scrollable surface (menu shell, closet grid, run-build
+         strip, drawers, leaderboard — anything that overflows): thin, squared, token-
+         colored, so the native OS chrome never breaks the dungeon look. Firefox via
+         scrollbar-width/scrollbar-color; WebKit via the pseudo-element parts. No radius,
+         no gradients — a flat dun thumb that warms to amber-lo under the pointer. */
+      *{ scrollbar-width:thin; scrollbar-color:var(--dun-4) var(--dun-0); }
+      ::-webkit-scrollbar{ width:10px; height:10px; }
+      ::-webkit-scrollbar-track{ background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-1); }
+      ::-webkit-scrollbar-thumb{ background:var(--dun-4); border:2px solid var(--dun-0); border-radius:0; }
+      ::-webkit-scrollbar-thumb:hover{ background:var(--amber-lo); }
+      ::-webkit-scrollbar-thumb:active{ background:var(--amber-lo); }
+      ::-webkit-scrollbar-corner{ background:var(--dun-0); }
+      /* Fixed panels reserve their scrollbar gutter up front, so content never shifts
+         when an overflow appears mid-hydration (zero-CLS). */
+      .menu, .closet-grid, .pc-build, .hb-drawer{ scrollbar-gutter:stable; }
+
       /* --- HUD 4-corner layout (ui designer, docs/ui/hud_section_B_hud.css) --- */
       /* --ui-scale is set from the persisted UI-scale setting (src/ui/settings.ts). */
       #hud{ position:fixed; inset:0; z-index:5; pointer-events:none; font-family:var(--f-num); zoom:var(--ui-scale,1); }
@@ -729,10 +746,21 @@
         min-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pc-rank{ min-height:14px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:#8f87a8;
         text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      /* Owner-only slot (CUSTOMIZE BLOB); reserved on read-only profiles too, so both
-         variants share byte-identical card geometry. */
-      .pc-left-slot{ min-height:40px; display:flex; align-items:flex-end; }
+      /* Owner-only slot (name editor + CUSTOMIZE BLOB); reserved on read-only profiles
+         too, so both variants share byte-identical card geometry. */
+      .pc-left-slot{ min-height:40px; display:flex; flex-direction:column; gap:8px; justify-content:flex-end; }
       .pc-customize{ width:100%; min-width:0; font-size:9px; padding:10px 8px; letter-spacing:1px; }
+      /* The editable blob name (own Overview): guests edit + SAVE anytime through the
+         same sanitized login path; signed-in goes read-only (the server names accounts
+         from Google). Fixed rows — 12 label / 30 field / 12 note — inside the card. */
+      .pc-nameedit{ width:100%; display:flex; flex-direction:column; gap:4px; }
+      .pc-nameedit > .col-h{ height:12px; }
+      .pc-namerow{ display:flex; gap:6px; }
+      .menu input[type=text].pc-nameinput{ flex:1 1 0; min-width:0; width:auto; height:30px; font-size:16px; padding:4px 8px; }
+      .pc-nameinput:disabled{ color:#9a8fb5; }
+      .pc-name-save{ flex:0 0 auto; min-width:52px; height:30px; font-size:9px; padding:0 10px; letter-spacing:1px; }
+      .menu p.pc-name-note{ font-family:var(--f-ui); font-size:8px; letter-spacing:.2px; color:var(--dun-4); text-transform:none;
+        line-height:12px; height:12px; margin:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pc-right{ flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
       .pc-run{ grid-template-columns:1fr 1fr 1fr 1fr; }
       .pc-run .stat-value{ font-size:18px; }

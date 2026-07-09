@@ -66,6 +66,7 @@ interface ShimNode {
   className?: string;
   textContent?: string;
   disabled?: boolean;
+  value?: string;
   width?: number;
   height?: number;
   onclick?: () => void;
@@ -838,6 +839,60 @@ async function main(): Promise<void> {
     await broken.menu.showProfile();
     await settle();
     check("a failed top-run fetch stays honest in the same box", textOf(broken.overlay).includes("top run unavailable"));
+  }
+
+  section("editable username on the Overview card: guests rename anytime, accounts read-only");
+  {
+    const { menu, overlay, session, mutationCalls } = makeMenu();
+    await menu.showProfile();
+    await settle();
+    const input = () => collect(overlay, (n) => n.tagName === "INPUT")[0];
+    const saveBtn = () => collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "SAVE")[0];
+    check("the editor rides the profile card and shows the CURRENT name",
+      byClass(overlay, "pc-nameedit").length === 1 && input()?.value === session.name, `${input()?.value ?? ""} vs ${session.name}`);
+    check("guests get an explicit SAVE control", saveBtn() !== undefined);
+    const callsBefore = mutationCalls();
+    input()!.value = "  Sir\u200b   Blobby  ";
+    saveBtn()?.onclick?.();
+    await settle();
+    check("the rename persists through the sanitized login path (trim/collapse/strip/cap)",
+      session.name === "Sir Blobby", session.name);
+    check("...with exactly one write", mutationCalls() === callsBefore + 1);
+    check("the field shows the committed value", input()?.value === "Sir Blobby");
+    check("the card headline updates in place", textOf(overlay).includes("SIR BLOBBY"));
+    check("saved feedback is inline (nothing modal)", textOf(overlay).includes("saved \u2014 shows in lobbies"));
+    input()!.value = "   ";
+    saveBtn()?.onclick?.();
+    await settle();
+    check("an emptied input keeps the standing name (never blank)", session.name === "Sir Blobby" && input()?.value === "Sir Blobby");
+    input()!.value = "blob";
+    saveBtn()?.onclick?.();
+    await settle();
+    check("the literal 'blob' placeholder can never come back", session.name === "Sir Blobby");
+
+    // Signed-in: the server names accounts from Google (ensurePlayer overwrites), so the
+    // field is READ-ONLY with honest copy — never an edit that silently reverts.
+    const signed = makeMenu({ auth: fakeAuth(true) });
+    await signed.menu.showProfile();
+    await settle();
+    const sInput = collect(signed.overlay, (n) => n.tagName === "INPUT")[0];
+    check("signed-in name field is read-only", sInput?.disabled === true);
+    check("no SAVE control for accounts", !buttonsOf(signed.overlay).some((b) => b === "SAVE"));
+    check("honest copy names the source", textOf(signed.overlay).includes("named by your Google account"));
+  }
+
+  section("global pixel scrollbar: token-styled, applied everywhere, stable gutters");
+  {
+    const html = readFileSync(join(ROOT, "index.html"), "utf8");
+    check("WebKit parts styled (bar/track/thumb/corner)",
+      html.includes("::-webkit-scrollbar{") && html.includes("::-webkit-scrollbar-track{")
+      && html.includes("::-webkit-scrollbar-thumb{") && html.includes("::-webkit-scrollbar-corner{"));
+    check("Firefox fallback on every element", html.includes("*{ scrollbar-width:thin; scrollbar-color:var(--dun-4) var(--dun-0); }"));
+    check("squared pixel feel: flat token thumb, radius 0, amber-lo hover",
+      /::-webkit-scrollbar-thumb\{ background:var\(--dun-4\); border:2px solid var\(--dun-0\); border-radius:0; \}/.test(html)
+      && html.includes("::-webkit-scrollbar-thumb:hover{ background:var(--amber-lo)"));
+    check("fixed panels reserve a stable scrollbar gutter (zero-CLS)",
+      html.includes(".menu, .closet-grid, .pc-build, .hb-drawer{ scrollbar-gutter:stable; }"));
   }
 
   section("closet instant equip: one click equips immediately — no save step, no staging model");
