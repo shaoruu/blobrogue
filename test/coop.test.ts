@@ -46,6 +46,7 @@ import { Game } from "../src/game/game.js";
 import { Hud } from "../src/game/hud.js";
 import { Minimap } from "../src/game/minimap.js";
 import { BlessingOverlay } from "../src/ui/blessing.js";
+import { WeaponClaimOverlay } from "../src/ui/weaponClaim.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -199,6 +200,7 @@ for (const m of ["update", "setVisible", "showBanner", "tick", "showStats", "hid
 }
 (Minimap.prototype as any).render = noop;
 (BlessingOverlay.prototype as any).show = noop;
+(WeaponClaimOverlay.prototype as any).show = noop;
 (globalThis as any).WebSocket = ScriptedSocket;
 
 async function headlessClientSpectateTests(): Promise<void> {
@@ -332,6 +334,32 @@ async function headlessClientSpectateTests(): Promise<void> {
   deliverSnap();
   game.tick(1 / 60);
   check("a satisfied gate clears the exit readout (the blessing gate takes over)", game.exitWaitLabel() === null);
+
+  // Co-op reward overlays BLOCK gameplay input (UI Part4): a delivered claim flips the
+  // input context, so movement/fire/interact sample dead at the source while it is up —
+  // and the semantic contextual action yields even with a revivable body in range.
+  mateA.isDown = true; mateA.hp = 0;
+  mateA.x = self.x + 10; mateA.y = self.y;
+  deliverSnap();
+  game.tick(1 / 60);
+  const preClaim = game.contextualAction();
+  check("a revivable body in range exposes the SEMANTIC action (data, not presentation)",
+    preClaim !== null && preClaim.action === "revive" && preClaim.targetName === "s1" && preClaim.progress === null,
+    JSON.stringify(preClaim));
+  sock.deliver({ t: "woffer", id: 1, choices: ["railgun", "sword", "flamer"], rr: 1 });
+  game.tick(1 / 60);
+  check("a weapon claim overlay flips the input context to blessing", game.input.context === "blessing", `ctx=${game.input.context}`);
+  game.input.keyDown("w");
+  game.input.keyDown("e");
+  game.input.mouseDown();
+  const claimInput: InputCmd = game.buildInput();
+  check("the overlay blocks movement/fire/interact at the sample source",
+    claimInput.moveY === 0 && !claimInput.firing && claimInput.interact !== true);
+  check("the contextual action yields under the pick overlay", game.contextualAction() === null);
+  game.input.releaseAll();
+  game.isChoosing = false;
+  game.syncInputContext();
+  check("dismissing the overlay restores the contextual action", game.contextualAction() !== null);
 
   check("no exit fired during the whole down/spectate/revive/exit pass", exits === 0);
   game.stop();

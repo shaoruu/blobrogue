@@ -2074,13 +2074,18 @@ export class Game {
     });
   }
 
-  // The bottom-left contextual action prompt (UI Director: BL = dash + contextual
-  // revive/interact): the revive affordance while a living local player stands inside a
-  // revivable downed teammate's ring — `E | REVIVE GF`, flipping to the channeling readout
-  // while the hold runs. OUT bodies (down limit spent) never prompt: the sim would refuse
+  // The SEMANTIC contextual action (UI Part4): what the interact input would do right now,
+  // as data — action id + target + authoritative progress — never presentation. This is
+  // the single source the HUD prompt derives from today and a controller pass maps to its
+  // A-button glyph later; it rides the P0 input-context system (the `interact` sample +
+  // context gates in src/game/input.ts) rather than any parallel input path. The revive
+  // affordance appears while a living local player stands inside a revivable downed
+  // teammate's ring; OUT bodies (down limit spent) never prompt — the sim would refuse
   // the channel, and the world label already says the rescue is the stairs.
-  private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
-    if (this.mode === "solo" || this.isSandbox || !this.isRunning || this.isDown || this.hp <= 0) return null;
+  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | null {
+    // A pick overlay pauses the player (sim-shielded, inputs idle) — there IS no
+    // contextual action to offer under it.
+    if (this.mode === "solo" || this.isSandbox || !this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
     let near: RemotePlayer | null = null;
     for (const r of this.remotes()) {
       if (!r.isDown || r.isOut) continue;
@@ -2088,9 +2093,23 @@ export class Game {
       if (near === null || r.reviveProgress > near.reviveProgress) near = r;
     }
     if (near === null) return null;
-    const name = near.name.toUpperCase();
-    if (near.reviveProgress > 0 && this.input.isInteractHeld) {
-      return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round((near.reviveProgress / REVIVE.channel) * 100)}%`, isActive: true };
+    const isChanneling = near.reviveProgress > 0 && this.input.isInteractHeld;
+    return {
+      action: "revive",
+      targetName: near.name,
+      progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
+    };
+  }
+
+  // The BL prompt presentation over the semantic action. The key cap is the KEYBOARD
+  // binding only — no controller glyph until a controller actually exists (UI Part4);
+  // when pads land, the same semantic action maps to its A-button glyph here.
+  private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
+    const act = this.contextualAction();
+    if (act === null) return null;
+    const name = act.targetName.toUpperCase();
+    if (act.progress !== null) {
+      return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
     }
     return { key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
   }

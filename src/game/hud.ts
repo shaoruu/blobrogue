@@ -254,7 +254,7 @@ const HUD_MARKUP = `
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner bl">
     <div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
-    <div class="ctx-prompt" data-prompt><span class="key" data-prompt-key>E</span><span class="k" data-prompt-label></span></div>
+    <div class="ctx-prompt" data-prompt role="status"><span class="key" data-prompt-key>E</span><span class="k" data-prompt-label></span></div>
   </div>
   <div class="hotbar">
     <div class="hb-buffs" data-hb-buffs></div>
