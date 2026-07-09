@@ -51,6 +51,9 @@ function makeEl(tag = "div"): any {
   const store: any = { tagName: (tag || "div").toUpperCase(), nodeType: 1, tag };
   const style = makeStyle();
   const classList = makeClassList();
+  // Real child/text tracking so UI tests (menu) can assert on the rendered tree; the game
+  // oracle never reads these, so golden capture behavior is unchanged.
+  const children: any[] = [];
   let width = 1280;
   let height = 720;
   return new Proxy(store, {
@@ -65,13 +68,16 @@ function makeEl(tag = "div"): any {
         case "getContext":
           return () => ctxStub;
         case "appendChild":
-        case "append":
-        case "prepend":
         case "insertBefore":
-          return (c: any) => c;
+          return (c: any) => { children.push(c); return c; };
+        case "append":
+          return (...cs: any[]) => { children.push(...cs); };
+        case "prepend":
+          return (...cs: any[]) => { children.unshift(...cs); };
         case "removeChild":
           return (c: any) => c;
         case "replaceChildren":
+          return (...cs: any[]) => { children.length = 0; children.push(...cs); };
         case "remove":
         case "setAttribute":
         case "removeAttribute":
@@ -108,7 +114,7 @@ function makeEl(tag = "div"): any {
           return () => [];
         case "children":
         case "childNodes":
-          return [];
+          return children;
         case "parentNode":
         case "parentElement":
         case "firstChild":

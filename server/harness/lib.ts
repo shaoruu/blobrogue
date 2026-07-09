@@ -7,7 +7,7 @@ import { GameServer } from "../src/server.js";
 import { loadConfig, type ServerConfig } from "../src/config.js";
 import { mintTicket } from "../src/auth.js";
 import { createLogger } from "../src/logger.js";
-import { WSTransport } from "../../src/client/wsTransport.js";
+import { WSTransport, type SocketLike } from "../../src/client/wsTransport.js";
 import type { InputCmd } from "../../src/sim/input.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import { LatencySocket, type NetConditions, PERFECT_NET } from "./latencySocket.js";
@@ -88,6 +88,24 @@ export interface BotOptions {
   world?: string;
   name?: string;
   colorIndex?: number;
+  // Reconnect tuning for the resume suite (fast backoff, scaled grace windows).
+  reconnect?: { baseDelayMs?: number; maxDelayMs?: number; graceMs?: number };
+}
+
+// A socket that never connects — what a dead Wi-Fi link looks like to the transport. Fails
+// asynchronously (like a real refused/timed-out connect), so the reconnect loop backs off.
+class DeadSocket implements SocketLike {
+  readyState = 3;
+  bufferedAmount = 0;
+  onopen: (() => void) | null = null;
+  onclose: ((ev?: { code?: number }) => void) | null = null;
+  onerror: ((err: unknown) => void) | null = null;
+  onmessage: ((ev: { data: unknown }) => void) | null = null;
+  constructor() {
+    setTimeout(() => { this.onerror?.(new Error("network down")); this.onclose?.(); }, 5);
+  }
+  send(): void {}
+  close(): void {}
 }
 
 export class Bot {
@@ -99,6 +117,10 @@ export class Bot {
   private frame = 0;
   private lastT = 0;
   private trackId: string | null = null;
+  // The live socket (the transport re-creates one per reconnect attempt) + the network-down
+  // switch: while down, every attempt gets a DeadSocket — the Wi-Fi-outage simulator.
+  private currentSocket: LatencySocket | null = null;
+  private isNetworkDown = false;
   samples: BotSample[] = [];
   renderSamples: RenderSample[] = []; // interpolated x of a tracked remote player (latency probe)
   events: SimEvent[] = [];            // all replayed events (reliable-channel delivery assertions)
@@ -121,9 +143,29 @@ export class Bot {
         name: o.name,
         colorIndex: o.colorIndex,
       })),
-      socketFactory: (url) => new LatencySocket(url, net),
+      socketFactory: (url) => {
+        if (this.isNetworkDown) return new DeadSocket();
+        this.currentSocket = new LatencySocket(url, net);
+        return this.currentSocket;
+      },
       now: () => Date.now(),
+      reconnectBaseDelayMs: o.reconnect?.baseDelayMs,
+      reconnectMaxDelayMs: o.reconnect?.maxDelayMs,
+      resumeGraceMs: o.reconnect?.graceMs,
     });
+  }
+
+  // Abruptly kill the live socket (no close handshake — a Wi-Fi drop). Optionally keep the
+  // network down so reconnect attempts fail until restoreNetwork().
+  dropConnection(keepDown = false): void {
+    this.isNetworkDown = keepDown;
+    this.currentSocket?.terminate();
+  }
+
+  restoreNetwork(): void {
+    this.isNetworkDown = false;
+    // The connectivity-returned signal (what the browser's `online` event does for the game).
+    this.transport.retryReconnectNow();
   }
 
   start(): void {

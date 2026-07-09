@@ -35,9 +35,12 @@ Clear a floor of enemies, then step into the glowing exit to descend. See how de
   hearts/floor/kills/coins/weapon bar, and a hold-Tab run-stats panel.
 - **Online multiplayer with rooms** — PLAY ONLINE from the menu: quick-play into a public
   room, or create a private room and share its 4-letter code; everyone with the code lands
-  in the same **authoritative server world** (isolated per room), with names above blobs
-  and a pickable blob color. Classic peer-synced co-op is still there too. Accounts +
-  saved stats persist across sessions; guest play never requires sign-in.
+  in the same **authoritative server world** (isolated per room, verified end-to-end), with
+  names above blobs and a pickable blob color. A party start waits behind a readiness veil
+  until every room member has actually joined the world — nobody ever plays a separate run
+  by accident. A Wi-Fi blip is never a death: the server holds your blob safe for a 25s
+  reconnect grace and the client resumes the exact same body, inventory, and floor.
+  Accounts + saved stats persist across sessions; guest play never requires sign-in.
 
 ## Stack
 - Vite + TypeScript, HTML5 canvas rendering (no engine)

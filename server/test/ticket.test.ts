@@ -12,6 +12,7 @@
 
 import { mintGsTicket, worldIdForRoomCode, type GsTicketClaims } from "../../convex/gsTicketCore.js";
 import { mintTicket, verifyTicket, type AuthConfig } from "../src/auth.js";
+import { worldIdForRoomCode as clientWorldIdForRoomCode } from "../../src/net/protocol.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -64,6 +65,12 @@ async function main(): Promise<void> {
   {
     const world = worldIdForRoomCode("abcd");
     check("room code maps to its world id (normalized uppercase)", world === "room:ABCD", world);
+    // The Convex minter and the client/server shared mapping must agree — the client asserts
+    // snapshot wids against ITS mapping of the room code, so a drift here would falsely
+    // reject (or worse, falsely accept) every room join.
+    for (const code of ["abcd", " QQQQ ", "zz99"]) {
+      check(`minter and client agree on worldIdForRoomCode(${JSON.stringify(code)})`, worldIdForRoomCode(code) === clientWorldIdForRoomCode(code));
+    }
     const ticket = await mintGsTicket(secret, "player-1", 120, now, { worldId: world, name: "Ada", colorIndex: 2 });
     const res = verifyTicket(cfg, ticket, now);
     check("claimed ticket verifies", res.ok === true, res.reason ?? "");

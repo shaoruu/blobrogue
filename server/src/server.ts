@@ -19,7 +19,7 @@ import { parseCidrList, clientIpFrom } from "./net.js";
 import { WorldRegistry } from "./worldRegistry.js";
 import { WsSnapshotPublisher } from "./snapshotPublisher.js";
 import { MessageRouter, DEFAULT_WORLD_ID, OFFER_RESENDS } from "./messageRouter.js";
-import { createHttpHandler } from "./httpEndpoints.js";
+import { createHttpHandler, type WorldReport } from "./httpEndpoints.js";
 import type { SessionStore, SnapshotPublisher, RoomRuntime } from "./ports.js";
 
 const TICK_MS = 1000 / TICK_HZ;
@@ -29,6 +29,9 @@ const TICK_MS = 1000 / TICK_HZ;
 // hitches (and in-process test contention) without a spiral of death.
 const MAX_CATCHUP = 20;
 const MAX_MALFORMED = 3;
+// Close codes that are part of the deliberate lifecycle — never grounds for a reconnect seat:
+// join rejects, game over, superseded connections, and explicit client leaves.
+const SEATLESS_CLOSE_CODES: ReadonlySet<number> = new Set([4001, 4008, 4009, 4010]);
 
 // Optional dependency overrides (DI) for tests / alternative backends. Anything omitted uses the
 // production default.
@@ -80,7 +83,7 @@ export class GameServer {
       close: (conn, code, reason) => this.closeConn(conn, code, reason),
     });
 
-    this.http = createServer(createHttpHandler({ config: cfg, health: () => this.health() }));
+    this.http = createServer(createHttpHandler({ config: cfg, health: () => this.health(), worlds: () => this.worldReports() }));
     this.wss = new WebSocketServer({ server: this.http, path: cfg.wsPath, maxPayload: 8 * 1024 });
     this.wss.on("connection", (ws, req) => this.onConnection(ws, req));
   }
@@ -129,11 +132,16 @@ export class GameServer {
 
   private tickOnce(): void {
     const t0 = this.clock.mono();
+    // Reconnect-grace lifecycle first: overdue seats become authoritative leaves BEFORE this
+    // tick simulates, so wipe/exit gates see the post-leave party the same tick it happens.
+    this.metrics.counters.seatsExpired += this.sessions.sweep(this.clock.now());
     for (const room of this.sessions.rooms()) {
+      this.detectSoftAbsence(room);
       try { room.step(this.cfg); } catch (err) { this.log.error("world step failed", { worldId: room.id, err: String(err) }); }
     }
     for (const room of this.sessions.rooms()) {
       this.applyOffers(room);
+      this.handleExpiredOffers(room);
       this.publisher.sendOffers(room);
       this.publisher.publish(room);
       this.handleGameOver(room);
@@ -141,6 +149,27 @@ export class GameServer {
     const dur = this.clock.mono() - t0;
     this.metrics.recordTick(dur);
     if (dur > TICK_MS) this.log.warn("tick over budget", { ms: Number(dur.toFixed(2)), budget: TICK_MS });
+  }
+
+  // Silent-drop detection (balance gate §6: bodies go invulnerable/non-targeting within 3s of
+  // a disconnect, not only when the heartbeat finally closes the socket): a connection whose
+  // link has delivered NOTHING for absenceDetectMs gets its body marked absent/safe while the
+  // socket lingers; the very next inbound frame restores it. A healthy link can never trip
+  // this — pongs alone arrive every heartbeatMs (< the window), even from a background tab.
+  private detectSoftAbsence(room: RoomRuntime): void {
+    const windowMs = this.cfg.absenceDetectMs;
+    if (windowMs <= 0) return;
+    const now = this.clock.now();
+    for (const conn of room.conns.values()) {
+      if (conn.closing || conn.playerId === null) continue;
+      const isSilent = now - conn.lastInboundAt >= windowMs;
+      if (isSilent === conn.isSoftAbsent) continue;
+      conn.isSoftAbsent = isSilent;
+      room.setPlayerAbsent(conn.playerId, isSilent);
+      conn.log.info(isSilent ? "soft absence (silent link — body paused/safe)" : "soft absence lifted (traffic resumed)", {
+        authName: conn.authName ?? "", worldId: room.id, silentMs: now - conn.lastInboundAt,
+      });
+    }
   }
 
   // Turn this tick's per-player offerBlessing events into server-decided, validated offers.
@@ -159,6 +188,16 @@ export class GameServer {
       conn.offerId++;
       conn.offerResendsLeft = OFFER_RESENDS;
       conn.offerDeadline = this.clock.now() + this.cfg.offerTtlMs;
+    }
+  }
+
+  // Blessing offers the room expired this tick (the room already cleared both the sim entry
+  // and the conn/seat offers) — observability so a stuck-party report can be answered from
+  // the logs, and a growing counter flags AFK-heavy or overlay-bug behavior.
+  private handleExpiredOffers(room: RoomRuntime): void {
+    for (const pid of room.expiredOfferPlayers()) {
+      this.metrics.counters.offersExpired++;
+      this.log.info("blessing offer expired unanswered (pick forfeited, gate released)", { worldId: room.id, playerId: pid });
     }
   }
 
@@ -226,6 +265,7 @@ export class GameServer {
     // Aggregate rate limit BEFORE parsing (cheap sliding 1s window); per-CLASS limits apply
     // after decode in the router (segmented buckets for input/control/stat/pong).
     const now = this.clock.now();
+    conn.lastInboundAt = now; // any frame proves the link is alive (silent-drop detection)
     if (now - conn.rate.start >= 1000) { conn.rate.start = now; conn.rate.total = 0; conn.rate.input = 0; conn.rate.control = 0; conn.rate.stat = 0; conn.rate.pong = 0; }
     conn.rate.total++;
     this.metrics.counters.msgsIn++;
@@ -259,7 +299,18 @@ export class GameServer {
     if (conn.closing) return;
     conn.closing = true;
     try { conn.ws.close(code, reason); } catch { /* already closing */ }
-    this.sessions.unbind(conn);
+    // Unexpected closes (network death, heartbeat timeout, backpressure kick, peer vanishing)
+    // reserve the player's body for the reconnect grace. Deliberate lifecycle closes never do:
+    // join rejects (4001), game over (4008), superseded (4009), and a client `leave` (4010).
+    const isDeliberate = SEATLESS_CLOSE_CODES.has(code) || conn.isLeaving || conn.gameOver;
+    const isSeatReserved = !isDeliberate && conn.authed && conn.playerId !== null && conn.worldId !== null;
+    this.sessions.unbind(conn, isSeatReserved ? { nowMs: this.clock.now(), ttlMs: this.cfg.resumeGraceMs } : undefined);
+    if (isSeatReserved) {
+      this.metrics.counters.seatsReserved++;
+      conn.log.info("seat reserved (reconnect grace)", {
+        authName: conn.authName ?? "", worldId: conn.worldId ?? "", playerId: conn.playerId ?? "", graceMs: this.cfg.resumeGraceMs,
+      });
+    }
     this.conns.delete(conn.id);
     const perIp = this.connsPerIp.get(conn.ip);
     if (perIp !== undefined) {
@@ -275,6 +326,23 @@ export class GameServer {
       rttMs: c.rttMs, cliJitterMs: c.cliJitterMs, cliReconciliations: c.cliReconciliations, cliCorrectionMaxPx: c.cliCorrectionMaxPx,
     }));
     return this.metrics.report(this.startedAt, this.clock.now(), this.sessions.roomCount(), this.sessions.totalPlayers(), this.conns.size, nets);
+  }
+
+  // Per-world occupancy for /worlds (control panel): which worlds exist, who is actually
+  // connected to each, and whose seats are reserved for a reconnect — the ops answer to
+  // "did the whole room land in one world?" and "who is mid-outage right now?".
+  private worldReports(): WorldReport[] {
+    const out: WorldReport[] = [];
+    for (const room of this.sessions.rooms()) {
+      const names: string[] = [];
+      for (const conn of room.conns.values()) {
+        if (!conn.closing && conn.playerId !== null) names.push(conn.displayName ?? conn.playerId);
+      }
+      const away: string[] = [];
+      for (const seat of room.seats()) away.push(seat.displayName ?? seat.pid);
+      out.push({ id: room.id, players: room.playerCount, tick: room.state.tick, names, away });
+    }
+    return out;
   }
 
   // Test/introspection helpers.

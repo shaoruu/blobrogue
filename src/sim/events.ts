@@ -28,6 +28,10 @@ export type SimEvent =
   | { t: "itemPicked"; pid: PlayerId; x: number; y: number; tint: string }
   // rare: the boss-chest reward replaces the floor's pick with a Rare-pool offer.
   | { t: "offerBlessing"; pid: PlayerId; rare: boolean }
+  // The offer's TTL ran out unanswered: the pick is forfeited, the player's pause/shield
+  // lifts, and the party's descend gate releases. The server clears the matching
+  // connection/seat offer on this event; the owning client closes its overlay.
+  | { t: "blessingExpired"; pid: PlayerId }
   | { t: "revive"; pid: PlayerId; by: PlayerId; x: number; y: number } // downed player brought back by a teammate
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }

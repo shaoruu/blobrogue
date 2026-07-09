@@ -38,17 +38,53 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // honest): the join TICKET payload may carry verified room/identity claims (wld/nm/cl — see
 // server/src/auth.ts), and PlayerWire carries optional nm/cl which the client decodes
 // defensively with fallbacks, so old<->new client/server pairs interoperate cleanly.
-// v4: hotbar inventory commands — client->server `reorder` (move an inventory slot) and
-// `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event. New CLIENT
-// message types change the wire contract, so the strict join gate bumps.
+// v4 (ONE migration, strict equal-version join gate — skew is explicit, never silently
+// interoperated on a Sev-0 surface):
+//   - hotbar inventory commands: client->server `reorder` (move an inventory slot) and
+//     `drop` (drop an owned weapon as a world pickup) plus the weaponDrop event
+//   - room correctness: `wid` — the authoritative world id this connection is bound to, on
+//     EVERY snap, so the client can ASSERT it landed in the room it expected (mismatch =
+//     close, never play); `roster` — every seat in the world (verified identity + on/away
+//     state), independent of interest filtering, so readiness/HUD show who actually joined
+//     and who is reconnecting
+//   - reconnect resume: `tok` — the single-use seat token for THIS connection (rides every
+//     per-connection snapshot), presented via join's optional `resume` to reclaim the
+//     reserved body; a deliberate disconnect says `leave` so no seat is reserved; PlayerWire
+//     `ab` marks an absent body (rendered as a reconnecting ghost)
 // v5 (intentional bump, the content wave): the snapshot grew the `hzds` hazard list
 // (webs slow PREDICTED movement, so clients must know them), boss-choice/dealer
 // pickup flags + the personal-claim player flag, and the enemy wire's closed kind/move
 // sets grew (charger/burrower/orbiter/shielder + the boss roster; a v4 client would
 // reject any snapshot carrying them as a ProtocolError). The join gate enforcing
 // equality is what turns that skew into a clean "update your client" instead of a
-// mid-run desync. NOTE: the control plane's synthetic VERIFY join imports this constant.
+// mid-run desync. NOTE: the control plane's synthetic VERIFY join mirrors this constant
+// (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
 export const PROTOCOL_VERSION = 5;
+
+// How long the server reserves a disconnected player's body (their seat) before the
+// authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
+// contract (docs/specs/blobrogue_STUDIO_BALANCE_GATE.md §6) — a reserved body is paused,
+// safe, gate-neutral, and never blocks a wipe, so the long window costs teammates nothing
+// while covering real-world outages (router resets, elevator rides). Shared so the client's
+// reconnect loop and grace countdown agree with the server default (GS_RESUME_GRACE_MS can
+// override server-side; the countdown is display-only).
+export const RESUME_GRACE_MS = 90000;
+
+// World ids are minter-controlled but still bounded/charset-checked so a compromised minter
+// can't inject log-breaking or unbounded ids ("room:ABCD", "arena-1", ...). Shared by the
+// ticket verifier (server), the snapshot decoder (client), and the dev mint endpoint.
+const WORLD_ID_RE = /^[a-zA-Z0-9:_-]{1,40}$/;
+
+export function isValidWorldId(id: string): boolean {
+  return WORLD_ID_RE.test(id);
+}
+
+// The single room-code -> authoritative-world-id mapping the CLIENT and SERVER share. The
+// Convex minter keeps its own copy (convex/gsTicketCore.ts must stay import-free of app
+// code for bundling); server/test/ticket.test.ts locks the two to byte agreement.
+export function worldIdForRoomCode(code: string): string {
+  return "room:" + code.trim().toUpperCase();
+}
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`
@@ -91,7 +127,9 @@ export interface SelfWire {
 // Another player as seen by this client (rendered via interpolation, never predicted).
 // nm/cl are the verified cosmetic identity from that player's join ticket (name above the
 // blob, chosen blob tint). Both are decode-OPTIONAL with safe fallbacks (nm -> id, cl ->
-// null) so frames from an older server still decode.
+// null) so frames from an older server still decode. ab marks a network-absent body (its
+// player disconnected and the seat is reserved for the reconnect grace) — rendered as an
+// explicit reconnecting ghost, never mistaken for a live or dead teammate.
 export interface PlayerWire {
   id: PlayerId;
   x: number; y: number;
@@ -99,8 +137,33 @@ export interface PlayerWire {
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
+  ab: boolean;  // absent body — the seat is reserved for a reconnect (rendered as a ghost)
   nm: string;
   cl: number | null;
+}
+
+// One SEAT in this world, as published on every snapshot REGARDLESS of interest filtering:
+// the world-scoped player id, the VERIFIED ticket identity it joined with (aid — the same id
+// the lobby roster keys on, so readiness can be matched member-by-member), the cosmetic
+// name/color, and whether the seat is live ("on") or reserved for a reconnect ("away").
+// This is the server's authoritative "who is actually in this world" — the lobby's Convex
+// presence is only the expectation.
+export type SeatState = "on" | "away";
+
+export interface RosterWire {
+  pid: PlayerId;
+  aid: string;
+  nm: string;
+  cl: number | null;
+  st: SeatState;
+}
+
+// A player still deciding a blessing offer + the seconds left on its authoritative TTL.
+// Rides every snapshot (tiny, party-sized) so all clients agree on WHO is holding the
+// descend gate and for how long — a wait that is visible and bounded, never a mystery.
+export interface WaitWire {
+  pid: PlayerId;
+  s: number;
 }
 
 // A snapshot event carries a monotonic id so the reliable-event channel can dedupe (client
@@ -149,7 +212,13 @@ export interface HazardWire { id: number; k: HazardKind; x: number; y: number; r
 
 // Client -> server. The client authors INPUTS/INTENTS ONLY.
 export type ClientMsg =
-  | { t: "join"; ticket: string; protocol: number }
+  // resume (optional): the single-use seat token from a previous connection's full snapshot.
+  // Presenting it with a fresh valid ticket reclaims the reserved body (same player id, same
+  // state, same world) instead of spawning a new one.
+  | { t: "join"; ticket: string; protocol: number; resume?: string }
+  // Deliberate goodbye: the player is leaving on purpose (quit to lobby / run end), so the
+  // server must NOT reserve a reconnect seat for this connection.
+  | { t: "leave" }
   // An input is an INTENT SAMPLE, not a time authority: it carries NO dt. The server advances
   // simulation time by its own fixed tick (one command = one fixed step), so a client can't buy
   // extra time by claiming a large dt. `ackEv` piggybacks the reliable-event ack (last event id
@@ -191,6 +260,16 @@ export type ServerMsg =
       over: boolean;             // terminal run state (party wiped) — derivable from STATE
       selfId: PlayerId;          // this client's server-assigned id (on every snap so a dropped
                                  // join snapshot never loses identity)
+      wid: string;               // the authoritative world id this connection is BOUND to —
+                                 // the client asserts it against the expected room world and
+                                 // refuses to play on a mismatch
+      roster: RosterWire[];      // every seat in this world (verified identities + on/away),
+                                 // interest-INDEPENDENT — drives readiness + the HUD count
+      wait: WaitWire[];          // players still deciding a blessing offer (pid + seconds
+                                 // left) — the party-wait state everyone sees identically,
+                                 // so a held descend gate is explicit and NEVER indefinite
+      tok?: string;              // single-use resume token for THIS connection (full snaps
+                                 // only) — presented on reconnect to reclaim the seat
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
@@ -325,6 +404,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
+  blessingExpired: { scope: "pid", fields: { pid: "str" } },
   revive: { scope: "pid", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
@@ -411,12 +491,19 @@ function decodeClientMsg(raw: string): ClientMsg {
   const o = obj(parsed, "frame");
   switch (o.t) {
     case "join": {
-      exactKeys(o, ["t", "ticket", "protocol"]);
+      // `resume` is the ONE optional field on a security-sensitive frame: validate the two
+      // allowed shapes exactly (with/without it) — anything else is still an error.
+      exactKeys(o, o.resume === undefined ? ["t", "ticket", "protocol"] : ["t", "ticket", "protocol", "resume"]);
       const ticket = shortStr(o, "ticket", 512);
       // Protocol must be an explicit finite integer (no defaulting to 0 — that was a bypass).
       // The join handler additionally enforces it EQUALS the current PROTOCOL_VERSION.
       const protocol = intOf(o, "protocol", 0, 1e6);
-      return { t: "join", ticket, protocol };
+      if (o.resume === undefined) return { t: "join", ticket, protocol };
+      return { t: "join", ticket, protocol, resume: shortStr(o, "resume", 64) };
+    }
+    case "leave": {
+      exactKeys(o, ["t"]);
+      return { t: "leave" };
     }
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
@@ -533,6 +620,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
     bcl: boolOf(o, "bcl"),
+    ab: boolOf(o, "ab"),
     nm, cl,
   };
 }
@@ -620,6 +708,32 @@ function validateWireEvent(v: unknown): WireEvent {
   return { id: intOf(o, "id", 1, Number.MAX_SAFE_INTEGER), e: validateEvent(o.e) };
 }
 
+const SEAT_STATES: Record<SeatState, true> = { on: true, away: true };
+
+function validateWaitWire(v: unknown): WaitWire {
+  const o = obj(v, "wait");
+  return { pid: shortStr(o, "pid", 64), s: num(o, "s", 0, 1e4) };
+}
+
+function validateRosterWire(v: unknown): RosterWire {
+  const o = obj(v, "roster");
+  let cl: number | null = null;
+  if (o.cl !== undefined && o.cl !== null) cl = intOf(o, "cl", 0, 63);
+  return {
+    pid: shortStr(o, "pid", 64),
+    aid: shortStr(o, "aid", 64),
+    nm: shortStr(o, "nm", 24),
+    cl,
+    st: inSet(SEAT_STATES, o.st, "roster.st"),
+  };
+}
+
+function worldIdOf(o: Record<string, unknown>): string {
+  const wid = shortStr(o, "wid", 40);
+  if (!isValidWorldId(wid)) throw new ProtocolError("bad wid");
+  return wid;
+}
+
 function decodeServerMsg(raw: string): ServerMsg {
   let parsed: unknown;
   try {
@@ -638,6 +752,10 @@ function decodeServerMsg(raw: string): ServerMsg {
         full: boolOf(o, "full"),
         over: boolOf(o, "over"),
         selfId: shortStr(o, "selfId", 64),
+        wid: worldIdOf(o),
+        roster: arr(o.roster, "roster").map(validateRosterWire),
+        wait: arr(o.wait, "wait").map(validateWaitWire),
+        ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
         cleared: boolOf(o, "cleared"),
@@ -731,6 +849,7 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
     bcl: p.hasClaimedBossChoice,
+    ab: p.isAbsent,
     nm: identity?.name ?? p.id,
     cl: identity?.colorIndex ?? null,
   };
@@ -834,6 +953,14 @@ export function createInterestView(): InterestView {
 // own player becomes `self`; everyone else becomes a PlayerWire. events are supplied by the
 // caller (per-client reliable stream); evTo is the room's highest committed event id.
 export interface SnapshotOpts {
+  // The authoritative world id this snapshot describes (REQUIRED — the client asserts it
+  // against the room it expected to join; see the v4 protocol note).
+  worldId: string;
+  // Every seat in this world (verified identities + on/away), independent of interest
+  // filtering. Omitted => empty (direct test callers that don't exercise readiness).
+  roster?: RosterWire[];
+  // Single-use resume token for the receiving connection (full snapshots only).
+  resumeToken?: string;
   // Interest radius in px around the client's own player. Entities outside it are omitted from
   // this client's snapshot (the primary bandwidth + CPU lever). <= 0 disables the filter (send
   // everything) — the default, so direct callers/tests keep full snapshots.
@@ -844,6 +971,16 @@ export interface SnapshotOpts {
   // Per-player cosmetic identity (verified name/color from each join ticket), keyed by the
   // world-scoped player id. Omitted / missing entries fall back to id-as-name, no color.
   identities?: ReadonlyMap<PlayerId, PlayerIdentity>;
+}
+
+// The party-wait state straight off the sim's pending-blessing map, identical for every
+// client (sorted for determinism; whole seconds — a countdown readout, not a timer source).
+function partyWait(w: WorldState): WaitWire[] {
+  if (w.pendingBlessings.size === 0) return [];
+  const out: WaitWire[] = [];
+  for (const [pid, left] of w.pendingBlessings) out.push({ pid, s: Math.max(0, Math.ceil(left)) });
+  out.sort((a, b) => a.pid.localeCompare(b.pid));
+  return out;
 }
 
 // Interest management: a client always receives its OWN player + globally-relevant state (the
@@ -857,7 +994,7 @@ export function buildSnapshot(
   events: WireEvent[],
   evTo: number,
   full: boolean,
-  opts: SnapshotOpts = {},
+  opts: SnapshotOpts,
 ): ServerMsg {
   const self = w.players.get(selfPid);
   const r = opts.interestRadius ?? 0;
@@ -923,6 +1060,10 @@ export function buildSnapshot(
     full,
     over: w.isRunOver,
     selfId: selfPid,
+    wid: opts.worldId,
+    roster: opts.roster ?? [],
+    wait: partyWait(w),
+    ...(opts.resumeToken !== undefined ? { tok: opts.resumeToken } : {}),
     seed: w.seed,
     floor: w.floor,
     cleared: isFloorCleared(w),

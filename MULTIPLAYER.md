@@ -99,12 +99,10 @@ bindings.
 - [`src/net/config.ts`](src/net/config.ts) — reads `import.meta.env.VITE_CONVEX_URL`;
   `isMultiplayerEnabled` gates the whole online layer.
 - [`src/net/session.ts`](src/net/session.ts) — identity + saved stats.
-- [`src/net/multiplayer.ts`](src/net/multiplayer.ts) — one co-op session: owns the room +
-  presence subscriptions and implements the game's `CoopBridge`. The game core
-  ([`src/game/game.ts`](src/game/game.ts)) talks only to `CoopBridge`
-  ([`src/game/coop.ts`](src/game/coop.ts)) and never imports Convex, so solo has zero
-  network code in its graph.
-- [`src/ui/menu.ts`](src/ui/menu.ts) — title, co-op lobby (shareable code), game over.
+- [`src/net/onlineLobby.ts`](src/net/onlineLobby.ts) — one ONLINE room session (the only
+  multiplayer product path; see §7). The game core ([`src/game/game.ts`](src/game/game.ts))
+  never imports Convex, so solo has zero network code in its graph.
+- [`src/ui/menu.ts`](src/ui/menu.ts) — title, online rooms, game over.
 
 ---
 
@@ -145,9 +143,19 @@ want one.
 
 ---
 
-## 4. The co-op model (what's synced, what's local)
+## 4. The co-op model (what's synced, what's local) — LEGACY, removed from the product
 
-Delivered (the task's "at minimum", plus the down/revive nice-to-have):
+> **This whole section describes the peer-synced classic co-op, which is no longer
+> reachable from the product.** Each client simulated its OWN copy of the enemies from a
+> shared seed, so two players could believe they were "together" while fighting different
+> enemies and seeing different drops — the Sev-0 room-divergence incident. The client entry
+> points (menu screens and `src/net/multiplayer.ts`) are deleted; the game keeps only the
+> inert `CoopBridge` seam for tests/dev tooling, and the Convex `kind: "coop"` functions
+> remain solely so already-deployed clients keep working. The one multiplayer product path
+> is **PLAY ONLINE** (§7): the authoritative server owns every enemy, drop, and chest.
+> `test/menu.test.ts` locks the unreachability.
+
+Delivered historically (kept for context):
 
 - **Same dungeon for everyone** — shared `seed` + `floor`; both the layout and the enemy
   spawns are fully deterministic (seeded RNG in [`src/game/rng.ts`](src/game/rng.ts)), so
@@ -232,59 +240,265 @@ src/net/
   session.ts       identity (name + blob color) + saved stats
   auth.ts          vanilla Convex Auth client (Google sign-in, token storage)
   interp.ts        per-player entity-interpolation buffer (smooth remote rendering)
-  multiplayer.ts   classic co-op CoopBridge implementation over ConvexClient
+  partyGate.ts     run-readiness gate (expected lobby roster vs server world roster)
   onlineLobby.ts   ONLINE room session (roster/status via Convex, ticket mint -> game server)
-src/ui/menu.ts     title / online rooms / classic co-op lobby / game-over / sign-in
-src/game/coop.ts   CoopBridge contract (game ↔ net seam)
+src/ui/menu.ts     title / online rooms / game-over / sign-in (no classic co-op entry)
+src/game/coop.ts   CoopBridge contract (inert legacy seam; no product implementation)
 AUTH_SETUP.md      operator steps to enable Google sign-in
 ```
 
 ## 6. Sanity checklist after you provision
 - [ ] `npx convex dev` created `convex/_generated` and pushed without type errors.
-- [ ] `.env.local` has `VITE_CONVEX_URL` (dev) — `npm run dev` shows **host/join** on the menu.
-- [ ] Host a game in one tab, join with the code in a second tab → you see each other move,
-      shoot, and descend together; kill a teammate and revive them.
-- [ ] `npx convex deploy` + `VITE_CONVEX_URL` set in Vercel → co-op works on the deployed URL.
-- [ ] Unset `VITE_CONVEX_URL` locally → menu hides co-op, solo still plays. (Graceful degrade.)
+- [ ] `.env.local` has `VITE_CONVEX_URL` (dev) — `npm run dev` shows **PLAY ONLINE** on the menu.
+- [ ] Create a room in one tab, join with the code in a second tab → both roster rows show
+      **CONNECTED TO WORLD** after START, the party veil lifts together, and both see the
+      SAME enemies/drops with each other's names + colors.
+- [ ] `npx convex deploy` + `VITE_CONVEX_URL` set in Vercel → online play works on the deployed URL.
+- [ ] Unset `VITE_CONVEX_URL` locally → menu hides online play, solo still plays. (Graceful degrade.)
 
 ---
 
-## 7. Authoritative online play (the game server + the room lobby)
+## 7. Authoritative online play (the game server + the room lobby) — THE multiplayer path
 
-Separate from the classic Convex co-op above, the **authoritative WebSocket server**
-(`server/`) owns ALL gameplay state online: players, enemies, bullets, loot, inventory,
-blessings, and floor transitions. The player-facing front door is **PLAY ONLINE** on the
+The **authoritative WebSocket server** (`server/`) owns ALL gameplay state online: players,
+enemies, bullets, loot, inventory, blessings, and floor transitions — one simulation,
+identical for every member of a room. The player-facing front door is **PLAY ONLINE** on the
 menu (`?online=1` deep-links straight to it): quick-play into the public pool, create a
-private room with a shareable 4-letter code, or join a friend's code. Neither Convex nor
-the game server being unreachable can ever affect solo — every failure lands back on a menu
-screen with a status line.
+private room with a shareable 4-letter code, or join a friend's code. There is deliberately
+no other multiplayer entry (see §4). Neither Convex nor the game server being unreachable
+can ever affect solo — every failure lands back on a menu screen with a status line.
 
-### Rooms → worlds (how friends share ONE world)
+### Rooms → worlds (how friends share ONE world — the verified trust chain)
 
-Room codes map to isolated authoritative worlds via a verified chain — the world id is
-never a client-asserted string:
+Room codes map to isolated authoritative worlds via a verified chain, asserted at BOTH
+ends — the world id is never a client-asserted string, and after the Sev-0 room-divergence
+incident the client also refuses to play in a world the server didn't prove is the room's:
 
 1. **Lobby (Convex).** `rooms.create/join/quickPlay` with `kind: "online"` put the player in
-   a room (roster + status only; Convex owns NO gameplay for this kind). Online and classic
-   co-op rooms never cross-match. The lobby screen shows the code + live roster (names,
-   colors, host) and the host's START control; joining a room whose run is live drops
-   straight in, and a wipe regroups the party in the same lobby (`rooms.reopen`).
+   a room (roster + status only; Convex owns NO gameplay for this kind). The lobby screen
+   shows the code + live roster (names, colors, host) with each member's readiness (LOBBY /
+   CONNECTING… / CONNECTED TO WORLD — see below) and the host's START control; joining a
+   room whose run is live drops straight in, and a wipe regroups the party in the same
+   lobby (`rooms.reopen`). Identity (name + color pick) is FLUSHED to the profile before
+   every room operation and before every mint, so a fast CREATE → START can never race a
+   stale color/name into the ticket (`test/onlinelobby.test.ts`).
 2. **Ticket (Convex → signed claim).** On connect, [`convex/gsTicket.ts`](convex/gsTicket.ts)
    `mint({ clientId, roomCode })` verifies the caller actually SITS in that online room
    (`rooms.membership`), then binds `wld: "room:<CODE>"` into the HMAC ticket payload —
    along with the display name (`nm`) and chosen blob color (`cl`).
-3. **Join (game server).** The join message is unchanged (`{ t:"join", ticket, protocol }`);
-   the server verifies the ticket (`server/src/auth.ts`) and binds the connection to exactly
-   the ticket's world: `sessions.bind(conn, worldId)`. Same code → same world; different
-   codes → fully isolated runs (own seed/floor/enemies). No claim → the public default
-   world. Emptied room worlds are reset AND released, so codes never leak server memory.
-4. **Identity on the wire.** The verified name/color ride each snapshot's `PlayerWire`
-   (`nm`/`cl`), so names render above blobs and everyone sees your chosen tint. Both fields
-   are decode-optional with fallbacks — old/new client/server pairs interoperate.
+3. **Join (game server).** The server verifies the ticket (`server/src/auth.ts`) and binds
+   the connection to exactly the ticket's world: `sessions.bind(conn, worldId)`. Same code →
+   same world; different codes → fully isolated runs (own seed/floor/enemies). No claim →
+   the public default world. Emptied room worlds are reset AND released, so codes never leak
+   server memory. Every join logs `authName / worldId / roomCode / ticketWorld /
+   worldPlayers` — the production greps for "who actually landed where".
+4. **Snapshot echo (server → client assertion).** Every snapshot carries the authoritative
+   world id (`wid`) and the world's connected roster (`roster`: world pid + verified ticket
+   identity `aid`/`nm`/`cl`, interest-INDEPENDENT). The client compares `wid` against the
+   room world it expected (`worldIdForRoomCode(code)` — the shared mapping, agreement-locked
+   in `server/test/ticket.test.ts`): a mismatch closes the socket before ANY state is
+   accepted and returns to the lobby with an explicit error. It never plays (protocol v4;
+   `server/test/coherence.test.ts`).
+5. **Identity on the wire.** The verified name/color ride each snapshot's `PlayerWire`
+   (`nm`/`cl`) and the roster, so names render above blobs, everyone sees your chosen tint,
+   and the lobby roster and the in-game snapshot agree (both derive from the same profile
+   write). Identity is bound per-connection at join: a color/name change mid-run applies on
+   the NEXT connect (rejoin / next run) by design — the party always agrees on what it sees,
+   it is never silently half-updated.
 
-The mint/verify byte agreement (now including the `wld`/`nm`/`cl` claims) is locked by
-`server/test/ticket.test.ts`; the room isolation + identity flow end-to-end by
-`server/test/rooms.test.ts`.
+### Run readiness (the party gate) — why START can no longer strand anyone
+
+Convex lobby presence says who BELIEVES they are in the room; only the game server knows who
+actually joined its world. The Sev-0 was exactly that gap: START flipped the room live, one
+member silently failed to reach the world, and the two players ran different simulations.
+The gap is now closed end-to-end:
+
+- **Server truth published.** The per-world connected roster rides every snapshot (`roster`,
+  keyed by the same verified identity the lobby keys on), plus `/worlds` (loopback) lists
+  every world's occupants for the control panel.
+- **Readiness veil.** A run started from the lobby (host's START) boots ALL clients — host
+  included — behind a WAITING FOR PARTY veil that lists every expected room member with
+  live status (CONNECTING… / CONNECTED TO WORLD). Gameplay reveals only when every member
+  of the live Convex roster appears on the server's own roster (`src/net/partyGate.ts`).
+  Drop-ins to a live run, REJOIN, and quick play are ungated (the run is already going).
+- **Timeout / leave semantics (no deadlock).** The expectation is the LIVE roster: a member
+  who closes their tab or crashes goes presence-stale in ~12s and drops out of the
+  expectation, so the rest reveal without them. A member who stays in the lobby but never
+  reaches the world (their connect failed) trips the 20s gate deadline: the veil fails
+  EXPLICITLY, naming who never made it, and everyone lands back in the lobby — never a
+  silent solo run. If the world reaches the waiting player first (spawn damage), the veil
+  lifts immediately rather than letting them be hit invisibly.
+- **HUD debugging surface.** The online HUD label shows the authoritative world id + the
+  server-roster connected count (`ONLINE · room:ABCD · 2 connected`) — the two facts whose
+  disagreement was the incident.
+- **Duplicate identity (two tabs / zombie socket).** Two live connections with the same
+  verified identity in one world would render as two blobs of one member and break every
+  readiness read. The server supersedes explicitly: the NEWEST connection wins, the older
+  socket closes (code 4009, `duplicateIdentityKicks` metric), and bind-before-kick order
+  means the room's run is never reset by a tab takeover.
+
+`server/test/coherence.test.ts` locks the whole story: tick-for-tick identical world
+snapshots for two real same-room clients (enemies/pickups/chests/props + exact remote
+`nm`/`cl`), the Sev-0 repro (a member that never joins holds the gate WAITING then FAILED —
+the host cannot enter a separate run), the wrong-world close, and the duplicate-identity
+takeover. `test/partygate.test.ts` locks the timeout/leave semantics.
+
+### Reconnect grace / session resume — a Wi-Fi blip is never a death
+
+A brief network drop used to read as YOU DIED: the server removed the body on disconnect and
+the client turned a dead socket into a game over. Resume correctness is now first-class,
+reconciled with the studio balance gate's reconnect contract
+([`docs/specs/blobrogue_STUDIO_BALANCE_GATE.md`](docs/specs/blobrogue_STUDIO_BALANCE_GATE.md) §6):
+
+- **Seats (90s reservation, per the balance gate).** On an UNEXPECTED disconnect (network
+  death, heartbeat timeout, backpressure kick — anything that is not a join reject, game
+  over, superseded connection, or an explicit client `leave`), the server reserves the
+  player's seat for `GS_RESUME_GRACE_MS` (default 90s): the authoritative body stays in the
+  world with its full state — HP (exact, fractional — no heal, no rounding), inventory,
+  blessings, coins, floor, down state, pending blessing offer — plus the connection's
+  command/offer continuity (input ack watermark, command sequence). A reserved body is
+  paused, safe, and gate-neutral, so the long window costs teammates nothing.
+- **3s silent-drop detection.** The body goes safe BEFORE the socket dies: a connection
+  whose link delivers nothing for `GS_ABSENCE_DETECT_MS` (default 3s; heartbeat pongs arrive
+  every 2s, so a healthy link can never trip it) is marked absent immediately and reads
+  `away` on the roster; the very next inbound frame restores it. The heartbeat close (~6-8s)
+  then converts the soft absence into a reserved seat.
+- **Absent bodies are paused and safe.** A reserved body cannot act, take damage, attract
+  enemies, collect loot, open chests, or channel revives; it is excluded from the exit and
+  blessing gates on BOTH sides (it can neither trigger a descend nor hold the party hostage —
+  the party can descend and the body is carried along). Nothing rescales during a
+  reservation: encounter scaling is snapshotted at floor build and boss HP is never
+  re-rolled, so a mid-pull disconnect (or even a mid-floor expiry) changes no enemy numbers.
+  Teammates see an explicit reconnecting ghost (`PlayerWire.ab`) and an `away` roster seat,
+  never a corpse. Returning from absence grants the spawn-grace mercy window (an
+  invulnerability beat, not a heal).
+- **Reservations and the wipe (balance gate §6: "pending reconnect reservations do not block
+  wipe").** Absent bodies are excluded from the wipe calculus entirely: a mere disconnect is
+  never treated as a death (it cannot cause a wipe — with every connected player absent the
+  world simply idles), but a reservation cannot keep a run alive either — when the whole
+  CONNECTED party is down, the run ends immediately, and a member resuming afterwards lands
+  in the over-state (they see the wipe, never a resurrected private run).
+- **Resume tokens.** Every join answer carries a single-use, server-minted random seat token
+  (`tok`, 192 bits, on every per-connection snapshot so packet loss cannot strand a stale
+  token). Reconnecting presents a FRESH ticket (identity/room re-proved through the normal
+  trusted mint) plus the token (session continuity). A token mismatch on an existing seat or
+  live connection is a hard reject (`resume` — the replay/forgery signal, counted in
+  `resumesRejected`); tokens rotate on every successful join, so a captured token replays
+  exactly zero times. A matching token against a still-live connection (half-dead socket the
+  server has not noticed) takes the body over in place.
+- **Client auto-reconnect.** The transport reconnects with exponential backoff (0.4s -> 5s
+  steps) inside the grace window, re-minting tickets as needed, and retries IMMEDIATELY when
+  the browser announces connectivity returned (`online` event) — which is what lets an outage
+  lasting almost the whole window still resume in time. The game freezes on the last
+  authoritative frame under a `CONNECTION LOST · RECONNECTING (n)` overlay with the grace
+  countdown — explicitly not a game-over screen. A resumed session KEEPS the same player id,
+  body, and world; the fresh full snapshot re-anchors state (bootstrap event ack semantics:
+  the outage window's one-shot FX are skipped, never replayed; a preserved blessing offer
+  re-prompts and stays answerable).
+- **Expiry semantics.** When the grace runs out, the authoritative leave lifecycle applies:
+  the body is removed (tick-precise sweep), the stranded-wipe check runs against the
+  post-leave party, emptied worlds reset + release, and a late resume gets an explicit
+  `resume_expired` — the client lands on the room lobby with a `connection lost` note (REJOIN
+  RUN joins the live run fresh). The only close that ever reads as a death is the server's
+  own game-over close.
+- **Server restart (documented behavior).** Seats and worlds are in-memory BY DESIGN: a
+  game-server restart drops them all. Reconnecting clients resolve as `resume_expired` ->
+  `connection lost` on the lobby; the party regroups and starts fresh (room codes re-bind
+  through Convex tickets as always). Runs do not survive a server restart — that is the
+  accepted trade until worlds get durable state.
+- **Readiness integration.** The party gate treats an `away` member as RECONNECTING — still
+  expected (their return is imminent or the gate deadline names them), shown amber on the
+  veil; the HUD label appends `· N RECONNECTING`; `/worlds` lists `away` occupants for ops.
+
+### The UI contract (P0 copy + states — src/ui/onlineCopy.ts, locked by test/onlinecopy.test.ts)
+
+- **Lobby roster:** every member shows READY / NOT READY (host is implicit consent — HOST)
+  plus their heartbeat-measured ping. Non-hosts get the READY UP toggle (reset on every
+  lobby entry and on reopen after a wipe). The host's START RUN appears only when everyone
+  is ready; otherwise the button is `START ANYWAY — hold 3s`, armed only by an uninterrupted
+  3s hold (releasing cancels) — a party can never be yanked into a run by a slipped click.
+- **Normal HUD:** `CONNECTED · ROOM CODE · N PLAYERS` (server-roster truth; `· N
+  RECONNECTING` appended mid-outage). Debug details — authoritative world id, revision,
+  protocol version — live in the hold-Tab details panel, not the always-on HUD.
+- **World mismatch:** the run refuses to play and the lobby shows exactly
+  `World mismatch — rejoining the party…`.
+- **Reconnect states:** 0-3s a calm `CONNECTION LOST` / `Reconnecting…`; from 3s the
+  attempt counter, the `ESC — cancel` affordance, and the seat-grace countdown. Recovery
+  shows a `BACK ONLINE` toast. A resume that fails terminally lands on the room lobby with
+  its explicit note and the REJOIN RUN / leave choice; if the room itself is gone (or the
+  run finished during the outage) the player sees `RUN ENDED WHILE AWAY` — and a network
+  loss is NEVER recorded as a death or a finished run (only the server's own game-over
+  close records).
+- **No infinite veils:** the connect handshake has a hard 15s deadline (explicit failure),
+  the party gate its 20s deadline, and ESC cancels either veil (and an in-progress
+  reconnect) back to the lobby at any time.
+- **Input during an outage:** the veils AND a mid-run outage run under the input-context
+  system's `reconnect` context — gameplay actions and fire samples are blocked at the
+  controller, and the loss edge drops everything held (keys, mouse, the autofire latch,
+  the stats hold) exactly like a window blur, so resuming always requires fresh input.
+  Prompts stay neutral (key names + plain verbs); controller glyphs wait for real
+  controller support (enforced by the copy suite).
+
+### Blessing-offer expiry — the descend gate is visible and bounded, never stranded
+
+An unanswered online blessing offer resolves AUTHORITATIVELY when its TTL runs out (60s,
+the sim clock): `tickPendingBlessings` emits `blessingExpired`, and the room clears the
+matching connection AND seat offer on the SAME tick — no half-expired state can survive a
+disconnect, a reconnect, or a late choice, and the party's descend gate can never be held
+past the TTL. The pick is forfeited (no default pick, no reroll — balance gate §4/§6).
+Late/duplicate choices are rejected at every layer: the router (cleared conn offer, stale
+offer ids) and the room itself (`applyBlessing` requires the live sim entry). Every
+snapshot carries the party-wait state (`wait`: who is still choosing + authoritative
+seconds left, identical for all clients): the chooser's overlay shows the countdown, the
+HUD appends `· WAITING ON N PICKS` for teammates, and a watchdog closes an overlay whose
+offer died while its expiry event was unreachable (e.g. inside a reconnect's skipped
+backlog). `server/test/offerexpiry.test.ts` locks it end-to-end: silent expiry -> both
+sides cleared + descend proceeds; late/replayed chooses rejected with no double-apply; a
+three-player gate where two choose and one expires; and expiry during a disconnect where
+the resume resurrects nothing.
+
+`server/test/resume.test.ts` locks all of it with real reconnecting clients: exact-state
+resumes at 4%/20%/96% of the grace window (early blip / mid outage / near-edge return,
+scaled), expiry -> authoritative leave -> explicit `resume_expired`, replayed-token rejection
+with an undisturbed victim, drops while downed / mid-blessing / standing on the exit (no
+false descend, no deadlock, offer survives), the silent-link pause + restore, the
+no-boss/party-rescale invariants, teammates playing through an outage with the wipe applying
+immediately once every connected player is down (reservations never block it), a
+flaky-network convergence run (latency + jitter + 25% loss + repeated kills), and a real
+server-restart round trip.
+
+**Balance-gate items deliberately NOT in this PR** (they depend on systems blobrogue does not
+have yet, and belong to those features): post-expiry *spectator mode* (today: lobby with a
+`connection lost` note; REJOIN enters the live run fresh), boss *reward eligibility*
+accounting (≥50% fight time / ≥5% boss damage — there is no per-player boss reward split to
+gate yet), the *4.0s simultaneous-down wipe window* (the wipe is currently instant when the
+last connected player falls; changing it moves solo game-over timing and the golden masters,
+so it ships with the difficulty-modes work), and per-difficulty *down limits* (no
+Casual/Standard/Brutal modes exist). Each keeps the current authoritative behavior described
+above until its owning feature lands.
+
+### Interest filtering: temporarily OFF in production, and the re-enable plan
+
+`GS_INTEREST_RADIUS` now DEFAULTS to `0` (full-world snapshots, no filtering) — set
+explicitly to `0` in production during the incident and kept that way until this fix is
+verified live. Full snapshots are the safe posture: every client provably receives the
+identical world (the coherence suite compares them byte-for-byte per tick).
+
+Re-enable criteria (in order, all required):
+
+1. This PR deployed to production (protocol v4 client + server) and verified: two real
+   clients in one room, identical enemies/drops, roster + HUD world ids agree.
+2. `npm run test:coherence` green — including the "interest filtering is coherent" case,
+   which runs the re-enable candidate config (radius 500) and asserts co-located clients see
+   IDENTICAL sets, separated clients differ only by distance, and seed/floor/rev/cleared/
+   `wid`/roster stay identical regardless (the roster is deliberately interest-independent,
+   so readiness can never be filtered away).
+3. Staged rollout: set `GS_INTEREST_RADIUS=1100` on the game server (one env change +
+   reload), re-run the two-client verification from step 1 at distance (opposite ends of a
+   floor), and watch `/metrics` `snapBytes_*` drop while `/worlds` occupancy stays correct.
+
+Until all three hold, leave the env at `0`. The global objective state (`cleared`, boss,
+boss chest, `descend`) is global-scoped on the wire regardless of the radius.
 
 ### Ticket sources
 

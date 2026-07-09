@@ -13,6 +13,29 @@ import type { WireEvent } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
 
+// A reserved reconnect seat: the continuity a dropped connection needs to come back as the
+// SAME player. The body itself stays in the WorldState (absent/paused); the seat carries the
+// single-use token that reclaims it plus the per-connection command/offer state that must
+// stay idempotent across the reconnect.
+export interface Seat {
+  pid: PlayerId;
+  authName: string;
+  token: string;
+  reservedAt: number;
+  expiresAt: number;
+  displayName: string | null;
+  colorIndex: number | null;
+  lastAppliedSeq: number;
+  lastCseq: number;
+  pendingOffer: string[] | null;
+  offerId: number;
+  offerDeadline: number;
+}
+
+export type TakeSeatResult =
+  | { ok: true; seat: Seat }
+  | { ok: false; reason: "none" | "expired" | "token_mismatch" };
+
 // The authoritative simulation runtime for ONE room/world. Owns the WorldState + its connected
 // players and advances it one fixed tick. GameWorld implements it; a Colyseus Room could too.
 export interface RoomRuntime {
@@ -23,6 +46,22 @@ export interface RoomRuntime {
 
   addPlayer(pid: PlayerId): void;
   removePlayer(pid: PlayerId): void;
+  // Flip a player's network-absence (silent-link soft absence, seat reservation, resume).
+  setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void;
+
+  // ---- reconnect seats (grace/resume) ----
+  // Reserve the dropped connection's body + continuity state until expiresAt.
+  reserveSeat(conn: Conn, nowMs: number, ttlMs: number): void;
+  // Claim a seat with its single-use token: consumes the seat and returns the continuity
+  // state, or the explicit reason it cannot be claimed (the router maps "token_mismatch" to
+  // a hard reject and "none"/"expired" to the documented fresh-join guidance).
+  takeSeat(authName: string, token: string, nowMs: number): TakeSeatResult;
+  // A deliberate plain join by an identity that still holds a seat abandons it: the reserved
+  // body is removed so the fresh spawn is never a duplicate. Returns whether one existed.
+  discardSeat(authName: string): boolean;
+  // Remove every seat past its deadline (authoritative leave lifecycle) and return them.
+  expireSeats(nowMs: number): Seat[];
+  seats(): IterableIterator<Seat>;
 
   // Reset to a fresh run (new seed, floor 1). The session store calls this when the room
   // empties, so runs are party-scoped: the next group never inherits a half-played dungeon.
@@ -55,6 +94,8 @@ export interface RoomRuntime {
   gameOverPlayers(): PlayerId[];
   // Blessing offers raised this tick — the server turns each into a validated offer.
   offerPlayers(): BlessingOfferRequest[];
+  // Offers whose TTL expired this tick (already resolved on both sides) — logging/metrics.
+  expiredOfferPlayers(): PlayerId[];
 }
 
 // One sim-raised blessing offer (descend or boss chest) awaiting server-side rolling.
@@ -72,7 +113,16 @@ export interface SessionStore {
   roomCount(): number;
   totalPlayers(): number;
   bind(conn: Conn, roomId: string): RoomRuntime;
-  unbind(conn: Conn): void;
+  // Register a RESUMED connection on its room (the seat already owns the player body — no
+  // spawn). The caller has adopted the seat's playerId onto the conn.
+  attach(conn: Conn, room: RoomRuntime): void;
+  // Unbind on disconnect. With `seat`, the player's body/state is reserved for the reconnect
+  // grace instead of removed (unexpected socket death); without it, the authoritative leave
+  // applies immediately (deliberate leave / game over / superseded).
+  unbind(conn: Conn, seat?: { nowMs: number; ttlMs: number }): void;
+  // Expire overdue seats everywhere and release worlds that emptied; returns how many seats
+  // expired (metrics).
+  sweep(nowMs: number): number;
 }
 
 // State publication: turn authoritative room state into per-client wire snapshots (interest

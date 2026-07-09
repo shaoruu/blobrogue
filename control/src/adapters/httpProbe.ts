@@ -8,10 +8,6 @@
 import { createHmac } from "node:crypto";
 import { WebSocket } from "ws";
 
-// Mirrors PROTOCOL_VERSION in src/net/protocol.ts (control stays standalone — no game-code
-// imports — per its build boundary). Drift fails the control integration test, which drives
-// a REAL synthetic join against the in-process game server.
-const GS_PROTOCOL_VERSION = 5;
 
 import { redactFields } from "../redact.js";
 import type { GameServerLifecycleAction, GameServerProbe } from "../ports.js";
@@ -26,6 +22,15 @@ import type {
   VerifyResult,
   WorldSummary,
 } from "../types.js";
+
+// The game protocol version the synthetic join speaks. Must equal src/net/protocol.ts
+// PROTOCOL_VERSION (the control build cannot import across its rootDir, so the value is
+// mirrored here); control/test/integration.test.ts locks the two together and additionally
+// joins a REAL gs, so drift fails loudly.
+// Mirrors PROTOCOL_VERSION in src/net/protocol.ts (control stays standalone — no game-code
+// imports — per its build boundary). Drift fails the control integration test, which drives
+// a REAL synthetic join against the in-process game server.
+export const SYNTHETIC_JOIN_PROTOCOL = 5;
 
 export interface HttpProbeConfig {
   baseUrl: string;
@@ -73,10 +78,28 @@ export class HttpGameServerProbe implements GameServerProbe {
   }
 
   async worlds(): Promise<WorldSummary[]> {
+    // Real per-world occupancy from gs /worlds: which worlds exist, how many players each
+    // holds, and WHO is in each — the panel view that shows whether a room's members
+    // actually share one world. Every field is runtime-validated (the shape is a loose
+    // cast at the fetch boundary). Falls back to the healthz aggregate against an older gs.
+    const raw = await this.getJsonShaped<{ worlds?: Array<Partial<WorldSummary>> }>(`${this.cfg.baseUrl}/worlds`);
+    if (raw !== null && Array.isArray(raw.worlds)) {
+      const out: WorldSummary[] = [];
+      for (const e of raw.worlds) {
+        if (typeof e !== "object" || e === null) continue;
+        out.push({
+          id: typeof e.id === "string" ? e.id : "unnamed",
+          players: typeof e.players === "number" && Number.isFinite(e.players) ? e.players : 0,
+          tick: typeof e.tick === "number" && Number.isFinite(e.tick) ? e.tick : 0,
+          names: Array.isArray(e.names) ? e.names.filter((n): n is string => typeof n === "string") : [],
+          away: Array.isArray(e.away) ? e.away.filter((n): n is string => typeof n === "string") : [],
+        });
+      }
+      return out;
+    }
     const h = await this.getJson(`${this.cfg.baseUrl}/healthz`);
     if (h === null) return [];
-    // gs exposes an aggregate at Stage B (no per-world endpoint); surface it as one summary.
-    return [{ id: "gs-aggregate", players: numField(h, "players"), tick: 0 }];
+    return [{ id: "gs-aggregate", players: numField(h, "players"), tick: 0, names: [], away: [] }];
   }
 
   async logs(q: LogQuery): Promise<LogRecord[]> {
@@ -134,7 +157,7 @@ export class HttpGameServerProbe implements GameServerProbe {
       ws.on("open", () => {
         if (secret !== null) {
           const ticket = mintGsTicket(secret, "synthetic-verify", 60);
-          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: GS_PROTOCOL_VERSION })); } catch { finish(false, "ws_liveness", "send_failed"); }
+          try { ws.send(JSON.stringify({ t: "join", ticket, protocol: SYNTHETIC_JOIN_PROTOCOL })); } catch { finish(false, "ws_liveness", "send_failed"); }
         }
         // Without a secret, receiving ANY server frame (e.g. a heartbeat ping) proves the WS
         // server + tick/heartbeat loop are alive.
@@ -159,6 +182,12 @@ export class HttpGameServerProbe implements GameServerProbe {
   // ---- http helpers ----
 
   private async getJson(url: string): Promise<Record<string, LogValue> | null> {
+    return this.getJsonShaped<Record<string, LogValue>>(url);
+  }
+
+  // Fetch + parse JSON as a caller-declared loose shape. The shape is a boundary cast, so
+  // callers must runtime-validate every field they read (all of them do).
+  private async getJsonShaped<T extends object>(url: string): Promise<T | null> {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 3000);
@@ -167,7 +196,7 @@ export class HttpGameServerProbe implements GameServerProbe {
       if (!res.ok) return null;
       const obj: unknown = await res.json();
       if (typeof obj !== "object" || obj === null) return null;
-      return obj as Record<string, LogValue>;
+      return obj as T;
     } catch {
       return null;
     }
