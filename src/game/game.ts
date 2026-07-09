@@ -425,6 +425,9 @@ export class Game {
   // "welcome" latch (the first step into the waystation names it once).
   private patchSellT = 0;
   private isShopWelcomed = false;
+  // Your own purchase just landed: holds the panel's BOUGHT ✓ footer briefly so a buy
+  // reads "keep shopping", never a silent state flip.
+  private shopBoughtT = 0;
   private isPaused = false;
   private isChoosing = false; // a between-floor blessing overlay is up (freezes the sim)
   // Online: whether gameplay has been revealed yet. Until then the run sits behind the
@@ -891,6 +894,7 @@ export class Game {
     this.shopPanel.close();
     this.isShopWelcomed = false;
     this.patchSellT = 0;
+    this.shopBoughtT = 0;
     this.torches = this.placeTorches(this.dungeon);
     this.particles = [];
     this.dmgNumbers = [];
@@ -1770,6 +1774,7 @@ export class Game {
         else if (e.kind === "weapon") this.sfxAt("weapon", e.x, e.y, { gain: 0.55 });
         else this.sfxAt("levelup", e.x, e.y, { gain: 0.4 });
         this.patchSellT = 0.6;
+        if (this.isSelfPid(e.pid)) this.shopBoughtT = 1.2;
         break;
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
@@ -2717,8 +2722,16 @@ export class Game {
     this.syncInputContext();
   }
 
+  // Whether an event's pid is THIS client's player: online events carry server pids,
+  // local/solo worlds key the local player as LOCAL_ID.
+  private isSelfPid(pid: PlayerId): boolean {
+    return this.mode === "online" && this.wsTransport
+      ? pid === this.wsTransport.getSelfServerId()
+      : pid === LOCAL_ID;
+  }
+
   private shopPanelViewFor(slot: ShopSlot) {
-    return shopPanelView(this.world.shop!, slot, shopViewerOf(this.p), this.mods);
+    return shopPanelView(this.world.shop!, slot, shopViewerOf(this.p), this.mods, this.shopBoughtT > 0);
   }
 
   // Patch's-room upkeep, every tick: the handover pose timer, the one-time waystation
@@ -2727,6 +2740,7 @@ export class Game {
   // (floor changed, shop gone, buyer down, or the buyer displaced out of range).
   private tickShop(dt: number) {
     if (this.patchSellT > 0) this.patchSellT = Math.max(0, this.patchSellT - dt);
+    if (this.shopBoughtT > 0) this.shopBoughtT = Math.max(0, this.shopBoughtT - dt);
     const shop = this.world.shop;
     if (this.shopPanel.isOpen) {
       const slot = shop?.slots.find((s) => s.id === this.shopPanel.slotId);
@@ -2744,6 +2758,8 @@ export class Game {
     if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) {
       this.isShopWelcomed = true;
       this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
+      // The multi-buy opener (playtest fix: kills the pick-one mental model on arrival).
+      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "BUY FROM ANY STATION YOU CAN AFFORD", "#ffe9b0");
       this.sfxAt("blessing", shop.keeperX, shop.keeperY, { gain: 0.3, rate: 1.15 });
     }
   }
@@ -3906,8 +3922,24 @@ export class Game {
       const bob = Math.sin(this.animClock * 2.4 + slot.id * 1.7) * 2;
       this.drawShopMerch(slot, sx, sy - 24 + bob);
     }
-    const color = status === "buy" ? "#ffd27a" : status === "broke" ? "#ff8a7a" : "#9a8fb5";
+    // An unaffordable station still reads FOR SALE: its price chip wears the same amber
+    // outline the panel's broke row does — never the muted grey of the resolved states.
+    const color = status === "buy" ? "#ffd27a" : status === "broke" ? "#ffb43b" : "#9a8fb5";
+    if (status === "broke") this.drawShopChipOutline(shopChipCopy(status, slot.price), sx, sy + 15);
     this.drawShopText(shopChipCopy(status, slot.price), sx, sy + 15, color);
+  }
+
+  private drawShopChipOutline(text: string, sx: number, sy: number) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.font = '700 9px "Silkscreen", monospace';
+    const w = ctx.measureText(text).width;
+    ctx.fillStyle = "rgba(8,6,16,0.8)";
+    ctx.fillRect(sx - w / 2 - 4, sy - 9, w + 8, 13);
+    ctx.strokeStyle = "#ffb43b";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx - w / 2 - 3.5, sy - 8.5, w + 7, 12);
+    ctx.restore();
   }
 
   private drawShopMerch(slot: ShopSlot, sx: number, sy: number) {
