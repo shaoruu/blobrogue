@@ -10,6 +10,7 @@ import {
   AIMED_MOVES, FACING_DEADZONE, FACING_AXIS_BIAS,
 } from "../src/game/facing.js";
 import type { EnemyPose, SelectableClip } from "../src/game/facing.js";
+import { SHEETS, devSpriteManifest } from "../src/game/assets.js";
 import { createEnemy } from "../src/sim/enemies.js";
 import type { Enemy, AttackMove } from "../src/sim/types.js";
 import { Rng } from "../src/sim/rng.js";
@@ -161,10 +162,34 @@ function ladderTests(): void {
   }
 }
 
+// The AD's approved-final assets are drop-ins: the hooks must carry these EXACT
+// filenames so wiring the art is a pure file copy, never a code change.
+function approvedHookTests(): void {
+  section("approved asset hooks: exact final filenames (weaver2 / beam2 pair)");
+  check("the Weaver's base sprite hook expects weaver2_px.png",
+    devSpriteManifest().some((a) => a.group === "sprites" && a.label === "weaver" && a.src === "/sprites/weaver2_px.png"));
+  const dirs: Array<[string, string]> = [
+    ["weaver.walk_down", "/sprites/weaver2_px_walk_down.png"],
+    ["weaver.walk_up", "/sprites/weaver2_px_walk_up.png"],
+    ["weaver.walk_side", "/sprites/weaver2_px_walk_side.png"],
+    ["weaver.attack", "/sprites/weaver2_px_attack.png"],
+  ];
+  check("the Weaver directional/attack contract derives from the weaver2_px stem",
+    dirs.every(([key, src]) => SHEETS[key]?.src === src),
+    dirs.map(([key]) => SHEETS[key]?.src ?? "missing").join(", "));
+  check("the Beam pickup hook expects beam2_px.png",
+    devSpriteManifest().some((a) => a.group === "weapon pickups" && a.label === "pickup beam" && a.src === "/sprites/beam2_px.png"));
+  check("the Beam held hook expects held_beam2_px.png",
+    devSpriteManifest().some((a) => a.group === "held weapons" && a.label === "held beam" && a.src === "/sprites/held_beam2_px.png"));
+  check("the beam's dedicated ray is a registered code-tinted white mask (beam_ray)",
+    devSpriteManifest().some((a) => a.group === "bullet fx" && a.label === "beam_ray" && a.src === "/sprites/fx/beam_ray.png"));
+}
+
 function main(): void {
   facingTests();
   poseTests();
   ladderTests();
+  approvedHookTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nThe art/render facing contract holds.\n");

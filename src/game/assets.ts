@@ -44,17 +44,23 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
 // One-line registration for an AD directional set (the art/render contract convention):
 //   registerDirectionalSet("charger", 10)      -> charger_walk_{down,up,side}.png
 //   registerDirectionalSet("charger", 10, 12)  -> + charger_attack.png at 12fps
-// Directional ATTACK variants (`<name>_attack_{down,up,side}.png`) are rarer and get
-// explicit SHEETS entries when authored. Side sheets are authored facing RIGHT (the
-// renderer mirrors for left); frame 0 of each walk sheet doubles as that facing's idle
-// pose. Call sites are added only once the PNGs exist, so nothing 404s before then —
-// the clip-selection ladder (facing.ts resolveClip) already routes around absences.
-export function registerDirectionalSet(name: SpriteName, walkFps: number, attackFps?: number): void {
-  SHEETS[`${name}.walk_down`] = { src: `/sprites/${name}_walk_down.png`, fps: walkFps };
-  SHEETS[`${name}.walk_up`] = { src: `/sprites/${name}_walk_up.png`, fps: walkFps };
-  SHEETS[`${name}.walk_side`] = { src: `/sprites/${name}_walk_side.png`, fps: walkFps };
-  if (attackFps !== undefined) SHEETS[`${name}.attack`] = { src: `/sprites/${name}_attack.png`, fps: attackFps };
+// `fileBase` covers AD-versioned finals whose file stem differs from the sprite name
+// (e.g. the approved weaver2_px set). Directional ATTACK variants
+// (`<base>_attack_{down,up,side}.png`) are rarer and get explicit SHEETS entries when
+// authored. Side sheets are authored facing RIGHT (the renderer mirrors for left);
+// frame 0 of each walk sheet doubles as that facing's idle pose. Registration happens
+// once the PNGs are approved with exact names — the clip-selection ladder
+// (facing.ts resolveClip) routes around any sheet that has not landed/loaded yet.
+export function registerDirectionalSet(name: SpriteName, walkFps: number, attackFps?: number, fileBase: string = name): void {
+  SHEETS[`${name}.walk_down`] = { src: `/sprites/${fileBase}_walk_down.png`, fps: walkFps };
+  SHEETS[`${name}.walk_up`] = { src: `/sprites/${fileBase}_walk_up.png`, fps: walkFps };
+  SHEETS[`${name}.walk_side`] = { src: `/sprites/${fileBase}_walk_side.png`, fps: walkFps };
+  if (attackFps !== undefined) SHEETS[`${name}.attack`] = { src: `/sprites/${fileBase}_attack.png`, fps: attackFps };
 }
+
+// AD-approved finals (drop-in): the Weaver ships on the weaver2 base per the content
+// manifest — walk triplet + attack sheet derive from that stem via gen-walk.
+registerDirectionalSet("weaver", 12, 12, "weaver2_px");
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -64,7 +70,10 @@ export type FxName =
   | "comet_trail" | "crackle" | "arc_chain" | "smoke_puff"
   // Elemental status masks (public/sprites/fx). Authored by the AD; until the PNGs land
   // fxTinted returns null and the status/flame render falls back to glow_round + tint.
-  | "ember" | "frost" | "freeze_shell" | "flame_puff" | "shock_ring";
+  | "ember" | "frost" | "freeze_shell" | "flame_puff" | "shock_ring"
+  // The Sunlance's dedicated ray mask (pure white, code-tinted like every fx primitive);
+  // the beam recipe falls back to trail_streak until it lands.
+  | "beam_ray";
 
 const FX_SOURCES: Record<FxName, string> = {
   glow_round: "/sprites/fx/glow_round.png",
@@ -81,6 +90,7 @@ const FX_SOURCES: Record<FxName, string> = {
   freeze_shell: "/sprites/fx/freeze_shell.png",
   flame_puff: "/sprites/fx/flame_puff.png",
   shock_ring: "/sprites/fx/shock_ring.png",
+  beam_ray: "/sprites/fx/beam_ray.png",
 };
 
 // World props (destructibles + atmosphere) and the treasure chest, all in /public/sprites.
@@ -119,7 +129,8 @@ const SOURCES: Record<SpriteName, string> = {
   boss: "/sprites/boss.png",
   marrow: "/sprites/marrow.png",
   choir: "/sprites/choir.png",
-  weaver: "/sprites/weaver.png",
+  // AD-approved final base (content manifest: weaver2_px) — drop-in exact filename.
+  weaver: "/sprites/weaver2_px.png",
   gilded: "/sprites/gilded.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
@@ -147,6 +158,8 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/held_railgun.png",
   nailer: "/sprites/held_nailer.png",
   flamer: "/sprites/held_flamer.png",
+  // AD-approved final (content manifest: beam2 pair) — drop-in exact filename.
+  beam: "/sprites/held_beam2_px.png",
   // Melee (WeaponId -> AD's blade art: cutlass/claymore/pike).
   sword: "/sprites/held_cutlass.png",
   longsword: "/sprites/held_claymore.png",
@@ -169,6 +182,8 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   railgun: "/sprites/weapon_railgun.png",
   nailer: "/sprites/weapon_nailer.png",
   flamer: "/sprites/weapon_flamer.png",
+  // AD-approved final (content manifest: beam2 pair) — drop-in exact filename.
+  beam: "/sprites/beam2_px.png",
   sword: "/sprites/weapon_cutlass.png",
   longsword: "/sprites/weapon_claymore.png",
   spear: "/sprites/weapon_pike.png",
@@ -482,6 +497,10 @@ export function devSpriteManifest(): DevAssetEntry[] {
   for (const id of Object.keys(HELD_SOURCES) as WeaponId[]) {
     const src = HELD_SOURCES[id];
     if (src) out.push({ label: `held ${id}`, src, group: "held weapons" });
+  }
+  for (const id of Object.keys(PICKUP_SOURCES) as WeaponId[]) {
+    const src = PICKUP_SOURCES[id];
+    if (src) out.push({ label: `pickup ${id}`, src, group: "weapon pickups" });
   }
   for (const name of Object.keys(PROP_SOURCES) as PropSpriteName[]) out.push({ label: name, src: PROP_SOURCES[name], group: "props" });
   for (const name of Object.keys(FX_SOURCES) as FxName[]) out.push({ label: name, src: FX_SOURCES[name], group: "bullet fx" });

@@ -3280,10 +3280,13 @@ export class Game {
         this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
         return this.fxLayer("slug", color, bx, by, R * 4.2, R * 4.2, 1, angle);
       case "beam":
-        // The lance: rounds so fast and frequent the long warm streaks fuse into one
-        // continuous line of light.
+        // The lance: rounds so fast and frequent the long streaks fuse into one continuous
+        // line of light. The dedicated code-tinted white ray mask (AD final) carries it;
+        // the generic streak keeps the beam reading until that mask lands.
         this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.4, 0);
-        this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 14), R * 2.4, 0.85, angle);
+        if (!this.fxTrail("beam_ray", color, bx, by, Math.max(trailLen, R * 14), R * 3, 0.9, angle)) {
+          this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 14), R * 2.4, 0.85, angle);
+        }
         return this.fxLayer("core_dot", "#fff7dd", bx, by, R * 2, R * 2, 1, 0);
       case "vortex":
         // The undertow orb: a slow swirl of cold light with a rotating crackle — reads as

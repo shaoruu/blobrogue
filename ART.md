@@ -56,11 +56,20 @@ locked angle). The pose — facing, motion, move, phase, 0..1 windup, aim — is
 - `<name>_attack.png` — omni windup/strike strip, or `<name>_attack_{down,up,side}.png`
   for full directional attacks.
 
-**Enable a whole set with one line** in `src/game/assets.ts` (only once the PNGs exist):
+**Enable a whole set with one line** in `src/game/assets.ts` (only once the PNGs exist);
+the optional 4th arg covers AD-versioned finals whose file stem differs from the sprite name:
 ```ts
-registerDirectionalSet("charger", 10);      // the walk triplet
-registerDirectionalSet("marrow", 8, 12);    // + marrow_attack.png at 12fps
+registerDirectionalSet("charger", 10);              // the walk triplet
+registerDirectionalSet("marrow", 8, 12);            // + marrow_attack.png at 12fps
+registerDirectionalSet("weaver", 12, 12, "weaver2_px"); // approved final stem
 ```
+
+**Approved finals already wired (drop the files in, no code changes):**
+- Weaver base `weaver2_px.png` + directional/attack contract
+  `weaver2_px_walk_{down,up,side}.png`, `weaver2_px_attack.png` (12fps).
+- Beam pair: pickup `beam2_px.png`, held `held_beam2_px.png`.
+- Beam ray FX `fx/beam_ray.png` — a pure-white alpha mask like every fx primitive;
+  the code tints it per shot and falls back to `trail_streak` until it lands.
 
 Selection degrades one deliberate step at a time — `attack_<facing>` → `attack` →
 `walk_<facing>` → legacy `walk`/`idle` → static PNG + procedural juice — so partial sets
