@@ -583,18 +583,185 @@ export function bossHpForFloor(floor: number): number {
   return Math.round(scaled / 10) * 10;
 }
 
-// ---- §5b MARROW (corrected gate §3: F15, 1,250 HP, median 35–50s, high-roll 20–25s) ----
+// ---- EARNED WINDOWS (the deep-boss guarded/exposed contract) ----
+// The designer's anti-stack model, one mechanism across the deep roster (MARROW, the
+// Weaver, the Gilded Warden, the Hollow Choir — the Slime King stays the readable
+// tutorial boss and the F10 gauntlet stays the deliberate DPS/execution contrast beat):
+//  - GUARDED by default: incoming damage is chipped to guardMult (0.20–0.35 — reduction,
+//    NEVER immunity; impatient chip still kills, it is just the slow way).
+//  - Players FORCE the EXPOSED window by doing the phase's mechanic (break a lattice
+//    knot, bait the pounce onto debris, silence the fragments, bait the wall crash):
+//    full damage for a fixed 3–4s window. Windows are player-created, never timed gifts.
+//  - Per-window damage BANK: a fresh window arms bankFrac × maxHp; once the window has
+//    removed that much, it slams shut early (small final-hit overkill carries — the
+//    hard phase-skip guard remains the transition floor + queued overflow). Firepower
+//    converts a window harder and opens the next faster; it can't skip the mechanics.
+//  - Co-op scales the MECHANIC, not just HP: task counts index the pull's snapshotted
+//    player count (the *For tables below), on top of the unchanged sub-linear HP curve.
+// TTK is gated in EXPOSED time (balance tests), not wall-clock.
+
+export const EARNED_GUARD_MIN = 0.20; // guarded chip never below 20% (fairness floor)
+export const EARNED_GUARD_MAX = 0.35;
+export const EXPOSE_WINDOW_CAP = 8;   // combined exposure never exceeds this (stacked breaks)
+
+// ---- KEEP THEM GUESSING (the fair-surprise layer) ----
+// Randomize WHICH / WHERE / WHEN inside hard caps — NEVER whether a hit got a fair
+// tell. Three levers, all seeded off the world RNG (deterministic across clients):
+//  1. Add waves draw from a curated per-boss POOL (weighted, no immediate repeats, at
+//     most one of each capped entry alive, complex movers under the live mover cap) —
+//     every member is a known readable creature.
+//  2. Reinforcements arrive as AMBUSHES: an OMEN tell (egg-sac bloom / burst web /
+//     dust) marks the spot for a fixed beat BEFORE the body exists, the body then
+//     keeps its ordinary spawn grace before it may attack, and no ambush is ever
+//     placed inside a standing player's personal space — surprise in WHERE, never as
+//     an instant hit.
+//  3. Phase transitions RESHAPE the room (the Weaver re-strings its lanes, the Warden
+//     reconfigures its cover) — muscle memory resets, always leaving a readable route
+//     (webs only slow, cover is destructible and gapped, sites never rise on players).
+
+export const AMBUSH = {
+  tell: 0.7,        // omen seconds before the body exists (0.6–0.8 band)
+  radius: 24,       // the omen's marked footprint
+  playerClear: 140, // spawns land ≥140px from every player (approved spec §"guessing" 2)
+} as const;
+
+// ---- PARTY+GEAR-AWARE SCALING (the balancer's R framework) ----
+// What makes a strong 4-stack actually sweat: boss encounters scale off the party's
+// MEASURED power — headcount AND gear in one number — sampled once at the pull and
+// never rescaled mid-fight. Server-authoritative, deterministic from seed+loadouts.
+//
+//   ExpectedDPS(player) = weapon base DPS × blessing mults (damage / fire rate / the
+//     boss-capped crit expectation) × the boss-facing pellet/weapon coefficients ×
+//     0.72 practical factor (the 12s-moving-target model the DPS ceilings use)
+//   PartyDPS = Σ contributions;   R = clamp(PartyDPS / refDPS(floor), 1.0, 6.0)
+//
+// Guards: each contribution is floored at weakFloorFrac × refDPS / P (one weak or
+// naked player can never drag the pull below baseline), and a SOLO player never
+// scales past R = soloGearCap from gear alone — the strong solo build is the intended
+// power fantasy (its ceiling is the DPS-model gate, never HP).
+//
+// EFFECTIVE HP is sublinear and hard-capped (never a sponge): HPfrac = 1 +
+// hpPerR × (R − 1), clamped at hpFracCap. HP alone must never close the gap — the
+// surplus (R − 1) buys MECHANICS: add pressure (cap up, interval down, hard clamps),
+// the phase-timer soft-enrage (burn a phase faster than burnFrac × its R-scaled
+// budget and the NEXT phase carries one authored extra PATTERN — never damage, never
+// HP, never invuln), and pattern density in DISJOINT lanes only (the overlap arbiter
+// is never relaxed). Downed/disconnected players never change R mid-fight.
+
+export const POWER = {
+  practicalFactor: 0.72,
+  rMin: 1.0,
+  rMax: 6.0,
+  weakFloorFrac: 0.55,   // per-player contribution floor: 0.55 × refDPS / P
+  soloGearCap: 1.15,     // a solo player's gear never scales R past this
+  // Khp, measured DOWN from the approved spec's opening 0.62 by the spec's own
+  // calibration rule (the 4-strong 30–40s band outranks the constant): at 0.62 the
+  // measured god-stack P50 sits ~5s over the band once add pressure and climb
+  // downtime are real. The remedy ladder only ADDS mechanics when the stack is too
+  // fast — a too-slow stack can only give HP back.
+  hpPerR: 0.45,          // HPfrac = 1 + hpPerR × (R − 1)…
+  hpFracCap: 2.9,        // …clamped: never a sponge
+  addCapPerR: 1.6,       // add cap = round(base + addCapPerR × (R − 1))…
+  addCapMax: 8,          // …hard-clamped
+  addIntervalPerR: 0.9,  // interval = max(min, base − addIntervalPerR × (R − 1))
+  addIntervalMin: 3.0,
+  phaseTimerPerR: 0.10,  // Tphase = base × (1 + phaseTimerPerR × (R − 1))
+  burnFrac: 0.55,        // a phase burned faster than this × Tphase arms the soft-enrage
+  // The surprise wave rides the SAME add budget (never on top), one per phase, only
+  // at R ≥ surpriseMinR, with a longer tell and wider player clearance than the
+  // ordinary ambush — and never during a forced transition.
+  surpriseMinR: 3.0,
+  surpriseTell: 0.9,
+  surpriseClear: 140,
+} as const;
+
+// The balancer's per-floor reference DPS (the floor's median practical output). Boss
+// floors between anchors ride the nearest band; deep floors hold the finale's.
+export function refDpsForFloor(floor: number): number {
+  if (floor <= 5) return 20.7;
+  if (floor <= 15) return 36;
+  if (floor <= 20) return 36;
+  if (floor <= 25) return 43;
+  return 46;
+}
+
+// The pull's power ratio from per-player expected-DPS contributions (order-independent:
+// the guard floors each contribution before the sum).
+export function powerRatioFor(contributions: readonly number[], floor: number): number {
+  const players = contributions.length;
+  if (players === 0) return POWER.rMin;
+  const ref = refDpsForFloor(floor);
+  const perPlayerFloor = (POWER.weakFloorFrac * ref) / players;
+  let partyDps = 0;
+  for (const dps of contributions) partyDps += Math.max(dps, perPlayerFloor);
+  let r = Math.max(POWER.rMin, Math.min(POWER.rMax, partyDps / ref));
+  if (players === 1) r = Math.min(r, POWER.soloGearCap);
+  return r;
+}
+
+export function bossHpFracFor(r: number): number {
+  return Math.min(POWER.hpFracCap, 1 + POWER.hpPerR * (r - 1));
+}
+
+export function bossAddCapFor(baseCap: number, r: number): number {
+  return Math.min(POWER.addCapMax, Math.round(baseCap + POWER.addCapPerR * (r - 1)));
+}
+
+export function bossAddIntervalFor(base: number, r: number): number {
+  return Math.max(POWER.addIntervalMin, base - POWER.addIntervalPerR * (r - 1));
+}
+
+export function phaseTimerFor(base: number, r: number): number {
+  return base * (1 + POWER.phaseTimerPerR * (r - 1));
+}
+
+// The authored expected phase duration per boss (the soft-enrage yardstick, ≈ the
+// solo median wall-clock over its three phases).
+export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
+  boss: 16, marrow: 15, weaver: 13, gilded: 15, choir: 17,
+};
+
+// One curated pool entry: a known readable creature at a tier, weighted for the draw.
+// maxAlive caps entries that must stay singular (a second commander is noise, not
+// pressure); complex movers additionally respect the live mover cap at spawn time.
+export interface AddPoolEntry {
+  kind: EnemyKind;
+  tier: EnemyTier;
+  weight: number;
+  maxAlive: number; // 0 = uncapped
+  count: number;    // bodies per draw (a "pair" wave is its own pool entry)
+}
+
+// ---- §5b MARROW (earned windows: F15, median 35–55s wall / exposed-gated) ----
 // A LINE fight, not an area fight: sidestep the charge lanes, weave the volleys/spiral,
 // and punish the wall crash. Its transition beat is a bone SHIELD instead of a roar:
 // identical anti-burst plumbing (damage reduction + hard HP floor + queued overflow), but
 // INTERACTIVE — killing both summoned husks drops the shield early (.9–2.6s at 35%).
+// Earned window (light touch): MARROW is GUARDED (35% chip) at all times except after
+// you BAIT it into a wall — the crash stun opens the exposed window. A rush that
+// connects with a body recovers fast and opens nothing: the window is the dodge.
 
 export const MARROW = {
-  // The corrected gate pins the in-flight kit as authoritative: charge tell .9 / lock .5
-  // / 520 for 1.1s / recover .7 or crash 1.6; 65/30 thresholds with 57/22 floors;
-  // 1,250 HP at the F15 slot (the §3 curve clamps at F10, so the calibration carries).
-  baseHp: 1250,
+  // Recalibrated on the EXPOSED-damage assumption (§3 rule, deterministic sim harness):
+  // the old full-uptime 1,250 anchor assumed every second was damage time; under the
+  // guarded/exposed contract the median build converts crash windows instead (see
+  // balance tests for the measured wall-clock + exposed-time bands). The gauntlet's
+  // captains deliberately do NOT ride this anchor (CAPTAIN_HP_BASE below): F10 stays
+  // the full-uptime DPS/execution beat.
+  baseHp: 730,
   baseHpFloor: 15,
+  // Earned windows: guarded chip + the crash-bait window.
+  guardMult: 0.35,      // GUARDED damage multiplier (reduction, never immunity)
+  crashExpose: 3.5,     // seconds of EXPOSED opened by a baited wall crash
+  windowBankFrac: 0.40, // per-window damage bank (the phase chunk)
+  // Fair surprise: the cadence add is ONE omen-telegraphed ambush drawn from a curated
+  // pool, so the fight never decays into pure charge-lane memorization.
+  addPool: [
+    { kind: "skeleton", tier: "swarm", weight: 4, maxAlive: 0, count: 1 },
+    { kind: "skeleton", tier: "standard", weight: 3, maxAlive: 0, count: 1 },
+    { kind: "bat", tier: "swarm", weight: 2, maxAlive: 0, count: 2 },      // a bat pair
+    { kind: "charger", tier: "standard", weight: 1, maxAlive: 1, count: 1 }, // mover-capped lane bruiser
+  ] as readonly AddPoolEntry[],
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // indexed by phase 1..3
@@ -649,6 +816,17 @@ export function marrowHpForFloor(floor: number): number {
   return anchoredBossHp(MARROW.baseHp, MARROW.baseHpFloor, floor);
 }
 
+// The pre-earned-windows FULL-UPTIME calibration (MARROW's old 1,250 @F15). The F10
+// gauntlet captains and the mid-band miniboss templates keep deriving from THIS anchor:
+// they are the run's deliberate DPS/execution beats, never gained a guard, and must not
+// shrink because the guarded bosses' anchors were recalibrated onto exposed damage.
+export const CAPTAIN_HP_BASE = 1250;
+export const CAPTAIN_HP_FLOOR = 15;
+
+export function captainHpForFloor(floor: number): number {
+  return anchoredBossHp(CAPTAIN_HP_BASE, CAPTAIN_HP_FLOOR, floor);
+}
+
 // ---- §5c THE HOLLOW CHOIR (corrected gate §3: F30 finale, median 40–58s, high-roll ≥22s) ----
 // The grieving ghost mass: it does not zone you with bodies — it UNMAKES itself. On
 // cadence it fades intangible and drifts through you (a breather you must keep moving
@@ -657,15 +835,30 @@ export function marrowHpForFloor(floor: number): number {
 // kill them to force it back together early (the wisps ARE the boss during the beat).
 
 export const CHOIR = {
-  // The corrected gate lists 1,130 as the in-flight initial; at the F30 median build it
-  // burns in ≈34s (deterministic sim harness, not live telemetry) — under the 40s floor —
-  // so the §3 recalibration formula lands the anchor below (measured in-band; see
-  // balance tests).
-  baseHp: 1450,
+  // Recalibrated on the EXPOSED-damage assumption (earned windows): the Choir is
+  // GUARDED until its FRAGMENTS are silenced (see below), so the old full-uptime 1,450
+  // anchor would sponge — the anchor is re-measured in the balance tests.
+  baseHp: 750,
   baseHpFloor: 30,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.2, 2.8, 2.4] as readonly number[],
+  // Earned window: SILENCE THE CHOIR — it sings through summoned fragments (its ghost
+  // kin, fragile swarm bodies). While any fragment of the current verse stands, the
+  // Choir is GUARDED; killing every one opens the EXPOSED window, and the next verse
+  // gathers a few seconds later. More players = a wider verse (more simultaneous
+  // fragments), snapshotted at the pull.
+  guardMult: 0.30,
+  silenceExpose: 3.5,     // seconds of EXPOSED per fully-silenced verse
+  windowBankFrac: 0.40,
+  fragmentFirstAt: 3.0,   // first verse gathers shortly after the entrance grace
+  fragmentRespawn: 6.0,   // seconds after a window closes before the next verse
+  fragmentsFor: [0, 2, 3, 4, 4] as readonly number[], // indexed by snapshotted players 1..4
+  // Fair surprise: the verse arrives as an AMBUSH WAVE (omen tells at seeded anchors,
+  // never on a player), and as it lands the Choir sings WITH it — a bounded
+  // untargetable refrain (your DPS is redirected into the fragments, never idled).
+  singDuration: 3.5,
+  fragmentRingDist: 220,  // verse anchors ring the Choir at this reach
   // The fade: telegraph, then intangible drift toward the target, then a rematerialize
   // burst (P2+) into a long recover — the punish window for tracking it through the fade.
   fadeEvery: 3,
@@ -705,52 +898,125 @@ export function choirHpForFloor(floor: number): number {
   return anchoredBossHp(CHOIR.baseHp, CHOIR.baseHpFloor, floor);
 }
 
-// ---- §5d THE WEAVER (corrected gate §3: F20, median 38–55s, high-roll ≥20s) ----
-// The duelist that fights the FLOOR: webs are persistent slow-zones that shrink your
-// dance space (never damage — routing pressure), and its pounce is a marked drop from
-// above that chains in later phases. Small, fast, evasive — hard to pin, exactly like
-// the roster spec's duelist.
+// ---- §5d THE WEAVER (earned windows + fair surprise: F20 — read the weave, force it
+// out, punish). GUARDED (30% chip) by default, highly mobile, and every window is
+// PLAYER-CREATED per the designer's exact phase structure:
+//   P1 READ THE WEAVE — the weave PARTITIONS the arena: silk LANES (rows of sticky
+//     silk, move ×0.5, a dash clears the silk it crosses at the dash's own cost)
+//     anchored on glowing KNOTS (never where you already stand), and its blink-strike
+//     commits along a knot's thread. Shoot a knot → its lane section collapses →
+//     EXPOSED 3s (simultaneous breaks combine); a knot shot out mid-blink SNAGS it.
+//   P2 SHE CLIMBS — untargetable on the walls, dropping spiderling AMBUSHES (curated
+//     pool, omen-telegraphed) and AIMED SILK volleys that web where they land. Your
+//     DPS is redirected, never idle-punished: destroy every EGG-SAC (2 solo, +1 per
+//     extra player) to FORCE HER DOWN → marked descent, crash stagger, EXPOSED 4s.
+//     Ignore the sacs and she eventually descends on her own — with NO window.
+//   P3 WALL-CRAWL DASH — she crawls to a lane's end and CHARGE-DASHES along the lanes
+//     she built (the target lane's silk flares for the whole 0.7s locked tell). An
+//     intact lane's knot brakes her at the far end (no window); a dash into a
+//     broken/empty lane OVERSHOOTS into the wall → crash stagger + EXPOSED 4s. Break
+//     the lane you stand in — before the dash or out from under it — and she pays.
+// Phase transitions RESHAPE the weave: the molt crumbles every knot, lane and sac and
+// re-strings a fresh seeded lattice, so lane memory resets each phase.
 
 export const WEAVER = {
-  // The corrected gate lists 1,080 as the in-flight initial and recalibrates by
-  // measurement for the intended floor's legal build pool (§3) — deterministic
-  // sim-harness numbers, not live telemetry: at the F20 median build 1,080 burns in
-  // ≈32s — under the 38s floor — so the formula lands 1,500 (measured in-band; see
-  // balance tests).
-  baseHp: 1500,
+  // The approved spec opens the anchor at 1,500 but pins its own calibration rule
+  // higher: "HP calibrated on EXPOSED time (median 20–30s exposed), not uptime."
+  // Measured under the earned-windows contract (30% chip + banked windows + P2's
+  // untargetable climb), 1,500 lands the median build at ≈112s wall / ≈54s exposed —
+  // nearly double both bands — so the anchor is recalibrated down to the value the
+  // deterministic harness measures IN-band (see balance tests: wall 38–55s, exposed
+  // 20–30s). The 1,500 figure assumed full-uptime damage; exposed-time is the rule.
+  baseHp: 590,
   baseHpFloor: 20,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.7, 2.3] as readonly number[],
-  // Weave: plants a locked pattern of webs on and around the target's position.
-  weaveWindup: 0.7,
-  weaveLock: 0.35,
-  weaveRecover: 0.7,
-  webCount: [0, 3, 3, 4] as readonly number[],
-  webRingDist: 130,
+  // Earned windows.
+  guardMult: 0.30,        // GUARDED damage multiplier (reduction, never immunity)
+  knotBreakExpose: 3,     // P1: seconds of EXPOSED per broken lattice knot
+  forcedownExpose: 4,     // P2: every egg-sac silenced -> she is forced down
+  overshootExpose: 3.5,   // P3: a dash into a broken lane overshoots into the wall
+  windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
+  // THE LATTICE: knots anchor the silk lanes, ringed off the Weaver and never inside
+  // knotPlayerClear of a standing player (the break forces a reposition). Each knot
+  // casts 3 thread-lines; ONE is strung with sticky silk — the lane partition. A knot's
+  // death (shot or expiry) crumbles its lane silk; a shot additionally leaves debris.
+  knotsFor: [0, 1, 2, 3, 3] as readonly number[], // knots per lattice, by snapshotted players
+  maxKnots: 3,
+  knotRingDist: 170,
+  knotPlayerClear: 110,
+  knotLife: 22,           // lanes are the fight's geography — they persist
+  knotDebrisRadius: 52,
+  knotDebrisLife: 8,
+  laneWebSpacing: 78,     // silk row spacing along a strung lane
+  laneWebRadius: 44,
+  laneHalf: 240,          // a lane runs this far past its knot (wall-clamped)
+  // Sticky silk: move ×0.5 inside (designer number); a DASH through silk clears it —
+  // the dash itself is the cost. Enemies are unaffected.
   webRadius: 62,
   webLife: 12,
-  webSlow: 0.55,       // player move-speed multiplier inside a web (enemies unaffected)
-  maxWebs: 8,          // hard cap: the arena squeezes, it never fills
-  // Pounce per the corrected in-flight contract: tell .65 / lock .3 / .35 air / .9
-  // recover; P2+ chains a second, shorter-telegraph leap (chains 1/2/2).
-  pounceWindup: 0.65,
-  pounceLock: 0.3,
-  pounceChainWindup: 0.5,
-  pounceChainLock: 0.2,
-  pounceAir: 0.35,
-  pounceRecover: 0.9,
-  pounceRadius: 74,
+  webSlow: 0.5,
+  maxWebs: 20,            // hard cap over every silk source: sticky, never solid
+  // Blink-strike (P1): the whole 0.7s tell is post-lock (the lane + arrival mark freeze
+  // at windup start), then a 0.3s traverse along the committed thread and an arrival
+  // strike. Snagging the lane's knot mid-blink crashes it out of the air.
+  blinkWindup: 0.7,
+  blinkAir: 0.3,
+  blinkRecover: 0.55,
+  blinkStrikeRadius: 52,
+  blinkStrikeDamage: 1,
+  snagStagger: 1.0,       // crash recover after a mid-blink snag
+  // Weave: a self-cast re-stringing — fresh knots + their lanes (no aim, fixed tell).
+  weaveWindup: 0.7,
+  weaveRecover: 0.7,
+  // P2 — the climb. Untargetable on the walls (bounded by climbMax), egg-sacs are the
+  // forced-down switch, spiderlings + aimed silk are the pressure while she is up.
+  climbAscend: 0.6,       // the readable scurry-to-the-wall tell (still targetable)
+  climbMax: 9,            // she descends on her own past this (no window)
+  sacsFor: [0, 2, 3, 4, 5] as readonly number[], // egg-sacs per climb: 2 solo, +1 per extra
+  silkEvery: 3.0,         // aimed-silk cadence while climbing
+  silkWindup: 0.7,        // the volley's charge tell (windup rides the wire)
+  silkBolts: 3,
+  silkSpread: 0.28,
+  silkSpeed: 240,
+  silkDamage: 1,
+  silkLife: 2.2,
+  silkWebRadius: 40,      // a silk bolt webs where it lands
+  spiderlingEvery: 4.0,   // ambush pool drops while she is up (R tightens toward 3.0)
+  spiderlingCapBase: 2,   // live spiderling budget at R1 (R lifts it, clamped at 8)
+  sacRingDist: 200,       // the clutch blooms on this ring around her perch
+  descendTell: 0.35,      // the marked drop's own tell before the air beat
+  descendAir: 0.4,        // the marked drop (forced or voluntary)
+  descendStagger: 1.2,    // forced-down crash (the window rides it)
+  unforcedRecover: 0.7,   // voluntary descent: brief recover, NO window
+  pounceRadius: 74,       // the descent landing (shared pounce read)
   pounceInnerRadius: 44,
   pounceCenterDamage: 2,
   pounceOuterDamage: 1,
-  pounceChains: [0, 1, 2, 2] as readonly number[], // chained leaps per commitment (P2+)
-  pounceWebRadius: 52,
-  // Molt beat: a fixed 1.4s cocoon (roar semantics) that bursts into a web-bolt ring +
-  // two broodlings. Corrected thresholds 65/30, floors 57/22.
-  phaseAt: [0.65, 0.30] as readonly number[],
-  phaseFloor: [0.57, 0.22] as readonly number[],
-  moltDuration: 1.4,
+  // P3 — the lane dash. She crawls to a lane entry, flares THAT lane for the whole
+  // locked tell, then dashes it. The lane's live knot brakes her at the far end; a
+  // broken lane can't — she overshoots into the wall.
+  crawlNear: 46,          // close enough to a lane entry to commit the dash
+  crawlSpeedMult: 1.5,    // the wall-crawl scurry between commitments
+  dashFlare: 0.7,         // locked windup: the target lane's silk flares (≥0.6s tell)
+  dashSpeed: 560,
+  dashRecover: 0.55,      // intact lane: controlled brake, no window
+  laneBrakeSilk: 2,       // live silk rows a lane needs to brake her (else: overshoot)
+  dashStagger: 1.2,       // overshoot crash (the window rides it)
+  // The spiderling pool (fair surprise §1): every entry is a known readable creature.
+  addPool: [
+    { kind: "bat", tier: "swarm", weight: 4, maxAlive: 0, count: 1 },     // a spiderling
+    { kind: "bat", tier: "swarm", weight: 3, maxAlive: 0, count: 2 },     // a spiderling PAIR
+    { kind: "bat", tier: "elite", weight: 1, maxAlive: 1, count: 1 },     // one Commander
+    { kind: "charger", tier: "elite", weight: 1, maxAlive: 1, count: 1 }, // one Bulwark (mover-capped)
+  ] as readonly AddPoolEntry[],
+  // Molt beat: a fixed cocoon (roar semantics, ≤1.2s per the approved spec's forced-
+  // transition guardrail) that bursts into a web-bolt ring + two broodlings, then
+  // RESHAPES the weave (fresh lattice). Spec phase bands: P1 100–66, P2 66–33, P3 33–0.
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  moltDuration: 1.2,
   moltDamageReduction: 0.35,
   moltBoltCount: 8,
   moltBoltSpeed: 260,
@@ -782,7 +1048,12 @@ export const GILDED = {
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.6, 3.2, 2.8] as readonly number[],
-  armorChip: 0.3,       // closed-plate damage multiplier (never zero)
+  // Earned windows: the Warden was the pattern's precedent, now routed through the
+  // shared guarded/exposed plumbing — closed armor = GUARDED (30% chip), and each
+  // committed quake/sweep OPENS its recover as the exposed window, bank-capped like
+  // every other deep boss so a stacked party can't delete a phase through one opening.
+  armorChip: 0.3,       // GUARDED (closed-plate) damage multiplier — never zero
+  windowBankFrac: 0.40,
   // Anvil slam: a marked in-place quake with a directional aftershock line, then the
   // exposed recover — the fight's core loop.
   slamWindup: 0.8,
@@ -813,6 +1084,15 @@ export const GILDED = {
   sanctifyDuration: 1.2,
   sanctifyDamageReduction: 0.35,
   sanctifyBulletClearRadius: 70,
+  // Fair surprise §3 — the sanctify RESHAPES the archive: the old shelving crumbles and
+  // a fresh seeded ring of destructible cover rises around the Warden while it roars
+  // (the non-damaging beat IS the telegraph). Gaps are authored into the ring by
+  // construction, sites never rise on or beside a standing player, and every piece is
+  // breakable — the reconfiguration resets cover memory, never the escape.
+  coverSites: 12,        // candidate sites on the ring
+  coverGapEvery: 4,      // every Nth site stays open — ≥3 authored gaps per ring
+  coverRingDist: 200,
+  coverPlayerClear: 70,  // a site never rises within a player's personal space
 } as const;
 
 export function gildedHpForFloor(floor: number): number {
@@ -857,7 +1137,7 @@ export const GAUNTLET = {
 } as const;
 
 export function gauntletCaptainHp(round: GauntletRound): number {
-  return Math.round((round.hpFrac * MARROW.baseHp) / 10) * 10;
+  return Math.round((round.hpFrac * CAPTAIN_HP_BASE) / 10) * 10;
 }
 
 // ---- §3 the boss-facing damage model ("no legal build below high-roll minimum") ----
@@ -981,6 +1261,9 @@ export function coopMobHpMult(players: number): number {
   return 1 + COOP.mobHpPerExtra * (clampPlayers(players) - 1);
 }
 
+// Headcount-only boss-grade scaling — the GAUNTLET CAPTAINS' and MINIBOSSES' curve.
+// The five real bosses ride the R framework instead (bossHpFracFor over the measured
+// party+gear ratio — headcount is inside R, never multiplied in separately).
 export function coopBossHpMult(players: number): number {
   return 1 + COOP.bossHpPerExtra * (clampPlayers(players) - 1);
 }

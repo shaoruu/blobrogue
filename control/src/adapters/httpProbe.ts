@@ -38,7 +38,10 @@ import type {
 // a weapon pickup at the cap by trading an owned weapon for it.
 // v12: the weapon rarity + mystery wave (five legendary WeaponIds, hidden-identity
 // mystery pickups/pedestals via `myst`, the mysteryReveal + implosion events).
-export const SYNTHETIC_JOIN_PROTOCOL = 12;
+// v13: the earned-windows boss rework + fair-surprise layer — the enemy kind set grew
+// (the Weaver's `knot` and `sac` mechanic bodies) and the hazard kind set grew
+// (`omen`, the ambush pre-spawn tell); no new wire fields (guard/exposed rides aux).
+export const SYNTHETIC_JOIN_PROTOCOL = 13;
 
 export interface HttpProbeConfig {
   baseUrl: string;
