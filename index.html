@@ -71,6 +71,20 @@
       .hud-corner.bl{ bottom:16px; left:16px; }
       .statpanel{ background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); padding:9px 11px; display:flex; flex-direction:column; gap:7px; }
       .hearts{ display:flex; gap:3px; } .hearts canvas{ image-rendering:pixelated; }
+      /* KIT/XP §6: HP numeric readout beside the heart row (mode toggle in settings). */
+      .hprow{ display:flex; align-items:center; gap:8px; }
+      .hp-num{ font-family:var(--f-num); font-variant-numeric:tabular-nums; font-size:var(--fs-num); line-height:1; color:var(--cream); }
+      /* Teammate HP party panel (the Mender dependency): compact nameplate rows. */
+      .party{ display:none; flex-direction:column; gap:3px; }
+      .party.has-party{ display:flex; }
+      .party-row{ display:flex; align-items:center; gap:6px; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; }
+      .party-row.down{ opacity:.75; } .party-row.away{ opacity:.5; }
+      .party-dot{ width:8px; height:8px; flex:0 0 auto; background:var(--dun-4); box-shadow:inset 0 0 0 1px rgba(0,0,0,.5); }
+      .party-name{ min-width:42px; max-width:64px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--cream); text-transform:uppercase; }
+      .party-bar{ position:relative; width:46px; height:7px; background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .party-bar i{ position:absolute; top:1px; left:1px; bottom:1px; width:calc((100% - 2px) * var(--pfill,1)); background:var(--grn); transition:width .12s linear; }
+      .party-row.down .party-bar i{ background:var(--red,#ff5a5a); }
+      .party-hp{ min-width:34px; font-variant-numeric:tabular-nums; color:var(--dun-4); }
       .statrow{ display:flex; gap:6px; align-items:center; }
       .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--dun-1); box-shadow:inset 0 0 0 2px var(--dun-3); padding:3px 9px; }
       .chip .ic{ width:16px; height:16px; }
@@ -341,6 +355,18 @@
       .dash.ready{ box-shadow:inset 0 0 0 2px var(--grn); }
       .dash.ready .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
       .dash.ready .bar i{ background:var(--grn); box-shadow:0 0 8px var(--grn); }
+      /* KIT/XP §3+§6: the universal ULT meter — a dedicated BL readout, visually SEPARATE from
+         the combo/Resonance meters (amber identity, distinct READY + cooldown states). */
+      .ultmeter{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; margin-bottom:6px; }
+      .ultmeter .k{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--dun-4); min-width:56px; }
+      .ultmeter .key{ letter-spacing:1px; padding:2px 4px; }
+      .ultmeter .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
+      .ultmeter .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--ult-fill,0)); background:var(--amber); box-shadow:0 0 6px var(--amber); transition:width .1s linear; }
+      .ultmeter.ready{ box-shadow:inset 0 0 0 2px var(--amber); }
+      .ultmeter.ready .k{ color:var(--amber); }
+      .ultmeter.ready .bar i{ background:var(--amber); box-shadow:0 0 10px var(--amber); animation:ultReady .7s ease-in-out infinite alternate; }
+      .ultmeter.cd .bar i{ background:var(--dun-4); box-shadow:none; }
+      @keyframes ultReady{ from{ opacity:.65; } to{ opacity:1; } }
       /* The contextual interact prompt is world-anchored now (a floating [E] chip drawn on the
          canvas over its target — see Game.renderInteractPrompt), so the bottom-left chrome
          carries only the dash meter; no .ctx-prompt element lives here anymore. */

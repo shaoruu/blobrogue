@@ -1,5 +1,5 @@
 import { settings } from "../game/settings.js";
-import type { FlashLevel } from "../game/settings.js";
+import type { FlashLevel, HpDisplay } from "../game/settings.js";
 import { audio } from "../game/audio.js";
 
 // The shared settings controls, wired straight to the persisted `settings` singleton and
@@ -150,6 +150,8 @@ function keybindControl(read: () => string, write: (key: string) => void): { el:
 
 const FLASH_OPTIONS: readonly FlashLevel[] = ["off", "low", "full"];
 const FLASH_LABELS: Record<FlashLevel, string> = { off: "OFF", low: "LOW", full: "FULL" };
+const HP_DISPLAY_OPTIONS: readonly HpDisplay[] = ["hearts", "both", "number"];
+const HP_DISPLAY_LABELS: Record<HpDisplay, string> = { hearts: "HEARTS", both: "HEARTS+NUM", number: "NUMBER" };
 const PHOTOSENSITIVITY_NOTE = "full-intensity flashes may affect photosensitive players";
 
 // ---- the four category tabs (each returns its rows fresh on selection) ----
@@ -200,9 +202,12 @@ function buildVideoTab(): HTMLElement[] {
   shake.range.setAttribute("aria-label", "screen shake");
   uiScale.range.setAttribute("aria-label", "ui scale");
   const highContrast = switchControl(() => settings.isHighContrast, () => settings.setHighContrast(!settings.isHighContrast));
+  // KIT/XP §6: how the heart row reads its HP (hearts / hearts + number / number only).
+  const hpDisplay = cycleControl(HP_DISPLAY_OPTIONS, HP_DISPLAY_LABELS, () => settings.hpDisplay, (v) => settings.setHpDisplay(v));
   return [
     row("screen shake", null, shake.el),
     row("ui scale", null, uiScale.el),
+    row("hp display", "hearts, hearts + number, or number", hpDisplay.el),
     row("high contrast", "lift dark scenes for readability", highContrast.el),
   ];
 }

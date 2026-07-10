@@ -7,6 +7,7 @@
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
+import { settings } from "./settings.js";
 import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
 import type { WeaponDisplayStats } from "../sim/weaponStats.js";
@@ -60,6 +61,14 @@ export interface HudState {
   // compact icon-only slots above the hotbar. desc = the CURRENT level's effect;
   // nextDesc = the next level's effect (the upgrade delta), null at max level.
   items: { id: string; name: string; desc: string; nextDesc: string | null; glyph: string; tint: string; rarity: string; count: number }[];
+  // Teammate HP (KIT/XP spec §6, REQUIRED for the Mender fantasy): each party member's live
+  // HP as a number + a small bar on a nameplate row. Empty solo. The Mender cannot function
+  // without seeing who to heal, so this ships WITH kits.
+  party: { id: string; name: string; hp: number; maxHp: number; colorIndex: number | null; isDown: boolean; isAbsent: boolean }[];
+  // The universal ULT meter (spec §3/§6): a dedicated readout SEPARATE from the combo/Resonance
+  // meters. charge is 0..1; isReady lights the "ULT READY" state; cd is the 8s lockout fraction
+  // still remaining (0 = no lockout) after a cast. null hides the meter (a neutral-kit player).
+  ult: { charge: number; isReady: boolean; cd: number; kit: string } | null;
 }
 
 export interface HotbarActions {
@@ -421,7 +430,8 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
-    <div class="hearts" data-hearts></div>
+    <div class="hprow"><div class="hearts" data-hearts></div><span class="hp-num" data-hpnum>0/0</span></div>
+    <div class="party" data-party></div>
     <div class="statrow">
       <span class="chip floor"><span class="k">FL</span><span class="v" data-floor>1</span></span>
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
@@ -447,6 +457,7 @@ const HUD_MARKUP = `
   </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner bl">
+    <div class="ultmeter" data-ult hidden><span class="k" data-ult-k>ULT</span><span class="key keycap">F</span><span class="bar"><i data-ult-fill style="--ult-fill:0"></i></span></div>
     <div class="dash"><span class="k">DASH</span><span class="key keycap">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
   </div>
   <div class="hotbar">
@@ -511,6 +522,11 @@ export const LONG_PRESS_MS = 350;
 export class Hud {
   private hud: HTMLElement;
   private heartsEl: HTMLElement;
+  private hpNumEl!: HTMLElement;
+  private partyEl!: HTMLElement;
+  private ultEl!: HTMLElement;
+  private ultFillEl!: HTMLElement;
+  private ultKEl!: HTMLElement;
   private floorEl: HTMLElement;
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
@@ -582,6 +598,9 @@ export class Hud {
   // Hearts are the one expensive redraw (canvas per heart), so only rebuild on change.
   private prevHp = -1;
   private prevMaxHp = -1;
+  private prevHpDisplay = "";
+  private prevPartyKey = "";
+  private prevUltKey = "";
 
   constructor(root: HTMLElement) {
     const hud = el("div", "");
@@ -592,6 +611,11 @@ export class Hud {
     this.hud = hud;
 
     this.heartsEl = hud.querySelector("[data-hearts]")!;
+    this.hpNumEl = hud.querySelector("[data-hpnum]")!;
+    this.partyEl = hud.querySelector("[data-party]")!;
+    this.ultEl = hud.querySelector("[data-ult]")!;
+    this.ultFillEl = hud.querySelector("[data-ult-fill]")!;
+    this.ultKEl = hud.querySelector("[data-ult-k]")!;
     this.floorEl = hud.querySelector("[data-floor]")!;
     this.mutatorsEl = hud.querySelector("[data-mutators]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
@@ -1209,12 +1233,73 @@ export class Hud {
     });
   }
 
+  // Teammate HP party panel (spec §6): one compact nameplate row per member (color dot, name,
+  // a small HP bar, the numeric HP). Rebuilt only when a member's identity/HP/state changes, so
+  // a steady party never churns the DOM. Empty solo.
+  private renderParty(party: HudState["party"]): void {
+    const key = party.map((p) => `${p.id}:${p.hp}/${p.maxHp}:${p.colorIndex}:${p.isDown ? "d" : ""}${p.isAbsent ? "a" : ""}:${p.name}`).join("|");
+    if (key === this.prevPartyKey) return;
+    this.prevPartyKey = key;
+    this.partyEl.classList.toggle("has-party", party.length > 0);
+    this.partyEl.replaceChildren();
+    for (const m of party) {
+      const row = el("div", "");
+      row.className = "party-row" + (m.isDown ? " down" : "") + (m.isAbsent ? " away" : "");
+      const dot = el("span", ""); dot.className = "party-dot";
+      if (m.colorIndex !== null) dot.style.setProperty("--pc", String(m.colorIndex));
+      const name = el("span", ""); name.className = "party-name"; name.textContent = m.name;
+      const bar = el("span", ""); bar.className = "party-bar";
+      const fill = el("i", "");
+      const frac = m.maxHp > 0 ? Math.max(0, Math.min(1, m.hp / m.maxHp)) : 0;
+      fill.style.setProperty("--pfill", String(frac));
+      bar.appendChild(fill);
+      const hp = el("span", ""); hp.className = "party-hp";
+      hp.textContent = m.isAbsent ? "\u2014" : m.isDown ? "DOWN" : `${m.hp}/${m.maxHp}`;
+      row.append(dot, name, bar, hp);
+      this.partyEl.appendChild(row);
+    }
+  }
+
+  // The universal ULT meter (spec §3/§6): a dedicated BL readout, visually separate from the
+  // combo/Resonance meters. Fills 0->1, lights ULT READY at full, and shows the 8s cooldown
+  // lockout after a cast. Hidden for a neutral-kit player.
+  private renderUlt(ult: HudState["ult"]): void {
+    if (ult === null) {
+      if (!this.ultEl.hasAttribute("hidden")) this.ultEl.setAttribute("hidden", "");
+      this.prevUltKey = "";
+      return;
+    }
+    const fill = ult.isReady ? 1 : Math.max(0, Math.min(1, ult.charge));
+    const state = ult.isReady ? "ready" : ult.cd > 0 ? "cd" : "charge";
+    const key = `${state}:${Math.round(fill * 100)}:${Math.round(ult.cd * 100)}`;
+    if (key === this.prevUltKey) return;
+    this.prevUltKey = key;
+    this.ultEl.removeAttribute("hidden");
+    // During the lockout the bar shows the cooldown DRAINING (1 -> 0); otherwise the charge fill.
+    this.ultFillEl.style.setProperty("--ult-fill", String(ult.cd > 0 && !ult.isReady ? ult.cd : fill));
+    this.ultEl.classList.toggle("ready", ult.isReady);
+    this.ultEl.classList.toggle("cd", ult.cd > 0 && !ult.isReady);
+    this.ultKEl.textContent = ult.isReady ? "ULT READY" : "ULT";
+  }
+
   update(s: HudState) {
+    // HP readability (spec §6): hearts and/or a numeric current/max readout, per the player's
+    // setting. The hearts only re-raster on a value change; the mode toggles visibility without
+    // reflowing (both slots reserve their space), so there is never a layout shift.
+    const mode = settings.hpDisplay;
     if (s.hp !== this.prevHp || s.maxHp !== this.prevMaxHp) {
       renderHearts(this.heartsEl, s.hp, s.maxHp);
+      this.hpNumEl.textContent = `${s.hp}/${s.maxHp}`;
       this.prevHp = s.hp;
       this.prevMaxHp = s.maxHp;
     }
+    if (mode !== this.prevHpDisplay) {
+      this.heartsEl.classList.toggle("hidden", mode === "number");
+      this.hpNumEl.classList.toggle("hidden", mode === "hearts");
+      this.prevHpDisplay = mode;
+    }
+    this.renderParty(s.party);
+    this.renderUlt(s.ult);
     this.floorEl.textContent = String(s.floor);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);

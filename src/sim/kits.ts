@@ -24,7 +24,7 @@ import type { PlayerMods } from "./items.js";
 export type KitId = "none" | "gunner" | "mender" | "bulwark" | "phantom";
 
 // The playable v1 kits in stable pick order (lobby layout + deterministic iteration).
-export const KIT_IDS: readonly KitId[] = ["gunner", "mender", "bulwark", "phantom"];
+export const KIT_IDS: readonly Exclude<KitId, "none">[] = ["gunner", "mender", "bulwark", "phantom"];
 
 export function isKitId(v: unknown): v is KitId {
   return v === "none" || v === "gunner" || v === "mender" || v === "bulwark" || v === "phantom";

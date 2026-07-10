@@ -44,6 +44,7 @@ const { generateDungeon } = await import("../src/sim/dungeon.js");
 const { bossDisplayName } = await import("../src/sim/enemies.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
 const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
+const { settings } = await import("../src/game/settings.js");
 type HudModule = typeof import("../src/game/hud.js");
 type HudState = Parameters<InstanceType<HudModule["Hud"]>["update"]>[0];
 type WeaponId = HudState["weapons"][number]["id"];
@@ -80,6 +81,8 @@ function mkState(over: Partial<HudState> = {}): HudState {
     coopLabel: null, waitLabel: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
+    party: [],
+    ult: null,
     ...over,
   };
 }
@@ -691,9 +694,60 @@ function shopPanelTests(): void {
   check("an owned blessing is tagged UPGRADE LV2 (the level this buy reaches)", upView.tag === "UPGRADE LV2");
 }
 
+// KIT/XP spec §6 HUD dependencies: HP-number display modes, the teammate-HP party panel,
+// and the universal ult meter (separate from combo/Resonance).
+function kitHudTests(): void {
+  section("HP number display modes (hearts / hearts+number / number-only)");
+  const root = document.createElement("div");
+  const hud = new Hud(root);
+  settings.setHpDisplay("both");
+  hud.update(mkState({ hp: 5, maxHp: 6 }));
+  const hpNum = root.querySelector("[data-hpnum]") as HTMLElement;
+  const hearts = root.querySelector("[data-hearts]") as HTMLElement;
+  check("both: numeric HP reads current/max", hpNum.textContent === "5/6", hpNum.textContent ?? "");
+  check("both: hearts + number both visible", !hearts.classList.contains("hidden") && !hpNum.classList.contains("hidden"));
+  settings.setHpDisplay("hearts");
+  hud.update(mkState({ hp: 5, maxHp: 6 }));
+  check("hearts-only: the number is hidden", hpNum.classList.contains("hidden") && !hearts.classList.contains("hidden"));
+  settings.setHpDisplay("number");
+  hud.update(mkState({ hp: 5, maxHp: 6 }));
+  check("number-only: the heart row is hidden", hearts.classList.contains("hidden") && !hpNum.classList.contains("hidden"));
+  settings.setHpDisplay("both"); // restore default
+
+  section("teammate HP party panel (the Mender dependency)");
+  hud.update(mkState({
+    party: [
+      { id: "p1", name: "Ada", hp: 3, maxHp: 8, colorIndex: 2, isDown: false, isAbsent: false },
+      { id: "p2", name: "Bo", hp: 0, maxHp: 6, colorIndex: 1, isDown: true, isAbsent: false },
+      { id: "p3", name: "Cy", hp: 4, maxHp: 6, colorIndex: null, isDown: false, isAbsent: true },
+    ],
+  }));
+  const rows = root.querySelectorAll("[data-party] .party-row");
+  check("one nameplate row per teammate", rows.length === 3, `rows=${rows.length}`);
+  const first = rows[0];
+  check("a living teammate shows numeric HP", (first.querySelector(".party-hp") as HTMLElement).textContent === "3/8");
+  check("a downed teammate reads DOWN + carries the down class", rows[1].classList.contains("down") && (rows[1].querySelector(".party-hp") as HTMLElement).textContent === "DOWN");
+  check("an absent teammate carries the away class", rows[2].classList.contains("away"));
+  hud.update(mkState({ party: [] }));
+  check("solo clears the party panel", root.querySelectorAll("[data-party] .party-row").length === 0);
+
+  section("universal ult meter (separate from combo/Resonance; ready + cooldown states)");
+  hud.update(mkState({ ult: null }));
+  const ult = root.querySelector("[data-ult]") as HTMLElement;
+  check("a neutral-kit player hides the ult meter", ult.hasAttribute("hidden"));
+  hud.update(mkState({ ult: { charge: 0.5, isReady: false, cd: 0, kit: "gunner" } }));
+  check("a charging meter is visible and not ready", !ult.hasAttribute("hidden") && !ult.classList.contains("ready"));
+  check("the fill reflects the charge", (root.querySelector("[data-ult-fill]") as HTMLElement).style.getPropertyValue("--ult-fill") === "0.5");
+  hud.update(mkState({ ult: { charge: 1, isReady: true, cd: 0, kit: "gunner" } }));
+  check("a full meter lights ULT READY", ult.classList.contains("ready") && (root.querySelector("[data-ult-k]") as HTMLElement).textContent === "ULT READY");
+  hud.update(mkState({ ult: { charge: 0, isReady: false, cd: 0.75, kit: "gunner" } }));
+  check("after a cast the 8s cooldown state shows", ult.classList.contains("cd") && !ult.classList.contains("ready"));
+}
+
 function main(): void {
   weaponSlotTests();
   weaponTooltipTests();
+  kitHudTests();
   buffChipTests();
   buffOverflowTests();
   blessingCardTests();
