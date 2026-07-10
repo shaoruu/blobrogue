@@ -31,7 +31,10 @@ export type RoomId = "swarm" | "anchor" | "brawl" | "lane" | "cover" | "kite" | 
 export type MetricId = RoomId | "safety" | "control" | "boss";
 export type RangeBand = "point-blank" | "close" | "mid" | "long" | "self" | "placed";
 export type TargetProfile = "swarm" | "single" | "pack" | "lane" | "anchor" | "control" | "mixed";
-export type ResourceModel = "none" | "hold" | "placement" | "position" | "health-risk";
+// "coin-fed" (the Midas): the run economy amplifies the shot — never gates it. The
+// INFINITE RESERVE contract holds: a broke trigger still fires an honest base round, so
+// the cost model is a power tradeoff against the shop/hearts/rerolls, not ammo.
+export type ResourceModel = "none" | "hold" | "placement" | "position" | "health-risk" | "coin-fed";
 export type StatusIdentity = "none" | "burn" | "chill";
 // The server-owned state channels a weapon's output may ride. Closed set: the QA gate
 // rejects an authority claim that names state the sim does not actually own.
@@ -155,7 +158,9 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
   },
   ricochet: {
     role: "wall banker: shoot the corner, not the body",
-    metrics: ["lane"],
+    // Recalibrated with the legendary wave aboard: the 30-weapon lane median tightened
+    // past the bank's lane time; its single-lane edge now reads on the anchor metric.
+    metrics: ["anchor"],
     idealRange: "mid", target: "pack",
     strength: "Two wall banks reach around geometry and double-dip rooms.",
     weakness: "Open ground wastes the banks entirely.",
@@ -435,5 +440,96 @@ export const ARSENAL: Record<WeaponId, WeaponManifestEntry> = {
     visual: "#c9b06a sagging chain links to the latched body (fx/chain_link hook)",
     authority: ["effects:tether"],
     excelRoom: "brawl", weakRoom: "lane",
+  },
+  // ---- the legendary wave: one signature mechanic each, priced by a real tradeoff ----
+  reaper: {
+    role: "momentum harvester: the first kill starts the avalanche",
+    metrics: ["kite"],
+    novelty: {
+      nearest: "tesla",
+      axes: ["priority", "timing"],
+      note: "The Tesla taxes every HIT across a pack; the Reaper pays out on KILLS — target priority inverts (finish the weakest body first to seed the cascade), and the payoff compounds over the fight instead of per trigger pull.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "Kill shards seek and cascade — one finished body dominoes a bunched room.",
+    weakness: "No kills, no shards: a lone tough body faces a modest mid-tempo rifle.",
+    resource: "none", status: "none",
+    modifiers: "Standard mapping; shard count/decay are authored (never modded).",
+    audio: "cannon",
+    visual: "#b8ffd9 pale soul tracers, shard fans off corpses; held_reaper/weapon_reaper",
+    authority: ["bullets"],
+    excelRoom: "kite", weakRoom: "anchor",
+  },
+  swarm: {
+    role: "alpha strike: one slow commitment releases five hunters",
+    metrics: ["anchor"],
+    novelty: {
+      nearest: "homing",
+      axes: ["timing", "geometry"],
+      note: "The Wisp is a steady seeker stream; the Hive is a 1.15s VOLLEY commitment whose darts launch lazy and accelerate — the decision moves from tracking to timing the release beat, and the volley fans a whole arc instead of one lane.",
+    },
+    idealRange: "long", target: "swarm",
+    strength: "Five accelerating seekers arrive together — a committed volley that runs down distant bodies.",
+    weakness: "Darts launch slow and the cycle is a real beat — point-blank panic fire gets you killed.",
+    resource: "none", status: "none",
+    modifiers: "Pellet mods add darts; speed maps to launch velocity (acceleration is authored).",
+    audio: "homing",
+    visual: "#ffe86a wasp-gold darts that visibly pick up speed; held_hive/weapon_hive",
+    authority: ["bullets"],
+    excelRoom: "kite", weakRoom: "brawl",
+  },
+  midas: {
+    role: "coin-fed cannon: your purse is the magazine",
+    metrics: ["anchor"],
+    novelty: {
+      nearest: "smg",
+      axes: ["priority"],
+      note: "Mechanically a suppression stream, economically a NEW resource loop: every fed shot bids the run economy (shop, hearts, rerolls compete for the same coins), so the priority decision lives outside the room entirely.",
+    },
+    idealRange: "mid", target: "single",
+    strength: "Fed, it is a premium suppression stream that melts a marked body.",
+    weakness: "Broke, it fires the weakest round in the arsenal — the purse IS the power.",
+    resource: "coin-fed", status: "none",
+    modifiers: "Full standard mapping; the coin feed multiplies the damage line only.",
+    audio: "shootPistol",
+    visual: "#ffd700 gilded tracers that gleam brighter when fed; held_midas/weapon_midas",
+    authority: ["bullets"],
+    excelRoom: "anchor", weakRoom: "swarm",
+  },
+  phase: {
+    role: "cover denier: the room's geometry belongs to nobody",
+    metrics: ["anchor"],
+    novelty: {
+      nearest: "railgun",
+      axes: ["geometry", "positioning"],
+      note: "The Longshot deletes what it can SEE; the Umbra ignores sight lines entirely — walls and crates stop being cover for either side, so the play is standing where the room thinks you cannot shoot from.",
+    },
+    idealRange: "long", target: "control",
+    strength: "Rounds pass through walls and props — pre-thin the pack from total safety.",
+    weakness: "Slow cadence, zero pierce, mid damage: in the open it is strictly a lesser slug.",
+    resource: "position", status: "none",
+    modifiers: "Full standard mapping; pierce mods still apply (bodies, never geometry).",
+    audio: "tesla",
+    visual: "#9a7fff umbral bolts that dim through geometry; held_umbra/weapon_umbra",
+    authority: ["bullets"],
+    excelRoom: "door", weakRoom: "brawl",
+  },
+  vortex: {
+    role: "pack gatherer: yank the room into one clump",
+    metrics: ["swarm"],
+    novelty: {
+      nearest: "mortar",
+      axes: ["positioning", "geometry"],
+      note: "The Thumper converts a clump into damage; the Lodestone CREATES the clump — the implosion pulls scattered bodies onto the impact point, so its output is formation editing for your follow-up, not the kill itself.",
+    },
+    idealRange: "mid", target: "pack",
+    strength: "Every shot drags the nearby pack onto one point and splashes it.",
+    weakness: "Modest splash and a heavy body barely budges — alone against an anchor it stalls.",
+    resource: "none", status: "none",
+    modifiers: "Size maps to the round, life to travel; the implosion radius is authored.",
+    audio: "cannon",
+    visual: "#7fb0ff cold-blue rounds collapsing inward on impact; held_lodestone/weapon_lodestone",
+    authority: ["bullets"],
+    excelRoom: "swarm", weakRoom: "anchor",
   },
 };

@@ -313,6 +313,14 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   halo: "/sprites/held_halo.png",
   sentry: "/sprites/held_sentry.png",
   crook: "/sprites/held_crook.png",
+  // Legendary hooks — art is generated separately via the locked FAL pipeline (exact
+  // drop-in filenames, like the finals above). Until each lands, the held-weapon
+  // renderer falls back to its procedural draw — never broken art.
+  reaper: "/sprites/held_reaper.png",
+  swarm: "/sprites/held_hive.png",
+  midas: "/sprites/held_midas.png",
+  phase: "/sprites/held_umbra.png",
+  vortex: "/sprites/held_lodestone.png",
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
@@ -346,6 +354,13 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   halo: "/sprites/weapon_halo.png",
   sentry: "/sprites/weapon_sentry.png",
   crook: "/sprites/weapon_crook.png",
+  // Legendary hooks (FAL pipeline drop-ins — see HELD_SOURCES note). The pickup renderer
+  // and hotbar icons degrade to the generic pixel gun until each file lands.
+  reaper: "/sprites/weapon_reaper.png",
+  swarm: "/sprites/weapon_hive.png",
+  midas: "/sprites/weapon_midas.png",
+  phase: "/sprites/weapon_umbra.png",
+  vortex: "/sprites/weapon_lodestone.png",
 };
 
 // The weapon's icon art for DOM HUD surfaces (the hotbar): its pickup side profile.

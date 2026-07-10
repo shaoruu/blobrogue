@@ -71,6 +71,7 @@ const WEAPON_CYCLE: WeaponId[] = [
   "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
   "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+  "reaper", "swarm", "midas", "phase", "vortex",
 ];
 const COMBAT_TICKS = WEAPON_CYCLE.length * 44 + 48;
 const combat: Scenario = {

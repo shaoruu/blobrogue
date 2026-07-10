@@ -25,7 +25,8 @@ import {
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
-  isShopFloor, buildShopState, shopSlotStatusFor, shopViewerOf, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  isShopFloor, buildShopState, shopSlotStatusFor, shopViewerOf, shopWeaponPrice,
+  SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
 import { SHOP } from "../src/sim/balance.js";
@@ -162,8 +163,9 @@ function placementTests(): void {
     const rerolls = shop.slots.filter((s) => s.kind === "reroll");
     check("three item pedestals: 2 weapons + 1 blessing", weapons.length === 2 && blessings.length === 1);
     check("one heart station + one reroll post", hearts.length === 1 && rerolls.length === 1);
-    check("pedestal prices ride the unchanged 12/18/24 ladder",
-      weapons[0].price === 12 && weapons[1].price === 18 && blessings[0].price === 24);
+    check("pedestal prices scale their rarity off the unchanged 12/18/24 ladder base",
+      weapons.every((s, i) => s.price === shopWeaponPrice(SHOP.pedestalPrices[i], s.weapon!, s.isMystery))
+      && blessings[0].price === 24);
     check("heart 6 (never a full heal: +1 HP) and reroll 8",
       hearts[0].price === SHOP.heartPrice && SHOP.heartHeal === 1 && rerolls[0].price === SHOP.rerollCost);
     check("weapon pedestals are SHARED; blessing + heart are FOR YOU (personal)",
@@ -505,8 +507,11 @@ function flowAndWireTests(): void {
     check("claim + buyer state survives encode/decode byte-for-byte",
       JSON.stringify(decoded.shop) === JSON.stringify(toShopWire(w.shop!)));
     const rebuilt = shopFromWire(decoded.shop!);
-    check("shopFromWire(toShopWire(s)) is lossless",
-      JSON.stringify(rebuilt) === JSON.stringify(w.shop));
+    // Lossless on the WIRE projection: a mystery pedestal's identity/twist are sim
+    // secrets by design (hidden until the buy), so the sim-side struct is compared
+    // through toShopWire — the exact view every client reconstructs.
+    check("shopFromWire(toShopWire(s)) is lossless on the wire projection",
+      JSON.stringify(toShopWire(rebuilt)) === JSON.stringify(toShopWire(w.shop!)));
     check("non-shop floors carry shop: null on the wire",
       (buildSnapshot(createWorld(0xB1E, 4), LOCAL_ID, 0, [], 0, true, { worldId: "room:TEST" }) as Extract<ServerMsg, { t: "snap" }>).shop === null);
   }

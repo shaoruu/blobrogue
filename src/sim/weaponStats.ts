@@ -8,7 +8,7 @@
 
 import { WEAPONS, MAX_ORBIT_BLADES } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
-import type { WeaponId } from "./types.js";
+import type { WeaponId, WeaponRarity } from "./types.js";
 import type { PlayerMods } from "./items.js";
 import { CAPS } from "./balance.js";
 import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
@@ -73,6 +73,7 @@ export interface WeaponCoverage {
 
 export interface WeaponDisplayStats {
   isMelee: boolean;
+  rarity: WeaponRarity;            // drop-quality tier (the tooltip's rarity badge)
   role: string;                    // the room-job verb line
   power: { perHit: number; count: number }; // exact, per-pellet/swing × count — never a guaranteed sum
   impact: BandedStat;              // weight class of one hit (effective per-pellet/swing damage)
@@ -97,6 +98,13 @@ function roleOf(w: Weapon): string {
   if (w.tether !== undefined) return "REPOSITION THE THREAT";
   if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
   if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
+  // The legendary wave's signature mechanics outrank the shared fields: the gimmick IS
+  // the job (the Hive reads by its accel+homing pair, above the plain seeker verb).
+  if (w.killShards !== undefined) return "REAP THE PACK";
+  if (w.coinBoost !== undefined) return "SPEND COINS FOR POWER";
+  if (w.isPhase === true) return "SHOOT THROUGH WALLS";
+  if (w.implode !== undefined) return "DRAG THEM TOGETHER";
+  if (w.accel !== undefined && w.homing !== undefined) return "UNLEASH THE SWARM";
   if (w.homing !== undefined) return "SEEK TARGETS";
   if (w.chain !== undefined) return "ARC THE PACK";
   if (w.blast !== undefined) return "BLAST THE CHOKEPOINT";
@@ -150,6 +158,7 @@ function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage 
   if (w.tether !== undefined) return { kind: "TETHER", patternOrder: null };
   if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
+  if (w.implode !== undefined) return { kind: "AREA", patternOrder: null };
   if (w.chain !== undefined) return { kind: "CHAIN", patternOrder: null };
   if (w.homing !== undefined) return { kind: "TRACKING", patternOrder: null };
   if (w.bounce !== undefined) return { kind: "RICOCHET", patternOrder: null };
@@ -186,6 +195,12 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.burn !== undefined) m.push({ tag: "BURN", text: "SETS TARGETS ABLAZE", mag: 1 });
   if (w.chill !== undefined) m.push({ tag: "CHILL", text: "CHILLS ON HIT", mag: 1 });
   if (w.shock !== undefined) m.push({ tag: "SHOCK", text: "SHOCKS ON HIT", mag: 1 });
+  // Legendary signature mechanics, honestly stated (the sim numbers, never flavor-only).
+  if (w.killShards !== undefined) m.push({ tag: "REAP", text: `KILLS BURST INTO ${w.killShards} SEEKING SHARDS`, mag: w.killShards });
+  if (w.accel !== undefined) m.push({ tag: "ACCEL", text: "ROUNDS ACCELERATE IN FLIGHT", mag: w.accel });
+  if (w.coinBoost !== undefined) m.push({ tag: "GILDED", text: `EATS 1 COIN PER SHOT FOR \u00d7${w.coinBoost} DAMAGE`, mag: w.coinBoost });
+  if (w.isPhase === true) m.push({ tag: "PHASE", text: "ROUNDS PASS THROUGH WALLS", mag: 1 });
+  if (w.implode !== undefined) m.push({ tag: "IMPLODE", text: `${w.implode}PX IMPLOSION PULLS THE PACK IN`, mag: w.implode });
   const kick = FIRE_KNOCKBACK[w.id];
   if (kick >= 12) m.push({ tag: "KICK", text: "KICKS YOU BACK", mag: kick });
   return m;
@@ -200,6 +215,7 @@ export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number
   const perHit = w.damage * liveDamageMult(mods, lowHp);
   return {
     isMelee,
+    rarity: w.rarity,
     role: roleOf(w),
     power: { perHit, count: pellets },
     impact: impactBand(perHit),

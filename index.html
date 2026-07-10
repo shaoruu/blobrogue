@@ -91,6 +91,15 @@
       .hb-slot.on::after{ content:""; position:absolute; top:-6px; left:50%; transform:translateX(-50%);
         width:10px; height:4px; background:var(--amber); box-shadow:0 0 0 1px var(--dun-0); }
       .hb-slot.on .hb-icon, .hb-slot.on .hb-icon img{ width:40px; height:40px; }
+      /* Rarity frame tints (weapon drop-quality): rare = cool blue, legendary = gold.
+         Commons keep the classic frame so the tint stays a signal. The equipped state's
+         double frame wins the inner ring; rarity then rides the OUTER ring. */
+      .hb-slot.r-rare{ box-shadow:inset 0 0 0 2px #3f6fae,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.r-legendary{ box-shadow:inset 0 0 0 2px #b8860b,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.r-rare:hover{ box-shadow:inset 0 0 0 2px #5a8fd4,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.r-legendary:hover{ box-shadow:inset 0 0 0 2px #d4a017,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.on.r-rare{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 0 0 4px var(--dun-0),0 0 0 2px #3f6fae,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.on.r-legendary{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 0 0 4px var(--dun-0),0 0 0 2px #b8860b,0 3px 0 rgba(0,0,0,.4); }
       /* THE weapon-card tooltip: one root-level floating element (never a slot child, so
          no hotbar/drawer clipping and no per-slot duplicates), position:fixed and
          pointer-events:none, populated + anchored ~10px above the hovered/focused slot by
@@ -108,6 +117,10 @@
       .hb-tip .ti img{ width:16px; height:16px; image-rendering:pixelated; }
       .hb-tip .ti .glyphfb{ font-family:var(--f-num); font-size:12px; line-height:1; color:var(--cream); }
       .hb-tip .tn{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--amber); }
+      /* the rarity badge (header right): the tier word in its accent — text first, tint second */
+      .hb-tip .tw{ margin-left:auto; font-family:var(--f-ui); font-size:6px; letter-spacing:1px; color:#9a8fb5; }
+      .hb-tip .tw.rare{ color:#7fb8ff; }
+      .hb-tip .tw.legendary{ color:#ffd700; }
       .hb-tip .tj{ font-family:var(--f-ui); font-size:7px; letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }
       .hb-tip .tr{ display:flex; align-items:baseline; gap:7px; }
       .hb-tip .tk{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); min-width:52px; }
@@ -233,6 +246,8 @@
       .hd-stat span{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); }
       .hd-stat b{ font-family:var(--f-num); font-size:18px; font-weight:400; color:var(--amber-hi); }
       .hd-role{ margin:0; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber-hi); }
+      .hd-role.rare{ color:#7fb8ff; }
+      .hd-role.legendary{ color:#ffd700; }
       .hd-special{ margin:0; font-family:var(--f-num); font-size:14px; line-height:1.2; color:var(--blu); }
       .hd-drop{ min-height:48px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:9px; letter-spacing:2px;
         color:var(--red); background:rgba(255,90,90,.08); box-shadow:inset 0 0 0 2px #5a2030; }

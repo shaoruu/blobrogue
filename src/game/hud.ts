@@ -259,6 +259,11 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
   const tipName = el("span", "", w.name.toUpperCase());
   tipName.className = "tn";
   head.append(iconBox, tipName);
+  // The rarity badge rides the header, straight off the live card (weaponDisplayStats is
+  // the one honest stats source), so the tooltip can never disagree with the sim's tier.
+  const tipRarity = el("span", "", w.card.rarity.toUpperCase());
+  tipRarity.className = `tw ${w.card.rarity}`;
+  head.appendChild(tipRarity);
   const tipRole = el("span", "", w.card.role);
   tipRole.className = "tj";
   tip.append(head, tipRole);
@@ -303,10 +308,12 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
 // over the custom tip. Exported for the DOM suite.
 export function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
-  slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
+  // The rarity class tints the slot frame (rare blue / legendary gold — see index.html);
+  // commons keep the classic frame so the tint stays a signal, not noise.
+  slot.className = "hb-slot" + (w.isCurrent ? " on" : "") + (w.card.rarity !== "common" ? ` r-${w.card.rarity}` : "");
   slot.tabIndex = 0;
   slot.setAttribute("role", "button");
-  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}`);
+  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.card.rarity === "common" ? "" : `, ${w.card.rarity}`}${w.isCurrent ? ", equipped" : ""}`);
   const key = el("span", "", String(index + 1));
   key.className = "hb-key";
   slot.appendChild(key);
@@ -1090,8 +1097,8 @@ export class Hud {
   // action for the equipped weapon.
   openWeaponDrawer(d: WeaponDrawerData) {
     this.openDrawer(d.name.toUpperCase(), (body) => {
-      const role = el("p", "", d.stats.role);
-      role.className = "hd-role";
+      const role = el("p", "", `${d.stats.rarity.toUpperCase()} \u00b7 ${d.stats.role}`);
+      role.className = `hd-role ${d.stats.rarity}`;
       body.appendChild(role);
       const stats = el("div", "");
       stats.className = "hd-stats";

@@ -8,8 +8,8 @@
 // only ever advanced by the one authority (LocalTransport solo, the server online), so
 // same seed + same inputs -> same drops on every client.
 
-import type { WeaponId } from "./types.js";
-import { PICKUP_WEAPONS } from "./weapons.js";
+import type { WeaponId, WeaponRarity } from "./types.js";
+import { PICKUP_WEAPONS, WEAPONS } from "./weapons.js";
 import { Rng } from "./rng.js";
 import { WEAPON_VARIETY } from "./balance.js";
 
@@ -56,7 +56,21 @@ function takeAt(bag: WeaponBag, idx: number): WeaponId {
 // excluded, the bag deals a fresh pass early (dealt-but-unowned guns come back into
 // play); when the player owns the entire pool a duplicate is allowed — never an
 // infinite loop, never a dead draw.
-export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>): WeaponId {
+//
+// `rarity` is the rarity system's tier REQUEST (see rollWeaponRarity): when the current
+// pass still holds an undealt weapon of that tier, the deal comes from the tier; when the
+// tier is spent (or fully excluded), the draw falls through to the plain deal below — the
+// weighting is statistical, the deal's variety contract is absolute. Callers enforce the
+// legendary floor gate through `exclude`, whose skip-while-others-remain semantics
+// already guarantee a draw never hangs.
+export function drawWeaponFromBag(bag: WeaponBag, exclude: ReadonlySet<WeaponId>, rarity?: WeaponRarity): WeaponId {
+  if (rarity !== undefined) {
+    if (bag.order.length === 0) refillBag(bag);
+    const fitsTier = (id: WeaponId): boolean => WEAPONS[id].rarity === rarity && !exclude.has(id);
+    let idx = bag.order.findIndex((id) => fitsTier(id) && !bag.recent.includes(id));
+    if (idx < 0) idx = bag.order.findIndex(fitsTier);
+    if (idx >= 0) return takeAt(bag, idx);
+  }
   for (let pass = 0; pass < 2; pass++) {
     if (bag.order.length === 0) refillBag(bag);
     let idx = bag.order.findIndex((id) => !exclude.has(id) && !bag.recent.includes(id));

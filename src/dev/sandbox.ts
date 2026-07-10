@@ -20,6 +20,7 @@ const WEAPON_IDS: readonly WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
   "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear",
   "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+  "reaper", "swarm", "midas", "phase", "vortex",
 ];
 const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick"];
 const PROP_LABEL: Record<PropKind, string> = {
@@ -31,6 +32,7 @@ const PROP_LABEL: Record<PropKind, string> = {
 const WEAPON_ART_ID: Partial<Record<WeaponId, string>> = {
   sword: "cutlass", longsword: "claymore", spear: "pike",
   mortar: "thumper", beam: "beam2_px",
+  swarm: "hive", phase: "umbra", vortex: "lodestone",
 };
 const weaponArtId = (id: WeaponId) => WEAPON_ART_ID[id] ?? id;
 

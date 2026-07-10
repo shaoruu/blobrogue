@@ -81,6 +81,9 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   sawnoff: 10, railgun: 12, nailer: 3, flamer: 1, mortar: 6, beam: 1,
   sword: 14, longsword: 20, spear: 16,
   lastlight: 9, breach: 7, snapwire: 12, frostline: 1, halo: 6, sentry: 2, crook: 10,
+  // The vortex's KB is INWARD (implodeBullet aims it at the impact point) — this number
+  // is the pull strength, resisted exactly like ordinary knockback.
+  reaper: 5, swarm: 3, midas: 4, phase: 6, vortex: 22,
 };
 export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
@@ -93,7 +96,22 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   sawnoff: 26, railgun: 6, nailer: 0, flamer: 0, mortar: 8, beam: 0,
   sword: 0, longsword: 0, spear: 8,
   lastlight: 12, breach: 10, snapwire: 0, frostline: 0, halo: 0, sentry: 0, crook: 0,
+  reaper: 0, swarm: 6, midas: 0, phase: 4, vortex: 6,
 };
+
+// ---- legendary gimmick tuning ----
+// Reaper kill shards: released from a killed body, seeking, cascading with halved damage
+// per generation (geometric decay; the cascade stops under KILL_SHARD_MIN_DMG).
+export const KILL_SHARD_DMG_FRAC = 0.5;
+export const KILL_SHARD_MIN_DMG = 0.6;
+export const KILL_SHARD_SPEED = 540;
+export const KILL_SHARD_LIFE = 0.8;
+export const KILL_SHARD_HOMING = 9; // steering rad/s (well above the Wisp's 6 — short-lived)
+export const KILL_SHARD_RADIUS = 4;
+// Vortex implosion: everything in the radius takes this fraction of the round's damage
+// (the direct hit included — the implosion IS the payload) and is yanked inward via
+// WEAPON_KB.vortex.
+export const IMPLODE_SPLASH_FRAC = 0.75;
 
 // ---- weapon effect entities (the effect wave; see types.ts Effect) ----
 // Hard world bounds: effects ride every snapshot unfiltered (like hazards), so the sim

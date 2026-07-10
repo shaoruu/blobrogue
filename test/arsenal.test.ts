@@ -241,8 +241,9 @@ const SECONDLANE_SETUP_TICKS = 84;
 
 // riskHp: risk-resource weapons (the Lastlight) have their declared metrics measured
 // with the cost PAID — god mode holds the bar at the authored risk point, so the curve
-// (not the bot's tanking) is what the room measures.
-function measureRoom(weapon: WeaponId, room: RoomId, opts: { riskHp?: number } = {}): RoomResult {
+// (not the bot's tanking) is what the room measures. purse: coin-fed weapons (the Midas)
+// measure their declared metrics with the purse STOCKED, the same paid-ceiling contract.
+function measureRoom(weapon: WeaponId, room: RoomId, opts: { riskHp?: number; purse?: number } = {}): RoomResult {
   const w = createWorld(0xA25E7 + ROOM_IDS.indexOf(room), 1, { isSandbox: true });
   const p = w.players.get(LOCAL_ID)!;
   p.invuln = 0;
@@ -251,6 +252,7 @@ function measureRoom(weapon: WeaponId, room: RoomId, opts: { riskHp?: number } =
     w.isGodMode = true;
     p.hp = opts.riskHp;
   }
+  if (opts.purse !== undefined) p.coins = opts.purse;
   ROOMS[room].setup(w, p);
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
   const isSecondLane = room === "secondlane";
@@ -421,8 +423,10 @@ function manifestGates(): void {
     ([["snapwire", "effects:wire"], ["frostline", "effects:zone"], ["halo", "effects:orbit"],
       ["sentry", "effects:sentry"], ["crook", "effects:tether"], ["breach", "chargeT"]] as Array<[WeaponId, AuthorityChannel]>)
       .every(([id, ch]) => ARSENAL[id].authority.includes(ch)));
+  // "coin-fed" (the Midas) keeps the INFINITE RESERVE contract: the run economy
+  // AMPLIFIES the shot, never gates it — a broke trigger still fires.
   check("the arsenal contract holds: no global ammo/meter resource models",
-    ALL_WEAPONS.every((id) => ["none", "hold", "placement", "position", "health-risk"].includes(ARSENAL[id].resource)));
+    ALL_WEAPONS.every((id) => ["none", "hold", "placement", "position", "health-risk", "coin-fed"].includes(ARSENAL[id].resource)));
 
   section("[MAJOR] roles: no duplicates; no damage/rate/color-only variants");
   const roles = ALL_WEAPONS.map((id) => ARSENAL[id].role);
@@ -439,6 +443,11 @@ function manifestGates(): void {
     (wep.basePierce ?? 0) > 0 ? "pierce" : "", wep.pellets > 1 ? "multi" : "",
     wep.burn !== undefined ? "burn" : "", wep.chill !== undefined ? "chill" : "",
     wep.lowHpBonus !== undefined ? "risk" : "",
+    // The legendary wave's signature flags — part of the structural fingerprint, so a
+    // legendary can never read as a numbers-only variant of its nearest neighbor.
+    wep.killShards !== undefined ? "reap" : "", wep.accel !== undefined ? "accel" : "",
+    wep.coinBoost !== undefined ? "gilded" : "", wep.isPhase === true ? "phase" : "",
+    wep.implode !== undefined ? "implode" : "",
   ].filter((s) => s.length > 0).join("+") || "plain";
   const fingerprints = ALL_WEAPONS.map((id) => `${mechSig(WEAPONS[id])}|${ARSENAL[id].idealRange}|${ARSENAL[id].target}`);
   const dupes = fingerprints.filter((f, i) => fingerprints.indexOf(f) !== i);
@@ -905,7 +914,9 @@ function inputModeGates(): void {
 function idealBossDps(id: WeaponId, isAtRisk: boolean): number {
   const w = WEAPONS[id];
   const coef = WEAPON_BOSS_COEF[id] ?? 1;
-  const riskMult = isAtRisk && w.lowHpBonus !== undefined ? 1 + w.lowHpBonus * (5 / 6) : 1;
+  // The Midas is banded FED (a stocked purse is no brake inside a boss window) — the
+  // same paid-ceiling treatment the risk archetype gets.
+  const riskMult = (isAtRisk && w.lowHpBonus !== undefined ? 1 + w.lowHpBonus * (5 / 6) : 1) * (w.coinBoost ?? 1);
   const burnDot = w.burn !== undefined ? C.BURN_DMG_MAX_BOSS : 0;
   if (w.wire) return (w.damage * coef) / (w.fireCd + w.wire.arm);
   if (w.sentry) return (w.damage * coef) / w.sentry.fireCd;
@@ -920,7 +931,7 @@ function idealBossDps(id: WeaponId, isAtRisk: boolean): number {
 function burstBossDps3s(id: WeaponId, isAtRisk: boolean): number {
   const w = WEAPONS[id];
   const coef = WEAPON_BOSS_COEF[id] ?? 1;
-  const riskMult = isAtRisk && w.lowHpBonus !== undefined ? 1 + w.lowHpBonus * (5 / 6) : 1;
+  const riskMult = (isAtRisk && w.lowHpBonus !== undefined ? 1 + w.lowHpBonus * (5 / 6) : 1) * (w.coinBoost ?? 1);
   const eff = 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF;
   const cycle = w.wire ? w.fireCd + w.wire.arm : w.sentry ? w.sentry.fireCd : w.orbit ? w.orbit.rehit : w.charge ? w.fireCd + 0.1 : w.fireCd;
   const shots = 1 + Math.floor(2.999 / cycle);
@@ -1065,7 +1076,8 @@ function envelopeGates(): void {
   }
 
   section("[REVIEW] envelope: no new neutral weapon melts a brute <1.5s or an elite <1.7s");
-  for (const id of ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook"] as WeaponId[]) {
+  for (const id of ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+    "reaper", "swarm", "midas", "phase", "vortex"] as WeaponId[]) {
     for (const [tier, floorSecs] of [["brute", 1.5], ["elite", 1.7]] as Array<["brute" | "elite", number]>) {
       const w = createWorld(0x77E5, 7, { isSandbox: true });
       w.isGodMode = true;
@@ -1109,9 +1121,10 @@ function differentiationGates(m: Matrix): void {
         const baseline = measureRoom("pistol", "secondlane");
         ok = own.isCleared && own.clearTicks <= baseline.clearTicks * 0.85;
         detail = `own=${(own.clearTicks / 60).toFixed(1)}s baseline=${(baseline.clearTicks / 60).toFixed(1)}s`;
-      } else if (entry.resource === "health-risk" && metric !== "boss") {
-        // Risk-paid run vs the room's neutral median: the payoff must be real.
-        const paid = measureRoom(id, metric as RoomId, { riskHp: 1 });
+      } else if ((entry.resource === "health-risk" || entry.resource === "coin-fed") && metric !== "boss") {
+        // Cost-paid run vs the room's neutral median: the payoff must be real (the
+        // Lastlight pays in hearts, the Midas in coins — same paid-ceiling contract).
+        const paid = measureRoom(id, metric as RoomId, entry.resource === "health-risk" ? { riskHp: 1 } : { purse: 999 });
         const med = metricMedian(m, metric);
         ok = paid.isCleared && paid.clearTicks <= med * 0.85;
         detail = `paid=${(paid.clearTicks / 60).toFixed(1)}s median=${(med / 60).toFixed(1)}s`;
@@ -1149,7 +1162,9 @@ function differentiationGates(m: Matrix): void {
 // ---- the CREATIVE gate: novelty audit, no reskins, full-charge behavior, clutter proof --
 
 function creativeGates(m: Matrix): void {
-  const NEW_WAVE: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook"];
+  // Every post-cluster addition is audited: the effect wave AND the legendary wave.
+  const NEW_WAVE: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+    "reaper", "swarm", "midas", "phase", "vortex"];
   const mechSig = (wep: Weapon): string => [
     wep.melee ? (wep.melee.isThrust ? "thrust" : "sweep") : "",
     wep.charge ? "charge" : "", wep.wire ? "wire" : "", wep.paint ? "paint" : "",
@@ -1159,6 +1174,11 @@ function creativeGates(m: Matrix): void {
     (wep.basePierce ?? 0) > 0 ? "pierce" : "", wep.pellets > 1 ? "multi" : "",
     wep.burn !== undefined ? "burn" : "", wep.chill !== undefined ? "chill" : "",
     wep.lowHpBonus !== undefined ? "risk" : "",
+    // The legendary wave's signature flags — part of the structural fingerprint, so a
+    // legendary can never read as a numbers-only variant of its nearest neighbor.
+    wep.killShards !== undefined ? "reap" : "", wep.accel !== undefined ? "accel" : "",
+    wep.coinBoost !== undefined ? "gilded" : "", wep.isPhase === true ? "phase" : "",
+    wep.implode !== undefined ? "implode" : "",
   ].filter((x) => x.length > 0).join("+") || "plain";
 
   section("[MAJOR] creative audit: every addition moves a whole play dimension");

@@ -33,6 +33,7 @@ import {
   BOSS_VULN_CAP, ELITE_BRACE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
+import { shopWeaponPrice } from "../src/sim/shop.js";
 import type { EnemyTier } from "../src/sim/balance.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -964,10 +965,10 @@ function partyRewardGates(): void {
       stocked.join(","));
     const shopWeapons = w.shop?.slots.filter((s) => s.kind === "weapon") ?? [];
     const prices = shopWeapons.map((s) => s.price);
-    check(`P${players} shop stalls two DISTINCT weapons on the unchanged ladder`,
+    check(`P${players} shop stalls two DISTINCT weapons, rarity-priced off the unchanged ladder base`,
       shopWeapons.length === SHOP.weaponPedestals
       && new Set(shopWeapons.map((s) => s.weapon)).size === shopWeapons.length
-      && prices.every((v, i) => v === SHOP.pedestalPrices[i]),
+      && shopWeapons.every((s, i) => s.price === shopWeaponPrice(SHOP.pedestalPrices[i], s.weapon!, s.isMystery)),
       `prices=${prices.join("/")}`);
   }
 
@@ -1288,7 +1289,10 @@ function practicalBossDps(id: WeaponId, mods: ReturnType<typeof createMods>): nu
   const rate = (1 / wep.fireCd) * mods.fireRateMult;
   // Burn is a flat DoT (never an amp): bounded at +3 practical DPS when present.
   const burnDot = mods.burnChance > 0 ? 3 : 0;
-  return wep.damage * mods.damageMult * effPellets * wepCoef * rate * vuln
+  // The Midas models its FED damage: a stocked purse is no brake inside a boss window,
+  // so the estimator assumes every shot eats a coin (the honest worst case).
+  const coinFed = wep.coinBoost ?? 1;
+  return wep.damage * coinFed * mods.damageMult * effPellets * wepCoef * rate * vuln
     * practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult) + burnDot;
 }
 

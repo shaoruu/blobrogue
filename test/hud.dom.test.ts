@@ -344,7 +344,7 @@ function drawerTests(): void {
   hud.openWeaponDrawer({ id: "shotgun", name: "Shotgun", stats: wcard("shotgun"), onDrop: () => dropCalls++ });
   check("weapon drawer opens", hud.isDrawerOpen());
   check("drawer titles the weapon", root.querySelector(".hd-head span")?.textContent === "SHOTGUN");
-  check("drawer leads with the room job", root.querySelector(".hd-role")?.textContent === "SHRED UP CLOSE");
+  check("drawer leads with the rarity tier + room job", root.querySelector(".hd-role")?.textContent === "COMMON \u00b7 SHRED UP CLOSE");
   const statTexts = [...root.querySelectorAll(".hd-stat")].map((s) => s.textContent);
   check("stat boxes are the tooltip's card rows (shared vocabulary, one source)",
     statTexts.join("|") === "POWER1.7 \u00d75|IMPACTSOLID|CADENCESTEADY|REACHCLOSE|COVERAGEWIDE", statTexts.join("|"));
@@ -362,8 +362,8 @@ function drawerTests(): void {
 
   section("UI Part4b: an effect-wave weapon flows through the SAME shared stats model");
   hud.openWeaponDrawer({ id: "snapwire", name: "Snapwire", stats: wcard("snapwire"), onDrop: null });
-  check("the trap states its room-verb role from the shared model",
-    root.querySelector(".hd-role")?.textContent === weaponDisplayStats("snapwire", createMods(), 0).role);
+  check("the trap states its rarity tier + room-verb role from the shared model",
+    root.querySelector(".hd-role")?.textContent === `RARE \u00b7 ${weaponDisplayStats("snapwire", createMods(), 0).role}`);
   check("the trap surfaces its authored technique line (ARMED TRAP)",
     [...root.querySelectorAll(".hd-special")].some((n) => n.textContent === "ARMED LINE TRAP"));
 
