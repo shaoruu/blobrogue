@@ -29,6 +29,7 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "2026-07-10",
     date: "2026-07-10",
     entries: [
+      { title: "All-new eyewear", body: "6 fresh face cosmetics that actually sit on the eyes — round specs, shades, star shades, 3D glasses, plus a monocle and pirate eyepatch that cover a single eye. Mix and match any hat + eyewear combo." },
       { title: "Cosmetic edge cleanup", body: "removed stray colored specks that could appear at the edges of the blob when wearing hats/glasses (leftover pixels in the transparent areas of the art)." },
       { title: "Kits/classes + ultimates + XP", body: "pick a class in the Amber Camp lobby — GUNNER (Overdrive: burst fire), MENDER (Sanctuary: healing zone), BULWARK (Aegis: projectile-blocking dome), PHANTOM (Phase: team invuln + speed). Each has a signature ULTIMATE on a server-charged meter (fills from damage/kills/time). Plus an account MASTERY track that unlocks kits as you play, and **HP numbers on the HUD** (not just hearts). Co-op: comps emerge, no forced roles." },
       { title: "All-new hats + head redesign", body: "the blob now has a proper bare rounded head, and every hat is a fresh hand-tuned sprite that sits ON the head and wraps the crown (no more double-stacking on the baked-in cowboy hat, which is now its own equippable). 12 hats redrawn — crown, beanie, top, wizard, chef, combat helmet, party, headphones, horns, mushroom, flower, halo — each individually positioned so it never covers your eyes. Store previews now show exactly what you'll wear." },
