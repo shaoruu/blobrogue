@@ -200,7 +200,8 @@ export function resolveFloorDescriptor(worldSeed: number, floorIndex: number, pl
   if (isDeep && ELITE_AFFIX_POOL.length > 0) {
     for (let ordinal = 0; ordinal < FLOOR_CAPS.eliteAffixSlots; ordinal++) {
       const rng = rollStream(worldSeed, floorIndex, RollStream.ELITE_AFFIXES, ordinal);
-      // Half the slots roll an affix (stub cadence); ≤1 affix per elite is inherent.
+      // Each slot has a 50% chance of a rolled affix (else null); ≤1 affix per elite is inherent
+      // (one roll per ordinal). The slot maps to the elite spawned at that ascending ordinal.
       const affix = rng.chance(0.5) ? ELITE_AFFIX_POOL[rng.int(0, ELITE_AFFIX_POOL.length - 1)] : null;
       eliteAffixes.push({ ordinal, affix });
     }
