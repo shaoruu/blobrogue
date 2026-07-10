@@ -908,15 +908,22 @@ function powerBudgetGates(): void {
 function coopScalingGates(): void {
   section("§8 co-op scaling: HP/threat/hearts by snapshotted player count");
   check("mob HP mult 1.00/1.55/2.10/2.65", [1, 2, 3, 4].every((p) => Math.abs(coopMobHpMult(p) - (1 + 0.55 * (p - 1))) < 1e-9));
-  check("boss HP mult 1.00/1.65/2.30/2.95", [1, 2, 3, 4].every((p) => Math.abs(coopBossHpMult(p) - (1 + 0.65 * (p - 1))) < 1e-9));
+  check("captain/miniboss HP mult 1.00/1.65/2.30/2.95 (headcount-only, boss-grade non-bosses)",
+    [1, 2, 3, 4].every((p) => Math.abs(coopBossHpMult(p) - (1 + 0.65 * (p - 1))) < 1e-9));
   check("threat mult 1.00/1.35/1.70/2.05", [1, 2, 3, 4].every((p) => Math.abs(coopThreatMult(p) - (1 + 0.35 * (p - 1))) < 1e-9));
   check("heart rate mult 1.00/1.30/1.60/1.90", [1, 2, 3, 4].every((p) => Math.abs(coopHeartRateMult(p) - (1 + 0.30 * (p - 1))) < 1e-9));
 
   const rng = new Rng(3);
   const duoSkeleton = createEnemy("skeleton", 0, 0, 3, rng, 0, { players: 2 });
   check("duo F3 skeleton HP = round(9 x 1.55)", duoSkeleton.hp === 14, `hp=${duoSkeleton.hp}`);
-  const duoBoss = createEnemy("boss", 0, 0, 5, rng, 1, { players: 2 });
-  check("duo F5 boss HP = round10(950 x 1.65)", duoBoss.hp === 1570, `hp=${duoBoss.hp}`);
+  // Bosses ride the R framework: a naked duo measures R=1 (the weak-player floor +
+  // clamp) — the boss holds its solo anchor; the party's GEAR is what raises it.
+  const duoBoss = createEnemy("boss", 0, 0, 5, rng, 1, { players: 2, power: 1 });
+  check("a naked duo's F5 boss holds the solo anchor (R=1 — gear, not headcount, scales bosses)",
+    duoBoss.hp === 950, `hp=${duoBoss.hp}`);
+  const strongPull = createEnemy("boss", 0, 0, 5, rng, 2, { players: 4, power: 4 });
+  check("an R=4 pull rides the measured HPfrac 1+0.45(R−1) — round10(950 × 2.35)",
+    strongPull.hp === Math.round((950 * (1 + 0.45 * 3)) / 10) * 10, `hp=${strongPull.hp}`);
 
   // Snapshot at encounter creation: the floor build carries P; later loads re-snapshot.
   const w = createWorld(0xC0093, 1, { isShared: true, skipLocalPlayer: true });

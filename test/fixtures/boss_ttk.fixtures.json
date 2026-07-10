@@ -9,7 +9,7 @@
   "measurements": {
     "boss.median": 48.217,
     "boss.highRoll": 46.317,
-    "boss.p10": 25.967,
+    "boss.p10": 27.5,
     "boss.p50": 46.317,
     "boss.p90": 58.35,
     "boss.transitionSeconds": 2.4,
@@ -24,7 +24,7 @@
     "weaver.medianExposed": 20.783,
     "weaver.highRoll": 78.017,
     "weaver.p10": 37.75,
-    "weaver.p50": 46.567,
+    "weaver.p50": 52.55,
     "weaver.p90": 78.017,
     "weaver.transitionSeconds": 2.8,
     "gilded.median": 45.333,
@@ -54,9 +54,9 @@
     "elite.roomClear.standardThreat": 4.2,
     "elite.roomClear.eliteThreat": 5.317,
     "godBuild.maxPracticalDps": 41.61,
-    "boss.godBuild": 25.967,
+    "boss.godBuild": 27.5,
     "marrow.godBuild": 48.467,
-    "weaver.godBuild": 45.633,
+    "weaver.godBuild": 53.183,
     "gilded.godBuild": 180,
     "choir.godBuild": 70.933
   }

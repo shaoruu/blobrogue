@@ -59,7 +59,9 @@ interface AmbushLog {
 // Transition-beat adds (the molt broodlings, shield husks, split wisps) are the
 // choreographed exceptions — they arrive ON the marked beat itself — so the audit
 // watches the seeded cadence/pool arrivals: the kinds each boss's pool can draw.
-function auditAmbushes(w: WorldState, boss: Enemy, watched: readonly EnemyKind[], ticks: number, drive?: (t: number) => void): AmbushLog {
+// Live pressure adds are culled once their grace ends (a real party clears them),
+// so the shared add budget keeps flowing like a real fight.
+function auditAmbushes(w: WorldState, boss: Enemy, watched: readonly EnemyKind[], ticks: number, isCulling = true, drive?: (t: number) => void): AmbushLog {
   const omens = new Map<number, { x: number; y: number; tick: number }>();
   const log: AmbushLog = { spawns: [], omenClearOk: true };
   for (let t = 0; t < ticks && !boss.dead; t++) {
@@ -72,6 +74,14 @@ function auditAmbushes(w: WorldState, boss: Enemy, watched: readonly EnemyKind[]
       }
     }
     if (drive) drive(t);
+    if (isCulling) {
+      for (const en of w.enemies) {
+        if (!en.dead && en.isSummoned && en !== boss && en.spawnTimer === 0
+          && en.kind !== "knot" && en.kind !== "sac") {
+          plantBullet(w, en.x, en.y, 999, 6);
+        }
+      }
+    }
     const evs = step(w, idle(t));
     for (const e of evs) {
       if (e.t !== "enemySpawn") continue;
@@ -143,7 +153,7 @@ function ambushTellGates(): void {
     let sangOk = false;
     let redirectOk = true;
     let singTime = 0;
-    const log = auditAmbushes(w, boss, ["ghost"], 60 * 10, () => {
+    const log = auditAmbushes(w, boss, ["ghost"], 60 * 10, false, () => {
       const isSinging = boss.attack.move === "harmonize" && boss.attack.phase === "active";
       if (isSinging) {
         sangOk = true;
@@ -179,6 +189,12 @@ function compositionGates(): void {
     step(w);
     const picks: string[] = [];
     for (let t = 0; t < 60 * 45 && !boss.dead; t++) {
+      for (const en of w.enemies) {
+        if (!en.dead && en.isSummoned && en !== boss && en.spawnTimer === 0
+          && en.kind !== "knot" && en.kind !== "sac") {
+          plantBullet(w, en.x, en.y, 999, 6);
+        }
+      }
       const evs = step(w, idle(t));
       // Same-tick arrivals are ONE draw (a pair entry blooms its bodies together).
       const wave: string[] = [];
