@@ -9,7 +9,7 @@
 ["gibs 854 1108 5 #9c6b4a","gibs 854 1148 10 #8a5a2c","puff 840 1128 5 #8fb8d6","puff 840 1128 5 #b07a3c","puff 854 1108 10 #8fb8d6","puff 854 1108 3 #5fbf7a","puff 854 1148 3 #5fbf7a","puff 854 1148 6 #b07a3c","sfx barrel 1.1 0.7","sfx barrel 1.8 0.45","sfx meleeHit 0.8 0.28"]
 []
 []
-["decal 884 1128 #ff7a2a 42 splat","decal 888 1128 #ffd27a 15 ring","decal 888 1176 #ffd27a 15 ring","decal 912 1128 #ff7a2a 42 splat","freeze 0.06","freeze 0.06","gibs 884 1128 18 #ff8a3b","gibs 888 1128 10 #8a5a2c","gibs 888 1176 5 #9c6b4a","gibs 912 1128 18 #ff8a3b","particles 884 1128 20 #ffb43b","particles 912 1128 20 #ffb43b","puff 866 1128 5 #b07a3c","puff 866 1128 5 #ff8a3b","puff 888 1128 3 #5fbf7a","puff 888 1128 5 #ffd27a","puff 888 1128 6 #b07a3c","puff 888 1176 10 #8fb8d6","puff 888 1176 3 #5fbf7a","puff 888 1176 5 #ffd27a","sfx barrel 0.7 1","sfx barrel 0.7 1","sfx barrel 1.1 0.7","sfx barrel 1.8 0.45","sfx meleeHit 0.8 0.28","sparks 884 1128 16","sparks 912 1128 16","trauma 0.6","trauma 0.6"]
+["decal 884 1128 #ff7a2a 42 splat","decal 888 1128 #ffd27a 15 ring","decal 912 1128 #ff7a2a 42 splat","freeze 0.06","freeze 0.06","gibs 884 1128 18 #ff8a3b","gibs 888 1128 10 #8a5a2c","gibs 888 1176 5 #9c6b4a","gibs 912 1128 18 #ff8a3b","particles 884 1128 20 #ffb43b","particles 912 1128 20 #ffb43b","puff 866 1128 5 #b07a3c","puff 866 1128 5 #ff8a3b","puff 888 1128 3 #5fbf7a","puff 888 1128 5 #ffd27a","puff 888 1128 6 #b07a3c","puff 888 1176 10 #8fb8d6","puff 888 1176 3 #5fbf7a","sfx barrel 0.7 1","sfx barrel 0.7 1","sfx barrel 1.1 0.7","sfx barrel 1.8 0.45","sfx meleeHit 0.8 0.28","sparks 884 1128 16","sparks 912 1128 16","trauma 0.6","trauma 0.6"]
 []
 []
 []
