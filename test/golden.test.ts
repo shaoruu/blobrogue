@@ -114,7 +114,7 @@ function runRefactor(s: Scenario): Run {
   const fx: string[][] = [];
   for (let tick = 0; tick < s.ticks; tick++) {
     applyCommands(game, s, tick);
-    applyInput(game, s.input(tick));
+    applyInput(game, s.input(tick, game.world));
     beginTick();
     game.tick(DT);
     fx.push(takeTick());

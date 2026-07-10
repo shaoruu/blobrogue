@@ -8,7 +8,7 @@
 
 import {
   createWorld, stepWorld, descend, devSpawnEnemy, applyItemToWorld, acquireWeaponInWorld,
-  spawnPlayerInWorld, isFloorCleared, isGildedExposed, buyFromShopInWorld,
+  spawnPlayerInWorld, isFloorCleared, isBossExposed, buyFromShopInWorld,
 } from "../src/sim/world.js";
 import type { WorldState } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
@@ -25,6 +25,7 @@ import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS,
+  CAPTAIN_HP_BASE, EARNED_GUARD_MIN, EARNED_GUARD_MAX, EXPOSE_WINDOW_CAP,
   PERMANENT_ADVANTAGE_CEILING, bossHpForFloor, marrowHpForFloor, choirHpForFloor,
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
@@ -144,11 +145,25 @@ interface TtkResult {
   seconds: number;
   killed: boolean;
   transitions: Array<{ entering: boolean; at: number; queued: number }>;
-  // Balancer report channels: total forced-transition time and (Warden) closed-plate time.
+  // Balancer report channels: total forced-transition time, (Warden) closed-plate time,
+  // and — the earned-windows gate currency — total time the boss was EXPOSED.
   transitionSeconds: number;
   closedArmorSeconds: number;
+  exposedSeconds: number;
 }
 
+// The scripted-aggression harness PLAYS THE MECHANICS (an earned-window boss measured
+// by a bot that ignores its mechanics would only measure the guard chip):
+//  - Weaver: shoot a live lattice KNOT first (breaks earn P1 windows and leave the
+//    debris P2 tangles need); the stationary gunner's own accumulating webs bait the
+//    pounce tangles, and aiming the real body converts the P3 feints.
+//  - Choir: shoot the live FRAGMENT verse first (silence opens the window; the same
+//    priority answers the split beat's wisps), circle-strafing so the drifting mass
+//    never body-blocks the fragment line.
+//  - MARROW: shadow it wall-side (the nearest wall at the player's back), freeze until
+//    the rush LOCKS, then sidestep — the committed rush carries past into the wall
+//    (the bait that opens its window).
+//  - Warden/King: stationary focus, as before (the Warden's windows are its recovers).
 function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKind; floor: number } = { kind: "boss", floor: 5 }): TtkResult {
   const w = createWorld(0xBA1A4CE, boss.floor, { isSandbox: true });
   w.isGodMode = true;
@@ -156,15 +171,61 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
   acquireWeaponInWorld(w, LOCAL_ID, weapon);
   grant(w, LOCAL_ID, picks);
   const target = devSpawnEnemy(w, boss.kind, p.x + 170, p.y);
+  // The sandbox arena's inner bounds (buildArena: 34×24 tiles, 1-tile border) and the
+  // marrow bait geometry: hold this far off the boss toward its nearest wall.
+  const arena = { x0: 48, y0: 48, x1: 33 * 48, y1: 23 * 48 };
+  const baitPoint = (): { x: number; y: number } => {
+    const dW = target.x - arena.x0, dE = arena.x1 - target.x;
+    const dN = target.y - arena.y0, dS = arena.y1 - target.y;
+    const min = Math.min(dW, dE, dN, dS);
+    const dir = min === dW ? [-1, 0] : min === dE ? [1, 0] : min === dN ? [0, -1] : [0, 1];
+    return {
+      x: Math.max(arena.x0 + 110, Math.min(arena.x1 - 110, target.x + dir[0] * 130)),
+      y: Math.max(arena.y0 + 110, Math.min(arena.y1 - 110, target.y + dir[1] * 130)),
+    };
+  };
   const transitions: TtkResult["transitions"] = [];
   let ticks = 0;
   let killed = false;
   let closedArmorSeconds = 0;
-  const maxTicks = 60 * 120;
+  let exposedSeconds = 0;
+  const maxTicks = 60 * 180;
   while (!killed && ticks < maxTicks) {
-    const aim = Math.atan2(target.y - p.y, target.x - p.x);
-    if (boss.kind === "gilded" && !target.dead && !isGildedExposed(target)) closedArmorSeconds += DT;
-    const evs = step(w, { seq: ticks, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+    const isExposedNow = !target.dead && isBossExposed(target);
+    let aimAt: { x: number; y: number } = target;
+    if (!isExposedNow) {
+      if (boss.kind === "weaver") {
+        aimAt = w.enemies.find((e) => !e.dead && e.kind === "knot") ?? target;
+      } else if (boss.kind === "choir") {
+        aimAt = w.enemies.find((e) => !e.dead && e.isSummoned && e.kind === "ghost") ?? target;
+      }
+    }
+    const aim = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
+    let moveX = 0, moveY = 0;
+    const atk = target.attack;
+    if (boss.kind === "marrow" && !target.dead) {
+      if (atk.move === "rush" && ((atk.phase === "windup" && atk.isAimLocked) || atk.phase === "active")) {
+        const side = atk.lockedAngle + Math.PI / 2;
+        moveX = Math.cos(side); moveY = Math.sin(side);
+      } else {
+        const bait = baitPoint();
+        if (Math.hypot(bait.x - p.x, bait.y - p.y) > 24) {
+          const back = Math.atan2(bait.y - p.y, bait.x - p.x);
+          moveX = Math.cos(back); moveY = Math.sin(back);
+        }
+      }
+    } else if (boss.kind === "choir" && !target.dead) {
+      const d = Math.hypot(target.x - p.x, target.y - p.y);
+      if (d < 170) {
+        const away = Math.atan2(p.y - target.y, p.x - target.x) + 0.7;
+        moveX = Math.cos(away); moveY = Math.sin(away);
+      }
+    }
+    if (!target.dead) {
+      if (boss.kind === "gilded" && !isBossExposed(target)) closedArmorSeconds += DT;
+      if (isExposedNow) exposedSeconds += DT;
+    }
+    const evs = step(w, { seq: ticks, moveX, moveY, aim, firing: true, dash: false });
     for (const e of evs) {
       if (e.t === "bossTransition") transitions.push({ entering: e.entering, at: ticks * DT, queued: e.queued });
       if (e.t === "enemyKill" && e.kind === boss.kind) killed = true;
@@ -175,7 +236,7 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
   const enterAts = transitions.filter((x) => x.entering).map((x) => x.at);
   const exitAts = transitions.filter((x) => !x.entering).map((x) => x.at);
   for (let i = 0; i < Math.min(enterAts.length, exitAts.length); i++) transitionSeconds += exitAts[i] - enterAts[i];
-  return { seconds: ticks * DT, killed, transitions, transitionSeconds, closedArmorSeconds };
+  return { seconds: ticks * DT, killed, transitions, transitionSeconds, closedArmorSeconds, exposedSeconds };
 }
 
 interface BossGateRow {
@@ -184,6 +245,10 @@ interface BossGateRow {
   medianWeapon: WeaponId;
   medianBuild: string[];
   medianBand: [number, number];
+  // Earned-window bosses gate their TTK in EXPOSED time (the designer's currency —
+  // wall-clock can be walked up by ignoring mechanics, exposed time cannot). null for
+  // the Slime King, the roster's deliberate no-guard tutorial boss.
+  exposedBand: [number, number] | null;
   highRollBuild: string[];
   highRollMin: number;
   // The unbreakable forced transition time (gate §3 "phases + forced time") and the beat's
@@ -196,57 +261,81 @@ interface BossGateRow {
 // The corrected gate §3 rows at the locked first-clear chain (King F5 / Gauntlet F10 /
 // Marrow F15 / Weaver F20 / Warden F25 / Choir F30 — Jet stays post-F30 content).
 // Median builds model expected power at each depth; high-roll = the representative
-// aggressive build (smg + Deadeye Lv3 + the depth's Glass Cannon stack).
+// aggressive build (smg + Deadeye Lv3 + the depth's Glass Cannon stack). Under earned
+// windows the high-roll/median gap narrows by design: firepower converts windows
+// harder, it can no longer out-DPS the mechanics.
 const BOSS_GATE_ROWS: readonly BossGateRow[] = [
   {
     kind: "boss", floor: 5, medianWeapon: "pistol", medianBuild: L3("hair_trigger"),
-    medianBand: [35, 50], highRollBuild: [...L3("deadeye"), "glass_cannon"], highRollMin: 20,
+    medianBand: [35, 50], exposedBand: null,
+    highRollBuild: [...L3("deadeye"), "glass_cannon"], highRollMin: 20,
     forcedEach: BOSS.roarDuration, beatCap: BOSS.roarDuration,
   },
   {
     kind: "marrow", floor: 15, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    medianBand: [35, 50], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
+    medianBand: [35, 50], exposedBand: [8, 20], // the light-touch retrofit: crash-gated windows
+    highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
     forcedEach: MARROW.shieldMinDuration, beatCap: MARROW.shieldDuration,
   },
   {
     kind: "weaver", floor: 20, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    medianBand: [38, 55], highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
+    medianBand: [38, 55], exposedBand: [20, 30], // the earned-windows flagship gate
+    highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
     forcedEach: WEAVER.moltDuration, beatCap: WEAVER.moltDuration,
   },
   {
     kind: "gilded", floor: 25, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    medianBand: [40, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
+    medianBand: [40, 58], exposedBand: [20, 34], // every commitment opens a recover window
+    highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
     forcedEach: GILDED.sanctifyDuration, beatCap: GILDED.sanctifyDuration,
   },
   {
     kind: "choir", floor: 30, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    medianBand: [40, 58], highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
+    medianBand: [40, 58], exposedBand: [12, 26], // verse-silence windows
+    highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
     forcedEach: CHOIR.splitMinDuration, beatCap: CHOIR.splitDuration,
   },
 ];
 
 function bossLadderGates(): void {
-  section("corrected gate §3 HP anchors at the locked chain floors (curve clamps at F10)");
-  check("F5 King HP is 950 (the corrected gate's pinned in-flight value)",
+  section("gate §3 HP anchors at the locked chain floors (earned-windows recalibration)");
+  check("F5 King HP is 950 (the tutorial boss keeps its full-uptime calibration)",
     bossHpForFloor(5) === BOSS.baseHp && BOSS.baseHp === 950, `hp=${bossHpForFloor(5)}`);
-  check("F15 Marrow HP is exactly the corrected gate's 1,250", marrowHpForFloor(15) === 1250, `hp=${marrowHpForFloor(15)}`);
-  check("F20 Weaver anchor holds at its chain floor (telemetry-recalibrated per §3)",
-    weaverHpForFloor(20) === WEAVER.baseHp, `hp=${weaverHpForFloor(20)}`);
-  check("F25 Warden anchor holds at its chain floor (telemetry-recalibrated per §3)",
-    gildedHpForFloor(25) === GILDED.baseHp, `hp=${gildedHpForFloor(25)}`);
-  check("F30 Choir anchor holds at its chain floor (telemetry-recalibrated per §3)",
-    choirHpForFloor(30) === CHOIR.baseHp, `hp=${choirHpForFloor(30)}`);
+  check("F15 Marrow anchor recalibrated onto crash-window damage (730)",
+    marrowHpForFloor(15) === MARROW.baseHp && MARROW.baseHp === 730, `hp=${marrowHpForFloor(15)}`);
+  check("F20 Weaver anchor recalibrated onto exposed damage (1,100)",
+    weaverHpForFloor(20) === WEAVER.baseHp && WEAVER.baseHp === 1100, `hp=${weaverHpForFloor(20)}`);
+  check("F25 Warden anchor holds (its commit windows were already the calibration)",
+    gildedHpForFloor(25) === GILDED.baseHp && GILDED.baseHp === 1280, `hp=${gildedHpForFloor(25)}`);
+  check("F30 Choir anchor recalibrated onto verse-silence damage (800)",
+    choirHpForFloor(30) === CHOIR.baseHp && CHOIR.baseHp === 800, `hp=${choirHpForFloor(30)}`);
+  check("the gauntlet/miniboss captains keep the FULL-UPTIME anchor (no guard, no shrink)",
+    CAPTAIN_HP_BASE === 1250, `captainBase=${CAPTAIN_HP_BASE}`);
   check("every boss deals 2 contact damage (authored integer, never scales)",
     (["boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[]).every((k) => ENEMY_ARCHETYPES[k].touchDamage === 2));
   // "Equal HP all modes": the sim ships one difficulty; boss HP is a single authored
   // anchor — solo createEnemy must land the anchor EXACTLY (party scaling is a separate,
   // documented co-op multiplier).
   check("boss HP at the anchor is mode-independent (solo spawn = the authored anchor)",
-    ([["boss", 5, 950], ["marrow", 15, 1250], ["weaver", 20, 1500], ["gilded", 25, 1280], ["choir", 30, 1450]] as Array<[EnemyKind, number, number]>)
+    ([["boss", 5, 950], ["marrow", 15, 730], ["weaver", 20, 1100], ["gilded", 25, 1280], ["choir", 30, 800]] as Array<[EnemyKind, number, number]>)
       .every(([k, f, hp]) => createEnemy(k, 0, 0, f, new Rng(1), 0, {}).hp === hp));
   check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
     bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= MARROW.baseHp * 1.5,
     `king@35=${bossHpForFloor(35)} marrow@35=${marrowHpForFloor(35)}`);
+
+  section("earned windows: the guarded/exposed fairness bounds (never immunity)");
+  check("every guarded chip sits in the 0.20–0.35 band (reduction, never immunity)",
+    [MARROW.guardMult, WEAVER.guardMult, GILDED.armorChip, CHOIR.guardMult]
+      .every((g) => g >= EARNED_GUARD_MIN - 1e-9 && g <= EARNED_GUARD_MAX + 1e-9));
+  check("every earned window is the authored 3–4s (combined exposure hard-capped)",
+    [MARROW.crashExpose, WEAVER.knotBreakExpose, WEAVER.tangleExpose, WEAVER.unravelExpose, CHOIR.silenceExpose]
+      .every((s) => s >= 3 && s <= 4) && EXPOSE_WINDOW_CAP <= 8);
+  check("per-window banks are the ~40% phase chunk on every earned boss",
+    [MARROW.windowBankFrac, WEAVER.windowBankFrac, GILDED.windowBankFrac, CHOIR.windowBankFrac]
+      .every((f) => f === 0.40));
+  check("co-op scales the MECHANIC: task counts grow with the snapshotted party",
+    WEAVER.knotsFor[1] < WEAVER.knotsFor[4] && WEAVER.weftsFor[1] < WEAVER.weftsFor[4]
+    && CHOIR.fragmentsFor[1] < CHOIR.fragmentsFor[4]);
 
   for (const row of BOSS_GATE_ROWS) {
     section(`gate §3 ${row.kind} @F${row.floor}: median ${row.medianBand[0]}–${row.medianBand[1]}s, high-roll ≥${row.highRollMin}s, forced ${row.forcedEach}s×2`);
@@ -255,6 +344,14 @@ function bossLadderGates(): void {
     check(`median build kills in ${row.medianBand[0]}–${row.medianBand[1]}s`,
       median.killed && median.seconds >= row.medianBand[0] && median.seconds <= row.medianBand[1],
       `ttk=${median.seconds.toFixed(1)}s`);
+    if (row.exposedBand !== null) {
+      // The earned-windows gate currency: the median kill converts its mechanics into
+      // this much EXPOSED time — wall-clock can be stalled, exposed time cannot.
+      record(`${row.kind}.medianExposed`, median.exposedSeconds);
+      check(`median kill's EXPOSED time sits in the ${row.exposedBand[0]}–${row.exposedBand[1]}s earned-window band`,
+        median.exposedSeconds >= row.exposedBand[0] && median.exposedSeconds <= row.exposedBand[1],
+        `exposed=${median.exposedSeconds.toFixed(1)}s of ${median.seconds.toFixed(1)}s wall`);
+    }
     const highRoll = measureBossTtk("smg", row.highRollBuild, { kind: row.kind, floor: row.floor });
     record(`${row.kind}.highRoll`, highRoll.seconds);
     check(`representative high-roll stays ≥${row.highRollMin}s`,
@@ -319,9 +416,12 @@ function bossLadderGates(): void {
   check("corrected §3 charge contract: tell .9 / lock .5 / 520 for 1.1s / recover .7 or crash 1.6",
     MARROW.chargeWindup === 0.9 && MARROW.chargeLock === 0.5 && MARROW.chargeDur === 1.1
     && MARROW.chargeSpeed === 520 && MARROW.chargeRecover === 0.7 && MARROW.crashStun === 1.6);
-  check("corrected §3 pounce contract: tell .65 / lock .3 / .35 air / .9 recover, chains 1/2/2",
+  check("earned-windows pounce contract: tell .65 / lock .3 / .35 air / FAST .55 bare-floor recover, chains 1/2/2",
     WEAVER.pounceWindup === 0.65 && WEAVER.pounceLock === 0.3 && WEAVER.pounceAir === 0.35
-    && WEAVER.pounceRecover === 0.9 && WEAVER.pounceChains[1] === 1 && WEAVER.pounceChains[2] === 2 && WEAVER.pounceChains[3] === 2);
+    && WEAVER.pounceRecover === 0.55 && WEAVER.pounceChains[1] === 1 && WEAVER.pounceChains[2] === 2 && WEAVER.pounceChains[3] === 2);
+  check("blink contract: the whole .7 tell is post-lock, ≥.35s recover, tangle/snag staggers real",
+    WEAVER.blinkWindup >= 0.30 && WEAVER.blinkRecover >= 0.35 && WEAVER.snagStagger >= 0.35
+    && WEAVER.tangleStagger >= 0.35 && WEAVER.feintRecover >= 0.35);
   check("corrected §3 Choir contract: fade tell .6 / drift 1.8×1.6 / recover .8; split 1–3.2s",
     CHOIR.fadeWindup === 0.6 && CHOIR.fadeDuration === 1.8 && CHOIR.fadeSpeedMult === 1.6
     && CHOIR.fadeRecover === 0.8 && CHOIR.splitMinDuration === 1.0 && CHOIR.splitDuration === 3.2);

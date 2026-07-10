@@ -332,7 +332,9 @@ function marrowTests(): void {
     // kill releases the Marrow straight back into the fight, still in phase 2.
     const { w, boss } = marrowSetup(0xAD06);
     stepFor(w, 0.2);
-    plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
+    // Earned windows: MARROW is GUARDED outside its baited crash — the drive must pay
+    // the chip to land 40% real damage.
+    plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.4) / MARROW.guardMult);
     stepFor(w, 0.1);
     check("a clean 65% cross shields without queueing", boss.attack.move === "shield"
       && Math.abs(boss.hp - 0.6 * boss.maxHp) < 1);
@@ -371,8 +373,9 @@ function marrowTests(): void {
   {
     const { w, boss } = marrowSetup(0xAD05);
     stepFor(w, 0.2);
-    // Drive it to P3 through both beats (queued overflow crosses 65% then 30%).
-    plantBullet(w, boss.x, boss.y, boss.maxHp * 0.75, 40);
+    // Drive it to P3 through both beats (queued overflow crosses 65% then 30%); the
+    // guarded chip applies before the threshold machinery, so the drive pays it.
+    plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.75) / MARROW.guardMult, 40);
     stepFor(w, MARROW.shieldDuration + 0.2);
     stepFor(w, MARROW.shieldDuration + 0.2);
     check("both transitions resolved into phase 3", boss.boss !== null && boss.boss.phase === 3, `phase=${boss.boss?.phase}`);
@@ -543,7 +546,8 @@ function choirTests(): void {
     const hp1 = boss.hp;
     plantBullet(w, boss.x, boss.y, 5);
     stepFor(w, 0.1);
-    check("the re-formed Choir takes hits again", boss.hp === hp1 - 5);
+    check("the re-formed Choir takes hits again (guarded chip — the window is the verse silence)",
+      Math.abs(boss.hp - (hp1 - 5 * CHOIR.guardMult)) < 1e-6);
   }
 
   section("Hollow Choir: the split beat — kill the wisps to force it back together");
@@ -623,9 +627,15 @@ function weaverTests(): void {
     check("webs never damage (routing pressure only)", p.hp === hp0);
   }
 
-  section("Weaver: the pounce — marked, airborne, web at the crater");
+  section("Weaver: the pounce — marked, airborne, web at the crater (the P2 bait move)");
   {
     const { w, p, boss } = weaverSetup(0x3EA2);
+    // Earned windows moved the pounce to P2 (P1 is the lattice/blink read): drive it
+    // across 65% and ride out the molt beat first.
+    stepFor(w, 0.2);
+    plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.37) / WEAVER.guardMult);
+    stepFor(w, WEAVER.moltDuration + 0.3);
+    check("into P2 for the pounce kit", boss.boss !== null && boss.boss.phase === 2);
     let guard = 0;
     while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
     check("the Weaver telegraphs the pounce", boss.attack.move === "pounce" && boss.attack.phase === "windup");
@@ -638,6 +648,7 @@ function weaverTests(): void {
     plantBullet(w, boss.x, boss.y, 99);
     stepFor(w, 0.1);
     check("the airborne Weaver cannot be shot", boss.hp === hpAir);
+    w.hazards.length = 0; // bare floor: this reading is the CRATER web, not the tangle
     const websBefore = w.hazards.length;
     p.x = markX + 200; p.y = markY; // step off the mark
     p.invuln = 0;
@@ -649,6 +660,9 @@ function weaverTests(): void {
   {
     // The landing hits when you hold your ground.
     const { w, p, boss } = weaverSetup(0x3EA3);
+    stepFor(w, 0.2);
+    plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.37) / WEAVER.guardMult);
+    stepFor(w, WEAVER.moltDuration + 0.3);
     let guard = 0;
     while (!(boss.attack.move === "pounce" && boss.attack.phase === "active") && guard++ < 900 && !boss.dead) {
       step(w, idle(w.tick + 1));
@@ -667,7 +681,7 @@ function weaverTests(): void {
     const { w, boss } = weaverSetup(0x3EA4);
     stepFor(w, 0.2);
     const ev: SimEvent[] = [];
-    plantBullet(w, boss.x, boss.y, boss.maxHp * 0.4);
+    plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.4) / WEAVER.guardMult);
     stepFor(w, 0.15, ev);
     check("a 65% cross raises the molt (roar semantics)", boss.attack.move === "roar");
     const brood = w.enemies.filter((e) => e.isSummoned && e.kind === "bat" && !e.dead);
