@@ -2528,7 +2528,7 @@ export class Game {
     if (!entry.isDashing) return;
     entry.dashImgCd -= dt;
     if (entry.dashImgCd <= 0) {
-      this.afterimages.push({ x: r.x, y: r.y, facing: r.facing, t: 0, color: playerColor(r.colorIndex) });
+      this.afterimages.push({ x: r.x, y: r.y, facing: r.facing, t: 0, color: playerColorOr(r.colorIndex) });
       entry.dashImgCd = 0.04;
     }
     entry.dashDustCd -= dt;
