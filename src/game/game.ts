@@ -545,6 +545,10 @@ export class Game {
   private hud: Hud;
   private onGameOver: (result: RunResult) => void;
   private onExit: (reason?: ExitReason, detail?: string) => void;
+  // Fired on each descend with the floor just reached — the client hook that banks deepest
+  // floor progressively (so depth is recorded even when the run ends by disconnect/quit,
+  // not just a clean full-party-wipe game over). Optional: solo tooling passes nothing.
+  private onFloorReached: (floor: number) => void;
   private pause: PauseOverlay;
   private blessing: BlessingOverlay;
   private shopPanel: ShopPanel;
@@ -790,7 +794,7 @@ export class Game {
   private isFlowDebug = false; // draw the pathfinding flow-field arrows over the floor
   private fps = 0;             // smoothed frames/sec, surfaced via devSnapshot()
 
-  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason, detail?: string) => void) {
+  constructor(canvas: HTMLCanvasElement, minimapCanvas: HTMLCanvasElement, hudRoot: HTMLElement, onGameOver: (result: RunResult) => void, onExit: (reason?: ExitReason, detail?: string) => void, onFloorReached: (floor: number) => void = () => {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.minimap = new Minimap(minimapCanvas);
@@ -807,6 +811,7 @@ export class Game {
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
+    this.onFloorReached = onFloorReached;
     this.pause = new PauseOverlay(() => this.setPaused(false), () => this.quitToMenu());
     this.blessing = new BlessingOverlay();
     this.shopPanel = new ShopPanel();
@@ -2513,6 +2518,10 @@ export class Game {
       case "descend":
         sfx("descend");
         this.addTrauma(TRAUMA_DESCEND);
+        // Bank the reached depth immediately (progressive, idempotent) so a run that later
+        // ends by disconnect/quit — never a clean full-party-wipe game over — still records
+        // the deepest floor on the leaderboard. Fires in every mode for the local player.
+        this.onFloorReached(e.toFloor);
         // Online, the structural floor load is driven by the authoritative world rebuild
         // (consumeWorldRebuilt in tick) — the event only carries the juice. Solo/co-op load here.
         if (this.mode !== "online") {
