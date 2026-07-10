@@ -140,6 +140,38 @@
         border-left:5px solid transparent; border-right:5px solid transparent; }
       .hb-ins::before{ top:-5px; border-top:5px solid var(--amber-hi); }
       .hb-ins::after{ bottom:-5px; border-bottom:5px solid var(--amber-hi); }
+      /* empty capacity boxes: the bar is always MAX_OWNED_WEAPONS slots wide, so the cap
+         reads at a glance and a pickup fills a box instead of shifting the layout. Inert
+         (no pointer events) and visually recessive next to real slots. */
+      .hb-empty{ position:relative; width:66px; min-width:48px; min-height:48px; padding:9px 4px 7px; align-self:stretch;
+        background:rgba(5,3,11,.42); box-shadow:inset 0 0 0 2px rgba(58,48,80,.6); pointer-events:none; }
+      .hb-empty .hb-key{ opacity:.4; }
+      /* the full-hotbar swap prompt: anchored ABOVE the bar (absolute — zero layout
+         shift), pointer-enabled buttons only. Amber frame = an actionable state, not
+         passive chrome. */
+      .hb-swap{ position:absolute; bottom:calc(100% + 12px); left:50%; transform:translateX(-50%); z-index:7;
+        display:none; flex-direction:column; align-items:center; gap:8px; padding:9px 12px 8px; pointer-events:auto;
+        background:var(--dun-1); box-shadow:0 0 0 2px var(--ink),0 0 0 4px var(--amber),0 6px 0 rgba(0,0,0,.5); }
+      .hb-swap.show{ display:flex; }
+      .hs-head{ display:flex; align-items:center; gap:8px; font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--cream); white-space:nowrap; }
+      .hs-tag{ padding:2px 5px; background:var(--amber); color:var(--dun-0); }
+      .hs-icon, .hs-icon img{ width:22px; height:22px; image-rendering:pixelated; }
+      .hs-name{ color:var(--amber-hi); }
+      .hs-row{ display:flex; align-items:center; gap:6px; }
+      .hs-slot{ position:relative; width:44px; height:44px; padding:0; border:0; cursor:pointer;
+        display:inline-flex; align-items:center; justify-content:center;
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 2px 0 rgba(0,0,0,.4); }
+      .hs-slot:hover{ box-shadow:inset 0 0 0 2px var(--amber-hi),0 2px 0 rgba(0,0,0,.4); }
+      .hs-slot:focus-visible{ outline:2px dashed var(--amber-hi); outline-offset:2px; }
+      .hs-slot img{ width:24px; height:24px; image-rendering:pixelated; }
+      .hs-key{ position:absolute; top:2px; left:2px; min-width:12px; height:12px; display:flex; align-items:center; justify-content:center;
+        font-family:var(--f-ui); font-size:7px; color:var(--cream); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .hs-leave{ margin-left:4px; padding:0 10px; height:44px; border:0; cursor:pointer;
+        font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--cream);
+        background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 2px 0 rgba(0,0,0,.4); }
+      .hs-leave:hover{ box-shadow:inset 0 0 0 2px var(--dun-4),0 2px 0 rgba(0,0,0,.4); }
+      .hs-leave:focus-visible{ outline:2px dashed var(--amber-hi); outline-offset:2px; }
+      .hs-hint{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); }
       /* interaction hint, absolutely anchored under the strip (never shifts the hotbar). */
       .hb-hint{ position:absolute; top:calc(100% + 2px); left:50%; transform:translateX(-50%); white-space:nowrap;
         font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); pointer-events:none;
@@ -158,6 +190,7 @@
         .hb-name{ display:none; }
         .hb-slot{ width:48px; }
         .hb-slot.on{ width:60px; }
+        .hb-empty{ width:48px; }
       }
       @media (max-width:700px), (pointer:coarse){
         .hb-buffs.show{ display:none; }

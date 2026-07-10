@@ -36,7 +36,7 @@ import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import {
   comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC,
-  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR, HALF_PI,
+  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR, HALF_PI, MAX_OWNED_WEAPONS,
 } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
@@ -697,6 +697,13 @@ export class Game {
   private isStatsHeld = false;
   private pendingDescend = 0;
 
+  // The full-hotbar swap prompt's target: the blocked weapon pickup underfoot (the sim
+  // refused to auto-collect it — see updatePickups). Client affordance only; the swap
+  // command re-validates everything authoritatively. `swapDismissedId` suppresses the
+  // prompt for a declined pickup until the player walks off it.
+  private swapTarget: { pickupId: number; weapon: WeaponId } | null = null;
+  private swapDismissedId: number | null = null;
+
   // ---- dev sandbox state (all false/0 in normal play; see the dev hooks at the end) ----
   // Every flag below is inert unless the ?dev sandbox flips it, so the whole feature is a
   // handful of cheap, harmless branches on the hot paths and tree-shakes out of a run.
@@ -717,6 +724,8 @@ export class Game {
       onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
       onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
       onSlotInspect: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "inspectSlot", index }); },
+      onSlotSwap: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "swapSlot", index }); },
+      onSwapDismiss: () => this.dismissSwapPrompt(),
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
@@ -784,6 +793,9 @@ export class Game {
         if (this.hud.cancelActiveDrag()) break;
         if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
         if (this.shopPanel.isOpen) { this.shopPanel.close(); break; }
+        // A visible swap prompt owns Escape next: LEAVE IT (the pickup stays on the
+        // floor) — never a pause menu over an unanswered trade.
+        if (this.input.context === "gameplay" && this.dismissSwapPrompt()) break;
         // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
         // connection attempt and return to the lobby — never a pause menu over a dead world.
         if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
@@ -812,6 +824,9 @@ export class Game {
         break;
       case "reorderSlots":
         if (this.isRunning) this.reorderSlots(a.from, a.to);
+        break;
+      case "swapSlot":
+        if (this.isRunning) this.swapSlot(a.index);
         break;
       case "cycleSpectate":
         if (this.isRunning) this.cycleSpectate(a.dir);
@@ -2577,7 +2592,8 @@ export class Game {
   // the authoritative command and the snapshot confirms — there is NO client-local
   // inventory mutation on the online path.
 
-  // Equip the weapon in hotbar slot `index` (number keys 1-9 via the selectWeapon action).
+  // Equip the weapon in hotbar slot `index` (number keys 1..MAX_OWNED_WEAPONS via the
+  // selectWeapon action).
   private equipSlot(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
@@ -2614,7 +2630,7 @@ export class Game {
     });
   }
 
-  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
+  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The number keys always map to
   // the resulting order, because they index the same authoritative ownedWeapons array.
   private reorderSlots(from: number, to: number) {
     const n = this.p.ownedWeapons.length;
@@ -2635,6 +2651,61 @@ export class Game {
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
     this.equipSlot((cur + dir + owned.length) % owned.length);
+  }
+
+  // ---- the full-hotbar swap prompt ----
+
+  // The blocked weapon pickup underfoot: the nearest live weapon pickup within collect
+  // range that this player could claim if the hotbar had room (the sim's updatePickups
+  // refused it because it doesn't). Pure client affordance — the same predicate the sim
+  // gates collection with, so the prompt appears exactly when a walk-over silently
+  // wouldn't collect.
+  private blockedWeaponPickup(): Pickup | null {
+    if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
+    const p = this.p;
+    if (p.ownedWeapons.length < MAX_OWNED_WEAPONS) return null;
+    let best: Pickup | null = null;
+    let bestD = Infinity;
+    for (const k of this.pickups) {
+      if (k.kind !== "weapon" || !k.weapon) continue;
+      if (k.isBossChoice ? p.hasClaimedBossChoice : p.ownedWeapons.includes(k.weapon)) continue;
+      const d = Math.hypot(this.px - k.x, this.py - k.y);
+      if (d < p.pr + k.radius && d < bestD) { best = k; bestD = d; }
+    }
+    return best;
+  }
+
+  // Refresh the swap prompt target each tick: standing on a blocked pickup arms it,
+  // walking away disarms it AND clears any decline (coming back re-offers the trade).
+  private tickSwapPrompt() {
+    const blocked = this.blockedWeaponPickup();
+    if (blocked === null) {
+      this.swapTarget = null;
+      this.swapDismissedId = null;
+      return;
+    }
+    this.swapTarget = blocked.id === this.swapDismissedId ? null : { pickupId: blocked.id, weapon: blocked.weapon! };
+  }
+
+  // Trade the weapon in hotbar slot `index` for the prompt's pickup. Authority decides:
+  // the sim validates fullness/ownership/range and performs the trade atomically (the
+  // replaced weapon lands as a floor pickup); a stale prompt is a rejected command.
+  private swapSlot(index: number) {
+    const target = this.swapTarget;
+    if (target === null) return;
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    this.transport.requestSwap(target.pickupId, owned[index]);
+  }
+
+  // Decline the swap prompt (LEAVE IT / Esc): nothing is sent — the pickup simply stays
+  // on the floor (cancel-safe by construction) and the prompt stays down until the player
+  // walks off it. Returns whether a prompt was actually dismissed (the Escape cascade).
+  private dismissSwapPrompt(): boolean {
+    if (this.swapTarget === null) return false;
+    this.swapDismissedId = this.swapTarget.pickupId;
+    this.swapTarget = null;
+    return true;
   }
 
 
@@ -2961,6 +3032,7 @@ export class Game {
   }
 
   private updateHud() {
+    this.tickSwapPrompt();
     const boss = this.enemies.find((e) => isBossKind(e.kind));
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
@@ -3004,6 +3076,7 @@ export class Game {
         id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
         card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
       })),
+      swap: this.swapTarget ? { id: this.swapTarget.weapon, name: WEAPONS[this.swapTarget.weapon].name } : null,
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
