@@ -227,11 +227,16 @@ function makeSlot(id: number, kind: ShopSlotKind, isShared: boolean, price: numb
 // Stock one premium slot's merchandise. Mystery/max_hp/full_heal/prospector/tokens carry
 // none — their payload is the purchase itself (the premium mystery's identity is rolled
 // per-buyer at the buy, deliberately not baked: each buyer draws their own fate).
-function stockPremiumSlot(slot: ShopSlot, rng: Rng, exclude: readonly WeaponId[]): void {
+// Identified legendaries obey the spec's "max 1/pool" through `taken`: within one stall
+// the legendary showcase, the artifact, and the mythic arsenal never duplicate a gun.
+function stockPremiumSlot(slot: ShopSlot, rng: Rng, exclude: readonly WeaponId[], taken: WeaponId[]): void {
   if (slot.kind === "legendary" || slot.kind === "mythic_weapon" || slot.kind === "artifact") {
     const band = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === "legendary");
-    const fresh = band.filter((id) => !exclude.includes(id));
-    slot.weapon = rng.pick(fresh.length > 0 ? fresh : band);
+    const unstalled = band.filter((id) => !taken.includes(id));
+    const fresh = unstalled.filter((id) => !exclude.includes(id));
+    const pool = fresh.length > 0 ? fresh : unstalled.length > 0 ? unstalled : band;
+    slot.weapon = rng.pick(pool);
+    taken.push(slot.weapon);
   } else if (slot.kind === "rare_blessing") {
     slot.itemId = rollShopRareBlessing(rng);
   } else if (slot.kind === "core_infusion") {
@@ -259,7 +264,7 @@ function gateTiers(tiers: readonly PremiumTier[], floor: number): PremiumTier[] 
 
 function pushSinkRow(
   slots: ShopSlot[], picked: readonly PremiumTier[], floor: number, rng: Rng,
-  exclude: readonly WeaponId[], cx: number, y: number,
+  exclude: readonly WeaponId[], taken: WeaponId[], cx: number, y: number,
 ): void {
   const start = slots.length;
   for (let i = 0; i < picked.length; i++) {
@@ -269,18 +274,21 @@ function pushSinkRow(
       premiumPriceAt(tier, floor),
       cx + (i - (picked.length - 1) / 2) * TILE * 2, y,
     );
-    stockPremiumSlot(slot, rng, exclude);
+    stockPremiumSlot(slot, rng, exclude, taken);
     slots.push(slot);
   }
 }
 
-function pushMythicSlot(slots: ShopSlot[], seed: number, floor: number, exclude: readonly WeaponId[], x: number, y: number): void {
-  // The mythic rides its own salted stream so the capstone is identical across party
-  // sizes for the same (seed, floor) — a mid-floor join can never shift it.
+function pushMythicSlot(slots: ShopSlot[], seed: number, floor: number, exclude: readonly WeaponId[], taken: WeaponId[], x: number, y: number): void {
+  // The mythic rides its own salted stream so the capstone's OPTION is identical across
+  // party sizes for the same (seed, floor) — a mid-floor join can never shift what the
+  // capstone IS. Its weapon stock additionally dedupes against the stall's other
+  // legendaries (`taken`, the spec's max-1-per-pool), and — like all stock — every
+  // client reads the authoritative build off the wire, so the stall is always one truth.
   const mythicRng = new Rng((seed ^ 0x3417c0de) + floor * 92821);
   const kind = mythicRng.pick(["mythic_weapon", "mythic_trio", "mythic_amber"] as const);
   const slot = makeSlot(slots.length, kind, true, premiumPriceAt("mythic", floor), x, y);
-  stockPremiumSlot(slot, mythicRng, exclude);
+  stockPremiumSlot(slot, mythicRng, exclude, taken);
   slots.push(slot);
 }
 
@@ -303,8 +311,9 @@ function buildPremiumShopState(rng: Rng, seed: number, floor: number, room: Room
     const t = tiers[i]; tiers[i] = tiers[j]; tiers[j] = t;
   }
   const slots: ShopSlot[] = [];
-  pushSinkRow(slots, tiers.slice(0, count), floor, rng, exclude, cx, midY);
-  if (floor >= PREMIUM.mythicFromFloor) pushMythicSlot(slots, seed, floor, exclude, cx + TILE * 3, backY);
+  const taken: WeaponId[] = [];
+  pushSinkRow(slots, tiers.slice(0, count), floor, rng, exclude, taken, cx, midY);
+  if (floor >= PREMIUM.mythicFromFloor) pushMythicSlot(slots, seed, floor, exclude, taken, cx + TILE * 3, backY);
   return { mode: "premium", keeperX: cx, keeperY: backY, slots, rerollsUsed: 0 };
 }
 
@@ -318,11 +327,12 @@ function buildClimaxShopState(seed: number, floor: number, room: Room, exclude: 
   const backY = (room.y + 1.5) * TILE;
   const midY = (room.cy + 0.5) * TILE;
   const slots: ShopSlot[] = [];
+  const taken: WeaponId[] = [];
   const row = PREMIUM.climaxTiers.slice(0, 5);
   const row2 = PREMIUM.climaxTiers.slice(5);
-  pushSinkRow(slots, row, floor, rng, exclude, cx, midY);
-  pushSinkRow(slots, row2, floor, rng, exclude, cx - TILE * 2, (room.cy + 2.5) * TILE);
-  pushMythicSlot(slots, seed, floor, exclude, cx + TILE * 3, backY);
+  pushSinkRow(slots, row, floor, rng, exclude, taken, cx, midY);
+  pushSinkRow(slots, row2, floor, rng, exclude, taken, cx - TILE * 2, (room.cy + 2.5) * TILE);
+  pushMythicSlot(slots, seed, floor, exclude, taken, cx + TILE * 3, backY);
   return { mode: "climax", keeperX: cx, keeperY: backY, slots, rerollsUsed: 0 };
 }
 
@@ -398,15 +408,16 @@ export function buildShopState(seed: number, floor: number, room: Room, exclude:
       isMystery: false, twist: null,
     });
   }
+  const taken: WeaponId[] = slots.map((s) => s.weapon).filter((id): id is WeaponId => id !== null);
   if (mode === "spoils") {
     // The spoils row: mid-room alone, or fronting the Dealer's stall on overlap floors.
-    pushSinkRow(slots, spoilsPicks(rng, floor), floor, rng, exclude, cx, isDealer ? (room.cy + 2.5) * TILE : midY);
+    pushSinkRow(slots, spoilsPicks(rng, floor), floor, rng, exclude, taken, cx, isDealer ? (room.cy + 2.5) * TILE : midY);
   } else if (floor >= PREMIUM.dealerSlotFromFloor) {
     // The Dealer's one premium slot (F6+): a small sink from the dealer pool, fronting
     // the stall. Drawn AFTER the classic stock so the staples' stream never shifts.
     const tier = rng.pick(gateTiers(PREMIUM.dealerTiers, floor));
     const slot = makeSlot(slots.length, SINK_KIND_BY_TIER[tier]!, false, premiumPriceAt(tier, floor), cx, (room.cy + 2.5) * TILE);
-    stockPremiumSlot(slot, rng, exclude);
+    stockPremiumSlot(slot, rng, exclude, taken);
     slots.push(slot);
   }
   return { mode, keeperX: cx, keeperY: backY, slots, rerollsUsed: 0 };
@@ -455,7 +466,7 @@ export function restockShop(shop: ShopState, seed: number, floor: number, exclud
       }
       continue;
     }
-    if (all && isPremiumRestockable(slot)) stockPremiumSlot(slot, rng, exclude);
+    if (all && isPremiumRestockable(slot)) stockPremiumSlot(slot, rng, exclude, keptWeapons.filter((id): id is WeaponId => id !== null));
   }
 }
 

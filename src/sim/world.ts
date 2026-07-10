@@ -1339,18 +1339,21 @@ export function shopViewerFor(w: WorldState, p: PlayerSim) {
 // The premium mystery sink's reveal: its own seeded stream, deterministic per (seed,
 // floor, slot, buyer, reroll generation), so the same seed + the same wallet always
 // reveal the same weapon — solo, server, and any replay agree — while two buyers of one
-// personal slot each get their own fate. The tier rides the SHARED rarity roll
-// (weapons.ts) with the premium ladder's depth-boosted legendary weight; the pick is
-// distinct-from-owned while the tier permits.
+// personal slot each get their own fate. Per the approved spec the premium gamble
+// "rolls rare+": the tier rides the SHARED rarity roll (weapons.ts) with the premium
+// ladder's depth-boosted legendary weight, and a common result promotes to RARE — the
+// 45-170 price buys a floor under the gamble the base pedestal mystery (1.25× ladder)
+// doesn't have. The pick is distinct-from-owned while the tier permits.
 function premiumMysteryRoll(w: WorldState, slot: ShopSlot, p: PlayerSim): WeaponId {
   let h = 5381;
   for (let i = 0; i < p.id.length; i++) h = ((h * 33) ^ p.id.charCodeAt(i)) | 0;
   const rng = new Rng((w.seed ^ 0x6d757374) + w.floor * 68041 + slot.id * 977 + (w.shop?.rerollsUsed ?? 0) * 31337 + h);
-  const tier = rollWeaponRarity(() => rng.next(), w.floor, { isMystery: true, legendaryWeight: premiumMysteryLegendaryWeight(w.floor) });
+  const rolled = rollWeaponRarity(() => rng.next(), w.floor, { isMystery: true, legendaryWeight: premiumMysteryLegendaryWeight(w.floor) });
+  const tier: WeaponRarity = rolled === "common" ? "rare" : rolled;
   const inTier = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier);
   const fresh = inTier.filter((id) => !p.ownedWeapons.includes(id));
-  const anyFresh = PICKUP_WEAPONS.filter((id) => !p.ownedWeapons.includes(id));
-  const pool = fresh.length > 0 ? fresh : anyFresh.length > 0 ? anyFresh : inTier;
+  const rarePlusFresh = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity !== "common" && !p.ownedWeapons.includes(id));
+  const pool = fresh.length > 0 ? fresh : rarePlusFresh.length > 0 ? rarePlusFresh : inTier;
   return rng.pick(pool);
 }
 

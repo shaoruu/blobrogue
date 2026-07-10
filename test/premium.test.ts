@@ -310,6 +310,33 @@ function mysteryTests(): void {
     check("the F30-band gamble delivers measurably more legendaries than the F10 band",
       deep > shallow, `${(shallow * 100).toFixed(1)}% → ${(deep * 100).toFixed(1)}%`);
   }
+  {
+    // The approved spec's "rolls rare+": the premium gamble NEVER reveals a common —
+    // that floor under the gamble is what the 45-170 ladder buys (the base pedestal
+    // mystery keeps the anything-goes roll at its 1.25× price).
+    let isRarePlus = true;
+    for (let i = 0; i < 300 && isRarePlus; i++) {
+      const { w, ps } = worldWithSlot("mystery", 9, 1, 0x4a5e + i * 7919);
+      const slot = w.shop!.slots.find((s) => s.kind === "mystery")!;
+      give(ps[0], 1000);
+      const ev: SimEvent[] = [];
+      buyAt(w, ps[0], slot, ev);
+      const e = ev.find((x) => x.t === "mysteryReveal");
+      if (e === undefined || e.t !== "mysteryReveal" || WEAPONS[e.weapon].rarity === "common") isRarePlus = false;
+    }
+    check("the premium gamble rolls RARE+ (300 seeded reveals, zero commons)", isRarePlus);
+  }
+  {
+    // The approved spec's "Legendary (identified, max 1/pool)": one stall never sells
+    // the same legendary twice — the climax's showcase/artifact/mythic-arsenal dedupe.
+    let isDistinct = true;
+    for (const seed of SEEDS) {
+      const w = createWorld(seed, PREMIUM.climaxFloor);
+      const stalled = w.shop!.slots.map((s) => s.weapon).filter((id): id is WeaponId => id !== null);
+      if (new Set(stalled).size !== stalled.length) isDistinct = false;
+    }
+    check("identified legendaries never duplicate within one stall (max 1/pool)", isDistinct);
+  }
   const ofRarity = (rarity: WeaponRarity) => PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === rarity);
   check("every rarity band is non-empty (the mystery roll can always deliver)",
     ofRarity("common").length > 0 && ofRarity("rare").length > 0 && ofRarity("legendary").length > 0);
