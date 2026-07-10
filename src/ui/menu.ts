@@ -14,8 +14,8 @@ import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js
 import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
-import { cosmeticIcon } from "../game/cosmeticArt.js";
-import { createBlobPreview } from "./blobPreview.js";
+import { hasCosmeticArt } from "../game/cosmeticArt.js";
+import { createBlobPreview, drawBlob, isBlobReady } from "./blobPreview.js";
 import type { BlobLook, BlobPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
@@ -1077,6 +1077,25 @@ export class Menu {
     panel.appendChild(rightCol);
     wrap.appendChild(panel);
 
+    // Grid thumbnails are composited (base + this card's item) through the SAME renderer the
+    // mirror uses, so they can never drift from the equipped look. A composite needs its
+    // sprites streamed in; each not-yet-ready card registers a repaint here, and one rAF loop
+    // repaints them IN PLACE (fixed-size canvases — zero layout shift) until their art lands,
+    // then parks. The loop also parks the moment the grid leaves the document (closet closed).
+    let cardPaintRaf = 0;
+    let cardPaints: Array<() => boolean> = [];
+    const runCardPaints = () => {
+      cardPaintRaf = 0;
+      if (grid.isConnected === false) { cardPaints = []; return; }
+      cardPaints = cardPaints.filter((paint) => !paint());
+      scheduleCardPaints();
+    };
+    const scheduleCardPaints = () => {
+      if (cardPaintRaf === 0 && cardPaints.length > 0 && typeof requestAnimationFrame === "function") {
+        cardPaintRaf = requestAnimationFrame(runCardPaints);
+      }
+    };
+
     const unlocks = () => this.session.profile?.unlocks ?? [];
     const equippedOf = (slot: CosmeticSlot) => this.session.cosmetics[slot];
     // ONE shared loadout state (the session) drives every stage: the closet mirror AND —
@@ -1133,22 +1152,40 @@ export class Menu {
 
     const cardIcon = (def: CosmeticDef | null): HTMLElement => {
       const icon = el("span", "cos-icon");
+      // Body-color cards keep their color swatch.
       if (def?.slot === "body" || (def === null && active === "body")) {
         const swatch = el("span", "cos-swatch");
         swatch.style.background = playerColor(def?.paletteIndex ?? 0);
         icon.appendChild(swatch);
         return icon;
       }
-      const art = def ? cosmeticIcon(def.id) : null;
-      if (art) {
-        const mini = document.createElement("canvas");
-        mini.width = 40; mini.height = 40;
+      // Title cards keep their glyph (titles are text, not worn art).
+      if (active === "title") { icon.textContent = "\u2726"; return icon; }
+      // A hat/face id with no generated art falls back to the neutral glyph (defensive — the
+      // catalog test guarantees every shipped hat/face has art).
+      if (def !== null && !hasCosmeticArt(def.id)) { icon.textContent = "\u25cf"; return icon; }
+      // Hat/face cards render the REAL composite so the thumbnail matches the equipped look:
+      // the base body plus ONLY this card's own item (per-card isolation — a hat card shows
+      // that hat with no glasses, a glasses card that glasses with no hat), at the same side
+      // orientation the mirror and the world use, preserving each item's authored proportions.
+      const isHatCard = active === "hat";
+      const cardLook: BlobLook = {
+        colorIndex: lookOf(this.session.cosmetics, this.session.colorIndex).colorIndex,
+        hat: def !== null && isHatCard ? def.id : null,
+        face: def !== null && !isHatCard ? def.id : null,
+      };
+      const mini = document.createElement("canvas");
+      const px = 40;
+      mini.width = px; mini.height = px;
+      const paint = (): boolean => {
         const g = mini.getContext("2d");
-        if (g) { g.imageSmoothingEnabled = false; g.drawImage(art, 0, 0, 40, 40); }
-        icon.appendChild(mini);
-      } else {
-        icon.textContent = def?.slot === "title" ? "\u2726" : "\u25cf";
-      }
+        if (!g) return true;
+        g.clearRect(0, 0, px, px);
+        drawBlob(g, cardLook, { cx: px / 2, cy: px * 0.56, size: Math.round(px * 0.82) });
+        return isBlobReady(cardLook);
+      };
+      if (!paint()) cardPaints.push(paint);
+      icon.appendChild(mini);
       return icon;
     };
 
@@ -1186,11 +1223,16 @@ export class Menu {
     };
 
     const renderGrid = () => {
+      // Retire the previous grid's readiness loop; this render repopulates the pending set.
+      if (cardPaintRaf !== 0 && typeof cancelAnimationFrame === "function") cancelAnimationFrame(cardPaintRaf);
+      cardPaintRaf = 0;
+      cardPaints = [];
       grid.replaceChildren();
       const slotDef = categories.find((c) => c.slot === active);
       // The always-owned DEFAULT/NONE card leads every category.
       addCard(null, slotDef?.noneLabel ?? "None");
       for (const def of cosmeticsForSlot(active)) addCard(def, def.name);
+      scheduleCardPaints();
     };
 
     const renderAll = () => { renderCats(); renderGrid(); syncStage(); };

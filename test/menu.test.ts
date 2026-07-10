@@ -1095,6 +1095,47 @@ async function main(): Promise<void> {
       !menuSrc.includes("requestLeave") && !menuSrc.includes("PREVIEWING") && !menuSrc.includes("closet-equip") && !menuSrc.includes("discard unsaved") && !menuSrc.includes("KEEP BROWSING"));
   }
 
+  section("closet thumbnails composite base + item through the SHARED renderer (preview == equipped)");
+  {
+    const { menu, overlay } = makeMenu();
+    await menu.showProfile("closet");
+    await settle();
+    const cards = () => byClass(overlay, "cos-card");
+    const cardByName = (n: string) => cards().find((c) => textOf(c).includes(n));
+    const canvasIn = (card: ShimNode | undefined): ShimNode[] =>
+      collect(byClass(card ?? {}, "cos-icon")[0] ?? {}, (n) => n.tagName === "CANVAS");
+    // Hat/glasses cards render a mini-canvas COMPOSITE (base body + this one item) rather than
+    // a raw stretched icon — the exact path the mirror/world use, so a thumbnail can't drift.
+    check("a hat card thumbnail is a composited canvas (fixed 40px \u2014 zero layout shift)",
+      canvasIn(cardByName("Top Hat")).length === 1 && canvasIn(cardByName("Top Hat"))[0]?.width === 40);
+    check("the No-Hat card composites the plain cowboy base (still a canvas, not a glyph)",
+      canvasIn(cardByName("No Hat")).length === 1);
+    menu.cycleTabs(1); // -> Glasses
+    check("a glasses card thumbnail is a composited canvas too",
+      canvasIn(cardByName("Round Specs")).length === 1);
+    menu.cycleTabs(1); // -> Blob Color: swatches only, never a composite canvas
+    check("body-color cards keep their swatch (no composite canvas)",
+      byClass(cardByName("Cyan") ?? {}, "cos-swatch").length === 1 && canvasIn(cardByName("Cyan")).length === 0);
+    menu.cycleTabs(1); // -> Titles: glyphs only, never a composite canvas
+    check("title cards keep their glyph (no composite canvas)",
+      canvasIn(cardByName("Depth Diver")).length === 0);
+    // ONE render path: the closet card and the big mirror both draw the blob through
+    // blobPreview's shared drawBlob (base sprite + drawLoadoutOverlays at side orientation),
+    // and the card no longer reaches for the raw down-facing cosmeticIcon.
+    const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
+    const previewSrc = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
+    check("closet cards composite through the shared drawBlob (not the raw cosmeticIcon)",
+      menuSrc.includes("drawBlob(g, cardLook") && !menuSrc.includes("cosmeticIcon"));
+    check("drawBlob is the ONE shared blob renderer (base + side-orientation overlays), used by both surfaces",
+      previewSrc.includes("export function drawBlob") && previewSrc.includes("heroBodySprite(look.hat)")
+      && /drawLoadoutOverlays\(ctx, look\.hat, look\.face, \{[\s\S]*?orientation: "side"/.test(previewSrc)
+      && previewSrc.includes("drawBlob(g, look,"));
+    // Missing/streaming art keeps the safe fallback: nothing fabricated, and a glyph stands
+    // for a hat/face id that has no generated art at all.
+    check("the glyph fallback remains for an id with no art (defensive contract)",
+      menuSrc.includes("!hasCosmeticArt(def.id)") && menuSrc.includes("\\u25cf"));
+  }
+
   section("controller parity: pure pad mapping + LB/RB category cycling + B just closes");
   {
     // Edge detection: a held button fires exactly once.
