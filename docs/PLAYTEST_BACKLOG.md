@@ -11,11 +11,11 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟢 #70 UI: big centered hero blob, reorganized menu nav hierarchy, TABBED settings, design-system tokens (color/type/focus/keycap), in-game What's New panel.
 
 ## BUGS (investigating → fix batch)
-🟡 Heart double-consume — "consume a heart even though I consumed a heart" (extra heart spent). [investigating]
+🟡 Heart double-consume — DIAGNOSED: heal-heart consume paths are provably atomic + test-covered (NOT the bug). Suspect = max-HP 'Heart Container' vs heal-'Heart' confusion: applyMaxHpBonus (world.ts:1084) applies the +4 cap BEFORE subtracting the artifact devil-deal hpTithe (:1539), so a capped player buying the artifact loses containers the cap already ate → reads as double-spend. FIX: subtract tithe from raw bonus before the positive clamp; add sequential pickup+shop+artifact test; confirm w/ Ian if he means heal-hearts or containers. Golden regen if applyMaxHpBonus changes. [fix queued]
 🟡 Leaderboard stuck — DIAGNOSED: recordRun only fires on clean game-over (full wipe); death-while-teammates-continue / disconnect / quit never submit the deeper floor. FIX: persist deepest floor per-descend via a NEW Convex mutation (recordFloorProgress, Math.max fold) + client descend hook. Needs Convex deploy. [fix queued]
-🟡 Name change doesn't work — profile rename shipped (#53) but Ian can't change username. [investigating]
-🟡 Sentry (Prism Sentry) has no animation — static turret. [investigating]
-🟡 Umbra (phase) sprite is broken/ugly. [investigating]
+🟡 Name change doesn't work — DIAGNOSED: GUEST rename path works + is test-covered. The failure = SIGNED-IN (Google) accounts: name field disabled (menu.ts:424) AND server overwrites with the Google account name (players.ts ensureAccountRow:181), so a signed-in rename reverts = 'doesn't work'. FIX: either allow an account displayName distinct from Google name (stop ensureAccountRow clobbering), or make the read-only UI copy explain why. Client+Convex only, no game-server deploy. [fix queued]
+🟡 Sentry no animation — ROOT-CAUSED: game.ts:5641-5647 sprite branch draws a static image, no animClock/rotation/recoil (the pre-load fallback :5653 DOES animate, so it freezes once art loads). Sim has fireCd/targetEid/aim available. FIX: idle bob/pulse + barrel-toward-target (persist aim from sentryShot) + recoil off fireCd. CLIENT-ONLY render, no golden regen. [fix queued]
+🟡 Umbra sprite broken — ROOT-CAUSED: public/sprites/weapon_umbra.png + held_umbra.png DON'T EXIST (refs assets.ts:329/369), so it falls back to the generic gun icon inside the legendary glow = looks broken. Also no drawBulletFx 'phase' case (plain circle bullet). FIX: generate the 2 sprites via fal pipeline (pure file drop, hooks wired) + optional phase bullet case. CLIENT-ONLY art, no golden regen. I OWN the art gen. [generating]
 🟡 Drag & drop still buggy / imprecise — precision + drag-out-to-discard specced (UI designer), needs build.
 🟡 Consuming hearts when already at/над full? (part of heart bug) [investigating]
 
