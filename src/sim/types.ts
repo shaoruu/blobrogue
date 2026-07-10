@@ -31,7 +31,12 @@ export type EnemyKind =
   // Summon-only bodies (never in the floor planner):
   //  - echo: the echojack's 1-HP false-noise decoy — soaks homing/attention, expires quietly;
   //  - knell: The Toll's noise-lure bomb — shoot it before it tolls, or leave its radius.
-  | "echo" | "knell"
+  //  - knot: the Weaver's lattice ANCHOR NODE — the glowing crossing its thread-lines
+  //    meet at, and the anchor of a strung silk LANE. Shooting it collapses the lane
+  //    (P1 it EXPOSES the Weaver; P3 the broken lane is the dash-overshoot bait).
+  //  - sac: the Weaver's P2 EGG-SAC — bloomed in on an omen tell while she climbs.
+  //    Destroying every sac of a clutch forces her down for the earned window.
+  | "echo" | "knell" | "knot" | "sac"
   // Miniboss templates (captain machinery, seeded mid-band cadence — see minibossKindForFloor):
   | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded";
@@ -114,6 +119,37 @@ export interface BossState {
   // Sequenced-emission scratch: shard pairs fired this spiral (MARROW), waves released this
   // sweep (Gilded Warden), pounces chained this commitment (Weaver).
   spinCount: number;
+  // ---- EARNED WINDOWS (deep bosses: Weaver / Warden / MARROW / Choir) ----
+  // By default an earned-window boss is GUARDED (damage chipped to its guardMult, never
+  // immunity). Performing the phase's mechanic — breaking a lattice knot, baiting the
+  // pounce onto thread debris, silencing the Choir fragments, punishing the wall crash —
+  // opens a fixed EXPOSED window of full damage. Seconds left in that window (0 = guarded).
+  exposed: number;
+  // Per-window damage bank: what the CURRENT window may still remove before it slams
+  // shut early. Armed when a fresh window opens (bankFrac × maxHp — the phase chunk), so
+  // stacked firepower converts a window harder but can never one-shot a phase through it.
+  windowBank: number;
+  // Mechanic adds gating the NEXT window (the Choir's fragments): killing every one
+  // opens the window. Empty when no silence set is live. Distinct from beatAddIds —
+  // those belong to the transition beat, these to the earned-window loop.
+  windowAddIds: number[];
+  // The Weaver's committed lane: the knot id (+1) whose thread it is traveling — the
+  // P1 blink (shoot the knot to SNAG it) and the P3 charge-dash (a dead knot can't
+  // brake it: the overshoot) both ride it. 0 = no lane committed.
+  laneKnotId: number;
+  // Fair surprise §1: the add pool's previous draw index (-1 = none yet) — weighted
+  // selection never repeats the exact entry twice in a row, so waves can't be rote.
+  lastAddPick: number;
+  // ---- the R framework (party+gear-aware scaling; see balance.ts POWER) ----
+  // Seconds spent in the CURRENT phase — the soft-enrage yardstick.
+  phaseTime: number;
+  // 1 while the current phase carries its authored extra PATTERN (the "you skipped
+  // the lesson" beat: the previous phase was burned faster than burnFrac × its
+  // R-scaled budget). Never damage, never HP, never invuln — one more readable
+  // pattern in the rotation. 0 otherwise.
+  enrage: number;
+  // The phase's one surprise wave (R ≥ surpriseMinR) has been spent. Reset each phase.
+  isSurpriseSpent: boolean;
 }
 
 export interface Enemy extends Entity {
@@ -141,13 +177,18 @@ export interface Enemy extends Entity {
   // the client can render authoritative special state without a bespoke field per kind:
   //  - sinderling: 0 = unarmed, 1 = armed (stoked — jet + death burst live);
   //  - echo/knell: remaining decoy life in seconds (drives the client fade/fuse);
+  //  - knot: remaining lattice life in seconds; sac: 0 (its read is the body itself);
   //  - fragment: tethered source enemy id + 1 (0 = untethered — the simplified pattern);
   //  - bulwark elites: remaining plate HP (0 = shattered);
+  //  - earned-window bosses (Weaver/Warden/MARROW/Choir): seconds left in the current
+  //    EXPOSED window (0 = guarded) — the client's guard/exposed render keys off it;
   //  - everyone else: 0.
   aux: number;
   // Generic per-behavior sequence counter (sim-internal, never on the wire): the
   // seamcutter's sweep emissions, the caskbellows' volley shots, the sinderling's wedge
-  // drops, the marshal/toll attack alternation. Reset by each move's begin.
+  // drops, the marshal/toll attack alternation. Reset by each move's begin. The
+  // Weaver's mechanic bodies (knot/sac) never attack and carry their CASTER's enemy
+  // id + 1 here instead (a lattice always belongs to the weaver that spun it).
   seq: number;
   // Commander-elite pack panic: seconds this body flees leaderless (no attack triggers
   // from idle while it runs). Sim-internal — clients read the movement itself.
@@ -326,6 +367,9 @@ export interface Bullet {
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
   blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
+  // The Weaver's aimed SILK (sim-internal, enemy fire only): the bolt WEBS where it
+  // dies — wall, floor or the player it caught. Undefined on every other round.
+  isSilk?: boolean;
   // Breach shell: an artillery lob that sails OVER bodies (the enemy-collision loop skips
   // it) and detonates only at its charged landing point (end of life) or on a wall face.
   isLob?: boolean;
@@ -429,7 +473,10 @@ export interface Prop {
 //    same protection rules as enemy contact. Enemies are immune (their fire).
 //  - charge: a volatile elite's death fuse — harmless while it burns (life > 0), then
 //    detonates a SHARED-risk burst (players 1, enemies more) when it expires.
-export type HazardKind = "web" | "cinder" | "charge";
+//  - omen: an AMBUSH pre-spawn tell (fair surprise §2) — a harmless marked bloom
+//    (burst web / dust / egg-sac swell) that stands for its whole life BEFORE the body
+//    it announces exists; the spawn resolves where the omen stood when it expires.
+export type HazardKind = "web" | "cinder" | "charge" | "omen";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)
@@ -438,6 +485,14 @@ export interface Hazard {
   radius: number;
   life: number;    // seconds until it fades
   maxLife: number; // authored duration (drives the client's fade render)
+  // Omen payload (sim-internal, never on the wire): the ambush body this tell
+  // announces, spawned at the omen's spot when its life expires. The spawned add keeps
+  // its ordinary spawn grace on top — tell, then body, then teeth.
+  spawnKind?: EnemyKind;
+  spawnTier?: EnemyTier;
+  // The summoning boss's enemy id + 1 (0/undefined = none): a Choir verse omen feeds
+  // its fragment into the summoner's silence set when it resolves.
+  forBossId?: number;
 }
 
 // Environmental FLOOR hazards — the depth-escalation danger layer, DISTINCT from the
@@ -561,7 +616,7 @@ export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
   | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment" | "mason"
-  | "echo" | "knell" | "marshal" | "toll"
+  | "echo" | "knell" | "knot" | "sac" | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "patch"
   | "heart" | "coin" | "gun" | "spit";

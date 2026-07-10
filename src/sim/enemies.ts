@@ -8,6 +8,7 @@ import {
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
+  captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
@@ -201,6 +202,24 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 12, drawSize: 36, alpha: 0.9, tint: "#c9b458", kbResist: 3.0,
     baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
+  // The Weaver's lattice ANCHOR NODE: the glowing crossing its thread-lines meet at,
+  // and the anchor of a strung silk LANE. Stationary, harmless, and the earned-window
+  // mechanic target — a few focused rounds break it (P1: EXPOSES the Weaver; always
+  // crumbles the lane's silk, and P3 the broken lane is the dash-overshoot bait).
+  // Never placed where a player already stands. Summon-only.
+  knot: {
+    kind: "knot", sprite: "knot", movement: "drift", isPhasing: false,
+    radius: 13, drawSize: 38, alpha: 1, tint: "#e6c2ff", kbResist: 3.0,
+    baseHp: 10, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
+  // The Weaver's P2 EGG-SAC: bloomed in on an omen tell while she climbs. Harmless,
+  // shootable, and the forced-down switch — destroy the whole clutch to bring her to
+  // the floor for the window. Summon-only, never where a player stands.
+  sac: {
+    kind: "sac", sprite: "sac", movement: "drift", isPhasing: false,
+    radius: 16, drawSize: 46, alpha: 1, tint: "#d8a7e8", kbResist: 3.0,
+    baseHp: 12, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
   // ROOT MARSHAL (miniboss template: the formation fight). P1: a wide slow-turning
   // guard + a live rootward formation it raises and rallies. At 50% the shield SHATTERS
   // INTO DESTRUCTIBLE COVER (real crates where the guard hung) and P2 trades the wall
@@ -292,7 +311,8 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   caskbellows: "bulwark", // frontal plate + rear crank = a strongly directional sentry
   sinderling: "brace",  // its armed death burst is already its loud exit
   fragment: "volatile",
-  echo: "brace", knell: "brace", marshal: "brace", toll: "brace", // never elite in practice
+  echo: "brace", knell: "brace", knot: "brace", sac: "brace", // never elite in practice
+  marshal: "brace", toll: "brace",
   boss: "brace", marrow: "brace", choir: "brace", weaver: "brace", gilded: "brace",
 };
 
@@ -372,12 +392,13 @@ export function minibossKindForFloor(seed: number, floor: number): EnemyKind | n
   }
 }
 
-// The miniboss captain's HP at its floor: the gauntlet's anchor (a fraction of the
-// calibrated MARROW base) ridden up the same clamped §3 curve, rounded to tens. Party
-// scaling applies at spawn (spawnFloorEnemies), like the gauntlet captains.
+// The miniboss captain's HP at its floor: the captain anchor (the pre-earned-windows
+// full-uptime calibration — captains have no guard, so they never ride the guarded
+// bosses' recalibrated anchors) ridden up the same clamped §3 curve, rounded to tens.
+// Party scaling applies at spawn (spawnFloorEnemies), like the gauntlet captains.
 export function minibossHpForFloor(kind: EnemyKind, floor: number): number {
   const frac = MINIBOSS.hpFrac[kind] ?? 0.3;
-  return Math.round((frac * marrowHpForFloor(floor)) / 10) * 10;
+  return Math.round((frac * captainHpForFloor(floor)) / 10) * 10;
 }
 
 // Which boss holds each boss-cadence floor: the authored F5–F30 chain (null = the F10
@@ -439,6 +460,10 @@ export interface CreateEnemyOpts {
   tier?: EnemyTier;
   isSummoned?: boolean;
   players?: number; // encounter player snapshot (co-op HP/KB scaling); 1 = solo
+  // The pull's measured power ratio R (party+gear, sampled at encounter creation) —
+  // BOSS HP scales off THIS, never off headcount alone (R already includes it). 1 =
+  // baseline (solo / unmeasured).
+  power?: number;
 }
 
 // The seeded sim Rng supplies the bat's initial `zig` heading so enemy creation is
@@ -450,8 +475,11 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const tierDef = TIERS[tier];
   const players = opts.players ?? 1;
   const isBoss = isBossKind(kind);
+  // Boss HP: the R framework's sublinear, hard-capped effective HP (party+gear in one
+  // measured number — headcount is never multiplied in separately). Mobs keep the
+  // per-player co-op curve.
   const hp = isBoss
-    ? Math.round((enemyHpForFloor(kind, floor) * coopBossHpMult(players)) / 10) * 10
+    ? Math.round((enemyHpForFloor(kind, floor) * bossHpFracFor(opts.power ?? 1)) / 10) * 10
     : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players)));
   const speed = isBoss
     ? a.baseSpeed
@@ -497,6 +525,8 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         addTimer: BOSS_ADD_FIRST_AT[kind] ?? 0,
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
+        exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
+        phaseTime: 0, enrage: 0, isSurpriseSpent: false,
       }
       : null,
   };
@@ -507,10 +537,11 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
 };
 
-// Only the summoner bosses run a cadence add drip (the Choir's wisps and the Weaver's
-// broodlings arrive on their transition beats instead; the Warden fights alone).
+// The summoner bosses run a cadence add drip; the Choir's timer paces its earned-window
+// FRAGMENT verses instead (the Weaver's broodlings still arrive only on its molt beat;
+// the Warden fights alone).
 const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
-  boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt,
+  boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt, choir: CHOIR.fragmentFirstAt,
 };
 
 // The corrected gate §2 cadence table (authoritative over earlier drafts): F1 slime only,
@@ -954,7 +985,7 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   return plan;
 }
 
-export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1): FloorSpawns {
+export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, power = 1): FloorSpawns {
   const rng = new Rng((seed ^ 0x9e3779b9) + floor * 2654435761);
   const roomCount = dungeon.rooms.length;
   if (roomCount <= 1) return { active: [], pending: [] };
@@ -982,7 +1013,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
-    active.push(createEnemy(bossKind, b.x, b.y, floor, rng, active.length, { players }));
+    active.push(createEnemy(bossKind, b.x, b.y, floor, rng, active.length, { players, power }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);

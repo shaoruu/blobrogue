@@ -1,0 +1,229 @@
+{
+  "note": "The R framework's ship-gate report: deterministic sim-harness pulls (seeded worlds, scripted mechanic-playing parties) across party sizes × builds. NOT live telemetry. Regenerate: npm run scaling:report",
+  "boss": "weaver@F20",
+  "pulls": 204,
+  "guards": {
+    "refDps": 36,
+    "hpFracCap": 2.9,
+    "addCapMax": 8,
+    "soloGearCap": 1.15,
+    "weakFloorFrac": 0.55
+  },
+  "cells": {
+    "solo/naked": {
+      "partyDps": 9,
+      "r": 1,
+      "effHp": 590,
+      "killedFrac": 0,
+      "ttkP10": null,
+      "ttkP50": null,
+      "ttkP90": null,
+      "exposedP50": 36.2,
+      "addsKilledP50": 58,
+      "hitsTakenP50": 144,
+      "maxLiveAdds": 3,
+      "phaseDurationsP50": [
+        42.8,
+        137.2
+      ]
+    },
+    "solo/median": {
+      "partyDps": 28.31,
+      "r": 1,
+      "effHp": 590,
+      "killedFrac": 1,
+      "ttkP10": 42.3,
+      "ttkP50": 54.1,
+      "ttkP90": 64,
+      "exposedP50": 21.6,
+      "addsKilledP50": 23,
+      "hitsTakenP50": 31,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        12.2,
+        21.6,
+        16.7
+      ]
+    },
+    "solo/highRoll": {
+      "partyDps": 19.13,
+      "r": 1,
+      "effHp": 590,
+      "killedFrac": 1,
+      "ttkP10": 66.3,
+      "ttkP50": 72.9,
+      "ttkP90": 82.8,
+      "exposedP50": 29.6,
+      "addsKilledP50": 29,
+      "hitsTakenP50": 42,
+      "maxLiveAdds": 3,
+      "phaseDurationsP50": [
+        15.8,
+        33.9,
+        12.6
+      ]
+    },
+    "solo/god": {
+      "partyDps": 35.16,
+      "r": 1,
+      "effHp": 590,
+      "killedFrac": 1,
+      "ttkP10": 43.7,
+      "ttkP50": 47.4,
+      "ttkP90": 49.7,
+      "exposedP50": 21.6,
+      "addsKilledP50": 22,
+      "hitsTakenP50": 21,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        11.3,
+        17.3,
+        21
+      ]
+    },
+    "P2/naked": {
+      "partyDps": 18,
+      "r": 1,
+      "effHp": 590,
+      "killedFrac": 0.8235294117647058,
+      "ttkP10": 122.9,
+      "ttkP50": 151.8,
+      "ttkP90": 163.4,
+      "exposedP50": 32.6,
+      "addsKilledP50": 65,
+      "hitsTakenP50": 158,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        16.9,
+        99.8,
+        45.6
+      ]
+    },
+    "P2/median": {
+      "partyDps": 56.61,
+      "r": 1.573,
+      "effHp": 740,
+      "killedFrac": 1,
+      "ttkP10": 27.2,
+      "ttkP50": 31.9,
+      "ttkP90": 40.4,
+      "exposedP50": 12.2,
+      "addsKilledP50": 21,
+      "hitsTakenP50": 27,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        5.8,
+        20.7,
+        15
+      ]
+    },
+    "P2/highRoll": {
+      "partyDps": 38.26,
+      "r": 1.063,
+      "effHp": 610,
+      "killedFrac": 1,
+      "ttkP10": 30.5,
+      "ttkP50": 37.3,
+      "ttkP90": 44.4,
+      "exposedP50": 15.5,
+      "addsKilledP50": 25,
+      "hitsTakenP50": 35,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        7.3,
+        14.7,
+        10.8
+      ]
+    },
+    "P2/god": {
+      "partyDps": 70.31,
+      "r": 1.953,
+      "effHp": 840,
+      "killedFrac": 1,
+      "ttkP10": 33.5,
+      "ttkP50": 38.2,
+      "ttkP90": 40.2,
+      "exposedP50": 18.1,
+      "addsKilledP50": 28,
+      "hitsTakenP50": 17,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        7.6,
+        18.2,
+        20
+      ]
+    },
+    "P4/naked": {
+      "partyDps": 36,
+      "r": 1,
+      "effHp": 590,
+      "killedFrac": 0.4117647058823529,
+      "ttkP10": 128.1,
+      "ttkP50": 154.5,
+      "ttkP90": 164.2,
+      "exposedP50": 10.1,
+      "addsKilledP50": 108,
+      "hitsTakenP50": 307,
+      "maxLiveAdds": 3,
+      "phaseDurationsP50": [
+        8.1,
+        169.2,
+        2.8
+      ]
+    },
+    "P4/median": {
+      "partyDps": 113.22,
+      "r": 3.145,
+      "effHp": 1160,
+      "killedFrac": 1,
+      "ttkP10": 21.9,
+      "ttkP50": 29.2,
+      "ttkP90": 33.5,
+      "exposedP50": 11.1,
+      "addsKilledP50": 28,
+      "hitsTakenP50": 34,
+      "maxLiveAdds": 5,
+      "phaseDurationsP50": [
+        5.2,
+        19.2,
+        8.1
+      ]
+    },
+    "P4/highRoll": {
+      "partyDps": 76.52,
+      "r": 2.125,
+      "effHp": 890,
+      "killedFrac": 1,
+      "ttkP10": 27.3,
+      "ttkP50": 31.5,
+      "ttkP90": 39.6,
+      "exposedP50": 12.1,
+      "addsKilledP50": 30,
+      "hitsTakenP50": 37,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        5.3,
+        17.6,
+        8.6
+      ]
+    },
+    "P4/god": {
+      "partyDps": 140.62,
+      "r": 3.906,
+      "effHp": 1360,
+      "killedFrac": 1,
+      "ttkP10": 29.5,
+      "ttkP50": 32.5,
+      "ttkP90": 36.2,
+      "exposedP50": 17.6,
+      "addsKilledP50": 35,
+      "hitsTakenP50": 15,
+      "maxLiveAdds": 4,
+      "phaseDurationsP50": [
+        5.2,
+        13.9,
+        6
+      ]
+    }
+  }
+}

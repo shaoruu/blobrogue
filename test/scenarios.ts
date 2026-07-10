@@ -9,7 +9,9 @@
 // explosions/chests/pickups, elemental status + combo + lifesteal). Exact outcomes only
 // need to AGREE between oracle and refactor.
 
-import type { WeaponId, EnemyKind, PropKind } from "../src/sim/types.js";
+import type { WeaponId, EnemyKind, PropKind, Enemy } from "../src/sim/types.js";
+import type { WorldState } from "../src/sim/world.js";
+import { LOCAL_ID } from "../src/sim/input.js";
 
 export interface FrameInput {
   moveX: number; // -1..1
@@ -37,7 +39,12 @@ export interface Scenario {
   floor: number;
   ticks: number;
   commands: Command[];
-  input(tick: number): FrameInput;
+  // Scripted per-tick intent. `w` is the live authoritative world (read-only by
+  // convention): earned-window boss scripts must PLAY THE MECHANICS — aim at a lattice
+  // knot, sidestep a locked rush — which no pure function of the tick can do. The
+  // script stays a deterministic function of (tick, state), so both golden runs and
+  // every replay harness reproduce it byte-for-byte.
+  input(tick: number, w?: WorldState): FrameInput;
 }
 
 const idle: FrameInput = { moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
@@ -127,60 +134,153 @@ const boss: Scenario = {
   },
 };
 
-// Deep boss floor: spawn MARROW point-blank and hose it down with the same
-// strong Lv3 build so the golden walks ITS full phase machine: P1 line charges (incl. the
-// wall-crash stun) + volleys, both interactive shield beats (floors + queued overflow +
-// husk adds), P2 crash rings, the P3 spiral barrage, and death.
+// The rest of the boss roster, each hosed down by the same strong Lv3 build so the
+// goldens walk every phase machine tick-for-tick. The earned-window bosses need their
+// scripts to PLAY THE MECHANICS (aim a knot, silence a fragment, sidestep a locked
+// rush) — a bot that ignores them would only golden the guard chip — so each boss
+// script is a deterministic function of (tick, world state).
+function bossGoldenCommands(kind: EnemyKind, dx = 190): Command[] {
+  const cmds: Command[] = [];
+  cmds.push({ t: "godmode", tick: 0 });
+  for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
+    for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+  }
+  cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
+  cmds.push({ t: "spawnEnemy", tick: 2, kind, dx, dy: 0 });
+  return cmds;
+}
+
+// Nearest live body of a kind (a boss floor carries its NATURAL boss in the far arena
+// besides the scenario's dev-spawned one — the script fights the one at hand).
+function liveKind(w: WorldState, kind: EnemyKind): Enemy | undefined {
+  const p = w.players.get(LOCAL_ID);
+  if (!p) return undefined;
+  let best: Enemy | undefined;
+  let bestD = Infinity;
+  for (const e of w.enemies) {
+    if (e.dead || e.kind !== kind) continue;
+    const d = Math.hypot(e.x - p.x, e.y - p.y);
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  return best;
+}
+
+function aimFrom(w: WorldState, at: { x: number; y: number } | undefined): number {
+  const p = w.players.get(LOCAL_ID);
+  if (!p || !at) return 0;
+  return Math.atan2(at.y - p.y, at.x - p.x);
+}
+
+// MARROW: hold ground, aim the boss, and SIDESTEP each locked rush so the blind bull
+// carries past into geometry — the baited crash is its earned window, and this script
+// walks it (plus the shield beats, the spiral, and the death) into the golden.
 const marrow: Scenario = {
   name: "marrow",
   seed: 0x7777,
   floor: 15,
   ticks: 2400,
-  commands: (() => {
-    const cmds: Command[] = [];
-    cmds.push({ t: "godmode", tick: 0 });
-    for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
-      for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
+  // dx -190: this seed's spawn room opens WEST (dx +190 is inside the east wall — the
+  // old golden's dev marrow sat wedged there, never actually fighting).
+  commands: bossGoldenCommands("marrow", -190),
+  input(_tick, w) {
+    if (!w) return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    const boss = liveKind(w, "marrow");
+    const p = w.players.get(LOCAL_ID);
+    let moveX = 0, moveY = 0;
+    if (boss && boss.attack.move === "rush" && boss.attack.phase === "windup" && boss.attack.isAimLocked) {
+      const side = boss.attack.lockedAngle + Math.PI / 2;
+      moveX = Math.cos(side); moveY = Math.sin(side);
+    } else if (p) {
+      // Between commitments, walk back to the spawn-room anchor: dodge drift would
+      // otherwise kite the fight into corridors and lose the line of fire.
+      const ax = w.dungeon.spawn.x * 48 + 24, ay = w.dungeon.spawn.y * 48 + 24;
+      if (Math.hypot(ax - p.x, ay - p.y) > 30) {
+        const back = Math.atan2(ay - p.y, ax - p.x);
+        moveX = Math.cos(back); moveY = Math.sin(back);
+      }
     }
-    cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
-    cmds.push({ t: "spawnEnemy", tick: 2, kind: "marrow", dx: 190, dy: 0 });
-    return cmds;
-  })(),
-  input() {
-    return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    return { moveX, moveY, aim: aimFrom(w, boss), firing: true, dash: false };
   },
 };
 
-// The rest of the boss roster, each hosed down by the same strong Lv3 build so the
-// goldens walk every phase machine tick-for-tick: the Choir's wails/fades/wisp-splits,
-// the Weaver's webs/pounces/molt, the Gilded Warden's plate/quakes/sweeps/sanctifies.
-function bossGolden(name: string, seed: number, kind: EnemyKind, floor: number): Scenario {
-  return {
-    name,
-    seed,
-    floor,
-    ticks: 2400,
-    commands: (() => {
-      const cmds: Command[] = [];
-      cmds.push({ t: "godmode", tick: 0 });
-      for (const itemId of ["vitality", "hair_trigger", "deadeye", "full_metal"]) {
-        for (let i = 0; i < 3; i++) cmds.push({ t: "item", tick: 0, itemId });
-      }
-      cmds.push({ t: "weapon", tick: 0, weapon: "smg" });
-      cmds.push({ t: "spawnEnemy", tick: 2, kind, dx: 190, dy: 0 });
-      return cmds;
-    })(),
-    input() {
-      return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
-    },
-  };
-}
+// The Hollow Choir: silence the FRAGMENT verses (aim them first), circle off the
+// drifting mass so it never body-blocks the fragment line — the goldens walk the
+// verse/silence/exposed loop, both wisp-splits and the death.
+const choir: Scenario = {
+  name: "choir",
+  seed: 0x8888,
+  floor: 30,
+  ticks: 2400,
+  commands: bossGoldenCommands("choir"),
+  input(_tick, w) {
+    if (!w) return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    const boss = liveKind(w, "choir");
+    const fragment = w.enemies.find((e) => !e.dead && e.isSummoned && e.kind === "ghost");
+    const p = w.players.get(LOCAL_ID);
+    let moveX = 0, moveY = 0;
+    if (boss && p && Math.hypot(boss.x - p.x, boss.y - p.y) < 170) {
+      const away = Math.atan2(p.y - boss.y, p.x - boss.x) + 0.7;
+      moveX = Math.cos(away); moveY = Math.sin(away);
+    }
+    return { moveX, moveY, aim: aimFrom(w, fragment ?? boss), firing: true, dash: false };
+  },
+};
 
-// Each deep boss is exercised at its curriculum floor (Marrow F15 / Weaver F20 /
-// Warden F25 / Choir F30); the marrow scenario itself pins F15 below.
-const choir = bossGolden("choir", 0x8888, "choir", 30);
-const weaverScenario = bossGolden("weaver", 0x9999, "weaver", 20);
-const gilded = bossGolden("gilded", 0xAAAA, "gilded", 25);
+// THE WEAVER (the earned-windows + fair-surprise flagship): break the lattice KNOTS
+// (P1 windows + P3 lane denial), burst the EGG-SAC clutch to force her off the walls
+// (P2), and unload through every earned window — the golden walks lanes/blink/snag,
+// the climb loop with its omen ambushes, the molt reshapes and the P3 lane dashes.
+const weaverScenario: Scenario = {
+  name: "weaver",
+  seed: 0x9999,
+  floor: 20,
+  ticks: 3000,
+  // The flagship needs the full arc on the golden clock: a Glass Cannon stack (the
+  // gauntlet golden's precedent) converts windows hard enough to reach P3 in time —
+  // and proves the bank/floor plumbing under real pressure.
+  commands: [
+    ...bossGoldenCommands("weaver"),
+    { t: "item", tick: 0, itemId: "glass_cannon" },
+    { t: "item", tick: 0, itemId: "glass_cannon" },
+    { t: "item", tick: 0, itemId: "glass_cannon" },
+  ],
+  input(_tick, w) {
+    if (!w) return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    const boss = liveKind(w, "weaver");
+    const mechanic = boss !== undefined && boss.boss !== null && boss.boss.exposed > 0
+      ? undefined // the window is open: unload on the boss, not the scaffolding
+      : liveKind(w, "sac") ?? liveKind(w, "knot");
+    const p = w.players.get(LOCAL_ID);
+    let moveX = 0, moveY = 0;
+    if (mechanic !== undefined && p !== undefined) {
+      if (Math.hypot(mechanic.x - p.x, mechanic.y - p.y) > 280) {
+        // The clutch spreads by design: run the mechanic down.
+        const toward = Math.atan2(mechanic.y - p.y, mechanic.x - p.x);
+        moveX = Math.cos(toward); moveY = Math.sin(toward);
+      } else if (boss !== undefined && Math.hypot(boss.x - p.x, boss.y - p.y) < 140) {
+        // A weaver parked on the muzzle eats the mechanic shot: circle off her.
+        const away = Math.atan2(p.y - boss.y, p.x - boss.x) + 0.7;
+        moveX = Math.cos(away); moveY = Math.sin(away);
+      }
+    }
+    return { moveX, moveY, aim: aimFrom(w, mechanic ?? boss), firing: true, dash: false };
+  },
+};
+
+// The Gilded Warden's windows are its own committed recovers: the stationary gunner
+// converts them unchanged (aim tracks the boss so sweeps/sanctify reposition never
+// drops the line).
+const gilded: Scenario = {
+  name: "gilded",
+  seed: 0xAAAA,
+  floor: 25,
+  ticks: 2400,
+  commands: bossGoldenCommands("gilded"),
+  input(_tick, w) {
+    if (!w) return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
+    return { moveX: 0, moveY: 0, aim: aimFrom(w, liveKind(w, "gilded")), firing: true, dash: false };
+  },
+};
 
 // The F10 Miniboss Gauntlet: a NATURAL floor-10 world (no sandbox, no spawn command) —
 // the stage machine itself is the scenario. A god-mode player hoses everything down and

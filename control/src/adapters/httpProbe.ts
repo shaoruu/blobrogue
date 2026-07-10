@@ -38,9 +38,12 @@ import type {
 // a weapon pickup at the cap by trading an owned weapon for it.
 // v12: the weapon rarity + mystery wave (five legendary WeaponIds, hidden-identity
 // mystery pickups/pedestals via `myst`, the mysteryReveal + implosion events).
-// v13: the premium coin economy (premium stall slot kinds + mode on the shop wire,
+// v13: the earned-windows boss rework + fair-surprise layer — the enemy kind set grew
+// (the Weaver's `knot` and `sac` mechanic bodies) and the hazard kind set grew
+// (`omen`, the ambush pre-spawn tell); no new wire fields (guard/exposed rides aux).
+// v14: the premium coin economy (premium stall slot kinds + mode on the shop wire,
 // SelfWire premium run state).
-export const SYNTHETIC_JOIN_PROTOCOL = 13;
+export const SYNTHETIC_JOIN_PROTOCOL = 14;
 
 export interface HttpProbeConfig {
   baseUrl: string;

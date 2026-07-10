@@ -275,6 +275,9 @@ export const WAVE_SOUNDS = {
     stem: "boss/weaver_feint", variants: 1, gain: 0.86, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.55, 0.12, 0.35)],
+    // Same-material (chitin) shipped fallback until the generated stem lands: the feint
+    // reads as a dry, whispery split.
+    fallback: { sample: "dash", rate: 1.15, highpassHz: 1200 },
   },
   "weaver.phase": {
     stem: "boss/weaver_phase", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
@@ -1453,6 +1456,15 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
   weaver: {
     pounce: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
     weave: { windup: "weaver.latticeWarn", release: "weaver.latticeFire" },
+    // Earned windows + fair surprise: the blink-strike rides the thread it committed;
+    // the climb (dive grammar) departs on the blink rows and its silk volleys charge on
+    // the lattice rows; the P3 lane dash (rush grammar) flares then fires; every
+    // snag / forced-down / overshoot flips the move to "crash" — the shared
+    // punishable-stun grammar, voiced on the Weaver's own rows.
+    blink: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
+    dive: { windup: "weaver.feint", active: "weaver.blinkDepart" },
+    rush: { windup: "weaver.latticeWarn", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
+    crash: { impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
   },
   gilded: {
     // The EXPOSED recover after each commitment is the fight's punish identity.

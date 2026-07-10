@@ -123,12 +123,21 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   - the reliable event stream grew mysteryReveal (the reveal moment) and implosion
 //     (the Lodestone's collapse FX). NOTE: the control plane's synthetic VERIFY join
 //     mirrors this constant (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-// v13 (intentional bump, the depth-scaling PREMIUM coin economy — the approved vendor
+// v13 (the earned-windows boss rework + fair surprise + R scaling): NO new wire fields —
+//   but two closed sets grew, which the strict validators turn into hard decode failures
+//   on older clients, so the equal-version join gate bumps once for the whole arc:
+//   - the enemy kind set: the Weaver's lattice `knot` and egg-sac `sac` mechanic bodies;
+//   - the hazard kind set: `omen`, the ambush pre-spawn tell every client must render.
+//   The deep bosses' guarded/exposed state rides the existing `aux` channel (seconds
+//   left in the current EXPOSED window; 0 = guarded), the Weaver's new moves reuse the
+//   closed move grammar (weave/blink/dive/pounce/rush/crash), and every window/bank/
+//   lattice/pool/R decision stays sim-internal.
+// v14 (intentional bump, the depth-scaling PREMIUM coin economy — the approved vendor
 // ecology of docs/specs/COIN_ECONOMY_AND_VENDORS.md):
 //   - the shop wire's closed slot-kind set grew (the premium sinks mystery/legendary/
 //     rare_blessing/max_hp/full_heal/core_infusion/weapon_upgrade/revive_token/
 //     extra_slot, the utilities reroll_all/amber_cache/prospector, the artifact, and the
-//     mythic_* capstone kinds — a v12 client would reject any premium stall as a
+//     mythic_* capstone kinds — a v13 client would reject any premium stall as a
 //     ProtocolError), and ShopWire carries `md` (the stall's mode: dealer/premium/
 //     spoils/climax — the read every client must agree on);
 //   - SelfWire carries the premium run state the client must reconcile and render:
@@ -136,7 +145,7 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     amw (banked mythic Amber windfall), brt (the armed blessing-offer reroll),
 //     rvt (banked revive token), xsl (bought hotbar slots past MAX_OWNED_WEAPONS),
 //     tth (max hearts paid to the artifact), pfl (the Prospector's Draught's floor).
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -541,7 +550,7 @@ const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
 };
 const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true };
 const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
@@ -1222,7 +1231,14 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0 }
+      ? {
+        phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0,
+        isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0,
+        // Earned windows: the exposed remainder rides the aux channel (the render key);
+        // the bank and mechanic id lists are sim-internal and never travel.
+        exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
+        phaseTime: 0, enrage: 0, isSurpriseSpent: false,
+      }
       : null,
   };
 }
