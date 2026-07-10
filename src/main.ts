@@ -232,6 +232,10 @@ async function bootNormal() {
   }
 
   void menu.showTitle();
+  // Menu-only, boot-only "What's New": a returning player on a new build gets ONE popup;
+  // a brand-new player is caught up silently. Never on an invite/deep-join path (those
+  // return above), never mid-run — and it never blocks or delays Play.
+  menu.maybeShowChangelogPopup();
   // The pending-OAuth exchange (rare: only right after returning from Google) runs AFTER
   // the shell painted; the identity region settles in place via auth.onChange.
   if (auth) void auth.completeOAuth();

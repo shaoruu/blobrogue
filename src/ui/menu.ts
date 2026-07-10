@@ -24,6 +24,13 @@ import {
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
 } from "./onlineCopy.js";
 import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
+import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
+
+// The build's changelog version key: the vite `define` (__BUILD_VERSION__) at build time,
+// else the newest changelog section (tests/dev run outside a vite build). localStorage
+// remembers the last-seen key so a new build lights the unread cue exactly once.
+const CHANGELOG_VERSION = typeof __BUILD_VERSION__ !== "undefined" ? __BUILD_VERSION__ : LATEST_VERSION;
+const CHANGELOG_SEEN_KEY = "blobrogue.changelogSeen";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -134,6 +141,9 @@ export class Menu {
   private titleStage: BlobPreview | null = null;
   // The current screen's tab group for controller LB/RB (closet categories, profile views).
   private tabCycle: ((dir: 1 | -1) => void) | null = null;
+  // The title's What's New button, kept so opening the panel can clear its unread cue in
+  // place (no title rebuild, zero layout shift).
+  private whatsNewBtn: HTMLButtonElement | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -163,6 +173,7 @@ export class Menu {
     this.titleStageRefresh = null; // idem
     this.titleStage = null;
     this.tabCycle = null;          // screens with tab groups re-arm after their own show()
+    this.whatsNewBtn = null;       // idem
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
   }
@@ -255,7 +266,7 @@ export class Menu {
     const stageBox = el("div", "blob-stage");
     stageBox.setAttribute("role", "img");
     stageBox.setAttribute("aria-label", this.stageLabel());
-    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96, { isCalmIdle: true });
+    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 160, { isCalmIdle: true });
     stageBox.appendChild(stagePreview.el);
     hero.appendChild(stageBox);
     wrap.appendChild(hero);
@@ -289,8 +300,11 @@ export class Menu {
       nav.append(profileBtn, settingsBtn);
       left.appendChild(nav);
       wrap.appendChild(left);
+      const whatsNew = this.whatsNewButton();
+      wrap.appendChild(whatsNew);
       wrap.appendChild(customize);
       this.show(wrap);
+      this.whatsNewBtn = whatsNew; // re-arm after show() cleared the per-screen refs
       this.titleStageRefresh = refreshStage;
       this.titleStage = stagePreview;
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
@@ -333,8 +347,11 @@ export class Menu {
     body.appendChild(right);
 
     wrap.appendChild(body);
+    const whatsNew = this.whatsNewButton();
+    wrap.appendChild(whatsNew);
     wrap.appendChild(customize);
     this.show(wrap);
+    this.whatsNewBtn = whatsNew; // re-arm after show() cleared the per-screen refs
     this.identityMount = identity;
     this.titleStageRefresh = refreshStage;
     this.titleStage = stagePreview;
@@ -1233,6 +1250,125 @@ export class Menu {
     this.titleStage?.setPaused(true);
     scope.open(closeBtn, currentFocus());
     void this.hydrateCloset();
+  }
+
+  // ---- WHAT'S NEW / CHANGELOG ---------------------------------------------------------
+  //
+  // The changelog is single-sourced from CHANGELOG.md (parsed at build into
+  // src/generated/changelog.ts). The menu shows a compact hero-corner button; localStorage
+  // "blobrogue.changelogSeen" holds the last-seen version key. Opening the panel marks the
+  // build seen (clears the unread cue). A returning player on a NEW build gets ONE auto-
+  // popup at the menu; a brand-new player is silently caught up (no popup, no nag).
+
+  private readChangelogSeen(): string | null {
+    try { return localStorage.getItem(CHANGELOG_SEEN_KEY); } catch { return null; }
+  }
+
+  private markChangelogSeen(): void {
+    try { localStorage.setItem(CHANGELOG_SEEN_KEY, CHANGELOG_VERSION); } catch { /* ignore */ }
+  }
+
+  // Unread = the player has seen SOME build before (a stored key) and it isn't this one.
+  // A brand-new player (no stored key) is not "unread" — they get the silent catch-up.
+  private isChangelogUnread(): boolean {
+    const seen = this.readChangelogSeen();
+    return seen !== null && seen !== CHANGELOG_VERSION;
+  }
+
+  // The compact hero-corner button. When unread it wears a grayscale-distinct NEW chip and
+  // an 8px amber square dot — both reserved by CSS so they appear in place, zero shift.
+  private whatsNewButton(): HTMLButtonElement {
+    const btn = el("button", "secondary home-whatsnew");
+    btn.type = "button";
+    const applyUnread = () => {
+      btn.replaceChildren(el("span", "", "WHAT'S NEW"));
+      const unread = this.isChangelogUnread();
+      btn.setAttribute("aria-label", unread ? "What's new — unread updates" : "What's new");
+      if (unread) {
+        btn.appendChild(el("span", "wn-new", "NEW"));
+        btn.appendChild(el("span", "wn-dot"));
+      }
+    };
+    applyUnread();
+    btn.onclick = () => this.openChangelog();
+    return btn;
+  }
+
+  // On boot at the menu only (never mid-run, never on an invite deep-join — main.ts calls
+  // this on the plain title path). A returning player on a new build gets ONE popup scrolled
+  // to the newest section; a brand-new player is caught up silently.
+  maybeShowChangelogPopup(): void {
+    const seen = this.readChangelogSeen();
+    if (seen === null) { this.markChangelogSeen(); return; } // brand-new: silent, no popup
+    if (seen !== CHANGELOG_VERSION) this.openChangelog({ isUpdatePopup: true });
+  }
+
+  // The panel: the .menu panel family + the global pixel scrollbar. Header (WHAT'S NEW, or
+  // UPDATED · WHAT'S NEW as a returning-player popup) + close; a scrolling body of version
+  // sections (Unreleased renders as IN PROGRESS, muted), newest at top, 2px dun-3 dividers.
+  // Opening marks the build seen and clears the button's unread cue in place.
+  private openChangelog(opts: { isUpdatePopup?: boolean } = {}): void {
+    const scrim = el("div", "changelog-scrim");
+    const pop = el("div", "menu changelog-pop");
+    const scope = new FocusScope();
+    let isClosed = false;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+    };
+    const close = () => {
+      if (isClosed) return;
+      isClosed = true;
+      window.removeEventListener("keydown", onKey);
+      this.overlay.removeChild(scrim);
+      scope.close();
+    };
+
+    const head = el("div", "cl-head");
+    const title = el("div", "cl-title");
+    if (opts.isUpdatePopup) title.appendChild(el("span", "cl-flag", "UPDATED \u00b7 "));
+    title.appendChild(document.createTextNode("WHAT'S NEW"));
+    const closeBtn = this.closeButton(close);
+    head.append(title, closeBtn);
+    pop.appendChild(head);
+
+    const body = el("div", "cl-body");
+    for (const section of CHANGELOG) {
+      const sec = el("div", "cl-section");
+      const isUnreleased = section.version === "unreleased";
+      const date = el("div", `cl-date${isUnreleased ? " progress" : ""}`, isUnreleased ? "IN PROGRESS" : section.date);
+      sec.appendChild(date);
+      for (const entry of section.entries) {
+        const row = el("div", "cl-entry");
+        const text = el("span", "cl-entry-text");
+        if (entry.title) text.appendChild(el("span", "cl-entry-title", entry.title + (entry.body ? " \u2014 " : "")));
+        if (entry.body) text.appendChild(el("span", "cl-entry-body", entry.body));
+        row.appendChild(text);
+        sec.appendChild(row);
+      }
+      body.appendChild(sec);
+    }
+    pop.appendChild(body);
+
+    if (opts.isUpdatePopup) {
+      const foot = el("div", "cl-foot");
+      const gotIt = el("button", "cl-got-it", "GOT IT");
+      gotIt.type = "button";
+      gotIt.onclick = close;
+      foot.appendChild(gotIt);
+      pop.appendChild(foot);
+    }
+
+    scrim.appendChild(pop);
+    // The popup opens at the top (newest section first), so it lands on the newest already.
+    this.overlay.appendChild(scrim);
+    window.addEventListener("keydown", onKey);
+    // Opening catches the player up: mark seen + clear the title button's unread cue live.
+    this.markChangelogSeen();
+    if (this.whatsNewBtn) {
+      this.whatsNewBtn.replaceChildren(el("span", "", "WHAT'S NEW"));
+      this.whatsNewBtn.setAttribute("aria-label", "What's new");
+    }
+    scope.open(opts.isUpdatePopup ? (pop.querySelector<HTMLButtonElement>(".cl-got-it") ?? closeBtn) : closeBtn, currentFocus());
   }
 
   // ---- SETTINGS -----------------------------------------------------------------------
