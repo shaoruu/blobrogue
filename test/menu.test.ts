@@ -41,7 +41,10 @@ import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { padActions } from "../src/ui/menuGamepad.js";
-import { INVITE_RUN_LIVE_NOTE, COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL } from "../src/ui/onlineCopy.js";
+import {
+  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
+  INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL,
+} from "../src/ui/onlineCopy.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -161,7 +164,8 @@ interface FakeOpts {
   // "fail" (network failure), "manual" (the test settles each write by hand, in any order).
   persist?: "echo" | "static" | "fail" | "manual";
   // The rooms:join answer for invite tests: a joined room, or the server's real refusal.
-  join?: { code: string; status: "lobby" | "playing" } | "full" | "ended" | "missing" | "error";
+  // Read at CALL time, so a test can flip it between attempts (the TRY AGAIN path).
+  join?: { code: string; status: "lobby" | "playing" } | "full" | "ended" | "missing" | "classic" | "error";
 }
 
 interface FakeConvex {
@@ -190,9 +194,12 @@ function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
       const name = getFunctionName(ref as Parameters<typeof getFunctionName>[0]);
       calls.push(name);
       if (name === "rooms:join") {
+        // The EXACT error strings convex/rooms.ts throws — the mapping under test
+        // consumes these, so the fixture must never drift from the real mutation.
         if (opts.join === "full") return Promise.reject(new Error("that room is full"));
         if (opts.join === "ended") return Promise.reject(new Error("that game has ended"));
         if (opts.join === "missing") return Promise.reject(new Error("no room with that code"));
+        if (opts.join === "classic") return Promise.reject(new Error("that code is a classic co-op room"));
         if (opts.join === "error" || opts.join === undefined) return Promise.reject(new Error("boom"));
         return Promise.resolve({ roomId: "room-doc-1", code: opts.join.code, seed: 1, floor: 1, status: opts.join.status });
       }
@@ -1382,50 +1389,89 @@ async function main(): Promise<void> {
     check("rejoin button rendered for the live room", rejoin !== undefined);
   }
 
-  section("invite links: openInvite auto-joins through the real validated join, busy first");
+  section("invite links: shell first, inline connecting state, the SAME join path as manual");
   {
     const { menu, overlay, launches } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    const loc = window.location as unknown as { pathname: string; search: string; href: string };
+    loc.pathname = "/r/ABCD"; loc.search = ""; loc.href = "http://localhost/r/ABCD";
     const pending = menu.openInvite("ABCD");
-    // The join is in flight: the online home paints busy with the joining note — an
-    // arriving invite never shows a blank screen or an interactive home mid-join.
+    // The canonical shell paints SYNCHRONOUSLY with the join in flight — never blank,
+    // never a modal: the connecting state is the Online Home's own status line.
     const busyText = textOf(overlay);
-    check("the joining note paints while the join is in flight", busyText.includes("joining room ABCD"), busyText.slice(0, 120));
+    check("the shell renders FIRST with JOINING ROOM <CODE>\u2026 inline", busyText.includes("PLAY ONLINE") && busyText.includes("JOINING ROOM ABCD"), busyText.slice(0, 120));
     const quickBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("QUICK PLAY"))[0];
     check("the home actions are disabled while the join owns the screen", quickBtn?.disabled === true);
+    check("the connecting state lives in the reserved status line (not a modal)", byClass(overlay, "status-line").length === 1);
+    check("the URL is not consumed until the attempt resolves", loc.pathname === "/r/ABCD");
     await pending;
     const text = textOf(overlay);
-    check("the invite lands IN the room lobby (code auto-consumed, nothing to retype)", text.includes("ROOM ABCD"));
+    check("success+lobby lands IN the room lobby (auto-joined, nothing to retype)", text.includes("ROOM ABCD"));
     check("the code badge renders the joined room", textOf(byClass(overlay, "code-badge")[0] ?? {}) === "ABCD");
     check("a lobby-status invite never cold-launches gameplay", launches.length === 0);
+    check("the invite is stripped once resolved (refresh/back can't re-join)", loc.pathname === "/", loc.pathname);
   }
 
-  section("invite onto a live run: the lobby with REJOIN RUN + the honest note (no cold yank)");
+  section("invite onto a live run: the existing join-live path drops into the run");
   {
-    const { menu, overlay, launches } = makeMenu({ join: { code: "WXYZ", status: "playing" } });
+    const { menu, launches } = makeMenu({ join: { code: "WXYZ", status: "playing" } });
+    const loc = window.location as unknown as { pathname: string; search: string; href: string };
+    loc.pathname = "/"; loc.search = "?room=WXYZ"; loc.href = "http://localhost/?room=WXYZ";
     await menu.openInvite("WXYZ");
-    check("the run-already-live note is explicit", textOf(overlay).includes(INVITE_RUN_LIVE_NOTE));
-    check("REJOIN RUN is the obvious next action", buttonsOf(overlay).some((b) => b.includes("REJOIN RUN")));
-    check("gameplay is never auto-launched from a cold link", launches.length === 0);
+    check("success+already-playing launches through the join-live path", launches.length === 1 && launches[0]?.code === "WXYZ");
+    check("...ungated (a drop-in, not a party start)", launches[0]?.isPartyStart === false);
+    check("the query-form invite is consumed on resolve too", loc.search === "", loc.search);
   }
 
-  section("invite fallbacks: full / ended / gone land on the online home with a reason + live actions");
+  section("invite fallbacks: each refusal maps to the spec copy; the screen stays interactive");
   {
-    const expectations: Array<{ join: "full" | "ended" | "missing" | "error"; reason: string }> = [
-      { join: "full", reason: "Room full" },
-      { join: "ended", reason: "That room's gone" },
-      { join: "missing", reason: "That room's gone" },
-      { join: "error", reason: "couldn't join that room" },
+    const expectations: Array<{ join: "full" | "ended" | "missing" | "classic"; reason: string }> = [
+      { join: "full", reason: "THAT ROOM IS FULL (4/4)" },
+      { join: "ended", reason: "THIS INVITE HAS ENDED" },
+      { join: "missing", reason: "INVITE LINK EXPIRED OR INVALID" },
+      { join: "classic", reason: "THIS INVITE ISN'T AN ONLINE ROOM" },
     ];
     for (const { join, reason } of expectations) {
       const { menu, overlay } = makeMenu({ join });
       await menu.openInvite("ABCD");
       const text = textOf(overlay);
-      check(`${join}: the specific reason renders`, text.includes(reason), text.slice(0, 160));
+      check(`${join}: the exact spec reason renders`, text.includes(reason), text.slice(0, 160));
       const quickBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("QUICK PLAY"))[0];
       const joinBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("JOIN CODE"))[0];
-      check(`${join}: QUICK PLAY + JOIN CODE stay live (never a dead end)`,
-        quickBtn !== undefined && quickBtn.disabled !== true && joinBtn !== undefined && joinBtn.disabled !== true);
+      const createBtn = collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("CREATE ROOM"))[0];
+      check(`${join}: QUICK PLAY / CREATE ROOM / JOIN CODE stay live (never a dead end)`,
+        quickBtn?.disabled !== true && joinBtn?.disabled !== true && createBtn?.disabled !== true
+        && quickBtn !== undefined && joinBtn !== undefined && createBtn !== undefined);
+      check(`${join}: a definitive refusal never offers TRY AGAIN`, byClass(overlay, "status-retry").length === 0);
     }
+  }
+
+  section("network failure: COULDN'T REACH THE SERVER + TRY AGAIN re-runs the same join");
+  {
+    const fakeOpts: FakeOpts = { join: "error" };
+    const { menu, overlay } = makeMenu(fakeOpts);
+    await menu.openInvite("ABCD");
+    check("an unrecognized failure reads as the network state", textOf(overlay).includes(INVITE_UNREACHABLE_NOTE));
+    const retryBtn = byClass(overlay, "status-retry")[0];
+    check("TRY AGAIN renders INSIDE the reserved status line (zero shift)",
+      retryBtn !== undefined && textOf(retryBtn) === INVITE_TRY_AGAIN_LABEL
+      && byClass(byClass(overlay, "status-line")[0] ?? {}, "status-retry").length === 1);
+    // The server comes back; TRY AGAIN re-runs the SAME validated join.
+    fakeOpts.join = { code: "ABCD", status: "lobby" };
+    retryBtn.onclick?.();
+    await settle();
+    await settle();
+    check("TRY AGAIN re-runs the join and lands in the room", textOf(overlay).includes("ROOM ABCD"), textOf(overlay).slice(0, 120));
+  }
+
+  section("an invite in the offline build: the title + one honest status line, no dead end");
+  {
+    const overlay = document.createElement("div") as unknown as ShimNode;
+    const session = new Session(null);
+    const menu = new Menu(overlay as unknown as HTMLElement, session, null, null, { startSolo() {}, startOnline() {} });
+    await menu.openInvite("ABCD");
+    check("the title renders with its play action", buttonsOf(overlay).some((b) => b.includes("PLAY")));
+    check("the honest line is the spec's exact copy", textOf(overlay).includes(INVITE_OFFLINE_NOTE));
+    check("...inside the reserved home-status box", textOf(byClass(overlay, "home-status")[0] ?? {}) === INVITE_OFFLINE_NOTE);
   }
 
   section("guest invite: a signed-out player joins as a guest — the invite never forces sign-in");

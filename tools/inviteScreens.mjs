@@ -77,26 +77,33 @@ async function main() {
     const copied = await page.evaluate(`navigator.clipboard.readText()`);
     console.log(`clipboard now holds: ${copied}`);
 
-    // 3. An invite join in flight (the busy online home with the joining note).
+    // 3. An invite join in flight (the inline connecting state, actions disabled).
     await page.evaluate(`(async () => {
       const { inviteJoiningNote } = await import("/src/ui/onlineCopy.ts");
       await window.__inviteMenu.showOnlineHome(inviteJoiningNote("ABCD"), { isBusy: true });
     })()`);
     await shot("invite-joining");
 
-    // 4. The room-full fallback landing (reason + live actions on the online home).
+    // 4. The room-full fallback landing (spec reason + live actions on the online home).
     await page.evaluate(`(async () => {
-      const { inviteFailNote } = await import("/src/ui/onlineCopy.ts");
-      await window.__inviteMenu.showOnlineHome(inviteFailNote("that room is full"));
+      const { inviteFailState } = await import("/src/ui/onlineCopy.ts");
+      await window.__inviteMenu.showOnlineHome(inviteFailState("that room is full").note);
     })()`);
     await shot("invite-room-full");
 
-    // 5. The room-gone fallback landing.
+    // 5. The expired/invalid fallback landing.
     await page.evaluate(`(async () => {
-      const { inviteFailNote } = await import("/src/ui/onlineCopy.ts");
-      await window.__inviteMenu.showOnlineHome(inviteFailNote("no room with that code"));
+      const { inviteFailState } = await import("/src/ui/onlineCopy.ts");
+      await window.__inviteMenu.showOnlineHome(inviteFailState("no room with that code").note);
     })()`);
-    await shot("invite-room-gone");
+    await shot("invite-invalid");
+
+    // 6. The retryable network failure with TRY AGAIN inside the reserved status line.
+    await page.evaluate(`(async () => {
+      const { INVITE_UNREACHABLE_NOTE } = await import("/src/ui/onlineCopy.ts");
+      await window.__inviteMenu.showOnlineHome(INVITE_UNREACHABLE_NOTE, { retry: () => {} });
+    })()`);
+    await shot("invite-unreachable");
   }
 
   await browser.close();

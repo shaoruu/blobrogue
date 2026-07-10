@@ -21,9 +21,9 @@ import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_B
 import {
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
-  INVITE_RUN_LIVE_NOTE, INVITE_UNREACHABLE_NOTE, inviteJoiningNote, inviteFailNote,
+  INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
 } from "./onlineCopy.js";
-import { inviteUrlFor, shareInviteUrl } from "../net/inviteLink.js";
+import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -214,7 +214,9 @@ export class Menu {
   // Every async-hydrated region (auth, stats, leaderboard) renders its FINAL geometry from
   // first paint — skeletons fill in place, so nothing below them ever moves.
 
-  async showTitle(focus?: TitleFocus) {
+  // `statusNote` fills the reserved home-status line (e.g. the invite-on-offline-build
+  // landing) — content inside fixed geometry, never a layout change.
+  async showTitle(focus?: TitleFocus, statusNote = "") {
     // THE canonical home markup (finalized; supersedes every earlier shell variant):
     //   .menu-home                       grid rows 150px / minmax(0,1fr)
     //     .home-hero                     the two-column hero band: .hero-mark (logo +
@@ -272,10 +274,13 @@ export class Menu {
 
     if (!this.client) {
       // Offline build: no profile/multiplayer — single actions column under the same
-      // hero band (the closet saves on this device).
+      // hero band (the closet saves on this device). The same reserved home-status line as
+      // the online shell (usually empty; an invite opened in this build lands its honest
+      // ONLINE PLAY UNAVAILABLE note here).
       const left = el("div", "home-left");
       left.appendChild(this.soloButton("\u25be  PLAY"));
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
+      left.appendChild(el("p", "home-status", statusNote));
       const nav = el("div", "navrow");
       const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
       const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());
@@ -309,7 +314,7 @@ export class Menu {
     left.appendChild(solo);
     // The fixed home status line: reserved from first paint; any boot/exit note swaps
     // content inside it, never the layout around it.
-    left.appendChild(el("p", "home-status", ""));
+    left.appendChild(el("p", "home-status", statusNote));
     left.appendChild(this.leaderboardPreview(focusTargets));
     body.appendChild(left);
 
@@ -1355,10 +1360,13 @@ export class Menu {
   // code), or join a friend's code. Every action stays on this screen until it succeeds,
   // so a failed backend just writes a status line — never a dead end. `isBusy` renders
   // the actions disabled from first paint (an invite join in flight owns the screen until
-  // it settles — the settle re-arms them, success or failure).
-  async showOnlineHome(note = "", opts: { isBusy?: boolean } = {}) {
-    if (!this.client) { await this.showTitle(); return; }
-    if (this.needsNameGate()) { this.showNameGate(); return; }
+  // it settles — the settle re-arms them, success or failure); `retry` renders TRY AGAIN
+  // inside the reserved status line (the retryable invite failure re-runs its join).
+  // Returns the status-line element so the invite flow can drive the SAME inline state
+  // the manual actions use — never a modal, never a second surface.
+  async showOnlineHome(note = "", opts: { isBusy?: boolean; retry?: () => void } = {}): Promise<HTMLElement | null> {
+    if (!this.client) { await this.showTitle(); return null; }
+    if (this.needsNameGate()) { this.showNameGate(); return null; }
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "PLAY ONLINE"));
     wrap.appendChild(el("p", "", "Server-run worlds. Drop into the public pool, or make a room and share its code."));
@@ -1376,8 +1384,16 @@ export class Menu {
     wrap.appendChild(colA);
 
     // Status/failure line with reserved height: retries and errors swap text inside the
-    // same box, so the back button below never moves.
+    // same box, so the back button below never moves. The compact TRY AGAIN affordance
+    // (retryable invite failure only) rides INSIDE this reserved box.
     const status = el("p", "muted status-line", note);
+    if (opts.retry) {
+      const retryFn = opts.retry;
+      const retryBtn = el("button", "secondary status-retry", INVITE_TRY_AGAIN_LABEL);
+      retryBtn.type = "button";
+      retryBtn.onclick = () => retryFn();
+      status.appendChild(retryBtn);
+    }
     wrap.appendChild(status);
 
     const row = el("div", "btnrow");
@@ -1404,48 +1420,54 @@ export class Menu {
 
     this.show(wrap);
     this.bindEscape(goBack);
+    return status;
   }
 
   // An invite link's landing (cold boot in main.ts, warm popstate arrivals — same door).
-  // Routes straight into that room's lobby with the join in flight: the online home paints
-  // busy with "joining room CODE…" while the SAME server-validated rooms.join a typed code
-  // takes runs underneath (capacity, kind, ended — nothing bypassed). Guests join through
-  // the ordinary ensurePlayer identity; an invite never forces sign-in — a FIRST-TIME
-  // guest still passes the one-time name gate, and the invite continues into its join the
-  // moment the gate commits. Every failure settles the online home with a specific reason
-  // and the live quick-play/join actions.
+  // The canonical shell renders FIRST (never blank), then the join auto-attempts through
+  // doJoinOnline — the SAME path manual JOIN CODE takes (capacity, kind, ended: nothing
+  // bypassed) — as an inline connecting state on the Online Home status line (buttons
+  // disabled, not a modal). Guests join exactly as manual (doJoinOnline runs the ordinary
+  // session.login); an invite never forces sign-in — a FIRST-TIME guest still passes the
+  // one-time name gate, and the invite continues into its join the moment it commits.
+  // Every failure maps to the spec's honest copy on the status line with the screen's
+  // actions live, and the invite is stripped from the URL once the attempt resolves
+  // (success OR failure), so refresh/back never re-triggers a stale join.
   async openInvite(code: string): Promise<void> {
-    if (!this.client) { await this.showTitle(); return; }
+    if (!this.client) {
+      stripInviteFromLocation();
+      await this.showTitle(undefined, INVITE_OFFLINE_NOTE);
+      return;
+    }
     if (this.needsNameGate()) { this.showNameGate(() => void this.joinInvite(code)); return; }
     await this.joinInvite(code);
   }
 
   private async joinInvite(code: string): Promise<void> {
-    if (!this.client) { await this.showTitle(); return; }
-    await this.showOnlineHome(inviteJoiningNote(code), { isBusy: true });
-    const client = this.client;
+    const status = await this.showOnlineHome(inviteJoiningNote(code), { isBusy: true });
+    if (!status) return;
     // An unreachable backend never REJECTS (the Convex client retries forever) — it just
-    // never resolves. Settle honestly after the hydrate window; a join landing later must
-    // not teleport the player, so it leaves the room it silently won.
-    let isSettled = false;
+    // never resolves. Settle honestly at the hydrate window with the retryable failure;
+    // a join landing after that must not teleport the player, so it is dropped as stale
+    // (doJoinOnline leaves the room it silently won).
+    let isTimedOut = false;
     const timer = setTimeout(() => {
-      isSettled = true;
-      void this.showOnlineHome(INVITE_UNREACHABLE_NOTE);
+      isTimedOut = true;
+      stripInviteFromLocation();
+      void this.showOnlineHome(INVITE_UNREACHABLE_NOTE, { retry: () => void this.joinInvite(code) });
     }, HYDRATE_TIMEOUT_MS);
-    try {
-      const profile = await this.session.login();
-      const lobby = new OnlineLobby(client, this.session);
-      await lobby.join(code);
-      clearTimeout(timer);
-      if (isSettled) { lobby.leave(); return; }
-      // A live room is a JOINABLE room (drop-in): land in the lobby with the honest note —
-      // REJOIN RUN is right there. A cold link never yanks anyone straight into gameplay.
-      this.showOnlineLobby(lobby, profile, lobby.status === "playing" ? INVITE_RUN_LIVE_NOTE : "");
-    } catch (err) {
-      clearTimeout(timer);
-      if (isSettled) return;
-      await this.showOnlineHome(inviteFailNote(this.cleanErr(err instanceof Error ? err.message : "")));
-    }
+    await this.doJoinOnline(code, status, {
+      joiningNote: inviteJoiningNote(code),
+      isStale: () => isTimedOut,
+      onSettled: () => {
+        clearTimeout(timer);
+        if (!isTimedOut) stripInviteFromLocation();
+      },
+      onFail: (raw) => {
+        const fail = inviteFailState(raw);
+        void this.showOnlineHome(fail.note, fail.isRetryable ? { retry: () => void this.joinInvite(code) } : {});
+      },
+    });
   }
 
   private async doQuickPlayOnline(setBusy: (b: boolean, t: string) => void) {
@@ -1475,18 +1497,32 @@ export class Menu {
     }
   }
 
-  private async doJoinOnline(code: string, status: HTMLElement) {
-    if (!this.client || code.trim().length < 4) { status.textContent = "enter a valid code"; return; }
-    status.textContent = "joining\u2026";
+  // The ONE join path — manual JOIN CODE and invite links both land here, so an invite
+  // can never bypass or diverge from the validated join. `opts` lets the invite flow
+  // brand the in-flight note, map failures to its spec copy, and drop a join that
+  // settled after its caller already moved on (the unreachable-timeout landing).
+  private async doJoinOnline(code: string, status: HTMLElement, opts: {
+    joiningNote?: string;
+    onFail?: (rawMessage: string) => void;
+    isStale?: () => boolean;
+    onSettled?: () => void;
+  } = {}) {
+    const fail = opts.onFail ?? ((raw: string) => { status.textContent = raw; });
+    if (!this.client || code.trim().length < 4) { fail("enter a valid code"); return; }
+    status.textContent = opts.joiningNote ?? "joining\u2026";
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.join(code);
+      opts.onSettled?.();
+      if (opts.isStale?.()) { lobby.leave(); return; }
       // A live room means the run is on — drop straight in; otherwise wait in the lobby.
       if (lobby.status === "playing") this.launchOnline(lobby, profile, false);
       else this.showOnlineLobby(lobby, profile);
     } catch (err) {
-      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not join");
+      opts.onSettled?.();
+      if (opts.isStale?.()) return;
+      fail(this.cleanErr(err instanceof Error ? err.message : "could not join"));
     }
   }
 

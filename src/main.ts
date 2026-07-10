@@ -8,7 +8,7 @@ import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
 import { bindMenuGamepad } from "./ui/menuGamepad.js";
 import { bindUiScale } from "./ui/settings.js";
-import { exitNoteFor, INVITE_LINK_BROKEN_NOTE } from "./ui/onlineCopy.js";
+import { exitNoteFor, INVITE_INVALID_NOTE, INVITE_OFFLINE_NOTE } from "./ui/onlineCopy.js";
 import { parseInviteCode, hasInviteIntent, stripInviteFromLocation } from "./net/inviteLink.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 
@@ -190,31 +190,36 @@ async function bootNormal() {
     return;
   }
 
+  // An invite URL that carries NO joinable code — mangled grammar, or any invite on a
+  // build with no backend. Resolved immediately: the URL is consumed and the player lands
+  // on an honest interactive screen (never a guessed join, never a dead end).
+  function landUnjoinableInvite(): Promise<void> {
+    stripInviteFromLocation();
+    if (client) return menu.showOnlineHome(INVITE_INVALID_NOTE).then(() => undefined);
+    return menu.showTitle(undefined, INVITE_OFFLINE_NOTE);
+  }
+
   // Warm invite arrivals: the app is already open and a history navigation lands on an
   // invite URL — same parse, same validated join as a cold load. Menu-time only (never
-  // yanks a live run), and the URL is consumed so a refresh can't re-join.
+  // yanks a live run); openInvite consumes the URL once its attempt resolves.
   window.addEventListener("popstate", () => {
     if (isInRun || !hasInviteIntent(window.location.pathname, window.location.search)) return;
     const inviteCode = parseInviteCode(window.location.pathname, window.location.search);
-    stripInviteFromLocation();
-    if (inviteCode) void menu.openInvite(inviteCode);
-    else if (client) void menu.showOnlineHome(INVITE_LINK_BROKEN_NOTE);
+    if (inviteCode && client) void menu.openInvite(inviteCode);
+    else void landUnjoinableInvite();
   });
 
-  // Cold-load room invite (/r/<CODE> or ?room=CODE): route straight into that room's Play
-  // Online lobby through the same server-validated join a typed code takes. The URL is
-  // consumed up front (refresh-safe); a link that fails the room-code grammar lands on the
-  // online home with the honest broken-link note — never a guessed join, never a dead end.
+  // Cold-load room invite (/r/<CODE> or ?room=CODE), beside the ?online=1 / ?gs= routes:
+  // the canonical shell renders first, then the join auto-attempts through the same
+  // validated path as manual JOIN CODE (Menu.openInvite -> doJoinOnline). The URL is
+  // consumed when the attempt resolves — success or failure — so refresh/back never
+  // re-triggers a stale join.
   if (hasInviteIntent(window.location.pathname, window.location.search)) {
     const inviteCode = parseInviteCode(window.location.pathname, window.location.search);
-    stripInviteFromLocation();
-    if (client) {
-      if (inviteCode) await menu.openInvite(inviteCode);
-      else await menu.showOnlineHome(INVITE_LINK_BROKEN_NOTE);
-      if (auth) void auth.completeOAuth();
-      return;
-    }
-    // Offline build: no backend to join through — degrade to the plain title.
+    if (inviteCode && client) await menu.openInvite(inviteCode);
+    else await landUnjoinableInvite();
+    if (auth) void auth.completeOAuth();
+    return;
   }
 
   // `?online=1` deep-links to the online rooms screen (create/join/quick-play). It never

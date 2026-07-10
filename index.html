@@ -733,7 +733,10 @@
       .auth-status{ font-size:10px; color:var(--red); text-align:left; min-height:12px; margin:0; }
       /* Reserved status/failure line on action screens (online home, join code): busy,
          error, and retry copy swap INSIDE this box — the buttons around it never move. */
-      .status-line{ min-height:36px; margin:0; display:flex; align-items:center; justify-content:center; }
+      .status-line{ min-height:36px; margin:0; display:flex; align-items:center; justify-content:center; gap:12px; }
+      /* Compact TRY AGAIN inside the reserved status line (retryable invite failure only):
+         sized to fit the 36px box, so its presence never moves the buttons around it. */
+      .status-line .status-retry{ font-size:9px; letter-spacing:1px; padding:6px 12px; min-height:0; }
 
       .you-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; text-align:left; }
       .you-name{ font-family:var(--f-ui); font-size:11px; color:var(--cream); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

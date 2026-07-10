@@ -131,12 +131,13 @@ async function main(): Promise<void> {
     check("cold load routes invites before the plain title", mainSrc.includes("hasInviteIntent(window.location.pathname, window.location.search)")
       && mainSrc.indexOf("hasInviteIntent") < mainSrc.indexOf("void menu.showTitle()"));
     check("warm arrivals route through popstate", mainSrc.includes('window.addEventListener("popstate"'));
-    check("both paths consume the URL (refresh-safe)", (mainSrc.match(/stripInviteFromLocation\(\)/g) ?? []).length >= 2);
     check("both paths land on the same Menu.openInvite door", (mainSrc.match(/menu\.openInvite\(/g) ?? []).length >= 2);
     check("a warm invite never yanks a live run", mainSrc.includes("if (isInRun || !hasInviteIntent"));
     const menuSrc = readFileSync(join(ROOT, "src/ui/menu.ts"), "utf8");
-    check("the join stays server-authoritative (openInvite uses the SAME lobby.join as a typed code)",
-      menuSrc.includes("await lobby.join(code)"));
+    check("the URL is consumed when the ATTEMPT RESOLVES (menu strips; unjoinable invites strip in main)",
+      menuSrc.includes("stripInviteFromLocation()") && mainSrc.includes("stripInviteFromLocation()"));
+    check("the invite join IS the manual join (openInvite routes through doJoinOnline)",
+      menuSrc.includes("await this.doJoinOnline(code, status,"));
   }
 
   section("the deploy serves the clean path (SPA rewrite for /r/<CODE>)");
