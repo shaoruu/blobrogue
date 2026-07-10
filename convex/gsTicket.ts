@@ -22,12 +22,13 @@ import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { mintGsTicket, worldIdForRoomCode, type GsTicketClaims } from "./gsTicketCore";
+import { isKitUnlocked, masteryLevelForXp, type KitId } from "./masteryCore";
 
 const TICKET_TTL_SECS = 120;
 
 export const mint = action({
-  args: { clientId: v.string(), roomCode: v.optional(v.string()) },
-  handler: async (ctx, { clientId, roomCode }): Promise<{ ticket: string; playerId: string }> => {
+  args: { clientId: v.string(), roomCode: v.optional(v.string()), kit: v.optional(v.string()) },
+  handler: async (ctx, { clientId, roomCode, kit }): Promise<{ ticket: string; playerId: string }> => {
     const secret = process.env.GS_AUTH_SECRET;
     if (!secret) throw new Error("GS_AUTH_SECRET is not configured on this deployment");
     const trimmed = clientId.trim().slice(0, 48);
@@ -51,6 +52,14 @@ export const mint = action({
       if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
       if (profile.cosmetics.face !== null) claims.face = profile.cosmetics.face;
     }
+    // KIT selection (KIT/XP spec §9.5): the account authority validates the requested kit
+    // against the account's Mastery-unlocked set and signs BOTH the validated kit and the
+    // account's mastery level into the ticket. The game server re-gates kt against ml and
+    // downgrades a mismatch — so a client can never join with a kit it has not unlocked.
+    const masteryLevel = masteryLevelForXp(profile?.masteryXp ?? 0);
+    const requested = (kit ?? "gunner") as KitId;
+    claims.kit = isKitUnlocked(requested, masteryLevel) ? requested : "gunner";
+    claims.masteryLevel = masteryLevel;
     if (roomCode !== undefined) {
       if (!profile) throw new Error("join the room before requesting a room ticket");
       // Profile serializes the players-row id as a string; narrow it back for the query arg.

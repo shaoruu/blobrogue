@@ -26,6 +26,10 @@ export interface ProfileDoc {
   amber: number;
   // Earned cosmetic/unlock ids (granted by recordRun; starter items are owned implicitly).
   unlocks: string[];
+  // Account MASTERY (KIT/XP spec §4): the persistent ACCESS track (lifetime XP + derived level)
+  // the lobby reads to gate kit selection. Optional so an older backend still decodes.
+  masteryXp?: number;
+  masteryLevel?: number;
   // Present when the profile is account-backed (Google avatar URL).
   image?: string;
   // True when this stats row is linked to a signed-in account.
@@ -159,7 +163,7 @@ export const api = {
     // Trusted mint for the authoritative game-server join ticket (HMAC over GS_AUTH_SECRET).
     // With a roomCode, the mint verifies room membership and binds the room's world id into
     // the ticket, so friends sharing a code land in the same isolated server world.
-    mint: makeFunctionReference<"action", { clientId: string; roomCode?: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
+    mint: makeFunctionReference<"action", { clientId: string; roomCode?: string; kit?: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
   },
   rooms: {
     create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),

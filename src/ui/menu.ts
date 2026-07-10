@@ -10,6 +10,8 @@ import { playerColor, PLAYER_COLORS } from "../game/assets.js";
 import { resolveNameInput, rerollBlobName } from "../net/blobName.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
+import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js";
+import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { cosmeticIcon } from "../game/cosmeticArt.js";
@@ -1738,6 +1740,12 @@ export class Menu {
       wrap.appendChild(list);
       wrap.appendChild(el("p", "muted", `${players.length} player${players.length === 1 ? "" : "s"} in the room`));
 
+      // KIT select (spec §5): each player picks their OWN kit pre-run — no forced roles,
+      // 4× the same kit is legal. Locked kits show greyed with their unlock threshold (the
+      // same visible-but-locked aspiration pattern as the premium shop). Server-validated at
+      // join against account Mastery, so the pick is intent, never authority.
+      wrap.appendChild(this.kitSelectPanel(profile, render));
+
       const row = el("div", "btnrow");
       if (lobby.status === "playing") {
         // A run is live in this room (e.g. you stepped out mid-run) — jump back in.
@@ -1764,6 +1772,37 @@ export class Menu {
     this.teardownLobby();
     this.unsub = lobby.onChange(render);
     render();
+  }
+
+  // The pre-run KIT picker (spec §5): the four kit cards, the account-unlocked ones selectable
+  // (the pick persists locally + rides the join ticket), the locked ones greyed with their
+  // "REACH ACCOUNT LV N" threshold. Per-player, no forced comp. `rerender` re-runs the lobby
+  // render so the selection highlight updates (kit choice is local, not a lobby event).
+  private kitSelectPanel(profile: ProfileDoc | null, rerender: () => void): HTMLElement {
+    const level = profile?.masteryLevel ?? 1;
+    const selected = getSelectedKit();
+    const panel = el("div", "kit-select");
+    panel.appendChild(el("div", "kit-select-title", `CHOOSE YOUR KIT \u00b7 ACCOUNT LV ${level}`));
+    const grid = el("div", "kit-grid");
+    for (const kit of KIT_IDS) {
+      const meta = KIT_META[kit];
+      const unlocked = isKitUnlocked(kit, level);
+      const isSel = unlocked && kit === selected;
+      const card = el("button", `kit-card${unlocked ? "" : " locked"}${isSel ? " sel" : ""}`);
+      (card as HTMLButtonElement).type = "button";
+      card.appendChild(el("div", "kit-name", meta.name));
+      card.appendChild(el("div", "kit-role", `${meta.role} \u00b7 ${meta.ult}`));
+      card.appendChild(el("div", "kit-blurb", meta.blurb));
+      card.appendChild(el("div", "kit-lock", unlocked ? "" : `REACH ACCOUNT LV ${kitUnlockLevel(kit)}`));
+      if (unlocked) {
+        card.addEventListener("click", () => { setSelectedKit(kit); rerender(); });
+      } else {
+        (card as HTMLButtonElement).disabled = true;
+      }
+      grid.appendChild(card);
+    }
+    panel.appendChild(grid);
+    return panel;
   }
 
   // One tap shares the FULL invite URL (/r/<CODE>), not just the code: the native share

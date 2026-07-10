@@ -525,6 +525,19 @@
       .menu p.invite-url { min-height: 15px; font-size: var(--fs-sm); color: var(--ink-mute); margin: 0; overflow-wrap: anywhere; max-width: 360px; user-select: text; }
       .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
       .playerrow { display: flex; align-items: center; gap: 10px; font-size: var(--fs-md); }
+      /* KIT/XP §5: pre-run kit picker in the lobby. Per-player; locked cards greyed with their
+         unlock threshold (the visible-but-locked aspiration pattern). */
+      .kit-select { margin: 6px 0; }
+      .kit-select-title { font-family: var(--f-ui); font-size: var(--fs-xs); letter-spacing: 2px; color: var(--amber); margin-bottom: 6px; }
+      .kit-grid { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 8px; }
+      .kit-card { text-align: left; padding: 8px 10px; background: var(--dun-0); box-shadow: inset 0 0 0 2px var(--dun-3); color: var(--cream); cursor: pointer; font-family: var(--f-ui); }
+      .kit-card:hover { box-shadow: inset 0 0 0 2px var(--dun-4); }
+      .kit-card.sel { box-shadow: inset 0 0 0 2px var(--amber); background: rgba(255,180,60,.08); }
+      .kit-card.locked { opacity: .5; cursor: not-allowed; }
+      .kit-name { font-family: var(--f-logo); font-size: var(--fs-md); letter-spacing: 1px; color: #ffe6b0; }
+      .kit-role { font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--blu); text-transform: uppercase; margin-bottom: 3px; }
+      .kit-blurb { font-size: var(--fs-2xs); color: var(--ink-mute); line-height: 1.3; }
+      .kit-lock { font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--amber); margin-top: 4px; min-height: 12px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 
       /* --- The one-time online name gate + the lobby's YOU confirmation --- */
