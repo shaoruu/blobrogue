@@ -549,6 +549,100 @@ export const AMBUSH = {
   playerClear: 120, // never queued inside this range of a standing player
 } as const;
 
+// ---- PARTY+GEAR-AWARE SCALING (the balancer's R framework) ----
+// What makes a strong 4-stack actually sweat: boss encounters scale off the party's
+// MEASURED power — headcount AND gear in one number — sampled once at the pull and
+// never rescaled mid-fight. Server-authoritative, deterministic from seed+loadouts.
+//
+//   ExpectedDPS(player) = weapon base DPS × blessing mults (damage / fire rate / the
+//     boss-capped crit expectation) × the boss-facing pellet/weapon coefficients ×
+//     0.72 practical factor (the 12s-moving-target model the DPS ceilings use)
+//   PartyDPS = Σ contributions;   R = clamp(PartyDPS / refDPS(floor), 1.0, 6.0)
+//
+// Guards: each contribution is floored at weakFloorFrac × refDPS / P (one weak or
+// naked player can never drag the pull below baseline), and a SOLO player never
+// scales past R = soloGearCap from gear alone — the strong solo build is the intended
+// power fantasy (its ceiling is the DPS-model gate, never HP).
+//
+// EFFECTIVE HP is sublinear and hard-capped (never a sponge): HPfrac = 1 +
+// hpPerR × (R − 1), clamped at hpFracCap. HP alone must never close the gap — the
+// surplus (R − 1) buys MECHANICS: add pressure (cap up, interval down, hard clamps),
+// the phase-timer soft-enrage (burn a phase faster than burnFrac × its R-scaled
+// budget and the NEXT phase carries one authored extra PATTERN — never damage, never
+// HP, never invuln), and pattern density in DISJOINT lanes only (the overlap arbiter
+// is never relaxed). Downed/disconnected players never change R mid-fight.
+
+export const POWER = {
+  practicalFactor: 0.72,
+  rMin: 1.0,
+  rMax: 6.0,
+  weakFloorFrac: 0.55,   // per-player contribution floor: 0.55 × refDPS / P
+  soloGearCap: 1.15,     // a solo player's gear never scales R past this
+  // Khp, measured DOWN from the balancer's opening 0.62 (its own remedy ladder: the
+  // 4-strong band outranks the constant, and at 0.62 the measured god-stack P50 sat
+  // ~6s over the 30–40s band once add pressure and climb downtime were real).
+  hpPerR: 0.45,          // HPfrac = 1 + hpPerR × (R − 1)…
+  hpFracCap: 2.9,        // …clamped: never a sponge
+  addCapPerR: 1.6,       // add cap = round(base + addCapPerR × (R − 1))…
+  addCapMax: 8,          // …hard-clamped
+  addIntervalPerR: 0.9,  // interval = max(min, base − addIntervalPerR × (R − 1))
+  addIntervalMin: 3.0,
+  phaseTimerPerR: 0.10,  // Tphase = base × (1 + phaseTimerPerR × (R − 1))
+  burnFrac: 0.55,        // a phase burned faster than this × Tphase arms the soft-enrage
+  // The surprise wave rides the SAME add budget (never on top), one per phase, only
+  // at R ≥ surpriseMinR, with a longer tell and wider player clearance than the
+  // ordinary ambush — and never during a forced transition.
+  surpriseMinR: 3.0,
+  surpriseTell: 0.9,
+  surpriseClear: 140,
+} as const;
+
+// The balancer's per-floor reference DPS (the floor's median practical output). Boss
+// floors between anchors ride the nearest band; deep floors hold the finale's.
+export function refDpsForFloor(floor: number): number {
+  if (floor <= 5) return 20.7;
+  if (floor <= 15) return 36;
+  if (floor <= 20) return 36;
+  if (floor <= 25) return 43;
+  return 46;
+}
+
+// The pull's power ratio from per-player expected-DPS contributions (order-independent:
+// the guard floors each contribution before the sum).
+export function powerRatioFor(contributions: readonly number[], floor: number): number {
+  const players = contributions.length;
+  if (players === 0) return POWER.rMin;
+  const ref = refDpsForFloor(floor);
+  const perPlayerFloor = (POWER.weakFloorFrac * ref) / players;
+  let partyDps = 0;
+  for (const dps of contributions) partyDps += Math.max(dps, perPlayerFloor);
+  let r = Math.max(POWER.rMin, Math.min(POWER.rMax, partyDps / ref));
+  if (players === 1) r = Math.min(r, POWER.soloGearCap);
+  return r;
+}
+
+export function bossHpFracFor(r: number): number {
+  return Math.min(POWER.hpFracCap, 1 + POWER.hpPerR * (r - 1));
+}
+
+export function bossAddCapFor(baseCap: number, r: number): number {
+  return Math.min(POWER.addCapMax, Math.round(baseCap + POWER.addCapPerR * (r - 1)));
+}
+
+export function bossAddIntervalFor(base: number, r: number): number {
+  return Math.max(POWER.addIntervalMin, base - POWER.addIntervalPerR * (r - 1));
+}
+
+export function phaseTimerFor(base: number, r: number): number {
+  return base * (1 + POWER.phaseTimerPerR * (r - 1));
+}
+
+// The authored expected phase duration per boss (the soft-enrage yardstick, ≈ the
+// solo median wall-clock over its three phases).
+export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
+  boss: 16, marrow: 15, weaver: 13, gilded: 15, choir: 17,
+};
+
 // One curated pool entry: a known readable creature at a tier, weighted for the draw.
 // maxAlive caps entries that must stay singular (a second commander is noise, not
 // pressure); complex movers additionally respect the live mover cap at spawn time.
@@ -806,7 +900,8 @@ export const WEAVER = {
   silkDamage: 1,
   silkLife: 2.2,
   silkWebRadius: 40,      // a silk bolt webs where it lands
-  spiderlingEvery: 4.0,   // ambush pool drops while she is up
+  spiderlingEvery: 4.0,   // ambush pool drops while she is up (R tightens toward 3.0)
+  spiderlingCapBase: 2,   // live spiderling budget at R1 (R lifts it, clamped at 8)
   sacRingDist: 200,       // the clutch blooms on this ring around her perch
   descendTell: 0.35,      // the marked drop's own tell before the air beat
   descendAir: 0.4,        // the marked drop (forced or voluntary)
@@ -1048,6 +1143,9 @@ export function coopMobHpMult(players: number): number {
   return 1 + COOP.mobHpPerExtra * (clampPlayers(players) - 1);
 }
 
+// Headcount-only boss-grade scaling — the GAUNTLET CAPTAINS' and MINIBOSSES' curve.
+// The five real bosses ride the R framework instead (bossHpFracFor over the measured
+// party+gear ratio — headcount is inside R, never multiplied in separately).
 export function coopBossHpMult(players: number): number {
   return 1 + COOP.bossHpPerExtra * (clampPlayers(players) - 1);
 }

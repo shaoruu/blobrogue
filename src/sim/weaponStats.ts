@@ -10,7 +10,10 @@ import { WEAPONS } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
 import type { WeaponId } from "./types.js";
 import type { PlayerMods } from "./items.js";
-import { CAPS } from "./balance.js";
+import {
+  CAPS, POWER, BOSS_VULN_CAP, BOSS_NATIVE_PELLET_COEF, BOSS_EXTRA_PELLET_COEF,
+  WEAPON_BOSS_COEF,
+} from "./balance.js";
 import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
 
 // 0 at full HP -> 1 at death's door; scales the berserk/adrenaline payoffs.
@@ -161,6 +164,28 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   const kick = FIRE_KNOCKBACK[w.id];
   if (kick >= 12) m.push({ tag: "KICK", text: "KICKS YOU BACK", mag: kick });
   return m;
+}
+
+// ---- the R framework's per-player measurement (party+gear-aware boss scaling) ----
+// One player's EXPECTED boss-facing DPS from their loadout alone: weapon base output
+// through the SAME boss-facing coefficients real shots resolve with (pellet coefs,
+// per-family boss coefs, the capped crit channel — statuses amplify nothing against
+// boss-grade bodies; burn counts its flat bounded DoT), times the balancer's 0.72
+// practical factor (the 12s-moving-target model behind the DPS ceilings). Pure and
+// deterministic over (weapon, mods): the pull's R sample derives from exactly this.
+export function expectedBossDps(id: WeaponId, mods: PlayerMods): number {
+  const w = WEAPONS[id];
+  const isMelee = w.melee !== undefined;
+  const pellets = isMelee ? 1 : w.pellets + mods.extraPellets;
+  const extra = Math.max(0, pellets - w.pellets);
+  const effPellets = isMelee
+    ? 1
+    : 1 + Math.max(0, w.pellets - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
+  const wepCoef = WEAPON_BOSS_COEF[id] ?? 1;
+  const vuln = (1 - mods.critChance) + mods.critChance * Math.min(BOSS_VULN_CAP, mods.critMult);
+  const rate = (1 / w.fireCd) * mods.fireRateMult;
+  const burnDot = mods.burnChance > 0 ? 3 : 0;
+  return w.damage * mods.damageMult * effPellets * wepCoef * rate * vuln * POWER.practicalFactor + burnDot;
 }
 
 export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number): WeaponDisplayStats {

@@ -24,7 +24,7 @@ import {
 import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
-import { lowHpFrac, liveDamageMult, liveFireRateMult } from "./weaponStats.js";
+import { lowHpFrac, liveDamageMult, liveFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
 import type { InputCmd, PlayerId } from "./input.js";
@@ -35,7 +35,8 @@ import {
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
-  AMBUSH,
+  AMBUSH, POWER, PHASE_TIME_BASE, powerRatioFor, bossAddCapFor, bossAddIntervalFor,
+  phaseTimerFor,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices,
@@ -215,6 +216,11 @@ export interface WorldState {
   // Co-op encounter snapshot (§8): living players at floor build, clamped 1–4. Drives
   // enemy HP / threat budget / heart-rate scaling; NEVER rescales living enemies mid-floor.
   encounterPlayers: number;
+  // The R framework's pull sample (party+gear-aware boss scaling, balance.ts POWER):
+  // the party's measured power ratio, taken at encounter creation from loadouts alone
+  // and NEVER rescaled mid-fight. Bosses read it for effective HP and every surplus
+  // mechanic lever (add pressure, soft-enrage budgets, surprise waves, density).
+  encounterPower: number;
   // Threat-cap reinforcements: pre-planned units beyond the ActiveThreatCap, released in
   // waves as the living threat drops (spawnReleaseCd staggers the trickle).
   pendingSpawns: Enemy[];
@@ -313,6 +319,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     flowSources: [],
     rng: new Rng(seed ^ 0x53696d21),
     encounterPlayers: 1,
+    encounterPower: 1,
     pendingSpawns: [],
     spawnReleaseCd: 0,
     heartsThisFloor: 0,
@@ -384,6 +391,15 @@ export function setPlayerAbsence(w: WorldState, id: PlayerId, isAbsent: boolean)
   if (!isAbsent) p.invuln = Math.max(p.invuln, C.PLAYER_SPAWN_GRACE);
 }
 
+// The pull's measured power ratio R: every present player's expected boss-facing DPS
+// (weaponStats.expectedBossDps — pure over their loadout) through the balancer's
+// guard rails (weak-player floor, solo gear cap, [1, 6] clamp).
+function sampleEncounterPower(w: WorldState): number {
+  const contributions: number[] = [];
+  for (const p of w.players.values()) contributions.push(expectedBossDps(p.weapon, p.mods));
+  return powerRatioFor(contributions, w.floor);
+}
+
 // A single open walled rectangle for the dev sandbox — reuses the Dungeon/Room shape so
 // the renderer + pathfinder run unchanged.
 function buildArena(): Dungeon {
@@ -407,6 +423,11 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.floor = floor;
   w.rev++;
   w.encounterPlayers = clampPlayers(Math.max(1, w.players.size));
+  // The R framework's pull sample (party+gear in one measured number, balance.ts
+  // POWER): taken HERE, at encounter creation, exactly like the player snapshot —
+  // downed/disconnected players never change it mid-fight, and it derives purely from
+  // loadouts, so every client and the server agree.
+  w.encounterPower = sampleEncounterPower(w);
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.hazards = [];
@@ -443,7 +464,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers);
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.encounterPower);
   w.enemies = spawns.active;
   w.pendingSpawns = spawns.pending;
   w.spawnReleaseCd = 0;
@@ -1369,6 +1390,16 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   boss.attackCount = 0;
   boss.isNextRadial = true;
   boss.laneKnotId = 0; // the beat replaces any committed move — no stale blink lane
+  // The phase-timer soft-enrage (R framework): a phase burned faster than burnFrac ×
+  // its R-scaled budget means the party skipped the lesson — the NEXT phase carries
+  // one authored extra PATTERN (never damage, never HP, never invuln).
+  const phaseBudget = phaseTimerFor(PHASE_TIME_BASE[e.kind] ?? 14, w.encounterPower);
+  boss.enrage = boss.phaseTime < POWER.burnFrac * phaseBudget ? 1 : 0;
+  boss.phaseTime = 0;
+  boss.isSurpriseSpent = false;
+  if (boss.enrage === 1) {
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.7, gain: 0.8, trauma: 0.08 });
+  }
   boss.roar = { floorHp, queued, queuedBy: null };
   beginWindup(e, def.move);
   // The beat's shockwave dissipates every projectile near the boss — a readable reset.
@@ -1378,9 +1409,12 @@ function checkBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // The beat's adds at evenly marked edges. Interactive beats (MARROW's husks, the
   // Choir's wisps) remember them: killing every one collapses the beat early.
   boss.beatAddIds.length = 0;
+  // The R framework's beat-add lever: the Weaver's molt raises one extra broodling at
+  // R ≥ 3.5 (a body, not a stat — the interactive beats keep their authored counts).
+  const addCount = def.addCount + (e.kind === "weaver" && w.encounterPower >= 3.5 ? 1 : 0);
   const edgeAngle = w.rng.next() * Math.PI * 2;
-  for (let i = 0; i < def.addCount; i++) {
-    const add = spawnBossAdd(w, e, edgeAngle + (i / Math.max(1, def.addCount)) * Math.PI * 2, ev);
+  for (let i = 0; i < addCount; i++) {
+    const add = spawnBossAdd(w, e, edgeAngle + (i / Math.max(1, addCount)) * Math.PI * 2, ev);
     if (add && def.isBreakable) boss.beatAddIds.push(add.id);
   }
   // Fair surprise §3: the Warden's sanctify RESHAPES the archive — its old shelving
@@ -1974,6 +2008,8 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (e.boss.exposed === 0) e.boss.windowBank = 0;
       e.aux = e.boss.exposed;
     }
+    // The soft-enrage yardstick: seconds spent in the current phase (R framework).
+    if (e.boss) e.boss.phaseTime += dt;
     if (e.panicTime > 0) e.panicTime = e.panicTime > dt ? e.panicTime - dt : 0;
     // The echoed elite's scheduled repeat: the last ranged release refires once, along
     // the same locked bearing, from wherever the body now stands.
@@ -3774,11 +3810,13 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
 
   // Add pacing pauses during the transition roar (the roar spawns its own marked pair).
+  // Add pressure rides the R framework: the interval tightens and the cap grows with
+  // the pull's measured surplus, both hard-clamped (never more than addCapMax live).
   if (!boss.roar) {
     boss.addTimer -= dt;
     if (boss.addTimer <= 0) {
-      boss.addTimer = BOSS.addInterval[boss.phase];
-      const cap = BOSS.addCap[boss.phase];
+      boss.addTimer = bossAddIntervalFor(BOSS.addInterval[boss.phase], w.encounterPower);
+      const cap = bossAddCapFor(BOSS.addCap[boss.phase], w.encounterPower);
       for (let i = 0; i < BOSS.addBatch[boss.phase]; i++) {
         if (countBossAdds(w) >= cap) break;
         spawnBossAdd(w, e, w.rng.next() * Math.PI * 2, ev);
@@ -3799,10 +3837,13 @@ function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   bossChase(w, e, dt, ev);
 }
 
-// Living boss-summoned adds (the cadence cap counts only summons, never floor enemies).
+// Living boss-summoned adds (the cadence cap counts only summons, never floor enemies —
+// and never the mechanic/decoy bodies: knots, sacs and noise hold no add budget).
 function countBossAdds(w: WorldState): number {
   let n = 0;
-  for (const e of w.enemies) if (!e.dead && e.isSummoned && !isBossKind(e.kind)) n++;
+  for (const e of w.enemies) {
+    if (!e.dead && e.isSummoned && !isBossKind(e.kind) && !isDecoyKind(e.kind)) n++;
+  }
   return n;
 }
 
@@ -3907,6 +3948,13 @@ function bossRadialFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   for (let i = 0; i < BOSS.radialCount; i++) {
     spawnEnemyBullet(w, e.x, e.y, base + (i / BOSS.radialCount) * 6.28, 260, 7, BOSS.globDamage, "#a24bff", 2.6);
   }
+  // The King's soft-enrage pattern: a second, slower OFFSET ring — one more readable
+  // weave through the gaps, never a damage or speed change.
+  if (boss && boss.enrage === 1) {
+    for (let i = 0; i < BOSS.radialCount; i++) {
+      spawnEnemyBullet(w, e.x, e.y, base + Math.PI / BOSS.radialCount + (i / BOSS.radialCount) * 6.28, 200, 7, BOSS.globDamage, "#a24bff", 2.6);
+    }
+  }
   ev.push({ t: "radialBurst", x: e.x, y: e.y });
   // Every 2nd radial orders the living slimes into a delayed pack surge — coordinated
   // pressure with zero extra HP.
@@ -4006,12 +4054,12 @@ function drawFromAddPool(w: WorldState, boss: Enemy, pool: readonly AddPoolEntry
 // Queue one ambush: the omen tell at a settled anchor (never on/beside a standing
 // player), carrying its spawn payload. Returns whether the tell was actually placed —
 // a blocked anchor skips the ambush, it never relocates onto someone.
-function queueAmbush(w: WorldState, x: number, y: number, kind: Enemy["kind"], tier: EnemyTier, forBossId: number, ev: SimEvent[]): boolean {
+function queueAmbush(w: WorldState, x: number, y: number, kind: Enemy["kind"], tier: EnemyTier, forBossId: number, ev: SimEvent[], tell: number = AMBUSH.tell, clear: number = AMBUSH.playerClear): boolean {
   if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[kind].radius)) return false;
-  if (isNearAnyPlayer(w, settlePoint.x, settlePoint.y, AMBUSH.playerClear)) return false;
+  if (isNearAnyPlayer(w, settlePoint.x, settlePoint.y, clear)) return false;
   w.hazards.push({
     id: w.nextHazardId++, kind: "omen", x: settlePoint.x, y: settlePoint.y,
-    radius: AMBUSH.radius, life: AMBUSH.tell, maxLife: AMBUSH.tell,
+    radius: AMBUSH.radius, life: tell, maxLife: tell,
     spawnKind: kind, spawnTier: tier, forBossId: forBossId > 0 ? forBossId : undefined,
   });
   ev.push({ t: "cue", name: "enemyAttack", x: settlePoint.x, y: settlePoint.y, rate: 1.7, gain: 0.45, trauma: 0 });
@@ -4020,8 +4068,9 @@ function queueAmbush(w: WorldState, x: number, y: number, kind: Enemy["kind"], t
 
 // Queue an entry's whole wave around an origin: `count` bodies, each with its own
 // omen, retrying a few seeded ring angles per body so a crowded anchor SKIPS rather
-// than relocating onto someone. Returns how many tells actually stood.
-function queueAmbushWave(w: WorldState, origin: Enemy, dist: number, entry: AddPoolEntry, forBossId: number, ev: SimEvent[]): number {
+// than relocating onto someone. Surprise waves (R framework) pass their longer tell +
+// wider clearance. Returns how many tells actually stood.
+function queueAmbushWave(w: WorldState, origin: Enemy, dist: number, entry: AddPoolEntry, forBossId: number, ev: SimEvent[], tell: number = AMBUSH.tell, clear: number = AMBUSH.playerClear): number {
   let placed = 0;
   const base = w.rng.next() * Math.PI * 2;
   for (let i = 0; i < entry.count; i++) {
@@ -4029,16 +4078,19 @@ function queueAmbushWave(w: WorldState, origin: Enemy, dist: number, entry: AddP
       const ang = base + (i / Math.max(1, entry.count)) * Math.PI * 2 + attempt * 2.399963;
       const x = origin.x + Math.cos(ang) * dist;
       const y = origin.y + Math.sin(ang) * dist;
-      if (queueAmbush(w, x, y, entry.kind, entry.tier, forBossId, ev)) { placed++; break; }
+      if (queueAmbush(w, x, y, entry.kind, entry.tier, forBossId, ev, tell, clear)) { placed++; break; }
     }
   }
   return placed;
 }
 
-// Pending ambush bodies (they hold cap budget the moment their tell stands).
+// Pending ambush bodies (they hold cap budget the moment their tell stands — mechanic
+// blooms like the Weaver's sacs are objectives, never add pressure, so they don't).
 function countPendingOmens(w: WorldState): number {
   let n = 0;
-  for (const h of w.hazards) if (h.kind === "omen" && h.spawnKind !== undefined && h.life > 0) n++;
+  for (const h of w.hazards) {
+    if (h.kind === "omen" && h.spawnKind !== undefined && h.life > 0 && !isDecoyKind(h.spawnKind)) n++;
+  }
   return n;
 }
 
@@ -4115,13 +4167,20 @@ function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   if (!boss.roar) {
     boss.addTimer -= dt;
     if (boss.addTimer <= 0) {
-      boss.addTimer = MARROW.addInterval[boss.phase];
-      const cap = MARROW.addCap[boss.phase];
-      for (let i = 0; i < MARROW.addBatch[boss.phase]; i++) {
+      boss.addTimer = bossAddIntervalFor(MARROW.addInterval[boss.phase], w.encounterPower);
+      const cap = bossAddCapFor(MARROW.addCap[boss.phase], w.encounterPower);
+      // The phase's ONE surprise wave (R ≥ surpriseMinR): a second draw on the same
+      // slot — it CONSUMES the add budget (cap-gated like everything else), stands
+      // behind the longer surprise tell, and never fires during a beat.
+      const isSurprise = w.encounterPower >= POWER.surpriseMinR && !boss.isSurpriseSpent;
+      const batch = MARROW.addBatch[boss.phase] + (isSurprise ? 1 : 0);
+      if (isSurprise) boss.isSurpriseSpent = true;
+      for (let i = 0; i < batch; i++) {
         if (countBossAdds(w) + countPendingOmens(w) >= cap) break;
         const entry = drawFromAddPool(w, e, MARROW.addPool);
         if (!entry) break;
-        queueAmbushWave(w, e, 150, entry, 0, ev);
+        if (isSurprise) queueAmbushWave(w, e, 190, entry, 0, ev, POWER.surpriseTell, POWER.surpriseClear);
+        else queueAmbushWave(w, e, 150, entry, 0, ev);
       }
     }
   }
@@ -4134,7 +4193,17 @@ function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
       : a.move === "rush" ? MARROW.chargeRecover
       : a.move === "spin" ? MARROW.spinRecover
       : MARROW.volleyRecover;
-    if (a.time >= recDur) enterIdle(e);
+    if (a.time >= recDur) {
+      // The soft-enrage pattern: charges come in PAIRS — a survived rush re-telegraphs
+      // one more full-windup charge (a crash always ends the pair: the bait pays double).
+      if (a.move === "rush" && boss.enrage === 1 && boss.spinCount === 0) {
+        boss.spinCount = 1;
+        beginWindup(e, "rush");
+        ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.4, gain: 0.7, trauma: 0 });
+        return;
+      }
+      enterIdle(e);
+    }
     return;
   }
 
@@ -4439,7 +4508,8 @@ function choirRematerialize(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 function choirWailFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const a = e.attack;
   const boss = e.boss!;
-  const n = CHOIR.wailCount[boss.phase];
+  // The soft-enrage pattern: one more seeker in the volley (the Choir's authored lever).
+  const n = CHOIR.wailCount[boss.phase] + boss.enrage;
   for (let i = 0; i < n; i++) {
     const off = n === 1 ? 0 : (i / (n - 1) - 0.5) * CHOIR.wailSpread;
     const ang = a.lockedAngle + off;
@@ -4628,6 +4698,13 @@ function weaverWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
       for (let i = 0; i < WEAVER.moltBoltCount; i++) {
         spawnEnemyBullet(w, e.x, e.y, (i / WEAVER.moltBoltCount) * Math.PI * 2, WEAVER.moltBoltSpeed, WEAVER.shardRadius, WEAVER.shardDamage, "#c98bff", WEAVER.shardLife);
       }
+      // The soft-enrage pattern: a second, slower OFFSET ring — a denser weave to
+      // read on the way out, never a damage change.
+      if (e.boss!.enrage === 1) {
+        for (let i = 0; i < WEAVER.moltBoltCount; i++) {
+          spawnEnemyBullet(w, e.x, e.y, Math.PI / WEAVER.moltBoltCount + (i / WEAVER.moltBoltCount) * Math.PI * 2, WEAVER.moltBoltSpeed * 0.8, WEAVER.shardRadius, WEAVER.shardDamage, "#c98bff", WEAVER.shardLife);
+        }
+      }
       ev.push({ t: "radialBurst", x: e.x, y: e.y });
       enterIdle(e);
       weaverMoltReshape(w, e, ev);
@@ -4734,12 +4811,23 @@ function weaverClimbActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]):
     boss.spinCount++;
     a.isAimLocked = false;
   }
-  // Spiderling drops: the pool draw, omen-telegraphed near her perch.
+  // Spiderling drops: the pool draw, omen-telegraphed near her perch. The R framework
+  // tightens the cadence and lifts the live cap with the pull's surplus (hard-clamped),
+  // and the phase's ONE surprise wave (R ≥ surpriseMinR) doubles a slot INSIDE the
+  // same budget — never on top of it, never during a beat.
   boss.addTimer -= dt;
   if (boss.addTimer <= 0) {
-    boss.addTimer = WEAVER.spiderlingEvery;
-    const entry = drawFromAddPool(w, e, WEAVER.addPool);
-    if (entry) queueAmbushWave(w, e, 150, entry, 0, ev);
+    boss.addTimer = bossAddIntervalFor(WEAVER.spiderlingEvery, w.encounterPower);
+    const cap = bossAddCapFor(WEAVER.spiderlingCapBase, w.encounterPower);
+    const isSurprise = w.encounterPower >= POWER.surpriseMinR && !boss.isSurpriseSpent;
+    if (isSurprise) boss.isSurpriseSpent = true;
+    for (let i = 0; i < (isSurprise ? 2 : 1); i++) {
+      if (countBossAdds(w) + countPendingOmens(w) >= cap) break;
+      const entry = drawFromAddPool(w, e, WEAVER.addPool);
+      if (!entry) break;
+      if (isSurprise) queueAmbushWave(w, e, 190, entry, 0, ev, POWER.surpriseTell, POWER.surpriseClear);
+      else queueAmbushWave(w, e, 150, entry, 0, ev);
+    }
   }
   // The forced-down switch: the whole clutch is silenced (and none still blooming).
   const hasClutch = boss.windowAddIds.length > 0;
@@ -4805,8 +4893,10 @@ function weaverDescendLand(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 // builds the floor against you while she is up.
 function weaverSilkVolley(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const a = e.attack;
-  for (let i = 0; i < WEAVER.silkBolts; i++) {
-    const off = (i - (WEAVER.silkBolts - 1) / 2) * WEAVER.silkSpread;
+  // The soft-enrage pattern: a wider fan (+2 bolts) — more silk to read, same damage.
+  const bolts = WEAVER.silkBolts + (e.boss!.enrage === 1 ? 2 : 0);
+  for (let i = 0; i < bolts; i++) {
+    const off = (i - (bolts - 1) / 2) * WEAVER.silkSpread;
     const ang = a.lockedAngle + off;
     w.bullets.push({
       x: e.x + Math.cos(ang) * (e.radius + 6), y: e.y + Math.sin(ang) * (e.radius + 6),
@@ -4847,11 +4937,39 @@ function weaverDashActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
     const knot = w.enemies.find((o) => !o.dead && o.kind === "knot" && o.id === boss.laneKnotId - 1);
     if (knot && weaverLaneSilkCount(w, knot) >= WEAVER.laneBrakeSilk) {
       boss.laneKnotId = 0;
+      // The R framework's density lever: at R ≥ 3 a braked dash CHAINS one more lane
+      // (full flare tell, same overshoot bait) — one extra committed pattern, never a
+      // stat. spinCount counts the chain; a crash always ends the sequence.
+      if (w.encounterPower >= 3 && boss.spinCount < 1) {
+        const next = weaverPickDashLane(w, e);
+        if (next && next.id !== knot.id) {
+          boss.spinCount++;
+          weaverCommitChainedDash(w, e, next, ev);
+          return;
+        }
+      }
       enterRecover(e); // controlled brake: no window
       return;
     }
   }
   if (a.time >= 1.6) { boss.laneKnotId = 0; enterRecover(e); } // hard safety bound
+}
+
+// The chained dash (R ≥ 3): the same full flare tell + lane commit, WITHOUT consuming
+// a new attack slot — the chain is one commitment's pattern, not a faster rotation.
+function weaverCommitChainedDash(w: WorldState, e: Enemy, knot: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const a = e.attack;
+  a.phase = "windup";
+  a.time = 0;
+  a.windup = 0;
+  const exit = weaverLaneExit(w, e, knot);
+  a.lockedAngle = Math.atan2(exit.y - e.y, exit.x - e.x);
+  a.isAimLocked = true;
+  a.markX = exit.x;
+  a.markY = exit.y;
+  boss.laneKnotId = knot.id + 1;
+  ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.75, trauma: 0 });
 }
 
 // ---- the lattice: knots, lanes, silk ----
@@ -5244,7 +5362,9 @@ function gildedActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   // sweep: wave one fired at release; P3's offset second wave follows after the gap.
   // spinCount counts the EXTRA waves already released this commitment.
   const boss = e.boss!;
-  const extraWaves = GILDED.sweepWaves[boss.phase] - 1;
+  // The soft-enrage pattern: one more offset wave to walk through — never faster, never
+  // heavier (the R framework's authored Warden lever).
+  const extraWaves = GILDED.sweepWaves[boss.phase] - 1 + boss.enrage;
   if (boss.spinCount < extraWaves && a.time >= (boss.spinCount + 1) * GILDED.sweepWaveGap) {
     gildedSweepWave(w, e, ev);
     boss.spinCount++;
@@ -6522,7 +6642,10 @@ export function stepWorld(w: WorldState, inputs: Map<PlayerId, InputCmd>, dt: nu
 // ---- dev sandbox helpers (client dev tools mutate the world through these) ----
 
 export function devSpawnEnemy(w: WorldState, kind: Enemy["kind"], x: number, y: number, tier?: EnemyTier): Enemy {
-  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers, tier });
+  // A dev/sandbox-spawned BOSS is its own pull: sample R off the loadouts standing
+  // right now (harnesses grant weapons/blessings first, then spawn).
+  if (isBossKind(kind)) w.encounterPower = sampleEncounterPower(w);
+  const e = createEnemy(kind, x, y, w.floor, w.rng, w.nextEnemyId++, { players: w.encounterPlayers, tier, power: w.encounterPower });
   w.enemies.push(e);
   return e;
 }

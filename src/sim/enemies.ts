@@ -8,7 +8,7 @@ import {
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
-  captainHpForFloor,
+  captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
@@ -444,6 +444,10 @@ export interface CreateEnemyOpts {
   tier?: EnemyTier;
   isSummoned?: boolean;
   players?: number; // encounter player snapshot (co-op HP/KB scaling); 1 = solo
+  // The pull's measured power ratio R (party+gear, sampled at encounter creation) —
+  // BOSS HP scales off THIS, never off headcount alone (R already includes it). 1 =
+  // baseline (solo / unmeasured).
+  power?: number;
 }
 
 // The seeded sim Rng supplies the bat's initial `zig` heading so enemy creation is
@@ -455,8 +459,11 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
   const tierDef = TIERS[tier];
   const players = opts.players ?? 1;
   const isBoss = isBossKind(kind);
+  // Boss HP: the R framework's sublinear, hard-capped effective HP (party+gear in one
+  // measured number — headcount is never multiplied in separately). Mobs keep the
+  // per-player co-op curve.
   const hp = isBoss
-    ? Math.round((enemyHpForFloor(kind, floor) * coopBossHpMult(players)) / 10) * 10
+    ? Math.round((enemyHpForFloor(kind, floor) * bossHpFracFor(opts.power ?? 1)) / 10) * 10
     : Math.max(1, roundHalfToEven(a.baseHp * floorHpMult(floor) * tierDef.hpMult * coopMobHpMult(players)));
   const speed = isBoss
     ? a.baseSpeed
@@ -503,6 +510,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
         exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
+        phaseTime: 0, enrage: 0, isSurpriseSpent: false,
       }
       : null,
   };
@@ -961,7 +969,7 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   return plan;
 }
 
-export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1): FloorSpawns {
+export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, power = 1): FloorSpawns {
   const rng = new Rng((seed ^ 0x9e3779b9) + floor * 2654435761);
   const roomCount = dungeon.rooms.length;
   if (roomCount <= 1) return { active: [], pending: [] };
@@ -989,7 +997,7 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bossRoom = roomCount - 1;
     const b = pointInRoom(rng, dungeon, bossRoom);
-    active.push(createEnemy(bossKind, b.x, b.y, floor, rng, active.length, { players }));
+    active.push(createEnemy(bossKind, b.x, b.y, floor, rng, active.length, { players, power }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);

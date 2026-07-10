@@ -1058,6 +1058,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // Earned windows: the exposed remainder rides the aux channel (the render key);
         // the bank and mechanic id lists are sim-internal and never travel.
         exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
+        phaseTime: 0, enrage: 0, isSurpriseSpent: false,
       }
       : null,
   };

@@ -140,6 +140,16 @@ export interface BossState {
   // Fair surprise §1: the add pool's previous draw index (-1 = none yet) — weighted
   // selection never repeats the exact entry twice in a row, so waves can't be rote.
   lastAddPick: number;
+  // ---- the R framework (party+gear-aware scaling; see balance.ts POWER) ----
+  // Seconds spent in the CURRENT phase — the soft-enrage yardstick.
+  phaseTime: number;
+  // 1 while the current phase carries its authored extra PATTERN (the "you skipped
+  // the lesson" beat: the previous phase was burned faster than burnFrac × its
+  // R-scaled budget). Never damage, never HP, never invuln — one more readable
+  // pattern in the rotation. 0 otherwise.
+  enrage: number;
+  // The phase's one surprise wave (R ≥ surpriseMinR) has been spent. Reset each phase.
+  isSurpriseSpent: boolean;
 }
 
 export interface Enemy extends Entity {
