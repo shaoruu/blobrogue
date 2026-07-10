@@ -6,13 +6,13 @@ I iterate through this until done. Newest feedback appended; status kept current
 ## SHIPPED LIVE (this session, v8→v15)
 🟢 Menu polish, dash sync, invite links, weapon wave (7 effect guns), lighting/AO, hotbar cap+swap, weapon rarity (legendary+mystery), boss earned-window rework + party/gear scaling, premium coin economy + Mythic, co-op game-feel (remote audio sync, friendly-fire bonk, coin-to-wallet, no-card-on-1-9, world-anchored E prompt), player CHANGELOG.
 
-## BUILT & VERIFIED — awaiting deploy (Ian playing, deploy held)
-🟡 #69 Combat/perf: boss WALL-PATHING fix, thumper/all FPS fixes + standing perf gate, effect-guns (snapwire/halo/crook) break barrels, sunlance range+fire-sound, coin-in-wall spawn clamp, corpse cap, flocker O(n²).
-🟡 #70 UI: big centered hero blob, reorganized menu nav hierarchy, TABBED settings, design-system tokens (color/type/focus/keycap), in-game What's New panel.
+## SHIPPED LIVE — 2026-07-10 deploy (v15)
+🟢 #69 Combat/perf: boss WALL-PATHING fix, thumper/all FPS fixes + standing perf gate, effect-guns (snapwire/halo/crook) break barrels, sunlance range+fire-sound, coin-in-wall spawn clamp, corpse cap, flocker O(n²).
+🟢 #70 UI: big centered hero blob, reorganized menu nav hierarchy, TABBED settings, design-system tokens (color/type/focus/keycap), in-game What's New panel.
 
 ## BUGS (investigating → fix batch)
 🟡 Heart double-consume — "consume a heart even though I consumed a heart" (extra heart spent). [investigating]
-🟡 Leaderboard stuck — reached floor ~36 but leaderboard shows 20; deepest floor not recorded past a point. [investigating]
+🟡 Leaderboard stuck — DIAGNOSED: recordRun only fires on clean game-over (full wipe); death-while-teammates-continue / disconnect / quit never submit the deeper floor. FIX: persist deepest floor per-descend via a NEW Convex mutation (recordFloorProgress, Math.max fold) + client descend hook. Needs Convex deploy. [fix queued]
 🟡 Name change doesn't work — profile rename shipped (#53) but Ian can't change username. [investigating]
 🟡 Sentry (Prism Sentry) has no animation — static turret. [investigating]
 🟡 Umbra (phase) sprite is broken/ugly. [investigating]
