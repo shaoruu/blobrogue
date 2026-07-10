@@ -11,6 +11,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟢 #70 UI: big centered hero blob, reorganized menu nav hierarchy, TABBED settings, design-system tokens (color/type/focus/keycap), in-game What's New panel.
 
 ## BUGS (investigating → fix batch)
+🟡 Cosmetic equip 'COULDN'T SAVE — REVERTED' — equipping a 2nd cosmetic fails to persist (AD saw it as a guest). Art renders fine; save/persistence hiccup, maybe guest-only or a rapid-equip race. [investigating — confirm signed-in persists]
 🟡 Heart double-consume — DIAGNOSED: heal-heart consume paths are provably atomic + test-covered (NOT the bug). Suspect = max-HP 'Heart Container' vs heal-'Heart' confusion: applyMaxHpBonus (world.ts:1084) applies the +4 cap BEFORE subtracting the artifact devil-deal hpTithe (:1539), so a capped player buying the artifact loses containers the cap already ate → reads as double-spend. FIX: subtract tithe from raw bonus before the positive clamp; add sequential pickup+shop+artifact test; confirm w/ Ian if he means heal-hearts or containers. Golden regen if applyMaxHpBonus changes. [fix queued]
 🟡 Leaderboard stuck — DIAGNOSED: recordRun only fires on clean game-over (full wipe); death-while-teammates-continue / disconnect / quit never submit the deeper floor. FIX: persist deepest floor per-descend via a NEW Convex mutation (recordFloorProgress, Math.max fold) + client descend hook. Needs Convex deploy. [fix queued]
 🟡 Name change doesn't work — DIAGNOSED: GUEST rename path works + is test-covered. The failure = SIGNED-IN (Google) accounts: name field disabled (menu.ts:424) AND server overwrites with the Google account name (players.ts ensureAccountRow:181), so a signed-in rename reverts = 'doesn't work'. FIX: either allow an account displayName distinct from Google name (stop ensureAccountRow clobbering), or make the read-only UI copy explain why. Client+Convex only, no game-server deploy. [fix queued]
@@ -20,7 +21,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Consuming hearts when already at/над full? (part of heart bug) [investigating]
 
 ## CONTENT — more of (Ian loves it)
-🟢 MORE HATS/COSMETICS (3×) — SHIPPED LIVE (#72): 12 hats + 5 face items wired (assetKeys+rows), procedural painters DELETED, all resolve (no invisible). AD final gate = live closet. Body-color skins + more waves = future.
+🟢 MORE HATS/COSMETICS (3×) — SHIPPED LIVE (#72): 12 hats + 5 face items wired (assetKeys+rows), procedural painters DELETED, all resolve (no invisible). AD FINAL PLACEMENT GATE PASSED on live closet (top hat crowns head, specs on eye-line under hat, no invisible, padlocks correct). BATCH CLOSED. Body-color skins + more waves = future.
 🟡 MORE BLESSINGS — Ian loves them, wants more variety (respect raw caps). [game designer speccing]
 🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). [creative director owns roadmap]
 🟡 BIGGER BOSSES sometimes — periodic GIANT/spectacle multi-phase set-piece bosses. [roadmap]
