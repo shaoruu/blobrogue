@@ -46,3 +46,5 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Run persistence — reconnect resumes the run instead of dropping it. [todo → design]
 🟡 Hotbar full-swap flow redo (auto-swap equipped, E for slot pick). [specced]
 🟡 Everything spawnable in DEV WORLD (standing checklist per feature).
+
+- 🔵 BUILDING (bc-7fbd7d88) — Wave 1 boss ENCOUNTERS: JET F35 (mirror), Tithe F40 (feeder+2-state slab), Quorum F45 (3-husk shared-HP+tether+merge). All 3 bosses' art AD-locked + on main (#74/#75/#78); randomness layer live (#76). This is the 'more bosses / repeats at 35' fix.
