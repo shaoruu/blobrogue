@@ -333,6 +333,10 @@ const TRAUMA_DESCEND = 0.22;
 const TRAUMA_BOSS_FLOOR = 0.5;
 const TRAUMA_REMOTE_DOWN = 0.3;
 
+// How long (seconds) a Prism Sentry's post-shot recoil kick + muzzle flare plays out; the
+// barrel eases back to rest over this window. Client render only (no sim/golden effect).
+const SENTRY_RECOIL_TIME = 0.18;
+
 // ---- combo / kill-chain multiplier (per-local-player, mirrors the kills counter) ----
 // Each kill bumps the combo and refreshes a short window; let it lapse and the chain
 // resets to 0. The combo tier drives a coin/score multiplier, a small kill-trauma ramp,
@@ -748,6 +752,11 @@ export class Game {
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
+  // Prism Sentry render state, keyed by the (stable) server effect id. The wire carries no
+  // aim/fireCd for a sentry, so the turret's barrel tracks the last-fired direction and the
+  // recoil kick is driven off the sentryShot event's timestamp (animClock at fire) — a live,
+  // aiming, firing turret without any sim/golden change. Pruned to live sentries each render.
+  private sentryFx = new Map<number, { aim: number; firedAt: number }>();
   // Per-biome side-face gradients for the extruded wall look (built once). Indexed by biome.
   private wallSideGrads: [TileRenderGradient, TileRenderGradient][] = [];
   private currentBiome: Biome = biomeForFloor(1);
@@ -1088,6 +1097,7 @@ export class Game {
     this.decals = [];
     this.afterimages = [];
     this.muzzle.t = 0;
+    this.sentryFx.clear();
     this.shockwaves.clear();
     this.screenFlash.clear();
     this.motes.reseed(this.biomeIdx, this.px - this.canvas.width / 2, this.py - this.canvas.height / 2, this.canvas.width, this.canvas.height);
@@ -2402,10 +2412,15 @@ export class Game {
         waveAudio.cueAt("sentry.damaged", e.x, e.y);
         this.spawnPuff(e.x, e.y, 4, "#c8a8ff");
         break;
-      case "sentryShot":
+      case "sentryShot": {
         if (!waveAudio.cueAt("sentryShot", e.x, e.y)) this.sfxAt("homing", e.x, e.y, { rate: 1.15, gain: 0.45 });
         this.spawnParticles(e.x + Math.cos(e.aim) * 14, e.y + Math.sin(e.aim) * 14, 2, "#c8a8ff");
+        // Persist this shot's aim + fire time on the nearest sentry (the event carries the
+        // turret's position, and sentries are static) so the barrel keeps tracking and the
+        // recoil kick plays out even between the 20Hz shot events.
+        this.recordSentryShot(e.x, e.y, e.aim);
         break;
+      }
       case "sentryDown":
         // Destroyed shatters; a timeout powers down — the deployable's two endings.
         if (!waveAudio.cueAt(e.why === "timeout" ? "sentry.timeout" : "sentryDown", e.x, e.y)) {
@@ -5634,6 +5649,7 @@ export class Game {
   // (the local player especially — the 20Hz effect anchor would lag the predicted body).
   private renderEffectEntities() {
     const { ctx, cam } = this;
+    this.pruneSentryFx();
     let isDrawing = false;
     for (const e of this.effects) {
       if (e.kind === "zone" || e.kind === "wire") continue;
@@ -5641,20 +5657,41 @@ export class Game {
       if (e.kind === "sentry") {
         const sx = e.x - cam.x, sy = e.y - cam.y;
         ctx.globalAlpha = 1;
+        // A live turret READS live: an idle breathing pulse/bob so a placed sentry never
+        // freezes, a barrel that tracks the last-acquired target (persisted from sentryShot),
+        // and a brief recoil kick + muzzle flare right after a shot.
+        const fx = this.sentryFx.get(e.id);
+        const aim = fx ? fx.aim : this.animClock * 1.4; // never fired yet: a slow idle sweep
+        const recoil = fx ? Math.max(0, 1 - (this.animClock - fx.firedAt) / SENTRY_RECOIL_TIME) : 0;
+        const pulse = 1 + Math.sin(this.animClock * 4 + e.id * 1.7) * 0.05;
+        const bob = Math.sin(this.animClock * 2.4 + e.id * 0.9) * 1.4;
+        const kick = recoil * 4; // the whole body kicks back opposite the shot
+        const bcx = sx - Math.cos(aim) * kick;
+        const bcy = sy + bob - Math.sin(aim) * kick;
         const core = this.sprites.fxTinted("sentry_core", "#c8a8ff");
+        // The barrel muzzle: a short nub toward the target, recoiling into the body on fire.
+        const barrel = e.radius + 6 - recoil * 5;
+        const mx = bcx + Math.cos(aim) * barrel, my = bcy + Math.sin(aim) * barrel;
+        ctx.strokeStyle = "#e0d0ff";
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(bcx, bcy); ctx.lineTo(mx, my); ctx.stroke();
+        if (recoil > 0.55) { // muzzle flare on the freshest frames of a shot
+          ctx.fillStyle = "#f0e6ff";
+          ctx.beginPath(); ctx.arc(mx, my, 2 + recoil * 2, 0, 6.28); ctx.fill();
+        }
         if (core) {
-          ctx.drawImage(core, sx - e.radius * 1.4, sy - e.radius * 1.4, e.radius * 2.8, e.radius * 2.8);
+          const r = e.radius * 1.4 * pulse;
+          ctx.save();
+          ctx.translate(bcx, bcy);
+          ctx.rotate(aim); // the turret body faces its target
+          ctx.drawImage(core, -r, -r, r * 2, r * 2);
+          ctx.restore();
         } else {
           ctx.fillStyle = "#3a2f52";
-          ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+          ctx.beginPath(); ctx.arc(bcx, bcy, e.radius * pulse, 0, 6.28); ctx.fill();
           ctx.strokeStyle = "#c8a8ff";
           ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.arc(sx, sy, e.radius - 2, 0, 6.28); ctx.stroke();
-          const spin = this.animClock * 1.8;
-          ctx.beginPath();
-          ctx.moveTo(sx, sy);
-          ctx.lineTo(sx + Math.cos(spin) * (e.radius + 5), sy + Math.sin(spin) * (e.radius + 5));
-          ctx.stroke();
+          ctx.beginPath(); ctx.arc(bcx, bcy, e.radius * pulse - 2, 0, 6.28); ctx.stroke();
         }
         // Durability pips over the body — a destructible deployable must read as one.
         if (e.hp >= 0 && e.maxHp > 0 && e.hp < e.maxHp) {
@@ -5752,6 +5789,29 @@ export class Game {
   private effectOwnerPos(e: Effect): [number, number] {
     if (e.owner === LOCAL_ID) return [this.px, this.py];
     return [e.x, e.y];
+  }
+
+  // A sentryShot fired at (x,y): match it to the nearest live sentry (turrets are static and
+  // the event carries the turret's position) and stamp the barrel aim + fire time so the
+  // renderer can keep the barrel tracking and play the recoil kick between shot events.
+  private recordSentryShot(x: number, y: number, aim: number): void {
+    let best: number | null = null;
+    let bestD = Infinity;
+    for (const e of this.effects) {
+      if (e.kind !== "sentry") continue;
+      const d = (e.x - x) ** 2 + (e.y - y) ** 2;
+      if (d < bestD) { bestD = d; best = e.id; }
+    }
+    if (best !== null) this.sentryFx.set(best, { aim, firedAt: this.animClock });
+  }
+
+  // Drop render state for sentries that no longer exist (effect ids climb forever, so the
+  // map must not accumulate dead turrets).
+  private pruneSentryFx(): void {
+    if (this.sentryFx.size === 0) return;
+    const live = new Set<number>();
+    for (const e of this.effects) if (e.kind === "sentry") live.add(e.id);
+    for (const id of this.sentryFx.keys()) if (!live.has(id)) this.sentryFx.delete(id);
   }
 
   // The local Breach hold: a fill ring on the player plus a landing marker at the
