@@ -30,6 +30,23 @@
          never shift the layout under the title menu. */
       #game { width: min(100vw, 2560px); height: min(100vh, 1440px); }
 
+      /* === GLOBAL PIXEL SCROLLBAR ===
+         ONE scrollbar for every scrollable surface (menu shell, closet grid, run-build
+         strip, drawers, leaderboard — anything that overflows): thin, squared, token-
+         colored, so the native OS chrome never breaks the dungeon look. Firefox via
+         scrollbar-width/scrollbar-color; WebKit via the pseudo-element parts. No radius,
+         no gradients — a flat dun thumb that warms to amber-lo under the pointer. */
+      *{ scrollbar-width:thin; scrollbar-color:var(--dun-4) var(--dun-0); }
+      ::-webkit-scrollbar{ width:10px; height:10px; }
+      ::-webkit-scrollbar-track{ background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-1); }
+      ::-webkit-scrollbar-thumb{ background:var(--dun-4); border:2px solid var(--dun-0); border-radius:0; }
+      ::-webkit-scrollbar-thumb:hover{ background:var(--amber-lo); }
+      ::-webkit-scrollbar-thumb:active{ background:var(--amber-lo); }
+      ::-webkit-scrollbar-corner{ background:var(--dun-0); }
+      /* Fixed panels reserve their scrollbar gutter up front, so content never shifts
+         when an overflow appears mid-hydration (zero-CLS). */
+      .menu, .closet-grid, .pc-build, .hb-drawer{ scrollbar-gutter:stable; }
+
       /* --- HUD 4-corner layout (ui designer, docs/ui/hud_section_B_hud.css) --- */
       /* --ui-scale is set from the persisted UI-scale setting (src/ui/settings.ts). */
       #hud{ position:fixed; inset:0; z-index:5; pointer-events:none; font-family:var(--f-num); zoom:var(--ui-scale,1); }
@@ -491,22 +508,57 @@
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
         padding:22px 26px 20px; width:min(840px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
         display:flex; flex-direction:column; gap:16px; align-items:stretch; }
-      /* CANONICAL HOME GEOMETRY: 840x520 shell, 86px hero, 1.22fr/0.78fr body; left rows
-         16/82/54/16/154 (heading / PLAY ONLINE / PLAY SOLO / status / glance); right 176px
-         identity card + two 90px destinations. Fixed on desktop; media queries below relax
-         it for narrow/short viewports. */
-      .menu-home{ height:520px; }
-      .hero{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; height:86px; flex:0 0 86px; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
+      /* CANONICAL HOME GEOMETRY (the accepted placement): the shell is a grid of a
+         RAISED 150px hero row + minmax(0,1fr) body at height min(548px,100vh-40px),
+         min-height 508px. Only the hero row grew — the body boxes are UNCHANGED from
+         the shipped launchpad: left rows 82/54/16/154 (PLAY ONLINE / PLAY SOLO /
+         status / glance), right 112px identity card + two stacked 82px destinations —
+         so every zero-CLS box below the hero stays identical. Desktop budget closes
+         exactly: 548 - 48 chrome = 500 = 150 hero + 14 row gap + 336 body
+         (= 82+54+16+154 + 3 x 10 column gaps). */
+      .menu-home{ display:grid; grid-template-rows:150px minmax(0,1fr); gap:14px;
+        height:min(548px,calc(100vh - 40px)); min-height:508px; }
+      /* --- THE HERO BLOB STAGE (identity showpiece) ---
+         Two-column hero band: the wordmark left, the 132x132 .blob-stage right. The
+         stage holds a 96px canvas rendered by the shared CosmeticLoadout renderer with
+         the calm idle (canvas-side blink/wave, capped) over a quiet radial plinth glow
+         and a soft ground-shadow ellipse — the blob STANDS, it never floats. Deliberate
+         non-chrome: NO button affordance, NO amber fill, NO arrow, no CSS animation —
+         PLAY ONLINE below stays the only amber-filled element and the first action.
+         Every bound here is fixed from first paint, so cosmetics/loading never shift
+         anything. */
+      /* Explicit row AND column: the CUSTOMIZE chip shares this grid cell (grid-placed
+         over the band), and auto-placement must never push the hero into an implicit
+         second column. */
+      .home-hero{ grid-row:1; grid-column:1; display:grid; grid-template-columns:1fr 132px; gap:16px; align-items:center;
+        min-height:0; overflow:hidden; padding-bottom:10px; border-bottom:2px solid var(--dun-3); }
+      .hero-mark{ display:flex; flex-direction:column; align-items:center; gap:5px; text-align:center; min-width:0; }
       /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
          attributes so the space is reserved before the file streams in). */
       .logo-img{ image-rendering:pixelated; height:40px; width:235px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
-      .hero .tag{ font-family:var(--f-ui); font-size:10px; line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
+      .home-hero .tag{ font-family:var(--f-ui); font-size:10px; line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
+      .home-hero .blob-stage{ position:relative; flex:none; width:132px; height:132px;
+        background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
+      /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
+      .home-hero .blob-stage::before{ content:""; position:absolute; inset:6px; border-radius:50%;
+        background:radial-gradient(closest-side, rgba(255,180,59,.16), rgba(255,180,59,.05) 55%, transparent 74%); }
+      /* the soft ground-shadow ellipse under the feet — standing, not floating */
+      .home-hero .blob-stage::after{ content:""; position:absolute; left:50%; bottom:15px; width:60px; height:10px;
+        transform:translateX(-50%); border-radius:50%; background:rgba(5,3,11,.55); }
+      .home-hero .blob-stage .blob-preview{ position:relative; z-index:1; width:96px; height:96px;
+        image-rendering:pixelated; background:transparent; }
+      /* The small closet door beside the blob — the natural place to tap your guy. Quiet
+         secondary chrome. DOM-LAST (PLAY keeps first tab/reading order) but grid-placed
+         INTO the hero row, anchored at the blob's feet — no absolute offsets, so the
+         responsive hero variants keep it beside the blob for free. */
+      .stage-customize{ grid-row:1; grid-column:1; justify-self:end; align-self:end; margin:0 140px 12px 0;
+        z-index:2; min-width:0; width:auto; font-size:8px; letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
       .body{ display:flex; gap:20px; align-items:stretch; }
       .home-body{ display:grid; grid-template-columns:1.22fr 0.78fr; gap:20px; flex:1; min-height:0; }
       .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
-      /* Exact left rows: 16 heading / 82 online / 54 solo / 16 status / 154 glance. */
-      .home-left{ display:flex; flex-direction:column; gap:12px; min-width:0; }
-      .home-left > .col-h{ height:16px; flex:0 0 16px; }
+      /* Exact left rows: 82 online / 54 solo / 16 status / 154 glance (+ 3 x 10px gaps
+         = 336, the body row under the 150px hero). */
+      .home-left{ display:flex; flex-direction:column; gap:10px; min-width:0; }
       .home-left .btn-quick{ height:82px; flex:0 0 82px; padding:0 22px; }
       .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; }
       .home-left .lb-preview{ margin-top:0; }
@@ -561,9 +613,17 @@
          (identity stays 176, destinations stay 90); the glance stays exactly 3 rows at a
          fixed 142px (5 pad + 18 head + 4 gap + 88 rows + 4 gap + 18 state + 5 pad). */
       @media (max-width:680px){
-        .menu-home{ height:auto; }
+        .menu-home{ height:auto; min-height:0; grid-template-rows:auto auto; }
         .body{ flex-direction:column; }
         .home-body{ grid-template-columns:1fr; }
+        /* Narrow: the hero STACKS (accepted responsive spec) — centered wordmark above a
+           104px stage (80px blob), PLAY immediately below and still the first action
+           above the fold. */
+        .home-hero{ grid-template-columns:1fr; justify-items:center; gap:8px; }
+        .home-hero .blob-stage{ width:104px; height:104px; }
+        .home-hero .blob-stage .blob-preview{ width:80px; height:80px; }
+        .home-hero .blob-stage::after{ bottom:11px; width:50px; height:9px; }
+        .stage-customize{ justify-self:center; margin:0 0 12px 122px; }
         .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; }
         /* .home-left carries the specificity so the later base .lb-preview rule can't
            override this media block (source order vs cascade). */
@@ -571,11 +631,16 @@
         .home-right .identity-card{ height:108px; flex:0 0 108px; }
         .home-right .home-dest{ height:66px; flex:0 0 66px; }
       }
-      /* Short viewports NEVER hide the trusted leaderboard preview: the shell relaxes to
-         auto height and home-body scrolls in document order — Play is the first content
-         and stays above the fold. */
+      /* Short viewports (accepted responsive spec): a compact 100px hero row with an
+         88px stage (64px blob) so PLAY + the leaderboard preview stay visible without
+         scrolling Play off-screen; the shell follows content and never hides the glance. */
       @media (max-height:679px){
-        .menu-home{ height:auto; }
+        .menu-home{ height:auto; min-height:0; grid-template-rows:100px minmax(0,1fr); }
+        .home-hero{ grid-template-columns:1fr 88px; }
+        .home-hero .blob-stage{ width:88px; height:88px; }
+        .home-hero .blob-stage .blob-preview{ width:64px; height:64px; }
+        .home-hero .blob-stage::after{ bottom:10px; width:36px; height:7px; }
+        .stage-customize{ margin:0 98px 8px 0; }
       }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===
@@ -696,10 +761,21 @@
         min-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pc-rank{ min-height:14px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:#8f87a8;
         text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      /* Owner-only slot (CUSTOMIZE BLOB); reserved on read-only profiles too, so both
-         variants share byte-identical card geometry. */
-      .pc-left-slot{ min-height:40px; display:flex; align-items:flex-end; }
+      /* Owner-only slot (name editor + CUSTOMIZE BLOB); reserved on read-only profiles
+         too, so both variants share byte-identical card geometry. */
+      .pc-left-slot{ min-height:40px; display:flex; flex-direction:column; gap:8px; justify-content:flex-end; }
       .pc-customize{ width:100%; min-width:0; font-size:9px; padding:10px 8px; letter-spacing:1px; }
+      /* The editable blob name (own Overview): guests edit + SAVE anytime through the
+         same sanitized login path; signed-in goes read-only (the server names accounts
+         from Google). Fixed rows — 12 label / 30 field / 12 note — inside the card. */
+      .pc-nameedit{ width:100%; display:flex; flex-direction:column; gap:4px; }
+      .pc-nameedit > .col-h{ height:12px; }
+      .pc-namerow{ display:flex; gap:6px; }
+      .menu input[type=text].pc-nameinput{ flex:1 1 0; min-width:0; width:auto; height:30px; font-size:16px; padding:4px 8px; }
+      .pc-nameinput:disabled{ color:#9a8fb5; }
+      .pc-name-save{ flex:0 0 auto; min-width:52px; height:30px; font-size:9px; padding:0 10px; letter-spacing:1px; }
+      .menu p.pc-name-note{ font-family:var(--f-ui); font-size:8px; letter-spacing:.2px; color:var(--dun-4); text-transform:none;
+        line-height:12px; height:12px; margin:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pc-right{ flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
       .pc-run{ grid-template-columns:1fr 1fr 1fr 1fr; }
       .pc-run .stat-value{ font-size:18px; }
@@ -727,51 +803,79 @@
       .build-chip{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--cream); padding:5px 8px;
         background:#0d0819; box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)); }
       .build-chip.weapon{ color:var(--amber-hi); box-shadow:inset 0 0 0 1px var(--amber-lo); }
-      /* --- THE CLOSET: a fixed panel (stage | categories + grid + note + action strip).
-         Card states are carried by GEOMETRY + GLYPH + TEXT, never hue alone: previewing
-         lifts 2px with a double keyline and a caret; equipped wears the thick keyline and
-         the fisheye; locked is disabled (unfocusable) with its exact condition; NEW wears
-         the star. Browsing writes only the temporary preview — the strip commits. */
+      /* --- THE CLOSET: a fixed panel (stage | categories + grid + inline message line).
+         INSTANT EQUIP — no action strip, no save step, nothing to discard. Card states
+         (.cos-card owned|equipped|locked) are carried by GEOMETRY + GLYPH + TEXT, never
+         hue alone: equipped lifts 3px with the amber DOUBLE frame, the persistent .cos-
+         check badge and the EQUIPPED chip; locked wears the hatch overlay, the .cos-lock
+         glyph, a desaturated thumb and its exact condition as the chip (still focusable
+         so the condition is readable); NEW wears the one-visit chip; the in-flight write
+         rides a tiny .cos-saving corner spinner. */
       .closet-panel{ display:flex; gap:16px; width:min(640px,100%); height:430px; margin:0 auto; padding:14px;
         background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); text-align:left; }
       .closet-stage{ flex:0 0 128px; display:flex; flex-direction:column; gap:6px; align-items:center; }
       .closet-stage .blob-preview{ width:128px; height:128px; image-rendering:pixelated;
         background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); }
-      .closet-stage-state{ min-height:12px; font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:#8f87a8; margin:0; text-transform:none; }
       .closet-right{ flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
       .closet-cats{ display:flex; gap:6px; flex:0 0 30px; }
       .closet-cat{ flex:1; min-width:0; font-size:8px; padding:8px 4px; letter-spacing:1px; }
       .closet-cat.on{ box-shadow:inset 0 0 0 2px var(--cream); color:var(--cream); }
       .closet-grid{ flex:1; min-height:0; display:flex; flex-wrap:wrap; gap:8px; align-content:flex-start; overflow-y:auto; }
-      .cos-tile{ position:relative; display:flex; flex-direction:column; align-items:center; gap:3px; width:96px; min-width:0; height:104px; padding:10px 4px 6px;
+      .cos-card{ position:relative; display:flex; flex-direction:column; align-items:center; gap:3px; width:96px; min-width:72px; height:104px; padding:10px 4px 6px;
         text-transform:none; letter-spacing:0; clip-path:none; text-shadow:none; cursor:pointer;
         background:var(--dun-1); color:var(--cream); box-shadow:inset 0 0 0 2px var(--dun-3); transition:none; }
-      .cos-tile:hover:not(:disabled){ transform:none; background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--dun-4); }
-      .cos-tile:active:not(:disabled){ transform:none; }
-      /* equipped: THICK keyline + fisheye glyph */
-      .cos-tile.sel, .cos-tile.sel:hover{ box-shadow:inset 0 0 0 3px var(--cream); }
-      /* previewing: 2px lift + DOUBLE keyline + caret glyph (transform only — no layout) */
-      .cos-tile.prev, .cos-tile.prev:hover{ transform:translateY(-2px); box-shadow:inset 0 0 0 1px var(--cream), inset 0 0 0 3px var(--dun-1), inset 0 0 0 4px var(--cream); }
-      .cos-tile.locked{ opacity:.55; cursor:default; }
-      .cos-tile:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:2px; }
-      .cos-glyph{ position:absolute; top:2px; left:5px; font-family:var(--f-num); font-size:13px; line-height:1; color:var(--cream); min-height:12px; }
+      .cos-card.owned:hover{ transform:none; background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--dun-4); }
+      .cos-card:active{ transform:none; }
+      /* equipped: 3px lift + amber DOUBLE frame + the .cos-check badge (geometry first —
+         the lift/frame/badge/chip survive grayscale and every color-vision deficiency). */
+      .cos-card.equipped, .cos-card.equipped:hover{ transform:translateY(-3px); background:var(--dun-2);
+        box-shadow:inset 0 0 0 2px var(--amber), inset 0 0 0 4px var(--dun-0); }
+      .cos-check{ position:absolute; top:3px; right:3px; width:14px; height:14px; display:flex; align-items:center; justify-content:center;
+        font-family:var(--f-num); font-size:12px; line-height:1; color:var(--dun-0); background:var(--amber); box-shadow:0 0 0 1px var(--ink); }
+      /* locked: hatch overlay + lock glyph + desaturated thumb; NOT equippable but still
+         focusable, so the condition chip is readable by keyboard/pad/screen reader. */
+      .cos-card.locked{ cursor:default; color:#9a8fb5; }
+      /* Hover must NOT warm a locked card (the global button:hover would win otherwise —
+         locked cards are enabled so their condition stays focusable/readable). */
+      .cos-card.locked:hover{ transform:none; background:var(--dun-1); box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .cos-card.locked::after{ content:""; position:absolute; inset:0; pointer-events:none;
+        background-image:repeating-linear-gradient(45deg, rgba(5,3,11,.4) 0 2px, transparent 2px 7px); }
+      .cos-card.locked .cos-icon{ filter:grayscale(1) brightness(.7); }
+      /* CSS-drawn padlock (font-independent): body square + shackle. */
+      .cos-lock{ position:absolute; top:8px; right:5px; width:10px; height:7px; background:#9a8fb5; }
+      .cos-lock::before{ content:""; position:absolute; top:-5px; left:2px; width:2px; height:3px;
+        border:2px solid #9a8fb5; border-bottom:0; }
+      /* focus: EXTERNAL cream stepped ring — distinct from the equipped amber double frame. */
+      .cos-card:focus-visible{ outline:2px solid var(--cream); outline-offset:3px; }
       .cos-icon{ width:40px; height:40px; display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--dun-4); }
       .cos-icon canvas{ image-rendering:pixelated; }
+      /* Blob-color swatches always ride with their .cos-name label — never color alone. */
       .cos-swatch{ display:block; width:28px; height:28px; box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }
       .cos-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:.3px; line-height:1.2; text-align:center; }
-      .cos-state{ font-family:var(--f-ui); font-size:7px; letter-spacing:.5px; min-height:18px; color:var(--cream); text-align:center; line-height:1.3; }
+      /* The chip: EQUIPPED / the exact unlock condition / NEW. Reserved two lines. */
+      .cos-chip{ font-family:var(--f-ui); font-size:7px; letter-spacing:.5px; min-height:18px; color:var(--cream); text-align:center; line-height:1.3; }
+      .cos-card.equipped .cos-chip{ color:var(--amber-hi); }
+      /* Tiny corner spinner while the background write is in flight (stepped rotation —
+         pixel-friendly; the card already reads EQUIPPED, success just clears this). */
+      .cos-saving{ position:absolute; left:4px; bottom:4px; width:8px; height:8px;
+        border:2px solid var(--dun-4); border-top-color:var(--cream);
+        animation:cosSaving .7s steps(8) infinite; }
+      @keyframes cosSaving{ to{ transform:rotate(360deg); } }
+      /* The ONE inline message line (failure revert notice / locked-condition readout). */
       .closet-note{ min-height:14px; font-size:11px; margin:0; text-align:left; flex:0 0 14px; }
-      /* The fixed action strip: EQUIP/RESET, or the discard confirmation — same box. */
-      .closet-actions{ flex:0 0 44px; display:flex; gap:8px; align-items:center; }
-      .closet-equip{ min-width:0; flex:1; font-size:11px; padding:11px 8px; letter-spacing:1px; }
-      .closet-reset, .closet-discard, .closet-keep{ min-width:0; flex:1; font-size:9px; padding:11px 8px; letter-spacing:1px; }
-      .closet-confirm-copy{ flex:1.2; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:var(--cream); }
       /* The always-visible close affordance on the profile surfaces (48px touch target),
-         pinned to the shell corner; routes through the same guard as Back/Escape/B. */
+         pinned to the shell corner; same action as Back/Escape/B — just closes. */
       .panel-close{ position:absolute; top:8px; right:8px; z-index:2; min-width:48px; min-height:48px; width:48px; height:48px;
         padding:0; font-size:14px; letter-spacing:0; }
-      /* Mobile closet: PINNED preview stage, horizontal category rail, 2-col grid, and a
-         sticky action strip — the commit controls never scroll out of reach. */
+      /* The closet OVERLAY (the title's CUSTOMIZE door): a panel ABOVE the title, never
+         a mode swap — the translucent scrim keeps Play visibly anchored behind it, and
+         closing returns to the untouched title with the blob repainted in place. */
+      .closet-scrim{ position:fixed; inset:0; z-index:12; display:flex; align-items:center; justify-content:center;
+        padding:16px; background:rgba(5,3,11,.5); }
+      .closet-pop{ width:min(720px,94vw); max-height:min(560px,94vh); overflow:hidden auto; gap:10px; }
+      .closet-pop .closet-pop-h{ padding-right:56px; }
+      /* Mobile closet: PINNED preview stage, horizontal category rail, 2-col grid of
+         >=64px cards — a tap equips instantly, so nothing needs to stay in reach. */
       @media (max-width:680px){
         .closet-panel{ height:auto; max-height:calc(100vh - 150px); overflow-y:auto; flex-direction:column; align-items:stretch; }
         .closet-stage{ position:sticky; top:0; z-index:2; flex-direction:row; justify-content:center; align-items:center;
@@ -781,15 +885,15 @@
         .closet-cats{ overflow-x:auto; flex:0 0 44px; }
         .closet-cat{ flex:0 0 auto; min-width:96px; min-height:44px; white-space:nowrap; }
         .closet-grid{ overflow-y:visible; min-height:0; }
-        .cos-tile{ width:calc(50% - 4px); height:104px; }
-        .closet-actions{ position:sticky; bottom:0; z-index:2; background:#0d0819; box-shadow:0 -2px 0 var(--dun-3); padding:4px 0; flex:0 0 52px; }
-        .closet-equip, .closet-reset, .closet-discard, .closet-keep{ min-height:48px; }
+        .cos-card{ width:calc(50% - 4px); min-width:64px; height:104px; }
       }
-      /* Touch: full-leaderboard rows and closet cards keep >=48px targets. */
+      /* Touch: full-leaderboard rows keep >=48px targets, category tabs >=44px, the
+         72px-tall closet cards already clear the target comfortably, and the CUSTOMIZE
+         chip grows to a full touch target. */
       @media (pointer:coarse){
         .lb-rows-full .lb-row{ height:48px; flex:0 0 48px; }
         .closet-cat{ min-height:44px; }
-        .closet-equip, .closet-reset, .closet-discard, .closet-keep{ min-height:48px; }
+        .stage-customize{ min-height:44px; }
       }
 
       /* --- post-run sign-in nudge: renders WITH the screen, dismiss swaps in place --- */
