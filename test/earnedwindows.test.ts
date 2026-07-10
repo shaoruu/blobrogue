@@ -2,8 +2,8 @@
 //  - GUARDED by default: damage chips to guardMult (0.20–0.35) — reduction, NEVER immunity;
 //  - EXPOSED windows are PLAYER-CREATED via each phase's mechanic, never timed gifts:
 //      Weaver P1: break a lattice KNOT (and snag a mid-blink Weaver off its thread);
-//      Weaver P2: bait the locked pounce onto residual thread — the tangle;
-//      Weaver P3: read the mirror feint — hit the REAL body, never the wefts;
+//      Weaver P2: destroy the egg-sac clutch to force her off the walls;
+//      Weaver P3: bait the lane dash — a broken/empty lane overshoots into the wall;
 //      MARROW:   bait the rush into a wall crash;
 //      Choir:    silence every fragment of the current verse;
 //      Warden:   dodge the committed quake/sweep, punish the open recover;
@@ -149,13 +149,15 @@ function mechanicOnlyGates(): void {
       check("the knot is never where a player already stands (forced reposition)",
         Math.hypot(knot.x - p.x, knot.y - p.y) >= WEAVER.knotPlayerClear - 1e-6,
         `d=${Math.hypot(knot.x - p.x, knot.y - p.y).toFixed(0)}`);
-      const webs0 = w.hazards.filter((h) => h.kind === "web").length;
+      const kx = knot.x, ky = knot.y;
+      const laneWebs0 = w.hazards.filter((h) => h.kind === "web").length;
       plantBullet(w, knot.x, knot.y, 500, 12);
       step(w);
       check("breaking the knot opens the EXPOSED window", isBossExposed(boss)
         && boss.boss!.exposed > WEAVER.knotBreakExpose - 0.1, `exposed=${boss.boss!.exposed.toFixed(2)}s`);
-      check("the collapsed section leaves thread DEBRIS (the P2 bait)",
-        w.hazards.filter((h) => h.kind === "web").length > webs0);
+      check("the lane COLLAPSES with its anchor (silk crumbles) but loose debris remains at the break",
+        w.hazards.filter((h) => h.kind === "web").length < laneWebs0
+        && w.hazards.some((h) => h.kind === "web" && Math.hypot(h.x - kx, h.y - ky) < 8));
       const hp0 = boss.hp;
       plantBullet(w, boss.x, boss.y, 100);
       step(w);
@@ -164,41 +166,69 @@ function mechanicOnlyGates(): void {
     }
   }
 
-  section("Weaver P2 BAIT THE POUNCE: bare floor = fast recover, residual thread = tangle");
+  section("Weaver P2 SHE CLIMBS: untargetable with the clutch as the redirected target");
   {
-    // Force P2, then hand-run a pounce landing on CLEAN floor: no window may open.
     const { w, boss } = bossArena(0xEA22, 20, "weaver");
     boss.hp = boss.maxHp * 0.64; // into P2 territory…
     plantBullet(w, boss.x, boss.y, 1);
     step(w); // …via a damage event (transition machinery runs)
     for (let t = 0; t < 60 * 4; t++) step(w, idle(t)); // ride out the molt beat
     check("the molt transition played (P2)", boss.boss!.phase === 2);
-    w.hazards.length = 0; // clean floor: no residual thread anywhere
-    boss.attack.phase = "active";
-    boss.attack.move = "pounce";
-    boss.attack.time = WEAVER.pounceAir; // land this tick
-    boss.attack.markX = boss.x; boss.attack.markY = boss.y;
-    boss.boss!.spinCount = WEAVER.pounceChains[2]; // last leap of the chain
+    // Walk the machine into the climb.
+    let isClimbing = false;
+    for (let t = 0; t < 60 * 10 && !isClimbing; t++) {
+      step(w, idle(t));
+      isClimbing = boss.attack.move === "dive" && boss.attack.phase === "active";
+    }
+    check("she climbs the walls (dive grammar, untargetable)", isClimbing);
+    const hp0 = boss.hp;
+    plantBullet(w, boss.x, boss.y, 99);
     step(w);
-    check("a bare-floor landing opens NOTHING (fast recover)", !isBossExposed(boss)
-      && boss.attack.move === "pounce" && boss.attack.phase === "recover");
-
-    // Same landing, but the players pre-broke thread onto the spot: the tangle.
-    w.hazards.push({ id: w.nextHazardId++, kind: "web", x: boss.x, y: boss.y, radius: 40, life: 8, maxLife: 8 });
-    boss.attack.phase = "active";
-    boss.attack.move = "pounce";
-    boss.attack.time = WEAVER.pounceAir;
-    boss.attack.markX = boss.x; boss.attack.markY = boss.y;
-    boss.boss!.spinCount = 0;
+    check("the climbing Weaver cannot be shot", boss.hp === hp0);
+    // Alternate targets: the clutch blooms in on omen tells — never idle-punished.
+    let sacs: Enemy[] = [];
+    for (let t = 0; t < 60 * 3 && sacs.length < WEAVER.sacsFor[1]; t++) {
+      step(w, idle(t));
+      sacs = liveOf(w, "sac");
+    }
+    check(`the clutch gathered (${WEAVER.sacsFor[1]} sacs solo) while she is out of reach`,
+      sacs.length >= WEAVER.sacsFor[1], `sacs=${sacs.length}`);
+    // Destroy the whole clutch: she is FORCED DOWN — marked descent, crash, window.
+    for (const sac of sacs) plantBullet(w, sac.x, sac.y, 500, 14);
     step(w);
-    check("a landing baited onto thread TANGLES: crash stagger + the 4s window",
-      isBossExposed(boss) && boss.attack.move === "crash" && boss.attack.phase === "recover",
-      `exposed=${boss.boss!.exposed.toFixed(2)}s move=${boss.attack.move}`);
+    let isForced = false;
+    for (let t = 0; t < 60 * 3 && !isForced; t++) {
+      step(w, idle(t));
+      isForced = boss.attack.move === "crash" && isBossExposed(boss);
+    }
+    check("silencing the last sac forces her down: crash stagger + the 4s window", isForced,
+      `move=${boss.attack.move} exposed=${boss.boss!.exposed.toFixed(2)}s`);
+  }
+  {
+    // The clutch IGNORED: she eventually descends on her own — with NO window.
+    const { w, boss } = bossArena(0xEA23, 20, "weaver");
+    boss.hp = boss.maxHp * 0.64;
+    plantBullet(w, boss.x, boss.y, 1);
+    step(w);
+    for (let t = 0; t < 60 * 4; t++) step(w, idle(t));
+    let sawClimb = false;
+    let sawWindow = false;
+    let isBackDown = false;
+    for (let t = 0; t < 60 * (WEAVER.climbMax + 12) && !isBackDown; t++) {
+      step(w, idle(t));
+      const isUp = boss.attack.move === "dive" && boss.attack.phase === "active";
+      if (isUp) sawClimb = true;
+      if (isBossExposed(boss)) sawWindow = true;
+      if (sawClimb && !isUp && boss.attack.move !== "dive" && boss.attack.move !== "pounce") isBackDown = true;
+    }
+    check("an ignored clutch only delays her: the voluntary descent opens NOTHING",
+      sawClimb && isBackDown && !sawWindow);
+    check("the climb is bounded (climbMax caps the untargetable stretch)", WEAVER.climbMax <= 12);
   }
 
   section("Weaver P1 snag: a knot shot out mid-blink drops the Weaver off its thread");
   {
-    const { w, boss } = bossArena(0xEA23, 20, "weaver");
+    const { w, boss } = bossArena(0xEA24, 20, "weaver");
     // Walk the machine until it commits a blink (P1 weave→blink alternation).
     let isSnagged = false;
     for (let t = 0; t < 60 * 40 && !isSnagged; t++) {
@@ -218,54 +248,56 @@ function mechanicOnlyGates(): void {
       isSnagged && isBossExposed(boss));
   }
 
-  section("Weaver P3 MIRROR FEINT: read the real body; spraying a weft extends guarded");
+  section("Weaver P3 WALL-CRAWL DASH: intact lanes brake her; broken lanes overshoot");
   {
-    // Reading test: the real one is hit during the feint recovery -> final unravel.
-    const { w, boss } = bossArena(0xEA24, 20, "weaver");
-    boss.hp = boss.maxHp * 0.29;
-    plantBullet(w, boss.x, boss.y, 1);
-    step(w);
-    for (let t = 0; t < 60 * 4; t++) step(w, idle(t));
-    check("P3 reached", boss.boss!.phase === 3);
-    let isRead = false;
-    for (let t = 0; t < 60 * 30 && !isRead; t++) {
-      step(w, idle(t));
-      if (boss.attack.move === "decoy" && boss.attack.phase === "recover") {
-        check("the feint split real wefts (clearly-dimmer afterimages)", liveOf(w, "weft").length > 0,
-          `wefts=${liveOf(w, "weft").length}`);
-        plantBullet(w, boss.x, boss.y, 30, 12);
-        step(w, idle(t + 1));
-        isRead = isBossExposed(boss);
-      }
-    }
-    check("a direct hit on the REAL Weaver inside the feint recovery unravels it (4s window)", isRead);
-    check("the resolved feint crumbles every remaining weft", liveOf(w, "weft").length === 0);
-  }
-  {
-    // The punished spray: shooting a weft weaves more web and cancels the read.
     const { w, boss } = bossArena(0xEA25, 20, "weaver");
     boss.hp = boss.maxHp * 0.29;
     plantBullet(w, boss.x, boss.y, 1);
     step(w);
     for (let t = 0; t < 60 * 4; t++) step(w, idle(t));
-    let isSprayed = false;
-    for (let t = 0; t < 60 * 30 && !isSprayed; t++) {
+    check("P3 reached", boss.boss!.phase === 3);
+    // First dash, lane left INTACT: she brakes at the far end — no window.
+    let sawFlare = false;
+    let isBraked = false;
+    for (let t = 0; t < 60 * 30 && !isBraked; t++) {
       step(w, idle(t));
-      const weft = liveOf(w, "weft")[0];
-      if (weft && boss.attack.move === "decoy" && boss.attack.phase === "recover") {
-        const webs0 = w.hazards.filter((h) => h.kind === "web").length;
-        const cd0 = boss.attack.cooldown;
-        plantBullet(w, weft.x, weft.y, 50, 10);
-        step(w, idle(t + 1));
-        isSprayed = true;
-        check("the shot weft bursts into MORE web", w.hazards.filter((h) => h.kind === "web").length > webs0);
-        check("the feint resolves unread: no window, guarded extended",
-          !isBossExposed(boss) && boss.attack.move === "none"
-          && boss.attack.cooldown > cd0 + WEAVER.weftGuardExtend - 0.2,
-          `cd=${boss.attack.cooldown.toFixed(2)}`);
+      const a = boss.attack;
+      if (a.move === "rush" && a.phase === "windup") {
+        sawFlare = true;
+        check("the dash tell is locked for its whole ≥0.6s flare", a.isAimLocked && WEAVER.dashFlare >= 0.6);
+        check("the committed lane is named (its silk is the flare)", boss.boss!.laneKnotId > 0);
+        // Ride the whole commitment untouched.
+        for (let k = 0; k < 60 * 4; k++) {
+          step(w, idle(t + 1 + k));
+          if (boss.attack.move === "rush" && boss.attack.phase === "recover") { isBraked = true; break; }
+          if (boss.attack.move !== "rush") break;
+        }
+        break;
       }
     }
-    check("a weft was sprayed during a feint", isSprayed);
+    check("an INTACT lane brakes the dash at its far end — no window",
+      sawFlare && isBraked && !isBossExposed(boss));
+
+    // Next dash: break the lane's knot DURING the flare — she overshoots into the wall.
+    let isOvershot = false;
+    let sawCrash = false;
+    for (let t = 0; t < 60 * 40 && !isOvershot; t++) {
+      step(w, idle(t));
+      const a = boss.attack;
+      if (a.move === "rush" && a.phase === "windup" && boss.boss!.laneKnotId > 0) {
+        const lane = w.enemies.find((e) => !e.dead && e.id === boss.boss!.laneKnotId - 1);
+        if (lane) plantBullet(w, lane.x, lane.y, 500, 12);
+        for (let k = 0; k < 60 * 4; k++) {
+          step(w, idle(t + 1 + k));
+          if (boss.attack.move === "crash") { sawCrash = true; break; }
+          if (boss.attack.move !== "rush") break;
+        }
+        isOvershot = sawCrash && isBossExposed(boss);
+        break;
+      }
+    }
+    check("a dash into the BROKEN lane overshoots into the wall: crash stagger + the 4s window",
+      isOvershot);
   }
 
   section("MARROW: only the baited wall crash opens its window");
@@ -388,14 +420,14 @@ function transitionGates(): void {
   }
   check("the boss dies only after BOTH molt beats resolve the queued overflow",
     isDead && ticks * DT >= 2 * WEAVER.moltDuration, `death at ${(ticks * DT).toFixed(2)}s`);
-  check("boss death ends danger: knots/wefts/adds despawn and the floor clears", isFloorCleared(w),
+  check("boss death ends danger: knots/sacs/adds despawn and the floor clears", isFloorCleared(w),
     `enemies=${w.enemies.filter((e) => !e.dead).length}`);
 }
 
 // ---- 5. co-op scales the MECHANIC (snapshotted at the pull) ----
 
 function coopMechanicGates(): void {
-  section("co-op scales the tasks: knot/weft/fragment counts follow the snapshotted player count");
+  section("co-op scales the tasks: knot/sac/fragment counts follow the snapshotted player count");
   const countTasks = (players: number): { knots: number; fragments: number } => {
     const w = createWorld(0xEA50, 20, { isSandbox: true, skipLocalPlayer: true });
     w.isGodMode = true;
@@ -439,8 +471,8 @@ function coopMechanicGates(): void {
   check(`4-player pull: ${WEAVER.knotsFor[4]} knots / ${CHOIR.fragmentsFor[4]} fragments (more simultaneous tasks)`,
     four.knots === WEAVER.knotsFor[4] && four.fragments === CHOIR.fragmentsFor[4],
     `knots=${four.knots} fragments=${four.fragments}`);
-  check("the weft count scales too (table contract)",
-    WEAVER.weftsFor[4] > WEAVER.weftsFor[1]);
+  check("the egg-sac clutch scales too: 2 solo, +1 per extra player (table contract)",
+    WEAVER.sacsFor[1] === 2 && WEAVER.sacsFor[2] === 3 && WEAVER.sacsFor[3] === 4 && WEAVER.sacsFor[4] === 5);
 }
 
 // ---- 6. no soft-lock: pure chip kills every earned boss without any mechanic ----
@@ -491,7 +523,7 @@ function determinismGates(): void {
 // ---- 8. wire/view surface: exposed rides aux; mechanic bodies are honest decoys ----
 
 function surfaceGates(): void {
-  section("surface: guard/exposed state rides the aux channel; knots/wefts pay threat, drop nothing");
+  section("surface: guard/exposed state rides the aux channel; knots/sacs pay threat, drop nothing");
   {
     const { w, boss } = bossArena(0xEA80, 25, "gilded");
     let isChecked = false;
@@ -506,10 +538,10 @@ function surfaceGates(): void {
     }
     check("an exposed window was observed on the Warden", isChecked);
   }
-  check("knots and wefts carry real threat cost (summons hold live budget)",
-    ENEMY_ARCHETYPES.knot.threat > 0 && ENEMY_ARCHETYPES.weft.threat > 0);
-  check("knots and wefts are harmless bodies (no touch damage)",
-    ENEMY_ARCHETYPES.knot.touchDamage === 0 && ENEMY_ARCHETYPES.weft.touchDamage === 0);
+  check("knots and sacs carry real threat cost (summons hold live budget)",
+    ENEMY_ARCHETYPES.knot.threat > 0 && ENEMY_ARCHETYPES.sac.threat > 0);
+  check("knots and sacs are harmless bodies (no touch damage)",
+    ENEMY_ARCHETYPES.knot.touchDamage === 0 && ENEMY_ARCHETYPES.sac.touchDamage === 0);
   {
     // Breaking a knot grants no kill credit, no combo, no loot (a play, not an economy).
     const { w } = bossArena(0xEA81, 20, "weaver");

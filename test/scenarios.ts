@@ -217,18 +217,18 @@ const choir: Scenario = {
   },
 };
 
-// THE WEAVER (the earned-windows flagship): break the lattice KNOTS (P1 windows +
-// debris), stand ground so its own webs bait the P2 tangles, and read the P3 feints by
-// aiming only the real body — the golden walks lattice/blink/snag, tangle, molt beats,
-// the mirror feint and the death.
+// THE WEAVER (the earned-windows + fair-surprise flagship): break the lattice KNOTS
+// (P1 windows + P3 lane denial), burst the EGG-SAC clutch to force her off the walls
+// (P2), and unload through every earned window — the golden walks lanes/blink/snag,
+// the climb loop with its omen ambushes, the molt reshapes and the P3 lane dashes.
 const weaverScenario: Scenario = {
   name: "weaver",
   seed: 0x9999,
   floor: 20,
-  ticks: 4400,
+  ticks: 3000,
   // The flagship needs the full arc on the golden clock: a Glass Cannon stack (the
-  // gauntlet golden's precedent) converts windows hard enough to reach the P3 mirror
-  // feint — and proves the bank/floor plumbing under real pressure — inside 2400 ticks.
+  // gauntlet golden's precedent) converts windows hard enough to reach P3 in time —
+  // and proves the bank/floor plumbing under real pressure.
   commands: [
     ...bossGoldenCommands("weaver"),
     { t: "item", tick: 0, itemId: "glass_cannon" },
@@ -238,19 +238,23 @@ const weaverScenario: Scenario = {
   input(_tick, w) {
     if (!w) return { moveX: 0, moveY: 0, aim: 0, firing: true, dash: false };
     const boss = liveKind(w, "weaver");
-    const knot = boss !== undefined && boss.boss !== null && boss.boss.exposed > 0
+    const mechanic = boss !== undefined && boss.boss !== null && boss.boss.exposed > 0
       ? undefined // the window is open: unload on the boss, not the scaffolding
-      : liveKind(w, "knot");
-    // A weaver parked on the muzzle eats every knot shot: circle off it while working
-    // the lattice (the webs the circling lays down are exactly the P2 tangle bait).
+      : liveKind(w, "sac") ?? liveKind(w, "knot");
     const p = w.players.get(LOCAL_ID);
     let moveX = 0, moveY = 0;
-    if (knot !== undefined && boss !== undefined && p !== undefined
-      && Math.hypot(boss.x - p.x, boss.y - p.y) < 140) {
-      const away = Math.atan2(p.y - boss.y, p.x - boss.x) + 0.7;
-      moveX = Math.cos(away); moveY = Math.sin(away);
+    if (mechanic !== undefined && p !== undefined) {
+      if (Math.hypot(mechanic.x - p.x, mechanic.y - p.y) > 280) {
+        // The clutch spreads by design: run the mechanic down.
+        const toward = Math.atan2(mechanic.y - p.y, mechanic.x - p.x);
+        moveX = Math.cos(toward); moveY = Math.sin(toward);
+      } else if (boss !== undefined && Math.hypot(boss.x - p.x, boss.y - p.y) < 140) {
+        // A weaver parked on the muzzle eats the mechanic shot: circle off her.
+        const away = Math.atan2(p.y - boss.y, p.x - boss.x) + 0.7;
+        moveX = Math.cos(away); moveY = Math.sin(away);
+      }
     }
-    return { moveX, moveY, aim: aimFrom(w, knot ?? boss), firing: true, dash: false };
+    return { moveX, moveY, aim: aimFrom(w, mechanic ?? boss), firing: true, dash: false };
   },
 };
 

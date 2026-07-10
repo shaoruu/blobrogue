@@ -598,22 +598,24 @@ function weaverTests(): void {
   check("weaver is a boss kind", isBossKind("weaver"));
   check("F20 Weaver HP matches its calibration anchor", weaverHpForFloor(20) === WEAVER.baseHp, `hp=${weaverHpForFloor(20)}`);
 
-  section("Weaver: webs — persistent slow-zones, never damage");
+  section("Weaver: lanes — sticky silk partitions, never damage; the dash clears them");
   {
     const { w, p, boss } = weaverSetup(0x3EA1);
     let guard = 0;
     while (boss.attack.move !== "weave" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
     check("the Weaver telegraphs the weave", boss.attack.move === "weave");
-    const websBefore = w.hazards.length;
     stepFor(w, WEAVER.weaveWindup + 0.1);
-    check("the weave plants its P1 web pattern", w.hazards.length === websBefore + WEAVER.webCount[1],
-      `webs=${w.hazards.length - websBefore}`);
-    const web = w.hazards[w.hazards.length - 1];
-    check("webs are authored hazards with a real lifetime", web.kind === "web" && web.life > WEAVER.webLife - 1);
-    // The slow: walk the player through the web center and measure the stride.
+    const knots = w.enemies.filter((e) => !e.dead && e.kind === "knot");
+    const silk = w.hazards.filter((h) => h.kind === "web");
+    check("the weave strings a knot-anchored silk LANE (the arena partition)",
+      knots.length === WEAVER.knotsFor[1] && silk.length >= 3,
+      `knots=${knots.length} silk=${silk.length}`);
+    const web = silk[silk.length - 1];
+    check("silk rows are authored hazards with a real lifetime", web.kind === "web" && web.life > WEAVER.webLife - 1);
+    // The sticky slow: walk the player through the silk and measure the stride.
     w.isGodMode = false;
     const hp0 = p.hp;
-    p.invuln = 999; // webs must not damage on their own; enemy contact stays out of the reading
+    p.invuln = 999; // silk must not damage on its own; enemy contact stays out of the reading
     p.x = web.x; p.y = web.y;
     const x0 = p.x;
     for (let t = 0; t < 30; t++) step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false });
@@ -622,58 +624,57 @@ function weaverTests(): void {
     const x1 = p.x;
     for (let t = 0; t < 30; t++) step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false });
     const free = p.x - x1;
-    check("a web slows the walk to ~55%", snared < free * (WEAVER.webSlow + 0.12) && snared > free * (WEAVER.webSlow - 0.12),
+    check("sticky silk slows the walk to the designer's ×0.5", snared < free * (WEAVER.webSlow + 0.12) && snared > free * (WEAVER.webSlow - 0.12),
       `${snared.toFixed(0)}px vs ${free.toFixed(0)}px`);
-    check("webs never damage (routing pressure only)", p.hp === hp0);
+    check("silk never damages (routing pressure only)", p.hp === hp0);
+    // The dash clears the silk it crosses — at the dash's own cost.
+    const target = w.hazards.find((h) => h.kind === "web")!;
+    p.x = target.x - 30; p.y = target.y;
+    p.dashCd = 0;
+    step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: false, dash: true });
+    stepFor(w, 0.2);
+    check("a dash through the silk CLEARS it (the dash is the cost)",
+      !w.hazards.some((h) => h === target), `websNow=${w.hazards.filter((h) => h.kind === "web").length}`);
   }
 
-  section("Weaver: the pounce — marked, airborne, web at the crater (the P2 bait move)");
+  section("Weaver: the descent — marked, airborne, the shared pounce read");
   {
+    // Force her off the walls (P2 climb + broken clutch) and eat the landing when
+    // holding the mark; dodge it by stepping off.
     const { w, p, boss } = weaverSetup(0x3EA2);
-    // Earned windows moved the pounce to P2 (P1 is the lattice/blink read): drive it
-    // across 65% and ride out the molt beat first.
     stepFor(w, 0.2);
     plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.37) / WEAVER.guardMult);
     stepFor(w, WEAVER.moltDuration + 0.3);
-    check("into P2 for the pounce kit", boss.boss !== null && boss.boss.phase === 2);
+    check("into P2 for the climb kit", boss.boss !== null && boss.boss.phase === 2);
     let guard = 0;
-    while (boss.attack.move !== "pounce" && guard++ < 900 && !boss.dead) step(w, idle(w.tick + 1));
-    check("the Weaver telegraphs the pounce", boss.attack.move === "pounce" && boss.attack.phase === "windup");
-    stepFor(w, WEAVER.pounceLock + 0.05);
+    while (!(boss.attack.move === "dive" && boss.attack.phase === "active") && guard++ < 1200 && !boss.dead) {
+      step(w, idle(w.tick + 1));
+    }
+    check("she climbs (dive grammar) and cannot be shot", (() => {
+      const hpUp = boss.hp;
+      plantBullet(w, boss.x, boss.y, 99);
+      stepFor(w, 0.1);
+      return boss.hp === hpUp;
+    })());
+    // Burst the clutch as it blooms: the forced descent commits a marked pounce.
+    guard = 0;
+    while (boss.attack.move !== "pounce" && guard++ < 60 * 20 && !boss.dead) {
+      for (const sac of w.enemies) {
+        if (!sac.dead && sac.kind === "sac") plantBullet(w, sac.x, sac.y, 500, 14);
+      }
+      step(w, idle(w.tick + 1));
+    }
+    check("the broken clutch forces the marked descent", boss.attack.move === "pounce",
+      `move=${boss.attack.move}`);
     const markX = boss.attack.markX, markY = boss.attack.markY;
-    check("the mark locks on the target's position", Math.hypot(markX - p.x, markY - p.y) < 40);
-    stepFor(w, WEAVER.pounceWindup - WEAVER.pounceLock);
-    // Airborne now: untargetable, lerping onto the mark.
-    const hpAir = boss.hp;
-    plantBullet(w, boss.x, boss.y, 99);
-    stepFor(w, 0.1);
-    check("the airborne Weaver cannot be shot", boss.hp === hpAir);
-    w.hazards.length = 0; // bare floor: this reading is the CRATER web, not the tangle
-    const websBefore = w.hazards.length;
     p.x = markX + 200; p.y = markY; // step off the mark
     p.invuln = 0;
-    stepFor(w, WEAVER.pounceAir + 0.1);
-    check("it lands ON the mark and leaves a web at the crater",
-      Math.hypot(boss.x - markX, boss.y - markY) < 30 && w.hazards.length === websBefore + 1);
-    check("stepping off the mark dodges the landing", p.hp === p.maxHp);
-  }
-  {
-    // The landing hits when you hold your ground.
-    const { w, p, boss } = weaverSetup(0x3EA3);
-    stepFor(w, 0.2);
-    plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.37) / WEAVER.guardMult);
-    stepFor(w, WEAVER.moltDuration + 0.3);
-    let guard = 0;
-    while (!(boss.attack.move === "pounce" && boss.attack.phase === "active") && guard++ < 900 && !boss.dead) {
-      step(w, idle(w.tick + 1));
-      p.invuln = 0;
-    }
     w.isGodMode = false;
-    p.invuln = 0;
-    const hp0 = p.hp;
-    p.x = boss.attack.markX; p.y = boss.attack.markY;
-    stepFor(w, WEAVER.pounceAir + 0.1);
-    check("holding the mark eats the landing hit", p.hp <= hp0 - WEAVER.pounceOuterDamage, `hp ${hp0} -> ${p.hp}`);
+    stepFor(w, WEAVER.descendTell + WEAVER.descendAir + 0.1);
+    check("she lands ON the mark, forced into the crash window",
+      Math.hypot(boss.x - markX, boss.y - markY) < 30 && boss.attack.move === "crash",
+      `d=${Math.hypot(boss.x - markX, boss.y - markY).toFixed(0)} move=${boss.attack.move}`);
+    check("stepping off the mark dodges the landing", p.hp === p.maxHp);
   }
 
   section("Weaver: the molt beat — fixed cocoon, web-bolt ring, broodlings");

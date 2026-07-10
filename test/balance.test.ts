@@ -154,9 +154,9 @@ interface TtkResult {
 
 // The scripted-aggression harness PLAYS THE MECHANICS (an earned-window boss measured
 // by a bot that ignores its mechanics would only measure the guard chip):
-//  - Weaver: shoot a live lattice KNOT first (breaks earn P1 windows and leave the
-//    debris P2 tangles need); the stationary gunner's own accumulating webs bait the
-//    pounce tangles, and aiming the real body converts the P3 feints.
+//  - Weaver: shoot the EGG-SAC clutch first (P2's forced-down switch), then a live
+//    lattice KNOT (P1 breaks; P3 lane denial makes her dashes overshoot), then the
+//    body — the designer's phase priorities, scripted.
 //  - Choir: shoot the live FRAGMENT verse first (silence opens the window; the same
 //    priority answers the split beat's wisps), circle-strafing so the drifting mass
 //    never body-blocks the fragment line.
@@ -195,7 +195,9 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
     let aimAt: { x: number; y: number } = target;
     if (!isExposedNow) {
       if (boss.kind === "weaver") {
-        aimAt = w.enemies.find((e) => !e.dead && e.kind === "knot") ?? target;
+        aimAt = w.enemies.find((e) => !e.dead && e.kind === "sac")
+          ?? w.enemies.find((e) => !e.dead && e.kind === "knot")
+          ?? target;
       } else if (boss.kind === "choir") {
         aimAt = w.enemies.find((e) => !e.dead && e.isSummoned && e.kind === "ghost") ?? target;
       }
@@ -219,6 +221,14 @@ function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKi
       if (d < 170) {
         const away = Math.atan2(p.y - target.y, p.x - target.x) + 0.7;
         moveX = Math.cos(away); moveY = Math.sin(away);
+      }
+    } else if (boss.kind === "weaver") {
+      // The P2 fight is ABOUT running the clutch down (and closing on the forced-down
+      // window at her wall): walk to whatever the aim wants once it leaves gun range.
+      const d = Math.hypot(aimAt.x - p.x, aimAt.y - p.y);
+      if (d > 280) {
+        const toward = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
+        moveX = Math.cos(toward); moveY = Math.sin(toward);
       }
     }
     if (!target.dead) {
@@ -303,12 +313,12 @@ function bossLadderGates(): void {
     bossHpForFloor(5) === BOSS.baseHp && BOSS.baseHp === 950, `hp=${bossHpForFloor(5)}`);
   check("F15 Marrow anchor recalibrated onto crash-window damage (730)",
     marrowHpForFloor(15) === MARROW.baseHp && MARROW.baseHp === 730, `hp=${marrowHpForFloor(15)}`);
-  check("F20 Weaver anchor recalibrated onto exposed damage (1,100)",
-    weaverHpForFloor(20) === WEAVER.baseHp && WEAVER.baseHp === 1100, `hp=${weaverHpForFloor(20)}`);
+  check("F20 Weaver anchor recalibrated onto exposed damage (620)",
+    weaverHpForFloor(20) === WEAVER.baseHp && WEAVER.baseHp === 620, `hp=${weaverHpForFloor(20)}`);
   check("F25 Warden anchor holds (its commit windows were already the calibration)",
     gildedHpForFloor(25) === GILDED.baseHp && GILDED.baseHp === 1280, `hp=${gildedHpForFloor(25)}`);
-  check("F30 Choir anchor recalibrated onto verse-silence damage (800)",
-    choirHpForFloor(30) === CHOIR.baseHp && CHOIR.baseHp === 800, `hp=${choirHpForFloor(30)}`);
+  check("F30 Choir anchor recalibrated onto verse-silence damage (750)",
+    choirHpForFloor(30) === CHOIR.baseHp && CHOIR.baseHp === 750, `hp=${choirHpForFloor(30)}`);
   check("the gauntlet/miniboss captains keep the FULL-UPTIME anchor (no guard, no shrink)",
     CAPTAIN_HP_BASE === 1250, `captainBase=${CAPTAIN_HP_BASE}`);
   check("every boss deals 2 contact damage (authored integer, never scales)",
@@ -317,7 +327,7 @@ function bossLadderGates(): void {
   // anchor — solo createEnemy must land the anchor EXACTLY (party scaling is a separate,
   // documented co-op multiplier).
   check("boss HP at the anchor is mode-independent (solo spawn = the authored anchor)",
-    ([["boss", 5, 950], ["marrow", 15, 730], ["weaver", 20, 1100], ["gilded", 25, 1280], ["choir", 30, 800]] as Array<[EnemyKind, number, number]>)
+    ([["boss", 5, 950], ["marrow", 15, 730], ["weaver", 20, 620], ["gilded", 25, 1280], ["choir", 30, 750]] as Array<[EnemyKind, number, number]>)
       .every(([k, f, hp]) => createEnemy(k, 0, 0, f, new Rng(1), 0, {}).hp === hp));
   check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
     bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= MARROW.baseHp * 1.5,
@@ -328,13 +338,13 @@ function bossLadderGates(): void {
     [MARROW.guardMult, WEAVER.guardMult, GILDED.armorChip, CHOIR.guardMult]
       .every((g) => g >= EARNED_GUARD_MIN - 1e-9 && g <= EARNED_GUARD_MAX + 1e-9));
   check("every earned window is the authored 3–4s (combined exposure hard-capped)",
-    [MARROW.crashExpose, WEAVER.knotBreakExpose, WEAVER.tangleExpose, WEAVER.unravelExpose, CHOIR.silenceExpose]
+    [MARROW.crashExpose, WEAVER.knotBreakExpose, WEAVER.forcedownExpose, WEAVER.overshootExpose, CHOIR.silenceExpose]
       .every((s) => s >= 3 && s <= 4) && EXPOSE_WINDOW_CAP <= 8);
   check("per-window banks are the ~40% phase chunk on every earned boss",
     [MARROW.windowBankFrac, WEAVER.windowBankFrac, GILDED.windowBankFrac, CHOIR.windowBankFrac]
       .every((f) => f === 0.40));
   check("co-op scales the MECHANIC: task counts grow with the snapshotted party",
-    WEAVER.knotsFor[1] < WEAVER.knotsFor[4] && WEAVER.weftsFor[1] < WEAVER.weftsFor[4]
+    WEAVER.knotsFor[1] < WEAVER.knotsFor[4] && WEAVER.sacsFor[1] < WEAVER.sacsFor[4]
     && CHOIR.fragmentsFor[1] < CHOIR.fragmentsFor[4]);
 
   for (const row of BOSS_GATE_ROWS) {
@@ -416,12 +426,12 @@ function bossLadderGates(): void {
   check("corrected §3 charge contract: tell .9 / lock .5 / 520 for 1.1s / recover .7 or crash 1.6",
     MARROW.chargeWindup === 0.9 && MARROW.chargeLock === 0.5 && MARROW.chargeDur === 1.1
     && MARROW.chargeSpeed === 520 && MARROW.chargeRecover === 0.7 && MARROW.crashStun === 1.6);
-  check("earned-windows pounce contract: tell .65 / lock .3 / .35 air / FAST .55 bare-floor recover, chains 1/2/2",
-    WEAVER.pounceWindup === 0.65 && WEAVER.pounceLock === 0.3 && WEAVER.pounceAir === 0.35
-    && WEAVER.pounceRecover === 0.55 && WEAVER.pounceChains[1] === 1 && WEAVER.pounceChains[2] === 2 && WEAVER.pounceChains[3] === 2);
-  check("blink contract: the whole .7 tell is post-lock, ≥.35s recover, tangle/snag staggers real",
-    WEAVER.blinkWindup >= 0.30 && WEAVER.blinkRecover >= 0.35 && WEAVER.snagStagger >= 0.35
-    && WEAVER.tangleStagger >= 0.35 && WEAVER.feintRecover >= 0.35);
+  check("descent contract: marked tell + air ≥.6s combined, staggers/recovers ≥.35s",
+    WEAVER.descendTell + WEAVER.descendAir >= 0.6 && WEAVER.descendStagger >= 0.35
+    && WEAVER.unforcedRecover >= 0.35);
+  check("blink/dash contracts: whole ≥.6s tells post-lock, ≥.35s recovers, staggers real",
+    WEAVER.blinkWindup >= 0.6 && WEAVER.blinkRecover >= 0.35 && WEAVER.snagStagger >= 0.35
+    && WEAVER.dashFlare >= 0.6 && WEAVER.dashRecover >= 0.35 && WEAVER.dashStagger >= 0.35);
   check("corrected §3 Choir contract: fade tell .6 / drift 1.8×1.6 / recover .8; split 1–3.2s",
     CHOIR.fadeWindup === 0.6 && CHOIR.fadeDuration === 1.8 && CHOIR.fadeSpeedMult === 1.6
     && CHOIR.fadeRecover === 0.8 && CHOIR.splitMinDuration === 1.0 && CHOIR.splitDuration === 3.2);

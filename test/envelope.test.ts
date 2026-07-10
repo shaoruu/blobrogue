@@ -68,7 +68,7 @@ function capacityGates(): void {
     capacity === 24 && REGULARS.length <= capacity);
   check("every regular archetype declares a role; no summon/boss/captain kind does",
     REGULARS.every((k) => roleOf(k) !== null)
-    && (["echo", "knell", "knot", "weft", "marshal", "toll", "boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[])
+    && (["echo", "knell", "knot", "sac", "marshal", "toll", "boss", "marrow", "choir", "weaver", "gilded"] as EnemyKind[])
       .every((k) => roleOf(k) === null));
 }
 
