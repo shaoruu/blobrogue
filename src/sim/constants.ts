@@ -372,6 +372,15 @@ export const CHEST_LOOT_WALL_MARGIN = 10;
 // toward the aim direction. The inner radius sits beyond pickup range (pr 18 + weapon
 // pickup radius 16 = 34), so a stationary dropper never instantly re-collects the drop.
 export const WEAPON_DROP_RADII: readonly number[] = [44, 60, 76];
+// The hotbar cap — the ONE inventory size knob. The authoritative inventory never grows
+// past this, and every slot maps to its number key (1..MAX). 6 keeps the bar readable and
+// the whole row reachable without leaving WASD; must stay <= 9 (the number-key row).
+export const MAX_OWNED_WEAPONS = 6;
+// Authoritative range for the full-hotbar swap command: how far a player may stand from
+// the blocked weapon pickup they claim. Collect range is pr 18 + pickup 16 = 34 (where
+// the client shows the prompt); the extra slack only forgives drift between the click and
+// the command landing (online latency) — never a cross-room swap.
+export const WEAPON_SWAP_RANGE = 56;
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;

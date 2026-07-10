@@ -127,7 +127,7 @@ export interface PlayerSim {
   // Vampire Fang shared proc cooldown (1.25s): at most one kill-heal per window.
   fangCd: number;
   facing: number; aimAngle: number; weapon: WeaponId;
-  ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
+  ownedWeapons: WeaponId[]; // inventory (never grows past MAX_OWNED_WEAPONS); one number key per slot
   shotSeq: number; isDown: boolean;
   // Network-absent (authoritative server only): the player's connection dropped and their body
   // is RESERVED for the reconnect grace window. An absent body is paused and safe — it cannot
@@ -977,9 +977,18 @@ function equipWeapon(p: PlayerSim, id: WeaponId): void {
 // Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
 // and by dev/grant. Manual switching (1-9 / scroll / hotbar) goes through the validated
 // switchWeaponInWorld below on every path (LocalTransport and the server).
-function acquireWeapon(p: PlayerSim, id: WeaponId): void {
-  if (!p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
+// The MAX_OWNED_WEAPONS cap is enforced HERE, at the one place the inventory grows, so
+// the invariant is structural: no acquisition path (pickup, boss claim, shop, dev grant)
+// can ever mint a slot past the number-key row. Callers that want a nicer refusal (the
+// pickup pass leaving the weapon on the floor, the shop's HOTBAR FULL status) gate
+// earlier; this returns whether the weapon is owned+equipped afterwards.
+function acquireWeapon(p: PlayerSim, id: WeaponId): boolean {
+  if (!p.ownedWeapons.includes(id)) {
+    if (p.ownedWeapons.length >= C.MAX_OWNED_WEAPONS) return false;
+    p.ownedWeapons.push(id);
+  }
   equipWeapon(p, id);
+  return true;
 }
 
 // Authoritative, validated weapon switch (LocalTransport + the server's equip handler).
@@ -993,10 +1002,15 @@ export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId):
   return true;
 }
 
-// Client-driven acquire + equip (dev grant, or golden 'weapon' command).
+// Client-driven acquire + equip (dev grant, or golden 'weapon' command). At the hotbar
+// cap the grant REPLACES the equipped slot in place (the sandbox/golden affordance for
+// cycling arbitrary weapons) — the cap invariant holds on every path; the gameplay claim
+// path at the cap is swapWeaponInWorld.
 export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
-  if (p) acquireWeapon(p, id);
+  if (!p || acquireWeapon(p, id)) return;
+  p.ownedWeapons[p.ownedWeapons.indexOf(p.weapon)] = id;
+  equipWeapon(p, id);
 }
 
 export function reorderWeaponsInWorld(w: WorldState, pid: PlayerId, from: number, to: number): boolean {
@@ -1038,6 +1052,50 @@ export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev
   const [x, y] = spot;
   w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
   ev.push({ t: "weaponDrop", weapon: id, x, y });
+  return true;
+}
+
+export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number, dropId: WeaponId, ev: SimEvent[]): boolean {
+  // Authoritative full-hotbar swap: trade an OWNED weapon for the weapon pickup the player
+  // is standing on. This is the ONE way to claim a new weapon at the cap (updatePickups
+  // refuses to auto-collect into a full hotbar), and it is atomic — validate everything,
+  // then mutate: the replaced weapon lands as a normal world pickup (the same safe
+  // weaponDropSpot the Q drop uses) and the incoming weapon is acquired + equipped.
+  // Declining is free by construction: no command is sent and the pickup stays put.
+  // Gates mirror dropWeaponInWorld (no free actions from paused/terminal states), then:
+  //  - the hotbar must actually be full — below the cap a walk-over collects, so a swap
+  //    command is a tampered/stale client, not a state this function invents;
+  //  - dropId must be owned; the pickup must be a live weapon within WEAPON_SWAP_RANGE;
+  //  - the pickup must be claimable by THIS player: not an already-owned weapon, and a
+  //    boss-choice pedestal only before this player's personal claim (gate §4).
+  // A boss-choice swap resolves its grant exactly like the walk-over claim (seeded reroll
+  // when the pedestal weapon is owned) and leaves the pedestal standing for teammates —
+  // the all-claimed sweep in updatePickups retires it, same as always.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  if (w.isRunOver || p.isDown || p.isAbsent || w.pendingBlessings.has(pid)) return false;
+  if (p.ownedWeapons.length < C.MAX_OWNED_WEAPONS) return false;
+  const dropIdx = p.ownedWeapons.indexOf(dropId);
+  if (dropIdx < 0) return false;
+  const pk = w.pickups.find((q) => q.id === pickupId);
+  if (!pk || pk.kind !== "weapon" || pk.weapon === null) return false;
+  if (Math.hypot(p.x - pk.x, p.y - pk.y) > C.WEAPON_SWAP_RANGE) return false;
+  if (pk.isBossChoice ? p.hasClaimedBossChoice : p.ownedWeapons.includes(pk.weapon)) return false;
+  const spot = weaponDropSpot(w, p);
+  if (!spot) return false; // fully boxed in: keep everything rather than lose a weapon
+  let grant = pk.weapon;
+  if (pk.isBossChoice) {
+    p.hasClaimedBossChoice = true;
+    if (p.ownedWeapons.includes(pk.weapon)) grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
+  } else {
+    w.pickups = w.pickups.filter((q) => q !== pk);
+  }
+  p.ownedWeapons.splice(dropIdx, 1);
+  const [x, y] = spot;
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: dropId });
+  ev.push({ t: "weaponDrop", weapon: dropId, x, y });
+  acquireWeapon(p, grant);
+  ev.push({ t: "pickup", pid, kind: "weapon", x: pk.x, y: pk.y });
   return true;
 }
 
@@ -5930,6 +5988,11 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           collected = true; break;
         }
         if (p.kind === "weapon" && p.weapon) {
+          // A full hotbar NEVER auto-collects (MAX_OWNED_WEAPONS): the weapon stays on the
+          // floor and the swap command (swapWeaponInWorld) is the only claim path — the
+          // client surfaces that as the swap-or-leave prompt. `continue` (not break) so a
+          // teammate with room can still take it this same tick.
+          if (player.ownedWeapons.length >= C.MAX_OWNED_WEAPONS) continue;
           if (p.isBossChoice) {
             // Gate §4 boss reward: one personal CLAIM per player per boss chest. Claiming a
             // weapon the player already owns grants one seeded REROLL (never coins/raw

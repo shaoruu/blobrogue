@@ -91,6 +91,9 @@ export interface RoomRuntime {
   // Weapon drop: ownership + player-state + last-weapon rule validated; the room spawns the
   // shared pickup and emits the drop event through its reliable channel.
   tryDropWeapon(pid: PlayerId, weapon: WeaponId): boolean;
+  // Full-hotbar swap: trade an owned weapon for a named live weapon pickup. The sim
+  // validates fullness/ownership/pickup range and performs the trade atomically.
+  trySwapWeapon(pid: PlayerId, pickup: number, drop: WeaponId): boolean;
   // Shop purchase (Patch's room): the sim validates everything — liveness, proximity to
   // the station, price, and the per-viewer status matrix (sold/owned/max/full/broke).
   // Exactly one concurrent buyer can win a shared slot; every rejection mutates nothing.

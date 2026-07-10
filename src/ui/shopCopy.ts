@@ -22,6 +22,7 @@ export function shopActionCopy(status: ShopSlotStatus, price: number, coins: num
     case "broke": return `NEED ${price - coins} MORE COINS`;
     case "sold": return "SOLD";
     case "owned": return "OWNED";
+    case "full": return "HOTBAR FULL";
     case "maxLevel": return "MAX LV";
     case "fullHealth": return "FULL HEALTH";
     case "exhausted": return "NO REROLLS LEFT";

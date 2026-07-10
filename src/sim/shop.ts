@@ -22,6 +22,7 @@ import { Rng } from "./rng.js";
 import { SHOP } from "./balance.js";
 import { isBossFloor } from "./enemies.js";
 import { PICKUP_WEAPONS } from "./weapons.js";
+import { MAX_OWNED_WEAPONS } from "./constants.js";
 import { ITEMS, MAX_ITEM_LEVEL, itemLevelsOf, rollItemChoicesWith } from "./items.js";
 
 // Every third depth is a secured relay niche — except boss floors, whose capstone owns
@@ -158,6 +159,7 @@ export type ShopSlotStatus =
   | "broke"      // NEED N MORE
   | "sold"       // shared: claimed by someone else; personal: this viewer already bought
   | "owned"      // weapon the viewer already owns (claimed-by-you resolves here too)
+  | "full"       // weapon the viewer has no hotbar slot for (drop/swap first, then buy)
   | "maxLevel"   // blessing already at Lv3 for the viewer
   | "fullHealth" // heart at full HP
   | "exhausted"; // reroll limit spent, or nothing left to restock
@@ -180,6 +182,9 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
     case "weapon": {
       if (slot.soldTo !== null && slot.soldTo !== viewer.pid) return "sold";
       if (slot.weapon !== null && viewer.ownedWeapons.includes(slot.weapon)) return "owned";
+      // The hotbar cap gates the buy the same way it gates floor pickups: a full viewer
+      // must free a slot (Q drop / swap) before the stall will take their coins.
+      if (viewer.ownedWeapons.length >= MAX_OWNED_WEAPONS) return "full";
       break;
     }
     case "blessing": {

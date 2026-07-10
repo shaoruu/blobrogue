@@ -34,7 +34,9 @@ import type {
 // (dti/ddx/ddy/dnv/inv) so observing clients render a teammate's dash.
 // v10: the weapon effect wave (snapshot `effs` weapon-effect entities + SelfWire `chg`
 // charge reconcile + the effect events) on top of the dash + shop + bestiary wire.
-export const SYNTHETIC_JOIN_PROTOCOL = 10;
+// v11: the hotbar cap (MAX_OWNED_WEAPONS) + the client->server `swap` command that claims
+// a weapon pickup at the cap by trading an owned weapon for it.
+export const SYNTHETIC_JOIN_PROTOCOL = 11;
 
 export interface HttpProbeConfig {
   baseUrl: string;

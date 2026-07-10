@@ -7,7 +7,7 @@
 // solo is byte-for-byte the current game.
 
 import type { WorldState, WorldOptions } from "../sim/world.js";
-import { createWorld, stepWorld, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, buyFromShopInWorld } from "../sim/world.js";
+import { createWorld, stepWorld, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID, IDLE_INPUT } from "../sim/input.js";
@@ -34,6 +34,9 @@ export interface Transport {
   requestEquip(weapon: WeaponId): void;
   requestReorder(from: number, to: number): void;
   requestDrop(weapon: WeaponId): void;
+  // Full-hotbar swap: trade the owned weapon `drop` for the weapon pickup `pickup` (the
+  // sim's stable pickup id). Only the swap prompt calls this; declining sends nothing.
+  requestSwap(pickup: number, drop: WeaponId): void;
   // Shop purchase (Patch's room): the panel's BUY button, and nothing else, calls this.
   requestShopBuy(slot: number): void;
 }
@@ -79,6 +82,12 @@ export class LocalTransport implements Transport {
     // The drop's weaponDrop event joins the normal event stream so solo plays the same
     // pop/label FX the online reliable channel delivers.
     dropWeaponInWorld(this.state, LOCAL_ID, weapon, this.events);
+  }
+
+  requestSwap(pickup: number, drop: WeaponId): void {
+    // Same validated sim mutator the server routes the swap command through — solo and
+    // online share ONE authority path, and an invalid swap mutates nothing here too.
+    swapWeaponInWorld(this.state, LOCAL_ID, pickup, drop, this.events);
   }
 
   requestShopBuy(slot: number): void {
