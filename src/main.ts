@@ -8,7 +8,8 @@ import { AuthClient } from "./net/auth.js";
 import { Menu } from "./ui/menu.js";
 import { bindMenuGamepad } from "./ui/menuGamepad.js";
 import { bindUiScale } from "./ui/settings.js";
-import { exitNoteFor } from "./ui/onlineCopy.js";
+import { exitNoteFor, INVITE_INVALID_NOTE, INVITE_OFFLINE_NOTE } from "./ui/onlineCopy.js";
+import { parseInviteCode, hasInviteIntent, stripInviteFromLocation } from "./net/inviteLink.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
 
 declare global {
@@ -43,8 +44,13 @@ async function bootNormal() {
   const session = new Session(client);
 
   let activeOnline: OnlineLobby | null = null;
+  // Menu-vs-run truth for the warm invite path: a history navigation onto an invite URL
+  // routes into that room's lobby only while the menu owns the screen — it must never
+  // yank a live run out from under the player.
+  let isInRun = false;
 
   async function onGameOver(result: RunResult) {
+    isInRun = false;
     // An online room SURVIVES the wipe: the party regroups in the same lobby (the menu's
     // game-over screen offers "back to lobby" / "play again" and owns leaving the room).
     const online = activeOnline;
@@ -61,6 +67,7 @@ async function bootNormal() {
   }
 
   function onExit(reason?: ExitReason, detail?: string) {
+    isInRun = false;
     // Stepping out of an online run (Esc/cancel, a failed start, an outage) lands back in
     // the room lobby, not the title — the run may still be live for friends (the lobby's
     // REJOIN RUN / leave buttons are the contract's resume-failed choices). The exact copy
@@ -94,12 +101,14 @@ async function bootNormal() {
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
       leaveOnlineIfAny();
+      isInRun = true;
       menu.hide();
       game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics });
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       if (activeOnline && activeOnline !== lobby) activeOnline.leave();
       activeOnline = lobby;
+      isInRun = true;
       menu.hide();
       game.start({
         mode: "online",
@@ -178,6 +187,38 @@ async function bootNormal() {
       selfColorIndex: session.colorIndex,
       selfCosmetics: session.cosmetics,
     });
+    return;
+  }
+
+  // An invite URL that carries NO joinable code — mangled grammar, or any invite on a
+  // build with no backend. Resolved immediately: the URL is consumed and the player lands
+  // on an honest interactive screen (never a guessed join, never a dead end).
+  function landUnjoinableInvite(): Promise<void> {
+    stripInviteFromLocation();
+    if (client) return menu.showOnlineHome(INVITE_INVALID_NOTE).then(() => undefined);
+    return menu.showTitle(undefined, INVITE_OFFLINE_NOTE);
+  }
+
+  // Warm invite arrivals: the app is already open and a history navigation lands on an
+  // invite URL — same parse, same validated join as a cold load. Menu-time only (never
+  // yanks a live run); openInvite consumes the URL once its attempt resolves.
+  window.addEventListener("popstate", () => {
+    if (isInRun || !hasInviteIntent(window.location.pathname, window.location.search)) return;
+    const inviteCode = parseInviteCode(window.location.pathname, window.location.search);
+    if (inviteCode && client) void menu.openInvite(inviteCode);
+    else void landUnjoinableInvite();
+  });
+
+  // Cold-load room invite (/r/<CODE> or ?room=CODE), beside the ?online=1 / ?gs= routes:
+  // the canonical shell renders first, then the join auto-attempts through the same
+  // validated path as manual JOIN CODE (Menu.openInvite -> doJoinOnline). The URL is
+  // consumed when the attempt resolves — success or failure — so refresh/back never
+  // re-triggers a stale join.
+  if (hasInviteIntent(window.location.pathname, window.location.search)) {
+    const inviteCode = parseInviteCode(window.location.pathname, window.location.search);
+    if (inviteCode && client) await menu.openInvite(inviteCode);
+    else await landUnjoinableInvite();
+    if (auth) void auth.completeOAuth();
     return;
   }
 
