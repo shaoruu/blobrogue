@@ -753,7 +753,11 @@ export const BIOME_PRESSURE: readonly BiomePressure[] = [
   { budgetMult: 0.90, packBias: 1.00, complexShare: 1.00, hazardMult: 1.15, reinforceRate: 1.00 }, // The Deep
   { budgetMult: 0.95, packBias: 1.00, complexShare: 1.05, hazardMult: 1.00, reinforceRate: 1.00 }, // Gilded Archive (order/claimed space)
   { budgetMult: 1.05, packBias: 1.00, complexShare: 1.00, hazardMult: 1.00, reinforceRate: 1.15 }, // Emberreach
-  { budgetMult: 1.05, packBias: 1.10, complexShare: 1.10, hazardMult: 1.15, reinforceRate: 1.10 }, // The Null
+  // THE UNMAKING (post-F30) — pressure ramps region over region (each is its own biome band now).
+  { budgetMult: 1.05, packBias: 1.10, complexShare: 1.10, hazardMult: 1.15, reinforceRate: 1.10 }, // The Sump
+  { budgetMult: 1.08, packBias: 1.10, complexShare: 1.12, hazardMult: 1.18, reinforceRate: 1.12 }, // The Veinworks
+  { budgetMult: 1.10, packBias: 1.05, complexShare: 1.14, hazardMult: 1.15, reinforceRate: 1.12 }, // The Pale
+  { budgetMult: 1.12, packBias: 1.10, complexShare: 1.16, hazardMult: 1.20, reinforceRate: 1.15 }, // Null Core
 ];
 
 // ---- §5 Slime King (studio gate §3: F5, 900 HP, median 35–50s, high-roll 20–25s) ----

@@ -206,75 +206,149 @@ export const BIOMES: readonly Biome[] = [
     floorDim: 0.28,
     wallLift: 0.16,
   },
+  // ---- THE UNMAKING (post-F30): four corrupted regions, each its own biome band, 1:1 with
+  // REGIONS. Warmth drains as you descend (Sump warm-corrupted -> Veinworks resin/amber ->
+  // Pale near-grey subtraction -> Null Core void). Canonical AD palettes (validated for the
+  // readability walkability gate: floorA sits 24-48L below wallCap in every region, and JET
+  // stays dark-on-dark safe). Mood fields continue the ladder ramp (deeper = dimmer + more
+  // vignette + busier detail; pulse dips in the Pale's calm, peaks in the Null's throb).
   {
-    // Floors 31+ — THE SUMP: the wave-1 render band of THE UNMAKING (everything drains
-    // together; warm/cold materials melt; corrupted mixed ecology). This ONE terminal
-    // biome band is the coarse render/pressure granularity for all of post-F30; the
-    // encounter REGION model (REGIONS below) is the fine granularity that names the four
-    // post-F30 regions (Sump 31-50, Veinworks 51-70, Pale 71-90, Null Core 91-100). The
-    // palette band is split per-region when each region gets its own authored tile art;
-    // until then floors 31+ render the Sump palette and the region names the floor banner.
-    // Interim Sump hexes are the AD's gate target (JET F35 contrasts against a real Sump
-    // floor); TODO(AD-palette): relock with the AD's canonical palette when it lands.
-    // Mood/lighting fields carry forward the terminal band's values (the ladder darkens
-    // monotonically; readability grades against this Sump floor).
+    // Floors 31-50 — THE SUMP: everything drains together; warm/cold materials melt.
     name: "The Sump",
-    tileKey: "nullvoid", // TODO(AD-palette): rename to "sump" when dedicated Sump tiles land
-    bgColor: "#080610",
+    tileKey: "nullvoid",
+    bgColor: "#0c0a10",
     floorA: "#16131a",
     floorB: "#1a1620",
     wallFront: "#2a2333",
     wallCap: "#3a2f2a",
-    wallSideRgb: "34,28,42",
-    wallCorner: "rgba(6,4,10,0.6)",
-    tint: "#4a3358",
-    tintAlpha: 0.34,
-    accent: "#b48ac0",
-    glow: "#c9a6ff",
+    wallSideRgb: "36,30,42",
+    wallCorner: "rgba(6,5,10,0.55)",
+    tint: "#4a3f52",
+    tintAlpha: 0.30,
+    accent: "#9c7a52",
+    glow: "#b89a72",
+    lightLevel: 0.31,
+    vignette: 0.45,
+    vignetteColor: "#050408",
+    pulse: 0.06,
+    detailDensity: 0.25,
+    detailTint: "#6b5a4a",
+    torchesPerRoom: 3,
+    floorDim: 0.30,
+    wallLift: 0.30,
+  },
+  {
+    // Floors 51-70 — THE VEINWORKS: the corruption's circulatory system; resin/amber arteries.
+    name: "The Veinworks",
+    tileKey: "ember",
+    bgColor: "#0a0710",
+    floorA: "#14101c",
+    floorB: "#181322",
+    wallFront: "#281c34",
+    wallCap: "#3d2a1e",
+    wallSideRgb: "30,22,40",
+    wallCorner: "rgba(5,3,10,0.55)",
+    tint: "#5a3a4a",
+    tintAlpha: 0.30,
+    accent: "#ffb43b",
+    glow: "#e8913b",
     lightLevel: 0.36,
     vignette: 0.48,
-    vignetteColor: "#050208",
-    pulse: 0.12,
-    detailDensity: 0.27,
-    detailTint: "#8a6aa0",
+    vignetteColor: "#040208",
+    pulse: 0.10,
+    detailDensity: 0.28,
+    detailTint: "#c77320",
     torchesPerRoom: 3,
-    floorDim: 0.3,
+    // Retuned up (was 0.30) so the flat (no-art) tier darkens this floor enough to clear the
+    // walkability luma gate against the wall cap; the AD's authored hexes are untouched.
+    floorDim: 0.46,
+    wallLift: 0.40,
+  },
+  {
+    // Floors 71-90 — THE PALE: warmth/color draining out; subtraction begins; near-grey.
+    name: "The Pale",
+    tileKey: "sunless",
+    bgColor: "#12131a",
+    floorA: "#1c1e26",
+    floorB: "#22242e",
+    wallFront: "#343842",
+    wallCap: "#4a4e5a",
+    wallSideRgb: "44,48,56",
+    wallCorner: "rgba(10,11,16,0.5)",
+    tint: "#5a6070",
+    tintAlpha: 0.26,
+    accent: "#c9c9de",
+    glow: "#bfc6d6",
+    lightLevel: 0.40,
+    vignette: 0.52,
+    vignetteColor: "#060810",
+    pulse: 0.05,
+    detailDensity: 0.30,
+    detailTint: "#6b7082",
+    torchesPerRoom: 3,
+    floorDim: 0.30,
+    wallLift: 0.30,
+  },
+  {
+    // Floors 91-100 — NULL CORE: subtraction complete; the source; near-black, void-bright.
+    // Terminal: the ladder holds here forever.
+    name: "Null Core",
+    tileKey: "nullvoid",
+    bgColor: "#030208",
+    floorA: "#08060f",
+    floorB: "#0a0713",
+    wallFront: "#1e1638",
+    wallCap: "#241a40",
+    wallSideRgb: "12,8,24",
+    wallCorner: "rgba(1,0,4,0.65)",
+    tint: "#4a1470",
+    tintAlpha: 0.38,
+    accent: "#ff4ad8",
+    glow: "#d9a6ff",
+    lightLevel: 0.44,
+    vignette: 0.56,
+    vignetteColor: "#010003",
+    pulse: 0.14,
+    detailDensity: 0.33,
+    detailTint: "#ff4ad8",
+    torchesPerRoom: 3,
+    floorDim: 0.30,
     wallLift: 0.44,
   },
 ];
 
+// The biome band ladder is now 1:1 with the encounter REGION ladder (six curriculum bands + THE
+// UNMAKING's four post-F30 regions), so the band index IS the region index — one granularity for
+// palette, pressure, hazards AND encounter identity.
 export function biomeIndexForFloor(floor: number): number {
-  const f = Math.max(1, Math.floor(floor));
-  return Math.min(Math.floor((f - 1) / FLOORS_PER_BIOME), BIOMES.length - 1);
+  return regionIndexForFloor(floor);
 }
 
 export function biomeForFloor(floor: number): Biome {
   return BIOMES[biomeIndexForFloor(floor)];
 }
 
-// How deep into its biome band a floor sits, 0..1 (floor 6 -> 0, floor 10 -> 1). The
-// terminal band clamps at 1. Drives within-band escalation: hazard density, room-shape
-// drama and ambience all thicken as the band's milestone floor approaches — the
-// curriculum's teach -> remix -> prove ramp, expressed by the level itself.
+// How deep into its region a floor sits, 0..1 (region start -> 0, region end -> 1). The terminal
+// region clamps at 1. Drives within-region escalation: hazard density, room-shape drama and
+// ambience all thicken as the region's end approaches — the curriculum's teach -> remix -> prove
+// ramp, expressed by the level itself.
 export function biomeDepthForFloor(floor: number): number {
   const f = Math.max(1, Math.floor(floor));
-  const idx = biomeIndexForFloor(f);
-  if (idx >= BIOMES.length - 1) {
-    const over = f - FLOORS_PER_BIOME * (BIOMES.length - 1) - 1;
-    return Math.min(1, over / (FLOORS_PER_BIOME - 1));
-  }
-  return ((f - 1) % FLOORS_PER_BIOME) / (FLOORS_PER_BIOME - 1);
+  const region = regionForFloor(f);
+  // Terminal region (Null Core, no upper bound): ramp over a nominal 10-floor span, then hold at 1.
+  const end = region.toFloor ?? region.fromFloor + FLOORS_PER_BIOME * 2 - 1;
+  if (end <= region.fromFloor) return 1;
+  return Math.min(1, Math.max(0, (f - region.fromFloor) / (end - region.fromFloor)));
 }
 
 
-// ---- the encounter REGION model (the roadmap's post-F30 granularity) ----
-// A region is the encounter-identity unit of docs/blobrogue_CONTENT_ROADMAP_to100. The six
-// pre-F30 regions map 1:1 onto the six curriculum biome bands; the four post-F30 regions of THE
-// UNMAKING (Sump/Veinworks/Pale/Null Core) each span multiple floors and are the granularity the
-// biome-selective encounter deck (roster.ts) keys off. This is DELIBERATELY coarser-below /
-// finer-above than the palette biome ladder: the ladder is one terminal band (rendered as the
-// Sump for wave 1), while regions name all four post-F30 spans. When a post-F30 region gets its
-// own authored tile art, its palette graduates from REGION_PALETTES into a real biome band.
+// ---- the encounter REGION model ----
+// A region is the encounter-identity unit of docs/blobrogue_CONTENT_ROADMAP_to100. The ladder is
+// now 1:1 with the biome PALETTE bands (BIOMES) above: six curriculum regions (Amberwild ->
+// Emberreach) then THE UNMAKING's four post-F30 regions (Sump 31-50, Veinworks 51-70, Pale 71-90,
+// Null Core 91-100). REGIONS[i] and BIOMES[i] describe the same span — REGIONS carries the floor
+// ranges (driving biomeIndexForFloor / biomeDepthForFloor / the encounter deck), BIOMES carries
+// the palette. The pre-F30 regions keep their 5-floor spans; the post-F30 regions span 20/20/20/10.
 export type RegionId =
   | "amberwild" | "rootbound" | "sunless" | "deep" | "gilded" | "ember"
   | "sump" | "veinworks" | "pale" | "nullcore";
@@ -312,29 +386,9 @@ export function regionForFloor(floor: number): Region {
   return REGIONS[regionIndexForFloor(floor)];
 }
 
-// Authored post-F30 region palettes (the packet's OPEN ITEM). Sump reuses the terminal biome
-// band's interim AD hexes (single source — the band IS the Sump render palette for wave 1). The
-// other three are distinct placeholders marked TODO(AD-palette): not on the render path yet
-// (wave 1 stops at F50), authored so the data exists when their regions get art + a contrast
-// gate. Pre-F30 regions have no entry — their biome band already owns the palette.
-export type RegionPalette = Pick<Biome, "floorA" | "floorB" | "wallFront" | "wallCap" | "bgColor" | "accent">;
-
-export const REGION_PALETTES: Readonly<Partial<Record<RegionId, RegionPalette>>> = {
-  // Sump — the AD's interim hexes (mirrors the terminal biome band above).
-  sump: { bgColor: "#080610", floorA: "#16131a", floorB: "#1a1620", wallFront: "#2a2333", wallCap: "#3a2f2a", accent: "#b48ac0" },
-  // TODO(AD-palette): Veinworks — resin/amber arteries; warm-corrupted circulatory red.
-  veinworks: { bgColor: "#0c0605", floorA: "#1a1210", floorB: "#20160f", wallFront: "#3a221a", wallCap: "#4a2a1e", accent: "#d07a4a" },
-  // TODO(AD-palette): The Pale — warmth/color draining out; approaching Null, near-grey.
-  pale: { bgColor: "#0a0a0c", floorA: "#161618", floorB: "#1a1a1e", wallFront: "#2a2a30", wallCap: "#3a3a40", accent: "#9aa0aa" },
-  // TODO(AD-palette): Null Core — subtraction complete; the source; near-black void-bright.
-  nullcore: { bgColor: "#05030b", floorA: "#0a0714", floorB: "#0d0918", wallFront: "#241a44", wallCap: "#241a40", accent: "#ff4ad8" },
-};
-
 export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
   if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";
   if (opts?.isBoss) return "BOSS FLOOR";
-  // The region names the floor (authoritative below AND above F30, where four regions share one
-  // render band); the biome band only sets the palette.
   const name = regionForFloor(floor).name.toUpperCase();
   if (opts?.isDescend) return `${name} · DOWN TO FLOOR ${floor}`;
   return `${name} · FLOOR ${floor}`;
