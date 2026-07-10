@@ -389,6 +389,16 @@ export interface RemotePlayer {
   // Network-absent: their connection dropped and the server is holding their body for the
   // reconnect grace window. Rendered as a ghost with an explicit RECONNECTING label.
   isAbsent: boolean;
+  // Authoritative dash readout (never predicted): isDashing is ALIGNED with the rendered
+  // (interpolated) position, so afterimages/dust/sfx play where and when the blob visibly
+  // lunges; the direction and the two invuln windows ride the latest snapshot. The invuln
+  // seconds drive the same i-frame flicker the local player renders. All zero/false on the
+  // legacy co-op seam (its presence rows carry no dash state).
+  isDashing: boolean;
+  dashDirX: number;
+  dashDirY: number;
+  invuln: number;
+  dashInvuln: number;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   // The player's AUTHORITATIVE identity color (verified ticket claim / presence row).

@@ -90,7 +90,14 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
 //     reject any snapshot carrying these as a ProtocolError; the strict join gate turns
 //     that skew into a clean "update your client".
-export const PROTOCOL_VERSION = 8;
+// v9 (intentional bump, the remote-dash sync): PlayerWire grows the dash/invuln readout
+//   block (dti/ddx/ddy/dnv/inv — the same authoritative PlayerSim fields SelfWire already
+//   carries for reconciliation), so OBSERVING clients can render a teammate's dash
+//   (afterimages/dust/sfx/i-frame flicker) and interpolate it as a crisp move instead of a
+//   smeared glide. dashStart/dashTrail stay pid-scoped: remote dash FX are driven off this
+//   snapshot STATE (interp-aligned), never off the dasher's own event stream. A v8 client
+//   would reject the grown PlayerWire as a ProtocolError; the strict join gate fences it.
+export const PROTOCOL_VERSION = 9;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -171,6 +178,15 @@ export interface PlayerWire {
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  // Dash + invuln readout (v9), the same authoritative PlayerSim fields SelfWire carries:
+  // dti > 0 marks an ACTIVE dash, ddx/ddy its direction, dnv the dash-iframe window, inv
+  // the post-hit invuln. Observing clients render the dash (afterimages/dust/sfx/flicker)
+  // and interpolate it crisply from this state — dashStart/dashTrail events stay the
+  // dasher's own (pid scope), so nothing ever double-plays.
+  dti: number;
+  ddx: number; ddy: number;
+  dnv: number;
+  inv: number;
   rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
   out: boolean; // past the floor's down limit — teammates stop offering the revive
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
@@ -479,6 +495,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   shockArc: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", tRadius: "num", dmg: "num", color: "str", killed: "bool" } },
   enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num", combo: "num" } },
   heal: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
+  // Deliberately pid-scoped: these drive the DASHER's own juice. Teammates render a remote
+  // dash off the PlayerWire dash state (dti/ddx/ddy — v9), which is interp-aligned with the
+  // rendered position; broadcasting these events too would double-play the FX.
   dashStart: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   dashTrail: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
@@ -719,6 +738,10 @@ function validatePlayerWire(v: unknown): PlayerWire {
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    dti: num(o, "dti", -1e4, 1e4),
+    ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
+    dnv: num(o, "dnv", 0, 1e4),
+    inv: num(o, "inv", 0, 1e4),
     rv: num(o, "rv", 0, 1e4),
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
@@ -1001,6 +1024,7 @@ export interface PlayerIdentity {
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    dti: p.dashTime, ddx: p.dashDx, ddy: p.dashDy, dnv: p.dashInvuln, inv: p.invuln,
     rv: p.reviveProgress,
     out: isPlayerOut(p),
     bcl: p.hasClaimedBossChoice,

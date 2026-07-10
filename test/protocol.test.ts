@@ -221,7 +221,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + Patch's shop AND the bestiary wave (v8)", PROTOCOL_VERSION === 8, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + Patch's shop AND the bestiary wave (v8) + the remote-dash sync (v9)", PROTOCOL_VERSION === 9, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -416,10 +416,60 @@ function interestHysteresisTests(): void {
   check("an unknown entity in the hysteresis band does NOT enter", snapBack.t === "snap" && !snapBack.enemies.some((x) => x.id === fresh.id));
 }
 
+// v9: the remote-dash sync — PlayerWire carries the authoritative dash/invuln block so
+// OBSERVING clients render a teammate's dash. Locks: the fields ride buildSnapshot from
+// PlayerSim truth, round-trip losslessly, validate strictly, and read identically for every
+// observer (two clients must agree on when/where a dash happened).
+function remoteDashWireTests(): void {
+  section("v9: PlayerWire carries the dash/invuln readout — strict, lossless, observer-identical");
+  const w = createWorld(0xDA51, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(w, "pMe");
+  spawnPlayerInWorld(w, "pMate");
+  const dasher = spawnPlayerInWorld(w, "pDash");
+  dasher.dashTime = 0.12; dasher.dashDx = -0.6; dasher.dashDy = 0.8;
+  dasher.dashInvuln = 0.14; dasher.invuln = 0.25;
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test" });
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  const seen = snap.players.find((p) => p.id === "pDash");
+  check("the dash block rides the observer's wire straight from PlayerSim truth",
+    seen !== undefined && seen.dti === 0.12 && seen.ddx === -0.6 && seen.ddy === 0.8
+    && seen.dnv === 0.14 && seen.inv === 0.25,
+    JSON.stringify(seen && { dti: seen.dti, ddx: seen.ddx, ddy: seen.ddy, dnv: seen.dnv, inv: seen.inv }));
+  check("dash fields round-trip losslessly", deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(snap)), snap));
+
+  const snapB = buildSnapshot(w, "pMate", 0, [], 0, false, { worldId: "w-test" });
+  const seenB = snapB.t === "snap" ? snapB.players.find((p) => p.id === "pDash") : undefined;
+  check("both observers decode an IDENTICAL dash block (agreement on when/where)",
+    seenB !== undefined && deepEqual(seen, seenB));
+
+  const corruptDash = (over: Record<string, unknown>, drop?: string): string => {
+    const o = JSON.parse(jsonCodec.encodeServer(snap)) as { players: Array<Record<string, unknown>> };
+    const row = o.players.find((p) => p.id === "pDash")!;
+    Object.assign(row, over);
+    if (drop) delete row[drop];
+    return JSON.stringify(o);
+  };
+  const badFrames: Array<[string, string]> = [
+    ["junk dti", corruptDash({ dti: "fast" })],
+    ["out-of-range ddx", corruptDash({ ddx: 99 })],
+    ["negative dnv", corruptDash({ dnv: -1 })],
+    ["a v8 frame (dash block missing)", corruptDash({}, "dti")],
+  ];
+  for (const [label, frame] of badFrames) {
+    let rejected = false;
+    try { jsonCodec.decodeServer(frame); } catch (err) { rejected = err instanceof ProtocolError; }
+    check(`${label} is a protocol error`, rejected);
+  }
+}
+
 function eventScopeTests(): void {
   section("event scope: pid events target their player, positional FX carry coords, objectives are global");
   const cases: Array<[SimEvent, string]> = [
     [{ t: "playerHurt", pid: "p7", x: 1, y: 2 }, "pid"],
+    // Deliberately pid: remote dash FX ride PlayerWire dash STATE (v9), so broadcasting
+    // these would double-play the dasher's juice.
+    [{ t: "dashStart", pid: "p7", x: 1, y: 2 }, "pid"],
+    [{ t: "dashTrail", pid: "p7", x: 1, y: 2 }, "pid"],
     [{ t: "explosion", x: 10, y: 20, r: 90 }, "pos"],
     [{ t: "descend", toFloor: 2 }, "global"],
     [{ t: "bossPhase", eid: 3, x: 5, y: 6 }, "global"],
@@ -438,6 +488,7 @@ function main(): void {
   serverRoundTripTests();
   worldBindingWireTests();
   identityWireTests();
+  remoteDashWireTests();
   fuzzTests();
   projectionTests();
   interestHysteresisTests();
