@@ -69,6 +69,10 @@ export interface HotbarActions {
   onSlotInspect(index: number): void;
   // Swap prompt: trade the inventory slot at `index` for the blocked pickup underfoot.
   onSlotSwap(index: number): void;
+  // Drag-out-to-discard: a hotbar drag released OUTSIDE the slots row drops the weapon at
+  // `index` to the floor (same authoritative drop path as the drawer's DROP / Q). Never
+  // called for the last remaining weapon (the drag guards that before release).
+  onSlotDrop(index: number): void;
   // Swap prompt decline (LEAVE IT / Esc): dismiss it until the player walks away.
   onSwapDismiss(): void;
 }
@@ -470,7 +474,16 @@ interface SlotDrag {
   isActive: boolean;
   ghost: HTMLElement | null;
   marker: HTMLElement | null;
+  // The ghost's verb tag (MOVE / DROP / CAN'T DROP LAST) — updated as the pointer crosses
+  // between the reorder region and the discard region.
+  tag: HTMLElement | null;
   gap: number;
+  // The slot currently wearing the .drop-target highlight (nearest-slot reorder feedback),
+  // tracked so it can be cleared when the target changes or the drag enters the discard band.
+  dropTarget: HTMLElement | null;
+  // True while the pointer sits in the drag-out-to-discard region (outside the slots row +
+  // margin). Drives the ghost's MOVE↔DROP flip and whether a release drops or reorders.
+  isDiscarding: boolean;
   // Touch only: the pending long-press-to-inspect timer. Cancelled by drag activation,
   // release, or any teardown — a long-press NEVER equips or reorders.
   longPress: number | null;
@@ -731,7 +744,8 @@ export class Hud {
         pointerId: e.pointerId, fromIndex: index, slotEl: slot,
         startX: e.clientX, startY: e.clientY,
         grabX: e.clientX - r.left, grabY: e.clientY - r.top, scale,
-        isActive: false, ghost: null, marker: null, gap: index, longPress: null,
+        isActive: false, ghost: null, marker: null, tag: null, gap: index,
+        dropTarget: null, isDiscarding: false, longPress: null,
       };
       this.drag = drag;
       // Pressing IS intent to act: the tooltip drops immediately (hierarchy — the action
@@ -759,8 +773,7 @@ export class Hud {
         this.beginDragVisuals(slot, d);
       }
       this.moveGhost(d, e.clientX, e.clientY);
-      d.gap = this.insertionGapAt(e.clientX, e.clientY);
-      this.placeInsertionMarker(d);
+      this.updateDragMode(d, e.clientX, e.clientY);
     });
     slot.addEventListener("pointerup", (e) => {
       const d = this.drag;
@@ -771,9 +784,13 @@ export class Hud {
       // Gap -> final index: removing the source first shifts every later gap down by one.
       const to = d.gap > from ? d.gap - 1 : d.gap;
       const isOutside = isDragRelease && this.isOutsideSlots(e.clientX, e.clientY);
+      const canDrop = this.ownedCount() > 1;
       this.teardownDrag();
       if (!isDragRelease) this.hotbarActions?.onSlotActivate(index);
-      else if (!isOutside && to !== from) this.hotbarActions?.onSlotReorder(from, to);
+      // Released in the discard band: drop the weapon to the floor — UNLESS it's the last
+      // one owned, where the drag showed CAN'T DROP LAST and the release simply cancels.
+      else if (isOutside) { if (canDrop) this.hotbarActions?.onSlotDrop(from); }
+      else if (to !== from) this.hotbarActions?.onSlotReorder(from, to);
     });
     slot.addEventListener("pointercancel", () => this.teardownDrag());
     // The ONE floating tooltip follows the latest input: hover shows this slot's card
@@ -938,6 +955,7 @@ export class Hud {
     ghost.appendChild(moveTag);
     document.body.appendChild(ghost);
     d.ghost = ghost;
+    d.tag = moveTag;
     const marker = el("span", "");
     marker.className = "hb-ins";
     this.slotsEl.appendChild(marker);
@@ -960,28 +978,78 @@ export class Hud {
     return [...this.slotsEl.querySelectorAll<HTMLElement>(".hb-slot")];
   }
 
-  private insertionGapAt(x: number, y: number): number {
-    // Insertion gap under the pointer, row-aware (the strip wraps past ~10 slots): pick the
-    // row whose vertical center is nearest, then count that row's slots left of the pointer.
+  private ownedCount(): number {
+    return this.lastWeapons?.length ?? 0;
+  }
+
+  // The reorder-vs-discard decision + all reorder feedback for one pointer move. In the
+  // discard band the ghost flips to a red DROP read (or CAN'T DROP LAST for the final
+  // weapon), the insertion bar and drop-target highlight are hidden. Back inside, the ghost
+  // reverts to MOVE and the nearest-slot snap drives the insertion bar + drop-target ring.
+  private updateDragMode(d: SlotDrag, x: number, y: number): void {
+    const isOutside = this.isOutsideSlots(x, y);
+    if (isOutside) {
+      d.isDiscarding = true;
+      const canDrop = this.ownedCount() > 1;
+      d.ghost?.classList.add("discard");
+      d.ghost?.classList.toggle("cant", !canDrop);
+      if (d.tag) d.tag.textContent = canDrop ? "DROP" : "CAN'T DROP LAST";
+      if (d.marker) d.marker.style.display = "none";
+      this.setDropTarget(d, null, "before");
+      return;
+    }
+    d.isDiscarding = false;
+    d.ghost?.classList.remove("discard", "cant");
+    if (d.tag) d.tag.textContent = "MOVE";
+    if (d.marker) d.marker.style.display = "";
+    const snap = this.resolveDrop(x, y);
+    d.gap = snap.gap;
+    this.setDropTarget(d, snap.targetIndex, snap.side);
+    this.placeInsertionMarker(d);
+  }
+
+  // Nearest-slot snap: pick the slot whose center is closest to the pointer (row-aware — the
+  // strip wraps past ~10 slots), then resolve before/after by which half of THAT slot the
+  // pointer is in. `gap` is the resulting insertion index (0..slotCount); `targetIndex` is
+  // the slot to highlight and `side` which half the pointer favors.
+  private resolveDrop(x: number, y: number): { gap: number; targetIndex: number; side: "before" | "after" } {
     const slots = this.slotEls();
-    if (slots.length === 0) return 0;
+    if (slots.length === 0) return { gap: 0, targetIndex: -1, side: "before" };
     const rects = slots.map((s) => s.getBoundingClientRect());
     const rowTops: number[] = [];
     for (const r of rects) if (!rowTops.some((t) => Math.abs(t - r.top) < 4)) rowTops.push(r.top);
     let rowTop = rowTops[0];
-    let best = Infinity;
+    let bestRow = Infinity;
     for (const t of rowTops) {
       const h = rects.find((r) => Math.abs(r.top - t) < 4)!.height;
       const dist = Math.abs(t + h / 2 - y);
-      if (dist < best) { best = dist; rowTop = t; }
+      if (dist < bestRow) { bestRow = dist; rowTop = t; }
     }
-    let gap = 0;
+    // Nearest slot BY CENTER within the chosen row (no exact-overlap hit-test).
+    let target = -1;
+    let bestX = Infinity;
     for (let i = 0; i < rects.length; i++) {
-      const r = rects[i];
-      if (r.top < rowTop - 4) { gap = i + 1; continue; }         // full rows above the target
-      if (Math.abs(r.top - rowTop) < 4 && r.left + r.width / 2 < x) gap = i + 1;
+      if (Math.abs(rects[i].top - rowTop) >= 4) continue;
+      const dist = Math.abs(rects[i].left + rects[i].width / 2 - x);
+      if (dist < bestX) { bestX = dist; target = i; }
     }
-    return gap;
+    if (target < 0) return { gap: 0, targetIndex: -1, side: "before" };
+    const before = x < rects[target].left + rects[target].width / 2;
+    return { gap: before ? target : target + 1, targetIndex: target, side: before ? "before" : "after" };
+  }
+
+  // Move the .drop-target ring (+ its lateral nudge) onto the resolved slot, clearing it
+  // from any previous one. index < 0 clears it entirely (the discard band shows no target).
+  private setDropTarget(d: SlotDrag, index: number | null, side: "before" | "after"): void {
+    const next = index !== null && index >= 0 ? this.slotEls()[index] ?? null : null;
+    if (d.dropTarget && d.dropTarget !== next) {
+      d.dropTarget.classList.remove("drop-target", "nudge-before", "nudge-after");
+    }
+    d.dropTarget = next;
+    if (!next) return;
+    next.classList.add("drop-target");
+    next.classList.toggle("nudge-before", side === "before");
+    next.classList.toggle("nudge-after", side === "after");
   }
 
   private placeInsertionMarker(d: SlotDrag) {
@@ -1004,6 +1072,7 @@ export class Hud {
     if (d.longPress !== null) window.clearTimeout(d.longPress);
     d.ghost?.remove();
     d.marker?.remove();
+    d.dropTarget?.classList.remove("drop-target", "nudge-before", "nudge-after");
     d.slotEl.classList.remove("dragging");
     try { d.slotEl.releasePointerCapture(d.pointerId); } catch { /* already released / headless */ }
     // The DOM order may now be stale against authority (reorder in flight / rebuilds were

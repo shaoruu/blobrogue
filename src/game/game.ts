@@ -807,6 +807,7 @@ export class Game {
       onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
       onSlotInspect: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "inspectSlot", index }); },
       onSlotSwap: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "swapSlot", index }); },
+      onSlotDrop: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "dropWeaponAt", index }); },
       onSwapDismiss: () => this.dismissSwapPrompt(),
     });
     this.onGameOver = onGameOver;
@@ -898,6 +899,9 @@ export class Game {
         break;
       case "dropWeapon":
         if (this.isRunning) this.dropEquippedWeapon();
+        break;
+      case "dropWeaponAt":
+        if (this.isRunning) this.dropWeaponAt(a.index);
         break;
       case "activateSlot":
         if (this.isRunning) this.activateSlot(a.index);
@@ -2875,6 +2879,16 @@ export class Game {
   private dropEquippedWeapon() {
     if (this.p.ownedWeapons.length < 2) return;
     this.transport.requestDrop(this.weapon);
+  }
+
+  // Drop the weapon in hotbar slot `index` (the drag-out-to-discard gesture). Routes through
+  // the SAME server-authoritative dropWeaponInWorld path Q uses — named by weapon id, so the
+  // authority drops that exact slot's weapon (never equip-then-drop). The final weapon never
+  // drops; the sim/server re-checks fullness/downed/terminal even if a client bypasses this.
+  private dropWeaponAt(index: number) {
+    const owned = this.p.ownedWeapons;
+    if (owned.length < 2 || index < 0 || index >= owned.length) return;
+    this.transport.requestDrop(owned[index]);
   }
 
   private cycleWeapon(dir: number) {

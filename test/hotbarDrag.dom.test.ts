@@ -95,21 +95,22 @@ function layoutRow(slotsEl: HTMLElement, slots: HTMLElement[], zoom: number, ori
   return rects;
 }
 
-type Actions = { activates: number[]; reorders: [number, number][]; inspects: number[] };
+type Actions = { activates: number[]; reorders: [number, number][]; inspects: number[]; drops: number[] };
 
-function rig(currentIndex = 1): { hud: InstanceType<HudModule["Hud"]>; root: HTMLElement; slotsEl: HTMLElement; slots: HTMLElement[]; tipEl: HTMLElement; acts: Actions } {
+function rig(currentIndex = 1, ids = FIVE): { hud: InstanceType<HudModule["Hud"]>; root: HTMLElement; slotsEl: HTMLElement; slots: HTMLElement[]; tipEl: HTMLElement; acts: Actions } {
   const root = document.createElement("div");
   document.body.appendChild(root);
   const hud = new Hud(root);
-  const acts: Actions = { activates: [], reorders: [], inspects: [] };
+  const acts: Actions = { activates: [], reorders: [], inspects: [], drops: [] };
   hud.setHotbarActions({
     onSlotActivate: (i) => acts.activates.push(i),
     onSlotReorder: (from, to) => acts.reorders.push([from, to]),
     onSlotInspect: (i) => acts.inspects.push(i),
     onSlotSwap: () => {},
+    onSlotDrop: (i) => acts.drops.push(i),
     onSwapDismiss: () => {},
   });
-  hud.update(mkState(currentIndex));
+  hud.update(mkState(currentIndex, ids));
   const slotsEl = root.querySelector<HTMLElement>("[data-hb-slots]")!;
   const slots = [...slotsEl.querySelectorAll<HTMLElement>(".hb-slot")];
   const tipEl = root.querySelector<HTMLElement>("#hb-tip")!;
@@ -222,7 +223,7 @@ async function grabPointTests(): Promise<void> {
     check("no ghost before the threshold", ghostEl() === null);
     slots[1].dispatchEvent(ptr("pointermove", r.left + 5 + 4, r.top + 5)); // 4px < threshold
     check("a 4px wiggle never starts a drag", ghostEl() === null);
-    slots[1].dispatchEvent(ptr("pointermove", 400, 300));
+    slots[1].dispatchEvent(ptr("pointermove", r.left + 40, r.top + 10)); // past threshold, still INSIDE the row
     const ghost = ghostEl()!;
     check("ghost has transition disabled (never lags the pointer)", ghost.style.transition === "none");
     check("ghost carries no tooltip", ghost.querySelector(".hb-tip, .tip") === null);
@@ -320,6 +321,65 @@ function markerAndReorderTests(): void {
   }
 }
 
+function discardTests(): void {
+  section("drag-out-to-discard: the ghost flips MOVE <-> DROP across the discard band");
+  {
+    const { hud, root, slotsEl, slots, acts } = rig();
+    const rects = layoutRow(slotsEl, slots, 1);
+    // Start a reorder INSIDE the row: MOVE tag, insertion bar visible, a drop-target ring.
+    dragTo(slots[0], rects[0], 20, 20, rects[2].left + rects[2].width * 0.2, rects[2].top + 10);
+    const ghost = ghostEl()!;
+    const marker = slotsEl.querySelector<HTMLElement>(".hb-ins")!;
+    check("inside the row the ghost reads MOVE", ghost.querySelector(".hb-move")?.textContent === "MOVE" && !ghost.classList.contains("discard"));
+    check("inside the row the insertion bar shows", marker.style.display !== "none");
+    check("inside the row a slot wears the drop-target ring", slotsEl.querySelector(".hb-slot.drop-target") !== null);
+    // Cross OUT into the discard band: DROP read, no bar, no highlight.
+    slots[0].dispatchEvent(ptr("pointermove", 30, 80));
+    check("in the discard band the ghost flips to a red DROP read",
+      ghost.classList.contains("discard") && ghost.querySelector(".hb-move")?.textContent === "DROP");
+    check("in the discard band the insertion bar is hidden", marker.style.display === "none");
+    check("in the discard band no slot wears the drop-target ring", slotsEl.querySelector(".hb-slot.drop-target") === null);
+    // Cross BACK inside: revert to MOVE + reorder feedback.
+    slots[0].dispatchEvent(ptr("pointermove", rects[3].left + rects[3].width * 0.2, rects[3].top + 10));
+    check("crossing back reverts the ghost to MOVE",
+      !ghost.classList.contains("discard") && ghost.querySelector(".hb-move")?.textContent === "MOVE");
+    check("crossing back restores the insertion bar + drop-target",
+      marker.style.display !== "none" && slotsEl.querySelector(".hb-slot.drop-target") !== null);
+    slots[0].dispatchEvent(ptr("pointerup", rects[3].left + rects[3].width * 0.2, rects[3].top + 10));
+    check("a release back inside reorders (never drops)", acts.drops.length === 0 && acts.reorders.length === 1);
+    hud.clear(); root.remove();
+  }
+
+  section("drag-out-to-discard: the LAST remaining weapon can never be dropped");
+  {
+    const { hud, root, slotsEl, slots, acts } = rig(0, [FIVE[0]]); // one weapon owned
+    const rects = layoutRow(slotsEl, slots, 1);
+    dragTo(slots[0], rects[0], 20, 20, 30, 80); // straight out into the discard band
+    const ghost = ghostEl()!;
+    check("the ghost warns CAN'T DROP LAST", ghost.classList.contains("cant") && ghost.querySelector(".hb-move")?.textContent === "CAN'T DROP LAST");
+    slots[0].dispatchEvent(ptr("pointerup", 30, 80));
+    check("releasing the last weapon outside cancels — nothing dropped", acts.drops.length === 0 && acts.reorders.length === 0);
+    hud.clear(); root.remove();
+  }
+
+  section("nearest-slot snap: the drop-target is the nearest slot, before/after by its half");
+  {
+    const { hud, root, slotsEl, slots } = rig();
+    const rects = layoutRow(slotsEl, slots, 1);
+    // Pointer in the LEFT half of slot 3 -> target slot 3, insert BEFORE it.
+    dragTo(slots[0], rects[0], 20, 20, rects[3].left + rects[3].width * 0.2, rects[3].top + 10);
+    const target = slotsEl.querySelector<HTMLElement>(".hb-slot.drop-target")!;
+    check("left half snaps the ring onto the nearest slot, nudged 'before'",
+      target === slots[3] && target.classList.contains("nudge-before"));
+    // Pointer in the RIGHT half of slot 3 -> still slot 3, insert AFTER it.
+    slots[0].dispatchEvent(ptr("pointermove", rects[3].left + rects[3].width * 0.85, rects[3].top + 10));
+    const t2 = slotsEl.querySelector<HTMLElement>(".hb-slot.drop-target")!;
+    check("right half keeps the same nearest slot, nudged 'after'",
+      t2 === slots[3] && t2.classList.contains("nudge-after"));
+    hud.clear(); root.remove();
+  }
+}
+
 async function cancelTests(): Promise<void> {
   const begin = (currentIndex = 1) => {
     const r = rig(currentIndex);
@@ -372,11 +432,14 @@ async function cancelTests(): Promise<void> {
     hud.clear(); root.remove();
   }
 
-  section("cancel: release far outside the hotbar is a change of mind, not a reorder");
+  section("discard: release far outside the hotbar DROPS the dragged weapon (>1 owned)");
   {
     const { hud, root, slots, acts } = begin();
+    slots[0].dispatchEvent(ptr("pointermove", 30, 80)); // into the discard band first
     slots[0].dispatchEvent(ptr("pointerup", 30, 80)); // way above/left of the row
-    check("outside release commits nothing", acts.reorders.length === 0 && acts.activates.length === 0);
+    check("outside release drops the dragged slot, never reorders/equips",
+      acts.drops.length === 1 && acts.drops[0] === 0 && acts.reorders.length === 0 && acts.activates.length === 0,
+      JSON.stringify(acts.drops));
     check("state fully torn down", !hud.isInteractionActive() && ghostEl() === null);
     hud.clear(); root.remove();
   }
@@ -682,6 +745,7 @@ async function longPressTests(): Promise<void> {
 async function main(): Promise<void> {
   await grabPointTests();
   markerAndReorderTests();
+  discardTests();
   await cancelTests();
   keyboardReorderTests();
   await tooltipClampTests();

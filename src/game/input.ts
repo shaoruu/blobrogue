@@ -33,6 +33,10 @@ export type GameAction =
   | { kind: "inspectSlot"; index: number }
   | { kind: "cycleWeapon"; dir: 1 | -1 }
   | { kind: "dropWeapon" }
+  // Drag-out-to-discard: drop the OWNED weapon at hotbar `index` to the floor (the drawer's
+  // dropWeapon path, indexed directly — not equip-then-drop). Fired by a hotbar drag
+  // released outside the slots row when more than one weapon is owned.
+  | { kind: "dropWeaponAt"; index: number }
   | { kind: "activateSlot"; index: number }
   | { kind: "reorderSlots"; from: number; to: number }
   // The full-hotbar swap prompt: trade the slot at `index` for the blocked pickup underfoot.
@@ -57,6 +61,7 @@ const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   selectWeapon: ["gameplay"],
   cycleWeapon: ["gameplay"],
   dropWeapon: ["gameplay"],
+  dropWeaponAt: ["gameplay"],
   activateSlot: ["gameplay"],
   inspectSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
