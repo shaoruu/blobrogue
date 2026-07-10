@@ -60,6 +60,7 @@ export type SfxName =
   | "bossSpawn"
   | "gameOver"
   | "revive"
+  | "bonk"
   | "uiClick";
 
 export type MusicKind = "dungeon" | "boss" | null;
@@ -159,6 +160,11 @@ export const SAMPLES: Partial<Record<SfxName, SampleSpec>> = {
   // the revive sting reuses the authored heart chime at natural pitch — warm, ascending,
   // the same "life restored" family — never a synthesized stand-in.
   revive: { id: "revive", variants: 1, mix: 0.8, reuse: { sample: "heart" } },
+  // ASSET HOOK (audio director): public/audio/sfx/bonk.{ogg,mp3} — a soft, rounded, comedic
+  // "bonk" for the friendly-fire nudge, lower than combat. Until it ships it safely reuses
+  // the authored melee-hit thump at a slightly lower pitch (rounded, in the [0.85,1.15] band)
+  // — never a synthesized stand-in. TODO: replace with the bespoke bonk stem.
+  bonk: { id: "bonk", variants: 1, mix: 0.5, reuse: { sample: "meleeHit", rate: 0.9 } },
   // ASSET HOOK (P0): public/audio/sfx/uiClick.{ogg,mp3} is not shipped yet. Safe reuse:
   // the authored coin chime, slightly brightened, trimmed well down for UI duty.
   uiClick: { id: "uiClick", variants: 1, mix: 0.3, reuse: { sample: "coin", rate: 1.1 } },
@@ -935,6 +941,7 @@ class AudioEngine implements WaveEngine {
       case "bossSpawn": return 0.95;
       case "gameOver": return 0.75;
       case "revive": return 0.45;
+      case "bonk": return 0.18;
       case "uiClick": return 0.07;
     }
   }

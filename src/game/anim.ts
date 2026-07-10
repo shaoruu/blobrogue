@@ -9,16 +9,17 @@ export interface Anim {
   lean: number;   // eased -1..1 horizontal lean toward motion/aim
   recoil: number; // decays after a shot/attack (scale punch)
   flash: number;  // decays after a hit (white pop)
+  bounce: number; // decays after a friendly-fire bonk (a comedic squash-and-stretch, ~0.15s)
 }
 
 export function createAnim(): Anim {
   // Random phase so a room full of blobs doesn't bob in lockstep.
-  return { clock: Math.random() * 10, move: 0, lean: 0, recoil: 0, flash: 0 };
+  return { clock: Math.random() * 10, move: 0, lean: 0, recoil: 0, flash: 0, bounce: 0 };
 }
 
 export function resetAnim(a: Anim): void {
   a.clock = Math.random() * 10;
-  a.move = 0; a.lean = 0; a.recoil = 0; a.flash = 0;
+  a.move = 0; a.lean = 0; a.recoil = 0; a.flash = 0; a.bounce = 0;
 }
 
 export function stepAnim(a: Anim, dt: number, isMoving: boolean, leanTarget: number): void {
@@ -28,10 +29,13 @@ export function stepAnim(a: Anim, dt: number, isMoving: boolean, leanTarget: num
   a.clock += dt * (1 + a.move * 1.5);
   a.recoil -= dt * 6.5; if (a.recoil < 0) a.recoil = 0;
   a.flash -= dt * 7; if (a.flash < 0) a.flash = 0;
+  a.bounce -= dt * 6.5; if (a.bounce < 0) a.bounce = 0; // ~0.15s springy bonk, like recoil
 }
 
 export function triggerRecoil(a: Anim, strength = 1): void { a.recoil = strength; }
 export function triggerFlash(a: Anim): void { a.flash = 1; }
+// A playful friendly-fire bonk: a quick squash-and-stretch, never a hurt flash.
+export function triggerBounce(a: Anim, strength = 1): void { a.bounce = strength; }
 
 export interface XformStyle {
   freq: number;   // idle bob / breathe cycles per second
@@ -62,6 +66,13 @@ export function characterXform(a: Anim, style: XformStyle): Xform {
   const punch = a.recoil * a.recoil;
   sx += punch * 0.16;
   sy -= punch * 0.2;
+  // Friendly-fire bonk: a springy squash-and-stretch that overshoots once as it decays —
+  // reads as a comedic bounce (compress, then spring back), never a hit reaction.
+  if (a.bounce > 0) {
+    const spring = a.bounce * Math.sin(a.bounce * Math.PI * 1.5);
+    sx += spring * 0.22;
+    sy -= spring * 0.22;
+  }
   scratch.ox = 0;
   scratch.oy = oy;
   scratch.sx = sx;

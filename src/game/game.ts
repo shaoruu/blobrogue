@@ -45,7 +45,7 @@ import { Hud } from "./hud.js";
 import type { ProfileStats } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
-  createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash,
+  createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash, triggerBounce,
   characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
 import type { Anim, Xform, XformStyle } from "./anim.js";
@@ -155,6 +155,16 @@ interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facin
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing: boolean; dashImgCd: number; dashDustCd: number; }
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
+// A coin token flying from its pickup spot (world x,y) up into the top-left wallet: t runs
+// 0..1, arcing from the world position to the wallet's screen anchor, then the counter pops.
+interface CoinFly { x: number; y: number; t: number; }
+const COIN_FLY_DUR = 0.5;   // seconds for a coin to arc into the wallet
+const COIN_FLY_MAX = 8;     // hard cap on live tokens (a mega-burst never swarms)
+const COIN_FLY_ARC = 46;    // px of upward hump on the arc (reads as a lift-and-scoop)
+// World-anchored contextual prompt (item 6): how far above the target the floating [E]
+// keycap sits, and its keycap size. Easily tunable (a UI follow-up may adjust the numbers).
+const CTX_PROMPT_OFFSET_Y = 24;
+const CTX_PROMPT_KEY_PX = 14;
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
@@ -603,6 +613,8 @@ export class Game {
   private particles: Particle[] = [];
   private dmgNumbers: DmgNumber[] = [];  // floating damage popups (visual only)
   private worldLabels: WorldLabel[] = []; // floating text popups (visual only; e.g. drop names)
+  private coinFlies: CoinFly[] = [];      // coins arcing into the top-left wallet (client juice)
+  private coinFlySpawnTick = -1;          // coalesces a same-tick coin burst into one token
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
@@ -1723,6 +1735,7 @@ export class Game {
     this.updateParticles(dt);
     this.updateDmgNumbers(dt);
     this.updateWorldLabels(dt);
+    this.updateCoinFlies(dt);
     this.updateTracers(dt);
     this.updateCorpses(dt);
     this.updateDecals(dt);
@@ -1898,6 +1911,20 @@ export class Game {
     switch (e.t) {
       case "shot": {
         const w = WEAPONS[e.weapon];
+        // Online MP has ONE authoritative event stream: a teammate's shot arrives here too
+        // (v14, "pos" scope). The local player gets the full juice; a REMOTE player's shot
+        // is replayed POSITIONALLY — muzzle particles + tracer + a recoil punch on their
+        // blob + spatial audio (quieter if far) — with NO local camera kick/trauma/muzzle.
+        if (!this.isSelfPid(e.pid)) {
+          this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
+          this.remoteTracers.push({ x: e.x, y: e.y, angle: e.aim, life: 0.12, color: this.remoteColorOf(e.pid) });
+          const entry = this.remoteAnims.get(e.pid);
+          if (entry) triggerRecoil(entry.anim);
+          if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y, gain: 0.4, beamKey: e.pid })) {
+            this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { ...SHOOT_SFX_OPTS[e.weapon], gain: 0.4 });
+          }
+          break;
+        }
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         this.muzzle.t = MUZZLE_DUR; this.muzzle.x = e.x; this.muzzle.y = e.y; this.muzzle.angle = e.aim; this.muzzle.size = w.muzzle; this.muzzle.color = w.color;
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
@@ -1920,10 +1947,21 @@ export class Game {
       case "meleeSwing": {
         const w = WEAPONS[e.weapon];
         const m = w.melee;
+        const feel = MELEE_FEEL[e.weapon];
+        // A remote teammate's swing: the slash arc + a recoil punch on their blob + spatial
+        // audio, no local camera kick/trauma (see the shot case).
+        if (!this.isSelfPid(e.pid)) {
+          if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
+          const entry = this.remoteAnims.get(e.pid);
+          if (entry) triggerRecoil(entry.anim);
+          if (feel) this.sfxAt(feel.swingSfx, e.x, e.y, { rate: feel.swingRate, gain: feel.swingGain * 0.4 });
+          else this.sfxAt(SHOOT_SFX[e.weapon], e.x, e.y, { gain: 0.4 });
+          this.spawnParticles(e.bx + Math.cos(e.aim) * 14, e.by + Math.sin(e.aim) * 14, 4, w.color);
+          break;
+        }
         this.meleeFlipDir = -this.meleeFlipDir; // alternate the visual sweep; the hitbox wedge is symmetric
         triggerRecoil(this.playerAnim, FIRE_RECOIL[e.weapon] * settings.effectiveRecoil);
         if (m) this.spawnSlashWind(e.x, e.y, e.aim, m, w.color);
-        const feel = MELEE_FEEL[e.weapon];
         if (feel) sfx(feel.swingSfx, { rate: feel.swingRate, gain: feel.swingGain });
         else sfx(SHOOT_SFX[e.weapon]);
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
@@ -2019,7 +2057,9 @@ export class Game {
       }
       case "heal":
         this.spawnParticles(e.x, e.y, 8, "#ff6a9d");
-        sfx("heart", { gain: 0.5 });
+        // A teammate's heal is heard positionally (quieter); the local player's plays full.
+        if (this.isSelfPid(e.pid)) sfx("heart", { gain: 0.5 });
+        else this.sfxAt("heart", e.x, e.y, { gain: 0.4 });
         break;
       case "dashStart":
         this.dashImgCd = 0;
@@ -2031,6 +2071,16 @@ export class Game {
         this.spawnParticles(e.x, e.y, 1, "#ffd27a");
         break;
       case "playerHurt":
+        // A teammate getting hit MUST be audible to everyone (Ian: "I want to hear my friend
+        // get hit") — but a remote hit is a positional red burst + hurt cue on THEIR blob,
+        // never the local player's screen shake / hurt vignette / shop-close.
+        if (!this.isSelfPid(e.pid)) {
+          this.spawnParticles(e.x, e.y, 10, "#ff5a5a");
+          this.sfxAt("playerHurt", e.x, e.y, { gain: 0.6 });
+          const entry = this.remoteAnims.get(e.pid);
+          if (entry) triggerFlash(entry.anim);
+          break;
+        }
         triggerFlash(this.playerAnim);
         this.spawnParticles(e.x, e.y, 10, "#ff5a5a");
         sfx("playerHurt");
@@ -2059,11 +2109,32 @@ export class Game {
       case "blessingExpired":
         this.onOfferExpired(e.pid);
         break;
-      case "pickup":
-        if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); sfx("coin"); }
-        else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
-        else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); sfx("weapon"); }
+      case "pickup": {
+        // The world-space glow/decal fires for everyone at the spot; the chime is full for
+        // the local collector, positional (quieter) for a teammate's pickup.
+        const isSelfPickup = this.isSelfPid(e.pid);
+        const chime = (name: SfxName) => { if (isSelfPickup) sfx(name); else this.sfxAt(name, e.x, e.y, { gain: 0.4 }); };
+        if (e.kind === "coin") { this.spawnParticles(e.x, e.y, 6, "#ffd27a"); this.addDecal(e.x, e.y, "#ffd27a", 10, "ring"); chime("coin"); }
+        else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); chime("heart"); }
+        else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); chime("weapon"); }
+        // The local player's coin flies to the top-left wallet (client juice only).
+        if (isSelfPickup && e.kind === "coin") this.spawnCoinFly(e.x, e.y);
         break;
+      }
+      case "friendlyNudge": {
+        // The playful friendly-fire bonk (server-authoritative KB already applied): a soft
+        // round puff in the SHOOTER's color at contact + a tiny star mote, a springy
+        // squash-and-stretch on the bonked blob, and a rounded comedic sound — explicitly
+        // NOT red, no screen shake, no i-frame flicker, no hurt anim.
+        this.spawnPuff(e.x, e.y, 5, this.shooterColorOf(e.shooterId));
+        this.spawnSparkleBurst(e.x, e.y, 4, "#fff6d0");
+        if (this.isSelfPid(e.targetId)) triggerBounce(this.playerAnim);
+        else { const entry = this.remoteAnims.get(e.targetId); if (entry) triggerBounce(entry.anim); }
+        // Softer than combat, pitch-randomized, positional (quieter if far). The sim's
+        // per-pair cooldown already guarantees one bonk per nudge (never per-bullet).
+        this.sfxAt("bonk", e.x, e.y, { gain: 0.35, rate: 0.9 + Math.random() * 0.3 });
+        break;
+      }
       case "shopBuy": {
         // The register moment: positional (everyone browsing the stall sees a teammate's
         // claim land), with the buyer's kind selecting the flavor. Patch plays the
@@ -2122,10 +2193,16 @@ export class Game {
       }
       case "bulletWall":
         this.spawnSparks(e.x, e.y, 5, e.aim);
+        // A light impact tick so a round dying on a wall reads audibly — rate-limited so a
+        // firefight peppering a wall never strobes. TODO(audio director): a bespoke
+        // bullet-on-stone tick; borrows the ricochet stem, trimmed low, until then.
+        this.sfxAtThrottled("ricochet", e.x, e.y, "bulletWall", 3, { rate: 1.35, gain: 0.22 });
         break;
       case "bulletBounce":
         this.spawnSparks(e.x, e.y, 3, e.aim);
         this.spawnSparkFlash(e.x, e.y, e.color);
+        // A ricochet IS a ricochet — the authored stem fits exactly; rate-limited.
+        this.sfxAtThrottled("ricochet", e.x, e.y, "bulletBounce", 2, { gain: 0.4 });
         break;
       case "bulletBlocked": {
         // The block voices in the blocker's MATERIAL: shielder wood, living root
@@ -2143,6 +2220,9 @@ export class Game {
       case "propHit":
         triggerFlash(this.animForPropId(e.propId));
         this.spawnPuff(e.x, e.y, 5, PROP_TINT[e.kind]);
+        // A soft thud when a round chews a prop (propBreak already sounds on destruction).
+        // TODO(audio director): a bespoke prop-chew tick; borrows meleeHit low + dull rate.
+        this.sfxAtThrottled("meleeHit", e.x, e.y, "propHit", 2, { rate: 0.8, gain: 0.28 });
         break;
       case "propBreak":
         this.replayPropBreak(e.kind, e.x, e.y);
@@ -2189,9 +2269,12 @@ export class Game {
         if (e.kind === "toxic_pool") waveAudio.play("toxic_pool.enter", { x: e.x, y: e.y });
         const tint = HAZARD_HIT_TINT[e.kind];
         this.spawnPuff(e.x, e.y, 8, tint);
-        if (e.kind === "spikes") this.spawnSparks(e.x, e.y, 6, -Math.PI / 2);
-        if (e.kind === "fire_vent") this.spawnEmberAt(e.x, e.y, 10);
-        if (e.kind === "void_rift") this.spawnSparkleBurst(e.x, e.y, 8, tint);
+        // Each floor hazard gets its own contact voice (only the toxic pool sounded before).
+        // TODO(audio director): bespoke spikes/fire_vent/void_rift contact stems; these borrow
+        // the closest authored samples, trimmed, until they land. Rate-limited per kind.
+        if (e.kind === "spikes") { this.spawnSparks(e.x, e.y, 6, -Math.PI / 2); this.sfxAtThrottled("parry", e.x, e.y, "hazard.spikes", 2, { rate: 1.4, gain: 0.4 }); }
+        if (e.kind === "fire_vent") { this.spawnEmberAt(e.x, e.y, 10); this.sfxAtThrottled("barrel", e.x, e.y, "hazard.fire", 2, { rate: 1.6, gain: 0.35 }); }
+        if (e.kind === "void_rift") { this.spawnSparkleBurst(e.x, e.y, 8, tint); this.sfxAtThrottled("tesla", e.x, e.y, "hazard.void", 2, { rate: 0.7, gain: 0.4 }); }
         this.addDecal(e.x, e.y, tint, 12, "ring");
         break;
       }
@@ -2865,6 +2948,32 @@ export class Game {
     if (this.isNearCamera(x, y)) sfx(name, opts);
   }
 
+  // A positional sfx that never strobes: at most one play of `key` per `minGapTicks` sim
+  // ticks (many simultaneous impacts in one tick collapse to one voice). Keyed on the sim
+  // tick so it stays deterministic (never the wall-clock animClock). Used for the
+  // high-frequency world impacts (bullet-on-wall, prop chew, floor-hazard contact) so a 4p
+  // firefight peppering a wall reads as one tick, not a machine-gun of clicks.
+  private lastCueTick = new Map<string, number>();
+  private sfxAtThrottled(name: SfxName, x: number, y: number, key: string, minGapTicks: number, opts?: SfxOptions) {
+    if (!this.isNearCamera(x, y)) return;
+    const now = this.world.tick;
+    const last = this.lastCueTick.get(key);
+    if (last !== undefined && now - last < minGapTicks) return;
+    this.lastCueTick.set(key, now);
+    sfx(name, opts);
+  }
+
+  // The party color of a networked teammate (their verified colorIndex), neutral if unknown.
+  private remoteColorOf(pid: PlayerId): string {
+    const r = this.remotes().find((x) => x.playerId === pid);
+    return playerColorOr(r ? r.colorIndex : null);
+  }
+
+  // The player color of whoever fired — the local player's chosen tint or a teammate's.
+  private shooterColorOf(pid: PlayerId): string {
+    return this.isSelfPid(pid) ? playerColorOr(this.selfColorIndex) : this.remoteColorOf(pid);
+  }
+
 
 
 
@@ -2917,6 +3026,30 @@ export class Game {
     }
     if (this.worldLabels.some((l) => l.life <= 0)) {
       this.worldLabels = this.worldLabels.filter((l) => l.life > 0);
+    }
+  }
+
+  // The local player collected a coin: launch a token that arcs from the pickup up into the
+  // top-left wallet counter. Cheap + pooled (hard cap) and COALESCED — many coins landing on
+  // one tick spawn ONE token, not one per coin — so a chest dump reads as a satisfying scoop,
+  // never a swarm. The counter itself pops when the token lands (see updateCoinFlies).
+  private spawnCoinFly(x: number, y: number) {
+    if (this.coinFlySpawnTick === this.world.tick) return; // one per tick (burst -> a few)
+    if (this.coinFlies.length >= COIN_FLY_MAX) return;
+    this.coinFlySpawnTick = this.world.tick;
+    this.coinFlies.push({ x, y, t: 0 });
+  }
+
+  private updateCoinFlies(dt: number) {
+    if (this.coinFlies.length === 0) return;
+    let landed = false;
+    for (const c of this.coinFlies) {
+      c.t += dt / COIN_FLY_DUR;
+      if (c.t >= 1) landed = true;
+    }
+    if (landed) {
+      this.coinFlies = this.coinFlies.filter((c) => c.t < 1);
+      this.hud.pulseCoins(); // the wallet ticks up with a quick pop as the coin lands
     }
   }
 
@@ -3163,7 +3296,9 @@ export class Game {
       bossHpFrac,
       bossName: boss ? bossDisplayName(boss.kind) : "",
       coopLabel,
-      prompt: this.hudPrompt(),
+      // The contextual interact prompt now floats world-anchored near its target
+      // (renderContextPrompt), so the detached bottom-left corner E is gone.
+      prompt: null,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,
       comboMult: comboTier.mult,
@@ -3184,7 +3319,7 @@ export class Game {
   // Priority: the revive affordance (a living local player inside a revivable downed
   // teammate's ring — OUT bodies never prompt) outranks the shop affordance (a focused
   // station in Patch's room), so one E always means one thing.
-  contextualAction(): { action: "revive"; targetName: string; progress: number | null } | { action: "shop"; label: string } | null {
+  contextualAction(): { action: "revive"; targetName: string; progress: number | null; x: number; y: number } | { action: "shop"; label: string; x: number; y: number } | null {
     // A pick overlay pauses the player (sim-shielded, inputs idle) — there IS no
     // contextual action to offer under it.
     if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
@@ -3201,28 +3336,37 @@ export class Game {
           action: "revive",
           targetName: near.name,
           progress: isChanneling ? Math.min(1, near.reviveProgress / REVIVE.channel) : null,
+          x: near.x, y: near.y,
         };
       }
     }
     if (!this.shopPanel.isOpen) {
       const slot = this.focusedShopSlot();
-      if (slot !== null) return { action: "shop", label: shopSlotName(slot).toUpperCase() };
+      if (slot !== null) return { action: "shop", label: shopSlotName(slot).toUpperCase(), x: slot.x, y: slot.y };
     }
     return null;
   }
 
-  // The BL prompt presentation over the semantic action. The key cap is the KEYBOARD
-  // binding only — no controller glyph until a controller actually exists (UI Part4);
-  // when pads land, the same semantic action maps to its A-button glyph here.
-  private hudPrompt(): { key: string; label: string; isActive: boolean } | null {
+  // The ONE world-anchored contextual prompt (UI-designer spec): a floating [E] keycap over
+  // the RELEVANT TARGET — the revivable teammate, the focused shop station, or a full-hotbar
+  // weapon pickup underfoot — instead of a detached corner E in the eye's blind spot. Returns
+  // the world anchor + presentation; renderContextPrompt converts it to screen each frame.
+  // Priority mirrors contextualAction (revive > shop), with the pickup nudge last.
+  private worldPrompt(): { x: number; y: number; key: string; label: string; isActive: boolean } | null {
     const act = this.contextualAction();
-    if (act === null) return null;
-    if (act.action === "shop") return { key: "E", label: `INSPECT ${act.label}`, isActive: false };
-    const name = act.targetName.toUpperCase();
-    if (act.progress !== null) {
-      return { key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
+    if (act !== null) {
+      if (act.action === "shop") return { x: act.x, y: act.y, key: "E", label: `INSPECT ${act.label}`, isActive: false };
+      const name = act.targetName.toUpperCase();
+      if (act.progress !== null) return { x: act.x, y: act.y, key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
+      return { x: act.x, y: act.y, key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
     }
-    return { key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
+    // A full hotbar refused to auto-collect a weapon underfoot: float the "there's something
+    // here" nudge over the pickup itself (the detailed .hb-swap trade panel still stands).
+    if (this.swapTarget !== null) {
+      const pk = this.world.pickups.find((p) => p.id === this.swapTarget!.pickupId);
+      if (pk) return { x: pk.x, y: pk.y, key: "E", label: "SWAP", isActive: false };
+    }
+    return null;
   }
 
   // ---- Patch's shop (client side) ----
@@ -3727,7 +3871,9 @@ export class Game {
     this.renderHurtVignette();
     this.renderDownOverlay();
     this.renderSpectateBanner();
+    this.renderContextPrompt(); // world-anchored [E] keycap near the target (revive/shop/pickup)
     this.renderReticle();
+    this.renderCoinFlies();     // coins arcing into the top-left wallet
     this.renderMinimap();
     this.renderReconnectOverlay();
   }
@@ -4974,6 +5120,98 @@ export class Game {
     }
     ctx.restore();
     ctx.globalAlpha = 1;
+  }
+
+  // Coins arcing into the top-left wallet. Drawn in SCREEN space (after the world restore,
+  // like the reticle/minimap) so they read as headed INTO the HUD, not sitting in the world:
+  // each token lifts off its pickup spot (world->screen) and eases along an arc to the wallet
+  // counter's live screen anchor, shrinking as it lands.
+  private renderCoinFlies() {
+    if (this.coinFlies.length === 0) return;
+    const { ctx, renderCam: cam } = this;
+    const anchor = this.walletAnchorScreen();
+    ctx.save();
+    for (const c of this.coinFlies) {
+      const t = c.t < 0 ? 0 : c.t > 1 ? 1 : c.t;
+      const e = t * t * (3 - 2 * t); // smoothstep ease
+      const startX = c.x - cam.x, startY = c.y - cam.y;
+      const px = startX + (anchor.x - startX) * e;
+      const py = startY + (anchor.y - startY) * e - Math.sin(t * Math.PI) * COIN_FLY_ARC;
+      const r = 5 * (1 - 0.5 * e); // shrinks into the counter
+      ctx.globalAlpha = 0.9 * (1 - t * 0.2);
+      ctx.fillStyle = "#ffd27a";
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, 6.28);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(120,80,20,0.8)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      // A small inner highlight so the token reads as a coin, not a dot.
+      ctx.globalAlpha *= 0.7;
+      ctx.fillStyle = "#fff3c4";
+      ctx.beginPath();
+      ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.35, 0, 6.28);
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
+
+  // The world-anchored contextual [E] prompt: a floating keycap + label over the relevant
+  // target (revivable teammate / focused shop station / full-hotbar pickup), converted
+  // world->screen each frame like the other world FX. A subtle dark backing keeps it legible
+  // over any biome floor; it sits ABOVE the target so it never occludes the character or an
+  // incoming enemy. Drawn in screen space (after the world restore) so it never shakes.
+  private renderContextPrompt() {
+    const p = this.worldPrompt();
+    if (p === null) return;
+    const { ctx, renderCam: cam } = this;
+    const sx = p.x - cam.x;
+    const sy = p.y - cam.y - CTX_PROMPT_OFFSET_Y;
+    const accent = p.isActive ? "#8affc0" : "#e8dcc0";
+    ctx.save();
+    ctx.font = '700 9px "Silkscreen", monospace';
+    ctx.textBaseline = "middle";
+    const key = CTX_PROMPT_KEY_PX;
+    const pad = 5, gap = 6;
+    const labelW = ctx.measureText(p.label).width;
+    const totalW = key + gap + labelW;
+    const bx = sx - totalW / 2 - pad, by = sy - key / 2 - pad;
+    const bw = totalW + pad * 2, bh = key + pad * 2;
+    // Dark backing + outline for readability over any floor.
+    ctx.globalAlpha = 0.82;
+    ctx.fillStyle = "rgba(5,3,11,0.82)";
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = p.isActive ? "#8affc0" : "rgba(120,110,90,0.7)";
+    ctx.strokeRect(bx, by, bw, bh);
+    // The key cap.
+    const kx = sx - totalW / 2;
+    ctx.strokeStyle = accent;
+    ctx.strokeRect(kx, sy - key / 2, key, key);
+    ctx.fillStyle = accent;
+    ctx.textAlign = "center";
+    ctx.fillText(p.key, kx + key / 2, sy + 1);
+    // The label.
+    ctx.textAlign = "left";
+    ctx.fillStyle = p.isActive ? "#8affc0" : "#cfe8b0";
+    ctx.fillText(p.label, kx + key + gap, sy + 1);
+    ctx.restore();
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+
+  // The wallet coin counter's center in canvas pixels (the coin token's flight target). Reads
+  // the HUD chip's live rect and maps it through the canvas's own rect/scale, so it lands on
+  // the counter at any UI zoom or window size; falls back to the top-left corner if the HUD
+  // rect isn't measurable yet.
+  private walletAnchorScreen(): { x: number; y: number } {
+    const rect = this.hud.coinChipRect();
+    const cr = this.canvas.getBoundingClientRect();
+    if (rect === null || cr.width === 0 || cr.height === 0) return { x: 64, y: 44 };
+    const sx = this.canvas.width / cr.width, sy = this.canvas.height / cr.height;
+    return { x: (rect.left + rect.width / 2 - cr.left) * sx, y: (rect.top + rect.height / 2 - cr.top) * sy };
   }
 
   private renderDecals() {
