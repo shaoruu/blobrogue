@@ -46,7 +46,7 @@ function placeAt(p: PlayerSim, x: number, y: number): void {
 
 function main(): void {
   section("floor 2 bootstrap: a REAL generated dungeon with content (not a sandbox arena)");
-  // Floor 2 so the generated floor carries weapon pickups (floor 1 spawns none by design).
+  // Floor 2: any mid-run floor works (every non-boss floor stocks a weapon chest).
   const w = createWorld(SEED, 2, { isShared: true, skipLocalPlayer: true });
   const a = spawnPlayerInWorld(w, "pA");
   const b = spawnPlayerInWorld(w, "pB");

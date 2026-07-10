@@ -7,12 +7,13 @@
 
 import {
   createWorld, stepWorld, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared,
+  bossChestWeaponFor, removePlayerFromWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { InputCmd } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
-import type { Bullet, Enemy, EnemyKind } from "../src/sim/types.js";
+import type { Bullet, Enemy, EnemyKind, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import {
   createEnemy, spawnFloorEnemies, isBossKind, bossKindForFloor, ENEMY_ARCHETYPES, BOSS_KIN,
@@ -20,10 +21,12 @@ import {
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import {
-  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
+  MARROW, CHOIR, WEAVER, GILDED, GAUNTLET, KING_REWARD_TABLE, bossWeaponChoices,
   marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor, bossHpForFloor,
 } from "../src/sim/balance.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
+import { weaponDisplayStats } from "../src/sim/weaponStats.js";
+import { createMods } from "../src/sim/items.js";
 import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
 
@@ -872,14 +875,15 @@ function curriculumTests(): void {
     check("the final clear drops the premium boss chest with the gauntlet signature",
       isFloorCleared(w) && w.chests.some((c) => c.kind === "boss" && c.weapon === GAUNTLET.chestWeapon));
 
-    // The premium chest behaves like every boss chest: P+1 personal choices + rare offer.
+    // The premium chest behaves like every boss chest: the min(max(3,P+1),5) personal
+    // choices + rare offer.
     const chest = w.chests.find((c) => c.kind === "boss")!;
     const p = w.players.get(LOCAL_ID)!;
     p.x = chest.x; p.y = chest.y;
     const evs = step(w, idle(9999));
-    check("opening it raises the rare blessing offer and the P+1 choice set (no blessing before the full clear)",
+    check("opening it raises the rare blessing offer and the boss choice set (no blessing before the full clear)",
       evs.some((e) => e.t === "offerBlessing" && e.rare)
-      && w.pickups.filter((k) => k.isBossChoice).length === 2
+      && w.pickups.filter((k) => k.isBossChoice).length === bossWeaponChoices(1)
       && w.pickups.some((k) => k.isBossChoice && k.weapon === GAUNTLET.chestWeapon));
   }
 
@@ -972,12 +976,16 @@ function rotationTests(): void {
 // ---- the authored boss chests ----
 
 function bossChestTests(): void {
-  section("boss chests: each boss bakes its signature weapon");
-  const expected: Array<[EnemyKind, string]> = [
-    ["boss", "mortar"], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "tesla"], ["gilded", "cannon"],
+  section("boss chests: deep bosses bake their signature; the King rolls a seeded preference");
+  // Deep bosses keep their single authored signature. The King's chest is the run's first
+  // boss reward and rolls a seeded weighted preference (KING_REWARD_TABLE, mortar most
+  // likely) so the post-boss gun varies run to run — pinned via bossChestWeaponFor.
+  const expected: Array<[EnemyKind, string | null]> = [
+    ["boss", null], ["marrow", "railgun"], ["choir", "beam"], ["weaver", "tesla"], ["gilded", "cannon"],
   ];
   for (const [kind, weapon] of expected) {
-    const w = createWorld(0xC4E57 ^ kind.length, 10, { isSandbox: true });
+    const seed = 0xC4E57 ^ kind.length;
+    const w = createWorld(seed, 10, { isSandbox: true });
     w.isGodMode = true;
     const p = w.players.get(LOCAL_ID)!;
     const boss = devSpawnEnemy(w, kind, p.x + 150, p.y);
@@ -987,9 +995,13 @@ function bossChestTests(): void {
       step(w, idle(w.tick + 1));
     }
     const chest = w.chests.find((c) => c.kind === "boss");
-    check(`${kind} chest carries ${weapon}`, boss.dead && chest !== undefined && chest.weapon === weapon,
+    const want = weapon ?? bossChestWeaponFor(seed, 10, kind);
+    check(`${kind} chest carries ${want}`, boss.dead && chest !== undefined && chest.weapon === want,
       chest ? `weapon=${chest.weapon}` : "no chest");
   }
+  check("the King's seeded preference always lands inside its authored table",
+    [0x1, 0x22, 0x333, 0x4444, 0x55555].every((s) =>
+      KING_REWARD_TABLE.some((row) => row.weapon === bossChestWeaponFor(s, 5, "boss"))));
 }
 
 // ---- the weapon: Sunlance (beam) ----
@@ -1062,6 +1074,445 @@ function weaponTests(): void {
   }
 
   check("the Thumper sits in the pickup pool", PICKUP_WEAPONS.includes("mortar"));
+}
+
+// ---- the effect wave: seven room verbs on four shared primitives ----
+
+const fireCmd = (w: WorldState, aim = 0): InputCmd =>
+  ({ seq: w.tick + 1, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+
+function stepFiring(w: WorldState, seconds: number, ev?: SimEvent[], aim = 0): void {
+  const n = Math.round(seconds / DT);
+  for (let i = 0; i < n; i++) {
+    const out = step(w, fireCmd(w, aim));
+    if (ev) ev.push(...out);
+  }
+}
+
+function lastlightTests(): void {
+  section("Lastlight: trade safety for a kill window (damage scales with missing HP)");
+  {
+    const { w, p } = arena(0x1A57);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "lastlight");
+    const dummy = spawnReady(w, "slime", 850, 600);
+    dummy.hp = dummy.maxHp = 100;
+    dummy.speed = 0; // parked: the test isolates the risk curve, not the chase
+    // Full HP: one shot, measure the bite (waiting out the full fire cooldown).
+    step(w, fireCmd(w));
+    stepFor(w, 0.6);
+    const fullHpDmg = 100 - dummy.hp;
+    // One heart left: same shot, far bigger bite.
+    dummy.hp = 100;
+    p.hp = 1;
+    step(w, fireCmd(w));
+    stepFor(w, 0.6);
+    const lowHpDmg = 100 - dummy.hp;
+    check("a full-health shot lands the base slug", fullHpDmg > 2 && fullHpDmg < 4, `dmg=${fullHpDmg.toFixed(1)}`);
+    check("a one-heart shot lands ~2.8x harder (the risk curve)", lowHpDmg > fullHpDmg * 2.2 && lowHpDmg < fullHpDmg * 3.2,
+      `full=${fullHpDmg.toFixed(1)} low=${lowHpDmg.toFixed(1)}`);
+  }
+}
+
+function breachTests(): void {
+  section("Breach: hold charges the landing point; the shell sails OVER the pack");
+  {
+    const { w, p } = arena(0xB4EA);
+    p.x = 500; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "breach");
+    const near = spawnReady(w, "slime", 660, 600);  // 160px out: under the shell's arc
+    const far = spawnReady(w, "slime", 930, 600);   // ~430px out: at the full-charge landing
+    near.hp = near.maxHp = 40;
+    far.hp = far.maxHp = 40;
+    near.speed = 0;
+    far.speed = 0;
+    // Hold the full charge, then release (firing false) and let the shell fly.
+    stepFiring(w, 1.0);
+    check("holding the trigger charges without firing", p.chargeT > 0.85 && w.bullets.length === 0,
+      `chargeT=${p.chargeT.toFixed(2)}`);
+    const ev: SimEvent[] = [];
+    stepFor(w, 1.2, ev);
+    check("release detonates at the charged landing point", ev.some((x) => x.t === "explosion"));
+    check("the shell sailed OVER the near body (artillery, not contact)", near.hp === 40, `near=${near.hp}`);
+    check("the far anchor took the blast", far.hp < 40, `far=${far.hp}`);
+  }
+  {
+    // Tap: minimum charge lands close.
+    const { w, p } = arena(0xB4EB);
+    p.x = 500; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "breach");
+    const near = spawnReady(w, "slime", 650, 600); // ~150px: at the tap landing distance
+    near.hp = near.maxHp = 40;
+    near.speed = 0;
+    step(w, fireCmd(w)); // one held tick
+    const ev: SimEvent[] = [];
+    stepFor(w, 1.0, ev);
+    check("a tap lobs to the minimum distance and still detonates", ev.some((x) => x.t === "explosion") && near.hp < 40,
+      `near=${near.hp}`);
+  }
+  {
+    // Charging slows the walk (the exposure tradeoff) — the dash still rips free.
+    const { w, p } = arena(0xB4EC);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "breach");
+    step(w, fireCmd(w)); // prime the charge
+    const x0 = p.x;
+    for (let i = 0; i < 30; i++) step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: true, dash: false });
+    const charged = p.x - x0;
+    p.chargeT = 0;
+    const x1 = p.x;
+    for (let i = 0; i < 30; i++) step(w, { seq: w.tick + 1, moveX: 1, moveY: 0, aim: 0, firing: false, dash: false });
+    const free = p.x - x1;
+    check("holding the charge slows the walk", charged < free * 0.7, `charged=${charged.toFixed(0)} free=${free.toFixed(0)}`);
+  }
+}
+
+function snapwireTests(): void {
+  section("Snapwire: an armed line trap that holds the doorway");
+  {
+    const { w, p } = arena(0x54A1);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "snapwire");
+    const ev: SimEvent[] = [];
+    ev.push(...step(w, fireCmd(w)));
+    const wire = w.effects.find((e) => e.kind === "wire");
+    check("planting strings a wire along the aim", wire !== undefined && ev.some((x) => x.t === "wirePlanted"));
+    check("the wire arms after a beat, never instantly", wire !== undefined && wire.kind === "wire" && wire.arm > 0.5);
+    // A body crossing DURING the arm delay is safe (planting is never a point-blank hit).
+    const early = spawnReady(w, "slime", 760, 600);
+    early.hp = early.maxHp = 30;
+    stepFor(w, 0.2, ev);
+    check("crossing while arming does not trigger", early.hp === 30 && !ev.some((x) => x.t === "wireSnap"));
+    // Once armed, the same body springs it: damage + the snap event, wire consumed.
+    stepFor(w, 1.0, ev);
+    check("the armed wire snaps on the crosser", ev.some((x) => x.t === "wireSnap") && early.hp < 30,
+      `hp=${early.hp}`);
+    check("a snapped wire is spent", !w.effects.some((e) => e.kind === "wire"));
+  }
+  {
+    // The snap strikes EVERY body in the band, not just the tripper.
+    const { w, p } = arena(0x54A2);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "snapwire");
+    step(w, fireCmd(w));
+    stepFor(w, 0.8); // arm it
+    const a = spawnReady(w, "slime", 750, 600);
+    const b = spawnReady(w, "slime", 790, 604);
+    a.hp = a.maxHp = 30; b.hp = b.maxHp = 30;
+    stepFor(w, 0.3);
+    check("the snap catches every body touching the wire", a.hp < 30 && b.hp < 30, `${a.hp}/${b.hp}`);
+  }
+  {
+    // The cap: planting past max retires the OLDEST wire; pellets buy more wires.
+    const { w, p } = arena(0x54A3);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "snapwire");
+    for (let i = 0; i < 5; i++) {
+      step(w, fireCmd(w, (i / 5) * Math.PI * 2));
+      stepFor(w, 0.7);
+    }
+    check("at most the authored 3 wires stand", w.effects.filter((e) => e.kind === "wire").length === 3,
+      `wires=${w.effects.filter((e) => e.kind === "wire").length}`);
+    p.mods.extraPellets = 2;
+    for (let i = 0; i < 3; i++) {
+      step(w, fireCmd(w, (i / 3) * Math.PI));
+      stepFor(w, 0.7);
+    }
+    check("the pellets mod buys extra concurrent wires (authored cap 5)",
+      w.effects.filter((e) => e.kind === "wire").length === 5);
+  }
+}
+
+function frostlineTests(): void {
+  section("Frostline: paint a chill lane that cuts the room in two");
+  {
+    const { w, p } = arena(0xF057);
+    p.x = 500; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "frostline");
+    stepFiring(w, 0.6);
+    stepFor(w, 0.6);
+    const zones = w.effects.filter((e) => e.kind === "zone");
+    check("firing paints ground zones along the lane", zones.length >= 3, `zones=${zones.length}`);
+    check("zones spread outward along the flight line", zones.some((z) => z.x > p.x + 100));
+    // Park a body on the lane: chill soaks until it freezes solid.
+    const camper = spawnReady(w, "skeleton", zones[Math.min(2, zones.length - 1)].x, 600);
+    camper.hp = camper.maxHp = 60;
+    stepFor(w, 1.4);
+    check("a camper on the lane freezes solid (chill past the freeze point)", camper.chill >= C.FREEZE_AT,
+      `chill=${camper.chill.toFixed(1)}`);
+    // Zones thaw on their own.
+    stepFor(w, 4.5);
+    check("the lane thaws (zones expire)", !w.effects.some((e) => e.kind === "zone"));
+  }
+  {
+    // The world zone cap holds under sustained painting.
+    const { w, p } = arena(0xF058);
+    p.x = 300; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "frostline");
+    p.mods.bulletLifeMult = 3; // long-lived zones stack up fast
+    stepFiring(w, 6);
+    const zones = w.effects.filter((e) => e.kind === "zone").length;
+    check(`sustained painting never exceeds the hard zone cap (${C.MAX_ZONE_EFFECTS})`, zones <= C.MAX_ZONE_EFFECTS,
+      `zones=${zones}`);
+  }
+}
+
+function haloTests(): void {
+  section("Razor Halo: own your personal space (orbit blades + flare active)");
+  {
+    const { w, p } = arena(0x4A10);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "halo");
+    step(w, idle(w.tick + 1));
+    const orbit = w.effects.find((e) => e.kind === "orbit");
+    check("equipping conjures the orbit ring (no trigger needed)", orbit !== undefined);
+    // A body pressing into the resting ring gets shredded on a readable cadence.
+    const presser = spawnReady(w, "slime", p.x + 46, p.y);
+    presser.hp = presser.maxHp = 60;
+    presser.speed = 0; // park it inside the ring
+    const hp0 = presser.hp;
+    stepFor(w, 0.3);
+    const afterFirst = presser.hp;
+    stepFor(w, 1.2);
+    const afterMore = presser.hp;
+    check("a body inside the ring takes contact damage", afterFirst < hp0);
+    check("hits land on the re-hit cadence, not per tick", hp0 - afterFirst <= 3 && afterMore < afterFirst,
+      `first=${(hp0 - afterFirst).toFixed(1)} total=${(hp0 - afterMore).toFixed(1)}`);
+    // Switching away dismisses the ring.
+    acquireWeaponInWorld(w, LOCAL_ID, "pistol");
+    step(w, idle(w.tick + 1));
+    check("switching weapons dismisses the ring", !w.effects.some((e) => e.kind === "orbit"));
+  }
+  {
+    // The active: a flare reaches a body the resting ring cannot touch.
+    const { w, p } = arena(0x4A11);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "halo");
+    const standoff = spawnReady(w, "spitter", p.x + 88, p.y); // outside ring 46, inside flare 96
+    standoff.hp = standoff.maxHp = 40;
+    standoff.speed = 0;
+    stepFor(w, 0.8);
+    const beforeFlare = standoff.hp;
+    step(w, fireCmd(w));
+    stepFor(w, 0.6);
+    check("the resting ring cannot reach a standoff body", beforeFlare === 40);
+    check("the flare expands the ring onto it", standoff.hp < 40, `hp=${standoff.hp}`);
+  }
+  {
+    // Pellets map to authored extra blades, hard-capped.
+    const { w, p } = arena(0x4A12);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "halo");
+    p.mods.extraPellets = 9;
+    step(w, idle(w.tick + 1));
+    const orbit = w.effects.find((e) => e.kind === "orbit");
+    check("the pellets mod adds blades up to the authored cap (6)",
+      orbit !== undefined && orbit.kind === "orbit" && orbit.blades === 6,
+      orbit && orbit.kind === "orbit" ? `blades=${orbit.blades}` : "no orbit");
+  }
+}
+
+function sentryTests(): void {
+  section("Prism Sentry: hold a second lane (destructible, owner-attributed)");
+  {
+    const { w, p } = arena(0x5E27);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "sentry");
+    const ev: SimEvent[] = [];
+    ev.push(...step(w, fireCmd(w)));
+    const s = w.effects.find((e) => e.kind === "sentry");
+    check("firing deploys the turret a step ahead", s !== undefined && ev.some((x) => x.t === "sentryPlaced")
+      && s !== undefined && Math.abs(s.x - (p.x + 40)) < 2);
+    const mark = spawnReady(w, "slime", 880, 600);
+    mark.hp = mark.maxHp = 12;
+    mark.speed = 0;
+    const kills0 = p.kills;
+    stepFor(w, 5, ev);
+    check("the sentry acquires and kills the lane body on its own", mark.dead,
+      `hp=${mark.hp}`);
+    check("the kill credits the DEPLOYER (owner attribution)", p.kills === kills0 + 1);
+    check("bolts announce themselves (sentryShot events)", ev.some((x) => x.t === "sentryShot"));
+  }
+  {
+    // Out of range / no LOS: the turret holds its fire.
+    const { w, p } = arena(0x5E28);
+    p.x = 400; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "sentry");
+    step(w, fireCmd(w));
+    spawnReady(w, "slime", 400 + 40 + 300, 600).speed = 0; // beyond the 240px range
+    const ev: SimEvent[] = [];
+    stepFor(w, 1.5, ev);
+    check("a body beyond the acquire range draws no fire", !ev.some((x) => x.t === "sentryShot"));
+  }
+  {
+    // Destructible: contact chews it down; redeploying moves the ONE turret.
+    const { w, p } = arena(0x5E29);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "sentry");
+    step(w, fireCmd(w));
+    const s = w.effects.find((e) => e.kind === "sentry")!;
+    const chewer = spawnReady(w, "slime", s.x + 10, s.y); // parked: chews on the contact cadence
+    chewer.hp = chewer.maxHp = 500;
+    chewer.speed = 0;
+    chewer.kbResist = 1e9; // bolt knockback must not walk it out of contact mid-test
+    const ev: SimEvent[] = [];
+    stepFor(w, 6, ev);
+    check("enemy contact destroys the turret", !w.effects.some((e) => e.kind === "sentry")
+      && ev.some((x) => x.t === "sentryDown"));
+    // Redeploy: exactly one turret ever stands per owner.
+    stepFor(w, 0.3);
+    step(w, fireCmd(w, Math.PI));
+    stepFor(w, 0.1);
+    step(w, fireCmd(w, 0));
+    for (let i = 0; i < 80; i++) step(w, fireCmd(w, 0));
+    check("redeploying moves the single turret (never a farm)",
+      w.effects.filter((e) => e.kind === "sentry").length === 1);
+  }
+  {
+    // Attribution contract: the deployer leaving never re-credits (and never crashes).
+    const { w, p } = arena(0x5E2A);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "sentry");
+    step(w, fireCmd(w));
+    const mark = spawnReady(w, "slime", 880, 600);
+    mark.hp = mark.maxHp = 8;
+    mark.speed = 0;
+    removePlayerFromWorld(w, LOCAL_ID);
+    for (let i = 0; i < 60 * 5 && !mark.dead; i++) stepWorld(w, new Map(), DT);
+    check("a departed deployer's sentry keeps firing and still kills (credits no one)", mark.dead);
+  }
+}
+
+function crookTests(): void {
+  section("Crooked Chain: reposition the threat (pull, hold, sweep — heavies pull YOU)");
+  {
+    const { w, p } = arena(0xC401);
+    p.x = 600; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "crook");
+    const mark = spawnReady(w, "spitter", 780, 600); // in the 210px latch lane
+    mark.hp = mark.maxHp = 40;
+    const ev: SimEvent[] = [];
+    ev.push(...step(w, fireCmd(w)));
+    check("the first press latches the tether", w.effects.some((e) => e.kind === "tether")
+      && ev.some((x) => x.t === "tetherLatch" && x.eid >= 0));
+    stepFor(w, 0.6, ev);
+    const pulled = Math.hypot(mark.x - p.x, mark.y - p.y);
+    check("a standard body is reeled to the owner's feet", pulled < 110, `dist=${pulled.toFixed(0)}`);
+    // Second press: the sweep strikes the held body and releases the chain.
+    ev.length = 0;
+    ev.push(...step(w, fireCmd(w)));
+    stepFor(w, 0.2, ev);
+    check("the second press sweeps (damage + release)", ev.some((x) => x.t === "tetherSweep")
+      && mark.hp < 40 && !w.effects.some((e) => e.kind === "tether"),
+      `hp=${mark.hp}`);
+  }
+  {
+    // The risk half: a brute inverts the pull — the OWNER travels.
+    const { w, p } = arena(0xC402);
+    p.x = 600; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "crook");
+    const brute = spawnReady(w, "skeleton", 790, 600);
+    brute.tier = "brute";
+    brute.hp = brute.maxHp = 200;
+    brute.speed = 0;
+    const px0 = p.x, bx0 = brute.x;
+    step(w, fireCmd(w));
+    stepFor(w, 0.5);
+    check("a brute drags the OWNER in (the enemy holds its ground)",
+      p.x - px0 > 60 && Math.abs(brute.x - bx0) < 30,
+      `player+${(p.x - px0).toFixed(0)} brute+${(brute.x - bx0).toFixed(0)}`);
+  }
+  {
+    // A whiffed lash costs the cooldown and reads out loud.
+    const { w, p } = arena(0xC403);
+    p.x = 600; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "crook");
+    const ev: SimEvent[] = [];
+    ev.push(...step(w, fireCmd(w)));
+    check("a whiff raises the miss lash (eid -1) and no tether", ev.some((x) => x.t === "tetherLatch" && x.eid === -1)
+      && !w.effects.some((e) => e.kind === "tether"));
+  }
+}
+
+// Universal modifiers must map coherently onto the non-projectile archetypes.
+function effectModsTests(): void {
+  section("effect wave: universal mods map coherently (size/life/speed/pellets/status/crit)");
+  {
+    // size -> footprint: a doubled bulletSizeMult doubles the painted zone radius.
+    const { w, p } = arena(0x30D1);
+    p.x = 500; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "frostline");
+    p.mods.bulletSizeMult = 2;
+    stepFiring(w, 0.4);
+    const zone = w.effects.find((e) => e.kind === "zone");
+    check("size maps to zone footprint", zone !== undefined && zone.kind === "zone" && Math.abs(zone.radius - 52) < 1,
+      zone && zone.kind === "zone" ? `r=${zone.radius}` : "none");
+  }
+  {
+    // life -> duration; speed -> arm time (wires).
+    const { w, p } = arena(0x30D2);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "snapwire");
+    p.mods.bulletLifeMult = 2;
+    p.mods.bulletSpeedMult = 2;
+    step(w, fireCmd(w));
+    const wire = w.effects.find((e) => e.kind === "wire");
+    check("life maps to wire duration, speed to a faster arm",
+      wire !== undefined && wire.kind === "wire" && wire.maxLife > 20 && wire.arm < 0.4,
+      wire && wire.kind === "wire" ? `life=${wire.maxLife.toFixed(1)} arm=${wire.arm.toFixed(2)}` : "none");
+  }
+  {
+    // speed -> orbit angular speed.
+    const { w, p } = arena(0x30D3);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "halo");
+    p.mods.bulletSpeedMult = 1.5;
+    step(w, idle(w.tick + 1));
+    const orbit = w.effects.find((e) => e.kind === "orbit");
+    check("speed maps to orbit speed", orbit !== undefined && orbit.kind === "orbit" && Math.abs(orbit.speed - 5.4) < 0.01);
+  }
+  {
+    // status blessings roll on authored damage events (a wire snap shocks with Static Charge).
+    const { w, p } = arena(0x30D4);
+    p.x = 700; p.y = 600;
+    acquireWeaponInWorld(w, LOCAL_ID, "snapwire");
+    p.mods.shockChance = 1;
+    p.mods.critChance = 1;
+    step(w, fireCmd(w));
+    stepFor(w, 0.8);
+    const mark = spawnReady(w, "slime", 760, 600);
+    mark.hp = mark.maxHp = 60;
+    const ev: SimEvent[] = [];
+    stepFor(w, 0.3, ev);
+    const hit = ev.find((x): x is Extract<SimEvent, { t: "enemyHit" }> => x.t === "enemyHit");
+    check("a snapped body rolls the blessing statuses", mark.shock > 0, `shock=${mark.shock.toFixed(1)}`);
+    check("a snap can crit (crit rides the authored damage event)", hit !== undefined && hit.crit);
+  }
+}
+
+// Canonical tooltips: every weapon (incl. the effect wave) flows through the ONE shared
+// weaponDisplayStats model (#46) — role verb, banded stats, and technique lines derived
+// from canonical WeaponDef fields, never a bespoke second copy.
+function tooltipTests(): void {
+  section("tooltips: the shared weaponDisplayStats model covers every weapon");
+  const allIds = Object.keys(WEAPONS) as Array<keyof typeof WEAPONS>;
+  const base = createMods();
+  check("every weapon resolves a role + banded core stats through the shared model",
+    allIds.every((id) => {
+      const c = weaponDisplayStats(id, base, 0);
+      return c.role.length > 0 && c.impact.band.length > 0 && c.cadence.band.length > 0 && c.reach.band.length > 0;
+    }));
+  const wave: WeaponId[] = ["lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook"];
+  check("every effect-wave weapon carries at least one technique/tradeoff line",
+    wave.every((id) => weaponDisplayStats(id, base, 0).mechanics.length >= 1));
+  const wireCard = weaponDisplayStats("snapwire", base, 0);
+  check("the trap reads as a TRAP (coverage) with an armed-wire mechanic, no pellet pattern",
+    wireCard.coverage.kind === "TRAP" && wireCard.mechanics.some((mech) => mech.tag === "WIRE"));
+  const breachCard = weaponDisplayStats("breach", base, 0);
+  check("the charge lob reads as ARTILLERY with a charge mechanic",
+    breachCard.coverage.kind === "ARTILLERY" && breachCard.mechanics.some((mech) => mech.tag === "CHARGE"));
+  check("distinct room jobs read distinct role verbs", new Set(wave.map((id) => weaponDisplayStats(id, base, 0).role)).size >= 6);
+  check("all seven sit in the pickup pool", wave.every((id) => PICKUP_WEAPONS.includes(id)));
 }
 
 // ---- roster integration ----
@@ -1264,6 +1715,15 @@ rotationTests();
   bossChestTests();
   weaponTests();
   beamTests();
+  lastlightTests();
+  breachTests();
+  snapwireTests();
+  frostlineTests();
+  haloTests();
+  sentryTests();
+  crookTests();
+  effectModsTests();
+  tooltipTests();
   environmentTests();
   flockTests();
   rosterTests();

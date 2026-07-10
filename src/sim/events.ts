@@ -13,7 +13,9 @@ import type { ShopSlotKind } from "./shop.js";
 
 export type SimEvent =
   // combat — player
-  | { t: "shot"; pid: PlayerId; weapon: WeaponId; x: number; y: number; aim: number; px: number; py: number }
+  // chg: the released charge fraction (0..1) on hold-release weapons, 0 on everything
+  // else — the client picks the TIER release cue (distinct stems, never pitch tiers).
+  | { t: "shot"; pid: PlayerId; weapon: WeaponId; x: number; y: number; aim: number; px: number; py: number; chg: number }
   | { t: "meleeSwing"; pid: PlayerId; weapon: WeaponId; x: number; y: number; aim: number; bx: number; by: number }
   // combat — enemy damage
   | { t: "enemyHit"; eid: number; dmgX: number; dmgY: number; dmg: number; crit: boolean; puffX: number; puffY: number; puffColor: string; melee: boolean; closeShotgun: boolean; killed: boolean }
@@ -37,19 +39,50 @@ export type SimEvent =
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }
+  // A mystery ("???") weapon revealed its identity on pickup/purchase: the collector and
+  // everyone nearby see the same reveal moment (name flash + twist flavor). `twist` is
+  // the baked blessed/cursed/plain outcome — the state change itself rides the sim.
+  | { t: "mysteryReveal"; pid: PlayerId; weapon: WeaponId; twist: string; x: number; y: number }
   // A validated shop purchase landed (Patch's room): positional register-chime juice for
   // everyone browsing the stall. kind selects the buyer-side flavor (heart vs weapon vs
   // blessing vs reroll vs the premium sinks); the authoritative outcome itself rides
   // STATE, never this event.
   | { t: "shopBuy"; pid: PlayerId; slot: number; kind: ShopSlotKind; x: number; y: number }
-  // A mystery weapon purchase revealed its roll (the register moment's second beat):
-  // positional, so everyone at the stall sees what fate the buyer drew. The weapon
-  // itself already rides authoritative state (the buyer's inventory).
-  | { t: "mysteryReveal"; pid: PlayerId; weapon: WeaponId; x: number; y: number }
   // a player deliberately dropped an owned weapon back into the world (Q / inventory UI);
   // clients near the spot play a small pop + a weapon-name label over the new pickup.
   // Positional like lootDrop — no pid, so EVERY nearby client (not just the dropper) sees it
   | { t: "weaponDrop"; weapon: WeaponId; x: number; y: number }
+  // weapon effects (the effect wave). All positional: nearby clients replay the juice;
+  // the entities themselves ride the snapshot's effect list.
+  | { t: "wirePlanted"; x: number; y: number; tx: number; ty: number }
+  // The arm delay elapsed: the wire is LIVE (the trap's ready tell).
+  | { t: "wireArmed"; x: number; y: number }
+  | { t: "wireSnap"; x: number; y: number; tx: number; ty: number }
+  // The wire decayed unspent (expire =/= trigger — different sound, different lesson).
+  | { t: "wireExpired"; x: number; y: number }
+  // A plant was refused (facing a wall): the fail state reads out loud.
+  | { t: "wireRefused"; x: number; y: number }
+  // The Razor Halo's active expansion (r = the flared ring radius for the shockwave).
+  | { t: "haloFlare"; x: number; y: number; r: number }
+  | { t: "sentryPlaced"; x: number; y: number }
+  // The turret locked a NEW target (per-target, not per-bolt).
+  | { t: "sentryAcquire"; x: number; y: number }
+  | { t: "sentryShot"; x: number; y: number; aim: number }
+  // The turret took damage (enemy contact chew or enemy fire).
+  | { t: "sentryHit"; x: number; y: number }
+  // why: "destroyed" (chewed to zero) vs "timeout" (deploy duration ran out) — the
+  // deployable's two endings sound different by contract.
+  | { t: "sentryDown"; x: number; y: number; why: string }
+  // eid -1 = the lash whiffed (tx/ty is the scan end the chain snapped back from).
+  // inv: the INVERTED pull (a heavy body reels the owner in — the danger cue).
+  | { t: "tetherLatch"; eid: number; x: number; y: number; tx: number; ty: number; inv: boolean }
+  // The pull resolved into the hold window (the chain snaps taut; sweep is armed).
+  | { t: "tetherHold"; x: number; y: number }
+  | { t: "tetherSweep"; x: number; y: number; r: number }
+  // ---- the shared status library (apply on FIRST application; DoT ticks stay silent) ----
+  | { t: "statusApplied"; eid: number; x: number; y: number; kind: string }
+  | { t: "frozeSolid"; eid: number; x: number; y: number }
+  | { t: "freezeBroke"; eid: number; x: number; y: number }
   // bullets / world
   | { t: "bulletWall"; x: number; y: number; aim: number }
   | { t: "bulletBounce"; x: number; y: number; aim: number; color: string }
@@ -60,7 +93,10 @@ export type SimEvent =
   | { t: "bulletBlocked"; kind: EnemyKind; x: number; y: number; aim: number }
   | { t: "propHit"; propId: number; kind: PropKind; x: number; y: number }
   | { t: "propBreak"; kind: PropKind; x: number; y: number }
-  | { t: "explosion"; x: number; y: number; r: number }
+  // src: what detonated ("barrel", or the authoring WeaponId) — routes the impact voice.
+  | { t: "explosion"; x: number; y: number; r: number; src: string }
+  // The Lodestone's implosion: the inward-collapse FX twin of `explosion`.
+  | { t: "implosion"; x: number; y: number; r: number }
   | { t: "chestOpen"; kind: string; x: number; y: number }
   // A floor hazard damaged a player (kind selects the client's impact FX flavor).
   | { t: "hazardHit"; pid: PlayerId; kind: FloorHazardKind; x: number; y: number }

@@ -9,6 +9,9 @@ import {
   onlineHudLabel, netDetailsLine, reconnectOverlayCopy, exitNoteFor, startAnywayHoldLabel,
   WORLD_MISMATCH_NOTE, RUN_ENDED_AWAY_NOTE, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT,
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS,
+  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
+  INVITE_SHARE_HINT, INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
+  INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
 } from "../src/ui/onlineCopy.js";
 import type { ReconnectInfo } from "../src/client/wsTransport.js";
 
@@ -75,6 +78,26 @@ function main(): void {
   check("holding counts down and offers the out", startAnywayHoldLabel(0) === "STARTING IN 3\u2026 release to cancel"
     && startAnywayHoldLabel(2100) === "STARTING IN 1\u2026 release to cancel");
 
+  section("invite copy: the UI Director's spec strings, locked verbatim");
+  check("the control labels", COPY_INVITE_LABEL === "COPY INVITE" && INVITE_COPIED_LABEL === "COPIED!"
+    && INVITE_SHARED_LABEL === "SHARED!" && INVITE_COPY_FAILED_LABEL === "COPY FAILED");
+  check("the lobby hint pitches the LINK, not just the code", INVITE_SHARE_HINT.includes("invite link"));
+  check("the inline connecting state names the room", inviteJoiningNote("ABCD") === "JOINING ROOM ABCD\u2026");
+  check("offline build", INVITE_OFFLINE_NOTE === "ONLINE PLAY UNAVAILABLE IN THIS BUILD");
+  check("invalid/nonexistent", INVITE_INVALID_NOTE === "INVITE LINK EXPIRED OR INVALID");
+  check("network failure + its retry label", INVITE_UNREACHABLE_NOTE === "COULDN'T REACH THE SERVER" && INVITE_TRY_AGAIN_LABEL === "TRY AGAIN");
+  // The mapping consumes the EXACT errors convex/rooms.ts throws.
+  check("full -> THAT ROOM IS FULL (4/4), not retryable",
+    inviteFailState("that room is full").note === "THAT ROOM IS FULL (4/4)" && !inviteFailState("that room is full").isRetryable);
+  check("ended -> THIS INVITE HAS ENDED, not retryable",
+    inviteFailState("that game has ended").note === "THIS INVITE HAS ENDED" && !inviteFailState("that game has ended").isRetryable);
+  check("nonexistent -> the invalid note, not retryable",
+    inviteFailState("no room with that code").note === INVITE_INVALID_NOTE && !inviteFailState("no room with that code").isRetryable);
+  check("wrong kind (classic co-op code) -> THIS INVITE ISN'T AN ONLINE ROOM, not retryable",
+    inviteFailState("that code is a classic co-op room").note === "THIS INVITE ISN'T AN ONLINE ROOM" && !inviteFailState("that code is a classic co-op room").isRetryable);
+  check("anything unrecognized -> COULDN'T REACH THE SERVER, the one RETRYABLE state",
+    inviteFailState("ConvexError: [Request ID x] weird").note === INVITE_UNREACHABLE_NOTE && inviteFailState("weird").isRetryable);
+
   section("neutral prompts only: controller glyphs wait for real controller support");
   {
     // Enclosed-letter button art (Ⓐ…Ⓩ, 🅐…, 🅰…) and "(A)"-style prompts are banned until a
@@ -87,6 +110,11 @@ function main(): void {
       reconnectOverlayCopy(t0 + 5000, info(t0, 2, t0 + 90000)).hint ?? "",
       exitNoteFor("connection_lost"), exitNoteFor("world_mismatch"), exitNoteFor("party_incomplete", "Bob"),
       exitNoteFor("superseded"), exitNoteFor("connect_failed"), exitNoteFor("run_ended_away"),
+      COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
+      INVITE_SHARE_HINT, INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
+      INVITE_TRY_AGAIN_LABEL, inviteJoiningNote("ABCD"), inviteFailState("that room is full").note,
+      inviteFailState("that game has ended").note, inviteFailState("no room with that code").note,
+      inviteFailState("that code is a classic co-op room").note, inviteFailState("weird").note,
     ];
     check("every contract string is controller-glyph free", allCopy.every((s) => !GLYPH_RE.test(s)));
     check("the cancel prompt names the key, not a pad button", CONNECT_CANCEL_HINT === "ESC \u2014 cancel");

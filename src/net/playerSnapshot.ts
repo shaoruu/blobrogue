@@ -26,6 +26,7 @@ export interface AuthoritativePlayerSnapshot {
   dashDx: number;
   dashDy: number;
   fireCd: number;
+  chargeT: number;
   fangCd: number;
   facing: number;
   weapon: WeaponId;
@@ -43,6 +44,10 @@ export interface AuthoritativePlayerSnapshot {
   isAmberCacheArmed: boolean;
   amberWindfall: number;
   isBlessingRerollArmed: boolean;
+  reviveTokens: number;
+  extraWeaponSlots: number;
+  hpTithe: number;
+  prospectorFloor: number;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -89,6 +94,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     dashDx: p.dashDx,
     dashDy: p.dashDy,
     fireCd: p.fireCd,
+    chargeT: p.chargeT,
     fangCd: p.fangCd,
     facing: p.facing,
     weapon: p.weapon,
@@ -106,6 +112,10 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     isAmberCacheArmed: p.isAmberCacheArmed,
     amberWindfall: p.amberWindfall,
     isBlessingRerollArmed: p.isBlessingRerollArmed,
+    reviveTokens: p.reviveTokens,
+    extraWeaponSlots: p.extraWeaponSlots,
+    hpTithe: p.hpTithe,
+    prospectorFloor: p.prospectorFloor,
   };
 }
 
@@ -123,6 +133,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.dashDx = s.dashDx;
   p.dashDy = s.dashDy;
   p.fireCd = s.fireCd;
+  p.chargeT = s.chargeT;
   p.fangCd = s.fangCd;
   p.facing = s.facing;
   p.weapon = s.weapon;
@@ -140,6 +151,10 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.isAmberCacheArmed = s.isAmberCacheArmed;
   p.amberWindfall = s.amberWindfall;
   p.isBlessingRerollArmed = s.isBlessingRerollArmed;
+  p.reviveTokens = s.reviveTokens;
+  p.extraWeaponSlots = s.extraWeaponSlots;
+  p.hpTithe = s.hpTithe;
+  p.prospectorFloor = s.prospectorFloor;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

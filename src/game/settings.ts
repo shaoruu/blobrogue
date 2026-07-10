@@ -40,6 +40,7 @@ const FLASH_KEY = "blobrogue.flashLevel";
 const HITSTOP_KEY = "blobrogue.hitstop";
 const RECOIL_KEY = "blobrogue.recoil";
 const UI_SCALE_KEY = "blobrogue.uiScale";
+const CONTRAST_KEY = "blobrogue.highContrast";
 
 // Full-screen flash washes (boss phases, explosions, celebrations): off kills them, low
 // keeps a faint glow, full is the authored intensity. Anything at "full" is gated behind
@@ -155,6 +156,7 @@ export class Settings {
   private hitstop: boolean;          // impact hit-stop frames on/off
   private recoil: number;            // 0..1, scales camera kick + weapon recoil punch
   private hudScale: number;          // HUD/overlay zoom, UI_SCALE_MIN..UI_SCALE_MAX
+  private highContrast: boolean;     // halve the ambient darkness/AO grade for readability
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -170,6 +172,7 @@ export class Settings {
     this.hitstop = readBool(HITSTOP_KEY, true);
     this.recoil = clamp01(readNumber(RECOIL_KEY, 1));
     this.hudScale = clampUiScale(readNumber(UI_SCALE_KEY, 1));
+    this.highContrast = readBool(CONTRAST_KEY, false);
   }
 
   get isMuted(): boolean {
@@ -240,6 +243,7 @@ export class Settings {
   get isHitstop(): boolean { return this.hitstop; }
   get recoilIntensity(): number { return this.recoil; }
   get uiScale(): number { return this.hudScale; }
+  get isHighContrast(): boolean { return this.highContrast; }
 
   // What the render/FX paths actually consume: reduced motion zeroes camera motion
   // (shake + kick + recoil punch) regardless of the individual sliders.
@@ -274,6 +278,13 @@ export class Settings {
     if (this.recoil === v) return;
     this.recoil = v;
     try { localStorage.setItem(RECOIL_KEY, String(v)); } catch {}
+    this.emit();
+  }
+
+  setHighContrast(value: boolean): void {
+    if (this.highContrast === value) return;
+    this.highContrast = value;
+    try { localStorage.setItem(CONTRAST_KEY, value ? "1" : "0"); } catch {}
     this.emit();
   }
 

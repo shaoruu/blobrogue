@@ -6,9 +6,9 @@
 //
 // Purity: sim-only imports (this module is part of the isomorphic core).
 
-import { WEAPONS } from "./weapons.js";
+import { WEAPONS, MAX_ORBIT_BLADES } from "./weapons.js";
 import type { Weapon } from "./weapons.js";
-import type { WeaponId } from "./types.js";
+import type { WeaponId, WeaponRarity } from "./types.js";
 import type { PlayerMods } from "./items.js";
 import { CAPS } from "./balance.js";
 import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
@@ -62,7 +62,9 @@ export interface WeaponMechanic {
 // compare as tighter/wider (behavior categories never rank against each other).
 export type CoverageKind =
   | "THRUST" | "SWEEP" | "AREA" | "CHAIN" | "TRACKING" | "RICOCHET"
-  | "WIDE" | "BURST" | "FOCUSED";
+  | "WIDE" | "BURST" | "FOCUSED"
+  // Effect-wave coverage kinds: what the placed/worn/charged output does to space.
+  | "ARTILLERY" | "TRAP" | "ORBIT" | "TURRET" | "TETHER" | "GROUND";
 
 export interface WeaponCoverage {
   kind: CoverageKind;
@@ -71,6 +73,7 @@ export interface WeaponCoverage {
 
 export interface WeaponDisplayStats {
   isMelee: boolean;
+  rarity: WeaponRarity;            // drop-quality tier (the tooltip's rarity badge)
   role: string;                    // the room-job verb line
   power: { perHit: number; count: number }; // exact, per-pellet/swing × count — never a guaranteed sum
   impact: BandedStat;              // weight class of one hit (effective per-pellet/swing damage)
@@ -87,6 +90,21 @@ function roleOf(w: Weapon): string {
     if (w.melee.isThrust) return "HOLD A LANE";
     return w.melee.arc >= 1.5 ? "CLEAR YOUR FLANKS" : "DUEL UP CLOSE";
   }
+  // The effect wave's room verbs (each weapon's authored one-line job).
+  if (w.charge !== undefined) return "ERASE AN ANCHOR";
+  if (w.wire !== undefined) return "HOLD A DOORWAY";
+  if (w.orbit !== undefined) return "OWN YOUR SPACE";
+  if (w.sentry !== undefined) return "HOLD A SECOND LANE";
+  if (w.tether !== undefined) return "REPOSITION THE THREAT";
+  if (w.paint !== undefined) return "CUT THE ROOM IN TWO";
+  if (w.lowHpBonus !== undefined) return "TRADE SAFETY FOR THE KILL";
+  // The legendary wave's signature mechanics outrank the shared fields: the gimmick IS
+  // the job (the Hive reads by its accel+homing pair, above the plain seeker verb).
+  if (w.killShards !== undefined) return "REAP THE PACK";
+  if (w.coinBoost !== undefined) return "SPEND COINS FOR POWER";
+  if (w.isPhase === true) return "SHOOT THROUGH WALLS";
+  if (w.implode !== undefined) return "DRAG THEM TOGETHER";
+  if (w.accel !== undefined && w.homing !== undefined) return "UNLEASH THE SWARM";
   if (w.homing !== undefined) return "SEEK TARGETS";
   if (w.chain !== undefined) return "ARC THE PACK";
   if (w.blast !== undefined) return "BLAST THE CHOKEPOINT";
@@ -132,7 +150,15 @@ function reachBand(px: number): BandedStat {
 // live shot pattern (a modded multi-pellet volley moves FOCUSED -> BURST/WIDE honestly).
 function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage {
   if (w.melee) return { kind: w.melee.isThrust ? "THRUST" : "SWEEP", patternOrder: null };
+  // Effect-wave families read by their authoring behavior, not their pellet pattern.
+  if (w.charge !== undefined) return { kind: "ARTILLERY", patternOrder: null };
+  if (w.wire !== undefined) return { kind: "TRAP", patternOrder: null };
+  if (w.orbit !== undefined) return { kind: "ORBIT", patternOrder: null };
+  if (w.sentry !== undefined) return { kind: "TURRET", patternOrder: null };
+  if (w.tether !== undefined) return { kind: "TETHER", patternOrder: null };
+  if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
+  if (w.implode !== undefined) return { kind: "AREA", patternOrder: null };
   if (w.chain !== undefined) return { kind: "CHAIN", patternOrder: null };
   if (w.homing !== undefined) return { kind: "TRACKING", patternOrder: null };
   if (w.bounce !== undefined) return { kind: "RICOCHET", patternOrder: null };
@@ -150,6 +176,17 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
     const pierce = Math.min(4, (w.basePierce ?? 0) + mods.pierce);
     if (pierce > 0) m.push({ tag: "PIERCE", text: pierce === 1 ? "PIERCES 1 BODY" : `PIERCES ${pierce} BODIES`, mag: pierce });
   }
+  // Effect-wave technique/tradeoff lines (the authored special mechanics, priced by rule
+  // from canonical WeaponDef fields — never hand-written per weapon).
+  if (w.lowHpBonus !== undefined) m.push({ tag: "RISK", text: "HITS HARDER THE LOWER YOUR HP", mag: w.lowHpBonus });
+  if (w.charge !== undefined) m.push({ tag: "CHARGE", text: "HOLD TO CHARGE; FULL CHARGE WALKS A BLAST LINE", mag: 1 });
+  if (w.wire !== undefined) m.push({ tag: "WIRE", text: "ARMED LINE TRAP", mag: w.wire.max });
+  if (w.orbit !== undefined) {
+    const blades = Math.min(MAX_ORBIT_BLADES, w.orbit.blades + mods.extraPellets);
+    m.push({ tag: "ORBIT", text: `${blades} BLADES ORBIT YOU; FIRE FLARES THE RING`, mag: blades });
+  }
+  if (w.sentry !== undefined) m.push({ tag: "TURRET", text: "DEPLOYS A DESTRUCTIBLE TURRET", mag: w.sentry.hp });
+  if (w.tether !== undefined) m.push({ tag: "TETHER", text: "REELS A TARGET IN; HEAVIES REEL YOU", mag: 1 });
   if (w.melee?.isThrust) m.push({ tag: "THRUST", text: "PIERCING THRUST", mag: 1 });
   if (w.chain !== undefined) m.push({ tag: "CHAIN", text: `CHAINS TO ${w.chain} MORE`, mag: w.chain });
   if (w.bounce !== undefined) m.push({ tag: "RICOCHET", text: w.bounce === 1 ? "RICOCHETS ONCE" : `RICOCHETS \u00d7${w.bounce}`, mag: w.bounce });
@@ -158,6 +195,12 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.burn !== undefined) m.push({ tag: "BURN", text: "SETS TARGETS ABLAZE", mag: 1 });
   if (w.chill !== undefined) m.push({ tag: "CHILL", text: "CHILLS ON HIT", mag: 1 });
   if (w.shock !== undefined) m.push({ tag: "SHOCK", text: "SHOCKS ON HIT", mag: 1 });
+  // Legendary signature mechanics, honestly stated (the sim numbers, never flavor-only).
+  if (w.killShards !== undefined) m.push({ tag: "REAP", text: `KILLS BURST INTO ${w.killShards} SEEKING SHARDS`, mag: w.killShards });
+  if (w.accel !== undefined) m.push({ tag: "ACCEL", text: "ROUNDS ACCELERATE IN FLIGHT", mag: w.accel });
+  if (w.coinBoost !== undefined) m.push({ tag: "GILDED", text: `EATS 1 COIN PER SHOT FOR \u00d7${w.coinBoost} DAMAGE`, mag: w.coinBoost });
+  if (w.isPhase === true) m.push({ tag: "PHASE", text: "ROUNDS PASS THROUGH WALLS", mag: 1 });
+  if (w.implode !== undefined) m.push({ tag: "IMPLODE", text: `${w.implode}PX IMPLOSION PULLS THE PACK IN`, mag: w.implode });
   const kick = FIRE_KNOCKBACK[w.id];
   if (kick >= 12) m.push({ tag: "KICK", text: "KICKS YOU BACK", mag: kick });
   return m;
@@ -172,6 +215,7 @@ export function weaponDisplayStats(id: WeaponId, mods: PlayerMods, lowHp: number
   const perHit = w.damage * liveDamageMult(mods, lowHp);
   return {
     isMelee,
+    rarity: w.rarity,
     role: roleOf(w),
     power: { perHit, count: pellets },
     impact: impactBand(perHit),

@@ -15,9 +15,9 @@ import { isFloorCleared, playersAtExit, isPlayerOut } from "../sim/world.js";
 import type { ShopSlot, ShopSlotKind, ShopState } from "../sim/shop.js";
 import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
-  AttackMove, PropKind, PickupKind, ChestKind,
+  AttackMove, PropKind, PickupKind, ChestKind, Effect, EffectKind,
 } from "../sim/types.js";
-import type { EnemyTier } from "../sim/balance.js";
+import type { EnemyTier, ShopMode } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
@@ -90,15 +90,53 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
 //     reject any snapshot carrying these as a ProtocolError; the strict join gate turns
 //     that skew into a clean "update your client".
-// v9 (intentional bump, the depth-scaling PREMIUM coin economy): the shop wire's closed
-// slot-kind set grew (mystery/legendary/rare_blessing/max_hp/full_heal/reroll_all/
-// amber_cache + the mythic_* capstone kinds — a v8 client would reject any premium stall
-// as a ProtocolError), SelfWire carries the premium run state the client must reconcile
-// and render (php: successive +1-heart buys, driving the ×1.6 price ladder; amc: the
-// amber cache armed; amw: banked mythic Amber windfall; brt: the armed blessing-offer
-// reroll), and the mysteryReveal event joins the reliable stream. The strict join gate
-// turns the skew into a clean "update your client".
-export const PROTOCOL_VERSION = 9;
+// v9 (the remote-dash sync): PlayerWire grows the dash/invuln readout block
+//   (dti/ddx/ddy/dnv/inv — the same authoritative PlayerSim fields SelfWire already carries
+//   for reconciliation), so OBSERVING clients can render a teammate's dash (afterimages/
+//   dust/sfx/i-frame flicker) and interpolate it as a crisp move instead of a smeared glide.
+//   dashStart/dashTrail stay pid-scoped: remote dash FX are driven off this snapshot STATE
+//   (interp-aligned), never off the dasher's own event stream.
+// v10 (the weapon effect wave): snapshots grow the `effs` list — the authoritative weapon
+//   effect entities (chill zones, snap wires, orbit blades, sentries, tethers) every client
+//   must render, riding alongside the shop's `shop` stall state on the one shared world list;
+//   SelfWire grows `chg` (the held Breach charge, a server-owned field prediction reconciles
+//   like fireCd); and the effect events (wirePlanted/wireArmed/wireSnap/wireExpired/
+//   wireRefused/haloFlare/sentryPlaced/sentryAcquire/sentryShot/sentryHit/sentryDown/
+//   tetherLatch/tetherHold/tetherSweep + the shared status apply/freeze tells) join the
+//   reliable channel. A client on an older version rejects every snapshot carrying these, so
+//   the strict equal-version join gate turns the skew into a clean "update your client".
+// v11 (the hotbar cap): the inventory is capped at MAX_OWNED_WEAPONS and a full hotbar never
+//   auto-collects a weapon pickup — claiming one at the cap rides the NEW client->server
+//   `swap` command (trade an owned weapon for a named floor pickup, atomically, server-
+//   validated). A client at the cap on an older version would silently fail to collect with
+//   no swap affordance (and the server rejects the unknown command), so the join gate bumps.
+// v12 (the weapon rarity + mystery wave — ONE version for the whole feature;
+// client->server messages are unchanged):
+//   - the closed WeaponId set grew (the five legendaries: reaper/swarm/midas/phase/
+//     vortex) — a v11 client would reject any snapshot whose pickups/bullets/inventories
+//     carry them as a ProtocolError;
+//   - MYSTERY pickups: PickupWire carries `myst` and a mystery pickup's `wpn` is null ON
+//     THE WIRE (the identity is baked sim-side but hidden from every client until the
+//     authoritative reveal) — a v11 client would render a phantom identified weapon;
+//   - mystery shop pedestals: ShopSlotWire carries `myst` with the same hidden-identity
+//     contract (the SOLD pedestal reveals its true face after the buy);
+//   - the reliable event stream grew mysteryReveal (the reveal moment) and implosion
+//     (the Lodestone's collapse FX). NOTE: the control plane's synthetic VERIFY join
+//     mirrors this constant (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
+// v13 (intentional bump, the depth-scaling PREMIUM coin economy — the approved vendor
+// ecology of docs/specs/COIN_ECONOMY_AND_VENDORS.md):
+//   - the shop wire's closed slot-kind set grew (the premium sinks mystery/legendary/
+//     rare_blessing/max_hp/full_heal/core_infusion/weapon_upgrade/revive_token/
+//     extra_slot, the utilities reroll_all/amber_cache/prospector, the artifact, and the
+//     mythic_* capstone kinds — a v12 client would reject any premium stall as a
+//     ProtocolError), and ShopWire carries `md` (the stall's mode: dealer/premium/
+//     spoils/climax — the read every client must agree on);
+//   - SelfWire carries the premium run state the client must reconcile and render:
+//     php (successive +1-heart buys, the ×1.6 price ladder), amc (amber cache armed),
+//     amw (banked mythic Amber windfall), brt (the armed blessing-offer reroll),
+//     rvt (banked revive token), xsl (bought hotbar slots past MAX_OWNED_WEAPONS),
+//     tth (max hearts paid to the artifact), pfl (the Prospector's Draught's floor).
+export const PROTOCOL_VERSION = 13;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -151,6 +189,7 @@ export interface SelfWire {
   dcd: number; dti: number;    // dashCd, dashTime
   ddx: number; ddy: number;    // dash direction
   fcd: number;                 // fireCd
+  chg: number;                 // held Breach charge seconds (reconciled like fireCd)
   fng: number;                 // Vampire Fang shared proc cooldown
   fac: number;                 // facing (-1/1)
   down: boolean;               // isDown
@@ -166,6 +205,10 @@ export interface SelfWire {
   amc: boolean;                // isAmberCacheArmed (end-run coins→Amber trickle armed)
   amw: number;                 // amberWindfall (mythic +8 Amber claims banked this run)
   brt: boolean;                // isBlessingRerollArmed (next blessing offer rerolls once)
+  rvt: number;                 // reviveTokens (banked get-back-up, cap 1)
+  xsl: number;                 // extraWeaponSlots (bought hotbar capacity, cap 1)
+  tth: number;                 // hpTithe (max hearts paid to the artifact devil deal)
+  pfl: number;                 // prospectorFloor (coins ×2 while the floor matches; -1 = none)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -183,6 +226,15 @@ export interface PlayerWire {
   hp: number; mhp: number;
   fac: number; aim: number;
   wpn: WeaponId; down: boolean;
+  // Dash + invuln readout (v9), the same authoritative PlayerSim fields SelfWire carries:
+  // dti > 0 marks an ACTIVE dash, ddx/ddy its direction, dnv the dash-iframe window, inv
+  // the post-hit invuln. Observing clients render the dash (afterimages/dust/sfx/flicker)
+  // and interpolate it crisply from this state — dashStart/dashTrail events stay the
+  // dasher's own (pid scope), so nothing ever double-plays.
+  dti: number;
+  ddx: number; ddy: number;
+  dnv: number;
+  inv: number;
   rv: number;   // authoritative revive-channel progress on a DOWNED body (seconds)
   out: boolean; // past the floor's down limit — teammates stop offering the revive
   bcl: boolean; // has claimed this floor's boss weapon choice (gate §4 personal claim)
@@ -256,11 +308,30 @@ export interface BulletWire {
 // so they ride the snapshot as discrete values — no interpolation needed. All three carry the
 // sim's STABLE per-floor id (interest hysteresis + client anim keying + lifecycle identity).
 export interface PropWire { id: number; kind: PropKind; x: number; y: number; brk: number } // brk<0 => intact
-export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number; bch: boolean } // val<0 => face value; bch = boss weapon choice
+export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number; bch: boolean; myst: boolean } // val<0 => face value; bch = boss weapon choice; myst = unidentified (wpn hidden)
 export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; op: boolean; opt: number } // opt<0 => not yet open
 // Authored ground hazards (webs): bounded (hard sim cap), gameplay-relevant everywhere
 // (they slow PREDICTED movement), so they ride every snapshot unfiltered.
 export interface HazardWire { id: number; k: HazardKind; x: number; y: number; r: number; life: number; max: number }
+// Weapon effect entities (the effect wave): one flat struct covers every kind — unused
+// geometry fields ride as 0/-1 defaults so the validator stays a single table. Bounded
+// by hard sim caps per family (like hazards), so they ride every snapshot unfiltered.
+export interface EffectWire {
+  id: number;
+  k: EffectKind;
+  o: string;              // owner player id ("" = departed owner)
+  fx: WeaponId;           // authoring weapon (render recipe)
+  x: number; y: number;
+  x2: number; y2: number; // wire span end (wires only)
+  r: number;              // zone radius / orbit ring / sentry body / tether sweep reach
+  n: number;              // orbit blade count
+  a: number;              // orbit blade phase (rad)
+  fl: number;             // orbit flare seconds left
+  arm: number;            // wire arm seconds left (0 = live)
+  hp: number; mhp: number;// sentry durability (-1 = not a sentry)
+  eid: number;            // tethered enemy id (-1 = none)
+  life: number; max: number;
+}
 
 // Patch's shop stall (shop floors only, ≤5 slots): the authoritative stock every client
 // renders and buys against. Global like hazards — the shop is a shared objective and its
@@ -271,8 +342,9 @@ export interface ShopSlotWire {
   wpn: WeaponId | null; it: string | null;
   pr: number; x: number; y: number;
   sold: PlayerId | null; by: PlayerId[];
+  myst: boolean; // mystery pedestal: wpn is hidden (null) on the wire until a buy reveals
 }
-export interface ShopWire { kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
+export interface ShopWire { md: ShopMode; kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
 
 // ---- messages ----
 
@@ -313,6 +385,13 @@ export type ClientMsg =
   // server validates ownership + player state and picks the spawn spot itself; the pickup
   // and the updated inventory flow back via snapshot. Same cseq idempotency as equip.
   | { t: "drop"; weapon: WeaponId; cseq: number }
+  // Authoritative full-hotbar swap (v9): trade the OWNED weapon `drop` for the weapon
+  // pickup `pickup` (the sim's stable per-floor pickup id) the player is standing on.
+  // Only valid AT the hotbar cap — below it a walk-over collects. The server validates
+  // everything (fullness, ownership, pickup liveness/range/claimability) and performs the
+  // trade atomically: the replaced weapon lands as a normal world pickup, the incoming
+  // one is acquired + equipped. Declining sends nothing. Same cseq idempotency as equip.
+  | { t: "swap"; pickup: number; drop: WeaponId; cseq: number }
   // Authoritative blessing choice: names the server offer it answers (offerId) + the chosen
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
@@ -368,6 +447,7 @@ export type ServerMsg =
       chests: ChestWire[];       // shared chests (incl. the boss chest)
       hzds: HazardWire[];        // shared ground hazards (the Weaver's webs)
       shop: ShopWire | null;     // Patch's stall (shop floors only) — stock + claim state
+      effs: EffectWire[];        // shared weapon effect entities (the effect wave)
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
   | { t: "ping"; id: number; tick: number; time: number }
@@ -455,11 +535,14 @@ const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon
 const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
   weapon: true, blessing: true, heart: true, reroll: true,
   mystery: true, legendary: true, rare_blessing: true, max_hp: true, full_heal: true,
-  reroll_all: true, amber_cache: true,
+  core_infusion: true, weapon_upgrade: true, revive_token: true, extra_slot: true,
+  reroll_all: true, amber_cache: true, prospector: true, artifact: true,
   mythic_weapon: true, mythic_trio: true, mythic_amber: true,
 };
+const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
+const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
@@ -488,7 +571,7 @@ export type EventScopeKind = "global" | "pid" | "pos";
 interface EventSpec { scope: EventScopeKind; fields: Record<string, FieldKind> }
 
 const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
-  shot: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num" } },
+  shot: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num", chg: "num" } },
   meleeSwing: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", bx: "num", by: "num" } },
   enemyHit: { scope: "pos", fields: { eid: "num", dmgX: "num", dmgY: "num", dmg: "num", crit: "bool", puffX: "num", puffY: "num", puffColor: "str", melee: "bool", closeShotgun: "bool", killed: "bool" } },
   thornsHit: { scope: "pos", fields: { eid: "num", x: "num", y: "num", radius: "num", dmg: "num", tint: "str" } },
@@ -496,6 +579,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   shockArc: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", tRadius: "num", dmg: "num", color: "str", killed: "bool" } },
   enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num", combo: "num" } },
   heal: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
+  // Deliberately pid-scoped: these drive the DASHER's own juice. Teammates render a remote
+  // dash off the PlayerWire dash state (dti/ddx/ddy — v9), which is interp-aligned with the
+  // rendered position; broadcasting these events too would double-play the FX.
   dashStart: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   dashTrail: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
@@ -507,16 +593,36 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  // Positional: the reveal moment plays for everyone standing at the pedestal, not only
+  // the collector (the gamble resolving is shared theater).
+  mysteryReveal: { scope: "pos", fields: { pid: "str", weapon: "str", twist: "str", x: "num", y: "num" } },
   shopBuy: { scope: "pos", fields: { pid: "str", slot: "num", kind: "str", x: "num", y: "num" } },
-  mysteryReveal: { scope: "pos", fields: { pid: "str", weapon: "str", x: "num", y: "num" } },
   weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
+  wirePlanted: { scope: "pos", fields: { x: "num", y: "num", tx: "num", ty: "num" } },
+  wireArmed: { scope: "pos", fields: { x: "num", y: "num" } },
+  wireSnap: { scope: "pos", fields: { x: "num", y: "num", tx: "num", ty: "num" } },
+  wireExpired: { scope: "pos", fields: { x: "num", y: "num" } },
+  wireRefused: { scope: "pos", fields: { x: "num", y: "num" } },
+  haloFlare: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  sentryPlaced: { scope: "pos", fields: { x: "num", y: "num" } },
+  sentryAcquire: { scope: "pos", fields: { x: "num", y: "num" } },
+  sentryShot: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
+  sentryHit: { scope: "pos", fields: { x: "num", y: "num" } },
+  sentryDown: { scope: "pos", fields: { x: "num", y: "num", why: "str" } },
+  tetherLatch: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", inv: "bool" } },
+  tetherHold: { scope: "pos", fields: { x: "num", y: "num" } },
+  tetherSweep: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  statusApplied: { scope: "pos", fields: { eid: "num", x: "num", y: "num", kind: "str" } },
+  frozeSolid: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
+  freezeBroke: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
   bulletExpire: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   bulletBlocked: { scope: "pos", fields: { kind: "str", x: "num", y: "num", aim: "num" } },
   propHit: { scope: "pos", fields: { propId: "num", kind: "str", x: "num", y: "num" } },
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
-  explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num", src: "str" } },
+  implosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   hazardHit: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
@@ -653,6 +759,18 @@ function decodeClientMsg(raw: string): ClientMsg {
       exactKeys(o, ["t", "weapon", "cseq"]);
       return { t: "drop", weapon: weaponOf(o, "weapon"), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
     }
+    case "swap": {
+      // The pickup id is a non-negative integer naming a sim pickup; the drop id a KNOWN
+      // weapon. The sim validates the rest (fullness/ownership/liveness/range) — a stale
+      // or forged swap is a rejected command, never a crash and never a partial trade.
+      exactKeys(o, ["t", "pickup", "drop", "cseq"]);
+      return {
+        t: "swap",
+        pickup: intOf(o, "pickup", 0, Number.MAX_SAFE_INTEGER),
+        drop: weaponOf(o, "drop"),
+        cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER),
+      };
+    }
     case "chooseBlessing": {
       exactKeys(o, ["t", "offerId", "choiceId"]);
       return { t: "chooseBlessing", offerId: intOf(o, "offerId", 0, Number.MAX_SAFE_INTEGER), choiceId: shortStr(o, "choiceId", 48) };
@@ -704,6 +822,7 @@ function validateSelfWire(v: unknown): SelfWire {
     dcd: num(o, "dcd", 0, 1e4), dti: num(o, "dti", -1e4, 1e4),
     ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
     fcd: num(o, "fcd", 0, 1e4),
+    chg: num(o, "chg", 0, 1e4),
     fng: num(o, "fng", 0, 1e4),
     fac: num(o, "fac", -1, 1),
     down: boolOf(o, "down"),
@@ -719,6 +838,10 @@ function validateSelfWire(v: unknown): SelfWire {
     amc: boolOf(o, "amc"),
     amw: num(o, "amw", 0, 1e6),
     brt: boolOf(o, "brt"),
+    rvt: intOf(o, "rvt", 0, 8),
+    xsl: intOf(o, "xsl", 0, 8),
+    tth: intOf(o, "tth", 0, 16),
+    pfl: intOf(o, "pfl", -1, 1e6),
   };
 }
 
@@ -741,6 +864,10 @@ function validatePlayerWire(v: unknown): PlayerWire {
     hp: num(o, "hp", 0, 1e6), mhp: num(o, "mhp", 0, 1e6),
     fac: num(o, "fac", -1, 1), aim: num(o, "aim", -1000, 1000),
     wpn: weaponOf(o, "wpn"), down: boolOf(o, "down"),
+    dti: num(o, "dti", -1e4, 1e4),
+    ddx: num(o, "ddx", -8, 8), ddy: num(o, "ddy", -8, 8),
+    dnv: num(o, "dnv", 0, 1e4),
+    inv: num(o, "inv", 0, 1e4),
     rv: num(o, "rv", 0, 1e4),
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
@@ -805,6 +932,7 @@ function validatePickupWire(v: unknown): PickupWire {
     wpn: wpn as WeaponId | null,
     val: num(o, "val", -1, 1e9),
     bch: boolOf(o, "bch"),
+    myst: boolOf(o, "myst"),
   };
 }
 
@@ -850,6 +978,7 @@ function validateShopSlotWire(v: unknown): ShopSlotWire {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     sold: sold as PlayerId | null,
     by,
+    myst: boolOf(o, "myst"),
   };
 }
 
@@ -858,9 +987,32 @@ function validateShopWire(v: unknown): ShopWire {
   const slots = arr(o.slots, "shop.slots").map(validateShopSlotWire);
   if (slots.length > 16) throw new ProtocolError("bad shop.slots size");
   return {
+    md: inSet(SHOP_MODES, o.md, "shop.md"),
     kx: num(o, "kx", -POS_LIMIT, POS_LIMIT), ky: num(o, "ky", -POS_LIMIT, POS_LIMIT),
     ru: intOf(o, "ru", 0, 1e4),
     slots,
+  };
+}
+
+function validateEffectWire(v: unknown): EffectWire {
+  const o = obj(v, "effect");
+  const owner = o.o;
+  if (typeof owner !== "string" || owner.length > 64) throw new ProtocolError("bad effect.o");
+  return {
+    id: intOf(o, "id", 0, Number.MAX_SAFE_INTEGER),
+    k: inSet(EFFECT_KINDS, o.k, "effect.k"),
+    o: owner,
+    fx: weaponOf(o, "fx"),
+    x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
+    x2: num(o, "x2", -POS_LIMIT, POS_LIMIT), y2: num(o, "y2", -POS_LIMIT, POS_LIMIT),
+    r: num(o, "r", 0, 1e4),
+    n: intOf(o, "n", 0, 64),
+    a: num(o, "a", -1000, 1000),
+    fl: num(o, "fl", 0, 1e4),
+    arm: num(o, "arm", 0, 1e4),
+    hp: num(o, "hp", -1, 1e6), mhp: num(o, "mhp", -1, 1e6),
+    eid: intOf(o, "eid", -1, Number.MAX_SAFE_INTEGER),
+    life: num(o, "life", 0, 1e4), max: num(o, "max", 0, 1e4),
   };
 }
 
@@ -936,6 +1088,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         chests: arr(o.chests, "chests").map(validateChestWire),
         hzds: arr(o.hzds, "hzds").map(validateHazardWire),
         shop: o.shop === null ? null : validateShopWire(o.shop),
+        effs: arr(o.effs, "effs").map(validateEffectWire),
         events: arr(o.events, "events").map(validateWireEvent),
       };
     }
@@ -975,24 +1128,26 @@ export const jsonCodec: Codec = {
 export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
   return {
     x: s.x, y: s.y, hp: s.hp, mhp: s.maxHp, inv: s.invuln, dnv: s.dashInvuln,
-    dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, fng: s.fangCd,
+    dcd: s.dashCd, dti: s.dashTime, ddx: s.dashDx, ddy: s.dashDy, fcd: s.fireCd, chg: s.chargeT, fng: s.fangCd,
     fac: s.facing, down: s.isDown, rev: s.reviveProgress, out: false, wpn: s.weapon,
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
     php: s.premiumHpBuys, amc: s.isAmberCacheArmed, amw: s.amberWindfall, brt: s.isBlessingRerollArmed,
+    rvt: s.reviveTokens, xsl: s.extraWeaponSlots, tth: s.hpTithe, pfl: s.prospectorFloor,
   };
 }
 
 export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
   return {
     x: w.x, y: w.y, hp: w.hp, maxHp: w.mhp, invuln: w.inv, dashInvuln: w.dnv,
-    dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, fangCd: w.fng,
+    dashCd: w.dcd, dashTime: w.dti, dashDx: w.ddx, dashDy: w.ddy, fireCd: w.fcd, chargeT: w.chg, fangCd: w.fng,
     facing: w.fac, isDown: w.down, reviveProgress: w.rev, weapon: w.wpn,
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
     hasClaimedBossChoice: w.bcl,
     premiumHpBuys: w.php, isAmberCacheArmed: w.amc, amberWindfall: w.amw, isBlessingRerollArmed: w.brt,
+    reviveTokens: w.rvt, extraWeaponSlots: w.xsl, hpTithe: w.tth, prospectorFloor: w.pfl,
   };
 }
 
@@ -1025,6 +1180,7 @@ export interface PlayerIdentity {
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
   return {
     id: p.id, x: p.x, y: p.y, hp: p.hp, mhp: p.maxHp, fac: p.facing, aim: p.aimAngle, wpn: p.weapon, down: p.isDown,
+    dti: p.dashTime, ddx: p.dashDx, ddy: p.dashDy, dnv: p.dashInvuln, inv: p.invuln,
     rv: p.reviveProgress,
     out: isPlayerOut(p),
     bcl: p.hasClaimedBossChoice,
@@ -1076,35 +1232,104 @@ export function toPropWire(p: Prop): PropWire {
 }
 export function toShopWire(s: ShopState): ShopWire {
   return {
-    kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
+    md: s.mode, kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
     slots: s.slots.map((slot): ShopSlotWire => ({
       id: slot.id, k: slot.kind, sh: slot.isShared,
-      wpn: slot.weapon, it: slot.itemId, pr: slot.price,
+      // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
+      // be able to peek the gamble); the buy flips isMystery false, revealing it.
+      wpn: slot.isMystery ? null : slot.weapon, it: slot.itemId, pr: slot.price,
       x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
+      myst: slot.isMystery,
     })),
   };
 }
 export function shopFromWire(w: ShopWire): ShopState {
-  // Field order mirrors buildShopState so a decoded shop is BYTE-identical to the sim's
-  // (the shop suite locks the round-trip with a stringify compare).
+  // Field order mirrors buildShopState so a decoded shop is byte-identical to the sim's
+  // on its wire projection (the shop suite locks toShopWire round-trips; a mystery
+  // slot's hidden identity/twist are sim secrets and never reconstructable here).
   return {
+    mode: w.md,
     keeperX: w.kx, keeperY: w.ky,
     slots: w.slots.map((s): ShopSlot => ({
       id: s.id, kind: s.k, isShared: s.sh,
       weapon: s.wpn, itemId: s.it, price: s.pr,
       x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
+      isMystery: s.myst, twist: null,
     })),
     rerollsUsed: w.ru,
   };
 }
 export function toPickupWire(p: Pickup): PickupWire {
-  return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1, bch: p.isBossChoice ?? false };
+  return {
+    id: p.id, kind: p.kind, x: p.x, y: p.y,
+    // A mystery pickup's baked identity stays sim-side until the authoritative reveal.
+    wpn: p.isMystery ? null : p.weapon,
+    val: p.value ?? -1, bch: p.isBossChoice ?? false, myst: p.isMystery ?? false,
+  };
 }
 export function toChestWire(c: Chest): ChestWire {
   return { id: c.id, kind: c.kind, x: c.x, y: c.y, op: c.opened, opt: c.openT ?? -1 };
 }
 export function toHazardWire(h: Hazard): HazardWire {
   return { id: h.id, k: h.kind, x: h.x, y: h.y, r: h.radius, life: h.life, max: h.maxLife };
+}
+
+// Weapon effect entities: one flat wire struct, kind-relevant fields filled, the rest at
+// their defaults (0 / -1). Sim-internal scratch (rehit cooldowns, sentry fire cadence,
+// tether phase timers) stays OFF the wire — the client only renders.
+export function toEffectWire(e: Effect): EffectWire {
+  const base: EffectWire = {
+    id: e.id, k: e.kind, o: e.owner ?? "", fx: e.fx, x: e.x, y: e.y,
+    x2: 0, y2: 0, r: 0, n: 0, a: 0, fl: 0, arm: 0, hp: -1, mhp: -1, eid: -1,
+    life: e.life, max: e.maxLife,
+  };
+  switch (e.kind) {
+    case "zone":
+      base.r = e.radius;
+      break;
+    case "wire":
+      base.x2 = e.x2; base.y2 = e.y2; base.r = e.width; base.arm = e.arm;
+      break;
+    case "orbit":
+      base.r = e.ring; base.n = e.blades; base.a = e.angle; base.fl = e.flare;
+      base.x2 = e.bladeRadius; // blade contact radius rides the spare span slot
+      break;
+    case "sentry":
+      base.r = e.radius; base.hp = e.hp; base.mhp = e.maxHp;
+      break;
+    case "tether":
+      base.eid = e.eid; base.r = e.reach;
+      break;
+  }
+  return base;
+}
+
+// Build a render-ready Effect from the wire (scratch fields the renderer never reads are
+// defaulted; damage/cadence are authoritative-only and irrelevant client-side).
+export function effectFromWire(w: EffectWire): Effect {
+  const owner = w.o.length > 0 ? w.o : null;
+  const base = { id: w.id, owner, fx: w.fx, x: w.x, y: w.y, life: w.life, maxLife: w.max };
+  switch (w.k) {
+    case "zone":
+      return { ...base, kind: "zone", radius: w.r, chillRate: 0 };
+    case "wire":
+      return { ...base, kind: "wire", x2: w.x2, y2: w.y2, width: w.r, arm: w.arm, damage: 0 };
+    case "orbit":
+      return {
+        ...base, kind: "orbit", angle: w.a, ring: w.r, blades: w.n, bladeRadius: w.x2,
+        speed: 0, flare: w.fl, damage: 0, rehit: new Map(),
+      };
+    case "sentry":
+      return {
+        ...base, kind: "sentry", radius: w.r, hp: w.hp, maxHp: w.mhp, fireCd: 0, range: 0,
+        boltSpeed: 0, boltRadius: 0, boltDamage: 0, boltPierce: 0, contactCd: 0, targetEid: -1,
+      };
+    case "tether":
+      return {
+        ...base, kind: "tether", eid: w.eid, phase: "hold", isPlayerPulled: false,
+        pullSpeed: 0, holdDist: 0, holdTime: 0, pullTime: 0, damage: 0, reach: w.r,
+      };
+  }
 }
 
 // Radius reconstructed from kind so the wire stays tiny. Matches the sim's placement radii
@@ -1115,7 +1340,11 @@ export function propFromWire(w: PropWire): Prop {
 }
 export function pickupFromWire(w: PickupWire): Pickup {
   const radius = w.kind === "weapon" ? 16 : 13;
-  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined };
+  return {
+    id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn,
+    value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined,
+    isMystery: w.myst || undefined,
+  };
 }
 export function chestFromWire(w: ChestWire): Chest {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: w.kind === "boss" ? 18 : 16, opened: w.op, openT: w.opt < 0 ? undefined : w.opt };
@@ -1290,6 +1519,8 @@ export function buildSnapshot(
     // Unfiltered too: the stall is a shared objective (≤5 slots, shop floors only) whose
     // SOLD/claim state every client must agree on regardless of where they stand.
     shop: w.shop ? toShopWire(w.shop) : null,
+    // Effects share the hazard rule: hard sim caps per family, so the list stays small.
+    effs: w.effects.map(toEffectWire),
     events,
   };
 }

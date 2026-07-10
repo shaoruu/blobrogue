@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -208,6 +208,16 @@ export class GameWorld implements RoomRuntime {
     // tick's reliable stream — same path async blessing applies already use.
     const ev: SimEvent[] = [];
     const ok = dropWeaponInWorld(this.state, pid, weapon, ev);
+    for (const e of ev) this.injectedEvents.push(e);
+    return ok;
+  }
+
+  trySwapWeapon(pid: PlayerId, pickup: number, drop: WeaponId): boolean {
+    // Message-handler timing like tryDropWeapon: two swaps racing for one pickup resolve
+    // in arrival order against the SAME live state, so exactly one wins and the loser's
+    // command is an honest reject — never a duplicated weapon, never a lost one.
+    const ev: SimEvent[] = [];
+    const ok = swapWeaponInWorld(this.state, pid, pickup, drop, ev);
     for (const e of ev) this.injectedEvents.push(e);
     return ok;
   }

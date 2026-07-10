@@ -25,7 +25,8 @@ import {
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
-  isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, shopWeaponPrice,
+  SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
 import { SHOP, PREMIUM, isPremiumShopFloor } from "../src/sim/balance.js";
@@ -34,6 +35,8 @@ import type { Dungeon } from "../src/sim/dungeon.js";
 import { isBossFloor } from "../src/sim/enemies.js";
 import { itemById, itemLevelsOf, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
+import type { WeaponId } from "../src/sim/types.js";
+import { MAX_OWNED_WEAPONS } from "../src/sim/constants.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
@@ -162,8 +165,9 @@ function placementTests(): void {
     const rerolls = shop.slots.filter((s) => s.kind === "reroll");
     check("three item pedestals: 2 weapons + 1 blessing", weapons.length === 2 && blessings.length === 1);
     check("one heart station + one reroll post", hearts.length === 1 && rerolls.length === 1);
-    check("pedestal prices ride the unchanged 12/18/24 ladder",
-      weapons[0].price === 12 && weapons[1].price === 18 && blessings[0].price === 24);
+    check("pedestal prices scale their rarity off the unchanged 12/18/24 ladder base",
+      weapons.every((s, i) => s.price === shopWeaponPrice(SHOP.pedestalPrices[i], s.weapon!, s.isMystery))
+      && blessings[0].price === 24);
     check("heart 6 (never a full heal: +1 HP) and reroll 8",
       hearts[0].price === SHOP.heartPrice && SHOP.heartHeal === 1 && rerolls[0].price === SHOP.rerollCost);
     check("weapon pedestals are SHARED; blessing + heart are FOR YOU (personal)",
@@ -279,6 +283,25 @@ function buyCommandTests(): void {
     p.ownedWeapons.push(other.weapon!);
     check("a weapon you already own reads 'owned' before any coin moves",
       buyAt(w, p, other) === "owned" && p.coins === 99 && other.soldTo === null);
+  }
+  {
+    // The hotbar cap gates the stall exactly like floor pickups: a full buyer reads
+    // HOTBAR FULL and no coin moves — freeing a slot (drop/swap) re-opens the buy.
+    const w = createWorld(0xDEA1, 3);
+    const p = w.players.get(LOCAL_ID)!;
+    const weapon = slotOf(w, "weapon");
+    const fillers: WeaponId[] = ["shotgun", "railgun", "tesla", "smg", "cannon", "rapid", "burst", "homing"];
+    for (const id of fillers) {
+      if (p.ownedWeapons.length >= MAX_OWNED_WEAPONS) break;
+      if (id !== weapon.weapon && !p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
+    }
+    p.coins = 99;
+    check("a full hotbar reads 'full', coins/stock untouched",
+      buyAt(w, p, weapon) === "full" && p.coins === 99 && weapon.soldTo === null
+      && p.ownedWeapons.length === MAX_OWNED_WEAPONS);
+    p.ownedWeapons.pop();
+    check("freeing a slot re-opens the same buy",
+      buyAt(w, p, weapon) === "ok" && p.ownedWeapons.includes(weapon.weapon!) && p.ownedWeapons.length === MAX_OWNED_WEAPONS);
   }
   {
     const w = createWorld(0xDEA1, 3);
@@ -488,8 +511,11 @@ function flowAndWireTests(): void {
     check("claim + buyer state survives encode/decode byte-for-byte",
       JSON.stringify(decoded.shop) === JSON.stringify(toShopWire(w.shop!)));
     const rebuilt = shopFromWire(decoded.shop!);
-    check("shopFromWire(toShopWire(s)) is lossless",
-      JSON.stringify(rebuilt) === JSON.stringify(w.shop));
+    // Lossless on the WIRE projection: a mystery pedestal's identity/twist are sim
+    // secrets by design (hidden until the buy), so the sim-side struct is compared
+    // through toShopWire — the exact view every client reconstructs.
+    check("shopFromWire(toShopWire(s)) is lossless on the wire projection",
+      JSON.stringify(toShopWire(rebuilt)) === JSON.stringify(toShopWire(w.shop!)));
     check("non-shop floors carry shop: null on the wire",
       (buildSnapshot(createWorld(0xB1E, 4), LOCAL_ID, 0, [], 0, true, { worldId: "room:TEST" }) as Extract<ServerMsg, { t: "snap" }>).shop === null);
   }

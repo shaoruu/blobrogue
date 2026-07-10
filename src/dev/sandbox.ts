@@ -8,13 +8,20 @@ import type { EnemyTier } from "../sim/balance.js";
 import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
 import { ITEMS } from "../sim/items.js";
 import { WEAPONS } from "../sim/weapons.js";
+import { weaponDisplayStats } from "../sim/weaponStats.js";
+import { createMods } from "../sim/items.js";
 import { injectDevStyles } from "./styles.js";
 
 const ENEMY_KINDS: readonly EnemyKind[] = [
   "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
   "boss", "marrow", "choir", "weaver", "gilded",
 ];
-const WEAPON_IDS: readonly WeaponId[] = ["pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla", "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear"];
+const WEAPON_IDS: readonly WeaponId[] = [
+  "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam", "sword", "longsword", "spear",
+  "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+  "reaper", "swarm", "midas", "phase", "vortex",
+];
 const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
@@ -25,6 +32,7 @@ const PROP_LABEL: Record<PropKind, string> = {
 const WEAPON_ART_ID: Partial<Record<WeaponId, string>> = {
   sword: "cutlass", longsword: "claymore", spear: "pike",
   mortar: "thumper", beam: "beam2_px",
+  swarm: "hive", phase: "umbra", vortex: "lodestone",
 };
 const weaponArtId = (id: WeaponId) => WEAPON_ART_ID[id] ?? id;
 
@@ -146,14 +154,20 @@ function buildPanel(game: Game): void {
   info.append(previewName, previewType, previewStats);
   weaponPreview.append(art, info);
   const showWeapon = (id: WeaponId) => {
-    const w = WEAPONS[id]; const artId = weaponArtId(id);
+    const artId = weaponArtId(id);
     pickupImg.src = `/sprites/weapon_${artId}.png`;
     heldImg.src = `/sprites/held_${artId}.png`;
-    previewName.textContent = w.name.toUpperCase();
-    previewType.textContent = w.melee ? (w.melee.isThrust ? "MELEE · THRUST" : "MELEE · SWEEP") : "RANGED";
-    const rate = (1 / w.fireCd).toFixed(1);
-    const range = w.melee ? `${Math.round(w.melee.reach)} PX` : `${Math.round(w.speed * w.life)} PX`;
-    previewStats.textContent = `DMG ${w.damage}  ·  RATE ${rate}/S  ·  RANGE ${range}`;
+    // Canonical live stats (src/sim/weaponStats.ts) — the SAME model the in-run drawer +
+    // hotbar tooltip render from, so the QA surface can never drift from the sim.
+    const card = weaponDisplayStats(id, createMods(), 0);
+    previewName.textContent = WEAPONS[id].name.toUpperCase();
+    previewType.textContent = card.role;
+    const rows = [
+      `POWER ${Math.round(card.power.perHit * 10) / 10}${card.power.count > 1 ? ` \u00d7${card.power.count}` : ""}`,
+      `IMPACT ${card.impact.band}`, `CADENCE ${card.cadence.band}`, `REACH ${card.reach.band}`,
+    ].join("  \u00b7  ");
+    const notes = card.mechanics.map((mech) => mech.text).join("  \u00b7  ");
+    previewStats.textContent = notes.length > 0 ? `${rows}\n${notes}` : rows;
   };
   showWeapon("pistol");
   weaponSec.appendChild(weaponPreview);
@@ -249,6 +263,13 @@ function buildPanel(game: Game): void {
     flowBtn.classList.toggle("on", on);
   }, "wide");
   worldSec.appendChild(flowBtn);
+  const lightBtn = btn("Lighting & AO: on", () => {
+    const on = game.devToggleLighting();
+    lightBtn.textContent = `Lighting & AO: ${on ? "on" : "off"}`;
+    lightBtn.classList.toggle("on", on);
+  }, "wide");
+  lightBtn.classList.add("on");
+  worldSec.appendChild(lightBtn);
   panel.appendChild(worldSec);
 
   // ---- live readout ----
@@ -259,12 +280,14 @@ function buildPanel(game: Game): void {
   const bulletV = h("span", "v");
   const partV = h("span", "v");
   const hpV = h("span", "v");
+  const lightV = h("span", "v");
   read.append(
     h("span", "k", "fps"), fpsV,
     h("span", "k", "enemies"), enemyV,
     h("span", "k", "bullets"), bulletV,
     h("span", "k", "particles"), partV,
     h("span", "k", "hp"), hpV,
+    h("span", "k", "light ms"), lightV,
   );
   readSec.appendChild(read);
   panel.appendChild(readSec);
@@ -287,12 +310,15 @@ function buildPanel(game: Game): void {
     bulletV.textContent = String(s.bullets);
     partV.textContent = String(s.particles);
     hpV.textContent = `${s.hp}/${s.maxHp}`;
+    lightV.textContent = s.isLighting ? `${s.lightingMs.toFixed(2)}` : "off";
     floor = s.floor;
     for (const [id, b] of weaponBtns) b.classList.toggle("on", id === s.weapon);
     godBtn.classList.toggle("on", s.isGodMode);
     godBtn.textContent = `God mode: ${s.isGodMode ? "on" : "off"}`;
     flowBtn.classList.toggle("on", s.isFlowDebug);
     flowBtn.textContent = `Flow field: ${s.isFlowDebug ? "on" : "off"}`;
+    lightBtn.classList.toggle("on", s.isLighting);
+    lightBtn.textContent = `Lighting & AO: ${s.isLighting ? "on" : "off"}`;
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);

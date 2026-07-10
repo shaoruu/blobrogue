@@ -24,6 +24,7 @@ export interface PlayerMods {
   critChance: number;      // chance a pellet crits
   critMult: number;        // ×damage on a crit
   dashCdMult: number;      // ×dash cooldown (level LOOKUP — never multiplied copy-over-copy)
+  extraDashCharge: number; // banked extra dash uses (the premium dash core; hard cap 1)
   coinMult: number;        // ×coins per pickup
   coinMagnet: number;      // px radius that vacuums loose coins toward you
   coinMagnetPull: number;  // px/s pull speed of the vacuum
@@ -51,6 +52,7 @@ export function createMods(): PlayerMods {
     critChance: 0,
     critMult: 2,
     dashCdMult: 1,
+    extraDashCharge: 0,
     coinMult: 1,
     coinMagnet: 0,
     coinMagnetPull: 0,
@@ -74,6 +76,7 @@ export function clampModCaps(m: PlayerMods): void {
   if (m.burnChance > CAPS.elementalChance) m.burnChance = CAPS.elementalChance;
   if (m.chillChance > CAPS.elementalChance) m.chillChance = CAPS.elementalChance;
   if (m.shockChance > CAPS.elementalChance) m.shockChance = CAPS.elementalChance;
+  if (m.extraDashCharge > 1) m.extraDashCharge = 1; // the premium dash core's hard cap
 }
 
 export type ItemRarity = "common" | "uncommon" | "rare";
@@ -98,9 +101,18 @@ export interface ItemDef {
   glyph: string;       // single-char icon shown on the card + HUD strip (tint gives identity)
   tint: string;        // accent color for the drawn icon chip
   rarity: ItemRarity;
+  // Premium-only stock (the shop's core infusions): NEVER enters a blessing offer roll —
+  // the offer pool and its seeded streams are byte-identical with or without these defs.
+  isPremiumOnly?: boolean;
+  // Per-item level cap (defaults to MAX_ITEM_LEVEL; the dash core caps at 1).
+  maxLevel?: number;
   // Writes the blessing's TOTAL contribution at the given cumulative level (1–3) onto a
   // fresh mods struct. Levels are lookups, never repeated multiplication.
   apply: (m: PlayerMods, level: number) => void;
+}
+
+export function itemMaxLevel(def: ItemDef): number {
+  return def.maxLevel ?? MAX_ITEM_LEVEL;
 }
 
 // Convenience for the common "one number per level" shape.
@@ -237,7 +249,42 @@ export const ITEMS: readonly ItemDef[] = [
       m.burnChance += c; m.chillChance += c; m.shockChance += c;
     },
   },
+  // ---- the premium CORE INFUSIONS (shop stock only — never in a blessing offer) ----
+  // Single-stat bumps toward the existing raw caps: a FASTER route to the cap, never a
+  // higher cap (clampModCaps still rules). Leveled like blessings so the build strip,
+  // the recompute, and the level caps all ride the one item system; each successive core
+  // costs ×1.6 at the stall (see shopSlotPriceFor).
+  {
+    id: "core_damage", name: "Cinder Core",
+    descs: ["+25% damage.", "+45% damage.", "+60% damage."],
+    glyph: "\u25b2", tint: "#ff8a5a", rarity: "rare", isPremiumOnly: true,
+    apply: (m, l) => { m.damageMult += lv([0.25, 0.45, 0.60], l); },
+  },
+  {
+    id: "core_fire", name: "Tempo Core",
+    descs: ["+15% fire rate.", "+28% fire rate.", "+38% fire rate."],
+    glyph: "\u25b3", tint: "#ffd166", rarity: "rare", isPremiumOnly: true,
+    apply: (m, l) => { m.fireRateMult += lv([0.15, 0.28, 0.38], l); },
+  },
+  {
+    id: "core_move", name: "Gale Core",
+    descs: ["+8% move speed.", "+14% move speed.", "+19% move speed."],
+    glyph: "\u25bd", tint: "#7fdd5a", rarity: "rare", isPremiumOnly: true,
+    apply: (m, l) => { m.moveSpeedMult += lv([0.08, 0.14, 0.19], l); },
+  },
+  // The dash core: one banked extra dash charge — skill-expressive mobility, capped at
+  // ONE per run so movement never homogenizes into blink-spam.
+  {
+    id: "core_dash", name: "Echo Step",
+    descs: ["+1 dash charge.", "+1 dash charge.", "+1 dash charge."],
+    glyph: "\u00bb", tint: "#5ab6ff", rarity: "rare", isPremiumOnly: true, maxLevel: 1,
+    apply: (m) => { m.extraDashCharge += 1; },
+  },
 ];
+
+// The stat cores the core-infusion pedestal may stock (the dash core prices higher —
+// see shopSlotPriceFor's dashCorePriceMult).
+export const CORE_ITEM_IDS: readonly string[] = ["core_damage", "core_fire", "core_move", "core_dash"];
 
 // A player's cumulative levels from their pick history (an id's count IS its level).
 export function itemLevelsOf(ownedItemIds: readonly string[]): Map<string, number> {
@@ -277,7 +324,9 @@ export function rollItemChoicesWith(
   opts: RollOpts = {},
 ): ItemDef[] {
   const levels = itemLevelsOf(ownedItemIds);
-  const eligible = ITEMS.filter((it) => (levels.get(it.id) ?? 0) < MAX_ITEM_LEVEL);
+  // Premium-only defs (the shop's cores) never enter an offer pool: the eligible set —
+  // and therefore every seeded offer stream — is byte-identical to the pre-core game.
+  const eligible = ITEMS.filter((it) => it.isPremiumOnly !== true && (levels.get(it.id) ?? 0) < MAX_ITEM_LEVEL);
   let pool = opts.rareOnly ? eligible.filter((it) => it.rarity === "rare") : eligible;
   if (pool.length === 0) pool = eligible;
   const weightOf = (it: ItemDef) => RARITY_WEIGHT[it.rarity] * (levels.has(it.id) ? 1 : NEW_ITEM_WEIGHT);

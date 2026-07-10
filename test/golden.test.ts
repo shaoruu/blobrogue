@@ -22,7 +22,7 @@ import { Minimap } from "../src/game/minimap.js";
 import { BlessingOverlay } from "../src/ui/blessing.js";
 import { installFxCapture, beginTick, takeTick } from "./harness/fxCapture.js";
 import { SCENARIOS, DT, type Scenario, type FrameInput } from "./scenarios.js";
-import { playerView, enemyView, bulletView, pickupView, propView, chestView, diffStreams, type TickSnapshot } from "./snapshot.js";
+import { playerView, enemyView, bulletView, effectView, pickupView, propView, chestView, diffStreams, type TickSnapshot } from "./snapshot.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -99,6 +99,7 @@ function snapshot(w: WorldState, tick: number): TickSnapshot {
     player: playerView(p, pl.mods as unknown as Record<string, unknown>),
     enemies: w.enemies.map((e) => enemyView(e as unknown as Record<string, unknown>)),
     bullets: w.bullets.map((b) => bulletView(b as unknown as Record<string, unknown>)),
+    effects: w.effects.map((x) => effectView(x as unknown as Record<string, unknown>)),
     pickups: w.pickups.map((x) => pickupView(x as unknown as Record<string, unknown>)),
     props: w.props.map((x) => propView(x as unknown as Record<string, unknown>)),
     chests: w.chests.map((x) => chestView(x as unknown as Record<string, unknown>)),

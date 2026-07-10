@@ -56,6 +56,7 @@ function classOf(t: ClientMsg["t"]): MsgClass {
     case "equip":
     case "reorder":
     case "drop":
+    case "swap":
     case "shopBuy":
     case "chooseBlessing":
     case "spec":
@@ -84,6 +85,7 @@ export class MessageRouter {
       case "equip": this.onEquip(conn, msg); return;
       case "reorder": this.onReorder(conn, msg); return;
       case "drop": this.onDrop(conn, msg); return;
+      case "swap": this.onSwap(conn, msg); return;
       case "shopBuy": this.onShopBuy(conn, msg); return;
       case "chooseBlessing": this.onChooseBlessing(conn, msg); return;
       case "spec": this.onSpectate(conn, msg); return;
@@ -360,6 +362,15 @@ export class MessageRouter {
     conn.lastCseq = msg.cseq;
     const room = this.ctx.sessions.room(conn.worldId);
     if (room && !room.tryDropWeapon(conn.playerId, msg.weapon)) this.ctx.metrics.counters.rejectedInputs++;
+  }
+
+  private onSwap(conn: Conn, msg: Extract<ClientMsg, { t: "swap" }>): void {
+    if (!conn.authed || !conn.playerId || !conn.worldId) return;
+    // Same cseq idempotency as equip/drop: a resent swap can never trade twice.
+    if (msg.cseq <= conn.lastCseq) return;
+    conn.lastCseq = msg.cseq;
+    const room = this.ctx.sessions.room(conn.worldId);
+    if (room && !room.trySwapWeapon(conn.playerId, msg.pickup, msg.drop)) this.ctx.metrics.counters.rejectedInputs++;
   }
 
   private onShopBuy(conn: Conn, msg: Extract<ClientMsg, { t: "shopBuy" }>): void {

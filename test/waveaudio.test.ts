@@ -916,6 +916,31 @@ section("missing-file behavior and loader hygiene");
   await flushLoads();
   check("failed stem is NEVER refetched (no decode spam)", fetchCountFor(/audio\/boss\/marrow_wall_v1/) === beforeCounts);
 
+  // ---- the effect-wave contract post-#45 de-synthesis: NO oscillator lane exists ----
+  // A weapon row with a missing stem AND a missing DERIVE sample resolves to SILENCE
+  // (never a synth beep); the same row with a SHIPPED DERIVE sample plays the fallback.
+  resetFetchPlan(); // nothing allowed: the stem 404s AND the DERIVE sample 404s
+  const { engine: strictEngine, ctx: strictCtx } = await makeEngine();
+  strictCtx.advance(1);
+  const bareReq: WavePlayRequest = {
+    event: "shootLastlight", bus: "sfx", priority: 70, gain: 0.85, rate: 1,
+    stem: "sfx/lastlight_fire_v1",
+    fallback: { sample: "cannon", rate: 1.1 },
+  };
+  const firstTry = strictEngine.playWave(bareReq);
+  await flushLoads(); // both lanes fail
+  const beforeVoices = strictEngine.waveVoiceCount();
+  const retry = strictEngine.playWave(bareReq);
+  check("a weapon row with nothing on disk is SILENCE, never a beep",
+    !firstTry && !retry && strictEngine.waveVoiceCount() === beforeVoices);
+  const isLoopStarted = strictEngine.startWaveLoop("halo.loop#self", {
+    event: "halo.loop", bus: "sfx", gain: 0.3, stem: "sfx/halo_loop", fadeSec: 0.06,
+  });
+  check("a contract loop never pad-synths (silent until the stem lands)",
+    !isLoopStarted && !strictEngine.hasWaveLoop("halo.loop#self"));
+  // (The authored-or-DERIVE play path — a missing stem falling to a SHIPPED sample — is
+  // proven by the marrow.wallImpact DERIVE-cannon assertions above.)
+
   resetFetchPlan();
   allowFetch(/audio\/boss\/choir_strike/);
   const strikeReq = (v: number): WavePlayRequest => ({

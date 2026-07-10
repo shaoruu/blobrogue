@@ -2,8 +2,8 @@
 //   D-pad      — move focus through the screen's focusable controls (DOM order)
 //   A (0)      — activate the focused control (exactly a click)
 //   B (1)      — Back/cancel: dispatches the same Escape the keyboard uses, so it inherits
-//                every guard (closet discard confirmation, named focus restore, exact
-//                leaderboard-row return) with zero parallel logic
+//                the same behavior (named focus restore, exact leaderboard-row return)
+//                with zero parallel logic
 //   LB/RB (4/5)— cycle the screen's tab group (closet categories, profile views)
 //
 // The poller only acts while the overlay is visible (never during a run) and only on

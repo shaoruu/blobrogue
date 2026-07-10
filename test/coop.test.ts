@@ -35,6 +35,7 @@ import {
   pedestalWeaponRolls, bossWeaponChoices,
 } from "../src/sim/balance.js";
 import { ITEMS } from "../src/sim/items.js";
+import { shopWeaponPrice } from "../src/sim/shop.js";
 import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
 import * as C from "../src/sim/constants.js";
 import {
@@ -558,7 +559,7 @@ function weaponEconomyTests(): void {
   {
     let countBreaks = 0, dupes = 0, cells = 0;
     for (const seed of gateSeeds) {
-      for (let floor = 2; floor <= 6; floor++) {
+      for (let floor = 1; floor <= 6; floor++) { // F1 stocks too (the early-variety fix)
         if (floor === 5) continue; // boss floor: the reward is the chest's choice set
         for (const size of [1, 2, 3, 4]) {
           const { w } = partyWorld(seed, floor, size);
@@ -598,9 +599,9 @@ function weaponEconomyTests(): void {
       const hearts = w.shop!.slots.filter((s) => s.kind === "heart");
       check(`P${size}: 2 weapon pedestals + 1 blessing pedestal + 1 heart station`,
         weapons.length === SHOP.weaponPedestals && blessings.length === 1 && hearts.length === 1);
-      check(`P${size}: weapon kinds distinct, pedestal prices ride the unchanged ladder`,
+      check(`P${size}: weapon kinds distinct, pedestal prices rarity-scaled off the unchanged ladder base`,
         new Set(weapons.map((s) => s.weapon)).size === weapons.length
-        && weapons.every((s, i) => s.price === SHOP.pedestalPrices[i])
+        && weapons.every((s, i) => s.price === shopWeaponPrice(SHOP.pedestalPrices[i], s.weapon!, s.isMystery))
         && blessings[0].price === SHOP.pedestalPrices[SHOP.weaponPedestals],
         weapons.map((s) => `${s.weapon}@${s.price}`).join(","));
     }

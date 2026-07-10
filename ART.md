@@ -117,6 +117,20 @@ pipeline (`tools/gen-sprites.mjs`) and drop the cutouts on these exact stems:
   armed flag (stoked glow), the echo/knell fuse (fade / blink-out), the fragment's
   tether source (the line render), and a bulwark elite's plate HP.
 
+**Effect-wave hooks wired, art pending (generation owner: main agent / FAL pipeline —
+this branch ships NO binary art).** Exact drop-in filenames, all pre-registered in
+`src/game/assets.ts`; until each file lands it 404s visibly in dev and the game falls
+back to the same safe non-shipping placeholders every unregistered weapon uses (generic
+`gun` pickup sprite, held-weapon fallback, primitive-drawn effects):
+- Weapon pairs (`weapon_<id>.png` pickup + `held_<id>.png` held, 64px/40px as above) for
+  **lastlight, breach, snapwire, frostline, halo, sentry, crook**.
+- Effect masks under `public/sprites/fx/` — pure white, alpha-carried shape, code-tinted:
+  `frost_zone.png` (painted chill disc), `wire_post.png` (snapwire anchor),
+  `halo_blade.png` (orbit blade, authored pointing +Y), `sentry_core.png` (turret body),
+  `chain_link.png` (tether link). Each renderer keeps a readable primitive fallback
+  (circles/lines/diamonds) until its mask lands — dev is never blind, production never
+  blocks on art.
+
 
 **Move-specific telegraphs (multi-move bosses).** A generic attack sheet cannot express
 MARROW's charge vs its volley, or the Warden's quake vs its sweep — so any authored

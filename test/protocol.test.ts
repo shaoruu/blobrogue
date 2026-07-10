@@ -8,7 +8,7 @@
 // Run: npm run test:protocol
 
 import {
-  jsonCodec, ProtocolError, buildSnapshot, toSelfWire, applySelfWire, eventScope,
+  jsonCodec, ProtocolError, buildSnapshot, toSelfWire, applySelfWire, eventScope, effectFromWire,
   PROTOCOL_VERSION, INTEREST_EXIT_FACTOR, worldIdForRoomCode, isValidWorldId,
   type ClientMsg, type RosterWire, type ServerMsg, type WireEvent,
 } from "../src/net/protocol.js";
@@ -49,7 +49,7 @@ function distinctivePlayer(): PlayerSim {
   p.hp = 7; p.maxHp = 11;
   p.invuln = 0.375; p.dashInvuln = 0.125;
   p.dashCd = 0.5; p.dashTime = 0.0625; p.dashDx = -0.6; p.dashDy = 0.8;
-  p.fireCd = 0.11; p.fangCd = 0.85;
+  p.fireCd = 0.11; p.chargeT = 0.42; p.fangCd = 0.85;
   p.facing = -1;
   p.weapon = "railgun";
   p.ownedWeapons = ["pistol", "railgun", "tesla"];
@@ -73,7 +73,8 @@ function clientRoundTripTests(): void {
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
     { t: "drop", weapon: "railgun", cseq: 7 },
-    { t: "shopBuy", slot: 2, cseq: 8 },
+    { t: "swap", pickup: 12, drop: "railgun", cseq: 8 },
+    { t: "shopBuy", slot: 2, cseq: 9 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
     { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
@@ -121,6 +122,13 @@ function unknownFieldTests(): void {
     ["drop with an unknown weapon id", { t: "drop", weapon: "bfg9000", cseq: 1 }],
     ["drop with a smuggled extra field", { t: "drop", weapon: "pistol", cseq: 1, x: 10 }],
     ["drop without cseq", { t: "drop", weapon: "pistol" }],
+    // The v9 swap is strict too: a tampered client can name a pickup + an owned drop, but
+    // never smuggle a grant/outcome, a junk weapon id, or a malformed pickup id.
+    ["swap with an unknown drop weapon id", { t: "swap", pickup: 1, drop: "bfg9000", cseq: 1 }],
+    ["swap with a negative pickup id", { t: "swap", pickup: -1, drop: "pistol", cseq: 1 }],
+    ["swap with a float pickup id", { t: "swap", pickup: 1.5, drop: "pistol", cseq: 1 }],
+    ["swap with a smuggled grant field", { t: "swap", pickup: 1, drop: "pistol", cseq: 1, grant: "railgun" }],
+    ["swap without cseq", { t: "swap", pickup: 1, drop: "pistol" }],
     // A tampered buy can name a slot, but never smuggle a price/outcome or dodge cseq.
     ["shopBuy with a smuggled price", { t: "shopBuy", slot: 0, cseq: 1, price: 0 }],
     ["shopBuy with a negative slot", { t: "shopBuy", slot: -1, cseq: 1 }],
@@ -146,15 +154,38 @@ function serverRoundTripTests(): void {
   w.pendingBlessings.set("pOther", 41.2);
   devSpawnEnemy(w, "boss", me.x + 200, me.y);
   w.bullets.push({ x: me.x + 10, y: me.y + 5, vx: 250, vy: -40, radius: 5, life: 1, friendly: true, owner: "pMe", damage: 2, color: "#fff", pierce: 0, hitList: null, isCrit: false, fx: "pistol" });
+  // One live weapon effect of every kind (the v8 effs list) + the effect events.
+  w.effects.push(
+    { id: 0, kind: "zone", owner: "pMe", fx: "frostline", x: 100, y: 110, life: 2.5, maxLife: 3.5, radius: 26, chillRate: 2.4 },
+    { id: 1, kind: "wire", owner: "pMe", fx: "snapwire", x: 50, y: 60, x2: 170, y2: 60, width: 14, arm: 0.4, life: 11, maxLife: 12.7, damage: 9 },
+    { id: 2, kind: "orbit", owner: "pMe", fx: "halo", x: 300, y: 300, life: 1, maxLife: 1, angle: 1.2, ring: 46, blades: 4, bladeRadius: 12, speed: 3.6, flare: 0.2, damage: 1.5, rehit: new Map() },
+    { id: 3, kind: "sentry", owner: "pMe", fx: "sentry", x: 400, y: 380, life: 9, maxLife: 12, radius: 13, hp: 7, maxHp: 12, fireCd: 0.2, range: 240, boltSpeed: 520, boltRadius: 4, boltDamage: 2.4, boltPierce: 0, contactCd: 0, targetEid: -1 },
+    { id: 4, kind: "tether", owner: "pMe", fx: "crook", x: 200, y: 210, life: 1.1, maxLife: 2.35, eid: 5, phase: "hold", isPlayerPulled: false, pullSpeed: 560, holdDist: 64, holdTime: 1.2, pullTime: 0.4, damage: 5, reach: 90 },
+  );
   const events: WireEvent[] = [
     { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3 } },
     { id: 8, e: { t: "descend", toFloor: 3 } },
     { id: 9, e: { t: "gameOver", pid: "pMe" } },
     { id: 10, e: { t: "weaponDrop", weapon: "railgun", x: 33, y: 44 } },
+    { id: 11, e: { t: "wireSnap", x: 50, y: 60, tx: 170, ty: 60 } },
+    { id: 12, e: { t: "tetherLatch", eid: 5, x: 200, y: 210, tx: 260, ty: 210, inv: false } },
+    { id: 13, e: { t: "sentryShot", x: 400, y: 380, aim: 0.5 } },
+    { id: 14, e: { t: "haloFlare", x: 300, y: 300, r: 96 } },
   ];
   const snap = buildSnapshot(w, "pMe", 12, events, 9, false, { worldId: "w-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("full snapshot round-trips deep-equal", deepEqual(decoded, snap));
+  check("the v8 effs list carries every effect kind", snap.t === "snap"
+    && ["zone", "wire", "orbit", "sentry", "tether"].every((k) => snap.effs.some((e) => e.k === k)));
+  if (decoded.t === "snap") {
+    const kinds = decoded.effs.map((e) => effectFromWire(e).kind);
+    check("every decoded effect rebuilds a render-ready entity", deepEqual(kinds, ["zone", "wire", "orbit", "sentry", "tether"]));
+    const wire = decoded.effs.find((e) => e.k === "wire")!;
+    const rebuilt = effectFromWire(wire);
+    check("wire geometry survives the trip", rebuilt.kind === "wire" && rebuilt.x2 === 170 && rebuilt.arm === 0.4);
+    const sentry = decoded.effs.find((e) => e.k === "sentry")!;
+    check("sentry durability survives the trip (the client draws real pips)", sentry.hp === 7 && sentry.mhp === 12);
+  }
 
   const others: ServerMsg[] = [
     { t: "ping", id: 4, tick: 100, time: 1234567 },
@@ -221,7 +252,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + Patch's shop AND the bestiary wave (v8) + the premium economy (v9)", PROTOCOL_VERSION === 9, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + shop AND bestiary (v8) + the remote-dash sync (v9) + the weapon effect wave (v10) + the hotbar cap swap (v11) + the rarity/mystery wave (v12) + the premium economy (v13)", PROTOCOL_VERSION === 13, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -416,10 +447,60 @@ function interestHysteresisTests(): void {
   check("an unknown entity in the hysteresis band does NOT enter", snapBack.t === "snap" && !snapBack.enemies.some((x) => x.id === fresh.id));
 }
 
+// v9: the remote-dash sync — PlayerWire carries the authoritative dash/invuln block so
+// OBSERVING clients render a teammate's dash. Locks: the fields ride buildSnapshot from
+// PlayerSim truth, round-trip losslessly, validate strictly, and read identically for every
+// observer (two clients must agree on when/where a dash happened).
+function remoteDashWireTests(): void {
+  section("v9: PlayerWire carries the dash/invuln readout — strict, lossless, observer-identical");
+  const w = createWorld(0xDA51, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(w, "pMe");
+  spawnPlayerInWorld(w, "pMate");
+  const dasher = spawnPlayerInWorld(w, "pDash");
+  dasher.dashTime = 0.12; dasher.dashDx = -0.6; dasher.dashDy = 0.8;
+  dasher.dashInvuln = 0.14; dasher.invuln = 0.25;
+  const snap = buildSnapshot(w, "pMe", 0, [], 0, false, { worldId: "w-test" });
+  if (snap.t !== "snap") { check("snapshot built", false); return; }
+  const seen = snap.players.find((p) => p.id === "pDash");
+  check("the dash block rides the observer's wire straight from PlayerSim truth",
+    seen !== undefined && seen.dti === 0.12 && seen.ddx === -0.6 && seen.ddy === 0.8
+    && seen.dnv === 0.14 && seen.inv === 0.25,
+    JSON.stringify(seen && { dti: seen.dti, ddx: seen.ddx, ddy: seen.ddy, dnv: seen.dnv, inv: seen.inv }));
+  check("dash fields round-trip losslessly", deepEqual(jsonCodec.decodeServer(jsonCodec.encodeServer(snap)), snap));
+
+  const snapB = buildSnapshot(w, "pMate", 0, [], 0, false, { worldId: "w-test" });
+  const seenB = snapB.t === "snap" ? snapB.players.find((p) => p.id === "pDash") : undefined;
+  check("both observers decode an IDENTICAL dash block (agreement on when/where)",
+    seenB !== undefined && deepEqual(seen, seenB));
+
+  const corruptDash = (over: Record<string, unknown>, drop?: string): string => {
+    const o = JSON.parse(jsonCodec.encodeServer(snap)) as { players: Array<Record<string, unknown>> };
+    const row = o.players.find((p) => p.id === "pDash")!;
+    Object.assign(row, over);
+    if (drop) delete row[drop];
+    return JSON.stringify(o);
+  };
+  const badFrames: Array<[string, string]> = [
+    ["junk dti", corruptDash({ dti: "fast" })],
+    ["out-of-range ddx", corruptDash({ ddx: 99 })],
+    ["negative dnv", corruptDash({ dnv: -1 })],
+    ["a v8 frame (dash block missing)", corruptDash({}, "dti")],
+  ];
+  for (const [label, frame] of badFrames) {
+    let rejected = false;
+    try { jsonCodec.decodeServer(frame); } catch (err) { rejected = err instanceof ProtocolError; }
+    check(`${label} is a protocol error`, rejected);
+  }
+}
+
 function eventScopeTests(): void {
   section("event scope: pid events target their player, positional FX carry coords, objectives are global");
   const cases: Array<[SimEvent, string]> = [
     [{ t: "playerHurt", pid: "p7", x: 1, y: 2 }, "pid"],
+    // Deliberately pid: remote dash FX ride PlayerWire dash STATE (v9), so broadcasting
+    // these would double-play the dasher's juice.
+    [{ t: "dashStart", pid: "p7", x: 1, y: 2 }, "pid"],
+    [{ t: "dashTrail", pid: "p7", x: 1, y: 2 }, "pid"],
     [{ t: "explosion", x: 10, y: 20, r: 90 }, "pos"],
     [{ t: "descend", toFloor: 2 }, "global"],
     [{ t: "bossPhase", eid: 3, x: 5, y: 6 }, "global"],
@@ -438,6 +519,7 @@ function main(): void {
   serverRoundTripTests();
   worldBindingWireTests();
   identityWireTests();
+  remoteDashWireTests();
   fuzzTests();
   projectionTests();
   interestHysteresisTests();

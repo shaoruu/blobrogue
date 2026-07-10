@@ -11,6 +11,7 @@
 // `dispatch`, so they ride the exact same context gate as the keyboard.
 
 import { settings } from "./settings.js";
+import { MAX_OWNED_WEAPONS } from "../sim/constants.js";
 
 // Which surface currently owns input. Exactly one is active at a time:
 //  - menu:      no run on screen (title/lobby/game-over own the DOM)
@@ -34,6 +35,8 @@ export type GameAction =
   | { kind: "dropWeapon" }
   | { kind: "activateSlot"; index: number }
   | { kind: "reorderSlots"; from: number; to: number }
+  // The full-hotbar swap prompt: trade the slot at `index` for the blocked pickup underfoot.
+  | { kind: "swapSlot"; index: number }
   // The semantic interact PRESS (E edge; a controller's A button later): the game resolves
   // it against the world — today that is "open the focused shop station's panel". Distinct
   // from the revive channel, which is the HELD `interact` bit on the gameplay sample.
@@ -57,6 +60,7 @@ const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   activateSlot: ["gameplay"],
   inspectSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
+  swapSlot: ["gameplay"],
   interact: ["gameplay"],
   cycleSpectate: ["spectate"],
   spectateFollow: ["spectate"],
@@ -141,7 +145,9 @@ export class InputController {
       return isPlaying; // outside a run, Tab keeps doing focus navigation
     }
     if (!isRepeat) {
-      if (k >= "1" && k <= "9") this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
+      // The select row is exactly the hotbar cap (1..MAX_OWNED_WEAPONS, cap <= 9 by
+      // contract): every slot that can exist has a key, and no key names a dead slot.
+      if (k >= "1" && k <= String(MAX_OWNED_WEAPONS)) this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
       if (k === "q") this.emit({ kind: "dropWeapon" }); // Q drops the equipped weapon
       // E is ONE physical key, three semantic meanings, disambiguated purely by context +
       // world state: the interact PRESS below (gameplay — the game opens the focused shop

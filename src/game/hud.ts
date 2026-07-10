@@ -7,6 +7,7 @@
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
+import { MAX_OWNED_WEAPONS } from "../sim/constants.js";
 import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
 import type { WeaponDisplayStats } from "../sim/weaponStats.js";
@@ -17,11 +18,16 @@ export interface HudState {
   floor: number;
   kills: number;
   coins: number;
-  // Hotbar slots in inventory order (= the 1-9 selection order); `isCurrent` = equipped.
-  // `card` is the LIVE semantic weapon card from the sim's weaponStats helper (role verb,
-  // banded core stats, mechanics — same math real shots resolve with), driving the
-  // hover/focus tooltip on each slot.
+  // Hotbar slots in inventory order (= the 1..MAX_OWNED_WEAPONS selection order);
+  // `isCurrent` = equipped. `card` is the LIVE semantic weapon card from the sim's
+  // weaponStats helper (role verb, banded core stats, mechanics — same math real shots
+  // resolve with), driving the hover/focus tooltip on each slot. The bar always renders
+  // MAX_OWNED_WEAPONS boxes (empty capacity as inert placeholders), so the cap is visible
+  // from slot one and a pickup never shifts the layout.
   weapons: { id: WeaponId; name: string; isCurrent: boolean; card: WeaponDisplayStats }[];
+  // The full-hotbar swap prompt: the NEW weapon underfoot that a full hotbar refused to
+  // auto-collect — the player picks a slot to trade for it, or leaves it. null hides it.
+  swap: { id: WeaponId; name: string } | null;
   // The authoritative objective feed for the top-center lane: `N ENEMIES LEFT` while the
   // floor fights, `FLOOR CLEAR · GO DOWN` once cleared. A boss hides the line entirely
   // (the boss bar IS the objective), and the dev sandbox has no objective.
@@ -32,6 +38,9 @@ export interface HudState {
   isParty: boolean;
   isBossActive: boolean;
   bossHpFrac: number; // 0..1 boss health; only shown while isBossActive
+  // The tracked boss's authored display name ("The Slime King", "Marrow", …) for the
+  // bar's title; empty falls back to the generic BOSS label.
+  bossName: string;
   coopLabel: string | null;
   // Party coordination readout in the objective lane ("WAITING FOR 1/2 PLAYERS…" /
   // "WAITING AT EXIT…"); null hides it.
@@ -60,12 +69,18 @@ export interface HotbarActions {
   // Touch long-press on a slot: open its full stat drawer WITHOUT equipping (hover
   // tooltips are unreachable on touch; this is the inspect path for unequipped slots).
   onSlotInspect(index: number): void;
+  // Swap prompt: trade the inventory slot at `index` for the blocked pickup underfoot.
+  onSlotSwap(index: number): void;
+  // Swap prompt decline (LEAVE IT / Esc): dismiss it until the player walks away.
+  onSwapDismiss(): void;
 }
 
 // A weapon's stat sheet for the tap-to-inspect drawer. `stats` is the SAME live
 // WeaponDisplayStats the hotbar tooltip renders from — one source, so blessing/modifier
-// values can never drift between the two surfaces. onDrop backs the drawer's DROP button
-// (the touch path for Q); null when this weapon can't drop (unequipped or final weapon).
+// values can never drift between the two surfaces (the effect wave's weapons flow through
+// the same model: their room-verb roles, coverage, and special mechanics are authored in
+// weaponStats.ts, never a second copy). onDrop backs the drawer's DROP button (the touch
+// path for Q); null when this weapon can't drop (unequipped or final weapon).
 export interface WeaponDrawerData {
   id: WeaponId;
   name: string;
@@ -244,6 +259,11 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
   const tipName = el("span", "", w.name.toUpperCase());
   tipName.className = "tn";
   head.append(iconBox, tipName);
+  // The rarity badge rides the header, straight off the live card (weaponDisplayStats is
+  // the one honest stats source), so the tooltip can never disagree with the sim's tier.
+  const tipRarity = el("span", "", w.card.rarity.toUpperCase());
+  tipRarity.className = `tw ${w.card.rarity}`;
+  head.appendChild(tipRarity);
   const tipRole = el("span", "", w.card.role);
   tipRole.className = "tj";
   tip.append(head, tipRole);
@@ -277,25 +297,26 @@ export function renderTipInto(tip: HTMLElement, w: HudState["weapons"][number], 
   }
 }
 
-// One hotbar slot: select key (1-9) in the corner, weapon icon, name underneath. Slots
-// past 9 get no key badge — scroll still cycles to them. Fixed width so switching never
-// resizes anything. Slots are pointer/keyboard interactive (click/Enter/Space equips,
-// drag or Shift+arrows reorder — see Hud.attachSlotInteractions), so they carry button
-// semantics for a11y. The weapon-card tooltip is NOT a slot child: it is the Hud's ONE
-// floating tooltip, shown/anchored per slot on hover/focus (see Hud.showTipFor) and
-// linked via aria-describedby while it describes this slot. No native `title` — it would
-// double up over the custom tip. Exported for the DOM suite.
+// One hotbar slot: select key in the corner, weapon icon, name underneath. The inventory
+// is capped at MAX_OWNED_WEAPONS (<= 9 by contract), so EVERY slot that can exist carries
+// its number key — no unreachable slots. Fixed width so switching never resizes anything.
+// Slots are pointer/keyboard interactive (click/Enter/Space equips, drag or Shift+arrows
+// reorder — see Hud.attachSlotInteractions), so they carry button semantics for a11y. The
+// weapon-card tooltip is NOT a slot child: it is the Hud's ONE floating tooltip,
+// shown/anchored per slot on hover/focus (see Hud.showTipFor) and linked via
+// aria-describedby while it describes this slot. No native `title` — it would double up
+// over the custom tip. Exported for the DOM suite.
 export function buildSlot(w: HudState["weapons"][number], index: number): HTMLElement {
   const slot = el("span", "");
-  slot.className = "hb-slot" + (w.isCurrent ? " on" : "");
+  // The rarity class tints the slot frame (rare blue / legendary gold — see index.html);
+  // commons keep the classic frame so the tint stays a signal, not noise.
+  slot.className = "hb-slot" + (w.isCurrent ? " on" : "") + (w.card.rarity !== "common" ? ` r-${w.card.rarity}` : "");
   slot.tabIndex = 0;
   slot.setAttribute("role", "button");
-  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.isCurrent ? ", equipped" : ""}`);
-  if (index < 9) {
-    const key = el("span", "", String(index + 1));
-    key.className = "hb-key";
-    slot.appendChild(key);
-  }
+  slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.card.rarity === "common" ? "" : `, ${w.card.rarity}`}${w.isCurrent ? ", equipped" : ""}`);
+  const key = el("span", "", String(index + 1));
+  key.className = "hb-key";
+  slot.appendChild(key);
   const icon = el("span", "");
   icon.className = "hb-icon";
   const iconEl = weaponIconEl(w.id, w.name);
@@ -304,6 +325,21 @@ export function buildSlot(w: HudState["weapons"][number], index: number): HTMLEl
   const name = el("span", "", w.name.toUpperCase());
   name.className = "hb-name";
   slot.append(icon, name);
+  return slot;
+}
+
+// An EMPTY capacity slot: the bar always shows all MAX_OWNED_WEAPONS boxes, so the cap is
+// a visible fact of the UI (not a surprise at pickup six) and acquiring a weapon fills a
+// box instead of shifting the layout. Inert and invisible to a11y/interaction — it is not
+// a `.hb-slot`, so drag/keyboard/tooltip machinery never sees it. Exported for the DOM
+// suite.
+export function buildEmptySlot(index: number): HTMLElement {
+  const slot = el("span", "");
+  slot.className = "hb-empty";
+  slot.setAttribute("aria-hidden", "true");
+  const key = el("span", "", String(index + 1));
+  key.className = "hb-key";
+  slot.appendChild(key);
   return slot;
 }
 
@@ -388,7 +424,7 @@ const HUD_MARKUP = `
   </div><div class="coopstrip" data-coop></div></div>
   <div class="objlane" data-objlane>
     <div class="bossbar" data-bossbar>
-      <div class="bossbar-label">BOSS</div>
+      <div class="bossbar-label" data-bossname>BOSS</div>
       <div class="bossbar-track"><i data-bossfill></i></div>
     </div>
     <div class="objective" data-objective></div>
@@ -408,6 +444,7 @@ const HUD_MARKUP = `
     <div class="ctx-prompt" data-prompt role="status"><span class="key" data-prompt-key>E</span><span class="k" data-prompt-label></span></div>
   </div>
   <div class="hotbar">
+    <div class="hb-swap" data-hb-swap></div>
     <div class="hb-buffs" data-hb-buffs></div>
     <button class="hb-build" data-hb-build type="button" aria-haspopup="dialog"></button>
     <div class="hb-slots" data-hb-slots></div>
@@ -466,6 +503,9 @@ export class Hud {
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
   private hotbarHintEl: HTMLElement;
+  private swapEl: HTMLElement;
+  private prevSwapKey = "";
+  private prevHintCopy = "";
   private buildPillEl: HTMLButtonElement;
   private scrimEl: HTMLElement;
   private drawerEl: HTMLElement;
@@ -505,6 +545,8 @@ export class Hud {
   private comboBurstEl: HTMLElement;
   private bossbarEl!: HTMLElement;
   private bossFillEl!: HTMLElement;
+  private bossNameEl!: HTMLElement;
+  private prevBossName = "";
   private prevMult = 1;
   private prevCombo = -1;
   private comboPop = 0; // 0..1 scale-punch applied to the mult text when the chain ticks up
@@ -545,6 +587,7 @@ export class Hud {
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
     this.hotbarHintEl = hud.querySelector("[data-hb-hint]")!;
+    this.swapEl = hud.querySelector("[data-hb-swap]")!;
     this.buildPillEl = hud.querySelector("[data-hb-build]")!;
     // The drawers live on the ROOT, not inside #hud: #hud is a z-index:5 stacking context
     // that would pin them under the root-level hint/banner layers (z 6). Root placement
@@ -580,6 +623,7 @@ export class Hud {
     this.comboBurstEl = hud.querySelector("[data-combo-burst]")!;
     this.bossbarEl = hud.querySelector("[data-bossbar]")!;
     this.bossFillEl = hud.querySelector("[data-bossfill]")!;
+    this.bossNameEl = hud.querySelector("[data-bossname]")!;
     this.objLaneEl = hud.querySelector("[data-objlane]")!;
     this.objectiveEl = hud.querySelector("[data-objective]")!;
     this.waitLine = hud.querySelector("[data-waitline]")!;
@@ -1053,8 +1097,8 @@ export class Hud {
   // action for the equipped weapon.
   openWeaponDrawer(d: WeaponDrawerData) {
     this.openDrawer(d.name.toUpperCase(), (body) => {
-      const role = el("p", "", d.stats.role);
-      role.className = "hd-role";
+      const role = el("p", "", `${d.stats.rarity.toUpperCase()} \u00b7 ${d.stats.role}`);
+      role.className = `hd-role ${d.stats.rarity}`;
       body.appendChild(role);
       const stats = el("div", "");
       stats.className = "hd-stats";
@@ -1123,6 +1167,10 @@ export class Hud {
           this.attachSlotInteractions(slot, i);
           this.slotsEl.appendChild(slot);
         });
+        // The remaining capacity renders as inert empty boxes: the bar is ALWAYS
+        // MAX_OWNED_WEAPONS slots wide, so the cap reads at a glance and a pickup fills
+        // a box instead of shifting the layout.
+        for (let i = s.weapons.length; i < MAX_OWNED_WEAPONS; i++) this.slotsEl.appendChild(buildEmptySlot(i));
         if (this.pendingFocusIndex !== null) {
           this.slotEls()[this.pendingFocusIndex]?.focus();
           this.pendingFocusIndex = null;
@@ -1153,8 +1201,18 @@ export class Hud {
         this.prevEquippedId = equippedId;
       }
     }
-    // The interaction hint matters once there is something to switch/reorder/drop.
+    // The interaction hint matters once there is something to switch/reorder/drop. At the
+    // cap it leads with the state itself — a full bar is a fact the player must act on
+    // (swap or drop), never a silent no-op.
+    const hintCopy = s.weapons.length >= MAX_OWNED_WEAPONS
+      ? "HOTBAR FULL \u00b7 Q DROP \u00b7 SWAP AT A NEW WEAPON"
+      : "CLICK EQUIP \u00b7 DRAG REORDER \u00b7 Q DROP";
+    if (hintCopy !== this.prevHintCopy) {
+      this.prevHintCopy = hintCopy;
+      this.hotbarHintEl.textContent = hintCopy;
+    }
     this.hotbarHintEl.classList.toggle("show", s.weapons.length > 1);
+    this.updateSwapPrompt(s);
 
     const fill = s.dashFill < 0 ? 0 : s.dashFill > 1 ? 1 : s.dashFill;
     this.dashFillEl.style.setProperty("--dash-fill", String(fill));
@@ -1166,6 +1224,13 @@ export class Hud {
     this.objLaneEl.classList.toggle("boss", s.isBossActive);
     this.bossbarEl.classList.toggle("show", s.isBossActive);
     if (s.isBossActive) {
+      // The bar titles the fight with the boss's authored name (CSS uppercases it);
+      // an unauthored kind keeps the generic label rather than an empty line.
+      const bossName = s.bossName !== "" ? s.bossName : "BOSS";
+      if (bossName !== this.prevBossName) {
+        this.prevBossName = bossName;
+        this.bossNameEl.textContent = bossName;
+      }
       const bf = s.bossHpFrac < 0 ? 0 : s.bossHpFrac > 1 ? 1 : s.bossHpFrac;
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
@@ -1219,6 +1284,57 @@ export class Hud {
       this.buildPillEl.setAttribute("aria-label", `${s.items.length} blessings. Open the full build.`);
       this.buildPillEl.classList.toggle("has", s.items.length > 0);
     }
+  }
+
+  // The full-hotbar swap prompt, anchored above the bar (absolute — it never shifts the
+  // layout): the incoming weapon, one mini button per current slot (click = trade that
+  // slot for it), and LEAVE IT. Rebuilt only when the incoming weapon or the slot set
+  // changes; declining or walking away hides it. Buttons stop their pointer events so a
+  // prompt click can never leak into gameplay aim/fire.
+  private updateSwapPrompt(s: HudState) {
+    const key = s.swap === null ? "" : s.swap.id + "|" + s.weapons.map((w) => w.id).join(",");
+    if (key === this.prevSwapKey) return;
+    this.prevSwapKey = key;
+    this.swapEl.classList.toggle("show", s.swap !== null);
+    this.swapEl.replaceChildren();
+    if (s.swap === null) return;
+    const head = el("span", "");
+    head.className = "hs-head";
+    const tag = el("span", "", "HOTBAR FULL");
+    tag.className = "hs-tag";
+    const icon = el("span", "");
+    icon.className = "hs-icon";
+    const iconEl = weaponIconEl(s.swap.id, s.swap.name);
+    if (iconEl instanceof HTMLImageElement) iconEl.draggable = false;
+    icon.appendChild(iconEl);
+    const name = el("span", "", `SWAP FOR ${s.swap.name.toUpperCase()}?`);
+    name.className = "hs-name";
+    head.append(tag, icon, name);
+    const row = el("span", "");
+    row.className = "hs-row";
+    s.weapons.forEach((w, i) => {
+      const b = el("button", "");
+      b.type = "button";
+      b.className = "hs-slot";
+      b.setAttribute("aria-label", `Swap out ${w.name}, slot ${i + 1}`);
+      const k = el("span", "", String(i + 1));
+      k.className = "hs-key";
+      const ic = weaponIconEl(w.id, w.name);
+      if (ic instanceof HTMLImageElement) ic.draggable = false;
+      b.append(k, ic);
+      b.addEventListener("pointerdown", (e) => e.stopPropagation());
+      b.addEventListener("click", (e) => { e.stopPropagation(); this.hotbarActions?.onSlotSwap(i); });
+      row.appendChild(b);
+    });
+    const leave = el("button", "", "LEAVE IT");
+    leave.type = "button";
+    leave.className = "hs-leave";
+    leave.addEventListener("pointerdown", (e) => e.stopPropagation());
+    leave.addEventListener("click", (e) => { e.stopPropagation(); this.hotbarActions?.onSwapDismiss(); });
+    row.appendChild(leave);
+    const hint = el("span", "", "CLICK THE SLOT IT REPLACES \u00b7 ESC LEAVES IT");
+    hint.className = "hs-hint";
+    this.swapEl.append(head, row, hint);
   }
 
   private updateCombo(s: HudState) {
@@ -1372,6 +1488,9 @@ export class Hud {
     this.lastItems = [];
     this.slotsEl.replaceChildren();
     this.prevSlotsKey = "";
+    this.swapEl.classList.remove("show");
+    this.swapEl.replaceChildren();
+    this.prevSwapKey = "";
     this.hotbarHintEl.classList.remove("show");
     this.buffsEl.replaceChildren();
     this.buffsEl.classList.remove("show");

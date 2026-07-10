@@ -130,13 +130,14 @@ export class Session {
   // One swatch pick sets BOTH color layers at launch: the PARTY color (colorIndex — name
   // label / minimap / roster identity) and the cosmetic body item. The model keeps them
   // separate so party-assigned colors can diverge from the worn body palette later.
-  setColorIndex(colorIndex: number) {
+  // Applies locally at once; the returned promise resolves false when the background
+  // persist failed (network), so optimistic UIs can revert — it never rejects.
+  setColorIndex(colorIndex: number): Promise<boolean> {
     this.colorIndex = colorIndex;
     try { localStorage.setItem(COLOR_KEY, String(colorIndex)); } catch { /* ignore */ }
     const bodyItem = bodyItemForPaletteIndex(colorIndex);
     this.recordCosmeticPick("body", bodyItem?.id ?? null);
-    // Persist the pick onto the profile in the background; the local value already applies.
-    this.flushInBackground();
+    return this.flushInBackground();
   }
 
   private recordCosmeticPick(slot: CosmeticSlot, id: string | null) {
@@ -145,10 +146,27 @@ export class Session {
   }
 
   // Equip a cosmetic (or clear the slot with null). Applies locally immediately; persisted
-  // onto the profile in the background exactly like the color pick.
-  setCosmetic(slot: CosmeticSlot, id: string | null) {
+  // onto the profile in the background exactly like the color pick, with the same
+  // never-rejecting success signal.
+  setCosmetic(slot: CosmeticSlot, id: string | null): Promise<boolean> {
     this.recordCosmeticPick(slot, id);
-    this.flushInBackground();
+    return this.flushInBackground();
+  }
+
+  // Local-only rollback of a failed optimistic equip. No write is fired: the server never
+  // stored the failed pick, so local state is the only side that needs fixing.
+  revertCosmetic(slot: CosmeticSlot, id: string | null): void {
+    this.recordCosmeticPick(slot, id);
+  }
+
+  // The body-color equivalent: restores both color layers (party color + body item).
+  revertColor(colorIndex: number | null, body: string | null): void {
+    this.colorIndex = colorIndex;
+    try {
+      if (colorIndex === null) localStorage.removeItem(COLOR_KEY);
+      else localStorage.setItem(COLOR_KEY, String(colorIndex));
+    } catch { /* ignore */ }
+    this.recordCosmeticPick("body", body);
   }
 
   // The latest in-flight background identity write. Background picks never block the UI,
@@ -157,8 +175,14 @@ export class Session {
   // Sev — teammates rendering a stale/default tint).
   private pendingFlush: Promise<void> = Promise.resolve();
 
-  private flushInBackground(): void {
-    if (this.client) this.pendingFlush = this.login().then(() => undefined, () => undefined);
+  // Fire the background write and surface its outcome (true = stored; false = network
+  // failure, so an optimistic UI can revert). The pending handle is kept for the JOIN
+  // paths' flushIdentity() barrier as well.
+  private flushInBackground(): Promise<boolean> {
+    if (!this.client) return Promise.resolve(true);
+    const flush = this.login().then(() => true, () => false);
+    this.pendingFlush = flush.then(() => undefined);
+    return flush;
   }
 
   // Settle every backgrounded identity write, then land one final flush of the CURRENT

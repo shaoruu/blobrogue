@@ -264,8 +264,12 @@ The **authoritative WebSocket server** (`server/`) owns ALL gameplay state onlin
 enemies, bullets, loot, inventory, blessings, and floor transitions — one simulation,
 identical for every member of a room. The player-facing front door is **PLAY ONLINE** on the
 menu (`?online=1` deep-links straight to it): quick-play into the public pool, create a
-private room with a shareable 4-letter code, or join a friend's code. There is deliberately
-no other multiplayer entry (see §4). Neither Convex nor the game server being unreachable
+private room with a shareable 4-letter code, or join a friend's code. A room is also
+shareable as an **invite link** — `/r/<CODE>` (canonical, what the lobby's COPY INVITE
+writes) or `?room=CODE` (query fallback) — which routes straight into that room's lobby
+through the exact same validated `rooms.join` a typed code takes (capacity/kind/ended
+checks intact, guests welcome, no sign-in gate; see `src/net/inviteLink.ts`). There is
+deliberately no other multiplayer entry (see §4). Neither Convex nor the game server being unreachable
 can ever affect solo — every failure lands back on a menu screen with a status line.
 
 ### Rooms → worlds (how friends share ONE world — the verified trust chain)

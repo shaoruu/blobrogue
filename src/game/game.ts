@@ -1,26 +1,26 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect } from "../sim/types.js";
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
-import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf } from "../sim/enemies.js";
-import { WEAPONS } from "../sim/weapons.js";
+import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
+import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, amberForRun, isPremiumShopFloor } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, amberForRun } from "../sim/balance.js";
 import type { EnemyTier, EliteAffix } from "../sim/balance.js";
-import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
-import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
+import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
+import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
 import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
 import { ShopPanel } from "../ui/shopPanel.js";
 import { LocalTransport } from "../client/transport.js";
 import type { Transport } from "../client/transport.js";
 import { WSTransport } from "../client/wsTransport.js";
-import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION } from "../net/protocol.js";
+import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { drawLoadoutOverlays } from "./cosmeticArt.js";
 import { bodyPaletteIndex } from "./cosmetics.js";
@@ -36,7 +36,7 @@ import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import {
   comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC,
-  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR,
+  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR, HALF_PI, MAX_OWNED_WEAPONS,
 } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
@@ -56,8 +56,10 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
-import { WAVE_HAZARDS } from "./waveSpec.js";
+import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
+import { LightingRenderer } from "./lighting.js";
+import type { StaticLightSpec } from "./lighting.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
 import type { GameAction, InputContext } from "./input.js";
@@ -138,6 +140,8 @@ export interface DevSnapshot {
   weapon: WeaponId;
   isGodMode: boolean;
   isFlowDebug: boolean;
+  isLighting: boolean;
+  lightingMs: number;
   enemies: number;
   bullets: number;
   particles: number;
@@ -146,13 +150,24 @@ export interface DevSnapshot {
 
 interface RemoteTracer { x: number; y: number; angle: number; life: number; color: string; len?: number; isArc?: boolean; }
 interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facing: number; t: number; dur: number; }
-interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; }
+// Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
+// detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
+interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing: boolean; dashImgCd: number; dashDustCd: number; }
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
-interface Afterimage { x: number; y: number; facing: number; t: number; }
+// color carries a REMOTE dasher's party tint; null means the local player's own tint.
+interface Afterimage { x: number; y: number; facing: number; t: number; color: string | null; }
+
+// The i-frame blink: sim invulnerability (post-hit or the dash's own i-frame window)
+// renders as a 10Hz alpha flicker keyed to the window's remaining seconds. One predicate
+// for the local player AND remotes, mirroring the sim's isInvulnerable (either window).
+export function isInvulnBlinkFrame(invulnSec: number, dashInvulnSec: number): boolean {
+  const s = Math.max(invulnSec, dashInvulnSec);
+  return s > 0 && Math.floor(s * 20) % 2 === 0;
+}
 
 const MAX_DECALS = 48;
 const AFTERIMAGE_DUR = 0.28; // seconds a dash afterimage takes to fade out
@@ -182,12 +197,39 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   sword: "meleeSwing",
   longsword: "meleeSwing",
   spear: "meleeSwing",
+  // Effect wave. lastlight/breach/frostline fire through the wave manifest first (see
+  // WAVE_WEAPON_FIRE); these rows are the legacy fallback + the shared-sample stopgap
+  // until their generated stems land. The non-shooting verbs (snapwire/halo/sentry/
+  // crook) never raise a `shot` event — their dedicated effect events carry the sound —
+  // but the Record stays exhaustive by contract.
+  lastlight: "cannon",
+  breach: "cannon",
+  snapwire: "ricochet",
+  frostline: "shootRapid",
+  halo: "meleeSwing",
+  sentry: "homing",
+  crook: "meleeSwing",
+  // The legendaries borrow the closest authored sample, re-pitched below (final authored
+  // samples arrive with their art via the audio pipeline).
+  reaper: "cannon",
+  swarm: "homing",
+  midas: "shootPistol",
+  phase: "tesla",
+  vortex: "cannon",
 };
 // Per-shot pitch/gain trims where a shared sample needs to read as a different gun
 // (the railgun borrows the cannon boom, pitched up into a sharp crack).
 const SHOOT_SFX_OPTS: Partial<Record<WeaponId, SfxOptions>> = {
   railgun: { rate: 1.35, gain: 0.85 },
   sawnoff: { rate: 0.9 },
+  lastlight: { rate: 1.2, gain: 0.9 },
+  breach: { rate: 0.85 },
+  frostline: { rate: 1.4, gain: 0.5 },
+  reaper: { rate: 1.2, gain: 0.8 },
+  swarm: { rate: 0.8 },
+  midas: { rate: 1.3, gain: 0.9 },
+  phase: { rate: 0.7, gain: 0.8 },
+  vortex: { rate: 0.6 },
 };
 // Weapons whose shots leave a curl of barrel smoke (the beefy, black-powder end).
 const SMOKY_WEAPONS: ReadonlySet<WeaponId> = new Set(["shotgun", "cannon", "sawnoff", "railgun"]);
@@ -241,6 +283,9 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04, mortar: 0.45,
   beam: 0.02,
   sword: 0.08, longsword: 0.16, spear: 0.07,
+  lastlight: 0.4, breach: 0.5, snapwire: 0.05, frostline: 0.03,
+  halo: 0.14, sentry: 0.06, crook: 0.18,
+  reaper: 0.22, swarm: 0.32, midas: 0.1, phase: 0.28, vortex: 0.4,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -250,6 +295,9 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3, mortar: 1.4,
   beam: 0.15,
   sword: 0.7, longsword: 1.1, spear: 0.6,
+  lastlight: 1.4, breach: 1.5, snapwire: 0.4, frostline: 0.25,
+  halo: 0.8, sentry: 0.5, crook: 1.0,
+  reaper: 1.1, swarm: 1.3, midas: 0.8, phase: 1.2, vortex: 1.4,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
@@ -257,6 +305,9 @@ const FIRE_KICK: Record<WeaponId, number> = {
   sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5, mortar: 7,
   beam: 0.3,
   sword: 1.5, longsword: 2.5, spear: 1,
+  lastlight: 8, breach: 9, snapwire: 1, frostline: 0.5,
+  halo: 2, sentry: 1, crook: 3,
+  reaper: 4, swarm: 5, midas: 2, phase: 5, vortex: 6,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -355,6 +406,34 @@ const AIM_SOLID: number[] = [];
 // Animated prop frame tables (indexed by frameIndex), hoisted so the tile loop never allocates.
 const TORCH_FRAMES: TileName[] = ["torch_f0", "torch_f1", "torch_f2"];
 
+// ---- dynamic light recipes (see lighting.ts; spec §3 benchmark radii) ----
+// The hero's amber identity glow: a readability floor around the player, never off.
+// The small stain keeps walkable ground visibly lit even where the biome's floor art
+// is darker than the ambient grade could ever account for (the Null's near-black).
+const HERO_GLOW_RADIUS = 110;
+const HERO_GLOW_CUT = 0.55;
+const HERO_GLOW_STAIN = 0.24;
+const HERO_GLOW_COLOR = "#ffc86b";
+const REMOTE_GLOW_RADIUS = 96;
+const REMOTE_GLOW_CUT = 0.45;
+const REMOTE_GLOW_STAIN = 0.18;
+const MUZZLE_LIGHT_RADIUS = 74;
+const EXIT_LIGHT_RADIUS = 96;
+// Luminous projectiles ONLY (restraint: plain slugs carry their streak art, no light).
+// The Wisp (homing) is the cold seeker glow; the Sunlance (beam) the hot line.
+const BULLET_LIGHTS: Partial<Record<WeaponId, { radius: number; cut: number }>> = {
+  beam: { radius: 70, cut: 0.6 },
+  tesla: { radius: 55, cut: 0.5 },
+  flamer: { radius: 48, cut: 0.5 },
+  railgun: { radius: 62, cut: 0.55 },
+  homing: { radius: 55, cut: 0.45 },
+  mortar: { radius: 50, cut: 0.45 },
+  cannon: { radius: 45, cut: 0.4 },
+};
+// Explosion light pulse (spec: full pulse then fast falloff, capped radius).
+const EXPLOSION_LIGHT_MAX = 240;
+const EXPLOSION_LIGHT_DUR = 0.42;
+
 // ---- destructible props + treasure chests ----
 // Placement is seeded per floor (co-op layout agreement); destruction resolves on the
 // shared floor state via bullets/explosions, exactly like enemies. Reward rolls use the
@@ -391,8 +470,14 @@ const SHOP_STATION_IMG: Record<ShopSlot["kind"], PropSpriteName> = {
   rare_blessing: "shop_pedestal",
   max_hp: "shop_heart_station",
   full_heal: "shop_heart_station",
+  core_infusion: "shop_pedestal",
+  prospector: "shop_pedestal",
+  weapon_upgrade: "shop_reroll_post",
+  revive_token: "shop_heart_station",
+  extra_slot: "shop_pedestal",
   reroll_all: "shop_reroll_post",
   amber_cache: "shop_pedestal",
+  artifact: "shop_pedestal",
   mythic_weapon: "shop_pedestal",
   mythic_trio: "shop_pedestal",
   mythic_amber: "shop_pedestal",
@@ -476,6 +561,21 @@ export class Game {
   }
   private world!: WorldState;
   private inputSeq = 0;
+  // A held Breach charge must never fire out of a menu: when input leaves the gameplay
+  // context mid-charge, this latch turns subsequent input frames into the sim's explicit
+  // charge-cancel intent (dash bit, no movement, no fire) until the charge reads 0.
+  private isChargeCancelPending = false;
+  // ---- the semantic weapon-audio state machine (client-side edges over authoritative
+  // state; every cue is a WEAPON_AUDIO contract state, never a file name) ----
+  private audioPrevWeapon: WeaponId | null = null;
+  private audioPrevChargeT = 0;
+  private isChargeThresholdCued = false;
+  private isChargeLockCued = false;
+  private isBreachReleaseSeen = false;
+  private isRiskBandOpen = false;
+  private audioOrbitSector = -1;
+  // Short-fuse scheduled cues (the sentry's place -> unfold beat).
+  private pendingCues: Array<{ t: number; name: string; x: number; y: number }> = [];
   private seed = 0;
   // Seeded stream for solo/co-op blessing choice rolls (the sim never rolls choices; online
   // the server decides). Keeps the whole client Math.random-free on the choice path.
@@ -521,6 +621,9 @@ export class Game {
   private shockwaves = new ShockwaveField();
   private screenFlash = new ScreenFlash();
   private motes = new AmbienceField();
+  // Ambient occlusion + authored local lighting (see lighting.ts) — cached per floor,
+  // rendered under entities so the mood never taxes combat readability.
+  private lighting = new LightingRenderer();
   // Smoothed local mirror of the sim's hazardClock: advances every render frame and eases
   // onto the authoritative clock, so 20Hz online snapshots (or a hit-stop) never make a
   // telegraph animation stutter. Purely visual — damage reads the SIM clock.
@@ -591,6 +694,7 @@ export class Game {
   private get pickups(): Pickup[] { return this.world.pickups; }
   private get props(): Prop[] { return this.world.props; }
   private get hazards(): Hazard[] { return this.world.hazards; }
+  private get effects(): Effect[] { return this.world.effects; }
   private get chests(): Chest[] { return this.world.chests; }
 
   private isRunning = false;
@@ -628,6 +732,13 @@ export class Game {
   private isStatsHeld = false;
   private pendingDescend = 0;
 
+  // The full-hotbar swap prompt's target: the blocked weapon pickup underfoot (the sim
+  // refused to auto-collect it — see updatePickups). Client affordance only; the swap
+  // command re-validates everything authoritatively. `swapDismissedId` suppresses the
+  // prompt for a declined pickup until the player walks off it.
+  private swapTarget: { pickupId: number; weapon: WeaponId } | null = null;
+  private swapDismissedId: number | null = null;
+
   // ---- dev sandbox state (all false/0 in normal play; see the dev hooks at the end) ----
   // Every flag below is inert unless the ?dev sandbox flips it, so the whole feature is a
   // handful of cheap, harmless branches on the hot paths and tree-shakes out of a run.
@@ -648,6 +759,8 @@ export class Game {
       onSlotActivate: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "activateSlot", index }); },
       onSlotReorder: (from, to) => { this.syncInputContext(); this.input.dispatch({ kind: "reorderSlots", from, to }); },
       onSlotInspect: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "inspectSlot", index }); },
+      onSlotSwap: (index) => { this.syncInputContext(); this.input.dispatch({ kind: "swapSlot", index }); },
+      onSwapDismiss: () => this.dismissSwapPrompt(),
     });
     this.onGameOver = onGameOver;
     this.onExit = onExit;
@@ -715,6 +828,9 @@ export class Game {
         if (this.hud.cancelActiveDrag()) break;
         if (this.hud.isDrawerOpen()) { this.hud.closeDrawer(); break; }
         if (this.shopPanel.isOpen) { this.shopPanel.close(); break; }
+        // A visible swap prompt owns Escape next: LEAVE IT (the pickup stays on the
+        // floor) — never a pause menu over an unanswered trade.
+        if (this.input.context === "gameplay" && this.dismissSwapPrompt()) break;
         // On the connecting/readiness veil or mid-outage, Escape is CANCEL: give up on this
         // connection attempt and return to the lobby — never a pause menu over a dead world.
         if (this.mode === "online" && this.wsTransport && (this.isAwaitingOnlineWorld() || this.isOnlineOutage())) {
@@ -744,6 +860,9 @@ export class Game {
       case "reorderSlots":
         if (this.isRunning) this.reorderSlots(a.from, a.to);
         break;
+      case "swapSlot":
+        if (this.isRunning) this.swapSlot(a.index);
+        break;
       case "cycleSpectate":
         if (this.isRunning) this.cycleSpectate(a.dir);
         break;
@@ -761,7 +880,13 @@ export class Game {
   // Derive the current input context from run state. Called at every transition point and
   // once per tick; the controller clears its edge/latch state whenever it changes.
   private syncInputContext() {
+    const prev = this.input.context;
     this.input.setContext(this.currentInputContext());
+    // Leaving gameplay mid-charge (drawer, pause, overlay): the release that follows must
+    // CANCEL, not fire a shell into wherever the cursor happened to sit.
+    if (prev === "gameplay" && this.input.context !== "gameplay" && this.isRunning && this.p.chargeT > 0) {
+      this.isChargeCancelPending = true;
+    }
   }
 
   private currentInputContext(): InputContext {
@@ -920,6 +1045,7 @@ export class Game {
     this.patchSellT = 0;
     this.shopBoughtT = 0;
     this.torches = this.placeTorches(this.dungeon);
+    this.rebakeLighting();
     this.particles = [];
     this.dmgNumbers = [];
     this.worldLabels = [];
@@ -960,6 +1086,27 @@ export class Game {
     for (const e of this.world.enemies) floorKinds.add(e.kind);
     for (const e of this.world.pendingSpawns) floorKinds.add(e.kind);
     waveAudio.preloadForFloor(this.biomeIdx, bossUnit ? bossUnit.kind : null, floorKinds);
+  }
+
+  // Bake this floor's static light set: torches (emitting from the wall FACE into their
+  // room, so the pool can never leak behind the mounting wall), standing braziers, the
+  // ember-resting hazards, and Patch's stall (the waystation's warm hearth pool).
+  // Deterministic from the same floor state on every client.
+  private rebakeLighting() {
+    const specs: StaticLightSpec[] = [];
+    for (const t of this.torches) {
+      specs.push({ x: (t.tx + 0.5) * TILE, y: (t.ty + 1) * TILE + 6, kind: "torch" });
+    }
+    for (const p of this.props) {
+      if (p.kind === "brazier" && !p.dead) specs.push({ x: p.x, y: p.y, kind: "brazier" });
+    }
+    for (const h of this.world.floorHazards) {
+      if (h.kind === "fire_vent") specs.push({ x: (h.tx + 0.5) * TILE, y: (h.ty + 0.5) * TILE, kind: "vent" });
+      else if (h.kind === "void_rift") specs.push({ x: (h.tx + 0.5) * TILE, y: (h.ty + 0.5) * TILE, kind: "rift" });
+    }
+    const shop = this.world.shop;
+    if (shop) specs.push({ x: shop.keeperX, y: shop.keeperY + 12, kind: "stall" });
+    this.lighting.loadFloor(this.dungeon, this.biomeIdx, this.currentBiome, specs);
   }
 
   // Mount torches on the wall directly above each room (facing into it), at deterministic
@@ -1308,6 +1455,7 @@ export class Game {
     if (this.comboFreeze && this.combo > 0) this.p.comboTimer = COMBO_WINDOW;
 
     this.tickShop(dt);
+    this.tickWeaponAudio(dt);
     this.tickCosmetics(dt, cmd);
 
     if (this.coop) this.publishPresence();
@@ -1324,6 +1472,16 @@ export class Game {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
+    // Pending charge cancel: send the sim's explicit cancel intent (dash with zero
+    // movement neither dashes nor fires — see updateChargeShooting) until the
+    // authoritative charge reads empty. Movement is zeroed so a resume with a held
+    // movement key can't turn the cancel frame into a real dash.
+    if (this.isChargeCancelPending) {
+      if (this.p.chargeT > 0) {
+        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false };
+      }
+      this.isChargeCancelPending = false;
+    }
     return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact };
   }
 
@@ -1400,6 +1558,108 @@ export class Game {
 
   // Advance the client-only cosmetics the sim no longer owns: player anim, dash trail
   // afterimages, particle/decal/etc lifetimes, screen-shake/kick/hurt decay, camera.
+  // Charge-tier and risk-payoff releases: DISTINCT STEMS by contract, never pitch tiers.
+  // Returns true when the semantic layer owned the sound (legacy paths then stay quiet).
+  private playSemanticFireAudio(e: Extract<SimEvent, { t: "shot" }>): boolean {
+    const audio_ = WEAPON_AUDIO[e.weapon];
+    if (!audio_) return false;
+    if (e.weapon === "breach") {
+      this.isBreachReleaseSeen = true;
+      const release = e.chg >= 0.66 ? audio_.releaseAlt : audio_.release;
+      if (release !== undefined) waveAudio.cueAt(release, e.x, e.y);
+      if (audio_.travel !== undefined) waveAudio.cueAt(audio_.travel, e.x, e.y);
+      return true;
+    }
+    if (e.weapon === "lastlight" && e.pid === this.p.id && audio_.payoff !== undefined) {
+      // The risk payoff voice: the wielder's own empowered release once the band is open.
+      const lowHp = this.p.maxHp > 0 ? 1 - this.p.hp / this.p.maxHp : 0;
+      if (lowHp >= 0.5) { waveAudio.cueAt(audio_.payoff, e.x, e.y); return true; }
+    }
+    return false;
+  }
+
+  // Per-tick semantic weapon audio: equip edges, the Breach charge lifecycle (prime /
+  // ONE keyed hold loop / threshold / full lock / vent-on-cancel), the halo's single
+  // owner loop + blade-pass ticks, the chain's pull loop, and the risk band open/close.
+  // Every loop is level-held (holdLoop does the edge work) — never retriggered per tick.
+  private tickWeaponAudio(dt: number) {
+    for (let i = this.pendingCues.length - 1; i >= 0; i--) {
+      const cue = this.pendingCues[i];
+      cue.t -= dt;
+      if (cue.t <= 0) {
+        waveAudio.cueAt(cue.name, cue.x, cue.y);
+        this.pendingCues.splice(i, 1);
+      }
+    }
+    if (!this.isRunning) return;
+    const wpn = this.weapon;
+    const contract = WEAPON_AUDIO[wpn];
+    if (this.audioPrevWeapon !== wpn) {
+      if (this.audioPrevWeapon !== null && contract?.equip !== undefined) {
+        waveAudio.cueAt(contract.equip, this.px, this.py);
+      }
+      this.audioPrevWeapon = wpn;
+      this.audioPrevChargeT = 0;
+      this.isChargeThresholdCued = false;
+      this.isChargeLockCued = false;
+      this.isRiskBandOpen = false;
+      this.audioOrbitSector = -1;
+    }
+
+    // The Breach charge lifecycle off the authoritative (prediction-reconciled) chargeT.
+    const chargeSpec = WEAPONS[wpn].charge;
+    const chg = this.p.chargeT;
+    waveAudio.holdLoop("breach.chargeLoop", "self", chargeSpec !== undefined && chg > 0);
+    if (chargeSpec && contract) {
+      if (chg > 0 && this.audioPrevChargeT === 0 && contract.prime !== undefined) {
+        waveAudio.cueAt(contract.prime, this.px, this.py);
+        this.isBreachReleaseSeen = false;
+      }
+      if (chg >= chargeSpec.time * 0.5 && !this.isChargeThresholdCued && contract.threshold !== undefined) {
+        this.isChargeThresholdCued = true;
+        waveAudio.cueAt(contract.threshold, this.px, this.py);
+      }
+      if (chg >= chargeSpec.time - 1e-9 && !this.isChargeLockCued && contract.ready !== undefined) {
+        this.isChargeLockCued = true;
+        waveAudio.cueAt(contract.ready, this.px, this.py);
+      }
+      if (chg === 0 && this.audioPrevChargeT > 0) {
+        // The hold ended without a release event this tick: that was a CANCEL — vent it.
+        if (!this.isBreachReleaseSeen && contract.vent !== undefined) waveAudio.cueAt(contract.vent, this.px, this.py);
+        this.isChargeThresholdCued = false;
+        this.isChargeLockCued = false;
+        this.isBreachReleaseSeen = false;
+      }
+    }
+    this.audioPrevChargeT = chargeSpec !== undefined ? chg : 0;
+
+    // The halo: ONE mixed owner loop (never per blade) + the blade-pass tick each time
+    // the ring completes a sector (the row's cooldown paces it).
+    const orbit = this.effects.find((fx) => fx.kind === "orbit" && fx.owner === LOCAL_ID);
+    waveAudio.holdLoop("halo.loop", "self", orbit !== undefined);
+    if (orbit !== undefined && orbit.kind === "orbit" && orbit.blades > 0) {
+      const sector = Math.floor(orbit.angle / ((Math.PI * 2) / orbit.blades));
+      if (this.audioOrbitSector !== -1 && sector !== this.audioOrbitSector) {
+        waveAudio.cueAt("halo.pass", this.px, this.py);
+      }
+      this.audioOrbitSector = sector;
+    } else {
+      this.audioOrbitSector = -1;
+    }
+
+    // The chain: the pull/hold loop lives exactly while the local tether does.
+    const tether = this.effects.some((fx) => fx.kind === "tether" && fx.owner === LOCAL_ID);
+    waveAudio.holdLoop("crook.pullLoop", "self", tether);
+
+    // The risk band (Lastlight): danger on entry, recovery on exit — the band is the
+    // same authoritative low-HP curve the damage rides.
+    const risk = WEAPONS[wpn].lowHpBonus !== undefined
+      && this.p.maxHp > 0 && (1 - this.p.hp / this.p.maxHp) >= 0.5 && !this.isDown;
+    if (risk && !this.isRiskBandOpen && contract?.danger !== undefined) waveAudio.cueAt(contract.danger, this.px, this.py);
+    if (!risk && this.isRiskBandOpen && contract?.recovery !== undefined) waveAudio.cueAt(contract.recovery, this.px, this.py);
+    this.isRiskBandOpen = risk;
+  }
+
   private tickCosmetics(dt: number, cmd: InputCmd) {
     if (!this.isDown) {
       let ix = cmd.moveX, iy = cmd.moveY;
@@ -1456,7 +1716,7 @@ export class Game {
     // Dash afterimages (pure ghost trail): spaced by dashImgCd while the sim reports a dash.
     if (this.p.dashTime > 0) {
       this.dashImgCd -= dt;
-      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0 }); this.dashImgCd = 0.04; }
+      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0, color: null }); this.dashImgCd = 0.04; }
     }
 
     this.updateFootstepDust(dt);
@@ -1470,7 +1730,7 @@ export class Game {
     this.shockwaves.update(dt);
     this.screenFlash.update(dt);
     if (this.muzzle.t > 0) this.muzzle.t = Math.max(0, this.muzzle.t - dt);
-    if (this.coop) this.updateRemoteAnims(dt);
+    this.updateRemoteAnims(dt);
     if (this.trauma > 0) this.trauma = Math.max(0, this.trauma - dt * TRAUMA_DECAY);
     const ke = Math.min(1, dt * KICK_DECAY);
     this.kickX -= this.kickX * ke; this.kickY -= this.kickY * ke;
@@ -1643,10 +1903,13 @@ export class Game {
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
-        // Manifest-bound weapons (Thumper lob, Sunlance held-beam lifecycle) own their
-        // sound through the wave layer; every other weapon keeps its exact legacy sample.
-        if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
-          sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+        // Semantic weapon-audio contract first (charge TIER releases are distinct stems,
+        // the risk payoff is a distinct stem), then manifest-bound weapons (Thumper lob,
+        // Sunlance held-beam lifecycle), then the exact legacy sample.
+        if (!this.playSemanticFireAudio(e)) {
+          if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
+            sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+          }
         }
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
@@ -1687,6 +1950,12 @@ export class Game {
         if (!e.killed) {
           if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) {
             waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
+          } else if (e.melee && this.weapon === "halo") {
+            // The ring's contact voice (flared hits read as the CATCH) — the local
+            // wielder's read; remote halos keep the shared melee thump.
+            const orbit = this.effects.find((fx) => fx.kind === "orbit" && fx.owner === LOCAL_ID);
+            const cue = orbit !== undefined && orbit.kind === "orbit" && orbit.flare > 0 ? "halo.catch" : "halo.hit";
+            if (!waveAudio.cueAt(cue, e.puffX, e.puffY, e.eid)) sfx("meleeHit", { gain: 0.9 });
           } else if (e.melee) {
             sfx("meleeHit", { gain: 0.9 });
           } else {
@@ -1795,7 +2064,7 @@ export class Game {
         else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
         else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); sfx("weapon"); }
         break;
-      case "shopBuy":
+      case "shopBuy": {
         // The register moment: positional (everyone browsing the stall sees a teammate's
         // claim land), with the buyer's kind selecting the flavor. Patch plays the
         // handover pose over it. The OUTCOME itself is authoritative state — coins/stock/
@@ -1808,16 +2077,22 @@ export class Game {
         else if (e.kind === "blessing") this.sfxAt("blessing", e.x, e.y, { gain: 0.5 });
         else if (e.kind === "weapon") this.sfxAt("weapon", e.x, e.y, { gain: 0.55 });
         else this.sfxAt("levelup", e.x, e.y, { gain: 0.4 });
+        // The BIG-PURCHASE flourish (designer feel spec): a legendary/artifact/mythic
+        // claim is an EVENT — gold burst, a named banner, the levelup fanfare, and a
+        // touch of shake, so the table-flip spend lands like one.
+        if (PREMIUM_EVENT_KINDS.has(e.kind as ShopSlotKind)) {
+          const gold = WEAPON_RARITY_COLOR.legendary;
+          this.spawnSparkleBurst(e.x, e.y, 22, gold);
+          this.spawnParticles(e.x, e.y, 16, gold);
+          this.addDecal(e.x, e.y, gold, 26, "ring");
+          this.spawnWorldLabel(e.x, e.y - 40, e.kind === "artifact" ? "THE DEAL IS STRUCK" : "A MYTHIC CLAIM", gold);
+          this.sfxAt("levelup", e.x, e.y, { gain: 0.8, rate: 0.9 });
+          this.addTrauma(0.18);
+        }
         this.patchSellT = 0.6;
         if (this.isSelfPid(e.pid)) this.shopBoughtT = 1.2;
         break;
-      case "mysteryReveal":
-        // The reveal beat: the register chime already played (shopBuy); this names the
-        // fate. Everyone at the stall sees the label — the gamble is a shared moment.
-        this.spawnSparkleBurst(e.x, e.y, 14, "#c98bff");
-        this.spawnWorldLabel(e.x, e.y - 30, WEAPONS[e.weapon].name.toUpperCase(), "#c98bff");
-        this.sfxAt("weapon", e.x, e.y, { gain: 0.6, rate: 1.1 });
-        break;
+      }
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
         this.spawnPuff(e.x, e.y, 5, e.color);
@@ -1830,6 +2105,21 @@ export class Game {
         this.spawnWorldLabel(e.x, e.y - 22, WEAPONS[e.weapon].name.toUpperCase(), "#ffd166");
         this.sfxAt("weapon", e.x, e.y, { rate: 0.8, gain: 0.5 });
         break;
+      case "mysteryReveal": {
+        // The gamble resolves: name the identity for everyone at the pedestal, in its
+        // rarity color, with the twist's flavor line for the collector's story.
+        const w = WEAPONS[e.weapon];
+        const accent = WEAPON_RARITY_COLOR[w.rarity];
+        this.addDecal(e.x, e.y, MYSTERY_COLOR, 18, "ring");
+        this.spawnSparkleBurst(e.x, e.y, 14, MYSTERY_COLOR);
+        this.spawnParticles(e.x, e.y, 12, accent);
+        this.spawnWorldLabel(e.x, e.y - 26, `??? \u2192 ${w.name.toUpperCase()}`, accent);
+        if (e.twist === "blessed") this.spawnWorldLabel(e.x, e.y - 12, "BLESSED \u00b7 +1 HP", "#8affc0");
+        else if (e.twist === "cursed") this.spawnWorldLabel(e.x, e.y - 12, "CURSED \u00b7 JAMMED", "#ff6a6a");
+        this.sfxAt("weapon", e.x, e.y, { rate: w.rarity === "legendary" ? 1.3 : 1.1, gain: 0.7 });
+        this.addTrauma(w.rarity === "legendary" ? 0.2 : 0.1);
+        break;
+      }
       case "bulletWall":
         this.spawnSparks(e.x, e.y, 5, e.aim);
         break;
@@ -1857,8 +2147,14 @@ export class Game {
       case "propBreak":
         this.replayPropBreak(e.kind, e.x, e.y);
         break;
-      case "explosion":
-        this.sfxAt("barrel", e.x, e.y, { rate: 0.7 });
+      case "explosion": {
+        // The impact voice routes by SOURCE (breach.impact / mortarDetonate / the
+        // legacy barrel boom) — same blast juice either way.
+        const impactCue = WEAPON_AUDIO[e.src]?.impact;
+        if (!(impactCue !== undefined && waveAudio.cueAt(impactCue, e.x, e.y))) {
+          this.sfxAt("barrel", e.x, e.y, { rate: 0.7 });
+        }
+        this.lighting.addPulse(e.x, e.y, Math.min(EXPLOSION_LIGHT_MAX, e.r * 2), 0.85 * settings.flashFactor, "#ffb43b", EXPLOSION_LIGHT_DUR);
         this.addFreeze(FREEZE_HEAVY);
         this.addTrauma(0.6);
         this.spawnGibs(e.x, e.y, 18, "#ff8a3b");
@@ -1868,6 +2164,16 @@ export class Game {
         this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.6, 0.38, "#ffb43b", 5);
         this.spawnSparkleBurst(e.x, e.y, 10, "#ff8a3b");
         if (this.isNearCamera(e.x, e.y)) this.flashScreen(255, 150, 60, 0.13, 3.2);
+        break;
+      }
+      case "implosion":
+        // The Lodestone's collapse: the explosion's inward twin — cooler palette, a
+        // gentler thump, and converging spark rays instead of an outward shockwave.
+        this.sfxAt("barrel", e.x, e.y, { rate: 1.4, gain: 0.5 });
+        this.addTrauma(0.18);
+        this.spawnConvergence(e.x, e.y, e.r, "#7fb0ff");
+        this.addDecal(e.x, e.y, "#7fb0ff", e.r * 0.4, "ring");
+        this.spawnSparkleBurst(e.x, e.y, 8, "#9ecfff");
         break;
       case "chestOpen":
         sfx("chest");
@@ -1921,6 +2227,93 @@ export class Game {
       case "webPlaced":
         this.spawnPuff(e.x, e.y, 7, "#c98bff");
         this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
+        break;
+      // ---- weapon effects (the effect wave) — manifest-first, legacy sample fallback ----
+      case "wirePlanted":
+        if (!waveAudio.cueAt("wirePlant", e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 1.5, gain: 0.4 });
+        this.spawnPuff(e.tx, e.ty, 4, "#e8e05a");
+        break;
+      case "wireArmed":
+        waveAudio.cueAt("wire.armed", e.x, e.y);
+        this.spawnSparkFlash(e.x, e.y, "#e8e05a");
+        break;
+      case "wireExpired":
+        waveAudio.cueAt("wire.expire", e.x, e.y);
+        this.spawnPuff(e.x, e.y, 3, "#b8b04a");
+        break;
+      case "wireRefused":
+        waveAudio.cueAt("wire.refuse", e.x, e.y);
+        break;
+      case "wireSnap": {
+        if (!waveAudio.cueAt("wireSnap", e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 0.7, gain: 0.8 });
+        const len = Math.hypot(e.tx - e.x, e.ty - e.y);
+        this.remoteTracers.push({ x: e.x, y: e.y, angle: Math.atan2(e.ty - e.y, e.tx - e.x), life: 0.15, color: "#e8e05a", len, isArc: true });
+        this.spawnSparks((e.x + e.tx) / 2, (e.y + e.ty) / 2, 8, Math.atan2(e.ty - e.y, e.tx - e.x) + HALF_PI);
+        this.addTrauma(0.15);
+        break;
+      }
+      case "haloFlare":
+        if (!waveAudio.cueAt("haloFlare", e.x, e.y)) this.sfxAt("meleeSwing", e.x, e.y, { rate: 1.3, gain: 0.7 });
+        this.shockwaves.spawn(e.x, e.y, 12, e.r, 0.3, "#d8f0e8", 3);
+        break;
+      case "sentryPlaced":
+        if (!waveAudio.cueAt("sentryPlace", e.x, e.y)) this.sfxAt("chest", e.x, e.y, { rate: 1.4, gain: 0.5 });
+        this.spawnPuff(e.x, e.y, 8, "#c8a8ff");
+        this.addDecal(e.x, e.y, "#c8a8ff", 14, "ring");
+        // The prism opens a beat after the mount lands (place -> unfold are two cues).
+        this.pendingCues.push({ t: 0.22, name: "sentry.unfold", x: e.x, y: e.y });
+        break;
+      case "sentryAcquire":
+        waveAudio.cueAt("sentry.acquire", e.x, e.y);
+        break;
+      case "sentryHit":
+        waveAudio.cueAt("sentry.damaged", e.x, e.y);
+        this.spawnPuff(e.x, e.y, 4, "#c8a8ff");
+        break;
+      case "sentryShot":
+        if (!waveAudio.cueAt("sentryShot", e.x, e.y)) this.sfxAt("homing", e.x, e.y, { rate: 1.15, gain: 0.45 });
+        this.spawnParticles(e.x + Math.cos(e.aim) * 14, e.y + Math.sin(e.aim) * 14, 2, "#c8a8ff");
+        break;
+      case "sentryDown":
+        // Destroyed shatters; a timeout powers down — the deployable's two endings.
+        if (!waveAudio.cueAt(e.why === "timeout" ? "sentry.timeout" : "sentryDown", e.x, e.y)) {
+          this.sfxAt("parry", e.x, e.y, { rate: 0.6, gain: 0.7 });
+        }
+        if (e.why === "timeout") this.spawnPuff(e.x, e.y, 6, "#c8a8ff");
+        else { this.spawnGibs(e.x, e.y, 8, "#c8a8ff"); this.spawnPuff(e.x, e.y, 8, "#c8a8ff"); }
+        break;
+      case "tetherLatch": {
+        // Whiff and latch are different sounds; the INVERTED latch adds the danger tell
+        // (a heavy body is about to reel the wielder in).
+        if (e.eid < 0) waveAudio.cueAt("crook.whiff", e.x, e.y);
+        else if (!waveAudio.cueAt("tetherLatch", e.x, e.y)) this.sfxAt("ricochet", e.x, e.y, { rate: 0.8, gain: 0.6 });
+        if (e.inv) waveAudio.cueAt("crook.dragged", e.x, e.y);
+        const len = Math.hypot(e.tx - e.x, e.ty - e.y);
+        this.remoteTracers.push({ x: e.x, y: e.y, angle: Math.atan2(e.ty - e.y, e.tx - e.x), life: e.eid >= 0 ? 0.14 : 0.1, color: "#c9b06a", len, isArc: true });
+        if (e.eid >= 0) { triggerFlash(this.animForId(e.eid)); this.addTrauma(0.08); }
+        break;
+      }
+      case "tetherHold":
+        waveAudio.cueAt("crook.hold", e.x, e.y);
+        break;
+      case "statusApplied":
+        // The SHARED status library: apply cues ride per-entity cooldowns; DoT ticks
+        // stay silent by contract (burnTick below carries visuals only).
+        waveAudio.cueAt(STATUS_AUDIO[e.kind] ?? "status.chillApply", e.x, e.y, e.eid);
+        break;
+      case "frozeSolid":
+        waveAudio.cueAt("status.freeze", e.x, e.y, e.eid);
+        this.spawnSparkFlash(e.x, e.y, "#cdeaff");
+        break;
+      case "freezeBroke":
+        waveAudio.cueAt("status.freezeBreak", e.x, e.y, e.eid);
+        this.spawnPuff(e.x, e.y, 5, "#cdeaff");
+        break;
+      case "tetherSweep":
+        if (!waveAudio.cueAt("tetherSweep", e.x, e.y)) sfx("heavySwing", { rate: 1.1 });
+        this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.3, 0.32, "#c9b06a", 4);
+        this.addTrauma(0.2);
+        this.addFreeze(0.04);
         break;
       case "bossSlam":
         this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
@@ -2274,7 +2667,8 @@ export class Game {
   // the authoritative command and the snapshot confirms — there is NO client-local
   // inventory mutation on the online path.
 
-  // Equip the weapon in hotbar slot `index` (number keys 1-9 via the selectWeapon action).
+  // Equip the weapon in hotbar slot `index` (number keys 1..MAX_OWNED_WEAPONS via the
+  // selectWeapon action).
   private equipSlot(index: number) {
     const owned = this.p.ownedWeapons;
     if (index < 0 || index >= owned.length) return;
@@ -2311,7 +2705,7 @@ export class Game {
     });
   }
 
-  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The 1-9 keys always map to
+  // Move hotbar slot `from` to position `to` (hotbar drag/drop). The number keys always map to
   // the resulting order, because they index the same authoritative ownedWeapons array.
   private reorderSlots(from: number, to: number) {
     const n = this.p.ownedWeapons.length;
@@ -2332,6 +2726,61 @@ export class Game {
     if (owned.length < 2) return;
     const cur = owned.indexOf(this.weapon);
     this.equipSlot((cur + dir + owned.length) % owned.length);
+  }
+
+  // ---- the full-hotbar swap prompt ----
+
+  // The blocked weapon pickup underfoot: the nearest live weapon pickup within collect
+  // range that this player could claim if the hotbar had room (the sim's updatePickups
+  // refused it because it doesn't). Pure client affordance — the same predicate the sim
+  // gates collection with, so the prompt appears exactly when a walk-over silently
+  // wouldn't collect.
+  private blockedWeaponPickup(): Pickup | null {
+    if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
+    const p = this.p;
+    if (p.ownedWeapons.length < MAX_OWNED_WEAPONS) return null;
+    let best: Pickup | null = null;
+    let bestD = Infinity;
+    for (const k of this.pickups) {
+      if (k.kind !== "weapon" || !k.weapon) continue;
+      if (k.isBossChoice ? p.hasClaimedBossChoice : p.ownedWeapons.includes(k.weapon)) continue;
+      const d = Math.hypot(this.px - k.x, this.py - k.y);
+      if (d < p.pr + k.radius && d < bestD) { best = k; bestD = d; }
+    }
+    return best;
+  }
+
+  // Refresh the swap prompt target each tick: standing on a blocked pickup arms it,
+  // walking away disarms it AND clears any decline (coming back re-offers the trade).
+  private tickSwapPrompt() {
+    const blocked = this.blockedWeaponPickup();
+    if (blocked === null) {
+      this.swapTarget = null;
+      this.swapDismissedId = null;
+      return;
+    }
+    this.swapTarget = blocked.id === this.swapDismissedId ? null : { pickupId: blocked.id, weapon: blocked.weapon! };
+  }
+
+  // Trade the weapon in hotbar slot `index` for the prompt's pickup. Authority decides:
+  // the sim validates fullness/ownership/range and performs the trade atomically (the
+  // replaced weapon lands as a floor pickup); a stale prompt is a rejected command.
+  private swapSlot(index: number) {
+    const target = this.swapTarget;
+    if (target === null) return;
+    const owned = this.p.ownedWeapons;
+    if (index < 0 || index >= owned.length) return;
+    this.transport.requestSwap(target.pickupId, owned[index]);
+  }
+
+  // Decline the swap prompt (LEAVE IT / Esc): nothing is sent — the pickup simply stays
+  // on the floor (cancel-safe by construction) and the prompt stays down until the player
+  // walks off it. Returns whether a prompt was actually dismissed (the Escape cascade).
+  private dismissSwapPrompt(): boolean {
+    if (this.swapTarget === null) return false;
+    this.swapDismissedId = this.swapTarget.pickupId;
+    this.swapTarget = null;
+    return true;
   }
 
 
@@ -2503,21 +2952,51 @@ export class Game {
     this.corpses = this.corpses.filter((c) => c.t < 1);
   }
 
+  // Advance every teammate's client-side cosmetics from whichever remote source is active
+  // (legacy co-op presence OR the authoritative server): walk/idle anim + the remote dash FX.
   private updateRemoteAnims(dt: number) {
-    if (!this.coop) return;
-    const remotes = this.coop.remotePlayers();
+    const remotes = this.remotes();
+    if (remotes.length === 0 && this.remoteAnims.size === 0) return;
     for (const r of remotes) {
       let entry = this.remoteAnims.get(r.playerId);
-      if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y }; this.remoteAnims.set(r.playerId, entry); }
+      if (!entry) { entry = { anim: createAnim(), lastX: r.x, lastY: r.y, isDashing: false, dashImgCd: 0, dashDustCd: 0 }; this.remoteAnims.set(r.playerId, entry); }
       const moving = Math.hypot(r.x - entry.lastX, r.y - entry.lastY) > 0.35;
       const lean = r.x - entry.lastX;
       stepAnim(entry.anim, dt, moving, lean < 0 ? -1 : lean > 0 ? 1 : 0);
       entry.lastX = r.x; entry.lastY = r.y;
+      this.updateRemoteDashFx(r, entry, dt);
     }
     if (this.remoteAnims.size > remotes.length) {
       const live = new Set<string>();
       for (const r of remotes) live.add(r.playerId);
       for (const id of this.remoteAnims.keys()) if (!live.has(id)) this.remoteAnims.delete(id);
+    }
+  }
+
+  // A teammate's dash, driven off the authoritative PlayerWire dash state (isDashing is
+  // aligned with the interpolated pose, so the juice lands where the blob visibly lunges).
+  // The SAME reads as the local dash: takeoff puff + ring + sfx on the rising edge, then the
+  // afterimage ghost trail and one dust mote per authoritative tick while the dash is live.
+  // The dasher's own dashStart/dashTrail events stay pid-scoped, so nothing double-plays.
+  private updateRemoteDashFx(r: RemotePlayer, entry: RemoteAnimEntry, dt: number) {
+    if (r.isDashing && !entry.isDashing && !r.isAbsent) {
+      this.spawnParticles(r.x, r.y, 10, "#ffd27a");
+      this.addDecal(r.x, r.y, "#ffd27a", 16, "ring");
+      sfx("dash", { gain: 0.5 });
+      entry.dashImgCd = 0;
+      entry.dashDustCd = 0;
+    }
+    entry.isDashing = r.isDashing && !r.isAbsent;
+    if (!entry.isDashing) return;
+    entry.dashImgCd -= dt;
+    if (entry.dashImgCd <= 0) {
+      this.afterimages.push({ x: r.x, y: r.y, facing: r.facing, t: 0, color: playerColorOr(r.colorIndex) });
+      entry.dashImgCd = 0.04;
+    }
+    entry.dashDustCd -= dt;
+    if (entry.dashDustCd <= 0) {
+      this.spawnParticles(r.x, r.y, 1, "#ffd27a");
+      entry.dashDustCd = FIXED_DT;
     }
   }
 
@@ -2628,6 +3107,7 @@ export class Game {
   }
 
   private updateHud() {
+    this.tickSwapPrompt();
     const boss = this.enemies.find((e) => isBossKind(e.kind));
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
@@ -2671,6 +3151,7 @@ export class Game {
         id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
         card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
       })),
+      swap: this.swapTarget ? { id: this.swapTarget.weapon, name: WEAPONS[this.swapTarget.weapon].name } : null,
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
       isCleared: this.mode === "online" && this.wsTransport ? this.wsTransport.isFloorCleared() : isFloorCleared(this.world),
@@ -2679,6 +3160,7 @@ export class Game {
       isParty: this.mode !== "solo" && this.remotes().length > 0,
       isBossActive,
       bossHpFrac,
+      bossName: boss ? bossDisplayName(boss.kind) : "",
       coopLabel,
       prompt: this.hudPrompt(),
       dashFill: 1 - this.dashCd / this.dashCooldown(),
@@ -2809,9 +3291,16 @@ export class Game {
     const tx = Math.floor(this.px / TILE), ty = Math.floor(this.py / TILE);
     if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) {
       this.isShopWelcomed = true;
-      if (isPremiumShopFloor(this.floor)) {
+      // The stall names itself by MODE — the read arrives with the room (wire-agreed).
+      if (shop.mode === "climax") {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "THE LAST STALL BEFORE THE CHOIR", "#ffb43b");
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "SPEND IT ALL \u2014 COINS DIE WITH THE RUN", "#ffe9b0");
+      } else if (shop.mode === "premium") {
         this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S PREMIUM CACHE", "#ffb43b");
         this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "ONE PREMIUM BUY PER SHOP \u2014 CHOOSE WELL", "#ffe9b0");
+      } else if (shop.mode === "spoils") {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "THE SPOILS STALL", "#ffb43b");
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "A BOSS'S PURSE BURNS A HOLE \u2014 SPEND IT", "#ffe9b0");
       } else {
         this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
         // The multi-buy opener (playtest fix: kills the pick-one mental model on arrival).
@@ -3123,6 +3612,24 @@ export class Game {
     }
   }
 
+  // The implosion's converging rays: sparks born ON the ring, flying INTO the center —
+  // the visual inverse of an explosion, so the pull reads instantly.
+  private spawnConvergence(x: number, y: number, r: number, color: string) {
+    const n = 14;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * 6.28 + Math.random() * 0.3;
+      const d = r * (0.7 + Math.random() * 0.3);
+      const life = 0.16 + Math.random() * 0.12;
+      const speed = d / life;
+      this.pushParticle({
+        x: x + Math.cos(a) * d, y: y + Math.sin(a) * d,
+        vx: -Math.cos(a) * speed, vy: -Math.sin(a) * speed,
+        life, maxLife: life, color: i % 3 === 0 ? "#fff3c4" : color,
+        size: 1.5 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 0, drag: 1,
+      });
+    }
+  }
+
   // Soft colored haze — a bullet biting into flesh.
   private spawnPuff(x: number, y: number, n: number, color: string) {
     for (let i = 0; i < n; i++) {
@@ -3163,11 +3670,15 @@ export class Game {
     // world-space pass below (tiles, props, pickups, hazards, enemies, fx, player) subtracts
     // this single fractional value and nothing re-rounds it, so the whole scene translates
     // together — zero relative jitter as the camera pans, at any display refresh rate.
+    // The lighting/AO grade subtracts the SAME renderCam, so the light field pans with
+    // the smoothed world instead of stepping against it.
     {
       const a = this.hasRenderPrev ? this.renderAlpha : 1;
       this.renderCam.x = this.camPrevX + (this.cam.x - this.camPrevX) * a;
       this.renderCam.y = this.camPrevY + (this.cam.y - this.camPrevY) * a;
     }
+    this.lighting.beginFrame(this.animClock);
+    if (this.lighting.isEnabled) this.collectDynamicLights();
     ctx.fillStyle = this.currentBiome.bgColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     // trauma² shake, scaled by the player's intensity setting (zeroed under reduced
@@ -3184,6 +3695,7 @@ export class Game {
     this.renderDecals();
     this.renderFloorHazards(); // floor-level danger: over decals, under the ambient air + entities
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
+    this.renderGroundEffects(); // weapon ground effects (chill zones, snap wires) at floor level
     this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -3196,6 +3708,8 @@ export class Game {
     this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
+    this.renderEffectEntities(); // weapon effect bodies (sentries, orbit blades, tether chains)
+    this.renderChargeMarker();   // the local Breach hold: charge ring + landing marker
     this.renderTracers();
     this.renderRemotePlayers();
     this.renderAfterimages();
@@ -3215,6 +3729,73 @@ export class Game {
     this.renderReticle();
     this.renderMinimap();
     this.renderReconnectOverlay();
+  }
+
+  // Per-frame dynamic light sources, written into the lighting layer's fixed pool (no
+  // allocation): the hero/teammate identity glows (occluded — a wall between you and the
+  // next room keeps that room dark), the muzzle flash, luminous projectiles only, hazard
+  // eruption pulses, and the cleared exit. Everything is derived from render-side state;
+  // nothing here touches the sim.
+  private collectDynamicLights() {
+    const flash = settings.flashFactor;
+    if (this.isRunning && this.isWorldRevealed) {
+      if (!this.isDown) this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
+      for (const r of this.remotes()) {
+        if (!r.isDown && !r.isAbsent && this.isNearCamera(r.x, r.y, REMOTE_GLOW_RADIUS)) {
+          this.lighting.pushDynamic(r.x, r.y, REMOTE_GLOW_RADIUS, REMOTE_GLOW_CUT, HERO_GLOW_COLOR, REMOTE_GLOW_STAIN, true);
+        }
+      }
+    }
+    if (this.muzzle.t > 0 && flash > 0) {
+      this.lighting.pushDynamic(this.muzzle.x, this.muzzle.y, MUZZLE_LIGHT_RADIUS, 0.55 * (this.muzzle.t / MUZZLE_DUR) * flash, this.muzzle.color);
+    }
+    for (const b of this.bullets) {
+      if (!b.friendly || b.fx === undefined) continue;
+      const light = BULLET_LIGHTS[b.fx];
+      if (!light || !this.isNearCamera(b.x, b.y, light.radius)) continue;
+      this.lighting.pushDynamic(b.x, b.y, light.radius, light.cut, b.color);
+    }
+    // Hazard eruptions: the vent brightens through its telegraph and blazes while
+    // active; the rift's open maw deepens its wrong-colored resting light. Both stain
+    // the ground in their own hue — light IS the pressure tell (spec §5, Emberreach).
+    const clock = this.hazardVisClock;
+    for (const h of this.world.floorHazards) {
+      if (h.kind !== "fire_vent" && h.kind !== "void_rift") continue;
+      const wx = (h.tx + 0.5) * TILE, wy = (h.ty + 0.5) * TILE;
+      if (!this.isNearCamera(wx, wy, 160)) continue;
+      const phase = floorHazardPhaseAt(h, clock);
+      if (phase === "idle") continue;
+      const frac = floorHazardPhaseFrac(h, clock);
+      if (h.kind === "fire_vent") {
+        if (phase === "telegraph") {
+          this.lighting.pushDynamic(wx, wy, 70 + 30 * frac, 0.25 + 0.35 * frac, "#ff6a2a", 0.55);
+        } else {
+          const flick = settings.isReducedMotion ? 0.9 : 0.8 + 0.2 * Math.sin(this.animClock * 23 + h.phase * 9);
+          const fade = frac > 0.75 ? (1 - frac) / 0.25 : 1;
+          this.lighting.pushDynamic(wx, wy, 130, 0.8 * flick * fade, "#ff8a3b", 0.55);
+        }
+      } else if (phase === "active") {
+        this.lighting.pushDynamic(wx, wy, 100, 0.45, this.currentBiome.accent, 0.55);
+      }
+    }
+    // Burning cinders (the sinderling's flame-jet wake): each live cinder is real fire
+    // on the ground — a small warm cut + stain that fades with its life. Sim-capped at
+    // 12 live cinders, pushed after the vent tells so a saturated pool sheds wake
+    // dressing first. Volatile "charge" fuses stay UNLIT on purpose: a fuse is a tell,
+    // not a fire — its blinking ring renders above the grade, and the eventual burst
+    // arrives through the shared explosion light pulse.
+    for (const h of this.hazards) {
+      if (h.kind !== "cinder" || !this.isNearCamera(h.x, h.y, 90)) continue;
+      const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3);
+      const flicker = settings.isReducedMotion ? 0.85 : 0.7 + 0.3 * Math.sin(this.animClock * 11 + h.id * 1.9);
+      this.lighting.pushDynamic(h.x, h.y, 58, 0.5 * fade * flicker, "#ff8a3b", 0.5);
+    }
+    if (this.isCurrentFloorCleared()) {
+      const ex = (this.dungeon.exit.x + 0.5) * TILE, ey = (this.dungeon.exit.y + 0.5) * TILE;
+      if (this.isNearCamera(ex, ey, EXIT_LIGHT_RADIUS)) {
+        this.lighting.pushDynamic(ex, ey, EXIT_LIGHT_RADIUS, 0.5, "#8affc0");
+      }
+    }
   }
 
   // The depth mood: a biome-colored vignette that closes in band over band (10% of the
@@ -3394,7 +3975,17 @@ export class Game {
       art: this.tiles,
       wallSide: this.wallSideGrads[this.biomeIdx],
       animClock: this.animClock,
+      // The lighting layer supplies the ambient depth darkness (shaped by light pools)
+      // in the grade below; the tile pass's flat fill only runs when the layer is off.
+      isAmbientGraded: this.lighting.isEnabled,
     });
+    // The ambient grade: contact AO + biome darkness with authored light cut out of it
+    // (torch pools, hero glow, eruptions), then the light's own color stained onto the
+    // ground it reaches. Everything after this — hazards, telegraphs, entities, HUD —
+    // draws above the grade, so the depth mood can never darken a tell. Subtracts the
+    // same render-clock camera as every other world pass (the shared-camera smoothing
+    // invariant), so the light field pans with the world instead of stepping against it.
+    this.lighting.renderGrade(this.ctx, this.renderCam.x, this.renderCam.y, this.canvas.width, this.canvas.height, this.animClock);
   }
 
   // ---- floor hazards ----
@@ -3649,8 +4240,11 @@ export class Game {
     ctx.restore();
   }
 
-  // Wall-mounted torches: an additive glow behind a 3-frame flickering flame. Culled
-  // to the visible window; per-torch phase offset keeps them from flickering in sync.
+  // Wall-mounted torches: an additive emissive halo behind a 3-frame flickering flame.
+  // Culled to the visible window; per-torch phase offset keeps them from flickering in
+  // sync, and reduced motion holds the flicker at its midpoint. The halo takes the biome
+  // light grammar's tint + throw (warm home fires, a beacon against the cold caves, the
+  // Null's wrong lavender) — one authored glow asset, every mood.
   private renderProps() {
     const { ctx, renderCam: cam, canvas, tiles } = this;
     const clock = this.animClock;
@@ -3658,18 +4252,17 @@ export class Game {
     const hasGlow = tiles.ready("torch_glow");
     const hasFlame = tiles.ready(flame);
     if (!hasGlow && !hasFlame) return;
-    // The light itself takes the biome's color (amber home fires, arcane violet, the
-    // Fracture's cold crystal, the Null's wrong pink) — one authored glow, six moods.
-    const glowImg = hasGlow ? (tiles.tinted("torch_glow", this.currentBiome.glow) ?? tiles.get("torch_glow")) : null;
+    const halo = this.lighting.torchHalo();
+    const glowImg = hasGlow ? (tiles.tinted("torch_glow", halo.color) ?? tiles.get("torch_glow")) : null;
     for (const t of this.torches) {
       const sx = t.tx * TILE - cam.x, sy = t.ty * TILE - cam.y;
       if (sx <= -TILE || sy <= -TILE || sx >= canvas.width || sy >= canvas.height) continue;
       if (glowImg) {
-        const flick = 0.75 + 0.25 * Math.sin(clock * 11 + t.tx * 1.7 + t.ty * 0.9);
+        const flick = settings.isReducedMotion ? 0.875 : 0.75 + 0.25 * Math.sin(clock * 11 + t.tx * 1.7 + t.ty * 0.9);
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
         ctx.globalAlpha = 0.5 * flick;
-        ctx.drawImage(glowImg, sx + TILE / 2 - 48, sy + TILE / 2 - 48, 96, 96);
+        ctx.drawImage(glowImg, sx + TILE / 2 - halo.size / 2, sy + TILE / 2 - halo.size / 2, halo.size, halo.size);
         ctx.restore();
       }
       if (hasFlame) ctx.drawImage(tiles.get(flame), sx, sy, TILE, TILE);
@@ -3721,16 +4314,32 @@ export class Game {
     }
   }
 
-  // Soft drop-shadow ellipses under everything so entities sit ON the floor, not float.
-  // One cheap pass on the floor layer (before sprites) — dark, low-alpha, no per-entity cost.
+  // Soft contact shadows under everything so entities sit ON the floor, not float. With
+  // the lighting layer up, each shadow samples the baked light field: it slides a few px
+  // AWAY from the light and firms up on brightly lit ground, so bodies read grounded in
+  // a torch pool without their silhouettes ever changing. One cheap pass on the floor
+  // layer (before sprites) — a sampled gradient blob, no per-entity allocation.
   private shadow(cx: number, cy: number, w: number) {
     const { ctx } = this;
+    if (!this.lighting.isEnabled) {
+      ctx.save();
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = "#05030b";
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, w * 0.42, w * 0.18, 0, 0, 6.28);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
+    // Screen -> world through the same render-clock camera the callers subtracted.
+    const s = this.lighting.sampleLight(cx + this.renderCam.x, cy + this.renderCam.y);
+    const mag = Math.hypot(s.dx, s.dy);
+    const push = Math.min(4, mag * 22);
+    const ox = mag > 0.001 ? (-s.dx / mag) * push : 0;
+    const oy = mag > 0.001 ? (-s.dy / mag) * push : 0;
     ctx.save();
-    ctx.globalAlpha = 0.28;
-    ctx.fillStyle = "#05030b";
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, w * 0.42, w * 0.18, 0, 0, 6.28);
-    ctx.fill();
+    ctx.globalAlpha = 0.30 + 0.18 * Math.min(1, s.intensity * 1.6);
+    ctx.drawImage(this.lighting.shadowSprite(), cx + ox - w * 0.5, cy + oy - w * 0.21, w, w * 0.42);
     ctx.restore();
   }
 
@@ -3781,17 +4390,20 @@ export class Game {
   }
 
   // Brazier: the static base with the animated torch flame layered on top and the shared
-  // torch glow composited additively — a mood + light-source prop, no new art.
+  // torch glow composited additively — a mood + light-source prop, no new art. Halo tint
+  // and throw come from the biome light grammar, like the wall torches.
   private renderBrazier(p: Prop, sx: number, sy: number, xf: Xform) {
     const { ctx, tiles } = this;
     this.drawPropImage("brazier", 0, sx, sy, PROP_DRAW, xf, 0);
     const clock = this.animClock;
     if (tiles.ready("torch_glow")) {
-      const flick = 0.75 + 0.25 * Math.sin(clock * 11 + p.x * 0.03 + p.y * 0.02);
+      const halo = this.lighting.brazierHalo();
+      const glowImg = tiles.tinted("torch_glow", halo.color) ?? tiles.get("torch_glow");
+      const flick = settings.isReducedMotion ? 0.875 : 0.75 + 0.25 * Math.sin(clock * 11 + p.x * 0.03 + p.y * 0.02);
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       ctx.globalAlpha = 0.5 * flick;
-      ctx.drawImage(tiles.get("torch_glow"), sx - 48, sy - 52, 96, 96);
+      ctx.drawImage(glowImg, sx - halo.size / 2, sy - 4 - halo.size / 2, halo.size, halo.size);
       ctx.restore();
     }
     const flame = TORCH_FRAMES[frameIndex(TORCH_FRAMES.length, 8, clock)];
@@ -3988,6 +4600,17 @@ export class Game {
     const isEmptied = slot.isShared ? slot.soldTo !== null : status === "sold";
     if (!isEmptied) {
       const bob = Math.sin(this.animClock * 2.4 + slot.id * 1.7) * 2;
+      // The EVENT stock's distinct glow (designer feel spec): legendaries, the artifact,
+      // and the mythic pedestals breathe gold so the chase reads from across the room —
+      // greyed-but-glowing when unaffordable (visible-but-locked, never hidden).
+      if (PREMIUM_EVENT_KINDS.has(slot.kind) || (slot.weapon !== null && !slot.isMystery && WEAPONS[slot.weapon].rarity === "legendary")) {
+        ctx.save();
+        ctx.globalAlpha = (status === "buy" ? 0.5 : 0.28) + 0.18 * Math.sin(this.animClock * 3 + slot.id);
+        ctx.strokeStyle = WEAPON_RARITY_COLOR.legendary;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy - 24 + bob, 20, 0, 6.28); ctx.stroke();
+        ctx.restore();
+      }
       this.drawShopMerch(slot, sx, sy - 24 + bob);
     }
     // An unaffordable station still reads FOR SALE: its price chip wears the same amber
@@ -3995,8 +4618,8 @@ export class Game {
     // Prices are the viewer's EFFECTIVE price (successive-buy escalation included).
     const price = shopSlotPriceFor(shop, slot, viewer);
     const color = status === "buy" ? "#ffd27a" : status === "broke" ? "#ffb43b" : "#9a8fb5";
-    if (status === "broke") this.drawShopChipOutline(shopChipCopy(status, price), sx, sy + 15);
-    this.drawShopText(shopChipCopy(status, price), sx, sy + 15, color);
+    if (status === "broke") this.drawShopChipOutline(shopChipCopy(status, price, slot.kind), sx, sy + 15);
+    this.drawShopText(shopChipCopy(status, price, slot.kind), sx, sy + 15, color);
   }
 
   private drawShopChipOutline(text: string, sx: number, sy: number) {
@@ -4032,20 +4655,25 @@ export class Game {
 
   private drawShopMerch(slot: ShopSlot, sx: number, sy: number) {
     const { ctx } = this;
-    if ((slot.kind === "weapon" || slot.kind === "legendary" || slot.kind === "mythic_weapon") && slot.weapon !== null) {
+    // A mystery pedestal wears the "???" chip — its identity never even reaches the wire.
+    if (slot.kind === "weapon" && slot.isMystery) { this.drawShopGlyph(sx, sy, "?", MYSTERY_COLOR); return; }
+    if ((slot.kind === "weapon" || slot.kind === "legendary" || slot.kind === "mythic_weapon" || slot.kind === "artifact") && slot.weapon !== null) {
       const img = this.sprites.weaponPickup(slot.weapon);
       if (img) { ctx.drawImage(img, sx - 17, sy - 17, 34, 34); return; }
       if (this.sprites.ready("gun")) { ctx.drawImage(this.sprites.get("gun"), sx - 14, sy - 14, 28, 28); return; }
     }
-    if ((slot.kind === "heart" || slot.kind === "max_hp" || slot.kind === "full_heal") && this.sprites.ready("heart")) {
+    if ((slot.kind === "heart" || slot.kind === "max_hp" || slot.kind === "full_heal" || slot.kind === "revive_token") && this.sprites.ready("heart")) {
       ctx.drawImage(this.sprites.get("heart"), sx - 13, sy - 13, 26, 26);
       return;
     }
-    if (slot.kind === "mystery") { this.drawShopGlyph(sx, sy, "?", "#c98bff"); return; }
+    if (slot.kind === "mystery") { this.drawShopGlyph(sx, sy, "?", MYSTERY_COLOR); return; }
     if (slot.kind === "amber_cache" || slot.kind === "mythic_amber") { this.drawShopGlyph(sx, sy, "\u25c6", "#ffb43b"); return; }
     if (slot.kind === "mythic_trio") { this.drawShopGlyph(sx, sy, "\u2756", "#ffb43b"); return; }
     if (slot.kind === "reroll_all") { this.drawShopGlyph(sx, sy, "\u21bb", "#ffb43b"); return; }
-    if (slot.kind === "blessing" || slot.kind === "rare_blessing") {
+    if (slot.kind === "weapon_upgrade") { this.drawShopGlyph(sx, sy, "\u2692", "#e8e0c8"); return; }
+    if (slot.kind === "prospector") { this.drawShopGlyph(sx, sy, "\u2697", "#ffd166"); return; }
+    if (slot.kind === "extra_slot") { this.drawShopGlyph(sx, sy, "\u25a3", "#e8e0c8"); return; }
+    if (slot.kind === "blessing" || slot.kind === "rare_blessing" || slot.kind === "core_infusion") {
       const def = itemById(slot.itemId ?? "");
       const tint = def?.tint ?? "#c98bff";
       ctx.save();
@@ -4095,14 +4723,37 @@ export class Game {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
       const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
+      // The rarity treatment starts at the glow: weapons wear their tier's accent (the
+      // shared WEAPON_RARITY_COLOR palette); a mystery wears the "???" purple. Note the
+      // mystery's identity may be known locally (solo runs the full sim) but is NEVER
+      // rendered — the reveal moment is authoritative for every mode.
+      const isMystery = p.isMystery === true;
+      const rarity = !isMystery && p.kind === "weapon" && p.weapon ? WEAPONS[p.weapon].rarity : null;
+      const glow = p.kind === "heart" ? "#ff6a6a"
+        : p.kind === "coin" ? "#ffd27a"
+        : isMystery ? MYSTERY_COLOR
+        : rarity !== null ? WEAPON_RARITY_COLOR[rarity]
+        : "#ffb43b";
+      const isLegendary = rarity === "legendary";
       ctx.save();
-      ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
-      const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" ? "#ffd27a" : "#ffb43b");
+      ctx.globalAlpha = (0.3 + Math.abs(Math.sin(clock * 3)) * 0.15) * (isLegendary || isMystery ? 1.35 : 1);
+      const glowR = isLegendary || isMystery ? 26 : 20;
+      const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, glowR);
+      g.addColorStop(0, glow);
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx, sy, glowR, 0, 6.28); ctx.fill();
       ctx.restore();
+      // Legendary and mystery pickups earn a slow-pulsing accent ring — the from-across-
+      // the-room "that one is special" read.
+      if (isLegendary || isMystery) {
+        ctx.save();
+        ctx.globalAlpha = 0.45 + Math.sin(clock * 2.2) * 0.2;
+        ctx.strokeStyle = glow;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy + 2, 21 + Math.sin(clock * 2.2) * 2, 0, 6.28); ctx.stroke();
+        ctx.restore();
+      }
       // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
       // spent their one personal claim (teammates still see their own live options).
       if (p.isBossChoice) {
@@ -4117,6 +4768,29 @@ export class Game {
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
       const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;
       const pulse = p.kind === "coin" ? 1 : 1 + Math.sin(clock * 4) * 0.08;
+      // A mystery renders as a dark shrouded gun silhouette under a floating "?" — never
+      // its real art (that would leak the identity in solo, where the sim is local).
+      if (isMystery) {
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.scale(pulse, pulse);
+        if (this.sprites.ready("gun")) {
+          ctx.globalAlpha = 0.9;
+          ctx.filter = "brightness(0.25) saturate(0.4)";
+          ctx.drawImage(this.sprites.get("gun"), -15, -15, 30, 30);
+          ctx.filter = "none";
+        } else {
+          ctx.fillStyle = "#2a1f42";
+          ctx.beginPath(); ctx.arc(0, 0, 10, 0, 6.28); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = MYSTERY_COLOR;
+        ctx.font = "bold 13px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("?", 0, -14 + Math.sin(clock * 2.5) * 2);
+        ctx.restore();
+        continue;
+      }
       // Weapon pickups draw their own 64px side-profile sprite so each gun is
       // recognizable on the floor; anything without dedicated art (or not yet loaded)
       // falls back to the generic "gun" sprite, then to a plain dot.
@@ -4519,6 +5193,236 @@ export class Game {
       ctx.fillStyle = "#c98bff";
       ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
     }
+    ctx.restore();
+  }
+
+  // Weapon ground effects (the effect wave's floor layer): Frostline chill zones and
+  // Snapwire trip lines. Sprite-mask hooks (frost_zone / wire_post) recolor like every
+  // fx primitive; until the art lands the primitive fallback keeps them fully readable.
+  //
+  // COMBAT ATTENTION POLICY: weapon residue renders on the floor pass, UNDER every enemy
+  // body and telegraph marker, and always quieter than any telegraph — the residue caps
+  // below tell alphas by a wide margin. A REMOTE teammate's persistent effects simplify
+  // aggressively (REMOTE_EFFECT_ALPHA rims/lines, no fills, no blink pulses): their
+  // information matters, their brightness never competes with an enemy windup.
+  private renderGroundEffects() {
+    const { ctx, cam } = this;
+    let isDrawing = false;
+    for (const e of this.effects) {
+      if (e.kind !== "zone" && e.kind !== "wire") continue;
+      if (!isDrawing) { ctx.save(); isDrawing = true; }
+      const isRemote = e.owner !== LOCAL_ID;
+      if (e.kind === "zone") {
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        // Quick fade-in as the bead paints it, long fade-out as it thaws.
+        const fade = Math.min(1, (e.maxLife - e.life) * 8, (e.life / Math.max(0.001, e.maxLife)) * 2.5);
+        if (isRemote) {
+          // Remote zones: a thin rim only — the lane reads, nothing glows.
+          ctx.globalAlpha = 0.22 * fade;
+          ctx.strokeStyle = "#9fd8ff";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
+          continue;
+        }
+        const mask = this.sprites.fxTinted("frost_zone", "#9fd8ff");
+        if (mask) {
+          ctx.globalAlpha = 0.5 * fade;
+          ctx.drawImage(mask, sx - e.radius, sy - e.radius, e.radius * 2, e.radius * 2);
+        } else {
+          ctx.globalAlpha = 0.16 * fade;
+          ctx.fillStyle = "#9fd8ff";
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+          ctx.globalAlpha = 0.4 * fade;
+          ctx.strokeStyle = "#cdeaff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
+        }
+      } else {
+        const ax = e.x - cam.x, ay = e.y - cam.y;
+        const bx = e.x2 - cam.x, by = e.y2 - cam.y;
+        if (isRemote) {
+          // Remote wires: one dim steady line — no posts, no blink (their arm state is
+          // their owner's problem; the geometry is all a teammate needs).
+          ctx.globalAlpha = 0.35;
+          ctx.strokeStyle = "#b8b04a";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+          continue;
+        }
+        // Arming wires blink; live wires hold a taut hum-bright line.
+        const isArming = e.arm > 0;
+        const blink = isArming ? 0.35 + 0.3 * Math.sin(this.animClock * 18) : 1;
+        ctx.globalAlpha = 0.85 * blink;
+        ctx.strokeStyle = isArming ? "#b8b04a" : "#e8e05a";
+        ctx.lineWidth = isArming ? 1 : 2;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = "#e8e05a";
+        for (const [px, py] of [[ax, ay], [bx, by]] as const) {
+          const post = this.sprites.fxTinted("wire_post", "#e8e05a");
+          if (post) ctx.drawImage(post, px - 5, py - 5, 10, 10);
+          else ctx.fillRect(px - 2, py - 4, 4, 8);
+        }
+      }
+    }
+    if (isDrawing) ctx.restore();
+  }
+
+  // Weapon effect bodies: Prism Sentries, Razor Halo blades, and Crooked Chain links.
+  // The halo centers on its owner's RENDERED position when that player is on screen
+  // (the local player especially — the 20Hz effect anchor would lag the predicted body).
+  private renderEffectEntities() {
+    const { ctx, cam } = this;
+    let isDrawing = false;
+    for (const e of this.effects) {
+      if (e.kind === "zone" || e.kind === "wire") continue;
+      if (!isDrawing) { ctx.save(); isDrawing = true; }
+      if (e.kind === "sentry") {
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        ctx.globalAlpha = 1;
+        const core = this.sprites.fxTinted("sentry_core", "#c8a8ff");
+        if (core) {
+          ctx.drawImage(core, sx - e.radius * 1.4, sy - e.radius * 1.4, e.radius * 2.8, e.radius * 2.8);
+        } else {
+          ctx.fillStyle = "#3a2f52";
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+          ctx.strokeStyle = "#c8a8ff";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius - 2, 0, 6.28); ctx.stroke();
+          const spin = this.animClock * 1.8;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(spin) * (e.radius + 5), sy + Math.sin(spin) * (e.radius + 5));
+          ctx.stroke();
+        }
+        // Durability pips over the body — a destructible deployable must read as one.
+        if (e.hp >= 0 && e.maxHp > 0 && e.hp < e.maxHp) {
+          const w = e.radius * 2;
+          ctx.fillStyle = "#1c1826";
+          ctx.fillRect(sx - w / 2, sy - e.radius - 8, w, 3);
+          ctx.fillStyle = "#c8a8ff";
+          ctx.fillRect(sx - w / 2, sy - e.radius - 8, w * Math.max(0, e.hp / e.maxHp), 3);
+        }
+      } else if (e.kind === "orbit") {
+        const ownerPos = this.effectOwnerPos(e);
+        const cx = ownerPos[0] - cam.x, cy = ownerPos[1] - cam.y;
+        if (e.owner !== LOCAL_ID) {
+          // A teammate's ring: simple dim dots, no blades, no ring line — position and
+          // cadence read; nothing competes with enemy telegraphs.
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = "#d8f0e8";
+          for (let i = 0; i < e.blades; i++) {
+            const a = e.angle + (i / Math.max(1, e.blades)) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.arc(cx + Math.cos(a) * e.ring, cy + Math.sin(a) * e.ring, 3, 0, 6.28);
+            ctx.fill();
+          }
+          continue;
+        }
+        const blade = this.sprites.fxTinted("halo_blade", "#d8f0e8");
+        for (let i = 0; i < e.blades; i++) {
+          const a = e.angle + (i / Math.max(1, e.blades)) * Math.PI * 2;
+          const bx = cx + Math.cos(a) * e.ring;
+          const by = cy + Math.sin(a) * e.ring;
+          ctx.globalAlpha = 0.95;
+          if (blade) {
+            ctx.save();
+            ctx.translate(bx, by);
+            ctx.rotate(a + HALF_PI);
+            ctx.drawImage(blade, -e.bladeRadius, -e.bladeRadius, e.bladeRadius * 2, e.bladeRadius * 2);
+            ctx.restore();
+          } else {
+            ctx.save();
+            ctx.translate(bx, by);
+            ctx.rotate(a + HALF_PI);
+            ctx.fillStyle = "#d8f0e8";
+            ctx.beginPath();
+            ctx.moveTo(0, -e.bladeRadius);
+            ctx.lineTo(e.bladeRadius * 0.45, 0);
+            ctx.lineTo(0, e.bladeRadius);
+            ctx.lineTo(-e.bladeRadius * 0.45, 0);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+        ctx.globalAlpha = e.flare > 0 ? 0.3 : 0.12;
+        ctx.strokeStyle = "#d8f0e8";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(cx, cy, e.ring, 0, 6.28); ctx.stroke();
+      } else {
+        // Tether: a sagging chain from the owner to the latched body.
+        const target = this.enemies.find((en) => en.id === e.eid);
+        if (!target) continue;
+        const ownerPos = this.effectOwnerPos(e);
+        const ax = ownerPos[0] - cam.x, ay = ownerPos[1] - cam.y;
+        const bx = target.x - cam.x, by = target.y - cam.y;
+        if (e.owner !== LOCAL_ID) {
+          // A teammate's chain: one thin line, no links, no sag detail.
+          ctx.globalAlpha = 0.4;
+          ctx.strokeStyle = "#c9b06a";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+          continue;
+        }
+        const link = this.sprites.fxTinted("chain_link", "#c9b06a");
+        const segs = 9;
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = "#c9b06a";
+        ctx.lineWidth = 2;
+        for (let i = 0; i < segs; i++) {
+          const t0 = i / segs, t1 = (i + 1) / segs;
+          const sag0 = Math.sin(t0 * Math.PI) * 7, sag1 = Math.sin(t1 * Math.PI) * 7;
+          const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0 + sag0;
+          const x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1 + sag1;
+          if (link) {
+            ctx.drawImage(link, (x0 + x1) / 2 - 3, (y0 + y1) / 2 - 3, 6, 6);
+          } else if (i % 2 === 0) {
+            ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+          }
+        }
+      }
+    }
+    if (isDrawing) ctx.restore();
+  }
+
+  // Where an owner-anchored effect should draw from: the owner's RENDERED body when we
+  // can resolve it (local player: the predicted position), else the effect's own anchor.
+  private effectOwnerPos(e: Effect): [number, number] {
+    if (e.owner === LOCAL_ID) return [this.px, this.py];
+    return [e.x, e.y];
+  }
+
+  // The local Breach hold: a fill ring on the player plus a landing marker at the
+  // currently-charged distance — the ground target IS the weapon's aim story.
+  private renderChargeMarker() {
+    const p = this.p;
+    if (p.chargeT <= 0) return;
+    const spec = WEAPONS[p.weapon].charge;
+    if (!spec) return;
+    const { ctx, cam } = this;
+    const t = Math.min(1, p.chargeT / spec.time);
+    const dist = (spec.minDist + (spec.maxDist - spec.minDist) * t) * p.mods.bulletLifeMult;
+    const sx = this.px - cam.x, sy = this.py - cam.y;
+    const mx = sx + Math.cos(this.aimAngle) * dist;
+    const my = sy + Math.sin(this.aimAngle) * dist;
+    const blast = (WEAPONS[p.weapon].blast ?? 60) * 0.9;
+    ctx.save();
+    // Charge ring around the player.
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#ffb06a";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(sx, sy, p.pr + 7, -HALF_PI, -HALF_PI + t * Math.PI * 2);
+    ctx.stroke();
+    // Landing marker: blast-sized dashed ring + core dot, brightening toward full charge.
+    ctx.globalAlpha = 0.35 + 0.4 * t;
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(mx, my, blast, 0, 6.28); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#ffb06a";
+    ctx.beginPath(); ctx.arc(mx, my, 3.5, 0, 6.28); ctx.fill();
     ctx.restore();
   }
 
@@ -5115,8 +6019,10 @@ export class Game {
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
       // A network-absent teammate renders as an explicit ghost (their body is reserved for
-      // the reconnect grace) — never mistakable for a live player or a corpse.
-      ctx.globalAlpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1;
+      // the reconnect grace) — never mistakable for a live player or a corpse. A live one
+      // blinks through its authoritative i-frames exactly like the local blob does.
+      const alpha = r.isAbsent ? 0.35 : r.isDown ? 0.4 : isInvulnBlinkFrame(r.invuln, r.dashInvuln) ? 0.4 : 1;
+      ctx.globalAlpha = alpha;
       ctx.translate(sx + xf.ox, sy + xf.oy);
       ctx.rotate(xf.rot);
       ctx.scale(r.facing * xf.sx, xf.sy);
@@ -5129,7 +6035,7 @@ export class Game {
       ctx.restore();
       // Teammates' verified cosmetic overlays (same transform as their body draw above,
       // which never uses frame sheets — the procedural xf carries the full deform).
-      this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, r.isAbsent ? 0.35 : r.isDown ? 0.4 : 1, false);
+      this.drawCosmetics(r.hat, r.face, sx, sy, 52, r.facing, xf, alpha, false);
 
       if (!r.isDown && !r.isAbsent) {
         if (WEAPONS[r.weapon].melee) this.renderHeldMelee(sx, sy, r.aimAngle, r.weapon, 1, null);
@@ -5194,7 +6100,7 @@ export class Game {
     const psx = ipx - cam.x, psy = ipy - cam.y;
     let alpha = 1;
     if (this.isDown) alpha = 0.4;
-    else if (this.invuln > 0 && Math.floor(this.invuln * 20) % 2 === 0) alpha = 0.4;
+    else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;
     const clip: SheetClip = this.playerAnim.move > 0.5 ? "walk" : "idle";
     const xf = characterXform(this.playerAnim, CHARACTER_STYLE);
     // Directional recoil: nudge the blob back against its aim as it fires.
@@ -5649,15 +6555,17 @@ export class Game {
     const { ctx, renderCam: cam } = this;
     const isReady = this.sprites.ready("hero");
     const tint = this.selfTint();
-    const heroImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
+    const selfImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
     for (const a of this.afterimages) {
       const k = 1 - a.t; // 1..0
+      // A remote dasher's ghost carries their party tint; the local ghost keeps self tint.
+      const img = a.color ? this.sprites.tintedHero(a.color) ?? selfImg : selfImg;
       ctx.save();
       ctx.globalAlpha = k * 0.4;
       ctx.translate(a.x - cam.x, a.y - cam.y);
       ctx.scale(a.facing, 1);
-      if (isReady) ctx.drawImage(heroImg, -26, -26, 52, 52);
-      else { ctx.fillStyle = "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
+      if (isReady) ctx.drawImage(img, -26, -26, 52, 52);
+      else { ctx.fillStyle = a.color ?? "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
       ctx.restore();
     }
     ctx.globalAlpha = 1;
@@ -5757,6 +6665,8 @@ export class Game {
   devSpawnProp(kind: PropKind, atCursor: boolean): void {
     const p = this.devPlacePoint(atCursor);
     devSpawnProp(this.world, kind, p.x, p.y);
+    // A spawned brazier is a new static light source: fold it into the baked field.
+    if (kind === "brazier") this.rebakeLighting();
   }
 
   devSpawnChest(atCursor: boolean): void {
@@ -5835,6 +6745,17 @@ export class Game {
     return this.isFlowDebug;
   }
 
+  // A/B the whole AO + lighting layer (legacy flat depth fill returns while off).
+  devToggleLighting(): boolean {
+    this.lighting.isEnabled = !this.lighting.isEnabled;
+    return this.lighting.isEnabled;
+  }
+
+  // Direct lighting-layer access for QA rigs + the headless visual-metrics tests.
+  devLighting(): LightingRenderer {
+    return this.lighting;
+  }
+
   // Teleport the local player (QA capture rigs aim the camera at a spot of interest).
   devTeleport(x: number, y: number): void {
     this.p.x = x;
@@ -5857,6 +6778,8 @@ export class Game {
       weapon: this.weapon,
       isGodMode: this.isGodMode,
       isFlowDebug: this.isFlowDebug,
+      isLighting: this.lighting.isEnabled,
+      lightingMs: this.lighting.stats.frameMs,
       enemies: this.enemies.length,
       bullets: this.bullets.length,
       particles: this.particles.length,

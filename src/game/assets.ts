@@ -167,7 +167,11 @@ export type FxName =
   | "ember" | "frost" | "freeze_shell" | "flame_puff" | "shock_ring"
   // The Sunlance's dedicated ray mask (pure white, code-tinted like every fx primitive);
   // the beam recipe falls back to trail_streak until it lands.
-  | "beam_ray";
+  | "beam_ray"
+  // Effect-wave masks (frost zone disc, snapwire post, halo blade, sentry body, chain
+  // link). Authored by the AD via the locked fal recipe; until the PNGs land fxTinted
+  // returns null and each renderer keeps its readable primitive fallback.
+  | "frost_zone" | "wire_post" | "halo_blade" | "sentry_core" | "chain_link";
 
 const FX_SOURCES: Record<FxName, string> = {
   glow_round: "/sprites/fx/glow_round.png",
@@ -176,6 +180,11 @@ const FX_SOURCES: Record<FxName, string> = {
   slug: "/sprites/fx/slug.png",
   spark: "/sprites/fx/spark.png",
   comet_trail: "/sprites/fx/comet_trail.png",
+  frost_zone: "/sprites/fx/frost_zone.png",
+  wire_post: "/sprites/fx/wire_post.png",
+  halo_blade: "/sprites/fx/halo_blade.png",
+  sentry_core: "/sprites/fx/sentry_core.png",
+  chain_link: "/sprites/fx/chain_link.png",
   crackle: "/sprites/fx/crackle.png",
   arc_chain: "/sprites/fx/arc_chain.png",
   smoke_puff: "/sprites/fx/smoke_puff.png",
@@ -294,6 +303,24 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   sword: "/sprites/held_cutlass.png",
   longsword: "/sprites/held_claymore.png",
   spear: "/sprites/held_pike.png",
+  // Effect wave hooks — exact drop-in filenames for the generation pipeline
+  // (tools/gen-sprites.mjs). Until the art lands, missing files 404 visibly in dev and
+  // the held-weapon draw path falls back exactly like every other unregistered weapon.
+  lastlight: "/sprites/held_lastlight.png",
+  breach: "/sprites/held_breach.png",
+  snapwire: "/sprites/held_snapwire.png",
+  frostline: "/sprites/held_frostline.png",
+  halo: "/sprites/held_halo.png",
+  sentry: "/sprites/held_sentry.png",
+  crook: "/sprites/held_crook.png",
+  // Legendary hooks — art is generated separately via the locked FAL pipeline (exact
+  // drop-in filenames, like the finals above). Until each lands, the held-weapon
+  // renderer falls back to its procedural draw — never broken art.
+  reaper: "/sprites/held_reaper.png",
+  swarm: "/sprites/held_hive.png",
+  midas: "/sprites/held_midas.png",
+  phase: "/sprites/held_umbra.png",
+  vortex: "/sprites/held_lodestone.png",
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
@@ -319,6 +346,21 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   sword: "/sprites/weapon_cutlass.png",
   longsword: "/sprites/weapon_claymore.png",
   spear: "/sprites/weapon_pike.png",
+  // Effect wave hooks (same contract as the held set above).
+  lastlight: "/sprites/weapon_lastlight.png",
+  breach: "/sprites/weapon_breach.png",
+  snapwire: "/sprites/weapon_snapwire.png",
+  frostline: "/sprites/weapon_frostline.png",
+  halo: "/sprites/weapon_halo.png",
+  sentry: "/sprites/weapon_sentry.png",
+  crook: "/sprites/weapon_crook.png",
+  // Legendary hooks (FAL pipeline drop-ins — see HELD_SOURCES note). The pickup renderer
+  // and hotbar icons degrade to the generic pixel gun until each file lands.
+  reaper: "/sprites/weapon_reaper.png",
+  swarm: "/sprites/weapon_hive.png",
+  midas: "/sprites/weapon_midas.png",
+  phase: "/sprites/weapon_umbra.png",
+  vortex: "/sprites/weapon_lodestone.png",
 };
 
 // The weapon's icon art for DOM HUD surfaces (the hotbar): its pickup side profile.
