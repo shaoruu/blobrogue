@@ -17,7 +17,7 @@ import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
 import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText } from "../src/sim/biomes.js";
+import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText, REGIONS, regionForFloor, REGION_PALETTES } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
 import { spawnFloorEnemies, isBossFloor, isGauntletFloor, isBossKind, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
 import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp } from "../src/sim/world.js";
@@ -241,10 +241,10 @@ function curriculumCadenceTests(): void {
 }
 
 function biomeLadderTests(): void {
-  section("biome ladder: the canonical 30-floor six-region spine + terminal Null band");
-  check("seven bands exist (six curriculum regions + the post-F30 Null)", BIOMES.length === 7);
+  section("biome ladder: the canonical 30-floor six-region spine + terminal Sump render band");
+  check("seven bands exist (six curriculum regions + the post-F30 Sump render band)", BIOMES.length === 7);
   check("balance pressure covers every band", BIOME_PRESSURE.length === BIOMES.length);
-  check("curriculum mapping: Amberwild 1-5, Rootbound 6-10, Sunless 11-15, Deep 16-20, Gilded 21-25, Ember 26-30, Null 31+",
+  check("curriculum mapping: Amberwild 1-5, Rootbound 6-10, Sunless 11-15, Deep 16-20, Gilded 21-25, Ember 26-30, Sump 31+",
     biomeIndexForFloor(1) === 0 && biomeIndexForFloor(5) === 0 &&
     biomeIndexForFloor(6) === 1 && biomeIndexForFloor(10) === 1 &&
     biomeIndexForFloor(11) === 2 && biomeIndexForFloor(15) === 2 &&
@@ -252,8 +252,8 @@ function biomeLadderTests(): void {
     biomeIndexForFloor(21) === 4 && biomeIndexForFloor(25) === 4 &&
     biomeIndexForFloor(26) === 5 && biomeIndexForFloor(30) === 5 &&
     biomeIndexForFloor(31) === 6 && biomeIndexForFloor(99) === 6);
-  check("curriculum names hold", BIOMES.map((b) => b.name).join("|") ===
-    "Amberwild|Rootbound Warrens|Sunless Caves|The Deep|Gilded Archive|Emberreach|The Null");
+  check("curriculum names hold (terminal band renders as the Sump for THE UNMAKING)", BIOMES.map((b) => b.name).join("|") ===
+    "Amberwild|Rootbound Warrens|Sunless Caves|The Deep|Gilded Archive|Emberreach|The Sump");
   check("every band ends on its milestone floor", [5, 10, 15, 20, 25, 30].every((f) =>
     isBossFloor(f) && biomeIndexForFloor(f) === biomeIndexForFloor(f - 1)));
   check("F10 is the Miniboss Gauntlet, announced as such (a non-boss milestone)",
@@ -265,6 +265,25 @@ function biomeLadderTests(): void {
   check("mood darkens and thickens with every band", BIOMES.every((b, i) =>
     i === 0 || (b.vignette > BIOMES[i - 1].vignette && b.lightLevel > BIOMES[i - 1].lightLevel
       && b.detailDensity > BIOMES[i - 1].detailDensity)));
+
+  // The encounter REGION model (Gate 1's granularity): six pre-F30 regions 1:1 with the biome
+  // bands, then THE UNMAKING's four post-F30 regions (Sump 31-50, Veinworks 51-70, Pale 71-90,
+  // Null Core 91+). The region — not the biome band — names the floor banner past F30.
+  check("ten regions: six curriculum + four THE UNMAKING", REGIONS.length === 10);
+  check("region mapping spans the roadmap's floor ranges",
+    regionForFloor(1).id === "amberwild" && regionForFloor(30).id === "ember" &&
+    regionForFloor(31).id === "sump" && regionForFloor(50).id === "sump" &&
+    regionForFloor(51).id === "veinworks" && regionForFloor(70).id === "veinworks" &&
+    regionForFloor(71).id === "pale" && regionForFloor(90).id === "pale" &&
+    regionForFloor(91).id === "nullcore" && regionForFloor(120).id === "nullcore");
+  check("regions are contiguous + ordered (no gap, no overlap)", REGIONS.every((r, i) =>
+    r.fromFloor === (i === 0 ? 1 : (REGIONS[i - 1].toFloor as number) + 1) &&
+    (r.toFloor === null || r.toFloor >= r.fromFloor)));
+  check("the region names the post-F30 floor banner (JET F35 is the Sump; F55 is the Veinworks)",
+    floorBannerText(35) === "THE SUMP · FLOOR 35" && floorBannerText(55) === "THE VEINWORKS · FLOOR 55");
+  check("post-F30 region palettes authored (Sump interim + three placeholders)",
+    (["sump", "veinworks", "pale", "nullcore"] as const).every((id) => REGION_PALETTES[id] !== undefined) &&
+    REGION_PALETTES.sump?.floorA === "#16131a");
 }
 
 function hazardPlacementTests(): void {

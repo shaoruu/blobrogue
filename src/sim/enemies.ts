@@ -16,6 +16,10 @@ import {
 } from "./balance.js";
 import type { EnemyTier, EliteAffix } from "./balance.js";
 import { isControllerKind, isWorkerKind, ENEMY_MODULE } from "./bestiary.js";
+import { floorRoster, FAMILY_INTRO_FLOOR } from "./roster.js";
+// Re-exported from its new home (roster.ts, the encounter-deck curriculum data) so existing
+// consumers importing it from enemies.ts keep working.
+export { FAMILY_INTRO_FLOOR } from "./roster.js";
 
 export type Movement = "chase" | "flock" | "drift" | "kite" | "charge" | "burrow" | "orbit" | "boss";
 
@@ -544,46 +548,10 @@ const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt, choir: CHOIR.fragmentFirstAt,
 };
 
-// The corrected gate §2 cadence table (authoritative over earlier drafts): F1 slime only,
-// F2 expands (bat, skeleton, spitter — the bat flock's first isolated floor), F3 remixes
-// (+ghost, charger), F4 proves (+burrower, first guaranteed brute), F6 recovers with the
-// orbiter's isolated teaching room, F7 adapts with the shielder wall.
-// The bestiary wave extends the cadence down the biome ladder, each kind landing in the
-// band whose ecology it belongs to: the rootward walls Rootbound's formation floors
-// (F8), the caskbellows holds Sunless lanes (F11) where the echojack's noise starts
-// lying (F13), the seamcutter tears the Deep's load seams (F16), the sinderling feeds on
-// Emberreach's vents (F26), and the fragment sings only after the Choir falls (F31).
-export const FAMILY_INTRO_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = {
-  slime: 1, bat: 2, skeleton: 2, spitter: 2, ghost: 3, charger: 3,
-  burrower: 4, orbiter: 6, shielder: 7,
-  rootward: 8, caskbellows: 11, echojack: 13, seamcutter: 16, sinderling: 26, mason: 28, fragment: 31,
-};
-
-function floorRoster(floor: number, complexShare: number): Array<{ kind: EnemyKind; weight: number }> {
-  const roster: Array<{ kind: EnemyKind; weight: number }> = [{ kind: "slime", weight: 5 }];
-  const has = (kind: EnemyKind): boolean => floor >= (FAMILY_INTRO_FLOOR[kind] ?? Infinity);
-  if (has("bat")) roster.push({ kind: "bat", weight: 3 });
-  if (has("skeleton")) roster.push({ kind: "skeleton", weight: 2 });
-  // Ranged threat: rare on its intro floor (a gentle lesson), a bit more common from
-  // floor 3 once the melee lunge is learned. Sunless raises the complex share.
-  if (has("spitter")) roster.push({ kind: "spitter", weight: (floor >= 3 ? 2 : 1) * complexShare });
-  if (has("ghost")) roster.push({ kind: "ghost", weight: 2 * complexShare });
-  if (has("charger")) roster.push({ kind: "charger", weight: 2 });
-  if (has("burrower")) roster.push({ kind: "burrower", weight: 2 * complexShare });
-  if (has("orbiter")) roster.push({ kind: "orbiter", weight: 2 * complexShare });
-  if (has("shielder")) roster.push({ kind: "shielder", weight: 2 });
-  if (has("rootward")) roster.push({ kind: "rootward", weight: 2 });
-  if (has("caskbellows")) roster.push({ kind: "caskbellows", weight: 2 * complexShare });
-  // Support stays rarer than line troops: one liar per fight is texture, two is noise.
-  if (has("echojack")) roster.push({ kind: "echojack", weight: 1.5 * complexShare });
-  if (has("seamcutter")) roster.push({ kind: "seamcutter", weight: 2 });
-  // Ember native: heavier weight in its home band, where the vents it feeds on live.
-  if (has("sinderling")) roster.push({ kind: "sinderling", weight: 2.5 });
-  // The worker is texture, never the fight: one mason fortifying the vents is ecology.
-  if (has("mason")) roster.push({ kind: "mason", weight: 1.5 * complexShare });
-  if (has("fragment")) roster.push({ kind: "fragment", weight: 2 * complexShare });
-  return roster;
-}
+// The per-floor enemy pool is now Gate 1's biome-selective encounter deck (roster.ts): a
+// per-region INCLUDE + CARRYOVER deck drawn into a floor's hand, replacing the old cumulative
+// global roster. FAMILY_INTRO_FLOOR (the intro-cadence table) also lives there — it is deck
+// curriculum data — and is re-imported here for the encounter-CARD availability gate below.
 
 function weightedPick(rng: Rng, roster: Array<{ kind: EnemyKind; weight: number }>): EnemyKind {
   const total = roster.reduce((s, r) => s + r.weight, 0);
@@ -765,7 +733,7 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   const roomCount = dungeon.rooms.length;
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
   let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
-  const roster = floorRoster(floor, pressure.complexShare);
+  const roster = floorRoster(seed, floor, pressure.complexShare);
   const plan: PlannedUnit[] = [];
 
   // Combat rooms: 3–5 of the non-spawn rooms carry the floor's threat, in PROGRESSION
