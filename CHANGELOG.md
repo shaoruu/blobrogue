@@ -6,10 +6,15 @@ Newest changes first. (Times are Pacific.)
 ---
 
 ## Unreleased (in progress)
-- Combat + performance pass: bosses path around walls instead of beaching on cover; fixed frame-rate drops from Thumper/AoE weapons (with a standing perf guard so it can't regress); Snapwire / Razor Halo / Crooked Chain now break barrels & props; Sunlance range matches its beam and got a fire sound; coins can no longer drop inside walls.
-- Visual polish: real crystalline frost-zone art (no more flat green disc), redone weapon projectiles (Frostline shard + the legendaries), and a proper charred scorch mark from Thumper.
-- Hotbar overhaul: precise drag-to-reorder + drag-a-weapon-out-to-drop, cleaner full-hotbar swap.
-- Double-tap a direction to dash (+ rebindable dash key), shop click-outside-to-close & clearer sold-out states, more music variety, and run persistence on reconnect.
+- Content push: more bosses ramping toward floor 100 (with giant spectacle set-pieces + anti-repeat affixes), new gun verbs, deeper-floor enemies, and seeded floor mutators/elite affixes for run variety.
+- Kits/classes + XP: pick a class (Gunner/Mender/Bulwark/Phantom) with a signature ultimate; account XP unlocks kits & cosmetics.
+- More cosmetics (a fresh wave of real generated hats + face items, replacing the old placeholder ones), more blessings, HP numbers on the HUD, and interact-with-Patch.
+- Bug fixes in flight: heart double-consume, leaderboard deepest-floor not recording past a point, name change, sentry animation, Umbra art, drag-and-drop precision.
+- Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
+
+## 2026-07-10
+- **Combat correctness + performance:** bosses now path around walls & cover instead of beaching on them (no more cheesing from behind a wall); fixed frame-rate drops from Thumper and other AoE weapons, with a standing performance guard so it can't regress; Snapwire / Razor Halo / Crooked Chain now break barrels & props; Sunlance's range matches its beam and it has a fire sound; coins can no longer drop inside walls.
+- **UI overhaul:** your blob is now a big centerpiece on the main menu; the menu buttons are reorganized with clear hierarchy; Settings is now tabbed (Audio / Gameplay / Video / Accessibility) instead of one long list; a game-wide consistency pass (unified colors, text sizes, focus outlines, keycaps, panels); and a new in-game **What's New** panel so you can read the changelog right in the game.
 
 ## 2026-07-09
 - **Co-op game-feel pass:** you now HEAR teammates' guns, hits, and pickups (positional audio); friendly fire is a harmless playful "bonk" (a little shove + squash, zero damage); coins fly into your wallet on pickup; the weapon stat card no longer pops when you tap 1–9; the "E to trade" prompt now floats by your character instead of the screen corner; and a batch of previously-silent events got sound.
