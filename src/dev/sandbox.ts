@@ -6,6 +6,7 @@ import { Game } from "../game/game.js";
 import type { DevSnapshot } from "../game/game.js";
 import type { EnemyTier } from "../sim/balance.js";
 import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
+import type { MutatorId, RollAffixId, BossAffixId } from "../sim/floorRolls.js";
 import { ITEMS } from "../sim/items.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats } from "../sim/weaponStats.js";
@@ -22,6 +23,19 @@ const WEAPON_IDS: readonly WeaponId[] = [
   "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
   "reaper", "swarm", "midas", "phase", "vortex",
 ];
+// Wave 1 randomness rows: id -> readout label (kept local so the panel owns zero sim internals).
+const MUTATORS: ReadonlyArray<readonly [MutatorId, string]> = [
+  ["denseDark", "Dense Dark"], ["moltenFloor", "Molten"], ["twinnedElites", "Twinned"],
+  ["fractureStorm", "Fracture"], ["amberfall", "Amberfall"], ["thinAir", "Thin Air"],
+];
+const ROLL_AFFIXES: ReadonlyArray<readonly [RollAffixId, string]> = [
+  ["splits", "Splits"], ["shielded", "Shielded"], ["hazardTrail", "Hazard Trail"],
+  ["reflect", "Reflect"], ["enrage", "Enrage"],
+];
+const BOSS_AFFIXES: ReadonlyArray<readonly [BossAffixId, string]> = [
+  ["emberwake", "Emberwake"], ["sundering", "Sundering"], ["amberrain", "Amberrain"],
+];
+
 const PROP_KINDS: readonly PropKind[] = ["crate", "pot", "barrel", "barrel_explosive", "brazier", "root_wall", "silt_mound", "clinker_brick"];
 const PROP_LABEL: Record<PropKind, string> = {
   crate: "Crate", pot: "Pot", barrel: "Barrel", barrel_explosive: "Boom Barrel", brazier: "Brazier",
@@ -248,6 +262,52 @@ function buildPanel(game: Game): void {
   realRow.appendChild(btn("Real here", () => game.devLoadRealFloor(floor), "mini"));
   floorSec.appendChild(realRow);
   panel.appendChild(floorSec);
+
+  // ---- Wave 1 randomness: force every mutator / elite affix / boss affix in isolation ----
+  const randSec = section("Wave 1 Randomness");
+  const mutRow = h("div", "dev-row");
+  const activeMutators: MutatorId[] = [];
+  const mutBtns = new Map<MutatorId, HTMLButtonElement>();
+  const syncMutators = () => { game.devForceMutators(activeMutators); };
+  for (const [id, label] of MUTATORS) {
+    const b = btn(label, () => {
+      const i = activeMutators.indexOf(id);
+      if (i !== -1) activeMutators.splice(i, 1);
+      else { activeMutators.push(id); if (activeMutators.length > 2) activeMutators.shift(); }
+      for (const [mid, mb] of mutBtns) mb.classList.toggle("on", activeMutators.indexOf(mid) !== -1);
+      syncMutators();
+    }, "mini");
+    mutBtns.set(id, b);
+    mutRow.appendChild(b);
+  }
+  randSec.appendChild(h("div", "dev-note", "Mutators (\u22642, toggles):"));
+  randSec.appendChild(mutRow);
+  const clearMut = btn("Clear mutators", () => {
+    activeMutators.length = 0;
+    for (const mb of mutBtns.values()) mb.classList.remove("on");
+    syncMutators();
+  }, "wide");
+  randSec.appendChild(clearMut);
+  // Elite affixes: force-spawn an elite carrying each rolled affix (on a chosen chassis).
+  randSec.appendChild(h("div", "dev-note", "Elite affix (spawns an elite):"));
+  const affixKindSel = h("select", "dev-sel") as HTMLSelectElement;
+  for (const kind of ["slime", "spitter", "skeleton", "ghost", "charger"] as EnemyKind[]) {
+    const opt = h("option"); opt.value = kind; opt.textContent = kind; affixKindSel.appendChild(opt);
+  }
+  randSec.appendChild(affixKindSel);
+  const affixRow = h("div", "dev-row");
+  for (const [id, label] of ROLL_AFFIXES) {
+    affixRow.appendChild(btn(label, () => game.devSpawnAffixElite(id, affixKindSel.value as EnemyKind, isCursor()), "mini"));
+  }
+  randSec.appendChild(affixRow);
+  // Boss affixes: force the affix + spawn a boss to carry the extra telegraphed pattern.
+  randSec.appendChild(h("div", "dev-note", "Boss affix (spawns a boss):"));
+  const bossAffixRow = h("div", "dev-row");
+  for (const [id, label] of BOSS_AFFIXES) {
+    bossAffixRow.appendChild(btn(label, () => game.devForceBossAffix(id, isCursor()), "mini"));
+  }
+  randSec.appendChild(bossAffixRow);
+  panel.appendChild(randSec);
 
   // ---- props + inspect ----
   const worldSec = section("Props & Inspect");

@@ -82,6 +82,10 @@
       .chip.coins.coin-pop{ animation:coinPop .28s cubic-bezier(.2,1.6,.4,1); }
       @keyframes coinPop{ 0%{transform:scale(1);} 40%{transform:scale(1.22);} 100%{transform:scale(1);} }
       .coopstrip{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--blu); background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3); padding:4px 9px; text-transform:uppercase; }
+      /* Floor-mutator readout: collapsed off deep floors, so ordinary floors stay pristine and it
+         only expands at a floor transition (never a mid-combat shift). */
+      .mutators{ display:none; }
+      .mutators.has-mutators{ display:block; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--amber-lo); text-transform:uppercase; max-width:180px; }
       .minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
       .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
       #minimap{ position:absolute; inset:3px; width:calc(100% - 6px); height:calc(100% - 6px); image-rendering:pixelated; display:block; }

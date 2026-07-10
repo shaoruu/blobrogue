@@ -46,7 +46,10 @@ import type {
 // v15: the co-op game-feel pass — a new friendlyNudge event (the playful friendly-fire
 // bonk) + the shot/meleeSwing/playerHurt/heal/pickup events reclassified to "pos" scope
 // so a networked player's actions reach nearby observers, not only the actor.
-export const SYNTHETIC_JOIN_PROTOCOL = 15;
+// v16: the Wave 1 seeded-randomness layer — the snapshot carries `pcl` (the floor-locked
+// co-op count the client resolves the mutator/affix descriptor with) and the enemy wire
+// carries `afx` (a rolled elite's affix id) for its material tell.
+export const SYNTHETIC_JOIN_PROTOCOL = 16;
 
 export interface HttpProbeConfig {
   baseUrl: string;

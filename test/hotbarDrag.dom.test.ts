@@ -56,7 +56,7 @@ const FIVE: { id: WeaponId; name: string }[] = [
 
 function mkState(currentIndex = 1, ids = FIVE): HudState {
   return {
-    hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
+    hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30, mutators: [],
     weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponDisplayStats(w.id, createMods(), 0) })),
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",

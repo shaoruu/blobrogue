@@ -2,19 +2,23 @@
 // (docs/blobrogue_WAVE1_FOUNDATIONS.md). resolveFloorDescriptor runs THE ROLL-ORDER CONTRACT
 // (streams.ts) in order, enforces caps at generation, applies the density controller's
 // deterministic veto, and returns a frozen descriptor. loadFloorIntoWorld calls it once and
-// stores it on WorldState; nothing re-rolls per frame, clients recompute it identically inside
-// their own loadFloorIntoWorld (a pure function of seed+floor+playerCountAtLock — the same
-// pattern as floorHazards / the encounter deck, so it never rides the wire and PROTOCOL_VERSION
-// is unchanged). Reconnect + same-seed replay = identical.
+// stores it on WorldState; nothing re-rolls per frame. The descriptor is a pure function of
+// (worldSeed, floorIndex, playerCountAtLock), so it never travels the wire as a blob: the server
+// freezes it at generation, and each client reproduces the identical descriptor by resolving it
+// with the AUTHORITATIVE locked player count (SnapWire.pcl — see net/protocol.ts, PROTOCOL v16)
+// passed into its own loadFloorIntoWorld. Reconnect + same-seed replay = identical.
 //
-// FRAMEWORK ONLY. The mutator / affix pools below are a couple of clearly-marked STUB entries —
-// enough to exercise the framework end-to-end and golden-master it. They carry NO sim expression
-// yet (no vision / hazard / spawn changes), so existing floors stay byte-identical. Authoring the
-// real 6 floor mutators + 5 elite affixes + boss affixes (and wiring their expression) is the
-// NEXT build; new pool entries are DATA, and new systems APPEND to the roll-order contract.
+// WAVE 1 CONTENT. The pools below are the authored mutator / elite-affix / boss-affix sets, and
+// their in-sim expression is wired at floor generation (mutators), elite spawn (affixes by
+// ascending ordinal) and deep-boss update (boss affix). Every expression derives ONLY from
+// already-simulated data — vision radius, hazard density / tile behavior, spawn count, dash
+// tuning, real enemy behavior — so no new per-frame runtime path touches floats/wall-clock/
+// player-count inside a draw. Adding a mutator/affix is DATA (a row here + its expression helper);
+// new SYSTEMS still APPEND to the roll-order contract so stored seeds stay stable.
 
 import { RollStream, ROLL_ORDER, rollStream } from "./streams.js";
 import type { RollStreamId } from "./streams.js";
+import type { FloorHazardKind } from "./types.js";
 import { isBossFloor } from "./enemies.js";
 
 // ---- caps enforced at generation (roadmap "Randomness (Wave 1)") ----
@@ -29,29 +33,112 @@ export const FLOOR_CAPS = {
 // golden is trivially stable.
 export const RANDOMNESS_MIN_FLOOR = 31;
 
-// ---- STUB content pools (framework only — inert, no sim expression yet) ----
-// Each carries the minimum metadata the density controller's veto needs: a telegraph-density
-// weight (how much per-frame tell/FX pressure it would add at 4P) and a priority (lower = culled
-// first under the density veto). Real pools + expression land next build.
+// ---- FLOOR MUTATORS v1 (authored — Wave 1) ----
+// Six authored mutators, ≤2 per deep floor. Each expresses ONLY through already-simulated data:
+//   denseDark     — VISION: the run's sight radius contracts (client hero/teammate glow),
+//                   telegraphs stay full-bright (fairness cues are never dimmed).
+//   moltenFloor   — HAZARD DENSITY + TILE BEHAVIOR: denser floor hazards biased to FIRE VENTS
+//                   (pulsing safe-tile telegraphs — stand off the vent while it blazes).
+//   twinnedElites — SPAWN COUNT: one extra elite in the floor plan (paired elite pressure).
+//   fractureStorm — HAZARD DENSITY + TILE BEHAVIOR: denser hazards biased to VOID RIFTS whose
+//                   open-maw pull + arming pulse are the global pre-snap warning.
+//   amberfall     — HAZARD DENSITY + TILE BEHAVIOR: denser hazards biased to TOXIC (amber) pools.
+//   thinAir       — DASH TUNING: a longer, faster, quicker-recovering dash (the whole floor
+//                   feels slippery; no tells, pure movement feel).
+// densityWeight = the projected 4P telegraph/FX pressure the mutator adds; priority = veto rank
+// (higher survives; the LOWEST-priority mutator is dropped first when the 4P budget is exceeded).
+export type MutatorId =
+  | "denseDark" | "moltenFloor" | "twinnedElites" | "fractureStorm" | "amberfall" | "thinAir";
+
 export interface MutatorDef {
-  id: string;
+  id: MutatorId;
+  label: string; // the compact HUD readout name
   densityWeight: number; // projected 4P telegraph/FX pressure this mutator adds
   priority: number; // veto priority (higher survives; lower is dropped/re-rolled first)
 }
 
-// TODO(content): replace these two stubs with the authored pool (Dense Dark, Molten Floor,
-// Twinned Elites, Fracture Storm, Amberfall, Thin Air) and wire their expression.
 export const MUTATOR_POOL: readonly MutatorDef[] = [
-  { id: "stubDenseDark", densityWeight: 1, priority: 2 },
-  { id: "stubMoltenFloor", densityWeight: 2, priority: 1 },
+  { id: "denseDark", label: "Dense Dark", densityWeight: 1, priority: 6 },
+  { id: "thinAir", label: "Thin Air", densityWeight: 0.5, priority: 5 },
+  { id: "twinnedElites", label: "Twinned Elites", densityWeight: 2, priority: 4 },
+  { id: "moltenFloor", label: "Molten Floor", densityWeight: 2, priority: 3 },
+  { id: "amberfall", label: "Amberfall", densityWeight: 1.5, priority: 2 },
+  { id: "fractureStorm", label: "Fracture Storm", densityWeight: 2.5, priority: 1 },
 ];
 
-// TODO(content): replace with the authored affix set (splits / shielded / hazard-trail /
-// reflect / enrage). null = "this elite slot rolled no affix".
-export const ELITE_AFFIX_POOL: readonly string[] = ["stubSplits", "stubShielded"];
+// ELITE AFFIXES v1 (authored). One rolled affix per elite slot (by ascending spawn ordinal);
+// null = the slot rolled no affix. Each wires to real enemy behavior with a material-readable
+// tell (see world.ts + game.ts):
+//   splits     — pre-cracked seams; on death it splits into two swarm bodies.
+//   shielded   — an asymmetric crust slab (a directional breakable plate) that FALLS when spent.
+//   hazardTrail— the body drips its element, planting a short-lived cinder trail as it moves.
+//   reflect    — a glassy amber facet: while ARMED it reflects a frontal shot back, then CRACKS
+//                (disarmed) for a cooldown — the armed facet is the fairness tell.
+//   enrage     — dead-amber veins heat as HP drops; it closes faster the more bloodied it is.
+export type RollAffixId = "splits" | "shielded" | "hazardTrail" | "reflect" | "enrage";
 
-// TODO(content): replace with the authored deep boss-affix set (one extra telegraphed pattern).
-export const BOSS_AFFIX_POOL: readonly string[] = ["stubExtraPattern"];
+export const ELITE_AFFIX_POOL: readonly RollAffixId[] = ["splits", "shielded", "hazardTrail", "reflect", "enrage"];
+
+// BOSS AFFIXES v1 (authored). ONE extra telegraphed pattern layered onto a deep boss (F31+ boss
+// floor) so a repeated boss fights fresh. Each blooms telegraphed detonation zones (the shared
+// "charge" hazard: a ≥0.6s arming fuse, walk-dodgeable, routed through the telegraph budget as a
+// fairness cue) in a distinct spatial signature — see stepBossAffix in world.ts:
+//   emberwake — a bloom under each living player's feet (keep moving).
+//   sundering — a fracture SEAM of blooms drawn across the arena through the boss (leave the line).
+//   amberrain — a seeded scatter of blooms around the party (read the raining amber).
+export type BossAffixId = "emberwake" | "sundering" | "amberrain";
+
+export const BOSS_AFFIX_POOL: readonly BossAffixId[] = ["emberwake", "sundering", "amberrain"];
+
+// ---- mutator EXPRESSION helpers (pure; read the frozen mutator set) ----
+// Every helper is a pure function of the frozen mutator id list — a per-floor CONSTANT resolved at
+// generation. The sim and every client read the same list (server: players.size; client: the
+// authoritative SnapWire.pcl), so expression is identical everywhere and never branches on
+// wall-clock or live player count inside a frame.
+
+export function hasMutator(mutators: readonly string[], id: MutatorId): boolean {
+  return mutators.indexOf(id) !== -1;
+}
+
+// VISION: denseDark contracts the sight radius. A multiplier the client applies to its hero /
+// teammate glow radius; fairness telegraphs are drawn on top and stay full-bright.
+export function floorVisionMult(mutators: readonly string[]): number {
+  return hasMutator(mutators, "denseDark") ? 0.72 : 1;
+}
+
+// DASH TUNING: thinAir makes the dash longer/faster and recover quicker. Read by the shared dash
+// step (server sim + client prediction both hold the same descriptor), so a snared player's out
+// is unchanged in shape — only its reach/cadence shift.
+export interface DashProfile { speedMult: number; activeMult: number; cdMult: number; }
+export function floorDashProfile(mutators: readonly string[]): DashProfile {
+  if (hasMutator(mutators, "thinAir")) return { speedMult: 1.28, activeMult: 1.18, cdMult: 0.85 };
+  return { speedMult: 1, activeMult: 1, cdMult: 1 };
+}
+
+// SPAWN COUNT: twinnedElites adds one elite to the floor plan.
+export function floorExtraElites(mutators: readonly string[]): number {
+  return hasMutator(mutators, "twinnedElites") ? 1 : 0;
+}
+
+// HAZARD DENSITY + TILE BEHAVIOR: molten/fracture/amberfall each raise the floor-hazard budget and
+// bias the kind mix toward their signature tile (fire vents / void rifts / toxic amber pools). The
+// budgets multiply when two hazard mutators co-occur; the biased kinds accumulate so the pick is
+// weighted toward the storm's tiles (never AWAY from a biome's other tiles — the veto/caps keep it
+// fair). Returns identity when no hazard mutator is active.
+export interface HazardMutation { budgetMult: number; biasKinds: FloorHazardKind[]; }
+export function floorHazardMutation(mutators: readonly string[]): HazardMutation {
+  let budgetMult = 1;
+  const biasKinds: FloorHazardKind[] = [];
+  if (hasMutator(mutators, "moltenFloor")) { budgetMult *= 1.5; biasKinds.push("fire_vent"); }
+  if (hasMutator(mutators, "fractureStorm")) { budgetMult *= 1.45; biasKinds.push("void_rift"); }
+  if (hasMutator(mutators, "amberfall")) { budgetMult *= 1.4; biasKinds.push("toxic_pool"); }
+  return { budgetMult, biasKinds };
+}
+
+// The compact HUD readout: the active mutators' display labels, in pool order for a stable read.
+export function mutatorLabels(mutators: readonly string[]): string[] {
+  return MUTATOR_POOL.filter((m) => mutators.indexOf(m.id) !== -1).map((m) => m.label);
+}
 
 // The density budget the 4-player controller enforces at LOCK: a projected telegraph/FX pressure
 // ceiling that scales with the locked player count (more players = more simultaneous own-FX, so
@@ -113,7 +200,8 @@ export function resolveFloorDescriptor(worldSeed: number, floorIndex: number, pl
   if (isDeep && ELITE_AFFIX_POOL.length > 0) {
     for (let ordinal = 0; ordinal < FLOOR_CAPS.eliteAffixSlots; ordinal++) {
       const rng = rollStream(worldSeed, floorIndex, RollStream.ELITE_AFFIXES, ordinal);
-      // Half the slots roll an affix (stub cadence); ≤1 affix per elite is inherent.
+      // Each slot has a 50% chance of a rolled affix (else null); ≤1 affix per elite is inherent
+      // (one roll per ordinal). The slot maps to the elite spawned at that ascending ordinal.
       const affix = rng.chance(0.5) ? ELITE_AFFIX_POOL[rng.int(0, ELITE_AFFIX_POOL.length - 1)] : null;
       eliteAffixes.push({ ordinal, affix });
     }

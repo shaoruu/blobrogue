@@ -502,14 +502,17 @@ export class WSTransport implements Transport {
   // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
   // floor (initial join and every party-wide descend). Enemies/bullets/props ride the snapshot,
   // so only the walls + a local player need to exist; the next reconcile snaps self to truth.
-  private maybeRebuildWorld(seed: number, floor: number): void {
+  private maybeRebuildWorld(seed: number, floor: number, playerCountAtLock: number): void {
     if (seed === this.curSeed && floor === this.curFloor) return;
     this.curSeed = seed;
     this.curFloor = floor;
     this.predState.seed = seed;
     this.renderState.seed = seed;
-    loadFloorIntoWorld(this.predState, floor);
-    loadFloorIntoWorld(this.renderState, floor);
+    // Pass the AUTHORITATIVE floor-locked player count (SnapWire.pcl): the pred/render worlds
+    // hold only the local seat, so without it they would resolve the floor descriptor at
+    // playerCount=1 and derive the WRONG mutators/hazards/dash tuning for a multiplayer floor.
+    loadFloorIntoWorld(this.predState, floor, playerCountAtLock);
+    loadFloorIntoWorld(this.renderState, floor, playerCountAtLock);
     // A fresh floor is a hard teleport for every remote entity; drop stale interp history so
     // nothing slides across the new map for one render delay.
     this.interp = new RemoteInterp();
@@ -546,7 +549,7 @@ export class WSTransport implements Transport {
     }
     this.lastSnapRev = snap.rev;
     this.lastSnapTick = snap.tick;
-    this.maybeRebuildWorld(snap.seed, snap.floor);
+    this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl);
     this.latestSnap = snap;
     this.isEverReady = true;
     this.isSnapSeenOnSocket = true;

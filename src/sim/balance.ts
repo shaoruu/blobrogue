@@ -694,6 +694,54 @@ export const MAX_COMPLEX_PER_ROOM = 2;
 export const BRUTE_ELITE_COMBO_FLOOR = 8; // no brute+elite in one room before this floor
 export const ELITE_SPLIT_COUNT = 2;       // the shipped elite affix: splits into swarm units
 
+// ---- ROLLED elite affixes (Wave 1 randomness layer; see floorRolls.ts ELITE_AFFIX_POOL) ----
+// Assigned to deep-floor (F31+) elites by ascending spawn ordinal from the frozen descriptor.
+// Every affix is a visible behavior with counterplay; none multiplies damage. The tell is
+// material (built into the body draw) and, where it warns of incoming damage, a fairness cue
+// exempt from the Gate 2 telegraph cull.
+export const ROLL_AFFIX = {
+  // splits: on death the body cracks into `splitCount` swarm bodies (fragile, no rolled affix).
+  splitCount: 2,
+  splitHpFrac: 0.35,      // each shard's HP as a fraction of the parent's maxHp
+  splitSpeedMult: 1.15,   // shards scatter a touch faster than the parent
+  // shielded: an asymmetric crust slab (a directional breakable plate) that FALLS when spent —
+  // reuses the bulwark plate law (frontal arc, non-piercing only, slow tracking) with its own
+  // material read. plateHp is a floor-1 baseline, scaled by floorHpMult at spawn.
+  slabArc: 2.1,
+  slabHp: 10,
+  slabTurnRate: 1.5,
+  // hazardTrail: the body drips its element, planting a cinder every dripGap seconds it moves.
+  dripGap: 0.5,
+  dripLife: 1.4,
+  dripRadius: 16,
+  // reflect: a glassy amber facet. While ARMED (aux = armed seconds) a frontal player shot is
+  // bounced back as a hostile round; the facet then CRACKS (disarmed) for crackCd seconds, then
+  // re-arms. The armed facet is the fairness tell — bright while live, dark while cracked.
+  reflectArc: 1.6,
+  reflectArmed: 2.4,      // seconds a facet stays armed before it must re-arm
+  reflectCrackCd: 1.6,    // seconds a cracked facet stays disarmed (safe to shoot the front)
+  reflectBoltSpeed: 300,
+  reflectBoltRadius: 6,
+  reflectBoltDamage: 2,   // the bounced round is a fixed chip, never the player's full damage
+  // enrage: dead-amber veins heat as HP drops; the body closes faster the more bloodied it is
+  // (approach speed only — committed lethal dashes are untouched, so the read stays honest).
+  enrageMaxSpeedBonus: 0.5, // +50% approach speed at 0 HP, scaling linearly from full HP.
+} as const;
+
+// ---- BOSS affixes (Wave 1; see floorRolls.ts BOSS_AFFIX_POOL) ----
+// ONE extra telegraphed pattern layered onto a deep boss (F31+ boss floor). Each blooms the
+// shared telegraphed "charge" detonation (a ≥0.6s arming fuse, walk-dodgeable) in a distinct
+// spatial signature; the arming fuse is a fairness cue routed through the Gate 2 budget.
+export const BOSS_AFFIX = {
+  cooldown: 6.5,      // seconds between affix beats (idle, non-transition)
+  fuse: 0.9,          // arming fuse (≥0.6s tell, walk-dodgeable)
+  radius: 46,         // detonation reuses the shared "charge" hazard (a 1-HP walk-dodgeable chip)
+  seamCount: 5,       // sundering: blooms along the arena-spanning fracture line
+  seamSpacing: 78,
+  rainCount: 4,       // amberrain: scattered blooms around the party
+  rainSpread: 150,
+} as const;
+
 // Studio gate §1 (Standard): never more than 2 complex MOVERS live simultaneously — the
 // charge/burrow verbs that deny standard answers. Enforced at the spawn split and again
 // at every reinforcement release.

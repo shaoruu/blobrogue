@@ -68,7 +68,7 @@ function section(name: string): void {
 
 function mkState(over: Partial<HudState> = {}): HudState {
   return {
-    hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
+    hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30, mutators: [],
     weapons: [
       wslot("pistol", "Pistol", false),
       wslot("shotgun", "Shotgun", true),
@@ -486,6 +486,17 @@ function hierarchyTests(): void {
   hud.update(mkState({ isCleared: true, enemiesLeft: 0, isParty: true }));
   check("a party's cleared floor reads MEET AT EXIT (the coordination moment)",
     objective.textContent === "FLOOR CLEAR \u00b7 MEET AT EXIT");
+
+  section("floor-mutator readout: legible, and collapsed off deep floors (no layout shift)");
+  const mutators = root.querySelector<HTMLElement>("[data-mutators]")!;
+  hud.update(mkState({ mutators: [] }));
+  check("no mutators: the readout is empty and collapsed (ordinary floor stays pristine)",
+    mutators.textContent === "" && !mutators.classList.contains("has-mutators"));
+  hud.update(mkState({ mutators: ["Molten Floor", "Thin Air"] }));
+  check("active mutators read as a compact middot-joined list",
+    mutators.textContent === "Molten Floor \u00b7 Thin Air" && mutators.classList.contains("has-mutators"));
+  hud.update(mkState({ mutators: [] }));
+  check("clearing the mutators collapses the readout again", mutators.textContent === "" && !mutators.classList.contains("has-mutators"));
 
   hud.update(mkState({ isBossActive: true, bossHpFrac: 0.8, combo: 4, comboMult: 1.5, comboFrac: 0.5 }));
   check("a boss WINS the lane: bar shown, normal objective hidden",

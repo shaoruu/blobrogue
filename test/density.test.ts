@@ -119,11 +119,45 @@ function arbitrationTests(): void {
   check("a dense overlapping cluster always arbitrates to a fair set (100 seeds)", allFair);
 }
 
+// Wave 1: the floor mutators + elite/boss affixes must each satisfy the Gate 2 budget with a
+// READABLE tell at 4 players — their tells are enemyTell fairness cues, EXEMPT from culling, even
+// when four players' ambient FX would otherwise starve the budget. This locks the "unreadable at
+// 4P = CUT" rule for the specific reads the spec calls out (Reflect armed, Fracture pre-snap,
+// Molten safe-tile, Twinned Elites density, boss-affix blooms).
+function waveOneFairnessTests(): void {
+  section("Wave 1 mutators/affixes route their tells through Gate 2 (exempt at 4P)");
+  // The mutator/affix tells, as the client classifies them from the authoritative snapshot:
+  //  - Molten Floor safe-tile / Fracture Storm pre-snap / boss-affix bloom = hazard-or-mutator tells;
+  //  - Reflect "armed" / Twinned Elites (each elite) = elite-affix tells.
+  const moltenSafeTile = classifyTelegraph({ id: 1, phase: "windup", move: "erupt", isBoss: false, isHazardOrMutator: true });
+  const fracturePreSnap = classifyTelegraph({ id: 2, phase: "windup", move: "erupt", isBoss: false, isHazardOrMutator: true });
+  const bossAffixBloom = classifyTelegraph({ id: 3, phase: "windup", move: "erupt", isBoss: false, isHazardOrMutator: true });
+  const reflectArmed = classifyTelegraph({ id: 4, phase: "windup", move: "lunge", isBoss: false, isElite: true });
+  const twinnedA = classifyTelegraph({ id: 5, phase: "windup", move: "lunge", isBoss: false, isElite: true });
+  const twinnedB = classifyTelegraph({ id: 6, phase: "windup", move: "spit", isBoss: false, isElite: true });
+  const tells = [moltenSafeTile, fracturePreSnap, bossAffixBloom, reflectArmed, twinnedA, twinnedB];
+  check("every Wave 1 tell is a fairness cue in the enemyTell register",
+    tells.every((t) => t.isFairnessCue && t.register === VisualRegister.enemyTell));
+  check("elite-affix tells (reflect/twinned) outrank hazard/mutator tells for the ambient budget",
+    reflectArmed.priority === TelegraphPriority.eliteAffix && moltenSafeTile.priority === TelegraphPriority.hazardMutator
+    && TelegraphPriority.eliteAffix > TelegraphPriority.hazardMutator);
+  // 4 players' worth of overwhelming ambient FX under a starvation budget: every Wave 1 tell
+  // still renders (exempt), only the cosmetic ambient is culled.
+  const ambient = Array.from({ length: 60 }, (_, i) => ambientSource(`amb${i}`));
+  const weapon = Array.from({ length: 8 }, (_, i) => playerWeaponSource(`w${i}`)); // four players, mid-fight
+  const plan = planBudget([...tells, ...ambient, ...weapon], 0);
+  const rendered = new Set(plan.rendered.map((s) => s.id));
+  check("all Wave 1 tells render at a 4P starvation budget (fairness never culled)", tells.every((t) => rendered.has(t.id)));
+  check("the two Twinned Elites both keep their tells (density read intact)", rendered.has(5) && rendered.has(6));
+  check("only cosmetic ambient is culled under the 4P starvation budget", plan.culled.every((s) => !s.isFairnessCue && s.register === VisualRegister.ambient));
+}
+
 function main(): void {
   fairnessCulledTests();
   registerTests();
   priorityTests();
   arbitrationTests();
+  waveOneFairnessTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nGate 2 (4-player telegraph/effect-density controller) holds.\n");

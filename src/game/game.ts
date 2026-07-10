@@ -11,7 +11,7 @@ import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, amberForRun } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, amberForRun } from "../sim/balance.js";
 import type { EnemyTier, EliteAffix } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
@@ -67,6 +67,8 @@ import { PauseOverlay } from "../ui/pause.js";
 import { BlessingOverlay } from "../ui/blessing.js";
 import { BIOMES, biomeForFloor, biomeIndexForFloor, floorBannerText } from "../sim/biomes.js";
 import type { Biome } from "../sim/biomes.js";
+import { mutatorLabels, floorVisionMult } from "../sim/floorRolls.js";
+import type { MutatorId, RollAffixId, BossAffixId } from "../sim/floorRolls.js";
 import { renderDungeonTiles, buildWallSideGradients, tileHash, hexToRgb } from "./tileRender.js";
 import type { TileRenderGradient } from "./tileRender.js";
 
@@ -3368,6 +3370,9 @@ export class Game {
     this.hud.update({
       hp: this.hp, maxHp: this.maxHp,
       floor: this.floor, kills: this.kills, coins: this.coins,
+      // The active floor mutators (the "why this floor feels different" readout). Read from the
+      // authoritative descriptor the world holds (online: reconstructed from SnapWire.pcl).
+      mutators: mutatorLabels(this.world.floorDescriptor.mutators),
       // Live per-weapon cards ride each slot (mods + low-HP scalers via the sim's own
       // helper) so hover tooltips always show what a trigger pull would actually do.
       weapons: this.p.ownedWeapons.map((id) => ({
@@ -3975,11 +3980,15 @@ export class Game {
   // nothing here touches the sim.
   private collectDynamicLights() {
     const flash = settings.flashFactor;
+    // Dense Dark (floor mutator, VISION): the run's sight radius contracts. A per-floor constant
+    // read from the authoritative descriptor — fairness telegraphs draw on top and stay full-bright
+    // (they are never dimmed), so a tighter glow costs readability of the room, never of a tell.
+    const visionMult = floorVisionMult(this.world.floorDescriptor.mutators);
     if (this.isRunning && this.isWorldRevealed) {
-      if (!this.isDown) this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
+      if (!this.isDown) this.lighting.pushDynamic(this.px, this.py, HERO_GLOW_RADIUS * visionMult, HERO_GLOW_CUT, HERO_GLOW_COLOR, HERO_GLOW_STAIN, true);
       for (const r of this.remotes()) {
         if (!r.isDown && !r.isAbsent && this.isNearCamera(r.x, r.y, REMOTE_GLOW_RADIUS)) {
-          this.lighting.pushDynamic(r.x, r.y, REMOTE_GLOW_RADIUS, REMOTE_GLOW_CUT, HERO_GLOW_COLOR, REMOTE_GLOW_STAIN, true);
+          this.lighting.pushDynamic(r.x, r.y, REMOTE_GLOW_RADIUS * visionMult, REMOTE_GLOW_CUT, HERO_GLOW_COLOR, REMOTE_GLOW_STAIN, true);
         }
       }
     }
@@ -5463,6 +5472,9 @@ export class Game {
       if (e.tier === "elite" && e.aux > 0 && eliteAffixOf(e.kind) === "bulwark") {
         this.renderGuardArc(e, sx, sy, drawSize, ELITE_BULWARK.arc, AFFIX_RING_COLOR.bulwark);
       }
+      // Rolled elite affix (Wave 1): the material tell — a crust slab, a glassy amber facet
+      // (armed vs cracked), heated dead-amber veins, pre-cracked seams, or a dripping element.
+      if (e.rollAffix !== "") this.renderRollAffix(e, sx, sy, drawSize, anim.clock);
       // The caskbellows' rear crank: the weak point marked on its back between volleys.
       if (e.kind === "caskbellows") this.renderCaskCrank(e, sx, sy, drawSize);
       // The stoked sinderling burns visibly — armed state rides the aux channel.
@@ -5987,6 +5999,92 @@ export class Game {
 
   // A formation/plate guard arc (rootward, P1 marshal, bulwark elites): the protected
   // frontage drawn from the sim's authoritative lockedAngle, in the owner's color.
+  // The rolled elite affix's material tell (Wave 1). Every read is code-drawn material (slab
+  // arc, faceted plane, veins, crack seams, ember drip) — never a bare circle — and the
+  // reflect facet's ARMED state is the fairness cue (bright = don't shoot the front).
+  private renderRollAffix(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const bloodied = e.maxHp > 0 ? 1 - Math.max(0, Math.min(1, e.hp / e.maxHp)) : 0;
+    switch (e.rollAffix) {
+      case "shielded": {
+        // An asymmetric crust slab (a directional plate that FALLS when spent, afs = its HP).
+        if (e.affixState > 0) this.renderGuardArc(e, sx, sy, size, ROLL_AFFIX.slabArc, "#8a6f52");
+        return;
+      }
+      case "reflect": {
+        // A glassy amber facet across the front: pulsing BRIGHT while armed (the fairness tell —
+        // a frontal shot bounces back), a dim cracked hatch while disarmed (safe to shoot).
+        const facing = e.attack.lockedAngle;
+        const px = Math.cos(facing), py = Math.sin(facing);
+        const tx = -py, ty = px;
+        const r = size * 0.42, half = size * 0.34;
+        const cx = sx + px * r, cy = sy + py * r;
+        ctx.save();
+        if (e.affixState > 0) {
+          ctx.globalAlpha = 0.5 + 0.35 * Math.sin(clock * 8);
+          ctx.strokeStyle = "#ffca6b"; ctx.lineWidth = 4; ctx.lineCap = "round";
+          ctx.beginPath(); ctx.moveTo(cx - tx * half, cy - ty * half); ctx.lineTo(cx + tx * half, cy + ty * half); ctx.stroke();
+          ctx.globalAlpha = 0.22; ctx.lineWidth = 9; ctx.stroke();
+        } else {
+          ctx.globalAlpha = 0.45; ctx.strokeStyle = "#6b5a3a"; ctx.lineWidth = 2;
+          for (let i = -1; i <= 1; i++) {
+            const o = i * 4;
+            ctx.beginPath();
+            ctx.moveTo(cx - tx * half + px * o, cy - ty * half + py * o);
+            ctx.lineTo(cx + tx * half * 0.4 + px * o, cy + ty * half * 0.4 + py * o);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+        return;
+      }
+      case "enrage": {
+        // Dead-amber veins that HEAT as HP drops — brighter/hotter the more bloodied the body.
+        if (bloodied <= 0.02) return;
+        ctx.save();
+        ctx.globalAlpha = (0.25 + 0.65 * bloodied) * (0.7 + 0.3 * Math.sin(clock * 10));
+        ctx.strokeStyle = "#ff7a2a"; ctx.lineWidth = 2; ctx.lineCap = "round";
+        const n = 5;
+        for (let i = 0; i < n; i++) {
+          const ang = (i / n) * Math.PI * 2 + e.id;
+          const r0 = size * 0.12, r1 = size * 0.34 * (0.7 + 0.5 * bloodied);
+          ctx.beginPath();
+          ctx.moveTo(sx + Math.cos(ang) * r0, sy + Math.sin(ang) * r0);
+          ctx.lineTo(sx + Math.cos(ang) * r1, sy + Math.sin(ang) * r1);
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+      case "splits": {
+        // Pre-cracked seams that widen as the body is bloodied — it's about to come apart.
+        ctx.save();
+        ctx.globalAlpha = 0.4 + 0.4 * bloodied;
+        ctx.strokeStyle = "#241b2c"; ctx.lineWidth = 1 + 2 * bloodied; ctx.lineCap = "round";
+        const seams: ReadonlyArray<readonly [number, number, number, number]> = [
+          [-0.3, -0.38, 0.12, 0.32], [0.34, -0.3, -0.06, 0.36],
+        ];
+        for (const [ax, ay, bx, by] of seams) {
+          ctx.beginPath();
+          ctx.moveTo(sx + ax * size, sy + ay * size);
+          ctx.lineTo(sx + (ax + bx) * 0.5 * size, sy + (ay + by) * 0.5 * size - 3);
+          ctx.lineTo(sx + bx * size, sy + by * size);
+          ctx.stroke();
+        }
+        ctx.restore();
+        return;
+      }
+      case "hazardTrail": {
+        // The body drips its element (the ground cinders it leaves are the real hazard tell).
+        const dp = 0.6 + 0.4 * Math.sin(clock * 7 + e.id);
+        this.fxLayer("glow_round", "#ff8a3b", sx, sy + size * 0.3, size * 0.28 * dp, size * 0.28 * dp, 0.35, 0);
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
   private renderGuardArc(e: Enemy, sx: number, sy: number, size: number, arc: number, color: string) {
     const { ctx } = this;
     const half = arc / 2;
@@ -7160,6 +7258,34 @@ export class Game {
 
   devClearEnemies(): void {
     this.world.enemies.length = 0;
+  }
+
+  // ---- Wave 1 randomness dev hooks (force every mutator/affix/boss-affix in isolation) ----
+
+  // Force-spawn an elite carrying a specific ROLLED affix (splits/shielded/hazardTrail/reflect/
+  // enrage), so each affix's behavior + material tell is testable on its own.
+  devSpawnAffixElite(affix: RollAffixId, kind: EnemyKind, atCursor: boolean): void {
+    const p = this.devPlacePoint(atCursor);
+    const e = devSpawnEnemy(this.world, kind, p.x, p.y, "elite");
+    e.rollAffix = affix;
+    if (affix === "shielded") e.affixState = ROLL_AFFIX.slabHp;
+    else if (affix === "reflect") e.affixState = ROLL_AFFIX.reflectArmed;
+    this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
+  }
+
+  // Toggle the active floor mutators on the frozen descriptor (≤2). Refreshes the client floor so
+  // vision (Dense Dark), dash (Thin Air) and the HUD readout express immediately.
+  devForceMutators(ids: MutatorId[]): void {
+    this.world.floorDescriptor = { ...this.world.floorDescriptor, mutators: ids.slice(0, 2) };
+    this.loadFloorClient();
+  }
+
+  // Force a deep-boss affix and spawn a boss to carry it — the extra telegraphed pattern begins
+  // blooming on its cadence.
+  devForceBossAffix(affix: BossAffixId, atCursor: boolean): void {
+    this.world.floorDescriptor = { ...this.world.floorDescriptor, bossAffix: affix };
+    const p = this.devPlacePoint(atCursor);
+    devSpawnEnemy(this.world, "boss", p.x, p.y);
   }
 
   devSpawnProp(kind: PropKind, atCursor: boolean): void {

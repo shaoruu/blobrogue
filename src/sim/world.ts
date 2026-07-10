@@ -15,7 +15,7 @@ import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, n
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type {
-  Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
+  Enemy, EnemyKind, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
   MysteryTwist,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect,
 } from "./types.js";
@@ -45,6 +45,7 @@ import {
   AMBUSH, POWER, PHASE_TIME_BASE, powerRatioFor, bossAddCapFor, bossAddIntervalFor,
   phaseTimerFor,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
+  ROLL_AFFIX, BOSS_AFFIX,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
   MYSTERY, LEGENDARY_MIN_FLOOR,
@@ -53,7 +54,7 @@ import {
 import type { EnemyTier, AddPoolEntry } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
-import { resolveFloorDescriptor } from "./floorRolls.js";
+import { resolveFloorDescriptor, floorHazardMutation, floorExtraElites, floorDashProfile } from "./floorRolls.js";
 import type { FloorDescriptor } from "./floorRolls.js";
 import { buildShopState, restockShop, shopSlotStatusFor, shopSlotPriceFor, shopViewerOf, upgradeTargetTier, SHOP_BUY_RANGE } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
@@ -517,10 +518,17 @@ function buildArena(): Dungeon {
 // sim RNG stream is continuous across a run (matching the old start()/loadFloor split).
 // The co-op player count is SNAPSHOTTED here (encounter creation, §8) and never rescales
 // living enemies mid-floor.
-export function loadFloorIntoWorld(w: WorldState, floor: number): void {
+// `playerCountAtLock`: the AUTHORITATIVE co-op lock. On the server it is omitted and derived
+// from the seats present at PULL (players.size); online clients pass the value the snapshot
+// carries (SnapWire.pcl) so their reconstructed floor — descriptor, mutator-driven hazards,
+// dash tuning — matches the server exactly (the descriptor is a pure function of
+// seed+floor+playerCountAtLock, and never rescales mid-floor on join/down/disconnect).
+export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLock?: number): void {
   w.floor = floor;
   w.rev++;
-  w.encounterPlayers = clampPlayers(Math.max(1, w.players.size));
+  w.encounterPlayers = playerCountAtLock !== undefined
+    ? clampPlayers(Math.max(1, Math.floor(playerCountAtLock)))
+    : clampPlayers(Math.max(1, w.players.size));
   // The R framework's pull sample (party+gear in one measured number, balance.ts
   // POWER): taken HERE, at encounter creation, exactly like the player snapshot —
   // downed/disconnected players never change it mid-fight, and it derives purely from
@@ -529,6 +537,11 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   // Gate 3: resolve + FREEZE the floor's rolls once, now, with the locked player count. A pure
   // function of (seed, floor, encounterPlayers) — clients recompute the identical descriptor.
   w.floorDescriptor = resolveFloorDescriptor(w.seed, floor, w.encounterPlayers);
+  // Wave 1 mutator expression, resolved once at generation from the frozen mutator set: the
+  // hazard budget/kind bias (molten/fracture/amberfall) and the extra-elite count (twinned).
+  // Vision (denseDark) is a client render read; dash (thinAir) is read by the shared dash step.
+  const hazMut = floorHazardMutation(w.floorDescriptor.mutators);
+  const extraElites = floorExtraElites(w.floorDescriptor.mutators);
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.hazards = [];
@@ -555,7 +568,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   // Floor hazards place FIRST: props/chests then avoid hazard tiles (a barrel on spikes
   // reads as a bug). floorHazardClock is NOT reset — it is monotonic sim time (phases
   // are per-hazard), so an online client reconstructs it from the tick.
-  w.floorHazards = w.isSandbox ? [] : placeFloorHazards(w.dungeon, w.seed, floor);
+  w.floorHazards = w.isSandbox ? [] : placeFloorHazards(w.dungeon, w.seed, floor, "standard", hazMut);
   // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
   // footprint, and the obstacle revision must already name this floor's layout. The
   // ordering is free — every placement draws from its own seeded stream.
@@ -575,7 +588,10 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
-    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.encounterPower);
+    : spawnFloorEnemies(w.dungeon, w.seed, floor, w.encounterPlayers, w.encounterPower, {
+      extraElites,
+      eliteAffixes: w.floorDescriptor.eliteAffixes,
+    });
   w.enemies = spawns.active;
   w.pendingSpawns = spawns.pending;
   w.spawnReleaseCd = 0;
@@ -2026,6 +2042,9 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     });
     ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 1.6, gain: 0.5, trauma: 0 });
   }
+  // Splits (rolled elite affix): the body cracks into fragile swarm shards along its
+  // pre-cracked seams. Never off a summoned body (a shard can't cascade).
+  if (e.rollAffix === "splits" && !e.isSummoned) splitOnDeath(w, e, ev);
   // Commander elite: the pack PANICS leaderless — nearby allies scatter and start
   // nothing from idle for the panic window.
   if (e.tier === "elite" && e.captainPhase === undefined && eliteAffixOf(e.kind) === "commander") {
@@ -2176,9 +2195,13 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   // while at least one full cooldown of headroom remains, and each dash ADDS a cooldown
   // rather than setting it. With zero extra charges the bank is one cooldown deep and
   // the condition collapses to the classic `dashCd === 0`, bit-for-bit.
-  const dashBankHeadroom = dashCooldown(p) * p.mods.extraDashCharge;
+  // Thin Air (floor mutator, DASH TUNING): a longer/faster/quicker-recovering dash, read from
+  // the frozen descriptor — a per-floor constant, so the server sim and the client's prediction
+  // (which holds the identical descriptor) apply it in lockstep; identity when the mutator is off.
+  const dashProfile = floorDashProfile(w.floorDescriptor.mutators);
+  const dashBankHeadroom = dashCooldown(p) * dashProfile.cdMult * p.mods.extraDashCharge;
   if (input.dash && p.dashCd <= dashBankHeadroom && p.dashTime <= 0 && (ix || iy)) {
-    p.dashTime = PLAYER.dashActive; p.dashCd += dashCooldown(p); p.dashDx = ix; p.dashDy = iy;
+    p.dashTime = PLAYER.dashActive * dashProfile.activeMult; p.dashCd += dashCooldown(p) * dashProfile.cdMult; p.dashDx = ix; p.dashDy = iy;
     // The dash iframe is its own window (0.18s, covering the 0.16s active dash + tail):
     // SET, never max'd against post-hit protection, so the two can neither refresh nor
     // extend each other.
@@ -2189,7 +2212,7 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   let mvx: number, mvy: number;
   if (p.dashTime > 0) {
     p.dashTime -= dt;
-    mvx = p.dashDx * PLAYER.dashSpeed * dt; mvy = p.dashDy * PLAYER.dashSpeed * dt;
+    mvx = p.dashDx * PLAYER.dashSpeed * dashProfile.speedMult * dt; mvy = p.dashDy * PLAYER.dashSpeed * dashProfile.speedMult * dt;
     ev.push({ t: "dashTrail", pid: p.id, x: p.x, y: p.y });
   } else {
     mvx = ix * speed * dt; mvy = iy * speed * dt;
@@ -3356,6 +3379,10 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         }
         // A bulwark elite's directional plate absorbs the round instead (until it breaks).
         if (absorbOnBulwark(e, b, ev)) continue;
+        // Rolled elite affixes: the shielded slab absorbs a frontal round, or the armed reflect
+        // facet bounces it back as a hostile bolt (and cracks). Both frontal, non-piercing only.
+        if (absorbOnRollSlab(e, b, ev)) continue;
+        if (reflectFrontalBullet(w, e, b, ev)) continue;
         strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
@@ -3563,6 +3590,12 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     }
     return;
   }
+  // Rolled-affix per-tick upkeep (hazardTrail drips, reflect facet re-arm): passive, so it
+  // never consumes the tick — the chassis/kind AI and the kind-baseline elite affix run below.
+  if (e.rollAffix !== "") stepRollAffix(w, e, dt);
+  // Deep-boss affix (the extra telegraphed pattern): a parallel cadence that blooms telegraphed
+  // charge hazards; never touches the boss's own attack machine, so it layers cleanly.
+  if (e.boss !== null && w.floorDescriptor.bossAffix !== null) stepBossAffix(w, e, dt, ev);
   if (e.tier === "elite" && e.captainPhase === undefined && updateEliteAffix(w, e, dt, ev)) return;
   switch (e.kind) {
     case "spitter": updateSpitter(w, e, dt, ev); return;
@@ -3619,6 +3652,124 @@ function updateEliteAffix(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): 
     default:
       return updateEliteBrace(w, e, dt, ev);
   }
+}
+
+// ---- ROLLED elite affixes (Wave 1 randomness layer) ----
+// Passive per-tick upkeep for the rolled affix: hazardTrail drips its element, reflect re-arms
+// its cracked facet, shielded's slab slowly tracks the target while idle. splits (killEnemy),
+// reflect's bounce + shielded's absorb (the bullet loop) and enrage (applyChaseStep) live at
+// their own chokepoints. Never consumes the tick — the chassis behavior runs unchanged.
+function stepRollAffix(w: WorldState, e: Enemy, dt: number): void {
+  switch (e.rollAffix) {
+    case "hazardTrail": {
+      // The body drips its element as it moves: a short-lived cinder wake every dripGap, only
+      // while it is actually chasing (idle/telegraphing bodies don't paint the floor).
+      if (e.attack.phase !== "none") return;
+      e.affixClock += dt;
+      if (e.affixClock >= ROLL_AFFIX.dripGap && findTarget(w, e.x, e.y)) {
+        e.affixClock = 0;
+        plantDrip(w, e.x, e.y);
+      }
+      return;
+    }
+    case "reflect": {
+      // affixState > 0 = ARMED (the bright amber facet); 0 = CRACKED. A cracked facet re-arms
+      // after reflectCrackCd — the ONLY window the front is safe to shoot.
+      if (e.affixState <= 0) {
+        e.affixClock -= dt;
+        if (e.affixClock <= 0) { e.affixState = ROLL_AFFIX.reflectArmed; e.affixClock = 0; }
+      }
+      return;
+    }
+    case "shielded": {
+      // The crust slab tracks its target SLOWLY while the body is idle (a committed attack owns
+      // lockedAngle and the slab rides along), so footwork beats it even solo — same law as
+      // bulwark, its own material read.
+      if (e.affixState > 0 && e.attack.phase === "none" && findTarget(w, e.x, e.y)) {
+        const want = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+        const d = angleDiff(want, e.attack.lockedAngle);
+        const maxTurn = ROLL_AFFIX.slabTurnRate * dt;
+        e.attack.lockedAngle += d > maxTurn ? maxTurn : d < -maxTurn ? -maxTurn : d;
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+// hazardTrail's drip: a short-lived cinder wake (reuses the cinder hazard + its render/burn),
+// under the same hard cinder cap so a chased trail is a wake, never a lake.
+function plantDrip(w: WorldState, x: number, y: number): void {
+  if (isWall(w, x, y)) return;
+  let cinders = 0;
+  for (const h of w.hazards) if (h.kind === "cinder") cinders++;
+  if (cinders >= C.SINDER_CINDER_CAP) return;
+  w.hazards.push({
+    id: w.nextHazardId++, kind: "cinder", x, y,
+    radius: ROLL_AFFIX.dripRadius, life: ROLL_AFFIX.dripLife, maxLife: ROLL_AFFIX.dripLife,
+  });
+}
+
+// The shielded elite's asymmetric crust slab: absorbs non-piercing bullets inside its frontal
+// arc until the slab HP (aux) is spent, then FALLS for good — a directional breakable plate, its
+// own material read. Never immunity: melee, blasts, pierce and the flank always work. Returns
+// true when the slab ate the round.
+function absorbOnRollSlab(e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
+  if (e.rollAffix !== "shielded" || e.affixState <= 0 || b.pierce > 0) return false;
+  const incoming = Math.atan2(-b.vy, -b.vx);
+  if (Math.abs(angleDiff(incoming, e.attack.lockedAngle)) > ROLL_AFFIX.slabArc / 2) return false;
+  e.affixState = Math.max(0, e.affixState - b.damage);
+  b.life = 0;
+  ev.push({ t: "bulletBlocked", kind: e.kind, x: sweptHit.x, y: sweptHit.y, aim: incoming });
+  if (e.affixState === 0) {
+    // The slab falls: loud and final — from here the elite is just its chassis.
+    ev.push({ t: "puff", x: e.x, y: e.y, n: 8, color: "#8a6f52" });
+    ev.push({ t: "cue", name: "guard.break", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.06 });
+  }
+  return true;
+}
+
+// The reflect elite's glassy amber facet: while ARMED (aux > 0), a non-piercing frontal round is
+// bounced back as a hostile bolt (a fixed chip, never the player's full damage), and the facet
+// CRACKS — disarmed for reflectCrackCd (the safe window to shoot the front). Returns true when
+// the shot was reflected (the player round is spent).
+function reflectFrontalBullet(w: WorldState, e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
+  if (e.rollAffix !== "reflect" || e.affixState <= 0 || b.pierce > 0) return false;
+  const incoming = Math.atan2(-b.vy, -b.vx);
+  if (Math.abs(angleDiff(incoming, e.attack.lockedAngle)) > ROLL_AFFIX.reflectArc / 2) return false;
+  b.life = 0;
+  e.affixState = 0;
+  e.affixClock = ROLL_AFFIX.reflectCrackCd;
+  spawnEnemyBullet(w, e.x, e.y, incoming, ROLL_AFFIX.reflectBoltSpeed, ROLL_AFFIX.reflectBoltRadius, ROLL_AFFIX.reflectBoltDamage, "#ffca6b", 2.2);
+  ev.push({ t: "bulletBounce", x: e.x, y: e.y, aim: incoming, color: "#ffca6b" });
+  ev.push({ t: "cue", name: "guard.break", x: e.x, y: e.y, rate: 1.2, gain: 0.7, trauma: 0.04 });
+  return true;
+}
+
+// Which swarm body a splitting elite cracks into: its own kind when that kind is a swarm chassis,
+// otherwise plain slimes (the universal swarm). Shards are always swarm-tier fragile bodies.
+const SWARM_SPLIT_KIND: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = { slime: "slime", bat: "bat" };
+
+// splits (rolled elite affix): on death the body cracks along its pre-cracked seams into
+// splitCount fragile swarm bodies (no rolled affix of their own — a split can't cascade). Never
+// off a summoned body. The shards scatter from the corpse and settle onto clear ground.
+function splitOnDeath(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const kin: EnemyKind = SWARM_SPLIT_KIND[e.kind] ?? "slime";
+  for (let i = 0; i < ROLL_AFFIX.splitCount; i++) {
+    const ang = (i / ROLL_AFFIX.splitCount) * Math.PI * 2 + e.x;
+    const mx = e.x + Math.cos(ang) * (e.radius + 12);
+    const my = e.y + Math.sin(ang) * (e.radius + 12);
+    if (!settleSpawnPoint(w, mx, my, ENEMY_ARCHETYPES[kin].radius)) continue;
+    const shard = createEnemy(kin, settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      tier: "swarm", isSummoned: true, players: w.encounterPlayers,
+    });
+    shard.hp = shard.maxHp = Math.max(1, Math.round(e.maxHp * ROLL_AFFIX.splitHpFrac));
+    shard.speed *= ROLL_AFFIX.splitSpeedMult;
+    w.enemies.push(shard);
+    ev.push({ t: "puff", x: shard.x, y: shard.y, n: 4, color: ENEMY_ARCHETYPES[kin].tint });
+  }
+  ev.push({ t: "cue", name: "enemyKill", x: e.x, y: e.y, rate: 1.1, gain: 0.6, trauma: 0.03 });
 }
 
 // The commander's synchronized ONE commit: a fixed rally beat (roar grammar — a
@@ -5114,6 +5265,64 @@ function attackCdMultOf(e: Enemy): number {
 //                 the living slimes into a delayed pack surge (pressure, no extra HP).
 //   P3 (35–0%):   2.25s cadence; hop landings fire 4 cardinal globs; every 3rd attack is a
 //                 telegraphed 3s arena squeeze; chase +12%; adds 2 slimes / 7s (cap 7).
+// ---- BOSS AFFIX (Wave 1): one extra telegraphed pattern layered onto a deep boss ----
+// A parallel cadence, independent of the boss's own attack machine: on its beat it blooms
+// telegraphed "charge" detonations (a ≥0.6s arming fuse, walk-dodgeable — the same shared hazard
+// the volatile elite plants, so it rides hzds and renders as a fairness cue) in a distinct
+// spatial signature per affix. Paused during the entrance grace and every transition beat.
+function stepBossAffix(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  if (e.spawnTimer > 0 || boss.roar !== null) return;
+  boss.affixCd -= dt;
+  if (boss.affixCd > 0) return;
+  if (!findTarget(w, e.x, e.y)) return;
+  boss.affixCd = BOSS_AFFIX.cooldown;
+  switch (w.floorDescriptor.bossAffix) {
+    case "emberwake": {
+      // A bloom under each living player's feet — keep moving off the ground you stand on.
+      for (const p of w.players.values()) {
+        if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
+        plantAffixCharge(w, p.x, p.y);
+      }
+      break;
+    }
+    case "sundering": {
+      // A fracture SEAM drawn across the arena through the boss toward the nearest player —
+      // leave the line before it snaps.
+      const ang = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+      const cx = Math.cos(ang), cy = Math.sin(ang);
+      const half = (BOSS_AFFIX.seamCount - 1) / 2;
+      for (let i = 0; i < BOSS_AFFIX.seamCount; i++) {
+        const d = (i - half) * BOSS_AFFIX.seamSpacing;
+        plantAffixCharge(w, e.x + cx * d, e.y + cy * d);
+      }
+      break;
+    }
+    case "amberrain": {
+      // A seeded scatter of blooms around the party centroid — read the raining amber.
+      for (let i = 0; i < BOSS_AFFIX.rainCount; i++) {
+        const ox = (w.rng.next() * 2 - 1) * BOSS_AFFIX.rainSpread;
+        const oy = (w.rng.next() * 2 - 1) * BOSS_AFFIX.rainSpread;
+        plantAffixCharge(w, w.targetX + ox, w.targetY + oy);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.8, gain: 0.6, trauma: 0.05 });
+}
+
+// One boss-affix bloom: the shared telegraphed "charge" hazard (arming fuse → walk-dodgeable
+// detonation). Skips walls so a bloom never arms inside geometry.
+function plantAffixCharge(w: WorldState, x: number, y: number): void {
+  if (isWall(w, x, y)) return;
+  w.hazards.push({
+    id: w.nextHazardId++, kind: "charge", x, y,
+    radius: BOSS_AFFIX.radius, life: BOSS_AFFIX.fuse, maxLife: BOSS_AFFIX.fuse,
+  });
+}
+
 function updateBoss(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
@@ -6853,7 +7062,17 @@ function slimeHopPulse(e: Enemy): number {
   return 1 + C.SLIME_HOP_AMOUNT * Math.sin(e.hopClock * C.SLIME_HOP_FREQ);
 }
 
+// Enrage (rolled elite affix): dead-amber veins heat as HP drops, closing the gap faster the
+// more bloodied the body is. APPROACH speed only — committed lethal dashes move by their own
+// baked step, never through here, so the telegraph read stays honest. 1 for everyone else.
+function enrageMoveMult(e: Enemy): number {
+  if (e.rollAffix !== "enrage" || e.maxHp <= 0) return 1;
+  const bloodied = 1 - Math.max(0, Math.min(1, e.hp / e.maxHp));
+  return 1 + ROLL_AFFIX.enrageMaxSpeedBonus * bloodied;
+}
+
 function applyChaseStep(w: WorldState, e: Enemy, dt: number, angle: number, step: number): void {
+  step *= enrageMoveMult(e);
   // Local obstacle avoidance: props aren't in the flow field, so a chaser would otherwise
   // grind straight into a barrel/crate and wedge. Steer smoothly around the nearest
   // blocking prop instead.

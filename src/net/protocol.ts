@@ -154,7 +154,22 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   event type, so the equal-version join gate bumps once for the whole pass. NOTE: the
 //   control plane's synthetic VERIFY join mirrors this constant (control/src/adapters/
 //   httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-export const PROTOCOL_VERSION = 15;
+// v16 (the Wave 1 seeded-randomness layer): the authoritative FLOOR DESCRIPTOR now EXPRESSES in
+// the sim (floor mutators, elite affixes, deep-boss affixes), so two disjoint reads cross the
+// wire and the equal-version join gate bumps once for the whole layer:
+//   - the snapshot carries `pcl` — the co-op player count LOCKED at floor pull (never rescaled on
+//     join/down/disconnect). The floor descriptor is a pure function of seed+floor+pcl, so a
+//     client that resolves it with `pcl` reproduces the server's mutators EXACTLY (HUD readout,
+//     the Dense Dark vision dim, the mutator-driven floor hazards it derives locally, and Thin
+//     Air dash prediction) instead of guessing from its own seat count. A v15 client omits it.
+//   - the enemy wire carries `afx` — a rolled elite's affix id ("splits"/"shielded"/
+//     "hazardTrail"/"reflect"/"enrage", "" for none) so clients draw its material tell (the
+//     reflect facet's armed/cracked state, the shielded slab, pre-cracked seams, dripping
+//     element, heated veins). The boss affix needs NO new field: it blooms the existing
+//     telegraphed "charge" hazards, which already ride hzds. A v15 client would reject `afx`.
+// NOTE: the control plane's synthetic VERIFY join mirrors this constant
+// (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
+export const PROTOCOL_VERSION = 16;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -312,6 +327,12 @@ export interface EnemyWire {
   // The per-kind auxiliary channel (see Enemy.aux): sinderling armed flag, echo/knell
   // fuse, fragment tether id + 1, bulwark plate HP. 0 for everyone else.
   aux: number;
+  // The ROLLED elite affix id ("splits"/"shielded"/"hazardTrail"/"reflect"/"enrage"), or "" for
+  // none (v16) — drives the client's material affix tell.
+  afx: string;
+  // The rolled affix's per-body scalar (its OWN channel, never aux): a shielded slab's HP, a
+  // reflect facet's armed state (>0 = armed). 0 for other affixes. Drives the armed/slab render.
+  afs: number;
   burn: number; chill: number; shock: number;
 }
 
@@ -448,6 +469,9 @@ export type ServerMsg =
                                  // only) — presented on reconnect to reclaim the seat
       seed: number;              // authoritative run seed (client rebuilds the identical dungeon)
       floor: number;             // authoritative floor number (objective/HUD)
+      pcl: number;               // co-op player count LOCKED at floor pull (1..4) — the client
+                                 // resolves the identical floor descriptor (mutators/affixes) with
+                                 // it; never rescaled mid-floor on join/down/disconnect
       cleared: boolean;          // authoritative floor-cleared / exit-open flag (global objective)
       exr: PlayerId[];           // living players standing at the cleared exit — the SAME
                                  // predicate the descend gate requires, on the wire (drives
@@ -513,6 +537,13 @@ function boolOf(o: Record<string, unknown>, k: string): boolean {
 function shortStr(o: Record<string, unknown>, k: string, max: number): string {
   const v = o[k];
   if (typeof v !== "string" || v.length < 1 || v.length > max) throw new ProtocolError(`bad ${k}`);
+  return v;
+}
+// A rolled-affix id: a short string, or "" for none. Distinct from shortStr because the empty
+// string is a valid value here (the common "no rolled affix" case).
+function affixOf(o: Record<string, unknown>, k: string): string {
+  const v = o[k];
+  if (typeof v !== "string" || v.length > 16) throw new ProtocolError(`bad ${k}`);
   return v;
 }
 function obj(v: unknown, what: string): Record<string, unknown> {
@@ -919,6 +950,8 @@ function validateEnemyWire(v: unknown): EnemyWire {
     },
     bph: num(o, "bph", 0, 16),
     aux: num(o, "aux", -1e9, 1e9),
+    afx: affixOf(o, "afx"),
+    afs: num(o, "afs", -1e9, 1e9),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
   };
 }
@@ -1100,6 +1133,7 @@ function decodeServerMsg(raw: string): ServerMsg {
         ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
         seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
         floor: intOf(o, "floor", 1, 1e6),
+        pcl: intOf(o, "pcl", 1, 4),
         cleared: boolOf(o, "cleared"),
         exr,
         evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
@@ -1223,6 +1257,8 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
     bph: e.boss ? e.boss.phase : 0,
     aux: e.aux,
+    afx: e.rollAffix,
+    afs: e.affixState,
     burn: e.burn, chill: e.chill, shock: e.shock,
   };
 }
@@ -1237,6 +1273,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
   return {
     id: w.id, kind: w.kind, x, y, vx: 0, vy: 0, radius: w.r, hp: w.hp, maxHp: w.mhp, dead: false,
     tier: w.tr, isSummoned: false, kbResist: 1, surgeDelay: 0, surgeTime: 0,
+    rollAffix: w.afx, affixState: w.afs, affixClock: 0,
     aux: w.aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
@@ -1252,7 +1289,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // Earned windows: the exposed remainder rides the aux channel (the render key);
         // the bank and mechanic id lists are sim-internal and never travel.
         exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
-        phaseTime: 0, enrage: 0, isSurpriseSpent: false,
+        phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
       : null,
   };
@@ -1534,6 +1571,7 @@ export function buildSnapshot(
     ...(opts.resumeToken !== undefined ? { tok: opts.resumeToken } : {}),
     seed: w.seed,
     floor: w.floor,
+    pcl: w.floorDescriptor.playerCountAtLock,
     cleared: isFloorCleared(w),
     exr: playersAtExit(w),
     evTo,
