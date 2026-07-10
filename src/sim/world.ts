@@ -7118,15 +7118,15 @@ function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[]): vo
   const pool = w.jetMirror;
   if (pool.length === 0) return;
   const family = pool[(boss.attackCount + index) % pool.length];
-  const inverted = boss.phase >= 3;
+  const isInverted = boss.phase >= 3;
   let aim = e.attack.lockedAngle;
   if (findTarget(w, e.x, e.y)) aim = Math.atan2(w.targetY - e.y, w.targetX - e.x);
   // The canon offset spreads simultaneous verbs so they read as distinct mirrored lanes.
-  aim += (inverted ? -1 : 1) * index * 0.4;
-  jetEmitFamily(w, e, family, aim, inverted);
+  aim += (isInverted ? -1 : 1) * index * 0.4;
+  jetEmitFamily(w, e, family, aim, isInverted);
   // P3 room-drain: the room's amber "drains" into telegraphed blooms around the party — a
   // walk-dodgeable closing pressure layered on the inverted salvo (the shared charge hazard).
-  if (inverted && index === 0 && findTarget(w, e.x, e.y)) {
+  if (isInverted && index === 0 && findTarget(w, e.x, e.y)) {
     for (let i = 0; i < JET.drainCount; i++) {
       const ox = (w.rng.next() * 2 - 1) * JET.drainSpread;
       const oy = (w.rng.next() * 2 - 1) * JET.drainSpread;
@@ -7137,9 +7137,9 @@ function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[]): vo
 }
 
 // The authored mirrored PATTERN per Resonance family — the archetype tell, not the weapon.
-function jetEmitFamily(w: WorldState, e: Enemy, family: ResonanceFamily, aim: number, inverted: boolean): void {
+function jetEmitFamily(w: WorldState, e: Enemy, family: ResonanceFamily, aim: number, isInverted: boolean): void {
   const col = "#8a7bd8";
-  const sign = inverted ? -1 : 1;
+  const sign = isInverted ? -1 : 1;
   const shard = (ang: number, speed: number): void =>
     spawnEnemyBullet(w, e.x + Math.cos(ang) * (e.radius + 6), e.y + Math.sin(ang) * (e.radius + 6), ang, speed, JET.globRadius, JET.globDamage, col, JET.globLife);
   switch (family) {
@@ -7162,7 +7162,7 @@ function jetEmitFamily(w: WorldState, e: Enemy, family: ResonanceFamily, aim: nu
     }
     case "arc": {
       // A full ring (the bounce/chain/seek mirror): the pattern that ignores your cover.
-      const base = inverted ? Math.PI / JET.arcCount : 0;
+      const base = isInverted ? Math.PI / JET.arcCount : 0;
       for (let i = 0; i < JET.arcCount; i++) shard(base + (i / JET.arcCount) * Math.PI * 2, JET.globSpeed * 0.9);
       return;
     }
@@ -7207,8 +7207,8 @@ function titheBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   boss.attackCount++;
   e.attack.cooldown = TITHE.attackCd[boss.phase];
   // Feed when unexposed and no slab is standing; otherwise pressure with an amber ring.
-  const noSlab = countLiveIds(w, boss.windowAddIds) === 0 && boss.windowAddIds.length === 0;
-  if (boss.exposed <= 0 && noSlab) {
+  const isSlabless = countLiveIds(w, boss.windowAddIds) === 0 && boss.windowAddIds.length === 0;
+  if (boss.exposed <= 0 && isSlabless) {
     beginWindup(e, "build");
     ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
     return;
@@ -7338,14 +7338,14 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   // The husks share the pool: mirror the core HP onto every live husk (the bar + tether read
   // the ONE pool), and the HEAL husk regenerates the pool while it lives (undo lazy chip).
   const liveHusks: Enemy[] = [];
-  let healAlive = false;
+  let isHealAlive = false;
   for (const id of boss.windowAddIds) {
     const h = w.enemies.find((o) => !o.dead && o.id === id);
     if (!h) continue;
     liveHusks.push(h);
-    if (h.kind === "quorum_heal") healAlive = true;
+    if (h.kind === "quorum_heal") isHealAlive = true;
   }
-  if (boss.phase < 2 && healAlive && !boss.roar && e.hp < e.maxHp) {
+  if (boss.phase < 2 && isHealAlive && !boss.roar && e.hp < e.maxHp) {
     e.hp = Math.min(e.maxHp, e.hp + QUORUM.healRegenPerSec * dt);
   }
   for (const h of liveHusks) { h.hp = e.hp; h.maxHp = e.maxHp; }
