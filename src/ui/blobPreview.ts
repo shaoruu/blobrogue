@@ -1,6 +1,6 @@
 import { Sprites, playerColor, heroBodySprite } from "../game/assets.js";
 import { createAnim, stepAnim, characterXform, CHARACTER_STYLE } from "../game/anim.js";
-import { drawLoadoutOverlays } from "../game/cosmeticArt.js";
+import { drawLoadoutOverlays, isLoadoutArtSettled } from "../game/cosmeticArt.js";
 import type { CosmeticXform } from "../game/cosmeticSockets.js";
 
 // A small live preview of a blob's appearance (tint + cosmetic overlays) for the menu:
@@ -52,6 +52,77 @@ function sprites(): Sprites {
   return sharedSprites;
 }
 
+// The blob's default amber body tint (party-color slot 0): the fallback body fill when no
+// palette tint applies, and the color the momentary blink eyelids borrow.
+const DEFAULT_BLOB_COLOR = "#ffb43b";
+
+// The still (untransformed) body pose — the static default a fixed-frame surface (a closet
+// grid thumbnail) draws with, no idle deform.
+const IDLE_XFORM: CosmeticXform = { ox: 0, oy: 0, sx: 1, sy: 1, rot: 0 };
+
+// How a blob is drawn into a canvas: the anchor + drawn body size, an optional body
+// transform (the live idle deform; identity for a static thumbnail), and an optional
+// body-space pass drawn BETWEEN the body and its cosmetics (the calm-idle blink eyelids).
+export interface DrawBlobOpts {
+  cx: number;
+  cy: number;
+  size: number;
+  xf?: CosmeticXform;
+  afterBody?: (ctx: CanvasRenderingContext2D, drawSize: number, bodyColor: string) => void;
+}
+
+// THE one blob still-frame draw path: the tinted hero base (bald under any hat, the classic
+// cowboy with none) plus its cosmetics through the shared loadout renderer at side
+// orientation — the exact composite the world and the big preview render. Every surface that
+// shows a blob (the big mirror AND each closet grid thumbnail) goes through here, so a card
+// can never drift from what a player actually wears. While a sprite streams in, the body
+// falls back to a tinted disc and a not-yet-loaded cosmetic simply doesn't draw (never a
+// fabricated placeholder); isBlobReady is the repaint-until-ready signal for still surfaces.
+export function drawBlob(ctx: CanvasRenderingContext2D, look: BlobLook, o: DrawBlobOpts): void {
+  const xf = o.xf ?? IDLE_XFORM;
+  const half = o.size / 2;
+  const tint = look.colorIndex !== null && look.colorIndex > 0 ? playerColor(look.colorIndex) : null;
+  const bodyColor = tint ?? DEFAULT_BLOB_COLOR;
+  ctx.imageSmoothingEnabled = false;
+  ctx.save();
+  ctx.translate(o.cx + xf.ox, o.cy + xf.oy);
+  ctx.rotate(xf.rot);
+  ctx.scale(xf.sx, xf.sy);
+  // A hatted blob draws from the bald base so the equipped hat replaces the baked cowboy hat
+  // (exactly as the world renders it); a bare-headed blob keeps the classic hatted hero.
+  const base = heroBodySprite(look.hat);
+  const body = tint ? sprites().tintedSprite(base, tint) ?? null : null;
+  const plain = sprites().ready(base) ? sprites().get(base) : null;
+  const img = body ?? plain;
+  if (img) {
+    ctx.drawImage(img, -half, -half, o.size, o.size);
+    o.afterBody?.(ctx, o.size, bodyColor);
+  } else {
+    // Sprite still streaming: a disc in the blob's own tint keeps the slot readable.
+    ctx.fillStyle = bodyColor;
+    ctx.beginPath();
+    ctx.arc(0, 0, o.size * 0.3, 0, 6.28);
+    ctx.fill();
+  }
+  ctx.restore();
+  drawLoadoutOverlays(ctx, look.hat, look.face, {
+    cx: o.cx, cy: o.cy, sizePx: o.size, facing: 1,
+    orientation: "side", xf, isSheetPlaying: false, frameIndex: 0, alpha: 1,
+  });
+}
+
+// Whether every sprite drawBlob needs for this look has SETTLED (loaded or failed): the
+// body base and each equipped cosmetic's side-oriented art. A fixed-frame surface (a closet
+// thumbnail) uses this to repaint once — and only until — its art has settled (the canvas is
+// fixed-size, so the repaint is zero layout shift), then parks; a failed sprite still counts
+// as settled, so the loop never spins on missing art (drawBlob's disc/no-overlay fallback
+// simply stands). The overlay-load check lives in cosmeticArt so this surface keeps no
+// private overlay resolution.
+export function isBlobReady(look: BlobLook): boolean {
+  if (!sprites().get(heroBodySprite(look.hat)).complete) return false;
+  return isLoadoutArtSettled(look.hat, look.face, "side");
+}
+
 export interface BlobPreview {
   el: HTMLCanvasElement;
   setLook(look: BlobLook): void;
@@ -87,48 +158,23 @@ export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPrevie
     const g = el.getContext("2d");
     if (!g) return;
     g.clearRect(0, 0, size, size);
-    g.imageSmoothingEnabled = false;
     const xf = characterXform(anim, CHARACTER_STYLE);
     const isWaving = opts.isCalmIdle === true && clock < waveUntil;
     const gestureRot = isWaving ? Math.sin((waveUntil - clock) * (Math.PI * 4 / WAVE_SECONDS)) * WAVE_ROT : 0;
-    const drawSize = Math.round(size * 0.82);
-    const half = drawSize / 2;
-    const cx = size / 2 + xf.ox;
-    const cy = size * 0.56 + xf.oy;
-    g.save();
-    g.translate(cx, cy);
-    g.rotate(xf.rot + gestureRot);
-    g.scale(xf.sx, xf.sy);
-    const tint = look.colorIndex !== null && look.colorIndex > 0 ? playerColor(look.colorIndex) : null;
-    // A hatted blob previews from the bald base so the equipped hat replaces the baked cowboy
-    // hat (exactly as the world renders it); a bare-headed blob keeps the classic hatted hero.
-    const base = heroBodySprite(look.hat);
-    const body = tint ? sprites().tintedSprite(base, tint) ?? null : null;
-    const plain = sprites().ready(base) ? sprites().get(base) : null;
-    const img = body ?? plain;
-    if (img) {
-      g.drawImage(img, -half, -half, drawSize, drawSize);
+    // The idle deform carries the wave tilt into the body rotation; drawBlob feeds the same
+    // transform to the shared loadout renderer (capped inside), so hats follow the gesture.
+    const bodyXf: CosmeticXform = { ox: xf.ox, oy: xf.oy, sx: xf.sx, sy: xf.sy, rot: xf.rot + gestureRot };
+    const isBlinking = opts.isCalmIdle === true && clock < blinkUntil;
+    drawBlob(g, look, {
+      cx: size / 2, cy: size * 0.56, size: Math.round(size * 0.82), xf: bodyXf,
       // Blink: momentary eyelids in the body tint, under any face overlay drawn after.
-      if (opts.isCalmIdle === true && clock < blinkUntil) {
-        const s = drawSize / 64;
-        g.fillStyle = tint ?? "#ffb43b";
-        for (const eye of EYES) g.fillRect((eye.x - 32) * s, (eye.y - 32) * s, eye.w * s, eye.h * s);
-      }
-    } else {
-      // Sprite still streaming: a disc in the blob's own tint keeps the slot readable.
-      g.fillStyle = tint ?? "#ffb43b";
-      g.beginPath();
-      g.arc(0, 0, drawSize * 0.3, 0, 6.28);
-      g.fill();
-    }
-    g.restore();
-    // The cosmetic pass goes through THE shared loadout renderer — the same code path the
-    // world uses, so the mirror can never drift from what teammates see. The wave tilt
-    // rides the transform (capped inside), so hats follow the gesture.
-    const cosmeticXf: CosmeticXform = { ox: xf.ox, oy: xf.oy, sx: xf.sx, sy: xf.sy, rot: xf.rot + gestureRot };
-    drawLoadoutOverlays(g, look.hat, look.face, {
-      cx: size / 2, cy: size * 0.56, sizePx: drawSize, facing: 1,
-      orientation: "side", xf: cosmeticXf, isSheetPlaying: false, frameIndex: 0, alpha: 1,
+      afterBody: isBlinking
+        ? (bg, drawSize, bodyColor) => {
+            const s = drawSize / 64;
+            bg.fillStyle = bodyColor;
+            for (const eye of EYES) bg.fillRect((eye.x - 32) * s, (eye.y - 32) * s, eye.w * s, eye.h * s);
+          }
+        : undefined,
     });
   };
 

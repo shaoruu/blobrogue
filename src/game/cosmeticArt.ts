@@ -57,6 +57,28 @@ export function cosmeticIcon(id: string): CanvasImageSource | null {
   return slot.img;
 }
 
+// Whether the art a still-frame needs for this loadout has stopped streaming: every
+// referenced overlay's oriented image has SETTLED (loaded or failed) for this orientation.
+// A fixed-frame surface (the closet grid thumbnail) repaints only until this flips true,
+// then parks — the canvas is fixed-size, so those repaints are zero layout shift. A live
+// surface (the world, the animated mirror) ignores this: it already repaints every frame.
+// Ids without art never gate (they render nothing by contract). Requesting a slot here also
+// kicks off its lazy load, exactly like the first draw would.
+export function isLoadoutArtSettled(
+  hat: string | null,
+  face: string | null,
+  orientation: CosmeticOrientation,
+): boolean {
+  for (const id of [face, hat]) {
+    if (id === null) continue;
+    const key = ASSET_KEY_BY_ID.get(id);
+    if (key === undefined || COSMETIC_ASSET_SOURCES[key] === undefined) continue;
+    const slot = assetSlot(key, orientation);
+    if (!slot.isFailed && !(slot.img.complete && slot.img.naturalWidth > 0)) return false;
+  }
+  return true;
+}
+
 // The drawable overlay for a cosmetic: its generated asset centered on the deterministic
 // socket for the given orientation/frame, or null when the id has no art, the image has
 // not loaded, or the socket is invisible for this facing (a face on the back of the head).
