@@ -64,6 +64,8 @@ export interface OverlayResolved {
   source: CanvasImageSource;
   socket: SocketPoint;
   sizePx: number;
+  offsetX: number;
+  offsetY: number;
 }
 
 export function resolveOverlay(
@@ -78,7 +80,7 @@ export function resolveOverlay(
   if (slot.isFailed || !slot.img.complete || slot.img.naturalWidth === 0) return null;
   const socket = socketFor(def.socket, orientation, frameIndex);
   if (!socket.isVisible) return null;
-  return { source: slot.img, socket, sizePx: def.sizePx };
+  return { source: slot.img, socket, sizePx: def.sizePx, offsetX: def.offsetX ?? 0, offsetY: def.offsetY ?? 0 };
 }
 
 // ---- THE shared loadout renderer ----------------------------------------------------------
@@ -118,8 +120,10 @@ export function drawLoadoutOverlays(
     const overlay = resolveOverlay(id, o.orientation, o.frameIndex);
     if (!overlay) continue;
     const drawSize = overlay.sizePx * scale;
-    const sx = (overlay.socket.x - 32) * scale;
-    const sy = (overlay.socket.y - 32) * scale;
+    // Per-hat offset rides the socket in frame space, mirrored with facing on x so a
+    // side-authored nudge stays on the correct side when the sprite flips.
+    const sx = (overlay.socket.x - 32 + overlay.offsetX) * scale;
+    const sy = (overlay.socket.y - 32 + overlay.offsetY) * scale;
     ctx.drawImage(overlay.source, sx - drawSize / 2, sy - drawSize / 2, drawSize, drawSize);
   }
   ctx.restore();

@@ -54,21 +54,21 @@ const SOCKETS: Record<CosmeticOrientation, Record<SocketKind, FrameTable>> = {
   // Facing the camera: hat crowns the head, face sits on the eye line, a back layer hides
   // behind the body.
   down: {
-    head: still(32, 11),
+    head: still(32, 14),  // retuned: new base crown tops y22 (was tuned for old y11 crown)
     face: still(32, 32),
     back: still(32, 30, true, true),
   },
   // Facing away: the face layer is invisible (back of the head); a back layer draws in
   // front of the body sprite.
   up: {
-    head: still(32, 9),
+    head: still(32, 12),  // retuned for new base crown y22
     face: still(32, 32, false),
     back: still(32, 30, true, false),
   },
   // Side (authored RIGHT; the renderer's facing flip mirrors left): hat shifts toward the
   // face, the eye line sits forward of center.
   side: {
-    head: still(33, 10),
+    head: still(33, 13),  // retuned for new base crown y22 (side is what the hero renders)
     face: still(36, 32),
     back: still(26, 30, true, true),
   },
@@ -117,6 +117,12 @@ export interface CosmeticAssetDef {
   // Drawn size in frame-space px (the asset is authored square at this size, centered on
   // its socket).
   sizePx: number;
+  // Per-hat fine-tune offset in frame-space px, added to the socket anchor. Each hat sits
+  // slightly differently on the round head (a tall toque rides higher, a low headphone band
+  // sits lower), so this is the per-item nudge on top of the shared head socket. Defaults to
+  // 0,0 when omitted. +y = lower on the head, +x = toward the facing side.
+  offsetX?: number;
+  offsetY?: number;
   src: Record<CosmeticOrientation, string>;
 }
 
@@ -136,17 +142,17 @@ export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   cowboy_hat_classic: { socket: "head", sizePx: 48, src: orientedSources("cowboy_hat_classic") },
   // hats
   hat_top: { socket: "head", sizePx: 48, src: orientedSources("hat_top") },
-  hat_beanie: { socket: "head", sizePx: 48, src: orientedSources("hat_beanie") },
-  hat_chef: { socket: "head", sizePx: 48, src: orientedSources("hat_chef") },
-  hat_party: { socket: "head", sizePx: 48, src: orientedSources("hat_party") },
-  hat_flower: { socket: "head", sizePx: 48, src: orientedSources("hat_flower") },
-  hat_mushroom: { socket: "head", sizePx: 48, src: orientedSources("hat_mushroom") },
-  hat_crown: { socket: "head", sizePx: 48, src: orientedSources("hat_crown") },
+  hat_beanie: { socket: "head", sizePx: 48, offsetY: -4, src: orientedSources("hat_beanie") },
+  hat_chef: { socket: "head", sizePx: 50, offsetY: -7, src: orientedSources("hat_chef") },
+  hat_party: { socket: "head", sizePx: 46, offsetY: -5, src: orientedSources("hat_party") },
+  hat_flower: { socket: "head", sizePx: 46, offsetY: 2, src: orientedSources("hat_flower") },
+  hat_mushroom: { socket: "head", sizePx: 46, offsetY: -2, src: orientedSources("hat_mushroom") },
+  hat_crown: { socket: "head", sizePx: 48, offsetY: 2, src: orientedSources("hat_crown") },
   hat_wizard: { socket: "head", sizePx: 48, src: orientedSources("hat_wizard") },
-  hat_halo: { socket: "head", sizePx: 48, src: orientedSources("hat_halo") },
-  hat_headphones: { socket: "head", sizePx: 48, src: orientedSources("hat_headphones") },
+  hat_halo: { socket: "head", sizePx: 44, offsetY: 7, src: orientedSources("hat_halo") },
+  hat_headphones: { socket: "head", sizePx: 68, offsetY: 11, src: orientedSources("hat_headphones") },
   hat_helmet: { socket: "head", sizePx: 48, src: orientedSources("hat_helmet") },
-  hat_horns: { socket: "head", sizePx: 48, src: orientedSources("hat_horns") },
+  hat_horns: { socket: "head", sizePx: 48, offsetY: -6, src: orientedSources("hat_horns") },
   // faces
   round_glasses: { socket: "face", sizePx: 32, src: orientedSources("round_glasses") },
   face_shades: { socket: "face", sizePx: 32, src: orientedSources("face_shades") },
