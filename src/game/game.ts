@@ -2738,7 +2738,7 @@ export class Game {
   private blockedWeaponPickup(): Pickup | null {
     if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
     const p = this.p;
-    if (p.ownedWeapons.length < MAX_OWNED_WEAPONS) return null;
+    if (p.ownedWeapons.length < MAX_OWNED_WEAPONS + p.extraWeaponSlots) return null;
     let best: Pickup | null = null;
     let bestD = Infinity;
     for (const k of this.pickups) {
@@ -3151,6 +3151,7 @@ export class Game {
         id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
         card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
       })),
+      weaponCap: MAX_OWNED_WEAPONS + this.p.extraWeaponSlots,
       swap: this.swapTarget ? { id: this.swapTarget.weapon, name: WEAPONS[this.swapTarget.weapon].name } : null,
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").

@@ -191,3 +191,16 @@ Stall & stations (PropSpriteName hooks in `assets.ts`):
 - `shop_pedestal.png` — 64×64 stone display pedestal (weapon + blessing pedestals).
 - `shop_heart_station.png` — 64×64 heart-glass dispenser.
 - `shop_reroll_post.png` — 64×64 salvage-tag signpost (the reroll control).
+
+Premium vendor hooks (the coin-sink ecology — until these land, the premium stations
+reuse the four stall sprites above plus tinted glyph chips; see SHOP_STATION_IMG +
+drawShopGlyph in `game.ts`). The BIG-PURCHASE kinds (legendary showcase, artifact,
+mythic pedestal) also carry a gold breathing glow ring drawn in-engine — authored art
+should leave headroom for it:
+- `shop_premium_pedestal.png` — 64×64 gilded display pedestal (mystery/legendary/core
+  sinks at the premium, spoils, and climax stalls).
+- `shop_mythic_pedestal.png` — 64×64 the capstone plinth (one per party per shop; wants
+  presence — this is the run's most expensive object).
+- `shop_artifact_altar.png` — 64×64 the devil-deal altar (paid in max hearts; darker,
+  hungrier read than the coin stations).
+- `shop_upgrade_anvil.png` — 64×64 the weapon reforge station (rare→legendary loyalty).

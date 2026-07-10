@@ -180,7 +180,7 @@ export const PREMIUM = {
   // (legendary/upgrade from the F15 band, revive/slot from the F20 band).
   dealerTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "prospector"] as readonly PremiumTier[],
   spoilsTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "prospector", "core_infusion", "legendary", "weapon_upgrade", "revive_token"] as readonly PremiumTier[],
-  premiumTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "reroll_all", "amber_cache", "core_infusion", "prospector", "legendary", "weapon_upgrade", "extra_slot"] as readonly PremiumTier[],
+  premiumTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "reroll_all", "amber_cache", "core_infusion", "prospector", "legendary", "weapon_upgrade", "revive_token", "extra_slot"] as readonly PremiumTier[],
   // The climax vendor's GUARANTEED stock (the designer's list + the cache and the mythic
   // tease), in pedestal order. Always present, never seeded away.
   climaxTiers: ["max_hp", "revive_token", "legendary", "mystery", "full_heal", "weapon_upgrade", "amber_cache", "artifact"] as readonly PremiumTier[],

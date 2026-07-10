@@ -26,10 +26,10 @@ import {
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
   isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, shopWeaponPrice,
-  SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  isPremiumKind, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
-import { SHOP, PREMIUM, isPremiumShopFloor } from "../src/sim/balance.js";
+import { SHOP, PREMIUM, isPremiumShopFloor, isSpoilsFloor } from "../src/sim/balance.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import type { Dungeon } from "../src/sim/dungeon.js";
 import { isBossFloor } from "../src/sim/enemies.js";
@@ -180,9 +180,14 @@ function placementTests(): void {
     for (const seed of SEEDS) {
       for (const floor of SHOP_FLOORS) {
         const w = createWorld(seed, floor);
-        // 5 classic stations, plus the Dealer's one premium slot from F6+.
-        const want = SHOP.pedestalPrices.length + 2 + (floor >= PREMIUM.dealerSlotFromFloor ? 1 : 0);
-        if (!w.shop || w.shop.slots.length !== want) isEverywhere = false;
+        // 5 classic stations, plus the premium row: the spoils slots (1-3) where the
+        // post-boss cadence overlaps the Dealer's (6/21/…), else the one premium slot
+        // from F6+.
+        const premium = w.shop?.slots.filter((s) => isPremiumKind(s.kind)).length ?? 0;
+        const premiumWant = isSpoilsFloor(floor)
+          ? premium >= 1 && premium <= 3
+          : premium === (floor >= PREMIUM.dealerSlotFromFloor ? 1 : 0);
+        if (!w.shop || w.shop.slots.length !== SHOP.pedestalPrices.length + 2 + premium || !premiumWant) isEverywhere = false;
       }
     }
     check(`every (seed, shop floor) builds the full stall across ${SEEDS.length} seeds`, isEverywhere);

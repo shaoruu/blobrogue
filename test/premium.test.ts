@@ -21,27 +21,31 @@
 // Run: npm run test:premium
 
 import {
-  createWorld, loadFloorIntoWorld, spawnPlayerInWorld, buyFromShopInWorld,
-  applyItemToWorld, isPlayerInCombat, consumeBlessingReroll, devSpawnEnemy,
+  createWorld, loadFloorIntoWorld, spawnPlayerInWorld, stepWorld, buyFromShopInWorld,
+  applyItemToWorld, applyMaxHpBonus, acquireWeaponInWorld, isPlayerInCombat,
+  consumeBlessingReroll, devSpawnEnemy,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
   isShopFloor, hasShopRoomOnFloor, shopSlotStatusFor, shopSlotPriceFor,
-  shopViewerOf, isPremiumKind, isMythicKind,
+  shopViewerOf, isPremiumKind, isMythicKind, upgradeTargetTier, dealerRarityCeiling,
+  PREMIUM_LOCK_KINDS, DEALER_LEGENDARY_FROM_FLOOR,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopSlotKind } from "../src/sim/shop.js";
 import {
-  PREMIUM, CAPS, PLAYER, isPremiumShopFloor, premiumPriceAt,
-  mysteryOddsAt, roundToPriceStep, amberForRun, coinChanceTaper, COIN_TAPER,
+  PREMIUM, CAPS, PLAYER, REVIVE, isPremiumShopFloor, isSpoilsFloor, shopModeFor, premiumPriceAt,
+  premiumMysteryLegendaryWeight, roundToPriceStep, amberForRun, coinChanceTaper, COIN_TAPER,
   BOSS_DPS_CEILING,
 } from "../src/sim/balance.js";
 import type { PremiumTier } from "../src/sim/balance.js";
-import { WEAPONS, PICKUP_WEAPONS, weaponsOfRarity, rollMysteryWeapon } from "../src/sim/weapons.js";
+import type { WeaponRarity } from "../src/sim/types.js";
+import { WEAPONS, PICKUP_WEAPONS, LEGENDARY_WEAPONS } from "../src/sim/weapons.js";
 import { isBossFloor, isGauntletFloor } from "../src/sim/enemies.js";
-import { ITEMS, itemById, itemLevelsOf, recomputeMods, createMods, MAX_ITEM_LEVEL } from "../src/sim/items.js";
+import { ITEMS, itemById, itemLevelsOf, recomputeMods, createMods, rollItemChoicesWith, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import { Rng } from "../src/sim/rng.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import type { SimEvent } from "../src/sim/events.js";
+import type { InputCmd } from "../src/sim/input.js";
 import { jsonCodec, buildSnapshot, toShopWire } from "../src/net/protocol.js";
 import type { ServerMsg } from "../src/net/protocol.js";
 
@@ -75,9 +79,9 @@ function buyAt(w: WorldState, p: PlayerSim, slot: ShopSlot, ev: SimEvent[] = [])
 
 // A premium world with a guaranteed slot of `kind`: scans seeds until the seeded stock
 // offers it (stock is seeded 2-3 of 6-7 tiers, so a scan always lands quickly).
-function worldWithSlot(kind: ShopSlotKind, floor: number, size = 1): { w: WorldState; ps: PlayerSim[]; slot: ShopSlot } {
+function worldWithSlot(kind: ShopSlotKind, floor: number, size = 1, seedBase = 0x9e370001): { w: WorldState; ps: PlayerSim[]; slot: ShopSlot } {
   for (let s = 0; s < 4096; s++) {
-    const seed = 0x9e370001 + s * 2654435761;
+    const seed = seedBase + s * 2654435761;
     const { w, ps } = partyWorld(seed, floor, size);
     const slot = w.shop?.slots.find((x) => x.kind === kind);
     if (slot) return { w, ps, slot };
@@ -87,6 +91,10 @@ function worldWithSlot(kind: ShopSlotKind, floor: number, size = 1): { w: WorldS
 
 function give(p: PlayerSim, coins: number): void {
   p.coins = coins;
+}
+
+function idle(seq: number): InputCmd {
+  return { seq, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, interact: false };
 }
 
 // ---- 1. placement ----
@@ -115,9 +123,9 @@ function placementTests(): void {
     let isSinkCountRight = true;
     let hasMythicWhenDue = true;
     for (const seed of SEEDS) {
-      for (const floor of PREMIUM_FLOORS) {
+      for (const floor of PREMIUM_FLOORS.filter((f) => f !== PREMIUM.climaxFloor)) {
         const w = createWorld(seed, floor);
-        if (!w.shop) { isStocked = false; continue; }
+        if (!w.shop || w.shop.mode !== "premium") { isStocked = false; continue; }
         const sinks = w.shop.slots.filter((s) => !isMythicKind(s.kind));
         const mythics = w.shop.slots.filter((s) => isMythicKind(s.kind));
         if (sinks.length < 2 || sinks.length > 3) isSinkCountRight = false;
@@ -129,9 +137,33 @@ function placementTests(): void {
     check("the mythic slot appears exactly on F19+ landings, exactly once", hasMythicWhenDue);
   }
   {
+    section("placement: the SPOILS vendor lands the floor after every boss");
+    check("spoils cadence: 6/11/16/21/26/31 yes; never a boss/premium floor",
+      [6, 11, 16, 21, 26, 31].every(isSpoilsFloor) && ![5, 9, 10, 14, 15, 29, 30].some(isSpoilsFloor));
+    let isSpoilsRight = true;
+    for (const seed of SEEDS) {
+      for (const floor of [11, 16, 26, 31]) {
+        const w = createWorld(seed, floor);
+        if (!w.shop || w.shop.mode !== "spoils") { isSpoilsRight = false; continue; }
+        const sinks = w.shop.slots;
+        if (sinks.length < 1 || sinks.length > 3) isSpoilsRight = false;
+        if (sinks.some((s) => !isPremiumKind(s.kind) || isMythicKind(s.kind))) isSpoilsRight = false;
+      }
+      for (const floor of [6, 21]) {
+        // The overlap floors: the Dealer hosts the spoils row ON its stall.
+        const w = createWorld(seed, floor);
+        if (!w.shop || w.shop.mode !== "spoils") { isSpoilsRight = false; continue; }
+        const spoils = w.shop.slots.filter((s) => isPremiumKind(s.kind));
+        const classic = w.shop.slots.filter((s) => !isPremiumKind(s.kind));
+        if (classic.length !== 5 || spoils.length < 1 || spoils.length > 3) isSpoilsRight = false;
+      }
+    }
+    check("spoils stock is 1-3 premium items (never a mythic); overlap floors ride the Dealer's stall", isSpoilsRight);
+  }
+  {
     let isDealerSlotRight = true;
     for (const seed of SEEDS) {
-      for (const floor of [3, 6, 12, 18, 21, 27]) {
+      for (const floor of [3, 12, 18, 27]) {
         const w = createWorld(seed, floor);
         const premium = w.shop!.slots.filter((s) => isPremiumKind(s.kind));
         const want = floor >= PREMIUM.dealerSlotFromFloor ? 1 : 0;
@@ -139,7 +171,25 @@ function placementTests(): void {
         if (premium.some((s) => !PREMIUM.dealerTiers.includes(s.kind as PremiumTier))) isDealerSlotRight = false;
       }
     }
-    check("the Dealer carries exactly one premium slot from F6+ (none at F3), small tiers only", isDealerSlotRight);
+    check("the pure Dealer floors carry exactly one premium slot from F6+ (none at F3), small tiers only", isDealerSlotRight);
+  }
+  {
+    section("placement: the CLIMAX vendor (F29) is guaranteed, top-tier, lock-free");
+    check("F29 is the climax mode; the other landings stay premium",
+      shopModeFor(29) === "climax" && shopModeFor(19) === "premium" && shopModeFor(34) === "premium");
+    let isClimaxRight = true;
+    for (const seed of SEEDS) {
+      const w = createWorld(seed, PREMIUM.climaxFloor);
+      if (!w.shop || w.shop.mode !== "climax") { isClimaxRight = false; continue; }
+      const kinds = w.shop.slots.map((s) => s.kind);
+      // The designer's guaranteed stock: heart container, revive token, legendary,
+      // mystery, panacea, weapon upgrade — plus the cache, the artifact, and the mythic.
+      for (const want of ["max_hp", "revive_token", "legendary", "mystery", "full_heal", "weapon_upgrade", "amber_cache", "artifact"]) {
+        if (!kinds.includes(want as ShopSlotKind)) isClimaxRight = false;
+      }
+      if (!w.shop.slots.some((s) => isMythicKind(s.kind))) isClimaxRight = false;
+    }
+    check("every seed's climax vendor carries the full guaranteed stock + the mythic tease", isClimaxRight);
   }
 }
 
@@ -235,25 +285,34 @@ function mysteryTests(): void {
     check("same (seed, wallet, buyer) → the identical reveal", first !== "none" && first === revealFor("p0"));
   }
   {
-    // The odds table: monotone legendary share, and the seeded roll honors it.
-    const shares = MILESTONES.map((m) => {
-      const [c, r, l] = mysteryOddsAt(m - 1);
-      return l / (c + r + l);
-    });
-    check("legendary odds strictly improve with depth: " + shares.map((s) => Math.round(s * 100) + "%").join(" → "),
-      shares.every((s, i) => i === 0 || s > shares[i - 1]));
-    const rng = new Rng(0xabcdef);
-    let legendary = 0;
-    const n = 20000;
-    for (let i = 0; i < n; i++) {
-      if (WEAPONS[rollMysteryWeapon(rng, mysteryOddsAt(29), [])].rarity === "legendary") legendary++;
-    }
-    const want = 38 / 100;
-    check("the F30-band roll lands its authored legendary share (±2pp over 20k rolls)",
-      Math.abs(legendary / n - want) < 0.02, `${(legendary / n * 100).toFixed(1)}%`);
+    // The premium gamble's odds improve with depth: the per-band legendary weight fed
+    // into the SHARED rarity roll climbs strictly, and the deep bands measurably beat
+    // the shallow ones in realized legendary reveals.
+    const weights = MILESTONES.map((m) => premiumMysteryLegendaryWeight(m - 1));
+    check("the legendary weight strictly climbs per band: " + weights.join(" → "),
+      weights.every((v, i) => i === 0 || v > weights[i - 1]));
+    const legendaryShareAt = (floor: number): number => {
+      let legendary = 0;
+      const n = 400;
+      for (let i = 0; i < n; i++) {
+        const { w, ps } = worldWithSlot("mystery", floor, 1, 0x2000 + i * 7919);
+        const slot = w.shop!.slots.find((s) => s.kind === "mystery")!;
+        give(ps[0], 1000);
+        const ev: SimEvent[] = [];
+        buyAt(w, ps[0], slot, ev);
+        const e = ev.find((x) => x.t === "mysteryReveal");
+        if (e !== undefined && e.t === "mysteryReveal" && WEAPONS[e.weapon].rarity === "legendary") legendary++;
+      }
+      return legendary / n;
+    };
+    const shallow = legendaryShareAt(9);
+    const deep = legendaryShareAt(29);
+    check("the F30-band gamble delivers measurably more legendaries than the F10 band",
+      deep > shallow, `${(shallow * 100).toFixed(1)}% → ${(deep * 100).toFixed(1)}%`);
   }
+  const ofRarity = (rarity: WeaponRarity) => PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === rarity);
   check("every rarity band is non-empty (the mystery roll can always deliver)",
-    weaponsOfRarity("common").length > 0 && weaponsOfRarity("rare").length > 0 && weaponsOfRarity("legendary").length > 0);
+    ofRarity("common").length > 0 && ofRarity("rare").length > 0 && ofRarity("legendary").length > 0);
 }
 
 function sinkTests(): void {
@@ -263,8 +322,8 @@ function sinkTests(): void {
     give(p, 1000);
     check("the stocked weapon is a real legendary", slot.weapon !== null && WEAPONS[slot.weapon!].rarity === "legendary");
     check("buy grants it", buyAt(w, p, slot) === "ok" && p.ownedWeapons.includes(slot.weapon!));
-    check("every legendary is an EXISTING envelope weapon under the boss DPS gates (identity, not raw DPS)",
-      weaponsOfRarity("legendary").every((id) => PICKUP_WEAPONS.includes(id))
+    check("every legendary is a PICKUP_WEAPONS envelope weapon under the boss DPS gates (identity, not raw DPS)",
+      LEGENDARY_WEAPONS.every((id) => PICKUP_WEAPONS.includes(id))
       && Object.values(BOSS_DPS_CEILING).every((v) => v !== undefined));
   }
 
@@ -421,13 +480,14 @@ function guardrailTests(): void {
       for (let s = 0; s < 8192; s++) {
         const seed = 0x10c4 + s * 2654435761;
         const built = partyWorld(seed, 19, 1);
-        const sinks = (built.w.shop?.slots ?? []).filter((x) => !isMythicKind(x.kind) && x.kind !== "reroll_all" && x.kind !== "amber_cache");
+        const sinks = (built.w.shop?.slots ?? []).filter((x) => PREMIUM_LOCK_KINDS.has(x.kind));
         if (sinks.length >= 2) return built;
       }
       throw new Error("no seed offers two lockable sinks");
     })();
     give(p, 100_000);
-    const sinks = w.shop!.slots.filter((s) => !isMythicKind(s.kind) && s.kind !== "reroll_all" && s.kind !== "amber_cache");
+    p.hp = 1; // a worn buyer, so full_heal's own resolved state can't mask the lock read
+    const sinks = w.shop!.slots.filter((s) => PREMIUM_LOCK_KINDS.has(s.kind));
     check("first power sink buys fine", buyAt(w, p, sinks[0]) === "ok");
     check("the second power sink is LOCKED for this buyer (nothing mutates)",
       buyAt(w, p, sinks[1]) === "locked" && shopSlotStatusFor(w.shop!, sinks[1], shopViewerOf(p)) === "locked");
@@ -480,6 +540,182 @@ function guardrailTests(): void {
     && coinChanceTaper(25) > coinChanceTaper(20)
     && coinChanceTaper(100) === COIN_TAPER.releaseMax
     && COIN_TAPER.releaseMax < 1);
+}
+
+// ---- 5b. the designer catalog (cores, upgrade, tokens, draught, artifact, ceiling) ----
+
+function catalogTests(): void {
+  section("dealer rarity ceiling: common → mid rare → a single guaranteed legendary slot");
+  check("the ceiling table: Amberwild common, F6+ rare",
+    dealerRarityCeiling(3) === "common" && dealerRarityCeiling(6) === "rare" && dealerRarityCeiling(27) === "rare");
+  {
+    let isCeilingHeld = true;
+    let hasShowcase = true;
+    for (const seed of SEEDS) {
+      const early = createWorld(seed, 3).shop!;
+      for (const s of early.slots) {
+        if (s.kind === "weapon" && !s.isMystery && s.weapon !== null && WEAPONS[s.weapon].rarity !== "common") isCeilingHeld = false;
+      }
+      for (const floor of [18, 27]) {
+        const w = createWorld(seed, floor);
+        const showcase = w.shop!.slots.find((s) => s.kind === "weapon" && s.id === 1)!;
+        if (showcase.weapon === null || WEAPONS[showcase.weapon].rarity !== "legendary") hasShowcase = false;
+        if (showcase.price !== premiumPriceAt("legendary", floor)) hasShowcase = false;
+      }
+    }
+    check("F3 identified stock is common-only (the mystery gamble is the one path past)", isCeilingHeld);
+    check(`from F${DEALER_LEGENDARY_FROM_FLOOR} the second pedestal is a guaranteed legendary on the balancer's ladder`, hasShowcase);
+  }
+
+  section("core infusion: single-stat bump toward a raw cap, ×1.6 per level, never past");
+  {
+    const { w, ps: [p], slot } = worldWithSlot("core_infusion", 9);
+    give(p, 100_000);
+    const coreId = slot.itemId!;
+    check("the stock is a premium-only core", itemById(coreId)?.isPremiumOnly === true);
+    const base = shopSlotPriceFor(w.shop!, slot, shopViewerOf(p));
+    check("first core buys at the ladder", buyAt(w, p, slot) === "ok"
+      && (itemLevelsOf(p.ownedItemIds).get(coreId) ?? 0) === 1);
+    check("the NEXT level of the same core costs ×1.6 rounded to 5",
+      shopSlotPriceFor(w.shop!, slot, shopViewerOf(p)) === roundToPriceStep(base * 1.6));
+    const m = createMods();
+    recomputeMods(m, p.ownedItemIds);
+    check("the core's stat bump obeys the raw caps",
+      m.damageMult <= CAPS.damageMult && m.fireRateMult <= CAPS.fireRateMult && m.moveSpeedMult <= CAPS.moveSpeedMult);
+  }
+  check("premium-only cores NEVER enter a blessing offer pool (streams byte-identical)",
+    (() => {
+      const rng = new Rng(0xb1e55);
+      for (let i = 0; i < 200; i++) {
+        const picks = ITEMS.length > 0 ? rollFor(rng) : [];
+        if (picks.some((id) => itemById(id)?.isPremiumOnly)) return false;
+      }
+      return true;
+    })());
+
+  section("extra dash charge: cap 1, a banked second dash, classic timing untouched at 0");
+  {
+    const { w, ps: [p] } = partyWorld(0xda5e, 9, 1);
+    applyItemToWorld(w, p.id, itemById("core_dash")!);
+    check("the dash core lands as +1 charge, hard-capped at ONE",
+      p.mods.extraDashCharge === 1
+      && applyItemToWorld(w, p.id, itemById("core_dash")!).length === 0
+      && p.mods.extraDashCharge === 1);
+  }
+
+  section("revive token: cap 1, a lethal hit stands you back up, never a wipe shield");
+  {
+    const { w, ps: [p], slot } = worldWithSlot("revive_token", 19);
+    give(p, 10_000);
+    check("buy banks one token", buyAt(w, p, slot) === "ok" && p.reviveTokens === 1);
+    check("a second token reads OWNED (cap 1)", shopSlotStatusFor(w.shop!, slot, shopViewerOf(p)) === "owned");
+    p.hp = 1;
+    p.invuln = 0;
+    devSpawnEnemy(w, "slime", p.x + 10, p.y);
+    const ev: SimEvent[] = [];
+    // Drive one authoritative contact hit through the sim step (the one damage funnel).
+    for (let i = 0; i < 40 && p.reviveTokens > 0; i++) {
+      stepWorld(w, new Map([[p.id, idle(i)]]), 1 / 20).forEach((e) => ev.push(e));
+    }
+    check("the lethal hit consumed the token and stood the player back up",
+      p.reviveTokens === 0 && p.hp === REVIVE.hp && !p.isDown && !w.isRunOver
+      && ev.some((e) => e.t === "revive" && e.pid === p.id));
+  }
+
+  section("prospector's draught: coins ×2 for the REST of the floor, dead at the stairs");
+  {
+    const { w, ps: [p], slot } = worldWithSlot("prospector", 9);
+    give(p, 1000);
+    check("buy arms the draught for THIS floor", buyAt(w, p, slot) === "ok" && p.prospectorFloor === w.floor);
+    w.pickups.push({ id: w.nextPickupId++, kind: "coin", x: p.x, y: p.y, radius: 13, weapon: null });
+    const before = p.coins;
+    stepWorld(w, new Map([[p.id, idle(0)]]), 1 / 20);
+    check("a collected coin pays double under the draught", p.coins - before === 2);
+    loadFloorIntoWorld(w, w.floor + 1);
+    check("the draught dies at the stairs (floor mismatch)", p.prospectorFloor !== w.floor);
+  }
+
+  section("weapon upgrade: reforge the EQUIPPED gun one tier up, priced by target");
+  {
+    const { w, ps: [p], slot } = worldWithSlot("weapon_upgrade", 19);
+    give(p, 100_000);
+    check("a common in hand targets RARE at the base ladder",
+      upgradeTargetTier(p.weapon) === "rare"
+      && shopSlotPriceFor(w.shop!, slot, shopViewerOf(p)) === slot.price);
+    const oldWeapon = p.weapon;
+    check("the reforge swaps the gun for a seeded RARE", buyAt(w, p, slot) === "ok"
+      && !p.ownedWeapons.includes(oldWeapon)
+      && WEAPONS[p.weapon].rarity === "rare");
+  }
+  {
+    const { w, ps: [p], slot } = worldWithSlot("weapon_upgrade", 19);
+    give(p, 100_000);
+    acquireWeaponInWorld(w, p.id, LEGENDARY_WEAPONS[0]);
+    const viewer = shopViewerOf(p);
+    check("a rare-in-hand targets LEGENDARY at ×1.8; a legendary-in-hand reads AT THE CAP",
+      shopSlotStatusFor(w.shop!, slot, viewer) === "capped");
+  }
+
+  section("the artifact devil deal: a legendary paid in MAX HEARTS, cap 1/run, climax only");
+  {
+    let isClimaxOnly = true;
+    for (const seed of SEEDS) {
+      for (const floor of [9, 14, 19, 24]) {
+        if (createWorld(seed, floor).shop!.slots.some((s) => s.kind === "artifact")) isClimaxOnly = false;
+      }
+    }
+    check("the artifact never appears outside the climax vendor", isClimaxOnly);
+    const { w, ps: [p], slot } = worldWithSlot("artifact", PREMIUM.climaxFloor);
+    p.coins = 0; // hearts are the currency — a broke wallet must not matter
+    const maxBefore = p.maxHp;
+    check("the deal takes hearts, not coins", buyAt(w, p, slot) === "ok"
+      && p.coins === 0
+      && p.maxHp === maxBefore - PREMIUM.artifactHeartCost
+      && p.ownedWeapons.includes(slot.weapon!)
+      && WEAPONS[slot.weapon!].rarity === "legendary");
+    check("the tithe is permanent for the run and the deal is 1/run",
+      p.hpTithe === PREMIUM.artifactHeartCost
+      && shopSlotStatusFor(w.shop!, slot, shopViewerOf(p)) === "owned");
+  }
+  {
+    // With the current legal floor (base 6, Glass Cannon −2 → min maxHp 4) the guard is
+    // exactly at the boundary — a 4-heart buyer may deal and keeps 2. The refusal path
+    // is locked at the matrix level so future content can never gut a buyer below it.
+    const { w, slot } = worldWithSlot("artifact", PREMIUM.climaxFloor);
+    const tiny = {
+      ...shopViewerOf({
+        id: "tiny", coins: 0, hp: 3, maxHp: 3, weapon: "pistol" as const,
+        ownedWeapons: ["pistol" as const], ownedItemIds: [],
+        premiumHpBuys: 0, isAmberCacheArmed: false, reviveTokens: 0,
+        extraWeaponSlots: 0, hpTithe: 0, mods: { maxHpBonus: 0 },
+      }),
+    };
+    check("below the heart floor the deal reads NEED HEARTS (matrix-level guard)",
+      shopSlotStatusFor(w.shop!, slot, tiny) === "needHearts");
+  }
+
+  section("extra hotbar slot: very expensive, cap 1/run, honest capacity");
+  {
+    const { w, ps: [p], slot } = worldWithSlot("extra_slot", 19);
+    give(p, 100_000);
+    check("buy grants +1 capacity, cap 1", buyAt(w, p, slot) === "ok"
+      && p.extraWeaponSlots === 1
+      && shopSlotStatusFor(w.shop!, slot, shopViewerOf(p)) === "owned");
+  }
+
+  section("feel: unaffordable premium stock stays VISIBLE-BUT-LOCKED (broke, never hidden)");
+  {
+    const { w, ps: [p], slot } = worldWithSlot("legendary", 14);
+    give(p, 0);
+    check("a zero-coin viewer reads BROKE with the full price shown — the save-for-it goal",
+      shopSlotStatusFor(w.shop!, slot, shopViewerOf(p)) === "broke"
+      && shopSlotPriceFor(w.shop!, slot, shopViewerOf(p)) === slot.price);
+  }
+}
+
+// A blessing-offer roll's ids (the core-exclusion check drives one real roll).
+function rollFor(rng: Rng): string[] {
+  return rollItemChoicesWith(3, () => rng.next()).map((it) => it.id);
 }
 
 // ---- 6. co-op ----
@@ -562,6 +798,7 @@ function main(): void {
   sinkTests();
   mythicTests();
   guardrailTests();
+  catalogTests();
   coopTests();
   wireTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

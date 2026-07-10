@@ -34,8 +34,9 @@ const { buildShopState, shopViewerOf } = await import("../src/sim/shop.js");
 // identities) — the shop copy/panel assertions only vary coins/ownership.
 function viewerSrc(o: Partial<import("../src/sim/shop.js").ShopViewerSource> = {}): import("../src/sim/shop.js").ShopViewerSource {
   return {
-    id: "local", coins: 30, hp: 4, maxHp: 6, ownedWeapons: [], ownedItemIds: [],
-    premiumHpBuys: 0, isAmberCacheArmed: false, mods: { maxHpBonus: 0 },
+    id: "local", coins: 30, hp: 4, maxHp: 6, weapon: "pistol", ownedWeapons: [], ownedItemIds: [],
+    premiumHpBuys: 0, isAmberCacheArmed: false, reviveTokens: 0, extraWeaponSlots: 0, hpTithe: 0,
+    mods: { maxHpBonus: 0 },
     ...o,
   };
 }

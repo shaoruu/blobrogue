@@ -76,7 +76,7 @@ export type ShopSlotKind =
   | "mythic_weapon" | "mythic_trio" | "mythic_amber";
 
 // The premium sink kinds that participate in the one-power-buy-per-shop lock.
-const PREMIUM_LOCK_KINDS: ReadonlySet<ShopSlotKind> = new Set([
+export const PREMIUM_LOCK_KINDS: ReadonlySet<ShopSlotKind> = new Set([
   "mystery", "legendary", "rare_blessing", "max_hp", "full_heal",
   "core_infusion", "weapon_upgrade", "revive_token", "extra_slot",
 ]);

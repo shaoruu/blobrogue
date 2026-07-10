@@ -612,19 +612,28 @@ weapon stats are identical solo/co-op, and every count is deterministic per
   the interact panel's BUY; walking over a station never spends a coin, an invalid buy
   never consumes, coins are server-owned, and a reconnect resumes into the identical
   stall (claims + reroll counter ride the snapshot).
-- **The premium economy** (protocol v9): every milestone's landing floor (F9/14/19/24/29,
-  … — the F10/15/20/25/30 milestones are boss/gauntlet floors, and shops never generate
-  there) hosts a **premium shop** instead of the Dealer, and the Dealer itself carries one
-  premium slot from F6+. Stock is `max(2, P)` seeded distinct sinks (a bigger party's
-  stock is a strict superset of the identical solo prefix; prices never change with P),
-  sinks are **FOR YOU** (personal + non-depleting) with one power buy per shop per player
-  (buying one locks the rest), and the **mythic capstone** (F20+ milestones) is **ONE per
-  party per shop** — a shared claim like a weapon pedestal, no 4× mythic stacking. The
-  mystery weapon's reveal rolls a per-buyer seeded stream, so identical seeds + wallets
-  reveal identically while each buyer draws their own fate. Coin income stays per-player
-  (no shared wallet); collected coin VALUE carries an authored per-P compensation so a
-  party member's income tracks solo. Amber (the persistent currency) is bankable ONLY
-  through the amber cache / mythic windfall at run end — coins never buy permanent power.
+- **The premium economy** (protocol v13 — the approved vendor ecology of
+  `docs/specs/COIN_ECONOMY_AND_VENDORS.md`): one stall per floor, its **mode on the wire**
+  (`shop.md`: dealer / premium / spoils / climax). The Dealer's rarity ceiling rises by
+  region (common → mid rare → from F15 a single guaranteed LEGENDARY showcase on the
+  balancer's ladder) and carries one premium slot from F6+; the **spoils vendor** lands
+  the floor after every boss (1-3 premium items — on overlap floors 6/21 it rides the
+  Dealer's stall); milestone landings (F9/14/19/24, every 5 past F30) host **premium
+  shops** (the F10/15/20/25/30 milestones are boss/gauntlet floors, and shops never
+  generate there); and **F29 is the climax vendor** — guaranteed top-tier stock
+  (heart container, revive token, legendary, mystery, panacea, weapon upgrade, cache,
+  the artifact devil deal) plus the mythic tease, lock-free by design. Stock is
+  `max(2, P)` seeded distinct sinks (a bigger party's stock is a strict superset of the
+  identical solo prefix; prices never change with P), sinks are **FOR YOU** (personal +
+  non-depleting) with one power buy per shop per player outside the climax (buying one
+  locks the rest), game-changers cap at 1/run each (revive token, extra hotbar slot,
+  artifact, dash core), and the **mythic capstone** (F20+ landings) is **ONE per party
+  per shop** — a shared claim like a weapon pedestal, no 4× mythic stacking. The premium
+  mystery's reveal rolls a per-buyer seeded stream, so identical seeds + wallets reveal
+  identically while each buyer draws their own fate. Coin income stays per-player (no
+  shared wallet); collected coin VALUE carries an authored per-P compensation so a party
+  member's income tracks solo. Amber (the persistent currency) is bankable ONLY through
+  the amber cache / mythic windfall at run end — coins never buy permanent power.
 - **The boss reward** is `min(P+1, 5)` distinct choice PEDESTALS spilled from the chest
   (the boss's authored signature weapon first). Each member **claims exactly one by
   touch** (`isBossChoice` pickups + the per-player claim flag); a claim removes nothing

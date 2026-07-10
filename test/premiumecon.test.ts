@@ -23,7 +23,7 @@
 import { generateDungeon } from "../src/sim/dungeon.js";
 import type { Room } from "../src/sim/dungeon.js";
 import { spawnFloorEnemies, isBossFloor, isGauntletFloor, isMinibossKind } from "../src/sim/enemies.js";
-import { buildShopState, shopSlotPriceFor, shopSlotStatusFor, isPremiumKind, isMythicKind } from "../src/sim/shop.js";
+import { buildShopState, shopSlotPriceFor, shopSlotStatusFor, isPremiumKind, isMythicKind, PREMIUM_LOCK_KINDS } from "../src/sim/shop.js";
 import type { ShopState, ShopViewer } from "../src/sim/shop.js";
 import {
   PREMIUM, SHOP, SUSTAIN, isPremiumShopFloor, premiumPriceAt, coinChanceTaper,
@@ -148,10 +148,12 @@ function floorIncome(fc: FloorCoins, persona: Persona, floor: number, players: n
 // A deterministic spending policy viewer (the harness player is a healthy mid-build
 // body; only the wallet drives shop status here).
 function viewerFor(coins: number, persona: Persona): ShopViewer {
+  void persona;
   return {
     pid: "econ", coins: Math.floor(coins), hp: 4, maxHp: 6,
-    ownedWeapons: ["pistol"], ownedItemIds: [],
-    premiumHpBuys: 0, hpBonusTotal: 0, isAmberCacheArmed: false, isInCombat: false,
+    equipped: "pistol", ownedWeapons: ["pistol"], ownedItemIds: [],
+    premiumHpBuys: 0, hpBonusTotal: 0, isAmberCacheArmed: false,
+    reviveTokens: 0, extraWeaponSlots: 0, hpTithe: 0, isInCombat: false,
   };
 }
 
@@ -205,8 +207,13 @@ function simulateRun(seed: number, persona: Persona, players: number, floors: Fl
     grossByBand[Math.min(5, Math.floor((floor - 1) / 5))] += income;
     const room = floors[floor - 1].shopRoom;
     if (!room) continue;
-    const shop = buildShopState(seed, floor, room, players);
-    if (isPremiumShopFloor(floor)) {
+    const shop = buildShopState(seed, floor, room, [], players);
+    // The classic staples first (dealer floors, incl. spoils-overlap stalls) …
+    if (shop.slots.some((s) => !isPremiumKind(s.kind))) {
+      wallet = shopDealer(shop, floor, persona, wallet, rng);
+    }
+    // … then every premium row (dealer slot, spoils row, premium landing, the climax).
+    if (shop.slots.some((s) => isPremiumKind(s.kind))) {
       wallet = shopPremium(shop, floor, persona, wallet, rng, (kind, canAfford) => {
         const t = tierAfford.get(kind) ?? { can: 0, seen: 0 };
         t.seen++;
@@ -219,16 +226,15 @@ function simulateRun(seed: number, persona: Persona, players: number, floors: Fl
         poolAtMythic.push(pool);
         mythicAfford.push(afford);
       });
-    } else {
-      wallet = shopDealer(shop, floor, persona, wallet, rng, () => premiumBuys++);
     }
   }
   return { gross, premiumBuys, poolAtMythic, mythicAfford, tierAfford, unspentAtEnd: wallet, grossByBand };
 }
 
-// The Dealer visit: staples per appetite (a heart when worn, the blessing when flush),
-// then the premium slot under the persona's cushion.
-function shopDealer(shop: ShopState, floor: number, persona: Persona, wallet: number, rng: Rng, onPremium: () => void): number {
+// The Dealer visit's classic staples per appetite (a heart when worn, the blessing/
+// weapon when flush) — every premium row is priced by shopPremium below.
+function shopDealer(shop: ShopState, floor: number, persona: Persona, wallet: number, rng: Rng): number {
+  void floor;
   if (rng.chance(DEALER_APPETITE[persona])) {
     if (wallet >= SHOP.heartPrice + 6) wallet -= SHOP.heartPrice;
   }
@@ -239,16 +245,6 @@ function shopDealer(shop: ShopState, floor: number, persona: Persona, wallet: nu
   if (rng.chance(DEALER_APPETITE[persona])) {
     const weapon = shop.slots.find((s) => s.kind === "weapon");
     if (weapon && wallet >= weapon.price * 1.6) wallet -= weapon.price;
-  }
-  const premium = shop.slots.find((s) => isPremiumKind(s.kind));
-  if (premium) {
-    const viewer = viewerFor(wallet, persona);
-    const price = shopSlotPriceFor(shop, premium, viewer);
-    const reserve = persona === "greedy" && floor >= GREEDY_SAVE_FROM ? GREEDY_RESERVE : 0;
-    if (wallet >= price * sinkCushion(persona, floor) + reserve && shopSlotStatusFor(shop, premium, viewer) === "buy") {
-      wallet -= price;
-      onPremium();
-    }
   }
   return wallet;
 }
@@ -267,28 +263,34 @@ function shopPremium(
   for (const slot of shop.slots) {
     recordTier(isMythicKind(slot.kind) ? "mythic" : slot.kind, wallet >= shopSlotPriceFor(shop, slot, viewer));
   }
-  if (floor >= PREMIUM.mythicFromFloor) {
+  // The capstone landings only (the premium/climax stalls that actually stock a mythic):
+  // the afford metric indexes F19/24/29 exactly.
+  if (mythic !== undefined) {
     const price = premiumPriceAt("mythic", floor);
     recordMythic(wallet, wallet >= price);
-    if (mythic && wallet >= price && persona !== "noGreed") {
+    if (wallet >= price && persona !== "noGreed") {
       recordBuy(true);
       return wallet - price;
     }
   }
-  // The sinks, priciest-first (the chase mentality), under the persona's cushion; the
-  // no-Greed persona also simply skips half its opportunities (spending temperament),
-  // and a greedy run past F20 SAVES for the capstone instead of grazing.
+  // The power sinks, priciest-first (the chase mentality), under the persona's cushion;
+  // the no-Greed persona also simply skips half its opportunities (spending temperament),
+  // and a greedy run past F20 SAVES for the capstone instead of grazing. One power buy
+  // per stall (the lock) — except the CLIMAX vendor, the lock-free endgame splurge.
   if (persona === "noGreed" && rng.chance(0.5)) return wallet;
   const reserve = persona === "greedy" && floor >= GREEDY_SAVE_FROM ? GREEDY_RESERVE : 0;
+  const maxPowerBuys = shop.mode === "climax" ? 3 : 1;
   const sinks = shop.slots
-    .filter((s) => isPremiumKind(s.kind) && !isMythicKind(s.kind) && s.kind !== "reroll_all" && s.kind !== "amber_cache")
+    .filter((s) => PREMIUM_LOCK_KINDS.has(s.kind))
     .sort((a, b) => b.price - a.price);
+  let powerBuys = 0;
   for (const slot of sinks) {
+    if (powerBuys >= maxPowerBuys) break;
     const price = shopSlotPriceFor(shop, slot, viewer);
-    if (wallet >= price * sinkCushion(persona, floor) + reserve) {
+    if (price > 0 && wallet >= price * sinkCushion(persona, floor) + reserve) {
       recordBuy(false);
       wallet -= price;
-      break;
+      powerBuys++;
     }
   }
   // The utility posts stay outside the one-power-buy lock: reroll-everything fishing
