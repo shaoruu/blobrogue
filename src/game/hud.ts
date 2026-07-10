@@ -1298,8 +1298,10 @@ export class Hud {
       this.hpNumEl.classList.toggle("hidden", mode === "hearts");
       this.prevHpDisplay = mode;
     }
-    this.renderParty(s.party);
-    this.renderUlt(s.ult);
+    // Defensive against a loosely-typed caller (older test state builders): treat a missing
+    // party/ult as empty/none rather than throwing.
+    this.renderParty(s.party ?? []);
+    this.renderUlt(s.ult ?? null);
     this.floorEl.textContent = String(s.floor);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
