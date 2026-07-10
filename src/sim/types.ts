@@ -233,7 +233,112 @@ export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
   | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "beam"
-  | "sword" | "longsword" | "spear";
+  | "sword" | "longsword" | "spear"
+  // The effect wave: seven non-projectile room verbs built on four shared primitives
+  // (PlacedEffect zone/wire, OrbitEffect, DeployableEffect, Tether — see Effect below).
+  | "lastlight" | "breach" | "snapwire" | "frostline" | "halo" | "sentry" | "crook"
+  // The legendary wave — each is ONE signature mechanic, never bigger numbers:
+  //  - reaper: kills burst into seeking soul shards that cascade through the pack;
+  //  - swarm: one slow trigger pull releases a volley of accelerating seeker darts;
+  //  - midas: eats a coin per shot to hit far harder (fires weak when broke);
+  //  - phase: rounds pass straight through walls — cover is the player's, never the room's;
+  //  - vortex: shots implode, dragging every nearby body onto the impact point.
+  | "reaper" | "swarm" | "midas" | "phase" | "vortex";
+
+// Drop-quality tier. Drives drop weighting (legendaries are genuinely rare and gated off
+// the earliest floors), the pickup/hotbar/tooltip rarity treatment, and shop pricing.
+export type WeaponRarity = "common" | "rare" | "legendary";
+
+// A mystery pickup's baked reveal twist: a small buff or a small drawback rolled at spawn
+// (deterministic from the seed), so opening one is a real gamble — never a dead result.
+export type MysteryTwist = "plain" | "blessed" | "cursed";
+
+// ---- weapon effect entities (the effect wave's shared authoritative primitives) ----
+// Every non-projectile weapon output lives in ONE world list (w.effects), stepped in
+// updateEffects on the fixed world phase — server-owned, deterministic, and serialized on
+// the snapshot like bullets/hazards. Each entity carries its owner for the same immutable
+// attribution contract bullets follow (a departed owner's effect keeps working, credits
+// no one) and `fx` — the authoring weapon — for knockback profile, boss coefficient and
+// the client render recipe.
+
+export type EffectKind = "zone" | "wire" | "orbit" | "sentry" | "tether";
+
+export interface EffectBase {
+  id: number;              // stable per-floor id (wire identity + client anim keying)
+  kind: EffectKind;
+  owner: PlayerId | null;  // authoritative attribution (kills/combo credit this player)
+  fx: WeaponId;            // authoring weapon: KB profile, boss coef, render recipe
+  x: number; y: number;
+  life: number;            // seconds until the effect expires
+  maxLife: number;         // authored duration (drives the client's fade render)
+}
+
+// A painted ground zone (the Frostline's chill trail): standing enemies accumulate chill
+// (slow, then freeze — bosses slow but never freeze, same as the Cryo blessing).
+export interface ZoneEffect extends EffectBase {
+  kind: "zone";
+  radius: number;
+  chillRate: number; // seconds of chill applied per second an enemy stands inside
+}
+
+// An armed line trap (the Snapwire): a wire strung from (x,y) to (x2,y2) that snaps on
+// the first body crossing it once armed, striking EVERY enemy in the band.
+export interface WireEffect extends EffectBase {
+  kind: "wire";
+  x2: number; y2: number;
+  width: number;  // trigger band around the segment (px)
+  arm: number;    // seconds until armed (0 = live); planting is never a free point-blank hit
+  damage: number; // base snap damage (the owner's live damage mult applies at snap time)
+}
+
+// Orbiting blades around the owner (the Razor Halo): contact damage on a per-enemy re-hit
+// cadence; the active flares the ring outward for a beat.
+export interface OrbitEffect extends EffectBase {
+  kind: "orbit";
+  angle: number;       // shared blade phase (rad)
+  ring: number;        // current ring radius px (eases toward base/flare target)
+  blades: number;
+  bladeRadius: number;
+  speed: number;       // orbit angular speed (rad/s)
+  flare: number;       // seconds of active expansion left
+  damage: number;      // base per-blade contact damage
+  // Per-enemy re-hit cooldowns (sim-internal scratch, never on the wire): a body inside
+  // the ring is struck on a readable cadence, not once per tick.
+  rehit: Map<number, number>;
+}
+
+// A destructible lane-holding turret (the Prism Sentry): acquires the nearest enemy in
+// line of sight and fires owner-attributed bolts; enemy fire and contact chew it down.
+export interface SentryEffect extends EffectBase {
+  kind: "sentry";
+  radius: number;     // body radius (enemy bullets/contact test against it)
+  hp: number; maxHp: number;
+  fireCd: number;
+  range: number;
+  boltSpeed: number;
+  boltRadius: number;
+  boltDamage: number; // base bolt damage (owner's live damage mult applies at fire time)
+  boltPierce: number;
+  contactCd: number;  // cadence gate for enemy-contact damage (sim-internal)
+  targetEid: number;  // last acquired target id (-1 = none) — drives the acquire cue
+}
+
+// A latched chain (the Crooked Chain): pulls the target to the owner — or, against a
+// brute/elite/boss, pulls the OWNER to the target — then holds a short sweep window.
+export interface TetherEffect extends EffectBase {
+  kind: "tether";
+  eid: number;              // tethered enemy id
+  phase: "pull" | "hold";
+  isPlayerPulled: boolean;  // heavy bodies invert the pull (the risk half of the verb)
+  pullSpeed: number;
+  holdDist: number;
+  holdTime: number;         // authored hold window entered once the pull resolves
+  pullTime: number;         // remaining pull budget (bounds the yank)
+  damage: number;           // base sweep damage
+  reach: number;            // sweep radius around the owner
+}
+
+export type Effect = ZoneEffect | WireEffect | OrbitEffect | SentryEffect | TetherEffect;
 
 export interface Bullet {
   x: number; y: number;
@@ -265,11 +370,34 @@ export interface Bullet {
   // The Weaver's aimed SILK (sim-internal, enemy fire only): the bolt WEBS where it
   // dies — wall, floor or the player it caught. Undefined on every other round.
   isSilk?: boolean;
+  // Breach shell: an artillery lob that sails OVER bodies (the enemy-collision loop skips
+  // it) and detonates only at its charged landing point (end of life) or on a wall face.
+  isLob?: boolean;
+  // The lob's released charge fraction (0..1). At BREACH_LINE_TIER+ the detonation walks
+  // a LINE of blasts back along the approach (the full charge changes geometry).
+  lobT?: number;
+  // Persistent-source round (a sentry bolt): against boss-grade bodies its damage draws
+  // from the party's shared persistent budget (see drawPersistentBossBudget). Sim-internal
+  // — never on the wire.
+  isPersistent?: boolean;
+  // Frostline painting: every `paintSpacing` px of travel the bead drops a chill zone
+  // (radius/life/rate authored by the weapon's paint spec, mods applied at fire time).
+  // paintDist is the travel accumulator (sim-internal, never on the wire).
+  paintSpacing?: number;
+  paintRadius?: number;
+  paintLife?: number;
+  paintRate?: number;
+  paintDist?: number;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies
   chill?: number;          // seconds of chill the round applies
   shock?: number;          // seconds of shock the round applies
+  // Legendary gimmick channels (undefined on every non-legendary round):
+  killShards?: number;     // reaper: seeking shards released when this round KILLS
+  accel?: number;          // swarm: px/s² the round gains in flight
+  isPhase?: boolean;       // phase: the round ignores walls (and destructible props) entirely
+  implode?: number;        // vortex: implosion radius — the payload pulls the pack inward
   // Render recipe tag (the firing weapon). Selects the layered sprite FX in
   // renderBullets; absent on enemy fire, which keeps its own halo-and-core look.
   fx?: WeaponId;
@@ -305,6 +433,12 @@ export interface Pickup {
   // player claims exactly one; a claim never removes a teammate's options, so the pedestal
   // persists until every living player has claimed.
   isBossChoice?: boolean;
+  // Mystery pickup: `weapon` holds the ACTUAL identity (baked deterministically at spawn)
+  // but it is hidden from every client until the reveal — the wire sends null (see
+  // toPickupWire) and the renderer shows the "???" treatment. Collection reveals + grants
+  // (rerolled distinct if already owned) and applies the twist. Never a boss choice.
+  isMystery?: boolean;
+  twist?: MysteryTwist;
 }
 
 // Destructible / atmosphere world props. Placed deterministically per floor (seeded Rng)
@@ -397,6 +531,9 @@ export interface Chest {
   // Opening ejects it as a real pickup. Sim-side only (not on the wire) — contents stay
   // hidden until the open. undefined = the ordinary loot roll only.
   weapon?: WeaponId;
+  // Mystery pedestal: the baked weapon ejects as an UNIDENTIFIED pickup (see Pickup).
+  isMystery?: boolean;
+  twist?: MysteryTwist;
 }
 
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";
@@ -444,6 +581,16 @@ export interface RemotePlayer {
   // Network-absent: their connection dropped and the server is holding their body for the
   // reconnect grace window. Rendered as a ghost with an explicit RECONNECTING label.
   isAbsent: boolean;
+  // Authoritative dash readout (never predicted): isDashing is ALIGNED with the rendered
+  // (interpolated) position, so afterimages/dust/sfx play where and when the blob visibly
+  // lunges; the direction and the two invuln windows ride the latest snapshot. The invuln
+  // seconds drive the same i-frame flicker the local player renders. All zero/false on the
+  // legacy co-op seam (its presence rows carry no dash state).
+  isDashing: boolean;
+  dashDirX: number;
+  dashDirY: number;
+  invuln: number;
+  dashInvuln: number;
   aimAngle: number;
   shotSeq: number;    // increments each time they fire, so we can flash a tracer
   // The player's AUTHORITATIVE identity color (verified ticket claim / presence row).

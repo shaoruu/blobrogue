@@ -14,15 +14,22 @@ import type { FlowField } from "./pathfind.js";
 import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, navStepPoint, navPoint } from "./nav.js";
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
-import type { Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind, PropKind } from "./types.js";
+import type {
+  Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind, PropKind,
+  MysteryTwist,
+  Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect,
+} from "./types.js";
 import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
 import { Rng } from "./rng.js";
 import {
   ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
   isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
 } from "./enemies.js";
-import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
-import type { ShotSpec } from "./weapons.js";
+import {
+  WEAPONS, DEFAULT_WEAPON, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire,
+  rollWeaponRarity, rollMysteryTwist, LEGENDARY_WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR,
+} from "./weapons.js";
+import type { ShotSpec, Weapon } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
@@ -38,14 +45,17 @@ import {
   AMBUSH, POWER, PHASE_TIME_BASE, powerRatioFor, bossAddCapFor, bossAddIntervalFor,
   phaseTimerFor,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
-  WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
-  LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices,
+  WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
+  LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
+  MYSTERY, LEGENDARY_MIN_FLOOR,
 } from "./balance.js";
 import type { EnemyTier, AddPoolEntry } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import { buildShopState, restockShop, shopSlotStatusFor, shopViewerOf, SHOP_BUY_RANGE } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
+import { createWeaponBag, drawWeaponFromBag } from "./weaponBag.js";
+import type { WeaponBag } from "./weaponBag.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
 export interface MeleeSwing {
@@ -92,6 +102,11 @@ interface StrikeInfo {
   chill?: number;
   shock?: number;
   isMelee: boolean;
+  // Persistent-source damage (turret bolts, trap snaps — output that runs while nobody
+  // aims it). Against boss-grade bodies it draws from the party's shared persistent
+  // budget (PERSISTENT_BOSS_DPS_FRAC of partySize x PU_DPS per rolling second) and the
+  // overflow is deterministically truncated. Rooms are never budgeted.
+  isPersistent?: boolean;
   // Immutable actor identity for status attribution (burn DoT). Survives the actor's disconnect
   // — a burn lit by a departed player keeps crediting THAT id (which then resolves to no one),
   // never a different live player.
@@ -112,10 +127,14 @@ export interface PlayerSim {
   dashInvuln: number;
   dashCd: number; dashTime: number; dashDx: number; dashDy: number;
   fireCd: number;
+  // Seconds the trigger has been held on a charge weapon (the Breach). Server-owned and
+  // reconciled like fireCd so prediction and authority agree on the landing distance.
+  // Always 0 on weapons without a charge spec; reset by weapon switches and downs.
+  chargeT: number;
   // Vampire Fang shared proc cooldown (1.25s): at most one kill-heal per window.
   fangCd: number;
   facing: number; aimAngle: number; weapon: WeaponId;
-  ownedWeapons: WeaponId[]; // inventory; the client switches with 1-9 / Q / scroll
+  ownedWeapons: WeaponId[]; // inventory (never grows past MAX_OWNED_WEAPONS); one number key per slot
   shotSeq: number; isDown: boolean;
   // Network-absent (authoritative server only): the player's connection dropped and their body
   // is RESERVED for the reconnect grace window. An absent body is paused and safe — it cannot
@@ -179,6 +198,10 @@ export interface WorldState {
   // Authored ground hazards (the Weaver's webs): shared authoritative floor state, capped
   // and self-expiring; rebuilt empty on every floor load.
   hazards: Hazard[];
+  // Weapon effect entities (the effect wave: zones/wires/orbits/sentries/tethers). Shared
+  // authoritative state exactly like bullets — stepped in updateEffects on the world
+  // phase, hard-capped per family, serialized on every snapshot, rebuilt empty per floor.
+  effects: Effect[];
   // Environmental FLOOR hazards (depth escalation) — distinct from the boss webs above:
   // layout is derived per floor from the seed (never on the wire); pulse timing keys off
   // floorHazardClock — accumulated SIM seconds, monotonic across floors like tick, so
@@ -213,6 +236,11 @@ export interface WorldState {
   flowKey: number;
   flowSources: number[];
   rng: Rng;
+  // The per-run weapon deal (see weaponBag.ts): every free weapon roll — pedestals, boss
+  // chest alternates, wood chests, owned-claim rerolls — draws from this seeded shuffled
+  // bag so the early floors hand out DISTINCT guns. Reset with the run (never per floor);
+  // advanced only by the authority, so it lives off the wire like w.rng itself.
+  weaponBag: WeaponBag;
   // Co-op encounter snapshot (§8): living players at floor build, clamped 1–4. Drives
   // enemy HP / threat budget / heart-rate scaling; NEVER rescales living enemies mid-floor.
   encounterPlayers: number;
@@ -236,6 +264,12 @@ export interface WorldState {
   nextPickupId: number;
   nextChestId: number;
   nextHazardId: number;
+  nextEffectId: number;
+  // Persistent-source boss budget (envelope): per boss-grade enemy id, the rolling
+  // one-second window start (sim seconds off floorHazardClock) and the persistent
+  // damage already applied inside it. Sim-internal — never on the wire; cleared per
+  // floor. strikeEnemy truncates persistent damage past the window's budget.
+  persistentBossWindows: Map<number, { t: number; used: number }>;
   // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
   // recent record). histHead is the ring slot of the most recent record; histCount is how many
   // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
@@ -276,7 +310,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     mods: createMods(),
     invuln: 0, dashInvuln: 0,
     dashCd: 0, dashTime: 0, dashDx: 0, dashDy: 0,
-    fireCd: 0, fangCd: 0,
+    fireCd: 0, chargeT: 0, fangCd: 0,
     facing: 1, aimAngle: 0, weapon: DEFAULT_WEAPON,
     ownedWeapons: [DEFAULT_WEAPON],
     shotSeq: 0, isDown: false, isAbsent: false, reviveProgress: 0, reviveBy: null, downsThisFloor: 0, isInteracting: false, rewindTicks: 0,
@@ -306,6 +340,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     props: [],
     chests: [],
     hazards: [],
+    effects: [],
     floorHazards: [],
     floorHazardClock: 0,
     recentReleases: [],
@@ -318,6 +353,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     flowKey: -1,
     flowSources: [],
     rng: new Rng(seed ^ 0x53696d21),
+    weaponBag: createWeaponBag(seed),
     encounterPlayers: 1,
     encounterPower: 1,
     pendingSpawns: [],
@@ -331,6 +367,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     nextPickupId: 0,
     nextChestId: 0,
     nextHazardId: 0,
+    nextEffectId: 0,
+    persistentBossWindows: new Map(),
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
@@ -431,6 +469,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.hazards = [];
+  w.effects = [];
   w.recentReleases = [];
   w.gauntlet = !w.isSandbox && isGauntletFloor(floor) ? { stage: 0, breath: 0, isRewarded: false } : null;
   w.nextEnemyId = 0;
@@ -438,6 +477,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.nextPickupId = 0;
   w.nextChestId = 0;
   w.nextHazardId = 0;
+  w.nextEffectId = 0;
+  w.persistentBossWindows.clear();
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.pendingBlessings.clear();
@@ -457,10 +498,14 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.props = w.isSandbox ? [] : placeProps(w);
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) stockWeaponChests(w);
-  // Patch's shop: built off the generator's dedicated shop room (deterministic from
-  // seed+floor, party-size-invariant so a mid-floor join never shifts the stall).
+  // Patch's shop: built off the generator's dedicated shop room. Layout/prices are pure
+  // (seed, floor) and party-size-invariant so a mid-floor join never shifts the stall;
+  // the weapon stock additionally dodges guns the whole party owns at build time
+  // (authority-only state, shipped on the wire like the rest of the shop).
   const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
-  w.shop = !w.isSandbox && shopRoom !== undefined ? buildShopState(w.seed, floor, shopRoom) : null;
+  w.shop = !w.isSandbox && shopRoom !== undefined
+    ? buildShopState(w.seed, floor, shopRoom, [...weaponsOwnedByAll(w)])
+    : null;
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
@@ -499,6 +544,7 @@ export function isFloorCleared(w: WorldState): boolean {
 export function resetRunInWorld(w: WorldState, seed: number): void {
   w.seed = seed;
   w.rng = new Rng(seed ^ 0x53696d21);
+  w.weaponBag = createWeaponBag(seed);
   w.isRunOver = false;
   w.pityStreak = 0;
   w.isPityHeartArmed = false;
@@ -526,35 +572,85 @@ function ownerOf(w: WorldState, id: PlayerId | null): PlayerSim | null {
 //
 // Studio gate §4 pedestal rolls: max(1, ceil(P/2)) physical weapons per floor (P1–2
 // roll 1, P3–4 roll 2), DISTINCT ids when the pool permits. Party size buys options,
-// never rarity — the roll table is identical solo and co-op.
+// never rarity — the roll table is identical solo and co-op. Floor 1 stocks too (the
+// early-variety fix: it used to start at F2, leaving a solo player ~3 guaranteed guns
+// before the F5 boss), and the ids come from the run's shuffled bag, skipping guns the
+// whole party already owns, so early floors deal different weapons run to run and a
+// pedestal is never wasted on a universal duplicate.
 function stockWeaponChests(w: WorldState): void {
   const d = w.dungeon;
-  if (w.floor < 2 || d.rooms.length <= 2) return;
+  if (d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
-  const kinds: WeaponId[] = [];
+  const exclude = weaponsOwnedByAll(w);
+  // Each pedestal roll: (1) decide whether it wraps as a mystery (MYSTERY.minFloor+, from
+  // the pedestal stream), (2) roll the rarity TIER — legendary-gated for identified
+  // drops, gamble-weighted for mysteries — and deal that tier's next weapon from the
+  // run's shuffled bag, (3) bake the mystery's twist. Fixed draw order keeps the
+  // placement stream reproducible per (seed, floor).
+  const kinds: Array<{ weapon: WeaponId; isMystery: boolean; twist?: MysteryTwist }> = [];
   for (let i = 0; i < pedestalWeaponRolls(w.encounterPlayers); i++) {
-    kinds.push(rollDistinctWeapon(rng, kinds));
+    const isMystery = w.floor >= MYSTERY.minFloor && rng.chance(MYSTERY.pedestalChance);
+    const pick = rollBagWeapon(w, () => rng.next(), exclude, { isMystery });
+    if (kinds.some((k) => k.weapon === pick)) break; // pool saturated (everything owned): no dup pedestals
+    kinds.push({ weapon: pick, isMystery, twist: isMystery ? rollMysteryTwist(() => rng.next()) : undefined });
+    exclude.add(pick);
   }
   const used = new Set<number>();
   for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
-  for (const weapon of kinds) {
+  for (const { weapon, isMystery, twist } of kinds) {
     const host = w.chests.find((c) => c.kind === "wood" && c.weapon === undefined);
-    if (host) { host.weapon = weapon; continue; }
+    if (host) { host.weapon = weapon; host.isMystery = isMystery || undefined; host.twist = twist; continue; }
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
     let spot = chestTile(w, room, used);
     for (let ri = 1; spot === null && ri < d.rooms.length; ri++) spot = chestTile(w, d.rooms[ri], used);
     if (!spot) continue; // no open tile anywhere: forfeit this weapon roll
     used.add(spot.ty * d.w + spot.tx);
-    w.chests.push({ id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE, radius: 16, opened: false, weapon });
+    w.chests.push({
+      id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE,
+      radius: 16, opened: false, weapon, isMystery: isMystery || undefined, twist,
+    });
   }
 }
 
-// A weapon roll that avoids the ids already taken this batch (distinct while the pool
-// permits — with a 17-weapon pool the retry loop is a formality, but bounded regardless).
-function rollDistinctWeapon(rng: Rng, taken: readonly WeaponId[]): WeaponId {
-  let pick = rng.pick(PICKUP_WEAPONS);
-  for (let i = 0; i < PICKUP_WEAPONS.length && taken.includes(pick); i++) pick = rng.pick(PICKUP_WEAPONS);
-  return pick;
+// The world's one rarity-aware bag draw: roll the TIER (weighted, floor-gated — see
+// rollWeaponRarity), enforce the legendary floor gate through the bag's exclude
+// semantics (skip while others remain, never hang), then deal that tier's next undealt
+// weapon from the run's shuffled bag. `rand` is the calling stream (a placement Rng or
+// w.rng) so the tier roll rides the caller's determinism, and the roll consumes exactly
+// one rand() before the bag advances.
+function rollBagWeapon(
+  w: WorldState,
+  rand: () => number,
+  exclude: ReadonlySet<WeaponId>,
+  opts: { isPremium?: boolean; isMystery?: boolean } = {},
+): WeaponId {
+  const tier = rollWeaponRarity(rand, w.floor, opts);
+  const isLegendaryOpen = opts.isMystery === true || w.floor >= LEGENDARY_MIN_FLOOR;
+  let gated = exclude;
+  if (!isLegendaryOpen) {
+    const withGate = new Set(exclude);
+    for (const id of LEGENDARY_WEAPONS) withGate.add(id);
+    gated = withGate;
+  }
+  return drawWeaponFromBag(w.weaponBag, gated, tier);
+}
+
+// Weapons owned by EVERY player — the set a fresh drop would waste (nobody left to
+// collect it; updatePickups leaves a universally-owned weapon lying as a dead pickup).
+// A gun only SOME players own stays rollable: the others can still claim it. Empty when
+// the world has no players yet (server floor build before the first join).
+function weaponsOwnedByAll(w: WorldState): Set<WeaponId> {
+  const owned = new Set<WeaponId>();
+  let isFirst = true;
+  for (const p of w.players.values()) {
+    if (isFirst) {
+      for (const id of p.ownedWeapons) owned.add(id);
+      isFirst = false;
+      continue;
+    }
+    for (const id of [...owned]) if (!p.ownedWeapons.includes(id)) owned.delete(id);
+  }
+  return owned;
 }
 
 // Deep floors bias hazard density (§4 biome pressure): a wider explosive-barrel band.
@@ -886,6 +982,9 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
   const wep = WEAPONS[weapon];
   const pellets = wep.pellets + p.mods.extraPellets;
   const spread = pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + p.mods.spreadAdd : wep.spread;
+  // The Lastlight's intrinsic risk curve: weapon-authored (like the Thunderbolt's 9),
+  // scaling with MISSING health on top of the (capped) blessing damage multiplier.
+  const riskMult = wep.lowHpBonus !== undefined ? 1 + wep.lowHpBonus * lowHpFrac(p.hp, p.maxHp) : 1;
   return {
     pellets,
     basePellets: wep.pellets,
@@ -894,7 +993,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     life: wep.life * p.mods.bulletLifeMult,
     radius: wep.bulletRadius * p.mods.bulletSizeMult,
     color: wep.color,
-    damage: wep.damage * currentDamageMult(p),
+    damage: wep.damage * riskMult * currentDamageMult(p),
     pierce: Math.min(4, (wep.basePierce ?? 0) + p.mods.pierce),
     critChance: p.mods.critChance,
     critMult: p.mods.critMult,
@@ -907,6 +1006,15 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
+    killShards: wep.killShards,
+    accel: wep.accel,
+    isPhase: wep.isPhase,
+    implode: wep.implode,
+    // Frostline painting, mods-mapped here (size -> zone footprint, life -> duration).
+    paintSpacing: wep.paint?.spacing,
+    paintRadius: wep.paint !== undefined ? wep.paint.radius * p.mods.bulletSizeMult : undefined,
+    paintLife: wep.paint !== undefined ? wep.paint.life * p.mods.bulletLifeMult : undefined,
+    paintRate: wep.paint?.chillRate,
   };
 }
 
@@ -925,15 +1033,54 @@ function equipWeapon(p: PlayerSim, id: WeaponId): void {
   if (p.weapon === id) return;
   p.weapon = id;
   p.fireCd = 0;
+  p.chargeT = 0; // a held Breach charge never survives a weapon switch
   p.meleeSwing = null;
 }
 
 // Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
 // and by dev/grant. Manual switching (1-9 / scroll / hotbar) goes through the validated
 // switchWeaponInWorld below on every path (LocalTransport and the server).
-function acquireWeapon(p: PlayerSim, id: WeaponId): void {
-  if (!p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
+// The MAX_OWNED_WEAPONS cap is enforced HERE, at the one place the inventory grows, so
+// the invariant is structural: no acquisition path (pickup, boss claim, shop, dev grant)
+// can ever mint a slot past the number-key row. Callers that want a nicer refusal (the
+// pickup pass leaving the weapon on the floor, the shop's HOTBAR FULL status) gate
+// earlier; this returns whether the weapon is owned+equipped afterwards.
+function acquireWeapon(p: PlayerSim, id: WeaponId): boolean {
+  if (!p.ownedWeapons.includes(id)) {
+    if (p.ownedWeapons.length >= C.MAX_OWNED_WEAPONS) return false;
+    p.ownedWeapons.push(id);
+  }
   equipWeapon(p, id);
+  return true;
+}
+
+// The mystery reveal's baked twist (see rollMysteryTwist): a small buff or a small
+// drawback, never a dead result. Blessed follows the heart rules exactly (+1 HP, or the
+// coin conversion at full health); cursed jams the freshly-equipped trigger for a beat.
+function applyMysteryTwist(p: PlayerSim, twist: MysteryTwist, ev: SimEvent[]): void {
+  if (twist === "blessed") {
+    if (p.hp < p.maxHp) {
+      p.hp++;
+      ev.push({ t: "heal", pid: p.id, x: p.x, y: p.y });
+    } else {
+      p.coins += SUSTAIN.fullHpHeartCoins;
+    }
+  } else if (twist === "cursed") {
+    p.fireCd = Math.max(p.fireCd, MYSTERY.cursedJamSeconds);
+  }
+}
+
+// A mystery pickup's reveal at the claim moment: the baked identity — rerolled through
+// the bag's mystery gamble when the claimant already owns it (never a dead result) —
+// plus the shared reveal event. Shared by the walk-over collect and the full-hotbar
+// swap, so the two claim paths can never diverge. The caller applies the twist AFTER
+// acquiring (equipWeapon resets fireCd, which would silently clear a cursed jam).
+function revealMysteryPickup(w: WorldState, p: PlayerSim, pk: Pickup, ev: SimEvent[]): WeaponId {
+  const grant = p.ownedWeapons.includes(pk.weapon!)
+    ? rollBagWeapon(w, () => w.rng.next(), new Set(p.ownedWeapons), { isMystery: true })
+    : pk.weapon!;
+  ev.push({ t: "mysteryReveal", pid: p.id, weapon: grant, twist: pk.twist ?? "plain", x: pk.x, y: pk.y });
+  return grant;
 }
 
 // Authoritative, validated weapon switch (LocalTransport + the server's equip handler).
@@ -947,10 +1094,15 @@ export function switchWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId):
   return true;
 }
 
-// Client-driven acquire + equip (dev grant, or golden 'weapon' command).
+// Client-driven acquire + equip (dev grant, or golden 'weapon' command). At the hotbar
+// cap the grant REPLACES the equipped slot in place (the sandbox/golden affordance for
+// cycling arbitrary weapons) — the cap invariant holds on every path; the gameplay claim
+// path at the cap is swapWeaponInWorld.
 export function acquireWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId): void {
   const p = w.players.get(pid);
-  if (p) acquireWeapon(p, id);
+  if (!p || acquireWeapon(p, id)) return;
+  p.ownedWeapons[p.ownedWeapons.indexOf(p.weapon)] = id;
+  equipWeapon(p, id);
 }
 
 export function reorderWeaponsInWorld(w: WorldState, pid: PlayerId, from: number, to: number): boolean {
@@ -992,6 +1144,59 @@ export function dropWeaponInWorld(w: WorldState, pid: PlayerId, id: WeaponId, ev
   const [x, y] = spot;
   w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: id });
   ev.push({ t: "weaponDrop", weapon: id, x, y });
+  return true;
+}
+
+export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number, dropId: WeaponId, ev: SimEvent[]): boolean {
+  // Authoritative full-hotbar swap: trade an OWNED weapon for the weapon pickup the player
+  // is standing on. This is the ONE way to claim a new weapon at the cap (updatePickups
+  // refuses to auto-collect into a full hotbar), and it is atomic — validate everything,
+  // then mutate: the replaced weapon lands as a normal world pickup (the same safe
+  // weaponDropSpot the Q drop uses) and the incoming weapon is acquired + equipped.
+  // Declining is free by construction: no command is sent and the pickup stays put.
+  // Gates mirror dropWeaponInWorld (no free actions from paused/terminal states), then:
+  //  - the hotbar must actually be full — below the cap a walk-over collects, so a swap
+  //    command is a tampered/stale client, not a state this function invents;
+  //  - dropId must be owned; the pickup must be a live weapon within WEAPON_SWAP_RANGE;
+  //  - the pickup must be claimable by THIS player: not an already-owned weapon, and a
+  //    boss-choice pedestal only before this player's personal claim (gate §4).
+  // A boss-choice swap resolves its grant exactly like the walk-over claim (seeded reroll
+  // when the pedestal weapon is owned) and leaves the pedestal standing for teammates —
+  // the all-claimed sweep in updatePickups retires it, same as always.
+  const p = w.players.get(pid);
+  if (!p) return false;
+  if (w.isRunOver || p.isDown || p.isAbsent || w.pendingBlessings.has(pid)) return false;
+  if (p.ownedWeapons.length < C.MAX_OWNED_WEAPONS) return false;
+  const dropIdx = p.ownedWeapons.indexOf(dropId);
+  if (dropIdx < 0) return false;
+  const pk = w.pickups.find((q) => q.id === pickupId);
+  if (!pk || pk.kind !== "weapon" || pk.weapon === null) return false;
+  if (Math.hypot(p.x - pk.x, p.y - pk.y) > C.WEAPON_SWAP_RANGE) return false;
+  // A mystery's identity is hidden, so "already owned" can never block the swap — the
+  // reveal itself rerolls an owned identity into something the claimant lacks.
+  if (pk.isBossChoice ? p.hasClaimedBossChoice : (!pk.isMystery && p.ownedWeapons.includes(pk.weapon))) return false;
+  const spot = weaponDropSpot(w, p);
+  if (!spot) return false; // fully boxed in: keep everything rather than lose a weapon
+  let grant = pk.weapon;
+  let mysteryTwist: MysteryTwist | null = null;
+  if (pk.isBossChoice) {
+    p.hasClaimedBossChoice = true;
+    if (p.ownedWeapons.includes(pk.weapon)) grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
+  } else {
+    if (pk.isMystery) {
+      grant = revealMysteryPickup(w, p, pk, ev);
+      mysteryTwist = pk.twist ?? "plain";
+    }
+    w.pickups = w.pickups.filter((q) => q !== pk);
+  }
+  p.ownedWeapons.splice(dropIdx, 1);
+  const [x, y] = spot;
+  w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: dropId });
+  ev.push({ t: "weaponDrop", weapon: dropId, x, y });
+  acquireWeapon(p, grant);
+  // The twist lands AFTER the equip (equipWeapon resets fireCd — a cursed jam must stick).
+  if (mysteryTwist !== null) applyMysteryTwist(p, mysteryTwist, ev);
+  ev.push({ t: "pickup", pid, kind: "weapon", x: pk.x, y: pk.y });
   return true;
 }
 
@@ -1037,6 +1242,10 @@ export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): S
 // pauses/shields that player and holds the descend gate until the pick resolves.
 function raiseBlessingOffer(w: WorldState, pid: PlayerId, rare: boolean, ev: SimEvent[]): void {
   w.pendingBlessings.set(pid, C.BLESSING_OFFER_TTL);
+  // An overlay pause is a CANCEL, never a deferred release: a Breach charge held when the
+  // pick opens must not fire a shell the instant the menu closes.
+  const p = w.players.get(pid);
+  if (p) p.chargeT = 0;
   ev.push({ t: "offerBlessing", pid, rare });
 }
 
@@ -1085,7 +1294,22 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
   switch (slot.kind) {
     case "weapon": {
       slot.soldTo = pid;
-      acquireWeapon(p, slot.weapon!);
+      if (slot.isMystery) {
+        // The mystery pedestal reveals ON PURCHASE: an already-owned identity rerolls
+        // into something the buyer lacks (never a dead buy), the twist lands, and the
+        // slot flips to its true face — the SOLD pedestal shows what it was.
+        const grant = p.ownedWeapons.includes(slot.weapon!)
+          ? rollBagWeapon(w, () => w.rng.next(), new Set(p.ownedWeapons), { isMystery: true })
+          : slot.weapon!;
+        slot.weapon = grant;
+        slot.isMystery = false;
+        acquireWeapon(p, grant);
+        applyMysteryTwist(p, slot.twist ?? "plain", ev);
+        ev.push({ t: "mysteryReveal", pid, weapon: grant, twist: slot.twist ?? "plain", x: slot.x, y: slot.y });
+        slot.twist = null;
+      } else {
+        acquireWeapon(p, slot.weapon!);
+      }
       break;
     }
     case "blessing": {
@@ -1101,7 +1325,7 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     }
     case "reroll": {
       shop.rerollsUsed++;
-      restockShop(shop, w.seed, w.floor);
+      restockShop(shop, w.seed, w.floor, [...weaponsOwnedByAll(w)]);
       break;
     }
   }
@@ -1169,34 +1393,50 @@ function chillMoveScale(e: Enemy): number {
   if (e.chill <= 0) return 1;
   return isFrozen(e) ? 0 : C.CHILL_SLOW;
 }
-function applyBurn(e: Enemy, secs: number, owner: PlayerId | null): void {
+function applyBurn(e: Enemy, secs: number, owner: PlayerId | null, ev: SimEvent[]): void {
+  // First application announces through the SHARED status library; re-stamps and the
+  // DoT's ticks stay silent by contract (their cadence carries no decision).
+  if (e.burn === 0) ev.push({ t: "statusApplied", eid: e.id, x: e.x, y: e.y, kind: "burn" });
   if (secs > e.burn) e.burn = secs;
-  e.burnDmg = Math.min(C.BURN_DMG_MAX, e.burnDmg + C.BURN_DMG_STACK);
+  // Boss-grade bodies cap the DoT lower (envelope: burn is pack pressure; a boss's bar
+  // is paced by the vulnerability channel, never by a stacked clock).
+  const cap = isBossKind(e.kind) || e.captainPhase !== undefined ? C.BURN_DMG_MAX_BOSS : C.BURN_DMG_MAX;
+  e.burnDmg = Math.min(cap, e.burnDmg + C.BURN_DMG_STACK);
   // The most recent igniter owns the burn; its DoT tick credits that id on a kill. The identity
   // is immutable: if the igniter disconnects, the burn keeps THEIR id (which then credits no
   // one), never a different live player.
   e.burnOwner = owner;
 }
-function applyChill(e: Enemy, secs: number): void {
+function applyChill(e: Enemy, secs: number, ev: SimEvent[]): void {
+  if (e.chill === 0 && secs > 0) ev.push({ t: "statusApplied", eid: e.id, x: e.x, y: e.y, kind: "chill" });
+  const wasFrozen = isFrozen(e);
   e.chill = Math.min(C.CHILL_MAX, e.chill + secs);
+  if (!wasFrozen && isFrozen(e)) ev.push({ t: "frozeSolid", eid: e.id, x: e.x, y: e.y });
 }
-function applyShock(e: Enemy, secs: number): void {
+function applyShock(e: Enemy, secs: number, ev: SimEvent[]): void {
+  if (e.shock === 0 && secs > 0) ev.push({ t: "statusApplied", eid: e.id, x: e.x, y: e.y, kind: "shock" });
   if (secs > e.shock) e.shock = secs;
 }
 // `p` is the striking player when still connected; null when the actor has left (their in-flight
 // bullet keeps its baked-in statuses via `src` + the immutable ownerId, but the mods-chance rolls
 // need a live player and are skipped).
-function applyHitStatuses(w: WorldState, p: PlayerSim | null, e: Enemy, src: StrikeInfo): void {
-  if (src.burn !== undefined) applyBurn(e, src.burn, src.ownerId);
-  else if (p && p.mods.burnChance > 0 && w.rng.next() < p.mods.burnChance) applyBurn(e, C.ITEM_BURN_SECS, p.id);
-  if (src.chill !== undefined) applyChill(e, src.chill);
-  else if (p && p.mods.chillChance > 0 && w.rng.next() < p.mods.chillChance) applyChill(e, C.ITEM_CHILL_SECS);
-  if (src.shock !== undefined) applyShock(e, src.shock);
-  else if (p && p.mods.shockChance > 0 && w.rng.next() < p.mods.shockChance) applyShock(e, C.ITEM_SHOCK_SECS);
+function applyHitStatuses(w: WorldState, p: PlayerSim | null, e: Enemy, src: StrikeInfo, ev: SimEvent[]): void {
+  if (src.burn !== undefined) applyBurn(e, src.burn, src.ownerId, ev);
+  else if (p && p.mods.burnChance > 0 && w.rng.next() < p.mods.burnChance) applyBurn(e, C.ITEM_BURN_SECS, p.id, ev);
+  if (src.chill !== undefined) applyChill(e, src.chill, ev);
+  else if (p && p.mods.chillChance > 0 && w.rng.next() < p.mods.chillChance) applyChill(e, C.ITEM_CHILL_SECS, ev);
+  if (src.shock !== undefined) applyShock(e, src.shock, ev);
+  else if (p && p.mods.shockChance > 0 && w.rng.next() < p.mods.shockChance) applyShock(e, C.ITEM_SHOCK_SECS, ev);
 }
 
 function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
-  if (e.chill > 0) e.chill = e.chill > dt ? e.chill - dt : 0;
+  if (e.chill > 0) {
+    const wasFrozen = isFrozen(e);
+    e.chill = e.chill > dt ? e.chill - dt : 0;
+    // The shell shatters as the freeze decays — the status BREAK tell (dead bodies
+    // skip it; their kill burst already carried the moment).
+    if (wasFrozen && !isFrozen(e) && !e.dead) ev.push({ t: "freezeBroke", eid: e.id, x: e.x, y: e.y });
+  }
   if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
   if (e.burn > 0) {
     e.burn = e.burn > dt ? e.burn - dt : 0;
@@ -1441,6 +1681,24 @@ function endBossTransition(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   }
 }
 
+// The persistent-source boss budget (envelope): autonomous output (turret bolts, trap
+// snaps) may take at most PERSISTENT_BOSS_DPS_FRAC of the party's practical DPS budget
+// (encounterPlayers x PU_DPS) out of a boss-grade body per rolling second. Damage past
+// the window's remainder is TRUNCATED — deterministically, in sim order — so parked
+// sources supplement the fight without ever carrying it. Returns the damage to apply.
+function drawPersistentBossBudget(w: WorldState, e: Enemy, dmg: number): number {
+  const budget = PERSISTENT_BOSS_DPS_FRAC * PU_DPS * w.encounterPlayers;
+  const now = w.floorHazardClock;
+  let win = w.persistentBossWindows.get(e.id);
+  if (!win || now - win.t >= 1) {
+    win = { t: now, used: 0 };
+    w.persistentBossWindows.set(e.id, win);
+  }
+  const allowed = Math.max(0, Math.min(dmg, budget - win.used));
+  win.used += allowed;
+  return allowed;
+}
+
 // `p` may be null when the striking actor has left (their projectile outlived them): damage,
 // knockback (from the fire-time weapon), and baked-in statuses still land, but nothing is
 // credited to any player.
@@ -1455,12 +1713,18 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
     // hit.damage carries the crit multiplier baked in, so it is divided back out before
     // the capped channel applies. The fire-time pellet/weapon coefficient rides on top.
     dmg = (hit.damage / hit.critX) * Math.min(BOSS_VULN_CAP, hit.critX) * hit.bossCoef;
+    if (hit.isPersistent) {
+      dmg = drawPersistentBossBudget(w, e, dmg);
+      // A fully budget-capped hit lands as pressure, not damage: no zero-damage number,
+      // no knockback stack — the round is simply spent against a saturated window.
+      if (dmg <= 0) return;
+    }
   } else {
     dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
   }
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
-  applyHitStatuses(w, p, e, hit);
+  applyHitStatuses(w, p, e, hit, ev);
   const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
   const killed = e.hp <= 0 && !e.dead;
   const puffColor = hit.isCrit ? "#fff3c4" : ENEMY_ARCHETYPES[e.kind].tint;
@@ -1557,11 +1821,29 @@ const BOSS_SIGNATURE_WEAPON: Readonly<Partial<Record<Enemy["kind"], WeaponId>>> 
   boss: "mortar", marrow: "railgun", choir: "beam", weaver: "tesla", gilded: "cannon",
 };
 
+// The lead weapon a boss chest bakes. Deep bosses hand their single authored signature;
+// the Slime King — the run's FIRST boss, the one every player sees every run — rolls a
+// seeded weighted preference over KING_REWARD_TABLE instead (mortar most likely, never
+// guaranteed), keyed by (seed, floor) so it is fixed per run and identical on every
+// authority regardless of when the boss dies. Exported for the variety regression tests.
+export function bossChestWeaponFor(seed: number, floor: number, kind: Enemy["kind"]): WeaponId | undefined {
+  if (kind !== "boss") return BOSS_SIGNATURE_WEAPON[kind];
+  const rng = new Rng((seed ^ 0x4b1e9d07) + floor * 68909);
+  let total = 0;
+  for (const row of KING_REWARD_TABLE) total += row.weight;
+  let roll = rng.next() * total;
+  for (const row of KING_REWARD_TABLE) {
+    roll -= row.weight;
+    if (roll < 0) return row.weapon;
+  }
+  return BOSS_SIGNATURE_WEAPON[kind];
+}
+
 function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   if (isBossKind(e.kind)) {
     w.chests.push({
       id: w.nextChestId++, kind: "boss", x: e.x, y: e.y, radius: 18, opened: false,
-      weapon: BOSS_SIGNATURE_WEAPON[e.kind],
+      weapon: bossChestWeaponFor(w.seed, w.floor, e.kind),
     });
     return;
   }
@@ -1601,8 +1883,10 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   if (ix !== 0) p.facing = ix > 0 ? 1 : -1;
 
   // Webs slow the WALK only — the dash (below) rips through at full speed, so a snared
-  // player always has an out; it just costs the dash.
-  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * webSlowMult(w, p.x, p.y);
+  // player always has an out; it just costs the dash. Holding a Breach charge slows the
+  // same way (the exposure IS the tradeoff); the dash still rips free at full speed.
+  const chargeSlow = p.chargeT > 0 ? WEAPONS[p.weapon].charge?.slow ?? 1 : 1;
+  const speed = PLAYER.moveSpeed * p.mods.moveSpeedMult * webSlowMult(w, p.x, p.y) * chargeSlow;
   // Snap accumulated float dust to zero so a cooldown that is an exact multiple of the
   // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
   p.dashCd = Math.max(0, p.dashCd - dt);
@@ -1636,16 +1920,35 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
 
 function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, ev: SimEvent[]): void {
   p.fireCd = Math.max(0, p.fireCd - dt);
+  const wep = WEAPONS[p.weapon];
+  // Hold-charge weapons (the Breach) own the whole trigger lifecycle: hold accumulates
+  // the landing distance, RELEASE fires. Every other weapon fires on press-with-cooldown.
+  if (wep.charge) {
+    updateChargeShooting(w, p, wep, input, dt, ev);
+    return;
+  }
   if (input.firing && p.fireCd === 0) {
     cancelReviveChannelBy(w, p.id); // gate §6: the reviver's attack cancels their channel
-    const wep = WEAPONS[p.weapon];
     if (wep.melee) {
       startMeleeSwing(w, p, ev);
       return;
     }
+    // Effect-wave verbs: each branch authors an Effect (or resolves one) instead of
+    // spawning bullets. They pay the same cooldown/shotSeq bookkeeping as a shot.
+    if (wep.wire) { plantWire(w, p, wep, ev); return; }
+    if (wep.orbit) { flareOrbit(w, p, wep, ev); return; }
+    if (wep.sentry) { deploySentry(w, p, wep, ev); return; }
+    if (wep.tether) { fireTether(w, p, wep, ev); return; }
     const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
     const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
     const spec = resolveShot(p, p.weapon);
+    // The Midas: a FED shot eats one coin for its damage multiplier (and gleams brighter);
+    // broke, it fires the honest base round — never a locked trigger.
+    if (wep.coinBoost !== undefined && p.coins > 0) {
+      p.coins--;
+      spec.damage *= wep.coinBoost;
+      spec.color = "#fff3a8";
+    }
     for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
       // Anchor lag-comp at fire time: record the tick + the shooter's rewind depth NOW, so hit
       // tests use the shooter's fire-time view and decay to present as the projectile travels.
@@ -1655,13 +1958,235 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     }
     p.fireCd = wep.fireCd / currentFireRate(p);
     p.shotSeq++;
-    ev.push({ t: "shot", pid: p.id, weapon: p.weapon, x: muzzleX, y: muzzleY, aim: p.aimAngle, px: p.x, py: p.y });
+    ev.push({ t: "shot", pid: p.id, weapon: p.weapon, x: muzzleX, y: muzzleY, aim: p.aimAngle, px: p.x, py: p.y, chg: 0 });
     const kb = C.FIRE_KNOCKBACK[p.weapon];
     if (kb !== 0) {
       [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, -Math.cos(p.aimAngle) * kb, 0);
       [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, -Math.sin(p.aimAngle) * kb);
     }
   }
+}
+
+// ---- the effect wave: per-weapon trigger verbs ----
+
+// The Breach: holding the trigger charges a LANDING DISTANCE (bounded, walk slowed via
+// updatePlayer); releasing lobs a shell whose life expires exactly at that distance —
+// the lob flag makes it sail over bodies, so the end-of-arc airburst IS the payload.
+function updateChargeShooting(w: WorldState, p: PlayerSim, wep: Weapon, input: InputCmd, dt: number, ev: SimEvent[]): void {
+  const spec = wep.charge!;
+  // The SAFE CANCEL: dashing while holding a charge dumps it without firing (one intent,
+  // reachable from any input device — the same button that already means "get out").
+  // Weapon switches, going down, and pause/blessing overlays cancel through their own
+  // sites (equipWeapon / damagePlayer / stepPlayerPhase), so a charge can never fire
+  // out of a menu or a corpse.
+  if (input.dash && p.chargeT > 0) {
+    p.chargeT = 0;
+    return;
+  }
+  if (input.firing && p.fireCd === 0) {
+    if (p.chargeT === 0) cancelReviveChannelBy(w, p.id); // charging is an attack commitment
+    p.chargeT = Math.min(spec.time, p.chargeT + dt);
+    return;
+  }
+  if (input.firing || p.chargeT === 0) return;
+  // Release: distance scales tap -> full hold; the life mod maps to reach (duration of
+  // the arc), the speed mod to flight time over the SAME distance.
+  const t = p.chargeT / spec.time;
+  p.chargeT = 0;
+  const dist = (spec.minDist + (spec.maxDist - spec.minDist) * t) * p.mods.bulletLifeMult;
+  const shot = resolveShot(p, p.weapon);
+  shot.life = dist / shot.speed;
+  const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
+  const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
+  for (const b of fire(shot, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
+    b.isLob = true;
+    b.lobT = t;
+    b.bornTick = w.tick;
+    b.lagRewind = p.rewindTicks;
+    w.bullets.push(b);
+  }
+  p.fireCd = wep.fireCd / currentFireRate(p);
+  p.shotSeq++;
+  ev.push({ t: "shot", pid: p.id, weapon: p.weapon, x: muzzleX, y: muzzleY, aim: p.aimAngle, px: p.x, py: p.y, chg: t });
+  const kb = C.FIRE_KNOCKBACK[p.weapon];
+  if (kb !== 0) {
+    [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, -Math.cos(p.aimAngle) * kb, 0);
+    [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, -Math.sin(p.aimAngle) * kb);
+  }
+}
+
+// The Snapwire: string a wire from the planting spot along aim, wall-clamped. It arms
+// after a beat (planting is never a free point-blank hit) and the OLDEST owned wire
+// gives way past the cap — the pellets mod buys more concurrent wires, never more snap.
+function plantWire(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
+  const spec = wep.wire!;
+  const dirX = Math.cos(p.aimAngle), dirY = Math.sin(p.aimAngle);
+  // Walk the span outward in small steps and clamp at the first wall so a wire can never
+  // thread through geometry (a wire inside a wall would be an invisible trap).
+  const step = 8;
+  let len = 0;
+  while (len + step <= spec.length && !isWall(w, p.x + dirX * (len + step), p.y + dirY * (len + step))) len += step;
+  if (len < 24) {
+    // Face-planting into a wall refuses the plant — the fail state reads out loud.
+    p.fireCd = 0.2;
+    ev.push({ t: "wireRefused", x: p.x, y: p.y });
+    return;
+  }
+  const maxWires = Math.min(MAX_WIRES, spec.max + p.mods.extraPellets);
+  const owned = w.effects.filter((e): e is WireEffect => e.kind === "wire" && e.owner === p.id && e.life > 0);
+  for (let i = 0; i <= owned.length - maxWires; i++) owned[i].life = 0;
+  // Party-wide trap budget (envelope): the WORLD holds at most MAX_WIRES_PARTY armed
+  // wires; the globally oldest (lowest id) gives way regardless of who planted it.
+  const all = w.effects.filter((e): e is WireEffect => e.kind === "wire" && e.life > 0);
+  for (let i = 0; i <= all.length - MAX_WIRES_PARTY; i++) all[i].life = 0;
+  const arm = spec.arm / p.mods.bulletSpeedMult;
+  const life = arm + spec.life * p.mods.bulletLifeMult;
+  const x2 = p.x + dirX * len, y2 = p.y + dirY * len;
+  w.effects.push({
+    id: w.nextEffectId++, kind: "wire", owner: p.id, fx: wep.id,
+    x: p.x, y: p.y, x2, y2,
+    width: spec.width * p.mods.bulletSizeMult,
+    arm, life, maxLife: life,
+    damage: wep.damage,
+  });
+  p.fireCd = wep.fireCd / currentFireRate(p);
+  p.shotSeq++;
+  ev.push({ t: "wirePlanted", x: p.x, y: p.y, tx: x2, ty: y2 });
+}
+
+// The Razor Halo's active: flare the ring outward for a beat (updateEffects owns the
+// upkeep/damage; ensureOrbit covers the first press racing the world phase).
+function flareOrbit(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
+  const orbit = ensureOrbit(w, p, wep);
+  orbit.flare = wep.orbit!.flareDur;
+  p.fireCd = wep.fireCd / currentFireRate(p);
+  p.shotSeq++;
+  ev.push({ t: "haloFlare", x: p.x, y: p.y, r: wep.orbit!.flareRing });
+}
+
+// The Prism Sentry: park a destructible turret a step ahead (redeploying MOVES it — one
+// per owner, so the verb is "hold a second lane", never a turret farm).
+function deploySentry(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
+  const spec = wep.sentry!;
+  let x = p.x + Math.cos(p.aimAngle) * spec.deployDist;
+  let y = p.y + Math.sin(p.aimAngle) * spec.deployDist;
+  if (!isStandableSpot(w, x, y, spec.radius)) { x = p.x; y = p.y; }
+  for (const e of w.effects) {
+    if (e.kind === "sentry" && e.owner === p.id) e.life = 0; // silent replace: the redeploy
+  }
+  const life = spec.life * p.mods.bulletLifeMult;
+  w.effects.push({
+    id: w.nextEffectId++, kind: "sentry", owner: p.id, fx: wep.id,
+    x, y, life, maxLife: life,
+    radius: spec.radius, hp: spec.hp, maxHp: spec.hp,
+    fireCd: 0, range: spec.range,
+    boltSpeed: spec.boltSpeed * p.mods.bulletSpeedMult,
+    boltRadius: spec.boltRadius * p.mods.bulletSizeMult,
+    boltDamage: wep.damage,
+    boltPierce: Math.min(4, p.mods.pierce),
+    contactCd: 0,
+    targetEid: -1,
+  });
+  p.fireCd = wep.fireCd / currentFireRate(p);
+  p.shotSeq++;
+  ev.push({ t: "sentryPlaced", x, y });
+}
+
+// The Crooked Chain: first press latches the nearest body along the aim capsule and
+// starts the pull (heavy bodies pull the OWNER instead); a second press resolves the
+// sweep around the owner and releases the chain.
+function fireTether(w: WorldState, p: PlayerSim, wep: Weapon, ev: SimEvent[]): void {
+  const spec = wep.tether!;
+  const held = w.effects.find((e): e is TetherEffect => e.kind === "tether" && e.owner === p.id && e.life > 0);
+  if (held) {
+    sweepTether(w, p, held, ev);
+    p.fireCd = wep.fireCd / currentFireRate(p);
+    p.shotSeq++;
+    return;
+  }
+  const dirX = Math.cos(p.aimAngle), dirY = Math.sin(p.aimAngle);
+  let best: Enemy | null = null;
+  let bestFwd = Infinity;
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e)) continue;
+    const dx = e.x - p.x, dy = e.y - p.y;
+    const fwd = dx * dirX + dy * dirY;
+    if (fwd < 0 || fwd > spec.range) continue;
+    const lat = Math.abs(dx * dirY - dy * dirX);
+    if (lat > spec.width + e.radius) continue;
+    if (!hasLineOfSight(w, p.x, p.y, e.x, e.y)) continue;
+    if (fwd < bestFwd) { bestFwd = fwd; best = e; }
+  }
+  if (!best) {
+    // The whiff still lashes (readable feedback + a real cooldown cost).
+    p.fireCd = 0.35;
+    p.shotSeq++;
+    ev.push({ t: "tetherLatch", eid: -1, x: p.x, y: p.y, tx: p.x + dirX * spec.range, ty: p.y + dirY * spec.range, inv: false });
+    return;
+  }
+  const isHeavy = isBossKind(best.kind) || best.tier === "brute" || best.tier === "elite";
+  w.effects.push({
+    id: w.nextEffectId++, kind: "tether", owner: p.id, fx: wep.id,
+    x: p.x, y: p.y,
+    eid: best.id, phase: "pull", isPlayerPulled: isHeavy,
+    pullSpeed: spec.pullSpeed * p.mods.bulletSpeedMult,
+    holdDist: spec.holdDist,
+    holdTime: spec.hold * p.mods.bulletLifeMult,
+    pullTime: isHeavy ? spec.playerPullTime : C.TETHER_PULL_BUDGET,
+    damage: wep.damage,
+    reach: spec.reach * p.mods.bulletSizeMult,
+    life: C.TETHER_PULL_BUDGET + spec.hold * p.mods.bulletLifeMult + 0.5,
+    maxLife: C.TETHER_PULL_BUDGET + spec.hold * p.mods.bulletLifeMult + 0.5,
+  });
+  // A short lock (not the full weapon cooldown): the SECOND press is the sweep.
+  p.fireCd = C.TETHER_LATCH_FIRE_LOCK;
+  p.shotSeq++;
+  ev.push({ t: "tetherLatch", eid: best.id, x: p.x, y: p.y, tx: best.x, ty: best.y, inv: isHeavy });
+}
+
+// Resolve a held chain: strike everything in the sweep radius around the owner (the
+// reeled-in target included by construction) and release the tether.
+function sweepTether(w: WorldState, p: PlayerSim, t: TetherEffect, ev: SimEvent[]): void {
+  t.life = 0;
+  const dmg = t.damage * currentDamageMult(p);
+  const isCrit = p.mods.critChance > 0 && w.rng.next() < p.mods.critChance;
+  ev.push({ t: "tetherSweep", x: p.x, y: p.y, r: t.reach });
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e)) continue;
+    if (Math.hypot(e.x - p.x, e.y - p.y) > t.reach + e.radius) continue;
+    const kbX = e.x - p.x, kbY = e.y - p.y;
+    strikeEnemy(w, p, e, {
+      damage: isCrit ? dmg * p.mods.critMult : dmg, isCrit,
+      critX: isCrit ? p.mods.critMult : 1,
+      bossCoef: WEAPON_BOSS_COEF[t.fx] ?? 1,
+      puffX: e.x, puffY: e.y,
+      kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
+      isMelee: true,
+      ownerId: p.id, fxWeapon: t.fx,
+    }, ev);
+  }
+}
+
+// One live orbit ring per Razor Halo wielder (updateEffects keeps it in step with the
+// owner every world tick; this covers the flare racing the first upkeep).
+function ensureOrbit(w: WorldState, p: PlayerSim, wep: Weapon): OrbitEffect {
+  for (const e of w.effects) {
+    if (e.kind === "orbit" && e.owner === p.id && e.life > 0) return e;
+  }
+  const spec = wep.orbit!;
+  const orbit: OrbitEffect = {
+    id: w.nextEffectId++, kind: "orbit", owner: p.id, fx: wep.id,
+    x: p.x, y: p.y, life: 1, maxLife: 1,
+    angle: 0, ring: spec.ring,
+    blades: Math.min(MAX_ORBIT_BLADES, spec.blades + p.mods.extraPellets),
+    bladeRadius: spec.bladeRadius * p.mods.bulletSizeMult,
+    speed: spec.speed * p.mods.bulletSpeedMult,
+    flare: 0,
+    damage: wep.damage,
+    rehit: new Map(),
+  };
+  w.effects.push(orbit);
+  return orbit;
 }
 
 function startMeleeSwing(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
@@ -1746,15 +2271,40 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.friendly) steerHoming(w, b, dt);
       else steerEnemyHoming(w, b, dt); // the Choir's wails seek the nearest standing player
     }
+    // The Hive's darts gain speed in flight (launch lazy, arrive fast).
+    if (b.accel !== undefined) {
+      const sp = Math.hypot(b.vx, b.vy);
+      if (sp > 0) {
+        const scale = (sp + b.accel * dt) / sp;
+        b.vx *= scale;
+        b.vy *= scale;
+      }
+    }
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-    // A mortar shell that reaches the end of its arc airbursts instead of vanishing.
+    // Frostline painting: every spacing's worth of travel drops a chill zone under the
+    // bead (never inside a wall — the wall branch below kills the bead first).
+    if (b.friendly && b.paintSpacing !== undefined && b.paintDist !== undefined && !isWall(w, b.x, b.y)) {
+      b.paintDist += Math.hypot(b.vx, b.vy) * dt;
+      while (b.paintDist >= b.paintSpacing) {
+        b.paintDist -= b.paintSpacing;
+        spawnChillZone(w, b);
+      }
+    }
+    // A mortar shell that reaches the end of its arc airbursts instead of vanishing;
+    // a Lodestone round's end-of-arc implodes the same way.
     if (b.life <= 0 && b.friendly && b.blast !== undefined) { detonateBullet(w, b, b.x, b.y, ev); continue; }
+    if (b.life <= 0 && b.friendly && b.implode !== undefined) { implodeBullet(w, b, b.x, b.y, ev); continue; }
     // The Weaver's aimed silk webs the spot it dies on (spent bolt -> sticky floor).
     if (b.life <= 0 && b.isSilk === true) { plantWeb(w, b.x, b.y, WEAVER.silkWebRadius, ev); continue; }
-    if (isWall(w, b.x, b.y)) {
+    // Umbra rounds pass straight through walls — geometry simply isn't theirs to hit.
+    if (!(b.friendly && b.isPhase === true) && isWall(w, b.x, b.y)) {
       if (b.friendly && b.blast !== undefined) {
         // Shells burst ON the wall face (the last in-bounds point), not inside it.
         detonateBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
+        continue;
+      }
+      if (b.friendly && b.implode !== undefined) {
+        implodeBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
         continue;
       }
       if (b.bounce !== undefined && b.bounce > 0) { bounceOffWall(w, b, dt, ev); continue; }
@@ -1772,9 +2322,42 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
           break;
         }
       }
+      // Enemy fire chews deployed sentries — a parked turret is a real body in the lane,
+      // not an invulnerable damage source.
+      if (b.life > 0) {
+        for (const e of w.effects) {
+          if (e.kind !== "sentry" || e.life <= 0) continue;
+          if (Math.hypot(e.x - b.x, e.y - b.y) < e.radius + b.radius) {
+            b.life = 0;
+            e.hp -= b.damage;
+            ev.push({ t: "sentryHit", x: e.x, y: e.y });
+            break;
+          }
+        }
+      }
     }
   }
   w.bullets = w.bullets.filter((b) => b.life > 0);
+}
+
+// Drop one Frostline zone under a bead, respecting the hard world cap (the OLDEST zones
+// fade early — bounded wire, bounded frame, no matter how a build stacks fire rate).
+function spawnChillZone(w: WorldState, b: Bullet): void {
+  let zones = 0;
+  let oldest: ZoneEffect | null = null;
+  for (const e of w.effects) {
+    if (e.kind !== "zone" || e.life <= 0) continue;
+    zones++;
+    if (oldest === null || e.life < oldest.life) oldest = e;
+  }
+  if (zones >= C.MAX_ZONE_EFFECTS && oldest) oldest.life = 0;
+  const life = b.paintLife ?? 1;
+  w.effects.push({
+    id: w.nextEffectId++, kind: "zone", owner: b.owner, fx: b.fx ?? "frostline",
+    x: b.x, y: b.y, life, maxLife: life,
+    radius: b.paintRadius ?? 24,
+    chillRate: b.paintRate ?? 2,
+  });
 }
 
 // Mortar detonation: the shell's ONE payload, applied as an ordinary strike (attribution,
@@ -1788,23 +2371,68 @@ function detonateBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimE
   b.blast = undefined;
   b.life = 0;
   b.x = x; b.y = y; b.prevX = x; b.prevY = y;
-  ev.push({ t: "explosion", x, y, r });
+  // A FULL-charge Breach shell walks a LINE of detonations back along its approach (the
+  // creative gate's behavior change: the full hold buys geometry, never bigger numbers).
+  // The shared hitList keeps every body at exactly one strike, so the line extends AREA;
+  // it can never stack damage on a single target.
+  const points: Array<[number, number]> = [[x, y]];
+  if (b.isLob && (b.lobT ?? 0) >= C.BREACH_LINE_TIER) {
+    const speed = Math.hypot(b.vx, b.vy) || 1;
+    const ux = b.vx / speed, uy = b.vy / speed;
+    for (let i = 1; i < C.BREACH_LINE_BLASTS; i++) {
+      const px = x - ux * C.BREACH_LINE_STEP * i;
+      const py = y - uy * C.BREACH_LINE_STEP * i;
+      if (!isWall(w, px, py)) points.push([px, py]);
+    }
+  }
+  const shooter = ownerOf(w, b.owner);
+  for (const [bx, by] of points) {
+    ev.push({ t: "explosion", x: bx, y: by, r, src: b.fx ?? "barrel" });
+    for (const e of w.enemies) {
+      if (e.dead || isUntargetable(e)) continue;
+      if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
+      if (Math.hypot(e.x - bx, e.y - by) > r + e.radius) continue;
+      const kbX = e.x - bx, kbY = e.y - by;
+      strikeEnemy(w, shooter, e, {
+        damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: e.x, puffY: e.y,
+        kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
+        burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
+        ownerId: b.owner, fxWeapon: b.fx ?? null,
+      }, ev);
+      (b.hitList ??= []).push(e);
+    }
+    for (const prop of w.props) {
+      if (prop.breakT !== undefined || prop.kind === "brazier") continue;
+      if (Math.hypot(prop.x - bx, prop.y - by) <= r + prop.radius) destroyProp(w, prop, ev, shooter ?? undefined);
+    }
+  }
+}
+
+// Lodestone implosion: the round's ONE payload. Every targetable enemy in the radius is
+// yanked TOWARD the impact point (strikeEnemy's knockback, aimed inward — WEAPON_KB.vortex
+// is the pull strength, resisted like ordinary knockback so a heavy body barely budges)
+// and takes a modest splash (IMPLODE_SPLASH_FRAC of the round). The bullet collapses onto
+// the point exactly like a mortar shell, so its spent segment can never also plain-hit.
+function implodeBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEvent[]): void {
+  const r = b.implode;
+  if (r === undefined) return;
+  b.implode = undefined;
+  b.life = 0;
+  b.x = x; b.y = y; b.prevX = x; b.prevY = y;
+  ev.push({ t: "implosion", x, y, r });
   const shooter = ownerOf(w, b.owner);
   for (const e of w.enemies) {
     if (e.dead || isUntargetable(e)) continue;
     if (Math.hypot(e.x - x, e.y - y) > r + e.radius) continue;
-    const kbX = e.x - x, kbY = e.y - y;
+    const inX = x - e.x, inY = y - e.y;
     strikeEnemy(w, shooter, e, {
-      damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: e.x, puffY: e.y,
-      kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
+      damage: b.damage * C.IMPLODE_SPLASH_FRAC, isCrit: b.isCrit, critX: b.critX ?? 1,
+      bossCoef: b.bossCoef ?? 1, puffX: e.x, puffY: e.y,
+      kbDirX: inX === 0 && inY === 0 ? 1 : inX, kbDirY: inY,
       burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
       ownerId: b.owner, fxWeapon: b.fx ?? null,
     }, ev);
     (b.hitList ??= []).push(e);
-  }
-  for (const prop of w.props) {
-    if (prop.breakT !== undefined || prop.kind === "brazier") continue;
-    if (Math.hypot(prop.x - x, prop.y - y) <= r + prop.radius) destroyProp(w, prop, ev, shooter ?? undefined);
   }
 }
 
@@ -1886,6 +2514,258 @@ function sweptBulletHit(b: Bullet, cx: number, cy: number, r: number): boolean {
   sweptHit.x = px;
   sweptHit.y = py;
   return true;
+}
+
+// ---- weapon effect entities (the effect wave's world-phase step) ----
+
+// Distance from point (px,py) to the segment (x0,y0)-(x1,y1) — the wire trigger test.
+function distToSegment(px: number, py: number, x0: number, y0: number, x1: number, y1: number): number {
+  const dx = x1 - x0, dy = y1 - y0;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 > 0 ? Math.max(0, Math.min(1, ((px - x0) * dx + (py - y0) * dy) / len2)) : 0;
+  return Math.hypot(px - (x0 + dx * t), py - (y0 + dy * t));
+}
+
+// Advance every weapon effect one world tick. Runs BEFORE updateEnemies (like bullets),
+// so effect kills leave the array on this tick's compaction. Only the world phase steps
+// effects — prediction never runs this, so effects are purely server-owned online.
+function updateEffects(w: WorldState, dt: number, ev: SimEvent[]): void {
+  // Orbit upkeep: the halo ring exists exactly while its owner stands with the weapon in
+  // hand — equip conjures it, switching away (or going down) dismisses it.
+  for (const p of w.players.values()) {
+    const wep = WEAPONS[p.weapon];
+    const isLive = wep.orbit !== undefined && !p.isDown && !p.isAbsent && p.hp > 0
+      && !w.pendingBlessings.has(p.id);
+    if (isLive) ensureOrbit(w, p, wep);
+    else {
+      for (const e of w.effects) {
+        if (e.kind === "orbit" && e.owner === p.id) e.life = 0;
+      }
+    }
+  }
+  for (const e of w.effects) {
+    if (e.life <= 0) continue;
+    switch (e.kind) {
+      case "zone": updateZoneEffect(w, e, dt, ev); break;
+      case "wire": updateWireEffect(w, e, dt, ev); break;
+      case "orbit": updateOrbitEffect(w, e, dt, ev); break;
+      case "sentry": updateSentryEffect(w, e, dt, ev); break;
+      case "tether": updateTetherEffect(w, e, dt, ev); break;
+    }
+  }
+  w.effects = w.effects.filter((e) => e.life > 0);
+}
+
+// Frostline zones: standing enemies soak chill at the painted rate (slow, then freeze —
+// bosses slow but never freeze, exactly like the Cryo Coating blessing).
+function updateZoneEffect(w: WorldState, e: ZoneEffect, dt: number, ev: SimEvent[]): void {
+  e.life -= dt;
+  if (e.life <= 0) return;
+  for (const en of w.enemies) {
+    if (en.dead || isUntargetable(en)) continue;
+    if (Math.hypot(en.x - e.x, en.y - e.y) > e.radius + en.radius) continue;
+    applyChill(en, e.chillRate * dt, ev);
+  }
+}
+
+// Snapwire: once armed, the first body crossing the band snaps the wire on EVERY enemy
+// touching it — one authored damage event with full attribution/crit/status/knockback.
+function updateWireEffect(w: WorldState, e: WireEffect, dt: number, ev: SimEvent[]): void {
+  e.life -= dt;
+  if (e.life <= 0) {
+    // Decayed unspent: the expire tell (a snap zeroes life through its own event path).
+    ev.push({ t: "wireExpired", x: (e.x + e.x2) / 2, y: (e.y + e.y2) / 2 });
+    return;
+  }
+  if (e.arm > 0) {
+    e.arm = e.arm > dt ? e.arm - dt : 0;
+    if (e.arm === 0) ev.push({ t: "wireArmed", x: (e.x + e.x2) / 2, y: (e.y + e.y2) / 2 });
+    return;
+  }
+  let isTripped = false;
+  for (const en of w.enemies) {
+    if (en.dead || isUntargetable(en)) continue;
+    if (distToSegment(en.x, en.y, e.x, e.y, e.x2, e.y2) <= e.width + en.radius) { isTripped = true; break; }
+  }
+  if (!isTripped) return;
+  e.life = 0;
+  ev.push({ t: "wireSnap", x: e.x, y: e.y, tx: e.x2, ty: e.y2 });
+  const owner = ownerOf(w, e.owner);
+  const dmg = e.damage * (owner ? currentDamageMult(owner) : 1);
+  const isCrit = owner !== null && owner.mods.critChance > 0 && w.rng.next() < owner.mods.critChance;
+  // Perpendicular of the wire span: snapped bodies are THROWN off the line.
+  const spanX = e.x2 - e.x, spanY = e.y2 - e.y;
+  const spanLen = Math.hypot(spanX, spanY) || 1;
+  const perpX = -spanY / spanLen, perpY = spanX / spanLen;
+  for (const en of w.enemies) {
+    if (en.dead || isUntargetable(en)) continue;
+    if (distToSegment(en.x, en.y, e.x, e.y, e.x2, e.y2) > e.width + en.radius) continue;
+    const side = Math.sign((en.x - e.x) * perpX + (en.y - e.y) * perpY) || 1;
+    strikeEnemy(w, owner, en, {
+      damage: isCrit && owner ? dmg * owner.mods.critMult : dmg, isCrit,
+      critX: isCrit && owner ? owner.mods.critMult : 1,
+      bossCoef: WEAPON_BOSS_COEF[e.fx] ?? 1,
+      puffX: en.x, puffY: en.y,
+      kbDirX: perpX * side, kbDirY: perpY * side,
+      isMelee: false,
+      isPersistent: true,
+      ownerId: e.owner, fxWeapon: e.fx,
+    }, ev);
+  }
+}
+
+// Razor Halo: blades circle the owner and strike bodies on a per-enemy re-hit cadence;
+// the flare widens the ring and lands harder while it holds.
+function updateOrbitEffect(w: WorldState, e: OrbitEffect, dt: number, ev: SimEvent[]): void {
+  const owner = ownerOf(w, e.owner);
+  const spec = WEAPONS[e.fx].orbit;
+  if (!owner || !spec) { e.life = 0; return; }
+  e.x = owner.x;
+  e.y = owner.y;
+  // Mods can grow mid-run (blessing picks): keep the authored mapping in step.
+  e.blades = Math.min(MAX_ORBIT_BLADES, spec.blades + owner.mods.extraPellets);
+  e.speed = spec.speed * owner.mods.bulletSpeedMult;
+  e.bladeRadius = spec.bladeRadius * owner.mods.bulletSizeMult;
+  if (e.flare > 0) e.flare = e.flare > dt ? e.flare - dt : 0;
+  const targetRing = e.flare > 0 ? spec.flareRing : spec.ring;
+  e.ring += (targetRing - e.ring) * Math.min(1, dt * C.ORBIT_RING_EASE);
+  e.angle += e.speed * dt;
+  while (e.angle > Math.PI * 2) e.angle -= Math.PI * 2;
+  for (const [eid, cd] of e.rehit) {
+    if (cd <= dt) e.rehit.delete(eid);
+    else e.rehit.set(eid, cd - dt);
+  }
+  const flareMult = e.flare > 0 ? spec.flareBonus : 1;
+  for (const en of w.enemies) {
+    if (en.dead || isUntargetable(en) || e.rehit.has(en.id)) continue;
+    for (let i = 0; i < e.blades; i++) {
+      const a = e.angle + (i / e.blades) * Math.PI * 2;
+      const bx = e.x + Math.cos(a) * e.ring;
+      const by = e.y + Math.sin(a) * e.ring;
+      if (Math.hypot(en.x - bx, en.y - by) > e.bladeRadius + en.radius) continue;
+      const dmg = e.damage * currentDamageMult(owner) * flareMult;
+      const isCrit = owner.mods.critChance > 0 && w.rng.next() < owner.mods.critChance;
+      const kbX = en.x - e.x, kbY = en.y - e.y;
+      strikeEnemy(w, owner, en, {
+        damage: isCrit ? dmg * owner.mods.critMult : dmg, isCrit,
+        critX: isCrit ? owner.mods.critMult : 1,
+        bossCoef: WEAPON_BOSS_COEF[e.fx] ?? 1,
+        puffX: bx, puffY: by,
+        kbDirX: kbX === 0 && kbY === 0 ? 1 : kbX, kbDirY: kbY,
+        isMelee: true,
+        ownerId: e.owner, fxWeapon: e.fx,
+      }, ev);
+      e.rehit.set(en.id, spec.rehit);
+      break;
+    }
+  }
+}
+
+// Prism Sentry: a destructible lane turret. Enemy contact chews it on a readable
+// cadence, enemy fire hits it in updateBullets, and its bolts are ordinary owner-
+// attributed bullets (kills credit the deployer; a departed deployer credits no one).
+function updateSentryEffect(w: WorldState, e: SentryEffect, dt: number, ev: SimEvent[]): void {
+  e.life -= dt;
+  e.fireCd = Math.max(0, e.fireCd - dt);
+  e.contactCd = Math.max(0, e.contactCd - dt);
+  if (e.contactCd === 0) {
+    for (const en of w.enemies) {
+      if (en.dead || isUntargetable(en)) continue;
+      if (Math.hypot(en.x - e.x, en.y - e.y) > e.radius + en.radius) continue;
+      e.hp -= contactDamageOf(en);
+      e.contactCd = C.SENTRY_CONTACT_CD;
+      ev.push({ t: "sentryHit", x: e.x, y: e.y });
+      break;
+    }
+  }
+  if (e.hp <= 0 || e.life <= 0) {
+    const why = e.hp <= 0 ? "destroyed" : "timeout";
+    e.life = 0;
+    ev.push({ t: "sentryDown", x: e.x, y: e.y, why });
+    return;
+  }
+  if (e.fireCd > 0) return;
+  const owner = ownerOf(w, e.owner);
+  // Envelope: a turret STOPS while its owner is down or absent — autonomous fire never
+  // carries a fight its owner is not standing in. (A DEPARTED owner's turret keeps the
+  // attribution contract instead: it works, credits no one, and expires on its own.)
+  if (owner && (owner.isDown || owner.isAbsent)) return;
+  let best: Enemy | null = null;
+  let bestD = e.range * e.range;
+  for (const en of w.enemies) {
+    if (en.dead || isUntargetable(en)) continue;
+    const dx = en.x - e.x, dy = en.y - e.y, d = dx * dx + dy * dy;
+    if (d < bestD && hasLineOfSight(w, e.x, e.y, en.x, en.y)) { bestD = d; best = en; }
+  }
+  if (!best) return;
+  if (best.id !== e.targetEid) {
+    e.targetEid = best.id;
+    ev.push({ t: "sentryAcquire", x: e.x, y: e.y });
+  }
+  const spec = WEAPONS[e.fx].sentry!;
+  const aim = Math.atan2(best.y - e.y, best.x - e.x);
+  const dmg = e.boltDamage * (owner ? currentDamageMult(owner) : 1);
+  const isCrit = owner !== null && owner.mods.critChance > 0 && w.rng.next() < owner.mods.critChance;
+  w.bullets.push({
+    isPersistent: true,
+    x: e.x + Math.cos(aim) * (e.radius + 2), y: e.y + Math.sin(aim) * (e.radius + 2),
+    vx: Math.cos(aim) * e.boltSpeed, vy: Math.sin(aim) * e.boltSpeed,
+    radius: e.boltRadius,
+    life: (e.range * 1.15) / e.boltSpeed,
+    friendly: true,
+    owner: e.owner,
+    damage: isCrit && owner ? dmg * owner.mods.critMult : dmg,
+    color: "#c8a8ff",
+    pierce: e.boltPierce,
+    hitList: null,
+    isCrit,
+    critX: isCrit && owner ? owner.mods.critMult : 1,
+    bossCoef: WEAPON_BOSS_COEF[e.fx] ?? 1,
+    fx: e.fx,
+  });
+  e.fireCd = spec.fireCd / (owner ? currentFireRate(owner) : 1);
+  ev.push({ t: "sentryShot", x: e.x, y: e.y, aim });
+}
+
+// Crooked Chain: reel the target to the owner (or the OWNER to a heavy target), then
+// hold a short leash so the second press can sweep. Every window is bounded.
+function updateTetherEffect(w: WorldState, e: TetherEffect, dt: number, ev: SimEvent[]): void {
+  const owner = ownerOf(w, e.owner);
+  if (!owner || owner.isDown || owner.hp <= 0) { e.life = 0; return; }
+  const target = w.enemies.find((en) => en.id === e.eid && !en.dead);
+  if (!target || isUntargetable(target)) { e.life = 0; return; }
+  e.x = owner.x;
+  e.y = owner.y;
+  e.life -= dt;
+  if (e.life <= 0) return;
+  const dx = target.x - owner.x, dy = target.y - owner.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  if (e.phase === "pull") {
+    e.pullTime -= dt;
+    if (dist <= e.holdDist || e.pullTime <= 0) {
+      e.phase = "hold";
+      e.life = Math.min(e.life, e.holdTime);
+      ev.push({ t: "tetherHold", x: owner.x, y: owner.y });
+      return;
+    }
+    const step = Math.min(dist - e.holdDist * 0.8, e.pullSpeed * dt);
+    if (e.isPlayerPulled) {
+      // A paused (blessing-picking) owner is frozen state — nothing may drag them.
+      if (!w.pendingBlessings.has(owner.id)) {
+        [owner.x, owner.y] = moveCircle(w, owner.x, owner.y, owner.pr, (dx / dist) * step, 0);
+        [owner.x, owner.y] = moveCircle(w, owner.x, owner.y, owner.pr, 0, (dy / dist) * step);
+      }
+    } else {
+      moveEnemyBy(w, target, (-dx / dist) * step, (-dy / dist) * step);
+    }
+    return;
+  }
+  // Hold: leash a standard body inside the sweep window (heavies never leash — the
+  // inverted pull bought proximity, nothing more).
+  if (!e.isPlayerPulled && dist > e.holdDist * 1.5) {
+    const step = Math.min(dist - e.holdDist, e.pullSpeed * 0.7 * dt);
+    moveEnemyBy(w, target, (-dx / dist) * step, (-dy / dist) * step);
+  }
 }
 
 // Record every enemy's current position into the ring (one entry per world tick). Called at the
@@ -1994,6 +2874,10 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   tickReleaseArbiter(w, dt);
   releaseReinforcements(w, dt, ev);
   refreshNav(w, dt);
+  // Reaper soul shards born this pass. Buffered and flushed AFTER the enemy loop so a
+  // fresh shard never hit-tests inside the tick that spawned it (it visibly flies first,
+  // and the loop never iterates a mutating bullet list).
+  const shardSpawns: Bullet[] = [];
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
@@ -2067,6 +2951,9 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       // by design, so legitimate multi-hits are untouched (chests already apply this
       // same spent-round rule).
       if (b.life <= 0) continue;
+      // Breach shells are artillery: they sail OVER bodies and detonate only where the
+      // charged arc lands (or on a wall face) — never on contact.
+      if (b.isLob) continue;
       if (b.hitList && b.hitList.indexOf(e) !== -1) continue;
       // Immutable attribution: the bullet keeps flying and dealing damage after its owner leaves
       // (shooter null) — it just credits no one. Never re-attributed to another live player.
@@ -2088,6 +2975,12 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           detonateBullet(w, b, sweptHit.x, sweptHit.y, ev);
           continue;
         }
+        // Same contract for the Lodestone: the implosion IS the payload — the direct
+        // target sits inside the radius, takes exactly one splash hit, and gets pulled.
+        if (b.implode !== undefined) {
+          implodeBullet(w, b, sweptHit.x, sweptHit.y, ev);
+          continue;
+        }
         // A formation guard swallows a non-piercing shot arriving inside its slow arc.
         if (isGuardBlocked(e, b)) {
           b.life = 0;
@@ -2106,8 +2999,14 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
         strikeEnemy(w, shooter, e, {
           damage: b.damage, isCrit: b.isCrit, critX: b.critX ?? 1, bossCoef: b.bossCoef ?? 1, puffX: sweptHit.x, puffY: sweptHit.y, kbDirX: b.vx, kbDirY: b.vy,
           burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
+          isPersistent: b.isPersistent,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
+        // The Reaper's harvest: a KILLING round bursts the body into seeking shards
+        // (shards carry the field too, so kills cascade at geometrically decaying damage).
+        if (e.dead && b.killShards !== undefined && b.killShards > 0) {
+          spawnKillShards(w, b, e, shardSpawns);
+        }
         // The caskbellows' rear crank: a hit on its back mid-commitment staggers it.
         if (!e.dead) maybeCrankStagger(e, b, ev);
         if (b.chain !== undefined && b.chain > 0) {
@@ -2144,7 +3043,40 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
   }
+  for (const shard of shardSpawns) w.bullets.push(shard);
   w.enemies = w.enemies.filter((e) => !e.dead);
+}
+
+// The Reaper's kill shards: an even deterministic fan off the corpse (the homing does the
+// aiming), each at KILL_SHARD_DMG_FRAC of the killing round. The cascade is bounded by
+// construction: damage halves per generation and stops under KILL_SHARD_MIN_DMG.
+function spawnKillShards(w: WorldState, b: Bullet, e: Enemy, out: Bullet[]): void {
+  const count = b.killShards ?? 0;
+  const damage = b.damage * C.KILL_SHARD_DMG_FRAC;
+  if (count <= 0 || damage <= 0) return;
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    out.push({
+      x: e.x, y: e.y,
+      vx: Math.cos(a) * C.KILL_SHARD_SPEED,
+      vy: Math.sin(a) * C.KILL_SHARD_SPEED,
+      radius: C.KILL_SHARD_RADIUS,
+      life: C.KILL_SHARD_LIFE,
+      friendly: true,
+      owner: b.owner,
+      damage,
+      color: b.color,
+      pierce: 0,
+      hitList: null,
+      isCrit: false,
+      bossCoef: b.bossCoef,
+      fx: b.fx,
+      homing: C.KILL_SHARD_HOMING,
+      killShards: damage * C.KILL_SHARD_DMG_FRAC >= C.KILL_SHARD_MIN_DMG ? count : undefined,
+      bornTick: w.tick,
+      lagRewind: 0,
+    });
+  }
 }
 
 function canTouchDamage(e: Enemy): boolean {
@@ -3355,7 +4287,7 @@ function plantCinder(w: WorldState, x: number, y: number): void {
 // kills inside it credit the sinderling's killer. Cover splinters.
 function sinderlingBurst(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]): void {
   const r = C.SINDER_BURST_RADIUS;
-  ev.push({ t: "explosion", x: e.x, y: e.y, r });
+  ev.push({ t: "explosion", x: e.x, y: e.y, r, src: "sinderling" });
   ev.push({ t: "cue", name: "sinderling.burst", x: e.x, y: e.y, rate: 1, gain: 0.8, trauma: 0.05 });
   for (const victim of w.players.values()) {
     if (isProtected(victim) || victim.isDown || victim.isAbsent || victim.hp <= 0) continue;
@@ -5817,7 +6749,7 @@ function cinderBurn(w: WorldState, h: Hazard, ev: SimEvent[]): void {
 // protection rules apply), enemies take more, cover splinters. Ownerless by design
 // (nobody's kill credit): the corpse's spite, not anyone's weapon.
 function detonateCharge(w: WorldState, h: Hazard, ev: SimEvent[]): void {
-  ev.push({ t: "explosion", x: h.x, y: h.y, r: h.radius });
+  ev.push({ t: "explosion", x: h.x, y: h.y, r: h.radius, src: "charge" });
   for (const p of w.players.values()) {
     if (isProtected(p) || p.isDown || p.isAbsent || p.hp <= 0) continue;
     if (Math.hypot(p.x - h.x, p.y - h.y) <= h.radius) damagePlayer(w, p, ELITE_VOLATILE.playerDamage, ev);
@@ -5877,6 +6809,12 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
     if (p.kind === "brazier") continue;
     for (const b of w.bullets) {
       if (b.life <= 0) continue;
+      // Breach shells are artillery over COVER too: crates cannot eat a lobbed shell the
+      // way they eat direct fire (the blast still smashes props where it lands).
+      if (b.isLob) continue;
+      // Umbra rounds pass through props the same way they pass through walls: cover —
+      // the room's OR the player's — simply is not theirs to hit.
+      if (b.friendly && b.isPhase === true) continue;
       if (!sweptBulletHit(b, p.x, p.y, b.radius + p.radius)) continue;
       if (!b.friendly) {
         // Standing props are COVER: enemy fire is stopped by them — and spends them.
@@ -5964,14 +6902,14 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
 
 function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: SimEvent[]): void {
   const r = C.BARREL_EXPLOSION_RADIUS;
-  ev.push({ t: "explosion", x: source.x, y: source.y, r });
+  ev.push({ t: "explosion", x: source.x, y: source.y, r, src: "barrel" });
   for (const e of w.enemies) {
     if (e.dead || isUntargetable(e)) continue;
     if (Math.hypot(e.x - source.x, e.y - source.y) > r + e.radius) continue;
     damageEnemy(w, p ? p.id : null, e, C.BARREL_EXPLOSION_DAMAGE, ev);
     ev.push({ t: "flash", eid: e.id });
     ev.push({ t: "puff", x: e.x, y: e.y, n: 6, color: ENEMY_ARCHETYPES[e.kind].tint });
-    applyBurn(e, C.BARREL_BURN_SECS, p ? p.id : null);
+    applyBurn(e, C.BARREL_BURN_SECS, p ? p.id : null, ev);
     if (e.hp <= 0 && !e.dead) killEnemy(w, p, e, ev);
   }
   for (const victim of w.players.values()) {
@@ -6046,15 +6984,24 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     // (Only signature-bearing chests — every real boss drop — carry the choice set.)
     if (c.weapon !== undefined) {
       const choices: WeaponId[] = [c.weapon];
+      // Alternates come from the run's shuffled bag, skipping the signature, this set,
+      // and guns the whole party already owns — every pedestal is a real option. The
+      // boss chest is the premium container: each alternate's rarity tier rolls with the
+      // boosted legendary weight (see BOSS_CHEST_LEGENDARY_MULT).
+      const exclude = weaponsOwnedByAll(w);
+      exclude.add(c.weapon);
       while (choices.length < bossWeaponChoices(w.encounterPlayers)) {
-        choices.push(rollDistinctWeapon(w.rng, choices));
+        const pick = rollBagWeapon(w, () => w.rng.next(), exclude, { isPremium: true });
+        if (choices.includes(pick)) break; // pool saturated: no duplicate pedestals
+        choices.push(pick);
+        exclude.add(pick);
       }
       for (const weapon of choices) loot.push({ kind: "weapon", weapon, isBossChoice: true });
     }
     loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
-    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon, isMystery: c.isMystery, twist: c.twist });
     loot.push(...rollWoodChest(w));
   }
   ejectChestLoot(w, c, loot, openerAngle(p, c), p.pr, ev);
@@ -6079,7 +7026,7 @@ function smashOpenChest(w: WorldState, c: Chest, fromX: number, fromY: number, e
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
   const loot: ChestLoot[] = [];
-  if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+  if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon, isMystery: c.isMystery, twist: c.twist });
   loot.push(...rollWoodChest(w));
   const away = Math.atan2(c.y - fromY, c.x - fromX);
   ejectChestLoot(w, c, loot, away, 18, ev);
@@ -6093,7 +7040,7 @@ function openerAngle(p: PlayerSim, c: Chest): number {
 
 type ChestLoot =
   | { kind: "coin" | "heart" }
-  | { kind: "weapon"; weapon: WeaponId; isBossChoice?: boolean };
+  | { kind: "weapon"; weapon: WeaponId; isBossChoice?: boolean; isMystery?: boolean; twist?: MysteryTwist };
 
 // Every drop a chest produces lands somewhere the collector can actually STAND — the old
 // loose offsets (coins in a row, heart under the chest) could put loot inside a wall or
@@ -6108,8 +7055,11 @@ function ejectChestLoot(w: WorldState, c: Chest, loot: ChestLoot[], base: number
     const [x, y] = chestLootSpot(w, c, base, slot, pr, placed);
     placed.push({ x, y });
     if (item.kind === "weapon") {
-      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon, isBossChoice: item.isBossChoice });
-      ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+      w.pickups.push({
+        id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon,
+        isBossChoice: item.isBossChoice, isMystery: item.isMystery, twist: item.twist,
+      });
+      ev.push({ t: "lootDrop", x, y, color: item.isMystery ? MYSTERY_COLOR : WEAPON_RARITY_COLOR[WEAPONS[item.weapon].rarity] });
     } else {
       w.pickups.push(makePickup(w, item.kind, x, y, ev));
     }
@@ -6193,9 +7143,22 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
   const heartChance = SUSTAIN.woodChestHeart * coopHeartRateMult(w.encounterPlayers);
   if (r < heartChance) return [{ kind: "heart" }];
   // The ambient weapon window is IDENTICAL solo/co-op (gate §4: party quantity increases
-  // options through the §4 counts only — never through drop rates).
+  // options through the §4 counts only — never through drop rates). The id rides the
+  // run's shuffled bag and skips universally-owned guns, so the rare ambient gun is
+  // never a wasted duplicate while unowned guns remain.
   if (r < heartChance + SUSTAIN.woodChestWeapon) {
-    return [{ kind: "weapon", weapon: PICKUP_WEAPONS[Math.floor(w.rng.next() * PICKUP_WEAPONS.length)] }];
+    return [{ kind: "weapon", weapon: rollBagWeapon(w, () => w.rng.next(), weaponsOwnedByAll(w)) }];
+  }
+  // The mystery band stacks AFTER the identified band (hearts/weapons keep their exact
+  // rates) and only opens at MYSTERY.minFloor — early chests never gamble.
+  const mysteryBand = w.floor >= MYSTERY.minFloor ? SUSTAIN.woodChestMystery : 0;
+  if (r < heartChance + SUSTAIN.woodChestWeapon + mysteryBand) {
+    return [{
+      kind: "weapon",
+      weapon: rollBagWeapon(w, () => w.rng.next(), weaponsOwnedByAll(w), { isMystery: true }),
+      isMystery: true,
+      twist: rollMysteryTwist(() => w.rng.next()),
+    }];
   }
   const n = 3 + Math.floor(w.rng.next() * 4);
   const coins: ChestLoot[] = [];
@@ -6232,6 +7195,11 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           collected = true; break;
         }
         if (p.kind === "weapon" && p.weapon) {
+          // A full hotbar NEVER auto-collects (MAX_OWNED_WEAPONS): the weapon stays on the
+          // floor and the swap command (swapWeaponInWorld) is the only claim path — the
+          // client surfaces that as the swap-or-leave prompt. `continue` (not break) so a
+          // teammate with room can still take it this same tick.
+          if (player.ownedWeapons.length >= C.MAX_OWNED_WEAPONS) continue;
           if (p.isBossChoice) {
             // Gate §4 boss reward: one personal CLAIM per player per boss chest. Claiming a
             // weapon the player already owns grants one seeded REROLL (never coins/raw
@@ -6239,11 +7207,21 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
             if (player.hasClaimedBossChoice) continue;
             player.hasClaimedBossChoice = true;
             const grant = player.ownedWeapons.includes(p.weapon)
-              ? rollDistinctWeapon(w.rng, player.ownedWeapons)
+              ? drawWeaponFromBag(w.weaponBag, new Set(player.ownedWeapons))
               : p.weapon;
             acquireWeapon(player, grant);
             ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
             continue;
+          }
+          if (p.isMystery) {
+            // The reveal moment: the baked identity is granted — rerolled into something
+            // the collector does NOT own if they already carry it (never a dead result) —
+            // and the baked blessed/cursed twist lands (after the equip, so a cursed jam
+            // survives equipWeapon's cooldown reset). First-come, like every pickup.
+            acquireWeapon(player, revealMysteryPickup(w, player, p, ev));
+            applyMysteryTwist(player, p.twist ?? "plain", ev);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+            collected = true; break;
           }
           if (!player.ownedWeapons.includes(p.weapon)) {
             acquireWeapon(player, p.weapon);
@@ -6340,6 +7318,7 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   ev.push({ t: "playerHurt", pid: p.id, x: p.x, y: p.y });
   if (p.hp <= 0) {
     p.hp = 0;
+    p.chargeT = 0; // a held charge never survives going down
     if (w.isShared) {
       // Stage C (gate §6): going to 0 is always DOWN, never a direct cut — the wipe is the
       // held all-down beat in checkStrandedWipe (4.0s), which is also what lets a teammate's
@@ -6605,6 +7584,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
   recordHistory(w);
   updateBullets(w, dt, ev);
+  updateEffects(w, dt, ev);
   updateEnemies(w, dt, ev);
   updateGauntlet(w, dt, ev);
   updateHazards(w, dt, ev);

@@ -58,7 +58,8 @@ function mkState(currentIndex = 1, ids = FIVE): HudState {
   return {
     hp: 5, maxHp: 6, floor: 2, kills: 7, coins: 30,
     weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponDisplayStats(w.id, createMods(), 0) })),
-    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0,
+    swap: null,
+    isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
@@ -105,6 +106,8 @@ function rig(currentIndex = 1): { hud: InstanceType<HudModule["Hud"]>; root: HTM
     onSlotActivate: (i) => acts.activates.push(i),
     onSlotReorder: (from, to) => acts.reorders.push([from, to]),
     onSlotInspect: (i) => acts.inspects.push(i),
+    onSlotSwap: () => {},
+    onSwapDismiss: () => {},
   });
   hud.update(mkState(currentIndex));
   const slotsEl = root.querySelector<HTMLElement>("[data-hb-slots]")!;

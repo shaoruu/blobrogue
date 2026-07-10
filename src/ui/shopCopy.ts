@@ -19,13 +19,33 @@ import type { PlayerMods } from "../sim/items.js";
 export function shopActionCopy(status: ShopSlotStatus, price: number, coins: number): string {
   switch (status) {
     case "buy": return `BUY \u00b7 ${price} COIN${price === 1 ? "" : "S"}`;
-    case "broke": return `NEED ${price - coins} MORE`;
+    case "broke": return `NEED ${price - coins} MORE COINS`;
     case "sold": return "SOLD";
     case "owned": return "OWNED";
+    case "full": return "HOTBAR FULL";
     case "maxLevel": return "MAX LV";
     case "fullHealth": return "FULL HEALTH";
     case "exhausted": return "NO REROLLS LEFT";
   }
+}
+
+// The two non-buyable visual groups (live playtest fix: "can't afford yet" was read as
+// "already done/gone"). "broke" is still LIVE — the station is for sale, the viewer just
+// needs coins — so it wears the amber outline + coin glyph. Everything else non-buy is
+// RESOLVED for this viewer (bought/claimed/maxed/full/spent) and wears the muted
+// check treatment. The groups must never share a look, in color or grayscale.
+export function isResolvedShopStatus(status: ShopSlotStatus): boolean {
+  return status !== "buy" && status !== "broke";
+}
+
+// The state-dependent panel footer — the explicit multi-buy framing: every station is
+// independently purchasable, and a purchase never closes the stall.
+export function shopFooterCopy(shop: ShopState, viewer: ShopViewer, isJustBought: boolean): string {
+  if (isJustBought) return "BOUGHT \u2713 \u00b7 other stations still open";
+  const isAnyAffordable = shop.slots.some((s) => shopSlotStatusFor(shop, s, viewer) === "buy");
+  return isAnyAffordable
+    ? "Spend at any station you can afford"
+    : "Earn more coins and come back before you descend";
 }
 
 // Explicit ownership copy — the anti-ambiguity contract: a player always knows whether a
@@ -36,7 +56,12 @@ export function shopOwnershipCopy(slot: ShopSlot): string {
 }
 
 export function shopSlotName(slot: ShopSlot): string {
-  if (slot.kind === "weapon") return slot.weapon !== null ? WEAPONS[slot.weapon].name : "Weapon";
+  // A mystery pedestal is "???" everywhere until a buy reveals it (online clients never
+  // even receive the identity; sold mystery slots arrive already identified).
+  if (slot.kind === "weapon") {
+    if (slot.isMystery || slot.weapon === null) return slot.isMystery ? "???" : "Weapon";
+    return WEAPONS[slot.weapon].name;
+  }
   if (slot.kind === "blessing") return itemById(slot.itemId ?? "")?.name ?? "Blessing";
   if (slot.kind === "heart") return "Heart";
   return "Restock";
@@ -54,7 +79,8 @@ export type ShopPanelIcon =
   | { kind: "weapon"; weapon: WeaponId }
   | { kind: "glyph"; itemId: string; glyph: string; tint: string }
   | { kind: "heart" }
-  | { kind: "reroll" };
+  | { kind: "reroll" }
+  | { kind: "mystery" };
 
 export interface ShopPanelView {
   slotId: number;
@@ -67,6 +93,9 @@ export interface ShopPanelView {
   status: ShopSlotStatus;
   action: string;
   isBuyable: boolean;
+  coins: number;        // the viewer's live balance (anchors NEED N MORE COINS)
+  footer: string;       // state-dependent multi-buy framing (shopFooterCopy)
+  isJustBought: boolean; // the viewer's own buy just landed (~1.2s client latch)
 }
 
 const KIND_LABEL: Record<ShopSlot["kind"], string> = {
@@ -85,13 +114,21 @@ function fmt(n: number): string {
 // The full per-viewer panel view for one station. Weapon lines derive from
 // weaponDisplayStats — the ONE live effective-stats model the hotbar tooltip and drawer
 // read — so what the shop promises can never drift from what the buy delivers.
-export function shopPanelView(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, mods: PlayerMods): ShopPanelView {
+export function shopPanelView(shop: ShopState, slot: ShopSlot, viewer: ShopViewer, mods: PlayerMods, isJustBought = false): ShopPanelView {
   const status = shopSlotStatusFor(shop, slot, viewer);
   const lines: string[] = [];
   let icon: ShopPanelIcon = { kind: "reroll" };
   let tag: string | null = null;
-  if (slot.kind === "weapon" && slot.weapon !== null) {
+  if (slot.kind === "weapon" && slot.isMystery) {
+    // The gamble, stated honestly: no stats (nobody knows them), just the contract.
+    tag = "MYSTERY";
+    lines.push("UNIDENTIFIED \u2014 REVEALS WHEN BOUGHT");
+    lines.push("COULD BE ANYTHING \u2014 EVEN A LEGENDARY");
+    icon = { kind: "mystery" };
+  } else if (slot.kind === "weapon" && slot.weapon !== null) {
     const s = weaponDisplayStats(slot.weapon, mods, lowHpFrac(viewer.hp, viewer.maxHp));
+    // Rarer stock announces its tier (commons stay untagged — the tag is a signal).
+    if (s.rarity !== "common") tag = s.rarity.toUpperCase();
     lines.push(s.role);
     lines.push(`POWER ${fmt(s.power.perHit)}${s.power.count > 1 ? ` \u00d7${s.power.count}` : ""} \u00b7 ${s.cadence.band} \u00b7 ${s.reach.band} \u00b7 ${s.coverage.kind}`);
     for (const m of s.mechanics.slice(0, 2)) lines.push(m.text);
@@ -123,5 +160,8 @@ export function shopPanelView(shop: ShopState, slot: ShopSlot, viewer: ShopViewe
     status,
     action: shopActionCopy(status, slot.price, viewer.coins),
     isBuyable: status === "buy",
+    coins: viewer.coins,
+    footer: shopFooterCopy(shop, viewer, isJustBought),
+    isJustBought,
   };
 }

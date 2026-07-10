@@ -92,12 +92,14 @@ function makeEl(tag = "div"): any {
         case "prepend":
           return (...cs: any[]) => { children.unshift(...cs); };
         case "removeChild":
-          return (c: any) => c;
+          return (c: any) => {
+            const i = children.indexOf(c);
+            if (i >= 0) children.splice(i, 1);
+            return c;
+          };
         case "replaceChildren":
           return (...cs: any[]) => { children.length = 0; children.push(...cs); };
         case "remove":
-        case "setAttribute":
-        case "removeAttribute":
         case "setAttributeNS":
         case "addEventListener":
         case "removeEventListener":
@@ -109,6 +111,14 @@ function makeEl(tag = "div"): any {
         case "after":
         case "before":
           return noop;
+        // Attributes are tracked (not styled) so UI suites can assert accessibility
+        // contracts (aria-label/aria-pressed) exactly as written by the real code.
+        case "setAttribute":
+          return (k: string, v: string) => { (t.__attrs ?? (t.__attrs = {}))[k] = String(v); };
+        case "getAttribute":
+          return (k: string) => (t.__attrs && k in t.__attrs ? t.__attrs[k] : null);
+        case "removeAttribute":
+          return (k: string) => { if (t.__attrs) delete t.__attrs[k]; };
         case "focus":
           return () => { lastFocusedStore = t; };
         case "getBoundingClientRect":
@@ -244,7 +254,19 @@ const windowStub: any = {
   removeEventListener: (type: string, fn: (ev: unknown) => void) => {
     windowListeners.get(type)?.delete(fn);
   },
-  location: { search: "", href: "http://localhost/", hash: "", pathname: "/" },
+  location: { search: "", href: "http://localhost/", hash: "", pathname: "/", origin: "http://localhost" },
+  // Real-enough replaceState so URL-consuming code (invite/auth strip) is testable: the
+  // location fields update; nothing else happens (no navigation, no listeners).
+  history: {
+    replaceState: (_state: unknown, _title: string, url: string) => {
+      const u = new URL(String(url), windowStub.location.href);
+      windowStub.location.pathname = u.pathname;
+      windowStub.location.search = u.search;
+      windowStub.location.hash = u.hash;
+      windowStub.location.href = u.href;
+    },
+    pushState: noop,
+  },
   requestAnimationFrame: () => 0,
   cancelAnimationFrame: noop,
   setTimeout: () => 0,

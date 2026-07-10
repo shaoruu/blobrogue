@@ -11,6 +11,7 @@ import { jsonCodec, PROTOCOL_VERSION } from "../../src/net/protocol.js";
 import { acquireWeaponInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { RoomRuntime } from "../src/ports.js";
 import { TILE } from "../../src/sim/types.js";
+import { MAX_OWNED_WEAPONS } from "../../src/sim/constants.js";
 import { WebSocket as WsClient } from "ws";
 
 // Spawn a controlled boss near the dungeon spawn (where bots enter) so boss-combat tests are
@@ -372,6 +373,105 @@ async function main(): Promise<void> {
       await waitUntil(() => world.playerCount === 2, 1500);
       check("dropped pickup survives the dropper's disconnect", world.state.pickups.some((p) => p.weapon === "smg"));
 
+      a.stop(); b.stop();
+    } finally { await s.close(); }
+  });
+
+  // ---- the hotbar cap + the v9 swap command over the wire ----
+  await test("hotbar cap + swap: full bars never auto-collect; the swap trades atomically", async () => {
+    const s = await startTestServer();
+    try {
+      const a = new Bot({ url: s.url, secret: s.secret, playerId: "cap-a", script: () => idle() });
+      const b = new Bot({ url: s.url, secret: s.secret, playerId: "cap-b", script: () => idle() });
+      a.start(); b.start();
+      await waitUntil(() => a.transport.isReady() && b.transport.isReady(), 3000);
+      const world = s.server.getWorld()!;
+      world.state.isGodMode = true;
+      const aid = a.serverId()!, bid = b.serverId()!;
+      const fillers = ["shotgun", "railgun", "tesla", "smg", "cannon", "rapid", "burst", "homing"] as const;
+      const fillToCap = (pid: string) => {
+        for (const id of fillers) {
+          if (world.state.players.get(pid)!.ownedWeapons.length >= MAX_OWNED_WEAPONS) return;
+          acquireWeaponInWorld(world.state, pid, id);
+        }
+      };
+      // BOTH bots are capped (they idle side by side at spawn — an uncapped neighbor
+      // would scoop the test pickup the moment it lands).
+      fillToCap(aid); fillToCap(bid);
+      await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns.length ?? 0) === MAX_OWNED_WEAPONS, 2000);
+      const ap = world.state.players.get(aid)!;
+      check("server inventory is exactly at the cap", ap.ownedWeapons.length === MAX_OWNED_WEAPONS);
+
+      // A new weapon lands underfoot: the full bar must NOT auto-collect it.
+      const pkId = world.state.nextPickupId++;
+      world.state.pickups.push({ id: pkId, kind: "weapon", x: ap.x, y: ap.y, radius: 16, weapon: "flamer" });
+      await sleep(400);
+      check("a full hotbar never auto-collects (pickup still standing)",
+        world.state.pickups.some((p) => p.id === pkId) && !ap.ownedWeapons.includes("flamer"));
+      check("the cap held over the authority", ap.ownedWeapons.length === MAX_OWNED_WEAPONS);
+      const seen = await waitUntil(() => a.transport.getLatestSnapshot()?.pickups.some((p) => p.id === pkId) ?? false, 2000);
+      check("the blocked pickup rides the snapshot (the client can prompt)", seen);
+
+      // The swap command trades atomically: replaced weapon out as a pickup, incoming in.
+      const replaced = ap.ownedWeapons[2];
+      a.transport.requestSwap(pkId, replaced);
+      const isSwapped = await waitUntil(() => world.state.players.get(aid)!.ownedWeapons.includes("flamer"), 2000);
+      check("swap accepted: incoming weapon owned", isSwapped);
+      check("incoming weapon equipped", ap.weapon === "flamer");
+      check("still exactly MAX owned", ap.ownedWeapons.length === MAX_OWNED_WEAPONS);
+      check("the incoming pickup was consumed", !world.state.pickups.some((p) => p.id === pkId));
+      const dropped = world.state.pickups.find((p) => p.kind === "weapon" && p.weapon === replaced);
+      check("the replaced weapon landed as a floor pickup", dropped !== undefined);
+      check("nothing lost, nothing duplicated",
+        world.state.pickups.filter((p) => p.weapon === replaced).length === 1 && !ap.ownedWeapons.includes(replaced));
+      const echoed = await waitUntil(() => (a.transport.getLatestSnapshot()?.self?.wpns ?? []).includes("flamer"), 2000);
+      check("the new inventory echoed back via snapshot", echoed);
+      if (dropped) {
+        const isSharedDrop = await waitUntil(() => {
+          const pa = a.transport.getLatestSnapshot()?.pickups.find((p) => p.id === dropped.id);
+          const pb = b.transport.getLatestSnapshot()?.pickups.find((p) => p.id === dropped.id);
+          return !!pa && !!pb && pa.wpn === replaced && pb.wpn === replaced;
+        }, 2000);
+        check("both clients see the identical replaced-weapon pickup", isSharedDrop);
+      }
+
+      // Raw socket hardening: a below-cap swap rejects, a replayed cseq never trades
+      // twice, and a bogus pickup id rejects — all counted, none mutating.
+      const raw = await rawSocket(s.url);
+      raw.on("message", () => {});
+      raw.send(jsonCodec.encodeClient({ t: "join", ticket: mintTicket(s.secret, "cap-cheat"), protocol: PROTOCOL_VERSION }));
+      await waitUntil(() => world.playerCount >= 3, 1500);
+      const cheatId = [...world.state.players.keys()].find((k) => k !== aid && k !== bid)!;
+      const cheatP = world.state.players.get(cheatId)!;
+      const exit = world.state.dungeon.exit;
+      cheatP.x = exit.x * TILE + TILE / 2;
+      cheatP.y = exit.y * TILE + TILE / 2;
+      const rej0 = s.server.health().counters.rejectedInputs;
+      const cheatPk = world.state.nextPickupId++;
+      world.state.pickups.push({ id: cheatPk, kind: "weapon", x: cheatP.x, y: cheatP.y, radius: 16, weapon: "mortar" });
+      // Below the cap the walk-over collects (that is the design) — so pin the cheater at
+      // one weapon and aim the swap at the ALREADY-COLLECTED pickup: a stale/forged swap.
+      await waitUntil(() => cheatP.ownedWeapons.includes("mortar"), 2000);
+      raw.send(jsonCodec.encodeClient({ t: "swap", pickup: cheatPk, drop: "pistol", cseq: 1 }));
+      await sleep(200);
+      check("a below-cap / stale swap is rejected (nothing traded)",
+        cheatP.ownedWeapons.join(",") === "pistol,mortar" && s.server.health().counters.rejectedInputs > rej0);
+      fillToCap(cheatId);
+      const cheatPk2 = world.state.nextPickupId++;
+      world.state.pickups.push({ id: cheatPk2, kind: "weapon", x: cheatP.x, y: cheatP.y, radius: 16, weapon: "beam" });
+      await sleep(300);
+      check("the capped cheater cannot auto-collect either", !cheatP.ownedWeapons.includes("beam"));
+      raw.send(jsonCodec.encodeClient({ t: "swap", pickup: cheatPk2, drop: "mortar", cseq: 2 }));
+      await sleep(200);
+      check("wire swap accepted at the cap", cheatP.ownedWeapons.includes("beam") && !cheatP.ownedWeapons.includes("mortar"));
+      raw.send(jsonCodec.encodeClient({ t: "swap", pickup: cheatPk2, drop: "pistol", cseq: 2 })); // exact-cseq replay
+      await sleep(200);
+      check("replayed swap cseq ignored (pistol untouched, no second trade)",
+        cheatP.ownedWeapons.includes("pistol") && cheatP.ownedWeapons.length === MAX_OWNED_WEAPONS);
+      raw.send(jsonCodec.encodeClient({ t: "swap", pickup: 999999, drop: "pistol", cseq: 3 }));
+      await sleep(200);
+      check("unknown pickup id rejected", cheatP.ownedWeapons.includes("pistol") && cheatP.ownedWeapons.length === MAX_OWNED_WEAPONS);
+      raw.close();
       a.stop(); b.stop();
     } finally { await s.close(); }
   });

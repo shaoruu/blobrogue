@@ -16,8 +16,10 @@ import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import type { RemotePlayer, WeaponId } from "../sim/types.js";
+import { MAX_OWNED_WEAPONS } from "../sim/constants.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
+  effectFromWire,
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire, hazardFromWire, shopFromWire,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
@@ -585,7 +587,7 @@ export class WSTransport implements Transport {
     for (const p of snap.players) {
       const key = "p" + p.id;
       live.add(key);
-      this.interp.ingest(key, snap.tick, p.x, p.y, p.aim, now);
+      this.interp.ingest(key, snap.tick, p.x, p.y, p.aim, now, p.dti > 0);
     }
     this.interp.retain(live);
 
@@ -708,6 +710,9 @@ export class WSTransport implements Transport {
     // the world phase that would expire them — drop them so replayed fire can't grow the
     // hidden prediction world without bound (TD audit).
     if (this.predState.bullets.length > 0) this.predState.bullets.length = 0;
+    // Weapon effects are server-owned the same way: prediction only needs the trigger's
+    // cooldown/charge side effects, never the entities a replayed press would author.
+    if (this.predState.effects.length > 0) this.predState.effects.length = 0;
     // Periodic telemetry uplink (observability only): report client-side netcode signals the
     // server can't measure so /metrics can surface RTT/jitter/reconciliations/correction.
     if (this.isReady() && this.now() - this.lastStatAt > 2000) {
@@ -759,6 +764,16 @@ export class WSTransport implements Transport {
     // stock (its locally-rebuilt geometry still names the shop ROOM; the snapshot names
     // what is on the pedestals and who claimed what).
     this.renderState.shop = this.latestSnap?.shop ? shopFromWire(this.latestSnap.shop) : null;
+    // Self-owned effects re-key to LOCAL_ID so the render/audio layers recognize the
+    // local player's own ring/tether/charge exactly like solo (owner-anchored draws,
+    // the halo loop, the chain pull loop).
+    this.renderState.effects = this.latestSnap
+      ? this.latestSnap.effs.map((e) => {
+        const built = effectFromWire(e);
+        if (built.owner !== null && built.owner === this.selfServerId) built.owner = LOCAL_ID;
+        return built;
+      })
+      : [];
     this.renderState.floor = this.latestSnap ? this.latestSnap.floor : this.renderState.floor;
     // Hazard layout already lives in renderState (rebuilt from the authoritative seed);
     // the pulse clock is reconstructed from the authoritative tick — the server only ever
@@ -835,6 +850,13 @@ export class WSTransport implements Transport {
         reviveProgress: p.rv,
         isOut: p.out,
         isAbsent: p.ab,
+        // Dash keyed to the RENDERED pose (not the latest snapshot), so the FX play exactly
+        // where/when the interpolated blob makes its crisp move.
+        isDashing: pose ? pose.isDashing : p.dti > 0,
+        dashDirX: p.ddx,
+        dashDirY: p.ddy,
+        invuln: p.inv,
+        dashInvuln: p.dnv,
         aimAngle: pose ? pose.aimAngle : p.aim,
         shotSeq: 0,
         colorIndex: p.cl,
@@ -888,6 +910,21 @@ export class WSTransport implements Transport {
     const self = this.latestSnap?.self;
     if (self && (!self.wpns.includes(weapon) || self.wpns.length <= 1)) return;
     this.sendMsg({ t: "drop", weapon, cseq: ++this.cseq });
+  }
+
+  // Request an authoritative full-hotbar swap: trade the owned `drop` for the weapon
+  // pickup `pickup`. Never predicted — the trade is atomic server-side and both the new
+  // inventory and the replaced weapon's floor pickup flow back via snapshot. Pre-filtered
+  // against the last authoritative state so an obviously-stale prompt click (pickup gone,
+  // weapon no longer owned, hotbar no longer full) is a client no-op, not a wire reject.
+  requestSwap(pickup: number, drop: WeaponId): void {
+    const snap = this.latestSnap;
+    if (snap) {
+      const self = snap.self;
+      if (self && (!self.wpns.includes(drop) || self.wpns.length < MAX_OWNED_WEAPONS)) return;
+      if (!snap.pickups.some((p) => p.id === pickup && p.kind === "weapon")) return;
+    }
+    this.sendMsg({ t: "swap", pickup, drop, cseq: ++this.cseq });
   }
 
   // Answer a server blessing offer. The offerId names exactly which offer this choice answers;

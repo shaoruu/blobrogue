@@ -6,6 +6,10 @@
 
 const MUTE_KEY = "blobrogue.muted";
 const SHAKE_KEY = "blobrogue.shake";
+// The out-of-the-box screen-shake level for players who never touched the slider —
+// authored calm (live playtest feedback) while keeping game-feel. A stored choice,
+// whatever it is, always wins over this.
+const SHAKE_DEFAULT = 0.55;
 const AUTOFIRE_KEY = "blobrogue.autofire";
 // Volume PERCEPTUAL CURVE: sliders store a position 0..1 and the audible gain is
 // position² (equal-ish loudness steps across the whole travel; 0 stays exactly 0).
@@ -36,6 +40,7 @@ const FLASH_KEY = "blobrogue.flashLevel";
 const HITSTOP_KEY = "blobrogue.hitstop";
 const RECOIL_KEY = "blobrogue.recoil";
 const UI_SCALE_KEY = "blobrogue.uiScale";
+const CONTRAST_KEY = "blobrogue.highContrast";
 
 // Full-screen flash washes (boss phases, explosions, celebrations): off kills them, low
 // keeps a faint glow, full is the authored intensity. Anything at "full" is gated behind
@@ -151,11 +156,12 @@ export class Settings {
   private hitstop: boolean;          // impact hit-stop frames on/off
   private recoil: number;            // 0..1, scales camera kick + weapon recoil punch
   private hudScale: number;          // HUD/overlay zoom, UI_SCALE_MIN..UI_SCALE_MAX
+  private highContrast: boolean;     // halve the ambient darkness/AO grade for readability
   private listeners = new Set<Listener>();
 
   constructor() {
     this.muted = readBool(MUTE_KEY, false);
-    this.shake = clamp01(readNumber(SHAKE_KEY, 1));
+    this.shake = clamp01(readNumber(SHAKE_KEY, SHAKE_DEFAULT));
     this.autofire = readBool(AUTOFIRE_KEY, false) || readForceAutofire();
     this.master = readVolumePos(MASTER_KEY, LEGACY_MASTER_KEY, DEFAULT_MASTER_POS);
     this.music = readVolumePos(MUSIC_KEY, LEGACY_MUSIC_KEY, DEFAULT_MUSIC_POS);
@@ -166,6 +172,7 @@ export class Settings {
     this.hitstop = readBool(HITSTOP_KEY, true);
     this.recoil = clamp01(readNumber(RECOIL_KEY, 1));
     this.hudScale = clampUiScale(readNumber(UI_SCALE_KEY, 1));
+    this.highContrast = readBool(CONTRAST_KEY, false);
   }
 
   get isMuted(): boolean {
@@ -236,6 +243,7 @@ export class Settings {
   get isHitstop(): boolean { return this.hitstop; }
   get recoilIntensity(): number { return this.recoil; }
   get uiScale(): number { return this.hudScale; }
+  get isHighContrast(): boolean { return this.highContrast; }
 
   // What the render/FX paths actually consume: reduced motion zeroes camera motion
   // (shake + kick + recoil punch) regardless of the individual sliders.
@@ -270,6 +278,13 @@ export class Settings {
     if (this.recoil === v) return;
     this.recoil = v;
     try { localStorage.setItem(RECOIL_KEY, String(v)); } catch {}
+    this.emit();
+  }
+
+  setHighContrast(value: boolean): void {
+    if (this.highContrast === value) return;
+    this.highContrast = value;
+    try { localStorage.setItem(CONTRAST_KEY, value ? "1" : "0"); } catch {}
     this.emit();
   }
 

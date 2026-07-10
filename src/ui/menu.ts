@@ -14,10 +14,16 @@ import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPa
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { cosmeticOverlay } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
-import type { BlobLook } from "./blobPreview.js";
+import type { BlobLook, BlobPreview } from "./blobPreview.js";
+import { FocusScope, currentFocus } from "./focus.js";
 import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
-import { READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel } from "./onlineCopy.js";
+import {
+  READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
+  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
+  INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
+} from "./onlineCopy.js";
+import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -120,6 +126,12 @@ export class Menu {
   // The title's live identity region: auth settling (an OAuth exchange finishing after the
   // shell painted) re-renders CONTENT inside this reserved box — never the shell around it.
   private identityMount: HTMLElement | null = null;
+  // The title's character stage refresh: identity hydration, auth settle, and every
+  // closet equip repaint the blob inside its fixed box (content only — the hero band
+  // never moves). The preview handle itself is kept so the idle loop can be paused
+  // while the title is hidden (in-run) or covered by the closet overlay.
+  private titleStageRefresh: (() => void) | null = null;
+  private titleStage: BlobPreview | null = null;
   // The current screen's tab group for controller LB/RB (closet categories, profile views).
   private tabCycle: ((dir: 1 | -1) => void) | null = null;
 
@@ -133,18 +145,24 @@ export class Menu {
     // region's content in place when it does (same reserved geometry, zero layout shift).
     this.auth?.onChange(() => {
       if (this.identityMount) this.renderIdentityInto(this.identityMount);
+      // A settled sign-in can carry a different loadout — re-hydrate and repaint the stage.
+      if (this.titleStageRefresh) void this.flushTitleIdentity().then(() => this.titleStageRefresh?.());
     });
   }
 
   hide() {
     this.teardownLobby();
+    // The title (and its idle loop) is fully covered while a run plays — park the rAF.
+    this.titleStage?.setPaused(true);
     this.overlay.classList.add("hidden");
   }
 
   private show(...nodes: HTMLElement[]) {
     this.teardownLobby();
-    this.identityMount = null; // the title re-arms it after its own show()
-    this.tabCycle = null;      // screens with tab groups re-arm after their own show()
+    this.identityMount = null;     // the title re-arms it after its own show()
+    this.titleStageRefresh = null; // idem
+    this.titleStage = null;
+    this.tabCycle = null;          // screens with tab groups re-arm after their own show()
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
   }
@@ -155,7 +173,7 @@ export class Menu {
   }
 
   // The always-visible close affordance on the profile surfaces (the mobile-friendly \u2715
-  // in the shell corner). Routes through the SAME guard as Back/Escape.
+  // in the shell corner). Same action as Back/Escape.
   private closeButton(onClose: () => void): HTMLButtonElement {
     const btn = el("button", "secondary panel-close", "\u2715");
     btn.type = "button";
@@ -196,38 +214,73 @@ export class Menu {
   // Every async-hydrated region (auth, stats, leaderboard) renders its FINAL geometry from
   // first paint — skeletons fill in place, so nothing below them ever moves.
 
-  async showTitle(focus?: TitleFocus) {
+  // `statusNote` fills the reserved home-status line (e.g. the invite-on-offline-build
+  // landing) — content inside fixed geometry, never a layout change.
+  async showTitle(focus?: TitleFocus, statusNote = "") {
     // THE canonical home markup (finalized; supersedes every earlier shell variant):
-    //   .menu-home
-    //     .hero                          logo + tagline
+    //   .menu-home                       grid rows 150px / minmax(0,1fr)
+    //     .home-hero                     the two-column hero band: .hero-mark (logo +
+    //                                    tagline) | .blob-stage (the 132x132 identity
+    //                                    showpiece: YOUR blob at 96px via the shared
+    //                                    loadout renderer, calm idle, plinth glow +
+    //                                    ground shadow — no button chrome, no amber)
     //     .home-body
-    //       .home-left                   Play heading, PLAY ONLINE, PLAY SOLO,
-    //                                    fixed .home-status line, fixed leaderboard
-    //                                    preview (exactly 3 rows + state line)
+    //       .home-left                   PLAY ONLINE, PLAY SOLO, fixed .home-status
+    //                                    line, fixed leaderboard preview (exactly 3
+    //                                    rows + state line)
     //       .home-right                  reserved .identity-card, then the PROFILE and
     //                                    SETTINGS destinations
+    //     .stage-customize               the small closet door beside the blob —
+    //                                    absolutely anchored into the hero band, DOM-last
+    //                                    so PLAY stays first in tab/reading order
     // No home footer, no Controls button, no right-side Leaderboard destination.
     const wrap = el("div", "menu menu-home");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
-    // Hero banner: logo + tagline, divider under it. The logo carries its intrinsic
-    // dimensions (1128x192) so the box is reserved before the file streams in.
-    const hero = el("div", "hero");
+    // HERO BAND. Left: the wordmark (intrinsic 1128x192 logo so its box is reserved
+    // before the file streams in) + tagline. Right: the blob stage — an identity
+    // SHOWPIECE, not a control: no button affordance, no amber fill, no arrow. Play
+    // Online below remains the only amber-filled element and the first action.
+    const hero = el("div", "home-hero");
+    const mark = el("div", "hero-mark");
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
     logo.className = "logo-img";
     logo.alt = "BLOBROGUE";
     logo.width = 1128;
     logo.height = 192;
-    hero.appendChild(logo);
-    hero.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    mark.appendChild(logo);
+    mark.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    hero.appendChild(mark);
+    const stageBox = el("div", "blob-stage");
+    stageBox.setAttribute("role", "img");
+    stageBox.setAttribute("aria-label", this.stageLabel());
+    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96, { isCalmIdle: true });
+    stageBox.appendChild(stagePreview.el);
+    hero.appendChild(stageBox);
     wrap.appendChild(hero);
+    // The natural place to tap your guy: a small, quiet closet door beside the blob. It
+    // opens the closet as an OVERLAY — the title (and Play) never leaves the screen.
+    // Appended to the wrap LAST (absolute position anchors it into the hero band).
+    const customize = el("button", "secondary stage-customize", "CUSTOMIZE");
+    customize.type = "button";
+    customize.onclick = () => this.openClosetOverlay();
+    // Hydration repaints the blob inside the same fixed bounds — content only, zero shift.
+    // (Armed after show(); show() clears the previous screen's hook.)
+    const refreshStage = () => {
+      stagePreview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+      stageBox.setAttribute("aria-label", this.stageLabel());
+    };
 
     if (!this.client) {
-      // Offline build: no profile/multiplayer — single centered actions column, no split.
+      // Offline build: no profile/multiplayer — single actions column under the same
+      // hero band (the closet saves on this device). The same reserved home-status line as
+      // the online shell (usually empty; an invite opened in this build lands its honest
+      // ONLINE PLAY UNAVAILABLE note here).
       const left = el("div", "home-left");
       left.appendChild(this.soloButton("\u25be  PLAY"));
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
+      left.appendChild(el("p", "home-status", statusNote));
       const nav = el("div", "navrow");
       const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
       const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());
@@ -236,17 +289,20 @@ export class Menu {
       nav.append(profileBtn, settingsBtn);
       left.appendChild(nav);
       wrap.appendChild(left);
+      wrap.appendChild(customize);
       this.show(wrap);
+      this.titleStageRefresh = refreshStage;
+      this.titleStage = stagePreview;
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
       return;
     }
 
     const body = el("div", "home-body");
 
-    // LEFT: the play actions own the top; a fixed status line and the quiet leaderboard
+    // LEFT: the play actions own the top (first in DOM/tab order — the eye drops from
+    // the hero blob straight onto them); a fixed status line and the quiet leaderboard
     // glance fill the space under them (fixed row geometry, subordinate to Play).
     const left = el("div", "home-left");
-    left.appendChild(el("div", "col-h", "Play"));
     const onlineBtn = el("button", "btn-quick primary");
     onlineBtn.appendChild(el("span", "", "\u25b6 PLAY ONLINE"));
     onlineBtn.appendChild(el("span", "sub", "rooms & quick play on the live server"));
@@ -258,7 +314,7 @@ export class Menu {
     left.appendChild(solo);
     // The fixed home status line: reserved from first paint; any boot/exit note swaps
     // content inside it, never the layout around it.
-    left.appendChild(el("p", "home-status", ""));
+    left.appendChild(el("p", "home-status", statusNote));
     left.appendChild(this.leaderboardPreview(focusTargets));
     body.appendChild(left);
 
@@ -277,10 +333,14 @@ export class Menu {
     body.appendChild(right);
 
     wrap.appendChild(body);
+    wrap.appendChild(customize);
     this.show(wrap);
     this.identityMount = identity;
-    // Background identity flush (login/adoption) — no home UI depends on its timing.
-    void this.flushTitleIdentity();
+    this.titleStageRefresh = refreshStage;
+    this.titleStage = stagePreview;
+    // Background identity flush (login/adoption) — no home UI depends on its timing; the
+    // stage repaints in place once the profile's loadout lands.
+    void this.flushTitleIdentity().then(() => this.titleStageRefresh?.());
     // Back/Escape focus restore: land keyboard focus on the destination that was used
     // (or arm the leaderboard-row restore, consumed once the preview fill enables it).
     if (focus?.dest) focusTargets.get(focus.dest)?.focus();
@@ -299,6 +359,16 @@ export class Menu {
     }
   }
 
+  // The stage's accessible description (the accepted copy, exactly): "Your blob", or
+  // "Your blob wearing <hat>, <glasses>" when overlay cosmetics are equipped.
+  private stageLabel(): string {
+    const loadout = this.session.cosmetics;
+    const worn = [loadout.hat, loadout.face]
+      .map((id) => (id !== null ? cosmeticById(id)?.name : undefined))
+      .filter((name): name is string => name !== undefined);
+    return worn.length > 0 ? `Your blob wearing ${worn.join(", ")}` : "Your blob";
+  }
+
   // A 90px home destination card: the label leads (and IS the button's own text, so focus
   // tooling reads it plainly), the sub-copy rides underneath.
   private navButton(label: string, sub: string, go: () => void): HTMLButtonElement {
@@ -308,23 +378,52 @@ export class Menu {
     return btn;
   }
 
-  private nameRow(): HTMLElement {
-    const row = el("div", "namerow");
-    const label = el("label", "", "name");
-    const input = el("input");
+  // The editable blob name on the own Overview. Guests edit + SAVE anytime — the write
+  // rides the SAME sanitized session.login path the name gate uses (trim/collapse/strip,
+  // cap 20, never empty, never the literal "blob"), so lobby rosters and future
+  // leaderboard rows pick the new name up. Signed-in accounts are named by Google on the
+  // server (ensurePlayer overwrites with the account name), so the field goes READ-ONLY
+  // with honest copy — an editable box that silently reverts would be a lie.
+  private nameEditor(onSaved: (name: string) => void): { box: HTMLElement; input: HTMLInputElement } {
+    const box = el("div", "pc-nameedit");
+    box.appendChild(el("label", "col-h", "blob name"));
+    const row = el("div", "pc-namerow");
+    const input = el("input", "pc-nameinput");
     input.type = "text";
     input.maxLength = 20;
     input.placeholder = "your blob name";
     input.value = this.session.name;
-    // An emptied/junk input keeps the standing name (typed or generated) — a profile edit
-    // can never blank a name or resurrect the literal "blob".
-    input.addEventListener("change", () => {
-      const name = resolveNameInput(input.value, this.session.name);
-      input.value = name;
-      void this.session.login(name).catch(() => {});
-    });
-    row.append(label, input);
-    return row;
+    const note = el("p", "muted pc-name-note", "");
+    if (this.auth?.isSignedIn ?? false) {
+      input.disabled = true;
+      note.textContent = "named by your Google account";
+      row.appendChild(input);
+    } else {
+      note.textContent = "shows in lobbies & on the leaderboard";
+      const save = el("button", "secondary pc-name-save", "SAVE");
+      save.type = "button";
+      // An emptied/junk input keeps the standing name (typed or generated) — a profile
+      // edit can never blank a name or resurrect the literal "blob".
+      const commit = async () => {
+        const name = resolveNameInput(input.value, this.session.name);
+        input.value = name;
+        save.disabled = true;
+        note.textContent = "saving\u2026";
+        const profile = await this.session.login(name).catch(() => null);
+        save.disabled = false;
+        note.textContent = !this.client
+          ? "saved on this device"
+          : profile !== null
+            ? "saved \u2014 shows in lobbies & future runs"
+            : "saved on this device \u2014 syncs when you're online";
+        onSaved(this.session.name);
+      };
+      save.onclick = () => void commit();
+      input.addEventListener("keydown", (e) => { if (e.key === "Enter") void commit(); });
+      row.append(input, save);
+    }
+    box.append(row, note);
+    return { box, input };
   }
 
   // The right-column identity card. Signed in: the Google account chip + a quiet
@@ -767,34 +866,26 @@ export class Menu {
 
     const goBack = () => void this.showTitle({ dest: "profile" });
 
-    // Every way OUT of the closet (back, Escape/B, the Overview tab, the close \u2715)
-    // goes through the discard guard when unsaved preview picks exist; the Overview has no
-    // unsaved state.
-    let guard: (leave: () => void) => void = (leave) => leave();
+    // Closing (back, Escape/B, the Overview tab, the close \u2715) just closes: equips are
+    // instant and already persisted in the background, so there is never anything to
+    // discard and never a confirmation in the way.
     let closetTabCycle: ((dir: 1 | -1) => void) | null = null;
     if (view === "overview") this.buildOwnOverview(wrap);
-    else {
-      const closet = this.buildCloset(wrap);
-      guard = closet.requestLeave;
-      closetTabCycle = closet.cycleCategory;
-    }
-    wrap.prepend(this.closeButton(() => guard(goBack)));
+    else closetTabCycle = this.buildCloset(wrap).cycleCategory;
+    wrap.prepend(this.closeButton(goBack));
 
-    overviewTab.onclick = () => { if (view !== "overview") guard(() => void this.showProfile("overview")); };
+    overviewTab.onclick = () => { if (view !== "overview") void this.showProfile("overview"); };
     closetTab.onclick = () => { if (view !== "closet") void this.showProfile("closet"); };
 
     const row = el("div", "btnrow");
     const back = el("button", "secondary", "back");
-    back.addEventListener("click", () => guard(goBack));
+    back.addEventListener("click", goBack);
     row.appendChild(back);
     wrap.appendChild(row);
     this.show(wrap);
-    this.bindEscape(() => guard(goBack));
+    this.bindEscape(goBack);
     // Controller LB/RB: closet cycles its categories; the Overview toggles the views.
-    this.tabCycle = closetTabCycle ?? ((dir) => {
-      void dir;
-      guard(() => void this.showProfile("closet"));
-    });
+    this.tabCycle = closetTabCycle ?? (() => void this.showProfile("closet"));
 
     if (view === "overview") void this.hydrateOwnOverview();
     else void this.hydrateCloset();
@@ -804,6 +895,7 @@ export class Menu {
   // hydrates inside its reserved box (top run + build from the caller's own charted entry,
   // lifetime from the profile), and unavailable states stay honest.
   private ownCard: ReturnType<Menu["profileCard"]> | null = null;
+  private ownNameInput: HTMLInputElement | null = null;
 
   private buildOwnOverview(wrap: HTMLElement) {
     const card = this.profileCard(
@@ -812,13 +904,20 @@ export class Menu {
       this.session.cosmetics.title,
     );
     this.ownCard = card;
+    // The username editor lives ON the card, right under the appearance stage — the
+    // owner's identity block (name + look) in one place, above the closet door.
+    const editor = this.nameEditor((name) => {
+      card.nameEl.textContent = (name.trim() || "blob").toUpperCase();
+    });
+    this.ownNameInput = editor.input;
     const customize = el("button", "secondary pc-customize", "CUSTOMIZE BLOB");
     customize.addEventListener("click", () => void this.showProfile("closet"));
-    card.leftSlot.appendChild(customize);
+    card.leftSlot.append(editor.box, customize);
     wrap.appendChild(card.card);
 
     // The account region (owner-only): chip + sign-out for accounts, the honest guest /
-    // offline line otherwise. Reserved height either way.
+    // offline line otherwise. Reserved height either way. (Name edits live on the card
+    // above — this strip is purely the account relationship.)
     const account = el("div", "pc-account");
     if (this.auth?.isSignedIn) {
       account.appendChild(this.accountChip());
@@ -826,10 +925,7 @@ export class Menu {
       out.addEventListener("click", () => void this.doSignOut());
       account.appendChild(out);
     } else {
-      // Guests manage their display name HERE (identity lives on the profile surface;
-      // the home identity card is the sign-in pitch) — and the manual sign-in door is
-      // ALWAYS available here regardless of any nudge cooldown.
-      account.appendChild(this.nameRow());
+      // The manual sign-in door is ALWAYS available here regardless of any nudge cooldown.
       if (this.auth) {
         const note = el("p", "muted id-note", "Optional \u00b7 keeps this blob across devices.");
         const cta = el("button", "secondary btn-google pc-signin");
@@ -866,6 +962,12 @@ export class Menu {
         card.titleEl.textContent = titleTextOf(profile.cosmetics.title);
         card.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
         card.setLifetime(profile);
+        // Sync the name editor in place: accounts adopt the server's (Google) name; a
+        // guest's field follows the session unless they're mid-edit right now.
+        if (this.ownNameInput) {
+          if (this.auth?.isSignedIn ?? false) this.ownNameInput.value = profile.name;
+          else if (document.activeElement !== this.ownNameInput) this.ownNameInput.value = this.session.name;
+        }
       }
     } catch {
       card.setLifetime({ note: "stats unavailable \u2014 check your connection" });
@@ -892,18 +994,21 @@ export class Menu {
 
   // ---- THE CLOSET (own-profile-only, fixed panel) ------------------------------------
   //
-  // Browse -> preview -> commit, with real state semantics:
-  //   - clicking an unlocked card writes a PENDING pick (temporary preview only, per slot;
-  //     pending picks survive category switches)
-  //   - EQUIP persists the ACTIVE category's pending pick only
-  //   - RESET restores the equipped look (discards all pending) without any write
-  //   - leaving (back / Escape / the Overview tab) with unsaved picks swaps the action
-  //     strip into an explicit discard confirmation — same fixed geometry
+  // INSTANT EQUIP — there is no staging model, no save step, nothing to discard:
+  //   - clicking/tapping/A/Enter an OWNED card equips it IMMEDIATELY: the stage updates,
+  //     the card wears the unmistakable EQUIPPED state (chip text + persistent \u2713 badge +
+  //     the amber double frame + 3px lift), the category's previous card loses it
+  //   - persistence is OPTIMISTIC: the local apply is instant, the server write runs in
+  //     the background (a tiny corner spinner rides the card while in flight); success is
+  //     silent, FAILURE reverts stage + badge to the previously-equipped item with one
+  //     non-blocking inline message. Rapid switching is last-click-wins via a per-slot
+  //     sequence, so a slow earlier response can never override a newer pick.
+  //   - clicking the already-equipped card is a no-op; closing just closes.
   // Categories are REAL only: a slot renders a tab only while it has items (future slots
-  // stay hidden until populated). Locked cards are disabled (cannot focus or equip) and
-  // wear their exact configured condition — no mystery. Card states are distinguished by
-  // geometry + glyph + text, never hue alone. The mirror renders through the same shared
-  // loadout renderer as the world.
+  // stay hidden until populated). LOCKED cards are never equippable but stay FOCUSABLE so
+  // the condition is readable — the chip IS the exact configured condition, activation
+  // reads it out inline. Card states are distinguished by geometry + glyph + text, never
+  // hue alone. The mirror renders through the same shared loadout renderer as the world.
 
   private closetRefresh: (() => void) | null = null;
 
@@ -921,10 +1026,7 @@ export class Menu {
     try { localStorage.setItem("blobrogue.closet.seenUnlocks", JSON.stringify(unlocks)); } catch { /* ignore */ }
   }
 
-  private buildCloset(wrap: HTMLElement): { requestLeave: (leave: () => void) => void; cycleCategory: (dir: 1 | -1) => void } {
-    // Pending picks: slot -> id-or-null (null = the always-unlocked empty slot). A pick
-    // equal to the equipped value clears itself — no phantom "unsaved" state.
-    const pending = new Map<CosmeticSlot, string | null>();
+  private buildCloset(wrap: HTMLElement): { cycleCategory: (dir: 1 | -1) => void } {
     const categories = COSMETIC_SLOTS.filter((slotDef) => cosmeticsForSlot(slotDef.slot).length > 0);
     let active: CosmeticSlot = categories[0]?.slot ?? "hat";
     // NEW badges: real unlocks earned since the last closet visit (marked seen on open).
@@ -936,32 +1038,60 @@ export class Menu {
     const stage = el("div", "closet-stage");
     const preview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 128);
     stage.appendChild(preview.el);
-    const stageState = el("p", "closet-stage-state", "EQUIPPED");
-    stage.appendChild(stageState);
     panel.appendChild(stage);
 
     const rightCol = el("div", "closet-right");
     const cats = el("div", "closet-cats");
     const grid = el("div", "closet-grid");
+    // The ONE inline message line (reserved height): the failure revert notice and the
+    // locked-condition readout swap text here — nothing modal, nothing moves.
     const note = el("p", "muted closet-note", "");
-    const actions = el("div", "closet-actions");
-    rightCol.append(cats, grid, note, actions);
+    rightCol.append(cats, grid, note);
     panel.appendChild(rightCol);
     wrap.appendChild(panel);
 
     const unlocks = () => this.session.profile?.unlocks ?? [];
     const equippedOf = (slot: CosmeticSlot) => this.session.cosmetics[slot];
-    const effectiveOf = (slot: CosmeticSlot) => (pending.has(slot) ? pending.get(slot) ?? null : equippedOf(slot));
-    const effectiveLoadout = (): CosmeticLoadout => ({
-      hat: effectiveOf("hat"),
-      face: effectiveOf("face"),
-      body: effectiveOf("body"),
-      title: effectiveOf("title"),
-    });
-
+    // ONE shared loadout state (the session) drives every stage: the closet mirror AND —
+    // when the closet rides as an overlay above the title — the title blob, live.
     const syncStage = () => {
-      preview.setLook(lookOf(effectiveLoadout(), this.session.colorIndex));
-      stageState.textContent = pending.size > 0 ? "PREVIEWING \u2014 unsaved" : "EQUIPPED";
+      preview.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
+      this.titleStageRefresh?.();
+    };
+
+    // Optimistic-equip bookkeeping: a per-slot sequence makes rapid switching last-click-
+    // wins (a stale response is simply ignored), and the in-flight pick wears the corner
+    // spinner while its background write runs.
+    const equipSeq = new Map<CosmeticSlot, number>();
+    const inFlight = new Map<CosmeticSlot, string | null>();
+
+    const equip = (id: string | null) => {
+      const slot = active;
+      if (equippedOf(slot) === id) return; // selecting the equipped item is a no-op
+      const token = (equipSeq.get(slot) ?? 0) + 1;
+      equipSeq.set(slot, token);
+      const prevId = equippedOf(slot);
+      const prevColor = this.session.colorIndex;
+      inFlight.set(slot, id);
+      note.textContent = "";
+      // Apply locally NOW (stage + badge move immediately); persist in the background.
+      const persist = slot === "body"
+        ? this.session.setColorIndex(id !== null ? cosmeticById(id)?.paletteIndex ?? 0 : 0)
+        : this.session.setCosmetic(slot, id);
+      renderAll();
+      void persist.then((isSaved) => {
+        if (equipSeq.get(slot) !== token) return; // a newer pick owns this slot
+        inFlight.delete(slot);
+        // isKept covers the server-authority reconcile: a write the backend refused has
+        // already been rolled back by the session and must read as a failure here too.
+        const isKept = equippedOf(slot) === id;
+        if (!isSaved) {
+          if (slot === "body") this.session.revertColor(prevColor, prevId);
+          else this.session.revertCosmetic(slot, prevId);
+        }
+        if (!isSaved || !isKept) note.textContent = "COULDN'T SAVE \u2014 REVERTED";
+        renderAll();
+      });
     };
 
     const renderCats = () => {
@@ -969,7 +1099,7 @@ export class Menu {
       for (const slotDef of categories) {
         const tab = el("button", `secondary closet-cat${slotDef.slot === active ? " on" : ""}`, slotDef.label);
         tab.type = "button";
-        tab.onclick = () => { active = slotDef.slot; renderAll(); };
+        tab.onclick = () => { active = slotDef.slot; note.textContent = ""; renderAll(); };
         cats.appendChild(tab);
       }
     };
@@ -995,32 +1125,35 @@ export class Menu {
       return icon;
     };
 
+    // One card. State language: .cos-card owned|equipped|locked, the .cos-check badge,
+    // the .cos-lock glyph, the .cos-saving corner spinner — states read by GEOMETRY +
+    // GLYPH + TEXT (double frame, lift, badge, chip copy), never hue alone.
     const addCard = (def: CosmeticDef | null, label: string) => {
       const id = def?.id ?? null;
       const isLocked = def !== null && !isCosmeticOwned(def, unlocks());
       const isEquipped = equippedOf(active) === id;
-      const isPreviewing = pending.has(active) && (pending.get(active) ?? null) === id;
-      const btn = el("button", "cos-tile");
+      const isSaving = inFlight.has(active) && (inFlight.get(active) ?? null) === id;
+      const condition = def?.hint ?? "secret";
+      const btn = el("button", `cos-card ${isLocked ? "locked" : isEquipped ? "equipped" : "owned"}`);
       btn.type = "button";
-      btn.classList.toggle("sel", isEquipped);
-      btn.classList.toggle("prev", isPreviewing);
-      btn.classList.toggle("locked", isLocked);
       btn.setAttribute("aria-pressed", String(isEquipped));
-      // State semantics carried by geometry + glyph + text (never hue alone); locked cards
-      // are DISABLED — they cannot take focus or equip, and wear their exact condition.
-      btn.disabled = isLocked;
-      const glyph = isLocked ? "\u2716" : isPreviewing ? "\u25b8" : isEquipped ? "\u25c9" : isNewUnlock(id ?? "") ? "\u2605" : "";
-      const stateText = isLocked
-        ? `LOCKED \u2014 ${def?.hint ?? "secret"}`
-        : isPreviewing ? "PREVIEWING" : isEquipped ? "EQUIPPED" : isNewUnlock(id ?? "") ? "NEW" : "";
-      btn.append(el("span", "cos-glyph", glyph), cardIcon(def), el("span", "cos-name", label), el("span", "cos-state", stateText));
-      btn.setAttribute("aria-label", `${active}: ${label}${isLocked ? ` \u2014 locked, ${def?.hint ?? "secret"}` : ""}`);
+      if (isLocked) btn.appendChild(el("span", "cos-lock"));
+      if (isEquipped) btn.appendChild(el("span", "cos-check", "\u2713"));
+      btn.append(cardIcon(def), el("span", "cos-name", label));
+      // The chip: EQUIPPED, the exact unlock condition (locked), or the one-visit NEW tag.
+      const chip = isLocked
+        ? condition.toUpperCase()
+        : isEquipped ? "EQUIPPED" : isNewUnlock(id ?? "") ? "NEW" : "";
+      btn.appendChild(el("span", "cos-chip", chip));
+      if (isSaving) btn.appendChild(el("span", "cos-saving"));
+      btn.setAttribute("aria-label", isLocked
+        ? `${label}, locked \u2014 ${condition}`
+        : `${label}${isEquipped ? ", equipped" : ""}`);
+      // Locked cards stay focusable/clickable so the condition is readable everywhere —
+      // activation READS the condition inline, it never equips.
       btn.onclick = () => {
-        // Browsing updates the TEMPORARY preview only; equality with the equipped value
-        // clears the pending pick (nothing unsaved).
-        if (equippedOf(active) === id) pending.delete(active);
-        else pending.set(active, id);
-        renderAll();
+        if (isLocked) { note.textContent = `LOCKED \u2014 ${condition.toUpperCase()}`; return; }
+        equip(id);
       };
       grid.appendChild(btn);
     };
@@ -1028,37 +1161,12 @@ export class Menu {
     const renderGrid = () => {
       grid.replaceChildren();
       const slotDef = categories.find((c) => c.slot === active);
+      // The always-owned DEFAULT/NONE card leads every category.
       addCard(null, slotDef?.noneLabel ?? "None");
       for (const def of cosmeticsForSlot(active)) addCard(def, def.name);
     };
 
-    const renderActions = () => {
-      actions.replaceChildren();
-      const equip = el("button", "closet-equip", "EQUIP");
-      equip.type = "button";
-      equip.disabled = !pending.has(active);
-      equip.onclick = () => {
-        if (!pending.has(active)) return;
-        const pick = pending.get(active) ?? null;
-        if (active === "body") {
-          // One pick drives the cosmetic body item AND the party color at launch.
-          const def = pick !== null ? cosmeticById(pick) : undefined;
-          this.session.setColorIndex(def?.paletteIndex ?? 0);
-        } else {
-          this.session.setCosmetic(active, pick);
-        }
-        pending.delete(active);
-        note.textContent = "equipped";
-        renderAll();
-      };
-      const reset = el("button", "secondary closet-reset", "RESET");
-      reset.type = "button";
-      reset.disabled = pending.size === 0;
-      reset.onclick = () => { pending.clear(); note.textContent = ""; renderAll(); };
-      actions.append(equip, reset);
-    };
-
-    const renderAll = () => { renderCats(); renderGrid(); renderActions(); syncStage(); };
+    const renderAll = () => { renderCats(); renderGrid(); syncStage(); };
     renderAll();
     this.closetRefresh = renderAll;
     // This visit's NEW badges are computed — mark everything seen for the next visit.
@@ -1068,24 +1176,10 @@ export class Menu {
     const cycleCategory = (dir: 1 | -1) => {
       const idx = categories.findIndex((c) => c.slot === active);
       const next = categories[(idx + dir + categories.length) % categories.length];
-      if (next) { active = next.slot; renderAll(); }
+      if (next) { active = next.slot; note.textContent = ""; renderAll(); }
     };
 
-    // Leaving with unsaved picks needs an explicit decision; the confirmation swaps INSIDE
-    // the fixed action strip.
-    const requestLeave = (leave: () => void) => {
-      if (pending.size === 0) { leave(); return; }
-      actions.replaceChildren();
-      actions.appendChild(el("span", "closet-confirm-copy", "discard unsaved preview?"));
-      const discard = el("button", "secondary closet-discard", "DISCARD");
-      discard.type = "button";
-      discard.onclick = () => { pending.clear(); leave(); };
-      const keep = el("button", "secondary closet-keep", "KEEP BROWSING");
-      keep.type = "button";
-      keep.onclick = () => { renderActions(); };
-      actions.append(discard, keep);
-    };
-    return { requestLeave, cycleCategory };
+    return { cycleCategory };
   }
 
   private async hydrateCloset() {
@@ -1099,6 +1193,46 @@ export class Menu {
     } catch {
       // locked states stand
     }
+  }
+
+  // ---- the closet OVERLAY (the title's CUSTOMIZE affordance) ---------------------------
+  // The closet rides ABOVE the title as a panel — never a mode swap: Play stays on screen
+  // behind the translucent scrim, and closing (X / Esc / B / scrim tap) returns to the
+  // SAME title nodes with only the blob repainted. There is nothing else to sync back:
+  // instant equip already saved every change server-side as it happened.
+  private openClosetOverlay() {
+    const scrim = el("div", "closet-scrim");
+    const pop = el("div", "menu closet-pop");
+    const scope = new FocusScope();
+    let isClosed = false;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+    };
+    const close = () => {
+      if (isClosed) return;
+      isClosed = true;
+      window.removeEventListener("keydown", onKey);
+      this.overlay.removeChild(scrim);
+      this.closetRefresh = null;
+      this.tabCycle = null;
+      this.titleStageRefresh?.(); // the unchanged title, wearing the updated blob
+      this.titleStage?.setPaused(false); // the idle loop resumes with the title
+      scope.close();
+    };
+    scrim.addEventListener("click", (e) => { if (e.target === scrim) close(); });
+    const closeBtn = this.closeButton(close);
+    pop.appendChild(closeBtn);
+    pop.appendChild(el("div", "col-h closet-pop-h", "closet \u2014 changes save instantly"));
+    const closet = this.buildCloset(pop);
+    scrim.appendChild(pop);
+    this.overlay.appendChild(scrim);
+    window.addEventListener("keydown", onKey);
+    this.tabCycle = closet.cycleCategory;
+    // The covered title parks its idle loop; equips still repaint it live (static frames)
+    // through titleStageRefresh, so the blob behind the scrim visibly updates.
+    this.titleStage?.setPaused(true);
+    scope.open(closeBtn, currentFocus());
+    void this.hydrateCloset();
   }
 
   // ---- SETTINGS -----------------------------------------------------------------------
@@ -1131,7 +1265,10 @@ export class Menu {
     return !(this.auth?.isSignedIn ?? false) && !this.session.isNameConfirmed;
   }
 
-  private showNameGate() {
+  // `onDone` is where the committed identity continues to — the plain online home by
+  // default, or a pending invite join when an invite link brought a first-time guest here
+  // (the gate always runs first; the invite continues the moment it commits).
+  private showNameGate(onDone: () => void = () => void this.showOnlineHome()) {
     const wrap = el("div", "menu name-gate");
     wrap.appendChild(el("h1", "", "WHAT'S YOUR NAME?"));
     wrap.appendChild(el("p", "", "Teammates will see this in your run."));
@@ -1194,7 +1331,7 @@ export class Menu {
       this.session.setColorIndex(selected);
       this.session.markNameConfirmed();
       void this.session.login(name).catch(() => {});
-      void this.showOnlineHome();
+      onDone();
     };
     const row = el("div", "btnrow");
     const play = el("button", "", "PLAY ONLINE \u25b8");
@@ -1221,10 +1358,15 @@ export class Menu {
 
   // The online home: quick play into the public pool, create a private room (shareable
   // code), or join a friend's code. Every action stays on this screen until it succeeds,
-  // so a failed backend just writes a status line — never a dead end.
-  async showOnlineHome(note = "") {
-    if (!this.client) { await this.showTitle(); return; }
-    if (this.needsNameGate()) { this.showNameGate(); return; }
+  // so a failed backend just writes a status line — never a dead end. `isBusy` renders
+  // the actions disabled from first paint (an invite join in flight owns the screen until
+  // it settles — the settle re-arms them, success or failure); `retry` renders TRY AGAIN
+  // inside the reserved status line (the retryable invite failure re-runs its join).
+  // Returns the status-line element so the invite flow can drive the SAME inline state
+  // the manual actions use — never a modal, never a second surface.
+  async showOnlineHome(note = "", opts: { isBusy?: boolean; retry?: () => void } = {}): Promise<HTMLElement | null> {
+    if (!this.client) { await this.showTitle(); return null; }
+    if (this.needsNameGate()) { this.showNameGate(); return null; }
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "PLAY ONLINE"));
     wrap.appendChild(el("p", "", "Server-run worlds. Drop into the public pool, or make a room and share its code."));
@@ -1242,8 +1384,16 @@ export class Menu {
     wrap.appendChild(colA);
 
     // Status/failure line with reserved height: retries and errors swap text inside the
-    // same box, so the back button below never moves.
+    // same box, so the back button below never moves. The compact TRY AGAIN affordance
+    // (retryable invite failure only) rides INSIDE this reserved box.
     const status = el("p", "muted status-line", note);
+    if (opts.retry) {
+      const retryFn = opts.retry;
+      const retryBtn = el("button", "secondary status-retry", INVITE_TRY_AGAIN_LABEL);
+      retryBtn.type = "button";
+      retryBtn.onclick = () => retryFn();
+      status.appendChild(retryBtn);
+    }
     wrap.appendChild(status);
 
     const row = el("div", "btnrow");
@@ -1258,6 +1408,7 @@ export class Menu {
       buttons.forEach((b) => (b.disabled = isBusy));
       status.textContent = text;
     };
+    if (opts.isBusy) buttons.forEach((b) => (b.disabled = true));
     quick.addEventListener("click", () => void this.doQuickPlayOnline(setBusy));
     create.addEventListener("click", () => void this.doCreateOnline(setBusy));
     join.addEventListener("click", () => void this.showJoinScreen({
@@ -1269,6 +1420,54 @@ export class Menu {
 
     this.show(wrap);
     this.bindEscape(goBack);
+    return status;
+  }
+
+  // An invite link's landing (cold boot in main.ts, warm popstate arrivals — same door).
+  // The canonical shell renders FIRST (never blank), then the join auto-attempts through
+  // doJoinOnline — the SAME path manual JOIN CODE takes (capacity, kind, ended: nothing
+  // bypassed) — as an inline connecting state on the Online Home status line (buttons
+  // disabled, not a modal). Guests join exactly as manual (doJoinOnline runs the ordinary
+  // session.login); an invite never forces sign-in — a FIRST-TIME guest still passes the
+  // one-time name gate, and the invite continues into its join the moment it commits.
+  // Every failure maps to the spec's honest copy on the status line with the screen's
+  // actions live, and the invite is stripped from the URL once the attempt resolves
+  // (success OR failure), so refresh/back never re-triggers a stale join.
+  async openInvite(code: string): Promise<void> {
+    if (!this.client) {
+      stripInviteFromLocation();
+      await this.showTitle(undefined, INVITE_OFFLINE_NOTE);
+      return;
+    }
+    if (this.needsNameGate()) { this.showNameGate(() => void this.joinInvite(code)); return; }
+    await this.joinInvite(code);
+  }
+
+  private async joinInvite(code: string): Promise<void> {
+    const status = await this.showOnlineHome(inviteJoiningNote(code), { isBusy: true });
+    if (!status) return;
+    // An unreachable backend never REJECTS (the Convex client retries forever) — it just
+    // never resolves. Settle honestly at the hydrate window with the retryable failure;
+    // a join landing after that must not teleport the player, so it is dropped as stale
+    // (doJoinOnline leaves the room it silently won).
+    let isTimedOut = false;
+    const timer = setTimeout(() => {
+      isTimedOut = true;
+      stripInviteFromLocation();
+      void this.showOnlineHome(INVITE_UNREACHABLE_NOTE, { retry: () => void this.joinInvite(code) });
+    }, HYDRATE_TIMEOUT_MS);
+    await this.doJoinOnline(code, status, {
+      joiningNote: inviteJoiningNote(code),
+      isStale: () => isTimedOut,
+      onSettled: () => {
+        clearTimeout(timer);
+        if (!isTimedOut) stripInviteFromLocation();
+      },
+      onFail: (raw) => {
+        const fail = inviteFailState(raw);
+        void this.showOnlineHome(fail.note, fail.isRetryable ? { retry: () => void this.joinInvite(code) } : {});
+      },
+    });
   }
 
   private async doQuickPlayOnline(setBusy: (b: boolean, t: string) => void) {
@@ -1298,18 +1497,32 @@ export class Menu {
     }
   }
 
-  private async doJoinOnline(code: string, status: HTMLElement) {
-    if (!this.client || code.trim().length < 4) { status.textContent = "enter a valid code"; return; }
-    status.textContent = "joining\u2026";
+  // The ONE join path — manual JOIN CODE and invite links both land here, so an invite
+  // can never bypass or diverge from the validated join. `opts` lets the invite flow
+  // brand the in-flight note, map failures to its spec copy, and drop a join that
+  // settled after its caller already moved on (the unreachable-timeout landing).
+  private async doJoinOnline(code: string, status: HTMLElement, opts: {
+    joiningNote?: string;
+    onFail?: (rawMessage: string) => void;
+    isStale?: () => boolean;
+    onSettled?: () => void;
+  } = {}) {
+    const fail = opts.onFail ?? ((raw: string) => { status.textContent = raw; });
+    if (!this.client || code.trim().length < 4) { fail("enter a valid code"); return; }
+    status.textContent = opts.joiningNote ?? "joining\u2026";
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
       await lobby.join(code);
+      opts.onSettled?.();
+      if (opts.isStale?.()) { lobby.leave(); return; }
       // A live room means the run is on — drop straight in; otherwise wait in the lobby.
       if (lobby.status === "playing") this.launchOnline(lobby, profile, false);
       else this.showOnlineLobby(lobby, profile);
     } catch (err) {
-      status.textContent = this.cleanErr(err instanceof Error ? err.message : "could not join");
+      opts.onSettled?.();
+      if (opts.isStale?.()) return;
+      fail(this.cleanErr(err instanceof Error ? err.message : "could not join"));
     }
   }
 
@@ -1341,8 +1554,20 @@ export class Menu {
       youSwatch.style.background = playerColor(this.session.colorIndex ?? 0);
       you.append(el("span", "you-label", "YOU:"), youSwatch, el("span", "you-name", this.session.name));
       wrap.appendChild(you);
-      wrap.appendChild(el("p", "", "Share this code \u2014 friends pick PLAY ONLINE \u2192 JOIN CODE to join you."));
-      wrap.appendChild(el("div", "code-badge", lobby.code));
+      wrap.appendChild(el("p", "", INVITE_SHARE_HINT));
+      // The code badge + the one-tap invite share, one fixed row. Every feedback state
+      // swaps the button's LABEL inside its fixed width; the reserved line underneath
+      // only ever fills on a copy failure (the raw URL, shareable by hand) — the roster
+      // below never moves.
+      const codeRow = el("div", "code-row");
+      codeRow.appendChild(el("div", "code-badge", lobby.code));
+      const inviteUrlLine = el("p", "muted invite-url", "");
+      const invite = el("button", "secondary invite-copy", COPY_INVITE_LABEL);
+      invite.type = "button";
+      invite.onclick = () => void this.doCopyInvite(lobby.code, invite, inviteUrlLine);
+      codeRow.appendChild(invite);
+      wrap.appendChild(codeRow);
+      wrap.appendChild(inviteUrlLine);
 
       const players = lobby.players();
       const list = el("div", "playerlist");
@@ -1384,6 +1609,26 @@ export class Menu {
     this.teardownLobby();
     this.unsub = lobby.onChange(render);
     render();
+  }
+
+  // One tap shares the FULL invite URL (/r/<CODE>), not just the code: the native share
+  // sheet on touch devices, the clipboard everywhere else. The confirmation is honest per
+  // outcome — a dismissed share sheet copied nothing, so it confirms nothing — and every
+  // state swaps content inside the fixed button/line geometry. Node-local with a timed
+  // revert: a roster re-render simply rebuilds the idle control.
+  private async doCopyInvite(code: string, btn: HTMLButtonElement, urlLine: HTMLElement): Promise<void> {
+    const url = inviteUrlFor(code, window.location.origin);
+    btn.disabled = true;
+    const outcome = await shareInviteUrl(url);
+    btn.disabled = false;
+    if (outcome === "dismissed") { btn.textContent = COPY_INVITE_LABEL; return; }
+    if (outcome === "failed") {
+      btn.textContent = INVITE_COPY_FAILED_LABEL;
+      urlLine.textContent = url;
+      return;
+    }
+    btn.textContent = outcome === "shared" ? INVITE_SHARED_LABEL : INVITE_COPIED_LABEL;
+    setTimeout(() => { btn.textContent = COPY_INVITE_LABEL; }, 1600);
   }
 
   // A member's roster chip. In the lobby it is the readiness consent (READY / NOT READY,

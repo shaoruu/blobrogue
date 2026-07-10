@@ -8,6 +8,7 @@
 
 import { InputController } from "../src/game/input.js";
 import type { GameAction, InputContext } from "../src/game/input.js";
+import { MAX_OWNED_WEAPONS } from "../src/sim/constants.js";
 import { settings } from "../src/game/settings.js";
 import { FocusScope } from "../src/ui/focus.js";
 
@@ -33,7 +34,7 @@ function isIdle(input: InputController): boolean {
 }
 
 const NON_GAMEPLAY: InputContext[] = ["menu", "hud", "pause", "blessing", "shop", "reconnect", "spectate"];
-const WEAPON_ACTIONS: readonly GameAction["kind"][] = ["selectWeapon", "cycleWeapon", "dropWeapon", "activateSlot", "reorderSlots"];
+const WEAPON_ACTIONS: readonly GameAction["kind"][] = ["selectWeapon", "cycleWeapon", "dropWeapon", "activateSlot", "reorderSlots", "swapSlot"];
 
 function overlayLeakageTests(): void {
   section("overlay leakage: gameplay actions exist only in the gameplay context");
@@ -50,6 +51,19 @@ function overlayLeakageTests(): void {
       && actions[1].kind === "dropWeapon" // Q drops the equipped weapon
       && actions[2].kind === "cycleWeapon" && actions[2].dir === 1
       && actions[3].kind === "cycleWeapon" && actions[3].dir === -1);
+  }
+  {
+    // The select row IS the hotbar cap: every key 1..MAX_OWNED_WEAPONS names its slot,
+    // and no key past the cap emits anything — dead unreachable slots cannot exist.
+    const { input, actions } = harness();
+    input.setContext("gameplay");
+    for (let k = 1; k <= 9; k++) input.keyDown(String(k));
+    const selects = actions.filter((a) => a.kind === "selectWeapon");
+    check("every hotbar slot 1..MAX has its select key",
+      selects.length === MAX_OWNED_WEAPONS
+      && selects.every((a, i) => a.kind === "selectWeapon" && a.index === i),
+      selects.map((a) => (a.kind === "selectWeapon" ? a.index : -1)).join(","));
+    check("keys past the cap emit nothing (no dead slots to name)", selects.length === actions.length);
   }
   for (const ctx of NON_GAMEPLAY) {
     const { input, actions } = harness();

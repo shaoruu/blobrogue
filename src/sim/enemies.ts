@@ -331,6 +331,22 @@ export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
 }
 
+// The roster's authored names (docs/specs/blobrogue_BOSS_NAMES_flavor.md): the HUD boss
+// bar titles the fight with the real name instead of a generic "BOSS". Keyed by the
+// authoritative kind the bar already tracks; presentation (casing/truncation) is the
+// HUD's job.
+const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
+  boss: "The Slime King",
+  marrow: "Marrow",
+  weaver: "The Weaver",
+  gilded: "The Gilded Warden",
+  choir: "The Hollow Choir",
+};
+
+export function bossDisplayName(kind: EnemyKind): string {
+  return BOSS_DISPLAY_NAME[kind] ?? "Boss";
+}
+
 // The canonical first-clear chain (curriculum §0, FINAL): Slime King F5 → Miniboss
 // Gauntlet F10 (a non-boss milestone — see world.ts's gauntlet controller) → Marrow F15 →
 // Weaver F20 → Gilded Warden F25 → Hollow Choir F30. `null` marks the gauntlet slot.

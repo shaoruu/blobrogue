@@ -34,6 +34,7 @@ import {
   BOSS_VULN_CAP, ELITE_BRACE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
+import { shopWeaponPrice } from "../src/sim/shop.js";
 import type { EnemyTier } from "../src/sim/balance.js";
 import { biomeIndexForFloor } from "../src/sim/biomes.js";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -1068,9 +1069,9 @@ function compositionCapGates(): void {
 
 function partyRewardGates(): void {
   section("studio gate §4: pedestal rolls max(1, ceil(P/2)), distinct ids");
-  check("formulas: pedestals 1/1/2/2, boss choices 2/3/4/5",
+  check("formulas: pedestals 1/1/2/2, boss choices 3/3/4/5 (P+1 floored at 3 for early variety)",
     [1, 2, 3, 4].every((p) => pedestalWeaponRolls(p) === Math.max(1, Math.ceil(p / 2)))
-    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, p + 1)));
+    && [1, 2, 3, 4].every((p) => bossWeaponChoices(p) === Math.min(5, Math.max(3, p + 1))));
   for (let players = 1; players <= 4; players++) {
     const w = createWorld(0x9ED5, 1, { skipLocalPlayer: true });
     for (let i = 0; i < players; i++) spawnPlayerInWorld(w, `p${i}`);
@@ -1081,10 +1082,10 @@ function partyRewardGates(): void {
       stocked.join(","));
     const shopWeapons = w.shop?.slots.filter((s) => s.kind === "weapon") ?? [];
     const prices = shopWeapons.map((s) => s.price);
-    check(`P${players} shop stalls two DISTINCT weapons on the unchanged ladder`,
+    check(`P${players} shop stalls two DISTINCT weapons, rarity-priced off the unchanged ladder base`,
       shopWeapons.length === SHOP.weaponPedestals
       && new Set(shopWeapons.map((s) => s.weapon)).size === shopWeapons.length
-      && prices.every((v, i) => v === SHOP.pedestalPrices[i]),
+      && shopWeapons.every((s, i) => s.price === shopWeaponPrice(SHOP.pedestalPrices[i], s.weapon!, s.isMystery)),
       `prices=${prices.join("/")}`);
   }
 
@@ -1163,16 +1164,16 @@ function partyRewardGates(): void {
 
   section("studio gate §4: no player goes >2 consecutive non-boss floors without an opportunity");
   {
-    // Pedestals stock every floor from F2 (F1 carries the starter pistol itself), so the
-    // longest dry run is exactly one floor.
+    // Pedestals stock EVERY non-boss floor, floor 1 included (the early-variety fix:
+    // F1 used to carry only the starter pistol), so there is no dry floor at all.
     let ok = true;
-    for (let f = 2; f <= 9; f++) {
+    for (let f = 1; f <= 9; f++) {
       if (isBossFloor(f)) continue;
       const w = createWorld(0x9ED7, 1);
-      descend(w, f, []);
+      if (f > 1) descend(w, f, []);
       if (!w.chests.some((c) => c.weapon !== undefined)) ok = false;
     }
-    check("every non-boss floor F2+ stocks at least one weapon pedestal", ok);
+    check("every non-boss floor F1+ stocks at least one weapon pedestal", ok);
   }
 }
 
@@ -1405,7 +1406,10 @@ function practicalBossDps(id: WeaponId, mods: ReturnType<typeof createMods>): nu
   const rate = (1 / wep.fireCd) * mods.fireRateMult;
   // Burn is a flat DoT (never an amp): bounded at +3 practical DPS when present.
   const burnDot = mods.burnChance > 0 ? 3 : 0;
-  return wep.damage * mods.damageMult * effPellets * wepCoef * rate * vuln
+  // The Midas models its FED damage: a stocked purse is no brake inside a boss window,
+  // so the estimator assumes every shot eats a coin (the honest worst case).
+  const coinFed = wep.coinBoost ?? 1;
+  return wep.damage * coinFed * mods.damageMult * effPellets * wepCoef * rate * vuln
     * practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult) + burnDot;
 }
 

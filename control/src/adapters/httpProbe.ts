@@ -27,15 +27,21 @@ import type {
 // PROTOCOL_VERSION (the control build cannot import across its rootDir, so the value is
 // mirrored here); control/test/integration.test.ts locks the two together and additionally
 // joins a REAL gs, so drift fails loudly.
-// v7: the depth-progression world (new shared dungeon generator + seeded floor hazards
-// + hazardHit event) on top of the co-op experience pass (v6).
 // v8: Patch's shop room (dealer pickups off the wire, `shop` snapshot state, the shopBuy
 // command + event) + the bestiary wave (new enemy kinds/moves/hazard kinds + the
 // EnemyWire aux channel) — disjoint wire growth sharing one version.
-// v9: the earned-windows boss rework + the fair-surprise layer — the enemy kind set
-// grew (the Weaver's `knot` and `sac` mechanic bodies) and the hazard kind set grew
+// v9: the remote-dash sync — PlayerWire grows the dash/invuln readout block
+// (dti/ddx/ddy/dnv/inv) so observing clients render a teammate's dash.
+// v10: the weapon effect wave (snapshot `effs` weapon-effect entities + SelfWire `chg`
+// charge reconcile + the effect events) on top of the dash + shop + bestiary wire.
+// v11: the hotbar cap (MAX_OWNED_WEAPONS) + the client->server `swap` command that claims
+// a weapon pickup at the cap by trading an owned weapon for it.
+// v12: the weapon rarity + mystery wave (five legendary WeaponIds, hidden-identity
+// mystery pickups/pedestals via `myst`, the mysteryReveal + implosion events).
+// v13: the earned-windows boss rework + fair-surprise layer — the enemy kind set grew
+// (the Weaver's `knot` and `sac` mechanic bodies) and the hazard kind set grew
 // (`omen`, the ambush pre-spawn tell); no new wire fields (guard/exposed rides aux).
-export const SYNTHETIC_JOIN_PROTOCOL = 9;
+export const SYNTHETIC_JOIN_PROTOCOL = 13;
 
 export interface HttpProbeConfig {
   baseUrl: string;

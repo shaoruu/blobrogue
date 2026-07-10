@@ -532,7 +532,260 @@ export const WAVE_SOUNDS = {
   "beamHit": {
     stem: "sfx/sunlance_hit", variants: 2, gain: 0.42, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true, // manifest: 120ms per target
-    fallback: { sample: "enemyHit", rate: 1.15, highpassHz: 900 },
+    fallback: { sample: "enemyHit", rate: 1.15, highpassHz: 900 }, // contract band: <= 1.4
+  },
+
+  // ---- §4b the effect wave: SEMANTIC WEAPON AUDIO HOOKS -------------------------------
+  // The weapon audio integration contract. Resolution is authored stem -> shipped-sample
+  // DERIVE fallback -> SILENCE — the synth lane is GONE engine-wide (#45 de-synthesis), so
+  // "no oscillator, ever" holds by construction for every row here. Jitter <= 0.05 so the
+  // authored take never repitches past +-5%; DERIVE rates stay inside [0.7, 1.4].
+  // Multi-stage mechanics carry >= 3 semantic cues; every continuous mechanic is start +
+  // ONE keyed loop + stop (never a per-tick retrigger); tier releases are DISTINCT STEMS,
+  // never pitch tiers. WEAPON_AUDIO below binds semantic states to these rows — the client
+  // triggers states, never file names.
+
+  // Shared universal cue: the effect wave's equip foley (per-weapon stems can replace
+  // this by remapping WEAPON_AUDIO once authored takes land).
+  "weapon.equip": {
+    stem: "sfx/weapon_equip", variants: 2, gain: 0.45, bus: "sfx", priority: WAVE_PRIORITY.ui,
+    jitter: 0.05, cooldownMs: 150,
+    fallback: { sample: "weapon", rate: 1.1 },
+  },
+
+  // Lastlight (risk: danger / payoff / recovery + the release).
+  "shootLastlight": {
+    stem: "sfx/lastlight_fire", variants: 3, gain: 0.85, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    duck: [dM(0.8, 0.06, 0.2)],
+    fallback: { sample: "cannon", rate: 1.15, highpassHz: 300 }, // sharp desperate crack
+  },
+  "lastlight.empowered": {
+    stem: "sfx/lastlight_empowered", variants: 2, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true,
+    duck: [dM(0.7, 0.08, 0.25)],
+    fallback: { sample: "cannon", rate: 0.9, highpassHz: 200 }, // a DISTINCT heavier take, not a pitch tier
+  },
+  "lastlight.surge": {
+    stem: "sfx/lastlight_surge", variants: 1, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, cooldownMs: 800,
+    fallback: { sample: "crit", rate: 0.85 }, // the danger band opens
+  },
+  "lastlight.settle": {
+    stem: "sfx/lastlight_settle", variants: 1, gain: 0.45, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, cooldownMs: 800,
+    fallback: { sample: "heart", rate: 0.95 }, // recovery: the band closes
+  },
+
+  // Breach (charge: prime / hold loop / threshold / full lock / TWO release stems /
+  // travel / impact / vent-cancel — 9 semantic cues).
+  "breach.chargeStart": {
+    stem: "sfx/breach_charge_start", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, cooldownMs: 120,
+    fallback: { sample: "chest", rate: 1.15, highpassHz: 500 }, // breech opens, spring compresses
+  },
+  "breach.chargeLoop": {
+    stem: "sfx/breach_charge_loop", variants: 1, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0, loop: true,
+  },
+  "breach.threshold": {
+    stem: "sfx/breach_threshold", variants: 1, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, cooldownMs: 200,
+    fallback: { sample: "coin", rate: 0.85, lowpassHz: 3000 }, // the half-charge detent clicks past
+  },
+  "breach.fullLock": {
+    stem: "sfx/breach_lock", variants: 1, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, cooldownMs: 200,
+    fallback: { sample: "parry", rate: 1.15, highpassHz: 900 }, // the full-charge sear locks
+  },
+  "shootBreach": {
+    stem: "sfx/breach_fire", variants: 3, gain: 0.85, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    duck: [dM(0.8, 0.06, 0.2)],
+    fallback: { sample: "cannon", rate: 0.95, lowpassHz: 1300 }, // the short-lob release
+  },
+  "breach.releaseFull": {
+    stem: "sfx/breach_release_full", variants: 2, gain: 0.95, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true,
+    duck: [dM(0.75, 0.08, 0.25)],
+    fallback: { sample: "shootShotgun", rate: 0.85, lowpassHz: 1600 }, // a DISTINCT full-charge take
+  },
+  "breach.travel": {
+    stem: "sfx/breach_travel", variants: 2, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "dash", rate: 0.85, lowpassHz: 2500 }, // the shell's falling whistle
+  },
+  "breach.impact": {
+    stem: "sfx/breach_impact", variants: 3, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true,
+    duck: [dM(0.75, 0.08, 0.3)],
+    fallback: { sample: "barrel", rate: 0.85 },
+  },
+  "breach.vent": {
+    stem: "sfx/breach_vent", variants: 1, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, cooldownMs: 150,
+    fallback: { sample: "dash", rate: 0.85, highpassHz: 1200 }, // the canceled charge hisses out
+  },
+
+  // Snapwire (trap: place / arm / trigger / expire + the refused-plant fail).
+  "wirePlant": {
+    stem: "sfx/snapwire_plant", variants: 2, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "parry", rate: 1.15, highpassHz: 1500 }, // taut string pluck
+  },
+  "wire.armed": {
+    stem: "sfx/snapwire_armed", variants: 1, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, spatial: true, cooldownMs: 120,
+    fallback: { sample: "coin", rate: 1.15, highpassHz: 1800 }, // the wire goes live
+  },
+  "wireSnap": {
+    stem: "sfx/snapwire_snap", variants: 3, gain: 0.85, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 120,
+    duck: [dM(0.75, 0.08, 0.3)],
+    fallback: { sample: "parry", rate: 0.85 }, // heavy cable release
+  },
+  "wire.expire": {
+    stem: "sfx/snapwire_expire", variants: 1, gain: 0.35, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, cooldownMs: 200,
+    fallback: { sample: "parry", rate: 0.9, lowpassHz: 2200 }, // tension slackens, unspent
+  },
+  "wire.refuse": {
+    stem: "sfx/snapwire_refuse", variants: 1, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, cooldownMs: 200,
+    fallback: { sample: "uiClick", rate: 0.85 }, // no anchor here (fail state)
+  },
+
+  // Frostline release (its status voice is the SHARED status library below).
+  "shootFrostline": {
+    stem: "sfx/frostline_fire", variants: 3, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "shootRapid", rate: 1.15, highpassHz: 1200 }, // glassy chip
+  },
+
+  // Razor Halo (orbital: ONE mixed owner loop — never per blade — + pass / hit / catch
+  // and the flare active).
+  "halo.loop": {
+    stem: "sfx/halo_loop", variants: 1, gain: 0.3, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0, loop: true,
+  },
+  "halo.pass": {
+    stem: "sfx/halo_pass", variants: 2, gain: 0.25, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, cooldownMs: 250,
+    fallback: { sample: "meleeSwing", rate: 1.15, highpassHz: 1800 }, // one blade sweeping by
+  },
+  "halo.hit": {
+    stem: "sfx/halo_hit", variants: 3, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true,
+    fallback: { sample: "meleeHit", rate: 1.15, highpassHz: 700 },
+  },
+  "haloFlare": {
+    stem: "sfx/halo_flare", variants: 2, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "meleeSwing", rate: 1.15, highpassHz: 800 }, // ring of steel widening
+  },
+  "halo.catch": {
+    stem: "sfx/halo_catch", variants: 2, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "meleeHit", rate: 0.85 }, // the flared ring connects
+  },
+
+  // Prism Sentry (deployable: place / unfold / acquire / fire / damaged / destroyed /
+  // timeout — 7 semantic cues).
+  "sentryPlace": {
+    stem: "sfx/sentry_place", variants: 2, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "chest", rate: 1.15, highpassHz: 400 }, // crystalline mount click
+  },
+  "sentry.unfold": {
+    stem: "sfx/sentry_unfold", variants: 1, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, cooldownMs: 150,
+    fallback: { sample: "blessing", rate: 1.15, highpassHz: 600 }, // the prism opens
+  },
+  "sentry.acquire": {
+    stem: "sfx/sentry_acquire", variants: 1, gain: 0.45, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.03, spatial: true, cooldownMs: 300, isPerEntityCooldown: true,
+    fallback: { sample: "coin", rate: 1.15, highpassHz: 1400 }, // target lock chirp
+  },
+  "sentryShot": {
+    stem: "sfx/sentry_fire", variants: 3, gain: 0.45, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true,
+    fallback: { sample: "homing", rate: 1.15, highpassHz: 600 },
+  },
+  "sentry.damaged": {
+    stem: "sfx/sentry_damaged", variants: 2, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "enemyHit", rate: 1.15, highpassHz: 900 }, // glass chips off the core
+  },
+  "sentryDown": {
+    stem: "sfx/sentry_down", variants: 1, gain: 0.75, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 200,
+    fallback: { sample: "parry", rate: 0.85, lowpassHz: 3000 }, // shattering prism
+  },
+  "sentry.timeout": {
+    stem: "sfx/sentry_timeout", variants: 1, gain: 0.45, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, cooldownMs: 200,
+    fallback: { sample: "blessing", rate: 0.85 }, // powers down, unbroken
+  },
+
+  // Crooked Chain (tether: lash-latch / pull loop / hold / sweep + the inverted-drag
+  // danger and the whiffed-lash fail).
+  "tetherLatch": {
+    stem: "sfx/chain_latch", variants: 3, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    fallback: { sample: "ricochet", rate: 0.85, lowpassHz: 4000 }, // hook bite + link rattle
+  },
+  "crook.pullLoop": {
+    stem: "sfx/chain_pull_loop", variants: 1, gain: 0.35, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0, loop: true,
+  },
+  "crook.hold": {
+    stem: "sfx/chain_hold", variants: 1, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, cooldownMs: 150,
+    fallback: { sample: "chest", rate: 0.9, lowpassHz: 2500 }, // the chain snaps taut
+  },
+  "tetherSweep": {
+    stem: "sfx/chain_sweep", variants: 2, gain: 0.85, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 150,
+    duck: [dM(0.8, 0.08, 0.25)],
+    fallback: { sample: "heavySwing", rate: 1.1 },
+  },
+  "crook.dragged": {
+    stem: "sfx/chain_dragged", variants: 1, gain: 0.8, bus: "voiceTell", priority: WAVE_PRIORITY.enemyTell,
+    jitter: 0.04, spatial: true, cooldownMs: 300,
+    duck: [dM(0.7, 0.1, 0.3)],
+    fallback: { sample: "enemyAttack", rate: 0.85, lowpassHz: 1800 }, // YOU are the one reeled in
+  },
+  "crook.whiff": {
+    stem: "sfx/chain_whiff", variants: 2, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, cooldownMs: 150,
+    fallback: { sample: "meleeSwing", rate: 0.85, lowpassHz: 3500 }, // the lash bites nothing
+  },
+
+  // ---- §4c the SHARED status library (apply/break; DoT ticks stay silent) -------------
+  "status.chillApply": {
+    stem: "status/chill_apply", variants: 2, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 250, isPerEntityCooldown: true,
+    fallback: { sample: "coin", rate: 0.85, highpassHz: 1600 }, // frost takes hold
+  },
+  "status.freeze": {
+    stem: "status/freeze_solid", variants: 2, gain: 0.65, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.04, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "parry", rate: 1.15, highpassHz: 1200 }, // solid ice locks
+  },
+  "status.freezeBreak": {
+    stem: "status/freeze_break", variants: 2, gain: 0.55, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 200, isPerEntityCooldown: true,
+    fallback: { sample: "enemyDeath", rate: 1.15, highpassHz: 1500 }, // the shell shatters
+  },
+  "status.burnApply": {
+    stem: "status/burn_apply", variants: 2, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "barrel", rate: 1.15, highpassHz: 900 }, // ignition catch (ticks stay silent)
+  },
+  "status.shockApply": {
+    stem: "status/shock_apply", variants: 2, gain: 0.4, bus: "sfx", priority: WAVE_PRIORITY.impact,
+    jitter: 0.05, spatial: true, cooldownMs: 400, isPerEntityCooldown: true,
+    fallback: { sample: "tesla", rate: 1.15, highpassHz: 1200 }, // static takes hold
   },
 
   // ---- §5 six audio zones (ambient bus loops; never one full-volume global loop) -------
@@ -1348,9 +1601,108 @@ export const ALWAYS_REACHABLE_EVENTS: readonly WaveEventId[] = [
 ];
 
 // PR #31 WeaponIds -> wave fire events; beam is EXCLUDED on purpose (its lifecycle is
-// start/loop/stop through the director, never a per-shot one-shot at 22Hz).
+// start/loop/stop through the director, never a per-shot one-shot at 22Hz). The effect
+// wave binds only its SHOOTING verbs here (lastlight/frostline raise `shot` events);
+// breach routes through the charge-tier release logic in game.ts (WEAPON_AUDIO), and
+// the non-shooting verbs carry their sound on dedicated effect events.
 export const WAVE_WEAPON_FIRE: Readonly<Record<string, WaveEventId>> = {
   mortar: "shootMortar",
+  lastlight: "shootLastlight",
+  frostline: "shootFrostline",
+};
+
+// ---- the WEAPON AUDIO CONTRACT: semantic states -> manifest rows -----------------------
+// The client (and tests) speak STATES; only this table knows row ids. Universal state
+// vocabulary: equip, prime (start), loop (the ONE keyed hold loop), threshold, ready
+// (lock), release (+releaseAlt for a DISTINCT-STEM tier), travel, impact, vent
+// (cancel/cooldown), fail — plus the family verbs (trap place/arm/trigger/expire,
+// orbital pass/hit/catch, deployable place/unfold/acquire/fire/damaged/destroyed/
+// timeout, tether hold/sweep/dragged, risk danger/payoff/recovery) and the shared
+// statusApply/statusBreak library hooks.
+export type WeaponAudioState =
+  | "equip" | "prime" | "loop" | "threshold" | "ready" | "release" | "releaseAlt"
+  | "travel" | "impact" | "vent" | "fail"
+  | "place" | "arm" | "trigger" | "expire"
+  | "pass" | "hit" | "catch"
+  | "unfold" | "acquire" | "fire" | "damaged" | "destroyed" | "timeout"
+  | "hold" | "sweep" | "dragged"
+  | "danger" | "payoff" | "recovery"
+  | "statusApply" | "statusBreak";
+
+export const WEAPON_AUDIO: Readonly<Record<string, Partial<Record<WeaponAudioState, WaveEventId>>>> = {
+  lastlight: {
+    equip: "weapon.equip",
+    release: "shootLastlight",
+    danger: "lastlight.surge",       // the low-HP band opens (the cost is live)
+    payoff: "lastlight.empowered",   // a DISTINCT empowered take, never a pitch tier
+    recovery: "lastlight.settle",
+  },
+  breach: {
+    equip: "weapon.equip",
+    prime: "breach.chargeStart",
+    loop: "breach.chargeLoop",       // ONE keyed hold loop; start/stop, never per tick
+    threshold: "breach.threshold",
+    ready: "breach.fullLock",
+    release: "shootBreach",          // partial-charge tier
+    releaseAlt: "breach.releaseFull",// full-charge tier — a distinct stem
+    travel: "breach.travel",
+    impact: "breach.impact",
+    vent: "breach.vent",             // the safe cancel hisses out
+  },
+  snapwire: {
+    equip: "weapon.equip",
+    place: "wirePlant",
+    arm: "wire.armed",
+    trigger: "wireSnap",
+    expire: "wire.expire",
+    fail: "wire.refuse",
+  },
+  frostline: {
+    equip: "weapon.equip",
+    release: "shootFrostline",
+    statusApply: "status.chillApply", // the shared status library carries its voice
+    statusBreak: "status.freezeBreak",
+  },
+  halo: {
+    equip: "weapon.equip",
+    loop: "halo.loop",               // ONE mixed owner loop — never a voice per blade
+    pass: "halo.pass",
+    hit: "halo.hit",
+    release: "haloFlare",
+    catch: "halo.catch",
+  },
+  sentry: {
+    equip: "weapon.equip",
+    place: "sentryPlace",
+    unfold: "sentry.unfold",
+    acquire: "sentry.acquire",
+    fire: "sentryShot",
+    damaged: "sentry.damaged",
+    destroyed: "sentryDown",
+    timeout: "sentry.timeout",
+  },
+  crook: {
+    equip: "weapon.equip",
+    prime: "tetherLatch",
+    loop: "crook.pullLoop",
+    hold: "crook.hold",
+    sweep: "tetherSweep",
+    dragged: "crook.dragged",        // the risk half: YOU are the one reeled in
+    fail: "crook.whiff",
+  },
+  // Back-filled bindings for the previous wave's manifest weapons.
+  mortar: { release: "shootMortar", impact: "mortarDetonate" },
+  beam: { prime: "beamStart", loop: "beamLoop", vent: "beamStop", hit: "beamHit" },
+};
+
+// The shared status library (apply on FIRST application, break on state exit; DoT ticks
+// are SILENT by contract — their cadence carries no decision).
+export const STATUS_AUDIO: Readonly<Record<string, WaveEventId>> = {
+  burn: "status.burnApply",
+  chill: "status.chillApply",
+  shock: "status.shockApply",
+  freeze: "status.freeze",
+  freezeBreak: "status.freezeBreak",
 };
 
 export const BEAM_WEAPON_ID = "beam";

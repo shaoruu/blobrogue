@@ -61,6 +61,11 @@ export interface TileRenderScene<Img> {
   art: TileArtSource<Img>;
   wallSide: readonly [TileRenderGradient, TileRenderGradient];
   animClock: number;
+  // When true, the lighting layer owns the ambient depth darkness (it renders the same
+  // lightLevel budget with light pools cut out of it, immediately after this pass), so
+  // the flat fill below is skipped. False = legacy flat darkness (lighting off, and the
+  // headless readability scenes, which raster this pass alone).
+  isAmbientGraded?: boolean;
 }
 
 // Walls are drawn as extruded blocks: a lit top cap, a dark front face dropping down
@@ -321,7 +326,8 @@ export function renderDungeonTiles<Img>(ctx: TileRenderContext<Img>, scene: Tile
   ctx.fillRect(wx, wy, ww, wh);
   // Depth darkness: the world itself dims band over band (entities draw ABOVE this, so
   // combat readability never pays for the mood). Ember/Null breathe — the dark swells.
-  if (biome.lightLevel > 0) {
+  // Skipped when the lighting layer owns the ambient grade (isAmbientGraded).
+  if (biome.lightLevel > 0 && !scene.isAmbientGraded) {
     ctx.globalCompositeOperation = "source-over";
     const breathe = biome.pulse > 0 ? biome.pulse * 0.5 * (1 + Math.sin(scene.animClock * 1.3)) : 0;
     ctx.globalAlpha = Math.min(0.5, biome.lightLevel + breathe);

@@ -32,6 +32,9 @@ export interface Pose {
   x: number;
   y: number;
   aimAngle: number;
+  // The rendered pose sits on a dash segment: the observing client plays the dash FX
+  // (afterimages/dust/sfx) HERE, so the juice and the crisp movement stay aligned.
+  isDashing: boolean;
 }
 
 interface Sample {
@@ -40,6 +43,7 @@ interface Sample {
   x: number;
   y: number;
   aim: number;
+  dash: boolean;  // this keyframe was recorded mid-dash (dash movement led INTO it)
 }
 
 interface Track {
@@ -69,10 +73,10 @@ export class RemoteInterp {
   // Feed the latest snapshot for one player. Only rows whose server timestamp advanced add a
   // keyframe, so a burst of subscription callbacks (fired whenever ANY player changes) never
   // floods a still player's buffer with duplicate samples.
-  ingest(id: string, srcAt: number, x: number, y: number, aim: number, now: number): void {
+  ingest(id: string, srcAt: number, x: number, y: number, aim: number, now: number, isDashing = false): void {
     let track = this.tracks.get(id);
     if (!track) {
-      track = { samples: [], pose: { x, y, aimAngle: aim } };
+      track = { samples: [], pose: { x, y, aimAngle: aim, isDashing: false } };
       this.tracks.set(id, track);
     }
     const samples = track.samples;
@@ -87,8 +91,8 @@ export class RemoteInterp {
     // Reuse the oldest slot once the ring is full, so ingest stops allocating after warmup.
     const s = samples.length >= HISTORY
       ? samples.shift()!
-      : { recvAt: 0, srcAt: 0, x: 0, y: 0, aim: 0 };
-    s.recvAt = now; s.srcAt = srcAt; s.x = x; s.y = y; s.aim = aim;
+      : { recvAt: 0, srcAt: 0, x: 0, y: 0, aim: 0, dash: false };
+    s.recvAt = now; s.srcAt = srcAt; s.x = x; s.y = y; s.aim = aim; s.dash = isDashing;
     samples.push(s);
   }
 
@@ -108,25 +112,38 @@ export class RemoteInterp {
 
     // Before the oldest keyframe (just joined, or a long stall): hold the oldest pose.
     if (renderAt <= s[0].recvAt) {
-      pose.x = s[0].x; pose.y = s[0].y; pose.aimAngle = s[0].aim;
+      pose.x = s[0].x; pose.y = s[0].y; pose.aimAngle = s[0].aim; pose.isDashing = s[0].dash;
       return pose;
     }
-    // Common case: the render clock falls between two keyframes -- interpolate.
+    // Common case: the render clock falls between two keyframes -- interpolate. EXCEPT a
+    // dash segment: a dash covers ~30px per snapshot -- far under the teleport snap -- so a
+    // linear glide would smear the blink across the render delay and land it late. A segment
+    // whose end keyframe was recorded mid-dash is dash MOVEMENT, so we snap straight to its
+    // end: the remote blob steps keyframe-to-keyframe, a crisp fast move that matches the
+    // dash FX. Ordinary segments (dash === false on the end keyframe) lerp exactly as before.
     for (let i = 0; i < s.length - 1; i++) {
       const a = s[i], b = s[i + 1];
       if (renderAt <= b.recvAt) {
+        if (b.dash) {
+          pose.x = b.x; pose.y = b.y; pose.aimAngle = b.aim; pose.isDashing = true;
+          return pose;
+        }
         const span = b.recvAt - a.recvAt;
         const t = span > 0 ? (renderAt - a.recvAt) / span : 0;
         pose.x = a.x + (b.x - a.x) * t;
         pose.y = a.y + (b.y - a.y) * t;
         pose.aimAngle = lerpAngle(a.aim, b.aim, t);
+        pose.isDashing = false;
         return pose;
       }
     }
-    // Past the newest keyframe: briefly extrapolate from the last two, otherwise hold.
+    // Past the newest keyframe: briefly extrapolate from the last two, otherwise hold. Never
+    // extrapolate a dash -- projecting dash speed past the newest keyframe would overshoot
+    // the dash end (into walls) and rubber-band back; hold at the dash frontier instead.
     const last = s[s.length - 1];
     const ahead = renderAt - last.recvAt;
-    if (s.length >= 2 && ahead <= MAX_EXTRAPOLATE_MS) {
+    pose.isDashing = last.dash;
+    if (!last.dash && s.length >= 2 && ahead <= MAX_EXTRAPOLATE_MS) {
       const prev = s[s.length - 2];
       const span = last.recvAt - prev.recvAt;
       const k = span > 0 ? ahead / span : 0;

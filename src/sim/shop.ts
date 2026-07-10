@@ -15,13 +15,14 @@
 //     buy each per player per shop — a teammate's purchase never depletes yours.
 
 import type { Room } from "./dungeon.js";
-import type { WeaponId } from "./types.js";
+import type { WeaponId, MysteryTwist } from "./types.js";
 import { TILE } from "./types.js";
 import type { PlayerId } from "./input.js";
 import { Rng } from "./rng.js";
-import { SHOP } from "./balance.js";
+import { SHOP, SHOP_RARITY_PRICE_MULT, MYSTERY, LEGENDARY_MIN_FLOOR } from "./balance.js";
 import { isBossFloor } from "./enemies.js";
-import { PICKUP_WEAPONS } from "./weapons.js";
+import { PICKUP_WEAPONS, WEAPONS, rollWeaponRarity, rollMysteryTwist } from "./weapons.js";
+import { MAX_OWNED_WEAPONS } from "./constants.js";
 import { ITEMS, MAX_ITEM_LEVEL, itemLevelsOf, rollItemChoicesWith } from "./items.js";
 
 // Every third depth is a secured relay niche — except boss floors, whose capstone owns
@@ -42,6 +43,12 @@ export interface ShopSlot {
   x: number; y: number;    // station world position (the pedestal the player walks to)
   soldTo: PlayerId | null; // shared slots: the claiming buyer (null = still for sale)
   buyers: PlayerId[];      // personal slots: players who already bought here this floor
+  // Mystery pedestal: `weapon` holds the ACTUAL identity sim-side but the wire hides it
+  // (see toShopWire) — every client shows "???" until a buy reveals it. The buy flips
+  // isMystery false so the SOLD pedestal wears its true face. Both fields are always
+  // present (false/null on ordinary slots) so the wire round-trip stays 1:1.
+  isMystery: boolean;
+  twist: MysteryTwist | null;
 }
 
 export interface ShopState {
@@ -62,10 +69,50 @@ function shopRng(seed: number, floor: number, rerollsUsed: number): Rng {
   return new Rng((seed ^ 0x5a1e5b0b) + floor * 92821 + rerollsUsed * 31337);
 }
 
-function rollDistinctShopWeapon(rng: Rng, taken: readonly (WeaponId | null)[]): WeaponId {
-  let pick = rng.pick(PICKUP_WEAPONS);
-  for (let i = 0; i < PICKUP_WEAPONS.length && taken.includes(pick); i++) pick = rng.pick(PICKUP_WEAPONS);
-  return pick;
+// A pedestal weapon roll: rarity-tiered like every drop source, distinct from the ids
+// already stalled, and preferring a gun outside `exclude` (weapons the whole party
+// already owns — the same anti-repeat discipline the free-drop bag applies, so Patch
+// never stalls a gun nobody needs while unowned guns remain). The candidate ladder:
+// the rolled tier's fresh guns, the tier's unstalled guns, then any fresh/unstalled/
+// pooled gun — a stall never fails to stock. The LAST weapon pedestal may roll as a
+// MYSTERY (MYSTERY.minFloor+): identity hidden until purchase, gamble-weighted reveal
+// pool. Fixed draw order (mystery decision, tier, pick, twist) keeps the stream
+// reproducible per (seed, floor, rerolls, exclude).
+interface ShopWeaponRoll {
+  weapon: WeaponId;
+  isMystery: boolean;
+  twist: MysteryTwist | null;
+}
+
+function rollShopWeapon(rng: Rng, floor: number, taken: readonly (WeaponId | null)[], exclude: readonly WeaponId[], mayBeMystery: boolean): ShopWeaponRoll {
+  const isMystery = mayBeMystery && floor >= MYSTERY.minFloor && rng.chance(MYSTERY.shopChance);
+  const tier = rollWeaponRarity(() => rng.next(), floor, { isMystery });
+  // Below the legendary floor gate an identified stall may never fall back into the
+  // legendary tier either (the mystery gamble is the one sanctioned path past the gate).
+  const pool = PICKUP_WEAPONS.filter((id) =>
+    isMystery || floor >= LEGENDARY_MIN_FLOOR || WEAPONS[id].rarity !== "legendary");
+  const inTier = pool.filter((id) => WEAPONS[id].rarity === tier);
+  const ladder: ReadonlyArray<readonly WeaponId[]> = [
+    inTier.filter((id) => !taken.includes(id) && !exclude.includes(id)),
+    inTier.filter((id) => !taken.includes(id)),
+    pool.filter((id) => !taken.includes(id) && !exclude.includes(id)),
+    pool.filter((id) => !taken.includes(id)),
+    pool,
+  ];
+  const candidates = ladder.find((set) => set.length > 0)!;
+  return {
+    weapon: rng.pick(candidates),
+    isMystery,
+    twist: isMystery ? rollMysteryTwist(() => rng.next()) : null,
+  };
+}
+
+// Rarity-appropriate pricing: the ladder price is the COMMON price; rarer stock costs
+// proportionally more. A mystery pedestal prices as a gamble — above common, well under
+// a sure legendary.
+export function shopWeaponPrice(basePrice: number, weapon: WeaponId, isMystery: boolean): number {
+  if (isMystery) return Math.round(basePrice * MYSTERY.shopPriceMult);
+  return Math.round(basePrice * SHOP_RARITY_PRICE_MULT[WEAPONS[weapon].rarity]);
 }
 
 // The blessing pedestal holds ONE item everyone sees identically (per-player validity is
@@ -79,8 +126,10 @@ function rollShopBlessing(rng: Rng): string {
 // (the generator guarantees the room is at least 11x8 of clean rect floor): Patch's stall
 // on the back wall, the three item pedestals in a mid row with clear per-pedestal
 // approach lanes, the heart station and reroll post flanking the stall. Deterministic
-// from (seed, floor) — every client and the server derive the identical shop.
-export function buildShopState(seed: number, floor: number, room: Room): ShopState {
+// from (seed, floor, exclude) — built once by the authority at floor load and shipped
+// on the wire, so every client reads the identical shop. `exclude` is the guns the
+// whole party already owns at build time (see rollDistinctShopWeapon).
+export function buildShopState(seed: number, floor: number, room: Room, exclude: readonly WeaponId[] = []): ShopState {
   const rng = shopRng(seed, floor, 0);
   const cx = (room.cx + 0.5) * TILE;
   const backY = (room.y + 1.5) * TILE;
@@ -89,28 +138,34 @@ export function buildShopState(seed: number, floor: number, room: Room): ShopSta
   const slots: ShopSlot[] = [];
   for (let i = 0; i < SHOP.pedestalPrices.length; i++) {
     const isWeapon = i < SHOP.weaponPedestals;
-    const weapon = isWeapon ? rollDistinctShopWeapon(rng, weapons) : null;
-    if (weapon) weapons.push(weapon);
+    // Only the LAST weapon pedestal may be a mystery: one honest identified option always
+    // stands beside the gamble.
+    const roll = isWeapon ? rollShopWeapon(rng, floor, weapons, exclude, i === SHOP.weaponPedestals - 1) : null;
+    if (roll) weapons.push(roll.weapon);
     slots.push({
       id: i,
       kind: isWeapon ? "weapon" : "blessing",
       isShared: isWeapon,
-      weapon,
+      weapon: roll ? roll.weapon : null,
       itemId: isWeapon ? null : rollShopBlessing(rng),
-      price: SHOP.pedestalPrices[i],
+      price: roll ? shopWeaponPrice(SHOP.pedestalPrices[i], roll.weapon, roll.isMystery) : SHOP.pedestalPrices[i],
       x: cx + (i - (SHOP.pedestalPrices.length - 1) / 2) * TILE * 2,
       y: midY,
       soldTo: null,
       buyers: [],
+      isMystery: roll ? roll.isMystery : false,
+      twist: roll ? roll.twist : null,
     });
   }
   slots.push({
     id: slots.length, kind: "heart", isShared: false, weapon: null, itemId: null,
     price: SHOP.heartPrice, x: cx - TILE * 3, y: backY, soldTo: null, buyers: [],
+    isMystery: false, twist: null,
   });
   slots.push({
     id: slots.length, kind: "reroll", isShared: true, weapon: null, itemId: null,
     price: SHOP.rerollCost, x: cx + TILE * 3, y: backY, soldTo: null, buyers: [],
+    isMystery: false, twist: null,
   });
   return { keeperX: cx, keeperY: backY, slots, rerollsUsed: 0 };
 }
@@ -129,13 +184,17 @@ export function hasRestockableSlots(shop: ShopState): boolean {
 // Reroll the unbought item pedestals in place (rerollsUsed must already be incremented by
 // the caller — it keys the deterministic restock stream). Weapon rolls stay distinct from
 // every pedestal weapon still standing, bought or not.
-export function restockShop(shop: ShopState, seed: number, floor: number): void {
+export function restockShop(shop: ShopState, seed: number, floor: number, exclude: readonly WeaponId[] = []): void {
   const rng = shopRng(seed, floor, shop.rerollsUsed);
   const keptWeapons = shop.slots.map((s) => (isRestockable(s) ? null : s.weapon));
   for (const slot of shop.slots) {
     if (!isRestockable(slot)) continue;
     if (slot.kind === "weapon") {
-      slot.weapon = rollDistinctShopWeapon(rng, keptWeapons);
+      const roll = rollShopWeapon(rng, floor, keptWeapons, exclude, slot.id === SHOP.weaponPedestals - 1);
+      slot.weapon = roll.weapon;
+      slot.isMystery = roll.isMystery;
+      slot.twist = roll.twist;
+      slot.price = shopWeaponPrice(SHOP.pedestalPrices[slot.id], roll.weapon, roll.isMystery);
       keptWeapons.push(slot.weapon);
     } else {
       slot.itemId = rollShopBlessing(rng);
@@ -150,6 +209,7 @@ export type ShopSlotStatus =
   | "broke"      // NEED N MORE
   | "sold"       // shared: claimed by someone else; personal: this viewer already bought
   | "owned"      // weapon the viewer already owns (claimed-by-you resolves here too)
+  | "full"       // weapon the viewer has no hotbar slot for (drop/swap first, then buy)
   | "maxLevel"   // blessing already at Lv3 for the viewer
   | "fullHealth" // heart at full HP
   | "exhausted"; // reroll limit spent, or nothing left to restock
@@ -171,7 +231,13 @@ export function shopSlotStatusFor(shop: ShopState, slot: ShopSlot, viewer: ShopV
   switch (slot.kind) {
     case "weapon": {
       if (slot.soldTo !== null && slot.soldTo !== viewer.pid) return "sold";
-      if (slot.weapon !== null && viewer.ownedWeapons.includes(slot.weapon)) return "owned";
+      // A mystery pedestal never reads OWNED — nobody knows what it is (the buy itself
+      // rerolls an already-owned reveal into something the buyer lacks). Clients decode
+      // it with weapon hidden, so skipping the check here keeps panel and sim agreeing.
+      if (!slot.isMystery && slot.weapon !== null && viewer.ownedWeapons.includes(slot.weapon)) return "owned";
+      // The hotbar cap gates the buy the same way it gates floor pickups: a full viewer
+      // must free a slot (Q drop / swap) before the stall will take their coins.
+      if (viewer.ownedWeapons.length >= MAX_OWNED_WEAPONS) return "full";
       break;
     }
     case "blessing": {
