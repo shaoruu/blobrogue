@@ -3,6 +3,7 @@
 import type { WeaponId, SpriteName, FloorHazardKind } from "../sim/types.js";
 import { resolveClip } from "./facing.js";
 import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice, Facing4 } from "./facing.js";
+import { LAYERED_HERO_BASE_SRC, LAYERED_HERO_BASE_WALK_SRC } from "./cosmeticSockets.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -27,6 +28,9 @@ export interface SheetDef { src: string; fps: number; }
 //   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
 export const SHEETS: Partial<Record<string, SheetDef>> = {
   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
+  // The bald hero's walk sheet — same 256x64 / 4-frame layout and fps as hero.walk, so a
+  // hatted blob animates identically to the classic one (just without the baked hat).
+  "hero_bald.walk": { src: LAYERED_HERO_BASE_WALK_SRC, fps: 10 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
   "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 11 },
@@ -257,6 +261,10 @@ const PROP_SOURCES: Record<PropSpriteName, string> = {
 
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
+  // The bald hero base (cowboy hat stripped) used under any equipped head cosmetic. Its
+  // idle static + hero_bald.walk sheet mirror the hatted hero's, so tint/flash/anim all
+  // work identically (see heroBodySprite for the render-surface selection).
+  hero_bald: LAYERED_HERO_BASE_SRC,
   slime: "/sprites/slime.png",
   bat: "/sprites/bat.png",
   skeleton: "/sprites/skeleton.png",
@@ -806,6 +814,16 @@ export const PLAYER_COLORS = [
 
 export function playerColor(index: number): string {
   return PLAYER_COLORS[index % PLAYER_COLORS.length];
+}
+
+// The blob's BASE body sprite for a given head-cosmetic state. A player wearing ANY hat
+// renders from the bald base ("hero_bald") so the equipped hat REPLACES the baked cowboy
+// hat instead of stacking a second one on top; with no hat, the classic cowboy-hatted
+// "hero" is the default look. Every render surface (self, remotes, dash ghosts, and the
+// menu/closet preview) resolves the base through THIS one function so the choice, and thus
+// the fix, can never drift between surfaces.
+export function heroBodySprite(hat: string | null): SpriteName {
+  return hat !== null ? "hero_bald" : "hero";
 }
 
 // The explicit "identity not resolved yet" grey for teammate surfaces (dots, rings, labels).

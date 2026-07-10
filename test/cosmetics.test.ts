@@ -23,8 +23,10 @@ import {
 import { hasCosmeticArt, resolveOverlay } from "../src/game/cosmeticArt.js";
 import {
   COSMETIC_ORIENTATIONS, SOCKET_KINDS, socketFor, capCosmeticXform,
-  COSMETIC_SCALE_CAP, COSMETIC_ROT_CAP, COSMETIC_BOB_CAP, COSMETIC_ASSET_SOURCES, LAYERED_HERO_BASE_SRC,
+  COSMETIC_SCALE_CAP, COSMETIC_ROT_CAP, COSMETIC_BOB_CAP, COSMETIC_ASSET_SOURCES,
+  LAYERED_HERO_BASE_SRC, LAYERED_HERO_BASE_WALK_SRC,
 } from "../src/game/cosmeticSockets.js";
+import { heroBodySprite, SHEETS, devSpriteManifest } from "../src/game/assets.js";
 import { jsonCodec, ProtocolError, buildSnapshot } from "../src/net/protocol.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
 import { IDLE_INPUT } from "../src/sim/input.js";
@@ -307,16 +309,61 @@ function socketGateTests(): void {
       def.socket === (c.slot === "hat" ? "head" : "face"), def.socket);
   }
   check("round_glasses hooks the shipped Round Specs item", cosmeticById("face_round")?.assetKey === "round_glasses");
-  check("cowboy_hat_classic is a hook but NOT a catalog item (the baked default until the layered base ships)",
-    COSMETIC_ASSET_SOURCES.cowboy_hat_classic !== undefined && COSMETICS.every((c) => c.assetKey !== "cowboy_hat_classic"));
-  check("the layered bald base has an explicit hook for the art pipeline",
-    LAYERED_HERO_BASE_SRC === "/sprites/cosmetics/hero_base_bald.png");
+  check("cowboy_hat_classic is now a normal equippable hat layer (starter, hooks its overlay art)",
+    COSMETIC_ASSET_SOURCES.cowboy_hat_classic !== undefined
+    && cosmeticById("cowboy_hat_classic")?.slot === "hat"
+    && cosmeticById("cowboy_hat_classic")?.unlock === "starter"
+    && cosmeticById("cowboy_hat_classic")?.assetKey === "cowboy_hat_classic");
+  check("the layered bald base + walk sheet have explicit hooks for the art pipeline",
+    LAYERED_HERO_BASE_SRC === "/sprites/cosmetics/hero_base_bald.png"
+    && LAYERED_HERO_BASE_WALK_SRC === "/sprites/cosmetics/hero_base_bald_walk.png");
   // Sprites are the ONLY cosmetic art: with no image binaries loaded in this headless
   // harness, resolution yields nothing (never a fabricated placeholder) — a wired id with an
   // unloaded asset and an unknown id alike resolve to null.
   check("a wired overlay resolves to NOTHING while its sprite is unloaded (no procedural fallback)",
     resolveOverlay("face_round", "side", 0) === null);
   check("an unknown id resolves to NOTHING (multiplayer-safe fallback)", resolveOverlay("hat_from_2031", "side", 0) === null);
+}
+
+// The hat-layering fix (the "double cowboy hat" regression): a blob wearing ANY head
+// cosmetic renders from the BALD base so the equipped hat replaces the baked cowboy hat
+// instead of stacking on it; a bare-headed blob keeps the classic hatted hero. heroBodySprite
+// is the single decision every render surface routes through, so this locks both the choice
+// and that every surface (self/remotes/dash ghosts/menu preview) actually uses it. Pure and
+// client-only — no sim, no image binaries, no protocol.
+function baldBaseTests(): void {
+  section("bald base under hats: the equipped hat REPLACES the baked cowboy hat (no double hat)");
+
+  check("no hat equipped -> the classic hatted hero is the default body",
+    heroBodySprite(null) === "hero");
+  check("any hat equipped -> the bald base body (so the worn hat replaces the baked hat)",
+    heroBodySprite("hat_crown") === "hero_bald");
+  check("the cowboy hat, re-picked as a real layer, also rides the bald base",
+    heroBodySprite("cowboy_hat_classic") === "hero_bald");
+
+  // The bald base must animate IDENTICALLY to the hatted hero: same 4-frame walk sheet
+  // cadence (fps) so a hatted blob's walk never desyncs from a bare-headed one.
+  const heroWalk = SHEETS["hero.walk"];
+  const baldWalk = SHEETS["hero_bald.walk"];
+  check("the bald base registers a walk sheet", baldWalk !== undefined && baldWalk.src === LAYERED_HERO_BASE_WALK_SRC);
+  check("the bald walk cadence matches the hero walk exactly (identical fps)",
+    baldWalk !== undefined && heroWalk !== undefined && baldWalk.fps === heroWalk.fps);
+
+  // The bald base is a registered SPRITE (drives get() AND the tintedSprite/tintedSheetCanvas
+  // tint path), so the player's chosen body color tints the bald blob exactly like the hero.
+  const sprites = devSpriteManifest();
+  check("the bald base is a registered body sprite (tintable like the hero)",
+    sprites.some((s) => s.label === "hero_bald" && s.src === LAYERED_HERO_BASE_SRC));
+
+  // Every render surface resolves the base through heroBodySprite — static-scan the three the
+  // owner watches (self world, remotes world, the menu/closet preview) so none can drift.
+  const game = readFileSync(join(ROOT, "src/game/game.ts"), "utf8");
+  const renderPlayer = game.slice(game.indexOf("private renderPlayer()"), game.indexOf("private renderReviveRings"));
+  const renderRemotes = game.slice(game.indexOf("private renderRemotePlayers()"), game.indexOf("private selfTint()"));
+  const preview = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
+  check("self world render picks the base via heroBodySprite", renderPlayer.includes("heroBodySprite("));
+  check("remote world render picks the base via heroBodySprite", renderRemotes.includes("heroBodySprite("));
+  check("the menu/closet preview picks the base via heroBodySprite", preview.includes("heroBodySprite("));
 }
 
 function fakeStore(): NudgeStore & { data: Map<string, string> } {
@@ -381,6 +428,7 @@ function main(): void {
   renderContractTests();
   publicSchemaTests();
   socketGateTests();
+  baldBaseTests();
   nudgeTests();
   authHygieneTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

@@ -90,7 +90,10 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "body_violet", slot: "body", name: "Violet", unlock: "starter", paletteIndex: 4 },
   { id: "body_orange", slot: "body", name: "Orange", unlock: "starter", paletteIndex: 5 },
   // hats — every entry hooks its generated sprite via assetKey (the base name shared by the
-  // three oriented PNGs in public/sprites/cosmetics; see cosmeticSockets COSMETIC_ASSET_SOURCES)
+  // three oriented PNGs in public/sprites/cosmetics; see cosmeticSockets COSMETIC_ASSET_SOURCES).
+  // The cowboy hat is a normal equippable layer that rides the bald base — the classic look
+  // is the bare-headed default, and this lets a player re-pick it explicitly.
+  { id: "cowboy_hat_classic", slot: "hat", name: "Cowboy Hat", unlock: "starter", assetKey: "cowboy_hat_classic" },
   { id: "hat_top", slot: "hat", name: "Top Hat", unlock: "starter", assetKey: "hat_top" },
   { id: "hat_beanie", slot: "hat", name: "Beanie", unlock: "starter", assetKey: "hat_beanie" },
   { id: "hat_chef", slot: "hat", name: "Chef's Hat", unlock: "starter", assetKey: "hat_chef" },

@@ -651,7 +651,12 @@ export type TileKind = 0 | 1; // 0 = floor, 1 = wall
 // src/sim free of any import into src/game (which pulls in DOM types). The client re-exports
 // this from assets.ts for its render call sites.
 export type SpriteName =
-  | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
+  | "hero"
+  // The BALD hero body (no baked-in cowboy hat), rendered under any equipped head cosmetic
+  // so the worn hat replaces the classic hat instead of stacking a second one on top. A
+  // pure client render key — the sim never references it (players ride the wire as "hero").
+  | "hero_bald"
+  | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
   | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment" | "mason"
   | "echo" | "knell" | "knot" | "sac" | "marshal" | "toll"
