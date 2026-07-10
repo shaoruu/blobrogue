@@ -100,6 +100,54 @@ function cycleControl<T extends string>(options: readonly T[], labels: Record<T,
   return { el: wrap, sync };
 }
 
+// A human label for a normalized key name (the InputController's lowercased key). Arrows and
+// space get glyphs; everything else uppercases.
+function keyLabel(key: string): string {
+  const map: Record<string, string> = {
+    " ": "SPACE", arrowup: "\u2191", arrowdown: "\u2193", arrowleft: "\u2190", arrowright: "\u2192",
+  };
+  return map[key] ?? key.toUpperCase();
+}
+
+// A key-rebind control: shows the current bound key; clicking arms "capture" mode and the
+// NEXT keydown becomes the binding (Escape cancels, keeping the old key). Modifier-only keys
+// like Shift bind fine (event.key === "Shift"). role=button + live label for a11y.
+function keybindControl(read: () => string, write: (key: string) => void): { el: HTMLButtonElement; sync: () => void } {
+  const btn = el("button", "set-keybind");
+  btn.type = "button";
+  let listening = false;
+  const sync = () => {
+    if (listening) { btn.textContent = "PRESS A KEY\u2026"; return; }
+    btn.textContent = keyLabel(read());
+    btn.setAttribute("aria-label", `dash key: ${keyLabel(read())}. Click to rebind.`);
+  };
+  const onKey = (e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    stop();
+    if (e.key !== "Escape") write(e.key.toLowerCase());
+    sync();
+  };
+  const stop = () => {
+    if (!listening) return;
+    listening = false;
+    window.removeEventListener("keydown", onKey, true);
+    btn.classList.remove("listening");
+  };
+  btn.addEventListener("click", () => {
+    if (listening) { stop(); sync(); return; }
+    listening = true;
+    btn.classList.add("listening");
+    sync();
+    // Capture-phase, one binding at a time — the next key anywhere sets it.
+    window.addEventListener("keydown", onKey, true);
+  });
+  // Losing focus (tabbing away mid-capture) cancels cleanly, never a stuck listener.
+  btn.addEventListener("blur", () => { stop(); sync(); });
+  sync();
+  return { el: btn, sync };
+}
+
 const FLASH_OPTIONS: readonly FlashLevel[] = ["off", "low", "full"];
 const FLASH_LABELS: Record<FlashLevel, string> = { off: "OFF", low: "LOW", full: "FULL" };
 const PHOTOSENSITIVITY_NOTE = "full-intensity flashes may affect photosensitive players";
@@ -137,7 +185,13 @@ function buildAudioTab(): HTMLElement[] {
 
 function buildGameplayTab(): HTMLElement[] {
   const autofire = switchControl(() => settings.isAutofire, () => settings.toggleAutofire());
-  return [row("autofire", "click toggles continuous fire", autofire.el)];
+  const doubleTap = switchControl(() => settings.isDoubleTapDash, () => settings.setDoubleTapDash(!settings.isDoubleTapDash));
+  const dashKey = keybindControl(() => settings.dashKey, (k) => settings.setDashKey(k));
+  return [
+    row("autofire", "click toggles continuous fire", autofire.el),
+    row("double-tap to dash", "double-tap a move key to dash", doubleTap.el),
+    row("dash key", "shift always dashes too", dashKey.el),
+  ];
 }
 
 function buildVideoTab(): HTMLElement[] {
