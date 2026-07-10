@@ -261,6 +261,13 @@ function buildPanel(game: Game): void {
     flowBtn.classList.toggle("on", on);
   }, "wide");
   worldSec.appendChild(flowBtn);
+  const lightBtn = btn("Lighting & AO: on", () => {
+    const on = game.devToggleLighting();
+    lightBtn.textContent = `Lighting & AO: ${on ? "on" : "off"}`;
+    lightBtn.classList.toggle("on", on);
+  }, "wide");
+  lightBtn.classList.add("on");
+  worldSec.appendChild(lightBtn);
   panel.appendChild(worldSec);
 
   // ---- live readout ----
@@ -271,12 +278,14 @@ function buildPanel(game: Game): void {
   const bulletV = h("span", "v");
   const partV = h("span", "v");
   const hpV = h("span", "v");
+  const lightV = h("span", "v");
   read.append(
     h("span", "k", "fps"), fpsV,
     h("span", "k", "enemies"), enemyV,
     h("span", "k", "bullets"), bulletV,
     h("span", "k", "particles"), partV,
     h("span", "k", "hp"), hpV,
+    h("span", "k", "light ms"), lightV,
   );
   readSec.appendChild(read);
   panel.appendChild(readSec);
@@ -299,12 +308,15 @@ function buildPanel(game: Game): void {
     bulletV.textContent = String(s.bullets);
     partV.textContent = String(s.particles);
     hpV.textContent = `${s.hp}/${s.maxHp}`;
+    lightV.textContent = s.isLighting ? `${s.lightingMs.toFixed(2)}` : "off";
     floor = s.floor;
     for (const [id, b] of weaponBtns) b.classList.toggle("on", id === s.weapon);
     godBtn.classList.toggle("on", s.isGodMode);
     godBtn.textContent = `God mode: ${s.isGodMode ? "on" : "off"}`;
     flowBtn.classList.toggle("on", s.isFlowDebug);
     flowBtn.textContent = `Flow field: ${s.isFlowDebug ? "on" : "off"}`;
+    lightBtn.classList.toggle("on", s.isLighting);
+    lightBtn.textContent = `Lighting & AO: ${s.isLighting ? "on" : "off"}`;
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);

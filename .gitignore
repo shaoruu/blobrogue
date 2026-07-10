@@ -33,3 +33,6 @@ __pycache__/
 
 # readability QA output (diagnostic PNGs + report; never fixtures)
 test/readability/out/
+
+# Headless capture output (PR screenshots, test diagnostics)
+artifacts/

@@ -116,6 +116,7 @@ export function createSettingsControls(): HTMLElement {
   // ---- accessibility ----
   const reducedMotion = toggleButton("reduced motion", () => settings.isReducedMotion, () => settings.setReducedMotion(!settings.isReducedMotion));
   const hitstop = toggleButton("hit-stop", () => settings.isHitstop, () => settings.setHitstop(!settings.isHitstop));
+  const highContrast = toggleButton("high contrast", () => settings.isHighContrast, () => settings.setHighContrast(!settings.isHighContrast));
 
   // Flash level cycles full -> low -> off; the photosensitivity note shows only at full.
   const flash = document.createElement("button");
@@ -137,7 +138,7 @@ export function createSettingsControls(): HTMLElement {
   wrap.append(
     groupHeader("audio"), mute, master.row, music.row, sfxVol.row, mutedNote,
     groupHeader("game feel"), autofire, shake.row, recoil.row, uiScale.row,
-    groupHeader("accessibility"), reducedMotion, hitstop, flash, flashNote,
+    groupHeader("accessibility"), reducedMotion, hitstop, highContrast, flash, flashNote,
   );
   return wrap;
 }

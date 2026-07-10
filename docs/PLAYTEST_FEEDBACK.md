@@ -68,7 +68,7 @@ This is the source of truth for Ian's playtest feedback. Main runner updates it 
 - `SHIPPED` Biome hue grading + named floors; deeper visuals still too monotonic.
 - `SPECCED` Depth must change materials/ecology/room grammar/movement, survive grayscale: Verdant roots/life; Sunless shale/bone/sound; Deep resin/fracture/wrong geometry; Emberreach clinker/vents/pressure.
 - `SPECCED` Floor purpose cadence F1–F10: establish/discover/dealer/synthesize/boss/recover/adapt/risk/prepare/master; no filler.
-- `SPECCED` Real lighting post-server: deterministic coarse server `lightAt`; authored client masks/occlusion/bloom; torch/projectile/explosion sources; readability floor; biome light grammars.
+- `BUILDING` Real lighting post-server: client presentation half is in review — baked contact AO from dungeon geometry, wall-occluded torch/brazier/hazard light pools with per-biome grammar, hero-glow readability floor, light-aware entity shadows, emissive restraint (real sources only), accessibility (high contrast/reduced motion/flash level), `test:lighting` visual-metrics gate, dev sandbox A/B toggle + light-ms readout. Server-side deterministic `lightAt` exposure field (AI dark-behavior queries) remains future work per `docs/specs/blobrogue_POST_SERVER_LIGHTING_spec.md` §1.
 - `SPECCED` Ambience: biome loops + reactive vegetation/dust/drips/heat; calm→pressure→boss→release.
 - `SPECCED` Shared walkable Amber Camp lobby, no startup menu: players/collected characters/NPC stations/Amber Heart/physical Descent+Wilds gates/party staging. Post Stage C.
 - `SPECCED` Gas tank: directional hiss→toxic fog (players+mobs), fire consumes into one burst; no fifth poison status.
