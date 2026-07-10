@@ -228,7 +228,7 @@ export interface PlayerSim {
   // Whether an ult was requested THIS tick (the client's edge/level "ult requested" input bit).
   // Re-derived from the consumed input every stepPlayerPhase (like isInteracting) and resolved +
   // cleared in the authoritative updateUlts — never wired, so a client can request, never cast.
-  ultRequested: boolean;
+  isUltRequested: boolean;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -420,7 +420,7 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     phaseSpeed: 0,
     ultInvuln: 0,
     passiveState: 0,
-    ultRequested: false,
+    isUltRequested: false,
   };
 }
 
@@ -534,7 +534,7 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
   p.phaseSpeed = 0;
   p.ultInvuln = 0;
   p.passiveState = 0;
-  p.ultRequested = false;
+  p.isUltRequested = false;
   // Hand the kit its signature starting weapon — but only when the player is still on the
   // stock default loadout (never stomp a mid-run pickup / a re-select that kept gear).
   if (isRealKit(kit)) {
@@ -621,7 +621,7 @@ function updateUlts(w: WorldState, ev: SimEvent[]): void {
       const healed = menderHeal(p, target, LIFEBLOOM.healPerTick, ev);
       if (healed > 0) p.passiveState -= healed;
     }
-    if (p.ultRequested) resolveUlt(w, p, ev);
+    if (p.isUltRequested) resolveUlt(w, p, ev);
   }
 }
 
@@ -629,7 +629,7 @@ function updateUlts(w: WorldState, ev: SimEvent[]): void {
 // has elapsed, then applies the kit's effect, emits the SimEvent(s), resets the meter to 0, and
 // sets the lockout (spec §3). A refused request (not charged / on cooldown) simply does nothing.
 function resolveUlt(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
-  p.ultRequested = false;
+  p.isUltRequested = false;
   if (!isRealKit(p.kitId)) return;
   if (!canCastUlt(p.ultCharge, w.tick, p.ultReadyAtTick)) return;
   p.ultCharge = 0;
@@ -9090,7 +9090,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   p.isInteracting = input.interact === true && !p.isDown && p.hp > 0;
   // The "ult requested" intent for this tick — consumed + validated in the AUTHORITATIVE
   // updateUlts (world phase), which online prediction never runs, so a client can only ask.
-  p.ultRequested = input.ult === true && !p.isDown && p.hp > 0;
+  p.isUltRequested = input.ult === true && !p.isDown && p.hp > 0;
   // Self-buff ult timers decay per player step (so prediction applies the server-granted buff
   // the server reconciles) alongside the melee-swing timer. Phase invuln is capped at cast.
   if (p.overdriveT > 0) p.overdriveT = p.overdriveT > dt ? p.overdriveT - dt : 0;

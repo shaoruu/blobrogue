@@ -73,10 +73,10 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - isAbsent:      connection-lifecycle bookkeeping (reserved reconnect seat). The OWNING
 //                  client is by definition connected whenever it can receive a SelfWire, so
 //                  it would always read false there; others see it via PlayerWire.ab instead.
-// - ultRequested:  per-tick input derivative (the ult key) — re-derived from the consumed
+// - isUltRequested:  per-tick input derivative (the ult key) — re-derived from the consumed
 //                  input every stepPlayerPhase (server + prediction), never wired, so a client
 //                  can only REQUEST an ult; the server alone validates + resolves it.
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "ultRequested";
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested";
 // Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
 // - reviveBy:       the channel's identity (WHO is reviving whom) — prediction has no
 //                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
