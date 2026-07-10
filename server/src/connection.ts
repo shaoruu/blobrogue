@@ -7,6 +7,7 @@ import type { WebSocket } from "ws";
 import type { PlayerId } from "../../src/sim/input.js";
 import type { InterestView } from "../../src/net/protocol.js";
 import { createInterestView } from "../../src/net/protocol.js";
+import type { KitId } from "../../src/sim/kits.js";
 
 // The decoded, validated input INTENT (a ClientMsg "input" minus the tag). It carries NO dt: the
 // server tick owns simulation time (one command = one fixed step). Purely what the player intends.
@@ -48,6 +49,10 @@ export interface Conn {
   colorIndex: number | null;
   hat: string | null;
   face: string | null;
+  // The VALIDATED kit this player joined with (spec §9.5): the ticket's requested kit re-gated
+  // server-side against the account's Mastery level, downgraded to "gunner" on any mismatch —
+  // never a raw client claim. Applied to the sim body at spawn (setPlayerKit).
+  kitId: KitId;
   // Single-use seat token for THIS connection (minted at join, rotated at resume, delivered
   // on the full snapshot). If the socket dies unexpectedly it moves onto the reserved seat,
   // and presenting it with a fresh ticket reclaims the exact body.
@@ -137,7 +142,7 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "resumeToken"
+  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "kitId" | "resumeToken"
   | "presentedResumeToken" | "isResumeTokenConfirmed" | "isLeaving" | "malformed"
   | "connectedAt" | "lastInboundAt" | "isSoftAbsent" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
@@ -149,6 +154,7 @@ export function newConnState(now: number): Pick<Conn,
 > {
   return {
     authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, hat: null, face: null,
+    kitId: "none",
     resumeToken: null, presentedResumeToken: null, isResumeTokenConfirmed: false, isLeaving: false, malformed: 0,
     connectedAt: now, lastInboundAt: now, isSoftAbsent: false, rate: newRateWindows(now),
     queue: [], lastAppliedSeq: 0, lastInput: null, starveTicks: 0, ackedEventId: 0, lastCseq: 0,

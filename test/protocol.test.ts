@@ -68,7 +68,7 @@ function clientRoundTripTests(): void {
   section("client messages round-trip losslessly through the strict decoder");
   const msgs: ClientMsg[] = [
     { t: "join", ticket: "v1.abc.def", protocol: PROTOCOL_VERSION },
-    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ackEv: 17 },
+    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, ackEv: 17 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
@@ -89,7 +89,7 @@ function unknownFieldTests(): void {
   section("security-sensitive client frames REJECT unknown fields (malicious dt)");
   const dtVariants = [0, 1e9, -5, 0.0001];
   for (const dt of dtVariants) {
-    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0, dt });
+    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0, dt });
     let rejected = false;
     try { jsonCodec.decodeClient(raw); } catch (err) { rejected = err instanceof ProtocolError; }
     check(`input carrying dt=${dt} is a protocol error`, rejected);
@@ -106,6 +106,10 @@ function unknownFieldTests(): void {
   try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, ackEv: 0 })); }
   catch (err) { legacyInput = err instanceof ProtocolError; }
   check("a v4 input (no act) is a protocol error — the interact intent is mandatory", legacyInput);
+  let v17Input = false;
+  try { jsonCodec.decodeClient(JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0 })); }
+  catch (err) { v17Input = err instanceof ProtocolError; }
+  check("a v17 input (no ult) is a protocol error — the ult-requested intent is mandatory (v18)", v17Input);
   let specExtra = false;
   try { jsonCodec.decodeClient(JSON.stringify({ t: "spec", target: "p1", x: 5 })); }
   catch (err) { specExtra = err instanceof ProtocolError; }
@@ -161,6 +165,9 @@ function serverRoundTripTests(): void {
     { id: 2, kind: "orbit", owner: "pMe", fx: "halo", x: 300, y: 300, life: 1, maxLife: 1, angle: 1.2, ring: 46, blades: 4, bladeRadius: 12, speed: 3.6, flare: 0.2, damage: 1.5, rehit: new Map() },
     { id: 3, kind: "sentry", owner: "pMe", fx: "sentry", x: 400, y: 380, life: 9, maxLife: 12, radius: 13, hp: 7, maxHp: 12, fireCd: 0.2, range: 240, boltSpeed: 520, boltRadius: 4, boltDamage: 2.4, boltPierce: 0, contactCd: 0, targetEid: -1 },
     { id: 4, kind: "tether", owner: "pMe", fx: "crook", x: 200, y: 210, life: 1.1, maxLife: 2.35, eid: 5, phase: "hold", isPlayerPulled: false, pullSpeed: 560, holdDist: 64, holdTime: 1.2, pullTime: 0.4, damage: 5, reach: 90 },
+    // v18 kit-ult entities: the Mender's heal zone + the Bulwark's bullet-blocking dome.
+    { id: 5, kind: "sanctuary", owner: "pMe", fx: "beam", x: 120, y: 130, life: 3.5, maxLife: 4.0, radius: 120, healRate: 1 },
+    { id: 6, kind: "aegis", owner: "pMe", fx: "sawnoff", x: 140, y: 150, life: 3.2, maxLife: 4.0, radius: 110, hp: 9, maxHp: 12 },
   );
   const events: WireEvent[] = [
     { id: 7, e: { t: "enemyKill", eid: 1, kind: "slime", tier: "swarm", x: 10, y: 20, combo: 3 } },
@@ -175,11 +182,14 @@ function serverRoundTripTests(): void {
   const snap = buildSnapshot(w, "pMe", 12, events, 9, false, { worldId: "w-test" });
   const decoded = jsonCodec.decodeServer(jsonCodec.encodeServer(snap));
   check("full snapshot round-trips deep-equal", deepEqual(decoded, snap));
-  check("the v8 effs list carries every effect kind", snap.t === "snap"
-    && ["zone", "wire", "orbit", "sentry", "tether"].every((k) => snap.effs.some((e) => e.k === k)));
+  check("the effs list carries every effect kind (incl. the v18 sanctuary/aegis ult entities)", snap.t === "snap"
+    && ["zone", "wire", "orbit", "sentry", "tether", "sanctuary", "aegis"].every((k) => snap.effs.some((e) => e.k === k)));
   if (decoded.t === "snap") {
     const kinds = decoded.effs.map((e) => effectFromWire(e).kind);
-    check("every decoded effect rebuilds a render-ready entity", deepEqual(kinds, ["zone", "wire", "orbit", "sentry", "tether"]));
+    check("every decoded effect rebuilds a render-ready entity", deepEqual(kinds, ["zone", "wire", "orbit", "sentry", "tether", "sanctuary", "aegis"]));
+    const aegis = decoded.effs.find((e) => e.k === "aegis")!;
+    const rebuiltAegis = effectFromWire(aegis);
+    check("aegis barrier HP survives the trip (the client draws the dome by budget)", rebuiltAegis.kind === "aegis" && rebuiltAegis.hp === 9 && rebuiltAegis.maxHp === 12);
     const wire = decoded.effs.find((e) => e.k === "wire")!;
     const rebuilt = effectFromWire(wire);
     check("wire geometry survives the trip", rebuilt.kind === "wire" && rebuilt.x2 === 170 && rebuilt.arm === 0.4);
@@ -252,7 +262,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers v4-v12 + earned-windows boss kinds (v13) + the premium economy (v14) + the co-op game-feel pass (v15) + the Wave 1 randomness layer (v16: snap.pcl + enemy.afx) + the Wave 1 deep bosses (v17: jet/tithe/quorum kinds + mirror/merge moves)", PROTOCOL_VERSION === 17, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers v4-v17 + the KIT/CLASS + ULT + account-MASTERY system (v18: SelfWire kit/ult block, the ult input bit, sanctuary/aegis effect kinds, the 4 ult SimEvents, the kit/mastery ticket claim)", PROTOCOL_VERSION === 18, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -513,6 +523,11 @@ function eventScopeTests(): void {
     [{ t: "gameOver", pid: "p1" }, "pid"],
     [{ t: "enemyKill", eid: 1, kind: "slime", tier: "standard", x: 3, y: 4, combo: 0 }, "pos"],
     [{ t: "weaponDrop", weapon: "railgun", x: 5, y: 6 }, "pos"],
+    // v18 ult casts are positional (nearby clients render the cast FX).
+    [{ t: "ultOverdrive", pid: "p7", x: 1, y: 2, durationTicks: 100 }, "pos"],
+    [{ t: "ultSanctuary", pid: "p7", x: 1, y: 2, radius: 120, lifetimeTicks: 80 }, "pos"],
+    [{ t: "ultAegis", pid: "p7", x: 1, y: 2, radius: 110, hpBudget: 12, lifetimeTicks: 80 }, "pos"],
+    [{ t: "ultPhase", pid: "p7", x: 1, y: 2, radius: 90, invulnTicks: 20, speedTicks: 60 }, "pos"],
   ];
   for (const [e, kind] of cases) {
     check(`${e.t} -> ${kind}`, eventScope(e).kind === kind, `got=${eventScope(e).kind}`);

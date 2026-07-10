@@ -9,7 +9,8 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import type { KitId } from "../../src/sim/kits.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -113,8 +114,11 @@ export class GameWorld implements RoomRuntime {
     return this.state.players.size;
   }
 
-  addPlayer(pid: PlayerId): void {
+  addPlayer(pid: PlayerId, kit: KitId = "none"): void {
     spawnPlayerInWorld(this.state, pid);
+    // Apply the VALIDATED kit (spec §9.5): the stat lean + starting weapon land through the one
+    // recompute path. "none" leaves the neutral baseline untouched.
+    if (kit !== "none") setPlayerKit(this.state, pid, kit);
   }
 
   removePlayer(pid: PlayerId): void {
