@@ -29,7 +29,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 BULLET ART — "a lot of guns' bullets are still just circles." Make the bullet-visual pass COMPREHENSIVE (all guns, not just the flagged few). AD gave language for 8; extend to every flat one. [queued, expand scope]
 
 ## NEW SYSTEMS / FEATURES
-🟡 XP + KIT/CLASS system with ULTIMATES (healer etc.) — pick a kit to start, charge + use an ult as that kit; co-op team comps. Big. [game designer speccing, phase v1]
+🟡 XP + KIT/CLASS system with ULTIMATES — DESIGN COMPLETE (game designer). v1 = 4 kits: GUNNER (Overdrive burst), MENDER/healer (Sanctuary heal zone), BULWARK/tank (Aegis barrier), PHANTOM/mobility (Phase). Universal ult meter (server-owned, charges by damage+kills+time floor, 8s min between casts, HUD-shown separate from Resonance). XP = ACCOUNT MASTERY track (not a currency — gates ACCESS to kits/cosmetics, keeps Coins/Amber as only spendables). Kit-select pre-run in Amber Camp lobby, per-player (co-op comps emerge, no forced roles). In-run stays blessings (NOT adding a parallel in-run level). v2 deferred: Broodmother/Emberwright kits, per-kit mastery, optional NT-style in-run-XP→blessing-pick (Ian's call later). Big — phase into content build waves. [design done → build]
 🟡 SEE HEALTH — actual HP numbers on HUD, not just hearts. [game designer rec]
 🟡 INTERACT WITH PATCH (shopkeeper) — some interaction beyond buying. [todo → design]
 
