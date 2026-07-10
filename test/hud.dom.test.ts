@@ -74,6 +74,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
       wslot("shotgun", "Shotgun", true),
       wslot("tesla", "Tesla", false),
     ],
+    weaponCap: MAX_OWNED_WEAPONS,
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
