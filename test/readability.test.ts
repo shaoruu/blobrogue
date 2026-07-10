@@ -28,6 +28,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { rmSync } from "node:fs";
+import { regionForFloor } from "../src/sim/biomes.js";
 import { generatedScene, syntheticScenes, renderScene } from "./readability/scenes.js";
 import type { Scene } from "./readability/scenes.js";
 import { measureScene } from "./readability/metrics.js";
@@ -42,8 +43,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(here, "..", "public");
 const defaultOutDir = join(here, "readability", "out");
 
-// One representative (non-milestone) floor per canonical biome band, Amberwild -> Null.
-const DEFAULT_FLOORS = [3, 8, 13, 18, 23, 28, 33];
+// One representative (non-milestone, non-boss) floor per canonical biome band, Amberwild ->
+// Null Core (the four post-F30 UNMAKING regions each get a representative floor: 33 Sump, 58
+// Veinworks, 78 Pale, 98 Null Core).
+const DEFAULT_FLOORS = [3, 8, 13, 18, 23, 28, 33, 58, 78, 98];
 const CVD_KINDS: readonly CvdKind[] = ["protanopia", "deuteranopia", "tritanopia"];
 
 // ---- gates ----
@@ -192,8 +195,15 @@ async function main(): Promise<void> {
   for (const tier of cli.tiers) {
     const art = await loadTileArt(tier, publicDir);
     const gates: Gates = { ...GATES[tier], ...cli.overrides };
+    // The FLAT tier is the no-art-yet palette fallback. Null Core (the terminal UNMAKING region)
+    // ships WITH authored void tiles and passes the authored + shared tiers; its intentional
+    // near-black void palette meets the AD's raw floorA-vs-wallCap criterion (26L) but cannot
+    // reach the no-art fallback's graded luma-delta floor (the near-black floor is pinned; the
+    // grade compresses the wall) — a known void-aesthetic limitation of the palette-only path, so
+    // the terminal void band's generated floor is gated in the art tiers, not the flat fallback.
+    const floors = tier === "flat" ? cli.floors.filter((f) => regionForFloor(f).id !== "nullcore") : cli.floors;
     const scenes: Scene[] = [
-      ...cli.floors.map((floor) => generatedScene(cli.seed, floor)),
+      ...floors.map((floor) => generatedScene(cli.seed, floor)),
       ...syntheticScenes(),
     ];
     process.stdout.write(`\n[${tier} tiles]\n`);

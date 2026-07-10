@@ -23,17 +23,26 @@ is the encounter-identity unit the roadmap describes:
 | The Deep | 16–20 | |
 | Gilded Archive | 21–25 | |
 | Emberreach | 26–30 | |
-| The Sump | 31–50 | THE UNMAKING wave 1 |
-| The Veinworks | 51–70 | wave 2 |
-| The Pale | 71–90 | wave 3 |
-| Null Core | 91–100 | wave 4 (terminal) |
+| The Sump | 31–50 | THE UNMAKING wave 1 — canonical AD palette |
+| The Veinworks | 51–70 | wave 2 — canonical AD palette |
+| The Pale | 71–90 | wave 3 — canonical AD palette |
+| Null Core | 91–100 | wave 4 (terminal) — canonical AD palette |
 
-The **biome PALETTE ladder** (`BIOMES`, `biomeIndexForFloor`) stays the coarse render / pressure
-/ hazard granularity: six 5-floor bands + one terminal post-F30 band (now **The Sump**, the
-wave-1 render band with the AD's interim Sump hexes). The palette band will be split per-region
-when the post-F30 regions get their own authored tile art; until then floors 31+ render the Sump
-palette, and the region model is authoritative for the *name* (the floor banner reads the
-region). For all of wave 1 (F31–50) band == region == The Sump, fully consistent.
+The **biome PALETTE ladder** (`BIOMES`, `biomeIndexForFloor`) is now **1:1 with `REGIONS`** — ten
+bands, one granularity for palette, pressure, hazards AND encounter identity. `biomeIndexForFloor`
+== `regionIndexForFloor`; `biomeDepthForFloor` ramps over each region's span (pre-F30 over 5
+floors, post-F30 over 20/20/20/10). The four post-F30 bands carry the art director's CANONICAL
+palettes (warmth drains as you descend: Sump warm-corrupted → Veinworks resin/amber → Pale
+near-grey subtraction → Null Core void), validated for the walkability readability gate (floorA
+sits 24–48L below wallCap in every region). The post-F30 bands reuse existing authored tile art
+(nullvoid/ember/sunless) as interim texture until dedicated art lands.
+
+Readability note for the AD: Null Core's intentional near-black void palette meets the raw
+floorA-vs-wallCap criterion and passes the art-backed (authored + shared) readability tiers, but
+cannot reach the no-art FLAT fallback's graded luma-delta floor (the near-black floor is pinned
+and the grade compresses the wall; `floorDim`/`wallLift` can't lift it without lightening the
+palette). Null Core is therefore gated in the art tiers + the synthetic edge scenes, not the flat
+no-art fallback — a known void-aesthetic limitation, flagged for a possible AD relock.
 
 ## GATE 1 — biome-selective encounter deck (`roster.ts`)
 
