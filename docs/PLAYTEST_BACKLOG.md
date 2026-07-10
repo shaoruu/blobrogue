@@ -55,3 +55,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 - 🔴 Flower cosmetic re-gen someday (source amber-drifted vs greener/multi-color brief — needs re-gen not re-snap).
 - 🔴 choir.png 6% teal — minor cleanup (re-snap on choir_cyan/bone lane when convenient).
 - 🔴 Sump deep-mob enemies (Wave 1 packet called for 2-3 corrupted variants — not yet built).
+
+## Tech debt (TD daily gate 2026-07-10, non-blocking)
+- 🔴 BUNDLE BUDGET: client bundle 687KB / 202KB gzip (was 398KB), Vite chunk-size warning. Add a bundle budget + code-split (lazy dev/creative sandbox + heavy art/audio tables) before it hurts mobile load. TD tracking next gate.
+- 🔴 REFACTOR: src/sim/world.ts 8,886 lines + src/game/game.ts 7,532 — staged carve of world.ts by system behind a WorldContext (NOT big-bang). Server side already cleanly split.
