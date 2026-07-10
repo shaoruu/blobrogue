@@ -20,7 +20,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Consuming hearts when already at/над full? (part of heart bug) [investigating]
 
 ## CONTENT — more of (Ian loves it)
-🟡 MORE HATS / COSMETICS (asked 3×) — WAVE 1 GENERATED: 12 hats + 5 face down-facings on my box, AD gating; then up/side + wire to closet. [generating]
+🟡 MORE HATS / COSMETICS (asked 3×) — WAVE 1: 12 hats + 5 face down-facings generated + metrics-clean (regenerated headphones 4→12 colors + monocle 2→17% fill). Awaiting AD/Ian visual gate → then up/side + wire to closet. NO procedural fallback. [awaiting gate]
 🟡 MORE BLESSINGS — Ian loves them, wants more variety (respect raw caps). [game designer speccing]
 🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). [creative director owns roadmap]
 🟡 BIGGER BOSSES sometimes — periodic GIANT/spectacle multi-phase set-piece bosses. [roadmap]
