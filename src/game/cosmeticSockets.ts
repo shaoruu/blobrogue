@@ -156,9 +156,18 @@ export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   face_monocle: { socket: "face", sizePx: 32, src: orientedSources("face_monocle") },
 };
 
-// The layered-hero base (the hero WITHOUT the baked-in cowboy hat), and its walk sheet
-// (256x64, 4 frames, matching hero_walk's cadence). Registered in assets.ts as the
-// "hero_bald" sprite + "hero_bald.walk" sheet; the renderer selects it under any equipped
-// hat (see heroBodySprite) so the worn hat replaces the classic hat instead of stacking.
+// The layered-hero base (the canonical hero body WITHOUT the baked-in cowboy hat) and its
+// walk sheet, registered in assets.ts as the "hero_bald" sprite + "hero_bald.walk" sheet.
+// The renderer selects it under any equipped hat (see heroBodySprite) so the worn hat is a
+// separate layer over a fixed body rather than a second hat stacked on the baked one.
+//
+// THE ART HERE IS A PROVISIONAL PLACEHOLDER — the art director will finalize the bald body
+// later. These two paths are the single swap point: dropping the AD's approved PNGs at
+// exactly these paths is a ZERO-code change. The renderer never reads the art's pixels,
+// dimensions, or frame count (drawChar infers frames from the sheet at draw time and tints
+// through the generic path), and no test asserts anything about its specific look — only
+// that these registered paths and the walk cadence are wired. Keep the head-anchor sockets
+// above (tuned to the hero's 64px head geometry, not to this placeholder's pixels) as the
+// durable contract the final art must respect.
 export const LAYERED_HERO_BASE_SRC = "/sprites/cosmetics/hero_base_bald.png";
 export const LAYERED_HERO_BASE_WALK_SRC = "/sprites/cosmetics/hero_base_bald_walk.png";

@@ -28,8 +28,10 @@ export interface SheetDef { src: string; fps: number; }
 //   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
 export const SHEETS: Partial<Record<string, SheetDef>> = {
   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
-  // The bald hero's walk sheet — same 256x64 / 4-frame layout and fps as hero.walk, so a
-  // hatted blob animates identically to the classic one (just without the baked hat).
+  // The bald hero's walk sheet, at hero.walk's cadence so a hatted blob animates identically
+  // to the classic one (just without the baked hat). The art is a swappable placeholder (see
+  // LAYERED_HERO_BASE_WALK_SRC): drawChar infers the frame count/size from the sheet, so the
+  // AD's final walk PNG is a drop-in at the registered path with no code change.
   "hero_bald.walk": { src: LAYERED_HERO_BASE_WALK_SRC, fps: 10 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
@@ -261,9 +263,11 @@ const PROP_SOURCES: Record<PropSpriteName, string> = {
 
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
-  // The bald hero base (cowboy hat stripped) used under any equipped head cosmetic. Its
-  // idle static + hero_bald.walk sheet mirror the hatted hero's, so tint/flash/anim all
-  // work identically (see heroBodySprite for the render-surface selection).
+  // The bald hero base (canonical body, cowboy hat stripped) drawn under any equipped head
+  // cosmetic. It flows through the exact same draw/tint/flash path as "hero", so the player's
+  // body color tints it identically. The art is a swappable placeholder registered behind one
+  // named path (LAYERED_HERO_BASE_SRC) — the AD's final bald body is a drop-in PNG at that
+  // path with no code change. See heroBodySprite for the render-surface selection.
   hero_bald: LAYERED_HERO_BASE_SRC,
   slime: "/sprites/slime.png",
   bat: "/sprites/bat.png",
@@ -816,12 +820,15 @@ export function playerColor(index: number): string {
   return PLAYER_COLORS[index % PLAYER_COLORS.length];
 }
 
-// The blob's BASE body sprite for a given head-cosmetic state. A player wearing ANY hat
-// renders from the bald base ("hero_bald") so the equipped hat REPLACES the baked cowboy
-// hat instead of stacking a second one on top; with no hat, the classic cowboy-hatted
-// "hero" is the default look. Every render surface (self, remotes, dash ghosts, and the
-// menu/closet preview) resolves the base through THIS one function so the choice, and thus
-// the fix, can never drift between surfaces.
+// The blob's BASE body sprite for a given head-cosmetic state — the layered-cosmetic model
+// used by grade-A twin-stick roguelikes: ONE canonical body with the hat drawn as a separate
+// head-anchored layer (see cosmeticArt.drawLoadoutOverlays + cosmeticSockets), never baked in.
+// A player wearing ANY hat renders from the bald base ("hero_bald") so the equipped hat is
+// that layer over a fixed body; with no hat, the classic cowboy-hatted "hero" is the default.
+// The base is thus PIXEL-STABLE while switching between hats (hat A -> hat B stays "hero_bald"
+// — only the hat layer swaps); it flips only across the no-hat<->hatted boundary. Every render
+// surface (self, remotes, dash ghosts, and the menu/closet preview) resolves the base through
+// THIS one function so the choice can never drift between surfaces.
 export function heroBodySprite(hat: string | null): SpriteName {
   return hat !== null ? "hero_bald" : "hero";
 }

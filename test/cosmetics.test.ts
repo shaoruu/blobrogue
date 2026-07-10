@@ -340,6 +340,11 @@ function baldBaseTests(): void {
     heroBodySprite("hat_crown") === "hero_bald");
   check("the cowboy hat, re-picked as a real layer, also rides the bald base",
     heroBodySprite("cowboy_hat_classic") === "hero_bald");
+  // Principle: the canonical body is PIXEL-STABLE while switching between hats — only the hat
+  // layer swaps. The base flips only across the no-hat <-> hatted boundary.
+  check("switching between two different hats keeps the SAME base body",
+    heroBodySprite("hat_top") === heroBodySprite("hat_wizard")
+    && heroBodySprite("hat_top") === "hero_bald");
 
   // The bald base must animate IDENTICALLY to the hatted hero: same 4-frame walk sheet
   // cadence (fps) so a hatted blob's walk never desyncs from a bare-headed one.
