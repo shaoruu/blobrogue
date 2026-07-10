@@ -57,7 +57,7 @@ function calibrate(): number {
 }
 
 function realWorld(game: HarnessGame): WorldState {
-  return (game as unknown as { devWorld(): WorldState }).devWorld();
+  return (game as object as { devWorld(): WorldState }).devWorld();
 }
 
 function spawnCenter(w: WorldState): { x: number; y: number } {
