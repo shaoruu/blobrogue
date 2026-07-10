@@ -155,7 +155,7 @@ export const OVERDRIVE = {
   // result (blessings × fireFactor) is then clamped to expressiveFireCeiling — the fire-rate
   // portion of the ~7x expressive DPS ceiling — so a strong build + Overdrive can't blow past it.
   fireFactor: 1.9,
-  expressiveFireCeiling: 3.6, // max effective fire-rate mult under Overdrive (balancer-owned)
+  expressiveFireCeiling: 2.7, // balancer 2026-07-10: 3.6 was non-binding (max 3.42); 2.7 keeps top build ≤~7× raw w/ crit headroom
   bonusPierce: 2,       // temporary +pierce (spec §2.1)
 } as const;
 
@@ -185,7 +185,7 @@ export const LIFEBLOOM = {
   // capped cadence, so it never exceeds the heal/sec cap and HP stays integer (spec §2.2).
   fraction: 0.10,       // ~8-12% band
   poolCap: 4,           // never bank more than this much pending heal (anti-burst)
-  healEveryTicks: 20,   // 1.0s cadence
+  healEveryTicks: 40, // balancer 2026-07-10: 40t = ≤0.5 HP/s passive (was 1/s, re-introduced cut sustain)
   healPerTick: 1,       // <= ~1 HP/s
   range: 260,           // "in range" radius for the lowest-HP ally search
 } as const;
