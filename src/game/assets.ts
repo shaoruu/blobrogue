@@ -3,6 +3,7 @@
 import type { WeaponId, SpriteName, FloorHazardKind } from "../sim/types.js";
 import { resolveClip } from "./facing.js";
 import type { SelectableClip, MovePhaseClip, EnemyPose, ClipChoice, Facing4 } from "./facing.js";
+import { LAYERED_HERO_BASE_SRC, LAYERED_HERO_BASE_WALK_SRC } from "./cosmeticSockets.js";
 
 // Re-exported so the many render call sites keep importing SpriteName from assets; the union
 // itself now lives in the pure sim types module (see src/sim/types.ts) so the sim never
@@ -27,6 +28,11 @@ export interface SheetDef { src: string; fps: number; }
 //   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
 export const SHEETS: Partial<Record<string, SheetDef>> = {
   "hero.walk": { src: "/sprites/hero_walk.png", fps: 10 },
+  // The bald hero's walk sheet, at hero.walk's cadence so a hatted blob animates identically
+  // to the classic one (just without the baked hat). The art is a swappable placeholder (see
+  // LAYERED_HERO_BASE_WALK_SRC): drawChar infers the frame count/size from the sheet, so the
+  // AD's final walk PNG is a drop-in at the registered path with no code change.
+  "hero_bald.walk": { src: LAYERED_HERO_BASE_WALK_SRC, fps: 10 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
   "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 11 },
@@ -257,6 +263,12 @@ const PROP_SOURCES: Record<PropSpriteName, string> = {
 
 const SOURCES: Record<SpriteName, string> = {
   hero: "/sprites/hero.png",
+  // The bald hero base (canonical body, cowboy hat stripped) drawn under any equipped head
+  // cosmetic. It flows through the exact same draw/tint/flash path as "hero", so the player's
+  // body color tints it identically. The art is a swappable placeholder registered behind one
+  // named path (LAYERED_HERO_BASE_SRC) — the AD's final bald body is a drop-in PNG at that
+  // path with no code change. See heroBodySprite for the render-surface selection.
+  hero_bald: LAYERED_HERO_BASE_SRC,
   slime: "/sprites/slime.png",
   bat: "/sprites/bat.png",
   skeleton: "/sprites/skeleton.png",
@@ -806,6 +818,19 @@ export const PLAYER_COLORS = [
 
 export function playerColor(index: number): string {
   return PLAYER_COLORS[index % PLAYER_COLORS.length];
+}
+
+// The blob's BASE body sprite for a given head-cosmetic state — the layered-cosmetic model
+// used by grade-A twin-stick roguelikes: ONE canonical body with the hat drawn as a separate
+// head-anchored layer (see cosmeticArt.drawLoadoutOverlays + cosmeticSockets), never baked in.
+// A player wearing ANY hat renders from the bald base ("hero_bald") so the equipped hat is
+// that layer over a fixed body; with no hat, the classic cowboy-hatted "hero" is the default.
+// The base is thus PIXEL-STABLE while switching between hats (hat A -> hat B stays "hero_bald"
+// — only the hat layer swaps); it flips only across the no-hat<->hatted boundary. Every render
+// surface (self, remotes, dash ghosts, and the menu/closet preview) resolves the base through
+// THIS one function so the choice can never drift between surfaces.
+export function heroBodySprite(hat: string | null): SpriteName {
+  return hat !== null ? "hero_bald" : "hero";
 }
 
 // The explicit "identity not resolved yet" grey for teammate surfaces (dots, rings, labels).

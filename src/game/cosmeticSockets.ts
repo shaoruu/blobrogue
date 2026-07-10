@@ -19,9 +19,9 @@
 // public/sprites/cosmetics/<key>_<orientation>.png. Every shipped hat/face is a generated
 // sprite anchored on its socket — there is NO procedural cosmetic art. The renderer uses an
 // asset once its file has loaded, and draws nothing while it streams in / on failure (never
-// a fabricated placeholder). `cowboy_hat_classic` stays the baked-default hook with no
-// catalog row: until its art (and the layered bald base, see LAYERED_HERO_BASE_SRC) ship,
-// the classic hat stays the baked-in sprite look.
+// a fabricated placeholder). `cowboy_hat_classic` is now a normal equippable hat layer: it
+// draws over the bald hero base (LAYERED_HERO_BASE_SRC) exactly like every other hat, so
+// the classic cowboy look is a pick a player equips rather than baked into the body.
 
 export type CosmeticOrientation = "down" | "up" | "side";
 export type SocketKind = "head" | "face" | "back";
@@ -54,21 +54,21 @@ const SOCKETS: Record<CosmeticOrientation, Record<SocketKind, FrameTable>> = {
   // Facing the camera: hat crowns the head, face sits on the eye line, a back layer hides
   // behind the body.
   down: {
-    head: still(32, 16),
+    head: still(32, 11),
     face: still(32, 32),
     back: still(32, 30, true, true),
   },
   // Facing away: the face layer is invisible (back of the head); a back layer draws in
   // front of the body sprite.
   up: {
-    head: still(32, 14),
+    head: still(32, 9),
     face: still(32, 32, false),
     back: still(32, 30, true, false),
   },
   // Side (authored RIGHT; the renderer's facing flip mirrors left): hat shifts toward the
   // face, the eye line sits forward of center.
   side: {
-    head: still(33, 15),
+    head: still(33, 10),
     face: still(36, 32),
     back: still(26, 30, true, true),
   },
@@ -130,8 +130,8 @@ function orientedSources(key: string): Record<CosmeticOrientation, string> {
 
 // The pipeline's generation targets — the AD-approved Wave 1 set. Hats socket to the head
 // at the head size (~48px, like the classic cowboy hat); faces socket to the face at the
-// face size (~32px, like the round specs). cowboy_hat_classic stays the baked-default hook
-// (no catalog row) until the layered bald base ships.
+// face size (~32px, like the round specs). cowboy_hat_classic is a normal head layer that
+// rides the bald base like every other hat.
 export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   cowboy_hat_classic: { socket: "head", sizePx: 48, src: orientedSources("cowboy_hat_classic") },
   // hats
@@ -156,7 +156,18 @@ export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   face_monocle: { socket: "face", sizePx: 32, src: orientedSources("face_monocle") },
 };
 
-// The layered-hero base (the hero WITHOUT the baked-in cowboy hat) — the second half of
-// making cowboy_hat_classic a real layer. Until both files ship, the classic look stays
-// the baked sprite and the layer system leaves it alone.
+// The layered-hero base (the canonical hero body WITHOUT the baked-in cowboy hat) and its
+// walk sheet, registered in assets.ts as the "hero_bald" sprite + "hero_bald.walk" sheet.
+// The renderer selects it under any equipped hat (see heroBodySprite) so the worn hat is a
+// separate layer over a fixed body rather than a second hat stacked on the baked one.
+//
+// THE ART HERE IS A PROVISIONAL PLACEHOLDER — the art director will finalize the bald body
+// later. These two paths are the single swap point: dropping the AD's approved PNGs at
+// exactly these paths is a ZERO-code change. The renderer never reads the art's pixels,
+// dimensions, or frame count (drawChar infers frames from the sheet at draw time and tints
+// through the generic path), and no test asserts anything about its specific look — only
+// that these registered paths and the walk cadence are wired. Keep the head-anchor sockets
+// above (tuned to the hero's 64px head geometry, not to this placeholder's pixels) as the
+// durable contract the final art must respect.
 export const LAYERED_HERO_BASE_SRC = "/sprites/cosmetics/hero_base_bald.png";
+export const LAYERED_HERO_BASE_WALK_SRC = "/sprites/cosmetics/hero_base_bald_walk.png";

@@ -1,4 +1,4 @@
-import { Sprites, playerColor } from "../game/assets.js";
+import { Sprites, playerColor, heroBodySprite } from "../game/assets.js";
 import { createAnim, stepAnim, characterXform, CHARACTER_STYLE } from "../game/anim.js";
 import { drawLoadoutOverlays } from "../game/cosmeticArt.js";
 import type { CosmeticXform } from "../game/cosmeticSockets.js";
@@ -100,8 +100,11 @@ export function createBlobPreview(initial: BlobLook, size = 96, opts: BlobPrevie
     g.rotate(xf.rot + gestureRot);
     g.scale(xf.sx, xf.sy);
     const tint = look.colorIndex !== null && look.colorIndex > 0 ? playerColor(look.colorIndex) : null;
-    const body = tint ? sprites().tintedHero(tint) ?? null : null;
-    const plain = sprites().ready("hero") ? sprites().get("hero") : null;
+    // A hatted blob previews from the bald base so the equipped hat replaces the baked cowboy
+    // hat (exactly as the world renders it); a bare-headed blob keeps the classic hatted hero.
+    const base = heroBodySprite(look.hat);
+    const body = tint ? sprites().tintedSprite(base, tint) ?? null : null;
+    const plain = sprites().ready(base) ? sprites().get(base) : null;
     const img = body ?? plain;
     if (img) {
       g.drawImage(img, -half, -half, drawSize, drawSize);

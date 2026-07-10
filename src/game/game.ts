@@ -4,7 +4,7 @@ import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, A
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
-import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME } from "./assets.js";
+import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME, heroBodySprite } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
 import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
@@ -176,7 +176,9 @@ const INTERACT_KEY_PX = 13;        // the [E] keycap box size
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
 // color carries a REMOTE dasher's party tint; null means the local player's own tint.
-interface Afterimage { x: number; y: number; facing: number; t: number; color: string | null; }
+// base is the body sprite the dasher was wearing (bald under a hat, else the classic hero),
+// captured at drop time so the ghost matches the live body.
+interface Afterimage { x: number; y: number; facing: number; t: number; color: string | null; base: SpriteName; }
 
 // The i-frame blink: sim invulnerability (post-hit or the dash's own i-frame window)
 // renders as a 10Hz alpha flicker keyed to the window's remaining seconds. One predicate
@@ -1773,7 +1775,7 @@ export class Game {
     // Dash afterimages (pure ghost trail): spaced by dashImgCd while the sim reports a dash.
     if (this.p.dashTime > 0) {
       this.dashImgCd -= dt;
-      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0, color: null }); this.dashImgCd = 0.04; }
+      if (this.dashImgCd <= 0) { this.afterimages.push({ x: this.px, y: this.py, facing: this.facing, t: 0, color: null, base: heroBodySprite(this.selfCosmetics?.hat ?? null) }); this.dashImgCd = 0.04; }
     }
 
     this.updateFootstepDust(dt);
@@ -3214,7 +3216,7 @@ export class Game {
     if (!entry.isDashing) return;
     entry.dashImgCd -= dt;
     if (entry.dashImgCd <= 0) {
-      this.afterimages.push({ x: r.x, y: r.y, facing: r.facing, t: 0, color: playerColorOr(r.colorIndex) });
+      this.afterimages.push({ x: r.x, y: r.y, facing: r.facing, t: 0, color: playerColorOr(r.colorIndex), base: heroBodySprite(r.hat) });
       entry.dashImgCd = 0.04;
     }
     entry.dashDustCd -= dt;
@@ -6685,7 +6687,9 @@ export class Game {
         continue;
       }
       const color = playerColor(r.colorIndex);
-      const tinted = this.sprites.tintedHero(color);
+      // A hatted teammate renders from the bald base (their equipped hat replaces the baked
+      // cowboy hat); bare-headed teammates keep the classic hatted hero.
+      const tinted = this.sprites.tintedSprite(heroBodySprite(r.hat), color);
       const entry = this.remoteAnims.get(r.playerId);
       const xf = entry ? characterXform(entry.anim, CHARACTER_STYLE) : IDENTITY_XFORM;
       ctx.save();
@@ -6778,11 +6782,14 @@ export class Game {
     const rec = this.playerAnim.recoil;
     xf.ox += -Math.cos(this.aimAngle) * rec * 4;
     xf.oy += -Math.sin(this.aimAngle) * rec * 4;
-    this.drawChar("hero", clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
+    // A hatted blob renders from the bald base so the equipped hat replaces the baked cowboy
+    // hat instead of stacking on it; bare-headed blobs keep the classic hatted hero.
+    const base = heroBodySprite(this.selfCosmetics?.hat ?? null);
+    this.drawChar(base, clip, psx, psy, 52, this.facing, xf, 1, alpha, this.playerAnim.flash, this.playerAnim.clock, this.selfTint());
     if (this.selfCosmetics) {
       // Socket determinism: the cosmetic pass reads the SAME frame index the body sheet
       // shows this tick, so per-frame socket anchors can never drift off the head.
-      const sheet = this.sprites.sheet("hero", clip);
+      const sheet = this.sprites.sheet(base, clip);
       let cosmeticFrame = 0;
       if (sheet) {
         const fw = sheet.img.naturalHeight || 64;
@@ -7224,18 +7231,20 @@ export class Game {
   private renderAfterimages() {
     if (this.afterimages.length === 0) return;
     const { ctx, renderCam: cam } = this;
-    const isReady = this.sprites.ready("hero");
     const tint = this.selfTint();
-    const selfImg = tint ? this.sprites.tintedSprite("hero", tint) ?? this.sprites.get("hero") : this.sprites.get("hero");
     for (const a of this.afterimages) {
       const k = 1 - a.t; // 1..0
-      // A remote dasher's ghost carries their party tint; the local ghost keeps self tint.
-      const img = a.color ? this.sprites.tintedHero(a.color) ?? selfImg : selfImg;
+      // Each ghost matches the dasher's live body: bald base under a hat, else the classic
+      // hero. A remote dasher's ghost carries their party tint; the local ghost keeps self
+      // tint (null = the natural amber).
+      const color = a.color ?? tint;
+      const plain = this.sprites.ready(a.base) ? this.sprites.get(a.base) : null;
+      const img = color ? this.sprites.tintedSprite(a.base, color) ?? plain : plain;
       ctx.save();
       ctx.globalAlpha = k * 0.4;
       ctx.translate(a.x - cam.x, a.y - cam.y);
       ctx.scale(a.facing, 1);
-      if (isReady) ctx.drawImage(img, -26, -26, 52, 52);
+      if (img) ctx.drawImage(img, -26, -26, 52, 52);
       else { ctx.fillStyle = a.color ?? "#ffd27a"; ctx.beginPath(); ctx.arc(0, 0, this.pr, 0, 6.28); ctx.fill(); }
       ctx.restore();
     }
