@@ -172,3 +172,20 @@ Ian wants the DOGGIE early, and the loop needs a spendable-Amber reason to exist
 **Coordinate:** CD owns camp/NPC/pet theme + naming + the restoration hook narrative; balancer owns the Amber earn curve, sink pricing, and the Foundation ≤30% validation. I own the loop structure, the pet behavior/feel, the horizontal-vs-vertical split, and the anti-power-creep firewall above.
 
 **Net:** we don't invent a currency — we LIGHT UP Amber (already in the schema + earning) with a walkable camp, an early lovable doggie, a mostly-horizontal unlock tree with one small hard-capped power tier, and a layered retention stack — all without crossing the cosmetic no-pay-for-power line or risking co-op determinism (the pet lives outside the sim). Doggie ships in Wave 1.
+
+---
+
+# 11. HEART BLOOM — CANONICAL TIER COUNT (wave 2, lock this number)
+
+The Amber Heart / camp bloom is a **6-tier** system: `heartTier` **0–5** (single server-authoritative signal both the visual bloom and the audio stems read; client renders, never authors). Final table:
+
+- **T0 Dormant** — music-box skeleton
+- **T1 Ember** — +strings
+- **T2 Warm** — +heartbeat
+- **T3 Bright** — +dulcimer
+- **T4 Radiant** — +low foundation = full motif COMPLETE
+- **T5 Whole** — holds + swells, NO new stem (the F100 capstone: the complete known theme returning, never a new instrument)
+
+Rules: motif finishes assembling at **T4**; T5 adds no stem. Bloom+swell renders on a tier-change tick only if the client is present in camp (else the scene loads already-assembled) — presence-at-increment, co-op per-observer. One action crossing multiple tiers = one grand swell; separate actions serialize. Continuous micro-warming on raw Warmth may play between the 6 discrete tier events. Bloom is COSMETIC / zero combat power (hard rule).
+
+**ANY earlier reference to "7 tiers" or "T6" is STALE (the collapse dropped the old "Flicker" stage). The balancer sets Warmth→tier thresholds for SIX steps (0–5), not seven.** Tiebreaker source of truth for the full bloom design: the CD's META_LOOP packet. Pacing guardrail (CD): no INTERMEDIATE tier may be hard-gated behind a boss — reclaim-alone always inches the camp forward; only the final T5 Whole is deed-gated (the two Null keystones / F100).
