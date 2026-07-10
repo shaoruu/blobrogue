@@ -154,12 +154,12 @@ export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   hat_helmet: { socket: "head", sizePx: 48, src: orientedSources("hat_helmet") },
   hat_horns: { socket: "head", sizePx: 48, offsetY: -6, src: orientedSources("hat_horns") },
   // faces
-  round_glasses: { socket: "face", sizePx: 32, src: orientedSources("round_glasses") },
-  face_shades: { socket: "face", sizePx: 32, src: orientedSources("face_shades") },
-  face_eyepatch: { socket: "face", sizePx: 32, src: orientedSources("face_eyepatch") },
-  face_star_shades: { socket: "face", sizePx: 32, src: orientedSources("face_star_shades") },
-  face_3d_glasses: { socket: "face", sizePx: 32, src: orientedSources("face_3d_glasses") },
-  face_monocle: { socket: "face", sizePx: 32, src: orientedSources("face_monocle") },
+  round_glasses: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("round_glasses") },
+  face_shades: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -3, src: orientedSources("face_shades") },
+  face_eyepatch: { socket: "face", sizePx: 40, offsetX: -13, offsetY: -2, src: orientedSources("face_eyepatch") },
+  face_star_shades: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("face_star_shades") },
+  face_3d_glasses: { socket: "face", sizePx: 40, offsetX: -3, offsetY: -4, src: orientedSources("face_3d_glasses") },
+  face_monocle: { socket: "face", sizePx: 24, offsetX: -14, offsetY: -4, src: orientedSources("face_monocle") },
 };
 
 // The layered-hero base (the canonical hero body WITHOUT the baked-in cowboy hat) and its
