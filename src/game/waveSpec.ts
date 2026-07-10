@@ -275,6 +275,9 @@ export const WAVE_SOUNDS = {
     stem: "boss/weaver_feint", variants: 1, gain: 0.86, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
     jitter: 0, spatial: true, isOffCameraUncapped: true, cooldownMs: 150, isPerEntityCooldown: true,
     duck: [dM(0.55, 0.12, 0.35)],
+    // Same-material (chitin) shipped fallback until the generated stem lands: the feint
+    // reads as a dry, whispery split.
+    fallback: { sample: "dash", rate: 1.15, highpassHz: 1200 },
   },
   "weaver.phase": {
     stem: "boss/weaver_phase", variants: 1, gain: 0.9, bus: "voiceTell", priority: WAVE_PRIORITY.bossTell,
@@ -1200,6 +1203,12 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
   weaver: {
     pounce: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
     weave: { windup: "weaver.latticeWarn", release: "weaver.latticeFire" },
+    // Earned windows: the blink-strike rides the thread it committed (the lattice rows);
+    // the mirror feint's split is the read tell; a snag/tangle flips the move to "crash"
+    // — the shared punishable-stun grammar, voiced on the Weaver's own rows.
+    blink: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
+    decoy: { windup: "weaver.feint", release: "weaver.feint", recover: "weaver.recover" },
+    crash: { impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
   },
   gilded: {
     // The EXPOSED recover after each commitment is the fight's punish identity.

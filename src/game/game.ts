@@ -4255,6 +4255,8 @@ export class Game {
       if (e.kind === "marrow" && a.move === "shield" && isWindup) this.renderMarrowShield(e, sx, sy, drawSize);
       // The Weaver's pounce marker while it coils; the Warden's quake ring while it winds.
       if (e.kind === "weaver" && a.move === "pounce" && isWindup) this.renderDangerDisc(a.markX, a.markY, WEAVER.pounceRadius, a.windup);
+      // The blink-strike's arrival mark (the lane itself draws via renderTelegraph).
+      if (e.kind === "weaver" && a.move === "blink" && isWindup) this.renderDangerDisc(a.markX, a.markY, WEAVER.blinkStrikeRadius, a.windup);
       if (e.kind === "gilded" && a.move === "slam" && (isWindup || a.phase === "active")) {
         this.renderDangerDisc(a.markX, a.markY, GILDED.slamRadius, a.phase === "active" ? 1 : a.windup);
       }
@@ -4321,6 +4323,15 @@ export class Game {
       }
       // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
       if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
+      // The Weaver's lattice: every knot casts its three thread-lines (the blink lanes,
+      // crossing AT the shootable node) and glows as the mechanic target it is.
+      if (e.kind === "knot") this.renderKnotLattice(e, sx, sy, drawSize, anim.clock);
+      // An earned-window boss wears its state: a thread-dim guard rim while GUARDED, a
+      // blazing core through the EXPOSED window (aux = the authoritative remainder —
+      // the Warden's plate below renders its own gold flavor of the same read).
+      if (e.kind === "weaver" || e.kind === "marrow" || e.kind === "choir") {
+        this.renderEarnedWindow(e, sx, sy, drawSize);
+      }
       // The fragment's tether: the authoritative source id rides aux; the line IS the lane.
       if (e.kind === "fragment" && e.aux > 0) this.renderFragmentTether(e);
       // The Warden's plate: a gold sheen while closed, a cracked-open core glow while EXPOSED.
@@ -4594,12 +4605,74 @@ export class Game {
     ctx.restore();
   }
 
+  // The Weaver's lattice knot: the glowing ANCHOR NODE where its three thread-lines
+  // cross. The lines ARE the blink lanes (drawn from the sim's authoritative lattice
+  // orientation), and the node pulses like the shoot-this target it is.
+  private renderKnotLattice(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const tint = ENEMY_ARCHETYPES.knot.tint;
+    const reach = 300;
+    ctx.save();
+    ctx.strokeStyle = tint;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash(AIM_DASH);
+    ctx.globalAlpha = 0.22 + 0.1 * Math.sin(clock * 3 + e.id);
+    for (let k = 0; k < 3; k++) {
+      const ang = e.attack.lockedAngle + k * (Math.PI / 3);
+      ctx.beginPath();
+      ctx.moveTo(sx - Math.cos(ang) * reach, sy - Math.sin(ang) * reach);
+      ctx.lineTo(sx + Math.cos(ang) * reach, sy + Math.sin(ang) * reach);
+      ctx.stroke();
+    }
+    ctx.setLineDash(AIM_SOLID);
+    const pulse = 0.6 + 0.4 * Math.sin(clock * 7);
+    ctx.globalAlpha = 0.55 * pulse;
+    ctx.strokeStyle = "#fff3c4";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.42 + 2 * pulse, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // The earned-window read (Weaver/MARROW/Choir): GUARDED = a dim thread rim (your
+  // shots are chipping — force the window instead); EXPOSED (aux carries the sim's
+  // remainder) = the body blazes, unload. The Weaver's feint recovery additionally
+  // blazes WHITE on the real body — the read the wefts exist to blur.
+  private renderEarnedWindow(e: Enemy, sx: number, sy: number, size: number) {
+    const { ctx } = this;
+    const tint = ENEMY_ARCHETYPES[e.kind].tint;
+    if (e.aux > 0) {
+      const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
+      this.fxLayer("glow_round", tint, sx, sy, size * 1.15 * pulse, size * 1.15 * pulse, 0.5, 0);
+      this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.42, size * 0.42, 0.75 * pulse, 0);
+      return;
+    }
+    if (e.kind === "weaver" && e.attack.move === "decoy" && e.attack.phase === "recover") {
+      // The mirror feint: the REAL Weaver is clearly brighter and casts the true
+      // thread shadow — the wefts stay dim.
+      const pulse = 0.7 + 0.3 * Math.sin(this.animClock * 12);
+      this.fxLayer("glow_round", "#ffffff", sx, sy, size * 1.3 * pulse, size * 1.3 * pulse, 0.45, 0);
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = "#1a0f24";
+      ctx.beginPath();
+      ctx.ellipse(sx, sy + size * 0.42, size * 0.5, size * 0.18, 0, 0, 6.28);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.4 + 0.12 * Math.sin(this.animClock * 3);
+    ctx.strokeStyle = tint;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
   // The Warden's plate state: sealed = a cool gold rim (your shots are chipping); exposed
-  // = the plate hangs open and the amber core blazes — unload.
+  // = the plate hangs open and the amber core blazes — unload. Exposure rides the aux
+  // channel (the authoritative earned-window remainder), so online clients agree.
   private renderGildedPlate(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
-    const a = e.attack;
-    const isExposed = a.phase === "recover" && (a.move === "slam" || a.move === "sweep");
+    const isExposed = e.aux > 0;
     if (isExposed) {
       const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
       this.fxLayer("glow_round", "#ffb43b", sx, sy, size * 1.1 * pulse, size * 1.1 * pulse, 0.55, 0);
@@ -4710,14 +4783,16 @@ export class Game {
     ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.fill();
     ctx.restore();
 
-    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley" || a.move === "seam") {
+    const isBlinkLane = a.move === "blink" && e.kind === "weaver";
+    if (a.move === "lunge" || a.move === "spit" || a.move === "rush" || a.move === "volley" || a.move === "seam" || isBlinkLane) {
       // Line commitments draw their whole lane: the rush lengths match the sim's actual
       // travel, so where the line ends is where the rusher stops (or crashes). The seam
-      // draws to its authoritative mark — the far wall the cut will reach.
+      // draws to its authoritative mark — the far wall the cut will reach; the Weaver's
+      // blink draws its committed thread to the arrival mark (shoot the lane's knot!).
       const len = a.move === "lunge" ? 150
         : a.move === "spit" ? 300
         : a.move === "volley" ? 260
-        : a.move === "seam" ? Math.hypot(a.markX - e.x, a.markY - e.y)
+        : a.move === "seam" || isBlinkLane ? Math.hypot(a.markX - e.x, a.markY - e.y)
         : e.kind === "marrow" ? MARROW.chargeSpeed * MARROW.chargeDur
         : e.kind === "sinderling" ? SINDER_JET_SPEED * SINDER_JET_DUR
         : CHARGER_RUSH_SPEED * CHARGER_RUSH_DUR;

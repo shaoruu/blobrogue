@@ -90,7 +90,15 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
 //     reject any snapshot carrying these as a ProtocolError; the strict join gate turns
 //     that skew into a clean "update your client".
-export const PROTOCOL_VERSION = 8;
+// v9 (intentional bump, the earned-windows boss rework): the enemy wire's closed kind
+// set grew again — the Weaver's lattice `knot` and mirror-feint `weft` mechanic bodies
+// (a v8 client would reject any snapshot carrying them as a ProtocolError). No new wire
+// FIELDS: the deep bosses' guarded/exposed state rides the existing `aux` channel
+// (seconds left in the current EXPOSED window; 0 = guarded), the Weaver's new moves
+// reuse the existing closed move set (blink/decoy/crash shared grammar), and every
+// window/bank/lattice decision stays sim-internal. The strict equal-version join gate
+// (client/server/control all mirror this constant) fences the kind-set skew.
+export const PROTOCOL_VERSION = 9;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -1042,7 +1050,13 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,
     },
     boss: w.bph > 0
-      ? { phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0, isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0 }
+      ? {
+        phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0,
+        isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0,
+        // Earned windows: the exposed remainder rides the aux channel (the render key);
+        // the bank and mechanic id lists are sim-internal and never travel.
+        exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0,
+      }
       : null,
   };
 }

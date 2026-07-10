@@ -155,6 +155,9 @@ SHEETS["toll.attack"] = { src: "/sprites/toll_attack.png", fps: 10 };
 // Decoys are stationary props-with-a-pulse: one idle loop each.
 SHEETS["echo.idle"] = { src: "/sprites/echo_idle.png", fps: 6 };
 SHEETS["knell.idle"] = { src: "/sprites/knell_idle.png", fps: 8 };
+// The Weaver's mechanic bodies ride the same decoy contract: idle loops only.
+SHEETS["knot.idle"] = { src: "/sprites/knot_idle.png", fps: 7 };
+SHEETS["weft.idle"] = { src: "/sprites/weft_idle.png", fps: 6 };
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -248,6 +251,10 @@ const SOURCES: Record<SpriteName, string> = {
   fragment: "/sprites/fragment.png",
   echo: "/sprites/echo.png",
   knell: "/sprites/knell.png",
+  // The Weaver's earned-window bodies (fal recipe pending; tinted-disc fallback carries
+  // the lattice knot's glow and the weft afterimage's dim thread-body until then).
+  knot: "/sprites/knot.png",
+  weft: "/sprites/weft.png",
   marshal: "/sprites/marshal.png",
   toll: "/sprites/toll.png",
   boss: "/sprites/boss.png",
