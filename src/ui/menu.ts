@@ -337,6 +337,9 @@ export class Menu {
     const right = el("div", "home-right");
     const identity = this.identitySection();
     right.appendChild(identity);
+    // The destinations are a labeled, consistently-sized group (aligned to the identity
+    // card above) — a clean nav, not a scattered pile of buttons.
+    right.appendChild(el("div", "col-h nav-h", "more"));
     const nav = el("div", "navrow");
     const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
     const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());

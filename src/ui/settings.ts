@@ -51,11 +51,17 @@ function sliderRow(label: string, min: number, max: number, step: number, read: 
   return { row, range };
 }
 
-function groupHeader(label: string): HTMLElement {
+// One categorized section: a bordered sub-panel with a header and its control rows. The
+// settings surface is a grid of these (index.html .settings), so related controls are
+// grouped and aligned instead of forming one endless vertical stack.
+function section(label: string, ...rows: HTMLElement[]): HTMLElement {
+  const box = document.createElement("div");
+  box.className = "settings-section";
   const h = document.createElement("div");
-  h.className = "settings-group-h";
+  h.className = "settings-section-h";
   h.textContent = label;
-  return h;
+  box.append(h, ...rows);
+  return box;
 }
 
 const FLASH_ORDER: FlashLevel[] = ["full", "low", "off"];
@@ -135,10 +141,13 @@ export function createSettingsControls(): HTMLElement {
     syncFlash();
   });
 
+  // Categorized sections in a grid (index.html .settings): Audio, Game Feel, Display, and
+  // Accessibility. Each control row keeps its shape; related settings are grouped together.
   wrap.append(
-    groupHeader("audio"), mute, master.row, music.row, sfxVol.row, mutedNote,
-    groupHeader("game feel"), autofire, shake.row, recoil.row, uiScale.row,
-    groupHeader("accessibility"), reducedMotion, hitstop, highContrast, flash, flashNote,
+    section("audio", mute, master.row, music.row, sfxVol.row, mutedNote),
+    section("game feel", autofire, shake.row, recoil.row),
+    section("display", uiScale.row, highContrast),
+    section("accessibility", reducedMotion, hitstop, flash, flashNote),
   );
   return wrap;
 }
