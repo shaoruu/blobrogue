@@ -95,9 +95,7 @@ async function main(): Promise<void> {
         game.tick(1 / 60);
       }
       for (let i = 0; i < 8; i++) game.tick(1 / 60);
-      const p = privates(game);
-      p.cam.x = ventX - VIEW_W / 2 + 60;
-      p.cam.y = ventY - VIEW_H / 2;
+      privates(game).snapCameraTo(ventX - VIEW_W / 2 + 60, ventY - VIEW_H / 2);
       game.render();
       save("ember-vent-eruption", canvas);
     }

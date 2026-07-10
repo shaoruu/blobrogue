@@ -259,11 +259,11 @@ function findOpenTorch(game: HarnessGame): TilePoint | null {
 }
 
 function screenX(game: HarnessGame, wx: number): number {
-  return Math.round(wx - privates(game).cam.x);
+  return Math.round(wx - privates(game).renderCam.x);
 }
 
 function screenY(game: HarnessGame, wy: number): number {
-  return Math.round(wy - privates(game).cam.y);
+  return Math.round(wy - privates(game).renderCam.y);
 }
 
 interface BandMetrics {
@@ -431,9 +431,7 @@ function tellTest(game: HarnessGame, canvas: Canvas): void {
     game.tick(1 / 60);
   }
   for (let i = 0; i < 20; i++) game.tick(1 / 60);
-  const p = privates(game);
-  p.cam.x = ventX - VIEW_W / 2;
-  p.cam.y = ventY - VIEW_H / 2;
+  privates(game).snapCameraTo(ventX - VIEW_W / 2, ventY - VIEW_H / 2);
   const phase = floorHazardPhaseAt(hazard, w.floorHazardClock);
   const on = renderFrame(game, canvas);
   snapshot("ember-vent-tell", canvas);

@@ -491,9 +491,13 @@ export class LightingRenderer {
     const bh = win.wh / DARK_SCALE;
     const sx = win.wx / DARK_SCALE;
     const sy = win.wy / DARK_SCALE;
-    // Screen destination, snapped to integers so the nearest upscale never shimmers.
-    const dx = Math.round(win.wx - camX);
-    const dy = Math.round(win.wy - camY);
+    // Screen destination at the EXACT fractional camera (the shared render-clock camera
+    // every world pass subtracts): the window origin is tile-aligned in world space, so
+    // this fraction is what keeps the light field locked to the smoothed world during a
+    // pan. Snapping it would re-introduce per-pixel stepping against the scene — the
+    // exact relative jitter the one-camera contract (test:rendersmooth) forbids.
+    const dx = win.wx - camX;
+    const dy = win.wy - camY;
 
     if (!this.darkCanvas || this.darkCanvas.width < bw || this.darkCanvas.height < bh) {
       this.darkCanvas = this.ensureCanvas(this.darkCanvas, bw, bh);

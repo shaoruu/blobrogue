@@ -108,9 +108,11 @@ export interface HarnessGame {
 interface HarnessPrivates {
   seed: number;
   cam: { x: number; y: number };
+  renderCam: { x: number; y: number };
   torches: { tx: number; ty: number }[];
   input: { mouseX: number; mouseY: number; isMouseDown: boolean };
   motes: { reseed(): void; update(): void; render(): void };
+  snapCameraTo(x: number, y: number): void;
 }
 
 export function privates(game: HarnessGame): HarnessPrivates {
@@ -169,10 +171,10 @@ export function loadDeterministicFloor(game: HarnessGame, seed: number, floor: n
 
 export function settleAt(game: HarnessGame, x: number, y: number, viewW: number, viewH: number, ticks = 30): void {
   game.devTeleport(x, y);
-  const p = privates(game);
   for (let i = 0; i < ticks; i++) game.tick(1 / 60);
-  p.cam.x = x - viewW / 2;
-  p.cam.y = y - viewH / 2;
+  // Hard camera cut through the game's own snap (clears the render-clock interpolation
+  // history), so metrics/screenshots sample at exactly this camera, never mid-slide.
+  privates(game).snapCameraTo(x - viewW / 2, y - viewH / 2);
 }
 
 export { CanvasImage };
