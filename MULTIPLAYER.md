@@ -608,6 +608,19 @@ weapon stats are identical solo/co-op, and every count is deterministic per
   the interact panel's BUY; walking over a station never spends a coin, an invalid buy
   never consumes, coins are server-owned, and a reconnect resumes into the identical
   stall (claims + reroll counter ride the snapshot).
+- **The premium economy** (protocol v9): every milestone's landing floor (F9/14/19/24/29,
+  … — the F10/15/20/25/30 milestones are boss/gauntlet floors, and shops never generate
+  there) hosts a **premium shop** instead of the Dealer, and the Dealer itself carries one
+  premium slot from F6+. Stock is `max(2, P)` seeded distinct sinks (a bigger party's
+  stock is a strict superset of the identical solo prefix; prices never change with P),
+  sinks are **FOR YOU** (personal + non-depleting) with one power buy per shop per player
+  (buying one locks the rest), and the **mythic capstone** (F20+ milestones) is **ONE per
+  party per shop** — a shared claim like a weapon pedestal, no 4× mythic stacking. The
+  mystery weapon's reveal rolls a per-buyer seeded stream, so identical seeds + wallets
+  reveal identically while each buyer draws their own fate. Coin income stays per-player
+  (no shared wallet); collected coin VALUE carries an authored per-P compensation so a
+  party member's income tracks solo. Amber (the persistent currency) is bankable ONLY
+  through the amber cache / mythic windfall at run end — coins never buy permanent power.
 - **The boss reward** is `min(P+1, 5)` distinct choice PEDESTALS spilled from the chest
   (the boss's authored signature weapon first). Each member **claims exactly one by
   touch** (`isBossChoice` pickups + the per-player claim flag); a claim removes nothing

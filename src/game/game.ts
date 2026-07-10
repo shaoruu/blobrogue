@@ -11,7 +11,7 @@ import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, amberForRun } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, amberForRun, isPremiumShopFloor } from "../sim/balance.js";
 import type { EnemyTier, EliteAffix } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
@@ -2809,9 +2809,14 @@ export class Game {
     const tx = Math.floor(this.px / TILE), ty = Math.floor(this.py / TILE);
     if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) {
       this.isShopWelcomed = true;
-      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
-      // The multi-buy opener (playtest fix: kills the pick-one mental model on arrival).
-      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "BUY FROM ANY STATION YOU CAN AFFORD", "#ffe9b0");
+      if (isPremiumShopFloor(this.floor)) {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S PREMIUM CACHE", "#ffb43b");
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "ONE PREMIUM BUY PER SHOP \u2014 CHOOSE WELL", "#ffe9b0");
+      } else {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
+        // The multi-buy opener (playtest fix: kills the pick-one mental model on arrival).
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "BUY FROM ANY STATION YOU CAN AFFORD", "#ffe9b0");
+      }
       this.sfxAt("blessing", shop.keeperX, shop.keeperY, { gain: 0.3, rate: 1.15 });
     }
   }

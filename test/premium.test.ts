@@ -26,12 +26,12 @@ import {
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
-  isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopSlotPriceFor,
+  isShopFloor, hasShopRoomOnFloor, shopSlotStatusFor, shopSlotPriceFor,
   shopViewerOf, isPremiumKind, isMythicKind,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopSlotKind } from "../src/sim/shop.js";
 import {
-  PREMIUM, CAPS, PLAYER, isPremiumShopFloor, premiumPriceAt, premiumBandIndex,
+  PREMIUM, CAPS, PLAYER, isPremiumShopFloor, premiumPriceAt,
   mysteryOddsAt, roundToPriceStep, amberForRun, coinChanceTaper, COIN_TAPER,
   BOSS_DPS_CEILING,
 } from "../src/sim/balance.js";
@@ -42,7 +42,6 @@ import { ITEMS, itemById, itemLevelsOf, recomputeMods, createMods, MAX_ITEM_LEVE
 import { Rng } from "../src/sim/rng.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import type { SimEvent } from "../src/sim/events.js";
-import type { PlayerId } from "../src/sim/input.js";
 import { jsonCodec, buildSnapshot, toShopWire } from "../src/net/protocol.js";
 import type { ServerMsg } from "../src/net/protocol.js";
 
@@ -72,10 +71,6 @@ function buyAt(w: WorldState, p: PlayerSim, slot: ShopSlot, ev: SimEvent[] = [])
   p.x = slot.x;
   p.y = slot.y;
   return buyFromShopInWorld(w, p.id, slot.id, ev);
-}
-
-function slotOfKind(w: WorldState, kind: ShopSlotKind): ShopSlot | undefined {
-  return w.shop!.slots.find((s) => s.kind === kind);
 }
 
 // A premium world with a guaranteed slot of `kind`: scans seeds until the seeded stock
@@ -224,32 +219,20 @@ function mysteryTests(): void {
       && !before.includes(revealed.weapon));
   }
   {
-    // Determinism: identical world → identical reveal; different buyer → own fate.
-    const revealOf = (pid: string): string => {
-      const { w, ps } = partyWorld(0x5eed, 14, 2);
-      const slot = w.shop!.slots.find((s) => s.kind === "mystery");
-      if (!slot) return "none";
+    // Determinism: the identical (seed, floor, slot, buyer) always reveals the identical
+    // weapon — rebuilt worlds agree draw-for-draw.
+    const revealFor = (pid: string): string => {
+      const { w, ps } = worldWithSlot("mystery", 14, 2);
+      const slot = w.shop!.slots.find((s) => s.kind === "mystery")!;
       const p = ps.find((x) => x.id === pid)!;
       give(p, 1000);
       const ev: SimEvent[] = [];
       buyAt(w, p, slot, ev);
       const e = ev.find((x) => x.t === "mysteryReveal");
-      return e && e.t === "mysteryReveal" ? e.weapon : "none";
+      return e !== undefined && e.t === "mysteryReveal" ? e.weapon : "none";
     };
-    // Find a premium floor whose seeded stock has a mystery slot for this fixed seed.
-    if (revealOf("p0") !== "none") {
-      check("same (seed, wallet, buyer) → the identical reveal", revealOf("p0") === revealOf("p0"));
-    } else {
-      const { w, ps } = ((): { w: WorldState; ps: PlayerSim[] } => {
-        const { w, ps } = worldWithSlot("mystery", 14, 2);
-        return { w, ps };
-      })();
-      const slot = w.shop!.slots.find((s) => s.kind === "mystery")!;
-      give(ps[0], 1000);
-      const ev: SimEvent[] = [];
-      buyAt(w, ps[0], slot, ev);
-      check("same (seed, wallet, buyer) → the identical reveal", ev.some((e) => e.t === "mysteryReveal"));
-    }
+    const first = revealFor("p0");
+    check("same (seed, wallet, buyer) → the identical reveal", first !== "none" && first === revealFor("p0"));
   }
   {
     // The odds table: monotone legendary share, and the seeded roll honors it.
@@ -487,12 +470,16 @@ function guardrailTests(): void {
   }
 
   section("guardrails: the depth coin taper (calibration, never a value change)");
-  check("floor 1 untouched; a floored minimum share; monotone decline",
+  check("the valley: floor 1 untouched, monotone decline to the floor, never below it",
     coinChanceTaper(1) === 1
     && coinChanceTaper(COIN_TAPER.fromFloor) < 1
-    && coinChanceTaper(15) < coinChanceTaper(10)
-    && coinChanceTaper(30) >= COIN_TAPER.floorMult
-    && coinChanceTaper(100) === COIN_TAPER.floorMult);
+    && coinChanceTaper(8) < coinChanceTaper(5)
+    && coinChanceTaper(15) >= COIN_TAPER.floorMult);
+  check("the deep-band release: F20+ climbs back toward (never past) the release cap",
+    coinChanceTaper(COIN_TAPER.releaseFromFloor) > COIN_TAPER.floorMult
+    && coinChanceTaper(25) > coinChanceTaper(20)
+    && coinChanceTaper(100) === COIN_TAPER.releaseMax
+    && COIN_TAPER.releaseMax < 1);
 }
 
 // ---- 6. co-op ----
