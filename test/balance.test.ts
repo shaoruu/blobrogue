@@ -7,21 +7,20 @@
 // Run: npm run test:balance
 
 import {
-  createWorld, stepWorld, descend, devSpawnEnemy, applyItemToWorld, acquireWeaponInWorld,
-  spawnPlayerInWorld, isFloorCleared, isBossExposed, buyFromShopInWorld,
+  createWorld, stepWorld, descend, devSpawnEnemy, acquireWeaponInWorld,
+  spawnPlayerInWorld, isFloorCleared, buyFromShopInWorld,
 } from "../src/sim/world.js";
-import type { WorldState } from "../src/sim/world.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
-import type { Bullet, EnemyKind, WeaponId } from "../src/sim/types.js";
+import type { EnemyKind, WeaponId } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import {
   ENEMY_ARCHETYPES, enemyHpForFloor, enemySpeedForFloor, createEnemy, spawnFloorEnemies,
   threatCostOf, isBossFloor, isComplexMover,
 } from "../src/sim/enemies.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
-import { WEAPONS, PICKUP_WEAPONS } from "../src/sim/weapons.js";
+import { WEAPONS } from "../src/sim/weapons.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
   GAUNTLET, gauntletCaptainHp, CAPS, TIERS,
@@ -30,8 +29,7 @@ import {
   weaverHpForFloor, gildedHpForFloor, floorThreat, activeThreatCap,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopHeartRateMult, BIOME_PRESSURE,
   pedestalWeaponRolls, bossWeaponChoices, BOSS_MIN_LEGAL_TTK,
-  BOSS_DPS_CEILING, BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
-  BOSS_VULN_CAP, ELITE_BRACE,
+  BOSS_DPS_CEILING, ELITE_BRACE,
 } from "../src/sim/balance.js";
 import { itemById, recomputeMods, createMods, rollItemChoicesWith, ITEMS, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import { shopWeaponPrice } from "../src/sim/shop.js";
@@ -40,8 +38,11 @@ import { biomeIndexForFloor } from "../src/sim/biomes.js";
 import { readFileSync, writeFileSync } from "node:fs";
 import { Rng } from "../src/sim/rng.js";
 import * as C from "../src/sim/constants.js";
-
-const DT = 1 / 60;
+// The practical-DPS + boss-TTK harness is shared with the kit balance gates (one model, one
+// sim measurement) — see test/dpsHarness.ts.
+import {
+  DT, L3, plantBullet, idle, step, grant, measureBossTtk, practicalBossDps, forEachLegalBuild,
+} from "./dpsHarness.js";
 
 // Measured-build fixtures: every TTK number the gates measure is recorded here and pinned
 // against test/fixtures/boss_ttk.fixtures.json. These are DETERMINISTIC SIM-HARNESS
@@ -62,34 +63,6 @@ function check(name: string, cond: boolean, detail = ""): void {
 }
 function section(name: string): void {
   process.stdout.write(`\n[${name}]\n`);
-}
-
-function grant(w: WorldState, pid: PlayerId, ids: string[]): void {
-  for (const id of ids) {
-    const def = itemById(id);
-    if (!def) throw new Error(`unknown item ${id}`);
-    applyItemToWorld(w, pid, def);
-  }
-}
-
-const L3 = (id: string) => [id, id, id];
-
-// A friendly test bullet planted directly on a target (resolves through the ordinary
-// strike path: attribution, boss transition machinery, kill, loot).
-function plantBullet(w: WorldState, x: number, y: number, damage: number, radius = 20): void {
-  const b: Bullet = {
-    x, y, vx: 1, vy: 0, radius, life: 0.05, friendly: true, owner: LOCAL_ID,
-    damage, color: "#fff", pierce: 0, hitList: null, isCrit: false,
-  };
-  w.bullets.push(b);
-}
-
-function idle(seq: number): InputCmd {
-  return { seq, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
-}
-
-function step(w: WorldState, cmd: InputCmd): SimEvent[] {
-  return stepWorld(w, new Map([[LOCAL_ID, cmd]]), DT);
 }
 
 // ---- gate 3 + §3: the exact per-floor HP/speed tables ----
@@ -141,114 +114,6 @@ function enemyTableGates(): void {
 // clause is NOT enforceable against stacked-multiplier god builds (9+ picks) without
 // HP-sponging the median band — that deviation is reported in the PR, and these tests pin
 // the representative high-roll builds instead.
-
-interface TtkResult {
-  seconds: number;
-  killed: boolean;
-  transitions: Array<{ entering: boolean; at: number; queued: number }>;
-  // Balancer report channels: total forced-transition time, (Warden) closed-plate time,
-  // and — the earned-windows gate currency — total time the boss was EXPOSED.
-  transitionSeconds: number;
-  closedArmorSeconds: number;
-  exposedSeconds: number;
-}
-
-// The scripted-aggression harness PLAYS THE MECHANICS (an earned-window boss measured
-// by a bot that ignores its mechanics would only measure the guard chip):
-//  - Weaver: shoot the EGG-SAC clutch first (P2's forced-down switch), then a live
-//    lattice KNOT (P1 breaks; P3 lane denial makes her dashes overshoot), then the
-//    body — the designer's phase priorities, scripted.
-//  - Choir: shoot the live FRAGMENT verse first (silence opens the window; the same
-//    priority answers the split beat's wisps), circle-strafing so the drifting mass
-//    never body-blocks the fragment line.
-//  - MARROW: shadow it wall-side (the nearest wall at the player's back), freeze until
-//    the rush LOCKS, then sidestep — the committed rush carries past into the wall
-//    (the bait that opens its window).
-//  - Warden/King: stationary focus, as before (the Warden's windows are its recovers).
-function measureBossTtk(weapon: WeaponId, picks: string[], boss: { kind: EnemyKind; floor: number } = { kind: "boss", floor: 5 }): TtkResult {
-  const w = createWorld(0xBA1A4CE, boss.floor, { isSandbox: true });
-  w.isGodMode = true;
-  const p = w.players.get(LOCAL_ID)!;
-  acquireWeaponInWorld(w, LOCAL_ID, weapon);
-  grant(w, LOCAL_ID, picks);
-  const target = devSpawnEnemy(w, boss.kind, p.x + 170, p.y);
-  // The sandbox arena's inner bounds (buildArena: 34×24 tiles, 1-tile border) and the
-  // marrow bait geometry: hold this far off the boss toward its nearest wall.
-  const arena = { x0: 48, y0: 48, x1: 33 * 48, y1: 23 * 48 };
-  const baitPoint = (): { x: number; y: number } => {
-    const dW = target.x - arena.x0, dE = arena.x1 - target.x;
-    const dN = target.y - arena.y0, dS = arena.y1 - target.y;
-    const min = Math.min(dW, dE, dN, dS);
-    const dir = min === dW ? [-1, 0] : min === dE ? [1, 0] : min === dN ? [0, -1] : [0, 1];
-    return {
-      x: Math.max(arena.x0 + 110, Math.min(arena.x1 - 110, target.x + dir[0] * 130)),
-      y: Math.max(arena.y0 + 110, Math.min(arena.y1 - 110, target.y + dir[1] * 130)),
-    };
-  };
-  const transitions: TtkResult["transitions"] = [];
-  let ticks = 0;
-  let killed = false;
-  let closedArmorSeconds = 0;
-  let exposedSeconds = 0;
-  const maxTicks = 60 * 180;
-  while (!killed && ticks < maxTicks) {
-    const isExposedNow = !target.dead && isBossExposed(target);
-    let aimAt: { x: number; y: number } = target;
-    if (!isExposedNow) {
-      if (boss.kind === "weaver") {
-        aimAt = w.enemies.find((e) => !e.dead && e.kind === "sac")
-          ?? w.enemies.find((e) => !e.dead && e.kind === "knot")
-          ?? target;
-      } else if (boss.kind === "choir") {
-        aimAt = w.enemies.find((e) => !e.dead && e.isSummoned && e.kind === "ghost") ?? target;
-      }
-    }
-    const aim = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
-    let moveX = 0, moveY = 0;
-    const atk = target.attack;
-    if (boss.kind === "marrow" && !target.dead) {
-      if (atk.move === "rush" && ((atk.phase === "windup" && atk.isAimLocked) || atk.phase === "active")) {
-        const side = atk.lockedAngle + Math.PI / 2;
-        moveX = Math.cos(side); moveY = Math.sin(side);
-      } else {
-        const bait = baitPoint();
-        if (Math.hypot(bait.x - p.x, bait.y - p.y) > 24) {
-          const back = Math.atan2(bait.y - p.y, bait.x - p.x);
-          moveX = Math.cos(back); moveY = Math.sin(back);
-        }
-      }
-    } else if (boss.kind === "choir" && !target.dead) {
-      const d = Math.hypot(target.x - p.x, target.y - p.y);
-      if (d < 170) {
-        const away = Math.atan2(p.y - target.y, p.x - target.x) + 0.7;
-        moveX = Math.cos(away); moveY = Math.sin(away);
-      }
-    } else if (boss.kind === "weaver") {
-      // The P2 fight is ABOUT running the clutch down (and closing on the forced-down
-      // window at her wall): walk to whatever the aim wants once it leaves gun range.
-      const d = Math.hypot(aimAt.x - p.x, aimAt.y - p.y);
-      if (d > 280) {
-        const toward = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
-        moveX = Math.cos(toward); moveY = Math.sin(toward);
-      }
-    }
-    if (!target.dead) {
-      if (boss.kind === "gilded" && !isBossExposed(target)) closedArmorSeconds += DT;
-      if (isExposedNow) exposedSeconds += DT;
-    }
-    const evs = step(w, { seq: ticks, moveX, moveY, aim, firing: true, dash: false });
-    for (const e of evs) {
-      if (e.t === "bossTransition") transitions.push({ entering: e.entering, at: ticks * DT, queued: e.queued });
-      if (e.t === "enemyKill" && e.kind === boss.kind) killed = true;
-    }
-    ticks++;
-  }
-  let transitionSeconds = 0;
-  const enterAts = transitions.filter((x) => x.entering).map((x) => x.at);
-  const exitAts = transitions.filter((x) => !x.entering).map((x) => x.at);
-  for (let i = 0; i < Math.min(enterAts.length, exitAts.length); i++) transitionSeconds += exitAts[i] - enterAts[i];
-  return { seconds: ticks * DT, killed, transitions, transitionSeconds, closedArmorSeconds, exposedSeconds };
-}
 
 interface BossGateRow {
   kind: EnemyKind;
@@ -1372,67 +1237,12 @@ function eliteContractGates(): void {
 // strongest build is then run in the REAL sim against every boss to prove the absolute
 // high-roll minimum — no runtime clamp anywhere.
 
-// Moving-target accuracy factors per weapon family (the documented estimator model):
-// base hit fraction × spread penalty × projectile-speed penalty.
-function practicalAccuracy(id: WeaponId, spreadTotal: number, speed: number): number {
-  const MELEE: Record<string, number> = { sword: 0.65, longsword: 0.65, spear: 0.7 };
-  if (MELEE[id] !== undefined) return MELEE[id];
-  const base =
-    id === "homing" ? 0.95
-    : id === "beam" ? 0.9
-    : id === "tesla" ? 0.8
-    : id === "mortar" ? 0.7
-    : id === "ricochet" ? 0.75
-    : id === "flamer" ? 0.6
-    : id === "shotgun" || id === "sawnoff" ? 0.55
-    : 0.85;
-  const spreadPenalty = Math.max(0.35, 1 - spreadTotal * 0.55);
-  const speedPenalty = speed > 0 ? Math.min(1, Math.max(0.6, speed / 420)) : 1;
-  return base * spreadPenalty * speedPenalty;
-}
-
-function practicalBossDps(id: WeaponId, mods: ReturnType<typeof createMods>): number {
-  const wep = WEAPONS[id];
-  const isMelee = wep.melee !== undefined;
-  const pellets = isMelee ? 1 : wep.pellets + mods.extraPellets;
-  const extra = Math.max(0, pellets - wep.pellets);
-  // The fire-time pellet/weapon coefficients, exactly as fire() bakes them.
-  const effPellets = isMelee ? 1 : 1 + Math.max(0, wep.pellets - 1) * BOSS_NATIVE_PELLET_COEF + extra * BOSS_EXTRA_PELLET_COEF;
-  const wepCoef = isMelee ? 1 : WEAPON_BOSS_COEF[id] ?? 1;
-  const spreadTotal = isMelee ? 0 : (pellets > 1 ? Math.max(wep.spread, C.MIN_MULTI_SPREAD) + mods.spreadAdd : wep.spread);
-  // The boss vulnerability channel: statuses amplify NOTHING against boss-grade bodies
-  // (utility only), and the crit multiplier counts at most BOSS_VULN_CAP.
-  const vuln = (1 - mods.critChance) + mods.critChance * Math.min(BOSS_VULN_CAP, mods.critMult);
-  const rate = (1 / wep.fireCd) * mods.fireRateMult;
-  // Burn is a flat DoT (never an amp): bounded at +3 practical DPS when present.
-  const burnDot = mods.burnChance > 0 ? 3 : 0;
-  // The Midas models its FED damage: a stocked purse is no brake inside a boss window,
-  // so the estimator assumes every shot eats a coin (the honest worst case).
-  const coinFed = wep.coinBoost ?? 1;
-  return wep.damage * coinFed * mods.damageMult * effPellets * wepCoef * rate * vuln
-    * practicalAccuracy(id, spreadTotal, isMelee ? 0 : wep.speed * mods.bulletSpeedMult) + burnDot;
-}
-
 function godBuildGates(): void {
   section("balancer god-build gate: 100k legal builds under the per-boss practical-DPS ceilings");
-  const rng = new Rng(0x60D5EED);
-  const BUILD_COUNT = 100_000;
-  const PICK_COUNTS = [4, 8, 9, 12];
   let maxDps = 0;
   let maxBuild = "";
   const top: Array<{ dps: number; build: string }> = [];
-  const arsenal: WeaponId[] = [...PICKUP_WEAPONS, "pistol"];
-  for (let i = 0; i < BUILD_COUNT; i++) {
-    const owned: string[] = [];
-    const picks = PICK_COUNTS[i % PICK_COUNTS.length];
-    for (let n = 0; n < picks; n++) {
-      const choices = rollItemChoicesWith(3, () => rng.next(), owned);
-      if (choices.length === 0) break;
-      owned.push(choices[rng.int(0, choices.length - 1)].id);
-    }
-    const mods = createMods();
-    recomputeMods(mods, owned);
-    const weapon = arsenal[i % arsenal.length];
+  forEachLegalBuild(({ weapon, owned, mods }) => {
     const dps = practicalBossDps(weapon, mods);
     if (dps > maxDps) { maxDps = dps; maxBuild = `${weapon} + [${owned.join(",")}]`; }
     if (top.length < 100 || dps > top[top.length - 1].dps) {
@@ -1440,7 +1250,7 @@ function godBuildGates(): void {
       top.sort((a, b) => b.dps - a.dps);
       if (top.length > 100) top.pop();
     }
-  }
+  });
   record("godBuild.maxPracticalDps", maxDps);
   for (const [kind, ceiling] of Object.entries(BOSS_DPS_CEILING) as Array<[EnemyKind, number]>) {
     check(`100k-build max practical DPS ${maxDps.toFixed(1)} ≤ the ${kind} ceiling ${ceiling}`,
