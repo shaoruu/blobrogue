@@ -1,7 +1,8 @@
 // The PARTY+GEAR-AWARE SCALING framework (the balancer's R model) — ship gates.
 //   R = clamp(PartyDPS / refDPS(floor), 1, 6): headcount AND gear in ONE measured
 //   number, sampled at the pull from loadouts alone, never rescaled mid-fight.
-//   Effective HP is sublinear and hard-capped (HPfrac = 1 + 0.62(R−1), ≤2.9) — the
+//   Effective HP is sublinear and hard-capped (HPfrac = 1 + Khp(R−1), ≤2.9; the spec's
+//   opening Khp 0.62 measured down to 0.45 by its own band-first calibration rule) — the
 //   surplus buys MECHANICS: add pressure (cap/interval, hard clamps), the phase-timer
 //   soft-enrage (+1 authored pattern, never damage/HP/invuln), density in disjoint
 //   lanes, and the once-per-phase surprise wave INSIDE the add budget.
@@ -197,17 +198,17 @@ function measurementGates(): void {
 // ---- 2. effective HP: sublinear, hard-capped ----
 
 function hpGates(): void {
-  section("effective HP: HPfrac = 1 + 0.62(R−1), clamped ≤2.9 — never a sponge");
-  check("HPfrac table (Khp 0.45, measured): R1 1.00 / R2 1.45 / R3 1.90 / R4 2.35 / cap 2.9",
+  section("effective HP: HPfrac = 1 + Khp(R−1), clamped ≤2.9 — never a sponge");
+  check("HPfrac table (spec 0.62 measured down to Khp 0.45): R1 1.00 / R2 1.45 / R3 1.90 / R4 2.35 / cap 2.9",
     Math.abs(bossHpFracFor(1) - 1) < 1e-9 && Math.abs(bossHpFracFor(2) - 1.45) < 1e-9
     && Math.abs(bossHpFracFor(3) - 1.9) < 1e-9 && Math.abs(bossHpFracFor(4) - 2.35) < 1e-9
     && bossHpFracFor(6) === 2.9);
   const base = weaverHpForFloor(20);
   check("the Weaver ladder rides the measured curve on the earned-windows anchor",
-    Math.round((base * bossHpFracFor(2)) / 10) * 10 === 900
-    && Math.round((base * bossHpFracFor(3)) / 10) * 10 === 1180
-    && Math.round((base * bossHpFracFor(4)) / 10) * 10 === 1460
-    && Math.round((base * bossHpFracFor(6)) / 10) * 10 === 1800,
+    Math.round((base * bossHpFracFor(2)) / 10) * 10 === 860
+    && Math.round((base * bossHpFracFor(3)) / 10) * 10 === 1120
+    && Math.round((base * bossHpFracFor(4)) / 10) * 10 === 1390
+    && Math.round((base * bossHpFracFor(6)) / 10) * 10 === 1710,
     `base=${base}`);
 }
 

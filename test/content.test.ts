@@ -687,7 +687,7 @@ function weaverTests(): void {
     const ev: SimEvent[] = [];
     plantBullet(w, boss.x, boss.y, (boss.maxHp * 0.4) / WEAVER.guardMult);
     stepFor(w, 0.15, ev);
-    check("a 65% cross raises the molt (roar semantics)", boss.attack.move === "roar");
+    check("a 66% cross raises the molt (roar semantics)", boss.attack.move === "roar");
     const brood = w.enemies.filter((e) => e.isSummoned && e.kind === "bat" && !e.dead);
     check("two swarm broodling bats spawn with the beat", brood.length === WEAVER.moltAdds && brood.every((x) => x.tier === "swarm"));
     const shotsBefore = w.bullets.filter((b) => !b.friendly).length;

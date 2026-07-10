@@ -314,8 +314,8 @@ function bossLadderGates(): void {
     bossHpForFloor(5) === BOSS.baseHp && BOSS.baseHp === 950, `hp=${bossHpForFloor(5)}`);
   check("F15 Marrow anchor recalibrated onto crash-window damage (730)",
     marrowHpForFloor(15) === MARROW.baseHp && MARROW.baseHp === 730, `hp=${marrowHpForFloor(15)}`);
-  check("F20 Weaver anchor recalibrated onto exposed damage (620)",
-    weaverHpForFloor(20) === WEAVER.baseHp && WEAVER.baseHp === 620, `hp=${weaverHpForFloor(20)}`);
+  check("F20 Weaver anchor recalibrated onto exposed damage (590)",
+    weaverHpForFloor(20) === WEAVER.baseHp && WEAVER.baseHp === 590, `hp=${weaverHpForFloor(20)}`);
   check("F25 Warden anchor holds (its commit windows were already the calibration)",
     gildedHpForFloor(25) === GILDED.baseHp && GILDED.baseHp === 1280, `hp=${gildedHpForFloor(25)}`);
   check("F30 Choir anchor recalibrated onto verse-silence damage (750)",
@@ -328,7 +328,7 @@ function bossLadderGates(): void {
   // anchor — solo createEnemy must land the anchor EXACTLY (party scaling is a separate,
   // documented co-op multiplier).
   check("boss HP at the anchor is mode-independent (solo spawn = the authored anchor)",
-    ([["boss", 5, 950], ["marrow", 15, 730], ["weaver", 20, 620], ["gilded", 25, 1280], ["choir", 30, 750]] as Array<[EnemyKind, number, number]>)
+    ([["boss", 5, 950], ["marrow", 15, 730], ["weaver", 20, 590], ["gilded", 25, 1280], ["choir", 30, 750]] as Array<[EnemyKind, number, number]>)
       .every(([k, f, hp]) => createEnemy(k, 0, 0, f, new Rng(1), 0, {}).hp === hp));
   check("deep reappearances stay within the ≤1.5x later-boss effective ceiling",
     bossHpForFloor(35) <= BOSS.baseHp * 1.5 && marrowHpForFloor(35) <= MARROW.baseHp * 1.5,
@@ -416,8 +416,8 @@ function bossLadderGates(): void {
   }
 
   section("gate §3 mechanism: fixed beats ≤1.2s; interactive beats attackable throughout");
-  check("fixed roar beats are ≤1.2s and the molt is the authored 1.4s cocoon (corrected §3)",
-    BOSS.roarDuration <= 1.2 && WEAVER.moltDuration === 1.4 && GILDED.sanctifyDuration === 1.2);
+  check("fixed roar beats are ≤1.2s (approved spec: forced transitions never exceed 1.2s)",
+    BOSS.roarDuration <= 1.2 && WEAVER.moltDuration <= 1.2 && GILDED.sanctifyDuration <= 1.2);
   check("interactive beats (Marrow shield, Choir split) hold forced minima ≤1.2s",
     MARROW.shieldMinDuration <= 1.2 && CHOIR.splitMinDuration <= 1.2);
   check("the Marrow shield is reduction (65% damage still lands), never immunity",

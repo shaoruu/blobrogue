@@ -5330,8 +5330,14 @@ function updateChoir(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
         const n = CHOIR.fragmentsFor[w.encounterPlayers];
         const edgeAngle = w.rng.next() * Math.PI * 2;
         for (let i = 0; i < n; i++) {
-          const ang = edgeAngle + (i / n) * Math.PI * 2;
-          queueAmbush(w, e.x + Math.cos(ang) * CHOIR.fragmentRingDist, e.y + Math.sin(ang) * CHOIR.fragmentRingDist, "ghost", "swarm", e.id + 1, ev);
+          // The verse is a TASK (every fragment must die to open the window), so a
+          // ring slot fouled by player clearance re-aims around the ring instead of
+          // silently shrinking the mechanic.
+          for (let nudge = 0; nudge < 6; nudge++) {
+            const ang = edgeAngle + (i / n) * Math.PI * 2 + nudge * 0.5;
+            const ok = queueAmbush(w, e.x + Math.cos(ang) * CHOIR.fragmentRingDist, e.y + Math.sin(ang) * CHOIR.fragmentRingDist, "ghost", "swarm", e.id + 1, ev);
+            if (ok) break;
+          }
         }
       }
     }
@@ -5588,9 +5594,20 @@ function weaverBeginClimb(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const base = w.rng.next() * Math.PI * 2;
   for (let i = 0; live < want && i < want * 6; i++) {
     const ang = base + i * 2.399963; // golden-angle scatter: deterministic, well-spread
-    const dist = WEAVER.sacRingDist * (i % 2 === 0 ? 1 : 0.6);
-    const x = e.x + Math.cos(ang) * dist;
-    const y = e.y + Math.sin(ang) * dist;
+    // Egg-sacs live ON THE WALLS (spec P2): march the ray out to the chamber wall and
+    // clutch a body's width inside it. The march is bounded — she perches ON a wall,
+    // so nearby faces exist; a rayless direction (open running room) falls back to the
+    // ring, keeping the task walk-completable instead of a cross-chamber hike.
+    let x = e.x + Math.cos(ang) * WEAVER.sacRingDist;
+    let y = e.y + Math.sin(ang) * WEAVER.sacRingDist;
+    for (let d = TILE; d <= TILE * 8; d += TILE * 0.5) {
+      const wx = e.x + Math.cos(ang) * d;
+      const wy = e.y + Math.sin(ang) * d;
+      if (!isWall(w, wx, wy)) continue;
+      x = wx - Math.cos(ang) * 22;
+      y = wy - Math.sin(ang) * 22;
+      break;
+    }
     // The clutch stays IN THE CHAMBER (line of sight to the perch): a sac walled off
     // in the next room would be an unreachable objective — never fair.
     if (!hasLineOfSight(w, e.x, e.y, x, y)) continue;

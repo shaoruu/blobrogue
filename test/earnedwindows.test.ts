@@ -407,8 +407,8 @@ function transitionGates(): void {
   plantBullet(w, boss.x, boss.y, 1e6, 30);
   const evs = step(w);
   const enter = evs.find((e) => e.t === "bossTransition" && e.entering);
-  check("a million-damage window hit floors at 57% and queues the overflow",
-    Math.abs(boss.hp - 0.57 * boss.maxHp) < 1e-6 && enter !== undefined
+  check("a million-damage window hit floors at 58% and queues the overflow",
+    Math.abs(boss.hp - WEAVER.phaseFloor[0] * boss.maxHp) < 1e-6 && enter !== undefined
     && enter.t === "bossTransition" && enter.queued > 0,
     `hp=${(boss.hp / boss.maxHp * 100).toFixed(0)}%`);
   let ticks = 0;

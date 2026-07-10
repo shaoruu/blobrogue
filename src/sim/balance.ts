@@ -622,7 +622,7 @@ export const EXPOSE_WINDOW_CAP = 8;   // combined exposure never exceeds this (s
 export const AMBUSH = {
   tell: 0.7,        // omen seconds before the body exists (0.6–0.8 band)
   radius: 24,       // the omen's marked footprint
-  playerClear: 120, // never queued inside this range of a standing player
+  playerClear: 140, // spawns land ≥140px from every player (approved spec §"guessing" 2)
 } as const;
 
 // ---- PARTY+GEAR-AWARE SCALING (the balancer's R framework) ----
@@ -654,9 +654,11 @@ export const POWER = {
   rMax: 6.0,
   weakFloorFrac: 0.55,   // per-player contribution floor: 0.55 × refDPS / P
   soloGearCap: 1.15,     // a solo player's gear never scales R past this
-  // Khp, measured DOWN from the balancer's opening 0.62 (its own remedy ladder: the
-  // 4-strong band outranks the constant, and at 0.62 the measured god-stack P50 sat
-  // ~6s over the 30–40s band once add pressure and climb downtime were real).
+  // Khp, measured DOWN from the approved spec's opening 0.62 by the spec's own
+  // calibration rule (the 4-strong 30–40s band outranks the constant): at 0.62 the
+  // measured god-stack P50 sits ~5s over the band once add pressure and climb
+  // downtime are real. The remedy ladder only ADDS mechanics when the stack is too
+  // fast — a too-slow stack can only give HP back.
   hpPerR: 0.45,          // HPfrac = 1 + hpPerR × (R − 1)…
   hpFracCap: 2.9,        // …clamped: never a sponge
   addCapPerR: 1.6,       // add cap = round(base + addCapPerR × (R − 1))…
@@ -918,9 +920,14 @@ export function choirHpForFloor(floor: number): number {
 // re-strings a fresh seeded lattice, so lane memory resets each phase.
 
 export const WEAVER = {
-  // Recalibrated on the EXPOSED-damage assumption (§3 rule): measured wall-clock +
-  // exposed-time bands live in the balance tests.
-  baseHp: 620,
+  // The approved spec opens the anchor at 1,500 but pins its own calibration rule
+  // higher: "HP calibrated on EXPOSED time (median 20–30s exposed), not uptime."
+  // Measured under the earned-windows contract (30% chip + banked windows + P2's
+  // untargetable climb), 1,500 lands the median build at ≈112s wall / ≈54s exposed —
+  // nearly double both bands — so the anchor is recalibrated down to the value the
+  // deterministic harness measures IN-band (see balance tests: wall 38–55s, exposed
+  // 20–30s). The 1,500 figure assumed full-uptime damage; exposed-time is the rule.
+  baseHp: 590,
   baseHpFloor: 20,
   contactDamage: 2,
   entranceGrace: 1.2,
@@ -929,7 +936,7 @@ export const WEAVER = {
   guardMult: 0.30,        // GUARDED damage multiplier (reduction, never immunity)
   knotBreakExpose: 3,     // P1: seconds of EXPOSED per broken lattice knot
   forcedownExpose: 4,     // P2: every egg-sac silenced -> she is forced down
-  overshootExpose: 4,     // P3: a dash into a broken lane overshoots into the wall
+  overshootExpose: 3.5,   // P3: a dash into a broken lane overshoots into the wall
   windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
   // THE LATTICE: knots anchor the silk lanes, ringed off the Weaver and never inside
   // knotPlayerClear of a standing player (the break forces a reposition). Each knot
@@ -1004,11 +1011,12 @@ export const WEAVER = {
     { kind: "bat", tier: "elite", weight: 1, maxAlive: 1, count: 1 },     // one Commander
     { kind: "charger", tier: "elite", weight: 1, maxAlive: 1, count: 1 }, // one Bulwark (mover-capped)
   ] as readonly AddPoolEntry[],
-  // Molt beat: a fixed 1.4s cocoon (roar semantics) that bursts into a web-bolt ring +
-  // two broodlings, then RESHAPES the weave (fresh lattice). Thresholds 65/30, floors 57/22.
-  phaseAt: [0.65, 0.30] as readonly number[],
-  phaseFloor: [0.57, 0.22] as readonly number[],
-  moltDuration: 1.4,
+  // Molt beat: a fixed cocoon (roar semantics, ≤1.2s per the approved spec's forced-
+  // transition guardrail) that bursts into a web-bolt ring + two broodlings, then
+  // RESHAPES the weave (fresh lattice). Spec phase bands: P1 100–66, P2 66–33, P3 33–0.
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  moltDuration: 1.2,
   moltDamageReduction: 0.35,
   moltBoltCount: 8,
   moltBoltSpeed: 260,
