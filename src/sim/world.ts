@@ -53,6 +53,8 @@ import {
 import type { EnemyTier, AddPoolEntry } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
+import { resolveFloorDescriptor } from "./floorRolls.js";
+import type { FloorDescriptor } from "./floorRolls.js";
 import { buildShopState, restockShop, shopSlotStatusFor, shopSlotPriceFor, shopViewerOf, upgradeTargetTier, SHOP_BUY_RANGE } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
 import { createWeaponBag, drawWeaponFromBag } from "./weaponBag.js";
@@ -281,6 +283,14 @@ export interface WorldState {
   // and NEVER rescaled mid-fight. Bosses read it for effective HP and every surplus
   // mechanic lever (add pressure, soft-enrage budgets, surprise waves, density).
   encounterPower: number;
+  // Gate 3's FROZEN floor descriptor: the floor's mutator/affix/boss-affix rolls resolved ONCE at
+  // generation via THE ROLL-ORDER CONTRACT (floorRolls.ts / streams.ts), a pure function of
+  // (seed, floor, playerCountAtLock). Clients recompute it identically inside their own floor
+  // build (never on the wire — the same pattern as floorHazards), so reconnect + same-seed replay
+  // are identical. Nothing re-rolls per frame; the sim + clients READ this. FRAMEWORK ONLY this
+  // build — resolved + frozen but not yet EXPRESSED (no vision/hazard/spawn changes), so existing
+  // floors stay byte-identical.
+  floorDescriptor: FloorDescriptor;
   // Threat-cap reinforcements: pre-planned units beyond the ActiveThreatCap, released in
   // waves as the living threat drops (spawnReleaseCd staggers the trickle).
   pendingSpawns: Enemy[];
@@ -404,6 +414,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     weaponBag: createWeaponBag(seed),
     encounterPlayers: 1,
     encounterPower: 1,
+    floorDescriptor: resolveFloorDescriptor(seed, floor, 1),
     pendingSpawns: [],
     spawnReleaseCd: 0,
     heartsThisFloor: 0,
@@ -515,6 +526,9 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   // downed/disconnected players never change it mid-fight, and it derives purely from
   // loadouts, so every client and the server agree.
   w.encounterPower = sampleEncounterPower(w);
+  // Gate 3: resolve + FREEZE the floor's rolls once, now, with the locked player count. A pure
+  // function of (seed, floor, encounterPlayers) — clients recompute the identical descriptor.
+  w.floorDescriptor = resolveFloorDescriptor(w.seed, floor, w.encounterPlayers);
   w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
   w.bullets = [];
   w.hazards = [];
