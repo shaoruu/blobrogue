@@ -507,18 +507,49 @@ export function bossHpForFloor(floor: number): number {
   return Math.round(scaled / 10) * 10;
 }
 
-// ---- §5b MARROW (corrected gate §3: F15, 1,250 HP, median 35–50s, high-roll 20–25s) ----
+// ---- EARNED WINDOWS (the deep-boss guarded/exposed contract) ----
+// The designer's anti-stack model, one mechanism across the deep roster (MARROW, the
+// Weaver, the Gilded Warden, the Hollow Choir — the Slime King stays the readable
+// tutorial boss and the F10 gauntlet stays the deliberate DPS/execution contrast beat):
+//  - GUARDED by default: incoming damage is chipped to guardMult (0.20–0.35 — reduction,
+//    NEVER immunity; impatient chip still kills, it is just the slow way).
+//  - Players FORCE the EXPOSED window by doing the phase's mechanic (break a lattice
+//    knot, bait the pounce onto debris, silence the fragments, bait the wall crash):
+//    full damage for a fixed 3–4s window. Windows are player-created, never timed gifts.
+//  - Per-window damage BANK: a fresh window arms bankFrac × maxHp; once the window has
+//    removed that much, it slams shut early (small final-hit overkill carries — the
+//    hard phase-skip guard remains the transition floor + queued overflow). Firepower
+//    converts a window harder and opens the next faster; it can't skip the mechanics.
+//  - Co-op scales the MECHANIC, not just HP: task counts index the pull's snapshotted
+//    player count (the *For tables below), on top of the unchanged sub-linear HP curve.
+// TTK is gated in EXPOSED time (balance tests), not wall-clock.
+
+export const EARNED_GUARD_MIN = 0.20; // guarded chip never below 20% (fairness floor)
+export const EARNED_GUARD_MAX = 0.35;
+export const EXPOSE_WINDOW_CAP = 8;   // combined exposure never exceeds this (stacked breaks)
+
+// ---- §5b MARROW (earned windows: F15, median 35–55s wall / exposed-gated) ----
 // A LINE fight, not an area fight: sidestep the charge lanes, weave the volleys/spiral,
 // and punish the wall crash. Its transition beat is a bone SHIELD instead of a roar:
 // identical anti-burst plumbing (damage reduction + hard HP floor + queued overflow), but
 // INTERACTIVE — killing both summoned husks drops the shield early (.9–2.6s at 35%).
+// Earned window (light touch): MARROW is GUARDED (35% chip) at all times except after
+// you BAIT it into a wall — the crash stun opens the exposed window. A rush that
+// connects with a body recovers fast and opens nothing: the window is the dodge.
 
 export const MARROW = {
-  // The corrected gate pins the in-flight kit as authoritative: charge tell .9 / lock .5
-  // / 520 for 1.1s / recover .7 or crash 1.6; 65/30 thresholds with 57/22 floors;
-  // 1,250 HP at the F15 slot (the §3 curve clamps at F10, so the calibration carries).
-  baseHp: 1250,
+  // Recalibrated on the EXPOSED-damage assumption (§3 rule, deterministic sim harness):
+  // the old full-uptime 1,250 anchor assumed every second was damage time; under the
+  // guarded/exposed contract the median build converts crash windows instead (see
+  // balance tests for the measured wall-clock + exposed-time bands). The gauntlet's
+  // captains deliberately do NOT ride this anchor (CAPTAIN_HP_BASE below): F10 stays
+  // the full-uptime DPS/execution beat.
+  baseHp: 730,
   baseHpFloor: 15,
+  // Earned windows: guarded chip + the crash-bait window.
+  guardMult: 0.35,      // GUARDED damage multiplier (reduction, never immunity)
+  crashExpose: 3.5,     // seconds of EXPOSED opened by a baited wall crash
+  windowBankFrac: 0.40, // per-window damage bank (the phase chunk)
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // indexed by phase 1..3
@@ -573,6 +604,17 @@ export function marrowHpForFloor(floor: number): number {
   return anchoredBossHp(MARROW.baseHp, MARROW.baseHpFloor, floor);
 }
 
+// The pre-earned-windows FULL-UPTIME calibration (MARROW's old 1,250 @F15). The F10
+// gauntlet captains and the mid-band miniboss templates keep deriving from THIS anchor:
+// they are the run's deliberate DPS/execution beats, never gained a guard, and must not
+// shrink because the guarded bosses' anchors were recalibrated onto exposed damage.
+export const CAPTAIN_HP_BASE = 1250;
+export const CAPTAIN_HP_FLOOR = 15;
+
+export function captainHpForFloor(floor: number): number {
+  return anchoredBossHp(CAPTAIN_HP_BASE, CAPTAIN_HP_FLOOR, floor);
+}
+
 // ---- §5c THE HOLLOW CHOIR (corrected gate §3: F30 finale, median 40–58s, high-roll ≥22s) ----
 // The grieving ghost mass: it does not zone you with bodies — it UNMAKES itself. On
 // cadence it fades intangible and drifts through you (a breather you must keep moving
@@ -581,15 +623,25 @@ export function marrowHpForFloor(floor: number): number {
 // kill them to force it back together early (the wisps ARE the boss during the beat).
 
 export const CHOIR = {
-  // The corrected gate lists 1,130 as the in-flight initial; at the F30 median build it
-  // burns in ≈34s (deterministic sim harness, not live telemetry) — under the 40s floor —
-  // so the §3 recalibration formula lands the anchor below (measured in-band; see
-  // balance tests).
-  baseHp: 1450,
+  // Recalibrated on the EXPOSED-damage assumption (earned windows): the Choir is
+  // GUARDED until its FRAGMENTS are silenced (see below), so the old full-uptime 1,450
+  // anchor would sponge — the anchor is re-measured in the balance tests.
+  baseHp: 800,
   baseHpFloor: 30,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.2, 2.8, 2.4] as readonly number[],
+  // Earned window: SILENCE THE CHOIR — it sings through summoned fragments (its ghost
+  // kin, fragile swarm bodies). While any fragment of the current verse stands, the
+  // Choir is GUARDED; killing every one opens the EXPOSED window, and the next verse
+  // gathers a few seconds later. More players = a wider verse (more simultaneous
+  // fragments), snapshotted at the pull.
+  guardMult: 0.30,
+  silenceExpose: 3.5,     // seconds of EXPOSED per fully-silenced verse
+  windowBankFrac: 0.40,
+  fragmentFirstAt: 3.0,   // first verse gathers shortly after the entrance grace
+  fragmentRespawn: 6.0,   // seconds after a window closes before the next verse
+  fragmentsFor: [0, 2, 3, 4, 4] as readonly number[], // indexed by snapshotted players 1..4
   // The fade: telegraph, then intangible drift toward the target, then a rematerialize
   // burst (P2+) into a long recover — the punish window for tracking it through the fade.
   fadeEvery: 3,
@@ -629,23 +681,68 @@ export function choirHpForFloor(floor: number): number {
   return anchoredBossHp(CHOIR.baseHp, CHOIR.baseHpFloor, floor);
 }
 
-// ---- §5d THE WEAVER (corrected gate §3: F20, median 38–55s, high-roll ≥20s) ----
-// The duelist that fights the FLOOR: webs are persistent slow-zones that shrink your
-// dance space (never damage — routing pressure), and its pounce is a marked drop from
-// above that chains in later phases. Small, fast, evasive — hard to pin, exactly like
-// the roster spec's duelist.
+// ---- §5d THE WEAVER (earned windows: F20 — read the weave, force it out, punish) ----
+// The duelist that fights the FLOOR, now the earned-window flagship: highly mobile,
+// GUARDED (30% chip) by default, and every window is PLAYER-CREATED per phase:
+//   P1 READ THE WEAVE — it lays a visible thread LATTICE (3 lines crossing at a glowing
+//     KNOT, never where you already stand) and blink-strikes along the threads. Shoot a
+//     knot to collapse the section → EXPOSED 3s (simultaneous breaks combine), and a
+//     knot shot out mid-blink SNAGS the Weaver into a crash stagger.
+//   P2 BAIT THE POUNCE — the marked leap locks partway; a landing on bare floor is a
+//     FAST recover (no window), but a landing lured onto residual thread — its own webs
+//     or a broken knot's debris — TANGLES it → EXPOSED 4s + crash stagger. Co-op: one
+//     player baits while the others pre-break knots into debris.
+//   P3 MIRROR FEINT — it splits behind WEFT afterimages (clearly dimmer; the real one
+//     blazes and casts the true thread shadow). Shooting a weft weaves MORE web and
+//     extends guarded; hitting only the REAL Weaver inside its feint recovery unravels
+//     it → EXPOSED 4s.
+// Webs stay persistent slow-zones (routing pressure, never damage).
 
 export const WEAVER = {
-  // The corrected gate lists 1,080 as the in-flight initial and recalibrates by
-  // measurement for the intended floor's legal build pool (§3) — deterministic
-  // sim-harness numbers, not live telemetry: at the F20 median build 1,080 burns in
-  // ≈32s — under the 38s floor — so the formula lands 1,500 (measured in-band; see
-  // balance tests).
-  baseHp: 1500,
+  // Recalibrated on the EXPOSED-damage assumption (§3 rule): the old 1,500 anchor was
+  // calibrated for full-uptime damage; under guarded/exposed the median build converts
+  // windows instead. Measured wall-clock + exposed-time bands live in the balance tests.
+  baseHp: 1100,
   baseHpFloor: 20,
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.7, 2.3] as readonly number[],
+  // Earned windows.
+  guardMult: 0.30,        // GUARDED damage multiplier (reduction, never immunity)
+  knotBreakExpose: 3,     // P1: seconds of EXPOSED per broken lattice knot
+  tangleExpose: 4,        // P2+: seconds of EXPOSED per baited tangle
+  unravelExpose: 4,       // P3: seconds of EXPOSED per read feint
+  windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
+  // The lattice: knots ring the Weaver, never inside knotPlayerClear of a standing
+  // player (the mechanic forces a reposition, not a point-blank freebie). Each knot
+  // casts 3 thread-lines through itself; expiry crumbles it into thread DEBRIS (a web)
+  // without a window — only a player's shot earns the exposure.
+  knotsFor: [0, 1, 2, 3, 3] as readonly number[], // knots per lattice, by snapshotted players
+  maxKnots: 3,
+  knotRingDist: 170,
+  knotPlayerClear: 110,
+  knotLife: 14,
+  knotDebrisRadius: 52,
+  knotDebrisLife: 8,
+  // Blink-strike (P1): the whole 0.7s tell is post-lock (the lane + arrival mark freeze
+  // at windup start), then a 0.3s traverse along the committed thread and an arrival
+  // strike. Snagging the lane's knot mid-blink crashes it out of the air.
+  blinkWindup: 0.7,
+  blinkAir: 0.3,
+  blinkRecover: 0.55,
+  blinkLaneHalf: 240,     // traverse runs this far past the knot (wall-clamped)
+  blinkStrikeRadius: 52,
+  blinkStrikeDamage: 1,
+  snagStagger: 1.0,       // crash recover after a mid-blink snag
+  // Mirror feint (P3): the split tell, the afterimage count (mechanic scales with the
+  // pull's players), and the read window — the feint recovery — in which only a direct
+  // hit on the REAL Weaver unravels it. Shooting a weft cancels the read and extends
+  // guarded (the punished spray).
+  feintWindup: 0.6,
+  feintRecover: 1.6,
+  feintRingDist: 120,
+  weftsFor: [0, 2, 2, 3, 3] as readonly number[], // afterimages per feint, by players
+  weftGuardExtend: 1.4,   // extra attack cooldown when a weft is shot (guarded extends)
   // Weave: plants a locked pattern of webs on and around the target's position.
   weaveWindup: 0.7,
   weaveLock: 0.35,
@@ -656,14 +753,17 @@ export const WEAVER = {
   webLife: 12,
   webSlow: 0.55,       // player move-speed multiplier inside a web (enemies unaffected)
   maxWebs: 8,          // hard cap: the arena squeezes, it never fills
-  // Pounce per the corrected in-flight contract: tell .65 / lock .3 / .35 air / .9
-  // recover; P2+ chains a second, shorter-telegraph leap (chains 1/2/2).
+  // Pounce: tell .65 / lock .3 / .35 air; P2+ chains a second, shorter-telegraph leap
+  // (chains 1/2/2). A bare-floor landing recovers FAST (no window — earned windows
+  // moved the punish to the tangle); a tangled landing crashes into tangleStagger.
   pounceWindup: 0.65,
   pounceLock: 0.3,
   pounceChainWindup: 0.5,
   pounceChainLock: 0.2,
   pounceAir: 0.35,
-  pounceRecover: 0.9,
+  pounceRecover: 0.55,
+  tangleStagger: 1.2,
+  tanglePad: 6,        // landing counts as ON thread within web radius + this pad
   pounceRadius: 74,
   pounceInnerRadius: 44,
   pounceCenterDamage: 2,
@@ -706,7 +806,12 @@ export const GILDED = {
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.6, 3.2, 2.8] as readonly number[],
-  armorChip: 0.3,       // closed-plate damage multiplier (never zero)
+  // Earned windows: the Warden was the pattern's precedent, now routed through the
+  // shared guarded/exposed plumbing — closed armor = GUARDED (30% chip), and each
+  // committed quake/sweep OPENS its recover as the exposed window, bank-capped like
+  // every other deep boss so a stacked party can't delete a phase through one opening.
+  armorChip: 0.3,       // GUARDED (closed-plate) damage multiplier — never zero
+  windowBankFrac: 0.40,
   // Anvil slam: a marked in-place quake with a directional aftershock line, then the
   // exposed recover — the fight's core loop.
   slamWindup: 0.8,
@@ -781,7 +886,7 @@ export const GAUNTLET = {
 } as const;
 
 export function gauntletCaptainHp(round: GauntletRound): number {
-  return Math.round((round.hpFrac * MARROW.baseHp) / 10) * 10;
+  return Math.round((round.hpFrac * CAPTAIN_HP_BASE) / 10) * 10;
 }
 
 // ---- §3 the boss-facing damage model ("no legal build below high-roll minimum") ----

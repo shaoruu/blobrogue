@@ -31,7 +31,12 @@ export type EnemyKind =
   // Summon-only bodies (never in the floor planner):
   //  - echo: the echojack's 1-HP false-noise decoy — soaks homing/attention, expires quietly;
   //  - knell: The Toll's noise-lure bomb — shoot it before it tolls, or leave its radius.
-  | "echo" | "knell"
+  //  - knot: the Weaver's lattice ANCHOR NODE — the glowing crossing its thread-lines meet
+  //    at. Shooting it collapses the section (earned-window mechanic; P1 it EXPOSES the
+  //    Weaver, and always leaves thread debris a later pounce can tangle on).
+  //  - weft: the Weaver's P3 mirror-feint afterimage — a false weaver woven from thread.
+  //    Clearly dimmer than the real one; shooting it weaves MORE web and extends guarded.
+  | "echo" | "knell" | "knot" | "weft"
   // Miniboss templates (captain machinery, seeded mid-band cadence — see minibossKindForFloor):
   | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded";
@@ -114,6 +119,23 @@ export interface BossState {
   // Sequenced-emission scratch: shard pairs fired this spiral (MARROW), waves released this
   // sweep (Gilded Warden), pounces chained this commitment (Weaver).
   spinCount: number;
+  // ---- EARNED WINDOWS (deep bosses: Weaver / Warden / MARROW / Choir) ----
+  // By default an earned-window boss is GUARDED (damage chipped to its guardMult, never
+  // immunity). Performing the phase's mechanic — breaking a lattice knot, baiting the
+  // pounce onto thread debris, silencing the Choir fragments, punishing the wall crash —
+  // opens a fixed EXPOSED window of full damage. Seconds left in that window (0 = guarded).
+  exposed: number;
+  // Per-window damage bank: what the CURRENT window may still remove before it slams
+  // shut early. Armed when a fresh window opens (bankFrac × maxHp — the phase chunk), so
+  // stacked firepower converts a window harder but can never one-shot a phase through it.
+  windowBank: number;
+  // Mechanic adds gating the NEXT window (the Choir's fragments): killing every one
+  // opens the window. Empty when no silence set is live. Distinct from beatAddIds —
+  // those belong to the transition beat, these to the earned-window loop.
+  windowAddIds: number[];
+  // The Weaver's committed blink lane: the knot id (+1) whose thread it is traveling —
+  // shooting THAT knot mid-blink snags it out of the air. 0 = no lane committed.
+  laneKnotId: number;
 }
 
 export interface Enemy extends Entity {
@@ -141,13 +163,18 @@ export interface Enemy extends Entity {
   // the client can render authoritative special state without a bespoke field per kind:
   //  - sinderling: 0 = unarmed, 1 = armed (stoked — jet + death burst live);
   //  - echo/knell: remaining decoy life in seconds (drives the client fade/fuse);
+  //  - knot/weft: remaining life in seconds (the lattice unravels / the feint resolves);
   //  - fragment: tethered source enemy id + 1 (0 = untethered — the simplified pattern);
   //  - bulwark elites: remaining plate HP (0 = shattered);
+  //  - earned-window bosses (Weaver/Warden/MARROW/Choir): seconds left in the current
+  //    EXPOSED window (0 = guarded) — the client's guard/exposed render keys off it;
   //  - everyone else: 0.
   aux: number;
   // Generic per-behavior sequence counter (sim-internal, never on the wire): the
   // seamcutter's sweep emissions, the caskbellows' volley shots, the sinderling's wedge
-  // drops, the marshal/toll attack alternation. Reset by each move's begin.
+  // drops, the marshal/toll attack alternation. Reset by each move's begin. The
+  // Weaver's mechanic bodies (knot/weft) never attack and carry their CASTER's enemy
+  // id + 1 here instead (a lattice always belongs to the weaver that spun it).
   seq: number;
   // Commander-elite pack panic: seconds this body flees leaderless (no attack triggers
   // from idle while it runs). Sim-internal — clients read the movement itself.
@@ -414,7 +441,7 @@ export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
   | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment" | "mason"
-  | "echo" | "knell" | "marshal" | "toll"
+  | "echo" | "knell" | "knot" | "weft" | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "patch"
   | "heart" | "coin" | "gun" | "spit";

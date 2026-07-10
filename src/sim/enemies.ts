@@ -8,6 +8,7 @@ import {
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
+  captainHpForFloor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
@@ -201,6 +202,23 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 12, drawSize: 36, alpha: 0.9, tint: "#c9b458", kbResist: 3.0,
     baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
+  // The Weaver's lattice ANCHOR NODE: the glowing crossing its thread-lines meet at.
+  // Stationary, harmless, and the earned-window mechanic target — a few focused rounds
+  // break it (P1: EXPOSES the Weaver; always crumbles into thread debris a later pounce
+  // can be baited onto). Never placed where a player already stands. Summon-only.
+  knot: {
+    kind: "knot", sprite: "knot", movement: "drift", isPhasing: false,
+    radius: 13, drawSize: 38, alpha: 1, tint: "#e6c2ff", kbResist: 3.0,
+    baseHp: 10, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
+  // The Weaver's P3 mirror-feint afterimage: a false weaver woven from thread — clearly
+  // DIMMER than the real one (which blazes through the feint). 1 HP; shooting it weaves
+  // more web and extends guarded, so the read, not the spray, is the answer. Summon-only.
+  weft: {
+    kind: "weft", sprite: "weft", movement: "drift", isPhasing: false,
+    radius: 20, drawSize: 62, alpha: 0.45, tint: "#8a6bb0", kbResist: 3.0,
+    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
   // ROOT MARSHAL (miniboss template: the formation fight). P1: a wide slow-turning
   // guard + a live rootward formation it raises and rallies. At 50% the shield SHATTERS
   // INTO DESTRUCTIBLE COVER (real crates where the guard hung) and P2 trades the wall
@@ -292,7 +310,8 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   caskbellows: "bulwark", // frontal plate + rear crank = a strongly directional sentry
   sinderling: "brace",  // its armed death burst is already its loud exit
   fragment: "volatile",
-  echo: "brace", knell: "brace", marshal: "brace", toll: "brace", // never elite in practice
+  echo: "brace", knell: "brace", knot: "brace", weft: "brace", // never elite in practice
+  marshal: "brace", toll: "brace",
   boss: "brace", marrow: "brace", choir: "brace", weaver: "brace", gilded: "brace",
 };
 
@@ -356,12 +375,13 @@ export function minibossKindForFloor(seed: number, floor: number): EnemyKind | n
   }
 }
 
-// The miniboss captain's HP at its floor: the gauntlet's anchor (a fraction of the
-// calibrated MARROW base) ridden up the same clamped §3 curve, rounded to tens. Party
-// scaling applies at spawn (spawnFloorEnemies), like the gauntlet captains.
+// The miniboss captain's HP at its floor: the captain anchor (the pre-earned-windows
+// full-uptime calibration — captains have no guard, so they never ride the guarded
+// bosses' recalibrated anchors) ridden up the same clamped §3 curve, rounded to tens.
+// Party scaling applies at spawn (spawnFloorEnemies), like the gauntlet captains.
 export function minibossHpForFloor(kind: EnemyKind, floor: number): number {
   const frac = MINIBOSS.hpFrac[kind] ?? 0.3;
-  return Math.round((frac * marrowHpForFloor(floor)) / 10) * 10;
+  return Math.round((frac * captainHpForFloor(floor)) / 10) * 10;
 }
 
 // Which boss holds each boss-cadence floor: the authored F5–F30 chain (null = the F10
@@ -481,6 +501,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         addTimer: BOSS_ADD_FIRST_AT[kind] ?? 0,
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
+        exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0,
       }
       : null,
   };
@@ -491,10 +512,11 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
 };
 
-// Only the summoner bosses run a cadence add drip (the Choir's wisps and the Weaver's
-// broodlings arrive on their transition beats instead; the Warden fights alone).
+// The summoner bosses run a cadence add drip; the Choir's timer paces its earned-window
+// FRAGMENT verses instead (the Weaver's broodlings still arrive only on its molt beat;
+// the Warden fights alone).
 const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
-  boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt,
+  boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt, choir: CHOIR.fragmentFirstAt,
 };
 
 // The corrected gate §2 cadence table (authoritative over earlier drafts): F1 slime only,
