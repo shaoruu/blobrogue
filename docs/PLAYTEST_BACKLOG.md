@@ -20,7 +20,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Consuming hearts when already at/над full? (part of heart bug) [investigating]
 
 ## CONTENT — more of (Ian loves it)
-🟡 MORE HATS / COSMETICS (asked 3×) — WAVE 1: AD gated (mixed). Applied all fixes: re-exported ALL 17 at 64×64 (systemic socket-frame fix), regen'd 6 concept-fails (halo/horns/headphones/crown/monocle/helmet) with isolated-object prompts. 10 ship-ready (mushroom = exemplar). Sent regens back for AD re-gate → then up/side via faledit + wire to closet + REMOVE the old procedural cosmeticArt.ts painters (the rectangle hats). [awaiting AD re-gate]
+🟡 MORE HATS / COSMETICS (asked 3×) — WAVE 1: AD APPROVED 16/17, monocle re-passed (big lens) + crown beefed + helmet trimmed = full 17 clear. Deriving up/side via faledit now → then wire to closet catalog + REMOVE old procedural painters + render real in-game socket composite for AD placement gate. [orientations deriving]
 🟡 MORE BLESSINGS — Ian loves them, wants more variety (respect raw caps). [game designer speccing]
 🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). [creative director owns roadmap]
 🟡 BIGGER BOSSES sometimes — periodic GIANT/spectacle multi-phase set-piece bosses. [roadmap]
