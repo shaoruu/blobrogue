@@ -12,9 +12,12 @@ import {
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
   MAX_BURROWERS_PER_ROOM, MAX_SHIELDERS_PER_ROOM, MAX_WORKERS_PER_ROOM,
-  FLOCK_THREAT_SHARE_MAX,
+  FLOCK_THREAT_SHARE_MAX, ROLL_AFFIX,
 } from "./balance.js";
 import type { EnemyTier, EliteAffix } from "./balance.js";
+// Type-only (erased at runtime, so no import cycle with floorRolls, which imports isBossFloor
+// from here): the rolled elite-affix slots the caller resolved from the frozen descriptor.
+import type { EliteAffixRoll } from "./floorRolls.js";
 import { isControllerKind, isWorkerKind, ENEMY_MODULE } from "./bestiary.js";
 import { floorRoster, FAMILY_INTRO_FLOOR } from "./roster.js";
 // Re-exported from its new home (roster.ts, the encounter-deck curriculum data) so existing
@@ -509,6 +512,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     touchDamage: a.touchDamage,
     kbResist: a.kbResist * (tier === "brute" ? 2 : 1) * coopKbResistMult(players),
     surgeDelay: 0, surgeTime: 0,
+    rollAffix: "", affixClock: 0,
     aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     zig: rng.next() * Math.PI * 2,
     hopClock, hopMove: 0,
@@ -530,7 +534,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
         exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
-        phaseTime: 0, enrage: 0, isSurpriseSpent: false,
+        phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
       : null,
   };
@@ -729,7 +733,7 @@ function roomOpenArea(dungeon: Dungeon, roomIndex: number): number {
 // Deterministic threat-budget floor composition (§4): spend FloorThreat on a tiered unit
 // mix instead of counting bodies. Elites/brutes are planned first (they anchor the opening
 // wave); swarm packs and standards fill the remainder and overflow into reinforcements.
-function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number, players: number): PlannedUnit[] {
+function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number, players: number, extraElites = 0): PlannedUnit[] {
   const roomCount = dungeon.rooms.length;
   const pressure = BIOME_PRESSURE[biomeIndexForFloor(floor)];
   let budget = floorThreat(floor) * pressure.budgetMult * coopThreatMult(players);
@@ -904,7 +908,9 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   }
 
   if (floor >= TIERS.elite.minFloor) {
-    const elites = floor >= 9 ? 2 : 1;
+    // The Twinned Elites mutator adds one elite to the plan (paired elite pressure); the
+    // LIVE_CAPS.elites active cap + reinforcement release still gate how many are live at once.
+    const elites = (floor >= 9 ? 2 : 1) + Math.max(0, extraElites);
     for (let i = 0; i < elites; i++) {
       // Up to three rolls: an elite of a complex family needs a room playing its card.
       for (let roll = 0; roll < 3 && !add(weightedPick(rng, roster), "elite"); roll++) { /* reroll */ }
@@ -953,10 +959,32 @@ function planFloorUnits(rng: Rng, dungeon: Dungeon, seed: number, floor: number,
   return plan;
 }
 
-export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, power = 1): FloorSpawns {
+// The Wave-1 randomness inputs the floor descriptor supplies: the Twinned Elites mutator's extra
+// elite count, and the elite-affix slots (by ascending ordinal) rolled for this floor. Defaulted
+// so pre-F30 floors + every existing caller stay byte-identical.
+export interface SpawnOpts {
+  extraElites?: number;
+  eliteAffixes?: readonly EliteAffixRoll[];
+}
+
+// Assign an elite's rolled affix (splits/shielded/hazardTrail/reflect/enrage) from the frozen
+// descriptor slot at its ascending spawn ordinal, and stamp the affix's per-body scalar on aux
+// (a shielded slab's HP, a reflect facet's armed timer). Ordinals past the rolled slot count get
+// no rolled affix. Pure — every client that resolves the same descriptor assigns identically.
+function applyRollAffix(e: Enemy, ordinal: number, floor: number, eliteAffixes: readonly EliteAffixRoll[]): void {
+  const slot = eliteAffixes.find((r) => r.ordinal === ordinal);
+  const affix = slot?.affix ?? null;
+  if (affix === null) return;
+  e.rollAffix = affix;
+  if (affix === "shielded") e.aux = roundHalfToEven(ROLL_AFFIX.slabHp * floorHpMult(floor));
+  else if (affix === "reflect") e.aux = ROLL_AFFIX.reflectArmed; // the facet starts ARMED
+}
+
+export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, power = 1, opts: SpawnOpts = {}): FloorSpawns {
   const rng = new Rng((seed ^ 0x9e3779b9) + floor * 2654435761);
   const roomCount = dungeon.rooms.length;
   if (roomCount <= 1) return { active: [], pending: [] };
+  const eliteAffixes = opts.eliteAffixes ?? [];
 
   if (isGauntletFloor(floor)) {
     // The F10 Arena Gauntlet: the arena (last room) starts EMPTY — the world's gauntlet
@@ -991,8 +1019,9 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     return { active, pending: [] };
   }
 
-  const plan = planFloorUnits(rng, dungeon, seed, floor, players);
+  const plan = planFloorUnits(rng, dungeon, seed, floor, players, opts.extraElites ?? 0);
   const cap = activeThreatCap(floor) * coopThreatMult(players);
+  let eliteOrdinal = 0; // ascending spawn ordinal for elite-affix assignment (plan order)
   const moverCap = activeMoverCapFor(players);
   const active: Enemy[] = [];
   const pending: Enemy[] = [];
@@ -1005,6 +1034,9 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
   for (const unit of plan) {
     const p = pointInRoom(rng, dungeon, unit.room);
     const enemy = createEnemy(unit.kind, p.x, p.y, floor, rng, id++, { tier: unit.tier, players });
+    // Rolled elite affixes, by ASCENDING SPAWN ORDINAL (plan order), independent of the
+    // active/pending split — slot N is stable no matter how many elites end up live.
+    if (unit.tier === "elite" && !unit.isMiniboss) applyRollAffix(enemy, eliteOrdinal++, floor, eliteAffixes);
     if (unit.isMiniboss) {
       // The mid-band captain: gauntlet HP formula anchored to its template fraction,
       // party-scaled at THIS spawn, two-phase contract armed. Always active — the

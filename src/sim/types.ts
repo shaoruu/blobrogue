@@ -150,6 +150,10 @@ export interface BossState {
   enrage: number;
   // The phase's one surprise wave (R ≥ surpriseMinR) has been spent. Reset each phase.
   isSurpriseSpent: boolean;
+  // Wave 1 boss-affix cadence: seconds until the next affix beat (the deep-boss extra
+  // telegraphed pattern from FloorDescriptor.bossAffix). Sim-internal — never on the wire (the
+  // affix expresses through the telegraphed "charge" hazards it blooms, which ride hzds).
+  affixCd: number;
 }
 
 export interface Enemy extends Entity {
@@ -173,6 +177,16 @@ export interface Enemy extends Entity {
   captainPhase?: number;
   // The elite brace affix's cooldown (keeps its duty cycle ≤35%). Only elites tick it.
   braceCd?: number;
+  // The ROLLED elite affix (Wave 1 randomness layer), assigned to deep-floor (F31+) elites by
+  // ascending spawn ordinal from the frozen FloorDescriptor.eliteAffixes — a RollAffixId
+  // ("splits"/"shielded"/"hazardTrail"/"reflect"/"enrage") or "" for none. Orthogonal to the
+  // kind-baseline elite identity (ELITE_AFFIXES): the rolled affix is the fresh-run variety
+  // layer, ≤1 per elite, and rides the wire (EnemyWire.afx) so clients draw its material tell.
+  // The per-affix scalar (a reflect facet's armed timer, a shielded slab's HP) rides `aux`.
+  rollAffix: string;
+  // hazardTrail drip accumulator (seconds since the last cinder drop); reflect crack cooldown
+  // (seconds a cracked facet stays disarmed). Both sim-internal — the client reads aux/rollAffix.
+  affixClock: number;
   // The one per-kind/per-affix AUXILIARY channel that rides the wire (EnemyWire.aux) so
   // the client can render authoritative special state without a bespoke field per kind:
   //  - sinderling: 0 = unarmed, 1 = armed (stoked — jet + death burst live);

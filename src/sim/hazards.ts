@@ -457,11 +457,32 @@ function placeRift(ctx: PlacementCtx, room: Room): number {
 // in shape: the mode changes budgets and caps, never the draw pattern semantics. Rooms
 // marked "hazard" by the generator are dressed first and densest — authored set pieces;
 // the remaining budget scatters smaller formations through ordinary combat rooms.
-export function placeFloorHazards(d: Dungeon, seed: number, floor: number, difficulty: Difficulty = "standard"): FloorHazard[] {
+// A Wave-1 floor mutator's hazard override (molten/fracture/amberfall): scale the tile budget
+// and bias the kind mix toward the mutator's signature tile(s). Defaulted so every existing
+// caller + pre-F30 floors stay byte-identical. Kept as a plain shape (not a floorRolls import) so
+// hazards.ts has no dependency back into the roll layer.
+export interface HazardMutationOpts { budgetMult: number; biasKinds: readonly FloorHazardKind[]; }
+
+// Fold the mutator bias into the biome's kind weights: matching kinds are heavily favored, and a
+// biased kind the biome doesn't otherwise carry is added. Returns the biome profile unchanged
+// when no bias applies, so a floor with no hazard mutator draws exactly as before.
+function biasedProfile(profile: BiomeHazardProfile, biasKinds: readonly FloorHazardKind[]): BiomeHazardProfile {
+  if (biasKinds.length === 0) return profile;
+  const weights = profile.weights.map((w) => ({ ...w }));
+  for (const kind of biasKinds) {
+    const existing = weights.find((w) => w.kind === kind);
+    if (existing) existing.weight *= 3;
+    else weights.push({ kind, weight: 0.5 });
+  }
+  return { ...profile, weights };
+}
+
+export function placeFloorHazards(d: Dungeon, seed: number, floor: number, difficulty: Difficulty = "standard", mut?: HazardMutationOpts): FloorHazard[] {
   let budget = floorHazardBudgetFor(floor, difficulty);
+  if (mut !== undefined && mut.budgetMult !== 1) budget = Math.round(budget * mut.budgetMult);
   if (budget <= 0 || d.rooms.length < 2) return [];
   const rng = new Rng((seed ^ 0x6a2d9b4f) + floor * 79241);
-  const profile = BIOME_HAZARDS[biomeIndexForFloor(floor)];
+  const profile = biasedProfile(BIOME_HAZARDS[biomeIndexForFloor(floor)], mut?.biasKinds ?? []);
   const rules = HAZARD_DIFFICULTY[difficulty];
   const ctx: PlacementCtx = {
     d, rng,

@@ -17,6 +17,10 @@ export interface HudState {
   floor: number;
   kills: number;
   coins: number;
+  // The active floor mutators' display labels ("Molten Floor", "Thin Air", …) — the compact
+  // "why this floor feels different" readout under the stat row. Empty on ordinary floors; the
+  // slot reserves its height either way so a deep floor never shifts the layout.
+  mutators: string[];
   // Hotbar slots in inventory order (= the 1..MAX_OWNED_WEAPONS selection order);
   // `isCurrent` = equipped. `card` is the LIVE semantic weapon card from the sim's
   // weaponStats helper (role verb, banded core stats, mechanics — same math real shots
@@ -423,6 +427,7 @@ const HUD_MARKUP = `
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
+    <div class="mutators" data-mutators></div>
   </div><div class="coopstrip" data-coop></div></div>
   <div class="objlane" data-objlane>
     <div class="bossbar" data-bossbar>
@@ -510,6 +515,8 @@ export class Hud {
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
   private coinsChipEl: HTMLElement;
+  private mutatorsEl: HTMLElement;
+  private prevMutators = "";
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
   private hotbarHintEl: HTMLElement;
@@ -586,6 +593,7 @@ export class Hud {
 
     this.heartsEl = hud.querySelector("[data-hearts]")!;
     this.floorEl = hud.querySelector("[data-floor]")!;
+    this.mutatorsEl = hud.querySelector("[data-mutators]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
     this.coinsChipEl = hud.querySelector(".chip.coins")!;
@@ -1210,6 +1218,14 @@ export class Hud {
     this.floorEl.textContent = String(s.floor);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
+    // The floor-mutator readout: a middot-joined list, updated only when it changes (textContent
+    // only, fixed height — never a layout shift). Empty string on ordinary floors.
+    const mutatorCopy = s.mutators.join(" \u00b7 ");
+    if (mutatorCopy !== this.prevMutators) {
+      this.prevMutators = mutatorCopy;
+      this.mutatorsEl.textContent = mutatorCopy;
+      this.mutatorsEl.classList.toggle("has-mutators", mutatorCopy.length > 0);
+    }
     // Hotbar: one slot per owned weapon (icon + name + select key), equipped slot lit.
     // Only rebuild when the set/order or selection changes (cheap string key). A rebuild
     // mid-drag would strand the pointer capture, so a set/order change UNDER a live drag

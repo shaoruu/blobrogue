@@ -13,7 +13,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { RollStream, ROLL_ORDER, rollStream } from "../src/sim/streams.js";
-import { resolveFloorDescriptor, FLOOR_CAPS, RANDOMNESS_MIN_FLOOR } from "../src/sim/floorRolls.js";
+import {
+  resolveFloorDescriptor, FLOOR_CAPS, RANDOMNESS_MIN_FLOOR,
+  MUTATOR_POOL, ELITE_AFFIX_POOL, BOSS_AFFIX_POOL,
+  floorHazardMutation, floorDashProfile, floorVisionMult, floorExtraElites,
+} from "../src/sim/floorRolls.js";
 import type { FloorDescriptor } from "../src/sim/floorRolls.js";
 import { createWorld, loadFloorIntoWorld, spawnPlayerInWorld } from "../src/sim/world.js";
 import { isBossFloor } from "../src/sim/enemies.js";
@@ -119,6 +123,50 @@ function capsAndVetoTests(): void {
   check("the density veto actually fires for some deep floor at 4P (framework exercised)", vetoObserved);
 }
 
+// The AUTHORED Wave 1 content: every rolled id is a real authored pool member (no stubs), every
+// authored mutator/affix/boss-affix is reachable across the seed matrix, and every mutator's
+// EXPRESSION helper is a pure deterministic function of the frozen set.
+function contentTests(): void {
+  section("authored content: real pools, full coverage, deterministic expression");
+  const mutatorIds = new Set(MUTATOR_POOL.map((m) => m.id));
+  const seenMut = new Set<string>();
+  const seenAffix = new Set<string>();
+  const seenBoss = new Set<string>();
+  let idsValid = true;
+  const WIDE_SEEDS = Array.from({ length: 240 }, (_, i) => i * 2654435761 + 12345);
+  for (const seed of [...SEEDS, ...WIDE_SEEDS]) for (const floor of FLOORS) for (const p of PLAYERS) {
+    const d = resolveFloorDescriptor(seed, floor, p);
+    for (const m of d.mutators) { seenMut.add(m); if (!mutatorIds.has(m as never)) idsValid = false; }
+    for (const e of d.eliteAffixes) if (e.affix !== null) { seenAffix.add(e.affix); if (ELITE_AFFIX_POOL.indexOf(e.affix as never) === -1) idsValid = false; }
+    if (d.bossAffix !== null) { seenBoss.add(d.bossAffix); if (BOSS_AFFIX_POOL.indexOf(d.bossAffix as never) === -1) idsValid = false; }
+  }
+  check("every rolled id is a real authored pool member (no stubs)", idsValid);
+  check("all 6 authored floor mutators are reachable", seenMut.size === MUTATOR_POOL.length && MUTATOR_POOL.every((m) => seenMut.has(m.id)), [...seenMut].join(","));
+  check("all 5 authored elite affixes are reachable", seenAffix.size === ELITE_AFFIX_POOL.length, [...seenAffix].join(","));
+  check("all 3 authored boss affixes are reachable", seenBoss.size === BOSS_AFFIX_POOL.length, [...seenBoss].join(","));
+
+  // Expression helpers are pure + deterministic, and identity when their mutator is absent.
+  const idle = floorHazardMutation([]);
+  check("hazard expression is identity with no hazard mutator", idle.budgetMult === 1 && idle.biasKinds.length === 0);
+  check("molten raises the hazard budget + biases fire vents", floorHazardMutation(["moltenFloor"]).biasKinds.includes("fire_vent") && floorHazardMutation(["moltenFloor"]).budgetMult > 1);
+  check("thinAir tunes the dash; identity otherwise", floorDashProfile(["thinAir"]).speedMult > 1 && floorDashProfile([]).speedMult === 1);
+  check("denseDark contracts vision; identity otherwise", floorVisionMult(["denseDark"]) < 1 && floorVisionMult([]) === 1);
+  check("twinnedElites adds one elite; none otherwise", floorExtraElites(["twinnedElites"]) === 1 && floorExtraElites([]) === 0);
+  // Purity: the same frozen set always yields the same expression.
+  check("expression helpers are pure (repeat-stable)",
+    JSON.stringify(floorHazardMutation(["moltenFloor", "amberfall"])) === JSON.stringify(floorHazardMutation(["moltenFloor", "amberfall"])));
+
+  // The density veto is SENSIBLE at 4P: whenever it fires, the surviving mutators fit the (tighter)
+  // 4P budget and it only ever DROPS mutators (never invents one), keeping stored seeds stable.
+  let vetoSane = true;
+  for (const seed of SEEDS) for (const floor of FLOORS) {
+    const d4 = resolveFloorDescriptor(seed, floor, 4);
+    if (d4.projectedDensity > d4.densityBudget + 1e-9) vetoSane = false;
+    if (d4.isDensityVetoed && d4.mutators.length >= FLOOR_CAPS.maxMutators) vetoSane = false; // a veto removed at least one
+  }
+  check("the 4P density veto keeps surviving mutators within budget (sensible at 4P)", vetoSane);
+}
+
 function goldenBytes(): Record<string, FloorDescriptor> {
   const out: Record<string, FloorDescriptor> = {};
   for (const seed of SEEDS) for (const floor of FLOORS) for (const p of PLAYERS) {
@@ -156,6 +204,7 @@ function main(): void {
   contractTests();
   determinismTests();
   capsAndVetoTests();
+  contentTests();
   goldenMasterTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
