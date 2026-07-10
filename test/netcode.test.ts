@@ -249,10 +249,55 @@ async function worldRebuildTests(): Promise<void> {
   rig.transport.stop();
 }
 
+// v14: a NETWORKED player's combat events reach every nearby client's event queue (not only
+// the actor), so a teammate's shot/hurt is audible + visible; the local player's own copies
+// still arrive exactly once; and non-audible player-scoped events for OTHERS stay gated out.
+async function remoteCombatAudioGateTests(): Promise<void> {
+  section("v14: remote players' combat events survive the client gate; the local player's play once");
+  const rig = await makeRig();
+  rig.sock.deliver(rig.snap({ full: true }));
+  rig.transport.poll(); // drain the bootstrap
+  const self = rig.pid; // "p1"
+  const mate = "p2";
+  const events: WireEvent[] = [
+    { id: 1, e: { t: "shot", pid: mate, weapon: "pistol", x: 10, y: 20, aim: 0, px: 10, py: 20, chg: 0 } },
+    { id: 2, e: { t: "playerHurt", pid: mate, x: 10, y: 20 } },
+    { id: 3, e: { t: "heal", pid: mate, x: 10, y: 20 } },
+    { id: 4, e: { t: "pickup", pid: mate, kind: "coin", x: 10, y: 20 } },
+    { id: 5, e: { t: "shot", pid: self, weapon: "pistol", x: 5, y: 5, aim: 0, px: 5, py: 5, chg: 0 } },
+    // A NON-audible player-scoped event for a teammate must stay gated out (it drives the
+    // owner's private UI, not shared audio) — proves the gate is selective, not a blanket pass.
+    { id: 6, e: { t: "itemPicked", pid: mate, x: 10, y: 20, tint: "#fff" } },
+  ];
+  rig.world.tick = 10;
+  rig.sock.deliver(rig.snap({ events, evTo: 6 }));
+  const got = rig.transport.poll().events;
+  const remoteShot = got.filter((e) => e.t === "shot" && (e as { pid: string }).pid === mate);
+  const remoteHurt = got.filter((e) => e.t === "playerHurt" && (e as { pid: string }).pid === mate);
+  const remoteHeal = got.filter((e) => e.t === "heal" && (e as { pid: string }).pid === mate);
+  const remotePickup = got.filter((e) => e.t === "pickup" && (e as { pid: string }).pid === mate);
+  const localShot = got.filter((e) => e.t === "shot" && (e as { pid: string }).pid === self);
+  const remoteItem = got.filter((e) => e.t === "itemPicked");
+  check("a teammate's shot survives the gate (routable to the remote audio path)", remoteShot.length === 1);
+  check("a teammate's hurt survives the gate (Ian hears his friend get hit)", remoteHurt.length === 1);
+  check("a teammate's heal + pickup survive the gate", remoteHeal.length === 1 && remotePickup.length === 1);
+  check("the local player's own shot arrives exactly once (no double-play)", localShot.length === 1);
+  check("a teammate's non-audible pid event (itemPicked) stays gated out", remoteItem.length === 0);
+
+  // A resend (same ids) must not replay any of them — the local shot stays at exactly one.
+  rig.world.tick = 11;
+  rig.sock.deliver(rig.snap({ events, evTo: 6 }));
+  const resent = rig.transport.poll().events;
+  check("resent combat events are deduped (local shot never double-plays)",
+    resent.filter((e) => e.t === "shot").length === 0, `count=${resent.filter((e) => e.t === "shot").length}`);
+  rig.transport.stop();
+}
+
 async function main(): Promise<void> {
   await staleAndDuplicateTests();
   await ackMonotonicTests();
   await eventChannelTests();
+  await remoteCombatAudioGateTests();
   await offerAndRunOverTests();
   await firstSpawnPlacementTests();
   await worldRebuildTests();

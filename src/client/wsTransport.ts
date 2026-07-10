@@ -137,6 +137,15 @@ function pidOf(e: SimEvent): PlayerId | undefined {
   return (e as { pid?: PlayerId }).pid;
 }
 
+// Player-scoped combat events every NEARBY client replays (v14) — not only the actor. Online
+// MP has ONE authoritative event stream, so a teammate's shot/swing/hurt/heal/pickup must
+// pass the client's self-gate to reach handleSimEvent (which then plays them positionally as
+// a remote's, never with the local player's camera juice). Enemy/world events carry no pid
+// and pass anyway; the local player's own copies still play exactly once (deduped by id).
+const REMOTE_AUDIBLE_EVENTS: ReadonlySet<SimEvent["t"]> = new Set<SimEvent["t"]>([
+  "shot", "meleeSwing", "playerHurt", "heal", "pickup",
+]);
+
 export class WSTransport implements Transport {
   private opts: WSTransportOptions;
   private now: () => number;
@@ -613,7 +622,12 @@ export class WSTransport implements Transport {
       this.lastEventId = w.id;
       const e = w.e;
       const pid = pidOf(e);
-      if (pid === undefined || pid === this.selfServerId || e.t === "revive") this.events.push(e);
+      // Keep global/world events, this client's OWN player events, and the shared moments
+      // that everyone standing at them must replay: revive, plus a NETWORKED player's combat
+      // FX (shot/meleeSwing/playerHurt/heal/pickup — v14). Those now ride "pos" scope, so the
+      // server delivers a teammate's actions to nearby clients; the client replays them
+      // POSITIONALLY (handleSimEvent branches self vs remote), so a friend is audible to all.
+      if (pid === undefined || pid === this.selfServerId || e.t === "revive" || REMOTE_AUDIBLE_EVENTS.has(e.t)) this.events.push(e);
     }
     if (snap.evTo > this.lastEventId) this.lastEventId = snap.evTo;
   }

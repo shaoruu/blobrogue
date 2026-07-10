@@ -252,7 +252,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + shop AND bestiary (v8) + the remote-dash sync (v9) + the weapon effect wave (v10) + the hotbar cap swap (v11) + the rarity/mystery wave (v12) + earned-windows boss kinds (v13) + the premium economy (v14)", PROTOCOL_VERSION === 14, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers v4-v12 + earned-windows boss kinds (v13) + the premium economy (v14) + the co-op game-feel pass (v15: friendlyNudge + pos-scoped combat events)", PROTOCOL_VERSION === 15, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
@@ -496,7 +496,13 @@ function remoteDashWireTests(): void {
 function eventScopeTests(): void {
   section("event scope: pid events target their player, positional FX carry coords, objectives are global");
   const cases: Array<[SimEvent, string]> = [
-    [{ t: "playerHurt", pid: "p7", x: 1, y: 2 }, "pid"],
+    // v14: a networked player's combat FX are POSITIONAL (delivered to nearby observers,
+    // not only the actor), so a teammate's shot/hurt is seen + heard where it happens.
+    [{ t: "playerHurt", pid: "p7", x: 1, y: 2 }, "pos"],
+    [{ t: "shot", pid: "p7", weapon: "pistol", x: 1, y: 2, aim: 0, px: 1, py: 2, chg: 0 }, "pos"],
+    [{ t: "heal", pid: "p7", x: 1, y: 2 }, "pos"],
+    [{ t: "pickup", pid: "p7", kind: "coin", x: 1, y: 2 }, "pos"],
+    [{ t: "friendlyNudge", shooterId: "p7", targetId: "p8", x: 1, y: 2, dirX: 1, dirY: 0 }, "pos"],
     // Deliberately pid: remote dash FX ride PlayerWire dash STATE (v9), so broadcasting
     // these would double-play the dasher's juice.
     [{ t: "dashStart", pid: "p7", x: 1, y: 2 }, "pid"],

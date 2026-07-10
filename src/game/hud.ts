@@ -46,9 +46,6 @@ export interface HudState {
   // Party coordination readout in the objective lane ("WAITING FOR 1/2 PLAYERS…" /
   // "WAITING AT EXIT…"); null hides it.
   waitLabel: string | null;
-  // The bottom-left contextual action (revive/interact): key cap + label; isActive marks a
-  // hold that is channeling RIGHT NOW. Null hides the prompt.
-  prompt: { key: string; label: string; isActive: boolean } | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
   combo: number;      // current chain length
@@ -412,7 +409,7 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   TC  ONE objective lane: boss bar (wins) or the objective line, the co-op wait line,
 //       then the combo (yields to 70% scale under a boss bar)
 //   TR  minimap
-//   BL  dash meter + the contextual revive/interact prompt
+//   BL  dash meter (the contextual interact prompt is world-anchored, not chrome-docked)
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
@@ -442,7 +439,6 @@ const HUD_MARKUP = `
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner bl">
     <div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
-    <div class="ctx-prompt" data-prompt role="status"><span class="key" data-prompt-key>E</span><span class="k" data-prompt-label></span></div>
   </div>
   <div class="hotbar">
     <div class="hb-swap" data-hb-swap></div>
@@ -487,12 +483,11 @@ const DROP_OUTSIDE_PX = 72;
 
 // Tooltip interaction timing (UI review spec). Mouse hover debounces both ways — 120ms to
 // show (a pass-over never flashes a tip) and 80ms to hide (crossing the 6px slot gap never
-// flickers); keyboard/controller focus is intent and shows immediately. A quick weapon
-// cycle flashes the new weapon's card for 1.2s; a 350ms touch long-press opens the full
-// drawer without equipping. Exported for the DOM suite.
+// flickers); keyboard/controller focus is intent and shows immediately. Weapon switching
+// (1-9 / wheel / Q / gamepad) shows NO card — the card is a hover/focus affordance only. A
+// 350ms touch long-press opens the full drawer without equipping. Exported for the DOM suite.
 export const TIP_SHOW_DELAY_MS = 120;
 export const TIP_HIDE_DELAY_MS = 80;
-export const TIP_CONFIRM_MS = 1200;
 export const LONG_PRESS_MS = 350;
 
 export class Hud {
@@ -501,6 +496,7 @@ export class Hud {
   private floorEl: HTMLElement;
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
+  private coinsChipEl: HTMLElement;
   private slotsEl: HTMLElement;
   private buffsEl: HTMLElement;
   private hotbarHintEl: HTMLElement;
@@ -534,8 +530,6 @@ export class Hud {
   // on any explicit show/hide so a stale timer can never flicker or hide a fresh tip.
   private tipShowTimer: number | null = null;
   private tipHideTimer: number | null = null;
-  private tipConfirmTimer: number | null = null;
-  private prevEquippedId: WeaponId | null = null;
   private dashEl: HTMLElement;
   private dashFillEl: HTMLElement;
   private coopEl: HTMLElement;
@@ -559,12 +553,8 @@ export class Hud {
   private objLaneEl!: HTMLElement;
   private objectiveEl!: HTMLElement;
   private waitLine!: HTMLElement;
-  private promptEl!: HTMLElement;
-  private promptKeyEl!: HTMLElement;
-  private promptLabelEl!: HTMLElement;
   private prevObjective = "";
   private prevWaitLabel: string | null = null;
-  private prevPromptLabel: string | null = null;
   private bannerTimer = 0;
   private controlsHint: HTMLElement;
   private hintTimer = 0;
@@ -585,6 +575,7 @@ export class Hud {
     this.floorEl = hud.querySelector("[data-floor]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
+    this.coinsChipEl = hud.querySelector(".chip.coins")!;
     this.slotsEl = hud.querySelector("[data-hb-slots]")!;
     this.buffsEl = hud.querySelector("[data-hb-buffs]")!;
     this.hotbarHintEl = hud.querySelector("[data-hb-hint]")!;
@@ -628,9 +619,6 @@ export class Hud {
     this.objLaneEl = hud.querySelector("[data-objlane]")!;
     this.objectiveEl = hud.querySelector("[data-objective]")!;
     this.waitLine = hud.querySelector("[data-waitline]")!;
-    this.promptEl = hud.querySelector("[data-prompt]")!;
-    this.promptKeyEl = hud.querySelector("[data-prompt-key]")!;
-    this.promptLabelEl = hud.querySelector("[data-prompt-label]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
     const minimap = document.getElementById("minimap");
@@ -839,7 +827,23 @@ export class Hud {
   private clearTipTimers() {
     if (this.tipShowTimer !== null) { window.clearTimeout(this.tipShowTimer); this.tipShowTimer = null; }
     if (this.tipHideTimer !== null) { window.clearTimeout(this.tipHideTimer); this.tipHideTimer = null; }
-    if (this.tipConfirmTimer !== null) { window.clearTimeout(this.tipConfirmTimer); this.tipConfirmTimer = null; }
+  }
+
+  // ---- the top-left wallet (coin counter) ----
+
+  // The coin chip's live viewport rect — the flight target for a collected coin's arc into
+  // the wallet (the game maps it into canvas space). Null before layout exists.
+  coinChipRect(): DOMRect | null {
+    const r = this.coinsChipEl.getBoundingClientRect();
+    return r.width > 0 || r.height > 0 ? r : null;
+  }
+
+  // A quick pop/tick-up when a flown coin lands: a transform-only scale bounce (never a
+  // layout shift). Re-triggerable — restart the CSS animation by reflowing the class.
+  pulseCoins(): void {
+    this.coinsChipEl.classList.remove("coin-pop");
+    void this.coinsChipEl.offsetWidth; // reflow so the animation restarts on a rapid re-tick
+    this.coinsChipEl.classList.add("coin-pop");
   }
 
   // ---- the ONE floating weapon tooltip ----
@@ -850,10 +854,9 @@ export class Hud {
   private showTipFor(slot: HTMLElement, index: number) {
     const weapons = this.lastWeapons;
     if (this.drag || !weapons || index < 0 || index >= weapons.length) return;
-    // A fresh explicit show outlives any pending hide/confirm timer (never hidden from
-    // under a live hover/focus by a stale timer).
+    // A fresh explicit show outlives any pending hide timer (never hidden from under a live
+    // hover/focus by a stale timer).
     if (this.tipHideTimer !== null) { window.clearTimeout(this.tipHideTimer); this.tipHideTimer = null; }
-    if (this.tipConfirmTimer !== null) { window.clearTimeout(this.tipConfirmTimer); this.tipConfirmTimer = null; }
     const w = weapons[index];
     const equipped = weapons.find((x) => x.isCurrent)?.card ?? null;
     renderTipInto(this.tipEl, w, w.isCurrent ? null : equipped);
@@ -1181,25 +1184,8 @@ export class Hud {
           if (anchor && s.weapons[shownIndex]?.id === shownWeapon) this.showTipFor(anchor, shownIndex);
           else this.hideTip();
         }
-        // Quick weapon cycling (wheel / number keys): flash the newly equipped weapon's
-        // card for TIP_CONFIRM_MS as a transient confirmation — but never fight a tip the
-        // player is actively holding open via hover or focus.
-        const equippedIndex = s.weapons.findIndex((w) => w.isCurrent);
-        const equippedId = equippedIndex >= 0 ? s.weapons[equippedIndex].id : null;
-        const isPointerOrFocusTip = this.hoverSlot !== null
-          || (document.activeElement instanceof HTMLElement && document.activeElement.classList.contains("hb-slot"));
-        if (this.prevEquippedId !== null && equippedId !== null && equippedId !== this.prevEquippedId
-            && !isPointerOrFocusTip) {
-          const anchor = this.slotEls()[equippedIndex];
-          if (anchor) {
-            this.showTipFor(anchor, equippedIndex);
-            this.tipConfirmTimer = window.setTimeout(() => {
-              this.tipConfirmTimer = null;
-              this.hideTip();
-            }, TIP_CONFIRM_MS);
-          }
-        }
-        this.prevEquippedId = equippedId;
+        // Switching weapons (1-9 / wheel / Q / gamepad) shows NO stat card — the card is a
+        // HOVER/slot-focus affordance only (UI-designer spec); a switch must never flash it.
       }
     }
     // The interaction hint matters once there is something to switch/reorder/drop. At the
@@ -1253,16 +1239,9 @@ export class Hud {
       this.waitLine.classList.toggle("show", s.waitLabel !== null);
     }
 
-    // The bottom-left contextual prompt (revive/interact): key cap + label, lit while the
-    // hold is actually channeling. Text refreshes on change only; show/hide is opacity.
-    const promptLabel = s.prompt ? `${s.prompt.key}|${s.prompt.label}|${s.prompt.isActive}` : null;
-    if (promptLabel !== this.prevPromptLabel) {
-      this.prevPromptLabel = promptLabel;
-      this.promptKeyEl.textContent = s.prompt?.key ?? "E";
-      this.promptLabelEl.textContent = s.prompt?.label ?? "";
-      this.promptEl.classList.toggle("show", s.prompt !== null);
-      this.promptEl.classList.toggle("active", s.prompt?.isActive === true);
-    }
+    // The contextual interact prompt is world-anchored now (a floating [E] chip over the
+    // target — see Game.renderInteractPrompt), so the bottom-left chrome carries only the
+    // dash meter; nothing to update here.
 
     this.updateCombo(s);
 
@@ -1469,8 +1448,6 @@ export class Hud {
     this.objectiveEl.classList.remove("show", "clear");
     this.prevObjective = "";
     this.objLaneEl.classList.remove("boss");
-    this.promptEl.classList.remove("show", "active");
-    this.prevPromptLabel = null;
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;
@@ -1483,7 +1460,6 @@ export class Hud {
     this.hoverIndex = null;
     this.pendingFocusIndex = null;
     this.lastWeapons = null;
-    this.prevEquippedId = null;
     this.closeDrawer();
     this.buildPillEl.classList.remove("has");
     this.lastItems = [];

@@ -36,6 +36,11 @@ export type SimEvent =
   // connection/seat offer on this event; the owning client closes its overlay.
   | { t: "blessingExpired"; pid: PlayerId }
   | { t: "revive"; pid: PlayerId; by: PlayerId; x: number; y: number } // downed player brought back by a teammate
+  // Friendly-fire "playful bonk": a teammate's DIRECT projectile grazed a friend. Zero
+  // damage, zero i-frames — a pure positional impulse the sim applies deterministically
+  // (server-authoritative), plus the comedic bonk FX every nearby client replays. dir is
+  // the (normalized) bullet vector the nudge pushes along; x,y is the contact point.
+  | { t: "friendlyNudge"; shooterId: PlayerId; targetId: PlayerId; x: number; y: number; dirX: number; dirY: number }
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }

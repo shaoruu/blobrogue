@@ -145,7 +145,16 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     amw (banked mythic Amber windfall), brt (the armed blessing-offer reroll),
 //     rvt (banked revive token), xsl (bought hotbar slots past MAX_OWNED_WEAPONS),
 //     tth (max hearts paid to the artifact), pfl (the Prospector's Draught's floor).
-export const PROTOCOL_VERSION = 14;
+// v15 (the co-op game-feel pass): a NEW reliable event, friendlyNudge (a teammate's DIRECT
+//   projectile grazing a friend — 0 damage, a deterministic server-side positional impulse
+//   plus the comedic bonk FX), joins the wire; and the player-scoped combat events
+//   shot/meleeSwing/playerHurt/heal/pickup are reclassified from "pid" to "pos" scope so a
+//   networked player's actions reach every NEARBY client (not only the actor) and are
+//   audible/visible positionally. A v14 client's strict validator would reject the new
+//   event type, so the equal-version join gate bumps once for the whole pass. NOTE: the
+//   control plane's synthetic VERIFY join mirrors this constant (control/src/adapters/
+//   httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
+export const PROTOCOL_VERSION = 15;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -580,27 +589,33 @@ export type EventScopeKind = "global" | "pid" | "pos";
 interface EventSpec { scope: EventScopeKind; fields: Record<string, FieldKind> }
 
 const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
-  shot: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num", chg: "num" } },
-  meleeSwing: { scope: "pid", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", bx: "num", by: "num" } },
+  // Positional (v14): a networked player's own combat FX must reach every NEARBY client, not
+  // only the actor — a teammate's shot/swing/hurt/heal/pickup should be seen and heard
+  // POSITIONALLY (the client branches self vs remote in handleSimEvent). They already carry
+  // x,y, so interest filtering delivers them to observers within range.
+  shot: { scope: "pos", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", px: "num", py: "num", chg: "num" } },
+  meleeSwing: { scope: "pos", fields: { pid: "str", weapon: "str", x: "num", y: "num", aim: "num", bx: "num", by: "num" } },
   enemyHit: { scope: "pos", fields: { eid: "num", dmgX: "num", dmgY: "num", dmg: "num", crit: "bool", puffX: "num", puffY: "num", puffColor: "str", melee: "bool", closeShotgun: "bool", killed: "bool" } },
   thornsHit: { scope: "pos", fields: { eid: "num", x: "num", y: "num", radius: "num", dmg: "num", tint: "str" } },
   burnTick: { scope: "pos", fields: { x: "num", y: "num", radius: "num", dmg: "num" } },
   shockArc: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", tRadius: "num", dmg: "num", color: "str", killed: "bool" } },
   enemyKill: { scope: "pos", fields: { eid: "num", kind: "str", tier: "str", x: "num", y: "num", combo: "num" } },
-  heal: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
+  heal: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
   // Deliberately pid-scoped: these drive the DASHER's own juice. Teammates render a remote
   // dash off the PlayerWire dash state (dti/ddx/ddy — v9), which is interp-aligned with the
   // rendered position; broadcasting these events too would double-play the FX.
   dashStart: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
   dashTrail: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
-  playerHurt: { scope: "pid", fields: { pid: "str", x: "num", y: "num" } },
+  playerHurt: { scope: "pos", fields: { pid: "str", x: "num", y: "num" } },
   itemPicked: { scope: "pid", fields: { pid: "str", x: "num", y: "num", tint: "str" } },
   offerBlessing: { scope: "pid", fields: { pid: "str", rare: "bool" } },
   blessingExpired: { scope: "pid", fields: { pid: "str" } },
   // Positional: the revive moment plays for everyone standing at it (the reviver most of
   // all), not only the revived player. The revived player is AT the point by definition.
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
-  pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
+  // Positional (v14): the playful friendly-fire bonk plays for everyone standing at it.
+  friendlyNudge: { scope: "pos", fields: { shooterId: "str", targetId: "str", x: "num", y: "num", dirX: "num", dirY: "num" } },
+  pickup: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   // Positional: the reveal moment plays for everyone standing at the pedestal, not only
   // the collector (the gamble resolving is shared theater).

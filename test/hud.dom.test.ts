@@ -77,7 +77,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
     weaponCap: MAX_OWNED_WEAPONS,
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
-    coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
+    coopLabel: null, waitLabel: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
     ...over,
@@ -516,27 +516,22 @@ function hierarchyTests(): void {
   hud.update(mkState({ isObjectiveHidden: true }));
   check("the sandbox has no objective line", !objective.classList.contains("show"));
 
-  section("UI Director hierarchy: the co-op wait line rides the lane; BL carries the prompt");
+  section("UI Director hierarchy: the co-op wait line rides the lane; BL carries ONLY the dash");
   hud.update(mkState({ waitLabel: "WAITING AT EXIT \u00b7 1/2 \u2014 WAITING FOR GF" }));
   check("the coordination copy shows in the lane's wait slot",
     waitline.classList.contains("show") && waitline.textContent!.includes("WAITING AT EXIT"));
   hud.update(mkState());
   check("no coordination owed -> the wait slot fades (fixed height, no shift)", !waitline.classList.contains("show"));
 
-  const prompt = root.querySelector<HTMLElement>("[data-prompt]")!;
-  check("BL prompt hidden with no context", !prompt.classList.contains("show"));
-  hud.update(mkState({ prompt: { key: "E", label: "HOLD \u2014 REVIVE GF", isActive: false } }));
-  check("the revive affordance shows key cap + label in the BL cluster",
-    prompt.classList.contains("show") && !prompt.classList.contains("active")
-    && prompt.textContent!.includes("E") && prompt.textContent!.includes("REVIVE GF"));
-  hud.update(mkState({ prompt: { key: "E", label: "REVIVING GF\u2026 62%", isActive: true } }));
-  check("a running channel lights the prompt", prompt.classList.contains("active") && prompt.textContent!.includes("62%"));
+  // The interact prompt is world-anchored now (a floating [E] chip drawn on the canvas over
+  // its target — Game.renderInteractPrompt), so the bottom-left chrome carries only the dash.
   const bl = root.querySelector(".hud-corner.bl")!;
-  check("the prompt lives WITH the dash in the BL cluster", bl.querySelector(".dash") !== null && bl.querySelector("[data-prompt]") !== null);
+  check("the BL corner keeps the dash meter", bl.querySelector(".dash") !== null);
+  check("the detached bottom-left interact prompt is gone from chrome", root.querySelector("[data-prompt]") === null);
 
   hud.clear();
-  check("clear() resets lane + prompt states",
-    !objective.classList.contains("show") && !lane.classList.contains("boss") && !prompt.classList.contains("show"));
+  check("clear() resets the lane states",
+    !objective.classList.contains("show") && !lane.classList.contains("boss"));
 
   section("objectiveCopy: the canonical strings");
   check("N ENEMIES LEFT", objectiveCopy(false, 7) === "7 ENEMIES LEFT");

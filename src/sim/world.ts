@@ -293,6 +293,10 @@ export interface WorldState {
   // damage already applied inside it. Sim-internal — never on the wire; cleared per
   // floor. strikeEnemy truncates persistent damage past the window's budget.
   persistentBossWindows: Map<number, { t: number; used: number }>;
+  // Friendly-fire "playful bonk" per-ORDERED-pair cooldowns: `${shooterId}>${targetId}` ->
+  // seconds left before that shooter may nudge that target again (A->B independent of B->A).
+  // Sim-internal — never on the wire; entries self-expire and are cleared on every floor build.
+  friendlyNudgeCd: Map<string, number>;
   // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
   // recent record). histHead is the ring slot of the most recent record; histCount is how many
   // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
@@ -400,6 +404,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     nextHazardId: 0,
     nextEffectId: 0,
     persistentBossWindows: new Map(),
+    friendlyNudgeCd: new Map(),
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
@@ -510,6 +515,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.nextHazardId = 0;
   w.nextEffectId = 0;
   w.persistentBossWindows.clear();
+  w.friendlyNudgeCd.clear();
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.pendingBlessings.clear();
@@ -2554,9 +2560,54 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
           }
         }
       }
+    } else if (b.owner !== null && isFriendlyNudgeProjectile(b)) {
+      // A teammate's DIRECT round grazing a friend: 0 damage, a gentle positional impulse,
+      // and the bullet PASSES THROUGH (never consumed, no pierce cost). Resolved in the same
+      // bullet pass as every other collision so it stays deterministic + server-authoritative.
+      applyFriendlyNudges(w, b, ev);
     }
   }
   w.bullets = w.bullets.filter((b) => b.life > 0);
+}
+
+// A DIRECT player projectile eligible for the friendly bonk: an ordinary gun/pellet/thrown
+// round. Explicitly NOT area/persistent/sticky payloads — mortar blast, vortex implosion,
+// sentry bolts (isPersistent), Frostline paint — nor the Weaver's enemy silk. Those are
+// excluded by the game-designer spec (effect-wave/area/persistent weapons never bonk).
+function isFriendlyNudgeProjectile(b: Bullet): boolean {
+  return b.blast === undefined
+    && b.implode === undefined
+    && b.isPersistent !== true
+    && b.paintSpacing === undefined
+    && b.isSilk !== true;
+}
+
+// Resolve friendly nudges for one direct projectile against every NON-owner teammate it
+// swept over this tick. Downed/absent/dead teammates are skipped; a per-ORDERED-pair
+// cooldown gates it to one bonk per window (never per-bullet). The impulse is a fixed
+// wall-aware displacement ALONG the bullet vector, clamped to a dash-distance ceiling and
+// NEVER scaled by the shooter's weapon KB — it can't cancel firing/dash/reload/animation.
+function applyFriendlyNudges(w: WorldState, b: Bullet, ev: SimEvent[]): void {
+  const owner = b.owner;
+  if (owner === null) return;
+  const dist = Math.min(
+    C.FRIENDLY_NUDGE_FRAC * C.FRIENDLY_NUDGE_REF_KB,
+    PLAYER.dashSpeed * PLAYER.dashActive * C.FRIENDLY_NUDGE_DASH_FRAC,
+  );
+  const sp = Math.hypot(b.vx, b.vy) || 1;
+  const ux = b.vx / sp, uy = b.vy / sp;
+  for (const p of w.players.values()) {
+    if (p.id === owner) continue;                       // own projectiles never nudge you
+    if (p.isDown || p.isAbsent || p.hp <= 0) continue;  // downed/dead teammates: no nudge
+    if (!sweptBulletHit(b, p.x, p.y, p.pr + b.radius)) continue;
+    const key = owner + ">" + p.id;
+    if ((w.friendlyNudgeCd.get(key) ?? 0) > 0) continue; // A->B pair cooldown (independent of B->A)
+    w.friendlyNudgeCd.set(key, C.FRIENDLY_NUDGE_CD);
+    const cx = sweptHit.x, cy = sweptHit.y;              // contact point off the swept segment
+    [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, ux * dist, 0);
+    [p.x, p.y] = moveCircle(w, p.x, p.y, p.pr, 0, uy * dist);
+    ev.push({ t: "friendlyNudge", shooterId: owner, targetId: p.id, x: cx, y: cy, dirX: ux, dirY: uy });
+  }
 }
 
 // Drop one Frostline zone under a bead, respecting the hard world cap (the OLDEST zones
@@ -7854,6 +7905,16 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
       if (p.comboTimer <= 0) { p.comboTimer = 0; p.combo = 0; }
     }
     if (p.fangCd > 0) p.fangCd = p.fangCd > dt ? p.fangCd - dt : 0;
+  }
+
+  // Friendly-nudge pair cooldowns decay on the sim clock; expired entries are dropped so
+  // the map stays bounded (party-sized at most) even across a long fight.
+  if (w.friendlyNudgeCd.size > 0) {
+    for (const [key, left] of w.friendlyNudgeCd) {
+      const next = left - dt;
+      if (next <= 0) w.friendlyNudgeCd.delete(key);
+      else w.friendlyNudgeCd.set(key, next);
+    }
   }
 }
 

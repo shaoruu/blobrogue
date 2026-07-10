@@ -28,7 +28,7 @@ Object.assign(globalThis, {
 (dom.window.HTMLElement.prototype as unknown as { setPointerCapture(id: number): void }).setPointerCapture = () => {};
 (dom.window.HTMLElement.prototype as unknown as { releasePointerCapture(id: number): void }).releasePointerCapture = () => {};
 
-const { Hud, TIP_SHOW_DELAY_MS, TIP_HIDE_DELAY_MS, TIP_CONFIRM_MS, LONG_PRESS_MS } = await import("../src/game/hud.js");
+const { Hud, TIP_SHOW_DELAY_MS, TIP_HIDE_DELAY_MS, LONG_PRESS_MS } = await import("../src/game/hud.js");
 const { createMods } = await import("../src/sim/items.js");
 const { weaponDisplayStats } = await import("../src/sim/weaponStats.js");
 type HudModule = typeof import("../src/game/hud.js");
@@ -60,7 +60,7 @@ function mkState(currentIndex = 1, ids = FIVE): HudState {
     weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponDisplayStats(w.id, createMods(), 0) })),
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
-    coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
+    coopLabel: null, waitLabel: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
   };
@@ -626,17 +626,14 @@ async function tipTimingTests(): Promise<void> {
     hud.clear(); root.remove();
   }
 
-  section(`tooltip timing: quick weapon cycling flashes a ${TIP_CONFIRM_MS}ms confirmation`);
+  section("weapon switching (1-9 / wheel / Q / gamepad) shows NO stat card (hover/focus only)");
   {
     const { hud, root, tipEl } = rig(0); // pistol equipped
-    check("no confirmation on the first render", !tipShown(tipEl));
+    check("no card on the first render", !tipShown(tipEl));
     hud.update(mkState(1)); // cycled to the shotgun, no hover/focus anywhere
-    check("equip change flashes the NEW weapon's card", tipShown(tipEl)
-      && tipEl.querySelector(".tn")?.textContent === "SHOTGUN" && tipEl.querySelector(".tx")?.textContent === "EQUIPPED");
-    hud.update(mkState(2)); // cycled again before the flash expired
-    check("cycling again re-targets the confirmation", tipShown(tipEl) && tipEl.querySelector(".tn")?.textContent === "TESLA");
-    await wait(TIP_CONFIRM_MS + 80);
-    check("the confirmation hides itself", !tipShown(tipEl));
+    check("switching weapons flashes no card", !tipShown(tipEl));
+    hud.update(mkState(2)); // cycled again
+    check("cycling again still shows no card", !tipShown(tipEl));
     hud.clear(); root.remove();
   }
 }
