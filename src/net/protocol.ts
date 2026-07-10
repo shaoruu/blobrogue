@@ -105,7 +105,12 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   tetherLatch/tetherHold/tetherSweep + the shared status apply/freeze tells) join the
 //   reliable channel. A client on an older version rejects every snapshot carrying these, so
 //   the strict equal-version join gate turns the skew into a clean "update your client".
-export const PROTOCOL_VERSION = 10;
+// v11 (the hotbar cap): the inventory is capped at MAX_OWNED_WEAPONS and a full hotbar never
+//   auto-collects a weapon pickup — claiming one at the cap rides the NEW client->server
+//   `swap` command (trade an owned weapon for a named floor pickup, atomically, server-
+//   validated). A client at the cap on an older version would silently fail to collect with
+//   no swap affordance (and the server rejects the unknown command), so the join gate bumps.
+export const PROTOCOL_VERSION = 11;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -345,6 +350,13 @@ export type ClientMsg =
   // server validates ownership + player state and picks the spawn spot itself; the pickup
   // and the updated inventory flow back via snapshot. Same cseq idempotency as equip.
   | { t: "drop"; weapon: WeaponId; cseq: number }
+  // Authoritative full-hotbar swap (v9): trade the OWNED weapon `drop` for the weapon
+  // pickup `pickup` (the sim's stable per-floor pickup id) the player is standing on.
+  // Only valid AT the hotbar cap — below it a walk-over collects. The server validates
+  // everything (fullness, ownership, pickup liveness/range/claimability) and performs the
+  // trade atomically: the replaced weapon lands as a normal world pickup, the incoming
+  // one is acquired + equipped. Declining sends nothing. Same cseq idempotency as equip.
+  | { t: "swap"; pickup: number; drop: WeaponId; cseq: number }
   // Authoritative blessing choice: names the server offer it answers (offerId) + the chosen
   // item. The server validates offerId against the live pending offer (id match, not expired)
   // and choiceId against that offer's choice set, then applies the mods server-side.
@@ -700,6 +712,18 @@ function decodeClientMsg(raw: string): ClientMsg {
       // state (not downed/pending/terminal), and the never-drop-the-last-weapon rule.
       exactKeys(o, ["t", "weapon", "cseq"]);
       return { t: "drop", weapon: weaponOf(o, "weapon"), cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER) };
+    }
+    case "swap": {
+      // The pickup id is a non-negative integer naming a sim pickup; the drop id a KNOWN
+      // weapon. The sim validates the rest (fullness/ownership/liveness/range) — a stale
+      // or forged swap is a rejected command, never a crash and never a partial trade.
+      exactKeys(o, ["t", "pickup", "drop", "cseq"]);
+      return {
+        t: "swap",
+        pickup: intOf(o, "pickup", 0, Number.MAX_SAFE_INTEGER),
+        drop: weaponOf(o, "drop"),
+        cseq: intOf(o, "cseq", 0, Number.MAX_SAFE_INTEGER),
+      };
     }
     case "chooseBlessing": {
       exactKeys(o, ["t", "offerId", "choiceId"]);

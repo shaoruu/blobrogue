@@ -23,7 +23,8 @@ Object.assign(globalThis, {
   KeyboardEvent: dom.window.KeyboardEvent,
 });
 
-const { Hud, buildSlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
+const { Hud, buildSlot, buildEmptySlot, buildBuffChip, buildMoreChip, MAX_BUFF_SLOTS, objectiveCopy, weaponTipRows, weaponTipNotes, renderTipInto, fmtStat } = await import("../src/game/hud.js");
+const { MAX_OWNED_WEAPONS } = await import("../src/sim/constants.js");
 const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ShopPanel } = await import("../src/ui/shopPanel.js");
 const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView, shopFooterCopy, isResolvedShopStatus } = await import("../src/ui/shopCopy.js");
@@ -62,6 +63,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
       wslot("shotgun", "Shotgun", true),
       wslot("tesla", "Tesla", false),
     ],
+    swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
@@ -90,8 +92,19 @@ function weaponSlotTests(): void {
   check("slot carries no native title and no embedded tooltip (the floating singleton owns it)",
     slot.getAttribute("title") === null && slot.querySelector(".tip, .hb-tip") === null);
   check("equipped slot is lit", slot.classList.contains("on"));
-  const tenth = buildSlot(wslot("tesla", "Tesla", false), 9);
-  check("slots past 9 carry no key badge", tenth.querySelector(".hb-key") === null);
+  // The cap contract: MAX_OWNED_WEAPONS never exceeds the number-key row, so EVERY slot
+  // that can exist carries its select key — no unreachable slots, ever.
+  check("the hotbar cap fits the number-key row", MAX_OWNED_WEAPONS <= 9, `cap=${MAX_OWNED_WEAPONS}`);
+  for (let i = 0; i < MAX_OWNED_WEAPONS; i++) {
+    const s = buildSlot(wslot("tesla", "Tesla", false), i);
+    check(`slot ${i + 1} carries its select-key badge`, s.querySelector(".hb-key")?.textContent === String(i + 1));
+  }
+
+  section("empty capacity boxes: visible cap, inert, invisible to interaction machinery");
+  const empty = buildEmptySlot(4);
+  check("empty box shows its future select key", empty.querySelector(".hb-key")?.textContent === "5");
+  check("empty box is not a .hb-slot (drag/keyboard/tooltips never see it)", !empty.classList.contains("hb-slot") && empty.classList.contains("hb-empty"));
+  check("empty box is inert for a11y", empty.getAttribute("aria-hidden") === "true" && empty.tabIndex !== 0 && empty.getAttribute("role") === null);
 }
 
 // Render the floating tooltip's content for one weapon (the pure builder the Hud
@@ -371,8 +384,12 @@ function hudIntegrationTests(): void {
   hud.update(mkState());
   check("one labeled slot per owned weapon", root.querySelectorAll(".hb-slots .hb-slot").length === 3);
   check("slot order follows inventory order", [...root.querySelectorAll(".hb-slot .hb-name")].map((n) => n.textContent).join(",") === "PISTOL,SHOTGUN,TESLA");
+  check("the remaining capacity renders as inert empty boxes (the bar is always cap-wide)",
+    root.querySelectorAll(".hb-slots .hb-empty").length === MAX_OWNED_WEAPONS - 3
+    && root.querySelectorAll(".hb-slots > *").length === MAX_OWNED_WEAPONS);
   check("blessing row hidden while empty", !root.querySelector(".hb-buffs")!.classList.contains("show"));
   check("interaction hint shown with 2+ weapons", root.querySelector("[data-hb-hint]")!.classList.contains("show"));
+  check("below the cap the hint keeps the classic verbs", root.querySelector("[data-hb-hint]")!.textContent === "CLICK EQUIP \u00b7 DRAG REORDER \u00b7 Q DROP");
 
   hud.update(mkState({ items: [ITEM_LV2, ITEM_MAX] }));
   check("blessing row appears with picks", root.querySelector(".hb-buffs")!.classList.contains("show"));
@@ -390,6 +407,44 @@ function hudIntegrationTests(): void {
   check("reordered inventory re-renders in the new order", [...root.querySelectorAll(".hb-slot .hb-name")].map((n) => n.textContent).join(",") === "TESLA,PISTOL,SHOTGUN");
   check("key badges remap to the new positions", [...root.querySelectorAll(".hb-slot .hb-key")].map((n) => n.textContent).join(",") === "1,2,3");
   check("equipped highlight follows the weapon id", root.querySelectorAll(".hb-slot")[2].classList.contains("on"));
+
+  section("the full hotbar is legible: FULL hint copy + the swap prompt");
+  const fullIds: WeaponId[] = ["pistol", "shotgun", "tesla", "railgun", "smg", "cannon", "rapid", "burst", "sword"];
+  const fullWeapons = fullIds.slice(0, MAX_OWNED_WEAPONS).map((id, i) => wslot(id, id, i === 0));
+  hud.update(mkState({ weapons: fullWeapons }));
+  check("at the cap the bar renders exactly MAX slots and zero empties",
+    root.querySelectorAll(".hb-slots .hb-slot").length === MAX_OWNED_WEAPONS
+    && root.querySelectorAll(".hb-slots .hb-empty").length === 0);
+  check("at the cap the hint names the state and the ways out",
+    root.querySelector("[data-hb-hint]")!.textContent === "HOTBAR FULL \u00b7 Q DROP \u00b7 SWAP AT A NEW WEAPON");
+  const swapEl = root.querySelector<HTMLElement>("[data-hb-swap]")!;
+  check("no blocked pickup underfoot -> no swap prompt", !swapEl.classList.contains("show"));
+
+  const swapCalls: number[] = [];
+  let dismissed = 0;
+  hud.setHotbarActions({
+    onSlotActivate: () => {}, onSlotReorder: () => {}, onSlotInspect: () => {},
+    onSlotSwap: (i) => swapCalls.push(i),
+    onSwapDismiss: () => { dismissed++; },
+  });
+  hud.update(mkState({ weapons: fullWeapons, swap: { id: "flamer", name: "Flamer" } }));
+  check("a blocked pickup surfaces the swap prompt", swapEl.classList.contains("show"));
+  check("the prompt names the state and the incoming weapon",
+    swapEl.querySelector(".hs-tag")?.textContent === "HOTBAR FULL"
+    && swapEl.querySelector(".hs-name")?.textContent === "SWAP FOR FLAMER?");
+  const swapSlots = [...swapEl.querySelectorAll<HTMLButtonElement>(".hs-slot")];
+  check("one swap button per current slot, keyed like the hotbar",
+    swapSlots.length === MAX_OWNED_WEAPONS
+    && swapSlots.map((b) => b.querySelector(".hs-key")?.textContent).join(",") === Array.from({ length: MAX_OWNED_WEAPONS }, (_, i) => String(i + 1)).join(","));
+  check("swap buttons say what they trade away", swapSlots[2].getAttribute("aria-label") === "Swap out tesla, slot 3");
+  swapSlots[2].dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+  check("clicking a slot button routes the swap action with its index", swapCalls.join(",") === "2");
+  const leave = swapEl.querySelector<HTMLButtonElement>(".hs-leave")!;
+  check("the decline affordance is explicit", leave.textContent === "LEAVE IT");
+  leave.dispatchEvent(new dom.window.Event("click", { bubbles: true, cancelable: true }));
+  check("LEAVE IT routes the dismiss action", dismissed === 1);
+  hud.update(mkState({ weapons: fullWeapons, swap: null }));
+  check("walking away (or declining) hides the prompt", !swapEl.classList.contains("show"));
 }
 
 function hierarchyTests(): void {
@@ -487,6 +542,7 @@ function shopCopyTests(): void {
   check("broke reads NEED N MORE COINS (the exact shortfall, coins named)", shopActionCopy("broke", 12, 9) === "NEED 3 MORE COINS");
   check("sold reads SOLD", shopActionCopy("sold", 12, 30) === "SOLD");
   check("owned reads OWNED", shopActionCopy("owned", 12, 30) === "OWNED");
+  check("a capped hotbar reads HOTBAR FULL", shopActionCopy("full", 12, 30) === "HOTBAR FULL");
   check("maxed blessing reads MAX LV", shopActionCopy("maxLevel", 24, 30) === "MAX LV");
   check("full-HP heart reads FULL HEALTH", shopActionCopy("fullHealth", 6, 30) === "FULL HEALTH");
   check("spent reroll reads NO REROLLS LEFT", shopActionCopy("exhausted", 8, 30) === "NO REROLLS LEFT");

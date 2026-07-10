@@ -16,6 +16,7 @@ import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import type { RemotePlayer, WeaponId } from "../sim/types.js";
+import { MAX_OWNED_WEAPONS } from "../sim/constants.js";
 import { RemoteInterp } from "../net/interp.js";
 import {
   effectFromWire,
@@ -909,6 +910,21 @@ export class WSTransport implements Transport {
     const self = this.latestSnap?.self;
     if (self && (!self.wpns.includes(weapon) || self.wpns.length <= 1)) return;
     this.sendMsg({ t: "drop", weapon, cseq: ++this.cseq });
+  }
+
+  // Request an authoritative full-hotbar swap: trade the owned `drop` for the weapon
+  // pickup `pickup`. Never predicted — the trade is atomic server-side and both the new
+  // inventory and the replaced weapon's floor pickup flow back via snapshot. Pre-filtered
+  // against the last authoritative state so an obviously-stale prompt click (pickup gone,
+  // weapon no longer owned, hotbar no longer full) is a client no-op, not a wire reject.
+  requestSwap(pickup: number, drop: WeaponId): void {
+    const snap = this.latestSnap;
+    if (snap) {
+      const self = snap.self;
+      if (self && (!self.wpns.includes(drop) || self.wpns.length < MAX_OWNED_WEAPONS)) return;
+      if (!snap.pickups.some((p) => p.id === pickup && p.kind === "weapon")) return;
+    }
+    this.sendMsg({ t: "swap", pickup, drop, cseq: ++this.cseq });
   }
 
   // Answer a server blessing offer. The offerId names exactly which offer this choice answers;

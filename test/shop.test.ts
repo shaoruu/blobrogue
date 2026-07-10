@@ -34,6 +34,8 @@ import type { Dungeon } from "../src/sim/dungeon.js";
 import { isBossFloor } from "../src/sim/enemies.js";
 import { itemById, itemLevelsOf, MAX_ITEM_LEVEL } from "../src/sim/items.js";
 import { TILE } from "../src/sim/types.js";
+import type { WeaponId } from "../src/sim/types.js";
+import { MAX_OWNED_WEAPONS } from "../src/sim/constants.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../src/sim/input.js";
 import { LOCAL_ID } from "../src/sim/input.js";
@@ -275,6 +277,25 @@ function buyCommandTests(): void {
     p.ownedWeapons.push(other.weapon!);
     check("a weapon you already own reads 'owned' before any coin moves",
       buyAt(w, p, other) === "owned" && p.coins === 99 && other.soldTo === null);
+  }
+  {
+    // The hotbar cap gates the stall exactly like floor pickups: a full buyer reads
+    // HOTBAR FULL and no coin moves — freeing a slot (drop/swap) re-opens the buy.
+    const w = createWorld(0xDEA1, 3);
+    const p = w.players.get(LOCAL_ID)!;
+    const weapon = slotOf(w, "weapon");
+    const fillers: WeaponId[] = ["shotgun", "railgun", "tesla", "smg", "cannon", "rapid", "burst", "homing"];
+    for (const id of fillers) {
+      if (p.ownedWeapons.length >= MAX_OWNED_WEAPONS) break;
+      if (id !== weapon.weapon && !p.ownedWeapons.includes(id)) p.ownedWeapons.push(id);
+    }
+    p.coins = 99;
+    check("a full hotbar reads 'full', coins/stock untouched",
+      buyAt(w, p, weapon) === "full" && p.coins === 99 && weapon.soldTo === null
+      && p.ownedWeapons.length === MAX_OWNED_WEAPONS);
+    p.ownedWeapons.pop();
+    check("freeing a slot re-opens the same buy",
+      buyAt(w, p, weapon) === "ok" && p.ownedWeapons.includes(weapon.weapon!) && p.ownedWeapons.length === MAX_OWNED_WEAPONS);
   }
   {
     const w = createWorld(0xDEA1, 3);

@@ -73,7 +73,8 @@ function clientRoundTripTests(): void {
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
     { t: "drop", weapon: "railgun", cseq: 7 },
-    { t: "shopBuy", slot: 2, cseq: 8 },
+    { t: "swap", pickup: 12, drop: "railgun", cseq: 8 },
+    { t: "shopBuy", slot: 2, cseq: 9 },
     { t: "chooseBlessing", offerId: 2, choiceId: "it_dmg" },
     { t: "spec", target: "p7" },
     { t: "stat", rtt: 120, jit: 14, rec: 3, corr: 22, dly: 130 },
@@ -121,6 +122,13 @@ function unknownFieldTests(): void {
     ["drop with an unknown weapon id", { t: "drop", weapon: "bfg9000", cseq: 1 }],
     ["drop with a smuggled extra field", { t: "drop", weapon: "pistol", cseq: 1, x: 10 }],
     ["drop without cseq", { t: "drop", weapon: "pistol" }],
+    // The v9 swap is strict too: a tampered client can name a pickup + an owned drop, but
+    // never smuggle a grant/outcome, a junk weapon id, or a malformed pickup id.
+    ["swap with an unknown drop weapon id", { t: "swap", pickup: 1, drop: "bfg9000", cseq: 1 }],
+    ["swap with a negative pickup id", { t: "swap", pickup: -1, drop: "pistol", cseq: 1 }],
+    ["swap with a float pickup id", { t: "swap", pickup: 1.5, drop: "pistol", cseq: 1 }],
+    ["swap with a smuggled grant field", { t: "swap", pickup: 1, drop: "pistol", cseq: 1, grant: "railgun" }],
+    ["swap without cseq", { t: "swap", pickup: 1, drop: "pistol" }],
     // A tampered buy can name a slot, but never smuggle a price/outcome or dodge cseq.
     ["shopBuy with a smuggled price", { t: "shopBuy", slot: 0, cseq: 1, price: 0 }],
     ["shopBuy with a negative slot", { t: "shopBuy", slot: -1, cseq: 1 }],
@@ -244,7 +252,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + shop AND bestiary (v8) + the remote-dash sync (v9) + the weapon effect wave (v10)", PROTOCOL_VERSION === 10, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers room-correctness (v4) + content (v5) + co-op (v6) + the depth world (v7) + shop AND bestiary (v8) + the remote-dash sync (v9) + the weapon effect wave (v10) + the hotbar cap swap (v11)", PROTOCOL_VERSION === 11, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
