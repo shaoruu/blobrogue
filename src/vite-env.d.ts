@@ -9,3 +9,8 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+// Injected by vite (define) = the latest CHANGELOG version key (a date, or "unreleased").
+// Undefined outside a vite build (tsx tests) — the changelog module falls back to
+// LATEST_VERSION, so every read stays guarded with `typeof __BUILD_VERSION__`.
+declare const __BUILD_VERSION__: string;
