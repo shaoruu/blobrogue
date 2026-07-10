@@ -107,3 +107,26 @@ Numbers are design targets; balancer owns final tuning and must validate against
   4. **Protocol bump to v18** is required (kitId + ult state + 4 new SimEvents + 2 new sim entities cross the wire).
   5. **Teammate HP + HP numbers are a hard dependency** bundled into v1 (the Mender is non-functional without them) — do not split them into a later UI wave.
 - **Build order (impact/effort):** (1) HP numbers + teammate HP HUD [tiny, hard dependency]; (2) ult meter + 4 kits with one ult each [core; the two ally-ults Sanctuary/Aegis are the server-auth work to budget]; (3) account Mastery XP + lobby kit-select [wraps the meta hook]. Then the deferred kits/mastery in v2.
+
+## 10. BALANCER STRUCTURAL ADDENDUM (2026-07-10 — plumb these so K_* + magnitudes stay tunable without re-plumbing)
+These are STRUCTURAL (how the code is shaped), not final numbers. Balancer (dc9dfebf) owns the actual values later; build must make them tunable per below.
+
+### Charge model (§3)
+- **Store charge as fixed-point fractions of 100**, NOT raw (damage × coefficient). Normalize to be target-agnostic: `charge% per hit = 100 × (dmgDealt / RefEncounterHP) × W_dmg`, where RefEncounterHP = the floor's expected effective HP. (A flat K_dmg charges ~2–3× faster on low-HP early floors than deep bosses — normalize it out.)
+- **Per-source contribution share caps** so no single input dominates: damage ≤70%, kills ≤40%, time-floor via trickle. (Stops AoE-farming trash from perma-charging while a boss-only fight starves.)
+- **Time-floor is encounter-relative + combat-gated:** guarantee ~1 ult by ~45–60s of sustained boss combat even at low DPS; K_time floor ≈ 100 / (55s / FIXED_DT), accruing ONLY while in combat (enemies alive/aggro), never in empty rooms.
+- **Charge KEEPS accruing during the 8s lockout** (clamped ≤100, not wasted), still gated by the floor. Meter does NOT reset on floor descent or weapon swap (persists per §3).
+- **Log "charge wasted %"** (overcharge held at 100 is lost) so balancer can tune median to ~1 ult / 2–3 encounters.
+
+### Magnitude structure (§2)
+- **GUNNER Overdrive = a SEPARATE multiplicative layer clamped AFTER combining with blessings/Resonance to the 7× expressive ceiling** — NOT a raw fireRateMult add (that would collide with the 1.8× raw cap). Duration 5s fine.
+- **MENDER: Lifebloom HoT + Sanctuary HoT share ONE healing budget.** Implement a per-target server-side incoming-heal clamp: combined Mender output to one ally ≤~1.5 HP/s, party-wide ≤~3 HP/s, regardless of Mender count (two Menders must NOT double-stack). Overheal discard stays.
+- **BULWARK Aegis HP scales with encounter, not flat:** `hpBudget = k × RefEncounterDPS(floor) × duration`, clamped; duration OR HP whichever first. 15% Hardened DR applies inside damage-taken math BEFORE co-op/mode pressure, and must NOT stack past ~25% total DR with any future DR.
+- **PHANTOM Phase:** invuln ≤1.0s (≤1.2 hard cap) — one Phase must NOT trivialize a single ≤1.2s forced boss transition (8s floor mostly handles; confirm). **Ult speed 1.4× is an EXEMPT short burst (≤1.4× ≤3s), NOT clamped to the 1.35× raw mover cap** — plumb it as an ult burst so the shared mover cap doesn't clamp it.
+
+### Co-op / anti-stack (§7)
+- **Overlapping same-ult zone effects on one target take MAX, not SUM:** two Aegis overlap = cover only (no double DR); two Sanctuary overlap = max HoT not sum; two Overdrive on different players = fine (self-buff).
+- **Ults are PLAYER capability only** in the boss survivability math — they never reduce a boss forced-transition or skip a phase floor (make explicit for the QA gate).
+
+### Test hooks (golden-master, §7)
+- Deterministic per-tick dump of ultCharge accrual per input (dmg/kill/time/taken/heal), ultReadyAt enforcement, per-target incoming-heal clamp, Aegis barrier HP depletion, Phase multi-target selection — each under P=1..4 + reconnect + same-seed replay.
