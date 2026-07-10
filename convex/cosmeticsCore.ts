@@ -104,8 +104,7 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "hat_wizard", slot: "hat", name: "Wizard Hat", unlock: "earned", need: { deepestFloor: 15 }, hint: "reach floor 15", assetKey: "hat_wizard" },
   { id: "hat_halo", slot: "hat", name: "Halo", unlock: "earned", need: { deepestFloor: 20 }, hint: "reach floor 20", assetKey: "hat_halo" },
   { id: "hat_headphones", slot: "hat", name: "Headphones", unlock: "earned", need: { totalKills: 100 }, hint: "100 all-time kills", assetKey: "hat_headphones" },
-  // TEMP-DISABLED (2026-07-10): hat_helmet held out of the pool until its brim is widened to span the bao crown (flanks the head narrow). Re-enable when AD ships the wide version.
-  // { id: "hat_helmet", slot: "hat", name: "Helmet", unlock: "earned", need: { totalKills: 250 }, hint: "250 all-time kills", assetKey: "hat_helmet" },
+  { id: "hat_helmet", slot: "hat", name: "Helmet", unlock: "earned", need: { totalKills: 250 }, hint: "250 all-time kills", assetKey: "hat_helmet" },
   { id: "hat_horns", slot: "hat", name: "Horns", unlock: "earned", need: { totalKills: 1000 }, hint: "1000 all-time kills", assetKey: "hat_horns" },
   // face
   { id: "face_round", slot: "face", name: "Round Specs", unlock: "starter", assetKey: "round_glasses" },
