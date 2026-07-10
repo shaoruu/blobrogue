@@ -1,0 +1,49 @@
+# blobrogue — WAVE 1 BUILD PACKET (consolidated)
+**Creative Director consolidation of all studio input. NON-CANONICAL recommendation; runner builds/integrates. Fits protocol v15, earned-window bosses, party/gear scaling, deterministic authoritative sim, no-circle art rule, scene attention hierarchy.** Companion to blobrogue_CONTENT_ROADMAP_to100_RECOMMENDATION.md.
+
+## Wave 1 = one shippable, readable, replayable slice of THE UNMAKING (F31–50, The Sump)
+Ship complete before authoring Wave 2.
+
+## THREE PREREQUISITE GATES (block the wave)
+1. **Biome-selective encounter deck.** Per-ring INCLUDE set + explicit CARRYOVER whitelist; weighted deck (signature common / spice rare); draw-without-replacement within a floor; deterministic from seed. Cumulative global roster IS the repetition Ian feels.
+2. **4-player telegraph/effect-density controller.** Per-frame telegraph budget, priority order boss windup > giant-phase cue > elite affix tell > hazard/mutator > ambient; FAIRNESS CUES EXEMPT from culling (only ambient/cosmetic culls); overlap arbitration so two lethal windups never resolve same-tile within ~0.3s; reserved visual register for enemy tells vs 4 players' FX. Earned-window compliance is theoretical without this; giants + stingers are unshippable without it.
+3. **Amber home motif (AUTHORED — canonical melody locked).** The literal home theme every post-F30 boss quotes/corrupts and that returns whole at F100. Reference authored at /workspace/blobrogue_audio_manifest/amber_motif/ (AMBER_MOTIF_SPEC.md + amber_motif.mid + clean/jet/inverted rendered previews). LOCKED melody: G4→C5→E5→F#5→E5→C5, C Lydian (raised-4th F# = the shimmer), ~96 BPM, celesta/music box; a 6-note 'coming home' arc singable in one hearing. Plant in menu + Amberwild during the music-expansion pass. Corruption transforms authored: JET = minor-3rd + flatten F#→F (remove the shimmer/hope) + progressive detune + broken/reversed timbre, P3 = melodic inversion about C5 ('you reflected wrong'); UNMAKING regions = evocative harmonic-world reuse only (bosses don't quote the full tune); F100 = the EXACT original amber_motif.mid, celesta, warm, unbroken (the payoff). RUNNER: use amber_motif.mid as the LITERAL quotation source for the 3 must-land moments (menu/plant, Jet, F100) — generate the EL bed, then DAW/sample-layer this MIDI over it; do NOT rely on text-to-music to reproduce the tune. A composer may re-voice the arrangement but MUST keep pitch sequence + contour intact (recognizability is the mechanic). Giant signature stays SEPARATE from the motif — they meet only at F100 (giant subtracts to silence, THEN motif blooms).
+
+## BOSSES (Wave 1)
+All earned-window compliant: guarded body + PLAYER-CREATED window + telegraphed surprise (≥0.6s tell, walk-dodgeable, post-lock ≥.30s, recover ≥.35s) + HP calibrated on EXPOSED-time (never sponge) + co-op scales the TASK.
+- **F35 JET** (do first — hero remap, cheapest/highest payoff): curated MIRROR pool AUTHORED per Resonance family + seeded (mirrors the ARCHETYPE, never live-copies inventory); simultaneous mirrored-verbs capped to telegraph budget; window = survive the corrupted-Resonance phase → he's spent → exposed. Art: cold remap of hero.png silhouette; FIX dome contrast (cool rim ~#57b6ff/#7882aa + dead-amber veins + lift dome base ~20-30L; current preview is 75.9% dark-on-dark in the head vs Sump floor). Audio: Amber motif hollowed, P1 uncanny → P2 out-of-sync canon → P3 inverted over room-drain → dead note; literal quotation; per-phase stems.
+- **F40 THE TITHE:** builds cover, re-armors behind it; window = destroy the feeding SLAB before re-armor. Re-armor beatable at ~60-70% median-party slab-TTK; missing it COSTS but loops (never dead-ends); co-op = more/thicker slabs, not a shorter timer; ALWAYS leave one line-of-sight lane. Art: low/wide segmented armored feeder ~120px, slab is a SEPARATE 2-state destructible sprite reading as architecture; re-armor tell = amber ooze rising up seams (not a ring). Audio: swell layer fades IN while feeding/re-armoring, drops OUT when exposed (window audible); heavy but not colossal.
+- **F45 QUORUM:** three husks, ONE shared HP pool + ONE shared telegraph. Husk ROLES load-bearing (shield / heal-the-pool / damage) so kill-order is real and 4P crossfire can't skip by even-nuking the pool; telegraphed 1.2s NON-invuln merge; merged fast-form gets its OWN window with widened ≥.45s recover. Art: three lean hollow husks ~80px (bone/skeleton family + Sump corruption); code-drawn taut amber TETHER husk-to-husk that snaps + yanks on death (visible shared HP); merge-form sprite ~100px (3 bodies fused wrong); next-to-act husk leans hardest on the tether. Audio: 3 contrapuntal voice stems (one per husk) drop out on death; merge collapses to unison snarl + tempo jump; the audio IS the tell.
+- **F50 GORGE (GIANT #1):** defines the giant language. Multi-phase shell-peel; each shell its own mini earned-window fight reached via a player peel action. Art: 192px (3x hero), half-sunk (visible mass = upper body, sunk line hides bottom), ASYMMETRIC (landscape not creature outline = no-circle at scale), 3 authored shell states (crusted rind / peeled+chitin / core) each distinct silhouette+palette; peeled shells drop as debris/cover; exposed core molten bright amber #ffb43b/#ffd166 (the ONE bright warm amber on an enemy = your stolen amber); tectonic telegraphs (shell cracks/juts before slamming). STATIONARY front-facing set-piece — no side/up facings. Audio: GIANT SIGNATURE (half-time ~50-63 BPM, descending footfall motive + colossal downbeat, low register, choral awe, phase=accumulation), Gorge dressing = WET/warm-corrupted; generate FIRST as canonical reference for F75/F100.
+
+## GIANT calibration — HARD RULE
+Per-PHASE on exposed-time, never one inflated bar. Giant = K sequential phases, each a fraction of a standard boss's exposed HP; total TTK ~1.4-1.6× a standard boss via PHASE COUNT, never 4× HP. Each phase reached via player peel action; TTK gates override HP per-phase; co-op scales the TASK (more shell segments/peel points). Unshippable without Gate 2.
+
+## GUNS (Wave 1) — new VERBS, not clones (GD owns mechanics)
+- **DEPLOY** (Amberwork): place a temporary turret/cover node you fight around.
+- **MODESHIFT:** one weapon, two committed swap modes (close burst ↔ far lance); decision = when to shift.
+- **GAMBLE** (mystery tier): reload rerolls shot type from a SEEDED authored pool (deterministic; embraces "randomness").
+- Plus finish the queued Hollow pair (Ruinbreath + Widowbite) + Black Lantern.
+Reject: straight-bullet/SMG/short-cone/rail/colored-status clones. New guns must change position, target priority, room geometry, or timing.
+
+## ENEMIES (Wave 1)
+2–3 Sump corrupted variants using existing ecology verbs (HUNT/ORBIT/BURROW/ANCHOR/FLOCK/FLEE-BAIT), silhouette-readable, one new room decision each; no stat reskins.
+
+## RANDOMNESS (Wave 1) — the airtight determinism plan (GD-locked)
+- **Floor Mutators v1** (~6 authored, ≤2/floor): Dense Dark, Molten Floor, Twinned Elites, Fracture Storm, Amberfall, Thin Air. Express ONLY through already-simulated data (vision/hazard density/spawn count/tile behavior/dash) — no new runtime code path.
+- **Elite Affixes v1** (~5, ≤1/elite): splits (pre-cracked seams) / shielded (asymmetric crust slab that falls) / hazard-trail (body drips element) / reflect (glassy amber facet that cracks after reflecting) / enrage (dead-amber veins heat as HP drops). Material-readable, built into body art, not icon badges.
+- **DERIVATION:** all rolls from `(worldSeed, floorIndex, rollStreamId)` named PRNG streams; integer/fixed-point only; no floats/wall-clock/player-count branching inside a draw.
+- **ROLL-ORDER CONTRACT (written + golden-master-tested REQUIREMENT):** 1) floor mutators, 2) roster/encounter deck, 3) elite affixes by ascending spawn ordinal, 4) boss affix. New systems APPEND to the end (never insert mid-list) so existing seeds stay stable.
+- **Resolve once at generation, freeze in the authoritative floor descriptor/snapshot; clients READ never roll;** reconnect + same-seed replay = identical.
+- **Caps enforced at generation; Gate 2 density controller gets a DETERMINISTIC veto** (authored priority or seeded re-roll from the same stream; a pure function of seed+floor+playerCountAtLock).
+- **Golden-master REQUIRED** across P=1..4 + reconnect + same-seed replay for: mutator set, elite affix assignment, boss affix, deck composition. Not golden-mastered = not deterministic = doesn't ship.
+- **Fairness-under-randomness:** each mutator/affix must independently satisfy the Gate 2 budget with a readable tell at 4P (scrutinize Reflect "armed" tell, Fracture Storm global pre-snap warning, Molten Floor safe-tile telegraphing, Twinned Elites density). Unreadable at 4P = CUT.
+
+## AUDIO (Wave 1) — generation specs
+elevenlabs music, force_instrumental:true, ~150s long for clean loop pick, anti-fade prompt wording ("seamless loop, consistent intensity, NO intro/outro/fade"). Per-phase stems for Jet/Quorum/giants; Quorum = 3 voice stems + merged track. Stingers via elevenlabs sound-effects. Generate-first: Amber motif, then Gorge signature. Stingers land WITH Gate 2. Everything gated against the loop/seam bar + Ian's ear before wiring.
+
+## MULTIPLAYER / AUTHORITATIVE FLAGS
+Jet curated mirror (never live build-copy); giants need per-player telegraph budget (Gate 2); all mutator/affix/boss-affix rolls seeded + resolved at generation + frozen in snapshot; co-op HP/task locked at PULL (no mid-fight rescale on join/down/disconnect); golden-master across P=1..4 + reconnect + replay.
+
+## OPEN ITEM FOR RUNNER
+Post-F30 region palettes (Sump/Veinworks/Pale/Null Core) are NOT authored in biomes.ts yet. AD is gating JET contrast against an interim Sump palette (floorA #16131a / floorB #1a1620 / wallFront #2a2333 / wallCap #3a2f2a); lock the real hexes so the contrast gate is final.
