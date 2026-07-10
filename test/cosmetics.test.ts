@@ -290,24 +290,32 @@ function socketGateTests(): void {
   const mild = capCosmeticXform({ ox: 0.5, oy: -1, sx: 1.02, sy: 0.99, rot: 0.01 });
   check("mild body motion passes through untouched", mild.oy === -1 && mild.sx === 1.02 && mild.sy === 0.99 && mild.rot === 0.01);
 
-  section("asset hooks: EXACTLY the gated first pair, oriented paths, graceful degradation");
-  const keys = Object.keys(COSMETIC_ASSET_SOURCES).sort();
-  check("first integration pair ONLY (cowboy_hat_classic + round_glasses)",
-    keys.join(",") === "cowboy_hat_classic,round_glasses", keys.join(","));
+  section("asset hooks: every overlay wired to its Wave 1 sprite, oriented paths, no procedural art");
   for (const [key, def] of Object.entries(COSMETIC_ASSET_SOURCES)) {
     const oriented = COSMETIC_ORIENTATIONS.every((o) => def.src[o] === `/sprites/cosmetics/${key}_${o}.png`);
     check(`${key}: all three oriented asset paths follow the pipeline contract`, oriented);
   }
+  // EVERY hat/face catalog entry hooks a real asset (nothing renders procedurally anymore),
+  // and its assetKey resolves to a COSMETIC_ASSET_SOURCES entry with the right socket.
+  const overlays = COSMETICS.filter((c) => c.slot === "hat" || c.slot === "face");
+  for (const c of overlays) {
+    const key = c.assetKey;
+    check(`${c.id} carries an assetKey`, typeof key === "string" && key.length > 0, String(key));
+    const def = key ? COSMETIC_ASSET_SOURCES[key] : undefined;
+    check(`${c.id} resolves to a wired asset (${key})`, def !== undefined);
+    if (def) check(`${c.id} sockets to the ${c.slot === "hat" ? "head" : "face"}`,
+      def.socket === (c.slot === "hat" ? "head" : "face"), def.socket);
+  }
   check("round_glasses hooks the shipped Round Specs item", cosmeticById("face_round")?.assetKey === "round_glasses");
-  check("cowboy_hat_classic is NOT a catalog item (the baked default until the layered base ships)",
-    COSMETICS.every((c) => c.assetKey !== "cowboy_hat_classic"));
+  check("cowboy_hat_classic is a hook but NOT a catalog item (the baked default until the layered base ships)",
+    COSMETIC_ASSET_SOURCES.cowboy_hat_classic !== undefined && COSMETICS.every((c) => c.assetKey !== "cowboy_hat_classic"));
   check("the layered bald base has an explicit hook for the art pipeline",
     LAYERED_HERO_BASE_SRC === "/sprites/cosmetics/hero_base_bald.png");
-  // With no binaries on this machine, resolution degrades gracefully: the hooked item
-  // falls back to its procedural painter; an unknown id renders nothing.
-  const fallback = resolveOverlay("face_round", "side", 0);
-  check("absent asset falls back to the procedural painter (no fabricated placeholder)",
-    fallback !== null && fallback.mode === "frame");
+  // Sprites are the ONLY cosmetic art: with no image binaries loaded in this headless
+  // harness, resolution yields nothing (never a fabricated placeholder) — a wired id with an
+  // unloaded asset and an unknown id alike resolve to null.
+  check("a wired overlay resolves to NOTHING while its sprite is unloaded (no procedural fallback)",
+    resolveOverlay("face_round", "side", 0) === null);
   check("an unknown id resolves to NOTHING (multiplayer-safe fallback)", resolveOverlay("hat_from_2031", "side", 0) === null);
 }
 
