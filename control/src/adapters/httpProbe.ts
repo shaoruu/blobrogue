@@ -49,7 +49,10 @@ import type {
 // v16: the Wave 1 seeded-randomness layer — the snapshot carries `pcl` (the floor-locked
 // co-op count the client resolves the mutator/affix descriptor with) and the enemy wire
 // carries `afx` (a rolled elite's affix id) for its material tell.
-export const SYNTHETIC_JOIN_PROTOCOL = 16;
+// v17: the Wave 1 DEEP BOSSES (The Sump F35–45) — the enemy wire's closed kind + move sets
+// grew (jet/tithe/tithe_slab/quorum/quorum_shield/quorum_heal/quorum_dmg + mirror/merge);
+// no new struct field (they reuse bph/aux/hp/afs/atk).
+export const SYNTHETIC_JOIN_PROTOCOL = 17;
 
 export interface HttpProbeConfig {
   baseUrl: string;

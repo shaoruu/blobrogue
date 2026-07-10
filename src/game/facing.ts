@@ -74,6 +74,9 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   // stoking, harmonizing and the knell are body beats that keep the movement facing.
   decoy: false, blink: true, seam: true, stoke: false, harmonize: false, knell: false,
   build: false, // a stationary raise: the body keeps its guard/travel facing
+  // Wave 1: JET faces the party as it aims a mirrored salvo; the Quorum merge is a fixed
+  // transformation that keeps its facing.
+  mirror: true, merge: false,
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)

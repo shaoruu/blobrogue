@@ -39,7 +39,21 @@ export type EnemyKind =
   | "echo" | "knell" | "knot" | "sac"
   // Miniboss templates (captain machinery, seeded mid-band cadence — see minibossKindForFloor):
   | "marshal" | "toll"
-  | "boss" | "marrow" | "choir" | "weaver" | "gilded";
+  | "boss" | "marrow" | "choir" | "weaver" | "gilded"
+  // Wave 1 deep-floor bosses (THE UNMAKING / The Sump, F35–45 — see world.ts):
+  //  - jet (F35): the corrupted MIRROR of the party — casts a frozen archetype-based
+  //    MIRROR pool (never live inventory), spent after each corrupted-Resonance salvo
+  //    (the exposed window). 3 phases swap the phase body (jet/jet_phase2/jet_phase3).
+  //  - tithe (F40): the armored FEEDER — builds a feeding SLAB and re-armors behind it;
+  //    destroy the slab before the re-armor channel closes for the exposed window.
+  //  - tithe_slab: the Tithe's SEPARATE destructible feeding slab (a mechanic body, not
+  //    the feeder), 2-state (intact → cracked) as its HP drops; killing it opens the window.
+  //  - quorum (F45): the shared-pool CORE — untargetable behind its three husks until the
+  //    telegraphed merge, then the merge-form with its own widened-recover window.
+  //  - quorum_shield/heal/dmg: the three role-husks sharing the core's ONE pool + ONE
+  //    telegraph; roles gate kill-order (shield guards, heal regens, dmg attacks).
+  | "jet" | "tithe" | "tithe_slab"
+  | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
@@ -73,9 +87,15 @@ export type AttackMove =
   | "fade" | "wail" | "split" | "pounce" | "weave" | "slam" | "sweep" | "brace"
   | "decoy" | "blink" | "seam" | "stoke" | "harmonize" | "knell"
   // The worker verb: a long stationary tell, then ONE persistent construction is raised
-  // (the bailiff's root divider, the mason's clinker L-corner). Never aimed at a body —
-  // the site is the mark.
-  | "build";
+  // (the bailiff's root divider, the mason's clinker L-corner, the Tithe's feeding slab).
+  // Never aimed at a body — the site is the mark.
+  | "build"
+  // JET's corrupted-Resonance salvo: the telegraphed multi-verb barrage drawn from its
+  // frozen archetype MIRROR pool; the spent recover after it is the exposed window.
+  | "mirror"
+  // QUORUM's telegraphed 1.2s NON-invuln transition: the three husks fuse into the
+  // merge-form (the shared telegraph the whole fight builds toward).
+  | "merge";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
@@ -636,5 +656,12 @@ export type SpriteName =
   | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment" | "mason"
   | "echo" | "knell" | "knot" | "sac" | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
+  // Wave 1 deep bosses. JET's body is directional ("jet"); the phase bodies are single-frame
+  // escalation swaps. The Tithe feeder is directional; its slab is a 2-state destructible
+  // (base "tithe_slab" = intact, swapped to "tithe_slab_cracked" as its HP drops). The
+  // Quorum husks are directional; the merge-form is the core's single sprite ("quorum").
+  | "jet" | "jet_phase2" | "jet_phase3"
+  | "tithe" | "tithe_slab" | "tithe_slab_cracked"
+  | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg"
   | "patch"
   | "heart" | "coin" | "gun" | "spit";

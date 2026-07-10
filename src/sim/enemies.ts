@@ -5,9 +5,11 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
+  JET, TITHE, QUORUM,
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
+  jetHpForFloor, titheHpForFloor, quorumHpForFloor,
   captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
@@ -288,6 +290,51 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 36, drawSize: 108, alpha: 1, tint: "#ffd166", kbResist: 8,
     baseHp: GILDED.baseHp, baseSpeed: 26, touchDamage: GILDED.contactDamage, threat: 0,
   },
+  // ---- WAVE 1 deep bosses (The Sump, F35–45) ----
+  // JET (F35): the corrupted MIRROR of the player — a cold remap of the hero silhouette
+  // (64px body). Casts its frozen archetype MIRROR pool; spent after each salvo (§5g).
+  jet: {
+    kind: "jet", sprite: "jet", movement: "boss", isPhasing: false,
+    radius: 22, drawSize: 64, alpha: 1, tint: "#7882aa", kbResist: 6,
+    baseHp: JET.baseHp, baseSpeed: 96, touchDamage: JET.contactDamage, threat: 0,
+  },
+  // THE TITHE (F40): the low/wide armored feeder — builds a slab and re-armors behind it (§5h).
+  tithe: {
+    kind: "tithe", sprite: "tithe", movement: "boss", isPhasing: false,
+    radius: 40, drawSize: 96, alpha: 1, tint: "#c77320", kbResist: 9,
+    baseHp: TITHE.baseHp, baseSpeed: 30, touchDamage: TITHE.contactDamage, threat: 0,
+  },
+  // The Tithe's SEPARATE feeding slab: a stationary 2-state destructible (reads as
+  // architecture). Not the feeder — a mechanic body like the Weaver's knot/sac.
+  tithe_slab: {
+    kind: "tithe_slab", sprite: "tithe_slab", movement: "chase", isPhasing: false,
+    radius: 26, drawSize: 84, alpha: 1, tint: "#c77320", kbResist: 100,
+    baseHp: TITHE.slabBaseHp, baseSpeed: 0, touchDamage: 0, threat: 0,
+  },
+  // QUORUM (F45): the merge-form CORE — untargetable behind its husks until the merge,
+  // then the fused body with its own window. Its sprite is the merge-form (§5i).
+  quorum: {
+    kind: "quorum", sprite: "quorum", movement: "boss", isPhasing: false,
+    radius: 30, drawSize: 100, alpha: 1, tint: "#e8e2d0", kbResist: 8,
+    baseHp: QUORUM.baseHp, baseSpeed: 40, touchDamage: QUORUM.contactDamage, threat: 0,
+  },
+  // The three role-husks (bone family). They share the core's pool + telegraph; roles
+  // gate kill-order (shield guards, heal regens, dmg attacks). Directional 80px bodies.
+  quorum_shield: {
+    kind: "quorum_shield", sprite: "quorum_shield", movement: "chase", isPhasing: false,
+    radius: 22, drawSize: 80, alpha: 1, tint: "#cfc8b6", kbResist: 6,
+    baseHp: 1, baseSpeed: 44, touchDamage: 1, threat: 0,
+  },
+  quorum_heal: {
+    kind: "quorum_heal", sprite: "quorum_heal", movement: "chase", isPhasing: false,
+    radius: 22, drawSize: 80, alpha: 1, tint: "#d8b6e0", kbResist: 6,
+    baseHp: 1, baseSpeed: 48, touchDamage: 1, threat: 0,
+  },
+  quorum_dmg: {
+    kind: "quorum_dmg", sprite: "quorum_dmg", movement: "chase", isPhasing: false,
+    radius: 22, drawSize: 80, alpha: 1, tint: "#e0cdb6", kbResist: 6,
+    baseHp: 1, baseSpeed: 56, touchDamage: 1, threat: 0,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
@@ -321,6 +368,9 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   echo: "brace", knell: "brace", knot: "brace", sac: "brace", // never elite in practice
   marshal: "brace", toll: "brace",
   boss: "brace", marrow: "brace", choir: "brace", weaver: "brace", gilded: "brace",
+  // Wave 1 deep bosses + their satellite bodies never roll elite (bosses/summon-only).
+  jet: "brace", tithe: "brace", tithe_slab: "brace",
+  quorum: "brace", quorum_shield: "brace", quorum_heal: "brace", quorum_dmg: "brace",
 };
 
 export function eliteAffixOf(kind: EnemyKind): EliteAffix {
@@ -332,7 +382,10 @@ export function isBossFloor(floor: number): boolean {
   return floor % BOSS_EVERY === 0;
 }
 
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded"];
+// Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
+// HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
+// boss kinds themselves.
+const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -348,24 +401,35 @@ const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
   weaver: "The Weaver",
   gilded: "The Gilded Warden",
   choir: "The Hollow Choir",
+  jet: "JET",
+  tithe: "The Tithe",
+  quorum: "Quorum",
 };
 
 export function bossDisplayName(kind: EnemyKind): string {
   return BOSS_DISPLAY_NAME[kind] ?? "Boss";
 }
 
-// The canonical first-clear chain (curriculum §0, FINAL): Slime King F5 → Miniboss
-// Gauntlet F10 (a non-boss milestone — see world.ts's gauntlet controller) → Marrow F15 →
-// Weaver F20 → Gilded Warden F25 → Hollow Choir F30. `null` marks the gauntlet slot.
-const AUTHORED_BOSS_LADDER: readonly (EnemyKind | null)[] = ["boss", null, "marrow", "weaver", "gilded", "choir"];
+// The canonical first-clear chain (curriculum §0): Slime King F5 → Miniboss Gauntlet F10
+// (a non-boss milestone — see world.ts's gauntlet controller) → Marrow F15 → Weaver F20 →
+// Gilded Warden F25 → Hollow Choir F30. WAVE 1 extends the authored chain into THE UNMAKING
+// (The Sump): JET F35 → THE TITHE F40 → QUORUM F45 are FIXED fresh bosses (the payoff to
+// "repeats at 35 are boring"). `null` marks the gauntlet slot.
+const AUTHORED_BOSS_LADDER: readonly (EnemyKind | null)[] =
+  ["boss", null, "marrow", "weaver", "gilded", "choir", "jet", "tithe", "quorum"];
 
-// Beyond the authored chain (F35+ endgame), boss floors draw from the full roster, seeded
-// per run — variety between runs, identical across a run's clients/restarts.
-const DEEP_BOSS_ROSTER: readonly EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss"];
+// Beyond the authored chain (F50+ endgame), boss floors draw from the FULL roster (now
+// including the Wave 1 bosses), seeded per run — variety between runs, identical across a
+// run's clients/restarts.
+const DEEP_BOSS_ROSTER: readonly EnemyKind[] =
+  ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
 
-// Each boss floor's kin — the floor's ambient minions and its cadence/beat adds.
+// Each boss floor's kin — the floor's ambient minions and its cadence/beat adds. The Wave 1
+// bosses draw their own thematic kin (ghost mists for JET's hollow mirror, skeletons for the
+// Tithe's gnawed hoard, bone kin for the Quorum husk-family).
 export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   boss: "slime", marrow: "skeleton", choir: "ghost", weaver: "bat", gilded: "shielder",
+  jet: "ghost", tithe: "skeleton", quorum: "skeleton",
 };
 
 // The F10 Arena Gauntlet floor (curriculum §2): sequential authored minibosses instead of
@@ -419,9 +483,10 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
-// treats the authored finale (the Choir) as its predecessor.
+// treats the authored finale before the rotation (the F45 Quorum) as its predecessor, so
+// the first seeded floor (F50) never repeats it.
 function deepBossIndex(seed: number, step: number): number {
-  let prev = DEEP_BOSS_ROSTER.indexOf("choir");
+  let prev = DEEP_BOSS_ROSTER.indexOf("quorum");
   for (let s = 0; ; s++) {
     let pick = new Rng((seed ^ 0xB055ED) + s * 2654435761).int(0, DEEP_BOSS_ROSTER.length - 1);
     if (pick === prev) pick = (pick + 1) % DEEP_BOSS_ROSTER.length;
@@ -439,6 +504,9 @@ export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
     case "choir": return choirHpForFloor(floor);
     case "weaver": return weaverHpForFloor(floor);
     case "gilded": return gildedHpForFloor(floor);
+    case "jet": return jetHpForFloor(floor);
+    case "tithe": return titheHpForFloor(floor);
+    case "quorum": return quorumHpForFloor(floor);
     default: return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
   }
 }
@@ -543,6 +611,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
 const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.entranceGrace, marrow: MARROW.entranceGrace, choir: CHOIR.entranceGrace,
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
+  jet: JET.entranceGrace, tithe: TITHE.entranceGrace, quorum: QUORUM.entranceGrace,
 };
 
 // The summoner bosses run a cadence add drip; the Choir's timer paces its earned-window

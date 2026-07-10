@@ -16,6 +16,8 @@ import { injectDevStyles } from "./styles.js";
 const ENEMY_KINDS: readonly EnemyKind[] = [
   "slime", "bat", "skeleton", "ghost", "spitter", "charger", "burrower", "orbiter", "shielder",
   "boss", "marrow", "choir", "weaver", "gilded",
+  // Wave 1 deep bosses (spawn the core; it raises its own husks / slabs / mirror pool).
+  "jet", "tithe", "quorum",
 ];
 const WEAPON_IDS: readonly WeaponId[] = [
   "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",

@@ -405,6 +405,8 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   stoke: "#ff8a3b",   // sinderling self-arming channel: gathering embers
   harmonize: "#bfe9ff", // fragment tether pulse: the Choir's cold light
   knell: "#c9b458",   // The Toll's expanding sound ring: bronze
+  mirror: "#8a7bd8",  // JET's corrupted-Resonance salvo: cold indigo mirror-light
+  merge: "#e8d9b0",   // QUORUM's fuse-merge: pale bone gather
 };
 
 // The elite affix's ground-ring accent (derived from kind — the affix table is pure sim
@@ -5383,6 +5385,13 @@ export class Game {
         this.renderChoirSplit(e, sx, sy, drawSize, anim.clock);
         continue;
       }
+      // QUORUM: the shared-HP CORE is hidden behind its husks until the merge — draw the
+      // code-drawn amber tether that links the husks (the shared-HP tell) and skip the body.
+      // Once merged (phase 2) the fused merge-form draws normally below.
+      if (e.kind === "quorum" && (e.boss?.phase ?? 1) < 2) {
+        this.renderQuorumTether(e);
+        continue;
+      }
       // The Weaver airborne: no body to shoot — just the falling shadow on its landing mark.
       if (e.kind === "weaver" && a.move === "pounce" && a.phase === "active") {
         this.renderDangerDisc(a.markX, a.markY, WEAVER.pounceRadius, 1);
@@ -5433,7 +5442,17 @@ export class Game {
       // The AD drop-in ladder: attack_<facing> -> attack -> walk_<facing> -> legacy
       // walk/idle -> static + procedural (see facing.ts). New directional/attack sheets
       // light up per sprite with zero further render changes.
-      const choice = this.sprites.selectClip(arch.sprite, pose);
+      // JET swaps its whole body by fight phase (the escalation reads on the body): P1 the
+      // directional uncanny mirror, P2 the desaturated out-of-sync frame, P3 the hot-veined
+      // enrage. The Tithe's slab swaps intact -> cracked in place as its HP drops.
+      let spriteName = arch.sprite;
+      if (e.kind === "jet") {
+        const ph = e.boss?.phase ?? 1;
+        spriteName = ph >= 3 ? "jet_phase3" : ph === 2 ? "jet_phase2" : "jet";
+      } else if (e.kind === "tithe_slab" && e.hp <= e.maxHp * 0.5) {
+        spriteName = "tithe_slab_cracked";
+      }
+      const choice = this.sprites.selectClip(spriteName, pose);
       const facing = choice.isMirrored ? -1 : 1;
       const xf = characterXform(anim, isBoss ? BOSS_STYLE : CHARACTER_STYLE);
       let extra = 1;
@@ -5457,7 +5476,7 @@ export class Game {
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
-      this.drawChar(arch.sprite, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, null, choice.isHoldFirstFrame);
+      this.drawChar(spriteName, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, null, choice.isHoldFirstFrame);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
@@ -5500,7 +5519,8 @@ export class Game {
       // An earned-window boss wears its state: a thread-dim guard rim while GUARDED, a
       // blazing core through the EXPOSED window (aux = the authoritative remainder —
       // the Warden's plate below renders its own gold flavor of the same read).
-      if (e.kind === "weaver" || e.kind === "marrow" || e.kind === "choir") {
+      if (e.kind === "weaver" || e.kind === "marrow" || e.kind === "choir"
+        || e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum") {
         this.renderEarnedWindow(e, sx, sy, drawSize);
       }
       // The fragment's tether: the authoritative source id rides aux; the line IS the lane.
@@ -5517,9 +5537,13 @@ export class Game {
 
       const barW = isBoss ? 64 : 32;
       const barY = sy - drawSize / 2 - 8;
+      // QUORUM husks share the core's pool (shown on the HUD boss bar + the tether), so their
+      // own floating bar reads their BREAK INTEGRITY (aux) in amber — the "focus this husk" tell.
+      const isHusk = e.kind === "quorum_shield" || e.kind === "quorum_heal" || e.kind === "quorum_dmg";
+      const barFrac = isHusk ? e.aux : Math.max(0, e.hp / e.maxHp);
       ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 4);
-      ctx.fillStyle = isBoss ? "#ffb43b" : "#ff5a5a";
-      ctx.fillRect(sx - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), 4);
+      ctx.fillStyle = isHusk ? "#c77320" : isBoss ? "#ffb43b" : "#ff5a5a";
+      ctx.fillRect(sx - barW / 2, barY, barW * barFrac, 4);
     }
   }
 
@@ -6161,6 +6185,55 @@ export class Game {
     ctx.lineTo(src.x - cam.x, src.y - cam.y);
     ctx.stroke();
     ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
+  }
+
+  // QUORUM's code-drawn amber TETHER (per the QUORUM manifest): a taut amber line linking
+  // every living husk (and back to the fused core point). Its thickness/tautness reads the
+  // SHARED HP (the core pool fraction); it visibly snaps when a husk dies (that body simply
+  // drops out of the ring); and it leans HARDEST toward the "next to act" husk — the core's
+  // mark point (atk.mx/my), set to the lead husk while a shared telegraph is charging. There
+  // is exactly one Quorum core per floor, so every live husk on the field belongs to it.
+  private renderQuorumTether(core: Enemy) {
+    const husks = this.enemies.filter((o) => !o.dead
+      && (o.kind === "quorum_shield" || o.kind === "quorum_heal" || o.kind === "quorum_dmg"));
+    if (husks.length === 0) return;
+    const { ctx, renderCam: cam } = this;
+    const pool = Math.max(0, Math.min(1, core.hp / core.maxHp));
+    const a = core.attack;
+    const isCharging = a.phase === "windup" && a.move === "radial";
+    // The lead husk (nearest the core's mark point): the tether pulls hardest to it.
+    let lead: Enemy | null = null;
+    if (isCharging) {
+      let best = Infinity;
+      for (const h of husks) {
+        const d = Math.hypot(h.x - a.markX, h.y - a.markY);
+        if (d < best) { best = d; lead = h; }
+      }
+    }
+    // The shared centroid the husks orbit — the fused-core point the merge collapses toward.
+    let cx = 0, cy = 0;
+    for (const h of husks) { cx += h.x; cy += h.y; }
+    cx /= husks.length; cy /= husks.length;
+    ctx.save();
+    ctx.lineCap = "round";
+    const draw = (x0: number, y0: number, x1: number, y1: number, lead2: boolean): void => {
+      // Thicker/brighter with more shared HP; the lead husk's spoke pulls hardest.
+      ctx.globalAlpha = (lead2 ? 0.85 : 0.5) * (0.4 + 0.6 * pool);
+      ctx.strokeStyle = lead2 ? "#ffb43b" : "#c77320";
+      ctx.lineWidth = (lead2 ? 3.5 : 2) + 3 * pool + (lead2 && isCharging ? 2.5 * a.windup : 0);
+      ctx.beginPath();
+      ctx.moveTo(x0 - cam.x, y0 - cam.y);
+      ctx.lineTo(x1 - cam.x, y1 - cam.y);
+      ctx.stroke();
+    };
+    // Spokes from the shared centroid to each husk (the shared-pool web).
+    for (const h of husks) draw(cx, cy, h.x, h.y, lead !== null && h.id === lead.id);
+    // The husk-to-husk ring (drops a segment the instant a husk dies — the visible snap).
+    for (let i = 0; i < husks.length; i++) {
+      const h0 = husks[i], h1 = husks[(i + 1) % husks.length];
+      if (husks.length > 1) draw(h0.x, h0.y, h1.x, h1.y, false);
+    }
     ctx.restore();
   }
 

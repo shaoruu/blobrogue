@@ -938,9 +938,11 @@ function curriculumTests(): void {
 function rotationTests(): void {
   section("the curriculum chain: King F5 / Gauntlet F10 / Marrow F15 / Weaver F20 / Warden F25 / Choir F30");
   {
-    // Curriculum §0 (FINAL): the first-clear chain is locked for every seed.
+    // Curriculum §0: the first-clear chain is locked for every seed. WAVE 1 extends the
+    // authored chain into The Sump — F35 JET / F40 THE TITHE / F45 QUORUM are FIXED bosses.
     const ladder: Array<[number, EnemyKind | null]> = [
       [5, "boss"], [10, null], [15, "marrow"], [20, "weaver"], [25, "gilded"], [30, "choir"],
+      [35, "jet"], [40, "tithe"], [45, "quorum"],
     ];
     let authoredOk = true;
     for (let s = 0; s < 40; s++) {
@@ -948,19 +950,20 @@ function rotationTests(): void {
         if (bossKindForFloor(0xAAA + s * 131, floor) !== kind) authoredOk = false;
       }
     }
-    check("the locked first-clear chain holds for every seed (F10 is the gauntlet, not a boss)", authoredOk);
+    check("the locked first-clear chain (incl. Wave 1 F35/F40/F45) holds for every seed", authoredOk);
     check("F10 is the authored Miniboss Gauntlet floor", isGauntletFloor(10) && !isGauntletFloor(15));
   }
   {
-    // Beyond the authored chain (F35+ endgame): seeded, deterministic, varied, no
-    // immediate repeats — including the F30 Choir finale boundary.
+    // Beyond the authored chain (F50+ endgame): seeded, deterministic, varied, no immediate
+    // repeats — including the F45 Quorum finale boundary. The deep roster now holds all eight.
+    const roster: EnemyKind[] = ["marrow", "choir", "weaver", "gilded", "boss", "jet", "tithe", "quorum"];
     const seen = new Set<EnemyKind>();
     let deterministic = true;
     let noRepeats = true;
-    for (let s = 0; s < 60; s++) {
+    for (let s = 0; s < 80; s++) {
       const seed = 0x5EED + s * 977;
-      let prev: EnemyKind | null = "choir";
-      for (let floor = 35; floor <= 65; floor += 5) {
+      let prev: EnemyKind | null = "quorum"; // the F45 authored finale before the rotation
+      for (let floor = 50; floor <= 95; floor += 5) {
         const a = bossKindForFloor(seed, floor);
         if (a !== bossKindForFloor(seed, floor)) deterministic = false;
         if (a === null || a === prev) noRepeats = false;
@@ -969,8 +972,8 @@ function rotationTests(): void {
       }
     }
     check("the deep pick is a pure function of (seed, floor)", deterministic);
-    check("no boss repeats back-to-back deep (nor against the F30 finale)", noRepeats);
-    check("all five bosses appear across deep seeds", seen.size === 5, [...seen].join(","));
+    check("no boss repeats back-to-back deep (nor against the F45 finale)", noRepeats);
+    check("every deep-roster boss appears across deep seeds", roster.every((k) => seen.has(k)), [...seen].join(","));
   }
   {
     // Every authored boss floor spawns its boss with the matching kin.

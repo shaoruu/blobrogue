@@ -149,7 +149,11 @@ function twoWaveGates(): void {
   check("every Wave-B body declares what it synthesizes", bKinds.every((k) => (WAVE_B_SYNTHESIS[k]?.length ?? 0) > 0));
   // Every synthesis source is a Wave-A teacher already met by the B-body's first
   // possible appearance (the miniboss cadence starts F13; decoys ride their owners).
-  const B_FIRST_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = { echo: 13, knell: 13, knot: 20, sac: 20, marshal: 13, toll: 13 };
+  const B_FIRST_FLOOR: Readonly<Partial<Record<EnemyKind, number>>> = {
+    echo: 13, knell: 13, knot: 20, sac: 20, marshal: 13, toll: 13,
+    // Wave 1 boss mechanic bodies first appear on their boss floors (F40/F45).
+    tithe_slab: 40, quorum_shield: 45, quorum_heal: 45, quorum_dmg: 45,
+  };
   check("every synthesized verb was TAUGHT first (source intro <= B first floor)",
     bKinds.every((k) => (WAVE_B_SYNTHESIS[k] ?? []).every((src) =>
       ENEMY_WAVE[src] === "A" && (FAMILY_INTRO_FLOOR[src] ?? Infinity) <= (B_FIRST_FLOOR[k] ?? 0))));

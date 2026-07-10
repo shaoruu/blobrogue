@@ -1004,6 +1004,9 @@ export function phaseTimerFor(base: number, r: number): number {
 // solo median wall-clock over its three phases).
 export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: 16, marrow: 15, weaver: 13, gilded: 15, choir: 17,
+  // Wave 1 deep bosses. Quorum has one transition (husks → merge), so its budget is the
+  // two-stage median rather than a three-phase one.
+  jet: 15, tithe: 16, quorum: 16,
 };
 
 // One curated pool entry: a known readable creature at a tier, weighted for the draw.
@@ -1382,6 +1385,204 @@ export const GILDED = {
 
 export function gildedHpForFloor(floor: number): number {
   return anchoredBossHp(GILDED.baseHp, GILDED.baseHpFloor, floor);
+}
+
+// ---- WAVE 1 DEEP BOSSES (THE UNMAKING / The Sump, F35–45) ----
+// All three ride the same earned-window plumbing as the F15–30 roster: guarded body +
+// a PLAYER-CREATED exposed window + telegraphed surprise (≥0.6s tell, walk-dodgeable,
+// ≥0.30s post-lock, ≥0.35s recover), HP calibrated on EXPOSED time (never a sponge),
+// and co-op scaling the TASK (not just HP). They slot onto the deep-floor progression
+// to replace the "repeats at 35 are boring" problem with three fresh authored fights.
+
+// ---- §5g JET (F35): the corrupted MIRROR of the party ----
+// JET mirrors the ARCHETYPE of the party's weapons — never their live inventory. Its
+// MIRROR POOL is a frozen set of "Resonance families" resolved once at the pull (like
+// the R sample): distinct families present across the party, seeded-padded to a minimum,
+// capped. Each family maps to ONE authored mirrored VERB (a bullet pattern JET performs).
+// The fight window: survive a corrupted-Resonance salvo → JET is SPENT → its recover is
+// the exposed window (the Gilded commitment-recover model). 3 phases swap the body
+// (uncanny → out-of-sync canon → inverted/room-drain). Simultaneous verbs are capped to
+// the telegraph budget (fewer at 4P), so co-op grows the POOL (task), never the soup.
+
+// The authored Resonance families JET can mirror — the ARCHETYPE buckets, not weapons.
+export type ResonanceFamily = "spread" | "rapid" | "lance" | "arc" | "lob" | "melee";
+
+// The stable family order (determinism: the frozen loadout is built in this order).
+export const RESONANCE_FAMILIES: readonly ResonanceFamily[] = ["spread", "rapid", "lance", "arc", "lob", "melee"];
+
+// Weapon ARCHETYPE → Resonance family. JET reads a weapon's family, NEVER its identity or
+// stats — two different weapons of the same family produce the SAME mirrored verb (the
+// archetype-not-inventory contract, locked by test).
+export const WEAPON_RESONANCE: Readonly<Record<WeaponId, ResonanceFamily>> = {
+  pistol: "lance", shotgun: "spread", rapid: "rapid",
+  smg: "rapid", cannon: "lob", burst: "spread", ricochet: "arc", homing: "arc", tesla: "arc",
+  sawnoff: "spread", railgun: "lance", nailer: "rapid", flamer: "lance", mortar: "lob", beam: "lance",
+  sword: "melee", longsword: "melee", spear: "melee",
+  lastlight: "lance", breach: "lob", snapwire: "lob", frostline: "lob", halo: "lob", sentry: "lob", crook: "melee",
+  reaper: "arc", swarm: "rapid", midas: "lance", phase: "lance", vortex: "lob",
+};
+
+export function weaponResonanceFamily(id: WeaponId): ResonanceFamily {
+  return WEAPON_RESONANCE[id];
+}
+
+export const JET = {
+  // Calibrated on EXPOSED time like the deep roster (the spent-recover windows are the
+  // only full-damage time). Anchored at F35; rides the clamped §3 curve above F35.
+  baseHp: 760,
+  baseHpFloor: 35,
+  guardMult: 0.32,        // GUARDED between salvos (reduction, never immunity)
+  spentExpose: 3.2,       // seconds of EXPOSED the "he's spent" recover opens
+  windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // between salvos, per phase
+  // The corrupted-Resonance salvo: a telegraphed multi-verb barrage, then the spent recover.
+  mirrorWindup: 0.75,     // the tell (≥0.6s)
+  mirrorLock: 0.4,        // aim locks here — 0.75-0.4 = 0.35s post-lock dodge (≥0.30)
+  mirrorActive: 0.35,     // the emission beat
+  spentRecover: 3.2,      // the exposed window (= spentExpose)
+  canonOffset: 0.16,      // P2 "out-of-sync canon": the staggered second verb's delay
+  // The frozen mirror pool: distinct party families, padded up to verbMinSeeded with
+  // seeded families, capped at verbMax. Bigger party = more distinct families = a bigger
+  // pool cycled one salvo at a time (the co-op TASK grows, the per-salvo read does not).
+  verbMax: 4,
+  verbMinSeeded: 2,
+  // Simultaneous verbs per salvo, clamped to the 4-player telegraph budget: solo/duo may
+  // read 2 at once, trio/quad only 1 (readability over raw pressure at 4P).
+  simulCapFor: [0, 2, 2, 1, 1] as readonly number[], // by snapshotted players 1..4
+  phaseSimul: [0, 1, 2, 2] as readonly number[],      // the salvo's desire, per phase 1..3
+  // The mirrored bullet verbs (shared shard kinematics; the PATTERN is the archetype tell).
+  globSpeed: 250, globRadius: 8, globDamage: 1, globLife: 2.6,
+  spreadCount: 5, spreadArc: 0.9,     // spread family: a wide fan
+  rapidCount: 4, rapidGap: 0.06,      // rapid family: a fast aimed stream (staggered in active)
+  lanceSpeed: 460,                    // lance family: a fast locked line
+  arcCount: 10,                       // arc family: a full ring (the "bounce/chain/seek" mirror)
+  lobRadius: 74,                      // lob family: a marked bloom (a telegraphed charge)
+  meleeReach: 150, meleeDamage: 2,    // melee family: a lunge strike at the locked bearing
+  // P3 room-drain: a scatter of telegraphed charge blooms (the shared walk-dodgeable hazard)
+  // laid around the party as the room "drains" — layered on the inverted salvos.
+  drainCount: 3, drainSpread: 150,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  // Transition beat: a fixed roar (the amber-motif dead note), King/Gilded semantics.
+  roarDuration: 1.2,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 70,
+  shardRadius: 8,
+} as const;
+
+export function jetHpForFloor(floor: number): number {
+  return anchoredBossHp(JET.baseHp, JET.baseHpFloor, floor);
+}
+
+// A solo party is capped at soloGearCap R; a fixed simultaneous cap for the salvo. The
+// clamp is a pure function of the SNAPSHOTTED player count (frozen at the pull) — never
+// a per-draw player-count branch.
+export function jetSimulCapFor(players: number): number {
+  return JET.simulCapFor[Math.max(1, Math.min(4, players))];
+}
+
+// ---- §5h THE TITHE (F40): the armored FEEDER ----
+// A heavy low-wide feeder gorged on the party's stolen amber. It BUILDS a feeding SLAB
+// and RE-ARMORS behind it — GUARDED while it feeds. The window: destroy the slab before
+// the re-armor channel closes → the feeder is EXPOSED. Missing it COSTS (no window, more
+// pressure) but always LOOPS (it feeds again — never a dead end). Co-op = MORE / THICKER
+// slabs (the task), never a shorter channel. The slab is a SEPARATE 2-state destructible.
+
+export const TITHE = {
+  // Heavier body than the lean roster, but calibrated on EXPOSED time: the windows are
+  // gated behind slab-TTK, so the bar is not a sponge — the slab is the pacing.
+  baseHp: 940,
+  baseHpFloor: 40,
+  guardMult: 0.30,        // GUARDED while armored / re-armoring behind the slab
+  slabExpose: 3.5,        // seconds of EXPOSED opened by breaking the slab in time
+  windowBankFrac: 0.40,
+  contactDamage: 2,
+  entranceGrace: 1.2,
+  attackCd: [0, 3.2, 2.9, 2.5] as readonly number[],
+  // The feed cycle: a build tell (amber ooze rising the seams), then the re-armor channel
+  // behind the raised slab(s). Break every slab before the channel elapses for the window.
+  feedEvery: [0, 2.0, 1.8, 1.6] as readonly number[], // cadence gap after a feed resolves
+  buildWindup: 0.8,       // the ooze-rising tell (≥0.6s)
+  rearmChannel: 3.0,      // seconds to re-armor — the slab must die inside ~60-70% of this
+  slabsFor: [0, 1, 1, 2, 2] as readonly number[],       // slabs per feed by snapshotted players
+  slabThickFor: [0, 1.0, 1.0, 1.25, 1.4] as readonly number[], // co-op = THICKER slabs (HP mult)
+  slabBaseHp: 46,         // slab HP anchor at F40 (per slab); scales on the floor curve
+  slabHpFloor: 40,
+  slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
+  slabOffset: 0.5,        // …offset off the direct axis (rad) so a line-of-sight lane always stays
+  // Offense between feeds: a heavy amber ring, occasionally a denser double ring (P3).
+  radialWindup: 0.8,
+  radialRecover: 0.7,
+  radialCount: 12,
+  globSpeed: 230, globRadius: 8, globDamage: 1, globLife: 2.8,
+  shardRadius: 8,
+  phaseAt: [0.66, 0.33] as readonly number[],
+  phaseFloor: [0.58, 0.25] as readonly number[],
+  // Transition beat: a feeder bellow (roar semantics), no adds.
+  roarDuration: 1.2,
+  roarDamageReduction: 0.35,
+  roarBulletClearRadius: 70,
+} as const;
+
+export function titheHpForFloor(floor: number): number {
+  return anchoredBossHp(TITHE.baseHp, TITHE.baseHpFloor, floor);
+}
+
+// One slab's HP: the anchor ridden up the §3 curve, thickened by the snapshotted party.
+export function titheSlabHpForFloor(floor: number, players: number): number {
+  const thick = TITHE.slabThickFor[Math.max(1, Math.min(4, players))];
+  return Math.max(1, Math.round(anchoredBossHp(TITHE.slabBaseHp, TITHE.slabHpFloor, floor) * thick));
+}
+
+// ---- §5i QUORUM (F45): three husks, ONE shared pool + ONE telegraph ----
+// Three hollow bone husks (SHIELD / HEAL / DMG) share ONE HP pool (the boss bar) and ONE
+// telegraph (the core drives it; the lead husk shows it). Roles are LOAD-BEARING so
+// kill-order is real: while the SHIELD husk lives the pool is GUARDED (chip); while the
+// HEAL husk lives the pool REGENERATES — so 4P crossfire that nukes the pool evenly makes
+// no progress. Break a husk (focus its integrity) to end its role; the tether snaps + yanks.
+// At the merge threshold a telegraphed 1.2s NON-invuln MERGE fuses the husks into the
+// merge-form, which gets its OWN earned window with a widened ≥0.45s recover.
+
+export const QUORUM = {
+  baseHp: 800,            // the SHARED pool (calibrated on exposed time)
+  baseHpFloor: 45,
+  guardMult: 0.30,        // pool GUARDED while a higher-priority husk lives / merge-closed
+  windowBankFrac: 0.40,
+  contactDamage: 2,
+  entranceGrace: 1.4,
+  // Husks: 3 role bodies orbiting the core, sharing the pool.
+  huskRingDist: 120,
+  huskIntegrityFrac: 0.20, // each husk's break meter as a fraction of the pool max
+  healRegenPerSec: 10,     // the HEAL husk regenerates the pool while alive (undo lazy chip)
+  // The ONE shared telegraph (core-driven): a converging amber ring the lead husk shows.
+  attackCd: [0, 2.8, 2.2] as readonly number[], // phase 1 (husks), phase 2 (merged)
+  volleyWindup: 0.75,      // the shared tell (≥0.6s)
+  volleyLock: 0.42,        // 0.75-0.42 = 0.33s post-lock (≥0.30)
+  volleyRecover: 0.6,
+  radialCount: 9,
+  globSpeed: 220, globRadius: 8, globDamage: 1, globLife: 2.6,
+  shardRadius: 8,
+  // Merge: telegraphed 1.2s NON-invuln transition at the threshold.
+  mergeThreshold: 0.45,    // pool fraction that triggers the merge beat
+  mergeFloor: 0.40,        // the anti-burst floor (queued overflow lands after the merge)
+  mergeDuration: 1.2,
+  mergeDamageReduction: 0.0, // NON-invuln — keep damaging it through the merge
+  mergeBulletClearRadius: 60,
+  // Merge-form: faster commitment → widened recover window (≥0.45s), the merge-form's own
+  // earned window. A radial commitment opens the exposed recover, bank-capped like the rest.
+  mergeRadialWindup: 0.7,
+  mergeRadialActive: 0.3,
+  mergeRecover: 0.5,       // the EXPOSED window (widened ≥0.45)
+  mergeRadialCount: 12,
+  mergeSpeed: 250,
+  phaseAt: [0.45] as readonly number[],  // one transition: husks → merge-form
+  phaseFloor: [0.40] as readonly number[],
+} as const;
+
+export function quorumHpForFloor(floor: number): number {
+  return anchoredBossHp(QUORUM.baseHp, QUORUM.baseHpFloor, floor);
 }
 
 // ---- §5f the F10 MINIBOSS GAUNTLET (corrected gate §3, exact formula) ----
