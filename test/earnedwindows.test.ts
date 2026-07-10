@@ -125,12 +125,12 @@ function mechanicOnlyGates(): void {
   section("windows are PLAYER-CREATED: no exposure ever arrives as a timed gift (Weaver, 20s idle)");
   {
     const { w, boss } = bossArena(0xEA20, 20, "weaver");
-    let everExposed = false;
+    let isEverExposed = false;
     for (let t = 0; t < 60 * 20; t++) {
       step(w, idle(t));
-      if (isBossExposed(boss)) everExposed = true;
+      if (isBossExposed(boss)) isEverExposed = true;
     }
-    check("20 untouched seconds never expose the Weaver", !everExposed && !boss.dead);
+    check("20 untouched seconds never expose the Weaver", !isEverExposed && !boss.dead);
     check("its lattice stood for the taking the whole time (knots laid, none gifted a window)",
       liveOf(w, "knot").length > 0 || w.hazards.some((h) => h.kind === "web"));
   }
@@ -200,8 +200,8 @@ function mechanicOnlyGates(): void {
   {
     const { w, boss } = bossArena(0xEA23, 20, "weaver");
     // Walk the machine until it commits a blink (P1 weave→blink alternation).
-    let snagged = false;
-    for (let t = 0; t < 60 * 40 && !snagged; t++) {
+    let isSnagged = false;
+    for (let t = 0; t < 60 * 40 && !isSnagged; t++) {
       step(w, idle(t));
       if (boss.attack.move === "blink" && boss.attack.phase === "windup" && boss.boss!.laneKnotId > 0) {
         const lane = w.enemies.find((e) => !e.dead && e.id === boss.boss!.laneKnotId - 1);
@@ -209,13 +209,13 @@ function mechanicOnlyGates(): void {
         if (lane) {
           plantBullet(w, lane.x, lane.y, 500, 12);
           step(w, idle(t + 1));
-          snagged = boss.attack.move === "crash";
+          isSnagged = boss.attack.move === "crash";
         }
         break;
       }
     }
     check("shooting the lane's knot snags the blink into a crash stagger + window",
-      snagged && isBossExposed(boss));
+      isSnagged && isBossExposed(boss));
   }
 
   section("Weaver P3 MIRROR FEINT: read the real body; spraying a weft extends guarded");
@@ -227,18 +227,18 @@ function mechanicOnlyGates(): void {
     step(w);
     for (let t = 0; t < 60 * 4; t++) step(w, idle(t));
     check("P3 reached", boss.boss!.phase === 3);
-    let read = false;
-    for (let t = 0; t < 60 * 30 && !read; t++) {
+    let isRead = false;
+    for (let t = 0; t < 60 * 30 && !isRead; t++) {
       step(w, idle(t));
       if (boss.attack.move === "decoy" && boss.attack.phase === "recover") {
         check("the feint split real wefts (clearly-dimmer afterimages)", liveOf(w, "weft").length > 0,
           `wefts=${liveOf(w, "weft").length}`);
         plantBullet(w, boss.x, boss.y, 30, 12);
         step(w, idle(t + 1));
-        read = isBossExposed(boss);
+        isRead = isBossExposed(boss);
       }
     }
-    check("a direct hit on the REAL Weaver inside the feint recovery unravels it (4s window)", read);
+    check("a direct hit on the REAL Weaver inside the feint recovery unravels it (4s window)", isRead);
     check("the resolved feint crumbles every remaining weft", liveOf(w, "weft").length === 0);
   }
   {
@@ -248,8 +248,8 @@ function mechanicOnlyGates(): void {
     plantBullet(w, boss.x, boss.y, 1);
     step(w);
     for (let t = 0; t < 60 * 4; t++) step(w, idle(t));
-    let sprayed = false;
-    for (let t = 0; t < 60 * 30 && !sprayed; t++) {
+    let isSprayed = false;
+    for (let t = 0; t < 60 * 30 && !isSprayed; t++) {
       step(w, idle(t));
       const weft = liveOf(w, "weft")[0];
       if (weft && boss.attack.move === "decoy" && boss.attack.phase === "recover") {
@@ -257,7 +257,7 @@ function mechanicOnlyGates(): void {
         const cd0 = boss.attack.cooldown;
         plantBullet(w, weft.x, weft.y, 50, 10);
         step(w, idle(t + 1));
-        sprayed = true;
+        isSprayed = true;
         check("the shot weft bursts into MORE web", w.hazards.filter((h) => h.kind === "web").length > webs0);
         check("the feint resolves unread: no window, guarded extended",
           !isBossExposed(boss) && boss.attack.move === "none"
@@ -265,7 +265,7 @@ function mechanicOnlyGates(): void {
           `cd=${boss.attack.cooldown.toFixed(2)}`);
       }
     }
-    check("a weft was sprayed during a feint", sprayed);
+    check("a weft was sprayed during a feint", isSprayed);
   }
 
   section("MARROW: only the baited wall crash opens its window");
@@ -311,12 +311,12 @@ function mechanicOnlyGates(): void {
   section("Gilded Warden: the committed quake opens its recover as the window");
   {
     const { w, boss } = bossArena(0xEA28, 25, "gilded");
-    let opened = false;
-    for (let t = 0; t < 60 * 12 && !opened; t++) {
+    let isOpened = false;
+    for (let t = 0; t < 60 * 12 && !isOpened; t++) {
       step(w, idle(t));
-      if (isBossExposed(boss)) opened = boss.attack.phase === "recover";
+      if (isBossExposed(boss)) isOpened = boss.attack.phase === "recover";
     }
-    check("the slam/sweep recover IS the exposed window", opened);
+    check("the slam/sweep recover IS the exposed window", isOpened);
   }
 }
 
@@ -380,14 +380,14 @@ function transitionGates(): void {
     && enter.t === "bossTransition" && enter.queued > 0,
     `hp=${(boss.hp / boss.maxHp * 100).toFixed(0)}%`);
   let ticks = 0;
-  let dead = false;
-  while (!dead && ticks < 60 * 20) {
+  let isDead = false;
+  while (!isDead && ticks < 60 * 20) {
     const e2 = step(w, idle(ticks + 1));
-    if (e2.some((e) => e.t === "enemyKill" && e.kind === "weaver")) dead = true;
+    if (e2.some((e) => e.t === "enemyKill" && e.kind === "weaver")) isDead = true;
     ticks++;
   }
   check("the boss dies only after BOTH molt beats resolve the queued overflow",
-    dead && ticks * DT >= 2 * WEAVER.moltDuration, `death at ${(ticks * DT).toFixed(2)}s`);
+    isDead && ticks * DT >= 2 * WEAVER.moltDuration, `death at ${(ticks * DT).toFixed(2)}s`);
   check("boss death ends danger: knots/wefts/adds despawn and the floor clears", isFloorCleared(w),
     `enemies=${w.enemies.filter((e) => !e.dead).length}`);
 }
@@ -451,16 +451,16 @@ function noSoftLockGates(): void {
   for (const [kind, floor] of rows) {
     const { w, boss } = bossArena(0xEA60 + floor, floor, kind);
     let ticks = 0;
-    let dead = false;
-    while (!dead && ticks < 60 * 60) {
+    let isDead = false;
+    while (!isDead && ticks < 60 * 60) {
       // Big flat chip planted straight on the boss — no knots, no baits, no reads.
       if (ticks % 6 === 0 && !boss.dead) plantBullet(w, boss.x, boss.y, 40, 26);
       const evs = step(w, idle(ticks));
-      if (evs.some((e) => e.t === "enemyKill" && e.kind === kind)) dead = true;
+      if (evs.some((e) => e.t === "enemyKill" && e.kind === kind)) isDead = true;
       ticks++;
     }
-    check(`${kind} dies to pure guarded chip inside 60s of sustained fire`, dead,
-      dead ? `at ${(ticks * DT).toFixed(1)}s` : `alive hp=${boss.hp.toFixed(0)}`);
+    check(`${kind} dies to pure guarded chip inside 60s of sustained fire`, isDead,
+      isDead ? `at ${(ticks * DT).toFixed(1)}s` : `alive hp=${boss.hp.toFixed(0)}`);
   }
 }
 
@@ -494,17 +494,17 @@ function surfaceGates(): void {
   section("surface: guard/exposed state rides the aux channel; knots/wefts pay threat, drop nothing");
   {
     const { w, boss } = bossArena(0xEA80, 25, "gilded");
-    let checked = false;
-    for (let t = 0; t < 60 * 12 && !checked; t++) {
+    let isChecked = false;
+    for (let t = 0; t < 60 * 12 && !isChecked; t++) {
       step(w, idle(t));
       if (isBossExposed(boss)) {
         step(w, idle(t + 1)); // aux mirrors on the next timer tick
         check("the boss's aux mirrors its exposed remainder (the client's render key)",
           boss.aux > 0 && Math.abs(boss.aux - boss.boss!.exposed) < 2 * DT, `aux=${boss.aux.toFixed(2)}`);
-        checked = true;
+        isChecked = true;
       }
     }
-    check("an exposed window was observed on the Warden", checked);
+    check("an exposed window was observed on the Warden", isChecked);
   }
   check("knots and wefts carry real threat cost (summons hold live budget)",
     ENEMY_ARCHETYPES.knot.threat > 0 && ENEMY_ARCHETYPES.weft.threat > 0);
@@ -534,12 +534,12 @@ function surfaceGates(): void {
       knot = liveOf(w, "knot")[0];
     }
     knot!.aux = 0.01;
-    let sawWindowFromExpiry = false;
+    let isWindowFromExpiry = false;
     for (let t = 0; t < 30; t++) {
       step(w, idle(t));
-      if (isBossExposed(boss)) sawWindowFromExpiry = true;
+      if (isBossExposed(boss)) isWindowFromExpiry = true;
     }
-    check("an expired knot never opens a window (debris only)", !sawWindowFromExpiry);
+    check("an expired knot never opens a window (debris only)", !isWindowFromExpiry);
   }
 }
 
