@@ -22,7 +22,9 @@ I iterate through this until done. Newest feedback appended; status kept current
 ## CONTENT — more of (Ian loves it)
 🟡 MORE HATS / COSMETICS (asked 3×) — art director speccing 8-12 hats + face items; I generate via pipeline. [specced]
 🟡 MORE BLESSINGS — Ian loves them, wants more variety (respect raw caps). [game designer speccing]
-🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). Big content push, phase it. [todo → design]
+🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). [creative director owns roadmap]
+🟡 BIGGER BOSSES sometimes — periodic GIANT/spectacle multi-phase set-piece bosses. [roadmap]
+🟡 MAJOR CONTENT PUSH ("a lot more", said many ways) — more guns (new verbs/families), more enemies for deep floors, more CRAZINESS/RANDOMNESS (floor modifiers/mutators/elite affixes/random events) so deep runs stay fresh. Phased in waves. [creative director + game designer roadmap]
 🟡 Legendary gun TEXTURES redone (some "ass") — visual pass. [queued]
 🟡 BULLET ART — "a lot of guns' bullets are still just circles." Make the bullet-visual pass COMPREHENSIVE (all guns, not just the flagged few). AD gave language for 8; extend to every flat one. [queued, expand scope]
 
