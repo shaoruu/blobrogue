@@ -60,7 +60,7 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   burrower: "A", orbiter: "A", shielder: "A",
   rootward: "A", echojack: "A", seamcutter: "A", caskbellows: "A", sinderling: "A",
   fragment: "A", mason: "A",
-  echo: "B", knell: "B", knot: "B", weft: "B", marshal: "B", toll: "B",
+  echo: "B", knell: "B", knot: "B", sac: "B", marshal: "B", toll: "B",
   boss: "boss", marrow: "boss", choir: "boss", weaver: "boss", gilded: "boss",
 };
 
@@ -79,7 +79,7 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   echo: ["echojack"],                  // the jack's own noise lesson, made a body
   knell: ["echojack"],                 // the decoy verb retuned to the Toll's bronze
   knot: ["caskbellows"],               // the planted shoot-this-body lesson, made a mechanic target
-  weft: ["echojack"],                  // the false-body misdirection verb, woven weaver-shaped
+  sac: ["caskbellows"],                // the same stationary-objective verb, clutch-shaped
   marshal: ["rootward", "shielder"],   // formation guard + the worker's cover verb, weaponized
   toll: ["echojack", "caskbellows"],   // noise-lure misdirection + the locked-lane volley verb
 };
@@ -255,16 +255,17 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   echo: [],
   knell: [],
   knot: [],
-  weft: [],
+  sac: [],
   marshal: ["sweep", "volley"],
   toll: ["knell", "volley"],
   boss: ["hopslam", "radial", "roar", "squeeze"],
   marrow: ["rush", "crash", "volley", "spin", "shield"],
   choir: ["fade", "wail", "split"],
   // The earned-window kit reuses shared grammar: "blink" (the echojack's visible dash)
-  // for the thread traverse, "decoy" for the mirror-feint split, "crash" for every
-  // punishable self-stun (the snag and the tangle).
-  weaver: ["pounce", "weave", "roar", "blink", "decoy", "crash"],
+  // for the P1 thread traverse, "dive" (the burrower's out-of-play verb) for the P2
+  // wall climb, "pounce" for the marked descent, "rush" for the P3 lane charge-dash,
+  // and "crash" for every punishable self-stun (the snag, the forcedown, the overshoot).
+  weaver: ["weave", "blink", "dive", "pounce", "rush", "crash", "roar"],
   gilded: ["slam", "sweep", "roar"],
 };
 
@@ -304,7 +305,7 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   echo: "decoy",
   knell: "decoy",
   knot: "decoy",
-  weft: "decoy",
+  sac: "decoy",
   marshal: "directional",
   toll: "mass",
   boss: "legacy",

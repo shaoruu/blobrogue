@@ -90,14 +90,16 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
 //     reject any snapshot carrying these as a ProtocolError; the strict join gate turns
 //     that skew into a clean "update your client".
-// v9 (intentional bump, the earned-windows boss rework): the enemy wire's closed kind
-// set grew again — the Weaver's lattice `knot` and mirror-feint `weft` mechanic bodies
-// (a v8 client would reject any snapshot carrying them as a ProtocolError). No new wire
-// FIELDS: the deep bosses' guarded/exposed state rides the existing `aux` channel
-// (seconds left in the current EXPOSED window; 0 = guarded), the Weaver's new moves
-// reuse the existing closed move set (blink/decoy/crash shared grammar), and every
-// window/bank/lattice decision stays sim-internal. The strict equal-version join gate
-// (client/server/control all mirror this constant) fences the kind-set skew.
+// v9 (intentional bump, the earned-windows boss rework + the fair-surprise layer): the
+// enemy wire's closed kind set grew — the Weaver's lattice `knot` and egg-sac `sac`
+// mechanic bodies — and the hazard kind set grew with `omen`, the ambush pre-spawn
+// tell every client must render (a v8 client would reject snapshots carrying either as
+// a ProtocolError). No new wire FIELDS: the deep bosses' guarded/exposed state rides
+// the existing `aux` channel (seconds left in the current EXPOSED window; 0 =
+// guarded), the Weaver's new moves reuse the existing closed move set
+// (blink/dive/pounce/rush/crash shared grammar), and every window/bank/lattice/pool
+// decision stays sim-internal. The strict equal-version join gate (client/server/
+// control all mirror this constant) fences the skew.
 export const PROTOCOL_VERSION = 9;
 
 // How long the server reserves a disconnected player's body (their seat) before the
@@ -450,7 +452,7 @@ const PROP_KINDS: Record<PropKind, true> = {
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
 const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = { weapon: true, blessing: true, heart: true, reroll: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
-const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
+const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
@@ -1055,7 +1057,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0,
         // Earned windows: the exposed remainder rides the aux channel (the render key);
         // the bank and mechanic id lists are sim-internal and never travel.
-        exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0,
+        exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
       }
       : null,
   };

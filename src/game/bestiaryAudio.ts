@@ -65,7 +65,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   echo: "decoy",
   knell: "decoy",
   knot: "decoy",
-  weft: "decoy",
+  sac: "decoy",
   marshal: "captain",
   toll: "captain",
   boss: "boss",
@@ -101,7 +101,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   echo: "mist",
   knell: "bell",
   knot: "chitin",  // the Weaver's thread lattice — its own body material
-  weft: "chitin",
+  sac: "chitin",
   marshal: "root",
   toll: "bell",
   boss: "goo",
@@ -221,9 +221,9 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   echo: { fuse: "echojack.jangle", toll: "echojack.blink" }, // the echo IS the jack's noise
   knell: { fuse: "knell.fuse", toll: "toll.ring" },
   // The Weaver's mechanic bodies sing its lattice rows: the knot hums the thread it
-  // anchors; the weft is the feint made audible.
+  // anchors; the sac is the clutch's slow swell.
   knot: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
-  weft: { fuse: "weaver.feint", toll: "weaver.feint" },
+  sac: { fuse: "weaver.feint", toll: "weaver.feint" },
   marshal: {
     windup: "marshal.order", lock: "marshal.lock", active: "marshal.order", impact: "marshal.shatter",
     recover: "marshal.recover", entrance: "marshal.entrance", phase: "marshal.shatter", death: "marshal.death",

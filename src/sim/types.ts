@@ -31,12 +31,12 @@ export type EnemyKind =
   // Summon-only bodies (never in the floor planner):
   //  - echo: the echojack's 1-HP false-noise decoy — soaks homing/attention, expires quietly;
   //  - knell: The Toll's noise-lure bomb — shoot it before it tolls, or leave its radius.
-  //  - knot: the Weaver's lattice ANCHOR NODE — the glowing crossing its thread-lines meet
-  //    at. Shooting it collapses the section (earned-window mechanic; P1 it EXPOSES the
-  //    Weaver, and always leaves thread debris a later pounce can tangle on).
-  //  - weft: the Weaver's P3 mirror-feint afterimage — a false weaver woven from thread.
-  //    Clearly dimmer than the real one; shooting it weaves MORE web and extends guarded.
-  | "echo" | "knell" | "knot" | "weft"
+  //  - knot: the Weaver's lattice ANCHOR NODE — the glowing crossing its thread-lines
+  //    meet at, and the anchor of a strung silk LANE. Shooting it collapses the lane
+  //    (P1 it EXPOSES the Weaver; P3 the broken lane is the dash-overshoot bait).
+  //  - sac: the Weaver's P2 EGG-SAC — bloomed in on an omen tell while she climbs.
+  //    Destroying every sac of a clutch forces her down for the earned window.
+  | "echo" | "knell" | "knot" | "sac"
   // Miniboss templates (captain machinery, seeded mid-band cadence — see minibossKindForFloor):
   | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded";
@@ -133,9 +133,13 @@ export interface BossState {
   // opens the window. Empty when no silence set is live. Distinct from beatAddIds —
   // those belong to the transition beat, these to the earned-window loop.
   windowAddIds: number[];
-  // The Weaver's committed blink lane: the knot id (+1) whose thread it is traveling —
-  // shooting THAT knot mid-blink snags it out of the air. 0 = no lane committed.
+  // The Weaver's committed lane: the knot id (+1) whose thread it is traveling — the
+  // P1 blink (shoot the knot to SNAG it) and the P3 charge-dash (a dead knot can't
+  // brake it: the overshoot) both ride it. 0 = no lane committed.
   laneKnotId: number;
+  // Fair surprise §1: the add pool's previous draw index (-1 = none yet) — weighted
+  // selection never repeats the exact entry twice in a row, so waves can't be rote.
+  lastAddPick: number;
 }
 
 export interface Enemy extends Entity {
@@ -163,7 +167,7 @@ export interface Enemy extends Entity {
   // the client can render authoritative special state without a bespoke field per kind:
   //  - sinderling: 0 = unarmed, 1 = armed (stoked — jet + death burst live);
   //  - echo/knell: remaining decoy life in seconds (drives the client fade/fuse);
-  //  - knot/weft: remaining life in seconds (the lattice unravels / the feint resolves);
+  //  - knot: remaining lattice life in seconds; sac: 0 (its read is the body itself);
   //  - fragment: tethered source enemy id + 1 (0 = untethered — the simplified pattern);
   //  - bulwark elites: remaining plate HP (0 = shattered);
   //  - earned-window bosses (Weaver/Warden/MARROW/Choir): seconds left in the current
@@ -173,7 +177,7 @@ export interface Enemy extends Entity {
   // Generic per-behavior sequence counter (sim-internal, never on the wire): the
   // seamcutter's sweep emissions, the caskbellows' volley shots, the sinderling's wedge
   // drops, the marshal/toll attack alternation. Reset by each move's begin. The
-  // Weaver's mechanic bodies (knot/weft) never attack and carry their CASTER's enemy
+  // Weaver's mechanic bodies (knot/sac) never attack and carry their CASTER's enemy
   // id + 1 here instead (a lattice always belongs to the weaver that spun it).
   seq: number;
   // Commander-elite pack panic: seconds this body flees leaderless (no attack triggers
@@ -248,6 +252,9 @@ export interface Bullet {
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
   blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
+  // The Weaver's aimed SILK (sim-internal, enemy fire only): the bolt WEBS where it
+  // dies — wall, floor or the player it caught. Undefined on every other round.
+  isSilk?: boolean;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies
@@ -322,7 +329,10 @@ export interface Prop {
 //    same protection rules as enemy contact. Enemies are immune (their fire).
 //  - charge: a volatile elite's death fuse — harmless while it burns (life > 0), then
 //    detonates a SHARED-risk burst (players 1, enemies more) when it expires.
-export type HazardKind = "web" | "cinder" | "charge";
+//  - omen: an AMBUSH pre-spawn tell (fair surprise §2) — a harmless marked bloom
+//    (burst web / dust / egg-sac swell) that stands for its whole life BEFORE the body
+//    it announces exists; the spawn resolves where the omen stood when it expires.
+export type HazardKind = "web" | "cinder" | "charge" | "omen";
 
 export interface Hazard {
   id: number;      // stable per-floor id (wire identity + client anim keying)
@@ -331,6 +341,14 @@ export interface Hazard {
   radius: number;
   life: number;    // seconds until it fades
   maxLife: number; // authored duration (drives the client's fade render)
+  // Omen payload (sim-internal, never on the wire): the ambush body this tell
+  // announces, spawned at the omen's spot when its life expires. The spawned add keeps
+  // its ordinary spawn grace on top — tell, then body, then teeth.
+  spawnKind?: EnemyKind;
+  spawnTier?: EnemyTier;
+  // The summoning boss's enemy id + 1 (0/undefined = none): a Choir verse omen feeds
+  // its fragment into the summoner's silence set when it resolves.
+  forBossId?: number;
 }
 
 // Environmental FLOOR hazards — the depth-escalation danger layer, DISTINCT from the
@@ -441,7 +459,7 @@ export type SpriteName =
   | "hero" | "slime" | "bat" | "skeleton" | "ghost" | "spitter" | "charger" | "burrower"
   | "orbiter" | "shielder"
   | "rootward" | "echojack" | "seamcutter" | "caskbellows" | "sinderling" | "fragment" | "mason"
-  | "echo" | "knell" | "knot" | "weft" | "marshal" | "toll"
+  | "echo" | "knell" | "knot" | "sac" | "marshal" | "toll"
   | "boss" | "marrow" | "choir" | "weaver" | "gilded"
   | "patch"
   | "heart" | "coin" | "gun" | "spit";

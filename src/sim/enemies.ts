@@ -202,22 +202,23 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 12, drawSize: 36, alpha: 0.9, tint: "#c9b458", kbResist: 3.0,
     baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
-  // The Weaver's lattice ANCHOR NODE: the glowing crossing its thread-lines meet at.
-  // Stationary, harmless, and the earned-window mechanic target — a few focused rounds
-  // break it (P1: EXPOSES the Weaver; always crumbles into thread debris a later pounce
-  // can be baited onto). Never placed where a player already stands. Summon-only.
+  // The Weaver's lattice ANCHOR NODE: the glowing crossing its thread-lines meet at,
+  // and the anchor of a strung silk LANE. Stationary, harmless, and the earned-window
+  // mechanic target — a few focused rounds break it (P1: EXPOSES the Weaver; always
+  // crumbles the lane's silk, and P3 the broken lane is the dash-overshoot bait).
+  // Never placed where a player already stands. Summon-only.
   knot: {
     kind: "knot", sprite: "knot", movement: "drift", isPhasing: false,
     radius: 13, drawSize: 38, alpha: 1, tint: "#e6c2ff", kbResist: 3.0,
     baseHp: 10, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
-  // The Weaver's P3 mirror-feint afterimage: a false weaver woven from thread — clearly
-  // DIMMER than the real one (which blazes through the feint). 1 HP; shooting it weaves
-  // more web and extends guarded, so the read, not the spray, is the answer. Summon-only.
-  weft: {
-    kind: "weft", sprite: "weft", movement: "drift", isPhasing: false,
-    radius: 20, drawSize: 62, alpha: 0.45, tint: "#8a6bb0", kbResist: 3.0,
-    baseHp: 1, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  // The Weaver's P2 EGG-SAC: bloomed in on an omen tell while she climbs. Harmless,
+  // shootable, and the forced-down switch — destroy the whole clutch to bring her to
+  // the floor for the window. Summon-only, never where a player stands.
+  sac: {
+    kind: "sac", sprite: "sac", movement: "drift", isPhasing: false,
+    radius: 16, drawSize: 46, alpha: 1, tint: "#d8a7e8", kbResist: 3.0,
+    baseHp: 12, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },
   // ROOT MARSHAL (miniboss template: the formation fight). P1: a wide slow-turning
   // guard + a live rootward formation it raises and rallies. At 50% the shield SHATTERS
@@ -310,7 +311,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   caskbellows: "bulwark", // frontal plate + rear crank = a strongly directional sentry
   sinderling: "brace",  // its armed death burst is already its loud exit
   fragment: "volatile",
-  echo: "brace", knell: "brace", knot: "brace", weft: "brace", // never elite in practice
+  echo: "brace", knell: "brace", knot: "brace", sac: "brace", // never elite in practice
   marshal: "brace", toll: "brace",
   boss: "brace", marrow: "brace", choir: "brace", weaver: "brace", gilded: "brace",
 };
@@ -501,7 +502,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         addTimer: BOSS_ADD_FIRST_AT[kind] ?? 0,
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
-        exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0,
+        exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
       }
       : null,
   };

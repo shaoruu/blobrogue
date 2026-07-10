@@ -4243,6 +4243,18 @@ export class Game {
         this.renderPounceShadow(a.markX, a.markY, drawSize, a.windup);
         continue;
       }
+      // The Weaver UP THE WALLS (P2 climb): out of reach, clinging translucent at her
+      // perch — shoot the CLUTCH instead. Her aimed-silk charge pulses on the windup
+      // channel so the volley is always read before it flies.
+      if (e.kind === "weaver" && a.move === "dive" && a.phase === "active") {
+        ctx.save();
+        ctx.globalAlpha = 0.45;
+        this.drawChar(ENEMY_ARCHETYPES.weaver.sprite, this.sprites.selectClip(ENEMY_ARCHETYPES.weaver.sprite, pose).clip, sx, sy - drawSize * 0.35, drawSize * 0.9, 1, IDENTITY_XFORM, 1, 0.45, a.windup * 0.8, anim.clock);
+        ctx.restore();
+        this.renderGhostShimmer(e, sx, sy - drawSize * 0.35);
+        if (a.windup > 0.05) this.renderTelegraph(e, sx, sy - drawSize * 0.35);
+        continue;
+      }
 
       // A worker's build tell previews the EXACT construction footprint (the sim's own
       // site geometry): green rising markers where the divider / L-corner will stand.
@@ -4326,6 +4338,16 @@ export class Game {
       // The Weaver's lattice: every knot casts its three thread-lines (the blink lanes,
       // crossing AT the shootable node) and glows as the mechanic target it is.
       if (e.kind === "knot") this.renderKnotLattice(e, sx, sy, drawSize, anim.clock);
+      // The egg-sac swells: a soft clutch pulse — "shoot these to bring her down".
+      if (e.kind === "sac") {
+        const swell = 0.5 + 0.5 * Math.sin(anim.clock * 4 + e.id);
+        ctx.save();
+        ctx.globalAlpha = 0.35 + 0.25 * swell;
+        ctx.strokeStyle = ENEMY_ARCHETYPES.sac.tint;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, drawSize * (0.42 + 0.05 * swell), 0, 6.28); ctx.stroke();
+        ctx.restore();
+      }
       // An earned-window boss wears its state: a thread-dim guard rim while GUARDED, a
       // blazing core through the EXPOSED window (aux = the authoritative remainder —
       // the Warden's plate below renders its own gold flavor of the same read).
@@ -4358,10 +4380,36 @@ export class Game {
   private renderHazards() {
     if (this.hazards.length === 0) return;
     const { ctx, cam } = this;
+    // The Weaver's committed lane flares through its whole dash tell: silk near the
+    // locked thread (her position to the exit mark) burns bright — the read.
+    const dasher = this.enemies.find((e) => e.kind === "weaver" && e.attack.move === "rush" && e.attack.phase === "windup");
+    const isOnFlareLane = (hx: number, hy: number): boolean => {
+      if (!dasher) return false;
+      const a = dasher.attack;
+      const dx = a.markX - dasher.x, dy = a.markY - dasher.y;
+      const len2 = dx * dx + dy * dy;
+      if (len2 < 1) return false;
+      const t = Math.max(0, Math.min(1, ((hx - dasher.x) * dx + (hy - dasher.y) * dy) / len2));
+      return Math.hypot(hx - (dasher.x + dx * t), hy - (dasher.y + dy * t)) < 60;
+    };
     ctx.save();
     for (const h of this.hazards) {
       const sx = h.x - cam.x, sy = h.y - cam.y;
       const fade = Math.min(1, h.life / Math.max(0.001, h.maxLife) * 3); // holds, then fades out
+      if (h.kind === "omen") {
+        // The ambush tell: an urgent bloom that swells as the body's arrival nears —
+        // "something is about to be HERE" reads before anything exists to hurt you.
+        const urgency = 1 - h.life / Math.max(0.001, h.maxLife);
+        const blink = 0.5 + 0.5 * Math.sin(this.animClock * (10 + urgency * 14));
+        ctx.globalAlpha = 0.3 + 0.5 * urgency * blink;
+        ctx.strokeStyle = "#e6c2ff";
+        ctx.lineWidth = 2 + 1.5 * urgency;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius * (0.5 + 0.5 * urgency), 0, 6.28); ctx.stroke();
+        ctx.globalAlpha = 0.14 + 0.2 * urgency;
+        ctx.fillStyle = "#e6c2ff";
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius * (0.5 + 0.5 * urgency), 0, 6.28); ctx.fill();
+        continue;
+      }
       if (h.kind === "cinder") {
         // Burning ground: an ember-orange pool with a flickering core.
         const flicker = 0.7 + 0.3 * Math.sin(this.animClock * 11 + h.id * 1.9);
@@ -4387,9 +4435,10 @@ export class Game {
         ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
         continue;
       }
-      ctx.globalAlpha = 0.34 * fade;
-      ctx.strokeStyle = "#c98bff";
-      ctx.lineWidth = 1.5;
+      const isFlaring = isOnFlareLane(h.x, h.y);
+      ctx.globalAlpha = (isFlaring ? 0.85 : 0.34) * fade;
+      ctx.strokeStyle = isFlaring ? "#ffd27a" : "#c98bff";
+      ctx.lineWidth = isFlaring ? 2.5 : 1.5;
       for (let i = 0; i < 8; i++) {
         const ang = (i / 8) * 6.28 + h.id * 0.7;
         ctx.beginPath();
@@ -4402,8 +4451,8 @@ export class Game {
         ctx.arc(sx, sy, h.radius * (ring / 2.4), 0, 6.28);
         ctx.stroke();
       }
-      ctx.globalAlpha = 0.1 * fade;
-      ctx.fillStyle = "#c98bff";
+      ctx.globalAlpha = (isFlaring ? 0.22 : 0.1) * fade;
+      ctx.fillStyle = isFlaring ? "#ffd27a" : "#c98bff";
       ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
     }
     ctx.restore();
@@ -4614,11 +4663,12 @@ export class Game {
     const reach = 300;
     ctx.save();
     ctx.strokeStyle = tint;
-    ctx.lineWidth = 1.5;
     ctx.setLineDash(AIM_DASH);
-    ctx.globalAlpha = 0.22 + 0.1 * Math.sin(clock * 3 + e.id);
     for (let k = 0; k < 3; k++) {
       const ang = e.attack.lockedAngle + k * (Math.PI / 3);
+      // k=0 IS the strung lane (the sim's silk row follows exactly this thread).
+      ctx.lineWidth = k === 0 ? 2.5 : 1.5;
+      ctx.globalAlpha = (k === 0 ? 0.38 : 0.2) + 0.1 * Math.sin(clock * 3 + e.id);
       ctx.beginPath();
       ctx.moveTo(sx - Math.cos(ang) * reach, sy - Math.sin(ang) * reach);
       ctx.lineTo(sx + Math.cos(ang) * reach, sy + Math.sin(ang) * reach);
@@ -4635,8 +4685,7 @@ export class Game {
 
   // The earned-window read (Weaver/MARROW/Choir): GUARDED = a dim thread rim (your
   // shots are chipping — force the window instead); EXPOSED (aux carries the sim's
-  // remainder) = the body blazes, unload. The Weaver's feint recovery additionally
-  // blazes WHITE on the real body — the read the wefts exist to blur.
+  // remainder) = the body blazes, unload.
   private renderEarnedWindow(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
     const tint = ENEMY_ARCHETYPES[e.kind].tint;
@@ -4645,19 +4694,6 @@ export class Game {
       this.fxLayer("glow_round", tint, sx, sy, size * 1.15 * pulse, size * 1.15 * pulse, 0.5, 0);
       this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.42, size * 0.42, 0.75 * pulse, 0);
       return;
-    }
-    if (e.kind === "weaver" && e.attack.move === "decoy" && e.attack.phase === "recover") {
-      // The mirror feint: the REAL Weaver is clearly brighter and casts the true
-      // thread shadow — the wefts stay dim.
-      const pulse = 0.7 + 0.3 * Math.sin(this.animClock * 12);
-      this.fxLayer("glow_round", "#ffffff", sx, sy, size * 1.3 * pulse, size * 1.3 * pulse, 0.45, 0);
-      ctx.save();
-      ctx.globalAlpha = 0.5;
-      ctx.fillStyle = "#1a0f24";
-      ctx.beginPath();
-      ctx.ellipse(sx, sy + size * 0.42, size * 0.5, size * 0.18, 0, 0, 6.28);
-      ctx.fill();
-      ctx.restore();
     }
     ctx.save();
     ctx.globalAlpha = 0.4 + 0.12 * Math.sin(this.animClock * 3);
@@ -4793,6 +4829,7 @@ export class Game {
         : a.move === "spit" ? 300
         : a.move === "volley" ? 260
         : a.move === "seam" || isBlinkLane ? Math.hypot(a.markX - e.x, a.markY - e.y)
+        : e.kind === "weaver" ? Math.hypot(a.markX - e.x, a.markY - e.y)
         : e.kind === "marrow" ? MARROW.chargeSpeed * MARROW.chargeDur
         : e.kind === "sinderling" ? SINDER_JET_SPEED * SINDER_JET_DUR
         : CHARGER_RUSH_SPEED * CHARGER_RUSH_DUR;

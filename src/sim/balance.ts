@@ -528,6 +528,38 @@ export const EARNED_GUARD_MIN = 0.20; // guarded chip never below 20% (fairness 
 export const EARNED_GUARD_MAX = 0.35;
 export const EXPOSE_WINDOW_CAP = 8;   // combined exposure never exceeds this (stacked breaks)
 
+// ---- KEEP THEM GUESSING (the fair-surprise layer) ----
+// Randomize WHICH / WHERE / WHEN inside hard caps — NEVER whether a hit got a fair
+// tell. Three levers, all seeded off the world RNG (deterministic across clients):
+//  1. Add waves draw from a curated per-boss POOL (weighted, no immediate repeats, at
+//     most one of each capped entry alive, complex movers under the live mover cap) —
+//     every member is a known readable creature.
+//  2. Reinforcements arrive as AMBUSHES: an OMEN tell (egg-sac bloom / burst web /
+//     dust) marks the spot for a fixed beat BEFORE the body exists, the body then
+//     keeps its ordinary spawn grace before it may attack, and no ambush is ever
+//     placed inside a standing player's personal space — surprise in WHERE, never as
+//     an instant hit.
+//  3. Phase transitions RESHAPE the room (the Weaver re-strings its lanes, the Warden
+//     reconfigures its cover) — muscle memory resets, always leaving a readable route
+//     (webs only slow, cover is destructible and gapped, sites never rise on players).
+
+export const AMBUSH = {
+  tell: 0.7,        // omen seconds before the body exists (0.6–0.8 band)
+  radius: 24,       // the omen's marked footprint
+  playerClear: 120, // never queued inside this range of a standing player
+} as const;
+
+// One curated pool entry: a known readable creature at a tier, weighted for the draw.
+// maxAlive caps entries that must stay singular (a second commander is noise, not
+// pressure); complex movers additionally respect the live mover cap at spawn time.
+export interface AddPoolEntry {
+  kind: EnemyKind;
+  tier: EnemyTier;
+  weight: number;
+  maxAlive: number; // 0 = uncapped
+  count: number;    // bodies per draw (a "pair" wave is its own pool entry)
+}
+
 // ---- §5b MARROW (earned windows: F15, median 35–55s wall / exposed-gated) ----
 // A LINE fight, not an area fight: sidestep the charge lanes, weave the volleys/spiral,
 // and punish the wall crash. Its transition beat is a bone SHIELD instead of a roar:
@@ -550,6 +582,14 @@ export const MARROW = {
   guardMult: 0.35,      // GUARDED damage multiplier (reduction, never immunity)
   crashExpose: 3.5,     // seconds of EXPOSED opened by a baited wall crash
   windowBankFrac: 0.40, // per-window damage bank (the phase chunk)
+  // Fair surprise: the cadence add is ONE omen-telegraphed ambush drawn from a curated
+  // pool, so the fight never decays into pure charge-lane memorization.
+  addPool: [
+    { kind: "skeleton", tier: "swarm", weight: 4, maxAlive: 0, count: 1 },
+    { kind: "skeleton", tier: "standard", weight: 3, maxAlive: 0, count: 1 },
+    { kind: "bat", tier: "swarm", weight: 2, maxAlive: 0, count: 2 },      // a bat pair
+    { kind: "charger", tier: "standard", weight: 1, maxAlive: 1, count: 1 }, // mover-capped lane bruiser
+  ] as readonly AddPoolEntry[],
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // indexed by phase 1..3
@@ -626,7 +666,7 @@ export const CHOIR = {
   // Recalibrated on the EXPOSED-damage assumption (earned windows): the Choir is
   // GUARDED until its FRAGMENTS are silenced (see below), so the old full-uptime 1,450
   // anchor would sponge — the anchor is re-measured in the balance tests.
-  baseHp: 800,
+  baseHp: 750,
   baseHpFloor: 30,
   contactDamage: 2,
   entranceGrace: 1.2,
@@ -642,6 +682,11 @@ export const CHOIR = {
   fragmentFirstAt: 3.0,   // first verse gathers shortly after the entrance grace
   fragmentRespawn: 6.0,   // seconds after a window closes before the next verse
   fragmentsFor: [0, 2, 3, 4, 4] as readonly number[], // indexed by snapshotted players 1..4
+  // Fair surprise: the verse arrives as an AMBUSH WAVE (omen tells at seeded anchors,
+  // never on a player), and as it lands the Choir sings WITH it — a bounded
+  // untargetable refrain (your DPS is redirected into the fragments, never idled).
+  singDuration: 3.5,
+  fragmentRingDist: 220,  // verse anchors ring the Choir at this reach
   // The fade: telegraph, then intangible drift toward the target, then a rematerialize
   // burst (P2+) into a long recover — the punish window for tracking it through the fade.
   fadeEvery: 3,
@@ -681,28 +726,31 @@ export function choirHpForFloor(floor: number): number {
   return anchoredBossHp(CHOIR.baseHp, CHOIR.baseHpFloor, floor);
 }
 
-// ---- §5d THE WEAVER (earned windows: F20 — read the weave, force it out, punish) ----
-// The duelist that fights the FLOOR, now the earned-window flagship: highly mobile,
-// GUARDED (30% chip) by default, and every window is PLAYER-CREATED per phase:
-//   P1 READ THE WEAVE — it lays a visible thread LATTICE (3 lines crossing at a glowing
-//     KNOT, never where you already stand) and blink-strikes along the threads. Shoot a
-//     knot to collapse the section → EXPOSED 3s (simultaneous breaks combine), and a
-//     knot shot out mid-blink SNAGS the Weaver into a crash stagger.
-//   P2 BAIT THE POUNCE — the marked leap locks partway; a landing on bare floor is a
-//     FAST recover (no window), but a landing lured onto residual thread — its own webs
-//     or a broken knot's debris — TANGLES it → EXPOSED 4s + crash stagger. Co-op: one
-//     player baits while the others pre-break knots into debris.
-//   P3 MIRROR FEINT — it splits behind WEFT afterimages (clearly dimmer; the real one
-//     blazes and casts the true thread shadow). Shooting a weft weaves MORE web and
-//     extends guarded; hitting only the REAL Weaver inside its feint recovery unravels
-//     it → EXPOSED 4s.
-// Webs stay persistent slow-zones (routing pressure, never damage).
+// ---- §5d THE WEAVER (earned windows + fair surprise: F20 — read the weave, force it
+// out, punish). GUARDED (30% chip) by default, highly mobile, and every window is
+// PLAYER-CREATED per the designer's exact phase structure:
+//   P1 READ THE WEAVE — the weave PARTITIONS the arena: silk LANES (rows of sticky
+//     silk, move ×0.5, a dash clears the silk it crosses at the dash's own cost)
+//     anchored on glowing KNOTS (never where you already stand), and its blink-strike
+//     commits along a knot's thread. Shoot a knot → its lane section collapses →
+//     EXPOSED 3s (simultaneous breaks combine); a knot shot out mid-blink SNAGS it.
+//   P2 SHE CLIMBS — untargetable on the walls, dropping spiderling AMBUSHES (curated
+//     pool, omen-telegraphed) and AIMED SILK volleys that web where they land. Your
+//     DPS is redirected, never idle-punished: destroy every EGG-SAC (2 solo, +1 per
+//     extra player) to FORCE HER DOWN → marked descent, crash stagger, EXPOSED 4s.
+//     Ignore the sacs and she eventually descends on her own — with NO window.
+//   P3 WALL-CRAWL DASH — she crawls to a lane's end and CHARGE-DASHES along the lanes
+//     she built (the target lane's silk flares for the whole 0.7s locked tell). An
+//     intact lane's knot brakes her at the far end (no window); a dash into a
+//     broken/empty lane OVERSHOOTS into the wall → crash stagger + EXPOSED 4s. Break
+//     the lane you stand in — before the dash or out from under it — and she pays.
+// Phase transitions RESHAPE the weave: the molt crumbles every knot, lane and sac and
+// re-strings a fresh seeded lattice, so lane memory resets each phase.
 
 export const WEAVER = {
-  // Recalibrated on the EXPOSED-damage assumption (§3 rule): the old 1,500 anchor was
-  // calibrated for full-uptime damage; under guarded/exposed the median build converts
-  // windows instead. Measured wall-clock + exposed-time bands live in the balance tests.
-  baseHp: 1100,
+  // Recalibrated on the EXPOSED-damage assumption (§3 rule): measured wall-clock +
+  // exposed-time bands live in the balance tests.
+  baseHp: 620,
   baseHpFloor: 20,
   contactDamage: 2,
   entranceGrace: 1.2,
@@ -710,68 +758,83 @@ export const WEAVER = {
   // Earned windows.
   guardMult: 0.30,        // GUARDED damage multiplier (reduction, never immunity)
   knotBreakExpose: 3,     // P1: seconds of EXPOSED per broken lattice knot
-  tangleExpose: 4,        // P2+: seconds of EXPOSED per baited tangle
-  unravelExpose: 4,       // P3: seconds of EXPOSED per read feint
+  forcedownExpose: 4,     // P2: every egg-sac silenced -> she is forced down
+  overshootExpose: 4,     // P3: a dash into a broken lane overshoots into the wall
   windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
-  // The lattice: knots ring the Weaver, never inside knotPlayerClear of a standing
-  // player (the mechanic forces a reposition, not a point-blank freebie). Each knot
-  // casts 3 thread-lines through itself; expiry crumbles it into thread DEBRIS (a web)
-  // without a window — only a player's shot earns the exposure.
+  // THE LATTICE: knots anchor the silk lanes, ringed off the Weaver and never inside
+  // knotPlayerClear of a standing player (the break forces a reposition). Each knot
+  // casts 3 thread-lines; ONE is strung with sticky silk — the lane partition. A knot's
+  // death (shot or expiry) crumbles its lane silk; a shot additionally leaves debris.
   knotsFor: [0, 1, 2, 3, 3] as readonly number[], // knots per lattice, by snapshotted players
   maxKnots: 3,
   knotRingDist: 170,
   knotPlayerClear: 110,
-  knotLife: 14,
+  knotLife: 22,           // lanes are the fight's geography — they persist
   knotDebrisRadius: 52,
   knotDebrisLife: 8,
+  laneWebSpacing: 78,     // silk row spacing along a strung lane
+  laneWebRadius: 44,
+  laneHalf: 240,          // a lane runs this far past its knot (wall-clamped)
+  // Sticky silk: move ×0.5 inside (designer number); a DASH through silk clears it —
+  // the dash itself is the cost. Enemies are unaffected.
+  webRadius: 62,
+  webLife: 12,
+  webSlow: 0.5,
+  maxWebs: 20,            // hard cap over every silk source: sticky, never solid
   // Blink-strike (P1): the whole 0.7s tell is post-lock (the lane + arrival mark freeze
   // at windup start), then a 0.3s traverse along the committed thread and an arrival
   // strike. Snagging the lane's knot mid-blink crashes it out of the air.
   blinkWindup: 0.7,
   blinkAir: 0.3,
   blinkRecover: 0.55,
-  blinkLaneHalf: 240,     // traverse runs this far past the knot (wall-clamped)
   blinkStrikeRadius: 52,
   blinkStrikeDamage: 1,
   snagStagger: 1.0,       // crash recover after a mid-blink snag
-  // Mirror feint (P3): the split tell, the afterimage count (mechanic scales with the
-  // pull's players), and the read window — the feint recovery — in which only a direct
-  // hit on the REAL Weaver unravels it. Shooting a weft cancels the read and extends
-  // guarded (the punished spray).
-  feintWindup: 0.6,
-  feintRecover: 1.6,
-  feintRingDist: 120,
-  weftsFor: [0, 2, 2, 3, 3] as readonly number[], // afterimages per feint, by players
-  weftGuardExtend: 1.4,   // extra attack cooldown when a weft is shot (guarded extends)
-  // Weave: plants a locked pattern of webs on and around the target's position.
+  // Weave: a self-cast re-stringing — fresh knots + their lanes (no aim, fixed tell).
   weaveWindup: 0.7,
-  weaveLock: 0.35,
   weaveRecover: 0.7,
-  webCount: [0, 3, 3, 4] as readonly number[],
-  webRingDist: 130,
-  webRadius: 62,
-  webLife: 12,
-  webSlow: 0.55,       // player move-speed multiplier inside a web (enemies unaffected)
-  maxWebs: 8,          // hard cap: the arena squeezes, it never fills
-  // Pounce: tell .65 / lock .3 / .35 air; P2+ chains a second, shorter-telegraph leap
-  // (chains 1/2/2). A bare-floor landing recovers FAST (no window — earned windows
-  // moved the punish to the tangle); a tangled landing crashes into tangleStagger.
-  pounceWindup: 0.65,
-  pounceLock: 0.3,
-  pounceChainWindup: 0.5,
-  pounceChainLock: 0.2,
-  pounceAir: 0.35,
-  pounceRecover: 0.55,
-  tangleStagger: 1.2,
-  tanglePad: 6,        // landing counts as ON thread within web radius + this pad
-  pounceRadius: 74,
+  // P2 — the climb. Untargetable on the walls (bounded by climbMax), egg-sacs are the
+  // forced-down switch, spiderlings + aimed silk are the pressure while she is up.
+  climbAscend: 0.6,       // the readable scurry-to-the-wall tell (still targetable)
+  climbMax: 9,            // she descends on her own past this (no window)
+  sacsFor: [0, 2, 3, 4, 5] as readonly number[], // egg-sacs per climb: 2 solo, +1 per extra
+  silkEvery: 3.0,         // aimed-silk cadence while climbing
+  silkWindup: 0.7,        // the volley's charge tell (windup rides the wire)
+  silkBolts: 3,
+  silkSpread: 0.28,
+  silkSpeed: 240,
+  silkDamage: 1,
+  silkLife: 2.2,
+  silkWebRadius: 40,      // a silk bolt webs where it lands
+  spiderlingEvery: 4.0,   // ambush pool drops while she is up
+  sacRingDist: 200,       // the clutch blooms on this ring around her perch
+  descendTell: 0.35,      // the marked drop's own tell before the air beat
+  descendAir: 0.4,        // the marked drop (forced or voluntary)
+  descendStagger: 1.2,    // forced-down crash (the window rides it)
+  unforcedRecover: 0.7,   // voluntary descent: brief recover, NO window
+  pounceRadius: 74,       // the descent landing (shared pounce read)
   pounceInnerRadius: 44,
   pounceCenterDamage: 2,
   pounceOuterDamage: 1,
-  pounceChains: [0, 1, 2, 2] as readonly number[], // chained leaps per commitment (P2+)
-  pounceWebRadius: 52,
+  // P3 — the lane dash. She crawls to a lane entry, flares THAT lane for the whole
+  // locked tell, then dashes it. The lane's live knot brakes her at the far end; a
+  // broken lane can't — she overshoots into the wall.
+  crawlNear: 46,          // close enough to a lane entry to commit the dash
+  crawlSpeedMult: 1.5,    // the wall-crawl scurry between commitments
+  dashFlare: 0.7,         // locked windup: the target lane's silk flares (≥0.6s tell)
+  dashSpeed: 560,
+  dashRecover: 0.55,      // intact lane: controlled brake, no window
+  laneBrakeSilk: 2,       // live silk rows a lane needs to brake her (else: overshoot)
+  dashStagger: 1.2,       // overshoot crash (the window rides it)
+  // The spiderling pool (fair surprise §1): every entry is a known readable creature.
+  addPool: [
+    { kind: "bat", tier: "swarm", weight: 4, maxAlive: 0, count: 1 },     // a spiderling
+    { kind: "bat", tier: "swarm", weight: 3, maxAlive: 0, count: 2 },     // a spiderling PAIR
+    { kind: "bat", tier: "elite", weight: 1, maxAlive: 1, count: 1 },     // one Commander
+    { kind: "charger", tier: "elite", weight: 1, maxAlive: 1, count: 1 }, // one Bulwark (mover-capped)
+  ] as readonly AddPoolEntry[],
   // Molt beat: a fixed 1.4s cocoon (roar semantics) that bursts into a web-bolt ring +
-  // two broodlings. Corrected thresholds 65/30, floors 57/22.
+  // two broodlings, then RESHAPES the weave (fresh lattice). Thresholds 65/30, floors 57/22.
   phaseAt: [0.65, 0.30] as readonly number[],
   phaseFloor: [0.57, 0.22] as readonly number[],
   moltDuration: 1.4,
@@ -842,6 +905,15 @@ export const GILDED = {
   sanctifyDuration: 1.2,
   sanctifyDamageReduction: 0.35,
   sanctifyBulletClearRadius: 70,
+  // Fair surprise §3 — the sanctify RESHAPES the archive: the old shelving crumbles and
+  // a fresh seeded ring of destructible cover rises around the Warden while it roars
+  // (the non-damaging beat IS the telegraph). Gaps are authored into the ring by
+  // construction, sites never rise on or beside a standing player, and every piece is
+  // breakable — the reconfiguration resets cover memory, never the escape.
+  coverSites: 12,        // candidate sites on the ring
+  coverGapEvery: 4,      // every Nth site stays open — ≥3 authored gaps per ring
+  coverRingDist: 200,
+  coverPlayerClear: 70,  // a site never rises within a player's personal space
 } as const;
 
 export function gildedHpForFloor(floor: number): number {

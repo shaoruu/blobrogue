@@ -1203,11 +1203,14 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
   weaver: {
     pounce: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
     weave: { windup: "weaver.latticeWarn", release: "weaver.latticeFire" },
-    // Earned windows: the blink-strike rides the thread it committed (the lattice rows);
-    // the mirror feint's split is the read tell; a snag/tangle flips the move to "crash"
-    // — the shared punishable-stun grammar, voiced on the Weaver's own rows.
+    // Earned windows + fair surprise: the blink-strike rides the thread it committed;
+    // the climb (dive grammar) departs on the blink rows and its silk volleys charge on
+    // the lattice rows; the P3 lane dash (rush grammar) flares then fires; every
+    // snag / forced-down / overshoot flips the move to "crash" — the shared
+    // punishable-stun grammar, voiced on the Weaver's own rows.
     blink: { windup: "weaver.blinkTell", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
-    decoy: { windup: "weaver.feint", release: "weaver.feint", recover: "weaver.recover" },
+    dive: { windup: "weaver.feint", active: "weaver.blinkDepart" },
+    rush: { windup: "weaver.latticeWarn", active: "weaver.blinkDepart", impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
     crash: { impact: "weaver.blinkArriveStrike", recover: "weaver.recover" },
   },
   gilded: {
