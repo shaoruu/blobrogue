@@ -9,7 +9,7 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -224,6 +224,11 @@ export class GameWorld implements RoomRuntime {
 
   rollBlessingChoices(pid: PlayerId, rare: boolean): string[] {
     const owned = this.state.players.get(pid)?.ownedItemIds ?? [];
+    // A reroll-everything purchase armed one offer reroll for this player: burn a full
+    // choice-set draw first (the solo client performs the identical burn locally).
+    if (consumeBlessingReroll(this.state, pid)) {
+      rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next(), owned, { rareOnly: rare });
+    }
     return rollItemChoicesWith(BLESSING_CHOICES, () => this.offerRng.next(), owned, { rareOnly: rare }).map((it) => it.id);
   }
 

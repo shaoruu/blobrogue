@@ -21,7 +21,7 @@ import {
   ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
   isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
 } from "./enemies.js";
-import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire } from "./weapons.js";
+import { WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, fire, rollMysteryWeapon } from "./weapons.js";
 import type { ShotSpec } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult } from "./weaponStats.js";
@@ -38,11 +38,12 @@ import {
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices,
+  PREMIUM, CAPS, mysteryOddsAt, coinChanceTaper, coopCoinGainMult,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
-import { buildShopState, restockShop, shopSlotStatusFor, shopViewerOf, SHOP_BUY_RANGE } from "./shop.js";
+import { buildShopState, restockShop, shopSlotStatusFor, shopSlotPriceFor, shopViewerOf, SHOP_BUY_RANGE } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
 
 // A live melee swing, resolving hits over its short duration (sim state, per player).
@@ -147,6 +148,18 @@ export interface PlayerSim {
   // Studio gate §4: the boss chest offers P+1 weapon CHOICES and each player claims exactly
   // one per boss floor. Reset on every floor build.
   hasClaimedBossChoice: boolean;
+  // ---- the premium coin economy (run-scoped, per player) ----
+  // Successive +1-max-heart purchases (each costs ×1.6 the last; the hearts share the +4
+  // total cap with Vitality — see applyMaxHpBonus).
+  premiumHpBuys: number;
+  // The amber cache is armed: unspent coins convert to a tiny Amber trickle at run end
+  // (≤ +2 per 100, capped +5/run) — the ONLY coins→permanence route.
+  isAmberCacheArmed: boolean;
+  // Flat Amber banked by the mythic windfall claim (+8 per claim).
+  amberWindfall: number;
+  // A reroll-everything purchase arms one reroll of this player's NEXT blessing offer:
+  // the roller (solo client / authoritative server) burns a full choice-set draw first.
+  isBlessingRerollArmed: boolean;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -277,6 +290,10 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     ownedItemIds: [],
     meleeSwing: null,
     hasClaimedBossChoice: false,
+    premiumHpBuys: 0,
+    isAmberCacheArmed: false,
+    amberWindfall: 0,
+    isBlessingRerollArmed: false,
   };
 }
 
@@ -436,9 +453,11 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   w.chests = w.isSandbox ? [] : placeChests(w);
   if (!w.isSandbox) stockWeaponChests(w);
   // Patch's shop: built off the generator's dedicated shop room (deterministic from
-  // seed+floor, party-size-invariant so a mid-floor join never shifts the stall).
+  // seed+floor; the party size is the SNAPSHOTTED encounter count, so a mid-floor join
+  // never shifts the stall — and it only ever grows the premium sink count upward from
+  // the identical solo prefix).
   const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
-  w.shop = !w.isSandbox && shopRoom !== undefined ? buildShopState(w.seed, floor, shopRoom) : null;
+  w.shop = !w.isSandbox && shopRoom !== undefined ? buildShopState(w.seed, floor, shopRoom, w.encounterPlayers) : null;
   w.obstacleRev++;
   const spawns = w.isSandbox
     ? { active: [], pending: [] }
@@ -850,14 +869,18 @@ function dashCooldown(p: PlayerSim): number {
 function isProtected(p: PlayerSim): boolean {
   return p.invuln > 0 || p.dashInvuln > 0;
 }
-function coinGain(p: PlayerSim): number {
-  return Math.max(1, Math.round(p.mods.coinMult));
+// A collected coin's face value: Greed's multiplier × the co-op compensation (coin income
+// is per-player and floor coins are first-come, so a party splits them ~P ways — the
+// value multiplier keeps each member's per-floor income roughly party-size-invariant,
+// which the premium ladder's P-invariant prices assume). Solo is ×1, unchanged.
+function coinGain(w: WorldState, p: PlayerSim): number {
+  return Math.max(1, Math.round(p.mods.coinMult * coopCoinGainMult(w.encounterPlayers)));
 }
 function comboMult(p: PlayerSim): number {
   return C.comboTierFor(p.combo).mult;
 }
-function comboCoinValue(p: PlayerSim): number {
-  return Math.max(1, Math.round(coinGain(p) * comboMult(p)));
+function comboCoinValue(w: WorldState, p: PlayerSim): number {
+  return Math.max(1, Math.round(coinGain(w, p) * comboMult(p)));
 }
 
 function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
@@ -890,9 +913,12 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
 
 // Recompute maxHp from the mods bonus and clamp current HP into it. Deliberately does NOT
 // heal the capacity delta — a max-HP upgrade restores exactly 1 heart (see applyItemToWorld),
-// per the Vitality rule in spec §2.
+// per the Vitality rule in spec §2. Premium +1-heart purchases stack on the blessing bonus
+// but the POSITIVE total is hard-capped at the same +4 (Vitality included) — no coin route
+// past the studio cap; Glass Cannon's negative bonus still applies in full.
 export function applyMaxHpBonus(p: PlayerSim): void {
-  p.maxHp = Math.max(1, PLAYER.baseMaxHp + p.mods.maxHpBonus);
+  const bonus = Math.min(CAPS.maxHpBonus, p.mods.maxHpBonus + p.premiumHpBuys);
+  p.maxHp = Math.max(1, PLAYER.baseMaxHp + bonus);
   if (p.hp > p.maxHp) p.hp = p.maxHp;
   if (p.hp < 1) p.hp = 1;
 }
@@ -1041,6 +1067,43 @@ export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void 
 // ("SOLD", "NEED N MORE", …) is also the reason the authority refused.
 export type ShopBuyOutcome = "ok" | "invalid" | Exclude<ShopSlotStatus, "buy">;
 
+// Whether living enemies stand close enough to a player that the mid-fight premium
+// stations (full heal / reroll-everything) read IN COMBAT. Shop rooms are sanctuary
+// (no enemy ever inside), so this only trips when the fight leaks to the doorstep.
+export function isPlayerInCombat(w: WorldState, p: { x: number; y: number }): boolean {
+  for (const e of w.enemies) {
+    if (!e.dead && Math.hypot(e.x - p.x, e.y - p.y) <= PREMIUM.combatLockRadius) return true;
+  }
+  return false;
+}
+
+// The authoritative shop viewer for a live player: the pure shopViewerOf projection plus
+// the world-derived combat read. Every sim-side status check goes through here.
+export function shopViewerFor(w: WorldState, p: PlayerSim) {
+  return shopViewerOf(p, isPlayerInCombat(w, p));
+}
+
+// The mystery reveal's own seeded stream: deterministic per (seed, floor, slot, buyer,
+// reroll generation), so the same seed + the same wallet always reveal the same weapon —
+// solo, server, and any replay agree — while two buyers of one personal slot each get
+// their own fate.
+function mysteryRevealRoll(w: WorldState, slot: ShopSlot, p: PlayerSim): WeaponId {
+  let h = 5381;
+  for (let i = 0; i < p.id.length; i++) h = ((h * 33) ^ p.id.charCodeAt(i)) | 0;
+  const rng = new Rng((w.seed ^ 0x6d757374) + w.floor * 68041 + slot.id * 977 + (w.shop?.rerollsUsed ?? 0) * 31337 + h);
+  return rollMysteryWeapon(rng, mysteryOddsAt(w.floor), p.ownedWeapons);
+}
+
+// Burn a player's armed blessing-offer reroll (a reroll-everything purchase). The caller
+// is the offer ROLLER — the solo client or the authoritative server — which discards one
+// full choice-set draw from its offer stream when this returns true.
+export function consumeBlessingReroll(w: WorldState, pid: PlayerId): boolean {
+  const p = w.players.get(pid);
+  if (!p || !p.isBlessingRerollArmed) return false;
+  p.isBlessingRerollArmed = false;
+  return true;
+}
+
 // The validated, authoritative shop purchase — the ONLY way coins leave a player at the
 // stall (LocalTransport routes the solo panel here; the server routes the shopBuy command
 // here). Walking over a station never reaches this function, let alone buys.
@@ -1057,9 +1120,10 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
   const slot = shop.slots.find((s) => s.id === slotId);
   if (!slot) return "invalid";
   if (Math.hypot(p.x - slot.x, p.y - slot.y) > SHOP_BUY_RANGE) return "invalid";
-  const status = shopSlotStatusFor(shop, slot, shopViewerOf(p));
+  const viewer = shopViewerFor(w, p);
+  const status = shopSlotStatusFor(shop, slot, viewer);
   if (status !== "buy") return status;
-  p.coins -= slot.price;
+  p.coins -= shopSlotPriceFor(shop, slot, viewer);
   switch (slot.kind) {
     case "weapon": {
       slot.soldTo = pid;
@@ -1080,6 +1144,69 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     case "reroll": {
       shop.rerollsUsed++;
       restockShop(shop, w.seed, w.floor);
+      break;
+    }
+    // ---- the premium sinks ----
+    case "mystery": {
+      slot.buyers.push(pid);
+      const weapon = mysteryRevealRoll(w, slot, p);
+      acquireWeapon(p, weapon);
+      ev.push({ t: "mysteryReveal", pid, weapon, x: slot.x, y: slot.y });
+      break;
+    }
+    case "legendary": {
+      slot.buyers.push(pid);
+      acquireWeapon(p, slot.weapon!);
+      break;
+    }
+    case "rare_blessing": {
+      slot.buyers.push(pid);
+      const item = itemById(slot.itemId!);
+      if (item) for (const e of applyItemToWorld(w, pid, item)) ev.push(e);
+      break;
+    }
+    case "max_hp": {
+      slot.buyers.push(pid);
+      p.premiumHpBuys++;
+      const maxHpBefore = p.maxHp;
+      applyMaxHpBonus(p);
+      if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
+      break;
+    }
+    case "full_heal": {
+      // The splurge: to full, never past maxHp, and deliberately NO protection frames —
+      // recovery is purchasable, invulnerability is not.
+      slot.buyers.push(pid);
+      p.hp = p.maxHp;
+      break;
+    }
+    case "reroll_all": {
+      shop.rerollsUsed++;
+      restockShop(shop, w.seed, w.floor, true);
+      p.isBlessingRerollArmed = true;
+      break;
+    }
+    case "amber_cache": {
+      slot.buyers.push(pid);
+      p.isAmberCacheArmed = true;
+      break;
+    }
+    // ---- the mythic capstone (one shared claim per party per shop) ----
+    case "mythic_weapon": {
+      slot.soldTo = pid;
+      acquireWeapon(p, slot.weapon!);
+      break;
+    }
+    case "mythic_trio": {
+      // Pick 1 of 3 rares: the existing rare-offer machinery — the buyer is paused under
+      // the offer (sanctuary ground) and the descend gate holds until they answer.
+      slot.soldTo = pid;
+      raiseBlessingOffer(w, pid, true, ev);
+      break;
+    }
+    case "mythic_amber": {
+      slot.soldTo = pid;
+      p.amberWindfall += PREMIUM.mythicAmber;
       break;
     }
   }
@@ -1478,12 +1605,14 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
   if (isMinibossKind(e.kind)) {
     w.pickups.push(makePickup(w, "heart", e.x, e.y, ev));
     for (let i = 0; i < 3; i++) {
-      w.pickups.push(makePickup(w, "coin", e.x + (i - 1) * 18, e.y + 16, ev, p ? comboCoinValue(p) : 1));
+      w.pickups.push(makePickup(w, "coin", e.x + (i - 1) * 18, e.y + 16, ev, p ? comboCoinValue(w, p) : 1));
     }
     return;
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
-  if (w.rng.next() < 0.5) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(p) : 1));
+  // The deep-floor taper (premium economy calibration) thins the CHANCE only — values and
+  // the RNG stream are untouched, so determinism and Greed's identity both hold.
+  if (w.rng.next() < 0.5 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(w, p) : 1));
   // Ambient hearts (§2): halved rate, party-scaled in co-op, never from summoned adds.
   if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
     w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
@@ -4943,18 +5072,18 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
-      if (w.rng.next() < 0.6) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.6 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       if (w.rng.next() < SUSTAIN.crateHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
         w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
       }
       break;
     case "pot":
       ev.push({ t: "propBreak", kind: "pot", x: p.x, y: p.y });
-      if (w.rng.next() < 0.35) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.35 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       break;
     case "barrel":
       ev.push({ t: "propBreak", kind: "barrel", x: p.x, y: p.y });
-      if (w.rng.next() < 0.45) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.45 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       break;
     case "barrel_explosive":
       explodeBarrel(w, by ?? null, p, ev);
@@ -5228,7 +5357,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         }
       }
       if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + p.radius) {
-        if (p.kind === "coin") { player.coins += p.value ?? coinGain(player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "coin") { player.coins += p.value ?? coinGain(w, player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
         if (p.kind === "heart") {
           // At full HP the heart is consumed and converts to coins (§2) — no backtracking
           // stockpile of floor hearts.

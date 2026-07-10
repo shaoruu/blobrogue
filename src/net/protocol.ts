@@ -90,7 +90,15 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     fuses, the fragment's tether id, a bulwark elite's plate HP). A v7 client would
 //     reject any snapshot carrying these as a ProtocolError; the strict join gate turns
 //     that skew into a clean "update your client".
-export const PROTOCOL_VERSION = 8;
+// v9 (intentional bump, the depth-scaling PREMIUM coin economy): the shop wire's closed
+// slot-kind set grew (mystery/legendary/rare_blessing/max_hp/full_heal/reroll_all/
+// amber_cache + the mythic_* capstone kinds — a v8 client would reject any premium stall
+// as a ProtocolError), SelfWire carries the premium run state the client must reconcile
+// and render (php: successive +1-heart buys, driving the ×1.6 price ladder; amc: the
+// amber cache armed; amw: banked mythic Amber windfall; brt: the armed blessing-offer
+// reroll), and the mysteryReveal event joins the reliable stream. The strict join gate
+// turns the skew into a clean "update your client".
+export const PROTOCOL_VERSION = 9;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -154,6 +162,10 @@ export interface SelfWire {
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
   bcl: boolean;                // hasClaimedBossChoice (gate §4 personal boss-reward claim)
+  php: number;                 // premiumHpBuys (the ×1.6 successive +1-heart price ladder)
+  amc: boolean;                // isAmberCacheArmed (end-run coins→Amber trickle armed)
+  amw: number;                 // amberWindfall (mythic +8 Amber claims banked this run)
+  brt: boolean;                // isBlessingRerollArmed (next blessing offer rerolls once)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -440,7 +452,12 @@ const PROP_KINDS: Record<PropKind, true> = {
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
 };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
-const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = { weapon: true, blessing: true, heart: true, reroll: true };
+const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
+  weapon: true, blessing: true, heart: true, reroll: true,
+  mystery: true, legendary: true, rare_blessing: true, max_hp: true, full_heal: true,
+  reroll_all: true, amber_cache: true,
+  mythic_weapon: true, mythic_trio: true, mythic_amber: true,
+};
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
@@ -491,6 +508,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
   shopBuy: { scope: "pos", fields: { pid: "str", slot: "num", kind: "str", x: "num", y: "num" } },
+  mysteryReveal: { scope: "pos", fields: { pid: "str", weapon: "str", x: "num", y: "num" } },
   weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
   bulletWall: { scope: "pos", fields: { x: "num", y: "num", aim: "num" } },
   bulletBounce: { scope: "pos", fields: { x: "num", y: "num", aim: "num", color: "str" } },
@@ -697,6 +715,10 @@ function validateSelfWire(v: unknown): SelfWire {
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
     combo: num(o, "combo", 0, 1e9), ct: num(o, "ct", 0, 1e4),
     bcl: boolOf(o, "bcl"),
+    php: intOf(o, "php", 0, 64),
+    amc: boolOf(o, "amc"),
+    amw: num(o, "amw", 0, 1e6),
+    brt: boolOf(o, "brt"),
   };
 }
 
@@ -958,6 +980,7 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
+    php: s.premiumHpBuys, amc: s.isAmberCacheArmed, amw: s.amberWindfall, brt: s.isBlessingRerollArmed,
   };
 }
 
@@ -969,6 +992,7 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
     hasClaimedBossChoice: w.bcl,
+    premiumHpBuys: w.php, isAmberCacheArmed: w.amc, amberWindfall: w.amw, isBlessingRerollArmed: w.brt,
   };
 }
 

@@ -93,7 +93,7 @@ function makeProfile(overrides: Partial<ProfileDoc> = {}): ProfileDoc {
   return {
     playerId: "player-1", name: "blob", colorIndex: 2,
     cosmetics: { hat: null, face: null, body: null, title: null },
-    totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0, unlocks: [], isAccount: false,
+    totalKills: 0, deepestFloor: 0, totalCoins: 0, gamesPlayed: 0, amber: 0, unlocks: [], isAccount: false,
     ...overrides,
   };
 }
@@ -250,7 +250,7 @@ function member(playerId: string, name: string, opts: Partial<LobbyPlayer> = {})
   };
 }
 
-const RUN = { floor: 3, kills: 12, coins: 7, durationMs: 61_000 };
+const RUN = { floor: 3, kills: 12, coins: 7, amber: 0, durationMs: 61_000 };
 
 async function main(): Promise<void> {
   section("one multiplayer path: the title offers exactly PLAY ONLINE + PLAY SOLO");

@@ -16,7 +16,7 @@
 import type { TileKind } from "./types.js";
 import { Rng } from "./rng.js";
 import { isBossFloor } from "./enemies.js";
-import { isShopFloor } from "./shop.js";
+import { hasShopRoomOnFloor } from "./shop.js";
 
 // "shop": Patch's waystation — the dedicated safe room on every shop floor (3/6/9, …).
 // The whole content pipeline treats it as sanctuary ground: no enemies, no hazards, no
@@ -494,12 +494,13 @@ export function generateDungeon(seed: number, floor: number): Dungeon {
       rooms.push(bossArena);
     }
   }
-  // Shop floors host Patch's waystation: a dedicated LARGER room, placed first (like the
-  // arena) so it always fits, on plain rect floor — the shop layout needs clean ground
-  // and the safe-room read needs a calm silhouette. Boss floors never carry one, so the
-  // arena and the shop never compete for first placement.
+  // Shop floors host Patch's waystation (the Dealer cadence, or a premium landing —
+  // hasShopRoomOnFloor): a dedicated LARGER room, placed first (like the arena) so it
+  // always fits, on plain rect floor — the shop layout needs clean ground and the
+  // safe-room read needs a calm silhouette. Boss floors never carry one, so the arena
+  // and the shop never compete for first placement.
   let shopRoom: Room | null = null;
-  if (isShopFloor(floor)) {
+  if (hasShopRoomOnFloor(floor)) {
     const sw = 11 + rand.int(0, 2);
     const sh = 8 + rand.int(0, 2);
     for (let attempt = 0; attempt < 80 && !shopRoom; attempt++) {

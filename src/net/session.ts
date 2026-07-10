@@ -219,6 +219,7 @@ export class Session {
         floor: result.floor,
         kills: result.kills,
         coins: result.coins,
+        amber: result.amber,
         durationMs: Math.round(result.durationMs),
         // The run's final build rides along for the player's leaderboard entry (ids only —
         // display names resolve client-side from the weapon/item catalogs).

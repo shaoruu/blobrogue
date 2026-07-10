@@ -32,7 +32,9 @@ import type {
 // v8: Patch's shop room (dealer pickups off the wire, `shop` snapshot state, the shopBuy
 // command + event) + the bestiary wave (new enemy kinds/moves/hazard kinds + the
 // EnemyWire aux channel) — disjoint wire growth sharing one version.
-export const SYNTHETIC_JOIN_PROTOCOL = 8;
+// v9: the premium coin economy (premium shop slot kinds on the shop wire, SelfWire
+// premium run state, the mysteryReveal event).
+export const SYNTHETIC_JOIN_PROTOCOL = 9;
 
 export interface HttpProbeConfig {
   baseUrl: string;

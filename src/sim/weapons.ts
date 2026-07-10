@@ -2,6 +2,7 @@ import type { Bullet, WeaponId } from "./types.js";
 import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
 import { BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF } from "./balance.js";
+import type { RarityWeights } from "./balance.js";
 
 export interface MeleeSpec {
   arc: number;         // swing arc in radians (thrust uses a narrow forward cone)
@@ -10,9 +11,25 @@ export interface MeleeSpec {
   swingDur?: number;   // active swing seconds (defaults to 0.2)
 }
 
+// Weapon rarity — the shared vocabulary the premium economy prices against (mystery
+// rolls, the legendary sink, the mythic arsenal). Rarity is derived from the static
+// WEAPONS table by id, never carried on the wire. Legendary means IDENTITY/MECHANIC —
+// the strongest room-verb silhouettes — never raw DPS past the boss ceilings: every
+// weapon here already sits under the §3 boss-facing envelope (WEAPON_BOSS_COEF + the
+// balance suite's 100k-build DPS gates), and rarity changes no stat. The in-flight
+// rarity wave (new legendary/mystery weapon content) extends THIS table.
+export type WeaponRarity = "common" | "rare" | "legendary";
+
+export const RARITY_COLOR: Record<WeaponRarity, string> = {
+  common: "#e8e0c8",
+  rare: "#6ad0ff",
+  legendary: "#ffb43b",
+};
+
 export interface Weapon {
   id: WeaponId;
   name: string;
+  rarity: WeaponRarity;
   fireCd: number;      // seconds between shots / swings
   speed: number;       // bullet speed px/s (unused on melee)
   life: number;        // bullet lifetime (doubles as range; unused on melee)
@@ -41,62 +58,62 @@ export interface Weapon {
 
 export const WEAPONS: Record<WeaponId, Weapon> = {
   pistol: {
-    id: "pistol", name: "Pistol", fireCd: 0.16, speed: 560, life: 1.1,
+    id: "pistol", name: "Pistol", rarity: "common", fireCd: 0.16, speed: 560, life: 1.1,
     damage: 2, pellets: 1, spread: 0, bulletRadius: 6, color: "#ffd27a", muzzle: 2,
   },
   shotgun: {
-    id: "shotgun", name: "Shotgun", fireCd: 0.52, speed: 500, life: 0.32,
+    id: "shotgun", name: "Shotgun", rarity: "common", fireCd: 0.52, speed: 500, life: 0.32,
     damage: 1.7, pellets: 5, spread: 0.52, bulletRadius: 5, color: "#ffb43b", muzzle: 6,
   },
   rapid: {
-    id: "rapid", name: "Rapid", fireCd: 0.07, speed: 660, life: 0.85,
+    id: "rapid", name: "Rapid", rarity: "common", fireCd: 0.07, speed: 660, life: 0.85,
     damage: 0.9, pellets: 1, spread: 0.07, bulletRadius: 4, color: "#8affe0", muzzle: 1,
   },
   // Tier A — pure data (no engine branches).
   smg: {
-    id: "smg", name: "Hornet", fireCd: 0.09, speed: 640, life: 0.9,
+    id: "smg", name: "Hornet", rarity: "common", fireCd: 0.09, speed: 640, life: 0.9,
     damage: 1.1, pellets: 1, spread: 0.03, bulletRadius: 4, color: "#b6ff6a", muzzle: 1,
   },
   cannon: {
-    id: "cannon", name: "Thunderbolt", fireCd: 0.72, speed: 520, life: 1.3,
+    id: "cannon", name: "Thunderbolt", rarity: "rare", fireCd: 0.72, speed: 520, life: 1.3,
     damage: 9, pellets: 1, spread: 0, bulletRadius: 11, color: "#ff8a3b", muzzle: 5,
     basePierce: 2,
   },
   burst: {
-    id: "burst", name: "Triplet", fireCd: 0.34, speed: 680, life: 1.0,
+    id: "burst", name: "Triplet", rarity: "common", fireCd: 0.34, speed: 680, life: 1.0,
     damage: 2.2, pellets: 3, spread: 0.14, bulletRadius: 4, color: "#6ad0ff", muzzle: 2,
   },
   // Tier B — each carries one optional behavior field stamped onto its bullets.
   ricochet: {
-    id: "ricochet", name: "Rebound", fireCd: 0.28, speed: 600, life: 1.6,
+    id: "ricochet", name: "Rebound", rarity: "rare", fireCd: 0.28, speed: 600, life: 1.6,
     damage: 2.4, pellets: 1, spread: 0.02, bulletRadius: 5, color: "#c98bff", muzzle: 2,
     bounce: 2,
   },
   homing: {
-    id: "homing", name: "Wisp", fireCd: 0.16, speed: 420, life: 1.4,
+    id: "homing", name: "Wisp", rarity: "rare", fireCd: 0.16, speed: 420, life: 1.4,
     damage: 1.6, pellets: 1, spread: 0.25, bulletRadius: 5, color: "#8affe0", muzzle: 1,
     homing: 6,
   },
   tesla: {
-    id: "tesla", name: "Tesla", fireCd: 0.4, speed: 900, life: 0.5,
+    id: "tesla", name: "Tesla", rarity: "legendary", fireCd: 0.4, speed: 900, life: 0.5,
     damage: 3, pellets: 1, spread: 0, bulletRadius: 5, color: "#7fe9ff", muzzle: 2,
     chain: 3, chainRange: 130,
   },
   // Tier A — pure data. Point-blank devastator: a dense, short-range pellet wall.
   sawnoff: {
-    id: "sawnoff", name: "Boomstick", fireCd: 0.62, speed: 440, life: 0.22,
+    id: "sawnoff", name: "Boomstick", rarity: "rare", fireCd: 0.62, speed: 440, life: 0.22,
     damage: 2.4, pellets: 8, spread: 0.85, bulletRadius: 5, color: "#ff7a3b", muzzle: 8,
   },
   // Tier A — pure data. Near-hitscan precision slug (pierce comes from the Full Metal item).
   // The 6px radius keeps the slug precise but forgiving enough that a near-graze on a small
   // body connects (collision is swept, so its 1400px/s can never tunnel between ticks).
   railgun: {
-    id: "railgun", name: "Longshot", fireCd: 0.85, speed: 1400, life: 1.6,
+    id: "railgun", name: "Longshot", rarity: "rare", fireCd: 0.85, speed: 1400, life: 1.6,
     damage: 11, pellets: 1, spread: 0, bulletRadius: 6, color: "#e8f0ff", muzzle: 3,
   },
   // Tier B — reuses the ricochet bounce field: fast full-auto that ricochets once.
   nailer: {
-    id: "nailer", name: "Nailer", fireCd: 0.12, speed: 720, life: 1.1,
+    id: "nailer", name: "Nailer", rarity: "common", fireCd: 0.12, speed: 720, life: 1.1,
     damage: 1.4, pellets: 1, spread: 0.05, bulletRadius: 3, color: "#d9d2c0", muzzle: 1,
     bounce: 1,
   },
@@ -104,7 +121,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // continuous flame cone; low per-hit damage but every round stamps burn, so the DoT
   // (and any elemental blessings) do the real work. See the status system in game.ts.
   flamer: {
-    id: "flamer", name: "Dragon", fireCd: 0.04, speed: 300, life: 0.28,
+    id: "flamer", name: "Dragon", rarity: "rare", fireCd: 0.04, speed: 300, life: 0.28,
     damage: 0.6, pellets: 2, spread: 0.5, bulletRadius: 7, color: "#ff8a3b", muzzle: 2,
     burn: 2,
   },
@@ -113,7 +130,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // chokepoint into a blast zone, and detonate explosive barrels from safety — weak
   // single-target on purpose (the blast is the whole payload; no pierce, no direct hit).
   mortar: {
-    id: "mortar", name: "Thumper", fireCd: 0.75, speed: 380, life: 0.6,
+    id: "mortar", name: "Thumper", rarity: "legendary", fireCd: 0.75, speed: 380, life: 0.6,
     damage: 6, pellets: 1, spread: 0, bulletRadius: 8, color: "#ffc46a", muzzle: 5,
     blast: 64,
   },
@@ -122,22 +139,22 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // is TRACKING: hold the line on one target and melt it — no spread, no travel time to
   // lead, but short range and it punches only one body deep (basePierce 1).
   beam: {
-    id: "beam", name: "Sunlance", fireCd: 0.045, speed: 2000, life: 0.24,
+    id: "beam", name: "Sunlance", rarity: "legendary", fireCd: 0.045, speed: 2000, life: 0.24,
     damage: 0.75, pellets: 1, spread: 0, bulletRadius: 4, color: "#ffe6a0", muzzle: 1,
     basePierce: 1,
   },
     sword: {
-    id: "sword", name: "Cutlass", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
+    id: "sword", name: "Cutlass", rarity: "common", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
     melee: { arc: 1.25, reach: 48, swingDur: 0.2 },
   },
   longsword: {
-    id: "longsword", name: "Claymore", fireCd: 0.38, speed: 0, life: 0, damage: 6.2,
+    id: "longsword", name: "Claymore", rarity: "rare", fireCd: 0.38, speed: 0, life: 0, damage: 6.2,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#d8dce8", muzzle: 0,
     melee: { arc: 1.85, reach: 58, swingDur: 0.25 },
   },
   spear: {
-    id: "spear", name: "Pike", fireCd: 0.28, speed: 0, life: 0, damage: 4.8,
+    id: "spear", name: "Pike", rarity: "common", fireCd: 0.28, speed: 0, life: 0, damage: 4.8,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#9ee8c8", muzzle: 0,
     melee: { arc: 0.32, reach: 74, isThrust: true, swingDur: 0.18 },
   },
@@ -151,6 +168,36 @@ export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
 ];
+
+export function weaponsOfRarity(rarity: WeaponRarity): WeaponId[] {
+  return PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === rarity);
+}
+
+// A seeded roll within one rarity band, distinct from the owned set while the band
+// permits (the fallback keeps the roll total — a maxed collector still gets a weapon,
+// acquire simply dedups it).
+export function rollWeaponOfRarity(rng: Rng, rarity: WeaponRarity, owned: readonly WeaponId[]): WeaponId {
+  const band = weaponsOfRarity(rarity);
+  const fresh = band.filter((id) => !owned.includes(id));
+  const pool = fresh.length > 0 ? fresh : band;
+  return pool[Math.floor(rng.next() * pool.length)];
+}
+
+// The mystery reveal: weighted rarity pick (weights = [common, rare, legendary] — the
+// premium economy's depth-improving odds), then a distinct-if-possible roll inside the
+// band. Deterministic from the injected seeded stream — solo and the authoritative
+// server reveal the identical weapon.
+export function rollMysteryWeapon(rng: Rng, weights: RarityWeights, owned: readonly WeaponId[]): WeaponId {
+  const order: readonly WeaponRarity[] = ["common", "rare", "legendary"];
+  const total = weights[0] + weights[1] + weights[2];
+  let r = rng.next() * total;
+  let rarity: WeaponRarity = "legendary";
+  for (let i = 0; i < order.length; i++) {
+    r -= weights[i];
+    if (r <= 0) { rarity = order[i]; break; }
+  }
+  return rollWeaponOfRarity(rng, rarity, owned);
+}
 
 // A resolved shot: the base weapon merged with the player's in-run item mods. Built
 // once per trigger-pull in the game core so fire() stays a pure geometry helper.

@@ -25,10 +25,10 @@ import {
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim, ShopBuyOutcome } from "../src/sim/world.js";
 import {
-  isShopFloor, buildShopState, shopSlotStatusFor, shopViewerOf, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
+  isShopFloor, hasShopRoomOnFloor, buildShopState, shopSlotStatusFor, shopViewerOf, SHOP_FOCUS_RANGE, SHOP_BUY_RANGE,
 } from "../src/sim/shop.js";
 import type { ShopSlot, ShopState } from "../src/sim/shop.js";
-import { SHOP } from "../src/sim/balance.js";
+import { SHOP, PREMIUM, isPremiumShopFloor } from "../src/sim/balance.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 import type { Dungeon } from "../src/sim/dungeon.js";
 import { isBossFloor } from "../src/sim/enemies.js";
@@ -52,7 +52,9 @@ function section(name: string): void {
 
 const DT = 1 / 20;
 const SEEDS = [0x1a2b3c, 0xbee5, 0x7777777, 0xdead10cc, 0x1359, 0xcafe42, 0x900d5eed, 0x31415926];
-const SHOP_FLOORS = [3, 6, 9, 12, 18, 21, 24, 27];
+// The Dealer's floors: every 3rd, minus boss floors (15/30) and the premium landings
+// (9/24 host the premium shop instead — test/premium.test.ts owns those).
+const SHOP_FLOORS = [3, 6, 12, 18, 21, 27];
 
 function idle(seq: number): InputCmd {
   return { seq, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
@@ -116,18 +118,18 @@ function placementTests(): void {
       for (let floor = 1; floor <= 30; floor++) {
         const d = generateDungeon(seed, floor);
         const shops = d.rooms.filter((r) => r.kind === "shop");
-        if (isShopFloor(floor) !== (shops.length === 1)) isCadenceRight = false;
+        if (hasShopRoomOnFloor(floor) !== (shops.length === 1)) isCadenceRight = false;
         if (shops.length > 1) isSingular = false;
         for (const s of shops) {
           if (s === d.rooms[0] || s === d.rooms[d.rooms.length - 1]) isMidJourney = false;
         }
       }
     }
-    check("shop cadence = every 3rd floor, never boss floors, exactly one room", isCadenceRight && isSingular);
+    check("shop cadence = every 3rd floor (Dealer) or a premium landing, never boss floors, exactly one room", isCadenceRight && isSingular);
     check("the shop is never the spawn or the exit room", isMidJourney);
-    check("isShopFloor: 3/6/9/12 yes; 15/30 (boss) no; 1/2/10 no",
-      [3, 6, 9, 12].every(isShopFloor) && ![15, 30, 1, 2, 10].some(isShopFloor)
-      && isBossFloor(15) && isBossFloor(30));
+    check("isShopFloor: 3/6/12 yes; 9/24 (premium landings) no; 15/30 (boss) no; 1/2/10 no",
+      [3, 6, 12].every(isShopFloor) && ![9, 24, 15, 30, 1, 2, 10].some(isShopFloor)
+      && [9, 24].every(isPremiumShopFloor) && isBossFloor(15) && isBossFloor(30));
   }
 
   section("placement: the shop room is the dedicated LARGER kind with clean rect ground");
@@ -174,10 +176,12 @@ function placementTests(): void {
     for (const seed of SEEDS) {
       for (const floor of SHOP_FLOORS) {
         const w = createWorld(seed, floor);
-        if (!w.shop || w.shop.slots.length !== SHOP.pedestalPrices.length + 2) isEverywhere = false;
+        // 5 classic stations, plus the Dealer's one premium slot from F6+.
+        const want = SHOP.pedestalPrices.length + 2 + (floor >= PREMIUM.dealerSlotFromFloor ? 1 : 0);
+        if (!w.shop || w.shop.slots.length !== want) isEverywhere = false;
       }
     }
-    check(`every (seed, shop floor) builds the full 5-station stall across ${SEEDS.length} seeds`, isEverywhere);
+    check(`every (seed, shop floor) builds the full stall across ${SEEDS.length} seeds`, isEverywhere);
   }
 }
 

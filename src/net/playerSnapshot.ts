@@ -39,6 +39,10 @@ export interface AuthoritativePlayerSnapshot {
   combo: number;
   comboTimer: number;
   hasClaimedBossChoice: boolean;
+  premiumHpBuys: number;
+  isAmberCacheArmed: boolean;
+  amberWindfall: number;
+  isBlessingRerollArmed: boolean;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -98,6 +102,10 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     combo: p.combo,
     comboTimer: p.comboTimer,
     hasClaimedBossChoice: p.hasClaimedBossChoice,
+    premiumHpBuys: p.premiumHpBuys,
+    isAmberCacheArmed: p.isAmberCacheArmed,
+    amberWindfall: p.amberWindfall,
+    isBlessingRerollArmed: p.isBlessingRerollArmed,
   };
 }
 
@@ -128,6 +136,10 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.combo = s.combo;
   p.comboTimer = s.comboTimer;
   p.hasClaimedBossChoice = s.hasClaimedBossChoice;
+  p.premiumHpBuys = s.premiumHpBuys;
+  p.isAmberCacheArmed = s.isAmberCacheArmed;
+  p.amberWindfall = s.amberWindfall;
+  p.isBlessingRerollArmed = s.isBlessingRerollArmed;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

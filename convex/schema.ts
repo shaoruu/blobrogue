@@ -46,6 +46,11 @@ export default defineSchema({
     deepestFloor: v.number(),
     totalCoins: v.number(),
     gamesPlayed: v.number(),
+    // The ONE persistent currency (progression spec §4): banked by the premium economy's
+    // amber cache / mythic windfall at run end. Coins never persist and never buy
+    // permanent power directly — Amber is the only coins→permanence route, and it only
+    // trickles. Optional: pre-Amber rows read 0.
+    amber: v.optional(v.number()),
     // Earned cosmetic/unlock ids. Seeded [] since day one; recordRun grants earned
     // cosmetics into it (see cosmeticsCore.earnedCosmeticsFor).
     unlocks: v.array(v.string()),

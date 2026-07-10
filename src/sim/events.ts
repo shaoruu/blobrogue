@@ -39,8 +39,13 @@ export type SimEvent =
   | { t: "lootDrop"; x: number; y: number; color: string }
   // A validated shop purchase landed (Patch's room): positional register-chime juice for
   // everyone browsing the stall. kind selects the buyer-side flavor (heart vs weapon vs
-  // blessing vs reroll); the authoritative outcome itself rides STATE, never this event.
+  // blessing vs reroll vs the premium sinks); the authoritative outcome itself rides
+  // STATE, never this event.
   | { t: "shopBuy"; pid: PlayerId; slot: number; kind: ShopSlotKind; x: number; y: number }
+  // A mystery weapon purchase revealed its roll (the register moment's second beat):
+  // positional, so everyone at the stall sees what fate the buyer drew. The weapon
+  // itself already rides authoritative state (the buyer's inventory).
+  | { t: "mysteryReveal"; pid: PlayerId; weapon: WeaponId; x: number; y: number }
   // a player deliberately dropped an owned weapon back into the world (Q / inventory UI);
   // clients near the spot play a small pop + a weapon-name label over the new pickup.
   // Positional like lootDrop — no pid, so EVERY nearby client (not just the dropper) sees it

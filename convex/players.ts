@@ -19,6 +19,9 @@ export interface Profile {
   deepestFloor: number;
   totalCoins: number;
   gamesPlayed: number;
+  // The persistent currency: banked by the premium economy at run end (amber cache
+  // trickle + mythic windfalls). Nothing spends it yet — the Foundation lands later.
+  amber: number;
   unlocks: string[];
   // Present when the row is linked to a signed-in account (Google avatar URL).
   image?: string;
@@ -41,6 +44,7 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
     deepestFloor: doc.deepestFloor,
     totalCoins: doc.totalCoins,
     gamesPlayed: doc.gamesPlayed,
+    amber: doc.amber ?? 0,
     unlocks: doc.unlocks,
     image: user?.image,
     isAccount: doc.userId !== undefined,
@@ -143,6 +147,7 @@ async function absorbGuestRow(
     totalCoins: account.totalCoins + guest.totalCoins,
     deepestFloor: Math.max(account.deepestFloor, guest.deepestFloor),
     gamesPlayed: account.gamesPlayed + guest.gamesPlayed,
+    amber: (account.amber ?? 0) + (guest.amber ?? 0),
     unlocks: [...new Set([...account.unlocks, ...guest.unlocks])],
     ...(account.colorIndex === undefined && guest.colorIndex !== undefined ? { colorIndex: guest.colorIndex } : {}),
     ...(account.cosmeticLoadout === undefined && guest.cosmeticLoadout !== undefined ? { cosmeticLoadout: guest.cosmeticLoadout } : {}),
@@ -301,6 +306,7 @@ interface RunArgs {
   floor: number;
   kills: number;
   coins: number;
+  amber: number;
   durationMs: number;
   build: RunBuild;
 }
@@ -311,6 +317,9 @@ async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Pro
     totalCoins: doc.totalCoins + Math.max(0, run.coins),
     deepestFloor: Math.max(doc.deepestFloor, run.floor),
     gamesPlayed: doc.gamesPlayed + 1,
+    // The premium economy's trickle is already capped at the sim (≤ +5 cache + windfalls);
+    // the fold re-clamps defensively so a tampered client can't mint meaningful Amber.
+    amber: (doc.amber ?? 0) + Math.max(0, Math.min(50, Math.floor(run.amber))),
   };
   // Earned cosmetics unlock off the post-fold all-time stats (the one grant path).
   const earned = earnedCosmeticsFor(totals).filter((id) => !doc.unlocks.includes(id));
@@ -335,14 +344,15 @@ export const recordRun = mutation({
     floor: v.number(),
     kills: v.number(),
     coins: v.number(),
+    amber: v.optional(v.number()),
     durationMs: v.optional(v.number()),
     build: v.optional(v.object({
       weapons: v.array(v.string()),
       items: v.array(v.object({ id: v.string(), count: v.number() })),
     })),
   },
-  handler: async (ctx, { clientId, floor, kills, coins, durationMs, build }) => {
-    const run: RunArgs = { floor, kills, coins, durationMs: durationMs ?? 0, build: cleanBuild(build) };
+  handler: async (ctx, { clientId, floor, kills, coins, amber, durationMs, build }) => {
+    const run: RunArgs = { floor, kills, coins, amber: amber ?? 0, durationMs: durationMs ?? 0, build: cleanBuild(build) };
     const userId = await getAuthUserId(ctx);
     if (userId) {
       const { row, user } = await ensureAccountRow(ctx, userId, clientId, "blob");
