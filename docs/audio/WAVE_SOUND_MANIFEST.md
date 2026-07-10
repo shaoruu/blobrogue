@@ -99,6 +99,71 @@ Canonical mechanics from `origin/ian/content-wave-variety-1eaf`: **Thumper** is 
 |`beamStop` >90ms since last beam shot|`sfx/sunlance_stop`|0.28|.34|—|1|NEW: `A focused amber light beam releases and powers down, short warm crystal tail falling cleanly to silence, [suffix]`|
 |`beamHit` rate-limit 120ms per target|`sfx/sunlance_hit_vN`|0.30|.42|—|2|NEW: `Focused amber light scorches and pierces a target, short warm glass sizzle and precise radiant tick, [suffix]`|
 
+## 4b. The effect wave: the WEAPON AUDIO INTEGRATION CONTRACT
+Canonical mechanics (protocol v8): **Lastlight** `lastlight`, **Breach** `breach`, **Snapwire**
+`snapwire`, **Frostline** `frostline`, **Razor Halo** `halo`, **Prism Sentry** `sentry`,
+**Crooked Chain** `crook`. Every row below is registered in `src/game/waveSpec.ts` and bound to a
+SEMANTIC STATE in `WEAPON_AUDIO` — gameplay code triggers states, never file names. Contract
+rules (gated by `test/arsenal.test.ts` + `test/waveaudio.test.ts`):
+- every row is `isSynthForbidden`: authored stem → shipped-sample DERIVE fallback → **silence**
+  (loud `console.warn` in dev, quiet in production — never the oscillator lane);
+- authored playback jitter ≤ ±5% (runtime rate 0.95–1.05); DERIVE rates stay in [0.7, 1.4];
+- multi-stage mechanics carry ≥ 3 semantic cues; every continuous mechanic is start + ONE keyed
+  loop + stop (never a per-tick retrigger); tier releases are DISTINCT STEMS, never pitch tiers;
+- the status voice is the SHARED `status/*` library; DoT ticks stay silent;
+- generation owner: the main agent, after these vertical-slice hooks settle. A stem `sfx/x`
+  ships as `public/audio/sfx/x.ogg+.mp3` (`_v1.._vN` when variants > 1).
+
+|state|event|file|var|prompt sketch|
+|---|---|---|---:|---|
+|shared equip|`weapon.equip`|`sfx/weapon_equip`|2|`A strange sidearm is drawn and settles into a grip, short foley, [suffix]`|
+|**Lastlight** release|`shootLastlight`|`sfx/lastlight_fire`|3|`A desperate last-stand hand cannon fires one heavy round, sharp dry crack, hot metallic ring, [suffix]`|
+|risk payoff (distinct stem)|`lastlight.empowered`|`sfx/lastlight_empowered`|2|`The same hand cannon fired at death's door, deeper doubled report with a burning overtone, [suffix]`|
+|risk danger (band opens)|`lastlight.surge`|`sfx/lastlight_surge`|1|`A weapon drinks its wielder's failing pulse, low hungry surge upward, [suffix]`|
+|risk recovery (band closes)|`lastlight.settle`|`sfx/lastlight_settle`|1|`The hungry weapon quiets as its wielder recovers, soft exhale down, [suffix]`|
+|**Breach** prime|`breach.chargeStart`|`sfx/breach_charge_start`|2|`A heavy mortar breech opens and a spring begins compressing, [suffix]`|
+|hold loop|`breach.chargeLoop`|`sfx/breach_charge_loop`|1|`Seamless tense mechanical spring under increasing load, low harmonic strain, loop, mono`|
+|threshold detent|`breach.threshold`|`sfx/breach_threshold`|1|`A ratchet detent clicks past its half stop, single dry precise click, [suffix]`|
+|full lock|`breach.fullLock`|`sfx/breach_lock`|1|`A siege spring seats at full compression, bright metallic sear and hold, [suffix]`|
+|release (partial tier)|`shootBreach`|`sfx/breach_fire`|3|`A charged breach mortar releases a heavy arcing shell, deep pneumatic launch thump, [suffix]`|
+|release (full tier, distinct)|`breach.releaseFull`|`sfx/breach_release_full`|2|`A fully-charged siege mortar unloads, massive sprung double concussion with barrel ring, [suffix]`|
+|travel|`breach.travel`|`sfx/breach_travel`|2|`A lobbed shell arcs overhead, falling air whistle, short, [suffix]`|
+|impact|`breach.impact`|`sfx/breach_impact`|3|`A siege shell detonates on packed ground, low concussive boom, tight stone debris, [suffix]`|
+|vent (safe cancel)|`breach.vent`|`sfx/breach_vent`|1|`A charged weapon dumps its pressure harmlessly, sharp steam hiss falling away, [suffix]`|
+|**Snapwire** place|`wirePlant`|`sfx/snapwire_plant`|2|`A taut tripwire is strung between two stakes, quick string pluck and stake tap, [suffix]`|
+|arm|`wire.armed`|`sfx/snapwire_armed`|1|`A strung tripwire goes live, single high tension ping, [suffix]`|
+|trigger|`wireSnap`|`sfx/snapwire_snap`|3|`A heavy tensioned wire trap snaps shut, violent cable release and whipping crack, [suffix]`|
+|expire|`wire.expire`|`sfx/snapwire_expire`|1|`A tensioned wire slackens unspent, sad soft twang losing pitch, [suffix]`|
+|fail (refused plant)|`wire.refuse`|`sfx/snapwire_refuse`|1|`A stake fails to bite stone, dull dead knock, [suffix]`|
+|**Frostline** release|`shootFrostline`|`sfx/frostline_fire`|3|`A small frost bead snaps out of a cold nozzle, tiny glassy chip and icy hiss, very short, [suffix]`|
+|**Halo** owner loop (ONE mixed loop)|`halo.loop`|`sfx/halo_loop`|1|`Seamless ring of orbiting blades, layered rhythmic steel whoosh around the listener, loop, mono`|
+|blade pass|`halo.pass`|`sfx/halo_pass`|2|`One blade sweeps close past the ear, short bright steel whoosh, [suffix]`|
+|blade hit|`halo.hit`|`sfx/halo_hit`|3|`An orbiting blade clips a body in passing, quick shallow steel bite, [suffix]`|
+|flare active|`haloFlare`|`sfx/halo_flare`|2|`A ring of blades flares outward, layered steel whoosh widening in a fast circle, [suffix]`|
+|flare catch|`halo.catch`|`sfx/halo_catch`|2|`A flared blade ring connects hard, doubled steel bite with weight, [suffix]`|
+|**Sentry** place|`sentryPlace`|`sfx/sentry_place`|2|`A small crystal turret locks onto stone, crisp mounting click and a rising chime, [suffix]`|
+|unfold|`sentry.unfold`|`sfx/sentry_unfold`|1|`A crystal mechanism unfolds into position, delicate glass articulation opening, [suffix]`|
+|acquire|`sentry.acquire`|`sfx/sentry_acquire`|1|`A small turret locks a target, two-note rising chirp, [suffix]`|
+|fire|`sentryShot`|`sfx/sentry_fire`|3|`A small automated crystal turret fires one light bolt, quick focused energy tick, very short, [suffix]`|
+|damaged|`sentry.damaged`|`sfx/sentry_damaged`|2|`Glass chips off a crystal housing under a blow, small brittle crack, [suffix]`|
+|destroyed|`sentryDown`|`sfx/sentry_down`|1|`A small crystal turret shatters and dies, bright prism crack, falling shards, sad power-down, [suffix]`|
+|timeout|`sentry.timeout`|`sfx/sentry_timeout`|1|`A crystal turret powers down intact, descending three-note chime fading out, [suffix]`|
+|**Crook** lash/latch|`tetherLatch`|`sfx/chain_latch`|3|`A crooked hooked chain lashes out and bites, sharp hook strike with rattling links, [suffix]`|
+|pull loop|`crook.pullLoop`|`sfx/chain_pull_loop`|1|`Seamless heavy chain reeling under strain, rhythmic link clatter over a taut creak, loop, mono`|
+|hold (taut)|`crook.hold`|`sfx/chain_hold`|1|`A heavy chain snaps taut and holds, single deep clank with tension ring, [suffix]`|
+|sweep|`tetherSweep`|`sfx/chain_sweep`|2|`A heavy chain sweeps a wide brutal arc, whipping links, deep whoosh and crunching connect, [suffix]`|
+|dragged (danger)|`crook.dragged`|`sfx/chain_dragged`|1|`The chain reverses, its wielder is dragged in, alarming low reeling groan toward the listener, [suffix]`|
+|whiff (fail)|`crook.whiff`|`sfx/chain_whiff`|2|`A hooked chain lashes through empty air and clatters back, [suffix]`|
+
+### 4c. The shared status library (apply / break; DoT ticks stay silent)
+|event|file|var|prompt sketch|
+|---|---|---:|---|
+|`status.chillApply`|`status/chill_apply`|2|`Frost takes hold of a body, quick icy crystallization whisper, [suffix]`|
+|`status.freeze`|`status/freeze_solid`|2|`A body locks solid in ice, sharp crystalline clamp, [suffix]`|
+|`status.freezeBreak`|`status/freeze_break`|2|`An ice shell shatters off a moving body, bright glassy burst, [suffix]`|
+|`status.burnApply`|`status/burn_apply`|2|`Flame catches on a body, quick ignition flutter, no roar, [suffix]`|
+|`status.shockApply`|`status/shock_apply`|2|`Static charge lands on a body, single crisp electric bite, [suffix]`|
+
 ## 5. Six audio zones / biome ambience
 All ambience is stereo, `ambient` bus, positional emitter layers; never one full-volume global loop. Generate 45–60s, crossfade 3s. No melody; existing dungeon/boss music remains separate.
 |zone|file|gain|new prompt|

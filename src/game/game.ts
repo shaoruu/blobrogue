@@ -1,6 +1,6 @@
 import type { Dungeon } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
-import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind } from "../sim/types.js";
+import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect } from "../sim/types.js";
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
 import type { FloorHazardPhase } from "../sim/hazards.js";
 import { Rng, randomSeed } from "../sim/rng.js";
@@ -36,7 +36,7 @@ import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
 import {
   comboTierFor, BURROW_ERUPT_RADIUS, CHARGER_RUSH_SPEED, CHARGER_RUSH_DUR, SHIELDER_BLOCK_ARC,
-  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR,
+  ROOTWARD_GUARD_ARC, SINDER_JET_SPEED, SINDER_JET_DUR, HALF_PI,
 } from "../sim/constants.js";
 import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
@@ -56,7 +56,7 @@ import { audio, sfx } from "./audio.js";
 import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
-import { WAVE_HAZARDS } from "./waveSpec.js";
+import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { settings } from "./settings.js";
 import { InputController } from "./input.js";
@@ -189,12 +189,27 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   sword: "meleeSwing",
   longsword: "meleeSwing",
   spear: "meleeSwing",
+  // Effect wave. lastlight/breach/frostline fire through the wave manifest first (see
+  // WAVE_WEAPON_FIRE); these rows are the legacy fallback + the shared-sample stopgap
+  // until their generated stems land. The non-shooting verbs (snapwire/halo/sentry/
+  // crook) never raise a `shot` event — their dedicated effect events carry the sound —
+  // but the Record stays exhaustive by contract.
+  lastlight: "cannon",
+  breach: "cannon",
+  snapwire: "ricochet",
+  frostline: "shootRapid",
+  halo: "meleeSwing",
+  sentry: "homing",
+  crook: "meleeSwing",
 };
 // Per-shot pitch/gain trims where a shared sample needs to read as a different gun
 // (the railgun borrows the cannon boom, pitched up into a sharp crack).
 const SHOOT_SFX_OPTS: Partial<Record<WeaponId, SfxOptions>> = {
   railgun: { rate: 1.35, gain: 0.85 },
   sawnoff: { rate: 0.9 },
+  lastlight: { rate: 1.2, gain: 0.9 },
+  breach: { rate: 0.85 },
+  frostline: { rate: 1.4, gain: 0.5 },
 };
 // Weapons whose shots leave a curl of barrel smoke (the beefy, black-powder end).
 const SMOKY_WEAPONS: ReadonlySet<WeaponId> = new Set(["shotgun", "cannon", "sawnoff", "railgun"]);
@@ -248,6 +263,8 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   sawnoff: 0.6, railgun: 0.4, nailer: 0.06, flamer: 0.04, mortar: 0.45,
   beam: 0.02,
   sword: 0.08, longsword: 0.16, spear: 0.07,
+  lastlight: 0.4, breach: 0.5, snapwire: 0.05, frostline: 0.03,
+  halo: 0.14, sentry: 0.06, crook: 0.18,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -257,6 +274,8 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   sawnoff: 1.6, railgun: 1.5, nailer: 0.6, flamer: 0.3, mortar: 1.4,
   beam: 0.15,
   sword: 0.7, longsword: 1.1, spear: 0.6,
+  lastlight: 1.4, breach: 1.5, snapwire: 0.4, frostline: 0.25,
+  halo: 0.8, sentry: 0.5, crook: 1.0,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
@@ -264,6 +283,8 @@ const FIRE_KICK: Record<WeaponId, number> = {
   sawnoff: 11, railgun: 6, nailer: 1.2, flamer: 0.5, mortar: 7,
   beam: 0.3,
   sword: 1.5, longsword: 2.5, spear: 1,
+  lastlight: 8, breach: 9, snapwire: 1, frostline: 0.5,
+  halo: 2, sentry: 1, crook: 3,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -473,6 +494,21 @@ export class Game {
   }
   private world!: WorldState;
   private inputSeq = 0;
+  // A held Breach charge must never fire out of a menu: when input leaves the gameplay
+  // context mid-charge, this latch turns subsequent input frames into the sim's explicit
+  // charge-cancel intent (dash bit, no movement, no fire) until the charge reads 0.
+  private isChargeCancelPending = false;
+  // ---- the semantic weapon-audio state machine (client-side edges over authoritative
+  // state; every cue is a WEAPON_AUDIO contract state, never a file name) ----
+  private audioPrevWeapon: WeaponId | null = null;
+  private audioPrevChargeT = 0;
+  private isChargeThresholdCued = false;
+  private isChargeLockCued = false;
+  private isBreachReleaseSeen = false;
+  private isRiskBandOpen = false;
+  private audioOrbitSector = -1;
+  // Short-fuse scheduled cues (the sentry's place -> unfold beat).
+  private pendingCues: Array<{ t: number; name: string; x: number; y: number }> = [];
   private seed = 0;
   // Seeded stream for solo/co-op blessing choice rolls (the sim never rolls choices; online
   // the server decides). Keeps the whole client Math.random-free on the choice path.
@@ -588,6 +624,7 @@ export class Game {
   private get pickups(): Pickup[] { return this.world.pickups; }
   private get props(): Prop[] { return this.world.props; }
   private get hazards(): Hazard[] { return this.world.hazards; }
+  private get effects(): Effect[] { return this.world.effects; }
   private get chests(): Chest[] { return this.world.chests; }
 
   private isRunning = false;
@@ -758,7 +795,13 @@ export class Game {
   // Derive the current input context from run state. Called at every transition point and
   // once per tick; the controller clears its edge/latch state whenever it changes.
   private syncInputContext() {
+    const prev = this.input.context;
     this.input.setContext(this.currentInputContext());
+    // Leaving gameplay mid-charge (drawer, pause, overlay): the release that follows must
+    // CANCEL, not fire a shell into wherever the cursor happened to sit.
+    if (prev === "gameplay" && this.input.context !== "gameplay" && this.isRunning && this.p.chargeT > 0) {
+      this.isChargeCancelPending = true;
+    }
   }
 
   private currentInputContext(): InputContext {
@@ -1305,6 +1348,7 @@ export class Game {
     if (this.comboFreeze && this.combo > 0) this.p.comboTimer = COMBO_WINDOW;
 
     this.tickShop(dt);
+    this.tickWeaponAudio(dt);
     this.tickCosmetics(dt, cmd);
 
     if (this.coop) this.publishPresence();
@@ -1321,6 +1365,16 @@ export class Game {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
+    // Pending charge cancel: send the sim's explicit cancel intent (dash with zero
+    // movement neither dashes nor fires — see updateChargeShooting) until the
+    // authoritative charge reads empty. Movement is zeroed so a resume with a held
+    // movement key can't turn the cancel frame into a real dash.
+    if (this.isChargeCancelPending) {
+      if (this.p.chargeT > 0) {
+        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false };
+      }
+      this.isChargeCancelPending = false;
+    }
     return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact };
   }
 
@@ -1397,6 +1451,108 @@ export class Game {
 
   // Advance the client-only cosmetics the sim no longer owns: player anim, dash trail
   // afterimages, particle/decal/etc lifetimes, screen-shake/kick/hurt decay, camera.
+  // Charge-tier and risk-payoff releases: DISTINCT STEMS by contract, never pitch tiers.
+  // Returns true when the semantic layer owned the sound (legacy paths then stay quiet).
+  private playSemanticFireAudio(e: Extract<SimEvent, { t: "shot" }>): boolean {
+    const audio_ = WEAPON_AUDIO[e.weapon];
+    if (!audio_) return false;
+    if (e.weapon === "breach") {
+      this.isBreachReleaseSeen = true;
+      const release = e.chg >= 0.66 ? audio_.releaseAlt : audio_.release;
+      if (release !== undefined) waveAudio.cueAt(release, e.x, e.y);
+      if (audio_.travel !== undefined) waveAudio.cueAt(audio_.travel, e.x, e.y);
+      return true;
+    }
+    if (e.weapon === "lastlight" && e.pid === this.p.id && audio_.payoff !== undefined) {
+      // The risk payoff voice: the wielder's own empowered release once the band is open.
+      const lowHp = this.p.maxHp > 0 ? 1 - this.p.hp / this.p.maxHp : 0;
+      if (lowHp >= 0.5) { waveAudio.cueAt(audio_.payoff, e.x, e.y); return true; }
+    }
+    return false;
+  }
+
+  // Per-tick semantic weapon audio: equip edges, the Breach charge lifecycle (prime /
+  // ONE keyed hold loop / threshold / full lock / vent-on-cancel), the halo's single
+  // owner loop + blade-pass ticks, the chain's pull loop, and the risk band open/close.
+  // Every loop is level-held (holdLoop does the edge work) — never retriggered per tick.
+  private tickWeaponAudio(dt: number) {
+    for (let i = this.pendingCues.length - 1; i >= 0; i--) {
+      const cue = this.pendingCues[i];
+      cue.t -= dt;
+      if (cue.t <= 0) {
+        waveAudio.cueAt(cue.name, cue.x, cue.y);
+        this.pendingCues.splice(i, 1);
+      }
+    }
+    if (!this.isRunning) return;
+    const wpn = this.weapon;
+    const contract = WEAPON_AUDIO[wpn];
+    if (this.audioPrevWeapon !== wpn) {
+      if (this.audioPrevWeapon !== null && contract?.equip !== undefined) {
+        waveAudio.cueAt(contract.equip, this.px, this.py);
+      }
+      this.audioPrevWeapon = wpn;
+      this.audioPrevChargeT = 0;
+      this.isChargeThresholdCued = false;
+      this.isChargeLockCued = false;
+      this.isRiskBandOpen = false;
+      this.audioOrbitSector = -1;
+    }
+
+    // The Breach charge lifecycle off the authoritative (prediction-reconciled) chargeT.
+    const chargeSpec = WEAPONS[wpn].charge;
+    const chg = this.p.chargeT;
+    waveAudio.holdLoop("breach.chargeLoop", "self", chargeSpec !== undefined && chg > 0);
+    if (chargeSpec && contract) {
+      if (chg > 0 && this.audioPrevChargeT === 0 && contract.prime !== undefined) {
+        waveAudio.cueAt(contract.prime, this.px, this.py);
+        this.isBreachReleaseSeen = false;
+      }
+      if (chg >= chargeSpec.time * 0.5 && !this.isChargeThresholdCued && contract.threshold !== undefined) {
+        this.isChargeThresholdCued = true;
+        waveAudio.cueAt(contract.threshold, this.px, this.py);
+      }
+      if (chg >= chargeSpec.time - 1e-9 && !this.isChargeLockCued && contract.ready !== undefined) {
+        this.isChargeLockCued = true;
+        waveAudio.cueAt(contract.ready, this.px, this.py);
+      }
+      if (chg === 0 && this.audioPrevChargeT > 0) {
+        // The hold ended without a release event this tick: that was a CANCEL — vent it.
+        if (!this.isBreachReleaseSeen && contract.vent !== undefined) waveAudio.cueAt(contract.vent, this.px, this.py);
+        this.isChargeThresholdCued = false;
+        this.isChargeLockCued = false;
+        this.isBreachReleaseSeen = false;
+      }
+    }
+    this.audioPrevChargeT = chargeSpec !== undefined ? chg : 0;
+
+    // The halo: ONE mixed owner loop (never per blade) + the blade-pass tick each time
+    // the ring completes a sector (the row's cooldown paces it).
+    const orbit = this.effects.find((fx) => fx.kind === "orbit" && fx.owner === LOCAL_ID);
+    waveAudio.holdLoop("halo.loop", "self", orbit !== undefined);
+    if (orbit !== undefined && orbit.kind === "orbit" && orbit.blades > 0) {
+      const sector = Math.floor(orbit.angle / ((Math.PI * 2) / orbit.blades));
+      if (this.audioOrbitSector !== -1 && sector !== this.audioOrbitSector) {
+        waveAudio.cueAt("halo.pass", this.px, this.py);
+      }
+      this.audioOrbitSector = sector;
+    } else {
+      this.audioOrbitSector = -1;
+    }
+
+    // The chain: the pull/hold loop lives exactly while the local tether does.
+    const tether = this.effects.some((fx) => fx.kind === "tether" && fx.owner === LOCAL_ID);
+    waveAudio.holdLoop("crook.pullLoop", "self", tether);
+
+    // The risk band (Lastlight): danger on entry, recovery on exit — the band is the
+    // same authoritative low-HP curve the damage rides.
+    const risk = WEAPONS[wpn].lowHpBonus !== undefined
+      && this.p.maxHp > 0 && (1 - this.p.hp / this.p.maxHp) >= 0.5 && !this.isDown;
+    if (risk && !this.isRiskBandOpen && contract?.danger !== undefined) waveAudio.cueAt(contract.danger, this.px, this.py);
+    if (!risk && this.isRiskBandOpen && contract?.recovery !== undefined) waveAudio.cueAt(contract.recovery, this.px, this.py);
+    this.isRiskBandOpen = risk;
+  }
+
   private tickCosmetics(dt: number, cmd: InputCmd) {
     if (!this.isDown) {
       let ix = cmd.moveX, iy = cmd.moveY;
@@ -1640,10 +1796,13 @@ export class Game {
         this.spawnParticles(e.x, e.y, w.muzzle, "#ffe6a0");
         if (SMOKY_WEAPONS.has(e.weapon)) this.spawnPuff(e.x, e.y, 3, "#c9b8a0");
         if (e.weapon !== "rapid" && e.weapon !== "flamer") this.spawnShell(e.px, e.py - 6, e.aim);
-        // Manifest-bound weapons (Thumper lob, Sunlance held-beam lifecycle) own their
-        // sound through the wave layer; every other weapon keeps its exact legacy sample.
-        if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
-          sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+        // Semantic weapon-audio contract first (charge TIER releases are distinct stems,
+        // the risk payoff is a distinct stem), then manifest-bound weapons (Thumper lob,
+        // Sunlance held-beam lifecycle), then the exact legacy sample.
+        if (!this.playSemanticFireAudio(e)) {
+          if (!waveAudio.weaponFired(e.weapon, { x: e.x, y: e.y })) {
+            sfx(SHOOT_SFX[e.weapon], SHOOT_SFX_OPTS[e.weapon]);
+          }
         }
         this.addTrauma(FIRE_TRAUMA[e.weapon]);
         const kick = FIRE_KICK[e.weapon] * settings.effectiveRecoil;
@@ -1684,6 +1843,12 @@ export class Game {
         if (!e.killed) {
           if (!e.melee && waveAudio.isBeamWeapon(this.p.weapon)) {
             waveAudio.beamHitAt(e.eid, e.dmgX, e.dmgY);
+          } else if (e.melee && this.weapon === "halo") {
+            // The ring's contact voice (flared hits read as the CATCH) — the local
+            // wielder's read; remote halos keep the shared melee thump.
+            const orbit = this.effects.find((fx) => fx.kind === "orbit" && fx.owner === LOCAL_ID);
+            const cue = orbit !== undefined && orbit.kind === "orbit" && orbit.flare > 0 ? "halo.catch" : "halo.hit";
+            if (!waveAudio.cueAt(cue, e.puffX, e.puffY, e.eid)) sfx("meleeHit", { gain: 0.9 });
           } else if (e.melee) {
             sfx("meleeHit", { gain: 0.9 });
           } else {
@@ -1847,8 +2012,13 @@ export class Game {
       case "propBreak":
         this.replayPropBreak(e.kind, e.x, e.y);
         break;
-      case "explosion":
-        this.sfxAt("barrel", e.x, e.y, { rate: 0.7 });
+      case "explosion": {
+        // The impact voice routes by SOURCE (breach.impact / mortarDetonate / the
+        // legacy barrel boom) — same blast juice either way.
+        const impactCue = WEAPON_AUDIO[e.src]?.impact;
+        if (!(impactCue !== undefined && waveAudio.cueAt(impactCue, e.x, e.y))) {
+          this.sfxAt("barrel", e.x, e.y, { rate: 0.7 });
+        }
         this.addFreeze(FREEZE_HEAVY);
         this.addTrauma(0.6);
         this.spawnGibs(e.x, e.y, 18, "#ff8a3b");
@@ -1859,6 +2029,7 @@ export class Game {
         this.spawnSparkleBurst(e.x, e.y, 10, "#ff8a3b");
         if (this.isNearCamera(e.x, e.y)) this.flashScreen(255, 150, 60, 0.13, 3.2);
         break;
+      }
       case "chestOpen":
         sfx("chest");
         this.spawnParticles(e.x, e.y, 22, e.kind === "boss" ? "#ffb43b" : "#ffd27a");
@@ -1911,6 +2082,93 @@ export class Game {
       case "webPlaced":
         this.spawnPuff(e.x, e.y, 7, "#c98bff");
         this.addDecal(e.x, e.y, "#c98bff", e.r * 0.4, "ring");
+        break;
+      // ---- weapon effects (the effect wave) — manifest-first, legacy sample fallback ----
+      case "wirePlanted":
+        if (!waveAudio.cueAt("wirePlant", e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 1.5, gain: 0.4 });
+        this.spawnPuff(e.tx, e.ty, 4, "#e8e05a");
+        break;
+      case "wireArmed":
+        waveAudio.cueAt("wire.armed", e.x, e.y);
+        this.spawnSparkFlash(e.x, e.y, "#e8e05a");
+        break;
+      case "wireExpired":
+        waveAudio.cueAt("wire.expire", e.x, e.y);
+        this.spawnPuff(e.x, e.y, 3, "#b8b04a");
+        break;
+      case "wireRefused":
+        waveAudio.cueAt("wire.refuse", e.x, e.y);
+        break;
+      case "wireSnap": {
+        if (!waveAudio.cueAt("wireSnap", e.x, e.y)) this.sfxAt("parry", e.x, e.y, { rate: 0.7, gain: 0.8 });
+        const len = Math.hypot(e.tx - e.x, e.ty - e.y);
+        this.remoteTracers.push({ x: e.x, y: e.y, angle: Math.atan2(e.ty - e.y, e.tx - e.x), life: 0.15, color: "#e8e05a", len, isArc: true });
+        this.spawnSparks((e.x + e.tx) / 2, (e.y + e.ty) / 2, 8, Math.atan2(e.ty - e.y, e.tx - e.x) + HALF_PI);
+        this.addTrauma(0.15);
+        break;
+      }
+      case "haloFlare":
+        if (!waveAudio.cueAt("haloFlare", e.x, e.y)) this.sfxAt("meleeSwing", e.x, e.y, { rate: 1.3, gain: 0.7 });
+        this.shockwaves.spawn(e.x, e.y, 12, e.r, 0.3, "#d8f0e8", 3);
+        break;
+      case "sentryPlaced":
+        if (!waveAudio.cueAt("sentryPlace", e.x, e.y)) this.sfxAt("chest", e.x, e.y, { rate: 1.4, gain: 0.5 });
+        this.spawnPuff(e.x, e.y, 8, "#c8a8ff");
+        this.addDecal(e.x, e.y, "#c8a8ff", 14, "ring");
+        // The prism opens a beat after the mount lands (place -> unfold are two cues).
+        this.pendingCues.push({ t: 0.22, name: "sentry.unfold", x: e.x, y: e.y });
+        break;
+      case "sentryAcquire":
+        waveAudio.cueAt("sentry.acquire", e.x, e.y);
+        break;
+      case "sentryHit":
+        waveAudio.cueAt("sentry.damaged", e.x, e.y);
+        this.spawnPuff(e.x, e.y, 4, "#c8a8ff");
+        break;
+      case "sentryShot":
+        if (!waveAudio.cueAt("sentryShot", e.x, e.y)) this.sfxAt("homing", e.x, e.y, { rate: 1.15, gain: 0.45 });
+        this.spawnParticles(e.x + Math.cos(e.aim) * 14, e.y + Math.sin(e.aim) * 14, 2, "#c8a8ff");
+        break;
+      case "sentryDown":
+        // Destroyed shatters; a timeout powers down — the deployable's two endings.
+        if (!waveAudio.cueAt(e.why === "timeout" ? "sentry.timeout" : "sentryDown", e.x, e.y)) {
+          this.sfxAt("parry", e.x, e.y, { rate: 0.6, gain: 0.7 });
+        }
+        if (e.why === "timeout") this.spawnPuff(e.x, e.y, 6, "#c8a8ff");
+        else { this.spawnGibs(e.x, e.y, 8, "#c8a8ff"); this.spawnPuff(e.x, e.y, 8, "#c8a8ff"); }
+        break;
+      case "tetherLatch": {
+        // Whiff and latch are different sounds; the INVERTED latch adds the danger tell
+        // (a heavy body is about to reel the wielder in).
+        if (e.eid < 0) waveAudio.cueAt("crook.whiff", e.x, e.y);
+        else if (!waveAudio.cueAt("tetherLatch", e.x, e.y)) this.sfxAt("ricochet", e.x, e.y, { rate: 0.8, gain: 0.6 });
+        if (e.inv) waveAudio.cueAt("crook.dragged", e.x, e.y);
+        const len = Math.hypot(e.tx - e.x, e.ty - e.y);
+        this.remoteTracers.push({ x: e.x, y: e.y, angle: Math.atan2(e.ty - e.y, e.tx - e.x), life: e.eid >= 0 ? 0.14 : 0.1, color: "#c9b06a", len, isArc: true });
+        if (e.eid >= 0) { triggerFlash(this.animForId(e.eid)); this.addTrauma(0.08); }
+        break;
+      }
+      case "tetherHold":
+        waveAudio.cueAt("crook.hold", e.x, e.y);
+        break;
+      case "statusApplied":
+        // The SHARED status library: apply cues ride per-entity cooldowns; DoT ticks
+        // stay silent by contract (burnTick below carries visuals only).
+        waveAudio.cueAt(STATUS_AUDIO[e.kind] ?? "status.chillApply", e.x, e.y, e.eid);
+        break;
+      case "frozeSolid":
+        waveAudio.cueAt("status.freeze", e.x, e.y, e.eid);
+        this.spawnSparkFlash(e.x, e.y, "#cdeaff");
+        break;
+      case "freezeBroke":
+        waveAudio.cueAt("status.freezeBreak", e.x, e.y, e.eid);
+        this.spawnPuff(e.x, e.y, 5, "#cdeaff");
+        break;
+      case "tetherSweep":
+        if (!waveAudio.cueAt("tetherSweep", e.x, e.y)) sfx("heavySwing", { rate: 1.1 });
+        this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.3, 0.32, "#c9b06a", 4);
+        this.addTrauma(0.2);
+        this.addFreeze(0.04);
         break;
       case "bossSlam":
         this.sfxAt("enemyDeath", e.x, e.y, { rate: 0.5 });
@@ -3189,6 +3447,7 @@ export class Game {
     this.renderDecals();
     this.renderFloorHazards(); // floor-level danger: over decals, under the ambient air + entities
     this.renderHazards(); // dynamic boss hazards (the Weaver's webs), over the floor layer
+    this.renderGroundEffects(); // weapon ground effects (chill zones, snap wires) at floor level
     this.motes.render(ctx, this.renderCam.x, this.renderCam.y); // ambient biome air, over the floor, under entities
     this.renderExit();
     this.renderShadows();
@@ -3201,6 +3460,8 @@ export class Game {
     this.renderCorpses();
     this.renderEnemies();
     this.renderBullets();
+    this.renderEffectEntities(); // weapon effect bodies (sentries, orbit blades, tether chains)
+    this.renderChargeMarker();   // the local Breach hold: charge ring + landing marker
     this.renderTracers();
     this.renderRemotePlayers();
     this.renderAfterimages();
@@ -4500,6 +4761,236 @@ export class Game {
       ctx.fillStyle = "#c98bff";
       ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
     }
+    ctx.restore();
+  }
+
+  // Weapon ground effects (the effect wave's floor layer): Frostline chill zones and
+  // Snapwire trip lines. Sprite-mask hooks (frost_zone / wire_post) recolor like every
+  // fx primitive; until the art lands the primitive fallback keeps them fully readable.
+  //
+  // COMBAT ATTENTION POLICY: weapon residue renders on the floor pass, UNDER every enemy
+  // body and telegraph marker, and always quieter than any telegraph — the residue caps
+  // below tell alphas by a wide margin. A REMOTE teammate's persistent effects simplify
+  // aggressively (REMOTE_EFFECT_ALPHA rims/lines, no fills, no blink pulses): their
+  // information matters, their brightness never competes with an enemy windup.
+  private renderGroundEffects() {
+    const { ctx, cam } = this;
+    let isDrawing = false;
+    for (const e of this.effects) {
+      if (e.kind !== "zone" && e.kind !== "wire") continue;
+      if (!isDrawing) { ctx.save(); isDrawing = true; }
+      const isRemote = e.owner !== LOCAL_ID;
+      if (e.kind === "zone") {
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        // Quick fade-in as the bead paints it, long fade-out as it thaws.
+        const fade = Math.min(1, (e.maxLife - e.life) * 8, (e.life / Math.max(0.001, e.maxLife)) * 2.5);
+        if (isRemote) {
+          // Remote zones: a thin rim only — the lane reads, nothing glows.
+          ctx.globalAlpha = 0.22 * fade;
+          ctx.strokeStyle = "#9fd8ff";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
+          continue;
+        }
+        const mask = this.sprites.fxTinted("frost_zone", "#9fd8ff");
+        if (mask) {
+          ctx.globalAlpha = 0.5 * fade;
+          ctx.drawImage(mask, sx - e.radius, sy - e.radius, e.radius * 2, e.radius * 2);
+        } else {
+          ctx.globalAlpha = 0.16 * fade;
+          ctx.fillStyle = "#9fd8ff";
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+          ctx.globalAlpha = 0.4 * fade;
+          ctx.strokeStyle = "#cdeaff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius * 0.92, 0, 6.28); ctx.stroke();
+        }
+      } else {
+        const ax = e.x - cam.x, ay = e.y - cam.y;
+        const bx = e.x2 - cam.x, by = e.y2 - cam.y;
+        if (isRemote) {
+          // Remote wires: one dim steady line — no posts, no blink (their arm state is
+          // their owner's problem; the geometry is all a teammate needs).
+          ctx.globalAlpha = 0.35;
+          ctx.strokeStyle = "#b8b04a";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+          continue;
+        }
+        // Arming wires blink; live wires hold a taut hum-bright line.
+        const isArming = e.arm > 0;
+        const blink = isArming ? 0.35 + 0.3 * Math.sin(this.animClock * 18) : 1;
+        ctx.globalAlpha = 0.85 * blink;
+        ctx.strokeStyle = isArming ? "#b8b04a" : "#e8e05a";
+        ctx.lineWidth = isArming ? 1 : 2;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = "#e8e05a";
+        for (const [px, py] of [[ax, ay], [bx, by]] as const) {
+          const post = this.sprites.fxTinted("wire_post", "#e8e05a");
+          if (post) ctx.drawImage(post, px - 5, py - 5, 10, 10);
+          else ctx.fillRect(px - 2, py - 4, 4, 8);
+        }
+      }
+    }
+    if (isDrawing) ctx.restore();
+  }
+
+  // Weapon effect bodies: Prism Sentries, Razor Halo blades, and Crooked Chain links.
+  // The halo centers on its owner's RENDERED position when that player is on screen
+  // (the local player especially — the 20Hz effect anchor would lag the predicted body).
+  private renderEffectEntities() {
+    const { ctx, cam } = this;
+    let isDrawing = false;
+    for (const e of this.effects) {
+      if (e.kind === "zone" || e.kind === "wire") continue;
+      if (!isDrawing) { ctx.save(); isDrawing = true; }
+      if (e.kind === "sentry") {
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        ctx.globalAlpha = 1;
+        const core = this.sprites.fxTinted("sentry_core", "#c8a8ff");
+        if (core) {
+          ctx.drawImage(core, sx - e.radius * 1.4, sy - e.radius * 1.4, e.radius * 2.8, e.radius * 2.8);
+        } else {
+          ctx.fillStyle = "#3a2f52";
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+          ctx.strokeStyle = "#c8a8ff";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(sx, sy, e.radius - 2, 0, 6.28); ctx.stroke();
+          const spin = this.animClock * 1.8;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(spin) * (e.radius + 5), sy + Math.sin(spin) * (e.radius + 5));
+          ctx.stroke();
+        }
+        // Durability pips over the body — a destructible deployable must read as one.
+        if (e.hp >= 0 && e.maxHp > 0 && e.hp < e.maxHp) {
+          const w = e.radius * 2;
+          ctx.fillStyle = "#1c1826";
+          ctx.fillRect(sx - w / 2, sy - e.radius - 8, w, 3);
+          ctx.fillStyle = "#c8a8ff";
+          ctx.fillRect(sx - w / 2, sy - e.radius - 8, w * Math.max(0, e.hp / e.maxHp), 3);
+        }
+      } else if (e.kind === "orbit") {
+        const ownerPos = this.effectOwnerPos(e);
+        const cx = ownerPos[0] - cam.x, cy = ownerPos[1] - cam.y;
+        if (e.owner !== LOCAL_ID) {
+          // A teammate's ring: simple dim dots, no blades, no ring line — position and
+          // cadence read; nothing competes with enemy telegraphs.
+          ctx.globalAlpha = 0.45;
+          ctx.fillStyle = "#d8f0e8";
+          for (let i = 0; i < e.blades; i++) {
+            const a = e.angle + (i / Math.max(1, e.blades)) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.arc(cx + Math.cos(a) * e.ring, cy + Math.sin(a) * e.ring, 3, 0, 6.28);
+            ctx.fill();
+          }
+          continue;
+        }
+        const blade = this.sprites.fxTinted("halo_blade", "#d8f0e8");
+        for (let i = 0; i < e.blades; i++) {
+          const a = e.angle + (i / Math.max(1, e.blades)) * Math.PI * 2;
+          const bx = cx + Math.cos(a) * e.ring;
+          const by = cy + Math.sin(a) * e.ring;
+          ctx.globalAlpha = 0.95;
+          if (blade) {
+            ctx.save();
+            ctx.translate(bx, by);
+            ctx.rotate(a + HALF_PI);
+            ctx.drawImage(blade, -e.bladeRadius, -e.bladeRadius, e.bladeRadius * 2, e.bladeRadius * 2);
+            ctx.restore();
+          } else {
+            ctx.save();
+            ctx.translate(bx, by);
+            ctx.rotate(a + HALF_PI);
+            ctx.fillStyle = "#d8f0e8";
+            ctx.beginPath();
+            ctx.moveTo(0, -e.bladeRadius);
+            ctx.lineTo(e.bladeRadius * 0.45, 0);
+            ctx.lineTo(0, e.bladeRadius);
+            ctx.lineTo(-e.bladeRadius * 0.45, 0);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+        ctx.globalAlpha = e.flare > 0 ? 0.3 : 0.12;
+        ctx.strokeStyle = "#d8f0e8";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(cx, cy, e.ring, 0, 6.28); ctx.stroke();
+      } else {
+        // Tether: a sagging chain from the owner to the latched body.
+        const target = this.enemies.find((en) => en.id === e.eid);
+        if (!target) continue;
+        const ownerPos = this.effectOwnerPos(e);
+        const ax = ownerPos[0] - cam.x, ay = ownerPos[1] - cam.y;
+        const bx = target.x - cam.x, by = target.y - cam.y;
+        if (e.owner !== LOCAL_ID) {
+          // A teammate's chain: one thin line, no links, no sag detail.
+          ctx.globalAlpha = 0.4;
+          ctx.strokeStyle = "#c9b06a";
+          ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+          continue;
+        }
+        const link = this.sprites.fxTinted("chain_link", "#c9b06a");
+        const segs = 9;
+        ctx.globalAlpha = 0.95;
+        ctx.strokeStyle = "#c9b06a";
+        ctx.lineWidth = 2;
+        for (let i = 0; i < segs; i++) {
+          const t0 = i / segs, t1 = (i + 1) / segs;
+          const sag0 = Math.sin(t0 * Math.PI) * 7, sag1 = Math.sin(t1 * Math.PI) * 7;
+          const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0 + sag0;
+          const x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1 + sag1;
+          if (link) {
+            ctx.drawImage(link, (x0 + x1) / 2 - 3, (y0 + y1) / 2 - 3, 6, 6);
+          } else if (i % 2 === 0) {
+            ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+          }
+        }
+      }
+    }
+    if (isDrawing) ctx.restore();
+  }
+
+  // Where an owner-anchored effect should draw from: the owner's RENDERED body when we
+  // can resolve it (local player: the predicted position), else the effect's own anchor.
+  private effectOwnerPos(e: Effect): [number, number] {
+    if (e.owner === LOCAL_ID) return [this.px, this.py];
+    return [e.x, e.y];
+  }
+
+  // The local Breach hold: a fill ring on the player plus a landing marker at the
+  // currently-charged distance — the ground target IS the weapon's aim story.
+  private renderChargeMarker() {
+    const p = this.p;
+    if (p.chargeT <= 0) return;
+    const spec = WEAPONS[p.weapon].charge;
+    if (!spec) return;
+    const { ctx, cam } = this;
+    const t = Math.min(1, p.chargeT / spec.time);
+    const dist = (spec.minDist + (spec.maxDist - spec.minDist) * t) * p.mods.bulletLifeMult;
+    const sx = this.px - cam.x, sy = this.py - cam.y;
+    const mx = sx + Math.cos(this.aimAngle) * dist;
+    const my = sy + Math.sin(this.aimAngle) * dist;
+    const blast = (WEAPONS[p.weapon].blast ?? 60) * 0.9;
+    ctx.save();
+    // Charge ring around the player.
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#ffb06a";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(sx, sy, p.pr + 7, -HALF_PI, -HALF_PI + t * Math.PI * 2);
+    ctx.stroke();
+    // Landing marker: blast-sized dashed ring + core dot, brightening toward full charge.
+    ctx.globalAlpha = 0.35 + 0.4 * t;
+    ctx.setLineDash([6, 5]);
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(mx, my, blast, 0, 6.28); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#ffb06a";
+    ctx.beginPath(); ctx.arc(mx, my, 3.5, 0, 6.28); ctx.fill();
     ctx.restore();
   }
 

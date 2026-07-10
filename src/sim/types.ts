@@ -192,7 +192,97 @@ export type WeaponId =
   | "pistol" | "shotgun" | "rapid"
   | "smg" | "cannon" | "burst" | "ricochet" | "homing" | "tesla"
   | "sawnoff" | "railgun" | "nailer" | "flamer" | "mortar" | "beam"
-  | "sword" | "longsword" | "spear";
+  | "sword" | "longsword" | "spear"
+  // The effect wave: seven non-projectile room verbs built on four shared primitives
+  // (PlacedEffect zone/wire, OrbitEffect, DeployableEffect, Tether — see Effect below).
+  | "lastlight" | "breach" | "snapwire" | "frostline" | "halo" | "sentry" | "crook";
+
+// ---- weapon effect entities (the effect wave's shared authoritative primitives) ----
+// Every non-projectile weapon output lives in ONE world list (w.effects), stepped in
+// updateEffects on the fixed world phase — server-owned, deterministic, and serialized on
+// the snapshot like bullets/hazards. Each entity carries its owner for the same immutable
+// attribution contract bullets follow (a departed owner's effect keeps working, credits
+// no one) and `fx` — the authoring weapon — for knockback profile, boss coefficient and
+// the client render recipe.
+
+export type EffectKind = "zone" | "wire" | "orbit" | "sentry" | "tether";
+
+export interface EffectBase {
+  id: number;              // stable per-floor id (wire identity + client anim keying)
+  kind: EffectKind;
+  owner: PlayerId | null;  // authoritative attribution (kills/combo credit this player)
+  fx: WeaponId;            // authoring weapon: KB profile, boss coef, render recipe
+  x: number; y: number;
+  life: number;            // seconds until the effect expires
+  maxLife: number;         // authored duration (drives the client's fade render)
+}
+
+// A painted ground zone (the Frostline's chill trail): standing enemies accumulate chill
+// (slow, then freeze — bosses slow but never freeze, same as the Cryo blessing).
+export interface ZoneEffect extends EffectBase {
+  kind: "zone";
+  radius: number;
+  chillRate: number; // seconds of chill applied per second an enemy stands inside
+}
+
+// An armed line trap (the Snapwire): a wire strung from (x,y) to (x2,y2) that snaps on
+// the first body crossing it once armed, striking EVERY enemy in the band.
+export interface WireEffect extends EffectBase {
+  kind: "wire";
+  x2: number; y2: number;
+  width: number;  // trigger band around the segment (px)
+  arm: number;    // seconds until armed (0 = live); planting is never a free point-blank hit
+  damage: number; // base snap damage (the owner's live damage mult applies at snap time)
+}
+
+// Orbiting blades around the owner (the Razor Halo): contact damage on a per-enemy re-hit
+// cadence; the active flares the ring outward for a beat.
+export interface OrbitEffect extends EffectBase {
+  kind: "orbit";
+  angle: number;       // shared blade phase (rad)
+  ring: number;        // current ring radius px (eases toward base/flare target)
+  blades: number;
+  bladeRadius: number;
+  speed: number;       // orbit angular speed (rad/s)
+  flare: number;       // seconds of active expansion left
+  damage: number;      // base per-blade contact damage
+  // Per-enemy re-hit cooldowns (sim-internal scratch, never on the wire): a body inside
+  // the ring is struck on a readable cadence, not once per tick.
+  rehit: Map<number, number>;
+}
+
+// A destructible lane-holding turret (the Prism Sentry): acquires the nearest enemy in
+// line of sight and fires owner-attributed bolts; enemy fire and contact chew it down.
+export interface SentryEffect extends EffectBase {
+  kind: "sentry";
+  radius: number;     // body radius (enemy bullets/contact test against it)
+  hp: number; maxHp: number;
+  fireCd: number;
+  range: number;
+  boltSpeed: number;
+  boltRadius: number;
+  boltDamage: number; // base bolt damage (owner's live damage mult applies at fire time)
+  boltPierce: number;
+  contactCd: number;  // cadence gate for enemy-contact damage (sim-internal)
+  targetEid: number;  // last acquired target id (-1 = none) — drives the acquire cue
+}
+
+// A latched chain (the Crooked Chain): pulls the target to the owner — or, against a
+// brute/elite/boss, pulls the OWNER to the target — then holds a short sweep window.
+export interface TetherEffect extends EffectBase {
+  kind: "tether";
+  eid: number;              // tethered enemy id
+  phase: "pull" | "hold";
+  isPlayerPulled: boolean;  // heavy bodies invert the pull (the risk half of the verb)
+  pullSpeed: number;
+  holdDist: number;
+  holdTime: number;         // authored hold window entered once the pull resolves
+  pullTime: number;         // remaining pull budget (bounds the yank)
+  damage: number;           // base sweep damage
+  reach: number;            // sweep radius around the owner
+}
+
+export type Effect = ZoneEffect | WireEffect | OrbitEffect | SentryEffect | TetherEffect;
 
 export interface Bullet {
   x: number; y: number;
@@ -221,6 +311,24 @@ export interface Bullet {
   chain?: number;          // tesla: lightning jumps left after the first hit
   chainRange?: number;     // tesla: max px a chain jump can reach
   blast?: number;          // mortar: AoE radius — the shell detonates on impact/expiry
+  // Breach shell: an artillery lob that sails OVER bodies (the enemy-collision loop skips
+  // it) and detonates only at its charged landing point (end of life) or on a wall face.
+  isLob?: boolean;
+  // The lob's released charge fraction (0..1). At BREACH_LINE_TIER+ the detonation walks
+  // a LINE of blasts back along the approach (the full charge changes geometry).
+  lobT?: number;
+  // Persistent-source round (a sentry bolt): against boss-grade bodies its damage draws
+  // from the party's shared persistent budget (see drawPersistentBossBudget). Sim-internal
+  // — never on the wire.
+  isPersistent?: boolean;
+  // Frostline painting: every `paintSpacing` px of travel the bead drops a chill zone
+  // (radius/life/rate authored by the weapon's paint spec, mods applied at fire time).
+  // paintDist is the travel accumulator (sim-internal, never on the wire).
+  paintSpacing?: number;
+  paintRadius?: number;
+  paintLife?: number;
+  paintRate?: number;
+  paintDist?: number;
   // Elemental status a bullet stamps on the enemy it hits (see applyBulletStatuses).
   // Undefined on plain rounds; the value is the status duration in seconds.
   burn?: number;           // seconds of burn DoT the round applies

@@ -80,6 +80,7 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   smg: 2, cannon: 14, burst: 3, ricochet: 5, homing: 2, tesla: 3,
   sawnoff: 10, railgun: 12, nailer: 3, flamer: 1, mortar: 6, beam: 1,
   sword: 14, longsword: 20, spear: 16,
+  lastlight: 9, breach: 7, snapwire: 12, frostline: 1, halo: 6, sentry: 2, crook: 10,
 };
 export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
@@ -91,7 +92,25 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   smg: 0, cannon: 10, burst: 0, ricochet: 0, homing: 0, tesla: 0,
   sawnoff: 26, railgun: 6, nailer: 0, flamer: 0, mortar: 8, beam: 0,
   sword: 0, longsword: 0, spear: 8,
+  lastlight: 12, breach: 10, snapwire: 0, frostline: 0, halo: 0, sentry: 0, crook: 0,
 };
+
+// ---- weapon effect entities (the effect wave; see types.ts Effect) ----
+// Hard world bounds: effects ride every snapshot unfiltered (like hazards), so the sim
+// caps each family — the wire and the frame stay bounded no matter how a build stacks.
+export const MAX_ZONE_EFFECTS = 48;      // oldest chill zones fade early past the cap
+export const EFFECT_TICK = 0.1;          // shared cadence for zone chill + sentry contact
+export const ORBIT_RING_EASE = 10;       // 1/s the halo ring eases toward its target radius
+export const SENTRY_CONTACT_CD = 0.4;    // seconds between enemy-contact chews on a sentry
+// Breach full-charge line (creative gate: a FULL charge changes the blast GEOMETRY, not
+// numbers): at or past the tier, the shell walks trailing detonations back along its
+// approach. hitList dedupe keeps every body at ONE hit — the line extends AREA only.
+export const BREACH_LINE_TIER = 0.9;   // charge fraction that turns the point into a line
+export const BREACH_LINE_BLASTS = 3;   // landing blast + trailing detonations
+export const BREACH_LINE_STEP = 76;    // px between detonations along the approach
+export const TETHER_PULL_BUDGET = 0.8;   // max seconds a standard-body pull may reel
+export const TETHER_LATCH_FIRE_LOCK = 0.3; // fireCd after a latch (the sweep is a SECOND press)
+export const WIRE_SNAP_STUN_KB = 1.6;    // snap knockback multiplier (the wire THROWS bodies)
 
 
 // Point-blank shotgun hit distance that triggers the (client-side) freeze.
@@ -101,6 +120,9 @@ export const SHOTGUN_FREEZE_RANGE = 96;
 export const BURN_TICK = 0.25;
 export const BURN_DMG_STACK = 2;
 export const BURN_DMG_MAX = 6;
+// Boss-grade bodies cap the burn DoT lower (envelope: DoT rides a normalized shared
+// clock and can never dominate a boss's health bar the way it eats a room's).
+export const BURN_DMG_MAX_BOSS = 4;
 export const CHILL_SLOW = 0.5;
 export const CHILL_MAX = 4;
 export const FREEZE_AT = 3;

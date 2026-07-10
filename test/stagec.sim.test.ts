@@ -1441,8 +1441,83 @@ function downIterationTests(): void {
   }
 }
 
+// ---- the effect wave: multi-player authority + attribution for weapon effects ----
+
+function effectAuthorityTests(): void {
+  const fireInput = (aim: number) => ({ seq: 0, moveX: 0, moveY: 0, aim, firing: true, dash: false });
+
+  section("effects: a planted wire's kill credits the planter, not a bystander");
+  {
+    const { w, a, b } = twoPlayerArena();
+    acquireWeaponInWorld(w, a.id, "snapwire");
+    stepPlayerPhase(w, a, fireInput(0), 1 / 20, []);
+    check("the wire is a shared world entity", w.effects.some((e) => e.kind === "wire" && e.owner === a.id));
+    for (let i = 0; i < 20; i++) stepWorldPhase(w, 1 / 20, []); // arm it
+    const e = devSpawnEnemy(w, "slime", a.x + 60, a.y);
+    e.spawnTimer = 0;
+    e.hp = 1;
+    for (let i = 0; i < 10 && !e.dead; i++) stepWorldPhase(w, 1 / 20, []);
+    check("the snap kill credits the PLANTER", e.dead && a.kills === 1 && b.kills === 0,
+      `A.kills=${a.kills} B.kills=${b.kills}`);
+  }
+
+  section("effects: a sentry keeps firing after its deployer leaves — and credits no one");
+  {
+    const { w, a, b } = twoPlayerArena();
+    acquireWeaponInWorld(w, a.id, "sentry");
+    stepPlayerPhase(w, a, fireInput(0), 1 / 20, []);
+    const mark = devSpawnEnemy(w, "slime", a.x + 160, a.y);
+    mark.spawnTimer = 0;
+    mark.speed = 0;
+    mark.hp = 3;
+    removePlayerFromWorld(w, a.id);
+    for (let i = 0; i < 20 * 5 && !mark.dead; i++) stepWorldPhase(w, 1 / 20, []);
+    check("the orphaned sentry still resolves the kill", mark.dead);
+    check("no live player inherits the credit", b.kills === 0);
+  }
+
+  section("effects: per-owner exclusives never collide across players");
+  {
+    const { w, a, b } = twoPlayerArena();
+    acquireWeaponInWorld(w, a.id, "halo");
+    acquireWeaponInWorld(w, b.id, "halo");
+    stepWorldPhase(w, 1 / 20, []);
+    const orbits = w.effects.filter((e) => e.kind === "orbit");
+    check("each halo wielder owns exactly one ring", orbits.length === 2
+      && orbits.some((e) => e.owner === a.id) && orbits.some((e) => e.owner === b.id));
+    // A switches away: only A's ring dismisses.
+    switchWeaponInWorld(w, a.id, "pistol");
+    stepWorldPhase(w, 1 / 20, []);
+    const after = w.effects.filter((e) => e.kind === "orbit");
+    check("dismissal is per-owner", after.length === 1 && after[0].owner === b.id);
+  }
+
+  section("effects: every client's snapshot carries the shared effect list (unfiltered)");
+  {
+    const { w, a, b } = twoPlayerArena();
+    acquireWeaponInWorld(w, a.id, "snapwire");
+    stepPlayerPhase(w, a, fireInput(0), 1 / 20, []);
+    // A tight interest radius around B, far from A's wire: effects still ride (like hazards).
+    const snapB = buildSnapshot(w, b.id, 0, [], 0, false, { worldId: "w-test", interestRadius: 100 });
+    check("B sees A's wire regardless of interest filtering", snapB.t === "snap"
+      && snapB.effs.some((e) => e.k === "wire"));
+  }
+
+  section("effects: the charge is server-owned state (survives the projection boundary)");
+  {
+    const { w, a } = twoPlayerArena();
+    acquireWeaponInWorld(w, a.id, "breach");
+    for (let i = 0; i < 8; i++) stepPlayerPhase(w, a, fireInput(0), 1 / 20, []);
+    check("holding charges authoritatively", a.chargeT > 0.3, `chg=${a.chargeT.toFixed(2)}`);
+    const snap = buildSnapshot(w, a.id, 0, [], 0, false, { worldId: "w-test" });
+    check("the charge rides SelfWire for reconciliation", snap.t === "snap" && snap.self !== null
+      && Math.abs(snap.self.chg - a.chargeT) < 1e-9);
+  }
+}
+
 function main(): void {
   ownershipTests();
+  effectAuthorityTests();
   departedOwnerTests();
   downReviveTests();
   downIterationTests();

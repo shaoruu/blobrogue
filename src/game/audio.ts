@@ -80,6 +80,10 @@ export interface WavePlayRequest {
   stem: string | null; // wave file path under public/audio/ (null = fallback-only row)
   fallback?: WaveSampleFallback;
   duck?: readonly WaveDuck[];
+  // Weapon integration contract: this event may NEVER reach the synth lane. Resolution
+  // stops after stem -> DERIVE fallback; a fully missing pair is a loud dev warning and
+  // silence in production.
+  isSynthForbidden?: boolean;
 }
 
 // A wave-manifest loop start; loops are keyed (entity/zone/channel) and stopped explicitly.
@@ -92,6 +96,7 @@ export interface WaveLoopRequest {
   gain: number;
   stem: string | null;
   fadeSec: number;
+  isSynthForbidden?: boolean;
 }
 
 // The capability surface the wave director drives — the engine's mechanics contract,
@@ -574,6 +579,10 @@ class AudioEngine implements WaveEngine {
     }
     const voiceGain = ctx.createGain();
     voiceGain.connect(bus);
+    // #45 de-synthesis: loops are authored-file-or-silence — no pad-synth lane exists, so
+    // the effect wave's synth-forbidden contract for continuous mechanics (charge hold,
+    // halo ring, chain pull) is satisfied by construction. The director's level-held
+    // holdLoop retries, so a not-yet-decoded loop starts cleanly once its stem lands.
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
@@ -715,8 +724,12 @@ class AudioEngine implements WaveEngine {
         console.info(`[audio] wave file missing, using authored fallback/silence: ${req.stem}`);
       }
     }
+    // #45 de-synthesis: authored file, else the DERIVE fallback (a shipped sample through
+    // pitch/filters), else SILENCE — there is no oscillator lane. This already IS the
+    // effect wave's synth-forbidden contract for every event, so the per-event flag is
+    // moot on this path (kept on WavePlayRequest for the dev warning below).
     const fb = req.fallback;
-    if (!fb) return [];
+    if (!fb) { if (req.isSynthForbidden === true) this.warnSynthForbidden(req.event, req.stem); return []; }
     const spec = SAMPLES[fb.sample];
     if (!spec) return [];
     const buf = this.sampleBuffer(spec);
@@ -728,6 +741,21 @@ class AudioEngine implements WaveEngine {
     tail.connect(out);
     src.start();
     return [src];
+  }
+
+  // Vite serves import.meta.env.DEV in dev builds; headless runners (tsx) and production
+  // bundles read false-y, so the warning path stays dev-only by construction.
+  private isDevBuild(): boolean {
+    const env = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env;
+    return env?.DEV === true;
+  }
+
+  private warnSynthForbidden(event: string, stem: string | null): void {
+    if (!this.isDevBuild()) return;
+    const key = `forbid:${event}`;
+    if (this.waveFallbackLogged.has(key)) return;
+    this.waveFallbackLogged.add(key);
+    console.warn(`[audio] MISSING weapon audio for "${event}" (stem ${stem ?? "none"} + fallback unavailable) — silent until the asset lands`);
   }
 
   private connectFilters(src: AudioNode, lowpassHz?: number, highpassHz?: number): AudioNode {
