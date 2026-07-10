@@ -26,6 +26,7 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { isValidWorldId } from "../../src/net/protocol.js";
+import { isKitId } from "../../src/sim/kits.js";
 
 export { isValidWorldId };
 
@@ -54,6 +55,12 @@ export interface TicketPayload {
   cl?: number;  // cosmetic color index
   ht?: string;  // cosmetic hat id
   fc?: string;  // cosmetic face id
+  // The KIT the player chose in the lobby + the account's Mastery LEVEL, both minted by the
+  // Convex account authority (which validated the pick against the account's unlocks). The game
+  // server RE-GATES kt against ml (isKitUnlocked) and downgrades on mismatch — a client can
+  // never inflate either (both are inside the HMAC signature).
+  kt?: string;  // chosen kit id
+  ml?: number;  // account mastery level
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -63,6 +70,8 @@ export interface TicketClaims {
   colorIndex?: number;
   hat?: string;
   face?: string;
+  kit?: string;
+  masteryLevel?: number;
 }
 
 export interface AuthResult {
@@ -73,6 +82,8 @@ export interface AuthResult {
   colorIndex?: number;  // validated cosmetic color index
   hat?: string;         // format-validated cosmetic hat id
   face?: string;        // format-validated cosmetic face id
+  kit?: string;         // format-validated chosen kit id (the join gate re-checks the unlock)
+  masteryLevel?: number;// account mastery level (drives the server-side kit-unlock gate)
   reason?: string;
 }
 
@@ -103,7 +114,7 @@ function sign(secret: string, body: string): string {
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
-// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc; see convex/gsTicketCore.ts).
+// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc, kt, ml; see convex/gsTicketCore.ts).
 export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
@@ -111,6 +122,8 @@ export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowM
   if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
   if (claims.hat !== undefined) payload.ht = claims.hat;
   if (claims.face !== undefined) payload.fc = claims.face;
+  if (claims.kit !== undefined) payload.kt = claims.kit;
+  if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -183,6 +196,16 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
   if (payload.fc !== undefined) {
     if (typeof payload.fc !== "string" || !COSMETIC_ID_RE.test(payload.fc)) return { ok: false, reason: "bad_cosmetic" };
     out.face = payload.fc;
+  }
+  if (payload.kt !== undefined) {
+    if (!isKitId(payload.kt)) return { ok: false, reason: "bad_kit" };
+    out.kit = payload.kt;
+  }
+  if (payload.ml !== undefined) {
+    if (typeof payload.ml !== "number" || !Number.isInteger(payload.ml) || payload.ml < 1 || payload.ml > 1e6) {
+      return { ok: false, reason: "bad_mastery" };
+    }
+    out.masteryLevel = payload.ml;
   }
   return out;
 }

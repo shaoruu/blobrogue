@@ -29,8 +29,10 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
+import { ULT, isRealKit, canCastUlt } from "../sim/kits.js";
+import type { KitId } from "../sim/kits.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
@@ -42,7 +44,7 @@ import type { ComboTier } from "../sim/constants.js";
 import { Minimap } from "./minimap.js";
 import type { MinimapDot } from "./minimap.js";
 import { Hud } from "./hud.js";
-import type { ProfileStats } from "./hud.js";
+import type { ProfileStats, HudState } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
   createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash, triggerBounce,
@@ -603,6 +605,8 @@ export class Game {
   // context mid-charge, this latch turns subsequent input frames into the sim's explicit
   // charge-cancel intent (dash bit, no movement, no fire) until the charge reads 0.
   private isChargeCancelPending = false;
+  // Dev sandbox: a one-frame ult-request pulse the panel's "Cast ult" button arms.
+  private devUltPulse = false;
   // ---- the semantic weapon-audio state machine (client-side edges over authoritative
   // state; every cue is a WEAPON_AUDIO contract state, never a file name) ----
   private audioPrevWeapon: WeaponId | null = null;
@@ -1531,17 +1535,19 @@ export class Game {
     const s = this.input.sample();
     const wx = this.input.mouseX + this.cam.x, wy = this.input.mouseY + this.cam.y;
     const aim = Math.atan2(wy - this.py, wx - this.px);
+    // Dev sandbox: a one-frame ult request armed by the panel button (OR'd with the held key).
+    const devUlt = this.devUltPulse; this.devUltPulse = false;
     // Pending charge cancel: send the sim's explicit cancel intent (dash with zero
     // movement neither dashes nor fires — see updateChargeShooting) until the
     // authoritative charge reads empty. Movement is zeroed so a resume with a held
     // movement key can't turn the cancel frame into a real dash.
     if (this.isChargeCancelPending) {
       if (this.p.chargeT > 0) {
-        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false };
+        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false };
       }
       this.isChargeCancelPending = false;
     }
-    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact };
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -2443,6 +2449,31 @@ export class Game {
         }
         if (e.why === "timeout") this.spawnPuff(e.x, e.y, 6, "#c8a8ff");
         else { this.spawnGibs(e.x, e.y, 8, "#c8a8ff"); this.spawnPuff(e.x, e.y, 8, "#c8a8ff"); }
+        break;
+      // KIT ULTIMATES: the cast moment's juice. The persistent zone/dome ride the effs list
+      // (rendered in renderGroundEffects/renderEffectEntities); these are the burst tells.
+      case "ultOverdrive":
+        this.spawnPuff(e.x, e.y, 12, "#ffd166");
+        this.sfxAt("weapon", e.x, e.y, { rate: 1.25, gain: 0.6 });
+        this.addTrauma(0.12);
+        break;
+      case "ultSanctuary":
+        this.spawnPuff(e.x, e.y, 16, "#7fe6a8");
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2;
+          this.spawnParticles(e.x + Math.cos(a) * e.radius * 0.7, e.y + Math.sin(a) * e.radius * 0.7, 1, "#b8ffd0");
+        }
+        this.sfxAt("heart", e.x, e.y, { rate: 0.9, gain: 0.7 });
+        break;
+      case "ultAegis":
+        this.spawnPuff(e.x, e.y, 14, "#bcd4ff");
+        this.sfxAt("parry", e.x, e.y, { rate: 0.8, gain: 0.7 });
+        this.addTrauma(0.1);
+        break;
+      case "ultPhase":
+        this.spawnPuff(e.x, e.y, 16, "#a8e6ff");
+        this.sfxAt("homing", e.x, e.y, { rate: 1.3, gain: 0.6 });
+        this.addTrauma(0.14);
         break;
       case "tetherLatch": {
         // Whiff and latch are different sounds; the INVERTED latch adds the danger tell
@@ -3404,7 +3435,33 @@ export class Game {
       // One coordination slot: an open blessing gate outranks exit staging (picks always
       // resolve before the descend, so the messages can never both apply).
       waitLabel: this.blessingWaitLabel() ?? this.exitWaitLabel(),
+      party: this.partyHud(),
+      ult: this.ultHud(),
     });
+  }
+
+  // Teammate HP for the party HUD (spec §6, the Mender dependency): the live nameplate rows.
+  private partyHud(): HudState["party"] {
+    if (this.mode === "solo") return [];
+    return this.remotes().map((r) => ({
+      id: r.playerId, name: r.name, hp: r.hp, maxHp: r.maxHp,
+      colorIndex: r.colorIndex, isDown: r.isDown, isAbsent: r.isAbsent,
+    }));
+  }
+
+  // The local player's ult meter readout (spec §3/§6). null for a neutral-kit player (the meter
+  // is hidden). cd is the 8s lockout fraction still remaining after a cast.
+  private ultHud(): HudState["ult"] {
+    const p = this.p;
+    if (!isRealKit(p.kitId)) return null;
+    const tick = this.world.tick;
+    const cd = Math.max(0, Math.min(1, (p.ultReadyAtTick - tick) / ULT.lockoutTicks));
+    return {
+      charge: p.ultCharge / ULT.meterMax,
+      isReady: canCastUlt(p.ultCharge, tick, p.ultReadyAtTick),
+      cd,
+      kit: p.kitId,
+    };
   }
 
   // The SEMANTIC contextual action (UI Part4): what the interact input would do right now,
@@ -5646,9 +5703,24 @@ export class Game {
     const { ctx, cam } = this;
     let isDrawing = false;
     for (const e of this.effects) {
-      if (e.kind !== "zone" && e.kind !== "wire") continue;
+      if (e.kind !== "zone" && e.kind !== "wire" && e.kind !== "sanctuary") continue;
       if (!isDrawing) { ctx.save(); isDrawing = true; }
       const isRemote = e.owner !== LOCAL_ID;
+      if (e.kind === "sanctuary") {
+        // The MENDER heal pocket: a soft warm ring + gentle inward pulse — a safe-stand zone,
+        // never a telegraph, so it stays quiet under enemy tells.
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        const fade = Math.min(1, (e.maxLife - e.life) * 6, (e.life / Math.max(0.001, e.maxLife)) * 2.5);
+        const pulse = 0.85 + 0.15 * Math.sin(this.animClock * 3);
+        ctx.globalAlpha = 0.12 * fade;
+        ctx.fillStyle = "#7fe6a8";
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.5 * fade;
+        ctx.strokeStyle = "#b8ffd0";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius * pulse, 0, 6.28); ctx.stroke();
+        continue;
+      }
       if (e.kind === "zone") {
         const sx = e.x - cam.x, sy = e.y - cam.y;
         // Quick fade-in as the bead paints it, long fade-out as it thaws.
@@ -5713,8 +5785,24 @@ export class Game {
     this.pruneSentryFx();
     let isDrawing = false;
     for (const e of this.effects) {
-      if (e.kind === "zone" || e.kind === "wire") continue;
+      // zone/wire/sanctuary render on the GROUND pass (renderGroundEffects); aegis + the
+      // entity-kinds below draw here.
+      if (e.kind === "zone" || e.kind === "wire" || e.kind === "sanctuary") continue;
       if (!isDrawing) { ctx.save(); isDrawing = true; }
+      if (e.kind === "aegis") {
+        // The BULWARK dome: a translucent bullet-blocking bubble whose rim brightens with the
+        // remaining barrier budget, dimming as it is spent — COVER, never immunity.
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        const frac = e.maxHp > 0 ? Math.max(0, Math.min(1, e.hp / e.maxHp)) : 1;
+        ctx.globalAlpha = 0.10 + 0.10 * frac;
+        ctx.fillStyle = "#8fb6ff";
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.35 + 0.5 * frac;
+        ctx.strokeStyle = "#bcd4ff";
+        ctx.lineWidth = 2 + 2 * frac;
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.stroke();
+        continue;
+      }
       if (e.kind === "sentry") {
         const sx = e.x - cam.x, sy = e.y - cam.y;
         ctx.globalAlpha = 1;
@@ -7427,6 +7515,27 @@ export class Game {
   devAddMaxHp(delta: number): void {
     this.p.mods.maxHpBonus += delta;
     applyMaxHpBonus(this.p);
+  }
+
+  // Sandbox: assign a kit to the local player so all four kits + their ults can be tested in
+  // isolation (spec build-gate). Applies the kit's stat lean + starting weapon.
+  devSetKit(kit: KitId): void {
+    setPlayerKit(this.world, LOCAL_ID, kit);
+  }
+
+  // Sandbox: fill the ult meter + clear the 8s lockout, so a cast is available on demand.
+  devFillUlt(): void {
+    this.p.ultCharge = ULT.meterMax;
+    this.p.ultReadyAtTick = 0;
+  }
+
+  // Sandbox: request an ult THIS frame (the authoritative sim still validates charge + lockout).
+  devCastUlt(): void {
+    this.devUltPulse = true;
+  }
+
+  devKit(): KitId {
+    return this.p.kitId;
   }
 
   // Rebuild the sandbox world at a new floor (scales enemy HP/speed via createEnemy's arg).

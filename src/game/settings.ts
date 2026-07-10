@@ -54,6 +54,20 @@ const DASH_KEY_DEFAULT = "shift";
 export type FlashLevel = "off" | "low" | "full";
 const FLASH_FACTOR: Record<FlashLevel, number> = { off: 0, low: 0.4, full: 1 };
 
+// HP readability (KIT/XP spec §6): the heart row can show hearts only, hearts + a numeric
+// current/max readout (the default — the healer loop needs numeric HP legibility), or the
+// number alone. A persisted player choice.
+export type HpDisplay = "hearts" | "both" | "number";
+const HP_DISPLAY_KEY = "blobrogue.hpDisplay";
+function readHpDisplay(): HpDisplay {
+  try {
+    const v = localStorage.getItem(HP_DISPLAY_KEY);
+    return v === "hearts" || v === "both" || v === "number" ? v : "both";
+  } catch {
+    return "both";
+  }
+}
+
 const UI_SCALE_MIN = 0.75;
 const UI_SCALE_MAX = 1.5;
 
@@ -178,6 +192,7 @@ export class Settings {
   private highContrast: boolean;     // halve the ambient darkness/AO grade for readability
   private doubleTapDash: boolean;    // double-tap a movement key to dash (default ON)
   private dashKeyBinding: string;    // the rebindable dash trigger key (shift is always one too)
+  private hpDisplayMode: HpDisplay;  // heart row: hearts / hearts + number / number only
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -196,6 +211,7 @@ export class Settings {
     this.highContrast = readBool(CONTRAST_KEY, false);
     this.doubleTapDash = readBool(DOUBLE_TAP_DASH_KEY, true);
     this.dashKeyBinding = readKeyBinding(DASH_KEY_KEY, DASH_KEY_DEFAULT);
+    this.hpDisplayMode = readHpDisplay();
   }
 
   get isMuted(): boolean {
@@ -270,6 +286,14 @@ export class Settings {
   get isDoubleTapDash(): boolean { return this.doubleTapDash; }
   // The rebindable dash key (normalized key name). Shift is always ALSO a dash trigger.
   get dashKey(): string { return this.dashKeyBinding; }
+  get hpDisplay(): HpDisplay { return this.hpDisplayMode; }
+
+  setHpDisplay(value: HpDisplay): void {
+    if (this.hpDisplayMode === value) return;
+    this.hpDisplayMode = value;
+    try { localStorage.setItem(HP_DISPLAY_KEY, value); } catch {}
+    this.emit();
+  }
 
   // What the render/FX paths actually consume: reduced motion zeroes camera motion
   // (shake + kick + recoil punch) regardless of the individual sliders.

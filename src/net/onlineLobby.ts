@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import type { PresenceDoc, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
 import { worldIdForRoomCode } from "./protocol.js";
+import { getSelectedKit } from "./kitSelection.js";
 
 // One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
 // Convex hosts only the social handshake: the room code, who is EXPECTED in it (roster),
@@ -246,7 +247,8 @@ export class OnlineLobby {
   // time, so the short TTL is always fresh.
   async mintTicket(): Promise<string> {
     await this.flushIdentity();
-    const res = await this.client.action(api.gsTicket.mint, { clientId: this.session.clientId, roomCode: this.code });
+    // The chosen kit rides the signed ticket (validated server-side against account Mastery).
+    const res = await this.client.action(api.gsTicket.mint, { clientId: this.session.clientId, roomCode: this.code, kit: getSelectedKit() });
     return res.ticket;
   }
 

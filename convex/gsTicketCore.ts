@@ -5,7 +5,8 @@
 //   ticket  = "v1." + b64url(utf8(JSON.stringify(payload))) + "." + b64url(sig)
 //   payload = { pid, exp } plus OPTIONAL identity/room claims appended in a FIXED order:
 //             wld (authorized world id), nm (display name), cl (party color index),
-//             ht (cosmetic hat id), fc (cosmetic face id).
+//             ht (cosmetic hat id), fc (cosmetic face id), kt (chosen kit id),
+//             ml (account mastery level).
 //             JSON.stringify preserves insertion order, so both mints build the object in
 //             exactly this order — that is what keeps the two implementations byte-identical.
 //   sig     = HMAC-SHA256(secret, "v1." + b64url(payload))     (signed over the BODY string)
@@ -28,6 +29,8 @@ export interface GsTicketPayload {
   cl?: number;  // party color index (name label / minimap identity tint)
   ht?: string;  // cosmetic hat id (visual-only; see convex/cosmeticsCore.ts)
   fc?: string;  // cosmetic face id (visual-only)
+  kt?: string;  // chosen KIT id (validated at mint against the account's Mastery unlocks)
+  ml?: number;  // account MASTERY level (the game server re-gates kt against it)
 }
 
 // Optional identity/room claims for a mint. Field names are the long-form of the wire keys.
@@ -37,6 +40,8 @@ export interface GsTicketClaims {
   colorIndex?: number;
   hat?: string;
   face?: string;
+  kit?: string;
+  masteryLevel?: number;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
@@ -65,7 +70,7 @@ function b64urlFromBytes(bytes: Uint8Array): string {
 
 // Mint a signed ticket valid for ttlSecs. Deterministic w.r.t. nowMs so the agreement test can
 // assert byte equality against the server's Node-crypto mint. Claims append in the FIXED key
-// order pid, exp, wld, nm, cl, ht, fc — the byte contract with server/src/auth.ts mintTicket.
+// order pid, exp, wld, nm, cl, ht, fc, kt, ml — the byte contract with server/src/auth.ts mintTicket.
 export async function mintGsTicket(
   secret: string,
   playerId: string,
@@ -79,6 +84,8 @@ export async function mintGsTicket(
   if (claims.colorIndex !== undefined) payload.cl = claims.colorIndex;
   if (claims.hat !== undefined) payload.ht = claims.hat;
   if (claims.face !== undefined) payload.fc = claims.face;
+  if (claims.kit !== undefined) payload.kt = claims.kit;
+  if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
   const enc = new TextEncoder();
   const body = "v1." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

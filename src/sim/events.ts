@@ -105,6 +105,18 @@ export type SimEvent =
   | { t: "chestOpen"; kind: string; x: number; y: number }
   // A floor hazard damaged a player (kind selects the client's impact FX flavor).
   | { t: "hazardHit"; pid: PlayerId; kind: FloorHazardKind; x: number; y: number }
+  // ---- KIT ULTIMATES (spec §7): the server validates + resolves each ult and emits ONE of
+  // these; clients render off the event only (no client-authoritative heal/shield/teleport/
+  // invuln). Each carries only integers/fixed-point + the caster id. The Sanctuary zone and
+  // Aegis dome themselves are sim entities on the effect list (reconciled from the snapshot);
+  // these events are the CAST moment's juice + the deterministic parameters.
+  | { t: "ultOverdrive"; pid: PlayerId; x: number; y: number; durationTicks: number }
+  | { t: "ultSanctuary"; pid: PlayerId; x: number; y: number; radius: number; lifetimeTicks: number }
+  | { t: "ultAegis"; pid: PlayerId; x: number; y: number; radius: number; hpBudget: number; lifetimeTicks: number }
+  // PHASE affects the caster + nearby allies; the per-player invuln/speed ride each affected
+  // player's own authoritative state (reconciled via SelfWire), so the event carries the AoE
+  // (x,y,radius) + the window lengths for the shared cast FX rather than a player-id array.
+  | { t: "ultPhase"; pid: PlayerId; x: number; y: number; radius: number; invulnTicks: number; speedTicks: number }
   // enemies / boss
   | { t: "spitMuzzle"; x: number; y: number }
   | { t: "lungeTrail"; x: number; y: number }

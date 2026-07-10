@@ -10,6 +10,7 @@ import type { PlayerSim } from "../sim/world.js";
 import type { PlayerMods } from "../sim/items.js";
 import { createMods } from "../sim/items.js";
 import type { WeaponId } from "../sim/types.js";
+import type { KitId } from "../sim/kits.js";
 
 // The authoritative (server-owned) slice of a player: everything the server simulates and the
 // client must treat as truth. This is the full-fidelity projection; SelfWire is its compact
@@ -48,6 +49,14 @@ export interface AuthoritativePlayerSnapshot {
   extraWeaponSlots: number;
   hpTithe: number;
   prospectorFloor: number;
+  // KIT / ULT authoritative state (server-owned; the client reconciles + renders it).
+  kitId: KitId;
+  ultCharge: number;
+  ultReadyAtTick: number;
+  overdriveT: number;
+  phaseSpeed: number;
+  ultInvuln: number;
+  passiveState: number;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -64,13 +73,19 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - isAbsent:      connection-lifecycle bookkeeping (reserved reconnect seat). The OWNING
 //                  client is by definition connected whenever it can receive a SelfWire, so
 //                  it would always read false there; others see it via PlayerWire.ab instead.
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent";
+// - isUltRequested:  per-tick input derivative (the ult key) — re-derived from the consumed
+//                  input every stepPlayerPhase (server + prediction), never wired, so a client
+//                  can only REQUEST an ult; the server alone validates + resolves it.
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested";
 // Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
 // - reviveBy:       the channel's identity (WHO is reviving whom) — prediction has no
 //                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
 // - downsThisFloor: the per-floor down count behind the OUT state — the client consumes
 //                   the derived out flag on the wire, never the counter
-type ServerOnlyField = "reviveBy" | "downsThisFloor";
+// - ultSources/ultWasted: §10 server-side charge-accrual bookkeeping (per-source share caps +
+//   the wasted-overcharge tuning stat). The client only ever reconciles the TOTAL meter
+//   (ultCharge), and never accrues locally, so these never cross the wire.
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
@@ -116,6 +131,13 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     extraWeaponSlots: p.extraWeaponSlots,
     hpTithe: p.hpTithe,
     prospectorFloor: p.prospectorFloor,
+    kitId: p.kitId,
+    ultCharge: p.ultCharge,
+    ultReadyAtTick: p.ultReadyAtTick,
+    overdriveT: p.overdriveT,
+    phaseSpeed: p.phaseSpeed,
+    ultInvuln: p.ultInvuln,
+    passiveState: p.passiveState,
   };
 }
 
@@ -155,6 +177,13 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.extraWeaponSlots = s.extraWeaponSlots;
   p.hpTithe = s.hpTithe;
   p.prospectorFloor = s.prospectorFloor;
+  p.kitId = s.kitId;
+  p.ultCharge = s.ultCharge;
+  p.ultReadyAtTick = s.ultReadyAtTick;
+  p.overdriveT = s.overdriveT;
+  p.phaseSpeed = s.phaseSpeed;
+  p.ultInvuln = s.ultInvuln;
+  p.passiveState = s.passiveState;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

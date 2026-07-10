@@ -7,6 +7,7 @@ import { sanitizeEquip, earnedCosmeticsFor, COSMETIC_SLOTS } from "./cosmeticsCo
 import type { CosmeticLoadout } from "./cosmeticsCore";
 import { foldBestRun, foldFloorProgress, mergeBestRun, syncIdentity, cleanBuild } from "./leaderboard";
 import type { RunBuild } from "./leaderboard";
+import { masteryXpForReachedFloor, masteryLevelForXp } from "./masteryCore";
 
 export interface Profile {
   playerId: string;
@@ -23,6 +24,11 @@ export interface Profile {
   // trickle + mythic windfalls). Nothing spends it yet — the Foundation lands later.
   amber: number;
   unlocks: string[];
+  // Account MASTERY (KIT/XP spec §4): the persistent ACCESS track. masteryXp is the lifetime
+  // total; masteryLevel is the derived level the lobby reads to gate kit selection. Never a
+  // currency, never spendable.
+  masteryXp: number;
+  masteryLevel: number;
   // Present when the row is linked to a signed-in account (Google avatar URL).
   image?: string;
   // True when this stats row is account-backed rather than guest-only.
@@ -46,6 +52,8 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
     gamesPlayed: doc.gamesPlayed,
     amber: doc.amber ?? 0,
     unlocks: doc.unlocks,
+    masteryXp: doc.masteryXp ?? 0,
+    masteryLevel: masteryLevelForXp(doc.masteryXp ?? 0),
     image: user?.image,
     isAccount: doc.userId !== undefined,
   };
@@ -347,6 +355,10 @@ async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Pro
     // The premium economy's trickle is already capped at the sim (≤ +5 cache + windfalls);
     // the fold re-clamps defensively so a tampered client can't mint meaningful Amber.
     amber: (doc.amber ?? 0) + Math.max(0, Math.min(50, Math.floor(run.amber))),
+    // Account MASTERY XP (KIT/XP spec §4): granted every run from run performance (derived
+    // from the deepest floor reached — a cleared floor always pays, win or lose). Access-only:
+    // it unlocks kits, never a stat or a spendable balance.
+    masteryXp: (doc.masteryXp ?? 0) + masteryXpForReachedFloor(run.floor),
   };
   // Earned cosmetics unlock off the post-fold all-time stats (the one grant path).
   const earned = earnedCosmeticsFor(totals).filter((id) => !doc.unlocks.includes(id));

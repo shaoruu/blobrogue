@@ -9,6 +9,7 @@
 import type { WorldState } from "../../src/sim/world.js";
 import type { WeaponId } from "../../src/sim/types.js";
 import type { PlayerId } from "../../src/sim/input.js";
+import type { KitId } from "../../src/sim/kits.js";
 import type { WireEvent } from "../../src/net/protocol.js";
 import type { Conn, InputIntent } from "./connection.js";
 import type { ServerConfig } from "./config.js";
@@ -53,7 +54,7 @@ export interface RoomRuntime {
   readonly conns: Map<number, Conn>;
   readonly playerCount: number;
 
-  addPlayer(pid: PlayerId): void;
+  addPlayer(pid: PlayerId, kit?: KitId): void;
   removePlayer(pid: PlayerId): void;
   // Flip a player's network-absence (silent-link soft absence, seat reservation, resume).
   setPlayerAbsent(pid: PlayerId, isAbsent: boolean): void;

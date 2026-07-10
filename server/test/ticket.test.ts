@@ -56,6 +56,8 @@ async function main(): Promise<void> {
       ["hat only", { name: "Ada", hat: "hat_top" }],
       ["face only", { name: "Ada", face: "face_shades" }],
       ["full cosmetic identity", { worldId: "room:ABCD", name: "Ada", colorIndex: 2, hat: "hat_crown", face: "face_monocle" }],
+      // v18: the kit + mastery-level claims (the byte contract must hold with them too).
+      ["kit + mastery", { worldId: "room:ABCD", name: "Ada", colorIndex: 2, kit: "phantom", masteryLevel: 5 }],
     ];
     for (const [label, claims] of claimVariants) {
       const fromConvex = await mintGsTicket(secret, "player-1", 120, now, claims);
@@ -109,6 +111,24 @@ async function main(): Promise<void> {
     const unknownRes = verifyTicket(cfg, unknownHat, now);
     check("well-formed UNKNOWN cosmetic id passes format-only verification (catalog-independent servers)",
       unknownRes.ok === true && unknownRes.hat === "hat_from_the_future");
+
+    // v18 KIT + MASTERY claims (spec §9.5): the signed kit + account level ride the ticket and
+    // verify back out; a malformed kit / mastery is rejected outright. The join handler then
+    // re-gates the kit against the level (isKitUnlocked ? kit : "gunner") — proven here directly.
+    const kitTicket = await mintGsTicket(secret, "player-1", 120, now, { kit: "bulwark", masteryLevel: 3 });
+    const kitRes = verifyTicket(cfg, kitTicket, now);
+    check("kit + mastery claims verify back out", kitRes.ok && kitRes.kit === "bulwark" && kitRes.masteryLevel === 3, `kit=${kitRes.kit} ml=${kitRes.masteryLevel}`);
+    const badKit = await mintGsTicket(secret, "player-1", 120, now, { kit: "sniper" });
+    check("an unknown kit claim rejects (bad_kit)", verifyTicket(cfg, badKit, now).reason === "bad_kit");
+    const badMastery = await mintGsTicket(secret, "player-1", 120, now, { masteryLevel: 0 });
+    check("a bad mastery level rejects (bad_mastery)", verifyTicket(cfg, badMastery, now).reason === "bad_mastery");
+    // The server-side unlock gate the join handler applies (never trust a client's claim).
+    const gate = (kit: string, level: number): string => {
+      const unlocked = kit === "gunner" || kit === "mender" || (kit === "bulwark" && level >= 3) || (kit === "phantom" && level >= 5);
+      return unlocked ? kit : "gunner";
+    };
+    check("a low-mastery PHANTOM claim is downgraded to gunner server-side", gate("phantom", 2) === "gunner");
+    check("a level-3 BULWARK claim is honoured server-side", gate("bulwark", 3) === "bulwark");
 
     // Tampering with the world claim (world-hop attempt) breaks the signature.
     const [head, payload] = ticket.split(".");

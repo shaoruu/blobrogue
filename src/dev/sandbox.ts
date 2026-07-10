@@ -8,6 +8,8 @@ import type { EnemyTier } from "../sim/balance.js";
 import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
 import type { MutatorId, RollAffixId, BossAffixId } from "../sim/floorRolls.js";
 import { ITEMS } from "../sim/items.js";
+import { KIT_IDS, KIT_META } from "../sim/kits.js";
+import type { KitId } from "../sim/kits.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats } from "../sim/weaponStats.js";
 import { createMods } from "../sim/items.js";
@@ -225,6 +227,29 @@ function buildPanel(game: Game): void {
   hpRow.appendChild(btn("-1 max HP", () => game.devAddMaxHp(-1), "mini"));
   playerSec.appendChild(hpRow);
   panel.appendChild(playerSec);
+
+  // ---- kits + ultimates (spec build-gate: all four kits + their ults testable in isolation) ----
+  const kitSec = section("Kits & Ults");
+  const kitRow = h("div", "dev-row");
+  const kitBtns = new Map<KitId, HTMLButtonElement>();
+  const selectKit = (kit: KitId) => {
+    game.devSetKit(kit);
+    for (const [id, b] of kitBtns) b.classList.toggle("on", id === kit);
+  };
+  kitRow.appendChild(btn("None", () => selectKit("none"), "mini"));
+  for (const kit of KIT_IDS) {
+    const b = btn(KIT_META[kit].name, () => selectKit(kit), "mini");
+    b.title = `${KIT_META[kit].role} \u00b7 ${KIT_META[kit].ult} \u2014 ${KIT_META[kit].blurb}`;
+    kitBtns.set(kit, b);
+    kitRow.appendChild(b);
+  }
+  kitSec.appendChild(h("div", "dev-note", "Kit (stat lean + passive + starting weapon):"));
+  kitSec.appendChild(kitRow);
+  const ultRow = h("div", "dev-row");
+  ultRow.appendChild(btn("Fill ult meter", () => game.devFillUlt(), "mini"));
+  ultRow.appendChild(btn("Cast ult (F)", () => game.devCastUlt(), "mini"));
+  kitSec.appendChild(ultRow);
+  panel.appendChild(kitSec);
 
   // ---- combo (gate the kill-chain HUD without having to sustain a live chain) ----
   const comboSec = section("Combo");

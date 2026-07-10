@@ -52,7 +52,11 @@ import type {
 // v17: the Wave 1 DEEP BOSSES (The Sump F35–45) — the enemy wire's closed kind + move sets
 // grew (jet/tithe/tithe_slab/quorum/quorum_shield/quorum_heal/quorum_dmg + mirror/merge);
 // no new struct field (they reuse bph/aux/hp/afs/atk).
-export const SYNTHETIC_JOIN_PROTOCOL = 17;
+// v18: the KIT/CLASS + ULT + account-MASTERY system — SelfWire grows the kit/ult block
+// (kit/uc/ura/ovt/phs/uiv/pst), the input command grows the `ult` requested bit, the
+// effect-entity kind set grew (sanctuary/aegis), four ult SimEvents joined the wire, and the
+// join ticket carries the validated kit + mastery level claim (kt/ml).
+export const SYNTHETIC_JOIN_PROTOCOL = 18;
 
 export interface HttpProbeConfig {
   baseUrl: string;

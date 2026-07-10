@@ -80,9 +80,12 @@ export interface InputSample {
   // The revive-channel hold (E). A gameplay-context level input like movement; every other
   // context samples it released, so a spectator/chooser can never channel.
   interact: boolean;
+  // The ult-request hold (F). Like interact, a gameplay-context level input; the server alone
+  // validates charge + the 8s lockout and resolves the effect.
+  ult: boolean;
 }
 
-const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false };
+const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false, ult: false };
 
 // Double-tap-to-dash timing (game-designer spec). A dash fires on a down->up->down where the
 // FIRST press was a genuine TAP (held <= TAP_MAX_HOLD) and the SECOND press lands within
@@ -304,7 +307,10 @@ export class InputController {
     const dashHeld = this.keys.has("shift") || (dashKey !== "shift" && this.keys.has(dashKey));
     const dashTap = this.isDashTapQueued;
     this.isDashTapQueued = false;
-    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e") };
+    // The "ult requested" intent (spec §3): Q is already the drop-weapon key, so the ult lives
+    // on the dedicated F key (a controller button later). A held bit is safe — the server resets
+    // the meter on cast, so holding it can never chain a second ult.
+    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e"), ult: this.keys.has("f") };
   }
 
   private suspendFire(): void {

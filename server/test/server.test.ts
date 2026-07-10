@@ -228,7 +228,7 @@ async function main(): Promise<void> {
       const startX = start.x;
       // Blast max-magnitude move inputs; the sim normalizes to unit + the server caps total dt.
       for (let i = 1; i <= 30; i++) {
-        cheatWs.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 8, my: 0, aim: 0, fire: false, dash: false, act: false, ackEv: 0 }));
+        cheatWs.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 8, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0 }));
       }
       await sleep(500);
       const moved = Math.abs(world.state.players.get(pid)!.x - startX);

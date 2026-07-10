@@ -16,6 +16,8 @@ import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
 import { inputToIntent } from "./connection.js";
 import type { RoomRuntime, Seat, SessionStore, SnapshotPublisher } from "./ports.js";
+import { isKitUnlocked } from "../../src/sim/kits.js";
+import type { KitId } from "../../src/sim/kits.js";
 
 const DEFAULT_WORLD_ID = "arena-1";
 const OFFER_RESENDS = 40;
@@ -128,6 +130,12 @@ export class MessageRouter {
     conn.colorIndex = auth.colorIndex ?? null;
     conn.hat = auth.hat ?? null;
     conn.face = auth.face ?? null;
+    // SERVER-SIDE kit-unlock gate (spec §9.5): the ticket's chosen kit is re-validated against
+    // the account's signed Mastery level. An unlocked kit stands; anything else (a client claim
+    // to an unowned kit, or a claim with no mastery proof) downgrades to GUNNER — never trusted.
+    conn.kitId = isKitUnlocked((auth.kit ?? "none") as KitId, auth.masteryLevel ?? 1)
+      ? ((auth.kit ?? "none") as KitId)
+      : "gunner";
     // The world comes from the VERIFIED ticket: Convex mints a `wld` claim only after the
     // player proved membership in that room, so friends sharing a code land in the same
     // isolated world and a client can never assert a world id. No claim -> the public default.

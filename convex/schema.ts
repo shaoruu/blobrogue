@@ -51,6 +51,11 @@ export default defineSchema({
     // permanent power directly — Amber is the only coins→permanence route, and it only
     // trickles. Optional: pre-Amber rows read 0.
     amber: v.optional(v.number()),
+    // Account MASTERY XP (KIT/XP spec §4): a persistent ACCESS track — it gates WHICH kits/
+    // cosmetics may be selected, NOT a currency and NOT spendable (the 2-currency rule is
+    // intact). Granted every run from run performance (floors/bosses/depth). Optional: pre-
+    // mastery rows read 0 (account level 1 -> Gunner + Mender unlocked).
+    masteryXp: v.optional(v.number()),
     // Earned cosmetic/unlock ids. Seeded [] since day one; recordRun grants earned
     // cosmetics into it (see cosmeticsCore.earnedCosmeticsFor).
     unlocks: v.array(v.string()),
