@@ -295,7 +295,7 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   // (64px body). Casts its frozen archetype MIRROR pool; spent after each salvo (§5g).
   jet: {
     kind: "jet", sprite: "jet", movement: "boss", isPhasing: false,
-    radius: 22, drawSize: 64, alpha: 1, tint: "#7882aa", kbResist: 6,
+    radius: 22, drawSize: 76, alpha: 1, tint: "#7882aa", kbResist: 6,
     baseHp: JET.baseHp, baseSpeed: 96, touchDamage: JET.contactDamage, threat: 0,
   },
   // THE TITHE (F40): the low/wide armored feeder — builds a slab and re-armors behind it (§5h).
