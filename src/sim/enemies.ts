@@ -483,9 +483,10 @@ export function bossKindForFloor(seed: number, floor: number): EnemyKind | null 
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
-// treats the authored finale (the Choir) as its predecessor.
+// treats the authored finale before the rotation (the F45 Quorum) as its predecessor, so
+// the first seeded floor (F50) never repeats it.
 function deepBossIndex(seed: number, step: number): number {
-  let prev = DEEP_BOSS_ROSTER.indexOf("choir");
+  let prev = DEEP_BOSS_ROSTER.indexOf("quorum");
   for (let s = 0; ; s++) {
     let pick = new Rng((seed ^ 0xB055ED) + s * 2654435761).int(0, DEEP_BOSS_ROSTER.length - 1);
     if (pick === prev) pick = (pick + 1) % DEEP_BOSS_ROSTER.length;

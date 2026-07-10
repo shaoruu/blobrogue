@@ -86,6 +86,11 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   sac: ["caskbellows"],                // the same stationary-objective verb, clutch-shaped
   marshal: ["rootward", "shielder"],   // formation guard + the worker's cover verb, weaponized
   toll: ["echojack", "caskbellows"],   // noise-lure misdirection + the locked-lane volley verb
+  // Wave 1 boss mechanic bodies synthesize learned Wave-A verbs (like the Weaver's knot/sac):
+  tithe_slab: ["shielder"],            // the built destructible-cover verb, made a feeding slab
+  quorum_shield: ["shielder"],         // the guard verb, one husk of the shared body
+  quorum_heal: ["rootward"],           // the formation-support/anchor verb, the healing husk
+  quorum_dmg: ["skeleton"],            // the lunge/aggressor verb, the damage husk
 };
 
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity
