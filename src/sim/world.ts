@@ -3673,11 +3673,11 @@ function stepRollAffix(w: WorldState, e: Enemy, dt: number): void {
       return;
     }
     case "reflect": {
-      // aux > 0 = ARMED (the bright amber facet); 0 = CRACKED. A cracked facet re-arms after
-      // reflectCrackCd — the ONLY window the front is safe to shoot.
-      if (e.aux <= 0) {
+      // affixState > 0 = ARMED (the bright amber facet); 0 = CRACKED. A cracked facet re-arms
+      // after reflectCrackCd — the ONLY window the front is safe to shoot.
+      if (e.affixState <= 0) {
         e.affixClock -= dt;
-        if (e.affixClock <= 0) { e.aux = ROLL_AFFIX.reflectArmed; e.affixClock = 0; }
+        if (e.affixClock <= 0) { e.affixState = ROLL_AFFIX.reflectArmed; e.affixClock = 0; }
       }
       return;
     }
@@ -3685,7 +3685,7 @@ function stepRollAffix(w: WorldState, e: Enemy, dt: number): void {
       // The crust slab tracks its target SLOWLY while the body is idle (a committed attack owns
       // lockedAngle and the slab rides along), so footwork beats it even solo — same law as
       // bulwark, its own material read.
-      if (e.aux > 0 && e.attack.phase === "none" && findTarget(w, e.x, e.y)) {
+      if (e.affixState > 0 && e.attack.phase === "none" && findTarget(w, e.x, e.y)) {
         const want = Math.atan2(w.targetY - e.y, w.targetX - e.x);
         const d = angleDiff(want, e.attack.lockedAngle);
         const maxTurn = ROLL_AFFIX.slabTurnRate * dt;
@@ -3716,13 +3716,13 @@ function plantDrip(w: WorldState, x: number, y: number): void {
 // own material read. Never immunity: melee, blasts, pierce and the flank always work. Returns
 // true when the slab ate the round.
 function absorbOnRollSlab(e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
-  if (e.rollAffix !== "shielded" || e.aux <= 0 || b.pierce > 0) return false;
+  if (e.rollAffix !== "shielded" || e.affixState <= 0 || b.pierce > 0) return false;
   const incoming = Math.atan2(-b.vy, -b.vx);
   if (Math.abs(angleDiff(incoming, e.attack.lockedAngle)) > ROLL_AFFIX.slabArc / 2) return false;
-  e.aux = Math.max(0, e.aux - b.damage);
+  e.affixState = Math.max(0, e.affixState - b.damage);
   b.life = 0;
   ev.push({ t: "bulletBlocked", kind: e.kind, x: sweptHit.x, y: sweptHit.y, aim: incoming });
-  if (e.aux === 0) {
+  if (e.affixState === 0) {
     // The slab falls: loud and final — from here the elite is just its chassis.
     ev.push({ t: "puff", x: e.x, y: e.y, n: 8, color: "#8a6f52" });
     ev.push({ t: "cue", name: "guard.break", x: e.x, y: e.y, rate: 1, gain: 0.85, trauma: 0.06 });
@@ -3735,11 +3735,11 @@ function absorbOnRollSlab(e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
 // CRACKS — disarmed for reflectCrackCd (the safe window to shoot the front). Returns true when
 // the shot was reflected (the player round is spent).
 function reflectFrontalBullet(w: WorldState, e: Enemy, b: Bullet, ev: SimEvent[]): boolean {
-  if (e.rollAffix !== "reflect" || e.aux <= 0 || b.pierce > 0) return false;
+  if (e.rollAffix !== "reflect" || e.affixState <= 0 || b.pierce > 0) return false;
   const incoming = Math.atan2(-b.vy, -b.vx);
   if (Math.abs(angleDiff(incoming, e.attack.lockedAngle)) > ROLL_AFFIX.reflectArc / 2) return false;
   b.life = 0;
-  e.aux = 0;
+  e.affixState = 0;
   e.affixClock = ROLL_AFFIX.reflectCrackCd;
   spawnEnemyBullet(w, e.x, e.y, incoming, ROLL_AFFIX.reflectBoltSpeed, ROLL_AFFIX.reflectBoltRadius, ROLL_AFFIX.reflectBoltDamage, "#ffca6b", 2.2);
   ev.push({ t: "bulletBounce", x: e.x, y: e.y, aim: incoming, color: "#ffca6b" });

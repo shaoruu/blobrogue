@@ -325,12 +325,14 @@ export interface EnemyWire {
   atk: AttackWire;
   bph: number;                 // boss phase (0 when not a boss)
   // The per-kind auxiliary channel (see Enemy.aux): sinderling armed flag, echo/knell
-  // fuse, fragment tether id + 1, bulwark plate HP, a rolled shielded slab's HP / reflect
-  // facet's armed timer. 0 for everyone else.
+  // fuse, fragment tether id + 1, bulwark plate HP. 0 for everyone else.
   aux: number;
   // The ROLLED elite affix id ("splits"/"shielded"/"hazardTrail"/"reflect"/"enrage"), or "" for
-  // none (v16) — drives the client's material affix tell. The per-affix scalar rides `aux`.
+  // none (v16) — drives the client's material affix tell.
   afx: string;
+  // The rolled affix's per-body scalar (its OWN channel, never aux): a shielded slab's HP, a
+  // reflect facet's armed state (>0 = armed). 0 for other affixes. Drives the armed/slab render.
+  afs: number;
   burn: number; chill: number; shock: number;
 }
 
@@ -949,6 +951,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
     bph: num(o, "bph", 0, 16),
     aux: num(o, "aux", -1e9, 1e9),
     afx: affixOf(o, "afx"),
+    afs: num(o, "afs", -1e9, 1e9),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
   };
 }
@@ -1255,6 +1258,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     bph: e.boss ? e.boss.phase : 0,
     aux: e.aux,
     afx: e.rollAffix,
+    afs: e.affixState,
     burn: e.burn, chill: e.chill, shock: e.shock,
   };
 }
@@ -1269,7 +1273,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
   return {
     id: w.id, kind: w.kind, x, y, vx: 0, vy: 0, radius: w.r, hp: w.hp, maxHp: w.mhp, dead: false,
     tier: w.tr, isSummoned: false, kbResist: 1, surgeDelay: 0, surgeTime: 0,
-    rollAffix: w.afx, affixClock: 0,
+    rollAffix: w.afx, affixState: w.afs, affixClock: 0,
     aux: w.aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,

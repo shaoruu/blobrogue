@@ -512,7 +512,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     touchDamage: a.touchDamage,
     kbResist: a.kbResist * (tier === "brute" ? 2 : 1) * coopKbResistMult(players),
     surgeDelay: 0, surgeTime: 0,
-    rollAffix: "", affixClock: 0,
+    rollAffix: "", affixState: 0, affixClock: 0,
     aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     zig: rng.next() * Math.PI * 2,
     hopClock, hopMove: 0,
@@ -968,16 +968,17 @@ export interface SpawnOpts {
 }
 
 // Assign an elite's rolled affix (splits/shielded/hazardTrail/reflect/enrage) from the frozen
-// descriptor slot at its ascending spawn ordinal, and stamp the affix's per-body scalar on aux
-// (a shielded slab's HP, a reflect facet's armed timer). Ordinals past the rolled slot count get
-// no rolled affix. Pure — every client that resolves the same descriptor assigns identically.
+// descriptor slot at its ascending spawn ordinal, and stamp the affix's per-body scalar on its
+// OWN channel (affixState — never `aux`, so a kind's aux mechanic is untouched): a shielded
+// slab's HP, a reflect facet's armed state. Ordinals past the rolled slot count get no rolled
+// affix. Pure — every client that resolves the same descriptor assigns identically.
 function applyRollAffix(e: Enemy, ordinal: number, floor: number, eliteAffixes: readonly EliteAffixRoll[]): void {
   const slot = eliteAffixes.find((r) => r.ordinal === ordinal);
   const affix = slot?.affix ?? null;
   if (affix === null) return;
   e.rollAffix = affix;
-  if (affix === "shielded") e.aux = roundHalfToEven(ROLL_AFFIX.slabHp * floorHpMult(floor));
-  else if (affix === "reflect") e.aux = ROLL_AFFIX.reflectArmed; // the facet starts ARMED
+  if (affix === "shielded") e.affixState = roundHalfToEven(ROLL_AFFIX.slabHp * floorHpMult(floor));
+  else if (affix === "reflect") e.affixState = ROLL_AFFIX.reflectArmed; // the facet starts ARMED
 }
 
 export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number, players = 1, power = 1, opts: SpawnOpts = {}): FloorSpawns {

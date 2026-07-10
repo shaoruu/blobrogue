@@ -6007,8 +6007,8 @@ export class Game {
     const bloodied = e.maxHp > 0 ? 1 - Math.max(0, Math.min(1, e.hp / e.maxHp)) : 0;
     switch (e.rollAffix) {
       case "shielded": {
-        // An asymmetric crust slab (a directional plate that FALLS when spent, aux = its HP).
-        if (e.aux > 0) this.renderGuardArc(e, sx, sy, size, ROLL_AFFIX.slabArc, "#8a6f52");
+        // An asymmetric crust slab (a directional plate that FALLS when spent, afs = its HP).
+        if (e.affixState > 0) this.renderGuardArc(e, sx, sy, size, ROLL_AFFIX.slabArc, "#8a6f52");
         return;
       }
       case "reflect": {
@@ -6020,7 +6020,7 @@ export class Game {
         const r = size * 0.42, half = size * 0.34;
         const cx = sx + px * r, cy = sy + py * r;
         ctx.save();
-        if (e.aux > 0) {
+        if (e.affixState > 0) {
           ctx.globalAlpha = 0.5 + 0.35 * Math.sin(clock * 8);
           ctx.strokeStyle = "#ffca6b"; ctx.lineWidth = 4; ctx.lineCap = "round";
           ctx.beginPath(); ctx.moveTo(cx - tx * half, cy - ty * half); ctx.lineTo(cx + tx * half, cy + ty * half); ctx.stroke();
@@ -7268,8 +7268,8 @@ export class Game {
     const p = this.devPlacePoint(atCursor);
     const e = devSpawnEnemy(this.world, kind, p.x, p.y, "elite");
     e.rollAffix = affix;
-    if (affix === "shielded") e.aux = ROLL_AFFIX.slabHp;
-    else if (affix === "reflect") e.aux = ROLL_AFFIX.reflectArmed;
+    if (affix === "shielded") e.affixState = ROLL_AFFIX.slabHp;
+    else if (affix === "reflect") e.affixState = ROLL_AFFIX.reflectArmed;
     this.spawnParticles(p.x, p.y, 6, ENEMY_ARCHETYPES[kind].tint);
   }
 

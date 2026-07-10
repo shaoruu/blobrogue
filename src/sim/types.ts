@@ -182,10 +182,14 @@ export interface Enemy extends Entity {
   // ("splits"/"shielded"/"hazardTrail"/"reflect"/"enrage") or "" for none. Orthogonal to the
   // kind-baseline elite identity (ELITE_AFFIXES): the rolled affix is the fresh-run variety
   // layer, ≤1 per elite, and rides the wire (EnemyWire.afx) so clients draw its material tell.
-  // The per-affix scalar (a reflect facet's armed timer, a shielded slab's HP) rides `aux`.
   rollAffix: string;
+  // The rolled affix's per-body SCALAR (its OWN channel, distinct from `aux` so it never collides
+  // with a kind's aux mechanic — sinderling armed flag, fragment tether id, bulwark plate): a
+  // shielded slab's remaining HP, or a reflect facet's armed state (>0 = armed, 0 = cracked).
+  // Rides the wire (EnemyWire.afs) so clients render armed/slab state. 0 for other affixes.
+  affixState: number;
   // hazardTrail drip accumulator (seconds since the last cinder drop); reflect crack cooldown
-  // (seconds a cracked facet stays disarmed). Both sim-internal — the client reads aux/rollAffix.
+  // (seconds a cracked facet stays disarmed). Both sim-internal — the client reads afs/rollAffix.
   affixClock: number;
   // The one per-kind/per-affix AUXILIARY channel that rides the wire (EnemyWire.aux) so
   // the client can render authoritative special state without a bespoke field per kind:
