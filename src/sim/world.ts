@@ -601,6 +601,13 @@ function lowestHpAllyInRange(w: WorldState, p: PlayerSim, range: number): Player
 // server-owned and a client only ever renders the resulting SimEvents/entities. Handles the
 // slow time-trickle FLOOR, the MENDER lifebloom HoT payout, and resolving each pending cast.
 function updateUlts(w: WorldState, ev: SimEvent[]): void {
+  // PHANTOM dash charge (spec §2.4): credited off this tick's authoritative dashStart events, so
+  // the meter never accrues in client prediction (which never runs this world phase).
+  for (const e of ev) {
+    if (e.t !== "dashStart") continue;
+    const dasher = w.players.get(e.pid);
+    if (dasher && dasher.kitId === "phantom") grantUltCharge(dasher, ULT.kDash);
+  }
   // Time-trickle FLOOR (spec §3): a slow integer grant keyed off the world tick, so a long
   // fight eventually grants an ult even at low output — and a defensive kit is never starved.
   const trickle = w.tick % ULT.timeGrantEveryTicks === 0;
@@ -2510,6 +2517,9 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
     // extend each other.
     p.dashInvuln = PLAYER.dashIframe;
     cancelReviveChannelBy(w, p.id); // gate §6: the reviver's dash cancels their channel
+    // PHANTOM charges its ult off dashes performed (spec §2.4) — credited AUTHORITATIVELY in
+    // updateUlts off this dashStart event, never here (the player phase runs in client
+    // prediction too, and the meter must stay server-owned).
     ev.push({ t: "dashStart", pid: p.id, x: p.x, y: p.y });
   }
   let mvx: number, mvy: number;

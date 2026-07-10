@@ -47,6 +47,7 @@ export const ULT = {
   kKill: 20,        // flat charge per kill (all kits)
   kTaken: 60,       // BULWARK override: charge per point of damage TAKEN (a tank charges by tanking)
   kHeal: 30,        // MENDER override: charge per HP of healing DONE (support still charges)
+  kDash: 45,        // PHANTOM override: charge per dash performed (the mobility kit's flavor, spec §2.4)
   // The slow time-trickle FLOOR (spec §3): a long fight eventually grants an ult even at low
   // output. Keyed off the integer world tick so it is deterministic and float-free: every
   // `timeGrantEveryTicks` ticks add `kTimePerGrant`. At 20Hz this fills from time alone in
