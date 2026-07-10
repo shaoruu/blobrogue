@@ -40,6 +40,14 @@ export interface AuthoritativePlayerSnapshot {
   combo: number;
   comboTimer: number;
   hasClaimedBossChoice: boolean;
+  premiumHpBuys: number;
+  isAmberCacheArmed: boolean;
+  amberWindfall: number;
+  isBlessingRerollArmed: boolean;
+  reviveTokens: number;
+  extraWeaponSlots: number;
+  hpTithe: number;
+  prospectorFloor: number;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -100,6 +108,14 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     combo: p.combo,
     comboTimer: p.comboTimer,
     hasClaimedBossChoice: p.hasClaimedBossChoice,
+    premiumHpBuys: p.premiumHpBuys,
+    isAmberCacheArmed: p.isAmberCacheArmed,
+    amberWindfall: p.amberWindfall,
+    isBlessingRerollArmed: p.isBlessingRerollArmed,
+    reviveTokens: p.reviveTokens,
+    extraWeaponSlots: p.extraWeaponSlots,
+    hpTithe: p.hpTithe,
+    prospectorFloor: p.prospectorFloor,
   };
 }
 
@@ -131,6 +147,14 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.combo = s.combo;
   p.comboTimer = s.comboTimer;
   p.hasClaimedBossChoice = s.hasClaimedBossChoice;
+  p.premiumHpBuys = s.premiumHpBuys;
+  p.isAmberCacheArmed = s.isAmberCacheArmed;
+  p.amberWindfall = s.amberWindfall;
+  p.isBlessingRerollArmed = s.isBlessingRerollArmed;
+  p.reviveTokens = s.reviveTokens;
+  p.extraWeaponSlots = s.extraWeaponSlots;
+  p.hpTithe = s.hpTithe;
+  p.prospectorFloor = s.prospectorFloor;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

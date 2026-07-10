@@ -41,7 +41,9 @@ import type {
 // v13: the earned-windows boss rework + fair-surprise layer — the enemy kind set grew
 // (the Weaver's `knot` and `sac` mechanic bodies) and the hazard kind set grew
 // (`omen`, the ambush pre-spawn tell); no new wire fields (guard/exposed rides aux).
-export const SYNTHETIC_JOIN_PROTOCOL = 13;
+// v14: the premium coin economy (premium stall slot kinds + mode on the shop wire,
+// SelfWire premium run state).
+export const SYNTHETIC_JOIN_PROTOCOL = 14;
 
 export interface HttpProbeConfig {
   baseUrl: string;

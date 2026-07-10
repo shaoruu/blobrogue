@@ -29,6 +29,17 @@ const { BlessingOverlay } = await import("../src/ui/blessing.js");
 const { ShopPanel } = await import("../src/ui/shopPanel.js");
 const { shopActionCopy, shopOwnershipCopy, shopChipCopy, shopPanelView, shopFooterCopy, isResolvedShopStatus } = await import("../src/ui/shopCopy.js");
 const { buildShopState, shopViewerOf } = await import("../src/sim/shop.js");
+
+// A shop-viewer source with sensible defaults (the premium run fields at their fresh-run
+// identities) — the shop copy/panel assertions only vary coins/ownership.
+function viewerSrc(o: Partial<import("../src/sim/shop.js").ShopViewerSource> = {}): import("../src/sim/shop.js").ShopViewerSource {
+  return {
+    id: "local", coins: 30, hp: 4, maxHp: 6, weapon: "pistol", ownedWeapons: [], ownedItemIds: [],
+    premiumHpBuys: 0, isAmberCacheArmed: false, reviveTokens: 0, extraWeaponSlots: 0, hpTithe: 0,
+    mods: { maxHpBonus: 0 },
+    ...o,
+  };
+}
 const { generateDungeon } = await import("../src/sim/dungeon.js");
 const { bossDisplayName } = await import("../src/sim/enemies.js");
 const { ITEMS, itemDesc, createMods } = await import("../src/sim/items.js");
@@ -63,6 +74,7 @@ function mkState(over: Partial<HudState> = {}): HudState {
       wslot("shotgun", "Shotgun", true),
       wslot("tesla", "Tesla", false),
     ],
+    weaponCap: MAX_OWNED_WEAPONS,
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
     coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
@@ -571,8 +583,8 @@ function shopCopyTests(): void {
     (["sold", "owned", "maxLevel", "fullHealth", "exhausted"] as const).every(isResolvedShopStatus));
 
   section("shopFooterCopy: the explicit multi-buy framing, state-dependent");
-  const rich = shopViewerOf({ id: "local", coins: 99, hp: 4, maxHp: 6, ownedWeapons: [], ownedItemIds: [] });
-  const poor = shopViewerOf({ id: "local", coins: 0, hp: 4, maxHp: 6, ownedWeapons: [], ownedItemIds: [] });
+  const rich = shopViewerOf(viewerSrc({ coins: 99 }));
+  const poor = shopViewerOf(viewerSrc({ coins: 0 }));
   check("your own buy reads BOUGHT ✓ · other stations still open",
     shopFooterCopy(shop, rich, true) === "BOUGHT \u2713 \u00b7 other stations still open");
   check("with affordable stations the footer says spend at ANY of them",
@@ -585,15 +597,13 @@ function shopPanelTests(): void {
   section("shop panel: compact, labeled, keyboard-first, aria-correct");
   const shop = buildShopState(0xDEA1, 3, generateDungeon(0xDEA1, 3).rooms.find((r) => r.kind === "shop")!);
   const weapon = shop.slots.find((s) => s.kind === "weapon")!;
-  const viewerOf = (coins: number) => shopViewerOf({
-    id: "local", coins, hp: 4, maxHp: 6, ownedWeapons: ["pistol"], ownedItemIds: [],
-  });
+  const viewerOf = (coins: number) => shopViewerOf(viewerSrc({ coins, ownedWeapons: ["pistol"] }));
   const mods = createMods();
 
   const panel = new ShopPanel();
   const bought: number[] = [];
   let closes = 0;
-  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods), (slot) => bought.push(slot), () => closes++);
+  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods, 3), (slot) => bought.push(slot), () => closes++);
   const root = document.querySelector<HTMLElement>(".shop-panel")!;
   const buy = root.querySelector<HTMLButtonElement>(".shop-buy")!;
   check("opens as a labeled dialog", panel.isOpen && root.getAttribute("role") === "dialog"
@@ -626,9 +636,7 @@ function shopPanelTests(): void {
   // The buyer's own claim lands: the panel STAYS OPEN, resolves to OWNED, and the footer
   // reinforces "keep shopping" — a buy is never a silent close.
   weapon.soldTo = "local";
-  panel.update(shopPanelView(shop, weapon, shopViewerOf({
-    id: "local", coins: 18, hp: 4, maxHp: 6, ownedWeapons: ["pistol", weapon.weapon!], ownedItemIds: [],
-  }), mods, true));
+  panel.update(shopPanelView(shop, weapon, shopViewerOf(viewerSrc({ coins: 18, ownedWeapons: ["pistol", weapon.weapon!] })), mods, 3, true));
   check("your own buy keeps the panel open and resolves to OWNED",
     panel.isOpen && buyLabel() === "OWNED" && buy.disabled);
   check("the resolved row wears the muted group's check (distinct from broke in grayscale)",
@@ -642,14 +650,14 @@ function shopPanelTests(): void {
   // The authoritative claim lands for a TEAMMATE (they won the race): the open panel
   // re-renders to an honest SOLD and the buy control disables — no ambiguous depletion.
   weapon.soldTo = "teammate";
-  panel.update(shopPanelView(shop, weapon, viewerOf(30), mods));
+  panel.update(shopPanelView(shop, weapon, viewerOf(30), mods, 3));
   check("a mid-look claim flips the row to SOLD and disables it",
     buyLabel() === "SOLD" && buy.disabled && buy.classList.contains("resolved"));
   buy.click();
   check("a disabled row sends nothing", bought.length === 1);
 
   weapon.soldTo = null;
-  panel.update(shopPanelView(shop, weapon, viewerOf(3), mods));
+  panel.update(shopPanelView(shop, weapon, viewerOf(3), mods, 3));
   check("broke re-render reads NEED 9 MORE COINS, disabled", buyLabel() === "NEED 9 MORE COINS" && buy.disabled);
   check("broke is the LIVE unaffordable group: coin glyph, .broke, never .resolved",
     buy.classList.contains("broke") && !buy.classList.contains("resolved")
@@ -662,7 +670,7 @@ function shopPanelTests(): void {
   check("Escape closes and fires onClose exactly once", !panel.isOpen && closes === 1);
 
   // Keyboard purchase: Enter on the focused (buyable) row buys.
-  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods), (slot) => bought.push(slot), () => closes++);
+  panel.open(shopPanelView(shop, weapon, viewerOf(30), mods, 3), (slot) => bought.push(slot), () => closes++);
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
   check("Enter buys from the keyboard", bought.length === 2 && bought[1] === weapon.id);
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "e" }));
@@ -670,12 +678,10 @@ function shopPanelTests(): void {
 
   // The blessing view carries the pick-card language (NEW/UPGRADE + exact effect).
   const blessing = shop.slots.find((s) => s.kind === "blessing")!;
-  const bView = shopPanelView(shop, blessing, viewerOf(30), mods);
+  const bView = shopPanelView(shop, blessing, viewerOf(30), mods, 3);
   check("a fresh blessing is tagged NEW with its exact Lv1 effect line",
     bView.tag === "NEW" && bView.lines.length >= 1 && bView.ownership === "FOR YOU");
-  const upView = shopPanelView(shop, blessing, shopViewerOf({
-    id: "local", coins: 30, hp: 4, maxHp: 6, ownedWeapons: ["pistol"], ownedItemIds: [blessing.itemId!],
-  }), mods);
+  const upView = shopPanelView(shop, blessing, shopViewerOf(viewerSrc({ ownedWeapons: ["pistol"], ownedItemIds: [blessing.itemId!] })), mods, 3);
   check("an owned blessing is tagged UPGRADE LV2 (the level this buy reaches)", upView.tag === "UPGRADE LV2");
 }
 

@@ -22,6 +22,8 @@ export interface ProfileDoc {
   deepestFloor: number;
   totalCoins: number;
   gamesPlayed: number;
+  // The persistent currency (banked by the premium economy's cache/windfall at run end).
+  amber: number;
   // Earned cosmetic/unlock ids (granted by recordRun; starter items are owned implicitly).
   unlocks: string[];
   // Present when the profile is account-backed (Google avatar URL).
@@ -136,7 +138,7 @@ export const api = {
     ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
-    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number; durationMs?: number; build?: RunBuildArg }, ProfileDoc | null>("players:recordRun"),
+    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number; amber?: number; durationMs?: number; build?: RunBuildArg }, ProfileDoc | null>("players:recordRun"),
   },
   leaderboard: {
     // The global top-N best runs (deepest floor, kills tie-break), public fields only.

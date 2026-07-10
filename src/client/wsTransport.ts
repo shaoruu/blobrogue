@@ -921,7 +921,7 @@ export class WSTransport implements Transport {
     const snap = this.latestSnap;
     if (snap) {
       const self = snap.self;
-      if (self && (!self.wpns.includes(drop) || self.wpns.length < MAX_OWNED_WEAPONS)) return;
+      if (self && (!self.wpns.includes(drop) || self.wpns.length < MAX_OWNED_WEAPONS + self.xsl)) return;
       if (!snap.pickups.some((p) => p.id === pickup && p.kind === "weapon")) return;
     }
     this.sendMsg({ t: "swap", pickup, drop, cseq: ++this.cseq });

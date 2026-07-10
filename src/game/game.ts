@@ -11,10 +11,10 @@ import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, amberForRun } from "../sim/balance.js";
 import type { EnemyTier, EliteAffix } from "../sim/balance.js";
-import { shopViewerOf, shopSlotStatusFor, SHOP_FOCUS_RANGE } from "../sim/shop.js";
-import type { ShopSlot, ShopState, ShopViewer } from "../sim/shop.js";
+import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
+import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
 import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
 import { ShopPanel } from "../ui/shopPanel.js";
 import { LocalTransport } from "../client/transport.js";
@@ -29,7 +29,7 @@ import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
-import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot } from "../sim/world.js";
+import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
@@ -72,6 +72,10 @@ import type { TileRenderGradient } from "./tileRender.js";
 
 export interface RunResult {
   floor: number; kills: number; coins: number; durationMs: number;
+  // Amber banked by the premium economy: the armed cache's end-run conversion of unspent
+  // coins (≤ +2 per 100, capped +5) plus any mythic windfall claims. The ONLY route from
+  // coins toward permanence — coins themselves die with the run.
+  amber: number;
   // The run's final build (weapons carried + blessings with levels) for the results screen.
   // Display-only for gameplay; the id/count subset also rides recordRun so a personal-best
   // run's build shows on the player's leaderboard profile.
@@ -461,6 +465,22 @@ const SHOP_STATION_IMG: Record<ShopSlot["kind"], PropSpriteName> = {
   blessing: "shop_pedestal",
   heart: "shop_heart_station",
   reroll: "shop_reroll_post",
+  mystery: "shop_pedestal",
+  legendary: "shop_pedestal",
+  rare_blessing: "shop_pedestal",
+  max_hp: "shop_heart_station",
+  full_heal: "shop_heart_station",
+  core_infusion: "shop_pedestal",
+  prospector: "shop_pedestal",
+  weapon_upgrade: "shop_reroll_post",
+  revive_token: "shop_heart_station",
+  extra_slot: "shop_pedestal",
+  reroll_all: "shop_reroll_post",
+  amber_cache: "shop_pedestal",
+  artifact: "shop_pedestal",
+  mythic_weapon: "shop_pedestal",
+  mythic_trio: "shop_pedestal",
+  mythic_amber: "shop_pedestal",
 };
 // Subtle idle bob/flash for props + chests — a fraction of the character juice so a crate
 // reads as a solid object, not a jelly.
@@ -2044,7 +2064,7 @@ export class Game {
         else if (e.kind === "heart") { this.spawnParticles(e.x, e.y, 8, "#ff6a6a"); this.addDecal(e.x, e.y, "#ff6a6a", 12, "ring"); sfx("heart"); }
         else { this.spawnParticles(e.x, e.y, 12, "#ffb43b"); this.addDecal(e.x, e.y, "#ffb43b", 14, "ring"); sfx("weapon"); }
         break;
-      case "shopBuy":
+      case "shopBuy": {
         // The register moment: positional (everyone browsing the stall sees a teammate's
         // claim land), with the buyer's kind selecting the flavor. Patch plays the
         // handover pose over it. The OUTCOME itself is authoritative state — coins/stock/
@@ -2057,9 +2077,22 @@ export class Game {
         else if (e.kind === "blessing") this.sfxAt("blessing", e.x, e.y, { gain: 0.5 });
         else if (e.kind === "weapon") this.sfxAt("weapon", e.x, e.y, { gain: 0.55 });
         else this.sfxAt("levelup", e.x, e.y, { gain: 0.4 });
+        // The BIG-PURCHASE flourish (designer feel spec): a legendary/artifact/mythic
+        // claim is an EVENT — gold burst, a named banner, the levelup fanfare, and a
+        // touch of shake, so the table-flip spend lands like one.
+        if (PREMIUM_EVENT_KINDS.has(e.kind as ShopSlotKind)) {
+          const gold = WEAPON_RARITY_COLOR.legendary;
+          this.spawnSparkleBurst(e.x, e.y, 22, gold);
+          this.spawnParticles(e.x, e.y, 16, gold);
+          this.addDecal(e.x, e.y, gold, 26, "ring");
+          this.spawnWorldLabel(e.x, e.y - 40, e.kind === "artifact" ? "THE DEAL IS STRUCK" : "A MYTHIC CLAIM", gold);
+          this.sfxAt("levelup", e.x, e.y, { gain: 0.8, rate: 0.9 });
+          this.addTrauma(0.18);
+        }
         this.patchSellT = 0.6;
         if (this.isSelfPid(e.pid)) this.shopBoughtT = 1.2;
         break;
+      }
       case "lootDrop":
         this.addDecal(e.x, e.y, e.color, 15, "ring");
         this.spawnPuff(e.x, e.y, 5, e.color);
@@ -2561,6 +2594,9 @@ export class Game {
   // sim's pending-offer state (releasing the descend gate the exit is holding).
   private offerBlessing(rare = false) {
     const owned = this.p.ownedItemIds;
+    // A reroll-everything purchase armed one offer reroll: burn a full choice-set draw
+    // from the offer stream first (the server does the identical burn online).
+    if (consumeBlessingReroll(this.world, LOCAL_ID)) rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
     const choices = rollItemChoicesWith(3, () => this.blessingRng.next(), owned, { rareOnly: rare });
     if (choices.length === 0) { dismissBlessingOfferInWorld(this.world, LOCAL_ID); return; }
     this.isChoosing = true;
@@ -2702,7 +2738,7 @@ export class Game {
   private blockedWeaponPickup(): Pickup | null {
     if (!this.isRunning || this.isChoosing || this.isDown || this.hp <= 0) return null;
     const p = this.p;
-    if (p.ownedWeapons.length < MAX_OWNED_WEAPONS) return null;
+    if (p.ownedWeapons.length < MAX_OWNED_WEAPONS + p.extraWeaponSlots) return null;
     let best: Pickup | null = null;
     let bestD = Infinity;
     for (const k of this.pickups) {
@@ -3115,6 +3151,7 @@ export class Game {
         id, name: WEAPONS[id].name, isCurrent: id === this.weapon,
         card: weaponDisplayStats(id, this.mods, lowHpFrac(this.hp, this.maxHp)),
       })),
+      weaponCap: MAX_OWNED_WEAPONS + this.p.extraWeaponSlots,
       swap: this.swapTarget ? { id: this.swapTarget.weapon, name: WEAPONS[this.swapTarget.weapon].name } : null,
       // Online floors use the authoritative global cleared flag (enemies may be interest-filtered
       // out of this client's snapshot, so a local count can't decide "cleared").
@@ -3222,7 +3259,14 @@ export class Game {
   }
 
   private shopPanelViewFor(slot: ShopSlot) {
-    return shopPanelView(this.world.shop!, slot, shopViewerOf(this.p), this.mods, this.shopBoughtT > 0);
+    return shopPanelView(this.world.shop!, slot, this.shopViewer(), this.mods, this.floor, this.shopBoughtT > 0);
+  }
+
+  // The local player's shop viewer with the client-side combat read (the authoritative
+  // buy re-validates the same predicate server-side; near enemies are always inside the
+  // interest view, so the reads agree).
+  private shopViewer() {
+    return shopViewerOf(this.p, isPlayerInCombat(this.world, this.p));
   }
 
   // Patch's-room upkeep, every tick: the handover pose timer, the one-time waystation
@@ -3248,9 +3292,21 @@ export class Game {
     const tx = Math.floor(this.px / TILE), ty = Math.floor(this.py / TILE);
     if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) {
       this.isShopWelcomed = true;
-      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
-      // The multi-buy opener (playtest fix: kills the pick-one mental model on arrival).
-      this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "BUY FROM ANY STATION YOU CAN AFFORD", "#ffe9b0");
+      // The stall names itself by MODE — the read arrives with the room (wire-agreed).
+      if (shop.mode === "climax") {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "THE LAST STALL BEFORE THE CHOIR", "#ffb43b");
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "SPEND IT ALL \u2014 COINS DIE WITH THE RUN", "#ffe9b0");
+      } else if (shop.mode === "premium") {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S PREMIUM CACHE", "#ffb43b");
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "ONE PREMIUM BUY PER SHOP \u2014 CHOOSE WELL", "#ffe9b0");
+      } else if (shop.mode === "spoils") {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "THE SPOILS STALL", "#ffb43b");
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "A BOSS'S PURSE BURNS A HOLE \u2014 SPEND IT", "#ffe9b0");
+      } else {
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 36, "PATCH'S WAYSTATION", "#ffd166");
+        // The multi-buy opener (playtest fix: kills the pick-one mental model on arrival).
+        this.spawnWorldLabel(shop.keeperX, shop.keeperY - 20, "BUY FROM ANY STATION YOU CAN AFFORD", "#ffe9b0");
+      }
       this.sfxAt("blessing", shop.keeperX, shop.keeperY, { gain: 0.3, rate: 1.15 });
     }
   }
@@ -3399,6 +3455,7 @@ export class Game {
     this.hud.setVisible(false);
     this.onGameOver({
       floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart,
+      amber: amberForRun(this.coins, this.p.isAmberCacheArmed, this.p.amberWindfall),
       build: {
         weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name })),
         items: this.collapsedItems().map((it) => ({ id: it.id, name: it.name, glyph: it.glyph, tint: it.tint, count: it.count })),
@@ -4465,7 +4522,7 @@ export class Game {
       this.drawShopStall(shop.keeperX - cam.x, shop.keeperY - cam.y);
       this.drawPatch(shop.keeperX - cam.x, shop.keeperY - cam.y - 22);
     }
-    const viewer = shopViewerOf(this.p);
+    const viewer = this.shopViewer();
     const focused = this.focusedShopSlot();
     for (const slot of shop.slots) {
       if (!this.isNearCamera(slot.x, slot.y, TILE * 2)) continue;
@@ -4539,18 +4596,31 @@ export class Game {
       ctx.restore();
     }
     // The merchandise floats over the pedestal — and honestly VANISHES once taken: a
-    // claimed shared weapon is gone for everyone; a personal slot empties only for the
+    // claimed shared object is gone for everyone; a personal slot empties only for the
     // viewer who bought theirs.
-    const isEmptied = slot.isShared ? slot.kind === "weapon" && slot.soldTo !== null : status === "sold";
+    const isEmptied = slot.isShared ? slot.soldTo !== null : status === "sold";
     if (!isEmptied) {
       const bob = Math.sin(this.animClock * 2.4 + slot.id * 1.7) * 2;
+      // The EVENT stock's distinct glow (designer feel spec): legendaries, the artifact,
+      // and the mythic pedestals breathe gold so the chase reads from across the room —
+      // greyed-but-glowing when unaffordable (visible-but-locked, never hidden).
+      if (PREMIUM_EVENT_KINDS.has(slot.kind) || (slot.weapon !== null && !slot.isMystery && WEAPONS[slot.weapon].rarity === "legendary")) {
+        ctx.save();
+        ctx.globalAlpha = (status === "buy" ? 0.5 : 0.28) + 0.18 * Math.sin(this.animClock * 3 + slot.id);
+        ctx.strokeStyle = WEAPON_RARITY_COLOR.legendary;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy - 24 + bob, 20, 0, 6.28); ctx.stroke();
+        ctx.restore();
+      }
       this.drawShopMerch(slot, sx, sy - 24 + bob);
     }
     // An unaffordable station still reads FOR SALE: its price chip wears the same amber
     // outline the panel's broke row does — never the muted grey of the resolved states.
+    // Prices are the viewer's EFFECTIVE price (successive-buy escalation included).
+    const price = shopSlotPriceFor(shop, slot, viewer);
     const color = status === "buy" ? "#ffd27a" : status === "broke" ? "#ffb43b" : "#9a8fb5";
-    if (status === "broke") this.drawShopChipOutline(shopChipCopy(status, slot.price), sx, sy + 15);
-    this.drawShopText(shopChipCopy(status, slot.price), sx, sy + 15, color);
+    if (status === "broke") this.drawShopChipOutline(shopChipCopy(status, price, slot.kind), sx, sy + 15);
+    this.drawShopText(shopChipCopy(status, price, slot.kind), sx, sy + 15, color);
   }
 
   private drawShopChipOutline(text: string, sx: number, sy: number) {
@@ -4566,18 +4636,45 @@ export class Game {
     ctx.restore();
   }
 
+  // A big tinted glyph on a dark chip — the premium stations' merchandise read until
+  // authored art lands (a "?" for the mystery, "◆" for the amber sinks, "✦" mythic trio).
+  private drawShopGlyph(sx: number, sy: number, glyph: string, tint: string) {
+    const { ctx } = this;
+    ctx.save();
+    ctx.fillStyle = "rgba(8,6,16,0.85)";
+    ctx.fillRect(sx - 11, sy - 11, 22, 22);
+    ctx.strokeStyle = tint;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(sx - 11, sy - 11, 22, 22);
+    ctx.fillStyle = tint;
+    ctx.font = '700 12px "Silkscreen", monospace';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(glyph, sx, sy + 1);
+    ctx.restore();
+  }
+
   private drawShopMerch(slot: ShopSlot, sx: number, sy: number) {
     const { ctx } = this;
-    if (slot.kind === "weapon" && slot.weapon !== null) {
+    // A mystery pedestal wears the "???" chip — its identity never even reaches the wire.
+    if (slot.kind === "weapon" && slot.isMystery) { this.drawShopGlyph(sx, sy, "?", MYSTERY_COLOR); return; }
+    if ((slot.kind === "weapon" || slot.kind === "legendary" || slot.kind === "mythic_weapon" || slot.kind === "artifact") && slot.weapon !== null) {
       const img = this.sprites.weaponPickup(slot.weapon);
       if (img) { ctx.drawImage(img, sx - 17, sy - 17, 34, 34); return; }
       if (this.sprites.ready("gun")) { ctx.drawImage(this.sprites.get("gun"), sx - 14, sy - 14, 28, 28); return; }
     }
-    if (slot.kind === "heart" && this.sprites.ready("heart")) {
+    if ((slot.kind === "heart" || slot.kind === "max_hp" || slot.kind === "full_heal" || slot.kind === "revive_token") && this.sprites.ready("heart")) {
       ctx.drawImage(this.sprites.get("heart"), sx - 13, sy - 13, 26, 26);
       return;
     }
-    if (slot.kind === "blessing") {
+    if (slot.kind === "mystery") { this.drawShopGlyph(sx, sy, "?", MYSTERY_COLOR); return; }
+    if (slot.kind === "amber_cache" || slot.kind === "mythic_amber") { this.drawShopGlyph(sx, sy, "\u25c6", "#ffb43b"); return; }
+    if (slot.kind === "mythic_trio") { this.drawShopGlyph(sx, sy, "\u2756", "#ffb43b"); return; }
+    if (slot.kind === "reroll_all") { this.drawShopGlyph(sx, sy, "\u21bb", "#ffb43b"); return; }
+    if (slot.kind === "weapon_upgrade") { this.drawShopGlyph(sx, sy, "\u2692", "#e8e0c8"); return; }
+    if (slot.kind === "prospector") { this.drawShopGlyph(sx, sy, "\u2697", "#ffd166"); return; }
+    if (slot.kind === "extra_slot") { this.drawShopGlyph(sx, sy, "\u25a3", "#e8e0c8"); return; }
+    if (slot.kind === "blessing" || slot.kind === "rare_blessing" || slot.kind === "core_infusion") {
       const def = itemById(slot.itemId ?? "");
       const tint = def?.tint ?? "#c98bff";
       ctx.save();

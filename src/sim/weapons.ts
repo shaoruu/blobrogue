@@ -403,6 +403,9 @@ export interface RarityRollOpts {
   isPremium?: boolean;
   // Mystery reveals gamble PAST the legendary floor gate at the boosted mystery weight.
   isMystery?: boolean;
+  // The premium economy's depth-boosted mystery gamble: an explicit legendary tier
+  // weight (per milestone band — see premiumMysteryLegendaryWeight) over the same roll.
+  legendaryWeight?: number;
 }
 
 export function rollWeaponRarity(rand: () => number, floor: number, opts: RarityRollOpts = {}): WeaponRarity {
@@ -410,7 +413,8 @@ export function rollWeaponRarity(rand: () => number, floor: number, opts: Rarity
   const tiers: WeaponRarity[] = ["common", "rare", "legendary"];
   const weightOf = (tier: WeaponRarity): number => {
     if (tier === "legendary" && !isLegendaryOpen) return 0;
-    const perWeapon = tier === "legendary" && opts.isMystery ? MYSTERY.legendaryWeight
+    const perWeapon = tier === "legendary" && opts.legendaryWeight !== undefined ? opts.legendaryWeight
+      : tier === "legendary" && opts.isMystery ? MYSTERY.legendaryWeight
       : tier === "legendary" && opts.isPremium ? WEAPON_RARITY_WEIGHT.legendary * BOSS_CHEST_LEGENDARY_MULT
       : WEAPON_RARITY_WEIGHT[tier];
     return perWeapon * PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier).length;

@@ -70,6 +70,239 @@ export const SHOP = {
   rerollLimit: 2, // per shop; restocks only pedestals nobody has bought
 } as const;
 
+// ---- the depth-scaling PREMIUM coin economy (the balancer's late-game sink ladder) ----
+// Late-game coins need big things to chase ("need some super expensive stuff as we go
+// on"), realized as the approved vendor ecology (docs/specs/COIN_ECONOMY_AND_VENDORS.md):
+//   1. the Dealer's RARITY CEILING rises by region (Amberwild common → mid rare → late a
+//      single guaranteed LEGENDARY slot, priced on the balancer's ladder);
+//   2. the SPOILS vendor lands the floor after every boss (1-3 premium items — the
+//      natural fat-wallet moment, never mid-fight, never on the boss floor itself);
+//   3. the CLIMAX vendor holds the F30 milestone's landing (F29, always present) with
+//      the guaranteed top-tier stock, so the save-for-it loop always pays off;
+//   plus the premium shops on the other milestone landings and the Dealer's one premium
+//   slot from F6+. Coins stay the TEMPORARY run currency — Amber is the persistent one —
+//   and nothing here buys past a boss mechanic: no invulnerability, no phase skip, and
+//   every purchased power obeys the existing caps (weapon envelope, blessing raw caps,
+//   maxHp +4 total, permanent Foundation untouched by coins). Premium buys are a FASTER
+//   route to a cap, never a higher cap.
+//
+// Placement: the balancer's milestones are F10/15/20/25/30, but those are exactly the
+// boss/gauntlet floors and the hard rule is NEVER a boss-floor shop — so each milestone's
+// premium shop is its LANDING, the floor before the capstone (F9/14/19/24/29, continuing
+// every 5 past F30).
+
+export type PremiumTier =
+  | "mystery"        // unidentified gamble — the shared mystery roll, depth-boosted odds
+  | "legendary"      // known, guaranteed top rarity (identity/mechanic, inside the envelope)
+  | "rare_blessing"  // premium 1-of-1 rare (respects Lv1-3 + the raw caps)
+  | "max_hp"         // +1 max heart, run-only, +4 TOTAL cap shared with Vitality
+  | "full_heal"      // Panacea: to full, no protection frames, never past maxHp
+  | "reroll_all"     // rerolls all unbought stock + the buyer's next blessing offer
+  | "amber_cache"    // the ONLY route from leftover coins toward permanence (a trickle)
+  | "core_infusion"  // single-stat bump toward a raw cap (a premium-only leveled core)
+  | "prospector"     // Prospector's Draught: coins ×2 for the REST of this floor
+  | "weapon_upgrade" // reforge the EQUIPPED gun one rarity tier up (loyalty, priced by target)
+  | "revive_token"   // one banked get-back-up (cap 1; steep — see the difficulty flag)
+  | "extra_slot"     // +1 hotbar slot past MAX_OWNED_WEAPONS (cap 1/run, very expensive)
+  | "artifact"       // the devil deal: a legendary paid in MAX HEARTS, cap 1/run, climax only
+  | "mythic";        // the F20+ capstone: one shared claim per party per shop
+
+// The stall a floor hosts — one per floor, never two (the wire carries it so every
+// client agrees on the room's read).
+export type ShopMode = "dealer" | "premium" | "spoils" | "climax";
+
+export const PREMIUM = {
+  firstShopFloor: 9,        // the F10 milestone's landing (never a boss/gauntlet floor)
+  shopEvery: 5,
+  dealerSlotFromFloor: 6,   // the Dealer carries one premium slot from F6+
+  legendaryFromFloor: 14,   // legendary-grade sinks join at the F15 milestone's landing
+  mythicFromFloor: 19,      // the mythic capstone joins at the F20 milestone's landing
+  climaxFloor: 29,          // the guaranteed pre-final-boss vendor (the F30 landing)
+  // The balancer's EXACT anchor ladders: price at each milestone's premium shop, one
+  // entry per band starting at the tier's intro. Between anchors (the Dealer slot, the
+  // spoils vendors) and past the last one, price = anchor × depthMult with
+  // depthMult = 1 + 0.09 × (floor − anchorFloor), rounded to 5. Tiers the balancer left
+  // unanchored (cache/cores/draught/upgrade/token/slot) are authored under the same
+  // curve and marked below.
+  anchors: {
+    mystery: [45, 70, 100, 135, 170],
+    legendary: [130, 190, 260, 330],
+    rare_blessing: [40, 60, 85, 110, 140],
+    max_hp: [55, 80, 110, 145, 180],
+    full_heal: [30, 45, 60, 80, 100],
+    reroll_all: [35, 55, 75, 100, 125],
+    amber_cache: [25, 40, 55, 75, 95],       // authored: under full_heal
+    core_infusion: [50, 70, 95, 120, 150],   // authored: between rare_blessing and max_hp
+    prospector: [20, 30, 45, 60, 75],        // authored: the cheap save-loop feeder
+    weapon_upgrade: [45, 65, 90, 115, 145],  // authored: common→rare; ×1.8 for →legendary
+    revive_token: [110, 150, 200, 250, 310], // authored STEEP (the difficulty flag below)
+    extra_slot: [150, 200, 260, 330, 410],   // authored: very expensive, cap 1/run
+    artifact: [0, 0, 0, 0, 0],               // paid in MAX HEARTS, never coins (see below)
+    mythic: [300, 430, 600],
+  } as Record<PremiumTier, readonly number[]>,
+  depthRatePerFloor: 0.09,
+  priceStep: 5,
+  // Successive-buy escalation (hoarding needs a real target): +1 maxHp and each core
+  // infusion level cost ×1.6 per prior buy of the same thing (run-wide);
+  // reroll-everything costs +50% per prior use in the SAME shop.
+  hpPriceGrowth: 1.6,
+  rerollPriceGrowth: 1.5,
+  // The dash-charge core prices above the stat cores (skill-expressive, cap 1).
+  dashCorePriceMult: 1.5,
+  // The weapon upgrade's →legendary target multiplier (loyalty still undercuts buying a
+  // legendary outright: ×1.8 of the upgrade ladder ≈ 78% of the legendary anchor).
+  upgradeLegendaryMult: 1.8,
+  // The artifact devil deal: a legendary paid in MAX HEARTS (1-2 containers per the
+  // spec; authored 2 — a real trade), requiring at least 2 max hearts left after paying.
+  // Cap 1/run. Climax vendor only.
+  artifactHeartCost: 2,
+  artifactMinHeartsLeft: 2,
+  // Amber conversion (the amber_cache purchase arms it): ≤ +2 Amber per 100 unspent coins
+  // at run end, capped +5 per run. The mythic windfall option banks +8 outright. Coins
+  // NEVER buy permanent power directly — Amber is the only permanent currency.
+  amberPerHundredCoins: 2,
+  amberRunCap: 5,
+  mythicAmber: 8,
+  // Prospector's Draught: collected-coin value multiplier for the rest of the floor.
+  prospectorMult: 2,
+  // Full-heal / reroll-everything are disabled mid-fight: any living enemy within this
+  // radius of the buyer reads the station as IN COMBAT (both are also structurally never
+  // on boss floors — no stall ever generates there).
+  combatLockRadius: 300,
+  // Premium sink stock: 2-3 seeded distinct sinks solo, growing to max(2, P) distinct in
+  // co-op (party size buys OPTIONS, never rarity/power — prices are P-invariant).
+  sinkSlotBase: 2,
+  sinkSlotBonusChance: 0.5,
+  // Spoils vendor stock: 1-3 seeded premium items (the boss windfall's sink).
+  spoilsSlotBase: 1,
+  spoilsSlotMax: 3,
+  // The tier pools per stall. Draw order is fixed; deeper tiers gate by floor
+  // (legendary/upgrade from the F15 band, revive/slot from the F20 band).
+  dealerTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "prospector"] as readonly PremiumTier[],
+  spoilsTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "prospector", "core_infusion", "legendary", "weapon_upgrade", "revive_token"] as readonly PremiumTier[],
+  premiumTiers: ["mystery", "rare_blessing", "max_hp", "full_heal", "reroll_all", "amber_cache", "core_infusion", "prospector", "legendary", "weapon_upgrade", "revive_token", "extra_slot"] as readonly PremiumTier[],
+  // The climax vendor's GUARANTEED stock (the designer's list + the cache and the mythic
+  // tease), in pedestal order. Always present, never seeded away.
+  climaxTiers: ["max_hp", "revive_token", "legendary", "mystery", "full_heal", "weapon_upgrade", "amber_cache", "artifact"] as readonly PremiumTier[],
+  // Premium mystery slots gamble on the SHARED mystery roll (weapons.ts rollWeaponRarity)
+  // with a legendary weight that climbs per milestone band — a deep mystery is a
+  // genuinely better gamble (the base pedestal gamble stays MYSTERY.legendaryWeight).
+  mysteryLegendaryWeightByBand: [2, 3, 4, 5, 6] as readonly number[],
+} as const;
+
+// DIFFICULTY FLAG (the designer's "keep it from flattening difficulty"): the revive
+// token is deliberately priced at the top of the non-mythic ladder, capped at ONE banked
+// at a time, revives at the standard REVIVE.hp with the standard non-stacking protection
+// window, and never prevents the wipe clock in co-op — it is a second chance, not a
+// second health bar. If live play still reads it as flattening, the balancer's next
+// levers are (in order): raise the ladder, gate it to the climax vendor only, or convert
+// it to co-op-only stock.
+
+// Premium shop cadence: F9/14/19/24/29, … — every milestone's landing floor. The
+// arithmetic itself guarantees "never a boss/gauntlet floor" (9 + 5k ≡ 4 mod 5, and
+// boss/gauntlet floors are ≡ 0 mod 5).
+export function isPremiumShopFloor(floor: number): boolean {
+  return floor >= PREMIUM.firstShopFloor && (floor - PREMIUM.firstShopFloor) % PREMIUM.shopEvery === 0;
+}
+
+// The spoils vendor's cadence: the floor AFTER every boss/gauntlet capstone (6/11/16/
+// 21/26/31, …) — it catches the boss coin windfall without ever selling mid-fight or on
+// the boss floor itself.
+export function isSpoilsFloor(floor: number): boolean {
+  return floor > 1 && (floor - 1) % 5 === 0;
+}
+
+// Which stall a floor hosts (one per floor): the climax vendor owns its fixed landing,
+// milestone landings host premium shops, post-boss floors host the spoils vendor, and
+// the Dealer keeps every third depth in between. Spoils and premium can never collide
+// (mod-5 arithmetic); a spoils floor that is also a Dealer floor (6/21/36, …) hosts the
+// spoils stall ON the Dealer's stall — the classic stations plus the spoils slots.
+export function shopModeFor(floor: number): ShopMode {
+  if (floor === PREMIUM.climaxFloor) return "climax";
+  if (isPremiumShopFloor(floor)) return "premium";
+  if (isSpoilsFloor(floor)) return "spoils";
+  return "dealer";
+}
+
+export function roundToPriceStep(v: number): number {
+  return Math.max(PREMIUM.priceStep, Math.round(v / PREMIUM.priceStep) * PREMIUM.priceStep);
+}
+
+function premiumAnchorStart(tier: PremiumTier): number {
+  if (tier === "legendary") return PREMIUM.legendaryFromFloor;
+  if (tier === "mythic") return PREMIUM.mythicFromFloor;
+  return PREMIUM.firstShopFloor;
+}
+
+// The one premium price function: the balancer's exact anchors AT the milestone shops,
+// the depthMult curve everywhere between and beyond (the Dealer's premium slot, and the
+// endless post-F30 bands, which keep climbing off the last anchor).
+export function premiumPriceAt(tier: PremiumTier, floor: number): number {
+  const anchors = PREMIUM.anchors[tier];
+  const start = premiumAnchorStart(tier);
+  const idx = Math.max(0, Math.min(anchors.length - 1, Math.floor((floor - start) / PREMIUM.shopEvery)));
+  const anchorFloor = start + idx * PREMIUM.shopEvery;
+  return roundToPriceStep(anchors[idx] * (1 + PREMIUM.depthRatePerFloor * (floor - anchorFloor)));
+}
+
+// Which milestone band a floor's premium offers price/roll against (0 = the F10 band).
+export function premiumBandIndex(floor: number): number {
+  return Math.max(0, Math.min(
+    PREMIUM.mysteryLegendaryWeightByBand.length - 1,
+    Math.floor((floor - PREMIUM.firstShopFloor) / PREMIUM.shopEvery),
+  ));
+}
+
+// The premium mystery gamble's legendary tier weight at a floor — fed into the SHARED
+// rarity roll (weapons.ts rollWeaponRarity), so the premium gamble and the base pedestal
+// gamble read off one table, one code path.
+export function premiumMysteryLegendaryWeight(floor: number): number {
+  return PREMIUM.mysteryLegendaryWeightByBand[premiumBandIndex(floor)];
+}
+
+// End-of-run Amber from the premium economy: the armed cache converts unspent coins to a
+// tiny trickle (≤ +2 per 100, capped +5/run) and the mythic windfall banks its flat grant.
+// This is the ONLY coins→permanence route; there is deliberately no other.
+export function amberForRun(unspentCoins: number, isCacheArmed: boolean, windfall: number): number {
+  const cache = isCacheArmed
+    ? Math.min(PREMIUM.amberRunCap, Math.floor((Math.max(0, unspentCoins) * PREMIUM.amberPerHundredCoins) / 100))
+    : 0;
+  return cache + Math.max(0, windfall);
+}
+
+// ---- the depth coin taper (the premium ladder's pool calibration) ----
+// The balancer's afford targets (mythic 8-20% for a greedy run, <3% without Greed; a
+// greedy P90 pool below the F20/25 mythic price; a greedy F30 pool of ~700 chasing the
+// 600 capstone) assume late pools that CHASE the ladder rather than trivialize it.
+// Ambient coin CHANCES taper with depth: floor 1 is untouched, the ramp is gentle
+// through the teaching floors, and the deep bands settle at the floor multiplier. Coin
+// VALUES are untouched (Greed keeps its full ×2/2.5/3 identity, already capped at Lv3)
+// and chest coin batches stay whole — only how often the world sheds loose coins thins.
+// Calibrated against the seeded 1,000-run economy harness (test/premiumecon.test.ts).
+// The taper is a VALLEY, not a cliff: it bottoms out through the mid bands (where the
+// mythic gates demand lean pools) and RELEASES into the deep bands — the F20+ floors pay
+// richer again, feeding the capstone chase the ladder prices for. Greed's multiplier and
+// every coin's value are untouched throughout.
+export const COIN_TAPER = {
+  fromFloor: 2,
+  perFloor: 0.125,
+  floorMult: 0.27,       // the valley floor: never below 27% of the floor-1 chance
+  releaseFromFloor: 20,  // the deep-band release begins with the F20 milestone
+  releasePerFloor: 0.022,
+  releaseMax: 0.43,      // deep floors climb back toward (never past) 40%
+} as const;
+
+export function coinChanceTaper(floor: number): number {
+  if (floor < COIN_TAPER.fromFloor) return 1;
+  if (floor >= COIN_TAPER.releaseFromFloor) {
+    return Math.min(
+      COIN_TAPER.releaseMax,
+      COIN_TAPER.floorMult + COIN_TAPER.releasePerFloor * (floor - COIN_TAPER.releaseFromFloor + 1),
+    );
+  }
+  return Math.max(COIN_TAPER.floorMult, 1 - COIN_TAPER.perFloor * (floor - COIN_TAPER.fromFloor + 1));
+}
+
 // ---- weapon rarity (drop quality tiers) ----
 // The one weighted tier table every weapon roll reads. Free drops keep their variety
 // through the per-run shuffled bag (weaponBag.ts): a roll first decides its TIER here
@@ -1249,6 +1482,16 @@ export const COOP = {
   threatPerExtra: 0.35,   // 1.00 / 1.35 / 1.70 / 2.05
   kbResistPerExtra: 0.20,
   heartRatePerExtra: 0.30,
+  // Coin income is PER-PLAYER (no shared wallet) and the premium ladder prices are
+  // P-invariant, so each member's income must be roughly party-size-invariant too: floor
+  // coins are first-come (a party SPLITS them ~P ways) while the threat budget only grows
+  // ~2× by P4, so an uncompensated member would earn ~1/3 of solo. Collected coin VALUE
+  // scales by this AUTHORED per-P table (calibrated by the premium economy harness so
+  // each party size passes the balancer's pool gates — the table is authored rather than
+  // linear because coinGain's integer rounding interacts with Greed's ×2/2.5/3 levels).
+  // Values only — drop chances, the taper, and Greed's identity are untouched, and solo
+  // (×1.00) is unchanged.
+  coinGainMult: [1.0, 1.7, 2.4, 3.1] as readonly number[],
   // Enemy damage: unchanged P1–3; ×1.10 at P4 authored as explicit integers — every
   // current source is 1 or 2, and both round back to themselves, so damage stays as-is.
 } as const;
@@ -1278,6 +1521,10 @@ export function coopKbResistMult(players: number): number {
 
 export function coopHeartRateMult(players: number): number {
   return 1 + COOP.heartRatePerExtra * (clampPlayers(players) - 1);
+}
+
+export function coopCoinGainMult(players: number): number {
+  return COOP.coinGainMult[clampPlayers(players) - 1];
 }
 
 // ---- §8b party weapon opportunities (studio balance gate §4 — Stage C shared worlds only) ----

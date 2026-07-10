@@ -219,6 +219,11 @@ export class ShopPanel {
       this.iconEl.appendChild(itemIconEl(view.icon.itemId, view.icon.glyph));
       return;
     }
+    if (view.icon.kind === "text") {
+      this.iconEl.style.setProperty("--t", view.icon.tint);
+      this.iconEl.textContent = view.icon.text;
+      return;
+    }
     this.iconEl.textContent = view.icon.kind === "heart" ? "\u2665" : view.icon.kind === "mystery" ? "?" : "\u21bb";
   }
 

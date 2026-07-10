@@ -1760,6 +1760,12 @@ export class Menu {
     stat("time", result.durationMs / 1000, fmtClock);
     wrap.appendChild(grid);
 
+    if (result.amber > 0) {
+      const amber = el("p", "", `\u25c6 +${result.amber} AMBER banked \u2014 the run's one lasting spark`);
+      amber.style.color = "#ffb43b";
+      amber.style.letterSpacing = "1px";
+      wrap.appendChild(amber);
+    }
     if (ctx.isNewBest) {
       const best = el("p", "", "\u2605 NEW BEST \u2014 your deepest run yet");
       best.style.color = "#ffb43b";
@@ -1774,7 +1780,8 @@ export class Menu {
       wrap.appendChild(line);
     }
     if (profile) {
-      wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins \u00b7 ${profile.gamesPlayed} runs`));
+      const amberNote = profile.amber > 0 ? ` \u00b7 ${profile.amber} amber` : "";
+      wrap.appendChild(el("p", "muted", `all-time \u2014 deepest floor ${profile.deepestFloor} \u00b7 ${profile.totalKills} kills \u00b7 ${profile.totalCoins} coins${amberNote} \u00b7 ${profile.gamesPlayed} runs`));
     }
 
     const row = el("div", "btnrow");

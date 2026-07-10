@@ -17,7 +17,7 @@ import type {
   Enemy, Bullet, Prop, Pickup, Chest, Hazard, HazardKind, EnemyKind, WeaponId, AttackPhase,
   AttackMove, PropKind, PickupKind, ChestKind, Effect, EffectKind,
 } from "../sim/types.js";
-import type { EnemyTier } from "../sim/balance.js";
+import type { EnemyTier, ShopMode } from "../sim/balance.js";
 import type { PlayerMods } from "../sim/items.js";
 import { PROP_RADIUS } from "../sim/constants.js";
 import { WEAPONS } from "../sim/weapons.js";
@@ -132,7 +132,20 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   left in the current EXPOSED window; 0 = guarded), the Weaver's new moves reuse the
 //   closed move grammar (weave/blink/dive/pounce/rush/crash), and every window/bank/
 //   lattice/pool/R decision stays sim-internal.
-export const PROTOCOL_VERSION = 13;
+// v14 (intentional bump, the depth-scaling PREMIUM coin economy — the approved vendor
+// ecology of docs/specs/COIN_ECONOMY_AND_VENDORS.md):
+//   - the shop wire's closed slot-kind set grew (the premium sinks mystery/legendary/
+//     rare_blessing/max_hp/full_heal/core_infusion/weapon_upgrade/revive_token/
+//     extra_slot, the utilities reroll_all/amber_cache/prospector, the artifact, and the
+//     mythic_* capstone kinds — a v13 client would reject any premium stall as a
+//     ProtocolError), and ShopWire carries `md` (the stall's mode: dealer/premium/
+//     spoils/climax — the read every client must agree on);
+//   - SelfWire carries the premium run state the client must reconcile and render:
+//     php (successive +1-heart buys, the ×1.6 price ladder), amc (amber cache armed),
+//     amw (banked mythic Amber windfall), brt (the armed blessing-offer reroll),
+//     rvt (banked revive token), xsl (bought hotbar slots past MAX_OWNED_WEAPONS),
+//     tth (max hearts paid to the artifact), pfl (the Prospector's Draught's floor).
+export const PROTOCOL_VERSION = 14;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -197,6 +210,14 @@ export interface SelfWire {
   mods: PlayerMods;            // authoritative run mods (drives client prediction: speed/firerate/dash)
   coins: number; kills: number; combo: number; ct: number; // HUD readouts
   bcl: boolean;                // hasClaimedBossChoice (gate §4 personal boss-reward claim)
+  php: number;                 // premiumHpBuys (the ×1.6 successive +1-heart price ladder)
+  amc: boolean;                // isAmberCacheArmed (end-run coins→Amber trickle armed)
+  amw: number;                 // amberWindfall (mythic +8 Amber claims banked this run)
+  brt: boolean;                // isBlessingRerollArmed (next blessing offer rerolls once)
+  rvt: number;                 // reviveTokens (banked get-back-up, cap 1)
+  xsl: number;                 // extraWeaponSlots (bought hotbar capacity, cap 1)
+  tth: number;                 // hpTithe (max hearts paid to the artifact devil deal)
+  pfl: number;                 // prospectorFloor (coins ×2 while the floor matches; -1 = none)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -332,7 +353,7 @@ export interface ShopSlotWire {
   sold: PlayerId | null; by: PlayerId[];
   myst: boolean; // mystery pedestal: wpn is hidden (null) on the wire until a buy reveals
 }
-export interface ShopWire { kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
+export interface ShopWire { md: ShopMode; kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
 
 // ---- messages ----
 
@@ -520,7 +541,14 @@ const PROP_KINDS: Record<PropKind, true> = {
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
 };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
-const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = { weapon: true, blessing: true, heart: true, reroll: true };
+const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
+  weapon: true, blessing: true, heart: true, reroll: true,
+  mystery: true, legendary: true, rare_blessing: true, max_hp: true, full_heal: true,
+  core_infusion: true, weapon_upgrade: true, revive_token: true, extra_slot: true,
+  reroll_all: true, amber_cache: true, prospector: true, artifact: true,
+  mythic_weapon: true, mythic_trio: true, mythic_amber: true,
+};
+const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true };
 const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true };
@@ -815,6 +843,14 @@ function validateSelfWire(v: unknown): SelfWire {
     coins: num(o, "coins", 0, 1e9), kills: num(o, "kills", 0, 1e9),
     combo: num(o, "combo", 0, 1e9), ct: num(o, "ct", 0, 1e4),
     bcl: boolOf(o, "bcl"),
+    php: intOf(o, "php", 0, 64),
+    amc: boolOf(o, "amc"),
+    amw: num(o, "amw", 0, 1e6),
+    brt: boolOf(o, "brt"),
+    rvt: intOf(o, "rvt", 0, 8),
+    xsl: intOf(o, "xsl", 0, 8),
+    tth: intOf(o, "tth", 0, 16),
+    pfl: intOf(o, "pfl", -1, 1e6),
   };
 }
 
@@ -960,6 +996,7 @@ function validateShopWire(v: unknown): ShopWire {
   const slots = arr(o.slots, "shop.slots").map(validateShopSlotWire);
   if (slots.length > 16) throw new ProtocolError("bad shop.slots size");
   return {
+    md: inSet(SHOP_MODES, o.md, "shop.md"),
     kx: num(o, "kx", -POS_LIMIT, POS_LIMIT), ky: num(o, "ky", -POS_LIMIT, POS_LIMIT),
     ru: intOf(o, "ru", 0, 1e4),
     slots,
@@ -1105,6 +1142,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     wpns: s.ownedWeapons, items: s.ownedItemIds, mods: s.mods,
     coins: s.coins, kills: s.kills, combo: s.combo, ct: s.comboTimer,
     bcl: s.hasClaimedBossChoice,
+    php: s.premiumHpBuys, amc: s.isAmberCacheArmed, amw: s.amberWindfall, brt: s.isBlessingRerollArmed,
+    rvt: s.reviveTokens, xsl: s.extraWeaponSlots, tth: s.hpTithe, pfl: s.prospectorFloor,
   };
 }
 
@@ -1116,6 +1155,8 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     ownedWeapons: w.wpns.slice(), ownedItemIds: w.items.slice(), mods: modsFromWire(w.mods),
     coins: w.coins, kills: w.kills, combo: w.combo, comboTimer: w.ct,
     hasClaimedBossChoice: w.bcl,
+    premiumHpBuys: w.php, isAmberCacheArmed: w.amc, amberWindfall: w.amw, isBlessingRerollArmed: w.brt,
+    reviveTokens: w.rvt, extraWeaponSlots: w.xsl, hpTithe: w.tth, prospectorFloor: w.pfl,
   };
 }
 
@@ -1207,7 +1248,7 @@ export function toPropWire(p: Prop): PropWire {
 }
 export function toShopWire(s: ShopState): ShopWire {
   return {
-    kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
+    md: s.mode, kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
     slots: s.slots.map((slot): ShopSlotWire => ({
       id: slot.id, k: slot.kind, sh: slot.isShared,
       // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
@@ -1223,6 +1264,7 @@ export function shopFromWire(w: ShopWire): ShopState {
   // on its wire projection (the shop suite locks toShopWire round-trips; a mystery
   // slot's hidden identity/twist are sim secrets and never reconstructable here).
   return {
+    mode: w.md,
     keeperX: w.kx, keeperY: w.ky,
     slots: w.slots.map((s): ShopSlot => ({
       id: s.id, kind: s.k, isShared: s.sh,

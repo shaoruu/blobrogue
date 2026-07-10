@@ -7,7 +7,6 @@
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
-import { MAX_OWNED_WEAPONS } from "../sim/constants.js";
 import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
 import type { WeaponDisplayStats } from "../sim/weaponStats.js";
@@ -25,6 +24,8 @@ export interface HudState {
   // MAX_OWNED_WEAPONS boxes (empty capacity as inert placeholders), so the cap is visible
   // from slot one and a pickup never shifts the layout.
   weapons: { id: WeaponId; name: string; isCurrent: boolean; card: WeaponDisplayStats }[];
+  // The player's live hotbar capacity (MAX_OWNED_WEAPONS plus a bought Bandolier slot).
+  weaponCap: number;
   // The full-hotbar swap prompt: the NEW weapon underfoot that a full hotbar refused to
   // auto-collect — the player picks a slot to trade for it, or leaves it. null hides it.
   swap: { id: WeaponId; name: string } | null;
@@ -1170,7 +1171,7 @@ export class Hud {
         // The remaining capacity renders as inert empty boxes: the bar is ALWAYS
         // MAX_OWNED_WEAPONS slots wide, so the cap reads at a glance and a pickup fills
         // a box instead of shifting the layout.
-        for (let i = s.weapons.length; i < MAX_OWNED_WEAPONS; i++) this.slotsEl.appendChild(buildEmptySlot(i));
+        for (let i = s.weapons.length; i < s.weaponCap; i++) this.slotsEl.appendChild(buildEmptySlot(i));
         if (this.pendingFocusIndex !== null) {
           this.slotEls()[this.pendingFocusIndex]?.focus();
           this.pendingFocusIndex = null;
@@ -1204,7 +1205,7 @@ export class Hud {
     // The interaction hint matters once there is something to switch/reorder/drop. At the
     // cap it leads with the state itself — a full bar is a fact the player must act on
     // (swap or drop), never a silent no-op.
-    const hintCopy = s.weapons.length >= MAX_OWNED_WEAPONS
+    const hintCopy = s.weapons.length >= s.weaponCap
       ? "HOTBAR FULL \u00b7 Q DROP \u00b7 SWAP AT A NEW WEAPON"
       : "CLICK EQUIP \u00b7 DRAG REORDER \u00b7 Q DROP";
     if (hintCopy !== this.prevHintCopy) {

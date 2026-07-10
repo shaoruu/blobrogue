@@ -45,7 +45,8 @@ export type SimEvent =
   | { t: "mysteryReveal"; pid: PlayerId; weapon: WeaponId; twist: string; x: number; y: number }
   // A validated shop purchase landed (Patch's room): positional register-chime juice for
   // everyone browsing the stall. kind selects the buyer-side flavor (heart vs weapon vs
-  // blessing vs reroll); the authoritative outcome itself rides STATE, never this event.
+  // blessing vs reroll vs the premium sinks); the authoritative outcome itself rides
+  // STATE, never this event.
   | { t: "shopBuy"; pid: PlayerId; slot: number; kind: ShopSlotKind; x: number; y: number }
   // a player deliberately dropped an owned weapon back into the world (Q / inventory UI);
   // clients near the spot play a small pop + a weapon-name label over the new pickup.

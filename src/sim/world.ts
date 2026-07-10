@@ -15,7 +15,7 @@ import { createNav, markNavTargets, navChaseField, navReachField, navClassFor, n
 import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type {
-  Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind, PropKind,
+  Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
   MysteryTwist,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect,
 } from "./types.js";
@@ -26,11 +26,11 @@ import {
   isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
 } from "./enemies.js";
 import {
-  WEAPONS, DEFAULT_WEAPON, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire,
+  WEAPONS, DEFAULT_WEAPON, PICKUP_WEAPONS, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire,
   rollWeaponRarity, rollMysteryTwist, LEGENDARY_WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR,
 } from "./weapons.js";
 import type { ShotSpec, Weapon } from "./weapons.js";
-import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
+import { createMods, recomputeMods, itemLevelsOf, itemById, itemMaxLevel } from "./items.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
@@ -48,11 +48,12 @@ import {
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
   MYSTERY, LEGENDARY_MIN_FLOOR,
+  PREMIUM, CAPS, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
 } from "./balance.js";
 import type { EnemyTier, AddPoolEntry } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
-import { buildShopState, restockShop, shopSlotStatusFor, shopViewerOf, SHOP_BUY_RANGE } from "./shop.js";
+import { buildShopState, restockShop, shopSlotStatusFor, shopSlotPriceFor, shopViewerOf, upgradeTargetTier, SHOP_BUY_RANGE } from "./shop.js";
 import type { ShopSlot, ShopSlotStatus, ShopState } from "./shop.js";
 import { createWeaponBag, drawWeaponFromBag } from "./weaponBag.js";
 import type { WeaponBag } from "./weaponBag.js";
@@ -168,6 +169,28 @@ export interface PlayerSim {
   // Studio gate §4: the boss chest offers P+1 weapon CHOICES and each player claims exactly
   // one per boss floor. Reset on every floor build.
   hasClaimedBossChoice: boolean;
+  // ---- the premium coin economy (run-scoped, per player) ----
+  // Successive +1-max-heart purchases (each costs ×1.6 the last; the hearts share the +4
+  // total cap with Vitality — see applyMaxHpBonus).
+  premiumHpBuys: number;
+  // The amber cache is armed: unspent coins convert to a tiny Amber trickle at run end
+  // (≤ +2 per 100, capped +5/run) — the ONLY coins→permanence route.
+  isAmberCacheArmed: boolean;
+  // Flat Amber banked by the mythic windfall claim (+8 per claim).
+  amberWindfall: number;
+  // A reroll-everything purchase arms one reroll of this player's NEXT blessing offer:
+  // the roller (solo client / authoritative server) burns a full choice-set draw first.
+  isBlessingRerollArmed: boolean;
+  // Banked revive tokens (cap 1): a lethal hit consumes one and stands the player back
+  // up at REVIVE.hp instead of downing/ending — a second chance, never a second bar.
+  reviveTokens: number;
+  // Bought hotbar capacity past MAX_OWNED_WEAPONS (cap 1/run — see weaponCapOf).
+  extraWeaponSlots: number;
+  // Max hearts paid to the artifact devil deal (permanent for the run; cap one deal).
+  hpTithe: number;
+  // The floor a Prospector's Draught is live on (-1 = none): collected coin VALUE
+  // doubles while w.floor matches — the buff dies at the stairs by construction.
+  prospectorFloor: number;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -318,6 +341,14 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     ownedItemIds: [],
     meleeSwing: null,
     hasClaimedBossChoice: false,
+    premiumHpBuys: 0,
+    isAmberCacheArmed: false,
+    amberWindfall: 0,
+    isBlessingRerollArmed: false,
+    reviveTokens: 0,
+    extraWeaponSlots: 0,
+    hpTithe: 0,
+    prospectorFloor: -1,
   };
 }
 
@@ -501,10 +532,12 @@ export function loadFloorIntoWorld(w: WorldState, floor: number): void {
   // Patch's shop: built off the generator's dedicated shop room. Layout/prices are pure
   // (seed, floor) and party-size-invariant so a mid-floor join never shifts the stall;
   // the weapon stock additionally dodges guns the whole party owns at build time
-  // (authority-only state, shipped on the wire like the rest of the shop).
+  // (authority-only state, shipped on the wire like the rest of the shop), and the
+  // premium sink count scales with the SNAPSHOTTED encounter size — only ever growing
+  // upward from the identical solo prefix.
   const shopRoom = w.dungeon.rooms.find((r) => r.kind === "shop");
   w.shop = !w.isSandbox && shopRoom !== undefined
-    ? buildShopState(w.seed, floor, shopRoom, [...weaponsOwnedByAll(w)])
+    ? buildShopState(w.seed, floor, shopRoom, [...weaponsOwnedByAll(w)], w.encounterPlayers)
     : null;
   w.obstacleRev++;
   const spawns = w.isSandbox
@@ -968,14 +1001,19 @@ function dashCooldown(p: PlayerSim): number {
 function isProtected(p: PlayerSim): boolean {
   return p.invuln > 0 || p.dashInvuln > 0;
 }
-function coinGain(p: PlayerSim): number {
-  return Math.max(1, Math.round(p.mods.coinMult));
+// A collected coin's face value: Greed's multiplier × the co-op compensation (coin income
+// is per-player and floor coins are first-come, so a party splits them ~P ways — the
+// value multiplier keeps each member's per-floor income roughly party-size-invariant,
+// which the premium ladder's P-invariant prices assume). Solo is ×1, unchanged.
+function coinGain(w: WorldState, p: PlayerSim): number {
+  const draught = p.prospectorFloor === w.floor ? PREMIUM.prospectorMult : 1;
+  return Math.max(1, Math.round(p.mods.coinMult * draught * coopCoinGainMult(w.encounterPlayers)));
 }
 function comboMult(p: PlayerSim): number {
   return C.comboTierFor(p.combo).mult;
 }
-function comboCoinValue(p: PlayerSim): number {
-  return Math.max(1, Math.round(coinGain(p) * comboMult(p)));
+function comboCoinValue(w: WorldState, p: PlayerSim): number {
+  return Math.max(1, Math.round(coinGain(w, p) * comboMult(p)));
 }
 
 function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
@@ -1020,9 +1058,13 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
 
 // Recompute maxHp from the mods bonus and clamp current HP into it. Deliberately does NOT
 // heal the capacity delta — a max-HP upgrade restores exactly 1 heart (see applyItemToWorld),
-// per the Vitality rule in spec §2.
+// per the Vitality rule in spec §2. Premium +1-heart purchases stack on the blessing bonus
+// but the POSITIVE total is hard-capped at the same +4 (Vitality included) — no coin route
+// past the studio cap; Glass Cannon's negative bonus and the artifact's heart tithe still
+// apply in full below the cap.
 export function applyMaxHpBonus(p: PlayerSim): void {
-  p.maxHp = Math.max(1, PLAYER.baseMaxHp + p.mods.maxHpBonus);
+  const bonus = Math.min(CAPS.maxHpBonus, p.mods.maxHpBonus + p.premiumHpBuys);
+  p.maxHp = Math.max(1, PLAYER.baseMaxHp + bonus - p.hpTithe);
   if (p.hp > p.maxHp) p.hp = p.maxHp;
   if (p.hp < 1) p.hp = 1;
 }
@@ -1040,14 +1082,20 @@ function equipWeapon(p: PlayerSim, id: WeaponId): void {
 // Acquire a weapon (dedup into the inventory) and equip it. Used by weapon pickups (sim)
 // and by dev/grant. Manual switching (1-9 / scroll / hotbar) goes through the validated
 // switchWeaponInWorld below on every path (LocalTransport and the server).
-// The MAX_OWNED_WEAPONS cap is enforced HERE, at the one place the inventory grows, so
+// The player's hotbar capacity: the studio cap plus any bought extra slot (the premium
+// extra_slot purchase, hard-capped at one).
+function weaponCapFor(p: PlayerSim): number {
+  return C.MAX_OWNED_WEAPONS + p.extraWeaponSlots;
+}
+
+// The hotbar cap is enforced HERE, at the one place the inventory grows, so
 // the invariant is structural: no acquisition path (pickup, boss claim, shop, dev grant)
 // can ever mint a slot past the number-key row. Callers that want a nicer refusal (the
 // pickup pass leaving the weapon on the floor, the shop's HOTBAR FULL status) gate
 // earlier; this returns whether the weapon is owned+equipped afterwards.
 function acquireWeapon(p: PlayerSim, id: WeaponId): boolean {
   if (!p.ownedWeapons.includes(id)) {
-    if (p.ownedWeapons.length >= C.MAX_OWNED_WEAPONS) return false;
+    if (p.ownedWeapons.length >= weaponCapFor(p)) return false;
     p.ownedWeapons.push(id);
   }
   equipWeapon(p, id);
@@ -1166,7 +1214,7 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   const p = w.players.get(pid);
   if (!p) return false;
   if (w.isRunOver || p.isDown || p.isAbsent || w.pendingBlessings.has(pid)) return false;
-  if (p.ownedWeapons.length < C.MAX_OWNED_WEAPONS) return false;
+  if (p.ownedWeapons.length < weaponCapFor(p)) return false;
   const dropIdx = p.ownedWeapons.indexOf(dropId);
   if (dropIdx < 0) return false;
   const pk = w.pickups.find((q) => q.id === pickupId);
@@ -1228,7 +1276,7 @@ function weaponDropSpot(w: WorldState, p: PlayerSim): [number, number] | null {
 export function applyItemToWorld(w: WorldState, pid: PlayerId, item: ItemDef): SimEvent[] {
   const p = w.players.get(pid);
   if (!p) return [];
-  if ((itemLevelsOf(p.ownedItemIds).get(item.id) ?? 0) >= MAX_ITEM_LEVEL) return [];
+  if ((itemLevelsOf(p.ownedItemIds).get(item.id) ?? 0) >= itemMaxLevel(item)) return [];
   p.ownedItemIds.push(item.id);
   const maxHpBefore = p.maxHp;
   recomputeMods(p.mods, p.ownedItemIds);
@@ -1272,6 +1320,65 @@ export function dismissBlessingOfferInWorld(w: WorldState, pid: PlayerId): void 
 // ("SOLD", "NEED N MORE", …) is also the reason the authority refused.
 export type ShopBuyOutcome = "ok" | "invalid" | Exclude<ShopSlotStatus, "buy">;
 
+// Whether living enemies stand close enough to a player that the mid-fight premium
+// stations (full heal / reroll-everything) read IN COMBAT. Shop rooms are sanctuary
+// (no enemy ever inside), so this only trips when the fight leaks to the doorstep.
+export function isPlayerInCombat(w: WorldState, p: { x: number; y: number }): boolean {
+  for (const e of w.enemies) {
+    if (!e.dead && Math.hypot(e.x - p.x, e.y - p.y) <= PREMIUM.combatLockRadius) return true;
+  }
+  return false;
+}
+
+// The authoritative shop viewer for a live player: the pure shopViewerOf projection plus
+// the world-derived combat read. Every sim-side status check goes through here.
+export function shopViewerFor(w: WorldState, p: PlayerSim) {
+  return shopViewerOf(p, isPlayerInCombat(w, p));
+}
+
+// The premium mystery sink's reveal: its own seeded stream, deterministic per (seed,
+// floor, slot, buyer, reroll generation), so the same seed + the same wallet always
+// reveal the same weapon — solo, server, and any replay agree — while two buyers of one
+// personal slot each get their own fate. Per the approved spec the premium gamble
+// "rolls rare+": the tier rides the SHARED rarity roll (weapons.ts) with the premium
+// ladder's depth-boosted legendary weight, and a common result promotes to RARE — the
+// 45-170 price buys a floor under the gamble the base pedestal mystery (1.25× ladder)
+// doesn't have. The pick is distinct-from-owned while the tier permits.
+function premiumMysteryRoll(w: WorldState, slot: ShopSlot, p: PlayerSim): WeaponId {
+  let h = 5381;
+  for (let i = 0; i < p.id.length; i++) h = ((h * 33) ^ p.id.charCodeAt(i)) | 0;
+  const rng = new Rng((w.seed ^ 0x6d757374) + w.floor * 68041 + slot.id * 977 + (w.shop?.rerollsUsed ?? 0) * 31337 + h);
+  const rolled = rollWeaponRarity(() => rng.next(), w.floor, { isMystery: true, legendaryWeight: premiumMysteryLegendaryWeight(w.floor) });
+  const tier: WeaponRarity = rolled === "common" ? "rare" : rolled;
+  const inTier = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier);
+  const fresh = inTier.filter((id) => !p.ownedWeapons.includes(id));
+  const rarePlusFresh = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity !== "common" && !p.ownedWeapons.includes(id));
+  const pool = fresh.length > 0 ? fresh : rarePlusFresh.length > 0 ? rarePlusFresh : inTier;
+  return rng.pick(pool);
+}
+
+// The upgrade station's reforge target: a seeded weapon of the NEXT tier up from the
+// buyer's equipped gun, distinct-from-owned while the tier permits. Same per-buyer
+// salted-stream determinism as the mystery reveal.
+function weaponUpgradeRoll(w: WorldState, slot: ShopSlot, p: PlayerSim, target: WeaponRarity): WeaponId {
+  let h = 5381;
+  for (let i = 0; i < p.id.length; i++) h = ((h * 33) ^ p.id.charCodeAt(i)) | 0;
+  const rng = new Rng((w.seed ^ 0x46049e5) + w.floor * 68041 + slot.id * 977 + h);
+  const inTier = PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === target);
+  const fresh = inTier.filter((id) => !p.ownedWeapons.includes(id));
+  return rng.pick(fresh.length > 0 ? fresh : inTier);
+}
+
+// Burn a player's armed blessing-offer reroll (a reroll-everything purchase). The caller
+// is the offer ROLLER — the solo client or the authoritative server — which discards one
+// full choice-set draw from its offer stream when this returns true.
+export function consumeBlessingReroll(w: WorldState, pid: PlayerId): boolean {
+  const p = w.players.get(pid);
+  if (!p || !p.isBlessingRerollArmed) return false;
+  p.isBlessingRerollArmed = false;
+  return true;
+}
+
 // The validated, authoritative shop purchase — the ONLY way coins leave a player at the
 // stall (LocalTransport routes the solo panel here; the server routes the shopBuy command
 // here). Walking over a station never reaches this function, let alone buys.
@@ -1288,9 +1395,10 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
   const slot = shop.slots.find((s) => s.id === slotId);
   if (!slot) return "invalid";
   if (Math.hypot(p.x - slot.x, p.y - slot.y) > SHOP_BUY_RANGE) return "invalid";
-  const status = shopSlotStatusFor(shop, slot, shopViewerOf(p));
+  const viewer = shopViewerFor(w, p);
+  const status = shopSlotStatusFor(shop, slot, viewer);
   if (status !== "buy") return status;
-  p.coins -= slot.price;
+  p.coins -= shopSlotPriceFor(shop, slot, viewer);
   switch (slot.kind) {
     case "weapon": {
       slot.soldTo = pid;
@@ -1326,6 +1434,110 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
     case "reroll": {
       shop.rerollsUsed++;
       restockShop(shop, w.seed, w.floor, [...weaponsOwnedByAll(w)]);
+      break;
+    }
+    // ---- the premium sinks ----
+    case "mystery": {
+      // The premium gamble: personal, revealed per-buyer (twist-free — the rarity IS the
+      // gamble; the base pedestal mystery keeps the blessed/cursed spice).
+      slot.buyers.push(pid);
+      const weapon = premiumMysteryRoll(w, slot, p);
+      acquireWeapon(p, weapon);
+      ev.push({ t: "mysteryReveal", pid, weapon, twist: "plain", x: slot.x, y: slot.y });
+      break;
+    }
+    case "legendary": {
+      slot.buyers.push(pid);
+      acquireWeapon(p, slot.weapon!);
+      break;
+    }
+    case "rare_blessing":
+    case "core_infusion": {
+      slot.buyers.push(pid);
+      const item = itemById(slot.itemId!);
+      if (item) for (const e of applyItemToWorld(w, pid, item)) ev.push(e);
+      break;
+    }
+    case "max_hp": {
+      slot.buyers.push(pid);
+      p.premiumHpBuys++;
+      const maxHpBefore = p.maxHp;
+      applyMaxHpBonus(p);
+      if (p.maxHp > maxHpBefore) p.hp = Math.min(p.maxHp, p.hp + 1);
+      break;
+    }
+    case "full_heal": {
+      // The Panacea splurge: to full, never past maxHp, and deliberately NO protection
+      // frames — recovery is purchasable, invulnerability is not.
+      slot.buyers.push(pid);
+      p.hp = p.maxHp;
+      break;
+    }
+    case "weapon_upgrade": {
+      // The loyalty reforge: the EQUIPPED gun is elevated one rarity tier — the old gun
+      // leaves the hotbar, its seeded next-tier reforge takes the hand. Priced by the
+      // TARGET tier (see shopSlotPriceFor); a legendary in hand reads CAPPED upstream.
+      slot.buyers.push(pid);
+      const target = upgradeTargetTier(p.weapon)!;
+      const reforged = weaponUpgradeRoll(w, slot, p, target);
+      const idx = p.ownedWeapons.indexOf(p.weapon);
+      p.ownedWeapons.splice(idx, 1);
+      acquireWeapon(p, reforged);
+      ev.push({ t: "mysteryReveal", pid, weapon: reforged, twist: "plain", x: slot.x, y: slot.y });
+      break;
+    }
+    case "revive_token": {
+      slot.buyers.push(pid);
+      p.reviveTokens = 1;
+      break;
+    }
+    case "extra_slot": {
+      slot.buyers.push(pid);
+      p.extraWeaponSlots = 1;
+      break;
+    }
+    case "reroll_all": {
+      shop.rerollsUsed++;
+      restockShop(shop, w.seed, w.floor, [...weaponsOwnedByAll(w)], true);
+      p.isBlessingRerollArmed = true;
+      break;
+    }
+    case "amber_cache": {
+      slot.buyers.push(pid);
+      p.isAmberCacheArmed = true;
+      break;
+    }
+    case "prospector": {
+      slot.buyers.push(pid);
+      p.prospectorFloor = w.floor;
+      break;
+    }
+    case "artifact": {
+      // The devil deal (climax only): a legendary paid in MAX HEARTS. The tithe is a
+      // real trade — max capacity drops for the rest of the run (applyMaxHpBonus), the
+      // status matrix already guaranteed enough hearts remain, and the deal is 1/run.
+      slot.buyers.push(pid);
+      p.hpTithe += PREMIUM.artifactHeartCost;
+      applyMaxHpBonus(p);
+      acquireWeapon(p, slot.weapon!);
+      break;
+    }
+    // ---- the mythic capstone (one shared claim per party per shop) ----
+    case "mythic_weapon": {
+      slot.soldTo = pid;
+      acquireWeapon(p, slot.weapon!);
+      break;
+    }
+    case "mythic_trio": {
+      // Pick 1 of 3 rares: the existing rare-offer machinery — the buyer is paused under
+      // the offer (sanctuary ground) and the descend gate holds until they answer.
+      slot.soldTo = pid;
+      raiseBlessingOffer(w, pid, true, ev);
+      break;
+    }
+    case "mythic_amber": {
+      slot.soldTo = pid;
+      p.amberWindfall += PREMIUM.mythicAmber;
       break;
     }
   }
@@ -1854,12 +2066,14 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
   if (isMinibossKind(e.kind)) {
     w.pickups.push(makePickup(w, "heart", e.x, e.y, ev));
     for (let i = 0; i < 3; i++) {
-      w.pickups.push(makePickup(w, "coin", e.x + (i - 1) * 18, e.y + 16, ev, p ? comboCoinValue(p) : 1));
+      w.pickups.push(makePickup(w, "coin", e.x + (i - 1) * 18, e.y + 16, ev, p ? comboCoinValue(w, p) : 1));
     }
     return;
   }
   // An unowned kill (departed actor) drops a face-value coin — no player's combo multiplier.
-  if (w.rng.next() < 0.5) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(p) : 1));
+  // The deep-floor taper (premium economy calibration) thins the CHANCE only — values and
+  // the RNG stream are untouched, so determinism and Greed's identity both hold.
+  if (w.rng.next() < 0.5 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", e.x, e.y, ev, p ? comboCoinValue(w, p) : 1));
   // Ambient hearts (§2): halved rate, party-scaled in co-op, never from summoned adds.
   if (!e.isSummoned && w.rng.next() < SUSTAIN.enemyHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
     w.pickups.push(makePickup(w, "heart", e.x + 10, e.y, ev));
@@ -1891,8 +2105,13 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   // tick (Second Wind Lv3: 0.35s at 60Hz) recovers on its true tick, not one late.
   p.dashCd = Math.max(0, p.dashCd - dt);
   if (p.dashCd < 1e-9) p.dashCd = 0;
-  if (input.dash && p.dashCd === 0 && (ix || iy)) {
-    p.dashTime = PLAYER.dashActive; p.dashCd = dashCooldown(p); p.dashDx = ix; p.dashDy = iy;
+  // Dash charges (the premium Echo Step core): the cooldown is a BANK — a dash is legal
+  // while at least one full cooldown of headroom remains, and each dash ADDS a cooldown
+  // rather than setting it. With zero extra charges the bank is one cooldown deep and
+  // the condition collapses to the classic `dashCd === 0`, bit-for-bit.
+  const dashBankHeadroom = dashCooldown(p) * p.mods.extraDashCharge;
+  if (input.dash && p.dashCd <= dashBankHeadroom && p.dashTime <= 0 && (ix || iy)) {
+    p.dashTime = PLAYER.dashActive; p.dashCd += dashCooldown(p); p.dashDx = ix; p.dashDy = iy;
     // The dash iframe is its own window (0.18s, covering the 0.16s active dash + tail):
     // SET, never max'd against post-hit protection, so the two can neither refresh nor
     // extend each other.
@@ -6893,18 +7112,18 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
   switch (p.kind) {
     case "crate":
       ev.push({ t: "propBreak", kind: "crate", x: p.x, y: p.y });
-      if (w.rng.next() < 0.6) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.6 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       if (w.rng.next() < SUSTAIN.crateHeartDrop * coopHeartRateMult(w.encounterPlayers)) {
         w.pickups.push(makePickup(w, "heart", p.x + 12, p.y, ev));
       }
       break;
     case "pot":
       ev.push({ t: "propBreak", kind: "pot", x: p.x, y: p.y });
-      if (w.rng.next() < 0.35) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.35 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       break;
     case "barrel":
       ev.push({ t: "propBreak", kind: "barrel", x: p.x, y: p.y });
-      if (w.rng.next() < 0.45) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
+      if (w.rng.next() < 0.45 * coinChanceTaper(w.floor)) w.pickups.push(makePickup(w, "coin", p.x, p.y, ev));
       break;
     case "barrel_explosive":
       explodeBarrel(w, by ?? null, p, ev);
@@ -7203,7 +7422,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
         }
       }
       if (!player.isDown && Math.hypot(player.x - p.x, player.y - p.y) < player.pr + p.radius) {
-        if (p.kind === "coin") { player.coins += p.value ?? coinGain(player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
+        if (p.kind === "coin") { player.coins += p.value ?? coinGain(w, player); ev.push({ t: "pickup", pid: player.id, kind: "coin", x: p.x, y: p.y }); collected = true; break; }
         if (p.kind === "heart") {
           // At full HP the heart is consumed and converts to coins (§2) — no backtracking
           // stockpile of floor hearts.
@@ -7216,7 +7435,7 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
           // floor and the swap command (swapWeaponInWorld) is the only claim path — the
           // client surfaces that as the swap-or-leave prompt. `continue` (not break) so a
           // teammate with room can still take it this same tick.
-          if (player.ownedWeapons.length >= C.MAX_OWNED_WEAPONS) continue;
+          if (player.ownedWeapons.length >= weaponCapFor(player)) continue;
           if (p.isBossChoice) {
             // Gate §4 boss reward: one personal CLAIM per player per boss chest. Claiming a
             // weapon the player already owns grants one seeded REROLL (never coins/raw
@@ -7336,6 +7555,21 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   if (p.hp <= 0) {
     p.hp = 0;
     p.chargeT = 0; // a held charge never survives going down
+    // The banked REVIVE TOKEN (premium, cap 1): the lethal hit consumes it and the player
+    // stands back up at the standard revive numbers — REVIVE.hp, the standard 1.0s
+    // protection window (a revive, not a bonus invulnerability product), the standard
+    // fire lockout via fireCd. It never prevents a wipe already in progress (everyone
+    // else must still be alive for the timer to reset) and never skips a boss mechanic —
+    // the hit LANDED; this only changes what comes after. See the difficulty flag in
+    // balance.ts beside its steep price.
+    if (p.reviveTokens > 0) {
+      p.reviveTokens--;
+      p.hp = REVIVE.hp;
+      p.invuln = Math.max(p.invuln, REVIVE.invuln);
+      p.fireCd = Math.max(p.fireCd, REVIVE.fireLockout);
+      ev.push({ t: "revive", pid: p.id, by: p.id, x: p.x, y: p.y });
+      return;
+    }
     if (w.isShared) {
       // Stage C (gate §6): going to 0 is always DOWN, never a direct cut — the wipe is the
       // held all-down beat in checkStrandedWipe (4.0s), which is also what lets a teammate's
