@@ -60,7 +60,7 @@ function mkState(currentIndex = 1, ids = FIVE): HudState {
     weapons: ids.map((w, i) => ({ ...w, isCurrent: i === currentIndex, card: weaponDisplayStats(w.id, createMods(), 0) })),
     swap: null,
     isCleared: false, enemiesLeft: 3, isObjectiveHidden: false, isParty: false, isBossActive: false, bossHpFrac: 0, bossName: "",
-    coopLabel: null, waitLabel: null, prompt: null, dashFill: 1,
+    coopLabel: null, waitLabel: null, dashFill: 1,
     combo: 0, comboMult: 1, comboColor: "#fff", comboFrac: 0,
     items: [],
   };

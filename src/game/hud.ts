@@ -46,9 +46,6 @@ export interface HudState {
   // Party coordination readout in the objective lane ("WAITING FOR 1/2 PLAYERS…" /
   // "WAITING AT EXIT…"); null hides it.
   waitLabel: string | null;
-  // The bottom-left contextual action (revive/interact): key cap + label; isActive marks a
-  // hold that is channeling RIGHT NOW. Null hides the prompt.
-  prompt: { key: string; label: string; isActive: boolean } | null;
   dashFill: number; // 0..1 dash-meter fill, 1 = ready
   // Kill-chain combo (per-local-player). combo 0 hides the widget entirely.
   combo: number;      // current chain length
@@ -412,7 +409,7 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   TC  ONE objective lane: boss bar (wins) or the objective line, the co-op wait line,
 //       then the combo (yields to 70% scale under a boss bar)
 //   TR  minimap
-//   BL  dash meter + the contextual revive/interact prompt
+//   BL  dash meter (the contextual interact prompt is world-anchored, not chrome-docked)
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
@@ -442,7 +439,6 @@ const HUD_MARKUP = `
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner bl">
     <div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
-    <div class="ctx-prompt" data-prompt role="status"><span class="key" data-prompt-key>E</span><span class="k" data-prompt-label></span></div>
   </div>
   <div class="hotbar">
     <div class="hb-swap" data-hb-swap></div>
@@ -557,12 +553,8 @@ export class Hud {
   private objLaneEl!: HTMLElement;
   private objectiveEl!: HTMLElement;
   private waitLine!: HTMLElement;
-  private promptEl!: HTMLElement;
-  private promptKeyEl!: HTMLElement;
-  private promptLabelEl!: HTMLElement;
   private prevObjective = "";
   private prevWaitLabel: string | null = null;
-  private prevPromptLabel: string | null = null;
   private bannerTimer = 0;
   private controlsHint: HTMLElement;
   private hintTimer = 0;
@@ -627,9 +619,6 @@ export class Hud {
     this.objLaneEl = hud.querySelector("[data-objlane]")!;
     this.objectiveEl = hud.querySelector("[data-objective]")!;
     this.waitLine = hud.querySelector("[data-waitline]")!;
-    this.promptEl = hud.querySelector("[data-prompt]")!;
-    this.promptKeyEl = hud.querySelector("[data-prompt-key]")!;
-    this.promptLabelEl = hud.querySelector("[data-prompt-label]")!;
 
     // Reconcile the standalone minimap canvas into the .tr frame (see index.html note).
     const minimap = document.getElementById("minimap");
@@ -1250,16 +1239,9 @@ export class Hud {
       this.waitLine.classList.toggle("show", s.waitLabel !== null);
     }
 
-    // The bottom-left contextual prompt (revive/interact): key cap + label, lit while the
-    // hold is actually channeling. Text refreshes on change only; show/hide is opacity.
-    const promptLabel = s.prompt ? `${s.prompt.key}|${s.prompt.label}|${s.prompt.isActive}` : null;
-    if (promptLabel !== this.prevPromptLabel) {
-      this.prevPromptLabel = promptLabel;
-      this.promptKeyEl.textContent = s.prompt?.key ?? "E";
-      this.promptLabelEl.textContent = s.prompt?.label ?? "";
-      this.promptEl.classList.toggle("show", s.prompt !== null);
-      this.promptEl.classList.toggle("active", s.prompt?.isActive === true);
-    }
+    // The contextual interact prompt is world-anchored now (a floating [E] chip over the
+    // target — see Game.renderInteractPrompt), so the bottom-left chrome carries only the
+    // dash meter; nothing to update here.
 
     this.updateCombo(s);
 
@@ -1466,8 +1448,6 @@ export class Hud {
     this.objectiveEl.classList.remove("show", "clear");
     this.prevObjective = "";
     this.objLaneEl.classList.remove("boss");
-    this.promptEl.classList.remove("show", "active");
-    this.prevPromptLabel = null;
     this.comboEl.classList.remove("show", "low");
     this.comboMultEl.style.transform = "scale(1)";
     this.prevCombo = -1;

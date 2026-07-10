@@ -161,10 +161,15 @@ interface CoinFly { x: number; y: number; t: number; }
 const COIN_FLY_DUR = 0.5;   // seconds for a coin to arc into the wallet
 const COIN_FLY_MAX = 8;     // hard cap on live tokens (a mega-burst never swarms)
 const COIN_FLY_ARC = 46;    // px of upward hump on the arc (reads as a lift-and-scoop)
-// World-anchored contextual prompt (item 6): how far above the target the floating [E]
-// keycap sits, and its keycap size. Easily tunable (a UI follow-up may adjust the numbers).
-const CTX_PROMPT_OFFSET_Y = 24;
-const CTX_PROMPT_KEY_PX = 14;
+// World-anchored interact nudge (item 6, UI-designer spec): the floating [E] chip sits just
+// ABOVE the target of the verb, offset by (target half-height + an 18px gap). Per-target so a
+// small floor pickup, a downed blob (+ its revive ring), and a shop pedestal (+ price chip)
+// each clear their own art. Screen-space top clamp keeps it onscreen. Easily tunable.
+const INTERACT_OFFSET_PICKUP = 26; // ~24px sprite + 18px gap (target.y - 26)
+const INTERACT_OFFSET_REVIVE = 40; // ~52px blob + ring, above the body
+const INTERACT_OFFSET_SHOP = 44;   // above the pedestal + its price chip
+const INTERACT_TOP_CLAMP = 14;     // never above this screen y
+const INTERACT_KEY_PX = 13;        // the [E] keycap box size
 // Floor stains + drop pulses that linger for a beat after the action moves on.
 interface Decal { x: number; y: number; color: string; r: number; t: number; life: number; kind: "splat" | "ring"; }
 // A fading ghost of the hero left along a dash so it reads as motion, not a teleport.
@@ -615,6 +620,9 @@ export class Game {
   private worldLabels: WorldLabel[] = []; // floating text popups (visual only; e.g. drop names)
   private coinFlies: CoinFly[] = [];      // coins arcing into the top-left wallet (client juice)
   private coinFlySpawnTick = -1;          // coalesces a same-tick coin burst into one token
+  // The world-anchored interact nudge, recomputed each tick (item 6): null when no interact
+  // is available/in-range. Rendered as a floating [E] chip over the target of the verb.
+  private interactPrompt: { x: number; y: number; verb: string; progress: number | null } | null = null;
   private corpses: Corpse[] = [];
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
@@ -3241,6 +3249,9 @@ export class Game {
 
   private updateHud() {
     this.tickSwapPrompt();
+    // The interact nudge tracks its live target every tick (item 6) — never a static corner
+    // element. Recomputed here from the same contextualAction() logic and drawn world-anchored.
+    this.interactPrompt = this.computeInteractPrompt();
     const boss = this.enemies.find((e) => isBossKind(e.kind));
     const isBossActive = boss !== undefined;
     const bossHpFrac = boss ? Math.max(0, boss.hp / boss.maxHp) : 0;
@@ -3296,9 +3307,6 @@ export class Game {
       bossHpFrac,
       bossName: boss ? bossDisplayName(boss.kind) : "",
       coopLabel,
-      // The contextual interact prompt now floats world-anchored near its target
-      // (renderContextPrompt), so the detached bottom-left corner E is gone.
-      prompt: null,
       dashFill: 1 - this.dashCd / this.dashCooldown(),
       combo: this.combo,
       comboMult: comboTier.mult,
@@ -3347,24 +3355,27 @@ export class Game {
     return null;
   }
 
-  // The ONE world-anchored contextual prompt (UI-designer spec): a floating [E] keycap over
-  // the RELEVANT TARGET — the revivable teammate, the focused shop station, or a full-hotbar
-  // weapon pickup underfoot — instead of a detached corner E in the eye's blind spot. Returns
-  // the world anchor + presentation; renderContextPrompt converts it to screen each frame.
-  // Priority mirrors contextualAction (revive > shop), with the pickup nudge last.
-  private worldPrompt(): { x: number; y: number; key: string; label: string; isActive: boolean } | null {
+  // The ONE world-anchored interact nudge (UI-designer spec, item 6): recomputed every tick
+  // from the SAME contextualAction() logic that fed the old bottom-left prompt, so it tracks
+  // the live target as it moves. Exactly ONE nudge at a time, by priority REVIVE > PICKUP >
+  // SHOP. The anchor y is the target CENTER minus a per-target up-offset; renderInteractPrompt
+  // converts it to screen each frame. `verb` is short/uppercase; `progress` (revive hold only)
+  // turns the chip into the in-place "REVIVING N%" read.
+  private computeInteractPrompt(): { x: number; y: number; verb: string; progress: number | null } | null {
     const act = this.contextualAction();
-    if (act !== null) {
-      if (act.action === "shop") return { x: act.x, y: act.y, key: "E", label: `INSPECT ${act.label}`, isActive: false };
-      const name = act.targetName.toUpperCase();
-      if (act.progress !== null) return { x: act.x, y: act.y, key: "E", label: `REVIVING ${name} \u00b7 ${Math.round(act.progress * 100)}%`, isActive: true };
-      return { x: act.x, y: act.y, key: "E", label: `HOLD TO REVIVE ${name}`, isActive: false };
+    // REVIVE outranks everything.
+    if (act !== null && act.action === "revive") {
+      return { x: act.x, y: act.y - INTERACT_OFFSET_REVIVE, verb: "REVIVE", progress: act.progress };
     }
-    // A full hotbar refused to auto-collect a weapon underfoot: float the "there's something
-    // here" nudge over the pickup itself (the detailed .hb-swap trade panel still stands).
+    // PICKUP (a full hotbar refused the walk-over collect) sits between revive and shop —
+    // the nudge draws the eye to the weapon; the .hb-swap panel remains the trade detail.
     if (this.swapTarget !== null) {
       const pk = this.world.pickups.find((p) => p.id === this.swapTarget!.pickupId);
-      if (pk) return { x: pk.x, y: pk.y, key: "E", label: "SWAP", isActive: false };
+      if (pk) return { x: pk.x, y: pk.y - INTERACT_OFFSET_PICKUP, verb: "SWAP", progress: null };
+    }
+    // SHOP is lowest (contextualAction only surfaces it when no revive is in range).
+    if (act !== null && act.action === "shop") {
+      return { x: act.x, y: act.y - INTERACT_OFFSET_SHOP, verb: "INSPECT", progress: null };
     }
     return null;
   }
@@ -3865,13 +3876,13 @@ export class Game {
     this.renderMuzzle();
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     this.renderWorldLabels();
+    this.renderInteractPrompt(); // world-anchored [E] chip over the interact target (item 6)
     ctx.restore();
     this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
     this.renderHurtVignette();
     this.renderDownOverlay();
     this.renderSpectateBanner();
-    this.renderContextPrompt(); // world-anchored [E] keycap near the target (revive/shop/pickup)
     this.renderReticle();
     this.renderCoinFlies();     // coins arcing into the top-left wallet
     this.renderMinimap();
@@ -5157,46 +5168,56 @@ export class Game {
     ctx.globalAlpha = 1;
   }
 
-  // The world-anchored contextual [E] prompt: a floating keycap + label over the relevant
-  // target (revivable teammate / focused shop station / full-hotbar pickup), converted
-  // world->screen each frame like the other world FX. A subtle dark backing keeps it legible
-  // over any biome floor; it sits ABOVE the target so it never occludes the character or an
-  // incoming enemy. Drawn in screen space (after the world restore) so it never shakes.
-  private renderContextPrompt() {
-    const p = this.worldPrompt();
+  // The ONE world-anchored interact nudge (UI-designer spec, item 6): a small boxed keycap
+  // chip `[E] VERB` anchored just ABOVE the target of the verb, converted world->screen every
+  // frame so it tracks as things move. Drawn in the SAME pass as renderWorldLabels (inside the
+  // camera/shake transform, after entities), so it reads as a diegetic tag on the target
+  // rather than a detached corner element. A two-pass boxed chip (dark backing + ink outline +
+  // amber keycap) survives any biome floor and stays legible even when an enemy overlaps.
+  // While a revive hold runs, the chip becomes the in-place "REVIVING N%" progress read.
+  private renderInteractPrompt() {
+    const p = this.interactPrompt;
     if (p === null) return;
     const { ctx, renderCam: cam } = this;
     const sx = p.x - cam.x;
-    const sy = p.y - cam.y - CTX_PROMPT_OFFSET_Y;
-    const accent = p.isActive ? "#8affc0" : "#e8dcc0";
+    // A very subtle idle bob (~0.5px) — no pulse/scale/glow.
+    const bob = Math.sin(this.animClock * 2) * 0.5;
+    let sy = p.y - cam.y + bob;
+    if (sy < INTERACT_TOP_CLAMP) sy = INTERACT_TOP_CLAMP; // pin onscreen at the top
     ctx.save();
-    ctx.font = '700 9px "Silkscreen", monospace';
+    ctx.font = '700 10px "Silkscreen", monospace';
     ctx.textBaseline = "middle";
-    const key = CTX_PROMPT_KEY_PX;
-    const pad = 5, gap = 6;
-    const labelW = ctx.measureText(p.label).width;
-    const totalW = key + gap + labelW;
-    const bx = sx - totalW / 2 - pad, by = sy - key / 2 - pad;
-    const bw = totalW + pad * 2, bh = key + pad * 2;
-    // Dark backing + outline for readability over any floor.
-    ctx.globalAlpha = 0.82;
+    ctx.textAlign = "left";
+    const key = INTERACT_KEY_PX;
+    const padX = 5, padY = 4, gap = 5;
+    const isProgress = p.progress !== null;
+    const verb = isProgress ? `REVIVING ${Math.round((p.progress ?? 0) * 100)}%` : p.verb;
+    const verbW = ctx.measureText(verb).width;
+    // Progress read drops the keycap (it's a status, not a press); the nudge leads with [E].
+    const contentW = isProgress ? verbW : key + gap + verbW;
+    const bw = contentW + padX * 2;
+    const bh = key + padY * 2;
+    const bx = sx - bw / 2, by = sy - bh / 2;
+    // Pass 1 — backing: dark fill + 2px ink outline (legible over any floor / under an enemy).
     ctx.fillStyle = "rgba(5,3,11,0.82)";
     ctx.fillRect(bx, by, bw, bh);
-    ctx.globalAlpha = 1;
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = p.isActive ? "#8affc0" : "rgba(120,110,90,0.7)";
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#120a24";
     ctx.strokeRect(bx, by, bw, bh);
-    // The key cap.
-    const kx = sx - totalW / 2;
-    ctx.strokeStyle = accent;
-    ctx.strokeRect(kx, sy - key / 2, key, key);
-    ctx.fillStyle = accent;
-    ctx.textAlign = "center";
-    ctx.fillText(p.key, kx + key / 2, sy + 1);
-    // The label.
-    ctx.textAlign = "left";
-    ctx.fillStyle = p.isActive ? "#8affc0" : "#cfe8b0";
-    ctx.fillText(p.label, kx + key + gap, sy + 1);
+    let cx = bx + padX;
+    // Pass 2 — the amber [E] keycap (the bright anchor), unless showing progress.
+    if (!isProgress) {
+      ctx.fillStyle = "#ffb43b";
+      ctx.fillRect(cx, sy - key / 2, key, key);
+      ctx.fillStyle = "#120a24";
+      ctx.textAlign = "center";
+      ctx.fillText("E", cx + key / 2, sy + 1);
+      ctx.textAlign = "left";
+      cx += key + gap;
+    }
+    // The verb / progress read, cream.
+    ctx.fillStyle = "#ffe9b0";
+    ctx.fillText(verb, cx, sy + 1);
     ctx.restore();
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
