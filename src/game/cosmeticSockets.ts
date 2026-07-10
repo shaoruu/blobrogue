@@ -54,21 +54,21 @@ const SOCKETS: Record<CosmeticOrientation, Record<SocketKind, FrameTable>> = {
   // Facing the camera: hat crowns the head, face sits on the eye line, a back layer hides
   // behind the body.
   down: {
-    head: still(32, 16),
+    head: still(32, 11),
     face: still(32, 32),
     back: still(32, 30, true, true),
   },
   // Facing away: the face layer is invisible (back of the head); a back layer draws in
   // front of the body sprite.
   up: {
-    head: still(32, 14),
+    head: still(32, 9),
     face: still(32, 32, false),
     back: still(32, 30, true, false),
   },
   // Side (authored RIGHT; the renderer's facing flip mirrors left): hat shifts toward the
   // face, the eye line sits forward of center.
   side: {
-    head: still(33, 15),
+    head: still(33, 10),
     face: still(36, 32),
     back: still(26, 30, true, true),
   },
