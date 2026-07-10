@@ -89,6 +89,19 @@ export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
 export const MELEE_THRUST_WIDTH = 18;
 
+// Friendly-fire "playful bonk" (approved game-designer spec): a player's DIRECT projectile
+// grazing a TEAMMATE deals 0 damage and applies a gentle positional impulse ALONG the
+// bullet vector — never scaled by the shooter's weapon KB (so a shotgun can't launch a
+// friend). The magnitude is ~30% of a standard enemy-hit knockback: a decaying WEAPON_KB
+// impulse travels ~WEAPON_KB px total (v/lambda, KB_LAMBDA == the decay lambda), so the
+// reference here is that same px space. It is applied as ONE wall-aware displacement and
+// clamped to <= 1/6 of a dash distance as a hard ceiling. A per-ORDERED-pair cooldown
+// (A->B independent of B->A) gates it to one bonk per window, never per-bullet.
+export const FRIENDLY_NUDGE_REF_KB = 18;      // the "standard enemy-hit knockback" reference (px)
+export const FRIENDLY_NUDGE_FRAC = 0.30;      // ~30% of that reference
+export const FRIENDLY_NUDGE_DASH_FRAC = 1 / 6; // hard ceiling as a fraction of a dash distance
+export const FRIENDLY_NUDGE_CD = 0.5;         // per-ORDERED-pair cooldown (seconds)
+
 // Weapon self-knockback (shoves the firing player) — a real sim position change.
 export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   pistol: 0, shotgun: 22, rapid: 0,
