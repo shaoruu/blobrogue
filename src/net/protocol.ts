@@ -110,7 +110,20 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   `swap` command (trade an owned weapon for a named floor pickup, atomically, server-
 //   validated). A client at the cap on an older version would silently fail to collect with
 //   no swap affordance (and the server rejects the unknown command), so the join gate bumps.
-export const PROTOCOL_VERSION = 11;
+// v12 (the weapon rarity + mystery wave — ONE version for the whole feature;
+// client->server messages are unchanged):
+//   - the closed WeaponId set grew (the five legendaries: reaper/swarm/midas/phase/
+//     vortex) — a v11 client would reject any snapshot whose pickups/bullets/inventories
+//     carry them as a ProtocolError;
+//   - MYSTERY pickups: PickupWire carries `myst` and a mystery pickup's `wpn` is null ON
+//     THE WIRE (the identity is baked sim-side but hidden from every client until the
+//     authoritative reveal) — a v11 client would render a phantom identified weapon;
+//   - mystery shop pedestals: ShopSlotWire carries `myst` with the same hidden-identity
+//     contract (the SOLD pedestal reveals its true face after the buy);
+//   - the reliable event stream grew mysteryReveal (the reveal moment) and implosion
+//     (the Lodestone's collapse FX). NOTE: the control plane's synthetic VERIFY join
+//     mirrors this constant (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
+export const PROTOCOL_VERSION = 12;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -274,7 +287,7 @@ export interface BulletWire {
 // so they ride the snapshot as discrete values — no interpolation needed. All three carry the
 // sim's STABLE per-floor id (interest hysteresis + client anim keying + lifecycle identity).
 export interface PropWire { id: number; kind: PropKind; x: number; y: number; brk: number } // brk<0 => intact
-export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number; bch: boolean } // val<0 => face value; bch = boss weapon choice
+export interface PickupWire { id: number; kind: PickupKind; x: number; y: number; wpn: WeaponId | null; val: number; bch: boolean; myst: boolean } // val<0 => face value; bch = boss weapon choice; myst = unidentified (wpn hidden)
 export interface ChestWire { id: number; kind: ChestKind; x: number; y: number; op: boolean; opt: number } // opt<0 => not yet open
 // Authored ground hazards (webs): bounded (hard sim cap), gameplay-relevant everywhere
 // (they slow PREDICTED movement), so they ride every snapshot unfiltered.
@@ -308,6 +321,7 @@ export interface ShopSlotWire {
   wpn: WeaponId | null; it: string | null;
   pr: number; x: number; y: number;
   sold: PlayerId | null; by: PlayerId[];
+  myst: boolean; // mystery pedestal: wpn is hidden (null) on the wire until a buy reveals
 }
 export interface ShopWire { kx: number; ky: number; ru: number; slots: ShopSlotWire[] }
 
@@ -551,6 +565,9 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   revive: { scope: "pos", fields: { pid: "str", by: "str", x: "num", y: "num" } },
   pickup: { scope: "pid", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   lootDrop: { scope: "pos", fields: { x: "num", y: "num", color: "str" } },
+  // Positional: the reveal moment plays for everyone standing at the pedestal, not only
+  // the collector (the gamble resolving is shared theater).
+  mysteryReveal: { scope: "pos", fields: { pid: "str", weapon: "str", twist: "str", x: "num", y: "num" } },
   shopBuy: { scope: "pos", fields: { pid: "str", slot: "num", kind: "str", x: "num", y: "num" } },
   weaponDrop: { scope: "pos", fields: { weapon: "str", x: "num", y: "num" } },
   wirePlanted: { scope: "pos", fields: { x: "num", y: "num", tx: "num", ty: "num" } },
@@ -577,6 +594,7 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   propHit: { scope: "pos", fields: { propId: "num", kind: "str", x: "num", y: "num" } },
   propBreak: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   explosion: { scope: "pos", fields: { x: "num", y: "num", r: "num", src: "str" } },
+  implosion: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
   chestOpen: { scope: "pos", fields: { kind: "str", x: "num", y: "num" } },
   hazardHit: { scope: "pos", fields: { pid: "str", kind: "str", x: "num", y: "num" } },
   spitMuzzle: { scope: "pos", fields: { x: "num", y: "num" } },
@@ -878,6 +896,7 @@ function validatePickupWire(v: unknown): PickupWire {
     wpn: wpn as WeaponId | null,
     val: num(o, "val", -1, 1e9),
     bch: boolOf(o, "bch"),
+    myst: boolOf(o, "myst"),
   };
 }
 
@@ -923,6 +942,7 @@ function validateShopSlotWire(v: unknown): ShopSlotWire {
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
     sold: sold as PlayerId | null,
     by,
+    myst: boolOf(o, "myst"),
   };
 }
 
@@ -1174,26 +1194,36 @@ export function toShopWire(s: ShopState): ShopWire {
     kx: s.keeperX, ky: s.keeperY, ru: s.rerollsUsed,
     slots: s.slots.map((slot): ShopSlotWire => ({
       id: slot.id, k: slot.kind, sh: slot.isShared,
-      wpn: slot.weapon, it: slot.itemId, pr: slot.price,
+      // A mystery pedestal's identity NEVER rides the wire (a tampered client must not
+      // be able to peek the gamble); the buy flips isMystery false, revealing it.
+      wpn: slot.isMystery ? null : slot.weapon, it: slot.itemId, pr: slot.price,
       x: slot.x, y: slot.y, sold: slot.soldTo, by: slot.buyers.slice(),
+      myst: slot.isMystery,
     })),
   };
 }
 export function shopFromWire(w: ShopWire): ShopState {
-  // Field order mirrors buildShopState so a decoded shop is BYTE-identical to the sim's
-  // (the shop suite locks the round-trip with a stringify compare).
+  // Field order mirrors buildShopState so a decoded shop is byte-identical to the sim's
+  // on its wire projection (the shop suite locks toShopWire round-trips; a mystery
+  // slot's hidden identity/twist are sim secrets and never reconstructable here).
   return {
     keeperX: w.kx, keeperY: w.ky,
     slots: w.slots.map((s): ShopSlot => ({
       id: s.id, kind: s.k, isShared: s.sh,
       weapon: s.wpn, itemId: s.it, price: s.pr,
       x: s.x, y: s.y, soldTo: s.sold, buyers: s.by.slice(),
+      isMystery: s.myst, twist: null,
     })),
     rerollsUsed: w.ru,
   };
 }
 export function toPickupWire(p: Pickup): PickupWire {
-  return { id: p.id, kind: p.kind, x: p.x, y: p.y, wpn: p.weapon, val: p.value ?? -1, bch: p.isBossChoice ?? false };
+  return {
+    id: p.id, kind: p.kind, x: p.x, y: p.y,
+    // A mystery pickup's baked identity stays sim-side until the authoritative reveal.
+    wpn: p.isMystery ? null : p.weapon,
+    val: p.value ?? -1, bch: p.isBossChoice ?? false, myst: p.isMystery ?? false,
+  };
 }
 export function toChestWire(c: Chest): ChestWire {
   return { id: c.id, kind: c.kind, x: c.x, y: c.y, op: c.opened, opt: c.openT ?? -1 };
@@ -1268,7 +1298,11 @@ export function propFromWire(w: PropWire): Prop {
 }
 export function pickupFromWire(w: PickupWire): Pickup {
   const radius = w.kind === "weapon" ? 16 : 13;
-  return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn, value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined };
+  return {
+    id: w.id, kind: w.kind, x: w.x, y: w.y, radius, weapon: w.wpn,
+    value: w.val < 0 ? undefined : w.val, isBossChoice: w.bch || undefined,
+    isMystery: w.myst || undefined,
+  };
 }
 export function chestFromWire(w: ChestWire): Chest {
   return { id: w.id, kind: w.kind, x: w.x, y: w.y, radius: w.kind === "boss" ? 18 : 16, opened: w.op, openT: w.opt < 0 ? undefined : w.opt };

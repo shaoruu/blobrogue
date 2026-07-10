@@ -219,7 +219,7 @@ export class ShopPanel {
       this.iconEl.appendChild(itemIconEl(view.icon.itemId, view.icon.glyph));
       return;
     }
-    this.iconEl.textContent = view.icon.kind === "heart" ? "\u2665" : "\u21bb";
+    this.iconEl.textContent = view.icon.kind === "heart" ? "\u2665" : view.icon.kind === "mystery" ? "?" : "\u21bb";
   }
 
   private onKey(e: KeyboardEvent): void {

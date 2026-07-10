@@ -1,7 +1,10 @@
-import type { Bullet, WeaponId } from "./types.js";
+import type { Bullet, WeaponId, WeaponRarity, MysteryTwist } from "./types.js";
 import type { PlayerId } from "./input.js";
 import type { Rng } from "./rng.js";
-import { BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF } from "./balance.js";
+import {
+  BOSS_EXTRA_PELLET_COEF, BOSS_NATIVE_PELLET_COEF, WEAPON_BOSS_COEF,
+  WEAPON_RARITY_WEIGHT, LEGENDARY_MIN_FLOOR, BOSS_CHEST_LEGENDARY_MULT, MYSTERY,
+} from "./balance.js";
 
 export interface MeleeSpec {
   arc: number;         // swing arc in radians (thrust uses a narrow forward cone)
@@ -81,6 +84,7 @@ export interface TetherSpec {
 export interface Weapon {
   id: WeaponId;
   name: string;
+  rarity: WeaponRarity; // drop-quality tier: weighting, gating, pricing, UI treatment
   fireCd: number;      // seconds between shots / swings
   speed: number;       // bullet speed px/s (unused on melee)
   life: number;        // bullet lifetime (doubles as range; unused on melee)
@@ -116,6 +120,14 @@ export interface Weapon {
   orbit?: OrbitSpec;
   sentry?: SentrySpec;
   tether?: TetherSpec;
+  // Legendary signature mechanics — one per legendary, never shared, never a stat reskin.
+  // Each stamps one field onto its bullets (or gates the trigger pull, for the Midas) and
+  // switches an isolated branch in the update loop, exactly like the Tier B fields above.
+  killShards?: number; // reaper: shards released from a body THIS round kills (cascades, decaying)
+  accel?: number;      // swarm: px/s² each dart gains in flight
+  coinBoost?: number;  // midas: eats 1 coin per shot to multiply damage by this (weak when broke)
+  isPhase?: boolean;   // phase: rounds ignore walls (and destructible props) entirely
+  implode?: number;    // vortex: implosion radius — the payload drags the pack onto the point
   // Canonical special-mechanic tooltip copy (data-driven: the HUD drawer, the pickup
   // inspect surfaces and the dev sandbox all read THIS string, never re-describe it).
   special?: string;
@@ -123,24 +135,24 @@ export interface Weapon {
 
 export const WEAPONS: Record<WeaponId, Weapon> = {
   pistol: {
-    id: "pistol", name: "Pistol", fireCd: 0.16, speed: 560, life: 1.1,
+    id: "pistol", name: "Pistol", rarity: "common", fireCd: 0.16, speed: 560, life: 1.1,
     damage: 2, pellets: 1, spread: 0, bulletRadius: 6, color: "#ffd27a", muzzle: 2,
   },
   shotgun: {
-    id: "shotgun", name: "Shotgun", fireCd: 0.52, speed: 500, life: 0.32,
+    id: "shotgun", name: "Shotgun", rarity: "common", fireCd: 0.52, speed: 500, life: 0.32,
     damage: 1.7, pellets: 5, spread: 0.52, bulletRadius: 5, color: "#ffb43b", muzzle: 6,
   },
   rapid: {
-    id: "rapid", name: "Rapid", fireCd: 0.07, speed: 660, life: 0.85,
+    id: "rapid", name: "Rapid", rarity: "common", fireCd: 0.07, speed: 660, life: 0.85,
     damage: 0.9, pellets: 1, spread: 0.07, bulletRadius: 4, color: "#8affe0", muzzle: 1,
   },
   // Tier A — pure data (no engine branches).
   smg: {
-    id: "smg", name: "Hornet", fireCd: 0.09, speed: 640, life: 0.9,
+    id: "smg", name: "Hornet", rarity: "common", fireCd: 0.09, speed: 640, life: 0.9,
     damage: 1.1, pellets: 1, spread: 0.03, bulletRadius: 4, color: "#b6ff6a", muzzle: 1,
   },
   cannon: {
-    id: "cannon", name: "Thunderbolt", fireCd: 0.72, speed: 520, life: 1.3,
+    id: "cannon", name: "Thunderbolt", rarity: "rare", fireCd: 0.72, speed: 520, life: 1.3,
     damage: 9, pellets: 1, spread: 0, bulletRadius: 11, color: "#ff8a3b", muzzle: 5,
     basePierce: 2,
     special: "Heavy slug punches through 2 bodies.",
@@ -150,43 +162,43 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // a boss-coefficient step (0.75 -> 0.7, WEAPON_BOSS_COEF) drops it out of the crown
   // races while keeping its authored fan-volley identity.
   burst: {
-    id: "burst", name: "Triplet", fireCd: 0.34, speed: 680, life: 1.0,
+    id: "burst", name: "Triplet", rarity: "common", fireCd: 0.34, speed: 680, life: 1.0,
     damage: 2.1, pellets: 3, spread: 0.14, bulletRadius: 4, color: "#6ad0ff", muzzle: 2,
   },
   // Tier B — each carries one optional behavior field stamped onto its bullets.
   ricochet: {
-    id: "ricochet", name: "Rebound", fireCd: 0.28, speed: 600, life: 1.6,
+    id: "ricochet", name: "Rebound", rarity: "rare", fireCd: 0.28, speed: 600, life: 1.6,
     damage: 2.4, pellets: 1, spread: 0.02, bulletRadius: 5, color: "#c98bff", muzzle: 2,
     bounce: 2,
     special: "Rounds bank off walls twice.",
   },
   homing: {
-    id: "homing", name: "Wisp", fireCd: 0.16, speed: 420, life: 1.4,
+    id: "homing", name: "Wisp", rarity: "rare", fireCd: 0.16, speed: 420, life: 1.4,
     damage: 1.6, pellets: 1, spread: 0.25, bulletRadius: 5, color: "#8affe0", muzzle: 1,
     homing: 6,
     special: "Rounds seek the nearest enemy.",
   },
   tesla: {
-    id: "tesla", name: "Tesla", fireCd: 0.4, speed: 900, life: 0.5,
+    id: "tesla", name: "Tesla", rarity: "rare", fireCd: 0.4, speed: 900, life: 0.5,
     damage: 3, pellets: 1, spread: 0, bulletRadius: 5, color: "#7fe9ff", muzzle: 2,
     chain: 3, chainRange: 130,
     special: "Arcs chain to 3 nearby enemies.",
   },
   // Tier A — pure data. Point-blank devastator: a dense, short-range pellet wall.
   sawnoff: {
-    id: "sawnoff", name: "Boomstick", fireCd: 0.62, speed: 440, life: 0.22,
+    id: "sawnoff", name: "Boomstick", rarity: "common", fireCd: 0.62, speed: 440, life: 0.22,
     damage: 2.4, pellets: 8, spread: 0.85, bulletRadius: 5, color: "#ff7a3b", muzzle: 8,
   },
   // Tier A — pure data. Near-hitscan precision slug (pierce comes from the Full Metal item).
   // The 6px radius keeps the slug precise but forgiving enough that a near-graze on a small
   // body connects (collision is swept, so its 1400px/s can never tunnel between ticks).
   railgun: {
-    id: "railgun", name: "Longshot", fireCd: 0.85, speed: 1400, life: 1.6,
+    id: "railgun", name: "Longshot", rarity: "rare", fireCd: 0.85, speed: 1400, life: 1.6,
     damage: 11, pellets: 1, spread: 0, bulletRadius: 6, color: "#e8f0ff", muzzle: 3,
   },
   // Tier B — reuses the ricochet bounce field: fast full-auto that ricochets once.
   nailer: {
-    id: "nailer", name: "Nailer", fireCd: 0.12, speed: 720, life: 1.1,
+    id: "nailer", name: "Nailer", rarity: "common", fireCd: 0.12, speed: 720, life: 1.1,
     damage: 1.4, pellets: 1, spread: 0.05, bulletRadius: 3, color: "#d9d2c0", muzzle: 1,
     bounce: 1,
     special: "Nails ricochet once off walls.",
@@ -195,7 +207,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // continuous flame cone; low per-hit damage but every round stamps burn, so the DoT
   // (and any elemental blessings) do the real work. See the status system in game.ts.
   flamer: {
-    id: "flamer", name: "Dragon", fireCd: 0.04, speed: 300, life: 0.28,
+    id: "flamer", name: "Dragon", rarity: "rare", fireCd: 0.04, speed: 300, life: 0.28,
     damage: 0.6, pellets: 2, spread: 0.5, bulletRadius: 7, color: "#ff8a3b", muzzle: 2,
     burn: 2,
     special: "Every round ignites (burn damage over time).",
@@ -205,7 +217,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // chokepoint into a blast zone, and detonate explosive barrels from safety — weak
   // single-target on purpose (the blast is the whole payload; no pierce, no direct hit).
   mortar: {
-    id: "mortar", name: "Thumper", fireCd: 0.75, speed: 380, life: 0.6,
+    id: "mortar", name: "Thumper", rarity: "rare", fireCd: 0.75, speed: 380, life: 0.6,
     damage: 6, pellets: 1, spread: 0, bulletRadius: 8, color: "#ffc46a", muzzle: 5,
     blast: 64,
     special: "Shells detonate where they land — the blast is the payload.",
@@ -221,23 +233,23 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // melt (30 HP in ~2.2s) while pulling the generalist edge back inside the review
   // threshold; its aim-discipline pricing vs bosses (WEAPON_BOSS_COEF) is unchanged.
   beam: {
-    id: "beam", name: "Sunlance", fireCd: 0.045, speed: 2000, life: 0.24,
+    id: "beam", name: "Sunlance", rarity: "rare", fireCd: 0.045, speed: 2000, life: 0.24,
     damage: 0.62, pellets: 1, spread: 0, bulletRadius: 4, color: "#ffe6a0", muzzle: 1,
     basePierce: 1,
     special: "A sustained lance that punches one body deep.",
   },
     sword: {
-    id: "sword", name: "Cutlass", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
+    id: "sword", name: "Cutlass", rarity: "common", fireCd: 0.22, speed: 0, life: 0, damage: 3.5,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#c8e0ff", muzzle: 0,
     melee: { arc: 1.25, reach: 48, swingDur: 0.2 },
   },
   longsword: {
-    id: "longsword", name: "Claymore", fireCd: 0.38, speed: 0, life: 0, damage: 6.2,
+    id: "longsword", name: "Claymore", rarity: "rare", fireCd: 0.38, speed: 0, life: 0, damage: 6.2,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#d8dce8", muzzle: 0,
     melee: { arc: 1.85, reach: 58, swingDur: 0.25 },
   },
   spear: {
-    id: "spear", name: "Pike", fireCd: 0.28, speed: 0, life: 0, damage: 4.8,
+    id: "spear", name: "Pike", rarity: "rare", fireCd: 0.28, speed: 0, life: 0, damage: 4.8,
     pellets: 1, spread: 0, bulletRadius: 0, color: "#9ee8c8", muzzle: 0,
     melee: { arc: 0.32, reach: 74, isThrust: true, swingDur: 0.18 },
   },
@@ -245,7 +257,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // TRADE SAFETY FOR A KILL WINDOW: an ordinary slug at full health, a monster at one
   // heart. Pure risk curve on the existing low-HP hooks — no new engine branch.
   lastlight: {
-    id: "lastlight", name: "Lastlight", fireCd: 0.55, speed: 620, life: 1.2,
+    id: "lastlight", name: "Lastlight", rarity: "rare", fireCd: 0.55, speed: 620, life: 1.2,
     damage: 3.2, pellets: 1, spread: 0, bulletRadius: 7, color: "#ff6a5a", muzzle: 4,
     lowHpBonus: 2.2,
     special: "Hits up to 3x harder the lower your HP.",
@@ -256,7 +268,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // signature job — a covered 50 HP anchor outlasted the 12s room cap. 9 keeps the
   // charge cycle honest (~5.6 sustained DPS) while the boss coefficient prices it.
   breach: {
-    id: "breach", name: "Breach", fireCd: 0.9, speed: 460, life: 0.9,
+    id: "breach", name: "Breach", rarity: "rare", fireCd: 0.9, speed: 460, life: 0.9,
     damage: 9, pellets: 1, spread: 0, bulletRadius: 8, color: "#ffb06a", muzzle: 5,
     blast: 76,
     charge: { time: 0.9, minDist: 140, maxDist: 420, slow: 0.55 },
@@ -265,7 +277,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // HOLD A DOORWAY: string an armed wire across the chokepoint; the first body across
   // snaps it on everything in the band. Zero direct damage — setup IS the weapon.
   snapwire: {
-    id: "snapwire", name: "Snapwire", fireCd: 0.65, speed: 0, life: 0,
+    id: "snapwire", name: "Snapwire", rarity: "rare", fireCd: 0.65, speed: 0, life: 0,
     damage: 9, pellets: 1, spread: 0, bulletRadius: 0, color: "#e8e05a", muzzle: 0,
     wire: { length: 120, width: 14, arm: 0.7, life: 12, max: 3 },
     special: "Strings an armed tripwire (up to 3). The first enemy across snaps it on everything touching the wire.",
@@ -274,7 +286,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // the lane slow, campers freeze solid. Weak direct hit on purpose — the floor is the
   // payload.
   frostline: {
-    id: "frostline", name: "Frostline", fireCd: 0.14, speed: 300, life: 1.1,
+    id: "frostline", name: "Frostline", rarity: "rare", fireCd: 0.14, speed: 300, life: 1.1,
     damage: 0.7, pellets: 1, spread: 0.04, bulletRadius: 6, color: "#9fd8ff", muzzle: 1,
     chill: 1.2,
     paint: { spacing: 30, radius: 26, life: 3.5, chillRate: 2.4 },
@@ -288,7 +300,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // keeps its persistent-family boss ceiling comfortably under 0.55 PU (contact is
   // rehit-gated and coefficient-priced) while the point-blank room job lands.
   halo: {
-    id: "halo", name: "Razor Halo", fireCd: 0.9, speed: 0, life: 0,
+    id: "halo", name: "Razor Halo", rarity: "rare", fireCd: 0.9, speed: 0, life: 0,
     damage: 2.2, pellets: 1, spread: 0, bulletRadius: 0, color: "#d8f0e8", muzzle: 0,
     orbit: { blades: 3, ring: 46, bladeRadius: 12, speed: 3.6, rehit: 0.5, flareRing: 96, flareDur: 0.4, flareBonus: 1.6 },
     special: "Blades orbit you, shredding anything that presses in. Fire flares the ring outward for a beat.",
@@ -300,7 +312,7 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // 0.48 PU) keeps it under the 0.55 PU passive ceiling and inside the party's
   // persistent boss budget while making the parked lane a real trade.
   sentry: {
-    id: "sentry", name: "Prism Sentry", fireCd: 1.2, speed: 0, life: 0,
+    id: "sentry", name: "Prism Sentry", rarity: "rare", fireCd: 1.2, speed: 0, life: 0,
     damage: 2.4, pellets: 1, spread: 0, bulletRadius: 0, color: "#c8a8ff", muzzle: 0,
     sentry: { hp: 12, radius: 13, range: 240, fireCd: 0.35, boltSpeed: 520, boltRadius: 4, life: 12, deployDist: 40 },
     special: "Deploys a turret that shoots the nearest enemy it can see. Destructible; redeploying moves it.",
@@ -308,10 +320,58 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // REPOSITION THE THREAT: latch the chain and reel the target to your feet — then fire
   // again to sweep it (and everything beside you). A brute or boss reels YOU in instead.
   crook: {
-    id: "crook", name: "Crooked Chain", fireCd: 0.9, speed: 0, life: 0,
+    id: "crook", name: "Crooked Chain", rarity: "rare", fireCd: 0.9, speed: 0, life: 0,
     damage: 5, pellets: 1, spread: 0, bulletRadius: 0, color: "#c9b06a", muzzle: 0,
     tether: { range: 210, width: 30, pullSpeed: 560, holdDist: 64, hold: 1.2, reach: 90, playerPullTime: 0.35 },
     special: "Latches and reels an enemy to you; fire again to sweep it. Brutes and bosses drag YOU in instead.",
+  },
+  // ---- LEGENDARIES — one signature mechanic each, never bigger numbers ----
+  // Reaper: modest single shots, but every KILL bursts the body into seeking soul shards
+  // that cascade (each generation halves damage — geometric, bounded). The room verb is
+  // MOMENTUM: the first kill in a pack starts an avalanche; against a lone tough body it
+  // is just an ordinary rifle — that restraint is the tradeoff.
+  reaper: {
+    id: "reaper", name: "Reaper", rarity: "legendary", fireCd: 0.45, speed: 620, life: 1.2,
+    damage: 3.2, pellets: 1, spread: 0.02, bulletRadius: 6, color: "#b8ffd9", muzzle: 3,
+    killShards: 3,
+    special: "Kills burst into 3 seeking soul shards; shard kills cascade.",
+  },
+  // Hive: one SLOW trigger pull releases a whole volley of seeker darts that accelerate
+  // in flight. The verb is ALPHA STRIKE: commit early, watch the swarm hunt — but the
+  // 1.15s cycle means a missed window costs a real beat (and darts launch slow, so
+  // point-blank panic fire is its weakest use).
+  swarm: {
+    id: "swarm", name: "Hive", rarity: "legendary", fireCd: 1.15, speed: 260, life: 2.2,
+    damage: 1.8, pellets: 5, spread: 1.4, bulletRadius: 5, color: "#ffe86a", muzzle: 5,
+    homing: 7, accel: 420,
+    special: "One pull releases 5 seeker darts that accelerate in flight.",
+  },
+  // Midas: eats 1 coin per shot to hit at double damage — your purse is the magazine.
+  // The verb is SPEND POWER: strong exactly as long as you bankroll it (shop, hearts and
+  // rerolls compete for the same coins); broke, it fires an honest but weak base round.
+  midas: {
+    id: "midas", name: "Midas", rarity: "legendary", fireCd: 0.18, speed: 640, life: 1.1,
+    damage: 2.2, pellets: 1, spread: 0.02, bulletRadius: 5, color: "#ffd700", muzzle: 2,
+    coinBoost: 2,
+    special: "Eats 1 coin per shot for \u00d72 damage; fires weak when broke.",
+  },
+  // Umbra: rounds pass straight through walls and props. The verb is DENY COVER: shoot
+  // the pack through the room's geometry from total safety — at a slow cadence, mid
+  // damage, and zero pierce, so it wins position, never raw DPS.
+  phase: {
+    id: "phase", name: "Umbra", rarity: "legendary", fireCd: 0.5, speed: 520, life: 1.5,
+    damage: 4, pellets: 1, spread: 0, bulletRadius: 6, color: "#9a7fff", muzzle: 2,
+    isPhase: true,
+    special: "Rounds pass straight through walls and cover.",
+  },
+  // Lodestone: every shot implodes on impact, dragging the whole nearby pack onto the
+  // point and splashing modest damage. The verb is GATHER: yank scattered bodies into one
+  // clump for your follow-up (or a barrel) — weak alone, devastating as a setup tool.
+  vortex: {
+    id: "vortex", name: "Lodestone", rarity: "legendary", fireCd: 0.6, speed: 480, life: 1.1,
+    damage: 2.5, pellets: 1, spread: 0, bulletRadius: 7, color: "#7fb0ff", muzzle: 4,
+    implode: 120,
+    special: "Shots implode, dragging the nearby pack onto the impact point.",
   },
 };
 
@@ -323,7 +383,64 @@ export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "sawnoff", "railgun", "nailer", "flamer", "mortar", "beam",
   "sword", "longsword", "spear",
   "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
+  "reaper", "swarm", "midas", "phase", "vortex",
 ];
+
+// The legendary tier of the pickup pool (derived once — gates and premium rolls read it).
+export const LEGENDARY_WEAPONS: readonly WeaponId[] =
+  PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === "legendary");
+
+// ---- the ONE rarity tier roll (every weapon drop source reads this) ----
+// Free drops compose rarity with the per-run shuffled bag (weaponBag.ts): the roll first
+// decides a TIER here — weighted by (tier weight x pool count), floor-gated, identical
+// solo/co-op per §4 — then deals the next undealt weapon OF that tier from the bag, so
+// rarity weighting and the anti-repeat deal never fight. Shop stock rolls tiers off its
+// own pure stream the same way. Consumes EXACTLY one rand() per call (deterministic draw
+// count — placement streams stay reproducible).
+
+export interface RarityRollOpts {
+  // Boss chests: the premium container — the legendary tier weight is boosted.
+  isPremium?: boolean;
+  // Mystery reveals gamble PAST the legendary floor gate at the boosted mystery weight.
+  isMystery?: boolean;
+}
+
+export function rollWeaponRarity(rand: () => number, floor: number, opts: RarityRollOpts = {}): WeaponRarity {
+  const isLegendaryOpen = opts.isMystery === true || floor >= LEGENDARY_MIN_FLOOR;
+  const tiers: WeaponRarity[] = ["common", "rare", "legendary"];
+  const weightOf = (tier: WeaponRarity): number => {
+    if (tier === "legendary" && !isLegendaryOpen) return 0;
+    const perWeapon = tier === "legendary" && opts.isMystery ? MYSTERY.legendaryWeight
+      : tier === "legendary" && opts.isPremium ? WEAPON_RARITY_WEIGHT.legendary * BOSS_CHEST_LEGENDARY_MULT
+      : WEAPON_RARITY_WEIGHT[tier];
+    return perWeapon * PICKUP_WEAPONS.filter((id) => WEAPONS[id].rarity === tier).length;
+  };
+  let total = 0;
+  for (const tier of tiers) total += weightOf(tier);
+  let r = rand() * total;
+  for (const tier of tiers) {
+    r -= weightOf(tier);
+    if (r <= 0 && weightOf(tier) > 0) return tier;
+  }
+  return "common";
+}
+
+// The one rarity accent palette (pickup glow, loot flash, hotbar frame, tooltip badge —
+// every surface reads the same swatch). MYSTERY_COLOR is the "???" treatment.
+export const WEAPON_RARITY_COLOR: Record<WeaponRarity, string> = {
+  common: "#ffb43b",
+  rare: "#7fb8ff",
+  legendary: "#ffd700",
+};
+export const MYSTERY_COLOR = "#c98bff";
+
+// The mystery pickup's blessed/cursed twist, baked at spawn (one rand() per roll).
+export function rollMysteryTwist(rand: () => number): MysteryTwist {
+  const r = rand();
+  if (r < MYSTERY.blessedChance) return "blessed";
+  if (r < MYSTERY.blessedChance + MYSTERY.cursedChance) return "cursed";
+  return "plain";
+}
 
 // Hard caps on authored entity counts the pellet mods can raise (Split Shot/Scattergun
 // map onto "more authored entities" for the effect weapons — bounded so the wire and the
@@ -362,6 +479,10 @@ export interface ShotSpec {
   burn?: number;
   chill?: number;
   shock?: number;
+  killShards?: number;
+  accel?: number;
+  isPhase?: boolean;
+  implode?: number;
   // Frostline painting, resolved with mods at fire time (size -> zone radius, life ->
   // zone duration) and stamped onto each bead.
   paintSpacing?: number;
@@ -415,6 +536,10 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       burn: spec.burn,
       chill: spec.chill,
       shock: spec.shock,
+      killShards: spec.killShards,
+      accel: spec.accel,
+      isPhase: spec.isPhase,
+      implode: spec.implode,
       paintSpacing: spec.paintSpacing,
       paintRadius: spec.paintRadius,
       paintLife: spec.paintLife,

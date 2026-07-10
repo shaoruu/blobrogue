@@ -384,9 +384,20 @@ function approvedHookTests(): void {
     devSpriteManifest().some((a) => a.group === "held weapons" && a.label === "held beam" && a.src === "/sprites/held_beam2_px.png"));
   check("the beam's dedicated ray is a registered code-tinted white mask (beam_ray)",
     devSpriteManifest().some((a) => a.group === "bullet fx" && a.label === "beam_ray" && a.src === "/sprites/fx/beam_ray.png"));
-  // Cut content stays honest: nothing registered for removed weapons (boomerang, vortex).
-  check("no hooks exist for cut weapons (boomerang/vortex removed at the gate)",
-    !devSpriteManifest().some((a) => a.label.includes("boomerang") || a.label.includes("vortex")));
+  // Cut content stays honest: nothing registered for removed weapons (the boomerang).
+  // (The old cut "vortex" concept was re-authored as the Lodestone legendary, which
+  // registers real hooks below.)
+  check("no hooks exist for cut weapons (boomerang removed at the gate)",
+    !devSpriteManifest().some((a) => a.label.includes("boomerang")));
+  // The legendary wave's FAL hooks: pickup + held pairs for all five, exact drop-in
+  // filenames (art generated separately; the fallback ladder covers until each lands).
+  const legendaryHooks: Array<[string, string]> = [
+    ["reaper", "reaper"], ["swarm", "hive"], ["midas", "midas"], ["phase", "umbra"], ["vortex", "lodestone"],
+  ];
+  check("every legendary registers its pickup + held hooks (FAL drop-in filenames)",
+    legendaryHooks.every(([id, art]) =>
+      devSpriteManifest().some((a) => a.group === "weapon pickups" && a.label === `pickup ${id}` && a.src === `/sprites/weapon_${art}.png`)
+      && devSpriteManifest().some((a) => a.group === "held weapons" && a.label === `held ${id}` && a.src === `/sprites/held_${art}.png`)));
 }
 
 function main(): void {

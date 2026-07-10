@@ -16,6 +16,7 @@ import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type {
   Enemy, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, AttackMove, TileKind, PropKind,
+  MysteryTwist,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect,
 } from "./types.js";
 import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
@@ -24,7 +25,10 @@ import {
   ENEMY_ARCHETYPES, BOSS_KIN, spawnFloorEnemies, createEnemy, threatCostOf, isBossFloor,
   isBossKind, isComplexMover, isGauntletFloor, eliteAffixOf, isMinibossKind,
 } from "./enemies.js";
-import { WEAPONS, DEFAULT_WEAPON, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire } from "./weapons.js";
+import {
+  WEAPONS, DEFAULT_WEAPON, MAX_WIRES, MAX_WIRES_PARTY, MAX_ORBIT_BLADES, fire,
+  rollWeaponRarity, rollMysteryTwist, LEGENDARY_WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR,
+} from "./weapons.js";
 import type { ShotSpec, Weapon } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, MAX_ITEM_LEVEL } from "./items.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult } from "./weaponStats.js";
@@ -41,6 +45,7 @@ import {
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
   LIVE_CAPS, activeMoverCapFor, pedestalWeaponRolls, bossWeaponChoices, KING_REWARD_TABLE,
+  MYSTERY, LEGENDARY_MIN_FLOOR,
 } from "./balance.js";
 import type { EnemyTier } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
@@ -555,25 +560,57 @@ function stockWeaponChests(w: WorldState): void {
   if (d.rooms.length <= 2) return;
   const rng = new Rng((w.seed ^ 0x51ed270b) + w.floor * 40503);
   const exclude = weaponsOwnedByAll(w);
-  const kinds: WeaponId[] = [];
+  // Each pedestal roll: (1) decide whether it wraps as a mystery (MYSTERY.minFloor+, from
+  // the pedestal stream), (2) roll the rarity TIER — legendary-gated for identified
+  // drops, gamble-weighted for mysteries — and deal that tier's next weapon from the
+  // run's shuffled bag, (3) bake the mystery's twist. Fixed draw order keeps the
+  // placement stream reproducible per (seed, floor).
+  const kinds: Array<{ weapon: WeaponId; isMystery: boolean; twist?: MysteryTwist }> = [];
   for (let i = 0; i < pedestalWeaponRolls(w.encounterPlayers); i++) {
-    const pick = drawWeaponFromBag(w.weaponBag, exclude);
-    if (kinds.includes(pick)) break; // pool saturated (everything owned): no dup pedestals
-    kinds.push(pick);
+    const isMystery = w.floor >= MYSTERY.minFloor && rng.chance(MYSTERY.pedestalChance);
+    const pick = rollBagWeapon(w, () => rng.next(), exclude, { isMystery });
+    if (kinds.some((k) => k.weapon === pick)) break; // pool saturated (everything owned): no dup pedestals
+    kinds.push({ weapon: pick, isMystery, twist: isMystery ? rollMysteryTwist(() => rng.next()) : undefined });
     exclude.add(pick);
   }
   const used = new Set<number>();
   for (const c of w.chests) used.add(Math.floor(c.y / TILE) * d.w + Math.floor(c.x / TILE));
-  for (const weapon of kinds) {
+  for (const { weapon, isMystery, twist } of kinds) {
     const host = w.chests.find((c) => c.kind === "wood" && c.weapon === undefined);
-    if (host) { host.weapon = weapon; continue; }
+    if (host) { host.weapon = weapon; host.isMystery = isMystery || undefined; host.twist = twist; continue; }
     const room = d.rooms[1 + rng.int(0, d.rooms.length - 2)];
     let spot = chestTile(w, room, used);
     for (let ri = 1; spot === null && ri < d.rooms.length; ri++) spot = chestTile(w, d.rooms[ri], used);
     if (!spot) continue; // no open tile anywhere: forfeit this weapon roll
     used.add(spot.ty * d.w + spot.tx);
-    w.chests.push({ id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE, radius: 16, opened: false, weapon });
+    w.chests.push({
+      id: w.nextChestId++, kind: "wood", x: (spot.tx + 0.5) * TILE, y: (spot.ty + 0.5) * TILE,
+      radius: 16, opened: false, weapon, isMystery: isMystery || undefined, twist,
+    });
   }
+}
+
+// The world's one rarity-aware bag draw: roll the TIER (weighted, floor-gated — see
+// rollWeaponRarity), enforce the legendary floor gate through the bag's exclude
+// semantics (skip while others remain, never hang), then deal that tier's next undealt
+// weapon from the run's shuffled bag. `rand` is the calling stream (a placement Rng or
+// w.rng) so the tier roll rides the caller's determinism, and the roll consumes exactly
+// one rand() before the bag advances.
+function rollBagWeapon(
+  w: WorldState,
+  rand: () => number,
+  exclude: ReadonlySet<WeaponId>,
+  opts: { isPremium?: boolean; isMystery?: boolean } = {},
+): WeaponId {
+  const tier = rollWeaponRarity(rand, w.floor, opts);
+  const isLegendaryOpen = opts.isMystery === true || w.floor >= LEGENDARY_MIN_FLOOR;
+  let gated = exclude;
+  if (!isLegendaryOpen) {
+    const withGate = new Set(exclude);
+    for (const id of LEGENDARY_WEAPONS) withGate.add(id);
+    gated = withGate;
+  }
+  return drawWeaponFromBag(w.weaponBag, gated, tier);
 }
 
 // Weapons owned by EVERY player — the set a fresh drop would waste (nobody left to
@@ -947,6 +984,10 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     burn: wep.burn,
     chill: wep.chill,
     shock: wep.shock,
+    killShards: wep.killShards,
+    accel: wep.accel,
+    isPhase: wep.isPhase,
+    implode: wep.implode,
     // Frostline painting, mods-mapped here (size -> zone footprint, life -> duration).
     paintSpacing: wep.paint?.spacing,
     paintRadius: wep.paint !== undefined ? wep.paint.radius * p.mods.bulletSizeMult : undefined,
@@ -989,6 +1030,35 @@ function acquireWeapon(p: PlayerSim, id: WeaponId): boolean {
   }
   equipWeapon(p, id);
   return true;
+}
+
+// The mystery reveal's baked twist (see rollMysteryTwist): a small buff or a small
+// drawback, never a dead result. Blessed follows the heart rules exactly (+1 HP, or the
+// coin conversion at full health); cursed jams the freshly-equipped trigger for a beat.
+function applyMysteryTwist(p: PlayerSim, twist: MysteryTwist, ev: SimEvent[]): void {
+  if (twist === "blessed") {
+    if (p.hp < p.maxHp) {
+      p.hp++;
+      ev.push({ t: "heal", pid: p.id, x: p.x, y: p.y });
+    } else {
+      p.coins += SUSTAIN.fullHpHeartCoins;
+    }
+  } else if (twist === "cursed") {
+    p.fireCd = Math.max(p.fireCd, MYSTERY.cursedJamSeconds);
+  }
+}
+
+// A mystery pickup's reveal at the claim moment: the baked identity — rerolled through
+// the bag's mystery gamble when the claimant already owns it (never a dead result) —
+// plus the shared reveal event. Shared by the walk-over collect and the full-hotbar
+// swap, so the two claim paths can never diverge. The caller applies the twist AFTER
+// acquiring (equipWeapon resets fireCd, which would silently clear a cursed jam).
+function revealMysteryPickup(w: WorldState, p: PlayerSim, pk: Pickup, ev: SimEvent[]): WeaponId {
+  const grant = p.ownedWeapons.includes(pk.weapon!)
+    ? rollBagWeapon(w, () => w.rng.next(), new Set(p.ownedWeapons), { isMystery: true })
+    : pk.weapon!;
+  ev.push({ t: "mysteryReveal", pid: p.id, weapon: grant, twist: pk.twist ?? "plain", x: pk.x, y: pk.y });
+  return grant;
 }
 
 // Authoritative, validated weapon switch (LocalTransport + the server's equip handler).
@@ -1080,14 +1150,21 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   const pk = w.pickups.find((q) => q.id === pickupId);
   if (!pk || pk.kind !== "weapon" || pk.weapon === null) return false;
   if (Math.hypot(p.x - pk.x, p.y - pk.y) > C.WEAPON_SWAP_RANGE) return false;
-  if (pk.isBossChoice ? p.hasClaimedBossChoice : p.ownedWeapons.includes(pk.weapon)) return false;
+  // A mystery's identity is hidden, so "already owned" can never block the swap — the
+  // reveal itself rerolls an owned identity into something the claimant lacks.
+  if (pk.isBossChoice ? p.hasClaimedBossChoice : (!pk.isMystery && p.ownedWeapons.includes(pk.weapon))) return false;
   const spot = weaponDropSpot(w, p);
   if (!spot) return false; // fully boxed in: keep everything rather than lose a weapon
   let grant = pk.weapon;
+  let mysteryTwist: MysteryTwist | null = null;
   if (pk.isBossChoice) {
     p.hasClaimedBossChoice = true;
     if (p.ownedWeapons.includes(pk.weapon)) grant = drawWeaponFromBag(w.weaponBag, new Set(p.ownedWeapons));
   } else {
+    if (pk.isMystery) {
+      grant = revealMysteryPickup(w, p, pk, ev);
+      mysteryTwist = pk.twist ?? "plain";
+    }
     w.pickups = w.pickups.filter((q) => q !== pk);
   }
   p.ownedWeapons.splice(dropIdx, 1);
@@ -1095,6 +1172,8 @@ export function swapWeaponInWorld(w: WorldState, pid: PlayerId, pickupId: number
   w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: dropId });
   ev.push({ t: "weaponDrop", weapon: dropId, x, y });
   acquireWeapon(p, grant);
+  // The twist lands AFTER the equip (equipWeapon resets fireCd — a cursed jam must stick).
+  if (mysteryTwist !== null) applyMysteryTwist(p, mysteryTwist, ev);
   ev.push({ t: "pickup", pid, kind: "weapon", x: pk.x, y: pk.y });
   return true;
 }
@@ -1193,7 +1272,22 @@ export function buyFromShopInWorld(w: WorldState, pid: PlayerId, slotId: number,
   switch (slot.kind) {
     case "weapon": {
       slot.soldTo = pid;
-      acquireWeapon(p, slot.weapon!);
+      if (slot.isMystery) {
+        // The mystery pedestal reveals ON PURCHASE: an already-owned identity rerolls
+        // into something the buyer lacks (never a dead buy), the twist lands, and the
+        // slot flips to its true face — the SOLD pedestal shows what it was.
+        const grant = p.ownedWeapons.includes(slot.weapon!)
+          ? rollBagWeapon(w, () => w.rng.next(), new Set(p.ownedWeapons), { isMystery: true })
+          : slot.weapon!;
+        slot.weapon = grant;
+        slot.isMystery = false;
+        acquireWeapon(p, grant);
+        applyMysteryTwist(p, slot.twist ?? "plain", ev);
+        ev.push({ t: "mysteryReveal", pid, weapon: grant, twist: slot.twist ?? "plain", x: slot.x, y: slot.y });
+        slot.twist = null;
+      } else {
+        acquireWeapon(p, slot.weapon!);
+      }
       break;
     }
     case "blessing": {
@@ -1751,6 +1845,13 @@ function updateShooting(w: WorldState, p: PlayerSim, input: InputCmd, dt: number
     const muzzleX = p.x + Math.cos(p.aimAngle) * 18;
     const muzzleY = p.y + Math.sin(p.aimAngle) * 18;
     const spec = resolveShot(p, p.weapon);
+    // The Midas: a FED shot eats one coin for its damage multiplier (and gleams brighter);
+    // broke, it fires the honest base round — never a locked trigger.
+    if (wep.coinBoost !== undefined && p.coins > 0) {
+      p.coins--;
+      spec.damage *= wep.coinBoost;
+      spec.color = "#fff3a8";
+    }
     for (const b of fire(spec, muzzleX, muzzleY, p.aimAngle, w.rng, p.id)) {
       // Anchor lag-comp at fire time: record the tick + the shooter's rewind depth NOW, so hit
       // tests use the shooter's fire-time view and decay to present as the projectile travels.
@@ -2073,6 +2174,15 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
       if (b.friendly) steerHoming(w, b, dt);
       else steerEnemyHoming(w, b, dt); // the Choir's wails seek the nearest standing player
     }
+    // The Hive's darts gain speed in flight (launch lazy, arrive fast).
+    if (b.accel !== undefined) {
+      const sp = Math.hypot(b.vx, b.vy);
+      if (sp > 0) {
+        const scale = (sp + b.accel * dt) / sp;
+        b.vx *= scale;
+        b.vy *= scale;
+      }
+    }
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
     // Frostline painting: every spacing's worth of travel drops a chill zone under the
     // bead (never inside a wall — the wall branch below kills the bead first).
@@ -2083,12 +2193,19 @@ function updateBullets(w: WorldState, dt: number, ev: SimEvent[]): void {
         spawnChillZone(w, b);
       }
     }
-    // A mortar shell that reaches the end of its arc airbursts instead of vanishing.
+    // A mortar shell that reaches the end of its arc airbursts instead of vanishing;
+    // a Lodestone round's end-of-arc implodes the same way.
     if (b.life <= 0 && b.friendly && b.blast !== undefined) { detonateBullet(w, b, b.x, b.y, ev); continue; }
-    if (isWall(w, b.x, b.y)) {
+    if (b.life <= 0 && b.friendly && b.implode !== undefined) { implodeBullet(w, b, b.x, b.y, ev); continue; }
+    // Umbra rounds pass straight through walls — geometry simply isn't theirs to hit.
+    if (!(b.friendly && b.isPhase === true) && isWall(w, b.x, b.y)) {
       if (b.friendly && b.blast !== undefined) {
         // Shells burst ON the wall face (the last in-bounds point), not inside it.
         detonateBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
+        continue;
+      }
+      if (b.friendly && b.implode !== undefined) {
+        implodeBullet(w, b, b.prevX ?? b.x, b.prevY ?? b.y, ev);
         continue;
       }
       if (b.bounce !== undefined && b.bounce > 0) { bounceOffWall(w, b, dt, ev); continue; }
@@ -2186,6 +2303,34 @@ function detonateBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimE
       if (prop.breakT !== undefined || prop.kind === "brazier") continue;
       if (Math.hypot(prop.x - bx, prop.y - by) <= r + prop.radius) destroyProp(w, prop, ev, shooter ?? undefined);
     }
+  }
+}
+
+// Lodestone implosion: the round's ONE payload. Every targetable enemy in the radius is
+// yanked TOWARD the impact point (strikeEnemy's knockback, aimed inward — WEAPON_KB.vortex
+// is the pull strength, resisted like ordinary knockback so a heavy body barely budges)
+// and takes a modest splash (IMPLODE_SPLASH_FRAC of the round). The bullet collapses onto
+// the point exactly like a mortar shell, so its spent segment can never also plain-hit.
+function implodeBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEvent[]): void {
+  const r = b.implode;
+  if (r === undefined) return;
+  b.implode = undefined;
+  b.life = 0;
+  b.x = x; b.y = y; b.prevX = x; b.prevY = y;
+  ev.push({ t: "implosion", x, y, r });
+  const shooter = ownerOf(w, b.owner);
+  for (const e of w.enemies) {
+    if (e.dead || isUntargetable(e)) continue;
+    if (Math.hypot(e.x - x, e.y - y) > r + e.radius) continue;
+    const inX = x - e.x, inY = y - e.y;
+    strikeEnemy(w, shooter, e, {
+      damage: b.damage * C.IMPLODE_SPLASH_FRAC, isCrit: b.isCrit, critX: b.critX ?? 1,
+      bossCoef: b.bossCoef ?? 1, puffX: e.x, puffY: e.y,
+      kbDirX: inX === 0 && inY === 0 ? 1 : inX, kbDirY: inY,
+      burn: b.burn, chill: b.chill, shock: b.shock, isMelee: false,
+      ownerId: b.owner, fxWeapon: b.fx ?? null,
+    }, ev);
+    (b.hitList ??= []).push(e);
   }
 }
 
@@ -2627,6 +2772,10 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
   tickReleaseArbiter(w, dt);
   releaseReinforcements(w, dt, ev);
   refreshNav(w, dt);
+  // Reaper soul shards born this pass. Buffered and flushed AFTER the enemy loop so a
+  // fresh shard never hit-tests inside the tick that spawned it (it visibly flies first,
+  // and the loop never iterates a mutating bullet list).
+  const shardSpawns: Bullet[] = [];
   for (const e of w.enemies) {
     tickStatuses(w, e, dt, ev);
     if (e.dead) continue;
@@ -2715,6 +2864,12 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           detonateBullet(w, b, sweptHit.x, sweptHit.y, ev);
           continue;
         }
+        // Same contract for the Lodestone: the implosion IS the payload — the direct
+        // target sits inside the radius, takes exactly one splash hit, and gets pulled.
+        if (b.implode !== undefined) {
+          implodeBullet(w, b, sweptHit.x, sweptHit.y, ev);
+          continue;
+        }
         // A formation guard swallows a non-piercing shot arriving inside its slow arc.
         if (isGuardBlocked(e, b)) {
           b.life = 0;
@@ -2736,6 +2891,11 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
           isPersistent: b.isPersistent,
           ownerId: b.owner, fxWeapon: b.fx ?? null,
         }, ev);
+        // The Reaper's harvest: a KILLING round bursts the body into seeking shards
+        // (shards carry the field too, so kills cascade at geometrically decaying damage).
+        if (e.dead && b.killShards !== undefined && b.killShards > 0) {
+          spawnKillShards(w, b, e, shardSpawns);
+        }
         // The caskbellows' rear crank: a hit on its back mid-commitment staggers it.
         if (!e.dead) maybeCrankStagger(e, b, ev);
         if (b.chain !== undefined && b.chain > 0) {
@@ -2772,7 +2932,40 @@ function updateEnemies(w: WorldState, dt: number, ev: SimEvent[]): void {
       }
     }
   }
+  for (const shard of shardSpawns) w.bullets.push(shard);
   w.enemies = w.enemies.filter((e) => !e.dead);
+}
+
+// The Reaper's kill shards: an even deterministic fan off the corpse (the homing does the
+// aiming), each at KILL_SHARD_DMG_FRAC of the killing round. The cascade is bounded by
+// construction: damage halves per generation and stops under KILL_SHARD_MIN_DMG.
+function spawnKillShards(w: WorldState, b: Bullet, e: Enemy, out: Bullet[]): void {
+  const count = b.killShards ?? 0;
+  const damage = b.damage * C.KILL_SHARD_DMG_FRAC;
+  if (count <= 0 || damage <= 0) return;
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    out.push({
+      x: e.x, y: e.y,
+      vx: Math.cos(a) * C.KILL_SHARD_SPEED,
+      vy: Math.sin(a) * C.KILL_SHARD_SPEED,
+      radius: C.KILL_SHARD_RADIUS,
+      life: C.KILL_SHARD_LIFE,
+      friendly: true,
+      owner: b.owner,
+      damage,
+      color: b.color,
+      pierce: 0,
+      hitList: null,
+      isCrit: false,
+      bossCoef: b.bossCoef,
+      fx: b.fx,
+      homing: C.KILL_SHARD_HOMING,
+      killShards: damage * C.KILL_SHARD_DMG_FRAC >= C.KILL_SHARD_MIN_DMG ? count : undefined,
+      bornTick: w.tick,
+      lagRewind: 0,
+    });
+  }
 }
 
 function canTouchDamage(e: Enemy): boolean {
@@ -5624,6 +5817,9 @@ function updateProps(w: WorldState, dt: number, ev: SimEvent[]): void {
       // Breach shells are artillery over COVER too: crates cannot eat a lobbed shell the
       // way they eat direct fire (the blast still smashes props where it lands).
       if (b.isLob) continue;
+      // Umbra rounds pass through props the same way they pass through walls: cover —
+      // the room's OR the player's — simply is not theirs to hit.
+      if (b.friendly && b.isPhase === true) continue;
       if (!sweptBulletHit(b, p.x, p.y, b.radius + p.radius)) continue;
       if (!b.friendly) {
         // Standing props are COVER: enemy fire is stopped by them — and spends them.
@@ -5794,11 +5990,13 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     if (c.weapon !== undefined) {
       const choices: WeaponId[] = [c.weapon];
       // Alternates come from the run's shuffled bag, skipping the signature, this set,
-      // and guns the whole party already owns — every pedestal is a real option.
+      // and guns the whole party already owns — every pedestal is a real option. The
+      // boss chest is the premium container: each alternate's rarity tier rolls with the
+      // boosted legendary weight (see BOSS_CHEST_LEGENDARY_MULT).
       const exclude = weaponsOwnedByAll(w);
       exclude.add(c.weapon);
       while (choices.length < bossWeaponChoices(w.encounterPlayers)) {
-        const pick = drawWeaponFromBag(w.weaponBag, exclude);
+        const pick = rollBagWeapon(w, () => w.rng.next(), exclude, { isPremium: true });
         if (choices.includes(pick)) break; // pool saturated: no duplicate pedestals
         choices.push(pick);
         exclude.add(pick);
@@ -5808,7 +6006,7 @@ function openChest(w: WorldState, p: PlayerSim, c: Chest, ev: SimEvent[]): void 
     loot.push({ kind: "heart" });
     for (let i = 0; i < 5; i++) loot.push({ kind: "coin" });
   } else {
-    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+    if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon, isMystery: c.isMystery, twist: c.twist });
     loot.push(...rollWoodChest(w));
   }
   ejectChestLoot(w, c, loot, openerAngle(p, c), p.pr, ev);
@@ -5833,7 +6031,7 @@ function smashOpenChest(w: WorldState, c: Chest, fromX: number, fromY: number, e
   c.openT = 0;
   ev.push({ t: "chestOpen", kind: c.kind, x: c.x, y: c.y });
   const loot: ChestLoot[] = [];
-  if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon });
+  if (c.weapon !== undefined) loot.push({ kind: "weapon", weapon: c.weapon, isMystery: c.isMystery, twist: c.twist });
   loot.push(...rollWoodChest(w));
   const away = Math.atan2(c.y - fromY, c.x - fromX);
   ejectChestLoot(w, c, loot, away, 18, ev);
@@ -5847,7 +6045,7 @@ function openerAngle(p: PlayerSim, c: Chest): number {
 
 type ChestLoot =
   | { kind: "coin" | "heart" }
-  | { kind: "weapon"; weapon: WeaponId; isBossChoice?: boolean };
+  | { kind: "weapon"; weapon: WeaponId; isBossChoice?: boolean; isMystery?: boolean; twist?: MysteryTwist };
 
 // Every drop a chest produces lands somewhere the collector can actually STAND — the old
 // loose offsets (coins in a row, heart under the chest) could put loot inside a wall or
@@ -5862,8 +6060,11 @@ function ejectChestLoot(w: WorldState, c: Chest, loot: ChestLoot[], base: number
     const [x, y] = chestLootSpot(w, c, base, slot, pr, placed);
     placed.push({ x, y });
     if (item.kind === "weapon") {
-      w.pickups.push({ id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon, isBossChoice: item.isBossChoice });
-      ev.push({ t: "lootDrop", x, y, color: "#ffb43b" });
+      w.pickups.push({
+        id: w.nextPickupId++, kind: "weapon", x, y, radius: 16, weapon: item.weapon,
+        isBossChoice: item.isBossChoice, isMystery: item.isMystery, twist: item.twist,
+      });
+      ev.push({ t: "lootDrop", x, y, color: item.isMystery ? MYSTERY_COLOR : WEAPON_RARITY_COLOR[WEAPONS[item.weapon].rarity] });
     } else {
       w.pickups.push(makePickup(w, item.kind, x, y, ev));
     }
@@ -5951,7 +6152,18 @@ function rollWoodChest(w: WorldState): ChestLoot[] {
   // run's shuffled bag and skips universally-owned guns, so the rare ambient gun is
   // never a wasted duplicate while unowned guns remain.
   if (r < heartChance + SUSTAIN.woodChestWeapon) {
-    return [{ kind: "weapon", weapon: drawWeaponFromBag(w.weaponBag, weaponsOwnedByAll(w)) }];
+    return [{ kind: "weapon", weapon: rollBagWeapon(w, () => w.rng.next(), weaponsOwnedByAll(w)) }];
+  }
+  // The mystery band stacks AFTER the identified band (hearts/weapons keep their exact
+  // rates) and only opens at MYSTERY.minFloor — early chests never gamble.
+  const mysteryBand = w.floor >= MYSTERY.minFloor ? SUSTAIN.woodChestMystery : 0;
+  if (r < heartChance + SUSTAIN.woodChestWeapon + mysteryBand) {
+    return [{
+      kind: "weapon",
+      weapon: rollBagWeapon(w, () => w.rng.next(), weaponsOwnedByAll(w), { isMystery: true }),
+      isMystery: true,
+      twist: rollMysteryTwist(() => w.rng.next()),
+    }];
   }
   const n = 3 + Math.floor(w.rng.next() * 4);
   const coins: ChestLoot[] = [];
@@ -6005,6 +6217,16 @@ function updatePickups(w: WorldState, dt: number, ev: SimEvent[]): void {
             acquireWeapon(player, grant);
             ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
             continue;
+          }
+          if (p.isMystery) {
+            // The reveal moment: the baked identity is granted — rerolled into something
+            // the collector does NOT own if they already carry it (never a dead result) —
+            // and the baked blessed/cursed twist lands (after the equip, so a cursed jam
+            // survives equipWeapon's cooldown reset). First-come, like every pickup.
+            acquireWeapon(player, revealMysteryPickup(w, player, p, ev));
+            applyMysteryTwist(player, p.twist ?? "plain", ev);
+            ev.push({ t: "pickup", pid: player.id, kind: "weapon", x: p.x, y: p.y });
+            collected = true; break;
           }
           if (!player.ownedWeapons.includes(p.weapon)) {
             acquireWeapon(player, p.weapon);

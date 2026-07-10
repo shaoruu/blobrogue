@@ -195,7 +195,22 @@ export type WeaponId =
   | "sword" | "longsword" | "spear"
   // The effect wave: seven non-projectile room verbs built on four shared primitives
   // (PlacedEffect zone/wire, OrbitEffect, DeployableEffect, Tether — see Effect below).
-  | "lastlight" | "breach" | "snapwire" | "frostline" | "halo" | "sentry" | "crook";
+  | "lastlight" | "breach" | "snapwire" | "frostline" | "halo" | "sentry" | "crook"
+  // The legendary wave — each is ONE signature mechanic, never bigger numbers:
+  //  - reaper: kills burst into seeking soul shards that cascade through the pack;
+  //  - swarm: one slow trigger pull releases a volley of accelerating seeker darts;
+  //  - midas: eats a coin per shot to hit far harder (fires weak when broke);
+  //  - phase: rounds pass straight through walls — cover is the player's, never the room's;
+  //  - vortex: shots implode, dragging every nearby body onto the impact point.
+  | "reaper" | "swarm" | "midas" | "phase" | "vortex";
+
+// Drop-quality tier. Drives drop weighting (legendaries are genuinely rare and gated off
+// the earliest floors), the pickup/hotbar/tooltip rarity treatment, and shop pricing.
+export type WeaponRarity = "common" | "rare" | "legendary";
+
+// A mystery pickup's baked reveal twist: a small buff or a small drawback rolled at spawn
+// (deterministic from the seed), so opening one is a real gamble — never a dead result.
+export type MysteryTwist = "plain" | "blessed" | "cursed";
 
 // ---- weapon effect entities (the effect wave's shared authoritative primitives) ----
 // Every non-projectile weapon output lives in ONE world list (w.effects), stepped in
@@ -334,6 +349,11 @@ export interface Bullet {
   burn?: number;           // seconds of burn DoT the round applies
   chill?: number;          // seconds of chill the round applies
   shock?: number;          // seconds of shock the round applies
+  // Legendary gimmick channels (undefined on every non-legendary round):
+  killShards?: number;     // reaper: seeking shards released when this round KILLS
+  accel?: number;          // swarm: px/s² the round gains in flight
+  isPhase?: boolean;       // phase: the round ignores walls (and destructible props) entirely
+  implode?: number;        // vortex: implosion radius — the payload pulls the pack inward
   // Render recipe tag (the firing weapon). Selects the layered sprite FX in
   // renderBullets; absent on enemy fire, which keeps its own halo-and-core look.
   fx?: WeaponId;
@@ -369,6 +389,12 @@ export interface Pickup {
   // player claims exactly one; a claim never removes a teammate's options, so the pedestal
   // persists until every living player has claimed.
   isBossChoice?: boolean;
+  // Mystery pickup: `weapon` holds the ACTUAL identity (baked deterministically at spawn)
+  // but it is hidden from every client until the reveal — the wire sends null (see
+  // toPickupWire) and the renderer shows the "???" treatment. Collection reveals + grants
+  // (rerolled distinct if already owned) and applies the twist. Never a boss choice.
+  isMystery?: boolean;
+  twist?: MysteryTwist;
 }
 
 // Destructible / atmosphere world props. Placed deterministically per floor (seeded Rng)
@@ -450,6 +476,9 @@ export interface Chest {
   // Opening ejects it as a real pickup. Sim-side only (not on the wire) — contents stay
   // hidden until the open. undefined = the ordinary loot roll only.
   weapon?: WeaponId;
+  // Mystery pedestal: the baked weapon ejects as an UNIDENTIFIED pickup (see Pickup).
+  isMystery?: boolean;
+  twist?: MysteryTwist;
 }
 
 export type ParticleKind = "dot" | "gib" | "spark" | "puff" | "shell" | "sparkfx";

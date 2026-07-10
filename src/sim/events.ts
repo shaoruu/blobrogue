@@ -39,6 +39,10 @@ export type SimEvent =
   // pickups / loot
   | { t: "pickup"; pid: PlayerId; kind: PickupKind; x: number; y: number }
   | { t: "lootDrop"; x: number; y: number; color: string }
+  // A mystery ("???") weapon revealed its identity on pickup/purchase: the collector and
+  // everyone nearby see the same reveal moment (name flash + twist flavor). `twist` is
+  // the baked blessed/cursed/plain outcome — the state change itself rides the sim.
+  | { t: "mysteryReveal"; pid: PlayerId; weapon: WeaponId; twist: string; x: number; y: number }
   // A validated shop purchase landed (Patch's room): positional register-chime juice for
   // everyone browsing the stall. kind selects the buyer-side flavor (heart vs weapon vs
   // blessing vs reroll); the authoritative outcome itself rides STATE, never this event.
@@ -90,6 +94,8 @@ export type SimEvent =
   | { t: "propBreak"; kind: PropKind; x: number; y: number }
   // src: what detonated ("barrel", or the authoring WeaponId) — routes the impact voice.
   | { t: "explosion"; x: number; y: number; r: number; src: string }
+  // The Lodestone's implosion: the inward-collapse FX twin of `explosion`.
+  | { t: "implosion"; x: number; y: number; r: number }
   | { t: "chestOpen"; kind: string; x: number; y: number }
   // A floor hazard damaged a player (kind selects the client's impact FX flavor).
   | { t: "hazardHit"; pid: PlayerId; kind: FloorHazardKind; x: number; y: number }

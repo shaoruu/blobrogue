@@ -7,7 +7,7 @@ import { Rng, randomSeed } from "../sim/rng.js";
 import { Sprites, TileSet, playerColor, playerColorOr, NEUTRAL_PLAYER_COLOR, FRAME } from "./assets.js";
 import type { SpriteName, SheetClip, TileName, FxName, PropSpriteName } from "./assets.js";
 import { ENEMY_ARCHETYPES, isBossFloor, isBossKind, isGauntletFloor, eliteAffixOf, bossDisplayName } from "../sim/enemies.js";
-import { WEAPONS } from "../sim/weapons.js";
+import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
@@ -205,6 +205,13 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   halo: "meleeSwing",
   sentry: "homing",
   crook: "meleeSwing",
+  // The legendaries borrow the closest authored sample, re-pitched below (final authored
+  // samples arrive with their art via the audio pipeline).
+  reaper: "cannon",
+  swarm: "homing",
+  midas: "shootPistol",
+  phase: "tesla",
+  vortex: "cannon",
 };
 // Per-shot pitch/gain trims where a shared sample needs to read as a different gun
 // (the railgun borrows the cannon boom, pitched up into a sharp crack).
@@ -214,6 +221,11 @@ const SHOOT_SFX_OPTS: Partial<Record<WeaponId, SfxOptions>> = {
   lastlight: { rate: 1.2, gain: 0.9 },
   breach: { rate: 0.85 },
   frostline: { rate: 1.4, gain: 0.5 },
+  reaper: { rate: 1.2, gain: 0.8 },
+  swarm: { rate: 0.8 },
+  midas: { rate: 1.3, gain: 0.9 },
+  phase: { rate: 0.7, gain: 0.8 },
+  vortex: { rate: 0.6 },
 };
 // Weapons whose shots leave a curl of barrel smoke (the beefy, black-powder end).
 const SMOKY_WEAPONS: ReadonlySet<WeaponId> = new Set(["shotgun", "cannon", "sawnoff", "railgun"]);
@@ -269,6 +281,7 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   sword: 0.08, longsword: 0.16, spear: 0.07,
   lastlight: 0.4, breach: 0.5, snapwire: 0.05, frostline: 0.03,
   halo: 0.14, sentry: 0.06, crook: 0.18,
+  reaper: 0.22, swarm: 0.32, midas: 0.1, phase: 0.28, vortex: 0.4,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -280,6 +293,7 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   sword: 0.7, longsword: 1.1, spear: 0.6,
   lastlight: 1.4, breach: 1.5, snapwire: 0.4, frostline: 0.25,
   halo: 0.8, sentry: 0.5, crook: 1.0,
+  reaper: 1.1, swarm: 1.3, midas: 0.8, phase: 1.2, vortex: 1.4,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
@@ -289,6 +303,7 @@ const FIRE_KICK: Record<WeaponId, number> = {
   sword: 1.5, longsword: 2.5, spear: 1,
   lastlight: 8, breach: 9, snapwire: 1, frostline: 0.5,
   halo: 2, sentry: 1, crook: 3,
+  reaper: 4, swarm: 5, midas: 2, phase: 5, vortex: 6,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;
@@ -2057,6 +2072,21 @@ export class Game {
         this.spawnWorldLabel(e.x, e.y - 22, WEAPONS[e.weapon].name.toUpperCase(), "#ffd166");
         this.sfxAt("weapon", e.x, e.y, { rate: 0.8, gain: 0.5 });
         break;
+      case "mysteryReveal": {
+        // The gamble resolves: name the identity for everyone at the pedestal, in its
+        // rarity color, with the twist's flavor line for the collector's story.
+        const w = WEAPONS[e.weapon];
+        const accent = WEAPON_RARITY_COLOR[w.rarity];
+        this.addDecal(e.x, e.y, MYSTERY_COLOR, 18, "ring");
+        this.spawnSparkleBurst(e.x, e.y, 14, MYSTERY_COLOR);
+        this.spawnParticles(e.x, e.y, 12, accent);
+        this.spawnWorldLabel(e.x, e.y - 26, `??? \u2192 ${w.name.toUpperCase()}`, accent);
+        if (e.twist === "blessed") this.spawnWorldLabel(e.x, e.y - 12, "BLESSED \u00b7 +1 HP", "#8affc0");
+        else if (e.twist === "cursed") this.spawnWorldLabel(e.x, e.y - 12, "CURSED \u00b7 JAMMED", "#ff6a6a");
+        this.sfxAt("weapon", e.x, e.y, { rate: w.rarity === "legendary" ? 1.3 : 1.1, gain: 0.7 });
+        this.addTrauma(w.rarity === "legendary" ? 0.2 : 0.1);
+        break;
+      }
       case "bulletWall":
         this.spawnSparks(e.x, e.y, 5, e.aim);
         break;
@@ -2103,6 +2133,15 @@ export class Game {
         if (this.isNearCamera(e.x, e.y)) this.flashScreen(255, 150, 60, 0.13, 3.2);
         break;
       }
+      case "implosion":
+        // The Lodestone's collapse: the explosion's inward twin — cooler palette, a
+        // gentler thump, and converging spark rays instead of an outward shockwave.
+        this.sfxAt("barrel", e.x, e.y, { rate: 1.4, gain: 0.5 });
+        this.addTrauma(0.18);
+        this.spawnConvergence(e.x, e.y, e.r, "#7fb0ff");
+        this.addDecal(e.x, e.y, "#7fb0ff", e.r * 0.4, "ring");
+        this.spawnSparkleBurst(e.x, e.y, 8, "#9ecfff");
+        break;
       case "chestOpen":
         sfx("chest");
         this.spawnParticles(e.x, e.y, 22, e.kind === "boss" ? "#ffb43b" : "#ffd27a");
@@ -3517,6 +3556,24 @@ export class Game {
     }
   }
 
+  // The implosion's converging rays: sparks born ON the ring, flying INTO the center —
+  // the visual inverse of an explosion, so the pull reads instantly.
+  private spawnConvergence(x: number, y: number, r: number, color: string) {
+    const n = 14;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * 6.28 + Math.random() * 0.3;
+      const d = r * (0.7 + Math.random() * 0.3);
+      const life = 0.16 + Math.random() * 0.12;
+      const speed = d / life;
+      this.pushParticle({
+        x: x + Math.cos(a) * d, y: y + Math.sin(a) * d,
+        vx: -Math.cos(a) * speed, vy: -Math.sin(a) * speed,
+        life, maxLife: life, color: i % 3 === 0 ? "#fff3c4" : color,
+        size: 1.5 + Math.random() * 2, kind: "spark", rot: 0, vr: 0, gravity: 0, drag: 1,
+      });
+    }
+  }
+
   // Soft colored haze — a bullet biting into flesh.
   private spawnPuff(x: number, y: number, n: number, color: string) {
     for (let i = 0; i < n; i++) {
@@ -4570,14 +4627,37 @@ export class Game {
       const clock = this.animForPickup(p).clock;
       const sx = p.x - cam.x, sy = p.y - cam.y + Math.sin(clock * 3) * 3 - 2;
       const name: SpriteName = p.kind === "weapon" ? "gun" : p.kind;
+      // The rarity treatment starts at the glow: weapons wear their tier's accent (the
+      // shared WEAPON_RARITY_COLOR palette); a mystery wears the "???" purple. Note the
+      // mystery's identity may be known locally (solo runs the full sim) but is NEVER
+      // rendered — the reveal moment is authoritative for every mode.
+      const isMystery = p.isMystery === true;
+      const rarity = !isMystery && p.kind === "weapon" && p.weapon ? WEAPONS[p.weapon].rarity : null;
+      const glow = p.kind === "heart" ? "#ff6a6a"
+        : p.kind === "coin" ? "#ffd27a"
+        : isMystery ? MYSTERY_COLOR
+        : rarity !== null ? WEAPON_RARITY_COLOR[rarity]
+        : "#ffb43b";
+      const isLegendary = rarity === "legendary";
       ctx.save();
-      ctx.globalAlpha = 0.3 + Math.abs(Math.sin(clock * 3)) * 0.15;
-      const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 20);
-      g.addColorStop(0, p.kind === "heart" ? "#ff6a6a" : p.kind === "coin" ? "#ffd27a" : "#ffb43b");
+      ctx.globalAlpha = (0.3 + Math.abs(Math.sin(clock * 3)) * 0.15) * (isLegendary || isMystery ? 1.35 : 1);
+      const glowR = isLegendary || isMystery ? 26 : 20;
+      const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, glowR);
+      g.addColorStop(0, glow);
       g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(sx, sy, 20, 0, 6.28); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx, sy, glowR, 0, 6.28); ctx.fill();
       ctx.restore();
+      // Legendary and mystery pickups earn a slow-pulsing accent ring — the from-across-
+      // the-room "that one is special" read.
+      if (isLegendary || isMystery) {
+        ctx.save();
+        ctx.globalAlpha = 0.45 + Math.sin(clock * 2.2) * 0.2;
+        ctx.strokeStyle = glow;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy + 2, 21 + Math.sin(clock * 2.2) * 2, 0, 6.28); ctx.stroke();
+        ctx.restore();
+      }
       // Boss weapon CHOICES (gate §4): a golden pedestal ring; dimmed once this player has
       // spent their one personal claim (teammates still see their own live options).
       if (p.isBossChoice) {
@@ -4592,6 +4672,29 @@ export class Game {
       // Coins spin (scaleX crossing 0); hearts/guns gently shimmer-pulse.
       const spin = p.kind === "coin" ? Math.cos(clock * 4) : 1;
       const pulse = p.kind === "coin" ? 1 : 1 + Math.sin(clock * 4) * 0.08;
+      // A mystery renders as a dark shrouded gun silhouette under a floating "?" — never
+      // its real art (that would leak the identity in solo, where the sim is local).
+      if (isMystery) {
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.scale(pulse, pulse);
+        if (this.sprites.ready("gun")) {
+          ctx.globalAlpha = 0.9;
+          ctx.filter = "brightness(0.25) saturate(0.4)";
+          ctx.drawImage(this.sprites.get("gun"), -15, -15, 30, 30);
+          ctx.filter = "none";
+        } else {
+          ctx.fillStyle = "#2a1f42";
+          ctx.beginPath(); ctx.arc(0, 0, 10, 0, 6.28); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = MYSTERY_COLOR;
+        ctx.font = "bold 13px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("?", 0, -14 + Math.sin(clock * 2.5) * 2);
+        ctx.restore();
+        continue;
+      }
       // Weapon pickups draw their own 64px side-profile sprite so each gun is
       // recognizable on the floor; anything without dedicated art (or not yet loaded)
       // falls back to the generic "gun" sprite, then to a plain dot.

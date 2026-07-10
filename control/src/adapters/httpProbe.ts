@@ -36,7 +36,9 @@ import type {
 // charge reconcile + the effect events) on top of the dash + shop + bestiary wire.
 // v11: the hotbar cap (MAX_OWNED_WEAPONS) + the client->server `swap` command that claims
 // a weapon pickup at the cap by trading an owned weapon for it.
-export const SYNTHETIC_JOIN_PROTOCOL = 11;
+// v12: the weapon rarity + mystery wave (five legendary WeaponIds, hidden-identity
+// mystery pickups/pedestals via `myst`, the mysteryReveal + implosion events).
+export const SYNTHETIC_JOIN_PROTOCOL = 12;
 
 export interface HttpProbeConfig {
   baseUrl: string;
