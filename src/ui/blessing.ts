@@ -108,7 +108,7 @@ export class BlessingOverlay {
       el.type = "button";
 
       const key = document.createElement("span");
-      key.className = "bc-key";
+      key.className = "bc-key keycap is-active";
       key.textContent = String(i + 1);
       el.appendChild(key);
 

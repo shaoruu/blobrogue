@@ -16,10 +16,24 @@
         --lea-0:#301c0e; --lea-1:#6b401e; --lea-2:#9c6633;
         --grn:#7fdd5a; --red:#ff5a5a; --bone:#e8e0c8; --blu:#5ab6ff; --pur:#b06bff;
         --ink:#120a24;
+        /* Secondary text greys — ONE family (was six near-identical hexes used at random):
+           --ink-mute is the primary secondary text, --ink-faint the dimmest label ink. */
+        --ink-mute:#9a8fb5; --ink-faint:#6f6689;
+        /* Rarity + danger accents, tokenized so every surface that signals legendary loot
+           or boss/health danger reads from ONE ramp. */
+        --gold:#b8860b; --gold-hi:#d4a017; --gold-bright:#ffd700;
+        --danger:#ff5a5f; --danger-deep:#c81e2e;
         --f-logo:'Press Start 2P',monospace;
         --f-ui:'Silkscreen','Press Start 2P',monospace;
         --f-num:'VT323',monospace;
+        /* Type ramp — every UI size snaps to one of these steps (no more ~17 one-offs). */
+        --fs-2xs:8px; --fs-xs:9px; --fs-sm:11px; --fs-md:14px; --fs-lg:18px; --fs-num:19px; --fs-title:34px;
         --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+        /* Panel frames — the two canonical pixel shells (modal/menu vs in-world/tooltip). */
+        --frame-strong:0 0 0 3px var(--dun-0),0 0 0 6px var(--dun-4),0 0 0 9px var(--dun-0);
+        --frame-soft:0 0 0 2px var(--ink),inset 0 0 0 2px var(--dun-3);
+        /* ONE focus ring for every interactive element (grayscale-distinct, high-contrast). */
+        --focus-ring:3px solid var(--cream);
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body { height: 100%; background: #0e0b1a; overflow: hidden; font-family: 'Silkscreen', 'Press Start 2P', monospace; }
@@ -60,16 +74,16 @@
       .statrow{ display:flex; gap:6px; align-items:center; }
       .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--dun-1); box-shadow:inset 0 0 0 2px var(--dun-3); padding:3px 9px; }
       .chip .ic{ width:16px; height:16px; }
-      .chip .v{ font-family:var(--f-num); font-size:19px; line-height:1; margin-top:2px; color:var(--cream); }
-      .chip .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .chip .v{ font-family:var(--f-num); font-size:var(--fs-num); line-height:1; margin-top:2px; color:var(--cream); }
+      .chip .k{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
       .chip.floor .v{ color:var(--amber); } .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
       /* Coin lands in the wallet: a transform-only pop (no layout shift). */
       .chip.coins{ transform-origin:left center; will-change:transform; }
       .chip.coins.coin-pop{ animation:coinPop .28s cubic-bezier(.2,1.6,.4,1); }
       @keyframes coinPop{ 0%{transform:scale(1);} 40%{transform:scale(1.22);} 100%{transform:scale(1);} }
-      .coopstrip{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--blu); background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3); padding:4px 9px; text-transform:uppercase; }
+      .coopstrip{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--blu); background:rgba(5,3,11,.62); box-shadow:inset 0 0 0 2px var(--dun-3); padding:4px 9px; text-transform:uppercase; }
       .minimap{ width:132px; height:96px; background:var(--dun-0); position:relative; box-shadow:0 0 0 3px var(--ink),inset 0 0 0 2px var(--amber-lo),0 0 14px rgba(255,180,59,.12); }
-      .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
+      .minimap .mm-title{ position:absolute; top:-9px; left:8px; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px; color:var(--amber); background:var(--dun-0); padding:0 4px; z-index:1; }
       #minimap{ position:absolute; inset:3px; width:calc(100% - 6px); height:calc(100% - 6px); image-rendering:pixelated; display:block; }
       /* --- bottom-center hotbar (Minecraft-style): one slot per owned weapon --- */
       .hotbar{ position:absolute; left:50%; bottom:14px; transform:translateX(-50%);
@@ -86,7 +100,7 @@
         cursor:pointer; touch-action:none; user-select:none; -webkit-user-select:none; }
       .hb-slot:hover{ box-shadow:inset 0 0 0 2px var(--dun-4),0 3px 0 rgba(0,0,0,.4); }
       /* focus = EXTERNAL dashed ring (distinct grayscale geometry — never a glow) */
-      .hb-slot:focus-visible{ outline:2px dashed var(--amber-hi); outline-offset:3px; }
+      .hb-slot:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
       .hb-slot .hb-icon, .hb-slot .hb-icon img{ width:30px; height:30px; }
       /* equipped = lift + DOUBLE frame + top notch (geometry-first, grayscale-distinct;
          the old amber glow was nonsemantic ornament and is gone — combat outranks UI) */
@@ -99,11 +113,11 @@
          Commons keep the classic frame so the tint stays a signal. The equipped state's
          double frame wins the inner ring; rarity then rides the OUTER ring. */
       .hb-slot.r-rare{ box-shadow:inset 0 0 0 2px #3f6fae,0 3px 0 rgba(0,0,0,.4); }
-      .hb-slot.r-legendary{ box-shadow:inset 0 0 0 2px #b8860b,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.r-legendary{ box-shadow:inset 0 0 0 2px var(--gold),0 3px 0 rgba(0,0,0,.4); }
       .hb-slot.r-rare:hover{ box-shadow:inset 0 0 0 2px #5a8fd4,0 3px 0 rgba(0,0,0,.4); }
-      .hb-slot.r-legendary:hover{ box-shadow:inset 0 0 0 2px #d4a017,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.r-legendary:hover{ box-shadow:inset 0 0 0 2px var(--gold-hi),0 3px 0 rgba(0,0,0,.4); }
       .hb-slot.on.r-rare{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 0 0 4px var(--dun-0),0 0 0 2px #3f6fae,0 3px 0 rgba(0,0,0,.4); }
-      .hb-slot.on.r-legendary{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 0 0 4px var(--dun-0),0 0 0 2px #b8860b,0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.on.r-legendary{ box-shadow:inset 0 0 0 2px var(--amber),inset 0 0 0 4px var(--dun-0),0 0 0 2px var(--gold),0 3px 0 rgba(0,0,0,.4); }
       /* THE weapon-card tooltip: one root-level floating element (never a slot child, so
          no hotbar/drawer clipping and no per-slot duplicates), position:fixed and
          pointer-events:none, populated + anchored ~10px above the hovered/focused slot by
@@ -111,31 +125,31 @@
          the bar; z 7 sits above the hotbar chrome and below scrim(8)/drawer(9)/menus(10). */
       .hb-tip{ position:fixed; left:0; top:0; z-index:7; display:none; pointer-events:none; zoom:var(--ui-scale,1);
         flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:266px; overflow-wrap:anywhere;
-        font-family:var(--f-num); font-size:14px; line-height:1.15; color:var(--bone); background:var(--dun-1);
-        box-shadow:0 0 0 2px var(--ink),0 4px 0 rgba(0,0,0,.5); padding:6px 9px; }
+        font-family:var(--f-num); font-size:var(--fs-md); line-height:1.15; color:var(--bone); background:var(--dun-1);
+        box-shadow:var(--frame-soft),0 4px 0 rgba(0,0,0,.5); padding:6px 9px; }
       .hb-tip.show{ display:flex; }
       /* header = the strongest element on the card; everything below steps down. */
       .hb-tip .th{ display:flex; align-items:center; gap:6px; padding-bottom:3px; border-bottom:1px solid var(--dun-3); }
       .hb-tip .ti{ flex:none; width:20px; height:20px; display:flex; align-items:center; justify-content:center;
         background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
       .hb-tip .ti img{ width:16px; height:16px; image-rendering:pixelated; }
-      .hb-tip .ti .glyphfb{ font-family:var(--f-num); font-size:12px; line-height:1; color:var(--cream); }
-      .hb-tip .tn{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--amber); }
+      .hb-tip .ti .glyphfb{ font-family:var(--f-num); font-size:var(--fs-sm); line-height:1; color:var(--cream); }
+      .hb-tip .tn{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--amber); }
       /* the rarity badge (header right): the tier word in its accent — text first, tint second */
-      .hb-tip .tw{ margin-left:auto; font-family:var(--f-ui); font-size:6px; letter-spacing:1px; color:#9a8fb5; }
+      .hb-tip .tw{ margin-left:auto; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--ink-mute); }
       .hb-tip .tw.rare{ color:#7fb8ff; }
-      .hb-tip .tw.legendary{ color:#ffd700; }
-      .hb-tip .tj{ font-family:var(--f-ui); font-size:7px; letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }
+      .hb-tip .tw.legendary{ color:var(--gold-bright); }
+      .hb-tip .tj{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px; color:var(--amber-hi); margin-bottom:2px; }
       .hb-tip .tr{ display:flex; align-items:baseline; gap:7px; }
-      .hb-tip .tk{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); min-width:52px; }
+      .hb-tip .tk{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); min-width:52px; }
       .hb-tip .tv{ color:var(--cream); }
       /* comparison tokens read by GLYPH + WORD first; the tint is the last channel. */
-      .hb-tip .td{ font-family:var(--f-ui); font-size:6px; letter-spacing:1px; align-self:center; }
-      .hb-tip .td.up{ color:var(--grn); } .hb-tip .td.down{ color:var(--red); } .hb-tip .td.eq{ color:#9a8fb5; }
+      .hb-tip .td{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; align-self:center; }
+      .hb-tip .td.up{ color:var(--grn); } .hb-tip .td.down{ color:var(--red); } .hb-tip .td.eq{ color:var(--ink-mute); }
       /* technique/tradeoff block sits behind a structural keyline, not a color wash. */
       .hb-tip .tm{ color:var(--blu); border-left:2px solid var(--dun-4); padding-left:6px; }
       .hb-tip .tm.gains{ color:var(--grn); } .hb-tip .tm.loses{ color:var(--red); } .hb-tip .tm.changes{ color:var(--amber); }
-      .hb-tip .tx{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--amber); }
+      .hb-tip .tx{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--amber); }
       /* drag/drop feedback (grayscale-distinct geometry, zero layout shift):
          - source slot: dimmed + diagonal hatch (never just a tint)
          - ghost: OPAQUE card, hard offset shadow, a MOVE tag — no glow, no equipped notch
@@ -150,7 +164,7 @@
         background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--amber-hi),0 5px 0 rgba(0,0,0,.55); }
       .hb-ghost::after{ display:none; } /* no equipped notch on the preview */
       .hb-ghost .hb-move{ position:absolute; top:-8px; left:50%; transform:translateX(-50%); padding:1px 4px;
-        font-family:var(--f-ui); font-size:6px; letter-spacing:1px; line-height:1;
+        font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; line-height:1;
         color:var(--dun-0); background:var(--amber-hi); box-shadow:0 0 0 1px var(--ink); }
       .hb-ins{ position:absolute; width:4px; background:var(--amber-hi); box-shadow:0 0 0 1px var(--ink); pointer-events:none; z-index:7; }
       .hb-ins::before, .hb-ins::after{ content:""; position:absolute; left:50%; transform:translateX(-50%);
@@ -170,7 +184,7 @@
         display:none; flex-direction:column; align-items:center; gap:8px; padding:9px 12px 8px; pointer-events:auto;
         background:var(--dun-1); box-shadow:0 0 0 2px var(--ink),0 0 0 4px var(--amber),0 6px 0 rgba(0,0,0,.5); }
       .hb-swap.show{ display:flex; }
-      .hs-head{ display:flex; align-items:center; gap:8px; font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--cream); white-space:nowrap; }
+      .hs-head{ display:flex; align-items:center; gap:8px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--cream); white-space:nowrap; }
       .hs-tag{ padding:2px 5px; background:var(--amber); color:var(--dun-0); }
       .hs-icon, .hs-icon img{ width:22px; height:22px; image-rendering:pixelated; }
       .hs-name{ color:var(--amber-hi); }
@@ -183,29 +197,28 @@
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 2px 0 rgba(0,0,0,.4); }
       .hs-slot:hover, .hs-slot:active{ transform:none; background:var(--dun-2);
         box-shadow:inset 0 0 0 2px var(--amber-hi),0 2px 0 rgba(0,0,0,.4); }
-      .hs-slot:focus-visible{ outline:2px dashed var(--amber-hi); outline-offset:2px; }
+      .hs-slot:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
       .hs-slot img{ width:24px; height:24px; image-rendering:pixelated; }
-      .hs-key{ position:absolute; top:2px; left:2px; min-width:12px; height:12px; display:flex; align-items:center; justify-content:center;
-        font-family:var(--f-ui); font-size:7px; color:var(--cream); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .hs-key{ position:absolute; top:2px; left:2px; min-width:12px; height:12px; }
       .hs-leave{ margin-left:4px; padding:0 10px; min-width:0; height:44px; border:0; cursor:pointer;
         clip-path:none; text-shadow:none; transition:none; white-space:nowrap;
-        font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--cream);
+        font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--cream);
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 2px 0 rgba(0,0,0,.4); }
       .hs-leave:hover, .hs-leave:active{ transform:none; background:var(--dun-2);
         box-shadow:inset 0 0 0 2px var(--dun-4),0 2px 0 rgba(0,0,0,.4); }
-      .hs-leave:focus-visible{ outline:2px dashed var(--amber-hi); outline-offset:2px; }
-      .hs-hint{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); }
+      .hs-leave:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
+      .hs-hint{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); }
       /* interaction hint, absolutely anchored under the strip (never shifts the hotbar). */
       .hb-hint{ position:absolute; top:calc(100% + 2px); left:50%; transform:translateX(-50%); white-space:nowrap;
-        font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); pointer-events:none;
+        font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); pointer-events:none;
         text-shadow:0 1px 0 var(--dun-0); opacity:0; transition:opacity .3s ease; }
       .hb-hint.show{ opacity:1; }
       /* BUILD·N pill: the compact/touch summary of the blessing row. Hidden on desktop
          (the chip strip shows instead); compact contexts swap them (media query below). */
       .hb-build{ display:none; pointer-events:auto; min-height:48px; min-width:48px; padding:0 16px; align-items:center; justify-content:center;
-        font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--cream); border:0; cursor:pointer;
+        font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--cream); border:0; cursor:pointer;
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3),0 3px 0 rgba(0,0,0,.4); }
-      .hb-build:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:2px; }
+      .hb-build:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
       /* UI Part4: narrow viewports drop the weapon-name labels but keep icons + key badges
          (48px minimum tap targets hold); the blessing chips collapse into the BUILD·N pill
          there AND on any coarse-pointer device (hover tooltips are unreachable on touch). */
@@ -230,41 +243,50 @@
         transform:translate(-50%,105%); visibility:hidden; transition:transform .12s steps(3), visibility 0s .12s; }
       .hb-drawer.open{ transform:translate(-50%,0); visibility:visible; transition:transform .12s steps(3); }
       .hd-head{ display:flex; justify-content:space-between; align-items:center; gap:12px;
-        font-family:var(--f-ui); font-size:10px; letter-spacing:2px; color:var(--amber); }
-      .hd-close{ min-width:64px; min-height:36px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:8px; letter-spacing:1px;
+        font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:2px; color:var(--amber); }
+      .hd-close{ min-width:64px; min-height:36px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px;
         color:var(--cream); background:var(--dun-2); box-shadow:inset 0 0 0 1px var(--dun-4); }
-      .hd-close:focus-visible{ outline:2px solid var(--amber-hi); }
-      .hd-body{ display:flex; flex-direction:column; gap:9px; font-family:var(--f-num); font-size:15px; color:var(--bone); }
+      .hd-close:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
+      .hd-body{ display:flex; flex-direction:column; gap:9px; font-family:var(--f-num); font-size:var(--fs-md); color:var(--bone); }
       .hd-row{ display:flex; gap:9px; align-items:flex-start; }
       .hd-icon{ flex:none; width:24px; height:24px; display:flex; align-items:center; justify-content:center;
         background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)); }
       .hd-icon img{ width:14px; height:14px; image-rendering:pixelated; }
-      .hd-icon .glyphfb{ font-family:var(--f-num); font-size:13px; line-height:1; color:var(--t,var(--cream)); }
+      .hd-icon .glyphfb{ font-family:var(--f-num); font-size:var(--fs-md); line-height:1; color:var(--t,var(--cream)); }
       .hd-text{ display:flex; flex-direction:column; gap:2px; }
-      .hd-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--t,var(--amber-hi)); }
+      .hd-name{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--t,var(--amber-hi)); }
       .hd-desc{ line-height:1.15; color:var(--cream); }
-      .hd-next{ line-height:1.15; color:#9a8fb5; }
+      .hd-next{ line-height:1.15; color:var(--ink-mute); }
       .hd-stats{ display:flex; gap:8px; }
       .hd-stat{ flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 4px;
         background:rgba(5,3,11,.6); box-shadow:inset 0 0 0 1px var(--dun-3); }
-      .hd-stat span{ font-family:var(--f-ui); font-size:7px; letter-spacing:1px; color:var(--dun-4); }
-      .hd-stat b{ font-family:var(--f-num); font-size:18px; font-weight:400; color:var(--amber-hi); }
-      .hd-role{ margin:0; font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:var(--amber-hi); }
+      .hd-stat span{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); }
+      .hd-stat b{ font-family:var(--f-num); font-size:var(--fs-lg); font-weight:400; color:var(--amber-hi); }
+      .hd-role{ margin:0; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px; color:var(--amber-hi); }
       .hd-role.rare{ color:#7fb8ff; }
-      .hd-role.legendary{ color:#ffd700; }
-      .hd-special{ margin:0; font-family:var(--f-num); font-size:14px; line-height:1.2; color:var(--blu); }
-      .hd-drop{ min-height:48px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:9px; letter-spacing:2px;
+      .hd-role.legendary{ color:var(--gold-bright); }
+      .hd-special{ margin:0; font-family:var(--f-num); font-size:var(--fs-md); line-height:1.2; color:var(--blu); }
+      .hd-drop{ min-height:48px; border:0; cursor:pointer; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px;
         color:var(--red); background:rgba(255,90,90,.08); box-shadow:inset 0 0 0 2px #5a2030; }
       /* danger reads as TRIANGLE + TEXT before any tint (grayscale/color-blind safe). */
       .hd-drop::before{ content:""; display:inline-block; margin-right:8px; vertical-align:-1px;
         border-left:5px solid transparent; border-right:5px solid transparent; border-bottom:8px solid var(--red); }
-      .hd-drop:focus-visible{ outline:2px solid var(--red); }
-      .hb-key{ position:absolute; top:3px; left:3px; min-width:14px; height:14px; display:flex; align-items:center; justify-content:center;
-        font-family:var(--f-logo); font-size:8px; line-height:1; color:var(--dun-4); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .hd-drop:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
+      /* === THE ONE KEYCAP COMPONENT ===
+         Was forked per surface (.hb-key / .hs-key / .dash .key / .bc-key). Now every
+         key glyph is a .keycap: dun-0 bg, dun-3 inset, cream glyph, --f-ui. The active/
+         equipped variant (.is-active, or .hb-slot.on .hb-key) flips to amber bg + dun-0
+         glyph. .keycap--sm is the compact (hotbar-swap) size. Per-surface rules below carry
+         only geometry (position/size); the skin lives here. */
+      .keycap{ display:flex; align-items:center; justify-content:center; line-height:1;
+        font-family:var(--f-ui); font-size:var(--fs-2xs); color:var(--cream);
+        background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .keycap.is-active{ color:var(--dun-0); background:var(--amber); box-shadow:inset 0 0 0 1px var(--amber-hi); }
+      .hb-key{ position:absolute; top:3px; left:3px; min-width:14px; height:14px; }
       .hb-slot.on .hb-key{ color:var(--dun-0); background:var(--amber); box-shadow:inset 0 0 0 1px var(--amber-hi); }
       .hb-icon{ width:40px; height:40px; display:flex; align-items:center; justify-content:center; filter:drop-shadow(0 2px 0 rgba(0,0,0,.45)); }
       .hb-icon img{ width:40px; height:40px; image-rendering:pixelated; }
-      .hb-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; line-height:1; color:var(--bone); opacity:.8; max-width:100%; overflow:hidden; white-space:nowrap; }
+      .hb-name{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.5px; line-height:1; color:var(--bone); opacity:.8; max-width:100%; overflow:hidden; white-space:nowrap; }
       .hb-slot.on .hb-name{ color:var(--amber-hi); opacity:1; }
       /* blessing slots on the row above the weapon slots (UI Director gate): max 8 compact
          24px icon-only squares — tint border + a small LV badge — plus a "+N" overflow chip;
@@ -276,28 +298,28 @@
         background:rgba(5,3,11,.72); cursor:help;
         box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)),0 2px 0 rgba(0,0,0,.35); }
       .hb-buff.rare{ box-shadow:inset 0 0 0 1px var(--t),0 0 8px color-mix(in srgb, var(--t) 35%, transparent),0 2px 0 rgba(0,0,0,.35); }
-      .hb-buff.more{ font-family:var(--f-ui); font-size:8px; letter-spacing:.5px; color:var(--cream);
+      .hb-buff.more{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.5px; color:var(--cream);
         box-shadow:inset 0 0 0 1px var(--dun-4),0 2px 0 rgba(0,0,0,.35); }
-      .hb-buff:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
+      .hb-buff:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
       .hb-buff img{ width:14px; height:14px; image-rendering:pixelated; }
-      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:13px; line-height:1; color:var(--t,var(--cream)); }
+      .hb-buff .glyphfb{ font-family:var(--f-num); font-size:var(--fs-md); line-height:1; color:var(--t,var(--cream)); }
       .hb-buff .lv{ position:absolute; right:-3px; bottom:-3px; min-width:9px; height:9px; padding:0 1px;
-        display:flex; align-items:center; justify-content:center; font-family:var(--f-logo); font-size:6px; line-height:1;
+        display:flex; align-items:center; justify-content:center; font-family:var(--f-logo); font-size:var(--fs-2xs); line-height:1;
         color:var(--dun-0); background:color-mix(in srgb, var(--t,var(--amber)) 80%, #fff); box-shadow:0 0 0 1px var(--ink); }
       .hb-buff .lv.max{ background:var(--amber-hi); }
       .hb-buff .tip{ position:absolute; bottom:calc(100% + 7px); left:50%; transform:translateX(-50%); z-index:5; display:none;
         flex-direction:column; gap:3px; text-align:left; width:max-content; max-width:250px;
-        font-family:var(--f-num); font-size:14px; line-height:1.15; color:var(--bone); background:var(--dun-1);
+        font-family:var(--f-num); font-size:var(--fs-md); line-height:1.15; color:var(--bone); background:var(--dun-1);
         box-shadow:0 0 0 2px var(--ink),inset 0 0 0 1px var(--dun-4); padding:6px 9px; }
       .hb-buff:hover .tip, .hb-buff:focus-visible .tip{ display:flex; }
-      .hb-buff .tip .tn{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--t,var(--amber)); }
+      .hb-buff .tip .tn{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--t,var(--amber)); }
       .hb-buff .tip .tc{ color:var(--cream); }
-      .hb-buff .tip .tx{ color:#9a8fb5; }
+      .hb-buff .tip .tx{ color:var(--ink-mute); }
       .hb-buff .tip .tx.max{ color:var(--amber); }
       .dash{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
-      .dash .k{ font-family:var(--f-ui); font-size:9px; letter-spacing:1px; color:var(--dun-4); }
+      .dash .k{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--dun-4); }
       .dash .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
-      .dash .key{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--cream); background:var(--dun-0); box-shadow:inset 0 0 0 1px var(--dun-3); padding:2px 4px; }
+      .dash .key{ letter-spacing:1px; padding:2px 4px; }
       .dash .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--dash-fill,1)); background:var(--blu); box-shadow:0 0 6px var(--blu); transition:width .1s linear; }
       .dash.ready{ box-shadow:inset 0 0 0 2px var(--grn); }
       .dash.ready .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
@@ -309,8 +331,8 @@
          (boss bar wins, combo yields harder). --- */
       @media (max-width:700px){
         .objlane{ width:min(420px,58vw); gap:4px; }
-        .objective{ font-size:9px; letter-spacing:2px; }
-        .waitline{ font-size:8px; letter-spacing:1px; max-width:92vw; }
+        .objective{ font-size:var(--fs-xs); letter-spacing:2px; }
+        .waitline{ font-size:var(--fs-2xs); letter-spacing:1px; max-width:92vw; }
         .bossbar-track{ height:12px; }
         .combo.show{ transform:translateY(0) scale(.85); }
         .objlane.boss .combo.show{ transform:translateY(0) scale(.6); }
@@ -323,12 +345,12 @@
          so its show/hide can never shift a line above it. */
       .objlane{ position:absolute; top:14px; left:50%; transform:translateX(-50%); width:min(560px,60vw);
         display:flex; flex-direction:column; align-items:center; gap:5px; pointer-events:none; }
-      .objective{ min-height:14px; font-family:var(--f-ui); font-size:10px; letter-spacing:3px; text-transform:uppercase;
+      .objective{ min-height:14px; font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:3px; text-transform:uppercase;
         color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6);
         opacity:0; transition:opacity .3s ease; }
       .objective.show{ opacity:1; }
       .objective.clear{ color:var(--grn); text-shadow:0 2px 0 var(--dun-0),0 0 12px rgba(138,255,192,.35); }
-      .waitline{ min-height:12px; font-family:var(--f-ui); font-size:9px; letter-spacing:2px; text-transform:uppercase;
+      .waitline{ min-height:12px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; text-transform:uppercase;
         color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6); text-align:center;
         opacity:0; transition:opacity .3s ease; }
       .waitline.show{ opacity:1; }
@@ -338,14 +360,14 @@
         transform:translateY(-10px); opacity:0; transition:opacity .3s ease, transform .3s ease; }
       .bossbar.show{ opacity:1; transform:translateY(0); }
       .bossbar:not(.show){ display:none; } /* free the lane's slot (the objective line replaces it) */
-      .bossbar-label{ font-family:var(--f-ui); font-size:10px; letter-spacing:4px; color:#ff8a8a;
+      .bossbar-label{ font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:4px; color:#ff8a8a;
         text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(255,80,80,0.5);
         /* Authored boss names replace the generic label: always ONE line inside the lane's
            fixed width — a too-long name clips to an ellipsis, never wraps or shifts. */
         text-transform:uppercase; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .bossbar-track{ width:100%; height:16px; background:var(--dun-0); box-shadow:inset 0 0 0 2px #5a2030, 0 0 12px rgba(255,60,60,0.35); position:relative; overflow:hidden; }
       .bossbar-track i{ position:absolute; inset:0; transform-origin:left center; transform:scaleX(1);
-        background:linear-gradient(180deg,#ff5a5f 0%,#c81e2e 100%); box-shadow:0 0 10px rgba(255,60,60,0.6);
+        background:linear-gradient(180deg,var(--danger) 0%,var(--danger-deep) 100%); box-shadow:0 0 10px rgba(255,60,60,0.6);
         transition:transform .18s ease; }
       .bossbar.low .bossbar-track i{ animation:bossLow .4s steps(2,jump-none) infinite; }
       @keyframes bossLow{ 0%{opacity:1;} 100%{opacity:.45;} }
@@ -362,7 +384,7 @@
       .combo-badge::before{ content:""; position:absolute; inset:0;
         -webkit-mask:url("/sprites/hud/combo_badge.png") center/contain no-repeat; mask:url("/sprites/hud/combo_badge.png") center/contain no-repeat;
         background:var(--combo-c,var(--cream)); filter:drop-shadow(0 0 10px color-mix(in srgb, var(--combo-c,var(--amber)) 45%, transparent)); }
-      .combo-mult{ position:relative; font-family:var(--f-num); font-size:34px; line-height:.85; color:#fff; transform-origin:center;
+      .combo-mult{ position:relative; font-family:var(--f-num); font-size:var(--fs-title); line-height:.85; color:#fff; transform-origin:center;
         text-shadow:0 2px 0 var(--dun-0),0 0 10px color-mix(in srgb, var(--combo-c,var(--amber)) 60%, transparent); }
       /* One-shot tier-up flare: the burst mask, tinted, scaling 0.5->1.4 and fading over ~0.3s. */
       .combo-burst{ position:absolute; left:50%; top:50%; width:128px; height:128px; transform:translate(-50%,-50%) scale(.5); opacity:0;
@@ -371,8 +393,8 @@
       .combo-burst.fire{ animation:comboBurst .32s ease-out 1; }
       @keyframes comboBurst{ 0%{opacity:.9; transform:translate(-50%,-50%) scale(.5);} 100%{opacity:0; transform:translate(-50%,-50%) scale(1.4);} }
       .combo-row{ display:flex; align-items:baseline; gap:5px; }
-      .combo-n{ font-family:var(--f-num); font-size:19px; line-height:1; color:var(--cream); }
-      .combo-k{ font-family:var(--f-ui); font-size:8px; letter-spacing:2px; color:#8b90a8; }
+      .combo-n{ font-family:var(--f-num); font-size:var(--fs-num); line-height:1; color:var(--cream); }
+      .combo-k{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:2px; color:var(--ink-mute); }
       /* Window bar: AD's frame mask (static, tinted) with the fill mask scaled to remaining %. */
       .combo-bar{ position:relative; width:120px; height:12px; }
       .combo-bar::before{ content:""; position:absolute; inset:0;
@@ -395,15 +417,15 @@
       .hidden { display: none !important; }
 
       .settings { display: flex; flex-direction: column; gap: 7px; align-items: center; margin-top: 2px; }
-      .settings-group-h { font-family: var(--f-ui); font-size: 9px; letter-spacing: 2px; color: var(--dun-4); text-transform: uppercase; text-align: left;
+      .settings-group-h { font-family: var(--f-ui); font-size: var(--fs-xs); letter-spacing: 2px; color: var(--dun-4); text-transform: uppercase; text-align: left;
         width: 100%; margin-top: 7px; padding-bottom: 4px; border-bottom: 2px solid var(--dun-3); }
       .settings-group-h:first-child { margin-top: 0; }
-      .settings-note { font-family: var(--f-ui); font-size: 9px; letter-spacing: .5px; color: var(--amber); text-transform: none; margin: 0; }
+      .settings-note { font-family: var(--f-ui); font-size: var(--fs-xs); letter-spacing: .5px; color: var(--amber); text-transform: none; margin: 0; }
       .settings-note:empty { display: none; }
       /* the mute explainer keeps its one line reserved so toggling mute never shifts layout */
       .settings-muted-note, .settings-muted-note:empty { display: block; height: 12px; line-height: 12px; overflow: hidden; text-align: center; }
-      .settings-shake { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #cbb6d6; }
-      .settings-label { text-transform: uppercase; letter-spacing: 1px; color: #8579a0; }
+      .settings-shake { display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--ink-mute); }
+      .settings-label { text-transform: uppercase; letter-spacing: 1px; color: var(--ink-mute); }
       .settings-val { color: #ffd27a; font-variant-numeric: tabular-nums; }
       /* muted: the volume sliders dim (they stay in the tab order and keep the stored mix
          so unmute restores it exactly; the inline note explains the state) */
@@ -415,22 +437,22 @@
       input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; margin-top: -9px; border-radius: 50%; background: #ffb43b; cursor: pointer; }
       input[type="range"]::-moz-range-track { height: 6px; border-radius: 4px; background: rgba(255,180,59,0.22); }
       input[type="range"]::-moz-range-thumb { width: 24px; height: 24px; border: none; border-radius: 50%; background: #ffb43b; cursor: pointer; }
-      input[type="range"]:focus-visible { outline: 3px solid #ffe9b0; outline-offset: 3px; }
+      input[type="range"]:focus-visible { outline:var(--focus-ring); outline-offset:2px; }
 
       .menu { display: flex; flex-direction: column; align-items: center; gap: 11px; padding: 20px 26px; max-width: 430px; width: 92vw; max-height: 94vh; }
       .logo-img { image-rendering: pixelated; width: min(340px, 70vw); height: auto; display:block; margin: 0 auto 2px; filter: drop-shadow(0 0 16px rgba(255,180,59,0.28)); }
       .menu h1 { font-family:'Press Start 2P', monospace; font-size: 30px; color: #ffb43b; letter-spacing: 2px; line-height:1.3; text-shadow: 0 4px 0 #05030b, 0 0 18px rgba(255,180,59,0.35); }
       .menu h1 .r { color:#ffe9b0; }
       .menu h1.died { color: #ff6a6a; text-shadow:0 4px 0 #05030b, 0 0 18px rgba(255,90,90,0.4); }
-      .menu p { font-size: 12px; color: #cbb6d6; line-height: 1.45; margin: 0; }
-      .menu p.muted { font-size: 12px; color: #8579a0; }
-      .menu p.hint { font-size: 11px; color: #6f6689; margin-top: 4px; }
+      .menu p { font-size: var(--fs-sm); color: var(--ink-mute); line-height: 1.45; margin: 0; }
+      .menu p.muted { font-size: var(--fs-sm); color: var(--ink-mute); }
+      .menu p.hint { font-size: var(--fs-sm); color: var(--ink-faint); margin-top: 4px; }
 
       .btnrow { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
       /* --- UI kit: chunky diegetic arcade-dungeon buttons (ui designer spec) --- */
       button { --c:#ffb43b; --c-hi:#ffd166; --c-lo:#b06e12; --tx:#120a24;
         position:relative; display:inline-flex; align-items:center; justify-content:center; gap:9px;
-        font-family:'Silkscreen',monospace; font-weight:700; font-size:15px; letter-spacing:1px; text-transform:uppercase;
+        font-family:'Silkscreen',monospace; font-weight:700; font-size:var(--fs-md); letter-spacing:1px; text-transform:uppercase;
         color:var(--tx); background:var(--c); cursor:pointer; border:0; padding:15px 28px; min-width:210px; line-height:1;
         clip-path:polygon(0 4px,4px 4px,4px 0,calc(100% - 4px) 0,calc(100% - 4px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 4px),0 calc(100% - 4px));
         box-shadow: inset 0 4px 0 0 var(--c-hi), inset 0 -5px 0 0 var(--c-lo), inset 0 0 0 3px #120a24, 0 6px 0 0 #05030b, 0 6px 0 3px #120a24;
@@ -439,50 +461,56 @@
         box-shadow:inset 0 4px 0 0 var(--c-hi),inset 0 -5px 0 0 var(--c-lo),inset 0 0 0 3px #120a24,0 8px 0 0 #05030b,0 8px 0 3px #120a24; }
       button:active { transform:translateY(6px);
         box-shadow:inset 0 4px 0 0 var(--c-hi),inset 0 -4px 0 0 var(--c-lo),inset 0 0 0 3px #120a24,0 0 0 0 #05030b,0 0 0 3px #120a24; }
-      button:focus-visible { outline:3px solid #ffe9b0; outline-offset:5px; }
+      button:focus-visible { outline:var(--focus-ring); outline-offset:2px; }
       button.secondary { --c:#2a2140; --c-hi:#46356b; --c-lo:#171227; --tx:#ffe9b0; text-shadow:0 2px 0 rgba(0,0,0,.5); }
       button.secondary:hover { --c:#46356b; --c-hi:#5a4788; --c-lo:#2a2140; --tx:#fff; }
 
       .namerow { display: flex; align-items: center; gap: 10px; }
-      .namerow label { font-size: 12px; color: #8579a0; text-transform: uppercase; letter-spacing: 1px; }
-      input { font-family:'Silkscreen',monospace; font-weight:700; font-size: 14px; letter-spacing:1px; padding: 11px 16px; background: #0d0819; color: #ffe6b0; border: 2px solid #05030b; box-shadow: inset 0 2px 0 #2a2140; text-align: center; outline:none; }
-      input::placeholder { color:#6f6689; }
+      .namerow label { font-size: var(--fs-sm); color: var(--ink-mute); text-transform: uppercase; letter-spacing: 1px; }
+      input { font-family:'Silkscreen',monospace; font-weight:700; font-size: var(--fs-md); letter-spacing:1px; padding: 11px 16px; background: #0d0819; color: #ffe6b0; border: 2px solid #05030b; box-shadow: inset 0 2px 0 #2a2140; text-align: center; outline:none; }
+      input::placeholder { color:var(--ink-faint); }
       input:focus { outline: none; border-color: #ffb43b; }
+      /* Keyboard focus always shows the ONE standard ring (mouse focus keeps the quieter
+         amber border above) — no input is ever left without a visible focus indicator. */
+      input:focus-visible { outline: var(--focus-ring); outline-offset: 2px; }
       .code-input { font-family:'Press Start 2P',monospace; font-size: 22px; letter-spacing: 10px; width: 220px; }
 
       .profile { display: flex; flex-direction: column; align-items: center; gap: 8px; }
       .profile:empty { display: none; }
-      .profile-title { font-size: 12px; color: #ffb43b; letter-spacing: 1px; text-transform: uppercase; }
+      .profile-title { font-size: var(--fs-sm); color: #ffb43b; letter-spacing: 1px; text-transform: uppercase; }
       .profile-grid { display: flex; gap: 18px; }
       .stat { display: flex; flex-direction: column; align-items: center; }
-      .stat-value { font-size: 20px; color: #ffe6b0; font-variant-numeric: tabular-nums; }
-      .stat-label { font-size: 11px; color: #8579a0; }
+      .stat-value { font-size: var(--fs-num); color: #ffe6b0; font-variant-numeric: tabular-nums; }
+      .stat-label { font-size: var(--fs-sm); color: var(--ink-mute); }
 
-      .code-badge { font-size: 40px; letter-spacing: 10px; color: #ffb43b; background: #120e20; border: 1px solid rgba(255,180,59,0.4); border-radius: 12px; padding: 10px 22px; }
+      /* Squared to the pixel language (was the last rounded/soft-border/raw-hex element):
+         a hard dun-0 plate double-framed in amber-lo, --f-logo, zero radius. */
+      .code-badge { font-family: var(--f-logo); font-size: 40px; letter-spacing: 10px; color: var(--amber); background: var(--dun-0);
+        box-shadow: inset 0 0 0 2px var(--amber-lo), 0 0 0 3px var(--dun-0); border-radius: 0; padding: 10px 22px; }
       /* The badge + COPY INVITE share one fixed row; the button's width is reserved so its
          COPIED!/SHARED!/COPY FAILED label swaps never move the badge or the roster below. */
       .code-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
       .invite-copy { min-width: 150px; }
       /* Reserved single line under the badge: empty normally, the raw invite URL on a copy
          failure — content swaps inside the same box, zero layout shift. */
-      .menu p.invite-url { min-height: 15px; font-size: 10px; color: #8579a0; margin: 0; overflow-wrap: anywhere; max-width: 360px; user-select: text; }
+      .menu p.invite-url { min-height: 15px; font-size: var(--fs-sm); color: var(--ink-mute); margin: 0; overflow-wrap: anywhere; max-width: 360px; user-select: text; }
       .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
-      .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+      .playerrow { display: flex; align-items: center; gap: 10px; font-size: var(--fs-md); }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 
       /* --- The one-time online name gate + the lobby's YOU confirmation --- */
       .name-gate { max-width: 380px; }
       .gate-namerow { display: flex; gap: 8px; width: 100%; align-items: stretch; }
       .gate-namerow input.gate-name { flex: 1; }
-      .gate-dice { flex: 0 0 auto; width: 52px; min-width: 52px; font-size: 18px; padding: 6px 0; }
+      .gate-dice { flex: 0 0 auto; width: 52px; min-width: 52px; font-size: var(--fs-lg); padding: 6px 0; }
       .gate-colorrow { display: flex; gap: 16px; align-items: center; }
       .swatch-row { display: grid; grid-template-columns: repeat(3, 34px); gap: 8px; }
       .swatch { position: relative; width: 34px; height: 34px; border: 2px solid #05030b; box-shadow: inset 0 0 0 2px rgba(5,3,11,.55); padding: 0; cursor: pointer; }
       /* Selected state is GEOMETRY: the check glyph + an inset ring, never hue alone. */
       .swatch.sel { box-shadow: inset 0 0 0 3px #05030b, inset 0 0 0 5px #ffe9b0; }
-      .swatch-check { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #05030b; text-shadow: 0 0 3px rgba(255,255,255,.6); pointer-events: none; }
-      .lobby-you { display: flex; align-items: center; gap: 8px; font-size: 13px; letter-spacing: 1px; color: #cbb6d6; }
-      .lobby-you .you-label { color: #8579a0; font-size: 11px; }
+      .swatch-check { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--fs-md); font-weight: 700; color: #05030b; text-shadow: 0 0 3px rgba(255,255,255,.6); pointer-events: none; }
+      .lobby-you { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); letter-spacing: 1px; color: var(--ink-mute); }
+      .lobby-you .you-label { color: var(--ink-mute); font-size: var(--fs-sm); }
       .lobby-you .you-swatch { width: 14px; height: 14px; display: inline-block; border: 2px solid #05030b; box-shadow: inset 0 0 0 1px rgba(5,3,11,.4); }
       .lobby-you .you-name { color: #ffe6b0; font-weight: 700; }
 
@@ -496,21 +524,20 @@
         transition: transform .06s steps(2), box-shadow .06s steps(2); }
       .blessing-card:hover { transform: translateY(-2px); box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--dun-4), 0 5px 0 rgba(5,3,11,0.5); }
       .blessing-card.selected, .blessing-card.selected:hover { box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px var(--amber), 0 5px 0 rgba(5,3,11,0.5), 0 0 16px rgba(255,180,59,0.35); }
-      .blessing-card:focus-visible { outline: 3px solid #ffe9b0; outline-offset: 3px; }
-      .bc-key { position: absolute; top: 8px; left: 8px; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
-        font-family: var(--f-logo), monospace; font-size: 10px; color: var(--dun-0); background: var(--amber); }
+      .blessing-card:focus-visible { outline:var(--focus-ring); outline-offset:2px; }
+      .bc-key { position: absolute; top: 8px; left: 8px; width: 20px; height: 20px; font-size: var(--fs-sm); }
       .bc-icon { display: flex; align-items: center; justify-content: center; width: 56px; height: 56px; margin-top: 6px; font-size: 30px; line-height: 1;
         background: color-mix(in srgb, var(--t) 22%, #0d0819); box-shadow: inset 0 0 0 2px var(--t), 0 0 12px color-mix(in srgb, var(--t) 45%, transparent); }
       .bc-icon img { width: 48px; height: 48px; image-rendering: pixelated; }
       .bc-icon .glyphfb { font-size: 30px; line-height: 1; color: var(--cream); }
-      .bc-name { font-family: var(--f-logo), monospace; font-size: 12px; color: var(--amber-hi); letter-spacing: 1px; line-height: 1.4; }
-      .bc-tag { font-family: var(--f-ui), monospace; font-size: 8px; letter-spacing: 2px; padding: 2px 6px; }
+      .bc-name { font-family: var(--f-logo), monospace; font-size: var(--fs-sm); color: var(--amber-hi); letter-spacing: 1px; line-height: 1.4; }
+      .bc-tag { font-family: var(--f-ui), monospace; font-size: var(--fs-2xs); letter-spacing: 2px; padding: 2px 6px; }
       .bc-tag.new { color: var(--grn); box-shadow: inset 0 0 0 1px var(--grn); }
       .bc-tag.up { color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
-      .bc-rarity { font-size: 9px; letter-spacing: 2px; color: var(--dun-4); }
+      .bc-rarity { font-size: var(--fs-xs); letter-spacing: 2px; color: var(--dun-4); }
       .bc-rarity.uncommon { color: var(--blu); }
       .bc-rarity.rare { color: var(--pur); }
-      .bc-desc { font-family: var(--f-num), monospace; font-size: 16px; line-height: 1.2; color: #cbb6d6; }
+      .bc-desc { font-family: var(--f-num), monospace; font-size: var(--fs-md); line-height: 1.2; color: var(--ink-mute); }
 
       /* --- Patch's shop panel: the compact interact panel (world keeps rendering behind it).
          Anchored above the hotbar so it never covers the buyer or the pedestal row; the
@@ -524,35 +551,35 @@
       .shop-card { width: 302px; background: #0d0819; color: #ffe6b0; padding: 12px 14px; text-align: left;
         box-shadow: inset 0 0 0 2px #05030b, inset 0 0 0 4px #2a2140, 0 5px 0 rgba(5,3,11,0.5); font-family: var(--f-ui), monospace; }
       .shop-head { display: flex; gap: 10px; align-items: center; }
-      .shop-coins { margin: 0 0 8px; font-size: 9px; letter-spacing: 1.5px; color: var(--amber-hi); text-align: right; }
+      .shop-coins { margin: 0 0 8px; font-size: var(--fs-xs); letter-spacing: 1.5px; color: var(--amber-hi); text-align: right; }
       .shop-icon { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: none; font-size: 22px; line-height: 1;
         color: var(--cream); background: color-mix(in srgb, var(--t, #ffb43b) 22%, #0d0819); box-shadow: inset 0 0 0 2px var(--t, #2a2140); }
       .shop-icon img { width: 36px; height: 36px; image-rendering: pixelated; }
       .shop-icon .glyphfb { font-size: 22px; line-height: 1; color: var(--cream); }
-      .shop-title h1 { font-family: var(--f-logo), monospace; font-size: 12px; margin: 0 0 4px; color: var(--amber-hi); letter-spacing: 1px; }
-      .shop-meta { margin: 0; font-size: 9px; letter-spacing: 1.5px; color: var(--dun-4); display: flex; gap: 8px; align-items: center; }
+      .shop-title h1 { font-family: var(--f-logo), monospace; font-size: var(--fs-sm); margin: 0 0 4px; color: var(--amber-hi); letter-spacing: 1px; }
+      .shop-meta { margin: 0; font-size: var(--fs-xs); letter-spacing: 1.5px; color: var(--dun-4); display: flex; gap: 8px; align-items: center; }
       .shop-tag { color: var(--grn); box-shadow: inset 0 0 0 1px var(--grn); padding: 1px 5px; }
       .shop-tag.hidden { display: none; }
-      .shop-ownership { margin: 8px 0 0; font-size: 9px; letter-spacing: 1.5px; color: var(--grn); }
+      .shop-ownership { margin: 8px 0 0; font-size: var(--fs-xs); letter-spacing: 1.5px; color: var(--grn); }
       .shop-ownership.shared { color: var(--amber); }
       .shop-lines { margin: 6px 0 10px; }
-      .shop-lines p { margin: 2px 0; font-family: var(--f-num), monospace; font-size: 15px; line-height: 1.25; color: #cbb6d6; }
+      .shop-lines p { margin: 2px 0; font-family: var(--f-num), monospace; font-size: var(--fs-md); line-height: 1.25; color: var(--ink-mute); }
       .shop-buy { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; padding: 9px 10px; border: 0; cursor: pointer; font-family: var(--f-logo), monospace;
-        font-size: 11px; letter-spacing: 1px; color: var(--dun-0); background: var(--amber);
+        font-size: var(--fs-sm); letter-spacing: 1px; color: var(--dun-0); background: var(--amber);
         box-shadow: inset 0 0 0 2px #05030b, 0 3px 0 rgba(5,3,11,0.5); }
       .shop-buy:hover:not(:disabled) { background: var(--amber-hi); }
-      .shop-buy:focus-visible { outline: 3px solid #ffe9b0; outline-offset: 2px; }
+      .shop-buy:focus-visible { outline:var(--focus-ring); outline-offset:2px; }
       .shop-buy:disabled { cursor: default; }
       .shop-buy .shop-buy-glyph { display: inline-flex; align-items: center; line-height: 1; }
       /* unaffordable = still for sale: amber OUTLINE (never filled, never the resolved grey) */
       .shop-buy.broke { background: #0d0819; color: var(--amber);
         box-shadow: inset 0 0 0 2px var(--amber), 0 3px 0 rgba(5,3,11,0.5); }
       /* settled for this viewer (sold/owned/max/full/spent): muted flat + check */
-      .shop-buy.resolved { background: #241a38; color: #9a8fb5;
+      .shop-buy.resolved { background: #241a38; color: var(--ink-mute);
         box-shadow: inset 0 0 0 2px #05030b, 0 3px 0 rgba(5,3,11,0.5); }
-      .shop-foot { margin: 8px 0 0; font-size: 8px; letter-spacing: 1px; color: #cbb6d6; text-align: center; min-height: 10px; }
+      .shop-foot { margin: 8px 0 0; font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--ink-mute); text-align: center; min-height: 10px; }
       .shop-foot.bought { color: var(--grn); }
-      .shop-card .hint { margin: 6px 0 0; font-size: 8px; letter-spacing: 1.5px; color: var(--dun-4); text-align: center; }
+      .shop-card .hint { margin: 6px 0 0; font-size: var(--fs-2xs); letter-spacing: 1.5px; color: var(--dun-4); text-align: center; }
 
       /* === MENU SHELL (fixed-geometry launchpad) — overrides earlier menu rules ===
          The home shell renders SYNCHRONOUSLY before any auth/network work, so every box
@@ -589,7 +616,7 @@
       /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
          attributes so the space is reserved before the file streams in). */
       .logo-img{ image-rendering:pixelated; height:40px; width:235px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
-      .home-hero .tag{ font-family:var(--f-ui); font-size:10px; line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
+      .home-hero .tag{ font-family:var(--f-ui); font-size:var(--fs-sm); line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:640px; min-height:28px; text-transform:none; margin:0; }
       .home-hero .blob-stage{ position:relative; flex:none; width:132px; height:132px;
         background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
       /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
@@ -605,7 +632,7 @@
          INTO the hero row, anchored at the blob's feet — no absolute offsets, so the
          responsive hero variants keep it beside the blob for free. */
       .stage-customize{ grid-row:1; grid-column:1; justify-self:end; align-self:end; margin:0 140px 12px 0;
-        z-index:2; min-width:0; width:auto; font-size:8px; letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
+        z-index:2; min-width:0; width:auto; font-size:var(--fs-2xs); letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
       .body{ display:flex; gap:20px; align-items:stretch; }
       .home-body{ display:grid; grid-template-columns:1.22fr 0.78fr; gap:20px; flex:1; min-height:0; }
       .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
@@ -616,14 +643,14 @@
       .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; }
       .home-left .lb-preview{ margin-top:0; }
       .home-right{ flex:1; display:flex; flex-direction:column; gap:10px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
-      .col-h{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
-      .btn-quick{ width:100%; flex-direction:column; gap:5px; padding:17px 22px; font-size:17px; min-width:0; }
-      .btn-quick .sub{ font-family:var(--f-ui); font-weight:400; font-size:9px; letter-spacing:.3px; text-transform:none; opacity:.85; text-shadow:none; }
-      .col-actions .play-solo{ width:100%; font-size:16px; padding:15px 22px; min-width:0; }
+      .col-h{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
+      .btn-quick{ width:100%; flex-direction:column; gap:5px; padding:17px 22px; font-size:var(--fs-lg); min-width:0; }
+      .btn-quick .sub{ font-family:var(--f-ui); font-weight:400; font-size:var(--fs-xs); letter-spacing:.3px; text-transform:none; opacity:.85; text-shadow:none; }
+      .col-actions .play-solo{ width:100%; font-size:var(--fs-md); padding:15px 22px; min-width:0; }
       .actrow{ display:flex; gap:10px; } .actrow button{ flex:1; min-width:0; }
       .namerow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; text-align:left; }
-      .namerow label{ font-family:var(--f-ui); font-size:9px; letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
-      .menu input[type=text]{ font-family:var(--f-num); font-size:20px; letter-spacing:1px; padding:8px 12px; background:#0d0819; color:var(--cream); border:0; box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 3px 6px rgba(0,0,0,.5); text-align:left; outline:none; width:100%; }
+      .namerow label{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; }
+      .menu input[type=text]{ font-family:var(--f-num); font-size:var(--fs-num); letter-spacing:1px; padding:8px 12px; background:#0d0819; color:var(--cream); border:0; box-shadow:inset 0 0 0 2px var(--dun-3),inset 0 3px 6px rgba(0,0,0,.5); text-align:left; outline:none; width:100%; }
       .menu input::placeholder{ color:var(--dun-4); }
       /* --- Blob-color pick (right column identity) --- */
       .swatches{ display:flex; gap:7px; }
@@ -634,34 +661,34 @@
       /* --- Optional Google sign-in (right column identity) --- */
       
       .authrow{ display:flex; flex-direction:column; gap:5px; align-items:stretch; }
-      .btn-google{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; font-size:11px; padding:9px 12px; min-width:0; text-transform:none; letter-spacing:1px; }
+      .btn-google{ display:flex; align-items:center; justify-content:center; gap:9px; width:100%; font-size:var(--fs-sm); padding:9px 12px; min-width:0; text-transform:none; letter-spacing:1px; }
       .btn-google svg{ display:block; flex:0 0 auto; }
-      .auth-status{ font-size:10px; color:var(--red); text-align:left; min-height:12px; margin:0; }
+      .auth-status{ font-size:var(--fs-sm); color:var(--red); text-align:left; min-height:12px; margin:0; }
       .auth-status:empty{ display:none; }
       .account{ display:flex; align-items:center; gap:10px; background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); padding:8px 10px; }
       .account-av{ flex:0 0 auto; width:32px; height:32px; background:var(--dun-3); box-shadow:inset 0 0 0 2px var(--dun-4); image-rendering:auto; object-fit:cover; }
       .account-av.has-img{ background:transparent; }
       .account-info{ display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; text-align:left; }
-      .account-name{ font-family:var(--f-ui); font-size:12px; color:var(--cream); letter-spacing:.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .account-sub{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
-      .account-out{ flex:0 0 auto; font-size:9px; padding:6px 9px; min-width:0; text-transform:uppercase; }
+      .account-name{ font-family:var(--f-ui); font-size:var(--fs-sm); color:var(--cream); letter-spacing:.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .account-sub{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .account-out{ flex:0 0 auto; font-size:var(--fs-xs); padding:6px 9px; min-width:0; text-transform:uppercase; }
       .profile{ display:flex; flex-direction:column; gap:8px; align-items:stretch; }
       .profile:empty{ display:none; }
       .profile-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }
       .stat{ background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 9px; display:flex; flex-direction:column; gap:1px; align-items:flex-start; }
-      .stat-value{ font-family:var(--f-num); font-size:21px; color:var(--cream); line-height:1; }
+      .stat-value{ font-family:var(--f-num); font-size:var(--fs-num); color:var(--cream); line-height:1; }
       .stat-value.amber{ color:var(--amber); }
-      .stat-label{ font-family:var(--f-ui); font-size:8px; letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .stat-label{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
       .settings{ display:flex; flex-direction:column; gap:7px; align-items:stretch; margin:0; }
-      .settings button{ font-size:11px; padding:9px 12px; min-width:0; justify-content:space-between; width:100%; text-transform:uppercase; }
+      .settings button{ font-size:var(--fs-sm); padding:9px 12px; min-width:0; justify-content:space-between; width:100%; text-transform:uppercase; }
       /* min-height 44px = comfortable touch row (label line + 24px thumb) */
-      .settings-shake{ display:flex; flex-direction:column; justify-content:center; gap:5px; min-height:44px; font-family:var(--f-ui); font-size:9px; color:var(--dun-4); text-transform:uppercase; letter-spacing:1px; }
+      .settings-shake{ display:flex; flex-direction:column; justify-content:center; gap:5px; min-height:44px; font-family:var(--f-ui); font-size:var(--fs-xs); color:var(--dun-4); text-transform:uppercase; letter-spacing:1px; }
       .settings-shake .lab{ display:flex; justify-content:space-between; } .settings-val{ color:var(--amber); }
       /* square pixel-kit track inside the menu shell (overrides the rounded base track) */
       .menu input[type=range]{ width:100%; }
       .menu input[type=range]::-webkit-slider-runnable-track{ border-radius:0; }
       .menu input[type=range]::-moz-range-track{ border-radius:0; }
-      .foot{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--dun-4); text-align:center; text-transform:none; min-height:20px; padding-top:6px; border-top:2px solid var(--dun-3); margin:0; }
+      .foot{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.5px; color:var(--dun-4); text-align:center; text-transform:none; min-height:20px; padding-top:6px; border-top:2px solid var(--dun-3); margin:0; }
       /* FINAL RESPONSIVE CONTRACT — <=680px width: ONE column with FIXED mobile rows
          (identity stays 176, destinations stay 90); the glance stays exactly 3 rows at a
          fixed 142px (5 pad + 18 head + 4 gap + 88 rows + 4 gap + 18 state + 5 pad). */
@@ -715,34 +742,34 @@
       .lb-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; height:18px; flex:0 0 18px; }
       .lb-head .col-h{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The view action is an explicit but link-quiet affordance, not a chunky button. */
-      .lb-view{ min-width:0; width:auto; font-size:8px; padding:4px 6px; letter-spacing:1px;
-        background:transparent; color:#8f87a8; clip-path:none; box-shadow:none; text-shadow:none; }
+      .lb-view{ min-width:0; width:auto; font-size:var(--fs-2xs); padding:4px 6px; letter-spacing:1px;
+        background:transparent; color:var(--ink-mute); clip-path:none; box-shadow:none; text-shadow:none; }
       .lb-view:hover{ transform:none; background:transparent; color:var(--cream); box-shadow:inset 0 -1px 0 var(--dun-4); }
       .lb-view:active{ transform:none; box-shadow:none; }
-      .lb-view:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
+      .lb-view:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
       .lb-rows{ display:flex; flex-direction:column; gap:2px; }
       .lb-row{ display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:28px; flex:0 0 28px; padding:0 8px;
-        font-family:var(--f-ui); font-size:10px; letter-spacing:.5px; text-transform:none; text-align:left;
-        color:#cbb6d6; background:transparent; clip-path:none;
+        font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:.5px; text-transform:none; text-align:left;
+        color:var(--ink-mute); background:transparent; clip-path:none;
         box-shadow:inset 0 0 0 1px var(--dun-2); text-shadow:none; transition:none; }
       .lb-row:hover:not(:disabled){ background:var(--dun-1); transform:none; box-shadow:inset 0 0 0 1px var(--dun-4); color:var(--cream); }
       .lb-row:active:not(:disabled){ transform:none; box-shadow:inset 0 0 0 1px var(--dun-4); }
       .lb-row:disabled{ cursor:default; }
-      .lb-row:focus-visible{ outline:2px solid var(--amber-hi); outline-offset:1px; }
-      .lb-rank{ flex:0 0 16px; font-family:var(--f-num); font-size:15px; color:var(--dun-4); text-align:right; }
+      .lb-row:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
+      .lb-rank{ flex:0 0 16px; font-family:var(--f-num); font-size:var(--fs-md); color:var(--dun-4); text-align:right; }
       /* The one permitted warm accent in the glance: the #1 numeral. */
       .lb-rows .lb-row:nth-child(1) .lb-rank{ color:var(--amber); }
       .lb-dot{ flex:0 0 9px; width:9px; height:9px; background:var(--dun-3); }
       .lb-name{ flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-height:12px; }
-      .lb-floor{ flex:0 0 auto; font-family:var(--f-num); font-size:15px; color:#9a8fb5; min-width:48px; text-align:right; }
+      .lb-floor{ flex:0 0 auto; font-family:var(--f-num); font-size:var(--fs-md); color:var(--ink-mute); min-width:48px; text-align:right; }
       /* The ONE fixed 18px state line: board-level states (offline/empty) outrank the
          player's own out-of-rows rank readout; single line, ellipsized, never wraps. */
-      .menu p.lb-standing{ height:18px; flex:0 0 18px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
-        color:#8f87a8; text-transform:none; line-height:18px; margin:0; text-align:left;
+      .menu p.lb-standing{ height:18px; flex:0 0 18px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.3px;
+        color:var(--ink-mute); text-transform:none; line-height:18px; margin:0; text-align:left;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The full LEADERBOARD destination keeps the readable panel treatment + its own
          two-line reserved note (`.menu p` specificity so p.muted sizing can't overflow it). */
-      .menu p.lb-note{ min-height:30px; font-size:10px; line-height:1.5; margin:0; text-align:left; }
+      .menu p.lb-note{ min-height:30px; font-size:var(--fs-sm); line-height:1.5; margin:0; text-align:left; }
       .lb-rows-full .lb-row{ height:38px; flex:0 0 38px; background:var(--dun-1); box-shadow:inset 0 0 0 1px var(--dun-3); color:var(--cream); }
       .lb-rows-full .lb-floor{ color:var(--amber-hi); }
 
@@ -765,43 +792,43 @@
         display:flex; align-items:center; justify-content:center; box-shadow:inset 0 0 0 2px #05030b; }
       .id-patch svg{ display:block; width:22px; height:22px; }
       .id-avatar{ display:block; width:40px; height:40px; object-fit:cover; image-rendering:auto; }
-      .id-title{ grid-column:2; grid-row:1; font-family:var(--f-ui); font-size:10px; letter-spacing:1px; color:var(--cream); text-transform:uppercase; text-align:left;
+      .id-title{ grid-column:2; grid-row:1; font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:1px; color:var(--cream); text-transform:uppercase; text-align:left;
         height:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .menu p.id-value{ grid-column:2; grid-row:2; font-family:var(--f-ui); font-size:9px; letter-spacing:.2px; color:#8f87a8; text-transform:none; line-height:12px; margin:0; text-align:left; height:24px; overflow:hidden; }
+      .menu p.id-value{ grid-column:2; grid-row:2; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.2px; color:var(--ink-mute); text-transform:none; line-height:12px; margin:0; text-align:left; height:24px; overflow:hidden; }
       .id-actions{ grid-column:1 / -1; grid-row:3; align-self:end; display:flex; flex-direction:column; gap:4px; min-width:0; }
-      .id-view{ min-width:0; width:100%; font-size:9px; padding:0 8px; height:28px; letter-spacing:1px; }
-      .menu p.id-note{ font-family:var(--f-ui); font-size:8px; letter-spacing:.2px; color:var(--dun-4); text-transform:none; line-height:12px; height:12px; flex:0 0 12px; margin:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .id-view{ min-width:0; width:100%; font-size:var(--fs-xs); padding:0 8px; height:28px; letter-spacing:1px; }
+      .menu p.id-note{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.2px; color:var(--dun-4); text-transform:none; line-height:12px; height:12px; flex:0 0 12px; margin:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* Mid-OAuth placeholder: the identity card's "signing you in" state, centered in the
          same reserved box the chip/CTA occupy — it settles in place when the exchange ends. */
       .menu p.id-pending{ margin:auto; text-align:center; color:var(--cream); white-space:normal; height:auto; flex:1; }
       /* The CTA is a SECONDARY (dark) control — never an amber/warm fill, no animation. */
-      .btn-google{ display:flex; align-items:center; justify-content:center; gap:8px; width:100%; font-size:9px; padding:0 10px; min-width:0; height:28px; flex:0 0 28px; letter-spacing:1px; }
-      .auth-status{ font-size:10px; color:var(--red); text-align:left; min-height:12px; margin:0; }
+      .btn-google{ display:flex; align-items:center; justify-content:center; gap:8px; width:100%; font-size:var(--fs-xs); padding:0 10px; min-width:0; height:28px; flex:0 0 28px; letter-spacing:1px; }
+      .auth-status{ font-size:var(--fs-sm); color:var(--red); text-align:left; min-height:12px; margin:0; }
       /* Reserved status/failure line on action screens (online home, join code): busy,
          error, and retry copy swap INSIDE this box — the buttons around it never move. */
       .status-line{ min-height:36px; margin:0; display:flex; align-items:center; justify-content:center; gap:12px; }
       /* Compact TRY AGAIN inside the reserved status line (retryable invite failure only):
          sized to fit the 36px box, so its presence never moves the buttons around it. */
-      .status-line .status-retry{ font-size:9px; letter-spacing:1px; padding:6px 12px; min-height:0; }
+      .status-line .status-retry{ font-size:var(--fs-xs); letter-spacing:1px; padding:6px 12px; min-height:0; }
 
       .you-info{ flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; text-align:left; }
-      .you-name{ font-family:var(--f-ui); font-size:11px; color:var(--cream); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .you-stats{ font-family:var(--f-ui); font-size:9px; color:#8f87a8; min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .you-name{ font-family:var(--f-ui); font-size:var(--fs-sm); color:var(--cream); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .you-stats{ font-family:var(--f-ui); font-size:var(--fs-xs); color:var(--ink-mute); min-height:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The fixed home status line: reserved from first paint (boot/exit notes swap
          content inside it; single line, ellipsized). */
-      .menu p.home-status{ height:16px; flex:0 0 16px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px;
-        color:#8f87a8; text-transform:none; line-height:16px; margin:0; text-align:left;
+      .menu p.home-status{ height:16px; flex:0 0 16px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.3px;
+        color:var(--ink-mute); text-transform:none; line-height:16px; margin:0; text-align:left;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* The two 82px home destinations, stacked (10px grid gaps). */
       .navrow{ display:flex; flex-direction:column; gap:10px; }
       .home-dest{ height:82px; flex:0 0 82px; min-width:0; width:100%; flex-direction:column; gap:6px; justify-content:center;
-        font-size:12px; letter-spacing:1px; padding:0 16px; }
-      .home-dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:8px; letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; }
+        font-size:var(--fs-sm); letter-spacing:1px; padding:0 16px; }
+      .home-dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:var(--fs-2xs); letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; }
 
       /* --- profile screens (the shared fixed card + the own wardrobe) --- */
       /* Worn title under the name: reserved line, so titled and untitled render at the
          same height and equipping a title never shifts the screen. */
-      .worn-title{ min-height:15px; font-family:var(--f-ui); font-size:11px; letter-spacing:1px; color:var(--amber-hi); text-transform:none; margin:0; }
+      .worn-title{ min-height:15px; font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:1px; color:var(--amber-hi); text-transform:none; margin:0; }
       /* THE PROFILE CARD: one fixed ~640x430 surface for every profile (own Overview and
          the read-only player view). Attention order: appearance/name (left) -> ranked top
          run + exact build (right, top) -> lifetime (right, bottom). Every region is
@@ -813,39 +840,39 @@
       .blob-stage{ flex:0 0 192px; width:192px; height:192px; background:var(--dun-0);
         box-shadow:inset 0 0 0 2px var(--dun-3); display:flex; align-items:center; justify-content:center; }
       .blob-stage .blob-preview{ width:192px; height:192px; image-rendering:pixelated; }
-      .pc-name{ font-family:var(--f-ui); font-size:13px; letter-spacing:1px; color:var(--cream);
+      .pc-name{ font-family:var(--f-ui); font-size:var(--fs-md); letter-spacing:1px; color:var(--cream);
         min-height:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .pc-rank{ min-height:14px; font-family:var(--f-ui); font-size:9px; letter-spacing:.3px; color:#8f87a8;
+      .pc-rank{ min-height:14px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.3px; color:var(--ink-mute);
         text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       /* Owner-only slot (name editor + CUSTOMIZE BLOB); reserved on read-only profiles
          too, so both variants share byte-identical card geometry. */
       .pc-left-slot{ min-height:40px; display:flex; flex-direction:column; gap:8px; justify-content:flex-end; }
-      .pc-customize{ width:100%; min-width:0; font-size:9px; padding:10px 8px; letter-spacing:1px; }
+      .pc-customize{ width:100%; min-width:0; font-size:var(--fs-xs); padding:10px 8px; letter-spacing:1px; }
       /* The editable blob name (own Overview): guests edit + SAVE anytime through the
          same sanitized login path; signed-in goes read-only (the server names accounts
          from Google). Fixed rows — 12 label / 30 field / 12 note — inside the card. */
       .pc-nameedit{ width:100%; display:flex; flex-direction:column; gap:4px; }
       .pc-nameedit > .col-h{ height:12px; }
       .pc-namerow{ display:flex; gap:6px; }
-      .menu input[type=text].pc-nameinput{ flex:1 1 0; min-width:0; width:auto; height:30px; font-size:16px; padding:4px 8px; }
-      .pc-nameinput:disabled{ color:#9a8fb5; }
-      .pc-name-save{ flex:0 0 auto; min-width:52px; height:30px; font-size:9px; padding:0 10px; letter-spacing:1px; }
-      .menu p.pc-name-note{ font-family:var(--f-ui); font-size:8px; letter-spacing:.2px; color:var(--dun-4); text-transform:none;
+      .menu input[type=text].pc-nameinput{ flex:1 1 0; min-width:0; width:auto; height:30px; font-size:var(--fs-md); padding:4px 8px; }
+      .pc-nameinput:disabled{ color:var(--ink-mute); }
+      .pc-name-save{ flex:0 0 auto; min-width:52px; height:30px; font-size:var(--fs-xs); padding:0 10px; letter-spacing:1px; }
+      .menu p.pc-name-note{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.2px; color:var(--dun-4); text-transform:none;
         line-height:12px; height:12px; margin:0; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .pc-right{ flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
       .pc-run{ grid-template-columns:1fr 1fr 1fr 1fr; }
-      .pc-run .stat-value{ font-size:18px; }
+      .pc-run .stat-value{ font-size:var(--fs-lg); }
       .pc-build{ height:64px; overflow-y:auto; align-content:flex-start; justify-content:flex-start; }
       .pc-lifetime{ min-height:56px; }
       .pc-life{ grid-template-columns:1fr 1fr 1fr 1fr; }
-      .pc-life .stat-value{ font-size:16px; }
-      .pc-life-note{ margin:0; font-size:11px; text-align:left; }
+      .pc-life .stat-value{ font-size:var(--fs-md); }
+      .pc-life-note{ margin:0; font-size:var(--fs-sm); text-align:left; }
       .pc-account{ display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; min-height:52px; }
       .pc-signin{ width:auto; min-width:220px; }
       .pc-tabs{ display:flex; gap:8px; justify-content:center; }
-      .pc-tab{ min-width:120px; font-size:9px; padding:9px 12px; letter-spacing:1px; }
+      .pc-tab{ min-width:120px; font-size:var(--fs-xs); padding:9px 12px; letter-spacing:1px; }
       .pc-tab.on{ box-shadow:inset 0 0 0 2px var(--amber), 0 0 0 0 transparent; color:var(--amber-hi); }
-      .lb-arrow{ flex:0 0 auto; font-family:var(--f-num); font-size:15px; color:var(--dun-4); }
+      .lb-arrow{ flex:0 0 auto; font-family:var(--f-num); font-size:var(--fs-md); color:var(--dun-4); }
       .lb-row:hover:not(:disabled) .lb-arrow, .lb-row:focus-visible .lb-arrow{ color:var(--cream); }
       @media (max-width:680px){
         .profile-card{ height:auto; flex-direction:column; align-items:center; }
@@ -856,7 +883,7 @@
         background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
       .pp-top .profile-grid{ flex:0 1 320px; }
       .build-strip{ display:flex; flex-wrap:wrap; gap:6px; justify-content:center; min-height:24px; }
-      .build-chip{ font-family:var(--f-ui); font-size:9px; letter-spacing:.5px; color:var(--cream); padding:5px 8px;
+      .build-chip{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.5px; color:var(--cream); padding:5px 8px;
         background:#0d0819; box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--t,var(--dun-4)) 75%, var(--dun-3)); }
       .build-chip.weapon{ color:var(--amber-hi); box-shadow:inset 0 0 0 1px var(--amber-lo); }
       /* --- THE CLOSET: a fixed panel (stage | categories + grid + inline message line).
@@ -874,7 +901,7 @@
         background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); }
       .closet-right{ flex:1; min-width:0; display:flex; flex-direction:column; gap:8px; }
       .closet-cats{ display:flex; gap:6px; flex:0 0 30px; }
-      .closet-cat{ flex:1; min-width:0; font-size:8px; padding:8px 4px; letter-spacing:1px; }
+      .closet-cat{ flex:1; min-width:0; font-size:var(--fs-2xs); padding:8px 4px; letter-spacing:1px; }
       .closet-cat.on{ box-shadow:inset 0 0 0 2px var(--cream); color:var(--cream); }
       .closet-grid{ flex:1; min-height:0; display:flex; flex-wrap:wrap; gap:8px; align-content:flex-start; overflow-y:auto; }
       .cos-card{ position:relative; display:flex; flex-direction:column; align-items:center; gap:3px; width:96px; min-width:72px; height:104px; padding:10px 4px 6px;
@@ -887,10 +914,10 @@
       .cos-card.equipped, .cos-card.equipped:hover{ transform:translateY(-3px); background:var(--dun-2);
         box-shadow:inset 0 0 0 2px var(--amber), inset 0 0 0 4px var(--dun-0); }
       .cos-check{ position:absolute; top:3px; right:3px; width:14px; height:14px; display:flex; align-items:center; justify-content:center;
-        font-family:var(--f-num); font-size:12px; line-height:1; color:var(--dun-0); background:var(--amber); box-shadow:0 0 0 1px var(--ink); }
+        font-family:var(--f-num); font-size:var(--fs-sm); line-height:1; color:var(--dun-0); background:var(--amber); box-shadow:0 0 0 1px var(--ink); }
       /* locked: hatch overlay + lock glyph + desaturated thumb; NOT equippable but still
          focusable, so the condition chip is readable by keyboard/pad/screen reader. */
-      .cos-card.locked{ cursor:default; color:#9a8fb5; }
+      .cos-card.locked{ cursor:default; color:var(--ink-mute); }
       /* Hover must NOT warm a locked card (the global button:hover would win otherwise —
          locked cards are enabled so their condition stays focusable/readable). */
       .cos-card.locked:hover{ transform:none; background:var(--dun-1); box-shadow:inset 0 0 0 2px var(--dun-3); }
@@ -898,18 +925,18 @@
         background-image:repeating-linear-gradient(45deg, rgba(5,3,11,.4) 0 2px, transparent 2px 7px); }
       .cos-card.locked .cos-icon{ filter:grayscale(1) brightness(.7); }
       /* CSS-drawn padlock (font-independent): body square + shackle. */
-      .cos-lock{ position:absolute; top:8px; right:5px; width:10px; height:7px; background:#9a8fb5; }
+      .cos-lock{ position:absolute; top:8px; right:5px; width:10px; height:7px; background:var(--ink-mute); }
       .cos-lock::before{ content:""; position:absolute; top:-5px; left:2px; width:2px; height:3px;
-        border:2px solid #9a8fb5; border-bottom:0; }
+        border:2px solid var(--ink-mute); border-bottom:0; }
       /* focus: EXTERNAL cream stepped ring — distinct from the equipped amber double frame. */
-      .cos-card:focus-visible{ outline:2px solid var(--cream); outline-offset:3px; }
-      .cos-icon{ width:40px; height:40px; display:flex; align-items:center; justify-content:center; font-size:18px; color:var(--dun-4); }
+      .cos-card:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
+      .cos-icon{ width:40px; height:40px; display:flex; align-items:center; justify-content:center; font-size:var(--fs-lg); color:var(--dun-4); }
       .cos-icon canvas{ image-rendering:pixelated; }
       /* Blob-color swatches always ride with their .cos-name label — never color alone. */
       .cos-swatch{ display:block; width:28px; height:28px; box-shadow:inset 0 0 0 2px rgba(5,3,11,.65); }
-      .cos-name{ font-family:var(--f-ui); font-size:8px; letter-spacing:.3px; line-height:1.2; text-align:center; }
+      .cos-name{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.3px; line-height:1.2; text-align:center; }
       /* The chip: EQUIPPED / the exact unlock condition / NEW. Reserved two lines. */
-      .cos-chip{ font-family:var(--f-ui); font-size:7px; letter-spacing:.5px; min-height:18px; color:var(--cream); text-align:center; line-height:1.3; }
+      .cos-chip{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.5px; min-height:18px; color:var(--cream); text-align:center; line-height:1.3; }
       .cos-card.equipped .cos-chip{ color:var(--amber-hi); }
       /* Tiny corner spinner while the background write is in flight (stepped rotation —
          pixel-friendly; the card already reads EQUIPPED, success just clears this). */
@@ -918,11 +945,11 @@
         animation:cosSaving .7s steps(8) infinite; }
       @keyframes cosSaving{ to{ transform:rotate(360deg); } }
       /* The ONE inline message line (failure revert notice / locked-condition readout). */
-      .closet-note{ min-height:14px; font-size:11px; margin:0; text-align:left; flex:0 0 14px; }
+      .closet-note{ min-height:14px; font-size:var(--fs-sm); margin:0; text-align:left; flex:0 0 14px; }
       /* The always-visible close affordance on the profile surfaces (48px touch target),
          pinned to the shell corner; same action as Back/Escape/B — just closes. */
       .panel-close{ position:absolute; top:8px; right:8px; z-index:2; min-width:48px; min-height:48px; width:48px; height:48px;
-        padding:0; font-size:14px; letter-spacing:0; }
+        padding:0; font-size:var(--fs-md); letter-spacing:0; }
       /* The closet OVERLAY (the title's CUSTOMIZE door): a panel ABOVE the title, never
          a mode swap — the translucent scrim keeps Play visibly anchored behind it, and
          closing returns to the untouched title with the blob repainted in place. */
@@ -955,10 +982,10 @@
       /* --- post-run sign-in nudge: renders WITH the screen, dismiss swaps in place --- */
       .nudge{ display:flex; flex-direction:column; gap:8px; align-items:center; min-height:88px; padding:10px 14px;
         background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
-      .nudge-copy{ font-family:var(--f-ui); font-size:10px; letter-spacing:.3px; color:var(--cream); text-transform:none; line-height:1.5; margin:0; max-width:460px; }
+      .nudge-copy{ font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:.3px; color:var(--cream); text-transform:none; line-height:1.5; margin:0; max-width:460px; }
       .nudge-row{ display:flex; gap:10px; align-items:center; justify-content:center; flex-wrap:wrap; }
       .nudge-row .btn-google{ width:auto; min-width:200px; }
-      .nudge-later{ min-width:0; font-size:10px; padding:9px 14px; }
+      .nudge-later{ min-width:0; font-size:var(--fs-sm); padding:9px 14px; }
       .unlock-line{ color:var(--amber-hi); font-weight:700; letter-spacing:.5px; }
 
       @media (max-width:680px){

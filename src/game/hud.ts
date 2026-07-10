@@ -313,7 +313,7 @@ export function buildSlot(w: HudState["weapons"][number], index: number): HTMLEl
   slot.setAttribute("role", "button");
   slot.setAttribute("aria-label", `${w.name}, slot ${index + 1}${w.card.rarity === "common" ? "" : `, ${w.card.rarity}`}${w.isCurrent ? ", equipped" : ""}`);
   const key = el("span", "", String(index + 1));
-  key.className = "hb-key";
+  key.className = "hb-key keycap";
   slot.appendChild(key);
   const icon = el("span", "");
   icon.className = "hb-icon";
@@ -336,7 +336,7 @@ export function buildEmptySlot(index: number): HTMLElement {
   slot.className = "hb-empty";
   slot.setAttribute("aria-hidden", "true");
   const key = el("span", "", String(index + 1));
-  key.className = "hb-key";
+  key.className = "hb-key keycap";
   slot.appendChild(key);
   return slot;
 }
@@ -438,7 +438,7 @@ const HUD_MARKUP = `
   </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner bl">
-    <div class="dash"><span class="k">DASH</span><span class="key">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
+    <div class="dash"><span class="k">DASH</span><span class="key keycap">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
   </div>
   <div class="hotbar">
     <div class="hb-swap" data-hb-swap></div>
@@ -634,12 +634,12 @@ export class Hud {
       `background:rgba(5,3,11,0.72);`);
     const card = el("div",
       `min-width:320px;max-width:440px;padding:22px 26px;background:var(--dun-1);` +
-      `box-shadow:0 0 0 3px var(--dun-0),0 0 0 6px var(--dun-4),0 0 0 9px var(--dun-0),inset 0 0 0 2px var(--dun-2),0 12px 0 rgba(0,0,0,0.4);` +
-      `color:var(--cream);font:16px var(--f-num),ui-monospace,monospace;font-variant-numeric:tabular-nums;`);
-    card.appendChild(el("h2", "color:var(--amber);font:14px var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
+      `box-shadow:var(--frame-strong),inset 0 0 0 2px var(--dun-2),0 12px 0 rgba(0,0,0,0.4);` +
+      `color:var(--cream);font:var(--fs-md) var(--f-num),ui-monospace,monospace;font-variant-numeric:tabular-nums;`);
+    card.appendChild(el("h2", "color:var(--amber);font:var(--fs-md) var(--f-logo),monospace;letter-spacing:2px;margin-bottom:16px;", "RUN STATS"));
     this.statsBody = el("div", "display:flex;flex-direction:column;gap:6px;");
     card.appendChild(this.statsBody);
-    card.appendChild(el("p", "margin-top:16px;font:8px var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "RELEASE TAB TO CLOSE"));
+    card.appendChild(el("p", "margin-top:16px;font:var(--fs-2xs) var(--f-ui),monospace;letter-spacing:1px;color:var(--dun-4);", "RELEASE TAB TO CLOSE"));
     this.statsPanel.appendChild(card);
     root.appendChild(this.statsPanel);
 
@@ -663,7 +663,7 @@ export class Hud {
     // (clear of its blessing-chip row). Fixed + opacity-only so it never shifts the layout.
     this.controlsHint = el("div",
       `position:fixed;left:0;right:0;bottom:122px;z-index:6;text-align:center;pointer-events:none;` +
-      `color:var(--cream);font:9px var(--f-ui),monospace;letter-spacing:1px;` +
+      `color:var(--cream);font:var(--fs-xs) var(--f-ui),monospace;letter-spacing:1px;` +
       `text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,0.6);opacity:0;transition:opacity 0.6s ease;`,
       "WASD MOVE \u00b7 MOUSE AIM \u00b7 CLICK SHOOT \u00b7 SHIFT DASH");
     root.appendChild(this.controlsHint);
@@ -1298,7 +1298,7 @@ export class Hud {
       b.className = "hs-slot";
       b.setAttribute("aria-label", `Swap out ${w.name}, slot ${i + 1}`);
       const k = el("span", "", String(i + 1));
-      k.className = "hs-key";
+      k.className = "hs-key keycap keycap--sm";
       const ic = weaponIconEl(w.id, w.name);
       if (ic instanceof HTMLImageElement) ic.draggable = false;
       b.append(k, ic);
@@ -1349,7 +1349,7 @@ export class Hud {
   showStats(d: StatsPanelData) {
     const line = (label: string, value: string) => {
       const row = el("div", "display:flex;justify-content:space-between;gap:24px;");
-      row.appendChild(el("span", "color:#9a8fb5;", label));
+      row.appendChild(el("span", "color:var(--ink-mute);", label));
       row.appendChild(el("span", "color:#ffe6b0;", value));
       return row;
     };
@@ -1362,19 +1362,19 @@ export class Hud {
       line("run time", fmtTime(d.runTime)),
     );
     if (d.netInfo) {
-      this.statsBody.appendChild(el("div", "color:#9a8fb5;font-size:12px;letter-spacing:0.5px;", d.netInfo));
+      this.statsBody.appendChild(el("div", "color:var(--ink-mute);font-size:var(--fs-sm);letter-spacing:0.5px;", d.netInfo));
     }
     if (d.items.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
-      this.statsBody.appendChild(el("div", "color:var(--amber);font-size:12px;letter-spacing:1px;", `BLESSINGS \u00b7 ${d.items.length}`));
+      this.statsBody.appendChild(el("div", "color:var(--amber);font-size:var(--fs-sm);letter-spacing:1px;", `BLESSINGS \u00b7 ${d.items.length}`));
       for (const it of d.items) {
         const row = el("div", "display:flex;align-items:flex-start;gap:8px;");
-        const icon = el("span", "font-size:14px;line-height:1.3;", it.glyph);
+        const icon = el("span", "font-size:var(--fs-md);line-height:1.3;", it.glyph);
         icon.style.color = it.tint;
         const text = el("div", "display:flex;flex-direction:column;gap:1px;");
         text.append(
           el("span", "color:#ffe6b0;", it.name),
-          el("span", "color:#9a8fb5;font-size:13px;", it.desc),
+          el("span", "color:var(--ink-mute);font-size:var(--fs-md);", it.desc),
         );
         row.append(icon, text);
         this.statsBody.appendChild(row);
@@ -1382,7 +1382,7 @@ export class Hud {
     }
     if (d.roster && d.roster.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
-      this.statsBody.appendChild(el("div", "color:#5ad1ff;font-size:12px;letter-spacing:1px;", "PARTY"));
+      this.statsBody.appendChild(el("div", "color:#5ad1ff;font-size:var(--fs-sm);letter-spacing:1px;", "PARTY"));
       for (const r of d.roster) {
         const row = el("div", "display:flex;align-items:center;gap:8px;");
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
@@ -1391,13 +1391,13 @@ export class Hud {
         // OUT (down limit spent) outranks plain down: the party's move is the stairs.
         const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isReconnecting ? "#9a8fb5" : r.isDown || r.isOut ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
         this.statsBody.appendChild(row);
       }
     }
     if (d.profile) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
-      this.statsBody.appendChild(el("div", "color:#ffb43b;font-size:12px;letter-spacing:1px;", `${d.profile.name.toUpperCase()} \u2014 ALL TIME`));
+      this.statsBody.appendChild(el("div", "color:#ffb43b;font-size:var(--fs-sm);letter-spacing:1px;", `${d.profile.name.toUpperCase()} \u2014 ALL TIME`));
       this.statsBody.append(
         line("deepest floor", String(d.profile.deepestFloor)),
         line("total kills", String(d.profile.totalKills)),

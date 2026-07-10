@@ -1074,7 +1074,9 @@ async function main(): Promise<void> {
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
     check("equipped card geometry: 3px lift + double frame", /\.cos-card\.equipped[^}]*translateY\(-3px\)/.test(html) && /\.cos-card\.equipped[^}]*inset 0 0 0 4px/.test(html));
     check("locked card geometry: hatch overlay + desaturated thumb", /\.cos-card\.locked::after[^}]*repeating-linear-gradient/.test(html) && /\.cos-card\.locked \.cos-icon[^}]*grayscale/.test(html));
-    check("focus ring is an EXTERNAL cream outline (not the amber frame)", /\.cos-card:focus-visible\{ outline:2px solid var\(--cream\); outline-offset:3px/.test(html));
+    check("focus ring is the ONE standard cream ring (--focus-ring = 3px solid var(--cream))",
+      /\.cos-card:focus-visible\{ outline:var\(--focus-ring\); outline-offset:2px/.test(html)
+      && /--focus-ring:\s*3px solid var\(--cream\)/.test(html));
     // Blob-color swatches carry a NAME label in addition to the color chip.
     byClass(overlay, "closet-cat").find((c) => textOf(c) === "Blob Color")?.onclick?.();
     const cyan = cardByName("Cyan");
