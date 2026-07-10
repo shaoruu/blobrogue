@@ -75,9 +75,10 @@ export interface CosmeticDef {
   hint?: string;
   // Body items only: the authored palette slot this body color renders as.
   paletteIndex?: number;
-  // Overlay items only: the generated-asset key in the art pipeline (see
-  // src/game/cosmeticSockets.ts COSMETIC_ASSET_SOURCES). Asset-first with graceful
-  // fallback to the item's procedural painter while the files are absent.
+  // Overlay items (hat/face) only: the generated-asset key in the art pipeline — the base
+  // name of the three oriented PNGs (see src/game/cosmeticSockets.ts COSMETIC_ASSET_SOURCES).
+  // Every shipped overlay carries one; the sprite is the only art, so while a file is still
+  // streaming the item renders nothing (never a fabricated placeholder).
   assetKey?: string;
 }
 
@@ -88,15 +89,27 @@ export const COSMETICS: readonly CosmeticDef[] = [
   { id: "body_pink", slot: "body", name: "Pink", unlock: "starter", paletteIndex: 3 },
   { id: "body_violet", slot: "body", name: "Violet", unlock: "starter", paletteIndex: 4 },
   { id: "body_orange", slot: "body", name: "Orange", unlock: "starter", paletteIndex: 5 },
-  // hats
-  { id: "hat_top", slot: "hat", name: "Top Hat", unlock: "starter" },
-  { id: "hat_party", slot: "hat", name: "Party Cone", unlock: "starter" },
-  { id: "hat_crown", slot: "hat", name: "Crown", unlock: "earned", need: { deepestFloor: 10 }, hint: "reach floor 10" },
-  { id: "hat_halo", slot: "hat", name: "Halo", unlock: "earned", need: { deepestFloor: 20 }, hint: "reach floor 20" },
+  // hats — every entry hooks its generated sprite via assetKey (the base name shared by the
+  // three oriented PNGs in public/sprites/cosmetics; see cosmeticSockets COSMETIC_ASSET_SOURCES)
+  { id: "hat_top", slot: "hat", name: "Top Hat", unlock: "starter", assetKey: "hat_top" },
+  { id: "hat_beanie", slot: "hat", name: "Beanie", unlock: "starter", assetKey: "hat_beanie" },
+  { id: "hat_chef", slot: "hat", name: "Chef's Hat", unlock: "starter", assetKey: "hat_chef" },
+  { id: "hat_party", slot: "hat", name: "Party Cone", unlock: "starter", assetKey: "hat_party" },
+  { id: "hat_flower", slot: "hat", name: "Flower", unlock: "earned", need: { deepestFloor: 5 }, hint: "reach floor 5", assetKey: "hat_flower" },
+  { id: "hat_mushroom", slot: "hat", name: "Mushroom", unlock: "earned", need: { deepestFloor: 8 }, hint: "reach floor 8", assetKey: "hat_mushroom" },
+  { id: "hat_crown", slot: "hat", name: "Crown", unlock: "earned", need: { deepestFloor: 10 }, hint: "reach floor 10", assetKey: "hat_crown" },
+  { id: "hat_wizard", slot: "hat", name: "Wizard Hat", unlock: "earned", need: { deepestFloor: 15 }, hint: "reach floor 15", assetKey: "hat_wizard" },
+  { id: "hat_halo", slot: "hat", name: "Halo", unlock: "earned", need: { deepestFloor: 20 }, hint: "reach floor 20", assetKey: "hat_halo" },
+  { id: "hat_headphones", slot: "hat", name: "Headphones", unlock: "earned", need: { totalKills: 100 }, hint: "100 all-time kills", assetKey: "hat_headphones" },
+  { id: "hat_helmet", slot: "hat", name: "Helmet", unlock: "earned", need: { totalKills: 250 }, hint: "250 all-time kills", assetKey: "hat_helmet" },
+  { id: "hat_horns", slot: "hat", name: "Horns", unlock: "earned", need: { totalKills: 1000 }, hint: "1000 all-time kills", assetKey: "hat_horns" },
   // face
   { id: "face_round", slot: "face", name: "Round Specs", unlock: "starter", assetKey: "round_glasses" },
-  { id: "face_shades", slot: "face", name: "Shades", unlock: "starter" },
-  { id: "face_monocle", slot: "face", name: "Monocle", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills" },
+  { id: "face_shades", slot: "face", name: "Shades", unlock: "starter", assetKey: "face_shades" },
+  { id: "face_eyepatch", slot: "face", name: "Eyepatch", unlock: "earned", need: { deepestFloor: 12 }, hint: "reach floor 12", assetKey: "face_eyepatch" },
+  { id: "face_star_shades", slot: "face", name: "Star Shades", unlock: "earned", need: { totalKills: 750 }, hint: "750 all-time kills", assetKey: "face_star_shades" },
+  { id: "face_3d_glasses", slot: "face", name: "3D Glasses", unlock: "earned", need: { deepestFloor: 25 }, hint: "reach floor 25", assetKey: "face_3d_glasses" },
+  { id: "face_monocle", slot: "face", name: "Monocle", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills", assetKey: "face_monocle" },
   // titles — text honors, earned only (the empty slot is the default)
   { id: "title_depth_diver", slot: "title", name: "Depth Diver", unlock: "earned", need: { deepestFloor: 10 }, hint: "reach floor 10" },
   { id: "title_blob_slayer", slot: "title", name: "Blob Slayer", unlock: "earned", need: { totalKills: 500 }, hint: "500 all-time kills" },

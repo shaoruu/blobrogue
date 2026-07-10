@@ -15,12 +15,13 @@
 //     name/team cues (locked by the render-order test) — gameplay reads always win.
 //   - SAFE FALLBACK: unknown/absent ids or missing art render NOTHING, never a placeholder.
 //
-// ASSET HOOKS (first integration pair ONLY — no fabricated art here): the art pipeline
-// (main agent, FAL) generates into public/sprites/cosmetics/<key>_<orientation>.png. The
-// renderer uses an asset when its file exists and has loaded; otherwise it falls back to
-// the item's procedural painter (if it has one), else draws nothing. `cowboy_hat_classic`
-// deliberately has NO procedural fallback: until its generated art (and the layered bald
-// base, see LAYERED_HERO_BASE_SRC) ship, the classic hat stays the baked-in sprite look.
+// ASSET HOOKS: the art pipeline (FAL) generates into
+// public/sprites/cosmetics/<key>_<orientation>.png. Every shipped hat/face is a generated
+// sprite anchored on its socket — there is NO procedural cosmetic art. The renderer uses an
+// asset once its file has loaded, and draws nothing while it streams in / on failure (never
+// a fabricated placeholder). `cowboy_hat_classic` stays the baked-default hook with no
+// catalog row: until its art (and the layered bald base, see LAYERED_HERO_BASE_SRC) ship,
+// the classic hat stays the baked-in sprite look.
 
 export type CosmeticOrientation = "down" | "up" | "side";
 export type SocketKind = "head" | "face" | "back";
@@ -127,11 +128,32 @@ function orientedSources(key: string): Record<CosmeticOrientation, string> {
   };
 }
 
-// The pipeline's generation targets. EXACTLY the gated first pair — broader content waits
-// until these two pass the socket gate across facings/animations/biomes/weapons.
+// The pipeline's generation targets — the AD-approved Wave 1 set. Hats socket to the head
+// at the head size (~48px, like the classic cowboy hat); faces socket to the face at the
+// face size (~32px, like the round specs). cowboy_hat_classic stays the baked-default hook
+// (no catalog row) until the layered bald base ships.
 export const COSMETIC_ASSET_SOURCES: Record<string, CosmeticAssetDef> = {
   cowboy_hat_classic: { socket: "head", sizePx: 48, src: orientedSources("cowboy_hat_classic") },
+  // hats
+  hat_top: { socket: "head", sizePx: 48, src: orientedSources("hat_top") },
+  hat_beanie: { socket: "head", sizePx: 48, src: orientedSources("hat_beanie") },
+  hat_chef: { socket: "head", sizePx: 48, src: orientedSources("hat_chef") },
+  hat_party: { socket: "head", sizePx: 48, src: orientedSources("hat_party") },
+  hat_flower: { socket: "head", sizePx: 48, src: orientedSources("hat_flower") },
+  hat_mushroom: { socket: "head", sizePx: 48, src: orientedSources("hat_mushroom") },
+  hat_crown: { socket: "head", sizePx: 48, src: orientedSources("hat_crown") },
+  hat_wizard: { socket: "head", sizePx: 48, src: orientedSources("hat_wizard") },
+  hat_halo: { socket: "head", sizePx: 48, src: orientedSources("hat_halo") },
+  hat_headphones: { socket: "head", sizePx: 48, src: orientedSources("hat_headphones") },
+  hat_helmet: { socket: "head", sizePx: 48, src: orientedSources("hat_helmet") },
+  hat_horns: { socket: "head", sizePx: 48, src: orientedSources("hat_horns") },
+  // faces
   round_glasses: { socket: "face", sizePx: 32, src: orientedSources("round_glasses") },
+  face_shades: { socket: "face", sizePx: 32, src: orientedSources("face_shades") },
+  face_eyepatch: { socket: "face", sizePx: 32, src: orientedSources("face_eyepatch") },
+  face_star_shades: { socket: "face", sizePx: 32, src: orientedSources("face_star_shades") },
+  face_3d_glasses: { socket: "face", sizePx: 32, src: orientedSources("face_3d_glasses") },
+  face_monocle: { socket: "face", sizePx: 32, src: orientedSources("face_monocle") },
 };
 
 // The layered-hero base (the hero WITHOUT the baked-in cowboy hat) — the second half of

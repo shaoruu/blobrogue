@@ -12,7 +12,7 @@ import { WEAPONS } from "../sim/weapons.js";
 import { itemById } from "../sim/items.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
-import { cosmeticOverlay } from "../game/cosmeticArt.js";
+import { cosmeticIcon } from "../game/cosmeticArt.js";
 import { createBlobPreview } from "./blobPreview.js";
 import type { BlobLook, BlobPreview } from "./blobPreview.js";
 import { FocusScope, currentFocus } from "./focus.js";
@@ -1137,7 +1137,7 @@ export class Menu {
         icon.appendChild(swatch);
         return icon;
       }
-      const art = def ? cosmeticOverlay(def.id) : null;
+      const art = def ? cosmeticIcon(def.id) : null;
       if (art) {
         const mini = document.createElement("canvas");
         mini.width = 40; mini.height = 40;

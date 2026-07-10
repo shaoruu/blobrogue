@@ -37,8 +37,8 @@ const BLINK_SECONDS = 0.14;
 const WAVE_SECONDS = 0.8;
 const WAVE_ROT = 0.05; // radians — under COSMETIC_ROT_CAP, so hats ride along exactly
 
-// The hero's eye bars in 64px frame space (the same measurements the cosmetic face
-// overlays anchor on — see src/game/cosmeticArt.ts lens positions).
+// The hero's eye bars in 64px frame space (the same eye line the cosmetic face socket
+// anchors on — see src/game/cosmeticSockets.ts SOCKETS face entries).
 const EYES: ReadonlyArray<{ x: number; y: number; w: number; h: number }> = [
   { x: 19, y: 27, w: 9, h: 9 },
   { x: 37, y: 27, w: 9, h: 9 },
