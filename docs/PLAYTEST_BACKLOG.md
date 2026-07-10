@@ -41,7 +41,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Double-tap dash + rebindable dash key (R). [specced]
 🟡 Shop: click-outside-to-close + clearer sold-out/heart-limit states. [specced]
 🟡 Ground FX: frost zone ✅done, thumper scorch decal + frost render tweak. [queued in visual pass]
-🟡 Music expansion (~29 tracks, pool+shuffle+combat crossfade). [audio spec in]
+🟡 Music expansion (~29 tracks, pool+shuffle+combat crossfade) + AMBER HOME MOTIF: canonical melody authored w/ literal MIDI at /workspace/blobrogue_audio_manifest/amber_motif/ (amber_motif.mid). Build = generate EL bed then DAW/sample-layer the MIDI over it (clean celesta F100 / broken-detuned-inverted Jet); NEVER text-to-music the tune. Plant in menu+Amberwild during music pass so it's internalized before Jet. Giant signature separate; they meet only at F100. [audio spec in]
 🟡 Run persistence — reconnect resumes the run instead of dropping it. [todo → design]
 🟡 Hotbar full-swap flow redo (auto-swap equipped, E for slot pick). [specced]
 🟡 Everything spawnable in DEV WORLD (standing checklist per feature).
