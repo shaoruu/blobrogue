@@ -20,7 +20,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Consuming hearts when already at/над full? (part of heart bug) [investigating]
 
 ## CONTENT — more of (Ian loves it)
-🟡 MORE HATS / COSMETICS (asked 3×) — art director speccing 8-12 hats + face items; I generate via pipeline. [specced]
+🟡 MORE HATS / COSMETICS (asked 3×) — WAVE 1 GENERATED: 12 hats + 5 face down-facings on my box, AD gating; then up/side + wire to closet. [generating]
 🟡 MORE BLESSINGS — Ian loves them, wants more variety (respect raw caps). [game designer speccing]
 🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). [creative director owns roadmap]
 🟡 BIGGER BOSSES sometimes — periodic GIANT/spectacle multi-phase set-piece bosses. [roadmap]
