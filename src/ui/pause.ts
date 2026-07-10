@@ -19,7 +19,8 @@ export class PauseOverlay {
     const title = document.createElement("h1");
     title.textContent = "PAUSED";
     card.appendChild(title);
-    card.appendChild(createSettingsControls());
+    // The pause card is narrow: the shared tabbed settings render single-column here.
+    card.appendChild(createSettingsControls().root);
 
     const row = document.createElement("div");
     row.className = "btnrow";

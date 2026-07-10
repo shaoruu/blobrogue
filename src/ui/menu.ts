@@ -24,6 +24,13 @@ import {
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
 } from "./onlineCopy.js";
 import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
+import { CHANGELOG, LATEST_VERSION } from "../generated/changelog.js";
+
+// The build's changelog version key: the vite `define` (__BUILD_VERSION__) at build time,
+// else the newest changelog section (tests/dev run outside a vite build). localStorage
+// remembers the last-seen key so a new build lights the unread cue exactly once.
+const CHANGELOG_VERSION = typeof __BUILD_VERSION__ !== "undefined" ? __BUILD_VERSION__ : LATEST_VERSION;
+const CHANGELOG_SEEN_KEY = "blobrogue.changelogSeen";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -134,6 +141,9 @@ export class Menu {
   private titleStage: BlobPreview | null = null;
   // The current screen's tab group for controller LB/RB (closet categories, profile views).
   private tabCycle: ((dir: 1 | -1) => void) | null = null;
+  // The title's What's New button, kept so opening the panel can clear its unread cue in
+  // place (no title rebuild, zero layout shift).
+  private whatsNewBtn: HTMLButtonElement | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -163,6 +173,7 @@ export class Menu {
     this.titleStageRefresh = null; // idem
     this.titleStage = null;
     this.tabCycle = null;          // screens with tab groups re-arm after their own show()
+    this.whatsNewBtn = null;       // idem
     this.overlay.classList.remove("hidden");
     this.overlay.replaceChildren(...nodes);
   }
@@ -237,11 +248,17 @@ export class Menu {
     const wrap = el("div", "menu menu-home");
     const focusTargets = new Map<string, HTMLButtonElement>();
 
-    // HERO BAND. Left: the wordmark (intrinsic 1128x192 logo so its box is reserved
-    // before the file streams in) + tagline. Right: the blob stage — an identity
-    // SHOWPIECE, not a control: no button affordance, no amber fill, no arrow. Play
-    // Online below remains the only amber-filled element and the first action.
+    // HERO BAND (centered stack, the blob is the star): the big blob stage on TOP, the
+    // wordmark logo below it, then a one-line tagline. The stage is an identity SHOWPIECE,
+    // not a control — no button affordance, no amber fill, no arrow. Play Online below
+    // remains the only amber-filled element and the first action.
     const hero = el("div", "home-hero");
+    const stageBox = el("div", "blob-stage");
+    stageBox.setAttribute("role", "img");
+    stageBox.setAttribute("aria-label", this.stageLabel());
+    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 160, { isCalmIdle: true });
+    stageBox.appendChild(stagePreview.el);
+    hero.appendChild(stageBox);
     const mark = el("div", "hero-mark");
     const logo = document.createElement("img");
     logo.src = "/ui/logo.png";
@@ -250,14 +267,8 @@ export class Menu {
     logo.width = 1128;
     logo.height = 192;
     mark.appendChild(logo);
-    mark.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast your way down as far as you can \u2014 solo, or with friends."));
+    mark.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast down as far as you can \u2014 solo, or with friends."));
     hero.appendChild(mark);
-    const stageBox = el("div", "blob-stage");
-    stageBox.setAttribute("role", "img");
-    stageBox.setAttribute("aria-label", this.stageLabel());
-    const stagePreview = createBlobPreview(lookOf(this.session.cosmetics, this.session.colorIndex), 96, { isCalmIdle: true });
-    stageBox.appendChild(stagePreview.el);
-    hero.appendChild(stageBox);
     wrap.appendChild(hero);
     // The natural place to tap your guy: a small, quiet closet door beside the blob. It
     // opens the closet as an OVERLAY — the title (and Play) never leaves the screen.
@@ -281,16 +292,19 @@ export class Menu {
       left.appendChild(this.soloButton("\u25be  PLAY"));
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       left.appendChild(el("p", "home-status", statusNote));
+      // Offline nav: the same uniform .dest stack (no LEADERBOARD — it needs the backend).
       const nav = el("div", "navrow");
-      const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
-      const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());
+      const profileBtn = this.destButton("\u25c6", "PROFILE", "your blob, stats & closet", () => void this.showProfile(), "profile");
+      const settingsBtn = this.destButton("\u2726", "SETTINGS", "controls, audio & accessibility", () => void this.showSettings(), "settings");
+      const whatsNewDest = this.whatsNewDest();
       focusTargets.set("profile", profileBtn);
       focusTargets.set("settings", settingsBtn);
-      nav.append(profileBtn, settingsBtn);
+      nav.append(profileBtn, settingsBtn, whatsNewDest);
       left.appendChild(nav);
       wrap.appendChild(left);
       wrap.appendChild(customize);
       this.show(wrap);
+      this.whatsNewBtn = whatsNewDest; // re-arm after show() cleared the per-screen refs
       this.titleStageRefresh = refreshStage;
       this.titleStage = stagePreview;
       if (focus?.dest) focusTargets.get(focus.dest)?.focus();
@@ -309,32 +323,39 @@ export class Menu {
     onlineBtn.addEventListener("click", () => void this.showOnlineHome());
     focusTargets.set("online", onlineBtn);
     left.appendChild(onlineBtn);
+    // PLAY SOLO is the secondary (dark) play action — PLAY ONLINE stays the ONLY amber-
+    // filled button, so the eye lands on it first.
     const solo = this.soloButton("PLAY SOLO");
-    solo.classList.add("play-solo");
+    solo.classList.add("play-solo", "secondary");
     left.appendChild(solo);
     // The fixed home status line: reserved from first paint; any boot/exit note swaps
     // content inside it, never the layout around it.
     left.appendChild(el("p", "home-status", statusNote));
-    left.appendChild(this.leaderboardPreview(focusTargets));
+    left.appendChild(this.leaderboardPreview());
     body.appendChild(left);
 
-    // RIGHT: the reserved identity card, then the PROFILE / SETTINGS destinations (the
-    // leaderboard's explicit door is the VIEW LEADERBOARD action on the glance itself).
+    // RIGHT: the reserved identity card, then a UNIFORM nav stack — PROFILE, LEADERBOARD,
+    // SETTINGS, WHAT'S NEW, every one the exact same .dest component (same size/type/
+    // padding). Consistency is what kills the "scattered" read.
     const right = el("div", "home-right");
     const identity = this.identitySection();
     right.appendChild(identity);
     const nav = el("div", "navrow");
-    const profileBtn = this.navButton("PROFILE", "your blob, stats & closet", () => void this.showProfile());
-    const settingsBtn = this.navButton("SETTINGS", "controls, audio & accessibility", () => void this.showSettings());
+    const profileBtn = this.destButton("\u25c6", "PROFILE", "your blob, stats & closet", () => void this.showProfile(), "profile");
+    const leaderboardBtn = this.destButton("\u2605", "LEADERBOARD", "the deepest runs on record", () => void this.showLeaderboard(), "leaderboard");
+    const settingsBtn = this.destButton("\u2726", "SETTINGS", "controls, audio & accessibility", () => void this.showSettings(), "settings");
+    const whatsNewDest = this.whatsNewDest();
     focusTargets.set("profile", profileBtn);
+    focusTargets.set("leaderboard", leaderboardBtn);
     focusTargets.set("settings", settingsBtn);
-    nav.append(profileBtn, settingsBtn);
+    nav.append(profileBtn, leaderboardBtn, settingsBtn, whatsNewDest);
     right.appendChild(nav);
     body.appendChild(right);
 
     wrap.appendChild(body);
     wrap.appendChild(customize);
     this.show(wrap);
+    this.whatsNewBtn = whatsNewDest; // re-arm after show() cleared the per-screen refs
     this.identityMount = identity;
     this.titleStageRefresh = refreshStage;
     this.titleStage = stagePreview;
@@ -369,11 +390,17 @@ export class Menu {
     return worn.length > 0 ? `Your blob wearing ${worn.join(", ")}` : "Your blob";
   }
 
-  // A 90px home destination card: the label leads (and IS the button's own text, so focus
-  // tooling reads it plainly), the sub-copy rides underneath.
-  private navButton(label: string, sub: string, go: () => void): HTMLButtonElement {
-    const btn = el("button", "secondary nav-btn home-dest", label);
-    btn.appendChild(el("span", "dest-sub", sub));
+  // The ONE uniform destination component: a fixed 56px row of icon / label+sub / arrow.
+  // Every right-column nav button is built from this — same size, type, and padding — so
+  // the nav reads as a clean aligned stack, never a scattered pile of mixed buttons.
+  private destButton(icon: string, label: string, sub: string, go: () => void, key = ""): HTMLButtonElement {
+    const btn = el("button", `secondary nav-btn dest${key ? " nav-" + key : ""}`);
+    btn.type = "button";
+    btn.setAttribute("aria-label", label);
+    btn.appendChild(el("span", "dest-ic", icon));
+    const main = el("div", "dest-main");
+    main.append(el("span", "dest-label", label), el("span", "dest-sub", sub));
+    btn.append(main, el("span", "dest-arrow", "\u203a"));
     btn.addEventListener("click", go);
     return btn;
   }
@@ -651,14 +678,12 @@ export class Menu {
   // player's own rank when it sits outside the visible rows. Hydration replaces contents
   // only — no node is ever inserted or removed. The preview is NEVER collapsed or hidden:
   // short viewports scroll the home in document order with Play first (see index.html).
-  private leaderboardPreview(focusTargets?: Map<string, HTMLButtonElement>): HTMLElement {
+  private leaderboardPreview(): HTMLElement {
     const panel = el("div", "lb-preview");
     const head = el("div", "lb-head");
     head.appendChild(el("span", "col-h", "Global leaderboard"));
-    const view = el("button", "secondary lb-view", "VIEW LEADERBOARD \u25b8");
-    view.addEventListener("click", () => void this.showLeaderboard());
-    focusTargets?.set("leaderboard", view);
-    head.appendChild(view);
+    // The explicit door is the LEADERBOARD nav destination on the right — the glance stays
+    // a quiet preview (clickable rows still open a player's profile).
     panel.appendChild(head);
     const { box, rows } = this.leaderboardRows(LB_PREVIEW_ROWS);
     const stateLine = el("p", "lb-standing", "");
@@ -1235,6 +1260,131 @@ export class Menu {
     void this.hydrateCloset();
   }
 
+  // ---- WHAT'S NEW / CHANGELOG ---------------------------------------------------------
+  //
+  // The changelog is single-sourced from CHANGELOG.md (parsed at build into
+  // src/generated/changelog.ts). The menu shows a compact hero-corner button; localStorage
+  // "blobrogue.changelogSeen" holds the last-seen version key. Opening the panel marks the
+  // build seen (clears the unread cue). A returning player on a NEW build gets ONE auto-
+  // popup at the menu; a brand-new player is silently caught up (no popup, no nag).
+
+  private readChangelogSeen(): string | null {
+    try { return localStorage.getItem(CHANGELOG_SEEN_KEY); } catch { return null; }
+  }
+
+  private markChangelogSeen(): void {
+    try { localStorage.setItem(CHANGELOG_SEEN_KEY, CHANGELOG_VERSION); } catch { /* ignore */ }
+  }
+
+  // Unread = the player has seen SOME build before (a stored key) and it isn't this one.
+  // A brand-new player (no stored key) is not "unread" — they get the silent catch-up.
+  private isChangelogUnread(): boolean {
+    const seen = this.readChangelogSeen();
+    return seen !== null && seen !== CHANGELOG_VERSION;
+  }
+
+  // The WHAT'S NEW nav destination — the SAME uniform .dest as the other utilities. When
+  // unread it wears a grayscale-distinct NEW chip in its sub line PLUS an 8px amber square
+  // corner dot (never hue-only); both are reserved by CSS so they appear in place.
+  private whatsNewDest(): HTMLButtonElement {
+    const btn = el("button", "secondary nav-btn dest nav-whatsnew");
+    btn.type = "button";
+    btn.onclick = () => this.openChangelog();
+    this.renderWhatsNew(btn);
+    return btn;
+  }
+
+  // (Re)build the WHAT'S NEW dest's content from the current unread state — called on build
+  // and again when opening the panel clears the cue, so the title button updates in place.
+  private renderWhatsNew(btn: HTMLButtonElement): void {
+    const unread = this.isChangelogUnread();
+    btn.replaceChildren();
+    btn.setAttribute("aria-label", unread ? "What's new — unread updates" : "What's new");
+    btn.appendChild(el("span", "dest-ic", "\u2726"));
+    const main = el("div", "dest-main");
+    main.appendChild(el("span", "dest-label", "WHAT'S NEW"));
+    const sub = el("span", "dest-sub");
+    if (unread) sub.appendChild(el("span", "wn-new", "NEW"));
+    else sub.textContent = "the latest changes";
+    main.appendChild(sub);
+    btn.append(main, el("span", "dest-arrow", "\u203a"));
+    if (unread) btn.appendChild(el("span", "wn-dot"));
+  }
+
+  // On boot at the menu only (never mid-run, never on an invite deep-join — main.ts calls
+  // this on the plain title path). A returning player on a new build gets ONE popup scrolled
+  // to the newest section; a brand-new player is caught up silently.
+  maybeShowChangelogPopup(): void {
+    const seen = this.readChangelogSeen();
+    if (seen === null) { this.markChangelogSeen(); return; } // brand-new: silent, no popup
+    if (seen !== CHANGELOG_VERSION) this.openChangelog({ isUpdatePopup: true });
+  }
+
+  // The panel: the .menu panel family + the global pixel scrollbar. Header (WHAT'S NEW, or
+  // UPDATED · WHAT'S NEW as a returning-player popup) + close; a scrolling body of version
+  // sections (Unreleased renders as IN PROGRESS, muted), newest at top, 2px dun-3 dividers.
+  // Opening marks the build seen and clears the button's unread cue in place.
+  private openChangelog(opts: { isUpdatePopup?: boolean } = {}): void {
+    const scrim = el("div", "changelog-scrim");
+    const pop = el("div", "menu changelog-pop");
+    const scope = new FocusScope();
+    let isClosed = false;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); }
+    };
+    const close = () => {
+      if (isClosed) return;
+      isClosed = true;
+      window.removeEventListener("keydown", onKey);
+      this.overlay.removeChild(scrim);
+      scope.close();
+    };
+
+    const head = el("div", "cl-head");
+    const title = el("div", "cl-title");
+    if (opts.isUpdatePopup) title.appendChild(el("span", "cl-flag", "UPDATED \u00b7 "));
+    title.appendChild(document.createTextNode("WHAT'S NEW"));
+    const closeBtn = this.closeButton(close);
+    head.append(title, closeBtn);
+    pop.appendChild(head);
+
+    const body = el("div", "cl-body");
+    for (const section of CHANGELOG) {
+      const sec = el("div", "cl-section");
+      const isUnreleased = section.version === "unreleased";
+      const date = el("div", `cl-date${isUnreleased ? " progress" : ""}`, isUnreleased ? "IN PROGRESS" : section.date);
+      sec.appendChild(date);
+      for (const entry of section.entries) {
+        const row = el("div", "cl-entry");
+        const text = el("span", "cl-entry-text");
+        if (entry.title) text.appendChild(el("span", "cl-entry-title", entry.title + (entry.body ? " \u2014 " : "")));
+        if (entry.body) text.appendChild(el("span", "cl-entry-body", entry.body));
+        row.appendChild(text);
+        sec.appendChild(row);
+      }
+      body.appendChild(sec);
+    }
+    pop.appendChild(body);
+
+    if (opts.isUpdatePopup) {
+      const foot = el("div", "cl-foot");
+      const gotIt = el("button", "cl-got-it", "GOT IT");
+      gotIt.type = "button";
+      gotIt.onclick = close;
+      foot.appendChild(gotIt);
+      pop.appendChild(foot);
+    }
+
+    scrim.appendChild(pop);
+    // The popup opens at the top (newest section first), so it lands on the newest already.
+    this.overlay.appendChild(scrim);
+    window.addEventListener("keydown", onKey);
+    // Opening catches the player up: mark seen + clear the title button's unread cue live.
+    this.markChangelogSeen();
+    if (this.whatsNewBtn) this.renderWhatsNew(this.whatsNewBtn);
+    scope.open(opts.isUpdatePopup ? (pop.querySelector<HTMLButtonElement>(".cl-got-it") ?? closeBtn) : closeBtn, currentFocus());
+  }
+
   // ---- SETTINGS -----------------------------------------------------------------------
 
   // The full settings destination (also reachable mid-run via pause, which embeds the same
@@ -1243,7 +1393,10 @@ export class Menu {
     const wrap = el("div", "menu settings-screen");
     wrap.appendChild(el("h1", "", "SETTINGS"));
     wrap.appendChild(el("p", "muted", "everything saves instantly \u2014 the pause menu carries the same controls"));
-    wrap.appendChild(createSettingsControls());
+    // The wide title panel lays the tabbed body out in two columns; the shared component
+    // is identical to the pause overlay's (single-column there).
+    const controls = createSettingsControls({ isTwoCol: true });
+    wrap.appendChild(controls.root);
     const row = el("div", "btnrow");
     const goBack = () => void this.showTitle({ dest: "settings" });
     const back = el("button", "secondary", "back");
@@ -1252,6 +1405,8 @@ export class Menu {
     wrap.appendChild(row);
     this.show(wrap);
     this.bindEscape(goBack);
+    // Controller LB/RB cycles the settings category tabs.
+    this.tabCycle = controls.cycleTab;
   }
 
   // ---- ONLINE (authoritative server): rooms + quick play -----------------------------

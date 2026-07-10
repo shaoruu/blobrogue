@@ -41,6 +41,7 @@ import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { padActions } from "../src/ui/menuGamepad.js";
+import { CHANGELOG, LATEST_VERSION } from "../src/generated/changelog.js";
 import {
   COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL,
@@ -366,12 +367,17 @@ async function main(): Promise<void> {
     const { menu, overlay } = makeMenu();
     await menu.showTitle();
     const buttons = buttonsOf(overlay);
-    check("PROFILE destination", buttons.some((b) => b.startsWith("PROFILE")));
-    check("SETTINGS destination", buttons.some((b) => b.startsWith("SETTINGS")));
-    const navs = byClass(overlay, "nav-btn").map(textOf);
-    check("the right side is about YOU: exactly PROFILE + SETTINGS (90px destination cards)",
-      navs.length === 2 && navs[0].startsWith("PROFILE") && navs[1].startsWith("SETTINGS"), navs.join("|"));
-    check("the leaderboard's explicit door is VIEW LEADERBOARD on the glance", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
+    check("PROFILE destination", buttons.some((b) => b.includes("PROFILE")));
+    check("SETTINGS destination", buttons.some((b) => b.includes("SETTINGS")));
+    // The right side is a UNIFORM .dest nav: PROFILE, LEADERBOARD, SETTINGS, WHAT'S NEW —
+    // every one the same component (kills the "scattered" read).
+    const navs = byClass(overlay, "nav-btn");
+    check("the right nav is four uniform .dest destinations in order",
+      navs.length === 4 && navs.every((n) => (n.className ?? "").includes("dest"))
+      && textOf(navs[0]).includes("PROFILE") && textOf(navs[1]).includes("LEADERBOARD")
+      && textOf(navs[2]).includes("SETTINGS") && textOf(navs[3]).includes("WHAT'S NEW"),
+      navs.map(textOf).join("|"));
+    check("the leaderboard's explicit door is the LEADERBOARD nav destination", buttons.some((b) => b.includes("LEADERBOARD")));
     check("the glance header is GLOBAL LEADERBOARD", textOf(overlay).includes("Global leaderboard"));
     const all = textOf(overlay);
     check("no inline settings controls on the title (sound/shake live behind SETTINGS)",
@@ -405,7 +411,7 @@ async function main(): Promise<void> {
     check("it draws through the shared preview renderer (the world/closet code path)",
       byClass(stage() ?? {}, "blob-preview").length === 1);
     const canvasBefore = collect(stage() ?? {}, (n) => n.tagName === "CANVAS")[0];
-    check("the canvas reserves its fixed 96px box from creation", canvasBefore?.width === 96 && canvasBefore?.height === 96);
+    check("the canvas reserves its fixed 160px centerpiece box from creation", canvasBefore?.width === 160 && canvasBefore?.height === 160);
     check("the stage is a SHOWPIECE, not a control (no button inside it)",
       collect(stage() ?? {}, (n) => n.tagName === "BUTTON").length === 0);
     check("before hydration a fresh guest shows the DEFAULT blob (accepted copy)",
@@ -421,25 +427,25 @@ async function main(): Promise<void> {
       (buttons[0] ?? "").includes("PLAY ONLINE") && (buttons[buttons.length - 1] ?? "") === "CUSTOMIZE", buttons.join("|").slice(0, 80));
     // The accepted shell + stage geometry, verbatim from the placement decision.
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
-    check("shell: 150px hero row over minmax(0,1fr), height min(548px,100vh-40px), min 508px",
-      /\.menu-home\{ display:grid; grid-template-rows:150px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(548px,calc\(100vh - 40px\)\); min-height:508px; \}/.test(html));
-    check("hero band: 1fr wordmark | 132px stage; stage canvas is 96px",
-      /\.home-hero\{ grid-row:1; grid-column:1; display:grid; grid-template-columns:1fr 132px;/.test(html)
-      && /\.home-hero \.blob-stage\{[^}]*width:132px; height:132px;/.test(html)
-      && /\.home-hero \.blob-stage \.blob-preview\{[^}]*width:96px; height:96px;/.test(html));
+    check("shell: 300px hero row over minmax(0,1fr), height min(700px,100vh-40px), min 620px",
+      /\.menu-home\{ display:grid; grid-template-rows:300px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(700px,calc\(100vh - 40px\)\); min-height:620px; position:relative; \}/.test(html));
+    check("hero band: a CENTERED column with a big 200px stage; stage canvas is 160px",
+      /\.home-hero\{ grid-row:1; grid-column:1; display:flex; flex-direction:column; align-items:center; justify-content:center;/.test(html)
+      && /\.home-hero \.blob-stage\{[^}]*width:200px; height:200px;/.test(html)
+      && /\.home-hero \.blob-stage \.blob-preview\{[^}]*width:160px; height:160px;/.test(html));
     check("the blob STANDS: radial plinth glow behind + soft ground-shadow ellipse",
       /\.home-hero \.blob-stage::before\{[^}]*radial-gradient/.test(html)
       && /\.home-hero \.blob-stage::after\{[^}]*border-radius:50%; background:rgba\(5,3,11/.test(html));
-    // The accepted responsive rules: narrow stacks the hero (104/80), short viewports
-    // compact it (100px row, 88/64) so Play + the glance stay on screen.
+    // The accepted responsive rules: narrow shrinks the centerpiece (240px row, 150/128),
+    // short viewports compact it (180px row, 120/96) so Play + the glance stay on screen.
     const narrowCss = html.slice(html.indexOf("@media (max-width:680px)"), html.indexOf("@media (max-height:679px)"));
-    check("narrow: hero stacks centered with a 104px stage (80px blob)",
-      /\.home-hero\{ grid-template-columns:1fr; justify-items:center; gap:8px; \}/.test(narrowCss)
-      && /width:104px; height:104px/.test(narrowCss) && /width:80px; height:80px/.test(narrowCss));
+    check("narrow: 240px hero row with a 150px stage (128px blob)",
+      /grid-template-rows:240px minmax\(0,1fr\)/.test(narrowCss)
+      && /width:150px; height:150px/.test(narrowCss) && /width:128px; height:128px/.test(narrowCss));
     const shortCss = html.slice(html.indexOf("@media (max-height:679px)"));
-    check("short: 100px hero row with an 88px stage (64px blob)",
-      /grid-template-rows:100px minmax\(0,1fr\)/.test(shortCss)
-      && /width:88px; height:88px/.test(shortCss) && /width:64px; height:64px/.test(shortCss));
+    check("short: 180px hero row with a 120px stage (96px blob)",
+      /grid-template-rows:180px minmax\(0,1fr\)/.test(shortCss)
+      && /width:120px; height:120px/.test(shortCss) && /width:96px; height:96px/.test(shortCss));
     // The accepted rendering-loop rules live in the shared preview: rAF only while
     // visible, pause on hide/overlay/tab-hide, static idle frame under reduced motion.
     const previewSrc = readFileSync(join(ROOT, "src/ui/blobPreview.ts"), "utf8");
@@ -490,7 +496,7 @@ async function main(): Promise<void> {
     check("the Play node is the SAME node after the flashy loadout landed",
       collect(overlay, (n) => n.tagName === "BUTTON" && textOf(n).includes("PLAY ONLINE"))[0] === playNode);
     check("the stage canvas never resizes (fixed reserved bounds)",
-      collect(byClass(overlay, "blob-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0] === stageCanvas && stageCanvas?.width === 96);
+      collect(byClass(overlay, "blob-stage")[0] ?? {}, (n) => n.tagName === "CANVAS")[0] === stageCanvas && stageCanvas?.width === 160);
     check("PLAY is still the first action in order", (buttonsOf(overlay)[0] ?? "").includes("PLAY ONLINE"));
     // The stage chrome stays quiet by construction: no CSS animation and no amber FILL
     // anywhere on it (the plinth glow is a low-alpha wash, never a competing highlight);
@@ -698,8 +704,9 @@ async function main(): Promise<void> {
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
     const navs = byClass(signed.overlay, "nav-btn").map(textOf);
-    check("signed-in title keeps the same destinations", navs.length === 2 && navs[0].startsWith("PROFILE") && navs[1].startsWith("SETTINGS"), navs.join("|"));
-    check("...and the same leaderboard door", buttonsOf(signed.overlay).some((b) => b.includes("VIEW LEADERBOARD")));
+    check("signed-in title keeps the four uniform destinations", navs.length === 4
+      && navs[0].includes("PROFILE") && navs[1].includes("LEADERBOARD") && navs[2].includes("SETTINGS") && navs[3].includes("WHAT'S NEW"), navs.join("|"));
+    check("...and the LEADERBOARD nav door", byClass(signed.overlay, "nav-leaderboard").length === 1);
 
     const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });
     await menu.showSettings();
@@ -709,18 +716,18 @@ async function main(): Promise<void> {
     check("Escape returns to the title", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
     const focusedAfterSettings = lastFocused();
     check("focus restored to the SETTINGS destination by name",
-      focusedAfterSettings?.className?.includes("nav-btn") === true && focusedAfterSettings?.textContent === "SETTINGS",
-      `${focusedAfterSettings?.className} / ${focusedAfterSettings?.textContent}`);
+      focusedAfterSettings?.className?.includes("nav-settings") === true,
+      `${focusedAfterSettings?.className}`);
 
     await menu.showProfile();
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
-    check("Escape from profile restores the PROFILE destination", lastFocused()?.textContent === "PROFILE");
+    check("Escape from profile restores the PROFILE destination", lastFocused()?.className?.includes("nav-profile") === true, lastFocused()?.className);
 
     await menu.showLeaderboard();
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
-    check("Escape from leaderboard restores the VIEW LEADERBOARD door", lastFocused()?.className?.includes("lb-view") === true, lastFocused()?.className);
+    check("Escape from leaderboard restores the LEADERBOARD nav destination", lastFocused()?.className?.includes("nav-leaderboard") === true, lastFocused()?.className);
 
     await menu.showOnlineHome();
     fireWindowEvent("keydown", { key: "Escape" });
@@ -1074,7 +1081,9 @@ async function main(): Promise<void> {
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
     check("equipped card geometry: 3px lift + double frame", /\.cos-card\.equipped[^}]*translateY\(-3px\)/.test(html) && /\.cos-card\.equipped[^}]*inset 0 0 0 4px/.test(html));
     check("locked card geometry: hatch overlay + desaturated thumb", /\.cos-card\.locked::after[^}]*repeating-linear-gradient/.test(html) && /\.cos-card\.locked \.cos-icon[^}]*grayscale/.test(html));
-    check("focus ring is an EXTERNAL cream outline (not the amber frame)", /\.cos-card:focus-visible\{ outline:2px solid var\(--cream\); outline-offset:3px/.test(html));
+    check("focus ring is the ONE standard cream ring (--focus-ring = 3px solid var(--cream))",
+      /\.cos-card:focus-visible\{ outline:var\(--focus-ring\); outline-offset:2px/.test(html)
+      && /--focus-ring:\s*3px solid var\(--cream\)/.test(html));
     // Blob-color swatches carry a NAME label in addition to the color chip.
     byClass(overlay, "closet-cat").find((c) => textOf(c) === "Blob Color")?.onclick?.();
     const cyan = cardByName("Cyan");
@@ -1549,6 +1558,71 @@ async function main(): Promise<void> {
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
     check("the control's width is reserved in CSS (label swaps can't shift)", /\.invite-copy\s*\{[^}]*min-width/.test(html));
     check("the URL line's height is reserved in CSS (failure fill can't shift)", /invite-url\s*\{[^}]*min-height/.test(html));
+  }
+
+  section("What's New: the uniform WHAT'S NEW nav destination, single-sourced from CHANGELOG.md");
+  {
+    const SEEN_KEY = "blobrogue.changelogSeen";
+    const latest = LATEST_VERSION; // the newest changelog section's version key
+
+    // A brand-new player (no stored key): the dest shows, WITHOUT the unread cue, and the
+    // boot popup is silent (it just catches them up). It rides the uniform nav stack.
+    localStorage.removeItem(SEEN_KEY);
+    const fresh = makeMenu();
+    await fresh.menu.showTitle();
+    const wn = byClass(fresh.overlay, "nav-whatsnew");
+    check("WHAT'S NEW is a uniform .dest in the nav stack", wn.length === 1
+      && (wn[0].className ?? "").includes("dest") && (wn[0].className ?? "").includes("nav-btn") && textOf(wn[0]).includes("WHAT'S NEW"));
+    check("PLAY stays first, What's New rides out of the Play path (never buttons[0])",
+      (buttonsOf(fresh.overlay)[0] ?? "").includes("PLAY"));
+    check("a brand-new player sees NO unread cue (no NEW chip, no dot)",
+      byClass(fresh.overlay, "wn-new").length === 0 && byClass(fresh.overlay, "wn-dot").length === 0);
+    fresh.menu.maybeShowChangelogPopup();
+    check("a brand-new player gets NO popup", byClass(fresh.overlay, "changelog-scrim").length === 0);
+    check("...and is caught up silently (seen := latest)", localStorage.getItem(SEEN_KEY) === latest);
+
+    // A returning player on a NEW build (stored key from an older version): the button wears
+    // the grayscale-distinct NEW chip + the amber square dot, and the boot popup opens once.
+    localStorage.setItem(SEEN_KEY, "2026-07-06");
+    const ret = makeMenu();
+    await ret.menu.showTitle();
+    check("a returning player on a new build sees the NEW chip + amber dot",
+      byClass(ret.overlay, "wn-new").length === 1 && textOf(byClass(ret.overlay, "wn-new")[0]) === "NEW"
+      && byClass(ret.overlay, "wn-dot").length === 1);
+    ret.menu.maybeShowChangelogPopup();
+    check("...and the ONE-TIME popup auto-opens at the menu", byClass(ret.overlay, "changelog-scrim").length === 1);
+    check("the popup header flags the update (UPDATED · WHAT'S NEW)", textOf(byClass(ret.overlay, "cl-title")[0]).includes("UPDATED"));
+    const gotIt = collect(ret.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "GOT IT");
+    check("the popup carries a [GOT IT] primary", gotIt.length === 1);
+    check("the panel renders version sections + the Unreleased IN PROGRESS marker",
+      byClass(ret.overlay, "cl-section").length === CHANGELOG.length && textOf(byClass(ret.overlay, "cl-body")[0]).includes("IN PROGRESS"));
+    check("opening the popup marks the build seen (dot cleared next paint)", localStorage.getItem(SEEN_KEY) === latest);
+    gotIt[0].onclick?.();
+    check("GOT IT closes the popup", byClass(ret.overlay, "changelog-scrim").length === 0);
+
+    // Caught up: no cue, no popup.
+    localStorage.setItem(SEEN_KEY, latest);
+    const caught = makeMenu();
+    await caught.menu.showTitle();
+    check("a caught-up player sees no unread cue", byClass(caught.overlay, "wn-dot").length === 0);
+    caught.menu.maybeShowChangelogPopup();
+    check("...and no popup", byClass(caught.overlay, "changelog-scrim").length === 0);
+
+    // Clicking the button opens the plain panel (no GOT IT) and clears the unread cue live.
+    localStorage.setItem(SEEN_KEY, "2026-07-06");
+    const click = makeMenu();
+    await click.menu.showTitle();
+    check("unread before click", byClass(click.overlay, "wn-dot").length === 1);
+    byClass(click.overlay, "nav-whatsnew")[0]?.onclick?.();
+    check("clicking opens the panel (no GOT IT — not the popup)",
+      byClass(click.overlay, "changelog-scrim").length === 1
+      && collect(click.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "GOT IT").length === 0);
+    check("opening clears the unread cue on the title dest in place",
+      byClass(byClass(click.overlay, "nav-whatsnew")[0] ?? {}, "wn-dot").length === 0);
+    check("...and marks the build seen", localStorage.getItem(SEEN_KEY) === latest);
+    fireWindowEvent("keydown", { key: "Escape" });
+    check("Escape closes the panel", byClass(click.overlay, "changelog-scrim").length === 0);
+    localStorage.removeItem(SEEN_KEY);
   }
 
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
