@@ -73,6 +73,10 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   choir: "boss",
   weaver: "boss",
   gilded: "boss",
+  // Wave 1 deep bosses run full boss grammar; the satellite bodies are decoy-grade
+  // (planted mechanic bodies, like the Weaver's knot/sac).
+  jet: "boss", tithe: "boss", quorum: "boss",
+  tithe_slab: "decoy", quorum_shield: "decoy", quorum_heal: "decoy", quorum_dmg: "decoy",
 };
 
 // ---- body materials ----
@@ -109,6 +113,14 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   choir: "voice",
   weaver: "chitin",
   gilded: "gold",
+  // Wave 1 placeholders (real per-boss audio is the audio director's separate task —
+  // amber-motif stems for JET, the feeder swell for the Tithe, three voice stems for the
+  // Quorum). The material here only picks the same-family fallback bank until those land:
+  // JET reuses the King's goo bank (the mirror of the player), the Tithe the Warden's gold
+  // (its stolen amber), the Quorum the bone roster; the mechanic bodies reuse the chitin
+  // lattice bank (like the Weaver's knots/sacs).
+  jet: "goo", tithe: "gold", quorum: "bone",
+  tithe_slab: "chitin", quorum_shield: "chitin", quorum_heal: "chitin", quorum_dmg: "chitin",
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -252,6 +264,25 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
     windup: "warden.prisonWarn", lock: "warden.turretLock", active: "warden.turretFire", impact: "warden.prisonClose",
     recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
   },
+  // Wave 1 deep bosses — PLACEHOLDER audio reusing an in-family bank until the audio
+  // director's bespoke stems land (JET = King goo bank, Tithe = Warden gold, Quorum = bone
+  // roster). The mechanic bodies sing the chitin lattice rows the Weaver's knots/sacs use.
+  jet: {
+    windup: "king.hopWarn", lock: "king.hopLock", active: "king.radialFire", impact: "king.slam",
+    recover: "king.recover", entrance: "king.entrance", phase: "king.phase", special: "king.squeezeWarn", death: "king.death",
+  },
+  tithe: {
+    windup: "warden.prisonWarn", lock: "warden.turretLock", active: "warden.turretFire", impact: "warden.prisonClose",
+    recover: "warden.exposed", entrance: "gilded.entrance", phase: "warden.phase", special: "warden.glyphWarn", death: "warden.death",
+  },
+  quorum: {
+    windup: "marrow.listenStart", lock: "marrow.aimLock", active: "marrow.chargeStart", impact: "marrow.wallImpact",
+    recover: "marrow.recover", entrance: "marrow.entrance", phase: "marrow.phase", special: "marrow.stompImpact", death: "marrow.death",
+  },
+  tithe_slab: { fuse: "weaver.latticeWarn", toll: "weaver.latticeFire" },
+  quorum_shield: { fuse: "weaver.feint", toll: "weaver.feint" },
+  quorum_heal: { fuse: "weaver.feint", toll: "weaver.feint" },
+  quorum_dmg: { fuse: "weaver.feint", toll: "weaver.feint" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {

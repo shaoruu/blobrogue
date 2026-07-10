@@ -167,9 +167,19 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     reflect facet's armed/cracked state, the shielded slab, pre-cracked seams, dripping
 //     element, heated veins). The boss affix needs NO new field: it blooms the existing
 //     telegraphed "charge" hazards, which already ride hzds. A v15 client would reject `afx`.
+// v17 (intentional bump, the Wave 1 DEEP BOSSES — The Sump F35–45): the enemy wire's closed
+// kind SET grew (jet / tithe / tithe_slab / quorum / quorum_shield / quorum_heal / quorum_dmg)
+// and the closed MOVE set grew (mirror / merge) — a v16 client would reject any snapshot
+// carrying them as a ProtocolError (exactly the v5 precedent, where the charger/burrower/boss
+// roster grew the sets). The bosses reuse the existing wire FIELDS: JET's frozen archetype
+// mirror pool, the Tithe's re-armor state and the Quorum shared-HP pool all express through
+// the already-shipped channels — the boss phase (`bph`), the earned-window remainder (`aux`),
+// the slab/husk HP (`hp`/`mhp`), the husk break-integrity (`afs`) and the shared attack state
+// (`atk`) — so no struct field was added; only the enum value sets widened. The equality join
+// gate turns that skew into a clean "update your client" instead of a mid-run desync.
 // NOTE: the control plane's synthetic VERIFY join mirrors this constant
 // (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -599,7 +609,8 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   fade: true, wail: true, split: true, pounce: true, weave: true, slam: true, sweep: true,
   brace: true,
   decoy: true, blink: true, seam: true, stoke: true, harmonize: true, knell: true,
-  build: true, // the worker verb (bailiff divider, mason L-corner)
+  build: true, // the worker verb (bailiff divider, mason L-corner, the Tithe's feeding slab)
+  mirror: true, merge: true, // Wave 1: JET's corrupted-Resonance salvo, Quorum's fuse-merge
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {

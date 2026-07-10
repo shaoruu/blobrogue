@@ -405,6 +405,8 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   stoke: "#ff8a3b",   // sinderling self-arming channel: gathering embers
   harmonize: "#bfe9ff", // fragment tether pulse: the Choir's cold light
   knell: "#c9b458",   // The Toll's expanding sound ring: bronze
+  mirror: "#8a7bd8",  // JET's corrupted-Resonance salvo: cold indigo mirror-light
+  merge: "#e8d9b0",   // QUORUM's fuse-merge: pale bone gather
 };
 
 // The elite affix's ground-ring accent (derived from kind — the affix table is pure sim

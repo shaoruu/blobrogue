@@ -62,6 +62,10 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   fragment: "A", mason: "A",
   echo: "B", knell: "B", knot: "B", sac: "B", marshal: "B", toll: "B",
   boss: "boss", marrow: "boss", choir: "boss", weaver: "boss", gilded: "boss",
+  // Wave 1 deep bosses are boss-grade; their satellite/mechanic bodies are Wave-B summons
+  // (never in a common deck), like the Weaver's knots/sacs.
+  jet: "boss", tithe: "boss", quorum: "boss",
+  tithe_slab: "B", quorum_shield: "B", quorum_heal: "B", quorum_dmg: "B",
 };
 
 // Topology workers: bodies whose commitment EDITS the room (persistent destructible
@@ -267,6 +271,17 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   // and "crash" for every punishable self-stun (the snag, the forcedown, the overshoot).
   weaver: ["weave", "blink", "dive", "pounce", "rush", "crash", "roar"],
   gilded: ["slam", "sweep", "roar"],
+  // Wave 1 deep bosses. JET's whole kit is the "mirror" salvo (its varied bullet patterns
+  // ride one telegraph read) + the roar transition. The Tithe raises slabs ("build"), fires
+  // amber rings ("radial") and bellows ("roar"). Quorum's core drives one shared "radial"
+  // telegraph, transitions via "merge". Satellite bodies commit nothing.
+  jet: ["mirror", "roar"],
+  tithe: ["build", "radial", "roar"],
+  quorum: ["radial", "merge"],
+  tithe_slab: [],
+  quorum_shield: [],
+  quorum_heal: [],
+  quorum_dmg: [],
 };
 
 // ---- the directional-art contract (QA render manifest) ----
@@ -313,6 +328,16 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   choir: "mass",
   weaver: "directional",
   gilded: "vertical_hold",
+  // Wave 1. JET + the Tithe feeder + the Quorum husks ship a directional walk triplet (no
+  // attack strip). The Tithe slab is a 2-state destructible (idle only, like a decoy body).
+  // The Quorum merge-form core is a drifting mass (idle + omni attack, no triplet).
+  jet: "directional_walk",
+  tithe: "directional_walk",
+  tithe_slab: "decoy",
+  quorum: "mass",
+  quorum_shield: "directional_walk",
+  quorum_heal: "directional_walk",
+  quorum_dmg: "directional_walk",
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----

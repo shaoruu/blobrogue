@@ -159,6 +159,27 @@ SHEETS["knell.idle"] = { src: "/sprites/knell_idle.png", fps: 8 };
 SHEETS["knot.idle"] = { src: "/sprites/knot_idle.png", fps: 7 };
 SHEETS["sac.idle"] = { src: "/sprites/sac_idle.png", fps: 6 };
 
+// ---- WAVE 1 deep bosses (AD-LOCKED committed art — wire, never regenerate) ----
+// JET (F35): the directional cold-mirror body (down/up/side, side mirrors). Single-frame
+// today; the facing ladder + frame-0 hold covers it. The phase bodies are single-frame
+// escalation swaps the render selects by fight phase (P1 = jet, P2/P3 = these).
+registerDirectionalSet("jet", { walkFps: 6, facings: ["down", "up", "side"] });
+SHEETS["jet_phase2.idle"] = { src: "/sprites/jet_phase2.png", fps: 2 };
+SHEETS["jet_phase3.idle"] = { src: "/sprites/jet_phase3.png", fps: 2 };
+// THE TITHE (F40): the directional feeder body + its SEPARATE 2-state destructible slab
+// (intact → cracked as its HP drops; the render swaps in place — they share a footprint).
+registerDirectionalSet("tithe", { walkFps: 5, facings: ["down", "up", "side"] });
+SHEETS["tithe_slab.idle"] = { src: "/sprites/tithe_slab_intact.png", fps: 2 };
+SHEETS["tithe_slab_cracked.idle"] = { src: "/sprites/tithe_slab_cracked.png", fps: 2 };
+// QUORUM (F45): the merge-form CORE is the drifting-mass contract (idle + omni attack,
+// both the fused body — it is only ever shown merged). The three role-husks are
+// directional walk triplets (side mirrors); single-frame today, the facing ladder covers it.
+SHEETS["quorum.idle"] = { src: "/sprites/quorum_merge.png", fps: 2 };
+SHEETS["quorum.attack"] = { src: "/sprites/quorum_merge.png", fps: 2 };
+registerDirectionalSet("quorum_shield", { walkFps: 6, facings: ["down", "up", "side"] });
+registerDirectionalSet("quorum_heal", { walkFps: 6, facings: ["down", "up", "side"] });
+registerDirectionalSet("quorum_dmg", { walkFps: 6, facings: ["down", "up", "side"] });
+
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
 // composite additively. Sizes are baked into the art; the renderer scales per bullet.
@@ -272,6 +293,18 @@ const SOURCES: Record<SpriteName, string> = {
   // AD-approved final base (content manifest: weaver2_px) — drop-in exact filename.
   weaver: "/sprites/weaver2_px.png",
   gilded: "/sprites/gilded.png",
+  // WAVE 1 deep bosses (AD-locked committed art). JET's phase bodies + the Tithe's 2-state
+  // slab + the Quorum merge-form base all map to their committed files.
+  jet: "/sprites/jet_walk_down.png",
+  jet_phase2: "/sprites/jet_phase2.png",
+  jet_phase3: "/sprites/jet_phase3.png",
+  tithe: "/sprites/tithe_walk_down.png",
+  tithe_slab: "/sprites/tithe_slab_intact.png",
+  tithe_slab_cracked: "/sprites/tithe_slab_cracked.png",
+  quorum: "/sprites/quorum_merge.png",
+  quorum_shield: "/sprites/quorum_shield_walk_down.png",
+  quorum_heal: "/sprites/quorum_heal_walk_down.png",
+  quorum_dmg: "/sprites/quorum_dmg_walk_down.png",
   // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
   // generated separately via the locked FAL recipe; until patch.png lands the renderer
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship

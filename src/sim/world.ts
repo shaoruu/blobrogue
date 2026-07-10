@@ -39,6 +39,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
+  JET, TITHE, QUORUM, jetSimulCapFor, titheSlabHpForFloor, weaponResonanceFamily, RESONANCE_FAMILIES,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -51,7 +52,7 @@ import {
   MYSTERY, LEGENDARY_MIN_FLOOR,
   PREMIUM, CAPS, coinChanceTaper, coopCoinGainMult, premiumMysteryLegendaryWeight,
 } from "./balance.js";
-import type { EnemyTier, AddPoolEntry } from "./balance.js";
+import type { EnemyTier, AddPoolEntry, ResonanceFamily } from "./balance.js";
 import { isControllerKind } from "./bestiary.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import { resolveFloorDescriptor, floorHazardMutation, floorExtraElites, floorDashProfile } from "./floorRolls.js";
@@ -284,6 +285,11 @@ export interface WorldState {
   // and NEVER rescaled mid-fight. Bosses read it for effective HP and every surplus
   // mechanic lever (add pressure, soft-enrage budgets, surprise waves, density).
   encounterPower: number;
+  // JET's FROZEN mirror pool (Wave 1): the distinct Resonance FAMILIES (weapon ARCHETYPES,
+  // never live inventory) the party carried at the pull, seeded-padded to a minimum and
+  // capped — resolved once when JET first commits and never re-read mid-fight. Empty off a
+  // JET floor. Sim-internal (JET's verbs express through ordinary enemy fire on the wire).
+  jetMirror: ResonanceFamily[];
   // Gate 3's FROZEN floor descriptor: the floor's mutator/affix/boss-affix rolls resolved ONCE at
   // generation via THE ROLL-ORDER CONTRACT (floorRolls.ts / streams.ts), a pure function of
   // (seed, floor, playerCountAtLock). Clients recompute it identically inside their own floor
@@ -415,6 +421,7 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     weaponBag: createWeaponBag(seed),
     encounterPlayers: 1,
     encounterPower: 1,
+    jetMirror: [],
     floorDescriptor: resolveFloorDescriptor(seed, floor, 1),
     pendingSpawns: [],
     spawnReleaseCd: 0,
@@ -534,6 +541,9 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // downed/disconnected players never change it mid-fight, and it derives purely from
   // loadouts, so every client and the server agree.
   w.encounterPower = sampleEncounterPower(w);
+  // JET's mirror pool is resolved lazily when it first commits (updateJet), so it captures
+  // the pull loadout on both the floor-load and dev-spawn paths; a fresh floor clears it.
+  w.jetMirror = [];
   // Gate 3: resolve + FREEZE the floor's rolls once, now, with the locked player count. A pure
   // function of (seed, floor, encounterPlayers) — clients recompute the identical descriptor.
   w.floorDescriptor = resolveFloorDescriptor(w.seed, floor, w.encounterPlayers);
@@ -1789,6 +1799,25 @@ const BOSS_BEATS: Readonly<Partial<Record<Enemy["kind"], BossBeatDef>>> = {
     damageReduction: GILDED.sanctifyDamageReduction, bulletClearRadius: GILDED.sanctifyBulletClearRadius,
     addCount: 0, isBreakable: false,
   },
+  // JET (F35): King/Gilded-style fixed roar at each phase boundary (the amber-motif dead note).
+  jet: {
+    phaseAt: JET.phaseAt, phaseFloor: JET.phaseFloor, move: "roar",
+    damageReduction: JET.roarDamageReduction, bulletClearRadius: JET.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
+  // THE TITHE (F40): a feeder bellow at each phase boundary, no adds.
+  tithe: {
+    phaseAt: TITHE.phaseAt, phaseFloor: TITHE.phaseFloor, move: "roar",
+    damageReduction: TITHE.roarDamageReduction, bulletClearRadius: TITHE.roarBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
+  // QUORUM (F45): ONE transition — the telegraphed NON-invuln merge (reduction 0, so you
+  // keep hurting it through the fuse; the phase floor is the only anti-burst guard).
+  quorum: {
+    phaseAt: QUORUM.phaseAt, phaseFloor: QUORUM.phaseFloor, move: "merge",
+    damageReduction: QUORUM.mergeDamageReduction, bulletClearRadius: QUORUM.mergeBulletClearRadius,
+    addCount: 0, isBreakable: false,
+  },
 };
 
 function bossBeatOf(e: Enemy): BossBeatDef {
@@ -1813,6 +1842,11 @@ const EARNED_WINDOWS: Readonly<Partial<Record<Enemy["kind"], EarnedWindowDef>>> 
   weaver: { guardMult: WEAVER.guardMult, bankFrac: WEAVER.windowBankFrac },
   gilded: { guardMult: GILDED.armorChip, bankFrac: GILDED.windowBankFrac },
   choir: { guardMult: CHOIR.guardMult, bankFrac: CHOIR.windowBankFrac },
+  // Wave 1 deep bosses. JET's guard between salvos, the Tithe's guard while armored, and the
+  // Quorum merge-form's guard between commitments all use the shared guarded/exposed plumbing.
+  jet: { guardMult: JET.guardMult, bankFrac: JET.windowBankFrac },
+  tithe: { guardMult: TITHE.guardMult, bankFrac: TITHE.windowBankFrac },
+  quorum: { guardMult: QUORUM.guardMult, bankFrac: QUORUM.windowBankFrac },
 };
 
 export function isBossExposed(e: Enemy): boolean {
@@ -1837,6 +1871,11 @@ function openBossWindow(e: Enemy, seconds: number, ev: SimEvent[]): void {
 // `isOverflow` marks a transition beat's queued damage being released: it already passed
 // every reduction when it first landed, so it must not be chipped a second time.
 function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, ev: SimEvent[], isOverflow = false): void {
+  // QUORUM husks: damage routes to the shared pool (the core), gated by role kill-order —
+  // full only against the highest-priority living husk (shield → heal → dmg); a lower one is
+  // chipped, so 4P crossfire that nukes the pool evenly makes no progress. The husk's own
+  // break-integrity (affixState) drains too; breaking it ends its role and snaps the tether.
+  if (isQuorumHusk(e.kind)) { quorumDamageHusk(w, by, e, dmg, ev); return; }
   if (!e.boss) {
     // The elite's brace: ≤25% reduction through its 0.9s defensive slide — never immunity.
     if (e.attack.move === "brace" && e.attack.phase === "windup") dmg *= 1 - ELITE_BRACE.damageReduction;
@@ -2006,7 +2045,14 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
 // Summon-only fake/mechanic bodies (never kills, never loot): the echojack's echo, The
 // Toll's knell, and the Weaver's lattice knots + egg-sacs.
 function isDecoyKind(kind: Enemy["kind"]): boolean {
-  return kind === "echo" || kind === "knell" || kind === "knot" || kind === "sac";
+  return kind === "echo" || kind === "knell" || kind === "knot" || kind === "sac"
+    // The Tithe's feeding slab is a mechanic body (like a knot): breaking it is counterplay,
+    // never an economy — no loot, no combo fuel.
+    || kind === "tithe_slab";
+}
+
+function isQuorumHusk(kind: Enemy["kind"]): boolean {
+  return kind === "quorum_shield" || kind === "quorum_heal" || kind === "quorum_dmg";
 }
 
 // `p` null = the killing actor has left: the kill still resolves (death, loot, boss chest) but
@@ -3496,6 +3542,10 @@ function isUntargetable(e: Enemy): boolean {
     case "weaver":
       return ((a.move === "pounce" || a.move === "blink") && a.phase === "active")
         || (a.move === "dive" && a.phase === "active");
+    case "quorum":
+      // The CORE is hidden behind its husks until the merge: untargetable while a husk
+      // still stands (phase 1) and through the merge beat itself. Shoot the husks.
+      return e.boss !== null && (e.boss.phase < 2 || a.move === "merge");
     default:
       return false;
   }
@@ -3624,6 +3674,13 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "choir": updateChoir(w, e, dt, ev); return;
     case "weaver": updateWeaver(w, e, dt, ev); return;
     case "gilded": updateGilded(w, e, dt, ev); return;
+    case "jet": updateJet(w, e, dt, ev); return;
+    case "tithe": updateTithe(w, e, dt, ev); return;
+    case "quorum": updateQuorum(w, e, dt, ev); return;
+    case "tithe_slab": return; // inert: a destructible feeding slab, not an actor
+    case "quorum_shield": updateQuorumHusk(w, e, dt); return;
+    case "quorum_heal": updateQuorumHusk(w, e, dt); return;
+    case "quorum_dmg": updateQuorumHusk(w, e, dt); return;
     default: updateChaser(w, e, dt); return;
   }
 }
@@ -6947,6 +7004,518 @@ function gildedSweepWave(w: WorldState, e: Enemy, ev: SimEvent[]): void {
     spawnEnemyBullet(w, e.x, e.y, base + (i / GILDED.sweepCount) * Math.PI * 2, GILDED.sweepSpeed, GILDED.shardRadius, GILDED.shardDamage, "#ffd166", GILDED.shardLife);
   }
   ev.push({ t: "radialBurst", x: e.x, y: e.y });
+}
+
+// ============================================================================
+// WAVE 1 DEEP BOSSES (THE UNMAKING / The Sump, F35–45)
+// ============================================================================
+
+// ---- §5g JET (F35): the corrupted MIRROR of the party ----
+// Earned window = the Gilded commitment-recover model: JET is GUARDED between salvos; a
+// corrupted-Resonance salvo commits, and its SPENT recover is the exposed window. The salvo
+// draws from a FROZEN archetype MIRROR pool (never live inventory). 3 phases: P1 uncanny
+// (one verb) → P2 out-of-sync canon (a staggered second verb) → P3 inverted + room-drain.
+
+// Resolve JET's mirror pool ONCE from the party's weapon ARCHETYPES (families), seeded-padded
+// to a minimum and capped. Reads only each equipped weapon's FAMILY — never its identity or
+// stats — so two different weapons of one family produce the same pool (archetype, not inventory).
+function resolveJetMirror(w: WorldState): void {
+  const present: ResonanceFamily[] = [];
+  for (const p of w.players.values()) {
+    const fam = weaponResonanceFamily(p.weapon);
+    if (present.indexOf(fam) === -1) present.push(fam);
+  }
+  // Stable family order (determinism) over the party's present families.
+  const pool: ResonanceFamily[] = RESONANCE_FAMILIES.filter((f) => present.indexOf(f) !== -1);
+  // Seeded pad: if the party is too homogeneous, JET reflects extra authored families from a
+  // dedicated stream (pure seed+floor — never touches the shared sim RNG).
+  const rng = new Rng((w.seed ^ 0x4a455421) + w.floor * 0x9e3779b1);
+  while (pool.length < JET.verbMinSeeded && pool.length < RESONANCE_FAMILIES.length) {
+    const rest = RESONANCE_FAMILIES.filter((f) => pool.indexOf(f) === -1);
+    pool.push(rest[rng.int(0, rest.length - 1)]);
+  }
+  w.jetMirror = pool.slice(0, JET.verbMax);
+}
+
+function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  if (w.jetMirror.length === 0) resolveJetMirror(w); // frozen at first tick (the pull loadout)
+  const a = e.attack;
+
+  if (a.phase === "windup") { jetWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { jetActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= JET.spentRecover) enterIdle(e);
+    return;
+  }
+  if (a.cooldown === 0 && e.spawnTimer === 0) { jetBeginAttack(e, ev); return; }
+  // Between salvos the mirror stalks the party (it moves like you would).
+  if (!findTarget(w, e.x, e.y)) return;
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+function jetBeginAttack(e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  boss.spinCount = 0; // verbs emitted this salvo
+  e.attack.cooldown = JET.attackCd[boss.phase];
+  beginWindup(e, "mirror");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
+}
+
+function jetWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "roar") {
+    // Phase transition: the amber-motif dead note (King/Gilded fixed-roar semantics).
+    a.time += dt;
+    a.windup = Math.min(1, a.time / JET.roarDuration);
+    if (a.time >= JET.roarDuration) { enterIdle(e); endBossTransition(w, e, ev); }
+    return;
+  }
+  // The salvo tell: aim locks partway (≥0.30s post-lock dodge). On release, fire the first
+  // mirrored verb and enter the brief active beat (the rest stagger in during P2's canon).
+  if (stepWindupTimer(w, e, dt, JET.mirrorWindup, JET.mirrorLock, false)) {
+    a.phase = "active"; a.time = 0; a.windup = 0;
+    jetFireVerb(w, e, 0, ev);
+    e.boss!.spinCount = 1;
+    ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.7, gain: 0.85, trauma: 0.04 });
+  }
+}
+
+function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  a.time += dt;
+  const simul = jetSalvoSize(w, boss.phase);
+  // P2's "out-of-sync canon": the further verbs enter one canonOffset apart, so the salvo
+  // reads as a mirror falling out of time with you rather than a single wall.
+  while (boss.spinCount < simul && a.time >= boss.spinCount * JET.canonOffset) {
+    jetFireVerb(w, e, boss.spinCount, ev);
+    boss.spinCount++;
+  }
+  if (a.time >= JET.mirrorActive + (simul - 1) * JET.canonOffset) {
+    enterRecover(e);
+    // He is SPENT — the recover is the exposed window (bank-capped like the deep roster).
+    openBossWindow(e, JET.spentExpose, ev);
+  }
+}
+
+// The salvo's simultaneous-verb count: the phase's desire clamped to the 4-player telegraph
+// budget (frozen at the pull — trio/quad read fewer at once; the co-op TASK grows via a
+// bigger POOL, not a denser salvo).
+function jetSalvoSize(w: WorldState, phase: number): number {
+  const desire = JET.phaseSimul[phase] ?? 1;
+  const cap = jetSimulCapFor(w.encounterPlayers);
+  return Math.max(1, Math.min(desire, cap, w.jetMirror.length));
+}
+
+// Fire the index-th mirrored verb of this salvo. Verbs cycle through the frozen pool by the
+// salvo count, so a longer pool is worked through across salvos. P3 INVERTS the pattern.
+function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const pool = w.jetMirror;
+  if (pool.length === 0) return;
+  const family = pool[(boss.attackCount + index) % pool.length];
+  const inverted = boss.phase >= 3;
+  let aim = e.attack.lockedAngle;
+  if (findTarget(w, e.x, e.y)) aim = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  // The canon offset spreads simultaneous verbs so they read as distinct mirrored lanes.
+  aim += (inverted ? -1 : 1) * index * 0.4;
+  jetEmitFamily(w, e, family, aim, inverted);
+  // P3 room-drain: the room's amber "drains" into telegraphed blooms around the party — a
+  // walk-dodgeable closing pressure layered on the inverted salvo (the shared charge hazard).
+  if (inverted && index === 0 && findTarget(w, e.x, e.y)) {
+    for (let i = 0; i < JET.drainCount; i++) {
+      const ox = (w.rng.next() * 2 - 1) * JET.drainSpread;
+      const oy = (w.rng.next() * 2 - 1) * JET.drainSpread;
+      plantAffixCharge(w, w.targetX + ox, w.targetY + oy);
+    }
+  }
+  ev.push({ t: "bossVolley", x: e.x + Math.cos(aim) * (e.radius + 6), y: e.y + Math.sin(aim) * (e.radius + 6) });
+}
+
+// The authored mirrored PATTERN per Resonance family — the archetype tell, not the weapon.
+function jetEmitFamily(w: WorldState, e: Enemy, family: ResonanceFamily, aim: number, inverted: boolean): void {
+  const col = "#8a7bd8";
+  const sign = inverted ? -1 : 1;
+  const shard = (ang: number, speed: number): void =>
+    spawnEnemyBullet(w, e.x + Math.cos(ang) * (e.radius + 6), e.y + Math.sin(ang) * (e.radius + 6), ang, speed, JET.globRadius, JET.globDamage, col, JET.globLife);
+  switch (family) {
+    case "spread": {
+      for (let i = 0; i < JET.spreadCount; i++) {
+        const off = (i / (JET.spreadCount - 1) - 0.5) * JET.spreadArc;
+        shard(aim + sign * off, JET.globSpeed);
+      }
+      return;
+    }
+    case "rapid": {
+      // A tight fast cluster (the stream mirror), lightly fanned so it reads as many rounds.
+      for (let i = 0; i < JET.rapidCount; i++) shard(aim + sign * (i - (JET.rapidCount - 1) / 2) * 0.05, JET.globSpeed * 1.25);
+      return;
+    }
+    case "lance": {
+      // A single fast locked line (precision/beam mirror).
+      shard(aim, JET.lanceSpeed);
+      return;
+    }
+    case "arc": {
+      // A full ring (the bounce/chain/seek mirror): the pattern that ignores your cover.
+      const base = inverted ? Math.PI / JET.arcCount : 0;
+      for (let i = 0; i < JET.arcCount; i++) shard(base + (i / JET.arcCount) * Math.PI * 2, JET.globSpeed * 0.9);
+      return;
+    }
+    case "lob": {
+      // A marked bloom at your feet (the AoE lob mirror): a telegraphed walk-off charge.
+      if (findTarget(w, e.x, e.y)) plantAffixCharge(w, w.targetX, w.targetY);
+      return;
+    }
+    case "melee": {
+      // A close forward slash of shards (the melee mirror) — read the lunge, step off the arc.
+      for (let i = 0; i < 3; i++) shard(aim + sign * (i - 1) * 0.22, JET.globSpeed * 1.1);
+      return;
+    }
+  }
+}
+
+// ---- §5h THE TITHE (F40): the armored FEEDER + its destructible feeding slab ----
+// GUARDED while armored; it BUILDS a slab and RE-ARMORS behind it. Destroy the slab before
+// the re-armor channel closes → the feeder is EXPOSED. Miss it → re-armored (no window) but it
+// ALWAYS feeds again (never dead-ends). Co-op = more/thicker slabs (task), never a shorter channel.
+
+function updateTithe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  if (a.phase === "windup") { titheWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { titheFeedChannel(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    if (a.time >= TITHE.radialRecover) enterIdle(e);
+    return;
+  }
+  if (a.cooldown === 0 && e.spawnTimer === 0) { titheBeginAttack(w, e, ev); return; }
+  // The heavy feeder lumbers toward the party between commitments.
+  if (!findTarget(w, e.x, e.y)) return;
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+}
+
+function titheBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  e.attack.cooldown = TITHE.attackCd[boss.phase];
+  // Feed when unexposed and no slab is standing; otherwise pressure with an amber ring.
+  const noSlab = countLiveIds(w, boss.windowAddIds) === 0 && boss.windowAddIds.length === 0;
+  if (boss.exposed <= 0 && noSlab) {
+    beginWindup(e, "build");
+    ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
+    return;
+  }
+  beginWindup(e, "radial");
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.55, gain: 0.7, trauma: 0 });
+}
+
+function titheWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  if (a.move === "roar") {
+    a.time += dt;
+    a.windup = Math.min(1, a.time / TITHE.roarDuration);
+    if (a.time >= TITHE.roarDuration) { enterIdle(e); endBossTransition(w, e, ev); }
+    return;
+  }
+  if (a.move === "build") {
+    // The amber-ooze-rising tell, then the slab(s) rise and the re-armor channel begins.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / TITHE.buildWindup);
+    if (a.time >= TITHE.buildWindup) {
+      titheRaiseSlabs(w, e, ev);
+      a.phase = "active"; a.time = 0; a.windup = 0;
+    }
+    return;
+  }
+  // radial: a heavy amber ring on release, denser (offset second ring) under soft-enrage.
+  a.time += dt;
+  a.windup = Math.min(1, a.time / TITHE.radialWindup);
+  if (a.time >= TITHE.radialWindup) {
+    titheRing(w, e, 0);
+    if (e.boss!.enrage === 1) titheRing(w, e, Math.PI / TITHE.radialCount);
+    enterRecover(e);
+  }
+}
+
+// The re-armor channel: break every slab before it elapses to EXPOSE the feeder. Miss it and
+// it re-armors (crumble the survivors, no window) — but the loop simply feeds again.
+function titheFeedChannel(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  a.time += dt;
+  a.windup = Math.min(1, a.time / TITHE.rearmChannel);
+  if (countLiveIds(w, boss.windowAddIds) === 0) {
+    // Every slab broken in time — the feeder is caught exposed.
+    boss.windowAddIds.length = 0;
+    enterRecover(e);
+    openBossWindow(e, TITHE.slabExpose, ev);
+    return;
+  }
+  if (a.time >= TITHE.rearmChannel) {
+    // Re-armored: the surviving slab(s) are absorbed back into the plating (no window).
+    for (const id of boss.windowAddIds) {
+      const slab = w.enemies.find((o) => !o.dead && o.id === id);
+      if (slab) { slab.dead = true; ev.push({ t: "puff", x: slab.x, y: slab.y, n: 4, color: ENEMY_ARCHETYPES.tithe_slab.tint }); }
+    }
+    boss.windowAddIds.length = 0;
+    enterRecover(e);
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.7, gain: 0.7, trauma: 0.05 });
+  }
+}
+
+// Raise the feeding slab(s) between the feeder and the party — offset off the direct axis so
+// a line-of-sight lane to the feeder ALWAYS stays open. Co-op raises more/thicker slabs.
+function titheRaiseSlabs(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.windowAddIds.length = 0;
+  let toward = 0;
+  if (findTarget(w, e.x, e.y)) toward = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  const n = TITHE.slabsFor[w.encounterPlayers] ?? 1;
+  const slabHp = titheSlabHpForFloor(w.floor, w.encounterPlayers);
+  for (let i = 0; i < n; i++) {
+    // Fan the slabs to one side of the axis (offset), never straddling it — the lane stays.
+    const ang = toward + (i - (n - 1) / 2) * (TITHE.slabOffset * 1.2) + TITHE.slabOffset;
+    const x = e.x + Math.cos(ang) * TITHE.slabRingDist;
+    const y = e.y + Math.sin(ang) * TITHE.slabRingDist;
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.tithe_slab.radius)) continue;
+    const slab = createEnemy("tithe_slab", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      isSummoned: true, players: w.encounterPlayers,
+    });
+    slab.hp = slabHp; slab.maxHp = slabHp;
+    slab.spawnTimer = 0;
+    w.enemies.push(slab);
+    boss.windowAddIds.push(slab.id);
+    ev.push({ t: "enemySpawn", eid: slab.id, kind: slab.kind, tier: slab.tier, x: slab.x, y: slab.y });
+  }
+}
+
+function titheRing(w: WorldState, e: Enemy, base: number): void {
+  for (let i = 0; i < TITHE.radialCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / TITHE.radialCount) * Math.PI * 2, TITHE.globSpeed, TITHE.globRadius, TITHE.globDamage, "#ffb43b", TITHE.globLife);
+  }
+}
+
+// ---- §5i QUORUM (F45): three husks, ONE shared pool + ONE telegraph, then the merge ----
+// The CORE carries the shared pool + the shared telegraph and is untargetable behind its
+// husks (phase 1). Roles gate kill-order: SHIELD guards the pool, HEAL regenerates it, DMG
+// attacks. Break a husk (focus its integrity) to end its role. At the merge threshold a
+// telegraphed 1.2s NON-invuln merge fuses them into the merge-form (phase 2) with its own window.
+
+const QUORUM_HUSK_KINDS: readonly Enemy["kind"][] = ["quorum_shield", "quorum_heal", "quorum_dmg"];
+
+// Kill-order priority (shield first): the highest-priority LIVING husk is the only one that
+// takes FULL pool damage; the rest are chipped (so 4P even-nuke stalls).
+function quorumPriorityHusk(w: WorldState, core: Enemy): Enemy | null {
+  for (const kind of QUORUM_HUSK_KINDS) {
+    const h = w.enemies.find((o) => !o.dead && o.kind === kind && o.seq === core.id + 1);
+    if (h) return h;
+  }
+  return null;
+}
+
+function quorumCoreOf(w: WorldState, husk: Enemy): Enemy | null {
+  return w.enemies.find((o) => !o.dead && o.kind === "quorum" && o.id === husk.seq - 1) ?? null;
+}
+
+function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss) return;
+  const a = e.attack;
+
+  // Raise the three husks on the first live tick (works on both the floor-load and dev paths).
+  if (boss.phase < 2 && boss.windowAddIds.length === 0 && e.spawnTimer === 0 && a.move !== "merge") {
+    quorumSpawnHusks(w, e, ev);
+  }
+
+  // The husks share the pool: mirror the core HP onto every live husk (the bar + tether read
+  // the ONE pool), and the HEAL husk regenerates the pool while it lives (undo lazy chip).
+  const liveHusks: Enemy[] = [];
+  let healAlive = false;
+  for (const id of boss.windowAddIds) {
+    const h = w.enemies.find((o) => !o.dead && o.id === id);
+    if (!h) continue;
+    liveHusks.push(h);
+    if (h.kind === "quorum_heal") healAlive = true;
+  }
+  if (boss.phase < 2 && healAlive && !boss.roar && e.hp < e.maxHp) {
+    e.hp = Math.min(e.maxHp, e.hp + QUORUM.healRegenPerSec * dt);
+  }
+  for (const h of liveHusks) { h.hp = e.hp; h.maxHp = e.maxHp; }
+
+  if (a.phase === "windup") { quorumWindup(w, e, dt, ev); return; }
+  if (a.phase === "active") { quorumActive(w, e, dt, ev); return; }
+  if (a.phase === "recover") {
+    a.time += dt;
+    const rec = boss.phase >= 2 ? QUORUM.mergeRecover : QUORUM.volleyRecover;
+    if (a.time >= rec) enterIdle(e);
+    return;
+  }
+  if (a.cooldown === 0 && e.spawnTimer === 0) { quorumBeginAttack(w, e, ev); return; }
+  // The core drifts with its husks (it has no independent chase — the husks are the pressure).
+  if (boss.phase >= 2 && findTarget(w, e.x, e.y)) {
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  }
+}
+
+// The husks orbit/lead the core; the core rides their centroid so the shared bodies read as one.
+function updateQuorumHusk(w: WorldState, e: Enemy, dt: number): void {
+  const core = quorumCoreOf(w, e);
+  if (!core) return;
+  if (!findTarget(w, e.x, e.y)) return;
+  const toCore = Math.hypot(core.x - e.x, core.y - e.y);
+  // Leash: hold a loose cluster around the core so the tether stays taut and readable.
+  if (toCore > QUORUM.huskRingDist * 2) {
+    applyChaseStep(w, e, dt, Math.atan2(core.y - e.y, core.x - e.x), e.speed * dt);
+  } else {
+    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+  }
+}
+
+function quorumSpawnHusks(w: WorldState, core: Enemy, ev: SimEvent[]): void {
+  const boss = core.boss!;
+  const integrity = Math.max(1, Math.round(QUORUM.huskIntegrityFrac * core.maxHp));
+  for (let i = 0; i < QUORUM_HUSK_KINDS.length; i++) {
+    const ang = (i / QUORUM_HUSK_KINDS.length) * Math.PI * 2;
+    const x = core.x + Math.cos(ang) * QUORUM.huskRingDist;
+    const y = core.y + Math.sin(ang) * QUORUM.huskRingDist;
+    const px = settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES[QUORUM_HUSK_KINDS[i]].radius) ? { x: settlePoint.x, y: settlePoint.y } : { x: core.x, y: core.y };
+    const husk = createEnemy(QUORUM_HUSK_KINDS[i], px.x, px.y, w.floor, w.rng, w.nextEnemyId++, {
+      isSummoned: true, players: w.encounterPlayers,
+    });
+    husk.seq = core.id + 1;          // the husk belongs to its core (shared pool linkage)
+    husk.hp = core.hp; husk.maxHp = core.maxHp;
+    husk.affixState = integrity;     // the break meter (focus it to end its role)
+    husk.aux = 1;                    // integrity fraction (drives the tether/focus render)
+    husk.spawnTimer = 0;
+    w.enemies.push(husk);
+    boss.windowAddIds.push(husk.id);
+    ev.push({ t: "enemySpawn", eid: husk.id, kind: husk.kind, tier: husk.tier, x: husk.x, y: husk.y });
+  }
+}
+
+function quorumBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  boss.attackCount++;
+  e.attack.cooldown = QUORUM.attackCd[boss.phase];
+  beginWindup(e, "radial");
+  // The shared telegraph reads on the "next to act" husk (the lead) — the tether leans to it.
+  const lead = quorumLeadHusk(w, e);
+  if (lead) { e.attack.markX = lead.x; e.attack.markY = lead.y; }
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.55, gain: 0.7, trauma: 0 });
+}
+
+// The lead husk (the "next to act"): in phase 1 the dmg husk leads (else heal, else shield);
+// null once merged. Drives the tether "pulls hardest" tell (via the core's mark point).
+function quorumLeadHusk(w: WorldState, core: Enemy): Enemy | null {
+  for (const kind of ["quorum_dmg", "quorum_heal", "quorum_shield"] as const) {
+    const h = w.enemies.find((o) => !o.dead && o.kind === kind && o.seq === core.id + 1);
+    if (h) return h;
+  }
+  return null;
+}
+
+function quorumWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  if (a.move === "merge") {
+    // The telegraphed 1.2s NON-invuln fuse: keep hurting it. On completion the husks are gone
+    // and the merge-form (phase 2, set by checkBossTransition) takes over with its own window.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / QUORUM.mergeDuration);
+    if (a.time >= QUORUM.mergeDuration) {
+      quorumRemoveHusks(w, e, ev);
+      enterIdle(e);
+      endBossTransition(w, e, ev);
+    }
+    return;
+  }
+  // The shared radial telegraph. Track the lead husk so the tell + tether follow it.
+  const lead = quorumLeadHusk(w, e);
+  if (lead) { a.markX = lead.x; a.markY = lead.y; }
+  const windupT = boss.phase >= 2 ? QUORUM.mergeRadialWindup : QUORUM.volleyWindup;
+  a.time += dt;
+  a.windup = Math.min(1, a.time / windupT);
+  if (!a.isAimLocked && findTarget(w, e.x, e.y)) {
+    a.lockedAngle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+    if (a.time >= QUORUM.volleyLock) a.isAimLocked = true;
+  }
+  if (a.time >= windupT) { a.phase = "active"; a.time = 0; a.windup = 0; }
+}
+
+function quorumActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  a.time += dt;
+  if (boss.phase >= 2) {
+    // Merge-form: the commitment resolves into a wide ring, then the widened recover window.
+    if (a.time >= QUORUM.mergeRadialActive) {
+      quorumRing(w, e, QUORUM.mergeRadialCount, QUORUM.mergeSpeed);
+      enterRecover(e);
+      openBossWindow(e, QUORUM.mergeRecover, ev);
+    }
+    return;
+  }
+  // Husk phase: the shared converging ring fires from the core (the husks show the tell).
+  quorumRing(w, e, QUORUM.radialCount, QUORUM.globSpeed);
+  enterRecover(e);
+}
+
+function quorumRing(w: WorldState, e: Enemy, count: number, speed: number): void {
+  const boss = e.boss!;
+  const base = (boss.burstParity ^= 1) ? Math.PI / count : 0;
+  for (let i = 0; i < count; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / count) * Math.PI * 2, speed, QUORUM.globRadius, QUORUM.globDamage, "#e8d9b0", QUORUM.globLife);
+  }
+}
+
+function quorumRemoveHusks(w: WorldState, core: Enemy, ev: SimEvent[]): void {
+  const boss = core.boss!;
+  for (const id of boss.windowAddIds) {
+    const h = w.enemies.find((o) => o.id === id && !o.dead);
+    if (h) { h.dead = true; ev.push({ t: "puff", x: h.x, y: h.y, n: 6, color: ENEMY_ARCHETYPES[h.kind].tint }); }
+  }
+  boss.windowAddIds.length = 0;
+  ev.push({ t: "cue", name: "bossSpawn", x: core.x, y: core.y, rate: 0.6, gain: 0.85, trauma: 0.1 });
+}
+
+// Damage to a husk routes to the shared pool: FULL against the highest-priority living husk
+// (shield → heal → dmg), chipped otherwise — so spreading damage evenly stalls. The husk's
+// own break-integrity drains too; at 0 it is removed (the tether snaps + yanks).
+function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: number, ev: SimEvent[]): void {
+  const core = quorumCoreOf(w, husk);
+  if (!core || !core.boss) { husk.hp -= dmg; return; }
+  const priority = quorumPriorityHusk(w, core);
+  const isPriority = priority !== null && priority.id === husk.id;
+  const eff = isPriority ? dmg : dmg * QUORUM.guardMult;
+  // Drain the shared pool (the phase-1 guard is the ROLE gate above — never the earned-window
+  // chip, which is the merge-form's phase-2 guard). The merge beat's floor still applies.
+  const boss = core.boss;
+  if (boss.roar) {
+    const target = core.hp - eff;
+    if (target < boss.roar.floorHp) { boss.roar.queued += boss.roar.floorHp - target; boss.roar.queuedBy = by; core.hp = boss.roar.floorHp; }
+    else core.hp = target;
+  } else {
+    core.hp -= eff;
+    checkBossTransition(w, core, ev);
+  }
+  // The husk's break meter (independent of the pool): focus it to end its role.
+  husk.affixState -= eff;
+  const integrity = Math.max(1, Math.round(QUORUM.huskIntegrityFrac * core.maxHp));
+  husk.aux = Math.max(0, Math.min(1, husk.affixState / integrity));
+  if (husk.affixState <= 0 && !husk.dead) {
+    husk.dead = true;
+    // The tether snaps + recoils on a husk's death (the client render reads the missing body).
+    ev.push({ t: "puff", x: husk.x, y: husk.y, n: 7, color: ENEMY_ARCHETYPES[husk.kind].tint });
+    ev.push({ t: "cue", name: "enemyHit", x: husk.x, y: husk.y, rate: 0.7, gain: 0.7, trauma: 0.06 });
+  }
 }
 
 // ---- shared attack helpers ----
