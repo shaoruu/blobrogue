@@ -673,11 +673,12 @@ async function tooltipGates(): Promise<void> {
 
   section("tooltip DOM: the header wears the rarity badge in every tier");
   const dom = new JSDOM("<!doctype html><html><body></body></html>");
-  const g = globalThis as unknown as Record<string, unknown>;
-  g.document = dom.window.document;
-  g.window = dom.window;
-  g.HTMLElement = dom.window.HTMLElement;
-  g.HTMLImageElement = dom.window.HTMLImageElement;
+  Object.assign(globalThis, {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    HTMLImageElement: dom.window.HTMLImageElement,
+  });
   const { renderTipInto } = await import("../src/game/hud.js");
   const tipFor = (id: WeaponId) => {
     const tip = dom.window.document.createElement("div");
