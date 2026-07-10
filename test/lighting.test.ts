@@ -386,14 +386,14 @@ function standNear(game: HarnessGame, wx: number, wy: number): { x: number; y: n
 }
 
 // High-contrast accessibility: the setting must lift the ambient grade — unlit far
-// floor reads measurably brighter in the darkest band with the toggle on.
+// floor reads measurably brighter in a deep band with the toggle on.
 function highContrastTest(game: HarnessGame, canvas: Canvas): void {
   loadDeterministicFloor(game, SEED, 33);
   const w = game.devWorld();
   settleAt(game, (w.dungeon.spawn.x + 0.5) * TILE, (w.dungeon.spawn.y + 0.5) * TILE, VIEW_W, VIEW_H);
   const far = findSite(game, "open", { nearX: (w.dungeon.spawn.x + 0.5) * TILE, nearY: (w.dungeon.spawn.y + 0.5) * TILE });
   if (!far) {
-    check("high-contrast-site", false, "no quiet far tile near the null spawn");
+    check("high-contrast-site", false, "no quiet far tile near the Sump spawn");
     return;
   }
   const fx = screenX(game, (far.tx + 0.5) * TILE - 12);
@@ -403,7 +403,7 @@ function highContrastTest(game: HarnessGame, canvas: Canvas): void {
   const lifted = patchLum(renderFrame(game, canvas), fx, fy, 24, 24);
   settings.setHighContrast(false);
   check("high-contrast-lifts-grade", lifted > normal + 0.8,
-    `null far floor ${normal.toFixed(1)} -> ${lifted.toFixed(1)} with high contrast on`);
+    `Sump far floor ${normal.toFixed(1)} -> ${lifted.toFixed(1)} with high contrast on`);
 }
 
 // Fire-vent tell preservation on an Emberreach floor: with the grade up, the vent's
@@ -483,7 +483,7 @@ async function main(): Promise<void> {
     { name: "amber", floor: 3 },
     { name: "deep", floor: 18 },
     { name: "ember", floor: 28 },
-    { name: "null", floor: 33 },
+    { name: "sump", floor: 33 },
   ];
   const metrics: BandMetrics[] = [];
   for (const band of bands) {
@@ -507,13 +507,13 @@ async function main(): Promise<void> {
 
   const ember = metrics.find((m) => m.name === "ember");
   const deep = metrics.find((m) => m.name === "deep");
-  const nul = metrics.find((m) => m.name === "null");
+  const nul = metrics.find((m) => m.name === "sump");
   if (ember && deep) {
     check("biome-tint-differs", ember.poolWarmth > deep.poolWarmth + 12,
       `ember pool warmth ${ember.poolWarmth.toFixed(1)} vs deep ${deep.poolWarmth.toFixed(1)}`);
   }
   if (nul) {
-    check("null-hero-glow-floor", nul.heroLum >= 12, `darkest band hero-ring luminance ${nul.heroLum.toFixed(1)}`);
+    check("sump-hero-glow-floor", nul.heroLum >= 12, `deepest tested band (Sump) hero-ring luminance ${nul.heroLum.toFixed(1)}`);
   }
 
   highContrastTest(game, canvas);

@@ -146,7 +146,15 @@ const BIOME_HAZARDS: readonly BiomeHazardProfile[] = [
   { weights: [{ kind: "toxic_pool", weight: 0.45 }, { kind: "spikes", weight: 0.3 }, { kind: "void_rift", weight: 0.25 }], base: 8, ramp: 6 },
   { weights: [{ kind: "void_rift", weight: 0.4 }, { kind: "spikes", weight: 0.35 }, { kind: "toxic_pool", weight: 0.25 }], base: 10, ramp: 7 },
   { weights: [{ kind: "fire_vent", weight: 0.65 }, { kind: "spikes", weight: 0.35 }], base: 12, ramp: 8 },
+  // THE UNMAKING (post-F30): the four corrupted regions, hazard density ramping region over region.
+  // The Sump — the mixed drain (warm/cold melt together).
   { weights: [{ kind: "void_rift", weight: 0.3 }, { kind: "fire_vent", weight: 0.3 }, { kind: "spikes", weight: 0.2 }, { kind: "toxic_pool", weight: 0.2 }], base: 14, ramp: 8 },
+  // The Veinworks — resin/amber arteries; fire + fracture environmental.
+  { weights: [{ kind: "fire_vent", weight: 0.4 }, { kind: "void_rift", weight: 0.35 }, { kind: "spikes", weight: 0.25 }], base: 16, ramp: 8 },
+  // The Pale — warmth draining; cold void + toxic subtraction.
+  { weights: [{ kind: "void_rift", weight: 0.45 }, { kind: "toxic_pool", weight: 0.3 }, { kind: "spikes", weight: 0.25 }], base: 18, ramp: 8 },
+  // Null Core — the source; void-dominant.
+  { weights: [{ kind: "void_rift", weight: 0.6 }, { kind: "spikes", weight: 0.4 }], base: 20, ramp: 8 },
 ];
 
 // Hazard-tile budget for a floor, scaled by the difficulty's gate multiplier (0.65x /

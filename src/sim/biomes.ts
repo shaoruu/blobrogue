@@ -206,63 +206,190 @@ export const BIOMES: readonly Biome[] = [
     floorDim: 0.28,
     wallLift: 0.16,
   },
+  // ---- THE UNMAKING (post-F30): four corrupted regions, each its own biome band, 1:1 with
+  // REGIONS. Warmth drains as you descend (Sump warm-corrupted -> Veinworks resin/amber ->
+  // Pale near-grey subtraction -> Null Core void). Canonical AD palettes (validated for the
+  // readability walkability gate: floorA sits 24-48L below wallCap in every region, and JET
+  // stays dark-on-dark safe). Mood fields continue the ladder ramp (deeper = dimmer + more
+  // vignette + busier detail; pulse dips in the Pale's calm, peaks in the Null's throb).
   {
-    // Floors 31+ — the Null: the approved post-F30 expansion slot (curriculum: "Null/Jet
-    // is a later post-F30 expansion"). Near-black, void-bright seams, light that falls
-    // upward. Terminal: the ladder holds here forever.
-    name: "The Null",
+    // Floors 31-50 — THE SUMP: everything drains together; warm/cold materials melt.
+    name: "The Sump",
     tileKey: "nullvoid",
-    bgColor: "#05030b",
-    floorA: "#0a0714",
-    floorB: "#0d0918",
-    wallFront: "#241a44",
-    wallCap: "#241a40",
-    wallSideRgb: "16,11,30",
-    wallCorner: "rgba(2,1,6,0.6)",
-    tint: "#5a1a80",
-    tintAlpha: 0.36,
-    accent: "#ff4ad8",
-    glow: "#d9a6ff",
+    bgColor: "#0c0a10",
+    floorA: "#16131a",
+    floorB: "#1a1620",
+    wallFront: "#2a2333",
+    wallCap: "#3a2f2a",
+    wallSideRgb: "36,30,42",
+    wallCorner: "rgba(6,5,10,0.55)",
+    tint: "#4a3f52",
+    tintAlpha: 0.30,
+    accent: "#9c7a52",
+    glow: "#b89a72",
+    lightLevel: 0.31,
+    vignette: 0.45,
+    vignetteColor: "#050408",
+    pulse: 0.06,
+    detailDensity: 0.25,
+    detailTint: "#6b5a4a",
+    torchesPerRoom: 3,
+    floorDim: 0.30,
+    wallLift: 0.30,
+  },
+  {
+    // Floors 51-70 — THE VEINWORKS: the corruption's circulatory system; resin/amber arteries.
+    name: "The Veinworks",
+    tileKey: "ember",
+    bgColor: "#0a0710",
+    floorA: "#14101c",
+    floorB: "#181322",
+    wallFront: "#281c34",
+    wallCap: "#3d2a1e",
+    wallSideRgb: "30,22,40",
+    wallCorner: "rgba(5,3,10,0.55)",
+    tint: "#5a3a4a",
+    tintAlpha: 0.30,
+    accent: "#ffb43b",
+    glow: "#e8913b",
     lightLevel: 0.36,
     vignette: 0.48,
-    vignetteColor: "#010004",
-    pulse: 0.12,
-    detailDensity: 0.27,
+    vignetteColor: "#040208",
+    pulse: 0.10,
+    detailDensity: 0.28,
+    detailTint: "#c77320",
+    torchesPerRoom: 3,
+    // Retuned up (was 0.30) so the flat (no-art) tier darkens this floor enough to clear the
+    // walkability luma gate against the wall cap; the AD's authored hexes are untouched.
+    floorDim: 0.46,
+    wallLift: 0.40,
+  },
+  {
+    // Floors 71-90 — THE PALE: warmth/color draining out; subtraction begins; near-grey.
+    name: "The Pale",
+    tileKey: "sunless",
+    bgColor: "#12131a",
+    floorA: "#1c1e26",
+    floorB: "#22242e",
+    wallFront: "#343842",
+    wallCap: "#4a4e5a",
+    wallSideRgb: "44,48,56",
+    wallCorner: "rgba(10,11,16,0.5)",
+    tint: "#5a6070",
+    tintAlpha: 0.26,
+    accent: "#c9c9de",
+    glow: "#bfc6d6",
+    lightLevel: 0.40,
+    vignette: 0.52,
+    vignetteColor: "#060810",
+    pulse: 0.05,
+    detailDensity: 0.30,
+    detailTint: "#6b7082",
+    torchesPerRoom: 3,
+    floorDim: 0.30,
+    wallLift: 0.30,
+  },
+  {
+    // Floors 91-100 — NULL CORE: subtraction complete; the source; near-black, void-bright.
+    // Terminal: the ladder holds here forever.
+    name: "Null Core",
+    tileKey: "nullvoid",
+    bgColor: "#030208",
+    floorA: "#08060f",
+    floorB: "#0a0713",
+    wallFront: "#1e1638",
+    wallCap: "#241a40",
+    wallSideRgb: "12,8,24",
+    wallCorner: "rgba(1,0,4,0.65)",
+    tint: "#4a1470",
+    tintAlpha: 0.38,
+    accent: "#ff4ad8",
+    glow: "#d9a6ff",
+    lightLevel: 0.44,
+    vignette: 0.56,
+    vignetteColor: "#010003",
+    pulse: 0.14,
+    detailDensity: 0.33,
     detailTint: "#ff4ad8",
     torchesPerRoom: 3,
-    floorDim: 0.3,
+    floorDim: 0.30,
     wallLift: 0.44,
   },
 ];
 
+// The biome band ladder is now 1:1 with the encounter REGION ladder (six curriculum bands + THE
+// UNMAKING's four post-F30 regions), so the band index IS the region index — one granularity for
+// palette, pressure, hazards AND encounter identity.
 export function biomeIndexForFloor(floor: number): number {
-  const f = Math.max(1, Math.floor(floor));
-  return Math.min(Math.floor((f - 1) / FLOORS_PER_BIOME), BIOMES.length - 1);
+  return regionIndexForFloor(floor);
 }
 
 export function biomeForFloor(floor: number): Biome {
   return BIOMES[biomeIndexForFloor(floor)];
 }
 
-// How deep into its biome band a floor sits, 0..1 (floor 6 -> 0, floor 10 -> 1). The
-// terminal band clamps at 1. Drives within-band escalation: hazard density, room-shape
-// drama and ambience all thicken as the band's milestone floor approaches — the
-// curriculum's teach -> remix -> prove ramp, expressed by the level itself.
+// How deep into its region a floor sits, 0..1 (region start -> 0, region end -> 1). The terminal
+// region clamps at 1. Drives within-region escalation: hazard density, room-shape drama and
+// ambience all thicken as the region's end approaches — the curriculum's teach -> remix -> prove
+// ramp, expressed by the level itself.
 export function biomeDepthForFloor(floor: number): number {
   const f = Math.max(1, Math.floor(floor));
-  const idx = biomeIndexForFloor(f);
-  if (idx >= BIOMES.length - 1) {
-    const over = f - FLOORS_PER_BIOME * (BIOMES.length - 1) - 1;
-    return Math.min(1, over / (FLOORS_PER_BIOME - 1));
-  }
-  return ((f - 1) % FLOORS_PER_BIOME) / (FLOORS_PER_BIOME - 1);
+  const region = regionForFloor(f);
+  // Terminal region (Null Core, no upper bound): ramp over a nominal 10-floor span, then hold at 1.
+  const end = region.toFloor ?? region.fromFloor + FLOORS_PER_BIOME * 2 - 1;
+  if (end <= region.fromFloor) return 1;
+  return Math.min(1, Math.max(0, (f - region.fromFloor) / (end - region.fromFloor)));
 }
 
+
+// ---- the encounter REGION model ----
+// A region is the encounter-identity unit of docs/blobrogue_CONTENT_ROADMAP_to100. The ladder is
+// now 1:1 with the biome PALETTE bands (BIOMES) above: six curriculum regions (Amberwild ->
+// Emberreach) then THE UNMAKING's four post-F30 regions (Sump 31-50, Veinworks 51-70, Pale 71-90,
+// Null Core 91-100). REGIONS[i] and BIOMES[i] describe the same span — REGIONS carries the floor
+// ranges (driving biomeIndexForFloor / biomeDepthForFloor / the encounter deck), BIOMES carries
+// the palette. The pre-F30 regions keep their 5-floor spans; the post-F30 regions span 20/20/20/10.
+export type RegionId =
+  | "amberwild" | "rootbound" | "sunless" | "deep" | "gilded" | "ember"
+  | "sump" | "veinworks" | "pale" | "nullcore";
+
+export interface Region {
+  readonly id: RegionId;
+  readonly name: string;
+  readonly fromFloor: number;
+  readonly toFloor: number | null; // null = terminal (holds forever)
+}
+
+export const REGIONS: readonly Region[] = [
+  { id: "amberwild", name: "Amberwild", fromFloor: 1, toFloor: 5 },
+  { id: "rootbound", name: "Rootbound Warrens", fromFloor: 6, toFloor: 10 },
+  { id: "sunless", name: "Sunless Caves", fromFloor: 11, toFloor: 15 },
+  { id: "deep", name: "The Deep", fromFloor: 16, toFloor: 20 },
+  { id: "gilded", name: "Gilded Archive", fromFloor: 21, toFloor: 25 },
+  { id: "ember", name: "Emberreach", fromFloor: 26, toFloor: 30 },
+  // THE UNMAKING (post-F30) — the roadmap's four corrupted regions.
+  { id: "sump", name: "The Sump", fromFloor: 31, toFloor: 50 },
+  { id: "veinworks", name: "The Veinworks", fromFloor: 51, toFloor: 70 },
+  { id: "pale", name: "The Pale", fromFloor: 71, toFloor: 90 },
+  { id: "nullcore", name: "Null Core", fromFloor: 91, toFloor: null },
+];
+
+export function regionIndexForFloor(floor: number): number {
+  const f = Math.max(1, Math.floor(floor));
+  for (let i = REGIONS.length - 1; i >= 0; i--) {
+    if (f >= REGIONS[i].fromFloor) return i;
+  }
+  return 0;
+}
+
+export function regionForFloor(floor: number): Region {
+  return REGIONS[regionIndexForFloor(floor)];
+}
 
 export function floorBannerText(floor: number, opts?: { isBoss?: boolean; isGauntlet?: boolean; isDescend?: boolean }): string {
   if (opts?.isGauntlet) return "MINIBOSS GAUNTLET";
   if (opts?.isBoss) return "BOSS FLOOR";
-  const name = biomeForFloor(floor).name.toUpperCase();
+  const name = regionForFloor(floor).name.toUpperCase();
   if (opts?.isDescend) return `${name} · DOWN TO FLOOR ${floor}`;
   return `${name} · FLOOR ${floor}`;
 }

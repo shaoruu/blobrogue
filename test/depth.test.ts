@@ -17,7 +17,7 @@ import { HAZARD_DIFFICULTY } from "../src/sim/balance.js";
 import type { Difficulty } from "../src/sim/balance.js";
 import type { FloorHazard, FloorHazardKind } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
-import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText } from "../src/sim/biomes.js";
+import { BIOMES, biomeIndexForFloor, biomeDepthForFloor, biomeForFloor, floorBannerText, REGIONS, regionForFloor, regionIndexForFloor } from "../src/sim/biomes.js";
 import { BIOME_PRESSURE, PLAYER } from "../src/sim/balance.js";
 import { spawnFloorEnemies, isBossFloor, isGauntletFloor, isBossKind, createEnemy, SWARM_ROOM_MIN_AREA } from "../src/sim/enemies.js";
 import { createWorld, stepWorld, isFloorCleared, devSpawnEnemy, devSpawnProp } from "../src/sim/world.js";
@@ -43,7 +43,7 @@ function section(name: string): void {
 
 const DT = 1 / 60;
 const SEEDS = [0x1a2b3c, 0xbee5, 0x7777777, 0xdead10cc, 0x1359, 0xcafe42, 0x900d5eed, 0x31415926];
-const FLOORS = [1, 2, 3, 5, 7, 9, 10, 12, 15, 17, 20, 22, 25, 27, 30, 32, 35];
+const FLOORS = [1, 2, 3, 5, 7, 9, 10, 12, 15, 17, 20, 22, 25, 27, 30, 32, 35, 42, 58, 78, 98];
 
 function idle(seq: number): InputCmd {
   return { seq, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
@@ -241,30 +241,55 @@ function curriculumCadenceTests(): void {
 }
 
 function biomeLadderTests(): void {
-  section("biome ladder: the canonical 30-floor six-region spine + terminal Null band");
-  check("seven bands exist (six curriculum regions + the post-F30 Null)", BIOMES.length === 7);
+  section("biome ladder: the six-region curriculum spine + THE UNMAKING's four post-F30 regions");
+  check("ten bands exist (six curriculum + four THE UNMAKING regions), 1:1 with REGIONS",
+    BIOMES.length === 10 && REGIONS.length === 10);
   check("balance pressure covers every band", BIOME_PRESSURE.length === BIOMES.length);
-  check("curriculum mapping: Amberwild 1-5, Rootbound 6-10, Sunless 11-15, Deep 16-20, Gilded 21-25, Ember 26-30, Null 31+",
+  check("mapping: pre-F30 five-floor bands, then Sump 31-50, Veinworks 51-70, Pale 71-90, Null Core 91+",
     biomeIndexForFloor(1) === 0 && biomeIndexForFloor(5) === 0 &&
     biomeIndexForFloor(6) === 1 && biomeIndexForFloor(10) === 1 &&
     biomeIndexForFloor(11) === 2 && biomeIndexForFloor(15) === 2 &&
     biomeIndexForFloor(16) === 3 && biomeIndexForFloor(20) === 3 &&
     biomeIndexForFloor(21) === 4 && biomeIndexForFloor(25) === 4 &&
     biomeIndexForFloor(26) === 5 && biomeIndexForFloor(30) === 5 &&
-    biomeIndexForFloor(31) === 6 && biomeIndexForFloor(99) === 6);
-  check("curriculum names hold", BIOMES.map((b) => b.name).join("|") ===
-    "Amberwild|Rootbound Warrens|Sunless Caves|The Deep|Gilded Archive|Emberreach|The Null");
-  check("every band ends on its milestone floor", [5, 10, 15, 20, 25, 30].every((f) =>
+    biomeIndexForFloor(31) === 6 && biomeIndexForFloor(50) === 6 &&
+    biomeIndexForFloor(51) === 7 && biomeIndexForFloor(70) === 7 &&
+    biomeIndexForFloor(71) === 8 && biomeIndexForFloor(90) === 8 &&
+    biomeIndexForFloor(91) === 9 && biomeIndexForFloor(120) === 9);
+  check("the biome band index is the region index (one granularity)",
+    [1, 5, 6, 30, 31, 50, 51, 70, 71, 90, 91, 120].every((f) => biomeIndexForFloor(f) === regionIndexForFloor(f)));
+  check("curriculum + UNMAKING names hold", BIOMES.map((b) => b.name).join("|") ===
+    "Amberwild|Rootbound Warrens|Sunless Caves|The Deep|Gilded Archive|Emberreach|The Sump|The Veinworks|The Pale|Null Core");
+  check("pre-F30 bands end on their milestone floor", [5, 10, 15, 20, 25, 30].every((f) =>
     isBossFloor(f) && biomeIndexForFloor(f) === biomeIndexForFloor(f - 1)));
   check("F10 is the Miniboss Gauntlet, announced as such (a non-boss milestone)",
     isGauntletFloor(10) && !isGauntletFloor(5) && !isGauntletFloor(20)
     && floorBannerText(10, { isBoss: true, isGauntlet: true }) === "MINIBOSS GAUNTLET"
     && floorBannerText(15, { isBoss: true }) === "BOSS FLOOR");
-  check("band depth ramps 0..1 within each band", biomeDepthForFloor(6) === 0 && biomeDepthForFloor(10) === 1
-    && biomeDepthForFloor(31) === 0 && biomeDepthForFloor(35) === 1 && biomeDepthForFloor(300) === 1);
+  check("region depth ramps 0..1 within each region (pre-F30 over 5 floors, post-F30 over the span)",
+    biomeDepthForFloor(6) === 0 && biomeDepthForFloor(10) === 1
+    && biomeDepthForFloor(31) === 0 && biomeDepthForFloor(50) === 1
+    && biomeDepthForFloor(91) === 0 && biomeDepthForFloor(100) === 1 && biomeDepthForFloor(300) === 1);
   check("mood darkens and thickens with every band", BIOMES.every((b, i) =>
     i === 0 || (b.vignette > BIOMES[i - 1].vignette && b.lightLevel > BIOMES[i - 1].lightLevel
       && b.detailDensity > BIOMES[i - 1].detailDensity)));
+
+  // The region names the floor banner (JET F35 is the Sump; F55 is the Veinworks; F95 the Null Core).
+  check("region ids span the roadmap's floor ranges",
+    regionForFloor(1).id === "amberwild" && regionForFloor(30).id === "ember" &&
+    regionForFloor(31).id === "sump" && regionForFloor(50).id === "sump" &&
+    regionForFloor(51).id === "veinworks" && regionForFloor(70).id === "veinworks" &&
+    regionForFloor(71).id === "pale" && regionForFloor(90).id === "pale" &&
+    regionForFloor(91).id === "nullcore" && regionForFloor(120).id === "nullcore");
+  check("regions are contiguous + ordered (no gap, no overlap)", REGIONS.every((r, i) =>
+    r.fromFloor === (i === 0 ? 1 : (REGIONS[i - 1].toFloor as number) + 1) &&
+    (r.toFloor === null || r.toFloor >= r.fromFloor)));
+  check("the region names the post-F30 floor banner",
+    floorBannerText(35) === "THE SUMP · FLOOR 35" && floorBannerText(55) === "THE VEINWORKS · FLOOR 55" &&
+    floorBannerText(95, { isBoss: false }) === "NULL CORE · FLOOR 95");
+  check("canonical AD palettes are wired into the post-F30 bands",
+    BIOMES[6].floorA === "#16131a" && BIOMES[6].wallCap === "#3a2f2a" &&
+    BIOMES[7].accent === "#ffb43b" && BIOMES[8].floorA === "#1c1e26" && BIOMES[9].wallCap === "#241a40");
 }
 
 function hazardPlacementTests(): void {
