@@ -481,7 +481,52 @@ function splitAndAddCase(): void {
   check("every add settled outside the sealed cover ring", isAddOutsideOk);
 }
 
-// ---- case 10: perf gate ----
+// ---- case 10: bosses route around walls/cover (regression: bosses beached on walls) ----
+
+// Every boss but the phasing Choir now walks the boss-clearance flow field (see world.ts
+// boss chase → applyChaseStep). A wall or a slab of cover between the boss and the party
+// used to beach it (straight-line atan2 steering); it must round the barrier and reach.
+// Braziers make an INDESTRUCTIBLE barrier so the boss cannot volley/charge a hole through
+// it — the only way across is a real detour.
+function bossPenetration(w: WorldState, e: Enemy): string | null {
+  const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
+  if (tx < 0 || ty < 0 || tx >= w.dungeon.w || ty >= w.dungeon.h || w.dungeon.tiles[ty * w.dungeon.w + tx] === 1) {
+    return `boss center in wall tile ${tx},${ty}`;
+  }
+  for (const p of w.props) {
+    if (p.dead) continue;
+    if (Math.hypot(e.x - p.x, e.y - p.y) < e.radius + p.radius * PROP_BLOCK_RING - 1e-6) return `boss inside prop ${p.id} ring`;
+  }
+  return null;
+}
+
+function bossWallRoutingCase(): void {
+  section("boss wall-routing: Marrow rounds an indestructible barrier to reach the pinned party");
+  const w = sandbox(0xB055E5);
+  placePlayer(w, tileCenter(8, 12).x, tileCenter(8, 12).y);
+  // A tall brazier barricade dead across the line between the boss and the party.
+  for (let ty = 8; ty <= 16; ty++) propAtTile(w, "brazier", 15, ty);
+  const marrow = devSpawnEnemy(w, "marrow", tileCenter(22, 12).x, tileCenter(22, 12).y);
+  marrow.spawnTimer = 0;
+  const target = w.players.get(LOCAL_ID)!;
+  const pinX = target.x, pinY = target.y;
+  const startTx = Math.floor(marrow.x / TILE);
+  let reached = -1;
+  let didRoundBarrier = false;
+  let penetration: string | null = null;
+  for (let tick = 0; tick < 900 && reached < 0 && !marrow.dead; tick++) {
+    target.x = pinX; target.y = pinY;
+    stepWorld(w, idleInputs, DT);
+    if (Math.floor(marrow.x / TILE) < 15) didRoundBarrier = true; // crossed to the party's side of the wall
+    if (penetration === null) penetration = bossPenetration(w, marrow);
+    if (Math.hypot(pinX - marrow.x, pinY - marrow.y) - (target.pr + marrow.radius) <= 4) reached = tick;
+  }
+  check("Marrow reached the party behind the barrier (did not beach on the wall)", reached >= 0, `ticks=${reached}, startTx=${startTx}`);
+  check("Marrow routed around the barrier (crossed to the party's side)", didRoundBarrier);
+  check("no wall/prop penetration on the boss during the route", penetration === null, penetration ?? "");
+}
+
+// ---- case 11: perf gate ----
 
 function perfGate(): void {
   section("perf gate: 50 enemies + 50 props under the server tick budget");
@@ -532,6 +577,7 @@ function main(): void {
   radiiCase();
   spawnValidationSweep();
   splitAndAddCase();
+  bossWallRoutingCase();
   perfGate();
 
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

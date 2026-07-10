@@ -32,10 +32,11 @@ import { TILE } from "./types.js";
 import { PROP_BLOCK_RING } from "./constants.js";
 
 // Clearance classes: an enemy routes with the smallest class radius that contains its
-// body. Three buckets cover the whole ground roster tightly (swarm ~10–12.5 / standard
-// 13–16 / brute+elite ~16.2–20.8); anything larger (the boss does not consume flow
-// routing) clamps to the biggest bucket and leans on collision + local steering.
-export const NAV_CLASS_RADII = [13, 16, 21] as const;
+// body. Three buckets cover the ground roster tightly (swarm ~10–12.5 / standard 13–16 /
+// brute+elite ~16.2–20.8); a fourth, wide bucket carries the bosses (radius 26–36) so
+// they route around walls and cover like everything else instead of beaching on them.
+// Anything larger than the widest bucket clamps to it and leans on collision + steering.
+export const NAV_CLASS_RADII = [13, 16, 21, 36] as const;
 
 export function navClassFor(radius: number): number {
   for (let i = 0; i < NAV_CLASS_RADII.length; i++) {

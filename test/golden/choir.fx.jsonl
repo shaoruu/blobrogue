@@ -718,7 +718,7 @@
 []
 []
 ["sfx ricochet 1.35 0.22","sparks 2405.99 1437.76 5"]
-["decal 2428.37 1468.2 #bfe9ff 18 splat","decal 2428.37 1468.2 #ffd27a 15 ring","decal 2428.5 1467.93 #bfe9ff 18 splat","dmg 2428.37 1456.5 3 1 ","dmg 2428.5 1456.23 3 1 ","freeze 0.03","freeze 0.03","freeze 0.04","freeze 0.04","gibs 2428.37 1468.2 10 #bfe9ff","gibs 2428.5 1467.93 10 #bfe9ff","particles 2428.37 1468.2 8 #bfe9ff","particles 2428.5 1467.93 8 #bfe9ff","particles 2442.54 1480.13 1 #ffe6a0","puff 2428.37 1468.2 5 #ffd27a","puff 2435.71 1471.93 9 #fff3c4","puff 2435.71 1471.93 9 #fff3c4","sfx crit 1 0.6","sfx crit 1 0.6","sfx smg 1 1","shell 2454 1488 -2.26","sparkfx 2435.71 1471.93 #fff3c4","sparkfx 2435.71 1471.93 #fff3c4","trauma 0.05","trauma 0.16","trauma 0.16","wavecue mob.death 2428.37 1468.2","wavecue mob.death 2428.5 1467.93"]
+["decal 2428.37 1468.2 #bfe9ff 18 splat","decal 2428.37 1468.2 #ffd27a 15 ring","decal 2428.5 1467.93 #bfe9ff 18 splat","dmg 2428.37 1456.5 3 1 ","dmg 2428.5 1456.23 3 1 ","freeze 0.03","freeze 0.03","freeze 0.04","gibs 2428.37 1468.2 10 #bfe9ff","gibs 2428.5 1467.93 10 #bfe9ff","particles 2428.37 1468.2 8 #bfe9ff","particles 2428.5 1467.93 8 #bfe9ff","particles 2442.54 1480.13 1 #ffe6a0","puff 2428.37 1468.2 5 #ffd27a","puff 2435.71 1471.93 9 #fff3c4","puff 2435.71 1471.93 9 #fff3c4","sfx crit 1 0.6","sfx crit 1 0.6","sfx smg 1 1","shell 2454 1488 -2.26","sparkfx 2435.71 1471.93 #fff3c4","sparkfx 2435.71 1471.93 #fff3c4","trauma 0.05","trauma 0.32","wavecue mob.death 2428.37 1468.2","wavecue mob.death 2428.5 1467.93"]
 ["sfx bossSpawn 1.5 0.6","trauma 0.05"]
 []
 []

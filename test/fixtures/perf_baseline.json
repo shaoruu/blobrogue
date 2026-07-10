@@ -1,0 +1,30 @@
+{
+  "note": "Perf baseline for test/perf.test.ts. tick()+render() (client scenarios) and stepWorldPhase (sim) frame times in ms. `calib` normalizes for hardware. Regenerate: npm run perf:baseline",
+  "calib": 10.057965000000024,
+  "sim": {
+    "median": 0.03252000000000521,
+    "p95": 0.10087200000000962
+  },
+  "scenarios": {
+    "thumper-into-barrels": {
+      "median": 36.84272400000009,
+      "p95": 42.11768299999994
+    },
+    "swarm-max-enemies": {
+      "median": 37.545930999999655,
+      "p95": 38.4623500000007
+    },
+    "full-auto-beam": {
+      "median": 35.42017699999997,
+      "p95": 36.04190700000072
+    },
+    "full-auto-flamer": {
+      "median": 35.019930999998905,
+      "p95": 35.591725000000224
+    },
+    "boss-plus-fx": {
+      "median": 30.989000000001397,
+      "p95": 32.44608599999992
+    }
+  }
+}
