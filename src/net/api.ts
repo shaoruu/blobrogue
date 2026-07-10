@@ -139,6 +139,9 @@ export const api = {
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
     recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number; amber?: number; durationMs?: number; build?: RunBuildArg }, ProfileDoc | null>("players:recordRun"),
+    // Progressive deepest-floor banking (fired on each descend) — raises deepestFloor +
+    // charts the floor without the per-run folding recordRun does. Returns nothing.
+    recordFloorProgress: makeFunctionReference<"mutation", { clientId: string; floor: number }, null>("players:recordFloorProgress"),
   },
   leaderboard: {
     // The global top-N best runs (deepest floor, kills tie-break), public fields only.

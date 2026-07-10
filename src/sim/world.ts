@@ -1096,8 +1096,14 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
 // past the studio cap; Glass Cannon's negative bonus and the artifact's heart tithe still
 // apply in full below the cap.
 export function applyMaxHpBonus(p: PlayerSim): void {
-  const bonus = Math.min(CAPS.maxHpBonus, p.mods.maxHpBonus + p.premiumHpBuys);
-  p.maxHp = Math.max(1, PLAYER.baseMaxHp + bonus - p.hpTithe);
+  // Subtract the artifact heart tithe from the RAW bonus BEFORE the positive +4 clamp, not
+  // after it. Clamping first (base + clamp(bonus) − tithe) let the cap silently swallow
+  // containers the player collected past +4, and THEN the tithe ate real hearts on top —
+  // a capped buyer paid for the deal twice. Clamping base+bonus−tithe as one quantity means
+  // an over-cap player's tithe comes out of the excess the cap was already eating, so it is
+  // free to them; a player exactly at (or below) the cap still pays it in full, unchanged.
+  const bonus = p.mods.maxHpBonus + p.premiumHpBuys - p.hpTithe;
+  p.maxHp = Math.max(1, PLAYER.baseMaxHp + Math.min(CAPS.maxHpBonus, bonus));
   if (p.hp > p.maxHp) p.hp = p.maxHp;
   if (p.hp < 1) p.hp = 1;
 }

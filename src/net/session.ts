@@ -235,6 +235,19 @@ export class Session {
     return this.profile;
   }
 
+  // Bank the deepest floor reached, PROGRESSIVELY, on each descend — so a run that ends by
+  // a teammate carrying on / a disconnect / a quit (never a clean full-party-wipe game over,
+  // the only thing that calls recordRun) still records its depth on the leaderboard. Fire-
+  // and-forget: a failed floor-bank must never interrupt play, and the mutation is
+  // idempotent (Math.max) so a re-bank of the same floor is harmless.
+  recordFloorProgress(floor: number): void {
+    if (!this.client || !Number.isFinite(floor) || floor < 1) return;
+    void this.client.mutation(api.players.recordFloorProgress, {
+      clientId: this.clientId,
+      floor: Math.floor(floor),
+    }).catch(() => { /* never let a depth-bank failure interrupt the run */ });
+  }
+
   async recordRun(result: RunResult): Promise<ProfileDoc | null> {
     if (!this.client) return null;
     try {

@@ -41,6 +41,12 @@ const HITSTOP_KEY = "blobrogue.hitstop";
 const RECOIL_KEY = "blobrogue.recoil";
 const UI_SCALE_KEY = "blobrogue.uiScale";
 const CONTRAST_KEY = "blobrogue.highContrast";
+// Double-tap a movement key to dash (alternate to the dash key). Default ON.
+const DOUBLE_TAP_DASH_KEY = "blobrogue.doubleTapDash";
+// The rebindable dash trigger (a single normalized key name, e.g. "shift" or "r"). Shift is
+// ALWAYS a dash trigger regardless of this; the binding adds a second key on top.
+const DASH_KEY_KEY = "blobrogue.dashKey";
+const DASH_KEY_DEFAULT = "shift";
 
 // Full-screen flash washes (boss phases, explosions, celebrations): off kills them, low
 // keeps a faint glow, full is the authored intensity. Anything at "full" is gated behind
@@ -104,6 +110,19 @@ function readFlashLevel(): FlashLevel {
   }
 }
 
+// A stored single-key binding: trimmed + lowercased so it matches the InputController's
+// normalized key names; empty/blank falls back to the default.
+function readKeyBinding(key: string, fallback: string): string {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === null) return fallback;
+    const clean = v.trim().toLowerCase();
+    return clean.length > 0 ? clean : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function readNumber(key: string, fallback: number): number {
   try {
     const v = localStorage.getItem(key);
@@ -157,6 +176,8 @@ export class Settings {
   private recoil: number;            // 0..1, scales camera kick + weapon recoil punch
   private hudScale: number;          // HUD/overlay zoom, UI_SCALE_MIN..UI_SCALE_MAX
   private highContrast: boolean;     // halve the ambient darkness/AO grade for readability
+  private doubleTapDash: boolean;    // double-tap a movement key to dash (default ON)
+  private dashKeyBinding: string;    // the rebindable dash trigger key (shift is always one too)
   private listeners = new Set<Listener>();
 
   constructor() {
@@ -173,6 +194,8 @@ export class Settings {
     this.recoil = clamp01(readNumber(RECOIL_KEY, 1));
     this.hudScale = clampUiScale(readNumber(UI_SCALE_KEY, 1));
     this.highContrast = readBool(CONTRAST_KEY, false);
+    this.doubleTapDash = readBool(DOUBLE_TAP_DASH_KEY, true);
+    this.dashKeyBinding = readKeyBinding(DASH_KEY_KEY, DASH_KEY_DEFAULT);
   }
 
   get isMuted(): boolean {
@@ -244,6 +267,9 @@ export class Settings {
   get recoilIntensity(): number { return this.recoil; }
   get uiScale(): number { return this.hudScale; }
   get isHighContrast(): boolean { return this.highContrast; }
+  get isDoubleTapDash(): boolean { return this.doubleTapDash; }
+  // The rebindable dash key (normalized key name). Shift is always ALSO a dash trigger.
+  get dashKey(): string { return this.dashKeyBinding; }
 
   // What the render/FX paths actually consume: reduced motion zeroes camera motion
   // (shake + kick + recoil punch) regardless of the individual sliders.
@@ -285,6 +311,23 @@ export class Settings {
     if (this.highContrast === value) return;
     this.highContrast = value;
     try { localStorage.setItem(CONTRAST_KEY, value ? "1" : "0"); } catch {}
+    this.emit();
+  }
+
+  setDoubleTapDash(value: boolean): void {
+    if (this.doubleTapDash === value) return;
+    this.doubleTapDash = value;
+    try { localStorage.setItem(DOUBLE_TAP_DASH_KEY, value ? "1" : "0"); } catch {}
+    this.emit();
+  }
+
+  // Rebind the dash key. Normalized (trim + lowercase) to match the InputController's key
+  // names; a blank binding resets to the default. Shift always stays a dash trigger too.
+  setDashKey(key: string): void {
+    const clean = key.trim().toLowerCase() || DASH_KEY_DEFAULT;
+    if (this.dashKeyBinding === clean) return;
+    this.dashKeyBinding = clean;
+    try { localStorage.setItem(DASH_KEY_KEY, clean); } catch {}
     this.emit();
   }
 

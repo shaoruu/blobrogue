@@ -5,7 +5,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { sanitizeEquip, earnedCosmeticsFor, COSMETIC_SLOTS } from "./cosmeticsCore";
 import type { CosmeticLoadout } from "./cosmeticsCore";
-import { foldBestRun, mergeBestRun, syncIdentity, cleanBuild } from "./leaderboard";
+import { foldBestRun, foldFloorProgress, mergeBestRun, syncIdentity, cleanBuild } from "./leaderboard";
 import type { RunBuild } from "./leaderboard";
 
 export interface Profile {
@@ -278,6 +278,33 @@ export const ensurePlayer = mutation({
     const inserted = (await ctx.db.get(id))!;
     const updated = await applyAppearance(ctx, inserted, undefined, cosmetics);
     return toProfile(updated);
+  },
+});
+
+// Bank the deepest floor a run has reached, PROGRESSIVELY, on each descend — the fix for
+// depth that never charted because recordRun only fires on a clean full-party-wipe game
+// over (a death-while-teammates-continue, a disconnect, or a quit all skipped it, so the
+// board showed a stale floor). Deliberately NARROW: it only raises deepestFloor via
+// Math.max and folds the floor into the leaderboard (foldFloorProgress). It must NOT do
+// what recordRun does — no gamesPlayed increment, no kills/coins summing, no cosmetic
+// unlock grants, no amber — because those are per-RUN, not per-floor, and would multiply
+// wildly across a descent. Idempotent by Math.max: re-banking the same floor is a no-op,
+// so a run that later disconnects still keeps the depth it already reached.
+export const recordFloorProgress = mutation({
+  args: { clientId: v.string(), floor: v.number() },
+  handler: async (ctx, { clientId, floor }) => {
+    const target = Math.max(0, Math.floor(floor));
+    if (target < 1) return null;
+    const userId = await getAuthUserId(ctx);
+    const row = userId
+      ? (await ensureAccountRow(ctx, userId, clientId, "blob")).row
+      : await findByClientId(ctx, clientId);
+    if (!row) return null;
+    if (target > row.deepestFloor) {
+      await ctx.db.patch(row._id, { deepestFloor: target, lastSeen: Date.now() });
+    }
+    await foldFloorProgress(ctx, { ...row, deepestFloor: Math.max(row.deepestFloor, target) }, target);
+    return null;
   },
 });
 

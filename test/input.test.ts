@@ -6,7 +6,7 @@
 //
 // Run: npm run test:input
 
-import { InputController } from "../src/game/input.js";
+import { InputController, DOUBLE_TAP_MS, TAP_MAX_HOLD } from "../src/game/input.js";
 import type { GameAction, InputContext } from "../src/game/input.js";
 import { MAX_OWNED_WEAPONS } from "../src/sim/constants.js";
 import { settings } from "../src/game/settings.js";
@@ -34,7 +34,7 @@ function isIdle(input: InputController): boolean {
 }
 
 const NON_GAMEPLAY: InputContext[] = ["menu", "hud", "pause", "blessing", "shop", "reconnect", "spectate"];
-const WEAPON_ACTIONS: readonly GameAction["kind"][] = ["selectWeapon", "cycleWeapon", "dropWeapon", "activateSlot", "reorderSlots", "swapSlot"];
+const WEAPON_ACTIONS: readonly GameAction["kind"][] = ["selectWeapon", "cycleWeapon", "dropWeapon", "dropWeaponAt", "activateSlot", "reorderSlots", "swapSlot"];
 
 function overlayLeakageTests(): void {
   section("overlay leakage: gameplay actions exist only in the gameplay context");
@@ -234,11 +234,13 @@ function uiDispatchTests(): void {
     input.dispatch({ kind: "activateSlot", index: 2 });
     input.dispatch({ kind: "reorderSlots", from: 0, to: 2 });
     input.dispatch({ kind: "dropWeapon" });
+    input.dispatch({ kind: "dropWeaponAt", index: 3 });
     check("gameplay: activate/reorder/drop dispatches pass",
-      actions.length === 3
+      actions.length === 4
       && actions[0].kind === "activateSlot" && actions[0].index === 2
       && actions[1].kind === "reorderSlots" && actions[1].from === 0 && actions[1].to === 2
-      && actions[2].kind === "dropWeapon");
+      && actions[2].kind === "dropWeapon"
+      && actions[3].kind === "dropWeaponAt" && actions[3].index === 3);
   }
   for (const ctx of NON_GAMEPLAY) {
     const { input, actions } = harness();
@@ -246,6 +248,7 @@ function uiDispatchTests(): void {
     input.dispatch({ kind: "activateSlot", index: 0 });
     input.dispatch({ kind: "reorderSlots", from: 0, to: 1 });
     input.dispatch({ kind: "dropWeapon" });
+    input.dispatch({ kind: "dropWeaponAt", index: 0 });
     check(`${ctx}: UI dispatches are rejected by the gate`, actions.length === 0, actions.map((a) => a.kind).join(","));
   }
   {
@@ -365,6 +368,98 @@ function fakeEl(isConnected = true): FakeFocusable {
   return el;
 }
 
+// A harness with an injected, mutable clock so the double-tap timing is deterministic.
+function clockHarness(): { input: InputController; clock: { t: number } } {
+  const clock = { t: 10_000 };
+  const input = new InputController(() => {}, () => clock.t);
+  return { input, clock };
+}
+
+function doubleTapDashTests(): void {
+  section("double-tap dash: a genuine tap-then-quick-repress dashes in the tapped direction");
+  {
+    const { input, clock } = clockHarness();
+    input.setContext("gameplay");
+    clock.t = 10_000; input.keyDown("w");           // press 1
+    clock.t = 10_050; input.keyUp("w");             // release 1 (held 50ms — a tap)
+    clock.t = 10_100; input.keyDown("w");           // press 2, 50ms after release (<= 220ms)
+    const s = input.sample();
+    check("tap-tap arms the dash bit in the tapped direction", s.dash && s.moveY === -1);
+    check("the dash latch is one-shot (next sample no longer dashes)", !input.sample().dash);
+  }
+
+  section("misfire guard: a HELD first press never dashes (down->up->down but held long)");
+  {
+    const { input, clock } = clockHarness();
+    input.setContext("gameplay");
+    clock.t = 10_000; input.keyDown("d");
+    clock.t = 10_000 + TAP_MAX_HOLD + 40; input.keyUp("d"); // held past the tap ceiling
+    clock.t = 10_000 + TAP_MAX_HOLD + 60; input.keyDown("d"); // quick re-press
+    check("a held-then-repress never dashes", !input.sample().dash);
+  }
+
+  section("misfire guard: a SLOW re-press never dashes (gap measured release->press)");
+  {
+    const { input, clock } = clockHarness();
+    input.setContext("gameplay");
+    clock.t = 10_000; input.keyDown("a");
+    clock.t = 10_050; input.keyUp("a"); // a clean tap
+    clock.t = 10_050 + DOUBLE_TAP_MS + 40; input.keyDown("a"); // re-press just too late
+    check("a slow re-press never dashes", !input.sample().dash);
+  }
+
+  section("double-tap dash shares the dash resource + arrow-key equivalents work");
+  {
+    const { input, clock } = clockHarness();
+    input.setContext("gameplay");
+    // Arrow-key equivalent of the up direction taps the same state as W.
+    clock.t = 10_000; input.keyDown("arrowup");
+    clock.t = 10_050; input.keyUp("arrowup");
+    clock.t = 10_090; input.keyDown("arrowup");
+    const s = input.sample();
+    check("an arrow-key double-tap dashes too (same dash bit as Shift)", s.dash && s.moveY === -1);
+  }
+
+  section("double-tap dash respects the setting + the gameplay gate");
+  {
+    settings.setDoubleTapDash(false);
+    const { input, clock } = clockHarness();
+    input.setContext("gameplay");
+    clock.t = 10_000; input.keyDown("w");
+    clock.t = 10_050; input.keyUp("w");
+    clock.t = 10_090; input.keyDown("w");
+    check("with the setting OFF a double-tap never dashes", !input.sample().dash);
+    settings.setDoubleTapDash(true);
+  }
+  {
+    const { input, clock } = clockHarness();
+    input.setContext("menu"); // not gameplay: no dash may be armed
+    clock.t = 10_000; input.keyDown("w");
+    clock.t = 10_050; input.keyUp("w");
+    clock.t = 10_090; input.keyDown("w");
+    input.setContext("gameplay");
+    check("a double-tap performed outside gameplay never dashes on return", !input.sample().dash);
+  }
+
+  section("rebindable dash key: Shift always dashes; the bound key adds a second trigger");
+  {
+    const { input } = clockHarness();
+    input.setContext("gameplay");
+    input.keyDown("shift"); input.keyDown("w");
+    check("Shift dashes out of the box", input.sample().dash);
+    input.keyUp("shift");
+    check("releasing Shift stops the dash bit", !input.sample().dash);
+    settings.setDashKey("r");
+    input.keyDown("r");
+    check("the rebound dash key (R) dashes", input.sample().dash);
+    input.keyUp("r");
+    input.keyDown("shift");
+    check("Shift still dashes after a rebind (stays a trigger regardless)", input.sample().dash);
+    input.keyUp("shift");
+    settings.setDashKey("shift");
+  }
+}
+
 function focusScopeTests(): void {
   section("focus restoration: modal open/close returns focus");
   {
@@ -396,6 +491,7 @@ uiDispatchTests();
 spectateTests();
 interactPressTests();
 shopContextTests();
+doubleTapDashTests();
 focusScopeTests();
 
 process.stdout.write(`\n${passed} passed, ${failed} failed\n`);

@@ -33,6 +33,10 @@ export type GameAction =
   | { kind: "inspectSlot"; index: number }
   | { kind: "cycleWeapon"; dir: 1 | -1 }
   | { kind: "dropWeapon" }
+  // Drag-out-to-discard: drop the OWNED weapon at hotbar `index` to the floor (the drawer's
+  // dropWeapon path, indexed directly — not equip-then-drop). Fired by a hotbar drag
+  // released outside the slots row when more than one weapon is owned.
+  | { kind: "dropWeaponAt"; index: number }
   | { kind: "activateSlot"; index: number }
   | { kind: "reorderSlots"; from: number; to: number }
   // The full-hotbar swap prompt: trade the slot at `index` for the blocked pickup underfoot.
@@ -57,6 +61,7 @@ const ACTION_CONTEXTS: Record<GameAction["kind"], readonly InputContext[]> = {
   selectWeapon: ["gameplay"],
   cycleWeapon: ["gameplay"],
   dropWeapon: ["gameplay"],
+  dropWeaponAt: ["gameplay"],
   activateSlot: ["gameplay"],
   inspectSlot: ["gameplay"],
   reorderSlots: ["gameplay"],
@@ -79,6 +84,29 @@ export interface InputSample {
 
 const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false };
 
+// Double-tap-to-dash timing (game-designer spec). A dash fires on a down->up->down where the
+// FIRST press was a genuine TAP (held <= TAP_MAX_HOLD) and the SECOND press lands within
+// DOUBLE_TAP_MS of the first RELEASE (the gap is measured release->press, NOT press->press),
+// so a held key or a slow re-press never dashes. Exported for the input test.
+export const DOUBLE_TAP_MS = 220;
+export const TAP_MAX_HOLD = 180;
+
+// The four logical movement directions; each maps from BOTH its WASD key and its arrow
+// equivalent, so a double-tap works on either (and mixing them across the two presses).
+type MoveDir = "up" | "down" | "left" | "right";
+const MOVE_DIR: Record<string, MoveDir> = {
+  w: "up", arrowup: "up",
+  s: "down", arrowdown: "down",
+  a: "left", arrowleft: "left",
+  d: "right", arrowright: "right",
+};
+
+// Per-direction tap tracking for the double-tap detector. pressT = when the currently-held
+// press began (-1 = not held); lastReleaseT = when the previous press was released (-1 =
+// none); lastPressWasTap = whether that previous press qualified as a tap (held short).
+interface TapState { pressT: number; lastReleaseT: number; lastPressWasTap: boolean }
+function freshTapState(): TapState { return { pressT: -1, lastReleaseT: -1, lastPressWasTap: false }; }
+
 export class InputController {
   private keys = new Set<string>();
   private ctx: InputContext = "menu";
@@ -86,11 +114,21 @@ export class InputController {
   private isAutofireLatched = false;
   private isStatsHeld = false;
   private onAction: (a: GameAction) => void;
+  // Injectable monotonic clock (ms) so the double-tap timing is deterministic under test;
+  // production uses performance.now().
+  private now: () => number;
+  // Per-direction double-tap state + the one-shot latch a detected double-tap arms (consumed
+  // by the next gameplay sample as a dash, so it shares the Shift dash's cooldown/charges).
+  private moveTap: Record<MoveDir, TapState> = {
+    up: freshTapState(), down: freshTapState(), left: freshTapState(), right: freshTapState(),
+  };
+  private isDashTapQueued = false;
   mouseX = 0;
   mouseY = 0;
 
-  constructor(onAction: (a: GameAction) => void) {
+  constructor(onAction: (a: GameAction) => void, now: () => number = () => performance.now()) {
     this.onAction = onAction;
+    this.now = now;
   }
 
   get context(): InputContext {
@@ -111,6 +149,9 @@ export class InputController {
     this.ctx = ctx;
     this.suspendFire();
     this.releaseStats();
+    // A double-tap sequence can never span an overlay boundary: a tap before the pause and a
+    // press after it must not fabricate a dash on resume.
+    this.resetDashTap();
   }
 
   // Window blur / tab hidden / focus loss: keyup+mouseup are lost while unfocused, so
@@ -119,6 +160,12 @@ export class InputController {
     this.keys.clear();
     this.suspendFire();
     this.releaseStats();
+    this.resetDashTap();
+  }
+
+  private resetDashTap(): void {
+    this.isDashTapQueued = false;
+    for (const dir of Object.keys(this.moveTap) as MoveDir[]) this.moveTap[dir] = freshTapState();
   }
 
   // UI-driven actions (hotbar slot click/drag, on-screen buttons) enter here and pass
@@ -145,6 +192,10 @@ export class InputController {
       return isPlaying; // outside a run, Tab keeps doing focus navigation
     }
     if (!isRepeat) {
+      // Movement-key double-tap -> dash (an alternate to the dash key). Runs before the
+      // weapon/interact edges (independent of them); only a genuine tap-then-quick-repress
+      // in live gameplay arms the dash latch.
+      this.trackMoveTap(k);
       // The select row is exactly the hotbar cap (1..MAX_OWNED_WEAPONS, cap <= 9 by
       // contract): every slot that can exist has a key, and no key names a dead slot.
       if (k >= "1" && k <= String(MAX_OWNED_WEAPONS)) this.emit({ kind: "selectWeapon", index: parseInt(k, 10) - 1 });
@@ -168,6 +219,37 @@ export class InputController {
     const k = key.toLowerCase();
     this.keys.delete(k);
     if (k === "tab") this.releaseStats();
+    this.releaseMoveTap(k);
+  }
+
+  // On a fresh movement-key press: if the previous press of the SAME direction was a tap and
+  // its RELEASE was within DOUBLE_TAP_MS, arm a dash (consumed by the next sample). Gated on
+  // live gameplay + the setting; the sequence is then reset so a third tap needs a fresh one.
+  private trackMoveTap(k: string): void {
+    const dir = MOVE_DIR[k];
+    if (dir === undefined) return;
+    const st = this.moveTap[dir];
+    const now = this.now();
+    if (this.ctx === "gameplay" && settings.isDoubleTapDash
+      && st.lastReleaseT >= 0 && st.lastPressWasTap && now - st.lastReleaseT <= DOUBLE_TAP_MS) {
+      this.isDashTapQueued = true;
+      st.lastReleaseT = -1;
+      st.lastPressWasTap = false;
+    }
+    st.pressT = now;
+  }
+
+  // On a movement-key release: record whether the press just ended was a genuine TAP (held
+  // <= TAP_MAX_HOLD) and when it released — the basis a following press checks against.
+  private releaseMoveTap(k: string): void {
+    const dir = MOVE_DIR[k];
+    if (dir === undefined) return;
+    const st = this.moveTap[dir];
+    if (st.pressT < 0) return;
+    const now = this.now();
+    st.lastPressWasTap = now - st.pressT <= TAP_MAX_HOLD;
+    st.lastReleaseT = now;
+    st.pressT = -1;
   }
 
   // Only the LEFT button fires — and, in autofire mode, toggles the latch. Right/middle
@@ -214,7 +296,15 @@ export class InputController {
     if (this.keys.has("d") || this.keys.has("arrowright")) moveX += 1;
     if (!settings.isAutofire) this.isAutofireLatched = false;
     const firing = settings.isAutofire ? this.isAutofireLatched : this.isMouseDown;
-    return { moveX, moveY, firing, dash: this.keys.has("shift"), interact: this.keys.has("e") };
+    // Dash triggers: Shift is ALWAYS one; the rebindable dash key adds a second (Ian's R);
+    // and a detected double-tap arms a one-shot latch, consumed here. All three feed the
+    // SAME `dash` bit, so they share the sim's dash cooldown/charges/i-frames — a double-tap
+    // is never a free extra dash.
+    const dashKey = settings.dashKey;
+    const dashHeld = this.keys.has("shift") || (dashKey !== "shift" && this.keys.has(dashKey));
+    const dashTap = this.isDashTapQueued;
+    this.isDashTapQueued = false;
+    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e") };
   }
 
   private suspendFire(): void {

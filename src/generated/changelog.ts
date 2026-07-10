@@ -18,10 +18,21 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "unreleased",
     date: "unreleased",
     entries: [
-      { body: "Combat + performance pass: bosses path around walls instead of beaching on cover; fixed frame-rate drops from Thumper/AoE weapons (with a standing perf guard so it can't regress); Snapwire / Razor Halo / Crooked Chain now break barrels & props; Sunlance range matches its beam and got a fire sound; coins can no longer drop inside walls." },
-      { body: "Visual polish: real crystalline frost-zone art (no more flat green disc), redone weapon projectiles (Frostline shard + the legendaries), and a proper charred scorch mark from Thumper." },
-      { body: "Hotbar overhaul: precise drag-to-reorder + drag-a-weapon-out-to-drop, cleaner full-hotbar swap." },
-      { body: "Double-tap a direction to dash (+ rebindable dash key), shop click-outside-to-close & clearer sold-out states, more music variety, and run persistence on reconnect." },
+      { body: "Content push: more bosses ramping toward floor 100 (with giant spectacle set-pieces + anti-repeat affixes), new gun verbs, deeper-floor enemies, and seeded floor mutators/elite affixes for run variety." },
+      { body: "Kits/classes + XP: pick a class (Gunner/Mender/Bulwark/Phantom) with a signature ultimate; account XP unlocks kits & cosmetics." },
+      { body: "More cosmetics (a fresh wave of real generated hats + face items, replacing the old placeholder ones), more blessings, HP numbers on the HUD, and interact-with-Patch." },
+      { body: "Bug fixes in flight: heart double-consume, leaderboard deepest-floor not recording past a point, name change, sentry animation, Umbra art, drag-and-drop precision." },
+      { body: "Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect." },
+    ],
+  },
+  {
+    version: "2026-07-10",
+    date: "2026-07-10",
+    entries: [
+      { title: "Deep-game foundations (floors 31-50 groundwork)", body: "per-region enemy decks so deeper floors stop repeating the same roster, a 4-player effect-density system so busy fights stay readable, a deterministic randomness backbone for upcoming floor mutators/affixes, and four new deep-region palettes (Sump/Veinworks/Pale/Null Core)." },
+      { title: "New cosmetics + legendary art", body: "a fresh wave of real hats (top, crown, party, halo, wizard, beanie, helmet, chef, flower, mushroom, horns, headphones) and face items (sunglasses, monocle, eyepatch, star shades, 3D glasses) — replacing the old placeholder shapes — plus proper art for all 5 legendary guns (Umbra, Reaper, Hive, Midas, Lodestone)." },
+      { title: "Combat correctness + performance", body: "bosses now path around walls & cover instead of beaching on them (no more cheesing from behind a wall); fixed frame-rate drops from Thumper and other AoE weapons, with a standing performance guard so it can't regress; Snapwire / Razor Halo / Crooked Chain now break barrels & props; Sunlance's range matches its beam and it has a fire sound; coins can no longer drop inside walls." },
+      { title: "UI overhaul", body: "your blob is now a big centerpiece on the main menu; the menu buttons are reorganized with clear hierarchy; Settings is now tabbed (Audio / Gameplay / Video / Accessibility) instead of one long list; a game-wide consistency pass (unified colors, text sizes, focus outlines, keycaps, panels); and a new in-game **What's New** panel so you can read the changelog right in the game." },
     ],
   },
   {

@@ -171,6 +171,19 @@
         border-left:5px solid transparent; border-right:5px solid transparent; }
       .hb-ins::before{ top:-5px; border-top:5px solid var(--amber-hi); }
       .hb-ins::after{ bottom:-5px; border-bottom:5px solid var(--amber-hi); }
+      /* nearest-slot reorder target: an amber-hi inset ring + a 2px lateral nudge that opens
+         the gap the dragged weapon will land in (before -> nudge right, after -> left). The
+         equipped variant keeps its translateY(-4px) lift. Transform-only, so no reflow. */
+      .hb-slot.drop-target{ box-shadow:inset 0 0 0 2px var(--amber-hi),0 3px 0 rgba(0,0,0,.4); }
+      .hb-slot.drop-target.nudge-before{ transform:translateX(2px); }
+      .hb-slot.drop-target.nudge-after{ transform:translateX(-2px); }
+      .hb-slot.on.drop-target.nudge-before{ transform:translateY(-4px) translateX(2px); }
+      .hb-slot.on.drop-target.nudge-after{ transform:translateY(-4px) translateX(-2px); }
+      /* drag-out-to-discard: crossing into the discard band flips the ghost to a red DROP
+         read (grayscale + danger inset) as the pre-release warning; the MOVE tag reads DROP,
+         or CAN'T DROP LAST when it's the only weapon owned (that release just cancels). */
+      .hb-ghost.discard{ filter:grayscale(1); box-shadow:inset 0 0 0 2px var(--danger),0 5px 0 rgba(0,0,0,.55); }
+      .hb-ghost.discard .hb-move{ color:var(--cream); background:var(--danger); box-shadow:0 0 0 1px var(--ink); }
       /* empty capacity boxes: the bar is always MAX_OWNED_WEAPONS slots wide, so the cap
          reads at a glance and a pickup fills a box instead of shifting the layout. Inert
          (no pointer events) and visually recessive next to real slots. */
@@ -705,6 +718,11 @@
       .set-step:hover{ transform:none; background:var(--dun-3); box-shadow:inset 0 0 0 2px var(--dun-4); }
       .set-step:active{ transform:none; }
       .set-cycle-v{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--amber-hi); min-width:42px; text-align:center; text-transform:uppercase; }
+      /* KEYBIND: a keycap-styled button showing the bound key; "listening" while capturing. */
+      .set-keybind{ min-width:72px; height:28px; padding:0 10px; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px;
+        color:var(--amber-hi); background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--dun-3); clip-path:none; text-shadow:none; transition:none; cursor:pointer; }
+      .set-keybind:hover{ transform:none; background:var(--dun-3); box-shadow:inset 0 0 0 2px var(--dun-4); }
+      .set-keybind.listening{ color:var(--dun-0); background:var(--amber); box-shadow:inset 0 0 0 2px var(--amber-hi); }
       /* Reserved single-line note (mute explainer / photosensitivity) — spans both columns. */
       .set-note{ grid-column:1 / -1; min-height:14px; margin:0; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.5px; color:var(--amber); }
       /* Reduced motion: the knob snaps instead of sliding. */

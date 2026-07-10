@@ -91,7 +91,15 @@ async function bootNormal() {
     if (activeOnline) { activeOnline.leave(); activeOnline = null; }
   }
 
-  const game = new Game(canvas, minimap, document.body, (result) => void onGameOver(result), onExit);
+  const game = new Game(
+    canvas, minimap, document.body,
+    (result) => void onGameOver(result),
+    onExit,
+    // Progressive deepest-floor banking on each descend (fire-and-forget); no-ops without a
+    // Convex client. This is what keeps the leaderboard's floor honest when a run ends by a
+    // teammate continuing / a disconnect / a quit instead of a clean full-party wipe.
+    (floor) => session.recordFloorProgress(floor),
+  );
   // Dev-server-only QA hook (dropped from production builds): lets headless tooling —
   // screenshot capture, manual floor QA — drive the real game without menu automation.
   if (import.meta.env.DEV) {
