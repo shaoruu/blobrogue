@@ -20,7 +20,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 Consuming hearts when already at/над full? (part of heart bug) [investigating]
 
 ## CONTENT — more of (Ian loves it)
-🟡 MORE HATS/COSMETICS (3×) — WAVE 1: art fully AD-approved + committed; WIRING BUILD launched (bc-6e049035: assetKeys+new rows→delete painters). Client-only, rides Vercel. → real socket render for AD final placement gate after merge. [wiring build]
+🟢 MORE HATS/COSMETICS (3×) — SHIPPED LIVE (#72): 12 hats + 5 face items wired (assetKeys+rows), procedural painters DELETED, all resolve (no invisible). AD final gate = live closet. Body-color skins + more waves = future.
 🟡 MORE BLESSINGS — Ian loves them, wants more variety (respect raw caps). [game designer speccing]
 🟡 MORE BOSSES — repeats start at floor 35; want fresh bosses ramping toward floor ~100 (gradual). [creative director owns roadmap]
 🟡 BIGGER BOSSES sometimes — periodic GIANT/spectacle multi-phase set-piece bosses. [roadmap]
@@ -29,7 +29,7 @@ I iterate through this until done. Newest feedback appended; status kept current
 🟡 CONTENT prereq detail: post-F30 palettes AUTHORED by AD (canonical, in DEEP_REGION_PALETTES.png + env art bible) — forwarded to foundation build agent to commit into biomes.ts + run readability gate. JET Sump contrast CONFIRMED final (real Sump floorA #16131a = interim it was gated against). ✅ unblocked. Giants (F50/75/100) = STATIONARY front-facing only (CD call, no directional rig). Wave1 boss art order JET→Tithe→Quorum→Gorge (down/front first, AD gates at in-engine size over Sump floor, then orientations/phases/anim).
 🟡 CONTENT ROADMAP to F100 (CD, design done): "THE UNMAKING" 4 regions (Sump F31-50 / Veinworks F51-70 / Pale F71-90 / Null Core F91-100). 14 new bosses every-5-floors + GIANT set-pieces F50/75/100 + seeded deep-boss AFFIXES so familiar bosses fight fresh (fixes repeat complaint). New gun VERBS (DEPLOY/MODESHIFT/GAMBLE...). Seeded randomness: floor mutators/elite affixes/random events/weekly seeds (the "craziness" dial, deterministic-safe). WAVE 1 = prereqs + Jet/Tithe/Quorum bosses + Gorge giant F50 + 3 guns + Sump enemies + mutators v1 + affixes v1. CD packaging tightened Wave 1 build packet. [awaiting packet → build]
 🟡 MAJOR CONTENT PUSH ("a lot more", said many ways) — more guns (new verbs/families), more enemies for deep floors, more CRAZINESS/RANDOMNESS (floor modifiers/mutators/elite affixes/random events) so deep runs stay fresh. Phased in waves. [creative director + game designer roadmap]
-🟡 Legendary TEXTURES + umbra — all 5 (umbra/reaper/hive/midas/lodestone) art committed, in the SAME wiring build (bc-6e049035). Fixes 'umbra fked' + 'textures ass'. [wiring build]
+🟢 Legendary TEXTURES + umbra — SHIPPED LIVE (#72): real art for all 5 (umbra/reaper/hive/midas/lodestone). Fixes 'umbra fked' + 'textures ass'.
 🟡 BULLET ART — "a lot of guns' bullets are still just circles." Make the bullet-visual pass COMPREHENSIVE (all guns, not just the flagged few). AD gave language for 8; extend to every flat one. [queued, expand scope]
 
 ## NEW SYSTEMS / FEATURES
