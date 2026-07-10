@@ -258,6 +258,15 @@ export interface WorldState {
   // Combined hash of every living source tile; the chase fields rebuild when it changes.
   flowKey: number;
   flowSources: number[];
+  // Per-tick same-kind flocker index (scratch, never on the wire): updateFlocker's
+  // separation/social scan reads only fellow flockers instead of every enemy, so a
+  // summon-heavy room is no longer O(flockers × all enemies). Rebuilt lazily off (tick, kind).
+  flockScan: Enemy[];
+  flockScanTick: number;
+  flockScanKind: string;
+  // Per-tick explosive-barrel detonation count (scratch): caps the chain a dense cluster
+  // fires in one tick, so an ignition can't cascade into a whole-frame FX/damage spike.
+  barrelExplosionsThisTick: number;
   rng: Rng;
   // The per-run weapon deal (see weaponBag.ts): every free weapon roll — pedestals, boss
   // chest alternates, wood chests, owned-claim rerolls — draws from this seeded shuffled
@@ -387,6 +396,10 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     flowCd: 0,
     flowKey: -1,
     flowSources: [],
+    flockScan: [],
+    flockScanTick: -1,
+    flockScanKind: "",
+    barrelExplosionsThisTick: 0,
     rng: new Rng(seed ^ 0x53696d21),
     weaponBag: createWeaponBag(seed),
     encounterPlayers: 1,
@@ -2086,11 +2099,39 @@ function dropLoot(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[]):
   }
 }
 
+// Nudge a drop point onto walkable floor. A coin/heart from an enemy that died against a
+// wall (or a prop flush to one) could otherwise land inside a wall tile — visible yet
+// forever uncollectible, since a player can never stand there. When the point is already on
+// floor it is returned untouched (drops that were fine stay bit-identical); otherwise the
+// nearest walkable tile center wins, scanning outward in square shells with a deterministic
+// geometric tie-break. Pure (no RNG) so the server and every replaying client agree.
+export function nudgePickupToWalkable(w: WorldState, x: number, y: number): { x: number; y: number } {
+  if (!isWall(w, x, y)) return { x, y };
+  const tx = Math.floor(x / TILE), ty = Math.floor(y / TILE);
+  for (let r = 1; r <= 8; r++) {
+    let bestX = 0, bestY = 0, bestD = Infinity, found = false;
+    for (let oy = -r; oy <= r; oy++) {
+      for (let ox = -r; ox <= r; ox++) {
+        if (Math.max(Math.abs(ox), Math.abs(oy)) !== r) continue; // only the new shell
+        const nx = tx + ox, ny = ty + oy;
+        if (nx < 0 || ny < 0 || nx >= w.dungeon.w || ny >= w.dungeon.h) continue;
+        if (w.dungeon.tiles[ny * w.dungeon.w + nx] === 1) continue;
+        const cx = (nx + 0.5) * TILE, cy = (ny + 0.5) * TILE;
+        const d = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+        if (d < bestD) { bestD = d; bestX = cx; bestY = cy; found = true; }
+      }
+    }
+    if (found) return { x: bestX, y: bestY };
+  }
+  return { x, y };
+}
+
 function makePickup(w: WorldState, kind: "heart" | "coin", x: number, y: number, ev: SimEvent[], value?: number): Pickup {
+  const spot = nudgePickupToWalkable(w, x, y);
   const color = kind === "heart" ? "#ff6a6a" : "#ffd27a";
-  ev.push({ t: "lootDrop", x, y, color });
+  ev.push({ t: "lootDrop", x: spot.x, y: spot.y, color });
   if (kind === "heart") w.heartsThisFloor++;
-  return { id: w.nextPickupId++, kind, x, y, radius: 13, weapon: null, value };
+  return { id: w.nextPickupId++, kind, x: spot.x, y: spot.y, radius: 13, weapon: null, value };
 }
 
 // ---- per-tick systems ----
@@ -2389,6 +2430,12 @@ function sweepTether(w: WorldState, p: PlayerSim, t: TetherEffect, ev: SimEvent[
       isMelee: true,
       ownerId: p.id, fxWeapon: t.fx,
     }, ev);
+  }
+  // The sweep smashes cover in its arc as well. One-shot (the tether releases this call),
+  // so no re-hit guard is needed.
+  for (const prop of w.props) {
+    if (Math.hypot(prop.x - p.x, prop.y - p.y) > t.reach + prop.radius) continue;
+    damageProp(w, prop, t.damage, ev, p);
   }
 }
 
@@ -2882,6 +2929,12 @@ function updateWireEffect(w: WorldState, e: WireEffect, dt: number, ev: SimEvent
       ownerId: e.owner, fxWeapon: e.fx,
     }, ev);
   }
+  // The snap chews cover in the band too — a barrel across the wire goes down with the pack.
+  // One-shot (the wire is spent this tick), so no re-hit guard is needed.
+  for (const p of w.props) {
+    if (distToSegment(p.x, p.y, e.x, e.y, e.x2, e.y2) > e.width + p.radius) continue;
+    damageProp(w, p, e.damage, ev, owner);
+  }
 }
 
 // Razor Halo: blades circle the owner and strike bodies on a per-enemy re-hit cadence;
@@ -2926,6 +2979,23 @@ function updateOrbitEffect(w: WorldState, e: OrbitEffect, dt: number, ev: SimEve
         ownerId: e.owner, fxWeapon: e.fx,
       }, ev);
       e.rehit.set(en.id, spec.rehit);
+      break;
+    }
+  }
+  // Cover pressed into the ring is shredded too, on the same per-target re-hit cadence —
+  // negative prop-id keys share the rehit map (enemy ids are non-negative) so the worn
+  // blades never delete a wall every tick.
+  for (const p of w.props) {
+    if (p.breakT !== undefined || p.kind === "brazier") continue;
+    const key = -1 - p.id;
+    if (e.rehit.has(key)) continue;
+    for (let i = 0; i < e.blades; i++) {
+      const a = e.angle + (i / e.blades) * Math.PI * 2;
+      const bx = e.x + Math.cos(a) * e.ring;
+      const by = e.y + Math.sin(a) * e.ring;
+      if (Math.hypot(p.x - bx, p.y - by) > e.bladeRadius + p.radius) continue;
+      damageProp(w, p, e.damage * flareMult, ev, owner);
+      e.rehit.set(key, spec.rehit);
       break;
     }
   }
@@ -3640,6 +3710,20 @@ function surgeMult(e: Enemy): number {
   return e.surgeTime > 0 ? BOSS.packSurgeSpeedMult : 1;
 }
 
+// The same-kind flocker cohort for this tick (rebuilt lazily off (tick, kind)). Built by
+// iterating w.enemies in array order, so it is the EXACT same set — in the exact same order
+// — the old full scan filtered to, only without touching every non-flocking body. Enemy
+// spawns defer to pendingSpawns (never appended mid-loop), so the first build of a tick is
+// complete for the whole enemy pass; the dead check below still skips bodies killed this tick.
+function flockScanFor(w: WorldState, e: Enemy): Enemy[] {
+  if (w.flockScanTick === w.tick && w.flockScanKind === e.kind) return w.flockScan;
+  w.flockScanTick = w.tick;
+  w.flockScanKind = e.kind;
+  w.flockScan.length = 0;
+  for (const other of w.enemies) if (other.kind === e.kind) w.flockScan.push(other);
+  return w.flockScan;
+}
+
 // Deterministic boids for the bat family. Each bat carries a persistent heading in its
 // `zig` scratch (seeded at spawn, so a fresh flock fans out reproducibly) and blends four
 // steering pulls into it under a capped turn rate:
@@ -3660,9 +3744,13 @@ function updateFlocker(w: WorldState, e: Enemy, dt: number): void {
   // deterministic array order; SEPARATION must instead see every body inside its small
   // radius — a capped-by-array-order pick can starve exactly the stacked pair it exists
   // to split (two late-array bats never scanning each other).
-  for (const other of w.enemies) {
+  for (const other of flockScanFor(w, e)) {
     if (other === e || other.dead || other.kind !== e.kind) continue;
     const dx = other.x - e.x, dy = other.y - e.y;
+    // Bounding-box pre-reject before the sqrt: a body outside the FLOCK_RADIUS square is
+    // outside the circle too, so this is bit-identical to the d >= FLOCK_RADIUS skip below,
+    // it just avoids the hypot for the many far pairs a summon-heavy room produces.
+    if (dx <= -C.FLOCK_RADIUS || dx >= C.FLOCK_RADIUS || dy <= -C.FLOCK_RADIUS || dy >= C.FLOCK_RADIUS) continue;
     const d = Math.hypot(dx, dy);
     if (d >= C.FLOCK_RADIUS) continue;
     if (d < closest) closest = d;
@@ -5170,13 +5258,13 @@ function bossRadialFire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 
 function bossChase(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (!findTarget(w, e.x, e.y)) return;
-  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
   const mult = e.boss && e.boss.phase >= 3 ? BOSS.p3ChaseMult : 1;
   const step = e.speed * mult * dt;
-  moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
-  // The boss does not walk around cover — it walks THROUGH it. The crush reach extends
-  // just past moveCircle's prop-block ring (prop.radius * 0.8 off the body), so a crate
-  // can never body-block the boss: whatever stops its step is destroyed by it.
+  // Route around walls on the boss-clearance flow field (prop avoidance + stuck-escape
+  // come free), so a wall between the King and the party no longer beaches it behind cover.
+  applyChaseStep(w, e, dt, chaseAngle(w, e), step);
+  // The King still crushes furniture it reaches: the smash reach extends just past
+  // moveCircle's prop-block ring, so any crate it does close on is destroyed, not orbited.
   enemySmashEnvironment(w, e.x, e.y, e.radius + 2, ev);
 }
 
@@ -5409,11 +5497,11 @@ function updateMarrow(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     return;
   }
 
-  if (a.cooldown === 0 && e.spawnTimer === 0) { marrowBeginAttack(e, ev); return; }
+  if (a.cooldown === 0 && e.spawnTimer === 0) { marrowBeginAttack(w, e, ev); return; }
   marrowChase(w, e, dt);
 }
 
-function marrowBeginAttack(e: Enemy, ev: SimEvent[]): void {
+function marrowBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
   e.attack.cooldown = MARROW.attackCd[boss.phase];
@@ -5423,10 +5511,20 @@ function marrowBeginAttack(e: Enemy, ev: SimEvent[]): void {
     ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.9, gain: 0.7, trauma: 0.1 });
     return;
   }
-  const isVolley = boss.isNextRadial;
+  // A rush into cover is a wasted commitment (a wall-crash daze the party never earned).
+  // Like the regular charger, the blind bull only lunges down a clear line of sight — when
+  // a wall blocks the charge lane it throws the bone volley instead (the alternation holds).
+  const isVolley = boss.isNextRadial || !marrowChargeLaneClear(w, e);
   boss.isNextRadial = !boss.isNextRadial;
   beginWindup(e, isVolley ? "volley" : "rush");
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isVolley ? 0.55 : 0.4, gain: 0.7, trauma: 0 });
+}
+
+// The charge lane is clear when a wall does not sit between Marrow and its target: the
+// blind bull commits to where it HEARD the party, so a straight line into stone is a
+// telegraphed self-daze, never a threat. Mirrors updateCharger's hasLineOfSight gate.
+function marrowChargeLaneClear(w: WorldState, e: Enemy): boolean {
+  return findTarget(w, e.x, e.y) && hasLineOfSight(w, e.x, e.y, w.targetX, w.targetY);
 }
 
 function marrowWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -5557,10 +5655,11 @@ function countLiveBeatAdds(w: WorldState, e: Enemy): number {
 
 function marrowChase(w: WorldState, e: Enemy, dt: number): void {
   if (!findTarget(w, e.x, e.y)) return;
-  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
   const mult = e.boss && e.boss.phase >= 3 ? MARROW.p3ChaseMult : 1;
   const step = e.speed * mult * dt;
-  moveEnemyBy(w, e, Math.cos(angle) * step, Math.sin(angle) * step);
+  // Flow-field routing at the boss clearance: the blind bull walks around cover between
+  // charges instead of grinding a wall face toward a target it cannot reach in a line.
+  applyChaseStep(w, e, dt, chaseAngle(w, e), step);
 }
 
 // THE HOLLOW CHOIR (spec §5c). The grieving ghost mass — the fight is about TRACKING and
@@ -5790,8 +5889,9 @@ function updateWeaver(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     return;
   }
   if (!findTarget(w, e.x, e.y)) return;
-  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
-  moveEnemyBy(w, e, Math.cos(angle) * e.speed * dt, Math.sin(angle) * e.speed * dt);
+  // Between pounces the duelist stalks around cover on the boss-clearance field rather than
+  // pressing straight into a wall — the blink/weave attacks still handle vertical closes.
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
 }
 
 // The crash stagger per phase: the P1 snag, the P2 forced-down, the P3 overshoot.
@@ -6512,10 +6612,10 @@ function updateGilded(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   }
 
   if (a.cooldown === 0 && e.spawnTimer === 0) { gildedBeginAttack(e, ev); return; }
-  // A stately advance — the Warden walks, it never chases.
+  // A stately advance — the Warden walks, it never chases — but it walks AROUND the room's
+  // pillars and its own gilded cover on the boss-clearance field, never into them.
   if (!findTarget(w, e.x, e.y)) return;
-  const angle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
-  moveEnemyBy(w, e, Math.cos(angle) * e.speed * dt, Math.sin(angle) * e.speed * dt);
+  applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
 }
 
 function gildedBeginAttack(e: Enemy, ev: SimEvent[]): void {
@@ -7187,8 +7287,21 @@ function destroyProp(w: WorldState, p: Prop, ev: SimEvent[], by?: PlayerSim): vo
   }
 }
 
+// Effect weapons (Snapwire's snap, Razor Halo's blades, the Crooked Chain's sweep) chew
+// cover the way bullets and melee do: subtract the strike's damage from a prop's hp and
+// break it through the shared destroyProp door when it drops. Braziers and already-breaking
+// props are immune. Returns true when the prop broke this call.
+function damageProp(w: WorldState, p: Prop, damage: number, ev: SimEvent[], by: PlayerSim | null): boolean {
+  if (p.breakT !== undefined || p.kind === "brazier") return false;
+  p.hp -= damage;
+  ev.push({ t: "propHit", propId: p.id, kind: p.kind, x: p.x, y: p.y });
+  if (p.hp <= 0) { destroyProp(w, p, ev, by ?? undefined); return true; }
+  return false;
+}
+
 function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: SimEvent[]): void {
   const r = C.BARREL_EXPLOSION_RADIUS;
+  w.barrelExplosionsThisTick++;
   ev.push({ t: "explosion", x: source.x, y: source.y, r, src: "barrel" });
   for (const e of w.enemies) {
     if (e.dead || isUntargetable(e)) continue;
@@ -7207,7 +7320,12 @@ function explodeBarrel(w: WorldState, p: PlayerSim | null, source: Prop, ev: Sim
   }
   for (const other of w.props) {
     if (other === source || other.breakT !== undefined || other.kind === "brazier") continue;
-    if (Math.hypot(other.x - source.x, other.y - source.y) <= r + other.radius) destroyProp(w, other, ev, p ?? undefined);
+    if (Math.hypot(other.x - source.x, other.y - source.y) > r + other.radius) continue;
+    // Cap the per-tick cascade: once the chain budget is spent, explosive barrels caught in
+    // the blast are LEFT standing (they can be set off again later) instead of all detonating
+    // this frame. Non-explosive cover still breaks freely — it adds no explosion to the burst.
+    if (other.kind === "barrel_explosive" && w.barrelExplosionsThisTick >= C.MAX_BARREL_EXPLOSIONS_PER_TICK) continue;
+    destroyProp(w, other, ev, p ?? undefined);
   }
 }
 
@@ -7884,6 +8002,7 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
 // combo decay. Runs once per authoritative tick at the fixed step AFTER every player has been
 // advanced. Only the sim RNG (w.rng) is consumed here, so the server is the single roller.
 export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void {
+  w.barrelExplosionsThisTick = 0; // reset the per-tick explosive-barrel chain budget
   recordHistory(w);
   updateBullets(w, dt, ev);
   updateEffects(w, dt, ev);

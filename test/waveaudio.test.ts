@@ -442,6 +442,47 @@ section("beam lifecycle (never one-shot at 22Hz)");
   check("remote beams get their own keyed loop", eng.loopStarts.some((l) => l.key === "beamLoop#p2"));
 }
 
+// ---- 5b. Sunlance audibility: the interim per-shot sizzle while the loop stem is missing ----
+section("beam audibility (per-shot sizzle when the authored loop stem is unshipped)");
+{
+  // The authored beamLoop stem is not yet shipped, so in the real engine the held loop
+  // starts silent (loops are authored-file-or-silence) — which left the Sunlance mute. Model
+  // that with an engine whose beam loop never goes live: the director must fall back to an
+  // audible, throttled, positional per-shot cue that YIELDS the instant the real loop sounds.
+  class SilentLoopEngine extends ScriptEngine {
+    startWaveLoop(key: string, req: WaveLoopRequest): boolean {
+      if (key.startsWith("beamLoop")) { this.loopStarts.push({ key, req }); return false; } // stem missing -> never live
+      return super.startWaveLoop(key, req);
+    }
+    hasWaveLoop(key: string): boolean {
+      if (key.startsWith("beamLoop")) return false;
+      return super.hasWaveLoop(key);
+    }
+  }
+  const eng = new SilentLoopEngine();
+  const dir = new WaveAudioDirector(eng);
+  dir.frame(frameInput([]));
+  for (let i = 0; i < 22; i++) { dir.weaponFired("beam", { x: 10, y: 0 }); eng.nowMs += 45; dir.frame(frameInput([])); }
+  const fireCues = eng.playsFor("beamFire");
+  check("a silent loop makes the lance audible via beamFire", fireCues.length > 0);
+  check("beamFire is throttled below the 22Hz fire rate (never machine-guns)", fireCues.length <= 14, `${fireCues.length} cues in 1s`);
+  check("beamFire is a positional (spatial) cue — heard where the lance fires", WAVE_SOUNDS["beamFire"].spatial === true);
+
+  // When the loop IS live (asset shipped), the interim sizzle stays silent — no doubled voice.
+  const engLive = new ScriptEngine();
+  const dirLive = new WaveAudioDirector(engLive);
+  dirLive.frame(frameInput([]));
+  for (let i = 0; i < 22; i++) { dirLive.weaponFired("beam", { x: 0, y: 0 }); engLive.nowMs += 45; dirLive.frame(frameInput([])); }
+  check("a live authored loop suppresses the interim sizzle (no doubled voice)", engLive.playsFor("beamFire").length === 0);
+
+  // Remote lances are audible too (the v15 positional path routes the same beamShot).
+  const engR = new SilentLoopEngine();
+  const dirR = new WaveAudioDirector(engR);
+  dirR.frame(frameInput([]));
+  dirR.weaponFired("beam", { beamKey: "p2", gain: 0.4, x: 50, y: 60 });
+  check("a remote lance is audible (its own positional per-shot cue)", engR.playsFor("beamFire").length > 0);
+}
+
 // ---- 6. revive channel lifecycle (§8) ----
 section("revive channel");
 {

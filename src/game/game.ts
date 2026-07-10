@@ -354,6 +354,15 @@ const LOW_HP_FRAC = 0.25;
 // Client particle budget: the newest effect wins; the oldest particle is dropped when the
 // pool is full, so a busy screen degrades gracefully instead of eating the frame budget.
 const MAX_PARTICLES = 700;
+// Per-frame FX burst coalescing: a thumper into an explosive-barrel cluster can land many
+// explosions + kills in ONE frame. The first FX_BURST_FULL on-screen bursts spawn at full
+// particle counts; beyond that per-event counts scale down so the frame's total spawn work
+// stays bounded (the pools already FIFO-evict — this keeps them from thrashing).
+const FX_BURST_FULL = 3;
+const FX_BURST_HALF = 8;
+// Hard cap on lingering corpse sprites: unbounded corpses grew both the array and the draw
+// loop through a long fight. When full, the oldest corpse shifts out.
+const MAX_CORPSES = 32;
 const FOOTSTEP_INTERVAL = 0.17; // seconds between dust kicks while running
 
 // ---- combat depth: telegraph rendering ----
@@ -624,6 +633,11 @@ export class Game {
   // is available/in-range. Rendered as a floating [E] chip over the target of the verb.
   private interactPrompt: { x: number; y: number; verb: string; progress: number | null } | null = null;
   private corpses: Corpse[] = [];
+  // Per-handleSimEvents-call FX burst state (reset each call): coalesces the explosion/kill
+  // spawn burst and the once-per-frame hitstop/shake so a many-detonation frame stays cheap.
+  private fxBurstCount = 0;
+  private burstFreeze = 0;
+  private burstTrauma = 0;
   private decals: Decal[] = [];
   private afterimages: Afterimage[] = [];
   private dashImgCd = 0; // spacing timer for dropping dash afterimages
@@ -1912,7 +1926,23 @@ export class Game {
   // — the juice is byte-identical; only the trigger path changed. isNearCamera gating stays
   // a client concern here. Remote-player FX are handled separately (presence-driven).
   private handleSimEvents(events: SimEvent[]) {
+    this.fxBurstCount = 0;
+    this.burstFreeze = 0;
+    this.burstTrauma = 0;
     for (const e of events) this.handleSimEvent(e);
+    // The explosion/kill burst coalesces its hitstop + shake into ONE apply per frame. The
+    // per-event calls all clamp anyway (freeze -> max, trauma -> sum capped at 1), so this is
+    // outcome-identical while a many-detonation frame no longer runs the apply 11 times.
+    if (this.burstFreeze > 0) this.addFreeze(this.burstFreeze);
+    if (this.burstTrauma > 0) this.addTrauma(this.burstTrauma);
+  }
+
+  // Coalesce heavy FX bursts: as more explosions/kills land in one frame, scale per-event
+  // particle counts down so the frame's total spawn work stays bounded. Advances the frame's
+  // burst counter — called only for ON-SCREEN bursts, the ones actually paid for.
+  private burstScale(): number {
+    const n = this.fxBurstCount++;
+    return n < FX_BURST_FULL ? 1 : n < FX_BURST_HALF ? 0.5 : 0.25;
   }
 
   private handleSimEvent(e: SimEvent) {
@@ -2037,15 +2067,26 @@ export class Game {
         const arch = ENEMY_ARCHETYPES[e.kind];
         const big = isBossKind(e.kind);
         if (big) audio.setMusic("dungeon"); // the intense boss track relaxes after the kill
-        this.spawnGibs(e.x, e.y, big ? 24 : 10, arch.tint);
-        this.spawnParticles(e.x, e.y, big ? 20 : 8, big ? "#ffb43b" : arch.tint);
-        this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
-        this.replayDeathBurst(e.kind, e.x, e.y);
+        // The visual death burst is camera-gated (an off-screen kill in a swarm pays nothing)
+        // and coalesced so many kills in ONE frame stay cheap; the hitstop/shake flush once.
+        // Bookkeeping below (corpse, audio, anim GC) always runs so state stays consistent.
+        if (this.isNearCamera(e.x, e.y)) {
+          const s = this.burstScale();
+          this.spawnGibs(e.x, e.y, Math.round((big ? 24 : 10) * s), arch.tint);
+          this.spawnParticles(e.x, e.y, Math.round((big ? 20 : 8) * s), big ? "#ffb43b" : arch.tint);
+          this.addDecal(e.x, e.y, arch.tint, big ? 36 : 18, "splat");
+          this.replayDeathBurst(e.kind, e.x, e.y);
+          this.burstFreeze = Math.max(this.burstFreeze, big ? FREEZE_HEAVY : FREEZE_KILL);
+          const mult = comboTierFor(e.combo).mult;
+          const comboTrauma = big ? 0 : COMBO_TRAUMA * ((mult - 1) / (COMBO_MAX_MULT - 1));
+          this.burstTrauma += (big ? TRAUMA_BOSS_KILL : TRAUMA_KILL) + comboTrauma;
+        }
         const dur = big ? DEATH_DUR_BOSS
           : (e.kind === "slime" || e.kind === "skeleton" || e.kind === "bat") ? DEATH_DUR_SHEET
           : DEATH_DUR;
         const size = arch.drawSize * (TIERS[e.tier as EnemyTier]?.drawMult ?? 1);
         this.corpses.push({ sprite: arch.sprite, x: e.x, y: e.y, size, facing: this.px >= e.x ? 1 : -1, t: 0, dur });
+        if (this.corpses.length > MAX_CORPSES) this.corpses.shift(); // oldest corpse yields to the newest
         const comboRate = 1 + Math.min(e.combo - 1, 20) * 0.015;
         // Wave-roster bosses die on their authored identity cue, never the generic splat.
         if (!waveAudio.bossDeath(e.kind, e.x, e.y)) {
@@ -2056,10 +2097,6 @@ export class Game {
           const layer = TIER_LAYERS[e.tier];
           if (layer) waveAudio.cueAt(layer, e.x, e.y, e.eid);
         }
-        this.addFreeze(big ? FREEZE_HEAVY : FREEZE_KILL);
-        const mult = comboTierFor(e.combo).mult;
-        const comboTrauma = big ? 0 : COMBO_TRAUMA * ((mult - 1) / (COMBO_MAX_MULT - 1));
-        this.addTrauma((big ? TRAUMA_BOSS_KILL : TRAUMA_KILL) + comboTrauma);
         this.enemyAnims.delete(e.eid);
         break;
       }
@@ -2236,22 +2273,26 @@ export class Game {
         this.replayPropBreak(e.kind, e.x, e.y);
         break;
       case "explosion": {
-        // The impact voice routes by SOURCE (breach.impact / mortarDetonate / the
-        // legacy barrel boom) — same blast juice either way.
+        // The impact voice routes by SOURCE (breach.impact / mortarDetonate / the legacy
+        // barrel boom) and is positional — it always plays. The heavy FX burst is camera-gated
+        // so an off-screen detonation (a thumper into a distant barrel cluster) pays nothing,
+        // and coalesced so many blasts in ONE frame stay cheap; the hitstop/shake flush once.
         const impactCue = WEAPON_AUDIO[e.src]?.impact;
         if (!(impactCue !== undefined && waveAudio.cueAt(impactCue, e.x, e.y))) {
           this.sfxAt("barrel", e.x, e.y, { rate: 0.7 });
         }
+        if (!this.isNearCamera(e.x, e.y)) break;
+        const s = this.burstScale();
         this.lighting.addPulse(e.x, e.y, Math.min(EXPLOSION_LIGHT_MAX, e.r * 2), 0.85 * settings.flashFactor, "#ffb43b", EXPLOSION_LIGHT_DUR);
-        this.addFreeze(FREEZE_HEAVY);
-        this.addTrauma(0.6);
-        this.spawnGibs(e.x, e.y, 18, "#ff8a3b");
-        this.spawnSparks(e.x, e.y, 16, Math.random() * 6.28);
-        this.spawnParticles(e.x, e.y, 20, "#ffb43b");
+        this.burstFreeze = Math.max(this.burstFreeze, FREEZE_HEAVY);
+        this.burstTrauma += 0.6;
+        this.spawnGibs(e.x, e.y, Math.round(18 * s), "#ff8a3b");
+        this.spawnSparks(e.x, e.y, Math.round(16 * s), Math.random() * 6.28);
+        this.spawnParticles(e.x, e.y, Math.round(20 * s), "#ffb43b");
         this.addDecal(e.x, e.y, "#ff7a2a", e.r * 0.6, "splat");
         this.shockwaves.spawn(e.x, e.y, 14, e.r * 1.6, 0.38, "#ffb43b", 5);
-        this.spawnSparkleBurst(e.x, e.y, 10, "#ff8a3b");
-        if (this.isNearCamera(e.x, e.y)) this.flashScreen(255, 150, 60, 0.13, 3.2);
+        this.spawnSparkleBurst(e.x, e.y, Math.round(10 * s), "#ff8a3b");
+        this.flashScreen(255, 150, 60, 0.13, 3.2);
         break;
       }
       case "implosion":
@@ -6324,15 +6365,19 @@ export class Game {
         this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.4, by - Math.sin(angle) * R * 2.4, R * 4.5, R * 4.5, 0.45, 0);
         this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
         return this.fxLayer("slug", color, bx, by, R * 4.2, R * 4.2, 1, angle);
-      case "beam":
-        // The lance: rounds so fast and frequent the long streaks fuse into one continuous
-        // line of light. The dedicated code-tinted white ray mask (AD final) carries it;
-        // the generic streak keeps the beam reading until that mask lands.
+      case "beam": {
+        // The lance: rounds so fast and frequent the streaks fuse into one continuous line of
+        // light. The bright head sits ON the round (its true position), and the whole ray is
+        // capped at the round's actual reach (life × speed) — so the drawn beam never extends
+        // past where the rounds can hit. Players read the lance's true reach, not a longer ray.
+        const reach = WEAPONS.beam.life * WEAPONS.beam.speed;
+        const beamLen = Math.min(reach, Math.max(trailLen, R * 24)); // >= round spacing so the ray never dashes
         this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.4, 0);
-        if (!this.fxTrail("beam_ray", color, bx, by, Math.max(trailLen, R * 14), R * 3, 0.9, angle)) {
-          this.fxTrail("trail_streak", color, bx, by, Math.max(trailLen, R * 14), R * 2.4, 0.85, angle);
+        if (!this.fxTrail("beam_ray", color, bx, by, beamLen, R * 3, 0.9, angle)) {
+          this.fxTrail("trail_streak", color, bx, by, beamLen, R * 2.4, 0.85, angle);
         }
         return this.fxLayer("core_dot", "#fff7dd", bx, by, R * 2, R * 2, 1, 0);
+      }
       default:
         return false;
     }

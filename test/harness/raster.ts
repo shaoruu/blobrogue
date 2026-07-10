@@ -88,6 +88,8 @@ export interface HarnessGame {
   devTeleport(x: number, y: number): void;
   devToggleLighting(): boolean;
   devGiveWeapon(id: string): void;
+  devSpawnEnemies(kind: string, count: number, atCursor: boolean, tier?: string): void;
+  devSpawnProp(kind: string, atCursor: boolean): void;
   devWorld(): {
     seed: number;
     floor: number;

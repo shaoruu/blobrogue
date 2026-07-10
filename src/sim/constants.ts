@@ -415,6 +415,10 @@ export const WEAPON_SWAP_RANGE = 56;
 export const BARREL_EXPLOSION_RADIUS = 70;
 export const BARREL_EXPLOSION_DAMAGE = 6;
 export const BARREL_EXPLOSION_SELF_DMG = 2;
+// Cap the explosive-barrel chain per tick: once this many barrels have detonated this tick,
+// further barrels caught in a blast are left as cover (they can be set off again later)
+// instead of all cascading in ONE frame — bounds the FX/damage burst a dense cluster fires.
+export const MAX_BARREL_EXPLOSIONS_PER_TICK = 6;
 
 // Lag compensation (Stage C). The world keeps a short ring of past enemy positions so the
 // server can rewind a shooter's hit test to where they actually saw the target (their

@@ -19,7 +19,7 @@ import {
   bossWaveEvents, PET_SIDECHAIN, BOSS_LOCK_AMBIENT_MUTE_MS, WAVE_PRIORITY,
   WAVE_BOSS_PHASE, WAVE_BOSS_DEATH, WAVE_BOSS_ENTRANCE, WAVE_WEAPON_FIRE,
   AMBIENT_ZONE_EVENTS, HAZARD_WAVE_EVENTS,
-  ALWAYS_REACHABLE_EVENTS, BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS,
+  ALWAYS_REACHABLE_EVENTS, BEAM_WEAPON_ID, BEAM_START_IDLE_MS, BEAM_STOP_GAP_MS, BEAM_FIRE_CUE_GAP_MS,
   BURROW_EMITTER, BURROW_THUD_EVENT, DEEP_EMITTER, takeStemsOf, emitterRand,
 } from "./waveSpec.js";
 import {
@@ -101,6 +101,7 @@ interface BeamState {
   lastShotAtMs: number;
   gain: number;
   holdMs: number; // stop hysteresis — wider for remote beams fed by ~10Hz presence sync
+  lastFireCueMs: number; // interim per-shot sizzle throttle (only while the loop is silent)
 }
 
 // Per-burrower deterministic underground emitter: each authored component channel keeps
@@ -281,7 +282,7 @@ class WaveAudioDirector {
   // existing SHOOT_SFX path. Beam shots NEVER one-shot: they drive the held-loop lifecycle.
   weaponFired(weapon: string, opts?: WavePlayOpts & { beamKey?: string }): boolean {
     if (weapon === BEAM_WEAPON_ID) {
-      this.beamShot(opts?.beamKey ?? "self", opts?.gain ?? 1);
+      this.beamShot(opts?.beamKey ?? "self", opts?.gain ?? 1, opts?.x, opts?.y);
       return true;
     }
     const event = WAVE_WEAPON_FIRE[weapon];
@@ -295,18 +296,28 @@ class WaveAudioDirector {
     this.play("beamHit", { entityId: targetId, x, y });
   }
 
-  private beamShot(key: string, gain: number): void {
+  private beamShot(key: string, gain: number, x?: number, y?: number): void {
     const nowMs = this.engine.now();
     if (nowMs < 0) return;
     const state = this.beams.get(key);
     if (!state || nowMs - state.lastShotAtMs > BEAM_START_IDLE_MS) {
-      this.play("beamStart", { gain });
+      this.play("beamStart", { gain, x, y });
       this.startLoop("beamLoop", key, { gain });
+    }
+    // The authored held loop is the real voice. Until its stem ships the loop is silent
+    // (loops are authored-file-or-silence), so an audible per-shot sizzle carries the lance
+    // — throttled so 22Hz fire reads as one continuous beam, positional so a teammate's
+    // lance is heard where it fires. It yields the instant the real loop actually sounds,
+    // so shipping the loop asset needs no code change (no doubled voice).
+    let lastFireCueMs = state?.lastFireCueMs ?? -Infinity;
+    if (!this.engine.hasWaveLoop(this.loopKey("beamLoop", key)) && nowMs - lastFireCueMs >= BEAM_FIRE_CUE_GAP_MS) {
+      this.play("beamFire", { gain, x, y });
+      lastFireCueMs = nowMs;
     }
     // Remote beams arrive through ~10Hz presence sync, slower than the 90ms local stop
     // gap; a wider hold keeps their loop from stuttering between updates.
     const holdMs = key === "self" ? BEAM_STOP_GAP_MS : BEAM_STOP_GAP_MS * 3;
-    this.beams.set(key, { lastShotAtMs: nowMs, gain, holdMs });
+    this.beams.set(key, { lastShotAtMs: nowMs, gain, holdMs, lastFireCueMs });
   }
 
   // ---- boss beats routed from SimEvents (exact moments, kind-aware) ----

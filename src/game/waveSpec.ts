@@ -534,6 +534,16 @@ export const WAVE_SOUNDS = {
     jitter: 0.05, spatial: true, cooldownMs: 120, isPerEntityCooldown: true, // manifest: 120ms per target
     fallback: { sample: "enemyHit", rate: 1.15, highpassHz: 900 }, // contract band: <= 1.4
   },
+  // The held-loop stem is the authored voice for the lance; until it ships the loop is
+  // silent (loops are authored-file-or-silence), which left the Sunlance mute. beamFire is
+  // the audible interim: a per-shot sizzle DERIVED from the shipped tesla bank, throttled by
+  // the director (see beamShot) so 22Hz fire reads as one lance, and suppressed the instant
+  // the real loop sounds. Positional, so a teammate's lance is heard where it fires.
+  "beamFire": {
+    stem: "sfx/sunlance_fire", variants: 1, gain: 0.3, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true,
+    fallback: { sample: "tesla", rate: 1.1 },
+  },
 
   // ---- §4b the effect wave: SEMANTIC WEAPON AUDIO HOOKS -------------------------------
   // The weapon audio integration contract. Resolution is authored stem -> shipped-sample
@@ -1596,12 +1606,13 @@ export const HAZARD_WAVE_EVENTS: readonly WaveEventId[] = [
 // Weapon + co-op cues reachable on ANY floor (player-driven) — part of every floor's
 // preload plan so a first trigger never races its decode.
 export const ALWAYS_REACHABLE_EVENTS: readonly WaveEventId[] = [
-  "shootMortar", "mortarDetonate", "beamStart", "beamLoop", "beamStop", "beamHit",
+  "shootMortar", "mortarDetonate", "beamStart", "beamLoop", "beamStop", "beamHit", "beamFire",
   "revive.channelStart", "revive.channelLoop", "revive.cancel",
 ];
 
 // PR #31 WeaponIds -> wave fire events; beam is EXCLUDED on purpose (its lifecycle is
-// start/loop/stop through the director, never a per-shot one-shot at 22Hz). The effect
+// start/loop/stop through the director — with a director-throttled beamFire sizzle only
+// while the authored loop stem is missing, never a raw per-shot one-shot at 22Hz). The effect
 // wave binds only its SHOOTING verbs here (lastlight/frostline raise `shot` events);
 // breach routes through the charge-tier release logic in game.ts (WEAPON_AUDIO), and
 // the non-shooting verbs carry their sound on dedicated effect events.
@@ -1709,6 +1720,9 @@ export const BEAM_WEAPON_ID = "beam";
 // Manifest §4 hysteresis: start after >120ms idle; stop when >90ms since the last shot.
 export const BEAM_START_IDLE_MS = 120;
 export const BEAM_STOP_GAP_MS = 90;
+// Interim per-shot sizzle throttle (only while the authored loop stem is missing): ~2 of
+// the Sunlance's 45ms shots per cue, so the lance reads continuous, never a machine gun.
+export const BEAM_FIRE_CUE_GAP_MS = 80;
 
 // Manifest §5 zone order == biomeIndexForFloor order (six-band ladder from PR #33; main's
 // four biomes are the first four indices, so this is correct before AND after that lands).
