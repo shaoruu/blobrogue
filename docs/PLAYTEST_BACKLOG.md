@@ -59,3 +59,8 @@ I iterate through this until done. Newest feedback appended; status kept current
 ## Tech debt (TD daily gate 2026-07-10, non-blocking)
 - 🔴 BUNDLE BUDGET: client bundle 687KB / 202KB gzip (was 398KB), Vite chunk-size warning. Add a bundle budget + code-split (lazy dev/creative sandbox + heavy art/audio tables) before it hurts mobile load. TD tracking next gate.
 - 🔴 REFACTOR: src/sim/world.ts 8,886 lines + src/game/game.ts 7,532 — staged carve of world.ts by system behind a WorldContext (NOT big-bang). Server side already cleanly split.
+
+## Dev panel QoL (Ian 2026-07-10)
+- 🔴 DEV PANEL THUMBNAILS: add a sprite thumbnail/preview to each enemy + boss spawn row (same style as the existing gun preview: pickup/held img + name/stats). Enemies are text-only rows today (src/dev/sandbox.ts ~line 145, dev-lbl span). Guns ALREADY have it (dev-weapon-preview ~line 161). Extend to enemies/bosses; nice-to-have for kits/mutators/affixes/cosmetics too.
+- 🔴 DEV PANEL COVERAGE: ensure ALL spawnable content is in the panel — Wave 1 bosses (done: jet/tithe/quorum), + kits/ults, mutators, elite/boss affixes, cosmetics (verify each has a spawn/force entry). Standing checklist per new feature.
+- SEQUENCING: run AFTER kit build (bc-b7bc4443) + double-hat build (bc-687339cb) merge — both touch src/dev/sandbox.ts, avoid 3-way collision. Dev-only QoL, not player-facing, no rush.
