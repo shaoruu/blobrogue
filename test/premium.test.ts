@@ -790,6 +790,49 @@ function coopTests(): void {
   }
 }
 
+// ---- 6b. heart container / artifact tithe accounting ----
+
+// The artifact heart tithe must be subtracted from the RAW +heart bonus BEFORE the positive
+// +4 clamp, not after it. Clamping first let the cap silently swallow the containers a
+// player collected past +4 AND then the tithe ate real hearts on top — a capped buyer paid
+// for the deal twice. These lock the corrected order and the normal ladder alongside it.
+function heartAccountingTests(): void {
+  section("heart accounting: the artifact tithe comes out of the RAW bonus before the +4 clamp");
+  const bare = (): PlayerSim => {
+    const w = createWorld(1, 1, { isShared: true, skipLocalPlayer: true });
+    return spawnPlayerInWorld(w, "hp");
+  };
+  const maxHpWith = (bonus: number, buys: number, tithe: number): number => {
+    const p = bare();
+    p.mods.maxHpBonus = bonus;
+    p.premiumHpBuys = buys;
+    p.hpTithe = tithe;
+    applyMaxHpBonus(p);
+    return p.maxHp;
+  };
+  const cap = PLAYER.baseMaxHp + CAPS.maxHpBonus; // the +4 ceiling (base 6 -> 10)
+
+  // The bug repro: a player OVER the container cap who pays the artifact tithe keeps the full
+  // capped max HP — the tithe is absorbed by the excess the cap was already eating, never a
+  // real heart. (Old order gave base + cap - tithe = 8; the fix keeps it at the 10 cap.)
+  check("capped player (raw bonus over +4) + artifact tithe stays at the cap",
+    maxHpWith(CAPS.maxHpBonus, 2, PREMIUM.artifactHeartCost) === cap,
+    `maxHp=${maxHpWith(CAPS.maxHpBonus, 2, PREMIUM.artifactHeartCost)} cap=${cap}`);
+
+  // A player EXACTLY at the cap with NO excess still pays the tithe in full (nothing was
+  // being swallowed to absorb it) — the deal is a real trade, just never a double charge.
+  check("exactly-at-cap (no excess) + tithe still costs the hearts",
+    maxHpWith(CAPS.maxHpBonus, 0, PREMIUM.artifactHeartCost) === cap - PREMIUM.artifactHeartCost);
+
+  // The normal ladder is untouched below the cap, with and without a tithe.
+  check("normal ladder: +2 hearts, no tithe = base + 2", maxHpWith(2, 0, 0) === PLAYER.baseMaxHp + 2);
+  check("normal ladder: +2 hearts with a 2-heart tithe = base (subtracted in full)",
+    maxHpWith(2, 0, 2) === PLAYER.baseMaxHp);
+  check("Glass Cannon's negative bonus still applies in full below the cap",
+    maxHpWith(-2, 0, 0) === PLAYER.baseMaxHp - 2);
+  check("max HP never drops below 1 (hard floor holds)", maxHpWith(-2, 0, 100) === 1);
+}
+
 // ---- 7. determinism + wire ----
 
 function wireTests(): void {
@@ -826,6 +869,7 @@ function main(): void {
   mythicTests();
   guardrailTests();
   catalogTests();
+  heartAccountingTests();
   coopTests();
   wireTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
