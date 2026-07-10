@@ -82,7 +82,10 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
 // - downsThisFloor: the per-floor down count behind the OUT state — the client consumes
 //                   the derived out flag on the wire, never the counter
-type ServerOnlyField = "reviveBy" | "downsThisFloor";
+// - ultSources/ultWasted: §10 server-side charge-accrual bookkeeping (per-source share caps +
+//   the wasted-overcharge tuning stat). The client only ever reconciles the TOTAL meter
+//   (ultCharge), and never accrues locally, so these never cross the wire.
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim

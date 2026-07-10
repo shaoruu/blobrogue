@@ -14,8 +14,16 @@
 //
 // Numbers here are the spec's design targets; the balancer owns final tuning of the K_* charge
 // coefficients + ult magnitudes and may retune them without touching the model.
+//
+// §10 BALANCER STRUCTURAL ADDENDUM (2026-07-10): this module is the ONE kit-tuning surface —
+// every K_* charge weight, per-source share cap, Overdrive fire factor + expressive ceiling,
+// Mender HoT + the per-target/party incoming-heal clamp, Aegis HP constant + duration, and the
+// Phase invuln/speed/duration live here as named constants so the balancer sets finals WITHOUT
+// touching logic. The charge model is normalized target-agnostic (charge% per hit scales by the
+// floor's RefEncounterHP, not raw damage) so ults don't charge faster on low-HP early floors.
 
 import type { PlayerMods } from "./items.js";
+import { refDpsForFloor, floorHpMult } from "./balance.js";
 
 // "none" is the pre-kit NEUTRAL baseline: a player who never went through kit-select (legacy
 // solo quick-start, the harness, every existing golden/balance scenario) carries it, and ALL
@@ -38,25 +46,41 @@ export function isRealKit(kit: KitId): kit is Exclude<KitId, "none"> {
 
 // ---- the universal ULT METER (spec §3) ----
 
+// The charge SOURCES the meter tracks. "time" is the combat-gated trickle FLOOR (uncapped —
+// it fills whatever the capped sources leave); every other source is share-capped so no single
+// input dominates one fill (§10).
+export type UltSource = "dmg" | "kill" | "taken" | "heal" | "dash" | "time";
+
 export const ULT = {
-  // The meter is an INTEGER 0..max (fixed-point). max === READY.
-  meterMax: 1000,
-  // Charge coefficients (balancer-owned; spec §3). Every contribution is rounded to an integer
-  // before it touches the meter, so the meter is pure fixed-point.
-  kDmg: 1.5,        // charge per point of damage DEALT (primary, all kits)
-  kKill: 20,        // flat charge per kill (all kits)
-  kTaken: 60,       // BULWARK override: charge per point of damage TAKEN (a tank charges by tanking)
-  kHeal: 30,        // MENDER override: charge per HP of healing DONE (support still charges)
-  kDash: 45,        // PHANTOM override: charge per dash performed (the mobility kit's flavor, spec §2.4)
-  // The slow time-trickle FLOOR (spec §3): a long fight eventually grants an ult even at low
-  // output. Keyed off the integer world tick so it is deterministic and float-free: every
-  // `timeGrantEveryTicks` ticks add `kTimePerGrant`. At 20Hz this fills from time alone in
-  // ~125s — well below a defensive kit ever being starved, well above damage-driven fills.
-  timeGrantEveryTicks: 5,
-  kTimePerGrant: 2,
-  // 8.0s hard floor between casts (spec §3), in ticks at TICK_HZ 20. Enforced server-side via
-  // the per-player ultReadyAtTick.
+  // The meter is a fixed-point INTEGER 0..meterMax = 0..100.00% (hundredths of a percent), so
+  // the target-agnostic normalization keeps crisp resolution and reads cleanly in a golden.
+  meterMax: 10000,
+  // ---- BALANCER charge WEIGHTS (§10): charge% per hit is target-agnostic ----
+  //   dmg:  charge = meterMax × (dmgDealt / RefEncounterHP) × K_dmg
+  //   kill: charge = meterMax × K_kill                      (flat meter fraction per kill)
+  //   taken (BULWARK): meterMax × (dmgTaken / maxHp) × K_taken
+  //   heal  (MENDER):  meterMax × K_heal × hpHealed         (meter fraction per HP healed)
+  //   dash  (PHANTOM): meterMax × K_dash                    (flat meter fraction per dash)
+  K_dmg: 0.35,
+  K_kill: 0.015,
+  K_taken: 0.70,
+  K_heal: 0.02,
+  K_dash: 0.04,
+  // Per-source contribution SHARE caps toward ONE meter fill (§10: no single input dominates —
+  // AoE-farming trash can't perma-charge while a boss-only fight starves). Fractions of meterMax;
+  // "time" is uncapped (it is the floor). A source stops contributing once it hits its share.
+  shareCap: { dmg: 0.70, kill: 0.40, taken: 0.85, heal: 0.70, dash: 0.70, time: 1 } as Record<UltSource, number>,
+  // Time FLOOR (§10): encounter-relative + combat-gated. Guarantee ~1 ult by ~combatFillSeconds
+  // of sustained combat even at low DPS; accrues ONLY while a hostile enemy is alive/aggro
+  // (never in empty rooms). Per-tick grant = meterMax / (combatFillSeconds × TICK_HZ).
+  combatFillSeconds: 55,
+  // 8.0s hard floor between casts (spec §3), in ticks at TICK_HZ 20. Charge KEEPS accruing during
+  // the lockout (clamped ≤ meterMax) and never resets on floor descent or weapon swap (§10).
   lockoutTicks: 160,
+  // RefEncounterHP normalization ANCHOR (§10): a floor-1 encounter's expected effective HP,
+  // scaled by the §3 floor HP curve — so a fill tracks per-ENCOUNTER progress, not raw damage,
+  // and deep floors don't charge slower/faster than early ones per encounter.
+  refEncounterHpAnchor: 600,
 } as const;
 
 // The authoritative tick rate (TICK_HZ), mirrored here so this module stays dependency-light
@@ -83,16 +107,42 @@ export function clampUltCharge(charge: number): number {
   return charge < 0 ? 0 : charge > ULT.meterMax ? ULT.meterMax : Math.floor(charge);
 }
 
-// The integer charge granted by one damage-dealt event (rounded — the meter never carries a
-// fractional remainder).
-export function chargeFromDamageDealt(dmg: number): number {
-  return Math.max(0, Math.round(dmg * ULT.kDmg));
+// The floor's expected effective HP (§10): the RefEncounterHP the charge calc normalizes damage
+// against, so a fill tracks per-encounter progress across depths. A per-floor value the sim reads.
+export function refEncounterHpForFloor(floor: number): number {
+  return ULT.refEncounterHpAnchor * floorHpMult(floor);
 }
-export function chargeFromDamageTaken(dmg: number): number {
-  return Math.max(0, Math.round(dmg * ULT.kTaken));
+// The floor's reference DPS (§10): drives the encounter-scaled Aegis HP budget. Wraps the R
+// framework's per-floor practical output so the two never drift.
+export function refEncounterDpsForFloor(floor: number): number {
+  return refDpsForFloor(floor);
 }
-export function chargeFromHealDone(hp: number): number {
-  return Math.max(0, Math.round(hp * ULT.kHeal));
+
+// ---- target-agnostic charge contributions (§10), in fixed-point meter units ----
+export function ultChargeFromDamageDealt(dmg: number, refEncounterHp: number): number {
+  if (dmg <= 0 || refEncounterHp <= 0) return 0;
+  return Math.max(0, Math.round(ULT.meterMax * (dmg / refEncounterHp) * ULT.K_dmg));
+}
+export function ultChargeFromKill(): number {
+  return Math.max(0, Math.round(ULT.meterMax * ULT.K_kill));
+}
+export function ultChargeFromDamageTaken(dmg: number, maxHp: number): number {
+  if (dmg <= 0 || maxHp <= 0) return 0;
+  return Math.max(0, Math.round(ULT.meterMax * (dmg / maxHp) * ULT.K_taken));
+}
+export function ultChargeFromHealDone(hp: number): number {
+  return Math.max(0, Math.round(ULT.meterMax * ULT.K_heal * hp));
+}
+export function ultChargeFromDash(): number {
+  return Math.max(0, Math.round(ULT.meterMax * ULT.K_dash));
+}
+// The combat-gated time-floor grant per tick (≥1 so a long low-DPS boss fight still charges).
+export function ultTimeChargePerTick(): number {
+  return Math.max(1, Math.round(ULT.meterMax / (ULT.combatFillSeconds * TICKS_PER_SECOND)));
+}
+// A source's absolute share cap in meter units (§10). "time" is uncapped (the floor).
+export function ultShareCapUnits(source: UltSource): number {
+  return Math.round(ULT.shareCap[source] * ULT.meterMax);
 }
 
 // ---- per-kit ULTIMATE numbers (spec §2), quantized to the 50ms tick ----
@@ -100,10 +150,12 @@ export function chargeFromHealDone(hp: number): number {
 
 export const OVERDRIVE = {
   durationTicks: 100,   // 5.0s self-buff window (spec §2.1)
-  // Magnitude is a FIXED (non-compounding) live multiplier layered over the player's capped
-  // build, clamped so a 5s Overdrive on a strong build cannot exceed the ~7x Resonance-window
-  // ceiling (spec §9.3). A constant can't compound, so the bound is structural.
-  fireRateMult: 1.9,    // large fire-rate boost + suspended cadence downtime
+  // §10: a SEPARATE multiplicative fire-rate LAYER — never added to mods.fireRateMult (which
+  // would collide with the 1.8x raw cap). fireFactor multiplies the live fire rate; the COMBINED
+  // result (blessings × fireFactor) is then clamped to expressiveFireCeiling — the fire-rate
+  // portion of the ~7x expressive DPS ceiling — so a strong build + Overdrive can't blow past it.
+  fireFactor: 1.9,
+  expressiveFireCeiling: 3.6, // max effective fire-rate mult under Overdrive (balancer-owned)
   bonusPierce: 2,       // temporary +pierce (spec §2.1)
 } as const;
 
@@ -111,10 +163,20 @@ export const SANCTUARY = {
   radius: 120,          // ~2.5 tiles (spec §2.2)
   lifetimeTicks: 80,    // 4.0s deterministic zone lifetime
   burstHeal: 2,         // on-cast burst heal to allies inside (HP)
-  // HoT: +1 HP every heal period to each ally inside, HARD-CAPPED at ~1 HP/s so it tops people
-  // off but can NEVER out-heal all incoming damage (spec §7). Never past maxHp.
+  // HoT: +1 HP every heal period to each ally inside, but ALL Mender healing (Lifebloom +
+  // Sanctuary, any number of Menders) shares ONE per-target/party incoming-heal budget below —
+  // so it tops people off but can NEVER out-heal all incoming damage and never double-stacks (§10).
   healEveryTicks: 20,   // 1.0s cadence -> 1 HP/s
   healPerTick: 1,
+} as const;
+
+// §10 per-target SERVER-SIDE incoming-heal clamp: the ONE budget Lifebloom + Sanctuary (and any
+// number of Menders) share, so combined Mender output to one ally never exceeds perTargetHpPerSec
+// and party-wide never exceeds partyHpPerSec — regardless of Mender count. Overheal is discarded
+// on top. HP is integer, so a fractional per-second budget admits whole HP up to its floor.
+export const MENDER_HEAL_CLAMP = {
+  perTargetHpPerSec: 1.5, // one ally: combined Mender HoT ≤ this
+  partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this
 } as const;
 
 export const LIFEBLOOM = {
@@ -131,15 +193,31 @@ export const LIFEBLOOM = {
 export const AEGIS = {
   radius: 110,          // deployed dome (spec §2.3)
   lifetimeTicks: 80,    // 4.0s OR the HP budget, whichever first (spec §9.2)
-  hpBudget: 12,         // barrier HP pool: each blocked enemy projectile costs 1 (balancer-set)
+  // §10: the barrier HP budget SCALES WITH THE ENCOUNTER, not a flat value —
+  //   hpBudget = clamp(round(hpConstant × RefEncounterDPS(floor) × durationSeconds), hpMin, hpMax)
+  // so a deep-floor dome blocks proportionally more incoming fire. Each blocked enemy projectile
+  // costs 1 HP; the dome falls on duration OR HP, whichever first.
+  hpConstant: 0.14,
+  hpMin: 8,
+  hpMax: 40,
 } as const;
 
+// The encounter-scaled Aegis HP budget for a floor (§10). Pure so the sim + tests agree.
+export function aegisHpBudgetForFloor(floor: number): number {
+  const raw = AEGIS.hpConstant * refEncounterDpsForFloor(floor) * ticksToSec(AEGIS.lifetimeTicks);
+  return Math.max(AEGIS.hpMin, Math.min(AEGIS.hpMax, Math.round(raw)));
+}
+
 export const PHASE = {
-  // Brief invuln, HARD-CAPPED <= 1.2s to stay under the boss "no invuln > 1.2s" rule (spec §9.1).
+  // Brief invuln — authored ≤ 1.0s (§10), HARD-CAPPED ≤ 1.2s to stay under the boss "no invuln
+  // > 1.2s" rule (spec §9.1). One Phase can't trivialize a single ≤1.2s forced transition, and
+  // the 8s lockout stops chaining across one.
   invulnTicks: 20,      // 1.0s
   invulnCapTicks: 24,   // 1.2s absolute cap (server clamps invulnTicks to this)
   speedTicks: 60,       // 3.0s speed surge
-  speedMult: 1.4,       // ~1.4x (Phase speed surge)
+  // §10: the speed surge is an EXEMPT short ULT BURST (≤1.4× ≤3s) — plumbed as a SEPARATE
+  // multiplier applied AFTER the capped mods, so the shared 1.35× raw mover cap never clamps it.
+  speedMult: 1.4,
   allyRadius: 90,       // self + allies within ~90px at cast (spec §2.4)
 } as const;
 
@@ -152,11 +230,16 @@ export const MOMENTUM = {
 } as const;
 
 export const HARDENED = {
-  // Flat small damage reduction (spec §2.3) — NO invuln. Integer HP is preserved by SOAKING the
-  // reduced fraction into the passive channel and only ever negating WHOLE points, so the
-  // realized reduction converges on this rate without fractional hearts.
+  // Flat small damage reduction (spec §2.3) — NO invuln. Applied inside the damage-taken math
+  // BEFORE any co-op/mode pressure (§10). Integer HP is preserved by SOAKING the reduced fraction
+  // into the passive channel and only ever negating WHOLE points, so the realized reduction
+  // converges on this rate without fractional hearts.
   reduction: 0.15,
 } as const;
+
+// §10: total damage reduction from ALL sources is clamped here — Hardened (0.15) is the only DR
+// today, but any future DR must sum under this ceiling (no stacking past ~25% total DR).
+export const MAX_TOTAL_DR = 0.25;
 
 // The MENDER's faster ally revive (spec §2.2): the channel accrues at this multiple while a
 // mender is the reviver.

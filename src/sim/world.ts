@@ -32,11 +32,14 @@ import {
 import type { ShotSpec, Weapon } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, itemMaxLevel } from "./items.js";
 import {
-  ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, HARDENED, MENDER_REVIVE_SPEED,
-  isRealKit, canCastUlt, clampUltCharge, chargeFromDamageDealt, chargeFromDamageTaken, chargeFromHealDone,
-  KIT_START_WEAPON, ticksToSec,
+  ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, HARDENED, MAX_TOTAL_DR,
+  MENDER_HEAL_CLAMP, MENDER_REVIVE_SPEED, isRealKit, canCastUlt,
+  ultChargeFromDamageDealt, ultChargeFromDamageTaken, ultChargeFromHealDone, ultChargeFromKill,
+  ultChargeFromDash, ultTimeChargePerTick, ultShareCapUnits,
+  refEncounterHpForFloor, aegisHpBudgetForFloor,
+  KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
 } from "./kits.js";
-import type { KitId } from "./kits.js";
+import type { KitId, UltSource } from "./kits.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
@@ -126,6 +129,11 @@ interface StrikeInfo {
   // the fire-time weapon). A present player uses their live weapon, exactly as before.
   fxWeapon: WeaponId | null;
 }
+
+// §10 per-source ult-charge accumulators toward one meter fill (enforces the share caps). "time"
+// is uncapped (the floor) so it is not tracked here.
+export interface UltSourceCharge { dmg: number; kill: number; taken: number; heal: number; dash: number }
+function freshUltSources(): UltSourceCharge { return { dmg: 0, kill: 0, taken: 0, heal: 0, dash: 0 }; }
 
 export interface PlayerSim {
   id: PlayerId;
@@ -225,6 +233,13 @@ export interface PlayerSim {
   // The one per-kit PASSIVE auxiliary channel (mirrors the enemy `aux` idiom): GUNNER momentum
   // stacks, MENDER lifebloom heal-credit pool, BULWARK hardened damage-soak. 0 for phantom/none.
   passiveState: number;
+  // §10 per-source charge accumulators toward the CURRENT meter fill (server-only, reset on
+  // cast): enforces the per-source SHARE caps so no single input dominates one fill. Never wired
+  // (the client only reconciles the total meter).
+  ultSources: UltSourceCharge;
+  // §10 tuning stat (server-only): total overcharge LOST while the meter sat at 100 (the "charge
+  // wasted %" the balancer tunes the median toward ~1 ult / 2-3 encounters against).
+  ultWasted: number;
   // Whether an ult was requested THIS tick (the client's edge/level "ult requested" input bit).
   // Re-derived from the consumed input every stepPlayerPhase (like isInteracting) and resolved +
   // cleared in the authoritative updateUlts — never wired, so a client can request, never cast.
@@ -357,6 +372,12 @@ export interface WorldState {
   // seconds left before that shooter may nudge that target again (A->B independent of B->A).
   // Sim-internal — never on the wire; entries self-expire and are cleared on every floor build.
   friendlyNudgeCd: Map<string, number>;
+  // §10 MENDER incoming-heal clamp: the rolling 1s per-target + party-wide heal budget ALL
+  // Mender output (Lifebloom + Sanctuary, any Mender count) shares, so healing never double-
+  // stacks or out-heals incoming damage. Server-only (heals resolve in the world phase); keyed
+  // by target player id, reset per floor.
+  incomingHealWindows: Map<PlayerId, { tick: number; hp: number }>;
+  partyHealWindow: { tick: number; hp: number };
   // Lag-compensation position history: per-enemy ring of past positions (offset 0 = most
   // recent record). histHead is the ring slot of the most recent record; histCount is how many
   // slots are valid. Recorded once per world tick; read only when a shooter has rewindTicks > 0.
@@ -420,6 +441,8 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     phaseSpeed: 0,
     ultInvuln: 0,
     passiveState: 0,
+    ultSources: freshUltSources(),
+    ultWasted: 0,
     isUltRequested: false,
   };
 }
@@ -479,6 +502,8 @@ export function createWorld(seed: number, floor: number, opts: WorldOptions = {}
     nextEffectId: 0,
     persistentBossWindows: new Map(),
     friendlyNudgeCd: new Map(),
+    incomingHealWindows: new Map(),
+    partyHealWindow: { tick: 0, hp: 0 },
     enemyHist: new Map(),
     histHead: 0,
     histCount: 0,
@@ -534,6 +559,8 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
   p.phaseSpeed = 0;
   p.ultInvuln = 0;
   p.passiveState = 0;
+  p.ultSources = freshUltSources();
+  p.ultWasted = 0;
   p.isUltRequested = false;
   // Hand the kit its signature starting weapon — but only when the player is still on the
   // stock default loadout (never stomp a mid-run pickup / a re-select that kept gear).
@@ -546,19 +573,31 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
   }
 }
 
-// Grant fixed-point ult charge to a real-kit player, clamped to the meter (spec §3). No-op for
-// the neutral baseline, so the shipped sim is untouched.
-function grantUltCharge(p: PlayerSim, amount: number): void {
+// §10 ACCRUE ult charge from one SOURCE, respecting the per-source SHARE cap toward the current
+// meter fill (so no single input dominates) and logging any overcharge held at 100 as "wasted"
+// for balancer tuning. "time" is uncapped (the floor). No-op for the neutral baseline.
+function accrueUlt(p: PlayerSim, source: UltSource, amount: number): void {
   if (!isRealKit(p.kitId) || amount <= 0) return;
-  p.ultCharge = clampUltCharge(p.ultCharge + amount);
+  if (source !== "time") {
+    const room = ultShareCapUnits(source) - p.ultSources[source];
+    if (room <= 0) return;
+    if (amount > room) amount = room;
+    p.ultSources[source] += amount;
+  }
+  p.ultCharge += amount;
+  if (p.ultCharge > ULT.meterMax) {
+    p.ultWasted += p.ultCharge - ULT.meterMax; // overcharge held at 100 is lost (the tuning stat)
+    p.ultCharge = ULT.meterMax;
+  }
 }
 
 // One authoritative "this player just dealt `dmg`" hook (called from strikeEnemy after the hit
-// lands). Feeds the ult meter (all kits), ramps GUNNER momentum, and banks MENDER lifebloom
+// lands). Feeds the ult meter (all kits, NORMALIZED by the floor's RefEncounterHP so it charges
+// per-encounter, not per-raw-damage — §10), ramps GUNNER momentum, and banks MENDER lifebloom
 // credit. No-op for the neutral baseline. `p` may be null (a departed owner's projectile).
-function onKitDamageDealt(p: PlayerSim | null, dmg: number): void {
+function onKitDamageDealt(w: WorldState, p: PlayerSim | null, dmg: number): void {
   if (p === null || !isRealKit(p.kitId) || dmg <= 0) return;
-  grantUltCharge(p, chargeFromDamageDealt(dmg));
+  accrueUlt(p, "dmg", ultChargeFromDamageDealt(dmg, refEncounterHpForFloor(w.floor)));
   if (p.kitId === "gunner") {
     if (p.passiveState < MOMENTUM.maxStacks) p.passiveState += 1;
   } else if (p.kitId === "mender") {
@@ -566,17 +605,46 @@ function onKitDamageDealt(p: PlayerSim | null, dmg: number): void {
   }
 }
 
-// Heal an ally by a MENDER source (Lifebloom / Sanctuary), clamped to maxHp (overheal does
-// nothing, spec §2.2), emitting the heal FX and crediting the healer's ult meter with the ACTUAL
-// HP restored (spec §2.2: healing done charges the meter). Returns the HP actually restored.
-function menderHeal(healer: PlayerSim | null, target: PlayerSim, amount: number, ev: SimEvent[]): number {
+// §10 per-target incoming-heal ROOM (whole HP) allowed RIGHT NOW under the shared Mender clamp:
+// the rolling 1s per-target budget AND the party-wide budget, so combined Mender output (any
+// number of Menders, Lifebloom + Sanctuary) never double-stacks or out-heals incoming damage.
+function incomingHealRoom(w: WorldState, target: PlayerSim): number {
+  const now = w.tick;
+  const win = TICKS_PER_SECOND; // 1s rolling window
+  const tw = w.incomingHealWindows.get(target.id);
+  const targetHealed = tw && now - tw.tick < win ? tw.hp : 0;
+  const partyHealed = now - w.partyHealWindow.tick < win ? w.partyHealWindow.hp : 0;
+  const perTargetRoom = MENDER_HEAL_CLAMP.perTargetHpPerSec - targetHealed;
+  const partyRoom = MENDER_HEAL_CLAMP.partyHpPerSec - partyHealed;
+  return Math.max(0, Math.floor(Math.min(perTargetRoom, partyRoom) + 1e-9));
+}
+
+// Commit `hp` of actually-applied Mender healing against the per-target + party rolling budgets.
+function consumeIncomingHeal(w: WorldState, target: PlayerSim, hp: number): void {
+  const now = w.tick;
+  const win = TICKS_PER_SECOND;
+  const tw = w.incomingHealWindows.get(target.id);
+  if (tw && now - tw.tick < win) tw.hp += hp; else w.incomingHealWindows.set(target.id, { tick: now, hp });
+  if (now - w.partyHealWindow.tick < win) w.partyHealWindow.hp += hp; else w.partyHealWindow = { tick: now, hp };
+}
+
+// Heal an ally by a MENDER source, clamped to maxHp (overheal does nothing, spec §2.2), emitting
+// the heal FX and crediting the healer's ult meter with the ACTUAL HP restored. `throughClamp`
+// routes the heal through the shared per-target/party incoming-heal RATE budget (§10 — the HoT
+// stream: Lifebloom + Sanctuary HoT + any Mender count share ONE budget, so sustained healing
+// never double-stacks or out-heals incoming damage). The one-time on-cast BURST bypasses the RATE
+// clamp (it is not sustained output) but is still maxHp-clamped. Returns HP restored.
+function menderHeal(w: WorldState, healer: PlayerSim | null, target: PlayerSim, amount: number, ev: SimEvent[], throughClamp: boolean): number {
   if (target.isDown || target.hp <= 0) return 0; // a HoT never revives (spec §7)
+  if (throughClamp) amount = Math.min(amount, incomingHealRoom(w, target));
+  if (amount <= 0) return 0;
   const before = target.hp;
   target.hp = Math.min(target.maxHp, target.hp + amount);
-  const healed = target.hp - before;
+  const healed = target.hp - before; // overheal discarded (never counts against the budget)
   if (healed <= 0) return 0;
+  if (throughClamp) consumeIncomingHeal(w, target, healed);
   ev.push({ t: "heal", pid: target.id, x: target.x, y: target.y });
-  if (healer && isRealKit(healer.kitId)) grantUltCharge(healer, chargeFromHealDone(healed));
+  if (healer && isRealKit(healer.kitId)) accrueUlt(healer, "heal", ultChargeFromHealDone(healed));
   return healed;
 }
 
@@ -606,23 +674,35 @@ function updateUlts(w: WorldState, ev: SimEvent[]): void {
   for (const e of ev) {
     if (e.t !== "dashStart") continue;
     const dasher = w.players.get(e.pid);
-    if (dasher && dasher.kitId === "phantom") grantUltCharge(dasher, ULT.kDash);
+    if (dasher && dasher.kitId === "phantom") accrueUlt(dasher, "dash", ultChargeFromDash());
   }
-  // Time-trickle FLOOR (spec §3): a slow integer grant keyed off the world tick, so a long
-  // fight eventually grants an ult even at low output — and a defensive kit is never starved.
-  const trickle = w.tick % ULT.timeGrantEveryTicks === 0;
+  // Time-FLOOR (§10): encounter-relative + COMBAT-GATED. Accrues only while a hostile enemy is
+  // alive/aggro (never in empty rooms), guaranteeing ~1 ult by ~combatFillSeconds of sustained
+  // combat even at low DPS. Keeps accruing during the 8s lockout (accrueUlt clamps ≤ meterMax).
+  const inCombat = isEncounterLive(w);
+  const timeGrant = ultTimeChargePerTick();
   for (const p of w.players.values()) {
     if (!isRealKit(p.kitId) || p.isDown || p.isAbsent || p.hp <= 0) continue;
-    if (trickle) grantUltCharge(p, ULT.kTimePerGrant);
-    // MENDER LIFEBLOOM payout: bank credit pays out in WHOLE HP on the capped cadence, so it
-    // tops the lowest ally off without ever out-healing incoming damage (spec §2.2).
+    if (inCombat) accrueUlt(p, "time", timeGrant);
+    // MENDER LIFEBLOOM payout: bank credit pays out in WHOLE HP on the capped cadence, routed
+    // through the shared incoming-heal clamp so it never out-heals or double-stacks (spec §2.2).
     if (p.kitId === "mender" && w.tick % LIFEBLOOM.healEveryTicks === 0 && p.passiveState >= 1) {
       const target = lowestHpAllyInRange(w, p, LIFEBLOOM.range) ?? p;
-      const healed = menderHeal(p, target, LIFEBLOOM.healPerTick, ev);
+      const healed = menderHeal(w, p, target, LIFEBLOOM.healPerTick, ev, true); // HoT: rate-clamped
       if (healed > 0) p.passiveState -= healed;
     }
     if (p.isUltRequested) resolveUlt(w, p, ev);
   }
+}
+
+// §10: is a hostile encounter LIVE (enemies alive/aggro)? Gates the ult time-floor so it never
+// trickles in an empty/cleared room. Decoys + mechanic bodies (echo/knell/knot/sac/slab) don't
+// count — they are counterplay, not pressure.
+function isEncounterLive(w: WorldState): boolean {
+  for (const e of w.enemies) {
+    if (!e.dead && !isDecoyKind(e.kind)) return true;
+  }
+  return false;
 }
 
 // Validate + resolve one player's ult cast: server checks the meter is full AND the 8s lockout
@@ -647,7 +727,7 @@ function resolveUlt(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
       for (const ally of w.players.values()) {
         if (ally.isDown || ally.hp <= 0 || ally.isAbsent) continue;
         if (ally !== p && Math.hypot(ally.x - p.x, ally.y - p.y) > SANCTUARY.radius) continue;
-        menderHeal(p, ally, SANCTUARY.burstHeal, ev);
+        menderHeal(w, p, ally, SANCTUARY.burstHeal, ev, false); // one-time burst bypasses the rate clamp
       }
       w.effects.push({
         id: w.nextEffectId++, kind: "sanctuary", owner: p.id, fx: p.weapon,
@@ -659,12 +739,15 @@ function resolveUlt(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
     }
     case "bulwark": {
       // AEGIS: a deterministic dome entity — duration OR HP budget, whichever first (spec §9.2).
+      // The HP budget SCALES WITH THE ENCOUNTER (§10), clamped, so a deep-floor dome blocks
+      // proportionally more incoming fire.
+      const hpBudget = aegisHpBudgetForFloor(w.floor);
       w.effects.push({
         id: w.nextEffectId++, kind: "aegis", owner: p.id, fx: p.weapon,
         x: p.x, y: p.y, life: ticksToSec(AEGIS.lifetimeTicks), maxLife: ticksToSec(AEGIS.lifetimeTicks),
-        radius: AEGIS.radius, hp: AEGIS.hpBudget, maxHp: AEGIS.hpBudget,
+        radius: AEGIS.radius, hp: hpBudget, maxHp: hpBudget,
       });
-      ev.push({ t: "ultAegis", pid: p.id, x: p.x, y: p.y, radius: AEGIS.radius, hpBudget: AEGIS.hpBudget, lifetimeTicks: AEGIS.lifetimeTicks });
+      ev.push({ t: "ultAegis", pid: p.id, x: p.x, y: p.y, radius: AEGIS.radius, hpBudget, lifetimeTicks: AEGIS.lifetimeTicks });
       break;
     }
     case "phantom": {
@@ -697,7 +780,7 @@ function updateSanctuaryEffect(w: WorldState, e: SanctuaryEffect, dt: number, ev
   for (const ally of w.players.values()) {
     if (ally.isDown || ally.hp <= 0 || ally.isAbsent) continue;
     if (Math.hypot(ally.x - e.x, ally.y - e.y) > e.radius) continue;
-    menderHeal(owner, ally, SANCTUARY.healPerTick, ev);
+    menderHeal(w, owner, ally, SANCTUARY.healPerTick, ev, true); // HoT: shares the rate clamp
   }
 }
 
@@ -812,6 +895,8 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   w.nextEffectId = 0;
   w.persistentBossWindows.clear();
   w.friendlyNudgeCd.clear();
+  w.incomingHealWindows.clear();
+  w.partyHealWindow = { tick: 0, hp: 0 };
   w.heartsThisFloor = 0;
   w.isFloorEnteredLow = [...w.players.values()].some((p) => p.hp < p.maxHp * SUSTAIN.pityLowHpFrac);
   w.pendingBlessings.clear();
@@ -1303,7 +1388,10 @@ function currentFireRate(p: PlayerSim): number {
   let m = liveFireRateMult(p.mods, lowHpFrac(p.hp, p.maxHp));
   if (p.kitId === "gunner") {
     if (p.passiveState > 0) m *= 1 + p.passiveState * MOMENTUM.fireRatePerStack; // MOMENTUM
-    if (p.overdriveT > 0) m *= OVERDRIVE.fireRateMult; // OVERDRIVE: fixed, non-compounding boost
+    // OVERDRIVE (§10): a SEPARATE multiplicative layer (never added to the raw fireRateMult cap),
+    // and the COMBINED result is clamped to the expressive fire-rate ceiling so a strong build +
+    // Overdrive can't blow past the ~7x expressive DPS envelope.
+    if (p.overdriveT > 0) m = Math.min(m * OVERDRIVE.fireFactor, OVERDRIVE.expressiveFireCeiling);
   }
   return m;
 }
@@ -2286,7 +2374,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   // Kit hooks (ult meter charge from damage dealt, GUNNER momentum ramp, MENDER lifebloom
   // credit). Inert for the neutral baseline, so shipped combat is byte-identical.
-  onKitDamageDealt(p, dmg);
+  onKitDamageDealt(w, p, dmg);
   applyKnockbackDir(p ? p.weapon : hit.fxWeapon ?? "pistol", e, hit.kbDirX, hit.kbDirY);
   applyHitStatuses(w, p, e, hit, ev);
   const closeShotgun = !hit.isMelee && p !== null && p.weapon === "shotgun" && Math.hypot(p.x - e.x, p.y - e.y) < C.SHOTGUN_FREEZE_RANGE;
@@ -2325,8 +2413,8 @@ function killEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, ev: SimEvent[])
     p.kills++;
     p.combo++;
     p.comboTimer = C.COMBO_WINDOW;
-    // Kill bonus to the ult meter (all kits — spec §3). Inert for the neutral baseline.
-    grantUltCharge(p, ULT.kKill);
+    // Kill bonus to the ult meter (all kits — spec §3), share-capped. Inert for the baseline.
+    accrueUlt(p, "kill", ultChargeFromKill());
   }
   const big = isBossKind(e.kind);
   ev.push({ t: "enemyKill", eid: e.id, kind: e.kind, tier: e.tier, x: e.x, y: e.y, combo: p ? p.combo : 0 });
@@ -8796,11 +8884,13 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   // transition (cleared floor), but the shared world keeps ticking under the chooser's menu
   // online — this shield covers the residue (a stray in-flight glob, a chained barrel).
   if (w.pendingBlessings.has(p.id)) return;
-  // BULWARK HARDENED (spec §2.3): flat ~15% damage reduction with NO invuln. Integer HP is
-  // preserved by SOAKING the reduced fraction into the passive channel and negating only WHOLE
-  // points, so the realized reduction converges on the rate without fractional hearts.
+  // BULWARK HARDENED (spec §2.3/§10): flat damage reduction with NO invuln, applied HERE in the
+  // damage-taken math BEFORE any co-op/mode pressure, and clamped so total DR never stacks past
+  // MAX_TOTAL_DR. Integer HP is preserved by SOAKING the reduced fraction into the passive
+  // channel and negating only WHOLE points, so the realized reduction converges without fractions.
   if (p.kitId === "bulwark" && amount > 0) {
-    p.passiveState += amount * HARDENED.reduction;
+    const dr = Math.min(HARDENED.reduction, MAX_TOTAL_DR);
+    p.passiveState += amount * dr;
     const negate = Math.floor(p.passiveState);
     if (negate > 0) {
       const applied = Math.min(negate, amount);
@@ -8809,8 +8899,9 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
     }
   }
   if (amount <= 0) return;
-  // The ult meter charges off damage TAKEN for the tank (spec §2.3), off the reduced amount.
-  if (p.kitId === "bulwark") grantUltCharge(p, chargeFromDamageTaken(amount));
+  // The ult meter charges off damage TAKEN for the tank (spec §2.3), normalized by the tank's
+  // own maxHp (§10 target-agnostic), off the post-reduction amount.
+  if (p.kitId === "bulwark") accrueUlt(p, "taken", ultChargeFromDamageTaken(amount, p.maxHp));
   // GUNNER MOMENTUM fully decays on taking ANY damage (spec §2.1). Only gunner uses the passive
   // channel for momentum; the other kits' channel is left untouched.
   if (p.kitId === "gunner") p.passiveState = 0;

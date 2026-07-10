@@ -6,16 +6,18 @@
 // Run: npx tsx test/kits.test.ts
 
 import {
-  createWorld, spawnPlayerInWorld, setPlayerKit, stepPlayerPhase, stepWorldPhase,
+  createWorld, spawnPlayerInWorld, setPlayerKit, stepPlayerPhase, stepWorldPhase, devSpawnEnemy,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { InputCmd } from "../src/sim/input.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet } from "../src/sim/types.js";
 import {
-  ULT, OVERDRIVE, SANCTUARY, AEGIS, PHASE, MOMENTUM, HARDENED, ticksToSec,
+  ULT, OVERDRIVE, SANCTUARY, AEGIS, PHASE, MOMENTUM, HARDENED, MENDER_HEAL_CLAMP, ticksToSec,
   masteryLevelForXp, isKitUnlocked, kitUnlockLevel, unlockedKits, masteryXpForRun,
-  canCastUlt, chargeFromDamageDealt, chargeFromDamageTaken, chargeFromHealDone,
+  canCastUlt, ultChargeFromDamageDealt, ultChargeFromDamageTaken, ultChargeFromHealDone,
+  ultShareCapUnits, ultTimeChargePerTick,
+  refEncounterHpForFloor, aegisHpBudgetForFloor,
 } from "../src/sim/kits.js";
 import type { KitId } from "../src/sim/kits.js";
 
@@ -72,26 +74,75 @@ function masteryTests(): void {
 }
 
 function chargeFormulaTests(): void {
-  section("ult meter: fixed-point charge formula (spec §3)");
-  check("meter is integer fixed-point 0..max", ULT.meterMax === 1000);
-  check("damage-dealt charge rounds to an integer", Number.isInteger(chargeFromDamageDealt(2.5)) && chargeFromDamageDealt(2) === Math.round(2 * ULT.kDmg));
-  check("damage-taken charge is the tank override", chargeFromDamageTaken(1) === ULT.kTaken);
-  check("healing-done charge is the mender override", chargeFromHealDone(2) === Math.round(2 * ULT.kHeal));
-  check("canCast requires BOTH a full meter and past the 8s lockout", !canCastUlt(ULT.meterMax, 10, 20) && canCastUlt(ULT.meterMax, 20, 20) && !canCastUlt(999, 50, 0));
+  section("ult meter: fixed-point + TARGET-AGNOSTIC charge formula (§10)");
+  check("meter is fixed-point hundredths of a percent (0..10000)", ULT.meterMax === 10000);
+  check("damage-dealt charge is normalized by RefEncounterHP (not raw)", (() => {
+    const ref = refEncounterHpForFloor(1);
+    return ultChargeFromDamageDealt(2, ref) === Math.round(ULT.meterMax * (2 / ref) * ULT.K_dmg);
+  })());
+  check("same damage charges the SAME fraction regardless of floor depth (target-agnostic)", (() => {
+    // Dealing a fixed FRACTION of the encounter charges identically on F1 and a deep floor.
+    const f1 = ultChargeFromDamageDealt(refEncounterHpForFloor(1) * 0.1, refEncounterHpForFloor(1));
+    const f9 = ultChargeFromDamageDealt(refEncounterHpForFloor(9) * 0.1, refEncounterHpForFloor(9));
+    return f1 === f9 && f1 > 0;
+  })());
+  check("damage-taken charge is normalized by the tank's own maxHp", ultChargeFromDamageTaken(2, 8) === Math.round(ULT.meterMax * (2 / 8) * ULT.K_taken));
+  check("healing-done charge is per-HP", ultChargeFromHealDone(2) === Math.round(ULT.meterMax * ULT.K_heal * 2));
+  check("canCast requires BOTH a full meter and past the 8s lockout", !canCastUlt(ULT.meterMax, 10, 20) && canCastUlt(ULT.meterMax, 20, 20) && !canCastUlt(ULT.meterMax - 1, 50, 0));
   check("the 8s lockout is 160 ticks (8.0s at 20Hz)", ULT.lockoutTicks === 160);
+  check("the time floor fills in ~combatFillSeconds even at zero DPS", (() => {
+    const perTick = ultTimeChargePerTick();
+    const ticksToFull = ULT.meterMax / perTick;
+    const seconds = ticksToFull / 20;
+    return seconds >= 45 && seconds <= 65; // ~55s band
+  })());
 
-  section("charge ACCRUES only for a real kit + a long fight eventually grants it (time floor)");
+  section("§10 per-source SHARE caps: no single input dominates one fill (damage ≤70%, kills ≤40%)");
+  check("share caps are exposed as tunable fractions", ULT.shareCap.dmg === 0.70 && ULT.shareCap.kill === 0.40);
+  {
+    // A gunner punching a huge dummy: damage charge saturates at its 70% share and stops.
+    const w = freshWorld();
+    spawnPlayerInWorld(w, "g"); setPlayerKit(w, "g", "gunner");
+    const g = w.players.get("g")!;
+    for (let i = 0; i < 400; i++) {
+      // Direct damage accrual via the exposed contribution (bypassing combat for a clean probe):
+      g.ultSources.dmg = g.ultSources.dmg; // no-op to keep intent clear
+      break;
+    }
+    // Drive the accrual through the real sim: spawn a fat dummy + autofire, capping time out by
+    // checking the dmg source never exceeds its share cap.
+    const enemy = devSpawnEnemy(w, "boss", g.x + 60, g.y);
+    enemy.hp = 1e9; enemy.maxHp = 1e9; // an effectively bottomless dummy
+    for (let i = 0; i < 300; i++) tick(w, (p) => ({ ...idle(), firing: p.id === "g", aim: 0 }));
+    check("damage source never exceeds its 70% share cap", g.ultSources.dmg <= ultShareCapUnits("dmg"), `dmg=${g.ultSources.dmg} cap=${ultShareCapUnits("dmg")}`);
+  }
+
+  section("§10 time floor is COMBAT-GATED (never trickles in an empty room)");
+  {
+    const empty = freshWorld();
+    empty.enemies = []; // a truly cleared room (freshWorld loads the floor's enemies)
+    spawnPlayerInWorld(empty, "g"); setPlayerKit(empty, "g", "gunner"); const g = empty.players.get("g")!; g.invuln = 0;
+    for (let i = 0; i < 200; i++) tick(empty, () => idle());
+    check("an EMPTY room never charges the time floor", g.ultCharge === 0, `charge=${g.ultCharge}`);
+    const combat = freshWorld();
+    combat.enemies = [];
+    spawnPlayerInWorld(combat, "g2"); setPlayerKit(combat, "g2", "gunner"); const g2 = combat.players.get("g2")!; g2.invuln = 0;
+    devSpawnEnemy(combat, "slime", g2.x + 400, g2.y); // a live enemy => encounter is live
+    for (let i = 0; i < 200; i++) tick(combat, () => idle());
+    check("a live encounter DOES charge the time floor", g2.ultCharge > 0, `charge=${g2.ultCharge}`);
+  }
+
+  section("charge is neutral-baseline-inert + persists (does not reset on the shipped sim)");
   const w = freshWorld();
   const neutral = spawnPlayerInWorld(w, "n"); neutral.invuln = 0;
-  const gun = spawnPlayerInWorld(w, "g"); setPlayerKit(w, "g", "gunner"); const g = w.players.get("g")!; g.invuln = 0;
-  for (let i = 0; i < 200; i++) tick(w, () => idle());
+  devSpawnEnemy(w, "slime", neutral.x + 300, neutral.y);
+  for (let i = 0; i < 100; i++) tick(w, () => idle());
   check("a neutral-kit player NEVER accrues charge (shipped sim untouched)", neutral.ultCharge === 0);
-  check("a real kit accrues the slow time-trickle floor", g.ultCharge > 0, `charge=${g.ultCharge}`);
 }
 
 function overdriveTests(): void {
   section("GUNNER OVERDRIVE: self-buff, magnitude clamped (spec §2.1/§9.3)");
-  check("Overdrive is a fixed (non-compounding) fire-rate boost under the ~7x window", OVERDRIVE.fireRateMult > 1 && OVERDRIVE.fireRateMult <= 2.5);
+  check("Overdrive is a fixed (non-compounding) fire-rate factor", OVERDRIVE.fireFactor > 1 && OVERDRIVE.fireFactor <= 2.5);
   check("Overdrive grants a bounded temporary pierce", OVERDRIVE.bonusPierce === 2);
   const w = freshWorld();
   spawnPlayerInWorld(w, "g"); setPlayerKit(w, "g", "gunner");
@@ -136,26 +187,31 @@ function sanctuaryTests(): void {
 }
 
 function aegisTests(): void {
-  section("BULWARK AEGIS: duration OR HP budget, whichever first (spec §2.3/§9.2)");
+  section("BULWARK AEGIS: ENCOUNTER-SCALED HP, duration OR HP whichever first (spec §2.3/§9.2/§10)");
+  check("the HP budget scales with the floor (deep floors block more) + clamps", (() => {
+    const f1 = aegisHpBudgetForFloor(1), deep = aegisHpBudgetForFloor(25);
+    return deep >= f1 && f1 >= AEGIS.hpMin && deep <= AEGIS.hpMax;
+  })());
   const w = freshWorld();
   spawnPlayerInWorld(w, "b"); setPlayerKit(w, "b", "bulwark");
   const b = w.players.get("b")!;
   const domeX = b.x, domeY = b.y;
+  const budget = aegisHpBudgetForFloor(w.floor);
   b.ultCharge = ULT.meterMax; b.ultReadyAtTick = 0;
   const ev = tick(w, (p) => ({ ...idle(), ult: p.id === "b" }));
   check("cast emitted ULT_AEGIS + spawned the dome entity", ev.some((e) => e.t === "ultAegis") && w.effects.some((e) => e.kind === "aegis"));
   const dome = w.effects.find((e) => e.kind === "aegis")!;
-  check("the dome opens with its full HP budget", dome.kind === "aegis" && dome.hp === AEGIS.hpBudget);
+  check("the dome opens with its encounter-scaled HP budget", dome.kind === "aegis" && dome.hp === budget);
   // Move the bulwark far away so injected enemy fire only tests the dome, never the player, then
   // feed it enemy projectiles: each blocked shot costs 1 barrier HP; the dome falls when spent.
   b.x = domeX + 1000;
   let blocked = 0;
-  for (let i = 0; i < AEGIS.hpBudget + 4 && w.effects.some((e) => e.kind === "aegis"); i++) {
+  for (let i = 0; i < budget + 4 && w.effects.some((e) => e.kind === "aegis"); i++) {
     w.bullets.push(enemyBullet(domeX, domeY));
     const e2 = tick(w, () => idle());
     blocked += e2.filter((e) => e.t === "bulletBlocked").length;
   }
-  check("the dome absorbed enemy projectiles (blocked, HP spent)", blocked >= AEGIS.hpBudget, `blocked=${blocked}`);
+  check("the dome absorbed enemy projectiles (blocked, HP spent)", blocked >= budget, `blocked=${blocked}`);
   check("the dome FELL on its HP budget well before the 4.0s duration (whichever first)", !w.effects.some((e) => e.kind === "aegis"));
   check("allies shoot OUT: a friendly round inside the dome is NOT absorbed", (() => {
     const w3 = freshWorld();
@@ -192,6 +248,51 @@ function phaseTests(): void {
   w.bullets.push(enemyBullet(ph.x, ph.y));
   tick(w, () => idle());
   check("Phase invuln negates incoming damage while live", ph.hp === hpBefore);
+}
+
+function healClampTests(): void {
+  section("§10 MENDER incoming-heal clamp: two Menders' HoT on ONE ally does NOT double-stack");
+  check("the per-target + party heal caps are exposed as tunables", MENDER_HEAL_CLAMP.perTargetHpPerSec === 1.5 && MENDER_HEAL_CLAMP.partyHpPerSec === 3.0);
+  // Two Menders both drop Sanctuary over one wounded ally; the sustained HoT is rate-clamped.
+  const w = freshWorld();
+  spawnPlayerInWorld(w, "m1"); setPlayerKit(w, "m1", "mender");
+  spawnPlayerInWorld(w, "m2"); setPlayerKit(w, "m2", "mender");
+  const ally = spawnPlayerInWorld(w, "a"); setPlayerKit(w, "a", "gunner");
+  const m1 = w.players.get("m1")!, m2 = w.players.get("m2")!;
+  m2.x = m1.x + 10; ally.x = m1.x + 5; ally.y = m1.y;
+  ally.maxHp = 100; ally.hp = 10; // deeply wounded so the cap, not maxHp, governs
+  m1.ultCharge = ULT.meterMax; m1.ultReadyAtTick = 0;
+  m2.ultCharge = ULT.meterMax; m2.ultReadyAtTick = 0;
+  // Both cast on the same tick.
+  tick(w, (p) => ({ ...idle(), ult: p.id === "m1" || p.id === "m2" }));
+  const afterBurst = ally.hp;
+  // Run 3 seconds of overlapping HoT; the sustained gain must track the per-target cap (≤ ~1
+  // whole HP/s from the combined Mender HoT), NOT 2 HP/s (which double-stacking would give).
+  const startHp = ally.hp;
+  for (let i = 0; i < 60; i++) tick(w, () => idle());
+  const hotGain = ally.hp - startHp;
+  check("the on-cast burst still lands (Sanctuary keeps its signature)", afterBurst > 10);
+  check("3s of TWO overlapping Sanctuary HoTs heals at the clamped rate, not doubled", hotGain <= 4, `hotGain=${hotGain} (two-mender double-stack would be ~6)`);
+}
+
+function overdriveCeilingTests(): void {
+  section("§10 Overdrive is a SEPARATE clamped fire-rate LAYER (never collides with the 1.8x raw cap)");
+  check("the fire factor + expressive ceiling are exposed tunables", OVERDRIVE.fireFactor > 1 && OVERDRIVE.expressiveFireCeiling >= OVERDRIVE.fireFactor);
+  check("the ceiling caps the combined build+Overdrive fire rate", OVERDRIVE.expressiveFireCeiling <= 5, `ceiling=${OVERDRIVE.expressiveFireCeiling}`);
+}
+
+function bossUntouchedTests(): void {
+  section("§11 ults are PLAYER capability only: casting never touches boss phase/transition state");
+  const w = freshWorld();
+  spawnPlayerInWorld(w, "b"); setPlayerKit(w, "b", "bulwark");
+  const boss = devSpawnEnemy(w, "boss", w.players.get("b")!.x + 300, w.players.get("b")!.y);
+  const phaseBefore = boss.boss ? boss.boss.phase : -1;
+  const hpBefore = boss.hp;
+  const b = w.players.get("b")!;
+  b.ultCharge = ULT.meterMax; b.ultReadyAtTick = 0;
+  tick(w, (p) => ({ ...idle(), ult: p.id === "b" }));
+  check("Aegis cast leaves the boss phase untouched", (boss.boss ? boss.boss.phase : -1) === phaseBefore);
+  check("Aegis cast does no direct damage to the boss (cover, not a weapon)", boss.hp === hpBefore);
 }
 
 function hardenedTests(): void {
@@ -236,11 +337,14 @@ function main(): void {
   masteryTests();
   chargeFormulaTests();
   overdriveTests();
+  overdriveCeilingTests();
   sanctuaryTests();
+  healClampTests();
   aegisTests();
   phaseTests();
   hardenedTests();
   momentumTests();
+  bossUntouchedTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll kit/ult/mastery unit gates hold.\n");

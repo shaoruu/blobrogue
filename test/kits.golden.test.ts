@@ -48,12 +48,17 @@ interface Scenario {
   dashEvery?: Record<PlayerId, number>;
   // A mid-run reconnect: remove `who` at tick `at`, respawn + re-kit at tick `back`.
   reconnect?: { who: PlayerId; at: number; back: number };
+  // Inject one enemy projectile inside a live Aegis dome (off the caster's body) each tick from
+  // this tick — exercises deterministic barrier HP depletion (duration OR HP, whichever first).
+  injectAegisFire?: number;
 }
 
-// A compact per-tick digest of everything the ult system owns.
+// A compact per-tick digest of everything the ult system owns. §10 test hooks: the per-source
+// charge accrual (dmg/kill/taken/heal/dash) + the wasted-overcharge stat, the meter + lockout,
+// the entity HP/lifetime, and the self-buff/invuln windows.
 interface Digest {
   t: number;
-  players: Array<{ id: string; kit: string; uc: number; ura: number; ov: number; ph: number; iv: number; ps: number; hp: number }>;
+  players: Array<{ id: string; kit: string; uc: number; ura: number; ov: number; ph: number; iv: number; ps: number; hp: number; src: [number, number, number, number, number]; wst: number }>;
   effects: Array<{ id: number; k: string; life: number; hp: number; r: number }>;
   ev: string[];
 }
@@ -66,6 +71,8 @@ function digest(w: WorldState, tick: number, ev: SimEvent[]): Digest {
     .map((p) => ({
       id: p.id, kit: p.kitId, uc: p.ultCharge, ura: p.ultReadyAtTick,
       ov: r(p.overdriveT), ph: r(p.phaseSpeed), iv: r(p.ultInvuln), ps: r(p.passiveState), hp: p.hp,
+      src: [p.ultSources.dmg, p.ultSources.kill, p.ultSources.taken, p.ultSources.heal, p.ultSources.dash] as [number, number, number, number, number],
+      wst: p.ultWasted,
     }));
   const effects = w.effects
     .filter((e) => e.kind === "sanctuary" || e.kind === "aegis")
@@ -114,6 +121,10 @@ function run(s: Scenario): Digest[] {
       setPlayerKit(w, s.reconnect.who, kitOf.get(s.reconnect.who) ?? "none");
     }
     if (s.fillAt?.[tick]) for (const id of s.fillAt[tick]) { const p = w.players.get(id); if (p) { p.ultCharge = ULT.meterMax; p.ultReadyAtTick = 0; } }
+    if (s.injectAegisFire !== undefined && tick >= s.injectAegisFire) {
+      const dome = w.effects.find((e) => e.kind === "aegis");
+      if (dome) w.bullets.push({ x: dome.x + 80, y: dome.y, vx: 0, vy: 0, radius: 5, life: 1, friendly: false, owner: null, damage: 1, color: "#fff", pierce: 0, hitList: null, isCrit: false });
+    }
     const ev: SimEvent[] = [];
     for (const p of w.players.values()) {
       const inp = baseInput(++seq);
@@ -152,15 +163,26 @@ const SCENARIOS: Scenario[] = [
     ],
     fillAt: { 20: ["pA"] }, ultFrom: { pA: 21 },
   },
-  // P2 BULWARK: Aegis dome deploys with its HP budget + fixed lifetime; the dome expires on
-  // duration here (HP-budget expiry is the cap unit test).
+  // P2 BULWARK: Aegis dome deploys with an ENCOUNTER-SCALED HP budget; injected enemy fire
+  // depletes it deterministically (HP-budget expiry before the 4s duration — whichever first).
   {
     name: "ult_bulwark_p2", seed: 0xb0fa, floor: 1, ticks: 180,
     players: [
       { id: "pA", kit: "bulwark", dx: 0, dy: 0 },
       { id: "pB", kit: "mender", dx: 24, dy: 0 },
     ],
-    fillAt: { 15: ["pA"] }, ultFrom: { pA: 16 },
+    fillAt: { 15: ["pA"] }, ultFrom: { pA: 16 }, injectAegisFire: 18,
+  },
+  // P2 MENDER heal-clamp (§10): TWO Menders both HoT ONE wounded ally — the shared per-target
+  // incoming-heal budget must NOT double-stack (heal rate ≤ the per-target cap, not 2×).
+  {
+    name: "ult_healclamp_p2", seed: 0x4ea1, floor: 1, ticks: 160,
+    players: [
+      { id: "pA", kit: "mender", dx: 0, dy: 0 },
+      { id: "pB", kit: "mender", dx: 20, dy: 0 },
+      { id: "pC", kit: "gunner", dx: 10, dy: 10, hp0: 1 },
+    ],
+    fillAt: { 20: ["pA", "pB"] }, ultFrom: { pA: 21, pB: 21 },
   },
   // P4 PHANTOM multi-target: 3 allies within the 90px radius get the capped invuln + speed
   // surge; the 4th (parked at 200px) is EXCLUDED. Charge accrues off dashes performed.
