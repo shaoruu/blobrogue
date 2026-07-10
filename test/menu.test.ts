@@ -42,7 +42,8 @@ import { itemById } from "../src/sim/items.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { padActions } from "../src/ui/menuGamepad.js";
 import {
-  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
+  COPY_INVITE_LABEL, SHARE_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL,
+  INVITE_COPIED_TAG, INVITE_COPIED_ANNOUNCEMENT, INVITE_SHARED_ANNOUNCEMENT, SELECT_COPY_LABEL,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL,
 } from "../src/ui/onlineCopy.js";
 
@@ -84,8 +85,12 @@ interface ShimNode {
   width?: number;
   height?: number;
   onclick?: () => void;
+  onkeydown?: (e: { key: string; preventDefault: () => void }) => void;
   children?: ShimNode[];
   getAttribute?(name: string): string | null;
+  title?: string;
+  tabIndex?: number;
+  readOnly?: boolean;
 }
 
 function textOf(node: ShimNode): string {
@@ -1500,55 +1505,122 @@ async function main(): Promise<void> {
     check("the gate latched (next invite skips it)", localStorage.getItem("blobrogue.nameConfirmed") === "1");
   }
 
-  section("COPY INVITE: one tap shares the FULL URL with honest per-outcome confirmation");
+  section("invite entry point 1: the button-row control — secondary, full URL, real-success confirmation");
   {
-    const nav = navigator as unknown as {
-      clipboard?: { writeText(text: string): Promise<void> };
-      share?: (data: { url: string }) => Promise<void>;
-      maxTouchPoints?: number;
-    };
+    const nav = navigator as unknown as { clipboard?: { writeText(text: string): Promise<void> } };
     const copiedUrls: string[] = [];
     nav.clipboard = { writeText: (t) => { copiedUrls.push(t); return Promise.resolve(); } };
     const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
     await menu.openInvite("ABCD");
+    check("the helper copy pitches the LINK and keeps the code for verbal sharing",
+      textOf(overlay).includes("Send the invite link") && textOf(overlay).includes("(Code: ABCD)"));
     const btn = byClass(overlay, "invite-copy")[0];
-    check("the control idles as COPY INVITE", textOf(btn ?? {}) === COPY_INVITE_LABEL);
+    check("no share sheet -> the control idles as COPY INVITE", textOf(btn ?? {}) === COPY_INVITE_LABEL);
+    check("the control is SECONDARY (no amber fill), riding the button row",
+      btn?.className?.includes("secondary") === true && byClass(byClass(overlay, "btnrow")[0] ?? {}, "invite-copy").length === 1);
+    const rowKids = (byClass(overlay, "btnrow")[0]?.children ?? []).map(textOf);
+    check("the primary Start/Ready control leads the row; the invite control follows",
+      rowKids[0]?.includes("READY") === true && rowKids[1] === COPY_INVITE_LABEL, rowKids.join(" | "));
     const buttonsBefore = buttonsOf(overlay).length;
     btn.onclick?.();
     await settle();
     check("one tap copies the FULL shareable URL (not just the code)", copiedUrls[0] === "http://localhost/r/ABCD", copiedUrls.join("|"));
-    check("the confirmation reads COPIED! in the same button", textOf(btn) === INVITE_COPIED_LABEL);
+    check("real success confirms \u2713 COPIED (glyph + text) in the same button", textOf(btn) === INVITE_COPIED_LABEL);
+    check("the polite live region announces for screen readers", textOf(byClass(overlay, "sr-live")[0]) === INVITE_COPIED_ANNOUNCEMENT);
     check("feedback swaps the LABEL only — no button appears or moves", buttonsOf(overlay).length === buttonsBefore);
-
-    // A blocked clipboard: honest failure + the raw URL in the reserved line.
-    nav.clipboard = { writeText: () => Promise.reject(new Error("denied")) };
-    btn.onclick?.();
-    await settle();
-    check("a blocked clipboard reads COPY FAILED (never a fake COPIED!)", textOf(btn) === INVITE_COPY_FAILED_LABEL);
-    check("...and the reserved line hands over the raw URL", textOf(byClass(overlay, "invite-url")[0]).includes("/r/ABCD"));
-
-    // Touch device: the native share sheet wins.
-    const sharedUrls: string[] = [];
-    nav.maxTouchPoints = 1;
-    nav.share = (d) => { sharedUrls.push(d.url); return Promise.resolve(); };
-    btn.onclick?.();
-    await settle();
-    check("touch devices get the native share sheet with the same URL", sharedUrls[0] === "http://localhost/r/ABCD");
-    check("a completed share confirms SHARED!", textOf(btn) === INVITE_SHARED_LABEL);
-    delete nav.share;
     delete nav.clipboard;
-    nav.maxTouchPoints = 0;
   }
 
-  section("invite affordance keeps the fixed geometry (reserved boxes from first paint)");
+  section("invite entry point 2: the code badge is tap-to-copy with its corner-tag confirmation");
+  {
+    const nav = navigator as unknown as { clipboard?: { writeText(text: string): Promise<void> } };
+    const copiedUrls: string[] = [];
+    nav.clipboard = { writeText: (t) => { copiedUrls.push(t); return Promise.resolve(); } };
+    const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    await menu.openInvite("ABCD");
+    const badge = byClass(overlay, "code-badge")[0];
+    check("the badge is a real button for AT + keyboard", badge?.getAttribute?.("role") === "button" && badge?.tabIndex === 0);
+    check("its accessible name + tooltip name the action",
+      badge?.getAttribute?.("aria-label") === "Copy invite link for room ABCD" && badge?.title === "Click to copy invite link");
+    check("the visible code text stays for verbal sharing", textOf(badge ?? {}).includes("ABCD"));
+    const tag = byClass(overlay, "code-copied-tag")[0];
+    check("the corner tag slot is reserved EMPTY at first paint", tag !== undefined && textOf(tag) === "");
+    badge.onclick?.();
+    await settle();
+    check("tapping the badge copies the FULL URL", copiedUrls[0] === "http://localhost/r/ABCD");
+    check("the confirmation lands in the reserved corner slot", textOf(tag) === INVITE_COPIED_TAG);
+    check("...and announces through the live region", textOf(byClass(overlay, "sr-live")[0]) === INVITE_COPIED_ANNOUNCEMENT);
+    badge.onkeydown?.({ key: "Enter", preventDefault: () => {} });
+    await settle();
+    check("Enter on the focused badge copies too", copiedUrls.length === 2);
+    delete nav.clipboard;
+  }
+
+  section("SHARE INVITE where a native sheet exists: spec payload, cancel is a no-op");
+  {
+    const nav = navigator as unknown as {
+      share?: (data: { title: string; text: string; url: string }) => Promise<void>;
+      clipboard?: { writeText(text: string): Promise<void> };
+    };
+    const shared: Array<{ title: string; text: string; url: string }> = [];
+    nav.share = (d) => { shared.push(d); return Promise.resolve(); };
+    const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    await menu.openInvite("ABCD");
+    const btn = byClass(overlay, "invite-copy")[0];
+    check("with a share sheet the control reads SHARE INVITE", textOf(btn ?? {}) === SHARE_INVITE_LABEL);
+    btn.onclick?.();
+    await settle();
+    check("the sheet gets the spec payload", shared[0]?.url === "http://localhost/r/ABCD"
+      && shared[0]?.title === "blobrogue" && shared[0]?.text === "Join my blobrogue run", JSON.stringify(shared[0]));
+    check("a completed share confirms \u2713 SHARED", textOf(btn) === INVITE_SHARED_LABEL);
+    check("...and announces", textOf(byClass(overlay, "sr-live")[0]) === INVITE_SHARED_ANNOUNCEMENT);
+
+    // Cancelling the sheet must confirm NOTHING (fresh lobby so no leftover confirmation).
+    nav.share = () => Promise.reject(Object.assign(new Error("canceled"), { name: "AbortError" }));
+    nav.clipboard = { writeText: () => { throw new Error("cancel must not fall through to copy"); } };
+    const second = makeMenu({ join: { code: "WXYZ", status: "lobby" } });
+    await second.menu.openInvite("WXYZ");
+    const btn2 = byClass(second.overlay, "invite-copy")[0];
+    btn2.onclick?.();
+    await settle();
+    check("cancelling the sheet is a NO-OP (label unchanged, no announcement)",
+      textOf(btn2) === SHARE_INVITE_LABEL && textOf(byClass(second.overlay, "sr-live")[0]) === "");
+    delete nav.share;
+    delete nav.clipboard;
+  }
+
+  section("locked-down copy: the chain ends in the revealed link field — never a dead action");
+  {
+    const nav = navigator as unknown as { clipboard?: { writeText(text: string): Promise<void> } };
+    nav.clipboard = { writeText: () => Promise.reject(new Error("denied")) };
+    // The shim has no document.execCommand either — the WHOLE chain refuses.
+    const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
+    await menu.openInvite("ABCD");
+    const fallback = byClass(overlay, "invite-fallback")[0];
+    check("the fallback row is reserved EMPTY from first paint", fallback !== undefined && (fallback.children ?? []).length === 0);
+    byClass(overlay, "invite-copy")[0]?.onclick?.();
+    await settle();
+    const field = byClass(overlay, "invite-fallback-field")[0];
+    check("total failure reveals the full link in a read-only field",
+      field?.value === "http://localhost/r/ABCD" && field?.readOnly === true, field?.value ?? "no field");
+    check("...with SELECT & COPY beside it", byClass(overlay, "invite-fallback-copy").some((b) => textOf(b) === SELECT_COPY_LABEL));
+    check("no fake success anywhere (label idle, no announcement)",
+      textOf(byClass(overlay, "invite-copy")[0]) === COPY_INVITE_LABEL && textOf(byClass(overlay, "sr-live")[0]) === "");
+    delete nav.clipboard;
+  }
+
+  section("invite affordance keeps the fixed geometry (ship gate: no layout shift)");
   {
     const { menu, overlay } = makeMenu({ join: { code: "ABCD", status: "lobby" } });
     await menu.openInvite("ABCD");
-    check("the badge + invite control share one row", byClass(overlay, "code-row").length === 1);
-    check("the invite-url line is reserved EMPTY from first paint", byClass(overlay, "invite-url").length === 1 && textOf(byClass(overlay, "invite-url")[0]) === "");
+    check("the corner tag + fallback row + live region are all reserved from first paint",
+      byClass(overlay, "code-copied-tag").length === 1 && byClass(overlay, "invite-fallback").length === 1 && byClass(overlay, "sr-live").length === 1);
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
-    check("the control's width is reserved in CSS (label swaps can't shift)", /\.invite-copy\s*\{[^}]*min-width/.test(html));
-    check("the URL line's height is reserved in CSS (failure fill can't shift)", /invite-url\s*\{[^}]*min-height/.test(html));
+    check("the control's width + \u226544px touch target are reserved in CSS",
+      /\.invite-copy\s*\{[^}]*min-width/.test(html) && /\.invite-copy\s*\{[^}]*min-height:\s*44px/.test(html));
+    check("the badge confirmation is an ABSOLUTE corner slot (no reflow)", /\.code-copied-tag\s*\{[^}]*position:\s*absolute/.test(html));
+    check("the fallback row's height is reserved", /\.invite-fallback\s*\{[^}]*min-height/.test(html));
+    check("the live region is visually hidden", /\.sr-live\s*\{[^}]*position:\s*absolute/.test(html));
   }
 
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);

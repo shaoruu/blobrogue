@@ -95,14 +95,32 @@ export function reconnectOverlayCopy(nowMs: number, info: ReconnectInfo): Reconn
 // every failure lands on the Online Home status line with the screen's live actions —
 // never silent, never a spinner that hangs, never a dead end.
 
-// The COPY INVITE control's states all fit the same fixed-width button (zero layout
-// shift); the failure state additionally surfaces the raw URL in the reserved line under
-// the badge, so a blocked clipboard still hands the player something to share by hand.
+// The invite control in the lobby button row: SHARE INVITE where a native sheet exists,
+// COPY INVITE otherwise; confirmations swap the LABEL inside the button's reserved width
+// (glyph + text, never color alone) for INVITE_CONFIRM_MS, and fire ONLY on real success.
+// The tap-to-copy code badge confirms in its absolutely-positioned corner slot instead,
+// and both success paths announce through the lobby's polite live region.
 export const COPY_INVITE_LABEL = "COPY INVITE";
-export const INVITE_COPIED_LABEL = "COPIED!";
-export const INVITE_SHARED_LABEL = "SHARED!";
-export const INVITE_COPY_FAILED_LABEL = "COPY FAILED";
-export const INVITE_SHARE_HINT = "Share the code \u2014 or copy the invite link and friends land straight in this lobby.";
+export const SHARE_INVITE_LABEL = "SHARE INVITE";
+export const INVITE_COPIED_LABEL = "\u2713 COPIED";
+export const INVITE_SHARED_LABEL = "\u2713 SHARED";
+export const INVITE_COPIED_TAG = "COPIED \u2713";
+export const INVITE_COPIED_ANNOUNCEMENT = "Invite link copied";
+export const INVITE_SHARED_ANNOUNCEMENT = "Invite link shared";
+export const INVITE_CONFIRM_MS = 1600;
+// The last-resort copy fallback (clipboard AND execCommand both refused): the revealed
+// read-only link field's action — selecting is itself useful, so it is never dead.
+export const SELECT_COPY_LABEL = "SELECT & COPY";
+
+export function inviteShareHint(code: string): string {
+  return `Send the invite link \u2014 friends open it to drop straight into your room. (Code: ${code})`;
+}
+
+export function inviteBadgeAriaLabel(code: string): string {
+  return `Copy invite link for room ${code}`;
+}
+
+export const INVITE_BADGE_TITLE = "Click to copy invite link";
 
 // The inline connecting state on the Online Home status line (buttons disabled, no modal).
 export function inviteJoiningNote(code: string): string {

@@ -413,13 +413,23 @@
       .stat-label { font-size: 11px; color: #8579a0; }
 
       .code-badge { font-size: 40px; letter-spacing: 10px; color: #ffb43b; background: #120e20; border: 1px solid rgba(255,180,59,0.4); border-radius: 12px; padding: 10px 22px; }
-      /* The badge + COPY INVITE share one fixed row; the button's width is reserved so its
-         COPIED!/SHARED!/COPY FAILED label swaps never move the badge or the roster below. */
-      .code-row { display: flex; align-items: center; justify-content: center; gap: 14px; }
-      .invite-copy { min-width: 150px; }
-      /* Reserved single line under the badge: empty normally, the raw invite URL on a copy
-         failure — content swaps inside the same box, zero layout shift. */
-      .menu p.invite-url { min-height: 15px; font-size: 10px; color: #8579a0; margin: 0; overflow-wrap: anywhere; max-width: 360px; user-select: text; }
+      /* The badge is itself tap-to-copy (role=button): pointer + focus ring, and its
+         COPIED ✓ confirmation lives in an ABSOLUTE corner slot — zero reflow. */
+      .code-badge[role="button"] { position: relative; cursor: pointer; }
+      .code-badge[role="button"]:focus-visible { outline: 3px solid #ffe9b0; outline-offset: 4px; }
+      .code-copied-tag { position: absolute; top: -9px; right: -6px; font-family: var(--f-ui); font-size: 9px; letter-spacing: 1px;
+        color: #7CFC98; background: var(--dun-0); padding: 1px 5px; pointer-events: none; }
+      /* The button-row invite control: SECONDARY hierarchy, reserved width sized to the
+         WIDEST label (SHARE INVITE) so the ✓ COPIED / ✓ SHARED confirmation swaps never
+         resize it, ≥44px touch target. */
+      .invite-copy { min-width: 210px; min-height: 44px; }
+      /* Reserved last-resort row under the badge: empty until the whole clipboard chain
+         fails, then the selectable link field + SELECT & COPY fill the SAME fixed box. */
+      .invite-fallback { min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+      .invite-fallback-field { font-size: 11px; letter-spacing: 0; width: 250px; padding: 8px 10px; text-align: left; user-select: all; }
+      .invite-fallback-copy { font-size: 9px; letter-spacing: 1px; padding: 8px 10px; min-height: 0; }
+      /* Visually-hidden polite live region (the "Invite link copied" announcement). */
+      .sr-live { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
       .playerlist { display: flex; flex-direction: column; gap: 8px; min-width: 220px; }
       .playerrow { display: flex; align-items: center; gap: 10px; font-size: 14px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }

@@ -99,7 +99,14 @@ function makeEl(tag = "div"): any {
           };
         case "replaceChildren":
           return (...cs: any[]) => { children.length = 0; children.push(...cs); };
+        case "setAttribute":
+          return (k: string, v: string) => { (t.__attrs ?? (t.__attrs = {}))[k] = String(v); };
+        case "getAttribute":
+          return (k: string) => (t.__attrs && k in t.__attrs ? t.__attrs[k] : null);
+        case "removeAttribute":
+          return (k: string) => { if (t.__attrs) delete t.__attrs[k]; };
         case "remove":
+        case "select":
         case "setAttributeNS":
         case "addEventListener":
         case "removeEventListener":

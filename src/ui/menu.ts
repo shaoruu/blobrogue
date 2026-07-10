@@ -20,10 +20,12 @@ import { createSettingsControls } from "./settings.js";
 import { shouldShowSigninNudge, recordNudgeShown, recordNudgeDismissed, SIGNIN_BENEFITS } from "./signinNudge.js";
 import {
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS, startAnywayHoldLabel,
-  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL, INVITE_SHARE_HINT,
+  COPY_INVITE_LABEL, SHARE_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL,
+  INVITE_COPIED_TAG, INVITE_COPIED_ANNOUNCEMENT, INVITE_SHARED_ANNOUNCEMENT, INVITE_CONFIRM_MS,
+  SELECT_COPY_LABEL, inviteShareHint, inviteBadgeAriaLabel, INVITE_BADGE_TITLE,
   INVITE_OFFLINE_NOTE, INVITE_UNREACHABLE_NOTE, INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
 } from "./onlineCopy.js";
-import { inviteUrlFor, shareInviteUrl, stripInviteFromLocation } from "../net/inviteLink.js";
+import { inviteUrlFor, shareInviteUrl, copyInviteUrl, canShareInvite, stripInviteFromLocation } from "../net/inviteLink.js";
 
 // ONE multiplayer product path: authoritative PLAY ONLINE. The legacy peer-synced classic
 // co-op ran a separate simulation per client (different enemies/drops while players believed
@@ -1554,20 +1556,36 @@ export class Menu {
       youSwatch.style.background = playerColor(this.session.colorIndex ?? 0);
       you.append(el("span", "you-label", "YOU:"), youSwatch, el("span", "you-name", this.session.name));
       wrap.appendChild(you);
-      wrap.appendChild(el("p", "", INVITE_SHARE_HINT));
-      // The code badge + the one-tap invite share, one fixed row. Every feedback state
-      // swaps the button's LABEL inside its fixed width; the reserved line underneath
-      // only ever fills on a copy failure (the raw URL, shareable by hand) — the roster
-      // below never moves.
-      const codeRow = el("div", "code-row");
-      codeRow.appendChild(el("div", "code-badge", lobby.code));
-      const inviteUrlLine = el("p", "muted invite-url", "");
-      const invite = el("button", "secondary invite-copy", COPY_INVITE_LABEL);
-      invite.type = "button";
-      invite.onclick = () => void this.doCopyInvite(lobby.code, invite, inviteUrlLine);
-      codeRow.appendChild(invite);
-      wrap.appendChild(codeRow);
-      wrap.appendChild(inviteUrlLine);
+      wrap.appendChild(el("p", "", inviteShareHint(lobby.code)));
+
+      // Screen-reader confirmation channel for both invite entry points (visually hidden,
+      // polite): "Invite link copied/shared" lands here on REAL success only.
+      const live = el("p", "sr-live", "");
+      live.setAttribute("aria-live", "polite");
+
+      // The last-resort copy fallback: a reserved (empty) row under the badge that fills
+      // with the full link in a selectable read-only field + SELECT & COPY only when the
+      // whole clipboard chain refused — content swaps inside the fixed box, never a shift.
+      const fallback = el("div", "invite-fallback");
+
+      // The code badge stays the big verbal-share code AND is itself tap-to-copy; its
+      // confirmation is a corner tag in an absolutely-positioned reserved slot (no
+      // reflow). Keyboard operable as a real button (Enter/Space).
+      const badge = el("div", "code-badge", lobby.code);
+      badge.setAttribute("role", "button");
+      badge.tabIndex = 0;
+      badge.setAttribute("aria-label", inviteBadgeAriaLabel(lobby.code));
+      badge.title = INVITE_BADGE_TITLE;
+      const badgeTag = el("span", "code-copied-tag", "");
+      badge.appendChild(badgeTag);
+      const onBadgeCopy = () => void this.doBadgeCopyInvite(lobby.code, badgeTag, fallback, live);
+      badge.onclick = onBadgeCopy;
+      badge.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onBadgeCopy(); }
+      };
+      wrap.appendChild(badge);
+      wrap.appendChild(fallback);
+      wrap.appendChild(live);
 
       const players = lobby.players();
       const list = el("div", "playerlist");
@@ -1595,6 +1613,13 @@ export class Menu {
         row.appendChild(this.readyToggleButton(lobby));
         wrap.appendChild(el("p", "muted", "waiting for the host to start\u2026"));
       }
+      // The invite entry point in the button row: SECONDARY by design (no amber fill —
+      // Start/Ready keeps the attention), SHARE INVITE where a native sheet exists,
+      // COPY INVITE otherwise. Its confirmation swaps the label inside the reserved width.
+      const invite = el("button", "secondary invite-copy", canShareInvite() ? SHARE_INVITE_LABEL : COPY_INVITE_LABEL);
+      invite.type = "button";
+      invite.onclick = () => void this.doShareInvite(lobby.code, invite, fallback, live);
+      row.appendChild(invite);
       const leave = el("button", "secondary", "leave");
       leave.addEventListener("click", () => { lobby.leave(); void this.showTitle(); });
       row.appendChild(leave);
@@ -1611,24 +1636,57 @@ export class Menu {
     render();
   }
 
-  // One tap shares the FULL invite URL (/r/<CODE>), not just the code: the native share
-  // sheet on touch devices, the clipboard everywhere else. The confirmation is honest per
-  // outcome — a dismissed share sheet copied nothing, so it confirms nothing — and every
-  // state swaps content inside the fixed button/line geometry. Node-local with a timed
-  // revert: a roster re-render simply rebuilds the idle control.
-  private async doCopyInvite(code: string, btn: HTMLButtonElement, urlLine: HTMLElement): Promise<void> {
+  // The button-row entry point. Shares the FULL invite URL (/r/<CODE>), never the bare
+  // code: the native sheet when the platform has one (a cancelled sheet is a deliberate
+  // no-op; an unsupported one falls through to the clipboard chain), the clipboard
+  // otherwise. Confirmation fires ONLY on real success — glyph + text swapped inside the
+  // button's reserved width for a beat, plus the polite live-region announcement. Node-
+  // local with a timed revert: a roster re-render simply rebuilds the idle control.
+  private async doShareInvite(code: string, btn: HTMLButtonElement, fallback: HTMLElement, live: HTMLElement): Promise<void> {
     const url = inviteUrlFor(code, window.location.origin);
     btn.disabled = true;
     const outcome = await shareInviteUrl(url);
     btn.disabled = false;
-    if (outcome === "dismissed") { btn.textContent = COPY_INVITE_LABEL; return; }
-    if (outcome === "failed") {
-      btn.textContent = INVITE_COPY_FAILED_LABEL;
-      urlLine.textContent = url;
-      return;
-    }
+    if (outcome === "dismissed") return;
+    if (outcome === "failed") { this.revealInviteFallback(fallback, url); return; }
     btn.textContent = outcome === "shared" ? INVITE_SHARED_LABEL : INVITE_COPIED_LABEL;
-    setTimeout(() => { btn.textContent = COPY_INVITE_LABEL; }, 1600);
+    live.textContent = outcome === "shared" ? INVITE_SHARED_ANNOUNCEMENT : INVITE_COPIED_ANNOUNCEMENT;
+    setTimeout(() => {
+      btn.textContent = canShareInvite() ? SHARE_INVITE_LABEL : COPY_INVITE_LABEL;
+    }, INVITE_CONFIRM_MS);
+  }
+
+  // The badge entry point: tap-to-copy through the clipboard chain (writeText, then the
+  // hidden-field execCommand path). Success lands the COPIED tag in the badge's reserved
+  // corner slot (absolute — zero reflow) + the live-region announcement; total failure
+  // reveals the selectable link field instead of pretending.
+  private async doBadgeCopyInvite(code: string, tag: HTMLElement, fallback: HTMLElement, live: HTMLElement): Promise<void> {
+    const url = inviteUrlFor(code, window.location.origin);
+    const outcome = await copyInviteUrl(url);
+    if (outcome === "failed") { this.revealInviteFallback(fallback, url); return; }
+    tag.textContent = INVITE_COPIED_TAG;
+    live.textContent = INVITE_COPIED_ANNOUNCEMENT;
+    setTimeout(() => { tag.textContent = ""; }, INVITE_CONFIRM_MS);
+  }
+
+  // The whole clipboard chain refused (locked-down browser): fill the reserved fallback
+  // row with the full link in a selectable read-only field + SELECT & COPY. Selecting is
+  // itself useful (manual Ctrl/Cmd+C), so the action is never dead.
+  private revealInviteFallback(container: HTMLElement, url: string) {
+    container.replaceChildren();
+    const field = el("input", "invite-fallback-field");
+    field.type = "text";
+    field.readOnly = true;
+    field.value = url;
+    field.setAttribute("aria-label", "invite link");
+    field.onclick = () => field.select();
+    const selectBtn = el("button", "secondary invite-fallback-copy", SELECT_COPY_LABEL);
+    selectBtn.type = "button";
+    selectBtn.onclick = () => {
+      field.select();
+      try { document.execCommand("copy"); } catch { /* the selection stands either way */ }
+    };
+    container.append(field, selectBtn);
   }
 
   // A member's roster chip. In the lobby it is the readiness consent (READY / NOT READY,

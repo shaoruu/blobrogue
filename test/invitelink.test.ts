@@ -14,7 +14,8 @@ import { dirname, join } from "node:path";
 
 import {
   normalizeRoomCode, parseInviteCode, hasInviteIntent, inviteUrlFor,
-  stripInviteFromLocation, shareInviteUrl,
+  stripInviteFromLocation, shareInviteUrl, copyInviteUrl, canShareInvite,
+  INVITE_SHARE_TITLE, INVITE_SHARE_TEXT,
 } from "../src/net/inviteLink.js";
 import type { ShareCapabilities } from "../src/net/inviteLink.js";
 
@@ -31,7 +32,7 @@ function section(name: string): void {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 function caps(over: Partial<ShareCapabilities>): ShareCapabilities {
-  return { share: null, writeClipboard: null, isTouch: false, ...over };
+  return { share: null, writeClipboard: null, execCopy: null, ...over };
 }
 
 async function main(): Promise<void> {
@@ -96,31 +97,35 @@ async function main(): Promise<void> {
     loc.pathname = "/"; loc.search = ""; loc.hash = ""; loc.href = "http://localhost/";
   }
 
-  section("share/copy outcome matrix: native sheet on touch, clipboard fallback, honest failure");
+  section("share/copy outcome matrix: sheet when present, then writeText -> execCommand -> honest failure");
   {
-    const shared: string[] = [];
+    const shared: Array<{ title: string; text: string; url: string }> = [];
     const copied: string[] = [];
     const url = "https://blob.example/r/ABCD";
-    check("touch + share sheet -> shared", await shareInviteUrl(url, caps({
-      isTouch: true, share: (d) => { shared.push(d.url); return Promise.resolve(); },
-    })) === "shared" && shared[0] === url);
-    check("a dismissed sheet is NOT a copy", await shareInviteUrl(url, caps({
-      isTouch: true,
+    check("a platform with navigator.share is share-capable (SHARE INVITE label driver)",
+      canShareInvite(caps({ share: () => Promise.resolve() })) && !canShareInvite(caps({})));
+    check("the sheet gets the spec payload (title/text/url) -> shared", await shareInviteUrl(url, caps({
+      share: (d) => { shared.push(d); return Promise.resolve(); },
+    })) === "shared" && shared[0].url === url && shared[0].title === INVITE_SHARE_TITLE && shared[0].text === INVITE_SHARE_TEXT);
+    check("a CANCELLED sheet is a no-op, never a fake copy", await shareInviteUrl(url, caps({
       share: () => Promise.reject(Object.assign(new Error("canceled"), { name: "AbortError" })),
       writeClipboard: () => { throw new Error("must not fall through on dismiss"); },
     })) === "dismissed");
-    check("a BROKEN sheet falls back to the clipboard", await shareInviteUrl(url, caps({
-      isTouch: true,
-      share: () => Promise.reject(new Error("NotAllowedError")),
+    check("an UNSUPPORTED sheet falls back to the clipboard", await shareInviteUrl(url, caps({
+      share: () => Promise.reject(new TypeError("unsupported")),
       writeClipboard: (t) => { copied.push(t); return Promise.resolve(); },
     })) === "copied" && copied[0] === url);
-    check("desktop ignores the sheet and copies", await shareInviteUrl(url, caps({
-      isTouch: false,
-      share: () => { throw new Error("desktop must not open the sheet"); },
+    check("no sheet -> the clipboard chain", await shareInviteUrl(url, caps({
       writeClipboard: () => Promise.resolve(),
     })) === "copied");
-    check("a blocked clipboard reports failure (no fake confirmation)", await shareInviteUrl(url, caps({
+    const execTried: string[] = [];
+    check("a blocked writeText falls back to execCommand('copy')", await copyInviteUrl(url, caps({
       writeClipboard: () => Promise.reject(new Error("denied")),
+      execCopy: (t) => { execTried.push(t); return true; },
+    })) === "copied" && execTried[0] === url);
+    check("both clipboard paths refused -> honest failure (the UI reveals the link)", await copyInviteUrl(url, caps({
+      writeClipboard: () => Promise.reject(new Error("denied")),
+      execCopy: () => false,
     })) === "failed");
     check("no capability at all reports failure", await shareInviteUrl(url, caps({})) === "failed");
   }

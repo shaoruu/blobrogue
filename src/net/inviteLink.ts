@@ -60,19 +60,42 @@ export function stripInviteFromLocation(): void {
   window.history.replaceState({}, "", url.pathname + url.search + url.hash);
 }
 
-// ---- the share/copy bridge (COPY INVITE) ----
+// ---- the share/copy bridge (SHARE INVITE / COPY INVITE / tap-to-copy badge) ----
 //
-// Touch devices get the native share sheet (navigator.share) when the browser has one;
-// everything else copies to the clipboard. Outcomes are explicit so the UI can confirm
-// honestly: a dismissed share sheet is NOT a copy, and a failure surfaces the raw URL
-// instead of pretending.
+// Platforms with a native share sheet (navigator.share) get it; everyone else runs the
+// clipboard chain: navigator.clipboard.writeText -> execCommand('copy') on a hidden
+// field -> honest failure (the UI then reveals the link in a selectable field — never a
+// dead action). Outcomes are explicit so confirmations fire ONLY on real success: a
+// dismissed share sheet is a no-op, never a fake COPIED.
 
 export type ShareOutcome = "shared" | "dismissed" | "copied" | "failed";
 
+export const INVITE_SHARE_TITLE = "blobrogue";
+export const INVITE_SHARE_TEXT = "Join my blobrogue run";
+
 export interface ShareCapabilities {
-  share: ((data: { url: string }) => Promise<void>) | null;
+  share: ((data: { title: string; text: string; url: string }) => Promise<void>) | null;
   writeClipboard: ((text: string) => Promise<void>) | null;
-  isTouch: boolean;
+  execCopy: ((text: string) => boolean) | null;
+}
+
+// The legacy path: a hidden read-only field, select, execCommand('copy'). Everything is
+// guarded — any environment that lacks a piece simply reports false and the chain moves on.
+function execCommandCopy(text: string): boolean {
+  try {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.left = "-9999px";
+    document.body.appendChild(field);
+    field.select();
+    const isCopied = document.execCommand("copy");
+    field.remove();
+    return isCopied;
+  } catch {
+    return false;
+  }
 }
 
 export function detectShareCapabilities(): ShareCapabilities {
@@ -82,27 +105,39 @@ export function detectShareCapabilities(): ShareCapabilities {
     writeClipboard: nav.clipboard && typeof nav.clipboard.writeText === "function"
       ? nav.clipboard.writeText.bind(nav.clipboard)
       : null,
-    isTouch: (nav.maxTouchPoints ?? 0) > 0,
+    execCopy: execCommandCopy,
   };
 }
 
-export async function shareInviteUrl(url: string, caps: ShareCapabilities = detectShareCapabilities()): Promise<ShareOutcome> {
-  if (caps.isTouch && caps.share) {
-    try {
-      await caps.share({ url });
-      return "shared";
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return "dismissed";
-      // A broken share sheet falls through to the clipboard.
-    }
-  }
+// Drives the button's idle label: SHARE INVITE where a share sheet exists, COPY INVITE
+// everywhere else.
+export function canShareInvite(caps: ShareCapabilities = detectShareCapabilities()): boolean {
+  return caps.share !== null;
+}
+
+export async function copyInviteUrl(url: string, caps: ShareCapabilities = detectShareCapabilities()): Promise<"copied" | "failed"> {
   if (caps.writeClipboard) {
     try {
       await caps.writeClipboard(url);
       return "copied";
     } catch {
-      return "failed";
+      // Blocked/denied clipboard: the legacy path below still gets its try.
     }
   }
+  if (caps.execCopy?.(url)) return "copied";
   return "failed";
+}
+
+export async function shareInviteUrl(url: string, caps: ShareCapabilities = detectShareCapabilities()): Promise<ShareOutcome> {
+  if (caps.share) {
+    try {
+      await caps.share({ title: INVITE_SHARE_TITLE, text: INVITE_SHARE_TEXT, url });
+      return "shared";
+    } catch (err) {
+      // Cancelling the sheet is a deliberate no-op; anything else (unsupported payload,
+      // blocked sheet) falls through to the clipboard chain.
+      if (err instanceof Error && err.name === "AbortError") return "dismissed";
+    }
+  }
+  return copyInviteUrl(url, caps);
 }

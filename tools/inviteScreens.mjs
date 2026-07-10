@@ -65,17 +65,24 @@ async function main() {
     console.log(`wrote ${file}`);
   };
 
-  // 1. The room lobby (main: code badge only; branch: badge + COPY INVITE).
+  // 1. The room lobby (main: code badge only; branch: tap-to-copy badge + the secondary
+  // COPY INVITE control in the button row).
   await page.evaluate(`window.__inviteMenu.showOnlineLobby(window.__inviteLobby, null)`);
   await shot("room-lobby");
 
   if (mode === "after") {
-    // 2. The copied confirmation (real navigator.clipboard write in-page).
+    // 2. The button-row confirmation (real navigator.clipboard write in-page).
     await page.click(".invite-copy");
     await page.waitForTimeout(300);
     await shot("room-lobby-copied");
     const copied = await page.evaluate(`navigator.clipboard.readText()`);
     console.log(`clipboard now holds: ${copied}`);
+
+    // 2b. The badge's own confirmation: the COPIED ✓ corner tag (re-render, then tap).
+    await page.evaluate(`window.__inviteMenu.showOnlineLobby(window.__inviteLobby, null)`);
+    await page.click(".code-badge");
+    await page.waitForTimeout(300);
+    await shot("room-lobby-badge-copied");
 
     // 3. An invite join in flight (the inline connecting state, actions disabled).
     await page.evaluate(`(async () => {

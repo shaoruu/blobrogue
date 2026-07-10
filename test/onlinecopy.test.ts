@@ -9,8 +9,10 @@ import {
   onlineHudLabel, netDetailsLine, reconnectOverlayCopy, exitNoteFor, startAnywayHoldLabel,
   WORLD_MISMATCH_NOTE, RUN_ENDED_AWAY_NOTE, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT,
   READY_LABEL, NOT_READY_LABEL, START_ANYWAY_IDLE, START_ANYWAY_HOLD_MS,
-  COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
-  INVITE_SHARE_HINT, INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
+  COPY_INVITE_LABEL, SHARE_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL,
+  INVITE_COPIED_TAG, INVITE_COPIED_ANNOUNCEMENT, INVITE_SHARED_ANNOUNCEMENT, INVITE_CONFIRM_MS,
+  SELECT_COPY_LABEL, inviteShareHint, inviteBadgeAriaLabel, INVITE_BADGE_TITLE,
+  INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
   INVITE_TRY_AGAIN_LABEL, inviteJoiningNote, inviteFailState,
 } from "../src/ui/onlineCopy.js";
 import type { ReconnectInfo } from "../src/client/wsTransport.js";
@@ -79,9 +81,16 @@ function main(): void {
     && startAnywayHoldLabel(2100) === "STARTING IN 1\u2026 release to cancel");
 
   section("invite copy: the UI Director's spec strings, locked verbatim");
-  check("the control labels", COPY_INVITE_LABEL === "COPY INVITE" && INVITE_COPIED_LABEL === "COPIED!"
-    && INVITE_SHARED_LABEL === "SHARED!" && INVITE_COPY_FAILED_LABEL === "COPY FAILED");
-  check("the lobby hint pitches the LINK, not just the code", INVITE_SHARE_HINT.includes("invite link"));
+  check("the control labels (share sheet vs clipboard)", COPY_INVITE_LABEL === "COPY INVITE" && SHARE_INVITE_LABEL === "SHARE INVITE");
+  check("confirmations are glyph + text, never color alone",
+    INVITE_COPIED_LABEL === "\u2713 COPIED" && INVITE_SHARED_LABEL === "\u2713 SHARED" && INVITE_COPIED_TAG === "COPIED \u2713");
+  check("confirmations hold for 1.6s", INVITE_CONFIRM_MS === 1600);
+  check("the live-region announcements", INVITE_COPIED_ANNOUNCEMENT === "Invite link copied" && INVITE_SHARED_ANNOUNCEMENT === "Invite link shared");
+  check("the badge's accessible affordance", inviteBadgeAriaLabel("ABCD") === "Copy invite link for room ABCD"
+    && INVITE_BADGE_TITLE === "Click to copy invite link");
+  check("the last-resort action", SELECT_COPY_LABEL === "SELECT & COPY");
+  check("the lobby helper copy is the spec line, code kept for verbal sharing",
+    inviteShareHint("ABCD") === "Send the invite link \u2014 friends open it to drop straight into your room. (Code: ABCD)");
   check("the inline connecting state names the room", inviteJoiningNote("ABCD") === "JOINING ROOM ABCD\u2026");
   check("offline build", INVITE_OFFLINE_NOTE === "ONLINE PLAY UNAVAILABLE IN THIS BUILD");
   check("invalid/nonexistent", INVITE_INVALID_NOTE === "INVITE LINK EXPIRED OR INVALID");
@@ -110,8 +119,10 @@ function main(): void {
       reconnectOverlayCopy(t0 + 5000, info(t0, 2, t0 + 90000)).hint ?? "",
       exitNoteFor("connection_lost"), exitNoteFor("world_mismatch"), exitNoteFor("party_incomplete", "Bob"),
       exitNoteFor("superseded"), exitNoteFor("connect_failed"), exitNoteFor("run_ended_away"),
-      COPY_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL, INVITE_COPY_FAILED_LABEL,
-      INVITE_SHARE_HINT, INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
+      COPY_INVITE_LABEL, SHARE_INVITE_LABEL, INVITE_COPIED_LABEL, INVITE_SHARED_LABEL,
+      INVITE_COPIED_TAG, INVITE_COPIED_ANNOUNCEMENT, INVITE_SHARED_ANNOUNCEMENT, SELECT_COPY_LABEL,
+      inviteShareHint("ABCD"), inviteBadgeAriaLabel("ABCD"), INVITE_BADGE_TITLE,
+      INVITE_OFFLINE_NOTE, INVITE_INVALID_NOTE, INVITE_UNREACHABLE_NOTE,
       INVITE_TRY_AGAIN_LABEL, inviteJoiningNote("ABCD"), inviteFailState("that room is full").note,
       inviteFailState("that game has ended").note, inviteFailState("no room with that code").note,
       inviteFailState("that code is a classic co-op room").note, inviteFailState("weird").note,
