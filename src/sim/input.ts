@@ -18,6 +18,10 @@ export interface InputCmd {
   // callers (tests/harness scripts) stay valid; absent reads as released. Solo has nothing
   // to interact with, so the bit is inert there.
   interact?: boolean;
+  // The "ult requested" intent (Q). Optional so pre-existing callers stay valid; absent reads
+  // as released. The client can only REQUEST — the authoritative sim validates charge + the 8s
+  // lockout and resolves the effect (spec §7). Inert for a neutral-kit player.
+  ult?: boolean;
 }
 
 export const IDLE_INPUT: InputCmd = { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };

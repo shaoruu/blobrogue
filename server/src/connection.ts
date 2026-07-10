@@ -16,6 +16,7 @@ export interface InputIntent {
   aim: number;
   fire: boolean; dash: boolean;
   act: boolean; // interact key held (the revive channel); the sim validates everything else
+  ult: boolean; // the "ult requested" intent; the server validates charge + the 8s lockout
 }
 
 // Per-class inbound rate windows (sliding 1s). Segmenting the buckets means a high-refresh
@@ -160,6 +161,6 @@ export function newConnState(now: number): Pick<Conn,
   };
 }
 
-export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean }): InputIntent {
-  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash, act: m.act };
+export function inputToIntent(m: { seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean }): InputIntent {
+  return { seq: m.seq, mx: m.mx, my: m.my, aim: m.aim, fire: m.fire, dash: m.dash, act: m.act, ult: m.ult };
 }

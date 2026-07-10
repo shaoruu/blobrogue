@@ -45,7 +45,7 @@ function rewindTicksFor(conn: Conn): number {
 }
 
 function intentToInput(i: InputIntent): InputCmd {
-  return { seq: i.seq, moveX: i.mx, moveY: i.my, aim: i.aim, firing: i.fire, dash: i.dash, interact: i.act };
+  return { seq: i.seq, moveX: i.mx, moveY: i.my, aim: i.aim, firing: i.fire, dash: i.dash, interact: i.act, ult: i.ult };
 }
 
 export class GameWorld implements RoomRuntime {

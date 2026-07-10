@@ -24,6 +24,8 @@ import { WEAPONS } from "../sim/weapons.js";
 import { ENEMY_ARCHETYPES, isBossKind } from "../sim/enemies.js";
 import type { SimEvent } from "../sim/events.js";
 import type { PlayerId } from "../sim/input.js";
+import type { KitId } from "../sim/kits.js";
+import { isKitId } from "../sim/kits.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
 import type { AuthoritativePlayerSnapshot } from "./playerSnapshot.js";
 
@@ -179,7 +181,23 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 // gate turns that skew into a clean "update your client" instead of a mid-run desync.
 // NOTE: the control plane's synthetic VERIFY join mirrors this constant
 // (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-export const PROTOCOL_VERSION = 17;
+// v18 (the KIT/CLASS + ULT + account-MASTERY system — docs/specs/blobrogue_KIT_XP_SYSTEM_spec.md):
+//   - SelfWire grows the authoritative kit/ult block the client reconciles + renders: kit (the
+//     chosen KitId), uc (the fixed-point ult meter 0..1000), ura (the ultReadyAtTick 8s lockout),
+//     ovt/phs/uiv (Overdrive / Phase-speed / Phase-invuln self-buff seconds), pst (the per-kit
+//     passive channel). A v17 client would reject a snapshot carrying them.
+//   - the input command grows a mandatory `ult` bit (the "ult requested" intent, alongside
+//     dash/act) — the client can only REQUEST; the server validates charge + the 8s lockout and
+//     resolves the effect (no client-authoritative heal/shield/teleport/invuln).
+//   - the effect-entity closed kind set grew (`sanctuary`, `aegis`) — the two new server-owned
+//     deterministic sim entities (the Mender's heal zone + the Bulwark's bullet-blocking dome)
+//     ride the existing effs list, reconciled from the snapshot.
+//   - four new reliable SimEvents (ultOverdrive / ultSanctuary / ultAegis / ultPhase) join the
+//     wire; clients render the cast off them only.
+//   - kit-select: the chosen kitId + the account Mastery level ride the signed join TICKET claim
+//     (kt/ml), validated server-side against the account's unlocks — never a raw client claim.
+// The equality join gate turns the skew into a clean "update your client".
+export const PROTOCOL_VERSION = 18;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -252,6 +270,15 @@ export interface SelfWire {
   xsl: number;                 // extraWeaponSlots (bought hotbar capacity, cap 1)
   tth: number;                 // hpTithe (max hearts paid to the artifact devil deal)
   pfl: number;                 // prospectorFloor (coins ×2 while the floor matches; -1 = none)
+  // KIT / ULT authoritative block (v18): the chosen kit, the fixed-point ult meter, the 8s
+  // lockout tick, the self-buff windows, and the per-kit passive channel.
+  kit: KitId;
+  uc: number;                  // ultCharge (fixed-point integer 0..ULT.meterMax)
+  ura: number;                 // ultReadyAtTick (the 8s hard-floor lockout)
+  ovt: number;                 // Overdrive self-buff seconds
+  phs: number;                 // Phase speed-surge seconds
+  uiv: number;                 // Phase invuln seconds (<= 1.2s)
+  pst: number;                 // per-kit passive channel (momentum / lifebloom / hardened)
 }
 
 // Another player as seen by this client (rendered via interpolation, never predicted).
@@ -412,7 +439,7 @@ export type ClientMsg =
   // the client has processed) so the server can stop resending delivered events. `act` is the
   // interact intent (the held revive-channel key) — the sim validates proximity/liveness, so
   // the bit alone can never conjure a revive.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ackEv: number }
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; ackEv: number }
   | { t: "pong"; id: number }
   // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
   // the server uses it only to center that client's interest view (and positional events)
@@ -586,6 +613,11 @@ function weaponOf(o: Record<string, unknown>, k: string): WeaponId {
 function isEnemyKind(v: unknown): v is EnemyKind {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(ENEMY_ARCHETYPES, v);
 }
+function kitOf(o: Record<string, unknown>, k: string): KitId {
+  const v = o[k];
+  if (!isKitId(v)) throw new ProtocolError(`bad ${k}`);
+  return v;
+}
 const PROP_KINDS: Record<PropKind, true> = {
   crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true,
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
@@ -601,7 +633,7 @@ const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
 const SHOP_MODES: Record<ShopMode, true> = { dealer: true, premium: true, spoils: true, climax: true };
 const CHEST_KINDS: Record<ChestKind, true> = { wood: true, boss: true };
 const HAZARD_KINDS: Record<HazardKind, true> = { web: true, cinder: true, charge: true, omen: true };
-const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true };
+const EFFECT_KINDS: Record<EffectKind, true> = { zone: true, wire: true, orbit: true, sentry: true, tether: true, sanctuary: true, aegis: true };
 const ATTACK_PHASES: Record<AttackPhase, true> = { none: true, windup: true, active: true, recover: true };
 const ATTACK_MOVES: Record<AttackMove, true> = {
   none: true, lunge: true, spit: true, hopslam: true, radial: true, roar: true, squeeze: true,
@@ -678,6 +710,12 @@ const EVENT_SPECS: Record<SimEvent["t"], EventSpec> = {
   tetherLatch: { scope: "pos", fields: { eid: "num", x: "num", y: "num", tx: "num", ty: "num", inv: "bool" } },
   tetherHold: { scope: "pos", fields: { x: "num", y: "num" } },
   tetherSweep: { scope: "pos", fields: { x: "num", y: "num", r: "num" } },
+  // KIT ULTIMATES (v18): positional cast FX. Each carries only integers + the caster id; the
+  // Sanctuary zone / Aegis dome themselves ride the effs list, reconciled from the snapshot.
+  ultOverdrive: { scope: "pos", fields: { pid: "str", x: "num", y: "num", durationTicks: "num" } },
+  ultSanctuary: { scope: "pos", fields: { pid: "str", x: "num", y: "num", radius: "num", lifetimeTicks: "num" } },
+  ultAegis: { scope: "pos", fields: { pid: "str", x: "num", y: "num", radius: "num", hpBudget: "num", lifetimeTicks: "num" } },
+  ultPhase: { scope: "pos", fields: { pid: "str", x: "num", y: "num", radius: "num", invulnTicks: "num", speedTicks: "num" } },
   statusApplied: { scope: "pos", fields: { eid: "num", x: "num", y: "num", kind: "str" } },
   frozeSolid: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
   freezeBroke: { scope: "pos", fields: { eid: "num", x: "num", y: "num" } },
@@ -782,7 +820,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ackEv"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "ackEv"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -792,6 +830,7 @@ function decodeClientMsg(raw: string): ClientMsg {
         fire: boolOf(o, "fire"),
         dash: boolOf(o, "dash"),
         act: boolOf(o, "act"),
+        ult: boolOf(o, "ult"),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
       };
     }
@@ -908,6 +947,13 @@ function validateSelfWire(v: unknown): SelfWire {
     xsl: intOf(o, "xsl", 0, 8),
     tth: intOf(o, "tth", 0, 16),
     pfl: intOf(o, "pfl", -1, 1e6),
+    kit: kitOf(o, "kit"),
+    uc: intOf(o, "uc", 0, 1e6),
+    ura: intOf(o, "ura", 0, Number.MAX_SAFE_INTEGER),
+    ovt: num(o, "ovt", 0, 1e4),
+    phs: num(o, "phs", 0, 1e4),
+    uiv: num(o, "uiv", 0, 1e4),
+    pst: num(o, "pst", 0, 1e4),
   };
 }
 
@@ -1204,6 +1250,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     bcl: s.hasClaimedBossChoice,
     php: s.premiumHpBuys, amc: s.isAmberCacheArmed, amw: s.amberWindfall, brt: s.isBlessingRerollArmed,
     rvt: s.reviveTokens, xsl: s.extraWeaponSlots, tth: s.hpTithe, pfl: s.prospectorFloor,
+    kit: s.kitId, uc: s.ultCharge, ura: s.ultReadyAtTick, ovt: s.overdriveT, phs: s.phaseSpeed,
+    uiv: s.ultInvuln, pst: s.passiveState,
   };
 }
 
@@ -1217,6 +1265,8 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     hasClaimedBossChoice: w.bcl,
     premiumHpBuys: w.php, isAmberCacheArmed: w.amc, amberWindfall: w.amw, isBlessingRerollArmed: w.brt,
     reviveTokens: w.rvt, extraWeaponSlots: w.xsl, hpTithe: w.tth, prospectorFloor: w.pfl,
+    kitId: w.kit, ultCharge: w.uc, ultReadyAtTick: w.ura, overdriveT: w.ovt, phaseSpeed: w.phs,
+    ultInvuln: w.uiv, passiveState: w.pst,
   };
 }
 
@@ -1379,6 +1429,12 @@ export function toEffectWire(e: Effect): EffectWire {
     case "tether":
       base.eid = e.eid; base.r = e.reach;
       break;
+    case "sanctuary":
+      base.r = e.radius; // healRate is sim-internal; the client renders the zone by kind
+      break;
+    case "aegis":
+      base.r = e.radius; base.hp = e.hp; base.mhp = e.maxHp; // the dome's remaining barrier budget
+      break;
   }
   return base;
 }
@@ -1408,6 +1464,10 @@ export function effectFromWire(w: EffectWire): Effect {
         ...base, kind: "tether", eid: w.eid, phase: "hold", isPlayerPulled: false,
         pullSpeed: 0, holdDist: 0, holdTime: 0, pullTime: 0, damage: 0, reach: w.r,
       };
+    case "sanctuary":
+      return { ...base, kind: "sanctuary", radius: w.r, healRate: 0 };
+    case "aegis":
+      return { ...base, kind: "aegis", radius: w.r, hp: w.hp, maxHp: w.mhp };
   }
 }
 

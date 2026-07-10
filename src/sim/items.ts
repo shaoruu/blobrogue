@@ -5,6 +5,8 @@
 // authoritative sim (solo LocalTransport and the server) runs the identical recompute.
 
 import { CAPS } from "./balance.js";
+import { applyKitStatLean } from "./kits.js";
+import type { KitId } from "./kits.js";
 
 // The neutral run-stat modifiers. Every field starts at its identity value (1 for a
 // multiplier, 0 for an additive) so an un-blessed run behaves exactly as before.
@@ -296,13 +298,17 @@ export function itemLevelsOf(ownedItemIds: readonly string[]): Map<string, numbe
 }
 
 // Full build recompute: identity mods -> every owned blessing's total contribution at its
-// level -> raw caps. Mutates `mods` in place (held references stay valid).
-export function recomputeMods(mods: PlayerMods, ownedItemIds: readonly string[]): void {
+// level -> the kit's STAT LEAN -> raw caps. Mutates `mods` in place (held references stay
+// valid). The kit lean is applied AFTER blessings and BEFORE the cap clamp, so a kit is a
+// different ROUTE to the committed caps, never a higher ceiling (spec §1). Omitting `kit` (or
+// passing "none") reproduces the pre-kit recompute byte-for-byte.
+export function recomputeMods(mods: PlayerMods, ownedItemIds: readonly string[], kit: KitId = "none"): void {
   Object.assign(mods, createMods());
   for (const [id, level] of itemLevelsOf(ownedItemIds)) {
     const def = itemById(id);
     if (def) def.apply(mods, level);
   }
+  applyKitStatLean(mods, kit);
   clampModCaps(mods);
 }
 

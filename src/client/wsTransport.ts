@@ -713,7 +713,7 @@ export class WSTransport implements Transport {
         const stamped: InputCmd = { ...cmd, seq };
         this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
-        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ackEv: this.lastEventId });
+        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, ackEv: this.lastEventId });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
       } else {
         // Pre-join / mid-resume: predict locally for instant feel; don't send before the

@@ -299,7 +299,7 @@ export type MysteryTwist = "plain" | "blessed" | "cursed";
 // no one) and `fx` — the authoring weapon — for knockback profile, boss coefficient and
 // the client render recipe.
 
-export type EffectKind = "zone" | "wire" | "orbit" | "sentry" | "tether";
+export type EffectKind = "zone" | "wire" | "orbit" | "sentry" | "tether" | "sanctuary" | "aegis";
 
 export interface EffectBase {
   id: number;              // stable per-floor id (wire identity + client anim keying)
@@ -376,7 +376,26 @@ export interface TetherEffect extends EffectBase {
   reach: number;            // sweep radius around the owner
 }
 
-export type Effect = ZoneEffect | WireEffect | OrbitEffect | SentryEffect | TetherEffect;
+// The MENDER's SANCTUARY ult zone (spec §2.2): a deterministic ground zone with a fixed
+// lifetime that heals allies standing inside on a capped cadence (never past maxHp, never
+// out-healing all incoming damage). Server-owned + reconciled from the snapshot like every
+// other effect entity. healRate is sim-internal (the client renders by kind, not by rate).
+export interface SanctuaryEffect extends EffectBase {
+  kind: "sanctuary";
+  radius: number;
+  healRate: number; // HP/sec target (sim-internal; the cap is enforced by the heal cadence)
+}
+
+// The BULWARK's AEGIS ult dome (spec §2.3): a deterministic barrier that BLOCKS enemy
+// projectiles crossing inward (allies shoot OUT freely) until its HP budget is spent OR its
+// duration elapses, whichever first — cover, never invuln. Server-owned + reconciled.
+export interface AegisEffect extends EffectBase {
+  kind: "aegis";
+  radius: number;
+  hp: number; maxHp: number; // barrier HP budget: each blocked enemy projectile costs 1
+}
+
+export type Effect = ZoneEffect | WireEffect | OrbitEffect | SentryEffect | TetherEffect | SanctuaryEffect | AegisEffect;
 
 export interface Bullet {
   x: number; y: number;

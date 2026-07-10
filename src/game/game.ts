@@ -5646,9 +5646,24 @@ export class Game {
     const { ctx, cam } = this;
     let isDrawing = false;
     for (const e of this.effects) {
-      if (e.kind !== "zone" && e.kind !== "wire") continue;
+      if (e.kind !== "zone" && e.kind !== "wire" && e.kind !== "sanctuary") continue;
       if (!isDrawing) { ctx.save(); isDrawing = true; }
       const isRemote = e.owner !== LOCAL_ID;
+      if (e.kind === "sanctuary") {
+        // The MENDER heal pocket: a soft warm ring + gentle inward pulse — a safe-stand zone,
+        // never a telegraph, so it stays quiet under enemy tells.
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        const fade = Math.min(1, (e.maxLife - e.life) * 6, (e.life / Math.max(0.001, e.maxLife)) * 2.5);
+        const pulse = 0.85 + 0.15 * Math.sin(this.animClock * 3);
+        ctx.globalAlpha = 0.12 * fade;
+        ctx.fillStyle = "#7fe6a8";
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.5 * fade;
+        ctx.strokeStyle = "#b8ffd0";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius * pulse, 0, 6.28); ctx.stroke();
+        continue;
+      }
       if (e.kind === "zone") {
         const sx = e.x - cam.x, sy = e.y - cam.y;
         // Quick fade-in as the bead paints it, long fade-out as it thaws.
@@ -5713,8 +5728,24 @@ export class Game {
     this.pruneSentryFx();
     let isDrawing = false;
     for (const e of this.effects) {
-      if (e.kind === "zone" || e.kind === "wire") continue;
+      // zone/wire/sanctuary render on the GROUND pass (renderGroundEffects); aegis + the
+      // entity-kinds below draw here.
+      if (e.kind === "zone" || e.kind === "wire" || e.kind === "sanctuary") continue;
       if (!isDrawing) { ctx.save(); isDrawing = true; }
+      if (e.kind === "aegis") {
+        // The BULWARK dome: a translucent bullet-blocking bubble whose rim brightens with the
+        // remaining barrier budget, dimming as it is spent — COVER, never immunity.
+        const sx = e.x - cam.x, sy = e.y - cam.y;
+        const frac = e.maxHp > 0 ? Math.max(0, Math.min(1, e.hp / e.maxHp)) : 1;
+        ctx.globalAlpha = 0.10 + 0.10 * frac;
+        ctx.fillStyle = "#8fb6ff";
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.fill();
+        ctx.globalAlpha = 0.35 + 0.5 * frac;
+        ctx.strokeStyle = "#bcd4ff";
+        ctx.lineWidth = 2 + 2 * frac;
+        ctx.beginPath(); ctx.arc(sx, sy, e.radius, 0, 6.28); ctx.stroke();
+        continue;
+      }
       if (e.kind === "sentry") {
         const sx = e.x - cam.x, sy = e.y - cam.y;
         ctx.globalAlpha = 1;
