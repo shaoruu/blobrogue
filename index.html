@@ -416,16 +416,6 @@
         border:3px solid #05030b; box-shadow: inset 0 0 0 3px #2a2140, 0 8px 0 0 rgba(5,3,11,0.5); }
       .hidden { display: none !important; }
 
-      .settings-note { font-family: var(--f-ui); font-size: var(--fs-xs); letter-spacing: .5px; color: var(--amber); text-transform: none; margin: 0; }
-      .settings-note:empty { display: none; }
-      /* the mute explainer keeps its one line reserved so toggling mute never shifts layout */
-      .settings-muted-note, .settings-muted-note:empty { display: block; height: 12px; line-height: 12px; overflow: hidden; text-align: center; }
-      .settings-shake { display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--ink-mute); }
-      .settings-label { text-transform: uppercase; letter-spacing: 1px; color: var(--ink-mute); }
-      .settings-val { color: #ffd27a; font-variant-numeric: tabular-nums; }
-      /* muted: the volume sliders dim (they stay in the tab order and keep the stored mix
-         so unmute restores it exactly; the inline note explains the state) */
-      .settings-shake.is-muted { opacity: .45; }
       /* The input is 24px tall (the touch hit area = the thumb); the visible 6px track is
          drawn by the track pseudo-elements so the look is unchanged. */
       input[type="range"] { -webkit-appearance: none; appearance: none; width: 160px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer; }
@@ -584,43 +574,38 @@
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
         padding:22px 26px 20px; width:min(840px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
         display:flex; flex-direction:column; gap:16px; align-items:stretch; }
-      /* CANONICAL HOME GEOMETRY (Ian's pass — the blob is the centerpiece): the shell is
-         a grid of a TALL 270px hero row + minmax(0,1fr) body at height
-         min(668px,100vh-40px), min-height 620px. The body boxes are UNCHANGED from the
-         shipped launchpad: left rows 82/54/16/154 (PLAY ONLINE / PLAY SOLO / status /
-         glance), right 112px identity card + two stacked 82px destinations — so every
-         zero-CLS box below the hero stays identical. Desktop budget closes exactly:
-         668 - 48 chrome = 620 = 270 hero + 14 row gap + 336 body
-         (= 82+54+16+154 + 3 x 10 column gaps). position:relative anchors the What's New
-         corner button. */
-      .menu-home{ display:grid; grid-template-rows:270px minmax(0,1fr); gap:14px;
-        height:min(668px,calc(100vh - 40px)); min-height:620px; position:relative; }
-      /* --- THE HERO BLOB STAGE (identity showpiece — the menu's centerpiece) ---
-         The hero is a CENTERED column: the wordmark + one-line tagline on top, then the
-         big 196x196 .blob-stage below. The stage holds a 160px canvas rendered by the
-         shared CosmeticLoadout renderer with the calm idle (canvas-side blink/wave,
-         capped) over a quiet radial plinth glow and a soft ground-shadow ellipse — the
-         blob STANDS, it never floats. Deliberate non-chrome: NO button affordance, NO
-         amber fill, NO arrow, no CSS animation — PLAY ONLINE below stays the only amber-
-         filled element and the first action. Every bound here is fixed from first paint,
-         so cosmetics/loading never shift anything. */
-      /* Explicit row AND column: the CUSTOMIZE / WHAT'S NEW chips share this grid cell
-         (grid-placed over the band), and auto-placement must never push the hero into an
-         implicit second column. */
-      .home-hero{ grid-row:1; grid-column:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+      /* CANONICAL HOME GEOMETRY (Ian's pass — the blob is the CENTERED STAR above the
+         wordmark): the shell is a grid of a TALL 300px hero row + minmax(0,1fr) body at
+         height min(700px,100vh-40px), min-height 620px. The body boxes below stay the
+         zero-CLS launchpad boxes. position:relative anchors the CUSTOMIZE corner chip. */
+      .menu-home{ display:grid; grid-template-rows:300px minmax(0,1fr); gap:14px;
+        height:min(700px,calc(100vh - 40px)); min-height:620px; position:relative; }
+      /* --- THE HERO BLOB STAGE (identity showpiece — the menu's centered star) ---
+         The hero is a CENTERED column stacked blob -> wordmark -> tagline: the big 200x200
+         .blob-stage on top (the star), the logo below it (shrunk so the blob wins), then a
+         one-line tagline. The stage holds a 160px canvas rendered by the shared
+         CosmeticLoadout renderer with the calm idle (canvas-side blink/wave, capped) over a
+         quiet radial plinth glow and a scaled ground-shadow ellipse — the blob STANDS, it
+         never floats. Deliberate non-chrome: NO button affordance, NO amber fill, NO arrow,
+         no CSS animation — PLAY ONLINE below stays the only amber-filled element and the
+         first action. Every bound here is fixed from first paint, so cosmetics/loading
+         never shift anything. */
+      /* Explicit row AND column: the CUSTOMIZE chip shares this grid cell (grid-placed over
+         the band), and auto-placement must never push the hero into an implicit column. */
+      .home-hero{ grid-row:1; grid-column:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;
         min-height:0; overflow:hidden; padding-bottom:12px; border-bottom:2px solid var(--dun-3); }
       .hero-mark{ display:flex; flex-direction:column; align-items:center; gap:4px; text-align:center; min-width:0; }
-      /* Fixed logo box (intrinsic 1128x192; the img element also carries width/height
-         attributes so the space is reserved before the file streams in). */
-      .logo-img{ image-rendering:pixelated; height:30px; width:176px; max-width:100%; object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
-      .home-hero .tag{ font-family:var(--f-ui); font-size:var(--fs-2xs); line-height:1.4; letter-spacing:.5px; color:var(--dun-4); max-width:520px; min-height:16px; text-transform:none; margin:0; }
-      .home-hero .blob-stage{ position:relative; flex:none; width:196px; height:196px;
+      /* The logo SHRINKS (clamp) so the blob is unmistakably the hero; intrinsic 1128x192,
+         width attrs reserve the box before the file streams in. */
+      .logo-img{ image-rendering:pixelated; height:clamp(30px,4.5vh,42px); width:auto; max-width:min(280px,80%); object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
+      .home-hero .tag{ font-family:var(--f-ui); font-size:var(--fs-xs); line-height:1.4; letter-spacing:.5px; color:var(--ink-mute); max-width:520px; min-height:14px; text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .home-hero .blob-stage{ position:relative; flex:none; width:200px; height:200px;
         background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
       /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
       .home-hero .blob-stage::before{ content:""; position:absolute; inset:10px; border-radius:50%;
         background:radial-gradient(closest-side, rgba(255,180,59,.16), rgba(255,180,59,.05) 55%, transparent 74%); }
-      /* the soft ground-shadow ellipse under the feet — standing, not floating */
-      .home-hero .blob-stage::after{ content:""; position:absolute; left:50%; bottom:22px; width:104px; height:14px;
+      /* the soft ground-shadow ellipse under the feet — standing, not floating (scaled up) */
+      .home-hero .blob-stage::after{ content:""; position:absolute; left:50%; bottom:22px; width:92px; height:14px;
         transform:translateX(-50%); border-radius:50%; background:rgba(5,3,11,.55); }
       .home-hero .blob-stage .blob-preview{ position:relative; z-index:1; width:160px; height:160px;
         image-rendering:pixelated; background:transparent; }
@@ -630,27 +615,13 @@
       .stage-customize{ grid-row:1; grid-column:1; justify-self:end; align-self:end; margin:0 14px 14px 0;
         z-index:2; min-width:0; width:auto; font-size:var(--fs-2xs); letter-spacing:1px; padding:8px 10px; white-space:nowrap; }
       .body{ display:flex; gap:20px; align-items:stretch; }
-      /* --- WHAT'S NEW (menu hero-corner) ---
-         A compact button pinned to the top-right of the menu card, OUT of the Play path
-         and never in the Profile/Settings destination stack. It shares the hero grid cell
-         (row 1 / col 1, self-aligned start/end) so its space is reserved from first paint
-         — the unread NEW chip + 8px amber square dot appear IN PLACE and shift nothing. */
-      .home-whatsnew{ grid-row:1; grid-column:1; justify-self:end; align-self:start; margin:14px 14px 0 0;
-        position:relative; z-index:2; min-width:0; width:auto; gap:6px;
-        font-size:var(--fs-2xs); letter-spacing:1px; padding:8px 12px; white-space:nowrap; }
-      /* Unread: an 8px amber SQUARE pixel dot at the corner PLUS a grayscale-distinct NEW
-         chip (amber plate + dun-0 glyph) — never hue-only. Both hidden when caught up. */
-      .home-whatsnew .wn-dot{ position:absolute; top:-4px; right:-4px; width:8px; height:8px;
-        background:var(--amber); box-shadow:0 0 0 1px var(--dun-0); }
-      .home-whatsnew .wn-new{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px;
-        color:var(--dun-0); background:var(--amber); padding:1px 4px; }
       .home-body{ display:grid; grid-template-columns:1.22fr 0.78fr; gap:20px; flex:1; min-height:0; }
       .col-actions{ flex:1.15; display:flex; flex-direction:column; gap:11px; min-width:0; }
       /* Exact left rows: 82 online / 54 solo / 16 status / 154 glance (+ 3 x 10px gaps
          = 336, the body row under the 150px hero). */
       .home-left{ display:flex; flex-direction:column; gap:10px; min-width:0; }
       .home-left .btn-quick{ height:82px; flex:0 0 82px; padding:0 22px; }
-      .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; }
+      .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; font-size:var(--fs-md); }
       .home-left .lb-preview{ margin-top:0; }
       .home-right{ flex:1; display:flex; flex-direction:column; gap:10px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
       .col-h{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
@@ -689,19 +660,55 @@
       .stat-value{ font-family:var(--f-num); font-size:var(--fs-num); color:var(--cream); line-height:1; }
       .stat-value.amber{ color:var(--amber); }
       .stat-label{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
-      /* Settings as an ORGANIZED grid of categorized sections (not one endless vertical
-         stack): two columns on the fixed shell, one on narrow. Each section is a bordered
-         sub-panel with a header; every control row is consistent and nothing toggles size,
-         so switching nothing and reserving the note lines keeps it zero-CLS. */
-      .settings{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:start; margin:0; }
-      .settings-section{ display:flex; flex-direction:column; gap:6px; padding:12px 14px;
-        background:#0d0819; box-shadow:inset 0 0 0 2px var(--dun-3); }
-      .settings-section-h{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--amber-hi);
-        text-transform:uppercase; text-align:left; margin:0 0 2px; }
-      .settings button{ font-size:var(--fs-sm); padding:9px 12px; min-width:0; justify-content:space-between; width:100%; text-transform:uppercase; }
-      /* min-height 44px = comfortable touch row (label line + 24px thumb) */
-      .settings-shake{ display:flex; flex-direction:column; justify-content:center; gap:5px; min-height:44px; font-family:var(--f-ui); font-size:var(--fs-xs); color:var(--dun-4); text-transform:uppercase; letter-spacing:1px; }
-      .settings-shake .lab{ display:flex; justify-content:space-between; } .settings-val{ color:var(--amber); }
+      /* === TABBED SETTINGS (shared by the title Settings screen AND the pause overlay) ===
+         A role=tablist strip over a fixed-height body that shows ONE category at a time.
+         Switching tabs swaps the body inside the fixed region (the outer box never resizes),
+         rows are a fixed height, the slider value has a reserved width, and the toggle is a
+         fixed-size pill — so nothing shifts. Wide title panel goes two-col; pause is one-col. */
+      .settings{ display:flex; flex-direction:column; gap:0; margin:0; }
+      .set-tabs{ display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin:10px 0; }
+      .set-tab{ min-width:0; width:100%; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; padding:9px 4px;
+        color:var(--ink-mute); background:var(--dun-1); box-shadow:inset 0 -2px 0 transparent;
+        clip-path:none; text-shadow:none; transition:none; }
+      .set-tab:hover{ transform:none; background:var(--dun-2); box-shadow:inset 0 -2px 0 var(--dun-4); color:var(--cream); }
+      .set-tab:active{ transform:none; }
+      /* Selected tab = amber underline + inset frame (geometry + color, not hue-only). */
+      .set-tab[aria-selected=true]{ color:var(--amber-hi); background:var(--dun-2);
+        box-shadow:inset 0 -2px 0 var(--amber), inset 0 0 0 2px var(--dun-3); }
+      .set-body{ height:212px; overflow-y:auto; scrollbar-gutter:stable; display:flex; flex-direction:column; gap:8px; padding:2px; }
+      .set-body.two-col{ display:grid; grid-template-columns:1fr 1fr; gap:8px 18px; align-content:start; }
+      /* ONE control-row component for every setting. */
+      .set-row{ display:grid; grid-template-columns:1fr auto; align-items:center; gap:12px; min-height:40px; padding:6px 10px;
+        background:rgba(5,3,11,.35); box-shadow:inset 0 0 0 1px var(--dun-3); }
+      .set-row.is-muted{ opacity:.45; }
+      .set-label{ display:flex; flex-direction:column; gap:1px; text-align:left; min-width:0; }
+      .set-label .lab{ font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:.5px; color:var(--cream); text-transform:uppercase; }
+      .set-label .sub{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.3px; color:var(--ink-mute); text-transform:none; }
+      /* TOGGLE: a compact right-aligned pill — knob position + ON/OFF text carry the state. */
+      .set-switch{ display:inline-flex; align-items:center; gap:8px; min-width:0; padding:4px 2px; border:0; cursor:pointer;
+        background:transparent; box-shadow:none; clip-path:none; text-shadow:none; transition:none; }
+      .set-switch:hover, .set-switch:active{ transform:none; background:transparent; box-shadow:none; }
+      .set-switch-track{ position:relative; width:40px; height:20px; flex:0 0 auto; background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--dun-3); }
+      .set-switch-knob{ position:absolute; top:2px; left:2px; width:16px; height:16px; background:var(--ink-mute); transition:left .08s steps(2), background .08s; }
+      .set-switch[aria-checked=true] .set-switch-track{ background:var(--amber); box-shadow:inset 0 0 0 2px var(--amber-hi); }
+      .set-switch[aria-checked=true] .set-switch-knob{ left:22px; background:var(--dun-0); }
+      .set-switch-txt{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--ink-mute); min-width:22px; text-align:left; }
+      .set-switch[aria-checked=true] .set-switch-txt{ color:var(--amber-hi); }
+      /* SLIDER: range + a FIXED-width value readout (no row shift on drag). */
+      .set-slider{ display:flex; align-items:center; gap:10px; }
+      .set-slider input[type=range]{ width:118px; }
+      .set-val{ font-family:var(--f-num); font-size:var(--fs-num); color:var(--amber); min-width:46px; text-align:right; font-variant-numeric:tabular-nums; }
+      /* CYCLE: a small ‹ VALUE › stepper. */
+      .set-cycle{ display:inline-flex; align-items:center; gap:6px; }
+      .set-step{ min-width:26px; width:26px; height:28px; padding:0; font-family:var(--f-num); font-size:var(--fs-num); color:var(--cream);
+        background:var(--dun-2); box-shadow:inset 0 0 0 2px var(--dun-3); clip-path:none; text-shadow:none; transition:none; }
+      .set-step:hover{ transform:none; background:var(--dun-3); box-shadow:inset 0 0 0 2px var(--dun-4); }
+      .set-step:active{ transform:none; }
+      .set-cycle-v{ font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--amber-hi); min-width:42px; text-align:center; text-transform:uppercase; }
+      /* Reserved single-line note (mute explainer / photosensitivity) — spans both columns. */
+      .set-note{ grid-column:1 / -1; min-height:14px; margin:0; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:.5px; color:var(--amber); }
+      /* Reduced motion: the knob snaps instead of sliding. */
+      @media (prefers-reduced-motion: reduce){ .set-switch-knob{ transition:none; } }
       /* square pixel-kit track inside the menu shell (overrides the rounded base track) */
       .menu input[type=range]{ width:100%; }
       .menu input[type=range]::-webkit-slider-runnable-track{ border-radius:0; }
@@ -712,35 +719,35 @@
          fixed 142px (5 pad + 18 head + 4 gap + 88 rows + 4 gap + 18 state + 5 pad). */
       @media (max-width:680px){
         .menu-home{ height:auto; min-height:0; grid-template-rows:auto auto; }
-        .settings{ grid-template-columns:1fr; }
+        .set-body.two-col{ grid-template-columns:1fr; }
         .body{ flex-direction:column; }
         .home-body{ grid-template-columns:1fr; }
-        /* Narrow: the centered hero shrinks its centerpiece to a 140px stage (112px
-           blob), PLAY still immediately below and the first action above the fold. */
-        .home-hero{ gap:8px; }
-        .home-hero .blob-stage{ width:140px; height:140px; }
-        .home-hero .blob-stage .blob-preview{ width:112px; height:112px; }
-        .home-hero .blob-stage::after{ bottom:16px; width:76px; height:11px; }
+        /* Narrow: a 240px hero row with a 150px stage (128px blob), PLAY still immediately
+           below and the first action above the fold. */
+        .menu-home{ grid-template-rows:240px minmax(0,1fr); }
+        .home-hero{ gap:6px; }
+        .logo-img{ height:clamp(28px,4vh,36px); }
+        .home-hero .blob-stage{ width:150px; height:150px; }
+        .home-hero .blob-stage .blob-preview{ width:128px; height:128px; }
+        .home-hero .blob-stage::after{ bottom:18px; width:70px; height:11px; }
         .stage-customize{ margin:0 10px 10px 0; }
-        .home-whatsnew{ margin:10px 10px 0 0; }
         .home-right{ border-left:0; border-top:2px solid var(--dun-3); padding-left:0; padding-top:14px; }
         /* .home-left carries the specificity so the later base .lb-preview rule can't
            override this media block (source order vs cascade). */
         .home-left .lb-preview{ height:142px; padding:5px 10px; gap:4px; }
         .home-right .identity-card{ height:108px; flex:0 0 108px; }
-        .home-right .home-dest{ height:66px; flex:0 0 66px; }
       }
-      /* Short viewports (accepted responsive spec): a compact 150px hero row with a
+      /* Short viewports (accepted responsive spec): a compact 180px hero row with a
          120px stage (96px blob) so PLAY + the leaderboard preview stay visible without
          scrolling Play off-screen; the shell follows content and never hides the glance. */
       @media (max-height:679px){
-        .menu-home{ height:auto; min-height:0; grid-template-rows:150px minmax(0,1fr); }
+        .menu-home{ height:auto; min-height:0; grid-template-rows:180px minmax(0,1fr); }
         .home-hero{ gap:6px; }
+        .logo-img{ height:clamp(26px,3.5vh,32px); }
         .home-hero .blob-stage{ width:120px; height:120px; }
         .home-hero .blob-stage .blob-preview{ width:96px; height:96px; }
-        .home-hero .blob-stage::after{ bottom:12px; width:52px; height:9px; }
+        .home-hero .blob-stage::after{ bottom:14px; width:56px; height:9px; }
         .stage-customize{ margin:0 10px 8px 0; }
-        .home-whatsnew{ margin:8px 10px 0 0; }
       }
 
       /* === TITLE HIERARCHY + DESTINATIONS (menu/identity redesign) ===
@@ -759,14 +766,8 @@
          Every box exists from first paint; hydration replaces contents only. */
       .lb-preview{ display:flex; flex-direction:column; gap:6px; margin-top:7px; height:154px; padding:9px 10px;
         box-shadow:inset 0 0 0 1px var(--dun-3); }
-      .lb-head{ display:flex; align-items:center; justify-content:space-between; gap:8px; height:18px; flex:0 0 18px; }
+      .lb-head{ display:flex; align-items:center; gap:8px; height:18px; flex:0 0 18px; }
       .lb-head .col-h{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      /* The view action is an explicit but link-quiet affordance, not a chunky button. */
-      .lb-view{ min-width:0; width:auto; font-size:var(--fs-2xs); padding:4px 6px; letter-spacing:1px;
-        background:transparent; color:var(--ink-mute); clip-path:none; box-shadow:none; text-shadow:none; }
-      .lb-view:hover{ transform:none; background:transparent; color:var(--cream); box-shadow:inset 0 -1px 0 var(--dun-4); }
-      .lb-view:active{ transform:none; box-shadow:none; }
-      .lb-view:focus-visible{ outline:var(--focus-ring); outline-offset:2px; }
       .lb-rows{ display:flex; flex-direction:column; gap:2px; }
       .lb-row{ display:flex; align-items:center; gap:8px; width:100%; min-width:0; height:28px; flex:0 0 28px; padding:0 8px;
         font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:.5px; text-transform:none; text-align:left;
@@ -839,11 +840,28 @@
       .menu p.home-status{ height:16px; flex:0 0 16px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.3px;
         color:var(--ink-mute); text-transform:none; line-height:16px; margin:0; text-align:left;
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      /* The two 82px home destinations, stacked (10px grid gaps). */
+      /* --- THE UNIFORM DESTINATION NAV (Ian's pass — kills the "scattered" read) ---
+         Every right-column utility (PROFILE / LEADERBOARD / SETTINGS / WHAT'S NEW) is the
+         EXACT same .dest component: full width, 56px tall, a 28px icon / label+sub / 16px
+         arrow grid. Same size, same type, same padding — no mixed one-offs. Stacked with
+         10px gaps and top-aligned under the identity card. */
       .navrow{ display:flex; flex-direction:column; gap:10px; }
-      .home-dest{ height:82px; flex:0 0 82px; min-width:0; width:100%; flex-direction:column; gap:6px; justify-content:center;
-        font-size:var(--fs-sm); letter-spacing:1px; padding:0 16px; }
-      .home-dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:var(--fs-2xs); letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; }
+      .dest{ position:relative; height:56px; flex:0 0 56px; min-width:0; width:100%; padding:0 14px;
+        display:grid; grid-template-columns:28px 1fr 16px; align-items:center; gap:10px;
+        font-size:var(--fs-sm); letter-spacing:1px; text-align:left; }
+      .dest .dest-ic{ font-family:var(--f-num); font-size:var(--fs-lg); line-height:1; color:var(--ink-mute); text-align:center; }
+      .dest:hover .dest-ic, .dest:focus-visible .dest-ic{ color:var(--cream); }
+      .dest .dest-main{ display:flex; flex-direction:column; gap:1px; min-width:0; }
+      .dest .dest-label{ font-family:var(--f-ui); letter-spacing:1px; text-transform:uppercase; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .dest .dest-sub{ font-family:var(--f-ui); font-weight:400; font-size:var(--fs-2xs); letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .dest .dest-arrow{ font-family:var(--f-num); font-size:var(--fs-lg); line-height:1; color:var(--dun-4); text-align:center; }
+      .dest:hover .dest-arrow, .dest:focus-visible .dest-arrow{ color:var(--cream); }
+      /* WHAT'S NEW unread cue rides the SAME .dest: an 8px amber SQUARE pixel dot at the
+         corner PLUS a grayscale-distinct NEW chip (amber plate + dun-0 glyph) in the sub
+         line — never hue-only. Both hidden when caught up; reserved by the sub row so the
+         layout never shifts. */
+      .dest .wn-dot{ position:absolute; top:-3px; right:-3px; width:8px; height:8px; background:var(--amber); box-shadow:0 0 0 1px var(--dun-0); }
+      .dest .wn-new{ display:inline-block; font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-0); background:var(--amber); padding:1px 4px; }
 
       /* --- profile screens (the shared fixed card + the own wardrobe) --- */
       /* Worn title under the name: reserved line, so titled and untitled render at the
@@ -1015,7 +1033,6 @@
          devices (the title glance keeps its fixed 28px rows — its 154px reserve is exact). */
       @media (max-width:680px), (pointer:coarse){
         .lb-rows-full .lb-row{ height:48px; flex:0 0 48px; }
-        .lb-view{ min-height:32px; }
       }
 
       /* === WHAT'S NEW / CHANGELOG PANEL ===

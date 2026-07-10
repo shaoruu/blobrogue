@@ -367,12 +367,17 @@ async function main(): Promise<void> {
     const { menu, overlay } = makeMenu();
     await menu.showTitle();
     const buttons = buttonsOf(overlay);
-    check("PROFILE destination", buttons.some((b) => b.startsWith("PROFILE")));
-    check("SETTINGS destination", buttons.some((b) => b.startsWith("SETTINGS")));
-    const navs = byClass(overlay, "nav-btn").map(textOf);
-    check("the right side is about YOU: exactly PROFILE + SETTINGS (90px destination cards)",
-      navs.length === 2 && navs[0].startsWith("PROFILE") && navs[1].startsWith("SETTINGS"), navs.join("|"));
-    check("the leaderboard's explicit door is VIEW LEADERBOARD on the glance", buttons.some((b) => b.includes("VIEW LEADERBOARD")));
+    check("PROFILE destination", buttons.some((b) => b.includes("PROFILE")));
+    check("SETTINGS destination", buttons.some((b) => b.includes("SETTINGS")));
+    // The right side is a UNIFORM .dest nav: PROFILE, LEADERBOARD, SETTINGS, WHAT'S NEW —
+    // every one the same component (kills the "scattered" read).
+    const navs = byClass(overlay, "nav-btn");
+    check("the right nav is four uniform .dest destinations in order",
+      navs.length === 4 && navs.every((n) => (n.className ?? "").includes("dest"))
+      && textOf(navs[0]).includes("PROFILE") && textOf(navs[1]).includes("LEADERBOARD")
+      && textOf(navs[2]).includes("SETTINGS") && textOf(navs[3]).includes("WHAT'S NEW"),
+      navs.map(textOf).join("|"));
+    check("the leaderboard's explicit door is the LEADERBOARD nav destination", buttons.some((b) => b.includes("LEADERBOARD")));
     check("the glance header is GLOBAL LEADERBOARD", textOf(overlay).includes("Global leaderboard"));
     const all = textOf(overlay);
     check("no inline settings controls on the title (sound/shake live behind SETTINGS)",
@@ -422,23 +427,24 @@ async function main(): Promise<void> {
       (buttons[0] ?? "").includes("PLAY ONLINE") && (buttons[buttons.length - 1] ?? "") === "CUSTOMIZE", buttons.join("|").slice(0, 80));
     // The accepted shell + stage geometry, verbatim from the placement decision.
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
-    check("shell: 270px hero row over minmax(0,1fr), height min(668px,100vh-40px), min 620px",
-      /\.menu-home\{ display:grid; grid-template-rows:270px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(668px,calc\(100vh - 40px\)\); min-height:620px; position:relative; \}/.test(html));
-    check("hero band: a CENTERED column with a big 196px stage; stage canvas is 160px",
+    check("shell: 300px hero row over minmax(0,1fr), height min(700px,100vh-40px), min 620px",
+      /\.menu-home\{ display:grid; grid-template-rows:300px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(700px,calc\(100vh - 40px\)\); min-height:620px; position:relative; \}/.test(html));
+    check("hero band: a CENTERED column with a big 200px stage; stage canvas is 160px",
       /\.home-hero\{ grid-row:1; grid-column:1; display:flex; flex-direction:column; align-items:center; justify-content:center;/.test(html)
-      && /\.home-hero \.blob-stage\{[^}]*width:196px; height:196px;/.test(html)
+      && /\.home-hero \.blob-stage\{[^}]*width:200px; height:200px;/.test(html)
       && /\.home-hero \.blob-stage \.blob-preview\{[^}]*width:160px; height:160px;/.test(html));
     check("the blob STANDS: radial plinth glow behind + soft ground-shadow ellipse",
       /\.home-hero \.blob-stage::before\{[^}]*radial-gradient/.test(html)
       && /\.home-hero \.blob-stage::after\{[^}]*border-radius:50%; background:rgba\(5,3,11/.test(html));
-    // The accepted responsive rules: narrow shrinks the centerpiece (140/112), short
-    // viewports compact it (150px row, 120/96) so Play + the glance stay on screen.
+    // The accepted responsive rules: narrow shrinks the centerpiece (240px row, 150/128),
+    // short viewports compact it (180px row, 120/96) so Play + the glance stay on screen.
     const narrowCss = html.slice(html.indexOf("@media (max-width:680px)"), html.indexOf("@media (max-height:679px)"));
-    check("narrow: centered hero with a 140px stage (112px blob)",
-      /width:140px; height:140px/.test(narrowCss) && /width:112px; height:112px/.test(narrowCss));
+    check("narrow: 240px hero row with a 150px stage (128px blob)",
+      /grid-template-rows:240px minmax\(0,1fr\)/.test(narrowCss)
+      && /width:150px; height:150px/.test(narrowCss) && /width:128px; height:128px/.test(narrowCss));
     const shortCss = html.slice(html.indexOf("@media (max-height:679px)"));
-    check("short: 150px hero row with a 120px stage (96px blob)",
-      /grid-template-rows:150px minmax\(0,1fr\)/.test(shortCss)
+    check("short: 180px hero row with a 120px stage (96px blob)",
+      /grid-template-rows:180px minmax\(0,1fr\)/.test(shortCss)
       && /width:120px; height:120px/.test(shortCss) && /width:96px; height:96px/.test(shortCss));
     // The accepted rendering-loop rules live in the shared preview: rAF only while
     // visible, pause on hide/overlay/tab-hide, static idle frame under reduced motion.
@@ -698,8 +704,9 @@ async function main(): Promise<void> {
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showTitle();
     const navs = byClass(signed.overlay, "nav-btn").map(textOf);
-    check("signed-in title keeps the same destinations", navs.length === 2 && navs[0].startsWith("PROFILE") && navs[1].startsWith("SETTINGS"), navs.join("|"));
-    check("...and the same leaderboard door", buttonsOf(signed.overlay).some((b) => b.includes("VIEW LEADERBOARD")));
+    check("signed-in title keeps the four uniform destinations", navs.length === 4
+      && navs[0].includes("PROFILE") && navs[1].includes("LEADERBOARD") && navs[2].includes("SETTINGS") && navs[3].includes("WHAT'S NEW"), navs.join("|"));
+    check("...and the LEADERBOARD nav door", byClass(signed.overlay, "nav-leaderboard").length === 1);
 
     const { menu, overlay } = makeMenu({ lb: LB_ENTRIES });
     await menu.showSettings();
@@ -709,18 +716,18 @@ async function main(): Promise<void> {
     check("Escape returns to the title", buttonsOf(overlay).some((b) => b.includes("PLAY ONLINE")));
     const focusedAfterSettings = lastFocused();
     check("focus restored to the SETTINGS destination by name",
-      focusedAfterSettings?.className?.includes("nav-btn") === true && focusedAfterSettings?.textContent === "SETTINGS",
-      `${focusedAfterSettings?.className} / ${focusedAfterSettings?.textContent}`);
+      focusedAfterSettings?.className?.includes("nav-settings") === true,
+      `${focusedAfterSettings?.className}`);
 
     await menu.showProfile();
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
-    check("Escape from profile restores the PROFILE destination", lastFocused()?.textContent === "PROFILE");
+    check("Escape from profile restores the PROFILE destination", lastFocused()?.className?.includes("nav-profile") === true, lastFocused()?.className);
 
     await menu.showLeaderboard();
     fireWindowEvent("keydown", { key: "Escape" });
     await settle();
-    check("Escape from leaderboard restores the VIEW LEADERBOARD door", lastFocused()?.className?.includes("lb-view") === true, lastFocused()?.className);
+    check("Escape from leaderboard restores the LEADERBOARD nav destination", lastFocused()?.className?.includes("nav-leaderboard") === true, lastFocused()?.className);
 
     await menu.showOnlineHome();
     fireWindowEvent("keydown", { key: "Escape" });
@@ -1553,20 +1560,19 @@ async function main(): Promise<void> {
     check("the URL line's height is reserved in CSS (failure fill can't shift)", /invite-url\s*\{[^}]*min-height/.test(html));
   }
 
-  section("What's New: a hero-corner button, single-sourced from CHANGELOG.md, out of the Play path");
+  section("What's New: the uniform WHAT'S NEW nav destination, single-sourced from CHANGELOG.md");
   {
     const SEEN_KEY = "blobrogue.changelogSeen";
     const latest = LATEST_VERSION; // the newest changelog section's version key
 
-    // A brand-new player (no stored key): the button shows, WITHOUT the unread cue, and the
-    // boot popup is silent (it just catches them up). Never in the Play/destination stacks.
+    // A brand-new player (no stored key): the dest shows, WITHOUT the unread cue, and the
+    // boot popup is silent (it just catches them up). It rides the uniform nav stack.
     localStorage.removeItem(SEEN_KEY);
     const fresh = makeMenu();
     await fresh.menu.showTitle();
-    const wn = byClass(fresh.overlay, "home-whatsnew");
-    check("the What's New button renders in the hero corner", wn.length === 1 && textOf(wn[0]).includes("WHAT'S NEW"));
-    check("it is NOT a PROFILE/SETTINGS destination (nav-btn stays exactly two)",
-      byClass(fresh.overlay, "nav-btn").length === 2 && !(wn[0].className ?? "").includes("nav-btn"));
+    const wn = byClass(fresh.overlay, "nav-whatsnew");
+    check("WHAT'S NEW is a uniform .dest in the nav stack", wn.length === 1
+      && (wn[0].className ?? "").includes("dest") && (wn[0].className ?? "").includes("nav-btn") && textOf(wn[0]).includes("WHAT'S NEW"));
     check("PLAY stays first, What's New rides out of the Play path (never buttons[0])",
       (buttonsOf(fresh.overlay)[0] ?? "").includes("PLAY"));
     check("a brand-new player sees NO unread cue (no NEW chip, no dot)",
@@ -1607,12 +1613,12 @@ async function main(): Promise<void> {
     const click = makeMenu();
     await click.menu.showTitle();
     check("unread before click", byClass(click.overlay, "wn-dot").length === 1);
-    byClass(click.overlay, "home-whatsnew")[0]?.onclick?.();
+    byClass(click.overlay, "nav-whatsnew")[0]?.onclick?.();
     check("clicking opens the panel (no GOT IT — not the popup)",
       byClass(click.overlay, "changelog-scrim").length === 1
       && collect(click.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "GOT IT").length === 0);
-    check("opening clears the unread cue on the title button in place",
-      byClass(byClass(click.overlay, "home-whatsnew")[0] ?? {}, "wn-dot").length === 0);
+    check("opening clears the unread cue on the title dest in place",
+      byClass(byClass(click.overlay, "nav-whatsnew")[0] ?? {}, "wn-dot").length === 0);
     check("...and marks the build seen", localStorage.getItem(SEEN_KEY) === latest);
     fireWindowEvent("keydown", { key: "Escape" });
     check("Escape closes the panel", byClass(click.overlay, "changelog-scrim").length === 0);
