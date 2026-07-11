@@ -71,6 +71,40 @@ const DEV_CSS = `
   .dev-weapon-type { font-size:8px; color:var(--amber); letter-spacing:1px; }
   .dev-weapon-stats { font-family:var(--f-num),monospace; font-size:14px; line-height:1.05; color:var(--dun-4); }
 
+  /* Catalog thumbnails: every spawn category gets the weapon card's visual read — a small
+     sprite (or a tinted glyph/swatch for the art-less rows) beside each name. */
+  .dev-entry { flex-wrap:nowrap; }
+  .dev-entry .dev-lbl { flex:1 1 auto; }
+  .dev-thumb {
+    flex:0 0 auto; width:26px; height:26px; image-rendering:pixelated; object-fit:contain;
+    background:rgba(5,3,11,.5); box-shadow:inset 0 0 0 1px var(--dun-3);
+  }
+  .dev-thumb.clickable { cursor:pointer; }
+  .dev-thumb.clickable:hover { box-shadow:inset 0 0 0 1px var(--amber); }
+  .dev-thumb-glyph {
+    display:flex; align-items:center; justify-content:center; box-sizing:border-box;
+    font-family:var(--f-ui),monospace; font-weight:700; font-size:12px; line-height:1;
+    box-shadow:inset 0 0 0 2px currentColor;
+  }
+  .dev-entry.on { box-shadow:inset 0 0 0 1px var(--amber-lo); background:rgba(255,180,59,.08); }
+
+  /* Shared inspector popover: the hover/focus card (large sprite + name + key stats) that gives
+     any thumbnail the same "see what it is" read the weapon card gives. Fixed to the LEFT of the
+     panel so it never overlaps controls or shifts layout. */
+  .dev-tip {
+    position:fixed; right:292px; width:210px; z-index:31; pointer-events:none;
+    display:grid; grid-template-columns:72px 1fr; gap:8px; align-items:center;
+    padding:8px; background:rgba(14,11,26,.97);
+    box-shadow:inset 0 0 0 2px var(--dun-3), 0 0 0 2px var(--ink), 0 8px 0 rgba(5,3,11,.5);
+  }
+  .dev-tip.hidden { display:none; }
+  .dev-tip-art { height:64px; display:flex; align-items:center; justify-content:center; background:rgba(23,18,39,.75); }
+  .dev-tip-art .dev-thumb { width:60px; height:60px; }
+  .dev-tip-info { min-width:0; display:flex; flex-direction:column; gap:4px; }
+  .dev-tip-name { font-size:11px; color:var(--cream); letter-spacing:1px; word-break:break-word; }
+  .dev-tip-type { font-size:8px; color:var(--amber); letter-spacing:1px; text-transform:uppercase; }
+  .dev-tip-stats { font-family:var(--f-num),monospace; font-size:13px; line-height:1.15; color:var(--dun-4); white-space:pre-line; }
+
   /* --- sprite / animation viewer (?dev=sprites) --- */
   .dev-sprites {
     position: fixed; inset: 0; z-index: 30; overflow-y: auto;
