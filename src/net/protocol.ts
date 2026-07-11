@@ -218,7 +218,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   same flag the damage gate reads) — the client now binds its guard/expose art to boss.exposed
 //   directly so art and hitbox can't desync. Quorum husk kind + liveness continue to ride each
 //   husk's own EnemyWire (kind + hp + position), which drives the discrete husk-state sprites.
-export const PROTOCOL_VERSION = 21;
+// v22 (JET mirror telegraph): EnemyWire grows `mfm` — JET's current mirror-salvo lead
+//   Resonance-family index (0..5, or -1 when not a mirror salvo). Drives the copied weapon's
+//   telegraph SHAPE (fan/lane/ring/parabola/wedge) and its own family hue (the "that's my gun"
+//   read); the sim tints the mirrored shards with the same enum. A v21 client rejects it.
+export const PROTOCOL_VERSION = 22;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -387,6 +391,10 @@ export interface EnemyWire {
   // straight from `boss.roar !== null` (false for non-bosses) so transition-beat + merge-fuse
   // VFX can bind to the authoritative flag rather than re-deriving it from move/phase edges.
   brr: boolean;
+  // JET's current MIRROR salvo lead Resonance-family index (0..5 into RESONANCE_FAMILIES), or
+  // -1 when the commitment isn't a mirror salvo. Drives the copied weapon's telegraph SHAPE +
+  // its own family hue (the "that's my gun" read); the sim tints the shards with the same enum.
+  mfm: number;
   // The per-kind auxiliary channel (see Enemy.aux): sinderling armed flag, echo/knell
   // fuse, fragment tether id + 1, bulwark plate HP. For the earned-window bosses this IS the
   // authoritative EXPOSED remainder (seconds left; 0 = guarded — the same flag the damage gate
@@ -1039,6 +1047,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
     },
     bph: num(o, "bph", 0, 16),
     brr: boolOf(o, "brr"),
+    mfm: num(o, "mfm", -1, 5),
     aux: num(o, "aux", -1e9, 1e9),
     afx: affixOf(o, "afx"),
     afs: num(o, "afs", -1e9, 1e9),
@@ -1354,6 +1363,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
     bph: e.boss ? e.boss.phase : 0,
     brr: e.boss ? e.boss.roar !== null : false,
+    mfm: e.boss ? e.boss.mirrorFamily : -1,
     aux: e.aux,
     afx: e.rollAffix,
     afs: e.affixState,
@@ -1392,7 +1402,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // Earned windows: the exposed remainder rides the aux channel (the render key), restored
         // into boss.exposed so the client's guard/expose art reads the SAME flag as the damage
         // gate (isBossExposed). The bank + mechanic id lists are sim-internal and never travel.
-        exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
+        exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1, mirrorFamily: w.mfm,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
       : null,

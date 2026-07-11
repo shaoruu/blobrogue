@@ -48,7 +48,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, jetSimulCapFor, titheSlabHpForFloor, weaponResonanceFamily, RESONANCE_FAMILIES,
+  JET, TITHE, QUORUM, jetSimulCapFor, titheSlabHpForFloor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -7474,6 +7474,11 @@ function jetBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // salvo instead of a no-op tracer beat, so it never stalls into an empty telegraph.
   if (move === "tracer" && jetTracerMotes(w) <= 0) move = "mirror";
   beginWindup(e, move);
+  // Surface the salvo's LEAD mirror family (index 0 = pool[attackCount % len]) so the client
+  // draws the copied weapon's shape + hue; -1 for the non-mirror pressure moves.
+  boss.mirrorFamily = move === "mirror" && w.jetMirror.length > 0
+    ? RESONANCE_FAMILIES.indexOf(w.jetMirror[boss.attackCount % w.jetMirror.length])
+    : -1;
   ev.push({ t: "cue", name: move === "mirror" ? "enemyHit" : "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
 }
 
@@ -7614,7 +7619,9 @@ function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[], for
 
 // The authored mirrored PATTERN per Resonance family — the archetype tell, not the weapon.
 function jetEmitFamily(w: WorldState, e: Enemy, family: ResonanceFamily, aim: number, isInverted: boolean): void {
-  const col = "#8a7bd8";
+  // The mirrored shards wear the COPIED weapon's OWN family hue (never JET's cold-indigo band),
+  // so a salvo reads as "that's MY gun" and not as one of JET's native attacks.
+  const col = RESONANCE_TELEGRAPH_COLOR[family];
   const sign = isInverted ? -1 : 1;
   const shard = (ang: number, speed: number): void =>
     spawnEnemyBullet(w, e.x + Math.cos(ang) * (e.radius + 6), e.y + Math.sin(ang) * (e.radius + 6), ang, speed, JET.globRadius, JET.globDamage, col, JET.globLife);
