@@ -1497,6 +1497,24 @@ export function gildedHpForFloor(floor: number): number {
 // and co-op scaling the TASK (not just HP). They slot onto the deep-floor progression
 // to replace the "repeats at 35 are boring" problem with three fresh authored fights.
 
+// The R-framework SURPLUS lever the three deep bosses share, mirroring the Weaver's
+// spiderling cadence / Marrow's ambush cadence EXACTLY (same helpers off encounterPower:
+// bossAddIntervalFor tightens the add-cadence, bossAddCapFor hard-clamps the count, and the
+// phase-timer soft-enrage + the once-per-phase surprise wave at POWER.surpriseMinR ride on
+// top). This is the WIRING that routes a high-R pull's surplus DPS into MORE mechanic
+// pressure + faster cadence instead of fatter HP alone. capBase 0 means a SOLO pull (R≈1)
+// adds nothing — the solo fight is untouched; co-op scales up (hard-clamped by addCapMax).
+// Placeholder curves reused from the Weaver band until the balancer's per-boss numbers land;
+// the payload is MORE telegraphed amber area-deny blooms (0.9s fuse, walk-dodgeable) around
+// the party — the game designer is separately speccing each boss's authored surplus content
+// (Jet second tracer, Tithe more/thicker slabs + feed-add, Quorum extra husk-add wave).
+export const DEEP_SURPLUS = {
+  interval: 6.0,     // add-cadence base → bossAddIntervalFor (tightens toward the 3.0s floor)
+  capBase: 0,        // extra-bloom count base → bossAddCapFor (0 at solo, +≈1.6 per R over 1)
+  ring: 130,         // the bloom ring distance around the party
+  surpriseBloom: 3,  // the once-per-phase surprise burst's extra blooms (R ≥ surpriseMinR)
+} as const;
+
 // ---- §5g JET (F35): the corrupted MIRROR of the party ----
 // JET mirrors the ARCHETYPE of the party's weapons — never their live inventory. Its
 // MIRROR POOL is a frozen set of "Resonance families" resolved once at the pull (like

@@ -53,7 +53,7 @@ import {
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
   AMBUSH, POWER, PHASE_TIME_BASE, powerRatioFor, bossAddCapFor, bossAddIntervalFor,
-  phaseTimerFor,
+  phaseTimerFor, DEEP_SURPLUS,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   ROLL_AFFIX, BOSS_AFFIX,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
@@ -7408,10 +7408,41 @@ function jetRecoverFor(move: AttackMove): number {
     : JET.spentRecover; // mirror (the window) + any fallback
 }
 
+// ---- the Wave 1 deep bosses' R-framework SURPLUS lever (JET / TITHE / QUORUM) ----
+// Mirrors updateWeaver's spiderling cadence / updateMarrow's ambush cadence EXACTLY, off
+// w.encounterPower: a tightening add-cadence (bossAddIntervalFor), a hard-clamped extra count
+// (bossAddCapFor — 0 at solo so the solo fight is untouched, scaling with R and clamped by
+// addCapMax), and the phase's ONE surprise wave at POWER.surpriseMinR. The phase-timer
+// soft-enrage rides the shared checkBossTransition path (each boss consumes boss.enrage), so
+// all four R levers (add-cadence, add-cap, phase-timer, surprise) are wired the same way the
+// F15–30 roster wires them. Surplus DPS at higher R therefore converts to MORE telegraphed
+// mechanic pressure — amber area-deny blooms (0.9s fuse, walk-dodgeable) ringing the party —
+// NOT to fatter HP alone. The bloom payload is the placeholder until the balancer's authored
+// per-boss surplus content (Jet second tracer / Tithe more+thicker slabs+feed-add / Quorum
+// extra husk-add wave) lands; the WIRING is what routes the surplus.
+function tickDeepBossSurplus(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const boss = e.boss;
+  if (!boss || boss.roar || e.spawnTimer > 0) return;
+  boss.addTimer -= dt;
+  if (boss.addTimer > 0) return;
+  boss.addTimer = bossAddIntervalFor(DEEP_SURPLUS.interval, w.encounterPower);
+  let n = bossAddCapFor(DEEP_SURPLUS.capBase, w.encounterPower); // 0 at solo; scales with R (clamped)
+  const isSurprise = w.encounterPower >= POWER.surpriseMinR && !boss.isSurpriseSpent;
+  if (isSurprise) { boss.isSurpriseSpent = true; n += DEEP_SURPLUS.surpriseBloom; }
+  if (n <= 0 || !findTarget(w, e.x, e.y)) return;
+  const ring = isSurprise ? POWER.surpriseClear : DEEP_SURPLUS.ring;
+  for (let i = 0; i < n; i++) {
+    const ang = (i / n) * Math.PI * 2 + boss.attackCount * 0.4;
+    plantAffixCharge(w, w.targetX + Math.cos(ang) * ring, w.targetY + Math.sin(ang) * ring);
+  }
+  ev.push({ t: "cue", name: isSurprise ? "bossSpawn" : "enemyAttack", x: w.targetX, y: w.targetY, rate: 0.6, gain: 0.5, trauma: isSurprise ? 0.05 : 0 });
+}
+
 function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
   if (w.jetMirror.length === 0) resolveJetMirror(w); // frozen at first tick (the pull loadout)
+  tickDeepBossSurplus(w, e, dt, ev); // R-framework surplus → mechanic pressure (off encounterPower)
   const a = e.attack;
 
   if (a.phase === "windup") { jetWindup(w, e, dt, ev); return; }
@@ -7674,6 +7705,7 @@ function jetFireBeam(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 function updateTithe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
+  tickDeepBossSurplus(w, e, dt, ev); // R-framework surplus → mechanic pressure (off encounterPower)
   const a = e.attack;
 
   if (a.phase === "windup") { titheWindup(w, e, dt, ev); return; }
@@ -7707,10 +7739,11 @@ function titheBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const phase = boss.phase;
   e.attack.cooldown = TITHE.attackCd[phase];
   const isSlabless = countLiveIds(w, boss.windowAddIds) === 0 && boss.windowAddIds.length === 0;
-  // SIGNATURE: once per P3, rip the plating into the rotating barrage wheel (isSurpriseSpent
-  // is the phase's one-shot flag — the Tithe has no add-pool surprise wave, so it is free).
-  if (phase >= 3 && !boss.isSurpriseSpent && boss.exposed <= 0 && isSlabless) {
-    boss.isSurpriseSpent = true;
+  // SIGNATURE: once per P3, rip the plating into the rotating barrage wheel. Gated on
+  // isNextRadial (set true by every checkBossTransition, unused otherwise by the Tithe) so it
+  // fires once on entering P3 — leaving isSurpriseSpent for the shared R-surplus surprise wave.
+  if (phase >= 3 && boss.isNextRadial && boss.exposed <= 0 && isSlabless) {
+    boss.isNextRadial = false;
     beginWindup(e, "spin");
     ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.85, trauma: 0.1 });
     return;
@@ -7958,6 +7991,8 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     e.hp = Math.min(e.maxHp, e.hp + QUORUM.healRegenPerSec * dt);
   }
   for (const h of liveHusks) { h.hp = e.hp; h.maxHp = e.maxHp; }
+
+  tickDeepBossSurplus(w, e, dt, ev); // R-framework surplus → mechanic pressure (off encounterPower)
 
   if (a.phase === "windup") { quorumWindup(w, e, dt, ev); return; }
   if (a.phase === "active") { quorumActive(w, e, dt, ev); return; }
