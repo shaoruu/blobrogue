@@ -58,6 +58,12 @@ export const DRAGON_NODE_ID = "pet_dragon";
 export const DRAGON_PET_ID = "dragon";
 export const DRAGON_RESCUE_FLOOR = 12;
 
+// Pet #4 — the baby slime, the DEEPEST rescue of the pack (a blob befriending a baby blob).
+// RESCUED like the rest, never bought — reaching its floor on any run grants it one time.
+export const SLIME_NODE_ID = "pet_slime";
+export const SLIME_PET_ID = "slime";
+export const SLIME_RESCUE_FLOOR = 18;
+
 // Whether a run that reached `deepestFloorThisRun` earns the one-time doggie rescue. Pure so
 // the server bank (recordRun) and any client hint agree.
 export function isDoggieRescuedByRun(deepestFloorThisRun: number): boolean {
@@ -93,6 +99,11 @@ export const CAMP_NODES: readonly CampNodeDef[] = [
     id: DRAGON_NODE_ID, name: "Baby Dragon", category: "companion", cost: 0, prereqs: [],
     desc: "A little amber dragon curled up in the depths — bring it back and it flutters after you, run after run.",
     pet: DRAGON_PET_ID, rescue: true, rescueFloor: DRAGON_RESCUE_FLOOR,
+  },
+  {
+    id: SLIME_NODE_ID, name: "Baby Slime", category: "companion", cost: 0, prereqs: [],
+    desc: "A wobbling baby blob from the deepest dark — one blob befriending another; carry it home and it bounces along at your side.",
+    pet: SLIME_PET_ID, rescue: true, rescueFloor: SLIME_RESCUE_FLOOR,
   },
   {
     id: "stash_slot_1", name: "Stash Slot", category: "convenience", cost: 25, prereqs: [CAMP_SHELL_ID],

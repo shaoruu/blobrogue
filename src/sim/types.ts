@@ -740,6 +740,7 @@ export type SpriteName =
   | "tithe_tribute" | "quorum_splinter"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
-  // swappable placeholder asset; the sim never references it (pets are OUT of the sim).
-  | "doggie" | "cat" | "dragon"
+  // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The
+  // slime companion's key is "slime_pet" so it never collides with the "slime" ENEMY sprite.
+  | "doggie" | "cat" | "dragon" | "slime_pet"
   | "heart" | "coin" | "gun" | "spit";

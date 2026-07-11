@@ -19,6 +19,7 @@ import {
   DOGGIE_NODE_ID, DOGGIE_PET_ID, DOGGIE_RESCUE_FLOOR,
   CAT_NODE_ID, CAT_PET_ID, CAT_RESCUE_FLOOR,
   DRAGON_NODE_ID, DRAGON_PET_ID, DRAGON_RESCUE_FLOOR,
+  SLIME_NODE_ID, SLIME_PET_ID, SLIME_RESCUE_FLOOR,
 } from "../src/sim/camp_nodes.js";
 import { petSpriteFor } from "../src/game/pets.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
@@ -126,38 +127,47 @@ function campSpendTests(): void {
     startCoinBonus(shellOwned) === 0 && startCoinBonus([CAMP_SHELL_ID, "coin_pouch"]) === 5);
 }
 
-// The pack grows: the cat + baby dragon are RESCUED companions like the doggie, found DEEPER.
-// They must be companion+rescue (never buyable), grant their pet once their node is owned, and
-// the server-side rescue grant must be data-driven (deeper floors earn deeper pets).
+// The pack grows: the cat + baby dragon + baby slime are RESCUED companions like the doggie,
+// found DEEPER. They must be companion+rescue (never buyable), grant their pet once their node
+// is owned, and the server-side rescue grant must be data-driven (deeper floors earn deeper
+// pets). The slime is the DEEPEST — a blob befriending a baby blob.
 function multiPetTests(): void {
-  section("multi-pet: the cat + baby dragon are RESCUED companions, found deeper than the pup");
+  section("multi-pet: the cat + baby dragon + baby slime are RESCUED companions, found deeper than the pup");
   const cat = campNodeById(CAT_NODE_ID);
   const dragon = campNodeById(DRAGON_NODE_ID);
+  const slime = campNodeById(SLIME_NODE_ID);
   check("pet_cat is a companion RESCUE (cost 0, rescue flag, grants the cat pet)",
     cat?.category === "companion" && cat?.rescue === true && cat?.cost === 0 && cat?.pet === CAT_PET_ID);
   check("pet_dragon is a companion RESCUE (cost 0, rescue flag, grants the dragon pet)",
     dragon?.category === "companion" && dragon?.rescue === true && dragon?.cost === 0 && dragon?.pet === DRAGON_PET_ID);
-  check("each pet is found DEEPER than the last (doggie < cat < dragon)",
-    DOGGIE_RESCUE_FLOOR < CAT_RESCUE_FLOOR && CAT_RESCUE_FLOOR < DRAGON_RESCUE_FLOOR,
-    `${DOGGIE_RESCUE_FLOOR} < ${CAT_RESCUE_FLOOR} < ${DRAGON_RESCUE_FLOOR}`);
+  check("pet_slime is a companion RESCUE (cost 0, rescue flag, grants the slime pet)",
+    slime?.category === "companion" && slime?.rescue === true && slime?.cost === 0 && slime?.pet === SLIME_PET_ID);
+  check("each pet is found DEEPER than the last (doggie < cat < dragon < slime)",
+    DOGGIE_RESCUE_FLOOR < CAT_RESCUE_FLOOR && CAT_RESCUE_FLOOR < DRAGON_RESCUE_FLOOR && DRAGON_RESCUE_FLOOR < SLIME_RESCUE_FLOOR,
+    `${DOGGIE_RESCUE_FLOOR} < ${CAT_RESCUE_FLOOR} < ${DRAGON_RESCUE_FLOOR} < ${SLIME_RESCUE_FLOOR}`);
   check("the node's rescueFloor matches its named constant",
     cat?.rescueFloor === CAT_RESCUE_FLOOR && dragon?.rescueFloor === DRAGON_RESCUE_FLOOR
+    && slime?.rescueFloor === SLIME_RESCUE_FLOOR
     && campNodeById(DOGGIE_NODE_ID)?.rescueFloor === DOGGIE_RESCUE_FLOOR);
 
-  section("Amber can NEVER buy the cat or dragon (canBuyNode refuses every rescue node)");
+  section("Amber can NEVER buy a companion (canBuyNode refuses every rescue node)");
   const buyCat = canBuyNode(CAT_NODE_ID, 9999, [CAMP_SHELL_ID]);
   const buyDragon = canBuyNode(DRAGON_NODE_ID, 9999, [CAMP_SHELL_ID]);
+  const buySlime = canBuyNode(SLIME_NODE_ID, 9999, [CAMP_SHELL_ID]);
   check("buying the cat is refused as a rescue", !buyCat.ok && buyCat.reason === "rescue");
   check("buying the dragon is refused as a rescue", !buyDragon.ok && buyDragon.reason === "rescue");
+  check("buying the slime is refused as a rescue", !buySlime.ok && buySlime.reason === "rescue");
 
   section("ownership derives from the rescued node; each pet is owned only once rescued");
   check("the cat is owned only with its node in unlocks",
     !isPetOwned(CAT_PET_ID, [CAMP_SHELL_ID]) && isPetOwned(CAT_PET_ID, [CAMP_SHELL_ID, CAT_NODE_ID]));
   check("the dragon is owned only with its node in unlocks",
     !isPetOwned(DRAGON_PET_ID, [CAMP_SHELL_ID]) && isPetOwned(DRAGON_PET_ID, [CAMP_SHELL_ID, DRAGON_NODE_ID]));
+  check("the slime is owned only with its node in unlocks",
+    !isPetOwned(SLIME_PET_ID, [CAMP_SHELL_ID]) && isPetOwned(SLIME_PET_ID, [CAMP_SHELL_ID, SLIME_NODE_ID]));
   check("ownedPets lists every rescued companion together",
-    ownedPets([CAMP_SHELL_ID, DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID]).sort().join(",")
-      === [DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID].sort().join(","));
+    ownedPets([CAMP_SHELL_ID, DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID]).sort().join(",")
+      === [DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID].sort().join(","));
 
   section("the server-side rescue grant is data-driven: deeper runs earn deeper pets");
   check("a shallow run (below the cat's floor) rescues only the pup",
@@ -167,9 +177,13 @@ function multiPetTests(): void {
     rescueNodesForRun(CAT_RESCUE_FLOOR).includes(CAT_NODE_ID)
     && rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DOGGIE_NODE_ID)
     && !rescueNodesForRun(CAT_RESCUE_FLOOR).includes(DRAGON_NODE_ID));
-  check("reaching the dragon's floor earns all three companions",
+  check("reaching the dragon's floor earns doggie+cat+dragon, not yet the slime",
     rescueNodesForRun(DRAGON_RESCUE_FLOOR).sort().join(",")
-      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID].sort().join(","));
+      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID].sort().join(",")
+    && !rescueNodesForRun(DRAGON_RESCUE_FLOOR).includes(SLIME_NODE_ID));
+  check("reaching the slime's floor (the deepest) earns all four companions",
+    rescueNodesForRun(SLIME_RESCUE_FLOOR).sort().join(",")
+      === [DOGGIE_NODE_ID, CAT_NODE_ID, DRAGON_NODE_ID, SLIME_NODE_ID].sort().join(","));
   check("a run below the shallowest rescue floor earns nothing",
     rescueNodesForRun(DOGGIE_RESCUE_FLOOR - 1).length === 0);
   check("isDoggieRescuedByRun still agrees with the generalized grant for the pup",
@@ -179,6 +193,7 @@ function multiPetTests(): void {
   check("doggie -> doggie", petSpriteFor(DOGGIE_PET_ID) === "doggie");
   check("cat -> cat", petSpriteFor(CAT_PET_ID) === "cat");
   check("dragon -> dragon", petSpriteFor(DRAGON_PET_ID) === "dragon");
+  check("slime -> slime_pet (distinct from the slime ENEMY sprite)", petSpriteFor(SLIME_PET_ID) === "slime_pet");
   check("an unknown pet id renders nothing (graceful null, never a crash)",
     petSpriteFor("griffin") === null && petSpriteFor("") === null);
   check("every companion node's pet id has a render sprite (no dangling pet)",

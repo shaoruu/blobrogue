@@ -37,10 +37,13 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   // sheets — the AD drops the final walk strip at this path with no code change; a missing
   // sheet cleanly falls back to the static idle PNG below (drawChar infers frame count/size).
   "doggie.walk": { src: "/sprites/pets/doggie_walk.png", fps: 9 },
-  // The cat + baby dragon share the doggie's companion contract: a 4-frame 256x64 walk strip
-  // (frame 0 = idle/sit), falling back to the static idle PNG below if a sheet is missing.
+  // The cat + baby dragon + baby slime share the doggie's companion contract: a 4-frame 256x64
+  // walk strip (frame 0 = idle/sit), falling back to the static idle PNG below if a sheet is
+  // missing. The slime companion registers under "slime_pet" so it never collides with the
+  // "slime" ENEMY sheet above.
   "cat.walk": { src: "/sprites/pets/cat_walk.png", fps: 9 },
   "dragon.walk": { src: "/sprites/pets/dragon_walk.png", fps: 9 },
+  "slime_pet.walk": { src: "/sprites/pets/slime_walk.png", fps: 9 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
   "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 11 },
@@ -351,9 +354,11 @@ const SOURCES: Record<SpriteName, string> = {
   // The companion doggie idle sprite (META spec §3). Swappable placeholder — the AD drops the
   // final generated doggie art at this exact path; a still-streaming image renders nothing.
   doggie: "/sprites/pets/doggie.png",
-  // The cat + baby dragon companion idle sprites (same 64x64 format as the doggie).
+  // The cat + baby dragon + baby slime companion idle sprites (same 64x64 format as the
+  // doggie). The slime uses the "slime_pet" key so it never collides with the "slime" enemy.
   cat: "/sprites/pets/cat.png",
   dragon: "/sprites/pets/dragon.png",
+  slime_pet: "/sprites/pets/slime.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",
