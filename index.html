@@ -655,6 +655,16 @@
          width attrs reserve the box before the file streams in. */
       .logo-img{ image-rendering:pixelated; height:clamp(30px,4.5vh,42px); width:auto; max-width:min(280px,80%); object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
       .home-hero .tag{ font-family:var(--f-ui); font-size:var(--fs-xs); line-height:1.4; letter-spacing:.5px; color:var(--ink-mute); max-width:520px; min-height:14px; text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      /* The live "players online" pill: a reserved, fixed-height line under the tagline.
+         Invisible (opacity, NOT display) until a positive count lands, so 0/loading/offline
+         never shifts the hero. The green dot is the design-system --grn (not an emoji). */
+      .home-online{ display:flex; align-items:center; justify-content:center; gap:7px; height:16px; min-height:16px;
+        font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.5px; color:var(--ink-mute); text-transform:none;
+        opacity:0; }
+      .home-online.on{ opacity:1; }
+      .home-online .online-dot{ flex:0 0 8px; width:8px; height:8px; border-radius:50%; background:var(--grn);
+        box-shadow:0 0 6px rgba(127,221,90,.7); }
+      .home-online .online-text{ min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .home-hero .blob-stage{ position:relative; flex:none; width:200px; height:200px;
         background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
       /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
@@ -854,6 +864,21 @@
       .menu p.lb-note{ min-height:30px; font-size:var(--fs-sm); line-height:1.5; margin:0; text-align:left; }
       .lb-rows-full .lb-row{ height:38px; flex:0 0 38px; background:var(--dun-1); box-shadow:inset 0 0 0 1px var(--dun-3); color:var(--cream); }
       .lb-rows-full .lb-floor{ color:var(--amber-hi); }
+      /* --- FULL LEADERBOARD rich stat columns (full board only; the title glance stays a
+         quiet name + floor). The header row and the data rows share these column widths so
+         values line up under their labels; padding/gap match .lb-row exactly. --- */
+      .lb-weapon{ flex:0 0 88px; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+        text-align:right; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.3px; color:var(--dun-4); }
+      .lb-kills, .lb-coins, .lb-time{ flex:0 0 52px; min-width:0; text-align:right;
+        font-family:var(--f-num); font-size:var(--fs-md); color:var(--ink-mute); }
+      .lb-rows-full .lb-kills{ color:var(--cream); }
+      .lb-rows-full .lb-coins{ color:var(--gold-hi); }
+      .lb-colhead{ display:flex; align-items:center; gap:8px; width:100%; padding:2px 8px 0; height:16px; flex:0 0 16px;
+        font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .lb-colhead span{ font-family:var(--f-ui); font-size:var(--fs-2xs); color:var(--dun-4); }
+      .lb-colhead .lb-name{ text-align:left; }
+      .lb-colhead .lb-arrow{ color:transparent; }
+      .lb-dot-ghost{ background:transparent; }
 
 
       /* --- reserved identity card (right column): guest CTA and account chip share ONE
@@ -1094,6 +1119,15 @@
          devices (the title glance keeps its fixed 28px rows — its 154px reserve is exact). */
       @media (max-width:680px), (pointer:coarse){
         .lb-rows-full .lb-row{ height:48px; flex:0 0 48px; }
+      }
+      /* Narrow widths: collapse the less-important leaderboard columns (weapon/coins/time)
+         so floor + kills stay readable without crowding — width-only (a wide touchscreen
+         keeps the full set). Header + rows share the classes, so both collapse in step. */
+      @media (max-width:680px){
+        .lb-weapon, .lb-coins, .lb-time{ display:none; }
+      }
+      @media (max-width:440px){
+        .lb-kills{ display:none; }
       }
 
       /* === WHAT'S NEW / CHANGELOG PANEL ===

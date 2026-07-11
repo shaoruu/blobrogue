@@ -74,6 +74,29 @@ export const list = query({
   },
 });
 
+// Rows count as "online" when they synced within this window. Deliberately longer than
+// list()'s 12s stale cutoff so the global tally tolerates the online lobby/run heartbeat's
+// slower (~5s) cadence plus a couple of missed beats without a blob flickering out.
+const ONLINE_WINDOW_MS = 30000;
+
+// A live, GLOBAL "who is connected right now" tally for the title screen — counts DISTINCT
+// players with a fresh presence row (someone briefly listed in two rooms is still one blob).
+// A full-table scan by design: presence holds one row per active member (dropped on leave),
+// this is the only cross-room read, and the count is the same for everyone, so a dedicated
+// index isn't worth the extra write cost on the ~11x/sec sync path.
+export const onlineCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - ONLINE_WINDOW_MS;
+    const rows = await ctx.db.query("presence").collect();
+    const online = new Set<string>();
+    for (const row of rows) {
+      if (row.updatedAt >= cutoff) online.add(row.playerId);
+    }
+    return online.size;
+  },
+});
+
 // The lobby READY toggle (roster shows READY/NOT READY per member; the host's START opens
 // when everyone is ready — see the menu's start gate).
 export const setReady = mutation({
