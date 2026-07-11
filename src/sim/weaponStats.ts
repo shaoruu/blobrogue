@@ -106,6 +106,7 @@ function roleOf(w: Weapon): string {
   if (w.killShards !== undefined) return "REAP THE PACK";
   if (w.coinBoost !== undefined) return "SPEND COINS FOR POWER";
   if (w.isPhase === true) return "SHOOT THROUGH WALLS";
+  if (w.nova !== undefined) return "COLLAPSE AND DETONATE";
   if (w.implode !== undefined) return "DRAG THEM TOGETHER";
   if (w.accel !== undefined && w.homing !== undefined) return "UNLEASH THE SWARM";
   if (w.homing !== undefined) return "SEEK TARGETS";
@@ -161,6 +162,7 @@ function coverageOf(w: Weapon, pellets: number, spread: number): WeaponCoverage 
   if (w.tether !== undefined) return { kind: "TETHER", patternOrder: null };
   if (w.paint !== undefined) return { kind: "GROUND", patternOrder: null };
   if (w.blast !== undefined) return { kind: "AREA", patternOrder: null };
+  if (w.nova !== undefined) return { kind: "AREA", patternOrder: null };
   if (w.implode !== undefined) return { kind: "AREA", patternOrder: null };
   if (w.chain !== undefined) return { kind: "CHAIN", patternOrder: null };
   if (w.homing !== undefined) return { kind: "TRACKING", patternOrder: null };
@@ -204,6 +206,7 @@ function mechanicsOf(w: Weapon, mods: PlayerMods): WeaponMechanic[] {
   if (w.coinBoost !== undefined) m.push({ tag: "GILDED", text: `EATS 1 COIN PER SHOT FOR \u00d7${w.coinBoost} DAMAGE`, mag: w.coinBoost });
   if (w.isPhase === true) m.push({ tag: "PHASE", text: "ROUNDS PASS THROUGH WALLS", mag: 1 });
   if (w.implode !== undefined) m.push({ tag: "IMPLODE", text: `${w.implode}PX IMPLOSION PULLS THE PACK IN`, mag: w.implode });
+  if (w.nova !== undefined) m.push({ tag: "NOVA", text: `THE CLUMP TAKES A ${w.nova}PX NOVA BLAST`, mag: w.nova });
   const kick = FIRE_KNOCKBACK[w.id];
   if (kick >= 12) m.push({ tag: "KICK", text: "KICKS YOU BACK", mag: kick });
   return m;

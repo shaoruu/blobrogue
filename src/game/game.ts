@@ -263,6 +263,15 @@ const SHOOT_SFX: Record<WeaponId, SfxName> = {
   midas: "shootPistol",
   phase: "tesla",
   vortex: "cannon",
+  // Content wave: each borrows the closest authored sample (final stems arrive with the art).
+  cleaver: "cannon",
+  scrapper: "shootRapid",
+  skipper: "shootShotgun",
+  arcbolt: "tesla",
+  cryobolt: "shootRapid",
+  firebomb: "cannon",
+  tracker: "homing",
+  singularity: "cannon",
 };
 // Per-shot pitch/gain trims where a shared sample needs to read as a different gun
 // (the railgun borrows the cannon boom, pitched up into a sharp crack).
@@ -277,6 +286,12 @@ const SHOOT_SFX_OPTS: Partial<Record<WeaponId, SfxOptions>> = {
   midas: { rate: 1.3, gain: 0.9 },
   phase: { rate: 0.7, gain: 0.8 },
   vortex: { rate: 0.6 },
+  cleaver: { rate: 0.8, gain: 0.9 },
+  scrapper: { rate: 1.25, gain: 0.7 },
+  arcbolt: { rate: 1.2, gain: 0.85 },
+  cryobolt: { rate: 1.5, gain: 0.6 },
+  firebomb: { rate: 0.75, gain: 0.95 },
+  singularity: { rate: 0.65, gain: 0.9 },
 };
 // Weapons whose shots leave a curl of barrel smoke (the beefy, black-powder end).
 const SMOKY_WEAPONS: ReadonlySet<WeaponId> = new Set(["shotgun", "cannon", "sawnoff", "railgun"]);
@@ -333,6 +348,8 @@ const FIRE_TRAUMA: Record<WeaponId, number> = {
   lastlight: 0.4, breach: 0.5, snapwire: 0.05, frostline: 0.03,
   halo: 0.14, sentry: 0.06, crook: 0.18,
   reaper: 0.22, swarm: 0.32, midas: 0.1, phase: 0.28, vortex: 0.4,
+  cleaver: 0.35, scrapper: 0.07, skipper: 0.4, arcbolt: 0.18,
+  cryobolt: 0.05, firebomb: 0.42, tracker: 0.14, singularity: 0.4,
 };
 // Per-weapon feel: recoil punch (sprite scale kick), camera kick (px, back along aim),
 // and knockback (px the weapon shoves the player). The hand cannon is the beefy end.
@@ -345,6 +362,8 @@ const FIRE_RECOIL: Record<WeaponId, number> = {
   lastlight: 1.4, breach: 1.5, snapwire: 0.4, frostline: 0.25,
   halo: 0.8, sentry: 0.5, crook: 1.0,
   reaper: 1.1, swarm: 1.3, midas: 0.8, phase: 1.2, vortex: 1.4,
+  cleaver: 1.3, scrapper: 0.5, skipper: 1.4, arcbolt: 0.8,
+  cryobolt: 0.4, firebomb: 1.4, tracker: 0.6, singularity: 1.4,
 };
 const FIRE_KICK: Record<WeaponId, number> = {
   pistol: 3, shotgun: 8, rapid: 1.2,
@@ -355,6 +374,8 @@ const FIRE_KICK: Record<WeaponId, number> = {
   lastlight: 8, breach: 9, snapwire: 1, frostline: 0.5,
   halo: 2, sentry: 1, crook: 3,
   reaper: 4, swarm: 5, midas: 2, phase: 5, vortex: 6,
+  cleaver: 6, scrapper: 1, skipper: 7, arcbolt: 2,
+  cryobolt: 1, firebomb: 7, tracker: 1.5, singularity: 6,
 };
 const KICK_DECAY = 20; // how fast the camera kick eases back to center
 const TRAUMA_HURT = 0.4;

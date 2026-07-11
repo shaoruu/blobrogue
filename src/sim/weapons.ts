@@ -128,6 +128,10 @@ export interface Weapon {
   coinBoost?: number;  // midas: eats 1 coin per shot to multiply damage by this (weak when broke)
   isPhase?: boolean;   // phase: rounds ignore walls (and destructible props) entirely
   implode?: number;    // vortex: implosion radius — the payload drags the pack onto the point
+  // singularity: paired with implode — the collapse point births a delayed nova blast of
+  // this radius once the pull has clumped the pack (two-stage: gather THEN detonate). One
+  // isolated field + one branch in implodeBullet, exactly like the Tier B behaviors above.
+  nova?: number;
   // Canonical special-mechanic tooltip copy (data-driven: the HUD drawer, the pickup
   // inspect surfaces and the dev sandbox all read THIS string, never re-describe it).
   special?: string;
@@ -373,6 +377,77 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
     implode: 120,
     special: "Shots implode, dragging the nearby pack onto the impact point.",
   },
+  // ---- THE CONTENT WAVE — new guns on the existing one-behavior-field pattern ----
+  // Each reuses an isolated behavior field (basePierce / pellets+bounce / burst / status /
+  // blast+burn / homing / implode) so the bullet update loop takes the exact same paths the
+  // base arsenal already does; only the legendary adds one new (nova) branch.
+  //
+  // SHRED A LINE: a heavy slow saw disc that punches through a whole file of bodies. The
+  // Thunderbolt is fast and stops at 2; the Cleaver is a slow, wide, deep-pierce room tool.
+  cleaver: {
+    id: "cleaver", name: "Cleaver", rarity: "common", fireCd: 0.72, speed: 360, life: 1.25,
+    damage: 3.6, pellets: 1, spread: 0, bulletRadius: 10, color: "#cfe8ff", muzzle: 3,
+    basePierce: 5,
+    special: "A slow saw disc shreds through a whole line of bodies.",
+  },
+  // HOSE A CROWD WIDE: a twin-pellet full-auto that fronts a spread across a soft crowd —
+  // wider and faster than the Hornet, softer per hit than the Triplet.
+  scrapper: {
+    id: "scrapper", name: "Scrapper", rarity: "common", fireCd: 0.12, speed: 600, life: 0.85,
+    damage: 1.0, pellets: 2, spread: 0.2, bulletRadius: 4, color: "#b6d36a", muzzle: 2,
+  },
+  // WORK THE CORNERS UP CLOSE: a bouncing buckshot — the fan banks off walls, so a corner
+  // shot fills a room. A close-range ricochet pack tool, distinct from the single-round banks.
+  skipper: {
+    id: "skipper", name: "Skipper", rarity: "common", fireCd: 0.5, speed: 520, life: 0.55,
+    damage: 1.5, pellets: 4, spread: 0.6, bulletRadius: 4, color: "#ffd08a", muzzle: 5,
+    bounce: 1,
+    special: "Buckshot banks once off walls — shoot the corner to fill a room.",
+  },
+  // TAX A MARKED BODY: every round stamps shock (amp + arc) on one target. A precise
+  // single-lane shocker — the shock does the work the modest slug can't.
+  arcbolt: {
+    id: "arcbolt", name: "Arcbolt", rarity: "rare", fireCd: 0.28, speed: 460, life: 0.5,
+    damage: 2.9, pellets: 1, spread: 0.05, bulletRadius: 5, color: "#7fe9ff", muzzle: 2,
+    shock: 2,
+    special: "Every round shocks (extra damage, then arcs to a neighbour) — short range.",
+  },
+  // FREEZE THE ROOM: a chilling shard that slows on contact and freezes a camper solid.
+  // The Frostline paints the FLOOR; the Cryobolt chills the BODY it hits — control on
+  // demand, feeble direct damage on purpose.
+  cryobolt: {
+    id: "cryobolt", name: "Cryobolt", rarity: "rare", fireCd: 0.3, speed: 560, life: 1.2,
+    damage: 1.2, pellets: 1, spread: 0.03, bulletRadius: 6, color: "#9fd8ff", muzzle: 2,
+    chill: 1.4,
+    special: "Every round chills; sustained fire freezes a body solid.",
+  },
+  // BURN THE CHOKEPOINT: a lobbed firebomb that detonates where it lands and leaves the
+  // whole blast ablaze. The Thumper is a clean AoE; the firebomb trades raw blast for a
+  // lingering burn DoT across everything it catches.
+  firebomb: {
+    id: "firebomb", name: "Firebomb", rarity: "rare", fireCd: 0.8, speed: 360, life: 0.6,
+    damage: 3.6, pellets: 1, spread: 0, bulletRadius: 8, color: "#ff7a3b", muzzle: 5,
+    blast: 56, burn: 2,
+    special: "Shells detonate on impact and set the whole blast ablaze — a short-armed lob.",
+  },
+  // RUN DOWN A RUNNER: one heavy seeking slug for the body that keeps slipping your aim.
+  // The Wisp sprays soft seekers; the Tracker commits a single hard-hitting hunter.
+  tracker: {
+    id: "tracker", name: "Tracker", rarity: "rare", fireCd: 0.85, speed: 460, life: 1.5,
+    damage: 9.3, pellets: 1, spread: 0, bulletRadius: 6, color: "#8affe0", muzzle: 3,
+    homing: 5,
+    special: "One slow, heavy round that seeks the nearest enemy — a hunter that never misses.",
+  },
+  // ---- legendary ----
+  // COLLAPSE, THEN DETONATE: the round implodes to yank the scattered pack onto one point,
+  // then a beat later a nova bursts on the clump. The Lodestone only gathers; the
+  // Singularity gathers AND finishes — a two-stage black hole into a star.
+  singularity: {
+    id: "singularity", name: "Singularity", rarity: "legendary", fireCd: 1.15, speed: 470, life: 1.3,
+    damage: 2.0, pellets: 1, spread: 0, bulletRadius: 7, color: "#c58bff", muzzle: 4,
+    implode: 116, nova: 78,
+    special: "Shots collapse the pack onto one point, then a nova detonates on the clump.",
+  },
 };
 
 export const DEFAULT_WEAPON: WeaponId = "pistol";
@@ -384,6 +459,8 @@ export const PICKUP_WEAPONS: readonly WeaponId[] = [
   "sword", "longsword", "spear",
   "lastlight", "breach", "snapwire", "frostline", "halo", "sentry", "crook",
   "reaper", "swarm", "midas", "phase", "vortex",
+  "cleaver", "scrapper", "skipper", "arcbolt", "cryobolt", "firebomb", "tracker",
+  "singularity",
 ];
 
 // The legendary tier of the pickup pool (derived once — gates and premium rolls read it).
@@ -487,6 +564,7 @@ export interface ShotSpec {
   accel?: number;
   isPhase?: boolean;
   implode?: number;
+  nova?: number;
   // Frostline painting, resolved with mods at fire time (size -> zone radius, life ->
   // zone duration) and stamped onto each bead.
   paintSpacing?: number;
@@ -544,6 +622,7 @@ export function fire(spec: ShotSpec, x: number, y: number, aim: number, rng: Rng
       accel: spec.accel,
       isPhase: spec.isPhase,
       implode: spec.implode,
+      nova: spec.nova,
       paintSpacing: spec.paintSpacing,
       paintRadius: spec.paintRadius,
       paintLife: spec.paintLife,

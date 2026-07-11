@@ -317,7 +317,12 @@ export type WeaponId =
   //  - midas: eats a coin per shot to hit far harder (fires weak when broke);
   //  - phase: rounds pass straight through walls — cover is the player's, never the room's;
   //  - vortex: shots implode, dragging every nearby body onto the impact point.
-  | "reaper" | "swarm" | "midas" | "phase" | "vortex";
+  | "reaper" | "swarm" | "midas" | "phase" | "vortex"
+  // The content wave — new guns built entirely on the existing one-behavior-field pattern
+  // (cleaver/scrapper/skipper/arcbolt/cryobolt/firebomb/tracker) plus one legendary that
+  // carries a single new isolated field (singularity: implode THEN a delayed nova blast).
+  | "cleaver" | "scrapper" | "skipper" | "arcbolt" | "cryobolt" | "firebomb" | "tracker"
+  | "singularity";
 
 // Drop-quality tier. Drives drop weighting (legendaries are genuinely rare and gated off
 // the earliest floors), the pickup/hotbar/tooltip rarity treatment, and shop pricing.
@@ -491,6 +496,11 @@ export interface Bullet {
   accel?: number;          // swarm: px/s² the round gains in flight
   isPhase?: boolean;       // phase: the round ignores walls (and destructible props) entirely
   implode?: number;        // vortex: implosion radius — the payload pulls the pack inward
+  // singularity (legendary): the SECOND stage. An imploding round that carries `nova`
+  // spawns a short-fused friendly blast at the collapse point once the pull has clumped
+  // the pack — the value is that nova blast radius. Sim-internal (never on the wire): the
+  // nova itself is an ordinary blast bullet, which the client already renders.
+  nova?: number;
   // Render recipe tag (the firing weapon). Selects the layered sprite FX in
   // renderBullets; absent on enemy fire, which keeps its own halo-and-core look.
   fx?: WeaponId;

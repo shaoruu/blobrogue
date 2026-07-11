@@ -84,6 +84,11 @@ export const WEAPON_KB: Record<WeaponId, number> = {
   // The vortex's KB is INWARD (implodeBullet aims it at the impact point) — this number
   // is the pull strength, resisted exactly like ordinary knockback.
   reaper: 5, swarm: 3, midas: 4, phase: 6, vortex: 22,
+  // Content wave. The Cleaver's heavy disc shoves hard; the Skipper buckshot and Scrapper
+  // stream stay light; the Firebomb blast and Singularity implosion (inward, like vortex)
+  // carry their own impulse.
+  cleaver: 10, scrapper: 2, skipper: 4, arcbolt: 5, cryobolt: 3, firebomb: 6, tracker: 3,
+  singularity: 20,
 };
 export const KB_LAMBDA = 16;
 export const KB_MAX_SPEED = 520;
@@ -110,6 +115,10 @@ export const FIRE_KNOCKBACK: Record<WeaponId, number> = {
   sword: 0, longsword: 0, spear: 8,
   lastlight: 12, breach: 10, snapwire: 0, frostline: 0, halo: 0, sentry: 0, crook: 0,
   reaper: 0, swarm: 6, midas: 0, phase: 4, vortex: 6,
+  // Content wave self-kick: the Cleaver's heavy disc and the Firebomb lob shove the firer;
+  // the rest are light.
+  cleaver: 4, scrapper: 0, skipper: 6, arcbolt: 2, cryobolt: 0, firebomb: 6, tracker: 0,
+  singularity: 4,
 };
 
 // ---- legendary gimmick tuning ----
@@ -125,6 +134,10 @@ export const KILL_SHARD_RADIUS = 4;
 // (the direct hit included — the implosion IS the payload) and is yanked inward via
 // WEAPON_KB.vortex.
 export const IMPLODE_SPLASH_FRAC = 0.75;
+// Singularity nova: seconds the second-stage blast waits at the collapse point before it
+// detonates. Long enough for the implosion's inward knockback to clump the pack onto the
+// point, short enough to read as one collapse-then-burst beat.
+export const NOVA_FUSE = 0.22;
 
 // ---- weapon effect entities (the effect wave; see types.ts Effect) ----
 // Hard world bounds: effects ride every snapshot unfiltered (like hazards), so the sim
