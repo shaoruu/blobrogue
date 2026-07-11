@@ -153,6 +153,8 @@ function twoWaveGates(): void {
     echo: 13, knell: 13, knot: 20, sac: 20, marshal: 13, toll: 13,
     // Wave 1 boss mechanic bodies first appear on their boss floors (F40/F45).
     tithe_slab: 40, quorum_shield: 45, quorum_heal: 45, quorum_dmg: 45,
+    // Wave 1 surplus adds first appear on their boss floors too.
+    tithe_tribute: 40, quorum_splinter: 45,
   };
   check("every synthesized verb was TAUGHT first (source intro <= B first floor)",
     bKinds.every((k) => (WAVE_B_SYNTHESIS[k] ?? []).every((src) =>

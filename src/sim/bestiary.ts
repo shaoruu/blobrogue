@@ -92,6 +92,9 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   quorum_shield: ["shielder"],         // the guard verb, one husk of the shared body
   quorum_heal: ["rootward"],           // the formation-support/anchor verb, the healing husk
   quorum_dmg: ["skeleton"],            // the lunge/aggressor verb, the damage husk
+  // Wave 1 surplus adds synthesize the earliest-taught chase verb (simple chasers):
+  tithe_tribute: ["slime"],            // the chase verb, aimed at the slab it reinforces
+  quorum_splinter: ["skeleton"],       // the aggressor-chaser verb, a role-echo shard
 };
 
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity
