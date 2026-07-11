@@ -24,8 +24,8 @@ import { WSTransport } from "../client/wsTransport.js";
 import { STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT } from "../net/protocol.js";
 import { resolveSpectateTarget, cycleSpectateTarget, isReconnectingTeammate } from "./spectate.js";
 import { drawLoadoutOverlays } from "./cosmeticArt.js";
-import { bodyPaletteIndex } from "./cosmetics.js";
-import type { CosmeticLoadout } from "./cosmetics.js";
+import { bodyPaletteIndex, EMPTY_LOADOUT } from "./cosmetics.js";
+import type { CosmeticLoadout, CosmeticSlot } from "./cosmetics.js";
 import { PartyGate } from "../net/partyGate.js";
 import type { ExpectedMember, PartyGateView } from "../net/partyGate.js";
 import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST, CONNECT_CANCEL_HINT, OFFER_EXPIRED_TOAST } from "../ui/onlineCopy.js";
@@ -7653,6 +7653,30 @@ export class Game {
   // isolation (spec build-gate). Applies the kit's stat lean + starting weapon.
   devSetKit(kit: KitId): void {
     setPlayerKit(this.world, LOCAL_ID, kit);
+  }
+
+  // Sandbox: equip a companion pet on the local blob so it renders + trots along in creative
+  // mode. Pass null to remove. Visual-only (out-of-sim): it drives the exact selfPet field a
+  // real run uses, so previewing a pet here follows the same render/follow path — never a sim
+  // entity, so it cannot affect determinism.
+  devSetPet(petId: string | null): void {
+    this.selfPet = petId;
+  }
+
+  devPet(): string | null {
+    return this.selfPet;
+  }
+
+  // Sandbox: equip a cosmetic overlay/palette on the local blob so a hat/face/body pick can be
+  // previewed on the player. Visual-only; mirrors the loadout the closet writes, so it flows
+  // through the same hero-base + overlay render path a run uses. Pass null to bare the slot.
+  devSetCosmetic(slot: CosmeticSlot, id: string | null): void {
+    const base = this.selfCosmetics ?? { ...EMPTY_LOADOUT };
+    this.selfCosmetics = { ...base, [slot]: id };
+  }
+
+  devCosmetic(slot: CosmeticSlot): string | null {
+    return this.selfCosmetics?.[slot] ?? null;
   }
 
   // Sandbox: fill the ult meter + clear the 8s lockout, so a cast is available on demand.

@@ -428,6 +428,13 @@ export function weaponIconSrc(id: WeaponId): string | null {
   return PICKUP_SOURCES[id] ?? null;
 }
 
+// A registered sprite's base (idle) source URL by name — the DOM-surface counterpart to
+// weaponIconSrc, used by the dev creative-mode catalog to show a thumbnail per enemy/boss.
+// Never called on a hot path.
+export function spriteSrc(name: SpriteName): string {
+  return SOURCES[name];
+}
+
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private tintCache = new Map<string, HTMLCanvasElement>();
