@@ -949,6 +949,32 @@ export const WAVE_SOUNDS = {
     stem: "pet/dog_happy", variants: 3, gain: 0.4, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05, spatial: true, cooldownMs: 1500,
   },
+  // The cat / baby dragon / baby slime each get a small species voice on the pet bus, same
+  // move-cue + settle-cue shape as the doggie (cooldowns own the anti-annoyance cadence).
+  "cat.move": {
+    stem: "pet/cat_meow", variants: 2, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6500,
+  },
+  "cat.settle": {
+    stem: "pet/cat_purr", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "dragon.move": {
+    stem: "pet/dragon_chirp", variants: 2, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6500,
+  },
+  "dragon.settle": {
+    stem: "pet/dragon_rumble", variants: 1, gain: 0.28, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "slimepet.move": {
+    stem: "pet/slime_squish", variants: 2, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 5500,
+  },
+  "slimepet.settle": {
+    stem: "pet/slime_plop", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
   "pet.summon": {
     stem: "pet/summon", variants: 1, gain: 0.38, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05,

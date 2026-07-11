@@ -13,7 +13,7 @@ import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL }
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
-import { DOGGIE_PET_ID } from "../sim/camp_nodes.js";
+import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
@@ -61,6 +61,7 @@ import type { SfxName, SfxOptions } from "./audio.js";
 import { waveAudio } from "./waveAudio.js";
 import type { WaveFramePlayer } from "./waveAudio.js";
 import { WAVE_HAZARDS, WEAPON_AUDIO, STATUS_AUDIO } from "./waveSpec.js";
+import type { WaveEventId } from "./waveSpec.js";
 import { ShockwaveField, ScreenFlash, AmbienceField } from "./vfx.js";
 import { LightingRenderer } from "./lighting.js";
 import type { StaticLightSpec } from "./lighting.js";
@@ -180,6 +181,15 @@ const PET_STOP_DIST = 12;     // within this of the rest spot it SITS (settles b
 const PET_FOLLOW_GAIN = 6;    // trot speed scales with distance (a little lag/catch-up)
 const PET_MAX_SPEED = 340;    // px/s cap on the trot (keeps pace with a running blob)
 const PET_WARP_DIST = 380;    // fell way behind (dash/teleport/floor change) -> scamper-warp
+// Per-pet voice: a move cue (while trotting), a settle cue (on stop), and an optional trot
+// loop. The doggie has the richest set (a felt trot loop + pant); the others get a small
+// species move/settle. Cooldowns live in the wave spec, so this only fires on transitions.
+const PET_VOICES: Record<string, { move: string; settle: string; trot?: WaveEventId }> = {
+  [DOGGIE_PET_ID]: { move: "dog.pant", settle: "dog.settle", trot: "dog.trot" },
+  [CAT_PET_ID]: { move: "cat.move", settle: "cat.settle" },
+  [DRAGON_PET_ID]: { move: "dragon.move", settle: "dragon.settle" },
+  [SLIME_PET_ID]: { move: "slimepet.move", settle: "slimepet.settle" },
+};
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // A coin token flying from its pickup spot (world x,y) up into the top-left wallet: t runs
@@ -7548,12 +7558,15 @@ export class Game {
     // wave-spec cooldowns own the anti-annoyance cadence; here we only fire on real state
     // transitions: a soft trot loop while moving, a content settle-sigh when it stops, and
     // an occasional pant kept alive by its own 6s cooldown while it keeps trotting.
-    if (ownerId === LOCAL_ID && petId === DOGGIE_PET_ID) {
-      waveAudio.holdLoop("dog.trot", "selfpet", pet.isMoving);
-      if (pet.isMoving) {
-        waveAudio.cueAt("dog.pant", pet.x, pet.y); // 6s cooldown gates the cadence
-      } else if (pet.wasMoving) {
-        waveAudio.cueAt("dog.settle", pet.x, pet.y); // the cozy stop payoff (8s cooldown)
+    if (ownerId === LOCAL_ID) {
+      const voice = PET_VOICES[petId];
+      if (voice !== undefined) {
+        if (voice.trot !== undefined) waveAudio.holdLoop(voice.trot, "selfpet", pet.isMoving);
+        if (pet.isMoving) {
+          waveAudio.cueAt(voice.move, pet.x, pet.y); // the move cue's own cooldown gates cadence
+        } else if (pet.wasMoving) {
+          waveAudio.cueAt(voice.settle, pet.x, pet.y); // the cozy stop payoff
+        }
       }
     }
     pet.wasMoving = pet.isMoving;

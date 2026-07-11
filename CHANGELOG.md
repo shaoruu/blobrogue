@@ -15,6 +15,8 @@ Newest changes first. (Times are Pacific.)
 - Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
 
 ## 2026-07-11
+- **Every pet has a voice now:** the cat meows and purrs, the baby dragon chirps and rumbles, and the slime squishes along beside you (each warm and cooldown'd so it stays cute, never annoying).
+
 - **The doggie has a voice:** your companion now softly pants as it trots to keep up and gives a content little sigh when it settles beside you (warm, low, and cooldown'd so it never grates).
 
 - **New guns sound the part:** the 8 new weapons each got a distinct fire sound (saw-disc whirr, arc zap, cryo crackle, the void cannon's gravity whoomp, and more).
