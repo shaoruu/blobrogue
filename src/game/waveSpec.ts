@@ -510,6 +510,40 @@ export const WAVE_SOUNDS = {
     duck: [dM(0.8, 0.06, 0.2)],
     fallback: { sample: "cannon", rate: 1.12, lowpassHz: 1100 }, // launch thump, not an explosion
   },
+  // Content-wave weapons (PR #97): each gets a bespoke fire cue with a safe base-sample
+  // fallback (so a missing/streaming stem still sounds, per the authored-or-fallback contract).
+  "shootCleaver": {
+    stem: "sfx/cleaver_fire_v1", variants: 1, gain: 0.7, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, fallback: { sample: "shootShotgun", rate: 0.85 },
+  },
+  "shootScrapper": {
+    stem: "sfx/scrapper_fire_v1", variants: 1, gain: 0.5, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, fallback: { sample: "smg", rate: 1.05 },
+  },
+  "shootSkipper": {
+    stem: "sfx/skipper_fire_v1", variants: 1, gain: 0.72, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, fallback: { sample: "shootShotgun", rate: 0.95 },
+  },
+  "shootArcbolt": {
+    stem: "sfx/arcbolt_fire_v1", variants: 1, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, fallback: { sample: "tesla", rate: 1.1 },
+  },
+  "shootCryobolt": {
+    stem: "sfx/cryobolt_fire_v1", variants: 1, gain: 0.6, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, fallback: { sample: "homing", rate: 1.15 },
+  },
+  "shootFirebomb": {
+    stem: "sfx/firebomb_fire_v1", variants: 1, gain: 0.72, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, duck: [dM(0.8, 0.06, 0.2)], fallback: { sample: "cannon", rate: 1.05, lowpassHz: 1200 },
+  },
+  "shootTracker": {
+    stem: "sfx/tracker_fire_v1", variants: 1, gain: 0.62, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.05, spatial: true, fallback: { sample: "homing", rate: 1.0 },
+  },
+  "shootSingularity": {
+    stem: "sfx/singularity_fire_v1", variants: 1, gain: 0.78, bus: "sfx", priority: WAVE_PRIORITY.weapon,
+    jitter: 0.04, spatial: true, duck: [dM(0.75, 0.08, 0.25)], fallback: { sample: "cannon", rate: 0.85, lowpassHz: 900 },
+  },
   "mortarDetonate": {
     stem: "sfx/thumper_impact_v1", variants: 1, gain: 0.9, bus: "sfx", priority: WAVE_PRIORITY.impact,
     jitter: 0.05, spatial: true,
@@ -1631,6 +1665,14 @@ export const WAVE_WEAPON_FIRE: Readonly<Record<string, WaveEventId>> = {
   mortar: "shootMortar",
   lastlight: "shootLastlight",
   frostline: "shootFrostline",
+  cleaver: "shootCleaver",
+  scrapper: "shootScrapper",
+  skipper: "shootSkipper",
+  arcbolt: "shootArcbolt",
+  cryobolt: "shootCryobolt",
+  firebomb: "shootFirebomb",
+  tracker: "shootTracker",
+  singularity: "shootSingularity",
 };
 
 // ---- the WEAPON AUDIO CONTRACT: semantic states -> manifest rows -----------------------

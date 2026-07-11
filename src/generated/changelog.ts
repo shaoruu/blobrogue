@@ -18,6 +18,8 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "unreleased",
     date: "unreleased",
     entries: [
+      { title: "Three new companions to rescue", body: "a grey cat, a baby amber dragon, and a baby slime join the doggie at the Kennel — rescue each from a deeper floor (the slime waits in the deepest dark), then pick which one rides along at your side (one companion at a time)." },
+      { title: "More guns, more traits", body: "8 new weapons — Cleaver (a slow saw disc that shreds a whole line), Scrapper (twin-pellet spray hose), Skipper (buckshot that banks off walls), Arcbolt (short-range shocker that arcs across a pack), Cryobolt (freezes a body solid), Firebomb (a lob that leaves the blast ablaze), Tracker (one heavy seeker that never misses), and the legendary Singularity (collapses the pack onto one point, then a nova detonates on the clump). Plus 10 new blessings — Marksman, Juggernaut, Heavy Rounds, Skirmisher, Executioner, Overload, Featherweight, Frostbite, Quickdraw, and Vanguard — each a distinct build with a real tradeoff." },
       { body: "Content push: more bosses ramping toward floor 100 (with giant spectacle set-pieces + anti-repeat affixes), new gun verbs, deeper-floor enemies, and seeded floor mutators/elite affixes for run variety." },
       { body: "Kits/classes + XP: pick a class (Gunner/Mender/Bulwark/Phantom) with a signature ultimate; account XP unlocks kits & cosmetics." },
       { body: "More cosmetics (a fresh wave of real generated hats + face items, replacing the old placeholder ones), more blessings, HP numbers on the HUD, and interact-with-Patch." },
@@ -29,6 +31,7 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "2026-07-11",
     date: "2026-07-11",
     entries: [
+      { title: "New guns sound the part", body: "the 8 new weapons each got a distinct fire sound (saw-disc whirr, arc zap, cryo crackle, the void cannon's gravity whoomp, and more)." },
       { title: "Chunkier, better-spaced Camp Doggie", body: "the pup is now pixelated to match the game's art scale (it was rendering too high-def/smooth next to everything else), and it sits a bit further back so it hangs out beside you instead of on top of you." },
       { title: "Main menu fits on one screen", body: "the home screen no longer scrolls — Play, Camp, the leaderboard glance, and every destination are visible at once on any window size (the blob stays the centerpiece). Short laptops now compact the hero band instead of pushing Play off-screen." },
     ],
