@@ -15,7 +15,7 @@ import {
 } from "../src/sim/balance.js";
 import {
   CAMP_NODES, campNodeById, canBuyNode, isNodeOwned, prereqsMet, isPetOwned, ownedPets,
-  startCoinBonus, CAMP_SHELL_ID, DOGGIE_NODE_ID, DOGGIE_PET_ID,
+  startCoinBonus, isDoggieRescuedByRun, CAMP_SHELL_ID, DOGGIE_NODE_ID, DOGGIE_PET_ID, DOGGIE_RESCUE_FLOOR,
 } from "../src/sim/camp_nodes.js";
 import { createWorld, spawnPlayerInWorld, stepWorld } from "../src/sim/world.js";
 import { buildSnapshot } from "../src/net/protocol.js";
@@ -80,36 +80,43 @@ function amberEarnTests(): void {
 }
 
 function campSpendTests(): void {
-  section("camp nodes: the exact wave-1 table + server-authoritative buy validation");
+  section("camp nodes: the exact wave-1 table (pet is RESCUED, sinks are amber-bought)");
   check("the hub shell is free (cost 0), no prereqs", campNodeById(CAMP_SHELL_ID)?.cost === 0);
   const doggie = campNodeById(DOGGIE_NODE_ID);
-  check("pet_doggie costs 30, category companion, grants the doggie pet, prereqs the shell",
-    doggie?.cost === 30 && doggie?.category === "companion" && doggie?.pet === DOGGIE_PET_ID
-    && doggie?.prereqs.includes(CAMP_SHELL_ID));
-  check("stash_slot_1 costs 25 (convenience)", campNodeById("stash_slot_1")?.cost === 25);
-  check("coin_pouch costs 20 and grants +5 start-run coins (convenience)",
+  check("pet_doggie is a RESCUE (not bought): rescue flag, cost 0, grants the doggie pet",
+    doggie?.rescue === true && doggie?.cost === 0 && doggie?.category === "companion" && doggie?.pet === DOGGIE_PET_ID);
+  check("stash_slot_1 costs 25 (convenience, amber-bought)", campNodeById("stash_slot_1")?.cost === 25);
+  check("coin_pouch costs 20 and grants +5 start-run coins (convenience, amber-bought)",
     campNodeById("coin_pouch")?.cost === 20 && campNodeById("coin_pouch")?.startCoins === 5);
-  check("every non-hub node prereqs the shell (the loop's entry)",
-    CAMP_NODES.filter((n) => n.id !== CAMP_SHELL_ID).every((n) => n.prereqs.includes(CAMP_SHELL_ID)));
+  check("every CONVENIENCE node prereqs the shell (the loop's entry)",
+    CAMP_NODES.filter((n) => n.category === "convenience").every((n) => n.prereqs.includes(CAMP_SHELL_ID)));
 
-  section("buy gate (pure, server-side): enough amber, prereqs met, not already owned");
+  section("the doggie is RESCUED, never bought: reachable early, one-time, not for sale");
+  check(`the rescue floor is shallow (${DOGGIE_RESCUE_FLOOR}) — reachable in the first few runs`, DOGGIE_RESCUE_FLOOR === 3);
+  check("a run below the rescue floor does NOT rescue the pup", !isDoggieRescuedByRun(2));
+  check("reaching the rescue floor rescues the pup", isDoggieRescuedByRun(3) && isDoggieRescuedByRun(9));
+  const rescueBuy = canBuyNode(DOGGIE_NODE_ID, 9999, [CAMP_SHELL_ID]);
+  check("Amber can NEVER buy the pet (canBuyNode refuses a rescue node)",
+    !rescueBuy.ok && rescueBuy.reason === "rescue", !rescueBuy.ok ? rescueBuy.reason : "accepted!");
+
+  section("buy gate (pure, server-side) for the CONVENIENCE sinks: amber / prereqs / owned");
   const shellOwned = [CAMP_SHELL_ID];
   check("rejects an unknown node", canBuyNode("nope", 999, shellOwned).ok === false);
-  const lockedNoShell = canBuyNode(DOGGIE_NODE_ID, 999, []);
-  check("rejects when prereqs unmet (no shell yet)", lockedNoShell.ok === false && !lockedNoShell.ok && lockedNoShell.reason === "locked");
-  const poor = canBuyNode(DOGGIE_NODE_ID, 29, shellOwned);
-  check("rejects when too poor (29 < 30)", !poor.ok && poor.reason === "insufficient");
-  const ok = canBuyNode(DOGGIE_NODE_ID, 30, shellOwned);
-  check("accepts at exactly the cost, returning the amount to deduct", ok.ok === true && ok.ok && ok.cost === 30);
-  const dupe = canBuyNode(DOGGIE_NODE_ID, 999, [CAMP_SHELL_ID, DOGGIE_NODE_ID]);
+  const lockedNoShell = canBuyNode("coin_pouch", 999, []);
+  check("rejects when prereqs unmet (no shell yet)", !lockedNoShell.ok && lockedNoShell.reason === "locked");
+  const poor = canBuyNode("coin_pouch", 19, shellOwned);
+  check("rejects when too poor (19 < 20)", !poor.ok && poor.reason === "insufficient");
+  const ok = canBuyNode("coin_pouch", 20, shellOwned);
+  check("accepts at exactly the cost, returning the amount to deduct", ok.ok === true && ok.ok && ok.cost === 20);
+  const dupe = canBuyNode("coin_pouch", 999, [CAMP_SHELL_ID, "coin_pouch"]);
   check("rejects an already-owned node", !dupe.ok && dupe.reason === "owned");
   check("prereqsMet / isNodeOwned agree with the gate",
-    prereqsMet(doggie!, shellOwned) && !isNodeOwned(DOGGIE_NODE_ID, shellOwned));
+    prereqsMet(campNodeById("coin_pouch")!, shellOwned) && !isNodeOwned("coin_pouch", shellOwned));
 
-  section("pet ownership derives from owned companion nodes; start-coin bonus from convenience");
-  check("the doggie pet is owned only once its node is owned",
+  section("pet ownership derives from the rescued node; start-coin bonus from convenience");
+  check("the doggie pet is owned only once it is rescued (its node is in unlocks)",
     !isPetOwned(DOGGIE_PET_ID, shellOwned) && isPetOwned(DOGGIE_PET_ID, [CAMP_SHELL_ID, DOGGIE_NODE_ID]));
-  check("ownedPets lists the doggie once its node is owned",
+  check("ownedPets lists the doggie once rescued",
     ownedPets([CAMP_SHELL_ID, DOGGIE_NODE_ID]).join(",") === DOGGIE_PET_ID);
   check("coin_pouch grants +5 start coins only when owned",
     startCoinBonus(shellOwned) === 0 && startCoinBonus([CAMP_SHELL_ID, "coin_pouch"]) === 5);

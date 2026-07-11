@@ -16,23 +16,37 @@ export interface CampNodeDef {
   id: string;                 // owned-node id (stored in players.unlocks[])
   name: string;
   category: CampNodeCategory;
-  cost: number;               // Amber cost (0 = free-unlocked)
+  cost: number;               // Amber cost (0 = free-unlocked / not amber-bought)
   prereqs: readonly string[]; // node ids that must already be owned
   desc: string;               // one player-facing line
   // companion nodes only: the pet id this node grants (the equippedPet value + wire label).
   pet?: string;
   // convenience only: extra coins the player starts a floor run with (no combat power).
   startCoins?: number;
+  // RESCUED, never bought (studio hard line — pets must read clear of pay-for-advantage): the
+  // node is granted like an achievement (server-side, see camp_nodes rescue helpers), and
+  // canBuyNode refuses it. The Kennel adopts/equips it; it is never a shop item.
+  rescue?: boolean;
 }
 
 // The camp hub itself: free-unlocked the first time a player banks any Amber (the loop's
 // entry). Everything else prereqs on it.
 export const CAMP_SHELL_ID = "camp_shell";
 
-// Pet #1 — the doggie. Its node is bought with Amber; the pet it grants is DOGGIE_PET_ID,
-// which is what rides the wire as the equipped-pet label.
+// Pet #1 — the doggie. It is RESCUED, not bought (studio hard line): granted like an
+// achievement the first time a run reaches DOGGIE_RESCUE_FLOOR (reachable in the first few
+// runs). The pet it grants is DOGGIE_PET_ID, which rides the wire as the equipped-pet label.
 export const DOGGIE_NODE_ID = "pet_doggie";
 export const DOGGIE_PET_ID = "doggie";
+// The stray pup is found in the depths: the deepest floor a run must reach to rescue it. Kept
+// shallow so the pet lands early (the loop's first emotional payoff), and it is one-time.
+export const DOGGIE_RESCUE_FLOOR = 3;
+
+// Whether a run that reached `deepestFloorThisRun` earns the one-time doggie rescue. Pure so
+// the server bank (recordRun) and any client hint agree.
+export function isDoggieRescuedByRun(deepestFloorThisRun: number): boolean {
+  return deepestFloorThisRun >= DOGGIE_RESCUE_FLOOR;
+}
 
 export const CAMP_NODES: readonly CampNodeDef[] = [
   {
@@ -40,9 +54,9 @@ export const CAMP_NODES: readonly CampNodeDef[] = [
     desc: "The camp stirs awake — free the first time you bank Amber.",
   },
   {
-    id: DOGGIE_NODE_ID, name: "Doggie", category: "companion", cost: 30, prereqs: [CAMP_SHELL_ID],
-    desc: "Adopt a loyal pup at the Kennel — it trots along at your side, into the dungeon and all.",
-    pet: DOGGIE_PET_ID,
+    id: DOGGIE_NODE_ID, name: "Doggie", category: "companion", cost: 0, prereqs: [],
+    desc: "A stray pup rescued from the depths — adopt it at the Kennel and it trots along at your side, into the dungeon and all.",
+    pet: DOGGIE_PET_ID, rescue: true,
   },
   {
     id: "stash_slot_1", name: "Stash Slot", category: "convenience", cost: 25, prereqs: [CAMP_SHELL_ID],
@@ -67,15 +81,17 @@ export function prereqsMet(node: CampNodeDef, owned: readonly string[]): boolean
   return node.prereqs.every((p) => owned.includes(p));
 }
 
-export type BuyReject = "unknown" | "owned" | "locked" | "insufficient";
+export type BuyReject = "unknown" | "owned" | "locked" | "insufficient" | "rescue";
 
 export type BuyCheck = { ok: true; cost: number } | { ok: false; reason: BuyReject };
 
 // The server-authoritative purchase gate (pure): the Convex buyNode mutation calls THIS with
-// the row's real Amber + owned ids, so a client can never fake affordability or prereqs.
+// the row's real Amber + owned ids, so a client can never fake affordability or prereqs. A
+// RESCUE node (a pet) is never for sale — Amber can never buy a pet (pay-for-advantage line).
 export function canBuyNode(id: string, amber: number, owned: readonly string[]): BuyCheck {
   const node = campNodeById(id);
   if (!node) return { ok: false, reason: "unknown" };
+  if (node.rescue) return { ok: false, reason: "rescue" };
   if (isNodeOwned(id, owned)) return { ok: false, reason: "owned" };
   if (!prereqsMet(node, owned)) return { ok: false, reason: "locked" };
   if (amber < node.cost) return { ok: false, reason: "insufficient" };

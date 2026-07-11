@@ -13,7 +13,7 @@ import { itemById } from "../sim/items.js";
 import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js";
 import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
-import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet, DOGGIE_NODE_ID, DOGGIE_PET_ID } from "../sim/camp_nodes.js";
+import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet, DOGGIE_NODE_ID, DOGGIE_PET_ID, DOGGIE_RESCUE_FLOOR } from "../sim/camp_nodes.js";
 import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
@@ -1598,14 +1598,13 @@ export class Menu {
       bal.appendChild(el("span", "camp-amber-lbl", "Amber"));
       body.appendChild(bal);
 
-      // THE KENNEL — adopt + equip the doggie (the wave-1 payoff).
-      const doggie = campNodeById(DOGGIE_NODE_ID)!;
+      // THE KENNEL — adopt + equip the RESCUED doggie (the wave-1 payoff). The pet is earned,
+      // never bought: until it is rescued from the depths, the Kennel just points the way.
       const isDoggieOwned = isNodeOwned(DOGGIE_NODE_ID, owned);
       const kennel = el("div", "camp-section camp-kennel");
       kennel.appendChild(el("h2", "camp-h", "The Kennel"));
       if (!isDoggieOwned) {
-        kennel.appendChild(el("p", "muted", "A loyal pup waits to be adopted \u2014 it'll follow you everywhere, even into the dungeon."));
-        kennel.appendChild(this.campBuyButton(doggie, amber, owned, note, rebuild));
+        kennel.appendChild(el("p", "muted", `A stray pup is lost somewhere in the depths \u2014 reach floor ${DOGGIE_RESCUE_FLOOR} on a run to bring it home. Pets are rescued, never bought.`));
       } else {
         const isEquipped = equippedPet === DOGGIE_PET_ID;
         kennel.appendChild(el("p", "muted", isEquipped ? "Doggie is at your side \u2014 sits when you rest, trots when you roam." : "Doggie is adopted \u2014 whistle to bring it along."));
@@ -1656,22 +1655,6 @@ export class Menu {
     // Hydrate the authoritative profile (Amber balance / owned nodes / equipped pet), then
     // repaint in place — a cold open shows the cached profile immediately, zero layout shift.
     void this.hydrateCamp();
-  }
-
-  // A full-width buy button for a headline node (the Kennel doggie), stateful by ownership +
-  // affordability + prereqs. All validation is re-done server-side on click; this is display.
-  private campBuyButton(node: CampNodeDef, amber: number, owned: readonly string[], note: HTMLElement, rebuild: () => HTMLElement): HTMLElement {
-    const locked = !prereqsMet(node, owned);
-    const afford = amber >= node.cost;
-    const btn = el("button", locked || !afford ? "camp-node locked" : "camp-node buyable",
-      locked ? `${node.name} \u2014 locked` : `Adopt ${node.name} \u2014 \u25c6 ${node.cost}`);
-    btn.type = "button";
-    btn.disabled = locked;
-    btn.onclick = () => {
-      if (!afford) { note.textContent = `Not enough Amber \u2014 need \u25c6 ${node.cost}.`; return; }
-      void this.campBuy(node.id, note, rebuild);
-    };
-    return btn;
   }
 
   // A convenience-node purchase card: owned / buyable / can't-afford / locked, one per node.

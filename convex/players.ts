@@ -9,7 +9,7 @@ import { foldBestRun, foldFloorProgress, mergeBestRun, syncIdentity, cleanBuild 
 import type { RunBuild } from "./leaderboard";
 import { masteryXpForReachedFloor, masteryLevelForXp } from "./masteryCore";
 import { bankedRunAmber, firstBossAmber, isBossKindId } from "../src/sim/balance.js";
-import { canBuyNode, isPetOwned, CAMP_SHELL_ID } from "../src/sim/camp_nodes.js";
+import { canBuyNode, isPetOwned, CAMP_SHELL_ID, DOGGIE_NODE_ID, isDoggieRescuedByRun } from "../src/sim/camp_nodes.js";
 
 export interface Profile {
   playerId: string;
@@ -404,6 +404,10 @@ async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Pro
   // this account banks any Amber (the loop's entry point).
   const metaUnlocks = newBossKinds.map(bossKillFlag);
   if (nextAmber > 0 && !doc.unlocks.includes(CAMP_SHELL_ID)) metaUnlocks.push(CAMP_SHELL_ID);
+  // The doggie is RESCUED, not bought (studio hard line): a one-time account unlock granted
+  // like an achievement the first time a run reaches the rescue floor — reachable in the first
+  // few runs. The Kennel then adopts/equips it; Amber never buys a pet.
+  if (isDoggieRescuedByRun(run.floor) && !doc.unlocks.includes(DOGGIE_NODE_ID)) metaUnlocks.push(DOGGIE_NODE_ID);
   const addedUnlocks = [...earned, ...metaUnlocks].filter((id) => !doc.unlocks.includes(id));
   await ctx.db.patch(doc._id, {
     ...totals,
