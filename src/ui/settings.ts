@@ -1,6 +1,13 @@
 import { settings } from "../game/settings.js";
 import type { FlashLevel, HpDisplay } from "../game/settings.js";
-import { audio } from "../game/audio.js";
+
+// The audio engine lives in a lazily-loaded chunk kept off the critical path. unlock()
+// resumes the AudioContext on the settings gesture; the engine ALSO self-binds a one-shot
+// gesture-unlock when it loads, so a slow/missed lazy load here is harmless. Fire-and-forget,
+// silent on failure — the settings panel never waits on (or breaks over) audio.
+function unlockAudio(): void {
+  void import("../game/uiAudio.js").then((m) => m.unlockAudio()).catch(() => {});
+}
 
 // The shared settings controls, wired straight to the persisted `settings` singleton and
 // reused verbatim by BOTH the title Settings screen and the in-game pause overlay (one
@@ -166,9 +173,9 @@ function buildAudioTab(): HTMLElement[] {
     for (const r of volumeRows) r.classList.toggle("is-muted", isMuted);
     mutedNote.textContent = isMuted ? "muted \u2014 sliders keep your mix until sound is back on" : "";
   };
-  const mute = switchControl(() => !settings.isMuted, () => { settings.toggleMuted(); audio.unlock(); }, syncMuted);
+  const mute = switchControl(() => !settings.isMuted, () => { settings.toggleMuted(); unlockAudio(); }, syncMuted);
   const master = sliderControl(0, 100, 5, () => settings.masterVol, (v) => {
-    audio.unlock();
+    unlockAudio();
     if (settings.isMuted && v > 0) { settings.setMuted(false); mute.sync(); syncMuted(); }
     settings.setMasterVol(v);
   });

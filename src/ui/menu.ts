@@ -14,7 +14,7 @@ import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js
 import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
 import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet } from "../sim/camp_nodes.js";
-import { waveAudio } from "../game/waveAudio.js";
+import type { WaveEventId } from "../game/waveSpec.js";
 import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
@@ -64,6 +64,15 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+// The audio engine (audio.ts + the wave sound specs) is a lazily-loaded chunk kept OFF the
+// menu's critical path — first paint never makes a sound. Menu cues fire-and-forget through
+// it and silently no-op if it hasn't loaded yet (or can't): a menu action's sound is never
+// essential. The chunk warms alongside the game engine during idle, so by the time a player
+// reaches these surfaces the cue plays instantly.
+function playMenuCue(cue: WaveEventId): void {
+  void import("../game/uiAudio.js").then((m) => m.playCue(cue)).catch(() => {});
 }
 
 const CONTROLS = "WASD move \u00b7 Mouse aim \u00b7 Click shoot \u00b7 Shift dash \u00b7 hold TAB for stats";
@@ -1595,7 +1604,7 @@ export class Menu {
   // (session.buyNode / session.equipPet) — the client never authors Amber or ownership. The
   // walkable hub lands in wave 2; wave 1 is this focused panel: balance, the Kennel, sinks.
   async showCamp() {
-    waveAudio.play("camp.shopOpen");
+    playMenuCue("camp.shopOpen");
     const wrap = el("div", "menu camp-screen");
     const goBack = () => void this.showTitle({ dest: "camp" });
     const note = el("p", "camp-note", "");
@@ -1727,10 +1736,10 @@ export class Menu {
     const res = await this.session.buyNode(nodeId);
     if (res && res.ok) {
       note.textContent = `Purchased ${campNodeById(nodeId)?.name ?? "node"}.`;
-      waveAudio.play("camp.purchase");
+      playMenuCue("camp.purchase");
     } else if (res && !res.ok) {
       note.textContent = res.reason === "insufficient" ? "Not enough Amber." : "Couldn't buy that right now.";
-      waveAudio.play("camp.denied");
+      playMenuCue("camp.denied");
     } else {
       note.textContent = "Couldn't reach the Camp \u2014 try again.";
     }
