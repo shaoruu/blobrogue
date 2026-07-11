@@ -1652,6 +1652,12 @@ export const TITHE = {
   feedAddCap: 4,          // hard readability cap on the feed-add count
   tributeRepairPerSec: 6, // an UNINTERCEPTED tribute at the slab repairs it 6 HP/s (the 4p divide-
                           // labor job — tuned so worked tributes don't outpace the break, ignored ones do)
+  // Ring suppression (EXPLICIT — the generic overlap arbiter never gates a tribute against the
+  // ring, since a tribute is a slab-REPAIR actor, not a damage release): while a GORGE SLAM ring
+  // telegraphs/is live, at most this many tributes ACT (the rest hold), restoring to the full
+  // feed-add count after the ring clears with re-activation staggered by tributeReactivateStagger.
+  tributeActiveCapDuringRing: 2,
+  tributeReactivateStagger: 0.18, // held tributes re-activate at 0 / 0.18 / 0.36s after the ring
   slabBaseHp: 84,         // slab HP anchor at F40 (per slab; balancer FINAL 46 → 84); scales on the floor curve
   slabHpFloor: 40,
   slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
