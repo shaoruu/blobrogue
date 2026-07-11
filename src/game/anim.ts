@@ -81,6 +81,16 @@ export function characterXform(a: Anim, style: XformStyle): Xform {
   return scratch;
 }
 
+// Frame count of a horizontal strip spritesheet inferred from its pixel dimensions: square
+// frames, so N = width / height (the height is one frame). Never hardcoded, so a sheet the
+// AD re-authors with more/fewer frames (a 4-frame idle, a 6-frame run) is a pure art drop-in.
+// A zero/absent height (image not decoded yet) falls back to a 64px frame; the result is
+// always at least 1 so a single-frame static never divides to zero.
+export function frameCount(sheetWidth: number, sheetHeight: number): number {
+  const fw = sheetHeight || 64;
+  return Math.max(1, Math.round(sheetWidth / fw));
+}
+
 // Current frame for a horizontal strip spritesheet (N square frames).
 export function frameIndex(frameCount: number, fps: number, clock: number): number {
   if (frameCount <= 1) return 0;
