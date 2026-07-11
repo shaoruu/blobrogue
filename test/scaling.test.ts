@@ -162,9 +162,9 @@ function quantile(sorted: number[], q: number): number {
 
 function measurementGates(): void {
   section("R measurement: refDPS anchors, guard rails, clamps");
-  check("refDPS anchors: F5 20.7 / F15 36 / F20 36 / F25 43 / F30 46",
+  check("refDPS anchors: F5 20.7 / F15 36 / F20 36 / F25 43 / F30 46 / deep F31+ 30 (achievable good-gun output)",
     refDpsForFloor(5) === 20.7 && refDpsForFloor(15) === 36 && refDpsForFloor(20) === 36
-    && refDpsForFloor(25) === 43 && refDpsForFloor(30) === 46);
+    && refDpsForFloor(25) === 43 && refDpsForFloor(30) === 46 && refDpsForFloor(35) === 30);
   check("the practical factor is the balancer's 0.72", POWER.practicalFactor === 0.72);
   const naked = dpsOf(BUILDS.naked);
   const median = dpsOf(BUILDS.median);
