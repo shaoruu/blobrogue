@@ -6,6 +6,7 @@ Newest changes first. (Times are Pacific.)
 ---
 
 ## Unreleased (in progress)
+- **Two new companions to rescue:** a grey cat and a baby amber dragon join the doggie at the Kennel — rescue each from a deeper floor, then pick which one rides along at your side (one companion at a time).
 - Content push: more bosses ramping toward floor 100 (with giant spectacle set-pieces + anti-repeat affixes), new gun verbs, deeper-floor enemies, and seeded floor mutators/elite affixes for run variety.
 - Kits/classes + XP: pick a class (Gunner/Mender/Bulwark/Phantom) with a signature ultimate; account XP unlocks kits & cosmetics.
 - More cosmetics (a fresh wave of real generated hats + face items, replacing the old placeholder ones), more blessings, HP numbers on the HUD, and interact-with-Patch.
