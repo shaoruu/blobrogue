@@ -927,6 +927,28 @@ export const WAVE_SOUNDS = {
   },
 
   // ---- §7 pets (species-neutral state cues) --------------------------------------------
+  // Companion-dog voice (the RESCUED doggie/pack — distinct from the combat pet.* rows).
+  // Warm, low-gain, heavily-varied + cooldown'd so it never grates (audio-director contract).
+  "dog.bark": {
+    stem: "pet/dog_bark", variants: 4, gain: 0.4, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 2500,
+  },
+  "dog.pant": {
+    stem: "pet/dog_pant", variants: 3, gain: 0.22, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 6000,
+  },
+  "dog.trot": {
+    stem: "pet/dog_trot", variants: 2, gain: 0.14, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.04, spatial: true, loop: true,
+  },
+  "dog.settle": {
+    stem: "pet/dog_settle", variants: 2, gain: 0.3, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 8000,
+  },
+  "dog.happy": {
+    stem: "pet/dog_happy", variants: 3, gain: 0.4, bus: "pet", priority: WAVE_PRIORITY.pet,
+    jitter: 0.05, spatial: true, cooldownMs: 1500,
+  },
   "pet.summon": {
     stem: "pet/summon", variants: 1, gain: 0.38, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05,

@@ -15,6 +15,8 @@ Newest changes first. (Times are Pacific.)
 - Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
 
 ## 2026-07-11
+- **The doggie has a voice:** your companion now softly pants as it trots to keep up and gives a content little sigh when it settles beside you (warm, low, and cooldown'd so it never grates).
+
 - **New guns sound the part:** the 8 new weapons each got a distinct fire sound (saw-disc whirr, arc zap, cryo crackle, the void cannon's gravity whoomp, and more).
 
 - **Chunkier, better-spaced Camp Doggie:** the pup is now pixelated to match the game's art scale (it was rendering too high-def/smooth next to everything else), and it sits a bit further back so it hangs out beside you instead of on top of you.

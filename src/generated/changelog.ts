@@ -31,6 +31,7 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "2026-07-11",
     date: "2026-07-11",
     entries: [
+      { title: "The doggie has a voice", body: "your companion now softly pants as it trots to keep up and gives a content little sigh when it settles beside you (warm, low, and cooldown'd so it never grates)." },
       { title: "New guns sound the part", body: "the 8 new weapons each got a distinct fire sound (saw-disc whirr, arc zap, cryo crackle, the void cannon's gravity whoomp, and more)." },
       { title: "Chunkier, better-spaced Camp Doggie", body: "the pup is now pixelated to match the game's art scale (it was rendering too high-def/smooth next to everything else), and it sits a bit further back so it hangs out beside you instead of on top of you." },
       { title: "Main menu fits on one screen", body: "the home screen no longer scrolls — Play, Camp, the leaderboard glance, and every destination are visible at once on any window size (the blob stays the centerpiece). Short laptops now compact the hero band instead of pushing Play off-screen." },

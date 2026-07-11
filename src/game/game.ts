@@ -13,6 +13,7 @@ import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL }
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
+import { DOGGIE_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
@@ -171,7 +172,7 @@ interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing:
 // A companion pet's client-only render state (META spec §3): a lagged follow position that
 // trails the owner (trots to catch up, sits when settled), a facing toward travel, and an
 // anim clock for the sit/trot cycle. Purely cosmetic — never a sim entity.
-interface PetRenderEntry { petId: string; x: number; y: number; facing: number; anim: Anim; isMoving: boolean; }
+interface PetRenderEntry { petId: string; x: number; y: number; facing: number; anim: Anim; isMoving: boolean; wasMoving: boolean; }
 // Companion pet follow tuning (all client-side render feel; nothing gameplay branches on it).
 const PET_SIZE = 34;          // draw size (px) — reads as a small companion beside the ~52px blob
 const PET_REST_OFFSET = 40;   // where the pet settles behind the owner (opposite their facing) — clears the ~52px blob so it sits BESIDE, not on top
@@ -7521,7 +7522,7 @@ export class Game {
     const restX = ownerX - ownerFacing * PET_REST_OFFSET;
     const restY = ownerY + 6;
     if (!pet || pet.petId !== petId) {
-      pet = { petId, x: restX, y: restY, facing: ownerFacing, anim: createAnim(), isMoving: false };
+      pet = { petId, x: restX, y: restY, facing: ownerFacing, anim: createAnim(), isMoving: false, wasMoving: false };
       this.petRenders.set(ownerId, pet);
     }
     const dx = restX - pet.x, dy = restY - pet.y;
@@ -7543,6 +7544,19 @@ export class Game {
       pet.isMoving = ownerMoving && dist > PET_STOP_DIST * 0.5;
       if (!pet.isMoving) pet.facing = ownerFacing;
     }
+    // The companion doggie's voice (local pet only, so remote pets never chorus). The
+    // wave-spec cooldowns own the anti-annoyance cadence; here we only fire on real state
+    // transitions: a soft trot loop while moving, a content settle-sigh when it stops, and
+    // an occasional pant kept alive by its own 6s cooldown while it keeps trotting.
+    if (ownerId === LOCAL_ID && petId === DOGGIE_PET_ID) {
+      waveAudio.holdLoop("dog.trot", "selfpet", pet.isMoving);
+      if (pet.isMoving) {
+        waveAudio.cueAt("dog.pant", pet.x, pet.y); // 6s cooldown gates the cadence
+      } else if (pet.wasMoving) {
+        waveAudio.cueAt("dog.settle", pet.x, pet.y); // the cozy stop payoff (8s cooldown)
+      }
+    }
+    pet.wasMoving = pet.isMoving;
     stepAnim(pet.anim, dt, pet.isMoving, 0);
   }
 
