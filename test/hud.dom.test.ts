@@ -737,6 +737,8 @@ function kitHudTests(): void {
   const ultK = root.querySelector("[data-ult-k]") as HTMLElement;
   const ultRdy = root.querySelector("[data-ult-rdy]") as HTMLElement;
   const ultKey = root.querySelector("[data-ult-key]") as HTMLElement;
+  const ultPct = root.querySelector("[data-ult-pct]") as HTMLElement;
+  const ultFill = root.querySelector("[data-ult-fill]") as HTMLElement;
   const cluster = root.querySelector("[data-klcluster]") as HTMLElement;
   const kitBadge = root.querySelector("[data-kitbadge]") as HTMLElement;
   check("a neutral-kit player hides the ult meter AND the kit badge", ult.hasAttribute("hidden") && kitBadge.hasAttribute("hidden"));
@@ -744,6 +746,7 @@ function kitHudTests(): void {
   check("a charging meter is visible and not ready", !ult.hasAttribute("hidden") && !ult.classList.contains("ready"));
   check("the fill reflects the charge", (root.querySelector("[data-ult-fill]") as HTMLElement).style.getPropertyValue("--ult-fill") === "0.5");
   check("the meter is NAMED by the kit's ult (fixes 'idk what my ult is')", ultK.textContent === "OVERDRIVE");
+  check("charging shows a low-emphasis NN% readout", ultPct.textContent === "50%");
   check("the READY suffix is present but hidden while charging (reserved, never a reflow)", !ultRdy.classList.contains("show"));
   check("the kit BADGE answers 'which class am I' (name + accent)", !kitBadge.hasAttribute("hidden")
     && (root.querySelector("[data-kit-name]") as HTMLElement).textContent === "GUNNER");
@@ -752,15 +755,19 @@ function kitHudTests(): void {
   check("a full meter lights the LOUD ready: <ULT> READY, keycap active", ult.classList.contains("ready")
     && ultK.textContent === "OVERDRIVE" && ultRdy.classList.contains("show") && ultKey.classList.contains("is-active"));
   check("the full ready line reads 'OVERDRIVE READY'", (ultK.textContent + ultRdy.textContent) === "OVERDRIVE READY");
+  check("READY is a SOLID block (fill=1), the loud read (grayscale-distinct from a partial fill)", ultFill.style.getPropertyValue("--ult-fill") === "1");
+  check("READY drops the NN% readout (the name already says READY)", ultPct.textContent === "");
   hud.update(mkState({ ult: { charge: 0, isReady: false, cd: 0.75, kit: "gunner", name: "Overdrive" } }));
   check("after a cast the 8s cooldown state shows, never ready", ult.classList.contains("cd")
     && !ult.classList.contains("ready") && !ultKey.classList.contains("is-active"));
+  check("LOCKOUT REFILLS from 0 (1-cd), unconfusable with the solid ready block", ultFill.style.getPropertyValue("--ult-fill") === "0.25");
+  check("LOCKOUT shows a countdown (Ns), not a percent", ultPct.textContent === "6s");
   // A different kit reads distinct: name + accent both change (no confusion with the amber gunner).
   hud.update(mkState({ ult: { charge: 0.3, isReady: false, cd: 0, kit: "mender", name: "Sanctuary" } }));
   check("switching kits re-names + re-tints the meter (Sanctuary / mender accent)",
     ultK.textContent === "SANCTUARY" && cluster.getAttribute("data-kit") === "mender"
     && (root.querySelector("[data-kit-name]") as HTMLElement).textContent === "MENDER");
-  check("pulseUlt is a transform-only ping (re-triggerable, never a layout shift)", (() => {
+  check("pulseUlt is the leading-edge flash ping (re-triggerable, opacity-only, never a layout shift)", (() => {
     const fill = root.querySelector("[data-ult-fill]") as HTMLElement;
     fill.classList.remove("mote-pulse");
     hud.pulseUlt();

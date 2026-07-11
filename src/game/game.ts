@@ -3368,12 +3368,16 @@ export class Game {
     this.ultMoteOrigin = null;
     const ult = this.ultHud();
     if (ult === null) { this.ultCue.reset(this.p.ultCharge); return; }
+    // During the post-cast lockout the bar shows the cooldown REFILL, not the charge fill, so a
+    // mote landing on its "leading edge" would misread — suppress motes there (charge still
+    // accrues authoritatively; motes resume the moment the meter is charging again).
+    const isLockout = ult.cd > 0 && !ult.isReady;
     const cues = this.ultCue.feed({ charge: this.p.ultCharge, isReady: ult.isReady, isCasting, origin, dt });
     for (const c of cues) {
-      if (c.t === "ultMote") this.spawnUltMote(c.x, c.y, c.amount, c.source);
+      if (c.t === "ultMote") { if (!isLockout) this.spawnUltMote(c.x, c.y, c.amount, c.source); }
       else if (c.t === "ultReady") this.onUltReady(ult.name);
-      // ultCast: the meter emptying + the 8s lockout sweep render straight off HudState.cd, and
-      // the cast BURST rides the authoritative ult* event FX — nothing extra to fire here.
+      // ultCast: the meter collapsing to empty + the 8s lockout refill render straight off
+      // HudState.cd, and the cast BURST rides the authoritative ult* event FX — nothing here.
     }
   }
 
@@ -3402,6 +3406,7 @@ export class Game {
   private onUltReady(name: string) {
     sfx("levelup", { gain: 0.5 });
     this.flashScreen(255, 180, 59, 0.09, 2.2);
+    this.hud.pulseUlt(); // the charge->ready "snap to solid + flash" on the (now solid) bar
     if (!this.hasShownUltReadyNudge) {
       this.hasShownUltReadyNudge = true;
       this.ultReadyNudge = { verb: `${name.toUpperCase()} READY`, t: 0 };
@@ -5654,11 +5659,13 @@ export class Game {
   // from the HUD element's live rect through the canvas's own rect/scale (lands correctly at any
   // UI zoom / window size). Null while the meter is hidden — the caller then drops its motes.
   private ultMeterAnchorScreen(): { x: number; y: number } | null {
-    const rect = this.hud.ultMeterRect();
+    const rect = this.hud.ultFillRect();
     const cr = this.canvas.getBoundingClientRect();
     if (rect === null || cr.width === 0 || cr.height === 0) return null;
     const sx = this.canvas.width / cr.width, sy = this.canvas.height / cr.height;
-    return { x: (rect.left + rect.width / 2 - cr.left) * sx, y: (rect.top + rect.height / 2 - cr.top) * sy };
+    // The fill's LEADING EDGE (its right edge), vertically centered — the mote lands exactly here,
+    // then triggers the leading-edge flash.
+    return { x: (rect.right - cr.left) * sx, y: (rect.top + rect.height / 2 - cr.top) * sy };
   }
 
   // Charge motes: each orb lifts off its combat origin (world->screen) and eases along an arc

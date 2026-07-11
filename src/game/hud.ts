@@ -7,7 +7,12 @@
 
 import { renderHearts, mountIcons, itemIconEl, weaponIconEl } from "./hudIcons.js";
 import { MAX_ITEM_LEVEL } from "../sim/items.js";
+import { ULT, ticksToSec } from "../sim/kits.js";
 import { settings } from "./settings.js";
+
+// The ult cast lockout in whole seconds (read from the sim so the countdown never drifts from
+// the authoritative 8s hard-floor): drives the low-emphasis lockout countdown readout.
+const ULT_LOCKOUT_SECONDS = ticksToSec(ULT.lockoutTicks);
 import { FocusScope, currentFocus } from "../ui/focus.js";
 import type { WeaponId } from "../sim/types.js";
 import type { WeaponDisplayStats } from "../sim/weaponStats.js";
@@ -458,7 +463,7 @@ const HUD_MARKUP = `
   <div class="hud-corner bl">
     <div class="klcluster" data-klcluster>
       <div class="kitbadge" data-kitbadge hidden><span class="ki" data-kit-icon></span><span class="kn" data-kit-name></span></div>
-      <div class="ultmeter" data-ult hidden><span class="ui" data-ult-icon></span><span class="lbl"><span class="k" data-ult-k>ULT</span><span class="rdy" data-ult-rdy> READY</span></span><span class="key keycap" data-ult-key>F</span><span class="bar"><i data-ult-fill style="--ult-fill:0"></i></span></div>
+      <div class="ultmeter" data-ult hidden><span class="ui" data-ult-icon></span><span class="lbl"><span class="k" data-ult-k>ULT</span><span class="rdy" data-ult-rdy> READY</span></span><span class="key keycap" data-ult-key>F</span><span class="bar"><i data-ult-fill style="--ult-fill:0"></i></span><span class="pct" data-ult-pct></span></div>
       <div class="dash"><span class="k">DASH</span><span class="key keycap">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
     </div>
   </div>
@@ -532,6 +537,7 @@ export class Hud {
   private ultRdyEl!: HTMLElement;
   private ultKeyEl!: HTMLElement;
   private ultIconEl!: HTMLElement;
+  private ultPctEl!: HTMLElement;
   private klClusterEl!: HTMLElement;
   private kitBadgeEl!: HTMLElement;
   private kitIconEl!: HTMLElement;
@@ -628,6 +634,7 @@ export class Hud {
     this.ultRdyEl = hud.querySelector("[data-ult-rdy]")!;
     this.ultKeyEl = hud.querySelector("[data-ult-key]")!;
     this.ultIconEl = hud.querySelector("[data-ult-icon]")!;
+    this.ultPctEl = hud.querySelector("[data-ult-pct]")!;
     this.klClusterEl = hud.querySelector("[data-klcluster]")!;
     this.kitBadgeEl = hud.querySelector("[data-kitbadge]")!;
     this.kitIconEl = hud.querySelector("[data-kit-icon]")!;
@@ -1299,20 +1306,27 @@ export class Hud {
       this.kitNameEl.textContent = ult.kit.toUpperCase();
       this.kitBadgeEl.removeAttribute("hidden");
     }
+    const isLockout = ult.cd > 0 && !ult.isReady;
     const fill = ult.isReady ? 1 : Math.max(0, Math.min(1, ult.charge));
-    const state = ult.isReady ? "ready" : ult.cd > 0 ? "cd" : "charge";
+    const state = ult.isReady ? "ready" : isLockout ? "cd" : "charge";
     const key = `${state}:${Math.round(fill * 100)}:${Math.round(ult.cd * 100)}`;
     if (key === this.prevUltKey) return;
     this.prevUltKey = key;
     this.ultEl.removeAttribute("hidden");
-    // During the lockout the bar shows the cooldown DRAINING (1 -> 0); otherwise the charge fill.
-    this.ultFillEl.style.setProperty("--ult-fill", String(ult.cd > 0 && !ult.isReady ? ult.cd : fill));
+    // LOCKOUT refills the dark bar from 0 as the cooldown ELAPSES (1-cd) — never a full-looking
+    // block; CHARGING/READY show the charge / solid fill.
+    this.ultFillEl.style.setProperty("--ult-fill", String(isLockout ? 1 - ult.cd : fill));
     this.ultEl.classList.toggle("ready", ult.isReady);
-    this.ultEl.classList.toggle("cd", ult.cd > 0 && !ult.isReady);
+    this.ultEl.classList.toggle("cd", isLockout);
     // READY is LOUD: the widget lifts to the kit accent, the NAME reads "<ULT> READY" (the " READY"
     // suffix is always in the DOM, only revealed — never a reflow), and the [F] keycap fills amber.
     this.ultRdyEl.classList.toggle("show", ult.isReady);
     this.ultKeyEl.classList.toggle("is-active", ult.isReady);
+    // Low-emphasis readout (fixed width, never a reflow): NN% while charging, the lockout countdown
+    // Ns on cooldown, nothing on the loud READY state (the name already says it).
+    this.ultPctEl.textContent = ult.isReady ? "" : isLockout
+      ? `${Math.ceil(ult.cd * ULT_LOCKOUT_SECONDS)}s`
+      : `${Math.round(fill * 100)}%`;
   }
 
   // Point a mask-tinted icon element at its white source; the kit accent fills it via CSS
@@ -1333,11 +1347,12 @@ export class Hud {
     this.ultFillEl.classList.add("mote-pulse");
   }
 
-  // The ult meter's live viewport rect — the flight target for a charge mote's arc into the meter
-  // (the game maps it into canvas space). Null before layout exists / while the meter is hidden.
-  ultMeterRect(): DOMRect | null {
+  // The ult meter FILL element's live viewport rect — its RIGHT edge is the fill's LEADING EDGE,
+  // the exact point a charge mote flies INTO (and where the leading-edge flash fires). The game
+  // maps it into canvas space. Null before layout exists / while the meter is hidden.
+  ultFillRect(): DOMRect | null {
     if (this.ultEl.hasAttribute("hidden")) return null;
-    const r = this.ultEl.getBoundingClientRect();
+    const r = this.ultFillEl.getBoundingClientRect();
     return r.width > 0 || r.height > 0 ? r : null;
   }
 
