@@ -1585,7 +1585,9 @@ export const JET = {
   // A2 TRACER SNAP (dash-punish): motes lock your position, hover, then SNAP to the mark
   // after tracerSnapDelay — you must dash LATE, after the snap tell, not on the lock.
   tracerWindup: 0.7, tracerLock: 0.35, tracerRecover: 0.6,
-  tracerCountFor: [0, 3, 3, 4, 4] as readonly number[], // motes by snapshotted players 1..4
+  // Mote count is R-keyed (balancer FINAL): round((R−1)/1.5), capped at tracerMoteCap →
+  // solo 0 / 2p 1 / 3p 2 / 4p 3 (a co-op dash-punish; solo JET is mirror-focused).
+  tracerMoteDivR: 1.5, tracerMoteCap: 3,
   tracerSnapDelay: 1.0, tracerSnapSpeed: 540, tracerRadius: 8, tracerDamage: 1, tracerLife: 1.4,
   // A3 RECOIL LINE (space-cover, P2+): JET recoils along an axis, laying an amber wall of
   // charge blooms that bisects the arena; the NEXT recoil lays the perpendicular = a cross.
@@ -1642,13 +1644,14 @@ export const TITHE = {
   buildWindup: 0.8,       // the ooze-rising tell (≥0.6s)
   rearmChannel: 3.0,      // seconds to re-armor — the slab must die inside ~60-70% of this
   slabsFor: [0, 1, 1, 2, 2] as readonly number[],       // slabs per feed by snapshotted players
-  slabThickFor: [0, 1.0, 1.6, 2.0, 2.4] as readonly number[], // co-op = THICKER slabs (HP mult — balancer FINAL)
+  slabThickFor: [0, 1.0, 1.8, 2.0, 1.9] as readonly number[], // co-op = THICKER slabs (HP mult — balancer REVISED: holds slab-TTK ~1.6-2.0s P1-4 with repair-adds active; the old 2.4× at 4p overshot)
   // R-framework SURPLUS (balancer FINAL): the feed channel spawns simple CHASER adds, count =
   // min(bossAddCapFor(0, R), feedAddCap) → solo 0 / 2p 3 / 3p 4 / 4p 4 (R-keyed), gated by the
   // active-threat cap only. ⚠ rearmChannel stays FLAT 3.0 at ALL R (perR 0 — NEVER a shorter
   // timer): the task scales via slab HP/thickness + these adds. Soft-enrage adds +1 slab.
   feedAddCap: 4,          // hard readability cap on the feed-add count
-  tributeReinforceFrac: 0.35, // a tribute reaching the slab thickens it by this × a fresh slab's HP
+  tributeRepairPerSec: 6, // an UNINTERCEPTED tribute at the slab repairs it 6 HP/s (the 4p divide-
+                          // labor job — tuned so worked tributes don't outpace the break, ignored ones do)
   slabBaseHp: 84,         // slab HP anchor at F40 (per slab; balancer FINAL 46 → 84); scales on the floor curve
   slabHpFloor: 40,
   slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
