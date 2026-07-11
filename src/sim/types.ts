@@ -294,6 +294,11 @@ export interface Enemy extends Entity {
   burnDmg: number;    // burn damage per second (stacks up to a cap)
   chill: number;      // seconds of slow left (high stacks freeze solid)
   shock: number;      // seconds the shocked tag is active (amp + on-hit arc)
+  // PHANTOM MARK (Wave 2): seconds the +vuln dash-through mark is live (0 = unmarked). A shared
+  // authoritative vulnerability the whole team's damage reads; against boss-grade bodies it shares
+  // the BOSS_VULN_CAP with the crit channel (never additive on top). Rides the wire (EnemyWire.mkt)
+  // so every client draws the marked glow. Decays in tickStatuses.
+  markT: number;
   statusTick: number; // burn DoT accumulator (fires a tick every 0.25s)
   // Who applied the current burn (authoritative kill attribution for the DoT). Solo: always
   // the single local player. Multiplayer: the shooter/exploder who lit the enemy, so the burn

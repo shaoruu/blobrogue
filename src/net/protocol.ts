@@ -246,7 +246,18 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     so the server can delta against the EXACT per-connection baseline the client holds and
 //     fall back to a full keyframe on any gap. NOTE: the control plane's synthetic VERIFY join
 //     mirrors this constant (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
-export const PROTOCOL_VERSION = 24;
+// v25 (Wave 2 kit SIGNATURES — docs/specs/blobrogue_KIT_XP_SYSTEM_spec.md): each kit gains ONE
+//   felt+visible signature, growing the wire in three places:
+//   - SelfWire grows three local-player fields the client reconciles + renders: `ovh` (Gunner
+//     OVERHEAT boil-over seconds — the glowing-gun burst), `osh` (Bulwark OVERSHIELD chip pool
+//     0..3, drawn on the health bar), and `pra` (Mender HEAL-PULSE readyAtTick, the CD readout).
+//     A v24 client would reject a snapshot carrying them.
+//   - the input command grows a mandatory `pulse` bit (the Mender heal-pulse request, alongside
+//     ult/dash/act) — the client can only REQUEST; the server validates the pulse cooldown.
+//   - EnemyWire grows `mkt` (PHANTOM dash-through mark seconds) so EVERY client draws the marked
+//     glow on a shared enemy (the mark is authoritative team-wide vulnerability). A v24 client
+//     rejects a snapshot carrying it (the enemy validator is exhaustive).
+export const PROTOCOL_VERSION = 25;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -315,6 +326,9 @@ export interface SelfWire {
   uc: number;                  // ultCharge (fixed-point integer 0..ULT.meterMax)
   ura: number;                 // ultReadyAtTick (the 8s hard-floor lockout)
   ovt: number;                 // Overdrive self-buff seconds
+  ovh: number;                 // Gunner OVERHEAT boil-over seconds (Wave 2 signature)
+  osh: number;                 // Bulwark OVERSHIELD chip pool 0..maxChips (Wave 2 signature)
+  pra: number;                 // Mender HEAL-PULSE readyAtTick (Wave 2 signature CD gate)
   phs: number;                 // Phase speed-surge seconds
   uiv: number;                 // Phase invuln seconds (<= 1.2s)
   pst: number;                 // per-kit passive channel (momentum / lifebloom / hardened)
@@ -421,6 +435,9 @@ export interface EnemyWire {
   // reflect facet's armed state (>0 = armed). 0 for other affixes. Drives the armed/slab render.
   afs: number;
   burn: number; chill: number; shock: number;
+  // PHANTOM dash-through MARK seconds remaining (Wave 2): a shared authoritative vulnerability so
+  // every client renders the marked glow (0 = unmarked). enemyFromWire restores it into markT.
+  mkt: number;
 }
 
 export interface BulletWire {
@@ -492,7 +509,7 @@ export type ClientMsg =
   // `ackSnap` (v24): the highest snapshot sseq this client has applied + retained as its delta
   // baseline. The server deltas the next snapshot against exactly that baseline (or sends a
   // full keyframe if it can no longer honor it), so a missed baseline can never be applied.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; ackEv: number; ackSnap: number }
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; pulse: boolean; ackEv: number; ackSnap: number }
   | { t: "pong"; id: number }
   // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
   // the server uses it only to center that client's interest view (and positional events)
@@ -901,7 +918,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "ackEv", "ackSnap"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "pulse", "ackEv", "ackSnap"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -912,6 +929,7 @@ function decodeClientMsg(raw: string): ClientMsg {
         dash: boolOf(o, "dash"),
         act: boolOf(o, "act"),
         ult: boolOf(o, "ult"),
+        pulse: boolOf(o, "pulse"),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
         ackSnap: intOf(o, "ackSnap", 0, Number.MAX_SAFE_INTEGER),
       };
@@ -1033,6 +1051,9 @@ function validateSelfWire(v: unknown): SelfWire {
     uc: intOf(o, "uc", 0, 1e6),
     ura: intOf(o, "ura", 0, Number.MAX_SAFE_INTEGER),
     ovt: num(o, "ovt", 0, 1e4),
+    ovh: num(o, "ovh", 0, 1e4),
+    osh: intOf(o, "osh", 0, 64),
+    pra: intOf(o, "pra", 0, Number.MAX_SAFE_INTEGER),
     phs: num(o, "phs", 0, 1e4),
     uiv: num(o, "uiv", 0, 1e4),
     pst: num(o, "pst", 0, 1e4),
@@ -1096,6 +1117,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
     afx: affixOf(o, "afx"),
     afs: num(o, "afs", -1e9, 1e9),
     burn: num(o, "burn", 0, 1e4), chill: num(o, "chill", 0, 1e4), shock: num(o, "shock", 0, 1e4),
+    mkt: num(o, "mkt", 0, 1e4),
   };
 }
 
@@ -1417,7 +1439,8 @@ export function selfWireFromSnapshot(s: AuthoritativePlayerSnapshot): SelfWire {
     bcl: s.hasClaimedBossChoice,
     php: s.premiumHpBuys, amc: s.isAmberCacheArmed, amw: s.amberWindfall, brt: s.isBlessingRerollArmed,
     rvt: s.reviveTokens, xsl: s.extraWeaponSlots, tth: s.hpTithe, pfl: s.prospectorFloor,
-    kit: s.kitId, uc: s.ultCharge, ura: s.ultReadyAtTick, ovt: s.overdriveT, phs: s.phaseSpeed,
+    kit: s.kitId, uc: s.ultCharge, ura: s.ultReadyAtTick, ovt: s.overdriveT,
+    ovh: s.overheatT, osh: s.overshield, pra: s.pulseReadyAtTick, phs: s.phaseSpeed,
     uiv: s.ultInvuln, pst: s.passiveState,
   };
 }
@@ -1432,7 +1455,8 @@ export function snapshotFromSelfWire(w: SelfWire): AuthoritativePlayerSnapshot {
     hasClaimedBossChoice: w.bcl,
     premiumHpBuys: w.php, isAmberCacheArmed: w.amc, amberWindfall: w.amw, isBlessingRerollArmed: w.brt,
     reviveTokens: w.rvt, extraWeaponSlots: w.xsl, hpTithe: w.tth, prospectorFloor: w.pfl,
-    kitId: w.kit, ultCharge: w.uc, ultReadyAtTick: w.ura, overdriveT: w.ovt, phaseSpeed: w.phs,
+    kitId: w.kit, ultCharge: w.uc, ultReadyAtTick: w.ura, overdriveT: w.ovt,
+    overheatT: w.ovh, overshield: w.osh, pulseReadyAtTick: w.pra, phaseSpeed: w.phs,
     ultInvuln: w.uiv, passiveState: w.pst,
   };
 }
@@ -1492,7 +1516,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     aux: e.aux,
     afx: e.rollAffix,
     afs: e.affixState,
-    burn: e.burn, chill: e.chill, shock: e.shock,
+    burn: e.burn, chill: e.chill, shock: e.shock, mkt: e.markT,
   };
 }
 
@@ -1510,7 +1534,7 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     aux: w.aux, seq: 0, panicTime: 0, echoTime: 0, echoAngle: 0,
     speed: 0, touchDamage: 0, zig: 0, hopClock: 0, hopMove: 0, spawnTimer: 0, stuckTimer: 0,
     avoidSide: 0, avoidTime: 0,
-    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, statusTick: 0, burnOwner: null,
+    burn: w.burn, burnDmg: 0, chill: w.chill, shock: w.shock, markT: w.mkt, statusTick: 0, burnOwner: null,
     attack: {
       phase: w.atk.ph, time: 0, move: w.atk.mv, windup: w.atk.wu, cooldown: 0,
       lockedAngle: w.atk.la, isAimLocked: w.atk.lk, markX: w.atk.mx, markY: w.atk.my,

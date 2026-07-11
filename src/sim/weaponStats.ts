@@ -15,6 +15,7 @@ import {
   WEAPON_BOSS_COEF,
 } from "./balance.js";
 import { MIN_MULTI_SPREAD, FIRE_KNOCKBACK } from "./constants.js";
+import { MOMENTUM, OVERHEAT } from "./kits.js";
 
 // 0 at full HP -> 1 at death's door; scales the berserk/adrenaline payoffs.
 export function lowHpFrac(hp: number, maxHp: number): number {
@@ -29,6 +30,23 @@ export function liveDamageMult(mods: PlayerMods, lowHp: number): number {
 
 export function liveFireRateMult(mods: PlayerMods, lowHp: number): number {
   return Math.max(0.25, Math.min(CAPS.fireRateMult, mods.fireRateMult + mods.adrenaline * lowHp));
+}
+
+// The GUNNER's Momentum/Overheat signature (Wave 2) is a FASTER ROUTE to the raw caps, never a
+// higher ceiling: the live damage/fire multiplier is the capped build value routed UP by the
+// stacks (+ the Overheat burst), then RE-CLAMPED to the same raw cap. Shared by world.ts's real
+// fire math and the balancer's ship-gate scan, so the "never above the cap" guarantee has one
+// source of truth. (The ult's Overdrive keeps its OWN separate expressive ceiling on top.)
+export function gunnerDamageMult(baseCapped: number, momentumStacks: number): number {
+  if (momentumStacks <= 0) return baseCapped;
+  return Math.min(CAPS.damageMult, baseCapped * (1 + momentumStacks * MOMENTUM.damagePerStack));
+}
+
+export function gunnerFireRateMult(baseCapped: number, momentumStacks: number, isOverheat: boolean): number {
+  let extra = momentumStacks > 0 ? momentumStacks * MOMENTUM.fireRatePerStack : 0;
+  if (isOverheat) extra += OVERHEAT.extraFireRate;
+  if (extra <= 0) return baseCapped;
+  return Math.min(CAPS.fireRateMult, baseCapped * (1 + extra));
 }
 
 // ---- the ONE weapon display-stats model (game-designer tooltip vocabulary) ----

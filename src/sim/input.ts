@@ -22,6 +22,10 @@ export interface InputCmd {
   // as released. The client can only REQUEST — the authoritative sim validates charge + the 8s
   // lockout and resolves the effect (spec §7). Inert for a neutral-kit player.
   ult?: boolean;
+  // The MENDER heal-pulse intent (Wave 2). Optional so pre-existing callers stay valid; absent
+  // reads as released. Like `ult`, the client can only REQUEST — the authoritative sim validates
+  // the pulse cooldown + resolves the directed heal. Inert for every non-Mender kit.
+  pulse?: boolean;
 }
 
 export const IDLE_INPUT: InputCmd = { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false };
