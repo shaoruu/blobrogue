@@ -74,3 +74,9 @@ Implement tribute + splinter as new simple-chaser enemy kinds (deterministic, ac
 - NEW Tithe TRIBUTE slab-repair = 6 HP/s each (unintercepted tribute repairs slab; the 4p divide-labor job).
 - NEW JET tracer-mote count = round((R-1)/1.5) cap 3 = solo0/2p1/3p2/4p3 (off encounterPower R).
 Everything else stands: JET salvo cap2 salvoIntervalPerR 0.12 floor1.8; TITHE feed-add cap4 re-arm FLAT 3.0; QUORUM husk-adds cap5 interval 6→3; PHASE_TIME_BASE JET16/TITHE16/QUORUM14 (NEW, required for soft-enrage). Overflow-discard = CONFIRMED BUG (damageEnemy ~L2249-2258, earned-window branch only, leave roar.queued).
+
+## ITEM 5 — TWO EXPLICIT SCHEDULER SUPPRESSIONS (NOT covered by generic overlap arbiter, need explicit code):
+1. TITHE ring suppression: while GORGE SLAM ring telegraphing/active → tributeActiveCap = min(surplusCap, 2); restore to full 4 after ring clears, re-activation staggered REINFORCE_STAGGER (0/.18/.36s). Arbiter never gates tribute vs ring (tribute = slab-REPAIR actor not damage release) → add explicitly in Tithe update path.
+2. QUORUM splinter grace: 1.0s spawn-grace — splinters spawn+telegraph immediately but first action (bubble/trickle/pip) gated until 1.0s passed AND no major release (tether-snap/crossfire) mid-flight. Arbiter covers instant pip-vs-sweep but NOT the 1.0s hold → add explicitly.
+
+## FINAL: rework = 5 items (movesets / balancer constants / overflow clamp / encounterPower wiring+surplus / 2 suppressions) + Quorum formation fix + AD presence. This doc is THE single source of truth. All injected to build bc-1fe0ba23.
