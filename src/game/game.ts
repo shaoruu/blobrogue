@@ -37,7 +37,7 @@ import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
-import { ULT, isRealKit, canCastUlt, KIT_META } from "../sim/kits.js";
+import { ULT, isRealKit, canCastUlt, KIT_META, MOMENTUM, OVERSHIELD, HEAL_PULSE, LIFEBLOOM } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
 import { UltCueTracker } from "./ultCue.js";
 import type { UltMoteSource } from "./ultCue.js";
@@ -429,6 +429,7 @@ const COMBO_MAX_MULT = 3;   // top multiplier tier, referenced by the trauma/pit
 const CHILL_TINT = "#7fd3ff";
 const FREEZE_TINT = "#dff4ff";
 const SHOCK_TINT = "#7fe9ff";
+const MARK_TINT = "#c9a0ff"; // PHANTOM dash-through mark ring (the phantom violet accent)
 
 // Hurt vignette: a red screen-edge flash on damage that fades fast (seconds⁻¹).
 const HURT_FLASH_DECAY = 3.2;
@@ -1692,11 +1693,11 @@ export class Game {
     // movement key can't turn the cancel frame into a real dash.
     if (this.isChargeCancelPending) {
       if (this.p.chargeT > 0) {
-        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false };
+        return { seq: ++this.inputSeq, moveX: 0, moveY: 0, aim, firing: false, dash: true, interact: false, ult: false, pulse: false };
       }
       this.isChargeCancelPending = false;
     }
-    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt };
+    return { seq: ++this.inputSeq, moveX: s.moveX, moveY: s.moveY, aim, firing: s.firing, dash: s.dash, interact: s.interact, ult: s.ult || devUlt, pulse: s.pulse };
   }
 
   // Co-op teammate positions fed to the sim as extra enemy-aggro targets (Stage A keeps
@@ -3673,7 +3674,29 @@ export class Game {
       waitLabel: this.blessingWaitLabel() ?? this.exitWaitLabel(),
       party: this.partyHud(),
       ult: this.ultHud(),
+      sig: this.sigHud(),
     });
+  }
+
+  // The local player's Wave 2 SIGNATURE readouts (null for a neutral kit). Each block is null
+  // unless the local player is that kit, so the HUD only ever draws the one that applies. Pure
+  // reads off authoritative state (momentum stacks / overheat window / overshield pool / pulse
+  // cooldown) — the sim owns every value; this only renders it.
+  private sigHud(): HudState["sig"] {
+    const p = this.p;
+    if (!isRealKit(p.kitId)) return null;
+    const tick = this.world.tick;
+    return {
+      momentum: p.kitId === "gunner"
+        ? { stacks: Math.round(p.passiveState), max: MOMENTUM.maxStacks, isOverheat: p.overheatT > 0 }
+        : null,
+      overshield: p.kitId === "bulwark"
+        ? { chips: p.overshield, max: OVERSHIELD.maxChips }
+        : null,
+      pulse: p.kitId === "mender"
+        ? { cd: Math.max(0, Math.min(1, (p.pulseReadyAtTick - tick) / HEAL_PULSE.cooldownTicks)), isReady: tick >= p.pulseReadyAtTick }
+        : null,
+    };
   }
 
   // Teammate HP for the party HUD (spec §6, the Mender dependency): the live nameplate rows.
@@ -4259,6 +4282,7 @@ export class Game {
     this.renderRemotePlayers();
     this.renderPets(); // client-side cosmetic companions (follow/sit; never a sim entity)
     this.renderAfterimages();
+    this.renderHealBeam(); // MENDER Lifebloom tether (under the bodies) — see who you're healing
     this.renderMeleeSwing();
     this.renderPlayer();
     this.renderReviveRings();
@@ -5900,6 +5924,10 @@ export class Game {
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
 
+      // PHANTOM MARK (Wave 2): a pulsing violet vulnerability ring the whole team reads (the mark
+      // is shared authoritative state on the wire). A pure cosmetic read off e.markT.
+      if (e.markT > 0) this.renderMarkGlow(e, sx, sy, drawSize);
+
       // The shielder's guard arc — drawn from the sim's authoritative block angle.
       if (e.kind === "shielder") this.renderShielderGuard(e, sx, sy, drawSize);
       // The formation guards: the rootward's slow arc, the marshal's P1 frontage (its
@@ -7443,6 +7471,52 @@ export class Game {
     }
   }
 
+  // PHANTOM MARK (Wave 2): a pulsing violet vulnerability ring so the whole team reads a marked
+  // (+15% damage-taken) enemy at a glance. Pure cosmetic — the mark itself is authoritative sim
+  // state (e.markT) reconciled from the snapshot.
+  private renderMarkGlow(e: Enemy, sx: number, sy: number, size: number) {
+    const pulse = 0.6 + 0.4 * Math.sin(this.animForEnemy(e).clock * 8);
+    this.fxLayer("glow_round", MARK_TINT, sx, sy, size * 1.25, size * 1.25, 0.18 + 0.16 * pulse, 0);
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = 0.4 + 0.35 * pulse;
+    ctx.strokeStyle = MARK_TINT;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, size * 0.5, 0, 6.28);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // MENDER heal BEAM (Wave 2): a soft green tether from the local Mender to the lowest-HP living
+  // ally in Lifebloom range — you SEE who the passive is topping off. Pure cosmetic (mirrors the
+  // sim's lowestHpAllyInRange target); no beam when solo or nobody in range needs it.
+  private renderHealBeam() {
+    if (this.p.kitId !== "mender" || this.isDown) return;
+    let best: RemotePlayer | null = null;
+    let bestMissing = 0;
+    for (const r of this.remotes()) {
+      if (r.isDown || r.isAbsent || r.hp <= 0 || r.hp >= r.maxHp) continue;
+      if (Math.hypot(r.x - this.px, r.y - this.py) > LIFEBLOOM.range) continue;
+      const missing = r.maxHp - r.hp;
+      if (missing > bestMissing) { bestMissing = missing; best = r; }
+    }
+    if (best === null) return;
+    const { ctx, renderCam: cam } = this;
+    const ax = this.px - cam.x, ay = this.py - cam.y;
+    const bx = best.x - cam.x, by = best.y - cam.y;
+    const pulse = 0.5 + 0.5 * Math.sin(this.animClock * 6);
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.25 * pulse;
+    ctx.strokeStyle = "#7fe6a8";
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.globalAlpha = 0.5 + 0.3 * pulse;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.restore();
+  }
+
   private renderBullets() {
     const { ctx, renderCam: cam } = this;
     for (const b of this.bullets) {
@@ -7856,6 +7930,19 @@ export class Game {
     const ipx = this.renderPrevX + (this.px - this.renderPrevX) * a;
     const ipy = this.renderPrevY + (this.py - this.renderPrevY) * a;
     const psx = ipx - cam.x, psy = ipy - cam.y;
+    // GUNNER OVERHEAT (Wave 2): a building heat glow on the body as Momentum ramps, FLARING on the
+    // boil-over burst — the visible "charge" the HUD pip row mirrors. Local read off authoritative
+    // state (passiveState stacks + overheatT window); drawn under the body.
+    if (this.p.kitId === "gunner" && !this.isDown) {
+      const heat = Math.min(1, this.p.passiveState / MOMENTUM.maxStacks);
+      const isBoil = this.p.overheatT > 0;
+      if (heat > 0 || isBoil) {
+        const pulse = isBoil ? 0.7 + 0.3 * Math.sin(this.animClock * 14) : 1;
+        const glowA = (isBoil ? 0.5 : 0.12 + 0.26 * heat) * pulse;
+        const glowSize = 52 * (1 + 0.28 * (isBoil ? 1 : heat));
+        this.fxLayer("glow_round", isBoil ? "#ffd479" : BURN_TINT, psx, psy, glowSize, glowSize, glowA, 0);
+      }
+    }
     let alpha = 1;
     if (this.isDown) alpha = 0.4;
     else if (isInvulnBlinkFrame(this.invuln, this.p.dashInvuln)) alpha = 0.4;

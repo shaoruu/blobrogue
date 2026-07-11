@@ -83,9 +83,12 @@ export interface InputSample {
   // The ult-request hold (F). Like interact, a gameplay-context level input; the server alone
   // validates charge + the 8s lockout and resolves the effect.
   ult: boolean;
+  // The MENDER heal-pulse hold (R). Like ult, a gameplay-context level input; the server alone
+  // validates the pulse cooldown and resolves the directed heal.
+  pulse: boolean;
 }
 
-const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false, ult: false };
+const IDLE_SAMPLE: InputSample = { moveX: 0, moveY: 0, firing: false, dash: false, interact: false, ult: false, pulse: false };
 
 // Double-tap-to-dash timing (game-designer spec). A dash fires on a down->up->down where the
 // FIRST press was a genuine TAP (held <= TAP_MAX_HOLD) and the SECOND press lands within
@@ -309,8 +312,9 @@ export class InputController {
     this.isDashTapQueued = false;
     // The "ult requested" intent (spec §3): Q is already the drop-weapon key, so the ult lives
     // on the dedicated F key (a controller button later). A held bit is safe — the server resets
-    // the meter on cast, so holding it can never chain a second ult.
-    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e"), ult: this.keys.has("f") };
+    // the meter on cast, so holding it can never chain a second ult. The MENDER heal-pulse (Wave
+    // 2) lives on C — a held bit is likewise safe (the server owns the pulse cooldown).
+    return { moveX, moveY, firing, dash: dashHeld || dashTap, interact: this.keys.has("e"), ult: this.keys.has("f"), pulse: this.keys.has("c") };
   }
 
   private suspendFire(): void {
