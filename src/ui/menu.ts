@@ -146,6 +146,9 @@ export class Menu {
   // The title's What's New button, kept so opening the panel can clear its unread cue in
   // place (no title rebuild, zero layout shift).
   private whatsNewBtn: HTMLButtonElement | null = null;
+  // The title's live "players online" subscription (Convex onUpdate). Torn down on every
+  // screen transition and on hide so it only runs while the title is actually on screen.
+  private onlineCountUnsub: (() => void) | null = null;
 
   constructor(overlay: HTMLElement, session: Session, client: ConvexClient | null, auth: AuthClient | null, host: MenuHost) {
     this.overlay = overlay;
@@ -164,13 +167,19 @@ export class Menu {
 
   hide() {
     this.teardownLobby();
+    this.teardownOnlineCount();
     // The title (and its idle loop) is fully covered while a run plays — park the rAF.
     this.titleStage?.setPaused(true);
     this.overlay.classList.add("hidden");
   }
 
+  private teardownOnlineCount() {
+    if (this.onlineCountUnsub) { this.onlineCountUnsub(); this.onlineCountUnsub = null; }
+  }
+
   private show(...nodes: HTMLElement[]) {
     this.teardownLobby();
+    this.teardownOnlineCount();
     this.identityMount = null;     // the title re-arms it after its own show()
     this.titleStageRefresh = null; // idem
     this.titleStage = null;
@@ -270,6 +279,14 @@ export class Menu {
     logo.height = 192;
     mark.appendChild(logo);
     mark.appendChild(el("p", "tag", "An amber cowboy-blob lost in the depths. Blast down as far as you can \u2014 solo, or with friends."));
+    // The live "players online" pill: a reserved, fixed-height line under the tagline, in
+    // the hero band and well clear of PLAY. Empty + invisible until the count subscription
+    // lands a positive number (opacity, not display), so it can never shift anything.
+    const onlinePill = el("div", "home-online");
+    onlinePill.setAttribute("aria-hidden", "true");
+    const onlineText = el("span", "online-text", "");
+    onlinePill.append(el("span", "online-dot"), onlineText);
+    mark.appendChild(onlinePill);
     hero.appendChild(mark);
     wrap.appendChild(hero);
     // The natural place to tap your guy: a small, quiet closet door beside the blob. It
@@ -361,6 +378,9 @@ export class Menu {
     this.identityMount = identity;
     this.titleStageRefresh = refreshStage;
     this.titleStage = stagePreview;
+    // The title's live "players online" pill fills in place (opacity only) — armed after
+    // show() cleared the previous title's subscription.
+    this.subscribeOnlineCount(onlinePill, onlineText);
     // Background identity flush (login/adoption) — no home UI depends on its timing; the
     // stage repaints in place once the profile's loadout lands.
     void this.flushTitleIdentity().then(() => this.titleStageRefresh?.());
@@ -380,6 +400,26 @@ export class Menu {
     } catch {
       // the home shell stands
     }
+  }
+
+  // Subscribe the title's "players online" pill to the live global count. The pill is a
+  // reserved, fixed-geometry line: a positive count fades it in and fills its text (content
+  // only), while 0 / loading / an unreachable backend all leave it empty and invisible —
+  // never a broken "undefined", never a layout shift. Rebound on every showTitle.
+  private subscribeOnlineCount(pill: HTMLElement, text: HTMLElement): void {
+    if (!this.client) return;
+    const render = (count: number) => {
+      if (typeof count !== "number" || count <= 0) {
+        pill.classList.remove("on");
+        pill.setAttribute("aria-hidden", "true");
+        text.textContent = "";
+        return;
+      }
+      text.textContent = `${count} ${count === 1 ? "blob" : "blobs"} playing now`;
+      pill.setAttribute("aria-hidden", "false");
+      pill.classList.add("on");
+    };
+    this.onlineCountUnsub = this.client.onUpdate(api.presence.onlineCount, {}, render, () => {});
   }
 
   // The stage's accessible description (the accepted copy, exactly): "Your blob", or

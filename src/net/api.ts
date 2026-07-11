@@ -179,6 +179,9 @@ export const api = {
   presence: {
     update: makeFunctionReference<"mutation", PresenceUpdateArgs, null>("presence:update"),
     list: makeFunctionReference<"query", { roomId: string }, PresenceDoc[]>("presence:list"),
+    // Live GLOBAL count of distinct players currently connected (recent presence rows) —
+    // the title screen subscribes to it for the "N playing now" indicator.
+    onlineCount: makeFunctionReference<"query", Record<string, never>, number>("presence:onlineCount"),
     revive: makeFunctionReference<"mutation", { roomId: string; targetPlayerId: string }, null>("presence:revive"),
     // Mirror of the authoritative game-server connection state (ONLINE rooms): worldId after
     // a verified world join, null on leaving. Powers the lobby's per-member readiness readout.

@@ -655,6 +655,16 @@
          width attrs reserve the box before the file streams in. */
       .logo-img{ image-rendering:pixelated; height:clamp(30px,4.5vh,42px); width:auto; max-width:min(280px,80%); object-fit:contain; display:block; margin:0; filter:drop-shadow(0 0 16px rgba(255,180,59,.28)); }
       .home-hero .tag{ font-family:var(--f-ui); font-size:var(--fs-xs); line-height:1.4; letter-spacing:.5px; color:var(--ink-mute); max-width:520px; min-height:14px; text-transform:none; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      /* The live "players online" pill: a reserved, fixed-height line under the tagline.
+         Invisible (opacity, NOT display) until a positive count lands, so 0/loading/offline
+         never shifts the hero. The green dot is the design-system --grn (not an emoji). */
+      .home-online{ display:flex; align-items:center; justify-content:center; gap:7px; height:16px; min-height:16px;
+        font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.5px; color:var(--ink-mute); text-transform:none;
+        opacity:0; }
+      .home-online.on{ opacity:1; }
+      .home-online .online-dot{ flex:0 0 8px; width:8px; height:8px; border-radius:50%; background:var(--grn);
+        box-shadow:0 0 6px rgba(127,221,90,.7); }
+      .home-online .online-text{ min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .home-hero .blob-stage{ position:relative; flex:none; width:200px; height:200px;
         background:transparent; box-shadow:none; display:flex; align-items:center; justify-content:center; }
       /* the radial plinth glow (quiet, low alpha — never competes with the amber Play) */
