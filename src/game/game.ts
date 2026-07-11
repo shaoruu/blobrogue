@@ -11,7 +11,8 @@ import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, amberForRun } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX } from "../sim/balance.js";
+import { DOGGIE_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
@@ -76,10 +77,16 @@ import type { TileRenderGradient } from "./tileRender.js";
 
 export interface RunResult {
   floor: number; kills: number; coins: number; durationMs: number;
-  // Amber banked by the premium economy: the armed cache's end-run conversion of unspent
-  // coins (≤ +2 per 100, capped +5) plus any mythic windfall claims. The ONLY route from
-  // coins toward permanence — coins themselves die with the run.
-  amber: number;
+  // Authoritative run FACTS the SERVER banks Amber from (never a client-authored amber
+  // number). floorsCleared counts cleared floors (from sim descend events); bossKills lists
+  // the boss kinds defeated this run (first-kill grants resolve server-side); the two cache
+  // flags mirror the premium economy's armed cache + mythic windfall; outcome drives the
+  // 100%/50% bank fraction (WAVE 1 always ends in "death" — "return" lands with the hub).
+  floorsCleared: number;
+  bossKills: string[];
+  isCacheArmed: boolean;
+  amberWindfall: number;
+  outcome: "death" | "return";
   // The run's final build (weapons carried + blessings with levels) for the results screen.
   // Display-only for gameplay; the id/count subset also rides recordRun so a personal-best
   // run's build shows on the player's leaderboard profile.
@@ -132,6 +139,10 @@ export interface StartOptions {
   // Solo + online; never touches the sim — teammates see the overlays via the verified
   // ticket identity instead, and body renders from the party color at launch.
   selfCosmetics?: CosmeticLoadout | null;
+  // The player's equipped companion pet id (META spec §3), or null. A pure client-side
+  // cosmetic follower rendered OUTSIDE the sim — it cannot desync a co-op run. Teammates'
+  // pets arrive via the verified ticket identity on the wire (PlayerWire.pt).
+  selfPet?: string | null;
 }
 
 // Read-only live state the dev sandbox panel polls for its readouts + button states.
@@ -157,6 +168,21 @@ interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facin
 // Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
 // detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing: boolean; dashImgCd: number; dashDustCd: number; }
+// A companion pet's client-only render state (META spec §3): a lagged follow position that
+// trails the owner (trots to catch up, sits when settled), a facing toward travel, and an
+// anim clock for the sit/trot cycle. Purely cosmetic — never a sim entity.
+interface PetRenderEntry { petId: string; x: number; y: number; facing: number; anim: Anim; isMoving: boolean; }
+// Companion pet follow tuning (all client-side render feel; nothing gameplay branches on it).
+const PET_SIZE = 34;          // draw size (px) — reads as a small companion beside the ~52px blob
+const PET_REST_OFFSET = 22;   // where the pet settles behind the owner (opposite their facing)
+const PET_STOP_DIST = 8;      // within this of the rest spot it SITS (settles beside you)
+const PET_FOLLOW_GAIN = 6;    // trot speed scales with distance (a little lag/catch-up)
+const PET_MAX_SPEED = 340;    // px/s cap on the trot (keeps pace with a running blob)
+const PET_WARP_DIST = 380;    // fell way behind (dash/teleport/floor change) -> scamper-warp
+// The sprite for an equipped pet id (null if unknown — old client / future pet renders nothing).
+function petSpriteFor(petId: string): SpriteName | null {
+  return petId === DOGGIE_PET_ID ? "doggie" : null;
+}
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // A coin token flying from its pickup spot (world x,y) up into the top-left wallet: t runs
@@ -629,6 +655,15 @@ export class Game {
   private ownedItemDefs: ItemDef[] = []; // mirror of the local player's picked items, for the HUD
   private selfColorIndex: number | null = null; // chosen blob tint (solo + online); null/0 = natural amber
   private selfCosmetics: CosmeticLoadout | null = null; // equipped cosmetic loadout (visual-only)
+  private selfPet: string | null = null; // equipped companion pet id (visual-only, out-of-sim)
+  // WAVE 1 run facts fed to the SERVER-authoritative Amber bank (never a client amber number):
+  // cleared-floor count (one per descend event) + the boss kinds defeated this run.
+  private runFloorsCleared = 0;
+  private runBossKills = new Set<string>();
+  // Per-owner client-side pet render state (lagged follow position + sit/trot anim), keyed by
+  // player id. Pure cosmetic — never in the sim, never targetable, never a gameplay input.
+  private petRenders = new Map<string, PetRenderEntry>();
+  private lastPetTs = 0; // performance.now() of the last pet-follow frame (own display-rate dt)
   private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
@@ -980,6 +1015,10 @@ export class Game {
     // The chosen blob tint applies to solo + online (classic co-op keeps assigned colors).
     this.selfColorIndex = this.mode === "coop" ? null : opts.selfColorIndex ?? null;
     this.selfCosmetics = this.mode === "coop" ? null : opts.selfCosmetics ?? null;
+    this.selfPet = this.mode === "coop" ? null : opts.selfPet ?? null;
+    this.runFloorsCleared = 0;
+    this.runBossKills.clear();
+    this.petRenders.clear();
     this.online = this.mode === "online" ? opts.online ?? null : null;
     this.spectateId = null;
     this.sentSpectateId = null;
@@ -1018,6 +1057,7 @@ export class Game {
     this.remoteShotSeen.clear();
     this.remoteDownSeen.clear();
     this.remoteAnims.clear();
+    this.petRenders.clear();
     this.reviveHold.clear();
     this.freeze = 0;
     this.trauma = 0;
@@ -2097,6 +2137,9 @@ export class Game {
       case "enemyKill": {
         const arch = ENEMY_ARCHETYPES[e.kind];
         const big = isBossKind(e.kind);
+        // WAVE 1 amber earn fact: a boss defeat this run (the server grants the one-time
+        // first-boss Amber per account; trash mobs never pay — the anti-grind rule).
+        if (big) this.runBossKills.add(e.kind);
         if (big) audio.setMusic("dungeon"); // the intense boss track relaxes after the kill
         // The visual death burst is camera-gated (an off-screen kill in a swarm pays nothing)
         // and coalesced so many kills in ONE frame stay cheap; the hitstop/shake flush once.
@@ -2559,6 +2602,9 @@ export class Game {
       case "descend":
         sfx("descend");
         this.addTrauma(TRAUMA_DESCEND);
+        // WAVE 1 amber earn fact: a descend means the floor just left was CLEARED (the exit
+        // only opens on clear). The server pays per cleared floor from this authoritative count.
+        this.runFloorsCleared++;
         // Bank the reached depth immediately (progressive, idempotent) so a run that later
         // ends by disconnect/quit — never a clean full-party-wipe game over — still records
         // the deepest floor on the leaderboard. Fires in every mode for the local player.
@@ -3755,7 +3801,14 @@ export class Game {
     this.hud.setVisible(false);
     this.onGameOver({
       floor: this.floor, kills: this.kills, coins: this.coins, durationMs: performance.now() - this.runStart,
-      amber: amberForRun(this.coins, this.p.isAmberCacheArmed, this.p.amberWindfall),
+      // Authoritative run facts — the server banks Amber from these. A game over is a wipe
+      // ("death" → 50% of the run pool); the leftover-coin cache trickle + first-boss grants
+      // ride along. Returning to camp (100%) lands with the walkable hub in wave 2.
+      floorsCleared: this.runFloorsCleared,
+      bossKills: [...this.runBossKills],
+      isCacheArmed: this.p.isAmberCacheArmed,
+      amberWindfall: this.p.amberWindfall,
+      outcome: "death",
       build: {
         weapons: this.p.ownedWeapons.map((id) => ({ id, name: WEAPONS[id].name })),
         items: this.collapsedItems().map((it) => ({ id: it.id, name: it.name, glyph: it.glyph, tint: it.tint, count: it.count })),
@@ -4013,6 +4066,7 @@ export class Game {
     this.renderChargeMarker();   // the local Breach hold: charge ring + landing marker
     this.renderTracers();
     this.renderRemotePlayers();
+    this.renderPets(); // client-side cosmetic companions (follow/sit; never a sim entity)
     this.renderAfterimages();
     this.renderMeleeSwing();
     this.renderPlayer();
@@ -6813,6 +6867,84 @@ export class Game {
       ctx.globalAlpha = 1;
       ctx.textAlign = "left";
     }
+  }
+
+  // Cosmetic companion pets (META spec §3): a pure CLIENT-SIDE follower per player who has one
+  // equipped — the local player (from selfPet) and any teammate (from the wire identity pet).
+  // The pet TROTS to keep near its owner with a little lag + a settle distance (it SITS when it
+  // catches up), and warps with a puff if it falls way behind (a dash/teleport/floor change).
+  // It is NEVER a sim entity: it cannot die, deal damage, block, or be targeted — enemies do
+  // not know it exists, so it can never desync a co-op run. Determinism-safe by construction.
+  private renderPets() {
+    // Own frame-dt clock: pets are display-rate juice, decoupled from the fixed sim step.
+    const now = performance.now();
+    const dt = this.lastPetTs > 0 ? Math.min(0.05, (now - this.lastPetTs) / 1000) : 0;
+    this.lastPetTs = now;
+
+    const live = new Set<string>();
+    // The local player's own pet follows the INTERPOLATED body position (matches renderPlayer).
+    if (this.selfPet !== null && !this.isSpectatingBody) {
+      const a = this.hasRenderPrev ? this.renderAlpha : 1;
+      const ox = this.renderPrevX + (this.px - this.renderPrevX) * a;
+      const oy = this.renderPrevY + (this.py - this.renderPrevY) * a;
+      this.stepPet(LOCAL_ID, this.selfPet, ox, oy, this.facing, this.isPlayerMoving, dt);
+      live.add(LOCAL_ID);
+    }
+    // Teammates' pets follow their interpolated remote positions (from the verified wire id).
+    for (const r of this.remotes()) {
+      if (r.pet === null || r.isAbsent) continue;
+      const entry = this.remoteAnims.get(r.playerId);
+      const moving = entry ? entry.anim.move > 0.5 : false;
+      this.stepPet(r.playerId, r.pet, r.x, r.y, r.facing, moving, dt);
+      live.add(r.playerId);
+    }
+    // Drop pets whose owner left this frame (leaver / no longer equipped).
+    for (const id of [...this.petRenders.keys()]) if (!live.has(id)) this.petRenders.delete(id);
+
+    const cam = this.renderCam;
+    for (const pet of this.petRenders.values()) {
+      const sprite = petSpriteFor(pet.petId);
+      if (sprite === null) continue;
+      const sx = pet.x - cam.x, sy = pet.y - cam.y;
+      const xf = characterXform(pet.anim, CHARACTER_STYLE);
+      // drawChar animates the "walk" sheet when trotting and holds frame 0 (the sit/idle pose)
+      // when settled — the AD drops the real doggie art at the wired path; a missing sheet
+      // falls back to the static idle PNG (and a disc while it streams). Never hand-drawn.
+      this.drawChar(sprite, "walk", sx, sy, PET_SIZE, pet.facing, xf, 1, 1, 0, pet.anim.clock, null, !pet.isMoving);
+    }
+  }
+
+  // Advance one pet's lagged follow toward its owner: trots in when beyond the settle
+  // distance, sits when it catches up, warps (with a puff) if it falls way behind.
+  private stepPet(ownerId: string, petId: string, ownerX: number, ownerY: number, ownerFacing: number, ownerMoving: boolean, dt: number) {
+    let pet = this.petRenders.get(ownerId);
+    // The rest spot sits just BEHIND the owner (opposite their facing) so it never blocks them.
+    const restX = ownerX - ownerFacing * PET_REST_OFFSET;
+    const restY = ownerY + 6;
+    if (!pet || pet.petId !== petId) {
+      pet = { petId, x: restX, y: restY, facing: ownerFacing, anim: createAnim(), isMoving: false };
+      this.petRenders.set(ownerId, pet);
+    }
+    const dx = restX - pet.x, dy = restY - pet.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > PET_WARP_DIST) {
+      // Owner dashed/teleported/changed floor: scamper-warp to the rest spot with a puff.
+      this.spawnPuff(pet.x, pet.y, 4, "#d8c8a0");
+      pet.x = restX; pet.y = restY; pet.isMoving = false;
+    } else if (dist > PET_STOP_DIST) {
+      // Trot toward the owner, speeding up the further behind it is (a little lag/catch-up).
+      const speed = Math.min(PET_MAX_SPEED, PET_FOLLOW_GAIN * dist);
+      const step = Math.min(dist, speed * dt);
+      pet.x += (dx / dist) * step;
+      pet.y += (dy / dist) * step;
+      pet.facing = dx >= 0 ? 1 : -1;
+      pet.isMoving = true;
+    } else {
+      // Settled beside/behind the owner: sit. Face the way the owner faces while idle.
+      pet.isMoving = ownerMoving && dist > PET_STOP_DIST * 0.5;
+      if (!pet.isMoving) pet.facing = ownerFacing;
+    }
+    stepAnim(pet.anim, dt, pet.isMoving, 0);
   }
 
   // The body tint for the local blob, or null for the natural amber sprite (palette slot 0

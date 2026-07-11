@@ -58,12 +58,16 @@ async function bootNormal() {
     // screen can celebrate a PB and any cosmetics this run just earned.
     const prevProfile = session.profile;
     const prevBest = prevProfile?.deepestFloor ?? 0;
+    const prevAmber = prevProfile?.amber ?? 0;
     const saved = await session.recordRun(result);
     const isNewBest = saved !== null && result.floor > prevBest;
     // Only diff unlocks against a KNOWN before-state — a cold start with no prior profile
     // can't tell "new this run" from "earned long ago", so it stays quiet.
     const newUnlocks = saved && prevProfile ? saved.unlocks.filter((id) => !prevProfile.unlocks.includes(id)) : [];
-    menu.showGameOver(result, saved ?? session.profile, { isNewBest, online, newUnlocks });
+    // The banked-Amber delta is the SERVER's authoritative grant (never a client number): the
+    // difference between the profile's Amber before and after recordRun folded the run.
+    const bankedAmber = saved && prevProfile ? Math.max(0, saved.amber - prevAmber) : 0;
+    menu.showGameOver(result, saved ?? session.profile, { isNewBest, online, newUnlocks, bankedAmber });
   }
 
   function onExit(reason?: ExitReason, detail?: string) {
@@ -111,7 +115,7 @@ async function bootNormal() {
       leaveOnlineIfAny();
       isInRun = true;
       menu.hide();
-      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics });
+      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet });
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       if (activeOnline && activeOnline !== lobby) activeOnline.leave();
@@ -138,6 +142,7 @@ async function bootNormal() {
         profile,
         selfColorIndex: session.colorIndex,
         selfCosmetics: session.cosmetics,
+        selfPet: session.equippedPet,
       });
     },
   });
@@ -180,6 +185,7 @@ async function bootNormal() {
       const cosmetics = session.cosmetics;
       if (cosmetics.hat !== null) params.set("hat", cosmetics.hat);
       if (cosmetics.face !== null) params.set("face", cosmetics.face);
+      if (session.equippedPet !== null) params.set("pet", session.equippedPet);
       const res = await fetch(`${devTicketUrl(gsOverride)}?${params}`);
       if (!res.ok) throw new Error(`ticket endpoint ${res.status}`);
       const data = (await res.json()) as { ticket: string };
@@ -194,6 +200,7 @@ async function bootNormal() {
       profile: null,
       selfColorIndex: session.colorIndex,
       selfCosmetics: session.cosmetics,
+      selfPet: session.equippedPet,
     });
     return;
   }
