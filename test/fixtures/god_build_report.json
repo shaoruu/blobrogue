@@ -7,407 +7,407 @@
     "gilded": 65,
     "choir": 65
   },
-  "maxPracticalDps": 40.92,
+  "maxPracticalDps": 47.94,
   "top100": [
     {
-      "dps": 40.92,
-      "build": "rapid + [big_iron,coin_magnet,coin_magnet,deadeye,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,hair_trigger,second_wind,static_charge]"
+      "dps": 47.94,
+      "build": "spear + [executioner,full_metal,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,split_shot,thorns]"
+    },
+    {
+      "dps": 47.45,
+      "build": "longsword + [big_iron,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,heavy_rounds,overload,quickdraw,scattergun,vampire_fang,vanguard]"
+    },
+    {
+      "dps": 47.15,
+      "build": "spear + [berserk,deadeye,glass_cannon,greed,overload,overload,quickdraw,skirmisher,vanguard]"
+    },
+    {
+      "dps": 46.17,
+      "build": "midas + [coin_magnet,elementalist,glass_cannon,hair_trigger,overload,quickdraw,second_wind,vampire_fang,vanguard]"
+    },
+    {
+      "dps": 46.05,
+      "build": "rapid + [big_iron,frostbite,glass_cannon,hair_trigger,incendiary_rounds,juggernaut,overload,quickdraw,quickdraw,thorns,vanguard,vitality]"
+    },
+    {
+      "dps": 45.96,
+      "build": "longsword + [adrenaline,big_iron,executioner,glass_cannon,greed,hair_trigger,heavy_rounds,overload,quickdraw,second_wind,skirmisher,static_charge]"
+    },
+    {
+      "dps": 45.55,
+      "build": "spear + [berserk,big_iron,featherweight,glass_cannon,hair_trigger,overload,quickdraw,swift_boots,thorns]"
+    },
+    {
+      "dps": 45.06,
+      "build": "spear + [full_metal,glass_cannon,hair_trigger,incendiary_rounds,juggernaut,overload,quickdraw,quickdraw,skirmisher]"
+    },
+    {
+      "dps": 44.94,
+      "build": "spear + [adrenaline,executioner,featherweight,glass_cannon,hair_trigger,heavy_rounds,juggernaut,overload,quickdraw]"
+    },
+    {
+      "dps": 44.74,
+      "build": "pistol + [cryo_coating,deadeye,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,quickdraw,second_wind,swift_boots,vampire_fang,vanguard]"
+    },
+    {
+      "dps": 44.71,
+      "build": "spear + [coin_magnet,full_metal,glass_cannon,hair_trigger,hair_trigger,overload,quickdraw,second_wind,vitality]"
+    },
+    {
+      "dps": 44.54,
+      "build": "pistol + [adrenaline,big_iron,coin_magnet,featherweight,glass_cannon,hair_trigger,overload,quickdraw,skirmisher,static_charge,thorns,vampire_fang]"
+    },
+    {
+      "dps": 44.36,
+      "build": "spear + [frostbite,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,skirmisher,skirmisher,vanguard]"
+    },
+    {
+      "dps": 44.28,
+      "build": "rapid + [cryo_coating,deadeye,featherweight,glass_cannon,hair_trigger,heavy_rounds,incendiary_rounds,juggernaut,overload,quickdraw,second_wind,vampire_fang]"
+    },
+    {
+      "dps": 43.79,
+      "build": "pistol + [adrenaline,big_iron,deadeye,elementalist,featherweight,hair_trigger,hair_trigger,overload,quickdraw,second_wind,vampire_fang,vanguard]"
+    },
+    {
+      "dps": 43.68,
+      "build": "pistol + [big_iron,coin_magnet,deadeye,glass_cannon,hair_trigger,overload,second_wind,skirmisher,swift_boots,thorns,vanguard,vitality]"
+    },
+    {
+      "dps": 43.6,
+      "build": "rapid + [big_iron,big_iron,coin_magnet,deadeye,glass_cannon,greed,incendiary_rounds,overload,quickdraw,second_wind,skirmisher,vitality]"
+    },
+    {
+      "dps": 43.47,
+      "build": "spear + [glass_cannon,greed,hair_trigger,heavy_rounds,overload,quickdraw,second_wind,static_charge,thorns]"
+    },
+    {
+      "dps": 43.45,
+      "build": "longsword + [adrenaline,big_iron,coin_magnet,cryo_coating,featherweight,glass_cannon,hair_trigger,juggernaut,overload,quickdraw,quickdraw,scattergun]"
+    },
+    {
+      "dps": 43.35,
+      "build": "sword + [adrenaline,big_iron,full_metal,glass_cannon,hair_trigger,hair_trigger,overload,quickdraw,second_wind]"
+    },
+    {
+      "dps": 43.26,
+      "build": "longsword + [big_iron,coin_magnet,featherweight,featherweight,glass_cannon,greed,hair_trigger,incendiary_rounds,incendiary_rounds,overload,quickdraw,vanguard]"
+    },
+    {
+      "dps": 43.26,
+      "build": "longsword + [big_iron,coin_magnet,cryo_coating,elementalist,frostbite,full_metal,glass_cannon,hair_trigger,overload,quickdraw,split_shot,vanguard]"
+    },
+    {
+      "dps": 43.19,
+      "build": "spear + [glass_cannon,greed,hair_trigger,overload,quickdraw,quickdraw,scattergun,swift_boots,vitality]"
+    },
+    {
+      "dps": 43.18,
+      "build": "midas + [deadeye,elementalist,full_metal,glass_cannon,hair_trigger,juggernaut,overload,second_wind,vitality]"
+    },
+    {
+      "dps": 43.18,
+      "build": "midas + [cryo_coating,deadeye,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,thorns,vanguard]"
+    },
+    {
+      "dps": 42.78,
+      "build": "midas + [cryo_coating,glass_cannon,greed,heavy_rounds,incendiary_rounds,overload,overload,quickdraw,swift_boots]"
+    },
+    {
+      "dps": 42.77,
+      "build": "spear + [big_iron,elementalist,executioner,featherweight,hair_trigger,overload,quickdraw,swift_boots,vitality]"
+    },
+    {
+      "dps": 42.52,
+      "build": "longsword + [berserk,coin_magnet,elementalist,featherweight,glass_cannon,hair_trigger,hair_trigger,overload,quickdraw,static_charge,static_charge,vanguard]"
+    },
+    {
+      "dps": 42.18,
+      "build": "longsword + [big_iron,coin_magnet,cryo_coating,glass_cannon,hair_trigger,incendiary_rounds,marksman,overload,scattergun,skirmisher,split_shot,vampire_fang]"
+    },
+    {
+      "dps": 42.13,
+      "build": "rapid + [adrenaline,big_iron,deadeye,executioner,glass_cannon,glass_cannon,hair_trigger,incendiary_rounds,quickdraw,swift_boots,swift_boots,vanguard]"
+    },
+    {
+      "dps": 42.12,
+      "build": "spear + [big_iron,featherweight,hair_trigger,incendiary_rounds,overload,quickdraw,skirmisher,split_shot,swift_boots]"
+    },
+    {
+      "dps": 42.1,
+      "build": "pistol + [big_iron,big_iron,cryo_coating,deadeye,executioner,hair_trigger,overload,quickdraw,second_wind,vampire_fang,vanguard,vitality]"
+    },
+    {
+      "dps": 42.06,
+      "build": "spear + [big_iron,executioner,glass_cannon,hair_trigger,quickdraw,skirmisher,swift_boots,swift_boots,vitality]"
+    },
+    {
+      "dps": 41.91,
+      "build": "rapid + [big_iron,deadeye,elementalist,executioner,glass_cannon,hair_trigger,heavy_rounds,quickdraw,skirmisher,skirmisher,swift_boots,vitality]"
+    },
+    {
+      "dps": 41.91,
+      "build": "cannon + [adrenaline,coin_magnet,deadeye,executioner,frostbite,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,skirmisher,vampire_fang]"
+    },
+    {
+      "dps": 41.89,
+      "build": "railgun + [deadeye,glass_cannon,greed,hair_trigger,heavy_rounds,incendiary_rounds,overload,quickdraw]"
+    },
+    {
+      "dps": 41.85,
+      "build": "railgun + [big_iron,executioner,glass_cannon,greed,hair_trigger,incendiary_rounds,juggernaut,overload,quickdraw,vampire_fang,vitality,vitality]"
+    },
+    {
+      "dps": 41.83,
+      "build": "scrapper + [adrenaline,coin_magnet,full_metal,glass_cannon,glass_cannon,hair_trigger,hair_trigger,overload,swift_boots]"
+    },
+    {
+      "dps": 41.79,
+      "build": "longsword + [big_iron,big_iron,deadeye,glass_cannon,hair_trigger,marksman,quickdraw,second_wind,skirmisher,swift_boots,thorns,vitality]"
+    },
+    {
+      "dps": 41.66,
+      "build": "sword + [big_iron,big_iron,featherweight,frostbite,hair_trigger,overload,overload,quickdraw,vitality]"
+    },
+    {
+      "dps": 41.62,
+      "build": "longsword + [big_iron,cryo_coating,executioner,full_metal,glass_cannon,greed,hair_trigger,overload,quickdraw,swift_boots,vampire_fang,vitality]"
+    },
+    {
+      "dps": 41.5,
+      "build": "spear + [adrenaline,coin_magnet,executioner,glass_cannon,hair_trigger,incendiary_rounds,overload,second_wind,vanguard]"
+    },
+    {
+      "dps": 41.5,
+      "build": "spear + [executioner,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,second_wind,thorns,vitality]"
+    },
+    {
+      "dps": 41.5,
+      "build": "railgun + [big_iron,featherweight,glass_cannon,greed,hair_trigger,overload,quickdraw,second_wind,skirmisher,vanguard,vitality,vitality]"
+    },
+    {
+      "dps": 41.5,
+      "build": "railgun + [big_iron,cryo_coating,frostbite,glass_cannon,hair_trigger,hair_trigger,heavy_rounds,overload,quickdraw,static_charge,thorns,vampire_fang]"
+    },
+    {
+      "dps": 41.49,
+      "build": "pistol + [cryo_coating,featherweight,glass_cannon,hair_trigger,incendiary_rounds,incendiary_rounds,overload,quickdraw,second_wind,static_charge,thorns,vitality]"
+    },
+    {
+      "dps": 41.48,
+      "build": "pistol + [coin_magnet,coin_magnet,cryo_coating,deadeye,featherweight,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,skirmisher,static_charge]"
+    },
+    {
+      "dps": 41.42,
+      "build": "longsword + [coin_magnet,featherweight,glass_cannon,hair_trigger,heavy_rounds,incendiary_rounds,overload,quickdraw,second_wind,split_shot,thorns,vampire_fang]"
+    },
+    {
+      "dps": 41.42,
+      "build": "longsword + [berserk,berserk,featherweight,glass_cannon,greed,hair_trigger,heavy_rounds,incendiary_rounds,overload,quickdraw,vampire_fang,vitality]"
+    },
+    {
+      "dps": 41.25,
+      "build": "cannon + [cryo_coating,elementalist,glass_cannon,greed,hair_trigger,overload,quickdraw,quickdraw,second_wind,thorns,vampire_fang,vanguard]"
+    },
+    {
+      "dps": 40.94,
+      "build": "beam + [adrenaline,big_iron,big_iron,coin_magnet,executioner,glass_cannon,hair_trigger,hair_trigger,juggernaut,quickdraw,quickdraw,second_wind]"
+    },
+    {
+      "dps": 40.86,
+      "build": "cannon + [adrenaline,big_iron,coin_magnet,glass_cannon,hair_trigger,overload,quickdraw,skirmisher,static_charge,thorns,vanguard,vitality]"
+    },
+    {
+      "dps": 40.8,
+      "build": "spear + [cryo_coating,glass_cannon,hair_trigger,incendiary_rounds,overload,scattergun,skirmisher,vanguard,vitality]"
+    },
+    {
+      "dps": 40.79,
+      "build": "pistol + [big_iron,deadeye,featherweight,frostbite,full_metal,hair_trigger,hair_trigger,overload,quickdraw,second_wind,swift_boots,thorns]"
+    },
+    {
+      "dps": 40.79,
+      "build": "longsword + [elementalist,executioner,featherweight,glass_cannon,hair_trigger,overload,quickdraw,second_wind,skirmisher,static_charge,thorns,vampire_fang]"
+    },
+    {
+      "dps": 40.69,
+      "build": "spear + [big_iron,featherweight,full_metal,glass_cannon,hair_trigger,quickdraw,skirmisher,vanguard,vitality]"
+    },
+    {
+      "dps": 40.61,
+      "build": "pistol + [big_iron,coin_magnet,elementalist,full_metal,hair_trigger,hair_trigger,juggernaut,juggernaut,overload,quickdraw,swift_boots,vitality]"
+    },
+    {
+      "dps": 40.6,
+      "build": "longsword + [cryo_coating,frostbite,glass_cannon,greed,hair_trigger,incendiary_rounds,juggernaut,marksman,overload,quickdraw,split_shot,swift_boots]"
+    },
+    {
+      "dps": 40.58,
+      "build": "railgun + [adrenaline,adrenaline,big_iron,featherweight,frostbite,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,static_charge,vitality]"
+    },
+    {
+      "dps": 40.46,
+      "build": "sword + [frostbite,glass_cannon,hair_trigger,incendiary_rounds,overload,quickdraw,second_wind,swift_boots,vitality]"
+    },
+    {
+      "dps": 40.45,
+      "build": "spear + [berserk,coin_magnet,deadeye,full_metal,glass_cannon,hair_trigger,juggernaut,overload,swift_boots]"
+    },
+    {
+      "dps": 40.45,
+      "build": "spear + [coin_magnet,deadeye,glass_cannon,hair_trigger,overload,static_charge,vampire_fang,vitality,vitality]"
+    },
+    {
+      "dps": 40.45,
+      "build": "spear + [big_iron,executioner,featherweight,frostbite,greed,hair_trigger,overload,quickdraw,skirmisher]"
+    },
+    {
+      "dps": 40.33,
+      "build": "pistol + [berserk,big_iron,cryo_coating,executioner,featherweight,frostbite,glass_cannon,hair_trigger,hair_trigger,overload,static_charge,swift_boots]"
+    },
+    {
+      "dps": 40.3,
+      "build": "pistol + [deadeye,frostbite,frostbite,glass_cannon,glass_cannon,hair_trigger,heavy_rounds,overload,thorns,thorns,vanguard,vitality]"
+    },
+    {
+      "dps": 40.29,
+      "build": "cannon + [adrenaline,big_iron,deadeye,glass_cannon,hair_trigger,marksman,overload,quickdraw,second_wind,swift_boots,vampire_fang,vanguard]"
+    },
+    {
+      "dps": 40.26,
+      "build": "beam + [adrenaline,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,quickdraw,quickdraw,quickdraw,second_wind,swift_boots,vanguard]"
+    },
+    {
+      "dps": 40.24,
+      "build": "pistol + [adrenaline,frostbite,glass_cannon,hair_trigger,hair_trigger,hair_trigger,incendiary_rounds,marksman,overload,skirmisher,swift_boots,vampire_fang]"
+    },
+    {
+      "dps": 40.19,
+      "build": "midas + [berserk,big_iron,coin_magnet,hair_trigger,incendiary_rounds,marksman,overload,quickdraw,second_wind]"
     },
     {
       "dps": 40.18,
-      "build": "pistol + [big_iron,deadeye,elementalist,glass_cannon,glass_cannon,hair_trigger,hair_trigger,static_charge,swift_boots,vampire_fang,vitality,vitality]"
+      "build": "longsword + [glass_cannon,hair_trigger,heavy_rounds,juggernaut,overload,quickdraw,quickdraw,swift_boots]"
     },
     {
-      "dps": 39.31,
-      "build": "longsword + [big_iron,cryo_coating,deadeye,deadeye,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,split_shot,thorns,vitality]"
+      "dps": 40.12,
+      "build": "longsword + [berserk,cryo_coating,frostbite,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,incendiary_rounds,overload,split_shot,vanguard,vanguard]"
     },
     {
-      "dps": 39.04,
-      "build": "spear + [big_iron,coin_magnet,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,second_wind,static_charge,swift_boots]"
+      "dps": 39.96,
+      "build": "spear + [featherweight,glass_cannon,hair_trigger,overload,second_wind,skirmisher,skirmisher,split_shot,vitality]"
     },
     {
-      "dps": 39.04,
-      "build": "spear + [big_iron,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,second_wind,split_shot,swift_boots,vampire_fang]"
+      "dps": 39.91,
+      "build": "midas + [adrenaline,big_iron,hair_trigger,hair_trigger,incendiary_rounds,incendiary_rounds,overload,swift_boots,swift_boots]"
     },
     {
-      "dps": 38.97,
-      "build": "rapid + [adrenaline,big_iron,coin_magnet,deadeye,deadeye,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,second_wind,second_wind,thorns]"
+      "dps": 39.85,
+      "build": "rapid + [adrenaline,big_iron,cryo_coating,deadeye,glass_cannon,glass_cannon,hair_trigger,hair_trigger,overload,quickdraw,skirmisher,split_shot]"
     },
     {
-      "dps": 38.27,
-      "build": "longsword + [big_iron,coin_magnet,deadeye,glass_cannon,hair_trigger,hair_trigger,hair_trigger,second_wind,split_shot,static_charge,swift_boots,vitality]"
+      "dps": 39.76,
+      "build": "pistol + [berserk,big_iron,coin_magnet,coin_magnet,hair_trigger,incendiary_rounds,overload,quickdraw,quickdraw,swift_boots,thorns,vitality]"
     },
     {
-      "dps": 38.19,
-      "build": "longsword + [adrenaline,big_iron,coin_magnet,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,hair_trigger,split_shot,vampire_fang,vitality]"
+      "dps": 39.61,
+      "build": "scrapper + [executioner,featherweight,glass_cannon,hair_trigger,incendiary_rounds,overload,skirmisher,skirmisher,vampire_fang]"
     },
     {
-      "dps": 37.86,
-      "build": "rapid + [adrenaline,big_iron,coin_magnet,elementalist,glass_cannon,hair_trigger,hair_trigger,hair_trigger,swift_boots,swift_boots,vampire_fang,vitality]"
+      "dps": 39.55,
+      "build": "longsword + [executioner,featherweight,glass_cannon,greed,hair_trigger,heavy_rounds,incendiary_rounds,overload,second_wind,skirmisher,split_shot,swift_boots]"
     },
     {
-      "dps": 37.7,
-      "build": "pistol + [big_iron,coin_magnet,coin_magnet,deadeye,full_metal,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,second_wind,thorns]"
+      "dps": 39.55,
+      "build": "longsword + [executioner,frostbite,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,second_wind,skirmisher,static_charge,swift_boots,vitality]"
     },
     {
-      "dps": 37.32,
-      "build": "rapid + [big_iron,coin_magnet,cryo_coating,deadeye,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,second_wind,swift_boots,thorns]"
+      "dps": 39.55,
+      "build": "longsword + [adrenaline,full_metal,glass_cannon,hair_trigger,incendiary_rounds,incendiary_rounds,overload,quickdraw,skirmisher,static_charge,swift_boots,vitality]"
     },
     {
-      "dps": 37.31,
-      "build": "sword + [big_iron,coin_magnet,glass_cannon,hair_trigger,hair_trigger,hair_trigger,incendiary_rounds,second_wind,split_shot]"
+      "dps": 39.54,
+      "build": "smg + [glass_cannon,hair_trigger,hair_trigger,overload,overload,second_wind,static_charge,vampire_fang,vitality]"
     },
     {
-      "dps": 37.19,
-      "build": "pistol + [big_iron,coin_magnet,cryo_coating,full_metal,glass_cannon,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,swift_boots,vitality]"
+      "dps": 39.52,
+      "build": "longsword + [adrenaline,coin_magnet,frostbite,full_metal,glass_cannon,hair_trigger,hair_trigger,overload,quickdraw,second_wind,static_charge,swift_boots]"
     },
     {
-      "dps": 37.19,
-      "build": "pistol + [big_iron,big_iron,coin_magnet,elementalist,glass_cannon,hair_trigger,hair_trigger,second_wind,swift_boots,swift_boots,thorns,vampire_fang]"
+      "dps": 39.51,
+      "build": "spear + [adrenaline,big_iron,executioner,hair_trigger,incendiary_rounds,overload,second_wind,skirmisher,vitality]"
     },
     {
-      "dps": 36.9,
-      "build": "smg + [big_iron,coin_magnet,full_metal,glass_cannon,hair_trigger,hair_trigger,hair_trigger,incendiary_rounds,second_wind]"
+      "dps": 39.48,
+      "build": "cannon + [big_iron,big_iron,coin_magnet,cryo_coating,glass_cannon,hair_trigger,juggernaut,overload,second_wind,skirmisher,skirmisher,vitality]"
     },
     {
-      "dps": 36.71,
-      "build": "spear + [big_iron,deadeye,glass_cannon,hair_trigger,incendiary_rounds,second_wind,split_shot,swift_boots,vitality]"
+      "dps": 39.46,
+      "build": "pistol + [big_iron,deadeye,elementalist,glass_cannon,hair_trigger,heavy_rounds,overload,quickdraw,quickdraw,second_wind,swift_boots,vampire_fang]"
     },
     {
-      "dps": 36.71,
-      "build": "spear + [big_iron,deadeye,glass_cannon,hair_trigger,incendiary_rounds,second_wind,split_shot,vitality,vitality]"
+      "dps": 39.21,
+      "build": "spear + [big_iron,big_iron,coin_magnet,deadeye,elementalist,incendiary_rounds,overload,quickdraw,second_wind]"
     },
     {
-      "dps": 36.36,
-      "build": "longsword + [big_iron,big_iron,full_metal,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,scattergun,static_charge,swift_boots,swift_boots,thorns]"
+      "dps": 39.15,
+      "build": "rapid + [coin_magnet,frostbite,full_metal,glass_cannon,hair_trigger,hair_trigger,overload,quickdraw,second_wind,vampire_fang,vanguard,vitality]"
     },
     {
-      "dps": 36.28,
-      "build": "longsword + [big_iron,big_iron,coin_magnet,deadeye,glass_cannon,greed,hair_trigger,hair_trigger,scattergun,second_wind,static_charge,vitality]"
+      "dps": 39.12,
+      "build": "cannon + [deadeye,deadeye,executioner,featherweight,glass_cannon,hair_trigger,heavy_rounds,overload,skirmisher,skirmisher,vanguard,vitality]"
     },
     {
-      "dps": 36.21,
-      "build": "spear + [big_iron,big_iron,coin_magnet,full_metal,glass_cannon,hair_trigger,incendiary_rounds,second_wind,thorns]"
+      "dps": 39.06,
+      "build": "scrapper + [adrenaline,big_iron,deadeye,glass_cannon,hair_trigger,quickdraw,skirmisher,swift_boots,swift_boots]"
     },
     {
-      "dps": 36.21,
-      "build": "spear + [berserk,big_iron,coin_magnet,glass_cannon,glass_cannon,hair_trigger,incendiary_rounds,split_shot,vitality]"
+      "dps": 39.02,
+      "build": "longsword + [big_iron,deadeye,executioner,frostbite,greed,hair_trigger,incendiary_rounds,overload,quickdraw,scattergun,vanguard,vitality]"
     },
     {
-      "dps": 36.21,
-      "build": "spear + [adrenaline,big_iron,coin_magnet,cryo_coating,elementalist,glass_cannon,glass_cannon,hair_trigger,scattergun]"
+      "dps": 39.01,
+      "build": "nailer + [glass_cannon,greed,hair_trigger,marksman,overload,overload,quickdraw,vampire_fang,vitality]"
     },
     {
-      "dps": 36.18,
-      "build": "sword + [big_iron,cryo_coating,deadeye,glass_cannon,glass_cannon,hair_trigger,hair_trigger,second_wind,vitality]"
+      "dps": 38.91,
+      "build": "spear + [big_iron,cryo_coating,frostbite,glass_cannon,incendiary_rounds,overload,second_wind,skirmisher,swift_boots]"
     },
     {
-      "dps": 36.13,
-      "build": "pistol + [cryo_coating,deadeye,elementalist,elementalist,glass_cannon,glass_cannon,hair_trigger,hair_trigger,second_wind,second_wind,static_charge,vampire_fang]"
+      "dps": 38.88,
+      "build": "midas + [executioner,glass_cannon,greed,heavy_rounds,overload,quickdraw,quickdraw,swift_boots,vampire_fang]"
     },
     {
-      "dps": 36.12,
-      "build": "spear + [adrenaline,big_iron,cryo_coating,deadeye,glass_cannon,glass_cannon,hair_trigger,split_shot,thorns]"
+      "dps": 38.86,
+      "build": "railgun + [adrenaline,berserk,coin_magnet,glass_cannon,greed,hair_trigger,incendiary_rounds,overload,quickdraw,second_wind,static_charge,vanguard]"
     },
     {
-      "dps": 36.04,
-      "build": "spear + [big_iron,coin_magnet,full_metal,glass_cannon,greed,hair_trigger,hair_trigger,second_wind,vitality]"
+      "dps": 38.85,
+      "build": "railgun + [adrenaline,big_iron,coin_magnet,executioner,glass_cannon,hair_trigger,juggernaut,overload,quickdraw,static_charge,vanguard,vitality]"
     },
     {
-      "dps": 35.99,
-      "build": "longsword + [adrenaline,big_iron,deadeye,full_metal,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,scattergun,second_wind,thorns]"
+      "dps": 38.81,
+      "build": "longsword + [cryo_coating,executioner,featherweight,full_metal,glass_cannon,hair_trigger,hair_trigger,heavy_rounds,overload,quickdraw,scattergun,swift_boots]"
     },
     {
-      "dps": 35.99,
-      "build": "longsword + [big_iron,deadeye,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,scattergun,split_shot,swift_boots,swift_boots,vitality]"
+      "dps": 38.78,
+      "build": "cannon + [berserk,full_metal,glass_cannon,greed,hair_trigger,incendiary_rounds,marksman,overload,quickdraw,second_wind,thorns,vitality]"
     },
     {
-      "dps": 35.85,
-      "build": "railgun + [adrenaline,big_iron,coin_magnet,glass_cannon,hair_trigger,hair_trigger,hair_trigger,incendiary_rounds,incendiary_rounds,second_wind,thorns,vitality]"
+      "dps": 38.78,
+      "build": "smg + [big_iron,cryo_coating,cryo_coating,featherweight,full_metal,glass_cannon,hair_trigger,overload,quickdraw]"
     },
     {
-      "dps": 35.79,
-      "build": "midas + [big_iron,full_metal,glass_cannon,hair_trigger,hair_trigger,second_wind,static_charge,thorns,vitality]"
+      "dps": 38.63,
+      "build": "rapid + [adrenaline,big_iron,featherweight,frostbite,full_metal,glass_cannon,hair_trigger,incendiary_rounds,quickdraw,skirmisher,swift_boots,vitality]"
     },
     {
-      "dps": 35.36,
-      "build": "spear + [coin_magnet,deadeye,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,split_shot,static_charge]"
+      "dps": 38.61,
+      "build": "spear + [big_iron,frostbite,glass_cannon,hair_trigger,juggernaut,overload,scattergun,vanguard,vitality]"
     },
     {
-      "dps": 35.33,
-      "build": "railgun + [adrenaline,big_iron,deadeye,elementalist,glass_cannon,hair_trigger,hair_trigger,static_charge,thorns,thorns,vampire_fang,vitality]"
-    },
-    {
-      "dps": 35.16,
-      "build": "sword + [big_iron,deadeye,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,scattergun,vitality]"
-    },
-    {
-      "dps": 35.16,
-      "build": "sword + [big_iron,deadeye,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,scattergun,second_wind,vitality]"
-    },
-    {
-      "dps": 34.98,
-      "build": "pistol + [big_iron,big_iron,coin_magnet,coin_magnet,cryo_coating,deadeye,elementalist,full_metal,glass_cannon,hair_trigger,static_charge,vitality]"
-    },
-    {
-      "dps": 34.92,
-      "build": "longsword + [big_iron,big_iron,coin_magnet,deadeye,elementalist,glass_cannon,hair_trigger,incendiary_rounds,incendiary_rounds,split_shot,static_charge,thorns]"
-    },
-    {
-      "dps": 34.92,
-      "build": "longsword + [big_iron,deadeye,glass_cannon,glass_cannon,hair_trigger,incendiary_rounds,scattergun,split_shot,static_charge,thorns,vampire_fang,vitality]"
-    },
-    {
-      "dps": 34.92,
-      "build": "longsword + [big_iron,big_iron,coin_magnet,deadeye,full_metal,glass_cannon,greed,hair_trigger,incendiary_rounds,second_wind,vampire_fang,vitality]"
-    },
-    {
-      "dps": 34.91,
-      "build": "pistol + [big_iron,coin_magnet,full_metal,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,static_charge]"
-    },
-    {
-      "dps": 34.91,
-      "build": "pistol + [adrenaline,berserk,big_iron,coin_magnet,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,second_wind,vampire_fang,vitality]"
-    },
-    {
-      "dps": 34.9,
-      "build": "scrapper + [big_iron,full_metal,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,static_charge,swift_boots,vampire_fang]"
-    },
-    {
-      "dps": 34.9,
-      "build": "scrapper + [big_iron,full_metal,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,static_charge,thorns,vitality]"
-    },
-    {
-      "dps": 34.85,
-      "build": "longsword + [big_iron,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,swift_boots,vitality]"
-    },
-    {
-      "dps": 34.85,
-      "build": "longsword + [adrenaline,big_iron,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,split_shot,static_charge,thorns,vampire_fang,vampire_fang,vitality]"
-    },
-    {
-      "dps": 34.85,
-      "build": "longsword + [big_iron,coin_magnet,elementalist,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,second_wind,second_wind,swift_boots,vampire_fang]"
-    },
-    {
-      "dps": 34.85,
-      "build": "longsword + [adrenaline,big_iron,coin_magnet,coin_magnet,elementalist,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,swift_boots,vampire_fang]"
-    },
-    {
-      "dps": 34.85,
-      "build": "longsword + [adrenaline,big_iron,cryo_coating,cryo_coating,full_metal,glass_cannon,greed,hair_trigger,hair_trigger,incendiary_rounds,static_charge,swift_boots]"
-    },
-    {
-      "dps": 34.83,
-      "build": "cannon + [big_iron,coin_magnet,deadeye,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,incendiary_rounds,second_wind,swift_boots,swift_boots,vitality]"
-    },
-    {
-      "dps": 34.64,
-      "build": "railgun + [big_iron,big_iron,coin_magnet,cryo_coating,deadeye,full_metal,glass_cannon,greed,hair_trigger,hair_trigger,static_charge,vampire_fang]"
-    },
-    {
-      "dps": 34.62,
-      "build": "rapid + [adrenaline,big_iron,big_iron,coin_magnet,deadeye,elementalist,full_metal,glass_cannon,hair_trigger,second_wind,swift_boots,vampire_fang]"
-    },
-    {
-      "dps": 34.55,
-      "build": "rapid + [berserk,big_iron,coin_magnet,coin_magnet,cryo_coating,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,vitality]"
-    },
-    {
-      "dps": 34.49,
-      "build": "nailer + [adrenaline,berserk,big_iron,deadeye,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,thorns]"
-    },
-    {
-      "dps": 34.41,
-      "build": "spear + [coin_magnet,glass_cannon,glass_cannon,hair_trigger,hair_trigger,split_shot,static_charge,swift_boots,vitality]"
-    },
-    {
-      "dps": 34.41,
-      "build": "spear + [coin_magnet,cryo_coating,glass_cannon,glass_cannon,hair_trigger,hair_trigger,second_wind,static_charge,swift_boots]"
-    },
-    {
-      "dps": 34.36,
-      "build": "cannon + [adrenaline,big_iron,big_iron,cryo_coating,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,second_wind,swift_boots,swift_boots,thorns]"
-    },
-    {
-      "dps": 34.23,
-      "build": "longsword + [big_iron,coin_magnet,cryo_coating,deadeye,deadeye,full_metal,glass_cannon,hair_trigger,incendiary_rounds,second_wind,swift_boots,vitality]"
-    },
-    {
-      "dps": 34.21,
-      "build": "longsword + [big_iron,big_iron,coin_magnet,deadeye,elementalist,full_metal,glass_cannon,hair_trigger,incendiary_rounds,scattergun,second_wind,static_charge]"
-    },
-    {
-      "dps": 34.21,
-      "build": "longsword + [big_iron,big_iron,deadeye,elementalist,glass_cannon,greed,hair_trigger,scattergun,split_shot,vampire_fang,vampire_fang,vitality]"
-    },
-    {
-      "dps": 34.21,
-      "build": "longsword + [adrenaline,big_iron,big_iron,coin_magnet,deadeye,elementalist,glass_cannon,hair_trigger,incendiary_rounds,scattergun,second_wind,second_wind]"
-    },
-    {
-      "dps": 34.19,
-      "build": "pistol + [adrenaline,adrenaline,berserk,big_iron,coin_magnet,cryo_coating,full_metal,glass_cannon,glass_cannon,hair_trigger,hair_trigger,vitality]"
-    },
-    {
-      "dps": 34.12,
-      "build": "longsword + [berserk,big_iron,full_metal,glass_cannon,glass_cannon,hair_trigger,hair_trigger,second_wind,static_charge,swift_boots,thorns,vitality]"
-    },
-    {
-      "dps": 34.12,
-      "build": "beam + [adrenaline,big_iron,glass_cannon,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,second_wind,static_charge,swift_boots,thorns,vitality]"
-    },
-    {
-      "dps": 34.05,
-      "build": "sword + [big_iron,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,split_shot,swift_boots,vitality]"
-    },
-    {
-      "dps": 34.05,
-      "build": "sword + [big_iron,cryo_coating,full_metal,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,second_wind,split_shot]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,coin_magnet,glass_cannon,hair_trigger,incendiary_rounds,swift_boots,thorns,thorns,vampire_fang]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,coin_magnet,cryo_coating,cryo_coating,elementalist,glass_cannon,hair_trigger,incendiary_rounds,swift_boots]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,elementalist,glass_cannon,greed,hair_trigger,incendiary_rounds,second_wind,thorns,vitality]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,coin_magnet,cryo_coating,glass_cannon,hair_trigger,incendiary_rounds,second_wind,split_shot,swift_boots]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [adrenaline,big_iron,coin_magnet,elementalist,glass_cannon,greed,hair_trigger,second_wind,swift_boots]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [adrenaline,berserk,big_iron,glass_cannon,greed,hair_trigger,incendiary_rounds,static_charge,vitality]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [adrenaline,big_iron,full_metal,glass_cannon,hair_trigger,incendiary_rounds,split_shot,swift_boots,vitality]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [adrenaline,big_iron,coin_magnet,cryo_coating,elementalist,elementalist,glass_cannon,hair_trigger,incendiary_rounds]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,cryo_coating,cryo_coating,full_metal,glass_cannon,hair_trigger,incendiary_rounds,split_shot,vitality]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,coin_magnet,elementalist,glass_cannon,greed,hair_trigger,split_shot,swift_boots,vitality]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,coin_magnet,cryo_coating,glass_cannon,hair_trigger,incendiary_rounds,static_charge,thorns,vampire_fang]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,elementalist,full_metal,glass_cannon,hair_trigger,second_wind,split_shot,static_charge,vitality]"
-    },
-    {
-      "dps": 34,
-      "build": "spear + [big_iron,coin_magnet,glass_cannon,greed,greed,hair_trigger,incendiary_rounds,second_wind,split_shot]"
-    },
-    {
-      "dps": 33.81,
-      "build": "rapid + [berserk,big_iron,big_iron,coin_magnet,glass_cannon,greed,hair_trigger,hair_trigger,second_wind,swift_boots,swift_boots,vampire_fang]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [adrenaline,berserk,big_iron,coin_magnet,glass_cannon,greed,hair_trigger,incendiary_rounds,thorns]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,coin_magnet,elementalist,glass_cannon,hair_trigger,second_wind,static_charge,swift_boots,thorns]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,glass_cannon,hair_trigger,incendiary_rounds]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,glass_cannon,hair_trigger,incendiary_rounds]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,coin_magnet,elementalist,glass_cannon,greed,hair_trigger,incendiary_rounds,second_wind,static_charge]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [berserk,big_iron,elementalist,glass_cannon,greed,hair_trigger,incendiary_rounds,static_charge,swift_boots]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,glass_cannon,hair_trigger,incendiary_rounds,second_wind,second_wind,static_charge,vampire_fang,vitality]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,full_metal,glass_cannon,greed,hair_trigger,incendiary_rounds,static_charge,vampire_fang,vitality]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,coin_magnet,glass_cannon,hair_trigger,incendiary_rounds,static_charge,swift_boots,thorns,vampire_fang]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [berserk,big_iron,cryo_coating,glass_cannon,greed,hair_trigger,incendiary_rounds,static_charge,swift_boots]"
-    },
-    {
-      "dps": 33.79,
-      "build": "midas + [big_iron,coin_magnet,cryo_coating,glass_cannon,hair_trigger,incendiary_rounds,second_wind,vampire_fang,vitality]"
-    },
-    {
-      "dps": 33.77,
-      "build": "sword + [big_iron,coin_magnet,deadeye,full_metal,glass_cannon,hair_trigger,hair_trigger,second_wind,vitality]"
-    },
-    {
-      "dps": 33.71,
-      "build": "spear + [big_iron,cryo_coating,deadeye,glass_cannon,greed,hair_trigger,static_charge,vitality,vitality]"
-    },
-    {
-      "dps": 33.71,
-      "build": "spear + [big_iron,coin_magnet,cryo_coating,deadeye,glass_cannon,greed,hair_trigger,static_charge,vampire_fang]"
-    },
-    {
-      "dps": 33.71,
-      "build": "spear + [berserk,big_iron,coin_magnet,cryo_coating,deadeye,full_metal,glass_cannon,hair_trigger,vampire_fang]"
-    },
-    {
-      "dps": 33.68,
-      "build": "smg + [big_iron,elementalist,full_metal,glass_cannon,hair_trigger,hair_trigger,second_wind,vampire_fang,vitality]"
-    },
-    {
-      "dps": 33.51,
-      "build": "longsword + [big_iron,glass_cannon,hair_trigger,hair_trigger,hair_trigger,scattergun,split_shot,static_charge,swift_boots,thorns,vampire_fang,vitality]"
-    },
-    {
-      "dps": 33.48,
-      "build": "midas + [adrenaline,big_iron,cryo_coating,deadeye,full_metal,glass_cannon,hair_trigger,second_wind,vitality]"
-    },
-    {
-      "dps": 33.48,
-      "build": "midas + [big_iron,cryo_coating,deadeye,glass_cannon,hair_trigger,second_wind,static_charge,swift_boots,thorns]"
-    },
-    {
-      "dps": 33.48,
-      "build": "midas + [adrenaline,berserk,berserk,big_iron,deadeye,full_metal,glass_cannon,hair_trigger,thorns]"
-    },
-    {
-      "dps": 33.48,
-      "build": "midas + [big_iron,coin_magnet,coin_magnet,deadeye,glass_cannon,hair_trigger,swift_boots,vampire_fang,vitality]"
-    },
-    {
-      "dps": 33.41,
-      "build": "longsword + [cryo_coating,glass_cannon,glass_cannon,hair_trigger,hair_trigger,incendiary_rounds,split_shot,vitality]"
+      "dps": 38.56,
+      "build": "spear + [adrenaline,big_iron,executioner,frostbite,glass_cannon,hair_trigger,quickdraw,vanguard,vitality]"
     }
   ]
 }
