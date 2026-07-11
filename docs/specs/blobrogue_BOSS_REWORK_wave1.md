@@ -80,3 +80,11 @@ Everything else stands: JET salvo cap2 salvoIntervalPerR 0.12 floor1.8; TITHE fe
 2. QUORUM splinter grace: 1.0s spawn-grace — splinters spawn+telegraph immediately but first action (bubble/trickle/pip) gated until 1.0s passed AND no major release (tether-snap/crossfire) mid-flight. Arbiter covers instant pip-vs-sweep but NOT the 1.0s hold → add explicitly.
 
 ## FINAL: rework = 5 items (movesets / balancer constants / overflow clamp / encounterPower wiring+surplus / 2 suppressions) + Quorum formation fix + AD presence. This doc is THE single source of truth. All injected to build bc-1fe0ba23.
+
+## AD ART PLAN (reuses EXISTING tech: glow_round/tier-ring for aura, renderGuardArc for guard/expose):
+DRAW SIZES: JET 76→96, TITHE 96→104(+slab), QUORUM core 100→112/husks 80→86 (tops boss ladder choir96/King100/gilded108, under Gorge-giant 192).
+GUARD/EXPOSE (value+saturation+shape not hue, drive off wire state): JET guarded=saturated amber plates+shimmer / exposed=plates crack hot-amber+desaturate cold grey-indigo. TITHE guarded=glassy blue-white shield-shimmer dome (zero-dmg signal) / exposed=shimmer gone+slump+sacs pulsing. QUORUM guarded=taut bone-cyan tether-beams shield-husk→others / exposed=shield dies→beams snap→others damageable.
+AURA: family-hue ground-ring beneath body (JET indigo/TITHE amber/QUORUM bone), doubles as guard/expose indicator.
+SIG VFX: JET 33% screen-desaturate grade + white-hot veins + copied-attack-colored beam; TITHE debris-wheel from shattered slabs→haggard exposed; QUORUM merge = amalgam sprite + tether collapse inward 1.2s.
+REGENS (gpt-image-2, I generate on box): 3 dramatized boss silhouettes + 2 new add sprites (tribute amber-glob crawler, splinter 3 role-tints). AD sending prompts. Telegraph footprints pending designer per-attack geometry.
+Wiring (size+aura+guard/expose state) injected to build; regen'd PNGs drop at paths after gen (placeholder meanwhile).
