@@ -7895,6 +7895,24 @@ function titheHurl(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 // them and the repair outpaces the break. If no slab stands it just mills (harmless).
 function updateTitheTribute(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (e.spawnTimer > 0) return; // spawn grace: the omen already stood as the tell
+  // RING SUPPRESSION (explicit — the arbiter doesn't gate a repair actor against the ring):
+  // while a GORGE SLAM ring telegraphs/is live, only the first tributeActiveCapDuringRing
+  // tributes (by id) ACT; the overflow holds so the ring dodge stays readable, then re-activates
+  // staggered (echoTime = overflow-index × stagger, counted down once the ring clears).
+  // The ring is "live" for the whole gorge commitment — the windup tell, the active fire, and
+  // the recover while the shockwave travels (move stays "slam" until the feeder idles). Keying
+  // off the move (not the phase) covers all three, since the phase resolves within the tick.
+  const feeder = w.enemies.find((o) => !o.dead && o.kind === "tithe" && o.boss !== null);
+  const ringLive = feeder !== undefined && feeder.attack.move === "slam";
+  if (ringLive) {
+    let rank = 0;
+    for (const o of w.enemies) if (!o.dead && o.kind === "tithe_tribute" && o.id < e.id) rank++;
+    if (rank >= TITHE.tributeActiveCapDuringRing) {
+      e.echoTime = (rank - TITHE.tributeActiveCapDuringRing) * TITHE.tributeReactivateStagger;
+      return; // held for the ring; echoTime is its post-ring staggered release delay
+    }
+  }
+  if (e.echoTime > 0) { e.echoTime = e.echoTime > dt ? e.echoTime - dt : 0; return; } // staggered re-activation
   let slab: Enemy | null = null;
   let bestD = Infinity;
   for (const o of w.enemies) {
@@ -8351,7 +8369,20 @@ function quorumSpawnSplinters(w: WorldState, core: Enemy, husk: Enemy, ev: SimEv
 // the pool progress — clear it, the kill-order lesson at small scale); all shards chase. The
 // spawn grace holds it inert so it never acts inside the husk's tether-snap.
 function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
-  if (e.spawnTimer > 0) return; // grace
+  if (e.spawnTimer > 0) return; // (a) 1.0s spawn-grace
+  // (b) FIRST-action hold (explicit — the arbiter covers the pip-vs-sweep INSTANT overlap but
+  // not the full hold): the shard's first action waits until no MAJOR release (tether-snap
+  // sweep / crossfire beam) is mid-flight. affixClock latches once it has acted (0 → 1), so
+  // only the first action is gated; after that it acts normally under the arbiter.
+  if (e.affixClock === 0) {
+    // A major release is "mid-flight" for the whole commitment (windup → active → recover while
+    // its wall/lanes travel) — the move stays set until the core idles, so key off the move.
+    const coreForHold = quorumCoreOf(w, e);
+    const majorMidFlight = coreForHold !== null
+      && (coreForHold.attack.move === "sweep" || coreForHold.attack.move === "beam");
+    if (majorMidFlight) return;
+    e.affixClock = 1;
+  }
   if (e.aux === 1) { // heal-role shard: trickle-heal the pool (weak)
     const core = quorumCoreOf(w, e);
     if (core && core.boss && core.boss.phase < 2 && !core.boss.roar && core.hp < core.maxHp) {
