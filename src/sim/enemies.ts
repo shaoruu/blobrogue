@@ -619,6 +619,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
         exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1, mirrorFamily: -1,
+        huskRaised: false, huskGuardUp: true,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
       : null,
