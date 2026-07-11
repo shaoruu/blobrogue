@@ -53,7 +53,7 @@ import {
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
   AMBUSH, POWER, PHASE_TIME_BASE, powerRatioFor, bossAddCapFor, bossAddIntervalFor,
-  phaseTimerFor, DEEP_SURPLUS,
+  phaseTimerFor,
   ELITE_COMMANDER, ELITE_BULWARK, ELITE_VOLATILE, ELITE_ECHOED, MARSHAL, TOLL,
   ROLL_AFFIX, BOSS_AFFIX,
   WEAPON_BOSS_COEF, WIPE_HOLD_SECONDS, PU_DPS, PERSISTENT_BOSS_DPS_FRAC,
@@ -5785,6 +5785,14 @@ function countBossAdds(w: WorldState): number {
   return n;
 }
 
+// Live summoned adds of a specific kind (the deep bosses' surplus adds are counted by their
+// own kind so the cap counts the ADDS, not the boss's own bodies — slabs, husks).
+function countLiveAddsOfKind(w: WorldState, kind: Enemy["kind"]): number {
+  let n = 0;
+  for (const e of w.enemies) if (!e.dead && e.isSummoned && e.kind === kind) n++;
+  return n;
+}
+
 function bossBeginAttack(e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
@@ -7408,41 +7416,17 @@ function jetRecoverFor(move: AttackMove): number {
     : JET.spentRecover; // mirror (the window) + any fallback
 }
 
-// ---- the Wave 1 deep bosses' R-framework SURPLUS lever (JET / TITHE / QUORUM) ----
-// Mirrors updateWeaver's spiderling cadence / updateMarrow's ambush cadence EXACTLY, off
-// w.encounterPower: a tightening add-cadence (bossAddIntervalFor), a hard-clamped extra count
-// (bossAddCapFor — 0 at solo so the solo fight is untouched, scaling with R and clamped by
-// addCapMax), and the phase's ONE surprise wave at POWER.surpriseMinR. The phase-timer
-// soft-enrage rides the shared checkBossTransition path (each boss consumes boss.enrage), so
-// all four R levers (add-cadence, add-cap, phase-timer, surprise) are wired the same way the
-// F15–30 roster wires them. Surplus DPS at higher R therefore converts to MORE telegraphed
-// mechanic pressure — amber area-deny blooms (0.9s fuse, walk-dodgeable) ringing the party —
-// NOT to fatter HP alone. The bloom payload is the placeholder until the balancer's authored
-// per-boss surplus content (Jet second tracer / Tithe more+thicker slabs+feed-add / Quorum
-// extra husk-add wave) lands; the WIRING is what routes the surplus.
-function tickDeepBossSurplus(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
-  const boss = e.boss;
-  if (!boss || boss.roar || e.spawnTimer > 0) return;
-  boss.addTimer -= dt;
-  if (boss.addTimer > 0) return;
-  boss.addTimer = bossAddIntervalFor(DEEP_SURPLUS.interval, w.encounterPower);
-  let n = bossAddCapFor(DEEP_SURPLUS.capBase, w.encounterPower); // 0 at solo; scales with R (clamped)
-  const isSurprise = w.encounterPower >= POWER.surpriseMinR && !boss.isSurpriseSpent;
-  if (isSurprise) { boss.isSurpriseSpent = true; n += DEEP_SURPLUS.surpriseBloom; }
-  if (n <= 0 || !findTarget(w, e.x, e.y)) return;
-  const ring = isSurprise ? POWER.surpriseClear : DEEP_SURPLUS.ring;
-  for (let i = 0; i < n; i++) {
-    const ang = (i / n) * Math.PI * 2 + boss.attackCount * 0.4;
-    plantAffixCharge(w, w.targetX + Math.cos(ang) * ring, w.targetY + Math.sin(ang) * ring);
-  }
-  ev.push({ t: "cue", name: isSurprise ? "bossSpawn" : "enemyAttack", x: w.targetX, y: w.targetY, rate: 0.6, gain: 0.5, trauma: isSurprise ? 0.05 : 0 });
-}
+// A simple chaser add drawn from the deep bosses' surplus paths (the Tithe's feed-adds, the
+// Quorum's husk-adds). The game designer owns the creature identity; the balancer owns the
+// per-P counts + cadence. Spawned as an omen-telegraphed ambush (fair: tell + grace +
+// player clearance) exactly like the Weaver/Marrow pool draws, gated by the active-threat cap.
+const TITHE_FEED_ADD: AddPoolEntry = { kind: "slime", tier: "swarm", weight: 1, maxAlive: 0, count: 1 };
+const QUORUM_HUSK_ADD: AddPoolEntry = { kind: "skeleton", tier: "swarm", weight: 1, maxAlive: 0, count: 1 };
 
 function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
   if (w.jetMirror.length === 0) resolveJetMirror(w); // frozen at first tick (the pull loadout)
-  tickDeepBossSurplus(w, e, dt, ev); // R-framework surplus → mechanic pressure (off encounterPower)
   const a = e.attack;
 
   if (a.phase === "windup") { jetWindup(w, e, dt, ev); return; }
@@ -7452,7 +7436,7 @@ function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
     if (a.time >= jetRecoverFor(a.move)) enterIdle(e);
     return;
   }
-  if (a.cooldown === 0 && e.spawnTimer === 0) { jetBeginAttack(e, ev); return; }
+  if (a.cooldown === 0 && e.spawnTimer === 0) { jetBeginAttack(w, e, ev); return; }
   // Between salvos the mirror stalks the party (it moves like you would).
   if (!findTarget(w, e.x, e.y)) return;
   applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
@@ -7462,12 +7446,14 @@ function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
 // commitment; the intervening slots interleave the pressure moves so the fight never
 // decays into one spammable salvo — P1 TRACER SNAP (A2), P2 adds the RECOIL LINE (A3) and
 // the OVERCLOCK FEINT beam (A4), P3 periodically CORRUPTS (a wide screen beam).
-function jetBeginAttack(e: Enemy, ev: SimEvent[]): void {
+function jetBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
   boss.spinCount = 0; // verbs emitted this salvo
   const phase = boss.phase;
-  e.attack.cooldown = JET.attackCd[phase];
+  // R-framework SURPLUS: the salvo cadence tightens with R (more parry attempts = more
+  // windows at high R), floored so it never becomes a machine-gun. Solo (R≈1) is unchanged.
+  e.attack.cooldown = Math.max(JET.salvoIntervalFloor, JET.attackCd[phase] - JET.salvoIntervalPerR * (w.encounterPower - 1));
   let move: AttackMove;
   if (boss.attackCount % 2 === 1) {
     move = "mirror"; // the signature salvo (opens the spent-recover window)
@@ -7551,23 +7537,23 @@ function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
     if (a.time >= JET.beamActive) { jetFireBeam(w, e, ev); enterRecover(e); }
     return;
   }
-  const simul = jetSalvoSize(w, boss.phase);
+  // R-framework SURPLUS (balancer FINAL): the render-capped base (jetSalvoSize) bounds how
+  // many verbs land AT ONCE (1 at 4p); at R ≥ surplusSimulMinR the P2/P3 salvo appends one
+  // more verb to the staggered SEQUENCE (faster sequence, same per-beat readability), and a
+  // soft-enraged phase appends one INVERTED verb (the "you skipped the lesson" beat). The
+  // extras ride the canon stagger, so they never exceed the simultaneous render cap.
+  const base = jetSalvoSize(w, boss.phase);
+  const surplus = w.encounterPower >= JET.surplusSimulMinR && boss.phase >= 2 ? 1 : 0;
+  const enrageVerb = boss.enrage === 1 && boss.phase >= 2 ? 1 : 0;
+  const total = base + surplus + enrageVerb;
   // P2's "out-of-sync canon": the further verbs enter one canonOffset apart, so the salvo
   // reads as a mirror falling out of time with you rather than a single wall.
-  while (boss.spinCount < simul && a.time >= boss.spinCount * JET.canonOffset) {
-    jetFireVerb(w, e, boss.spinCount, ev);
+  while (boss.spinCount < total && a.time >= boss.spinCount * JET.canonOffset) {
+    const forceInvert = enrageVerb === 1 && boss.spinCount === total - 1; // the enrage verb is inverted
+    jetFireVerb(w, e, boss.spinCount, ev, forceInvert);
     boss.spinCount++;
   }
-  if (a.time >= JET.mirrorActive + (simul - 1) * JET.canonOffset) {
-    // Soft-enrage (the "you skipped the lesson" beat): a burned phase carries the P3
-    // room-drain pattern early — a scatter of walk-dodgeable blooms around the party.
-    if (boss.enrage === 1 && boss.phase < 3 && findTarget(w, e.x, e.y)) {
-      const n = bossAddCapFor(JET.drainCount, w.encounterPower);
-      for (let i = 0; i < n; i++) {
-        const ang = (i / n) * Math.PI * 2;
-        plantAffixCharge(w, w.targetX + Math.cos(ang) * JET.drainSpread, w.targetY + Math.sin(ang) * JET.drainSpread);
-      }
-    }
+  if (a.time >= JET.mirrorActive + (total - 1) * JET.canonOffset) {
     enterRecover(e);
     // He is SPENT — the recover is the exposed window (bank-capped like the deep roster).
     openBossWindow(e, JET.spentExpose, ev);
@@ -7585,12 +7571,12 @@ function jetSalvoSize(w: WorldState, phase: number): number {
 
 // Fire the index-th mirrored verb of this salvo. Verbs cycle through the frozen pool by the
 // salvo count, so a longer pool is worked through across salvos. P3 INVERTS the pattern.
-function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[]): void {
+function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[], forceInvert = false): void {
   const boss = e.boss!;
   const pool = w.jetMirror;
   if (pool.length === 0) return;
   const family = pool[(boss.attackCount + index) % pool.length];
-  const isInverted = boss.phase >= 3;
+  const isInverted = boss.phase >= 3 || forceInvert; // the soft-enrage verb inverts even in P2
   let aim = e.attack.lockedAngle;
   if (findTarget(w, e.x, e.y)) aim = Math.atan2(w.targetY - e.y, w.targetX - e.x);
   // The canon offset spreads simultaneous verbs so they read as distinct mirrored lanes.
@@ -7705,7 +7691,6 @@ function jetFireBeam(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 function updateTithe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
-  tickDeepBossSurplus(w, e, dt, ev); // R-framework surplus → mechanic pressure (off encounterPower)
   const a = e.attack;
 
   if (a.phase === "windup") { titheWindup(w, e, dt, ev); return; }
@@ -7887,6 +7872,17 @@ function titheHurl(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.85, trauma: 0.08 });
 }
 
+// The feed channel's chaser adds (balancer FINAL): a per-P cap (solo 0 / 2p 3 / 4p 4) of
+// simple chasers, omen-telegraphed like the Weaver/Marrow pool draws, the live count held at
+// the cap (which stays under the room's active-threat budget). Solo raises none.
+function titheFeedAdds(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const cap = TITHE.feedAddFor[w.encounterPlayers] ?? 0;
+  let live = countLiveAddsOfKind(w, TITHE_FEED_ADD.kind) + countPendingOmensOfKind(w, TITHE_FEED_ADD.kind, TITHE_FEED_ADD.tier);
+  for (let i = 0; i < cap && live < cap; i++) {
+    if (queueAmbushWave(w, e, TITHE.slabRingDist + 44, TITHE_FEED_ADD, e.id, ev) > 0) live++;
+  }
+}
+
 // The re-armor channel: break every slab before it elapses to EXPOSE the feeder. Miss it and
 // it re-armors (crumble the survivors, no window) — but the loop simply feeds again.
 function titheFeedChannel(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -7920,8 +7916,13 @@ function titheRaiseSlabs(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   boss.windowAddIds.length = 0;
   let toward = 0;
   if (findTarget(w, e.x, e.y)) toward = Math.atan2(w.targetY - e.y, w.targetX - e.x);
-  const n = TITHE.slabsFor[w.encounterPlayers] ?? 1;
+  // Soft-enrage (a burned phase): this feed raises one EXTRA slab (never HP, never a shorter
+  // channel) — the "you skipped the lesson" beat, keyed off the phaseTimerFor yardstick.
+  const n = (TITHE.slabsFor[w.encounterPlayers] ?? 1) + (boss.enrage === 1 ? 1 : 0);
   const slabHp = titheSlabHpForFloor(w.floor, w.encounterPlayers);
+  // R-framework SURPLUS: the feed also spawns simple chaser adds (per-P cap, active-threat
+  // gated) — the 4p feed-add pressure. rearmChannel stays FLAT; the task scales, not the timer.
+  titheFeedAdds(w, e, ev);
   for (let i = 0; i < n; i++) {
     // Fan the slabs to one side of the axis (offset), never straddling it — the lane stays.
     const ang = toward + (i - (n - 1) / 2) * (TITHE.slabOffset * 1.2) + TITHE.slabOffset;
@@ -7971,6 +7972,7 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   const boss = e.boss;
   if (!boss) return;
   const a = e.attack;
+  if (boss.addTimer > 0) boss.addTimer -= dt; // the husk-add wave interval (surplus lever)
 
   // Prune broken husks from the shared roster so an emptied roster raises a fresh WAVE.
   for (let k = boss.windowAddIds.length - 1; k >= 0; k--) {
@@ -8000,8 +8002,6 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     e.hp = Math.min(e.maxHp, e.hp + QUORUM.healRegenPerSec * dt);
   }
   for (const h of liveHusks) { h.hp = e.hp; h.maxHp = e.maxHp; }
-
-  tickDeepBossSurplus(w, e, dt, ev); // R-framework surplus → mechanic pressure (off encounterPower)
 
   if (a.phase === "windup") { quorumWindup(w, e, dt, ev); return; }
   if (a.phase === "active") { quorumActive(w, e, dt, ev); return; }
@@ -8263,6 +8263,24 @@ function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: 
     // The tether snaps + recoils on a husk's death (the client render reads the missing body).
     ev.push({ t: "puff", x: husk.x, y: husk.y, n: 7, color: ENEMY_ARCHETYPES[husk.kind].tint });
     ev.push({ t: "cue", name: "enemyHit", x: husk.x, y: husk.y, rate: 0.7, gain: 0.7, trauma: 0.06 });
+    // R-framework SURPLUS: a husk break fires a husk-add WAVE (per-P cap, paced by the wave
+    // interval that tightens 6.0s → 3.0s with R). The merge-form (phase 2) raises none.
+    if (boss.phase < 2) quorumHuskAddWave(w, core, ev);
+  }
+}
+
+// The husk-add wave (balancer FINAL): fired on a husk break, capped by snapshotted party
+// size (solo 1 / 2p 4 / 4p 5), paced by bossAddIntervalFor(6.0 → 3.0s floor) off encounterPower,
+// and held under the cap by counting only the live husk-adds (not the husks themselves).
+function quorumHuskAddWave(w: WorldState, core: Enemy, ev: SimEvent[]): void {
+  const boss = core.boss!;
+  if (boss.addTimer > 0) return; // paced by the wave interval
+  const cap = QUORUM.huskAddFor[w.encounterPlayers] ?? 0;
+  if (cap <= 0) return;
+  boss.addTimer = bossAddIntervalFor(QUORUM.huskAddInterval, w.encounterPower);
+  let live = countLiveAddsOfKind(w, QUORUM_HUSK_ADD.kind) + countPendingOmensOfKind(w, QUORUM_HUSK_ADD.kind, QUORUM_HUSK_ADD.tier);
+  for (let i = 0; i < cap && live < cap; i++) {
+    if (queueAmbushWave(w, core, QUORUM.huskRingDist + 40, QUORUM_HUSK_ADD, core.id, ev) > 0) live++;
   }
 }
 

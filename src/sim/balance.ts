@@ -1102,9 +1102,9 @@ export function phaseTimerFor(base: number, r: number): number {
 // solo median wall-clock over its three phases).
 export const PHASE_TIME_BASE: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: 16, marrow: 15, weaver: 13, gilded: 15, choir: 17,
-  // Wave 1 deep bosses. Quorum has one transition (husks → merge), so its budget is the
-  // two-stage median rather than a three-phase one.
-  jet: 15, tithe: 16, quorum: 16,
+  // Wave 1 deep bosses (balancer FINAL soft-enrage yardsticks). Quorum has one transition
+  // (husks → merge), so its budget is the two-stage median rather than a three-phase one.
+  jet: 16, tithe: 16, quorum: 14,
 };
 
 // One curated pool entry: a known readable creature at a tier, weighted for the draw.
@@ -1492,23 +1492,13 @@ export function gildedHpForFloor(floor: number): number {
 // and co-op scaling the TASK (not just HP). They slot onto the deep-floor progression
 // to replace the "repeats at 35 are boring" problem with three fresh authored fights.
 
-// The R-framework SURPLUS lever the three deep bosses share, mirroring the Weaver's
-// spiderling cadence / Marrow's ambush cadence EXACTLY (same helpers off encounterPower:
-// bossAddIntervalFor tightens the add-cadence, bossAddCapFor hard-clamps the count, and the
-// phase-timer soft-enrage + the once-per-phase surprise wave at POWER.surpriseMinR ride on
-// top). This is the WIRING that routes a high-R pull's surplus DPS into MORE mechanic
-// pressure + faster cadence instead of fatter HP alone. capBase 0 means a SOLO pull (R≈1)
-// adds nothing — the solo fight is untouched; co-op scales up (hard-clamped by addCapMax).
-// Placeholder curves reused from the Weaver band until the balancer's per-boss numbers land;
-// the payload is MORE telegraphed amber area-deny blooms (0.9s fuse, walk-dodgeable) around
-// the party — the game designer is separately speccing each boss's authored surplus content
-// (Jet second tracer, Tithe more/thicker slabs + feed-add, Quorum extra husk-add wave).
-export const DEEP_SURPLUS = {
-  interval: 6.0,     // add-cadence base → bossAddIntervalFor (tightens toward the 3.0s floor)
-  capBase: 0,        // extra-bloom count base → bossAddCapFor (0 at solo, +≈1.6 per R over 1)
-  ring: 130,         // the bloom ring distance around the party
-  surpriseBloom: 3,  // the once-per-phase surprise burst's extra blooms (R ≥ surpriseMinR)
-} as const;
+// The R-framework SURPLUS the three deep bosses route (balancer FINAL, per-boss curves on
+// each boss's own constants above): JET tightens its salvo cadence + adds a sequential verb
+// at high R; the TITHE spawns feed-channel chaser adds; QUORUM fires husk-add waves on break.
+// All keyed off w.encounterPower via the shared scalers (bossAddIntervalFor for cadence, the
+// per-P caps + activeThreatCap for counts, phaseTimerFor for the soft-enrage) exactly like
+// updateWeaver/updateMarrow — surplus DPS at higher R converts to MORE mechanic pressure +
+// faster cadence + soft-enrage, never to fatter HP alone (a SOLO pull, R≈1, adds nothing).
 
 // ---- §5g JET (F35): the corrupted MIRROR of the party ----
 // JET mirrors the ARCHETYPE of the party's weapons — never their live inventory. Its
@@ -1559,6 +1549,13 @@ export const JET = {
   mirrorActive: 0.35,     // the emission beat
   spentRecover: 3.2,      // the exposed window (= spentExpose)
   canonOffset: 0.16,      // P2 "out-of-sync canon": the staggered second verb's delay
+  // R-framework SURPLUS (balancer FINAL). Higher R tightens the salvo cadence (more parry
+  // attempts = more windows), and at R ≥ surplusSimulMinR the P2/P3 salvo fires one EXTRA
+  // verb in the staggered sequence — the render cap (simulCapFor) still bounds how many land
+  // at once (1 at 4p), so it's a faster sequence at the same per-beat readability.
+  salvoIntervalPerR: 0.15, // salvo interval reduced this much per (R−1)…
+  salvoIntervalFloor: 1.8, // …floored here (never a machine-gun)
+  surplusSimulMinR: 3.5,   // at/above this R, the P2/P3 salvo adds one sequential verb
   // The frozen mirror pool: distinct party families, padded up to verbMinSeeded with
   // seeded families, capped at verbMax. Bigger party = more distinct families = a bigger
   // pool cycled one salvo at a time (the co-op TASK grows, the per-salvo read does not).
@@ -1643,6 +1640,11 @@ export const TITHE = {
   rearmChannel: 3.0,      // seconds to re-armor — the slab must die inside ~60-70% of this
   slabsFor: [0, 1, 1, 2, 2] as readonly number[],       // slabs per feed by snapshotted players
   slabThickFor: [0, 1.0, 1.6, 2.0, 2.4] as readonly number[], // co-op = THICKER slabs (HP mult — balancer FINAL)
+  // R-framework SURPLUS (balancer FINAL): the feed channel spawns simple CHASER adds, capped
+  // by snapshotted party size (solo 0 / 2p 3 / 4p 4), further gated by the active-threat cap.
+  // rearmChannel stays FLAT 3.0 — the task scales via slab HP/thickness + these adds, never a
+  // shorter timer. Soft-enrage (a burned phase) adds +1 slab to the NEXT feed.
+  feedAddFor: [0, 0, 3, 4, 4] as readonly number[],     // chaser adds per feed by snapshotted players
   slabBaseHp: 84,         // slab HP anchor at F40 (per slab; balancer FINAL 46 → 84); scales on the floor curve
   slabHpFloor: 40,
   slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
@@ -1717,6 +1719,12 @@ export const QUORUM = {
   huskSway: 0.12,          // sway amplitude (rad) — a little life, never enough to overlap
   huskIntegrityFrac: 0.10, // each husk's break meter as a fraction of the pool max (balancer FINAL 0.20 → 0.10)
   healRegenPerSec: 14,     // the HEAL husk regenerates the pool while alive (undo lazy chip — balancer FINAL 10 → 14)
+  // R-framework SURPLUS (balancer FINAL): a husk-adds WAVE fires when a husk breaks, capped by
+  // snapshotted party size (solo 1 / 2p 4 / 4p 5), gated by the active-threat cap and paced by
+  // a wave interval that tightens 6.0s → 3.0s with R (bossAddIntervalFor). The merge-form keeps
+  // its continuous final window regardless of R.
+  huskAddFor: [0, 1, 4, 5, 5] as readonly number[],     // husk-adds per break-wave by snapshotted players
+  huskAddInterval: 6.0,    // wave cadence base → bossAddIntervalFor (3.0s floor at high R)
   // The ONE shared telegraph (core-driven): a converging amber ring the lead husk shows.
   attackCd: [0, 2.8, 2.2] as readonly number[], // phase 1 (husks), phase 2 (merged)
   volleyWindup: 0.75,      // the shared tell (≥0.6s)
