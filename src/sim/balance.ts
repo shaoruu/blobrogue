@@ -1550,12 +1550,15 @@ export const JET = {
   spentRecover: 3.2,      // the exposed window (= spentExpose)
   canonOffset: 0.16,      // P2 "out-of-sync canon": the staggered second verb's delay
   // R-framework SURPLUS (balancer FINAL). Higher R tightens the salvo cadence (more parry
-  // attempts = more windows), and at R ≥ surplusSimulMinR the P2/P3 salvo fires one EXTRA
-  // verb in the staggered sequence — the render cap (simulCapFor) still bounds how many land
-  // at once (1 at 4p), so it's a faster sequence at the same per-beat readability.
-  salvoIntervalPerR: 0.15, // salvo interval reduced this much per (R−1)…
-  salvoIntervalFloor: 1.8, // …floored here (never a machine-gun)
-  surplusSimulMinR: 3.5,   // at/above this R, the P2/P3 salvo adds one sequential verb
+  // attempts = more windows), and adds EXTRA verbs to the staggered sequence — the render cap
+  // (simulCapFor) still bounds how many land at once (1 at 4p), so it's a faster sequence at
+  // the same per-beat readability.
+  // ⚠ BOSS-LOCAL salvo rate (NOT the generic addIntervalPerR 0.9, which is sized for 6–7s add
+  // loops and would floor Jet's 2–3s salvo instantly): 0.12 per (R−1), floored at 1.8s.
+  salvoIntervalPerR: 0.12,
+  salvoIntervalFloor: 1.8,
+  // Extra salvo verbs = min(bossAddCapFor(0, R), surplusVerbCap) → 0 solo / 2 at 2p+ (R-keyed).
+  surplusVerbCap: 2,
   // The frozen mirror pool: distinct party families, padded up to verbMinSeeded with
   // seeded families, capped at verbMax. Bigger party = more distinct families = a bigger
   // pool cycled one salvo at a time (the co-op TASK grows, the per-salvo read does not).
@@ -1640,11 +1643,11 @@ export const TITHE = {
   rearmChannel: 3.0,      // seconds to re-armor — the slab must die inside ~60-70% of this
   slabsFor: [0, 1, 1, 2, 2] as readonly number[],       // slabs per feed by snapshotted players
   slabThickFor: [0, 1.0, 1.6, 2.0, 2.4] as readonly number[], // co-op = THICKER slabs (HP mult — balancer FINAL)
-  // R-framework SURPLUS (balancer FINAL): the feed channel spawns simple CHASER adds, capped
-  // by snapshotted party size (solo 0 / 2p 3 / 4p 4), further gated by the active-threat cap.
-  // rearmChannel stays FLAT 3.0 — the task scales via slab HP/thickness + these adds, never a
-  // shorter timer. Soft-enrage (a burned phase) adds +1 slab to the NEXT feed.
-  feedAddFor: [0, 0, 3, 4, 4] as readonly number[],     // chaser adds per feed by snapshotted players
+  // R-framework SURPLUS (balancer FINAL): the feed channel spawns simple CHASER adds, count =
+  // min(bossAddCapFor(0, R), feedAddCap) → solo 0 / 2p 3 / 3p 4 / 4p 4 (R-keyed), gated by the
+  // active-threat cap only. ⚠ rearmChannel stays FLAT 3.0 at ALL R (perR 0 — NEVER a shorter
+  // timer): the task scales via slab HP/thickness + these adds. Soft-enrage adds +1 slab.
+  feedAddCap: 4,          // hard readability cap on the feed-add count
   slabBaseHp: 84,         // slab HP anchor at F40 (per slab; balancer FINAL 46 → 84); scales on the floor curve
   slabHpFloor: 40,
   slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
@@ -1719,11 +1722,13 @@ export const QUORUM = {
   huskSway: 0.12,          // sway amplitude (rad) — a little life, never enough to overlap
   huskIntegrityFrac: 0.10, // each husk's break meter as a fraction of the pool max (balancer FINAL 0.20 → 0.10)
   healRegenPerSec: 14,     // the HEAL husk regenerates the pool while alive (undo lazy chip — balancer FINAL 10 → 14)
-  // R-framework SURPLUS (balancer FINAL): a husk-adds WAVE fires when a husk breaks, capped by
-  // snapshotted party size (solo 1 / 2p 4 / 4p 5), gated by the active-threat cap and paced by
-  // a wave interval that tightens 6.0s → 3.0s with R (bossAddIntervalFor). The merge-form keeps
-  // its continuous final window regardless of R.
-  huskAddFor: [0, 1, 4, 5, 5] as readonly number[],     // husk-adds per break-wave by snapshotted players
+  // R-framework SURPLUS (balancer FINAL): a husk-adds WAVE fires when a husk breaks, count =
+  // min(bossAddCapFor(1, R), huskAddCap) → solo 1 / 2p 4 / 3p 5 / 4p 5 (R-keyed), gated by the
+  // active-threat cap and paced by a wave interval that tightens 6.0s → 3.0s with R (the
+  // generic bossAddIntervalFor 0.9 rate is fine here). The merge-form's continuous final window
+  // is UNGATED by R — no adds attach to it.
+  huskAddBase: 1,          // bossAddCapFor base for the break-wave count
+  huskAddCap: 5,           // hard readability cap on the wave count
   huskAddInterval: 6.0,    // wave cadence base → bossAddIntervalFor (3.0s floor at high R)
   // The ONE shared telegraph (core-driven): a converging amber ring the lead husk shows.
   attackCd: [0, 2.8, 2.2] as readonly number[], // phase 1 (husks), phase 2 (merged)

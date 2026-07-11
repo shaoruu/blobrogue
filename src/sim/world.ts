@@ -7543,7 +7543,10 @@ function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   // soft-enraged phase appends one INVERTED verb (the "you skipped the lesson" beat). The
   // extras ride the canon stagger, so they never exceed the simultaneous render cap.
   const base = jetSalvoSize(w, boss.phase);
-  const surplus = w.encounterPower >= JET.surplusSimulMinR && boss.phase >= 2 ? 1 : 0;
+  // R-framework SURPLUS (balancer FINAL): extra sequential verbs = min(bossAddCapFor(0,R), 2)
+  // → 0 solo / 2 at 2p+ (simulCapFor still governs how many render per beat). Counted vs the
+  // active-threat budget only, never the ≤2-complex-mover rule (these are shard patterns).
+  const surplus = Math.min(bossAddCapFor(0, w.encounterPower), JET.surplusVerbCap);
   const enrageVerb = boss.enrage === 1 && boss.phase >= 2 ? 1 : 0;
   const total = base + surplus + enrageVerb;
   // P2's "out-of-sync canon": the further verbs enter one canonOffset apart, so the salvo
@@ -7876,7 +7879,7 @@ function titheHurl(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 // simple chasers, omen-telegraphed like the Weaver/Marrow pool draws, the live count held at
 // the cap (which stays under the room's active-threat budget). Solo raises none.
 function titheFeedAdds(w: WorldState, e: Enemy, ev: SimEvent[]): void {
-  const cap = TITHE.feedAddFor[w.encounterPlayers] ?? 0;
+  const cap = Math.min(bossAddCapFor(0, w.encounterPower), TITHE.feedAddCap); // 0 solo / 3 2p / 4 3p+ (R-keyed)
   let live = countLiveAddsOfKind(w, TITHE_FEED_ADD.kind) + countPendingOmensOfKind(w, TITHE_FEED_ADD.kind, TITHE_FEED_ADD.tier);
   for (let i = 0; i < cap && live < cap; i++) {
     if (queueAmbushWave(w, e, TITHE.slabRingDist + 44, TITHE_FEED_ADD, e.id, ev) > 0) live++;
@@ -8275,7 +8278,7 @@ function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: 
 function quorumHuskAddWave(w: WorldState, core: Enemy, ev: SimEvent[]): void {
   const boss = core.boss!;
   if (boss.addTimer > 0) return; // paced by the wave interval
-  const cap = QUORUM.huskAddFor[w.encounterPlayers] ?? 0;
+  const cap = Math.min(bossAddCapFor(QUORUM.huskAddBase, w.encounterPower), QUORUM.huskAddCap); // 1 solo / 4 2p / 5 3p+ (R-keyed)
   if (cap <= 0) return;
   boss.addTimer = bossAddIntervalFor(QUORUM.huskAddInterval, w.encounterPower);
   let live = countLiveAddsOfKind(w, QUORUM_HUSK_ADD.kind) + countPendingOmensOfKind(w, QUORUM_HUSK_ADD.kind, QUORUM_HUSK_ADD.tier);
