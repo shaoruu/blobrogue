@@ -7733,7 +7733,7 @@ function titheRecoverFor(move: AttackMove): number {
   return move === "slam" ? TITHE.slamRecover
     : move === "spew" ? TITHE.spewRecover
     : move === "hurl" ? TITHE.hurlRecover
-    : TITHE.radialRecover; // radial / build / wheel fallback
+    : TITHE.radialRecover; // radial / build / rip-wheel fallback
 }
 
 // The Tithe's rotation: the FEED loop (build → slab → break-window) stays the primary
@@ -7752,7 +7752,7 @@ function titheBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   // fires once on entering P3 — leaving isSurpriseSpent for the shared R-surplus surprise wave.
   if (phase >= 3 && boss.isNextRadial && boss.exposed <= 0 && isSlabless) {
     boss.isNextRadial = false;
-    beginWindup(e, "spin");
+    beginWindup(e, "rip");
     ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.85, trauma: 0.1 });
     return;
   }
@@ -7800,7 +7800,7 @@ function titheWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
   }
   // slam (gorge) / spew / spin (signature wheel): a fixed rear tell, then the active beat.
   const windupT = a.move === "slam" ? TITHE.slamWindup : a.move === "spew" ? TITHE.spewWindup
-    : a.move === "spin" ? TITHE.wheelWindup : TITHE.radialWindup;
+    : a.move === "rip" ? TITHE.wheelWindup : TITHE.radialWindup;
   a.time += dt;
   a.windup = Math.min(1, a.time / windupT);
   if (a.time >= windupT) {
@@ -7839,7 +7839,7 @@ function titheActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
     if (boss.spinCount >= 2 && a.time >= TITHE.spewStageGap + 0.1) enterRecover(e);
     return;
   }
-  if (a.move === "spin") {
+  if (a.move === "rip") {
     // SIGNATURE: a slow rotating barrage wheel, then it COLLAPSES into a long exposed window.
     while (a.time >= boss.spinCount * TITHE.wheelInterval && a.time <= TITHE.wheelDuration) {
       const ang = boss.spinCount * TITHE.wheelStep;

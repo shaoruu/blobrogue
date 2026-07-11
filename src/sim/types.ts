@@ -110,8 +110,11 @@ export type AttackMove =
   //  - "beam":   a laser CORRIDOR telegraph (JET's overclock feint + P3 corruption, Quorum
   //    crossfire) — cover the lane, dodge through the authored gap;
   //  - "spew":   the Tithe's two-stage arcing-pool barrage (read wave 1, then its gaps);
-  //  - "hurl":   the Tithe throws its own slab as a line projectile (leaving a side open).
-  | "tracer" | "beam" | "spew" | "hurl";
+  //  - "hurl":   the Tithe throws its own slab as a line projectile (leaving a side open);
+  //  - "rip":    the Tithe's P3 SIGNATURE — it rips ALL its plating into a slow rotating
+  //    barrage wheel, then collapses into a long exposed window (a dedicated move so the
+  //    debris-wheel VFX binds to a real signal, not shared with MARROW's "spin").
+  | "tracer" | "beam" | "spew" | "hurl" | "rip";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).
