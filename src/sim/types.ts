@@ -707,7 +707,13 @@ export type SpriteName =
   // (base "tithe_slab" = intact, swapped to "tithe_slab_cracked" as its HP drops). The
   // Quorum husks are directional; the merge-form is the core's single sprite ("quorum").
   | "jet" | "jet_phase2" | "jet_phase3"
-  | "tithe" | "tithe_slab" | "tithe_slab_cracked"
+  // The guard/expose visuals are the base phase sprite + a REUSABLE overlay composited on
+  // top the instant the guard flag flips (a hard swap, no tween). "jet_expose" is ONE
+  // crack+desaturate overlay reused across every phase body; "tithe_exposed" is the Tithe's
+  // single slumped-exposed body pose (its dome shimmer toggles separately). Both are
+  // zero-code art drop points (register the path, ship the PNG) — see assets.ts.
+  | "jet_expose"
+  | "tithe" | "tithe_slab" | "tithe_slab_cracked" | "tithe_exposed"
   | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg"
   // Wave 1 surplus adds (placeholder art: the tribute reuses the feeder walk, the splinter
   // reuses the dmg-husk walk — the art director ships dedicated sprites later).

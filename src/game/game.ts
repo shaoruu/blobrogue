@@ -4873,6 +4873,16 @@ export class Game {
     ctx.restore();
   }
 
+  // Composite a REUSABLE body overlay (guard/expose crack, etc.) on top of the base sprite at
+  // the SAME transform, following the body's facing/deform. Zero-code art hook (the
+  // pet/cosmetic pattern): it draws ONLY once the overlay sheet has loaded — while it streams
+  // in or is absent it draws NOTHING (never a fallback disc over the boss). Callers gate it on
+  // the authoritative guard/expose flag, so the swap is a hard instant toggle with no tween.
+  private compositeBodyOverlay(name: SpriteName, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, frameClock: number): void {
+    if (this.sprites.sheet(name, "idle") === null) return;
+    this.drawChar(name, "idle", cx, cy, size, facing, xf, extra, 1, 0, frameClock);
+  }
+
   // ---- Patch's waystation ----
   // Every station renders from its authoritative slot. The ART hooks (patch sprite +
   // patch_stall / shop_pedestal / shop_heart_station / shop_reroll_post) take over piece
@@ -5506,6 +5516,11 @@ export class Game {
       // QUORUM: the shared-HP CORE is hidden behind its husks until the merge — draw the
       // code-drawn amber tether that links the husks (the shared-HP tell) and skip the body.
       // Once merged (phase 2) the fused merge-form draws normally below.
+      // Its guard/expose read is NOT an overlay toggle: it advances through 4 DISCRETE looks
+      // driven by husk deaths + the merge flag — {shield+heal+dmg} -> shield-dead -> heal-dead
+      // (the three directional husk sprites vanishing in kill-order) -> the merged core body
+      // ("quorum" = quorum_merge, the single core swap point in assets.ts). The shield-husk
+      // beams in renderQuorumTether are the taut-guarded / snapped-exposed read up to the merge.
       if (e.kind === "quorum" && (e.boss?.phase ?? 1) < 2) {
         this.renderQuorumTether(e);
         continue;
@@ -5574,6 +5589,10 @@ export class Game {
         spriteName = ph >= 3 ? "jet_phase3" : ph === 2 ? "jet_phase2" : "jet";
       } else if (e.kind === "tithe_slab" && e.hp <= e.maxHp * 0.5) {
         spriteName = "tithe_slab_cracked";
+      } else if (e.kind === "tithe" && e.aux > 0 && this.sprites.sheet("tithe_exposed", "idle") !== null) {
+        // EXPOSED — swap to the slumped body pose the instant the guard drops (hard swap).
+        // Guarded until its PNG lands so we never flash a disc; the shimmer dome toggles below.
+        spriteName = "tithe_exposed";
       }
       const choice = this.sprites.selectClip(spriteName, pose);
       const facing = choice.isMirrored ? -1 : 1;
@@ -5600,6 +5619,12 @@ export class Game {
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
       this.drawChar(spriteName, choice.clip, sx, sy, drawSize, facing, xf, extra, alpha, Math.max(anim.flash, telegraphFlash), anim.clock, null, choice.isHoldFirstFrame);
+
+      // JET's EXPOSE overlay: one reusable crack+desaturate layer composited over whatever
+      // phase body just drew, the instant the guard drops (hard swap — no tween, so the short
+      // exposed window reads on frame one). The composite draws nothing until its PNG lands
+      // (the procedural expose glow below carries the read meanwhile).
+      if (e.kind === "jet" && e.aux > 0) this.compositeBodyOverlay("jet_expose", sx, sy, drawSize, facing, xf, extra, anim.clock);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);

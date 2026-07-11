@@ -176,11 +176,20 @@ SHEETS["sac.idle"] = { src: "/sprites/sac_idle.png", fps: 6 };
 registerDirectionalSet("jet", { walkFps: 6, facings: ["down", "up", "side"] });
 SHEETS["jet_phase2.idle"] = { src: "/sprites/jet_phase2.png", fps: 2 };
 SHEETS["jet_phase3.idle"] = { src: "/sprites/jet_phase3.png", fps: 2 };
+// JET's REUSABLE expose overlay: a single crack+desaturate layer composited over whichever
+// phase body is active the instant the guard drops (hard swap, no tween). One PNG covers
+// P1/P2/P3 — drop it at this path and it lights up with zero code change. Until it lands the
+// renderer composites nothing here (the procedural expose read carries it).
+SHEETS["jet_expose.idle"] = { src: "/sprites/jet_expose.png", fps: 2 };
 // THE TITHE (F40): the directional feeder body + its SEPARATE 2-state destructible slab
 // (intact → cracked as its HP drops; the render swaps in place — they share a footprint).
 registerDirectionalSet("tithe", { walkFps: 5, facings: ["down", "up", "side"] });
 SHEETS["tithe_slab.idle"] = { src: "/sprites/tithe_slab_intact.png", fps: 2 };
 SHEETS["tithe_slab_cracked.idle"] = { src: "/sprites/tithe_slab_cracked.png", fps: 2 };
+// The Tithe's single slumped EXPOSED body pose (the guard read itself lives on the slab +
+// the toggled shimmer dome). Swapped in instantly for the feeder body while exposed, and
+// only once its PNG has loaded (until then the normal directional body holds — no disc).
+SHEETS["tithe_exposed.idle"] = { src: "/sprites/tithe_exposed.png", fps: 2 };
 // QUORUM (F45): the merge-form CORE is the drifting-mass contract (idle + omni attack,
 // both the fused body — it is only ever shown merged). The three role-husks are
 // directional walk triplets (side mirrors); single-frame today, the facing ladder covers it.
@@ -318,9 +327,11 @@ const SOURCES: Record<SpriteName, string> = {
   jet: "/sprites/jet_walk_down.png",
   jet_phase2: "/sprites/jet_phase2.png",
   jet_phase3: "/sprites/jet_phase3.png",
+  jet_expose: "/sprites/jet_expose.png",
   tithe: "/sprites/tithe_walk_down.png",
   tithe_slab: "/sprites/tithe_slab_intact.png",
   tithe_slab_cracked: "/sprites/tithe_slab_cracked.png",
+  tithe_exposed: "/sprites/tithe_exposed.png",
   quorum: "/sprites/quorum_merge.png",
   quorum_shield: "/sprites/quorum_shield_walk_down.png",
   quorum_heal: "/sprites/quorum_heal_walk_down.png",
