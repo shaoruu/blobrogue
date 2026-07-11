@@ -12,7 +12,7 @@ import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
-import { DOGGIE_PET_ID } from "../sim/camp_nodes.js";
+import { petSpriteFor } from "./pets.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
@@ -179,10 +179,6 @@ const PET_STOP_DIST = 12;     // within this of the rest spot it SITS (settles b
 const PET_FOLLOW_GAIN = 6;    // trot speed scales with distance (a little lag/catch-up)
 const PET_MAX_SPEED = 340;    // px/s cap on the trot (keeps pace with a running blob)
 const PET_WARP_DIST = 380;    // fell way behind (dash/teleport/floor change) -> scamper-warp
-// The sprite for an equipped pet id (null if unknown — old client / future pet renders nothing).
-function petSpriteFor(petId: string): SpriteName | null {
-  return petId === DOGGIE_PET_ID ? "doggie" : null;
-}
 // A short-lived floating text in world space (e.g. the name of a just-dropped weapon).
 interface WorldLabel { x: number; y: number; vy: number; life: number; maxLife: number; text: string; color: string; }
 // A coin token flying from its pickup spot (world x,y) up into the top-left wallet: t runs

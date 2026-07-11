@@ -741,5 +741,5 @@ export type SpriteName =
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim).
-  | "doggie"
+  | "doggie" | "cat" | "dragon"
   | "heart" | "coin" | "gun" | "spit";
