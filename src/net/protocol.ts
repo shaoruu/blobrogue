@@ -209,7 +209,16 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   (the Tithe's slab-reinforcing crawler) and quorum_splinter (Quorum's role-echo shard,
 //   role on EnemyWire.aux: 0 shield / 1 heal / 2 dmg). isEnemyKind keys off ENEMY_ARCHETYPES,
 //   so a v19 client would reject a snapshot carrying either kind.
-export const PROTOCOL_VERSION = 20;
+// v21 (Wave 1 deep-boss art/state binding): EnemyWire grows ONE field — `brr`, the boss
+//   transition-beat-live flag (boss.roar !== null; false for non-bosses) — so transition-beat
+//   and Quorum merge-fuse VFX bind to the authoritative flag instead of re-deriving it from
+//   move/phase edges. A v20 client would reject a snapshot carrying it (the enemy validator is
+//   exhaustive). The other guard/expose bindings need NO new field: the boss PHASE already
+//   rides `bph`, and the EXPOSED remainder already rides `aux` (restored into boss.exposed, the
+//   same flag the damage gate reads) — the client now binds its guard/expose art to boss.exposed
+//   directly so art and hitbox can't desync. Quorum husk kind + liveness continue to ride each
+//   husk's own EnemyWire (kind + hp + position), which drives the discrete husk-state sprites.
+export const PROTOCOL_VERSION = 21;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -373,9 +382,15 @@ export interface EnemyWire {
   hp: number; mhp: number; r: number;
   tr: EnemyTier;               // variety tier (drives the client's draw scale + markers)
   atk: AttackWire;
-  bph: number;                 // boss phase (0 when not a boss)
+  bph: number;                 // boss phase (0 when not a boss) — drives the per-phase base look
+  // The boss transition BEAT is live (its roar/shield/molt/merge is mid-flight). Serialized
+  // straight from `boss.roar !== null` (false for non-bosses) so transition-beat + merge-fuse
+  // VFX can bind to the authoritative flag rather than re-deriving it from move/phase edges.
+  brr: boolean;
   // The per-kind auxiliary channel (see Enemy.aux): sinderling armed flag, echo/knell
-  // fuse, fragment tether id + 1, bulwark plate HP. 0 for everyone else.
+  // fuse, fragment tether id + 1, bulwark plate HP. For the earned-window bosses this IS the
+  // authoritative EXPOSED remainder (seconds left; 0 = guarded — the same flag the damage gate
+  // reads via boss.exposed), which enemyFromWire restores into boss.exposed so art can't desync.
   aux: number;
   // The ROLLED elite affix id ("splits"/"shielded"/"hazardTrail"/"reflect"/"enrage"), or "" for
   // none (v16) — drives the client's material affix tell.
@@ -1023,6 +1038,7 @@ function validateEnemyWire(v: unknown): EnemyWire {
       mx: num(a, "mx", -POS_LIMIT, POS_LIMIT), my: num(a, "my", -POS_LIMIT, POS_LIMIT),
     },
     bph: num(o, "bph", 0, 16),
+    brr: boolOf(o, "brr"),
     aux: num(o, "aux", -1e9, 1e9),
     afx: affixOf(o, "afx"),
     afs: num(o, "afs", -1e9, 1e9),
@@ -1337,6 +1353,7 @@ export function toEnemyWire(e: Enemy): EnemyWire {
     id: e.id, kind: e.kind, x: e.x, y: e.y, hp: e.hp, mhp: e.maxHp, r: e.radius, tr: e.tier,
     atk: { ph: a.phase, mv: a.move, wu: a.windup, lk: a.isAimLocked, la: a.lockedAngle, mx: a.markX, my: a.markY },
     bph: e.boss ? e.boss.phase : 0,
+    brr: e.boss ? e.boss.roar !== null : false,
     aux: e.aux,
     afx: e.rollAffix,
     afs: e.affixState,
@@ -1365,10 +1382,16 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
     },
     boss: w.bph > 0
       ? {
-        phase: w.bph, transitionsDone: 0, roar: null, addTimer: 0, attackCount: 0,
+        // The transition beat is a boolean on the wire (brr); the client rebuilds a marker
+        // roar object so `boss.roar !== null` reads identically to the sim (transition-beat +
+        // Quorum merge-fuse VFX bind to it). The banked floorHp/queued/queuedBy are
+        // sim-internal (they never travel — the client only renders the beat, never resolves it).
+        phase: w.bph, transitionsDone: 0, roar: w.brr ? { floorHp: 0, queued: 0, queuedBy: null } : null,
+        addTimer: 0, attackCount: 0,
         isNextRadial: false, burstParity: 0, beatAddIds: [], spinCount: 0,
-        // Earned windows: the exposed remainder rides the aux channel (the render key);
-        // the bank and mechanic id lists are sim-internal and never travel.
+        // Earned windows: the exposed remainder rides the aux channel (the render key), restored
+        // into boss.exposed so the client's guard/expose art reads the SAME flag as the damage
+        // gate (isBossExposed). The bank + mechanic id lists are sim-internal and never travel.
         exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }

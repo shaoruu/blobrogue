@@ -5589,7 +5589,7 @@ export class Game {
         spriteName = ph >= 3 ? "jet_phase3" : ph === 2 ? "jet_phase2" : "jet";
       } else if (e.kind === "tithe_slab" && e.hp <= e.maxHp * 0.5) {
         spriteName = "tithe_slab_cracked";
-      } else if (e.kind === "tithe" && e.aux > 0 && this.sprites.sheet("tithe_exposed", "idle") !== null) {
+      } else if (e.kind === "tithe" && this.isEnemyExposed(e) && this.sprites.sheet("tithe_exposed", "idle") !== null) {
         // EXPOSED — swap to the slumped body pose the instant the guard drops (hard swap).
         // Guarded until its PNG lands so we never flash a disc; the shimmer dome toggles below.
         spriteName = "tithe_exposed";
@@ -5624,7 +5624,7 @@ export class Game {
       // phase body just drew, the instant the guard drops (hard swap — no tween, so the short
       // exposed window reads on frame one). The composite draws nothing until its PNG lands
       // (the procedural expose glow below carries the read meanwhile).
-      if (e.kind === "jet" && e.aux > 0) this.compositeBodyOverlay("jet_expose", sx, sy, drawSize, facing, xf, extra, anim.clock);
+      if (e.kind === "jet" && this.isEnemyExposed(e)) this.compositeBodyOverlay("jet_expose", sx, sy, drawSize, facing, xf, extra, anim.clock);
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
@@ -6465,10 +6465,18 @@ export class Game {
   // The earned-window read (Weaver/MARROW/Choir): GUARDED = a dim thread rim (your
   // shots are chipping — force the window instead); EXPOSED (aux carries the sim's
   // remainder) = the body blazes, unload.
+  // The authoritative EXPOSED read — the SAME flag the sim's damage gate uses (isBossExposed:
+  // boss.exposed > 0). It rides the wire on aux and is restored into boss.exposed by
+  // enemyFromWire, so binding art to it here means the guard/expose visuals can never desync
+  // from the hitbox. Non-boss bodies are never "exposed" in this sense.
+  private isEnemyExposed(e: Enemy): boolean {
+    return e.boss !== null && e.boss.exposed > 0;
+  }
+
   private renderEarnedWindow(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
     const deep = e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum";
-    if (e.aux > 0) {
+    if (this.isEnemyExposed(e)) {
       // EXPOSED — the guard is down: a blazing hot core reads "unload now". The deep bosses
       // crack hot-amber (Tithe's slumped amber sacs run a touch lighter); the earlier
       // earned-window bosses keep their own family tint.
@@ -6536,7 +6544,7 @@ export class Game {
     const hue = e.kind === "jet" ? { guard: "#5b63c8", expose: "#6b7088" }
       : e.kind === "tithe" ? { guard: "#e0902f", expose: "#8a5a22" }
       : { guard: "#eef0e2", expose: "#b9bcae" };
-    const exposed = e.aux > 0;
+    const exposed = this.isEnemyExposed(e);
     const { ctx } = this;
     const gy = sy + size * 0.32;
     const color = exposed ? hue.expose : hue.guard;
@@ -6558,7 +6566,7 @@ export class Game {
   // channel (the authoritative earned-window remainder), so online clients agree.
   private renderGildedPlate(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
-    const isExposed = e.aux > 0;
+    const isExposed = this.isEnemyExposed(e);
     if (isExposed) {
       const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
       this.fxLayer("glow_round", "#ffb43b", sx, sy, size * 1.1 * pulse, size * 1.1 * pulse, 0.55, 0);
