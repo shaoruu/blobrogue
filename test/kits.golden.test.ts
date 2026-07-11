@@ -42,6 +42,9 @@ interface Scenario {
   fillAt?: Record<number, PlayerId[]>;
   // A player requests their ult on every tick from this tick on (validated by the sim).
   ultFrom?: Record<PlayerId, number>;
+  // A MENDER requests the directed heal-pulse on every tick from this tick on (aim +x toward a
+  // co-located ally at dx>0; the sim validates the pulse cooldown).
+  pulseFrom?: Record<PlayerId, number>;
   // Players who autofire toward the enemy cluster (charge from damage dealt).
   fire?: PlayerId[];
   // Players who dash every dashEvery ticks (phantom charge from dashes).
@@ -58,8 +61,15 @@ interface Scenario {
 // the entity HP/lifetime, and the self-buff/invuln windows.
 interface Digest {
   t: number;
-  players: Array<{ id: string; kit: string; uc: number; ura: number; ov: number; ph: number; iv: number; ps: number; hp: number; src: [number, number, number, number, number]; wst: number }>;
+  players: Array<{ id: string; kit: string; uc: number; ura: number; ov: number; ph: number; iv: number; ps: number; hp: number; src: [number, number, number, number, number]; wst: number;
+    // Wave 2 signature authoritative state (determinism gate 6): Gunner overheat window, Bulwark
+    // overshield pool + regen clock, Mender pulse-CD gate, and the dash cooldown (proves the
+    // Phantom refund lands identically).
+    ovh: number; osh: number; oshr: number; pra: number; dcd: number }>;
   effects: Array<{ id: number; k: string; life: number; hp: number; r: number }>;
+  // Enemy mark state (determinism gate 6): the Phantom dash-through mark + each enemy's HP (the
+  // mark's damage effect resolves identically). Compact + sorted for a stable diff.
+  enemies: Array<{ id: number; hp: number; mk: number }>;
   ev: string[];
 }
 
@@ -73,16 +83,20 @@ function digest(w: WorldState, tick: number, ev: SimEvent[]): Digest {
       ov: r(p.overdriveT), ph: r(p.phaseSpeed), iv: r(p.ultInvuln), ps: r(p.passiveState), hp: p.hp,
       src: [p.ultSources.dmg, p.ultSources.kill, p.ultSources.taken, p.ultSources.heal, p.ultSources.dash] as [number, number, number, number, number],
       wst: p.ultWasted,
+      ovh: r(p.overheatT), osh: p.overshield, oshr: p.overshieldRegenT, pra: p.pulseReadyAtTick, dcd: r(p.dashCd),
     }));
   const effects = w.effects
     .filter((e) => e.kind === "sanctuary" || e.kind === "aegis")
     .map((e) => ({ id: e.id, k: e.kind, life: r(e.life), hp: r("hp" in e ? e.hp : -1), r: r("radius" in e ? e.radius : 0) }))
     .sort((a, b) => a.id - b.id);
+  const enemies = w.enemies
+    .map((e) => ({ id: e.id, hp: r(e.hp), mk: r(e.markT) }))
+    .sort((a, b) => a.id - b.id);
   const events = ev
     .filter((e) => ULT_EVENTS.has(e.t))
     .map((e) => `${e.t}:${(e as { pid?: string }).pid ?? ""}`)
     .sort();
-  return { t: tick, players, effects, ev: events };
+  return { t: tick, players, effects, enemies, ev: events };
 }
 
 function spawnCenter(w: WorldState): { x: number; y: number } {
@@ -134,6 +148,8 @@ function run(s: Scenario): Digest[] {
       if (de && tick % de === 0) { inp.dash = true; inp.moveX = 1; }
       const uf = s.ultFrom?.[p.id];
       if (uf !== undefined && tick >= uf) inp.ult = true;
+      const pf = s.pulseFrom?.[p.id];
+      if (pf !== undefined && tick >= pf) inp.pulse = true; // aim stays +x (baseInput 0) toward the ally
       stepPlayerPhase(w, p, inp, FIXED_DT, ev);
     }
     stepWorldPhase(w, FIXED_DT, ev);
@@ -195,6 +211,46 @@ const SCENARIOS: Scenario[] = [
       { id: "pD", kit: "mender", dx: 200, dy: 0 },
     ],
     fillAt: { 30: ["pA"] }, ultFrom: { pA: 31 },
+  },
+  // P1 GUNNER OVERHEAT (Wave 2): sustained autofire into a slime cluster ramps Momentum to the
+  // boil-over threshold, opening the +fire/+pierce burst window and rolling the stacks to the
+  // reset floor — the overheat clock (ovh) + stack channel (ps) must reproduce tick-for-tick.
+  {
+    name: "sig_overheat_p1", seed: 0x0ff11, floor: 1, ticks: 160,
+    players: [{ id: "pA", kit: "gunner", dx: 0, dy: 0 }],
+    enemies: [{ dx: 90, dy: -8 }, { dx: 110, dy: 8 }, { dx: 130, dy: 0 }, { dx: 150, dy: -6 }],
+    fire: ["pA"],
+  },
+  // P2 BULWARK OVERSHIELD (Wave 2): a slime pinned on the tank chips the overshield pool (osh)
+  // before hearts, and the regen clock (oshr) pauses under the sustained contact — the pool +
+  // regen countdown must reproduce bit-for-bit.
+  {
+    name: "sig_overshield_p2", seed: 0x0b5d1, floor: 1, ticks: 200,
+    players: [
+      { id: "pA", kit: "bulwark", dx: 0, dy: 0 },
+      { id: "pB", kit: "gunner", dx: 60, dy: 0 },
+    ],
+    enemies: [{ dx: 6, dy: 0 }, { dx: -6, dy: 6 }],
+  },
+  // P2 MENDER HEAL-PULSE (Wave 2): a wounded ally co-located at +x is topped by the directed
+  // pulse burst on its cooldown — the pulse-CD gate (pra) + the ally HP + the shared heal budget
+  // must reproduce tick-for-tick.
+  {
+    name: "sig_pulse_p2", seed: 0x0c0de, floor: 1, ticks: 200,
+    players: [
+      { id: "pA", kit: "mender", dx: 0, dy: 0 },
+      { id: "pB", kit: "gunner", dx: 30, dy: 0, hp0: 1 },
+    ],
+    pulseFrom: { pA: 10 },
+  },
+  // P2 PHANTOM MARK (Wave 2): a phantom dashing every few ticks through a slime cluster marks
+  // them (+vuln, enemies[].mk) and refunds the dash cooldown (dcd) — the mark timers + the
+  // refunded cooldown must reproduce bit-for-bit across replay + reconnect.
+  {
+    name: "sig_mark_p1", seed: 0x0dada, floor: 1, ticks: 160,
+    players: [{ id: "pA", kit: "phantom", dx: -40, dy: 0 }],
+    enemies: [{ dx: 20, dy: 0 }, { dx: 60, dy: 0 }],
+    fire: ["pA"], dashEvery: { pA: 20 },
   },
   // P2 RECONNECT: a mid-run leave + rejoin (re-kit) must reproduce bit-for-bit.
   {

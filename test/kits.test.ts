@@ -13,13 +13,15 @@ import type { InputCmd } from "../src/sim/input.js";
 import type { SimEvent } from "../src/sim/events.js";
 import type { Bullet } from "../src/sim/types.js";
 import {
-  ULT, OVERDRIVE, SANCTUARY, AEGIS, PHASE, MOMENTUM, HARDENED, MENDER_HEAL_CLAMP, ticksToSec,
+  ULT, OVERDRIVE, SANCTUARY, AEGIS, PHASE, MOMENTUM, OVERHEAT, HARDENED, OVERSHIELD,
+  HEAL_PULSE, PHANTOM_MARK, MENDER_HEAL_CLAMP, ticksToSec, TICKS_PER_SECOND,
   masteryLevelForXp, isKitUnlocked, kitUnlockLevel, unlockedKits, masteryXpForRun,
   canCastUlt, ultChargeFromDamageDealt, ultChargeFromDamageTaken, ultChargeFromHealDone,
   ultShareCapUnits, ultTimeChargePerTick,
   refEncounterHpForFloor, aegisHpBudgetForFloor,
 } from "../src/sim/kits.js";
 import type { KitId } from "../src/sim/kits.js";
+import { BOSS_VULN_CAP } from "../src/sim/balance.js";
 
 const FIXED_DT = 1 / 20;
 let passed = 0, failed = 0;
@@ -319,18 +321,137 @@ function hardenedTests(): void {
 }
 
 function momentumTests(): void {
-  section("GUNNER MOMENTUM: ramps on unhit hits, fully decays on taking damage (spec §2.1)");
+  section("GUNNER MOMENTUM: ramps on unhit hits, SOFTENED decay — survives a boss fight (Wave 2)");
   check("momentum ceiling is ~+15% damage / +10% fire rate at max", Math.abs(MOMENTUM.maxStacks * MOMENTUM.damagePerStack - 0.15) < 1e-9 && Math.abs(MOMENTUM.maxStacks * MOMENTUM.fireRatePerStack - 0.10) < 1e-9);
-  const w = freshWorld();
+  const w = freshWorld(); w.enemies = [];
   spawnPlayerInWorld(w, "g"); setPlayerKit(w, "g", "gunner");
   const g = w.players.get("g")!; g.invuln = 0;
-  // Simulate landed hits via the damage-dealt hook indirectly: momentum stacks live in the
-  // passive channel; a taken hit must zero it.
+  // Momentum stacks live in the passive channel; a significant taken hit softens the ramp by
+  // OVERHEAT.significantLoss (was: ANY hit WIPED it — the boss-fight achievability fix).
   g.passiveState = MOMENTUM.maxStacks;
   g.invuln = 0;
-  w.bullets.push(enemyBullet(g.x, g.y));
+  w.bullets.push(enemyBullet(g.x, g.y)); // a 1-heart (significant) hit
   tick(w, () => idle());
-  check("taking damage fully decays momentum", g.passiveState === 0);
+  check("a significant hit loses OVERHEAT.significantLoss stacks (not ALL)", g.passiveState === MOMENTUM.maxStacks - OVERHEAT.significantLoss, `stacks=${g.passiveState}`);
+  check("the ramp SURVIVES the hit (a graze no longer wipes it)", g.passiveState > 0);
+}
+
+function overheatTests(): void {
+  section("GUNNER OVERHEAT: boil-over at max stacks -> +fire/+pierce burst, rolls to the reset (Wave 2)");
+  check("authored: reset floor < max, +pierce, +fire on top of Momentum", OVERHEAT.resetStacks < MOMENTUM.maxStacks && OVERHEAT.bonusPierce >= 1 && OVERHEAT.extraFireRate > 0);
+  const w = freshWorld(); w.enemies = []; w.isGodMode = true; // isolate the ramp from incoming fire
+  spawnPlayerInWorld(w, "g"); setPlayerKit(w, "g", "gunner");
+  const g = w.players.get("g")!; g.invuln = 0;
+  const dummy = devSpawnEnemy(w, "boss", g.x + 60, g.y); dummy.hp = 1e9; dummy.maxHp = 1e9;
+  let sawBoilOver = false;
+  for (let i = 0; i < 200 && !sawBoilOver; i++) {
+    tick(w, (p) => ({ ...idle(), firing: p.id === "g", aim: 0 }));
+    if (g.overheatT > 0) sawBoilOver = true;
+  }
+  check("hitting max stacks fires OVERHEAT (the boil-over burst opens)", sawBoilOver && g.overheatT > 0, `ovh=${g.overheatT.toFixed(2)}`);
+  check("stacks roll to the reset floor (keeps rolling, never resets to 0)", g.passiveState >= OVERHEAT.resetStacks, `stacks=${g.passiveState}`);
+  check("the burst window is the authored ~3s (never longer)", g.overheatT <= ticksToSec(OVERHEAT.burstTicks) + 1e-6);
+}
+
+function overshieldTests(): void {
+  section("BULWARK OVERSHIELD: absorbs BEFORE hearts, regen pauses under fire (Wave 2)");
+  check("authored: 3 chips, regen no faster than the pause (an out-of-combat buffer)", OVERSHIELD.maxChips === 3 && OVERSHIELD.regenTicks >= OVERSHIELD.pauseTicks);
+  const w = freshWorld(); w.enemies = [];
+  spawnPlayerInWorld(w, "b"); setPlayerKit(w, "b", "bulwark");
+  const b = w.players.get("b")!; b.maxHp = 100; b.hp = 100; b.invuln = 0;
+  check("a bulwark spawns with a full overshield (felt in the first 30s)", b.overshield === OVERSHIELD.maxChips);
+  const startHp = b.hp;
+  // Sustained fire drains the pool BEFORE hearts (no post-hit iframe while the shield eats).
+  for (let i = 0; i < OVERSHIELD.maxChips; i++) { b.invuln = 0; w.bullets.push(enemyBullet(b.x, b.y)); tick(w, () => idle()); }
+  check("the overshield eats the first hits (hearts untouched while chips remain)", b.hp === startHp, `hp=${b.hp}`);
+  check("sustained fire drains the pool to empty (gone under fire, never invuln)", b.overshield === 0, `osh=${b.overshield}`);
+  b.invuln = 0; w.bullets.push(enemyBullet(b.x, b.y)); tick(w, () => idle());
+  check("once the shield is spent, the next hit reaches hearts", b.hp < startHp, `hp=${b.hp}`);
+
+  // Out-of-combat regen: a spent chip returns after the pause + interval (no incoming damage).
+  const w2 = freshWorld(); w2.enemies = [];
+  spawnPlayerInWorld(w2, "b2"); setPlayerKit(w2, "b2", "bulwark");
+  const b2 = w2.players.get("b2")!; b2.overshield = 0; b2.overshieldRegenT = 0;
+  for (let i = 0; i < OVERSHIELD.regenTicks + 2; i++) tick(w2, () => idle());
+  check("out of combat, the overshield regenerates", b2.overshield >= 1, `osh=${b2.overshield}`);
+  // Under sustained fire the regen is PAUSED: it never climbs while hits keep landing.
+  const w3 = freshWorld(); w3.enemies = [];
+  spawnPlayerInWorld(w3, "b3"); setPlayerKit(w3, "b3", "bulwark");
+  const b3 = w3.players.get("b3")!; b3.overshield = 0; b3.overshieldRegenT = 0;
+  for (let i = 0; i < OVERSHIELD.regenTicks * 2; i++) { b3.invuln = 0; w3.bullets.push(enemyBullet(b3.x, b3.y)); tick(w3, () => idle()); }
+  check("sustained fire PAUSES regen (the pool never climbs under fire)", b3.overshield === 0, `osh=${b3.overshield}`);
+}
+
+function healPulseTests(): void {
+  section("MENDER HEAL-PULSE: directed 2 HP burst to the aimed ally, on cooldown (Wave 2)");
+  check("authored: 2 HP, 6s cooldown", HEAL_PULSE.heal === 2 && HEAL_PULSE.cooldownTicks === 120);
+  const w = freshWorld(); w.enemies = [];
+  spawnPlayerInWorld(w, "m"); setPlayerKit(w, "m", "mender");
+  const ally = spawnPlayerInWorld(w, "a"); setPlayerKit(w, "a", "gunner");
+  const m = w.players.get("m")!;
+  ally.x = m.x + 40; ally.y = m.y; ally.maxHp = 20; ally.hp = 10; // aimed to the +x of the mender
+  tick(w, (p) => ({ ...idle(), aim: 0, pulse: p.id === "m" }));
+  check("the pulse instantly heals the aimed ally by HEAL_PULSE.heal", ally.hp === 12, `hp=${ally.hp}`);
+  check("the pulse arms its cooldown", m.pulseReadyAtTick > w.tick);
+  const hpAfter = ally.hp;
+  tick(w, (p) => ({ ...idle(), aim: 0, pulse: p.id === "m" }));
+  check("the cooldown refuses an immediate second pulse", ally.hp === hpAfter, `hp=${ally.hp}`);
+  // An ally OUTSIDE the aim cone is not the target (directed, not an AoE).
+  const w2 = freshWorld(); w2.enemies = [];
+  spawnPlayerInWorld(w2, "m2"); setPlayerKit(w2, "m2", "mender");
+  const behind = spawnPlayerInWorld(w2, "bh"); setPlayerKit(w2, "bh", "gunner");
+  const m2 = w2.players.get("m2")!;
+  behind.x = m2.x - 40; behind.y = m2.y; behind.maxHp = 20; behind.hp = 10; // BEHIND (aim is +x)
+  tick(w2, (p) => ({ ...idle(), aim: 0, pulse: p.id === "m2" }));
+  check("an ally outside the aim cone is NOT healed (directed, not AoE)", behind.hp === 10, `hp=${behind.hp}`);
+}
+
+function phantomMarkTests(): void {
+  section("PHANTOM MARK: dash-through marks +vuln + refunds the dash cooldown (Wave 2)");
+  check("authored: +15% vuln, 35% refund, non-stacking window", PHANTOM_MARK.vulnMult === 1.15 && PHANTOM_MARK.refundFrac === 0.35 && PHANTOM_MARK.durationTicks > 0);
+  const w = freshWorld(); w.enemies = [];
+  spawnPlayerInWorld(w, "ph"); setPlayerKit(w, "ph", "phantom");
+  const ph = w.players.get("ph")!;
+  const enemy = devSpawnEnemy(w, "slime", ph.x + 30, ph.y); enemy.hp = 1000; enemy.maxHp = 1000;
+  tick(w, (p) => ({ ...idle(), dash: p.id === "ph", moveX: 1, aim: 0 }));
+  check("dashing THROUGH an enemy MARKS it (+vuln for the window)", enemy.markT > 0, `markT=${enemy.markT.toFixed(2)}`);
+  const throughCd = ph.dashCd;
+  // A phantom dashing through EMPTY space gets the full cooldown (no refund) — the delta is 35%.
+  const empty = freshWorld(); empty.enemies = [];
+  spawnPlayerInWorld(empty, "e"); setPlayerKit(empty, "e", "phantom");
+  const pe = empty.players.get("e")!;
+  tick(empty, (p) => ({ ...idle(), dash: p.id === "e", moveX: 1, aim: 0 }));
+  check("dashing through EMPTY space adds the full dash cooldown (no refund)", pe.dashCd > 0);
+  check("dashing THROUGH an enemy leaves a SHORTER cooldown (35% refunded)", throughCd < pe.dashCd - 1e-9, `through=${throughCd.toFixed(3)} empty=${pe.dashCd.toFixed(3)}`);
+  check("the refund is ~PHANTOM_MARK.refundFrac of the cooldown", Math.abs(throughCd - pe.dashCd * (1 - PHANTOM_MARK.refundFrac)) < 1e-6, `through=${throughCd.toFixed(3)} expected=${(pe.dashCd * (1 - PHANTOM_MARK.refundFrac)).toFixed(3)}`);
+}
+
+function phantomBossVulnCapTests(): void {
+  section("PHANTOM MARK vs a BOSS: the +15% SHARES the BOSS_VULN_CAP (never additive, Wave 2)");
+  // A marked boss takes MORE from a plain (non-crit) hit, but a marked + max-crit hit is still
+  // capped at BOSS_VULN_CAP — the mark shares the crit channel's ceiling, never stacks past it.
+  const measure = (marked: boolean, critMult: number): number => {
+    const w = freshWorld(); w.enemies = [];
+    spawnPlayerInWorld(w, "ph"); setPlayerKit(w, "ph", "phantom");
+    const ph = w.players.get("ph")!;
+    const boss = devSpawnEnemy(w, "boss", ph.x + 120, ph.y);
+    const hp0 = boss.hp;
+    if (marked) boss.markT = ticksToSec(PHANTOM_MARK.durationTicks);
+    // A crit-carrying friendly bullet planted on the boss (critX baked in, as fire() does); a
+    // few ticks let it resolve the hit through the ordinary boss-grade strike path.
+    w.bullets.push({ x: boss.x, y: boss.y, vx: 1, vy: 0, radius: 30, life: 0.5, friendly: true, owner: "ph", damage: 10 * critMult, color: "#fff", pierce: 0, hitList: null, isCrit: critMult > 1, critX: critMult } as unknown as Bullet);
+    for (let i = 0; i < 3; i++) tick(w, () => idle());
+    return hp0 - boss.hp;
+  };
+  const plain = measure(false, 1);
+  const markedPlain = measure(true, 1);
+  check("a plain hit on a MARKED boss deals more (mark applies)", markedPlain > plain + 1e-6, `plain=${plain.toFixed(2)} marked=${markedPlain.toFixed(2)}`);
+  check("mark on a non-crit hit is exactly the +15% vuln (≤ cap)", Math.abs(markedPlain / plain - PHANTOM_MARK.vulnMult) < 1e-6, `ratio=${(markedPlain / plain).toFixed(3)}`);
+  // Max crit (well above the cap) alone already saturates BOSS_VULN_CAP; adding the mark cannot
+  // push the realized vulnerability past it.
+  const critOnly = measure(false, 3);
+  const critMarked = measure(true, 3);
+  check("mark + max-crit combined vulnerability is still capped at BOSS_VULN_CAP", Math.abs(critMarked - critOnly) < 1e-6, `critOnly=${critOnly.toFixed(2)} critMarked=${critMarked.toFixed(2)} (cap ${BOSS_VULN_CAP})`);
 }
 
 function main(): void {
@@ -344,6 +465,11 @@ function main(): void {
   phaseTests();
   hardenedTests();
   momentumTests();
+  overheatTests();
+  overshieldTests();
+  healPulseTests();
+  phantomMarkTests();
+  phantomBossVulnCapTests();
   bossUntouchedTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }

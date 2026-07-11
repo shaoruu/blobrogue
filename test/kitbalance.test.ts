@@ -32,9 +32,13 @@ import type { SimEvent } from "../src/sim/events.js";
 import type { EnemyKind, WeaponId } from "../src/sim/types.js";
 import type { PlayerMods } from "../src/sim/items.js";
 import { WEAPONS } from "../src/sim/weapons.js";
-import { PU_DPS, refDpsForFloor, BOSS_MIN_LEGAL_TTK } from "../src/sim/balance.js";
+import { PU_DPS, refDpsForFloor, BOSS_MIN_LEGAL_TTK, CAPS, BOSS_VULN_CAP } from "../src/sim/balance.js";
+import { SHOCK_DMG_MULT, FROZEN_DMG_MULT } from "../src/sim/constants.js";
+import { liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult } from "../src/sim/weaponStats.js";
+import type { Bullet } from "../src/sim/types.js";
 import {
-  OVERDRIVE, MENDER_HEAL_CLAMP, LIFEBLOOM, ULT, TICKS_PER_SECOND,
+  OVERDRIVE, MENDER_HEAL_CLAMP, LIFEBLOOM, HEAL_PULSE, ULT, TICKS_PER_SECOND, ticksToSec,
+  MOMENTUM, OVERHEAT, OVERSHIELD, HARDENED, MAX_TOTAL_DR, PHANTOM_MARK,
   refEncounterHpForFloor, ultChargeFromKill, ultChargeFromDamageDealt, ultShareCapUnits, ultTimeChargePerTick,
 } from "../src/sim/kits.js";
 
@@ -402,11 +406,162 @@ function gate4ChargeReweight(): void {
     `dmg=${dmgUnits} + kill=${killUnits} + time=${timeUnits} = ${total} vs meterMax ${ULT.meterMax}`);
 }
 
+// ---- GATE 5 — no kit SIGNATURE pushes a measured stat over the raw caps (Wave 2 ship gate) ----
+
+function enemyBulletAt(x: number, y: number): Bullet {
+  return { x, y, vx: 0, vy: 0, radius: 5, life: 1, friendly: false, owner: null, damage: 1, color: "#fff", pierce: 0, hitList: null, isCrit: false };
+}
+
+function gate5SignatureRawCaps(): void {
+  section("GATE 5 — no kit signature pushes a MEASURED stat over the raw caps (dmg ≤2.25×, fire ≤1.8×), across the 100k legal builds");
+  let maxDmg = 0, maxFire = 0, dmgViol = 0, fireViol = 0;
+  forEachLegalBuild(({ mods }) => {
+    // The gunner's WORST-CASE live signature: full Momentum + the Overheat burst BOTH active,
+    // layered on the (already-capped) build multipliers at death's-door HP (the strongest live
+    // base via berserk/adrenaline). gunnerDamageMult/gunnerFireRateMult RE-CLAMP to the raw caps
+    // — this gate proves the "faster route to the cap, never above it" guarantee empirically.
+    const dmg = gunnerDamageMult(liveDamageMult(mods, 1), MOMENTUM.maxStacks);
+    const fire = gunnerFireRateMult(liveFireRateMult(mods, 1), MOMENTUM.maxStacks, true);
+    if (dmg > maxDmg) maxDmg = dmg;
+    if (fire > maxFire) maxFire = fire;
+    if (dmg > CAPS.damageMult + 1e-9) dmgViol++;
+    if (fire > CAPS.fireRateMult + 1e-9) fireViol++;
+  });
+  check(`Momentum+Overheat damage never exceeds the raw cap (${CAPS.damageMult}×)`, dmgViol === 0, `max ${maxDmg.toFixed(3)}× violations=${dmgViol}`);
+  check(`Momentum+Overheat fire never exceeds the raw cap (${CAPS.fireRateMult}×)`, fireViol === 0, `max ${maxFire.toFixed(3)}× violations=${fireViol}`);
+  report(`GATE 5 — max realized gunner-signature dmg ${maxDmg.toFixed(3)}× (cap ${CAPS.damageMult}), fire ${maxFire.toFixed(3)}× (cap ${CAPS.fireRateMult}); Overheat is a faster route to the cap in a window, never above it`);
+}
+
+// ---- GATE 6 — Bulwark realized total DR (Hardened + overshield) ≤ MAX_TOTAL_DR under a facetank ----
+
+// Measure realized total damage reduction under a SUSTAINED integer-HP facetank at `cadenceTicks`
+// over `windowSeconds` (long enough that the one-time 3-chip buffer amortizes into the ONGOING
+// mitigation the cap governs). DR = 1 − (HP lost / total incoming). Under sustained fire the
+// overshield regen is paused, so realized DR converges toward Hardened + the amortized chips.
+function measureBulwarkRealizedDR(cadenceTicks: number, windowSeconds: number): { dr: number; incoming: number; lost: number } {
+  const w = createWorld(0xB0_DE7, 5, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  spawnPlayerInWorld(w, "b"); setPlayerKit(w, "b", "bulwark");
+  const b = w.players.get("b")!; b.maxHp = 1e7; b.hp = 1e7; // a deep pool: never downs, measure the slope
+  const ticks = Math.round(windowSeconds * TICKS_PER_SECOND);
+  const hp0 = b.hp;
+  let incoming = 0;
+  for (let t = 0; t < ticks; t++) {
+    if (t % cadenceTicks === 0) { b.invuln = 0; w.bullets.push(enemyBulletAt(b.x, b.y)); incoming += 1; }
+    tick(w, () => idleCmd());
+  }
+  const lost = hp0 - b.hp;
+  return { dr: incoming > 0 ? 1 - lost / incoming : 0, incoming, lost };
+}
+
+function gate6BulwarkRealizedDR(): void {
+  section("GATE 6 — Bulwark realized total DR (Hardened + overshield) ≤ MAX_TOTAL_DR under a sustained facetank");
+  // A sweep of SUSTAINED cadences (fire at least every ~2s, faster than the 4s regen so the
+  // overshield stays a one-time buffer, not perpetual absorption — the facetank the cap protects).
+  const cadences = [1, 2, 4, 10, 20, 40];
+  let maxDr = 0, maxCad = 0;
+  for (const c of cadences) {
+    const m = measureBulwarkRealizedDR(c, 120);
+    if (m.dr > maxDr) { maxDr = m.dr; maxCad = c; }
+    check(`realized DR ≤ ${MAX_TOTAL_DR} at a hit every ${c} ticks (${(c / TICKS_PER_SECOND).toFixed(2)}s)`,
+      m.dr <= MAX_TOTAL_DR + 1e-9,
+      `DR=${m.dr.toFixed(3)} (lost ${m.lost}/${m.incoming})`);
+  }
+  report(`GATE 6 — max realized total DR ${maxDr.toFixed(3)} (at every ${maxCad}t) vs cap ${MAX_TOTAL_DR}; Hardened ${HARDENED.reduction} + overshield ~${(maxDr - HARDENED.reduction).toFixed(3)} realized. If a measured uptime pushed this over, the balancer slows regen to ${OVERSHIELD.regenTicks < 100 ? "100t (1/5s)" : "1/5s"}.`);
+}
+
+// ---- GATE 7 — Mender pulse + passives ≤ the shared clamp to one ally / party (Wave 2 ship gate) ----
+
+// Two Menders spam the directed heal-pulse (on cooldown) AT one deeply-wounded ally while their
+// Lifebloom + Sanctuary HoT also run — the sustained combined rate must not exceed the shared
+// per-target clamp (the pulse burst bypasses the rate-clamp-DOWN but CONSUMES the budget). A long
+// window averages the 6s-CD burst into the sustained rate the cap governs.
+function measurePulsePlusPassives(menderCount: number, windowSeconds: number): { targetHps: number; partyHps: number } {
+  const floor = 20;
+  const w = createWorld(0xB0BA_9E7, floor, { isShared: true, skipLocalPlayer: true });
+  w.enemies = [];
+  const menders: PlayerSim[] = [];
+  for (let i = 0; i < menderCount; i++) { const id = `m${i}`; spawnPlayerInWorld(w, id); setPlayerKit(w, id, "mender"); menders.push(w.players.get(id)!); }
+  const anchor = menders[0];
+  const victim = spawnPlayerInWorld(w, "t");
+  victim.maxHp = 4000; victim.hp = 2000; // deep pool held mid-bar so every heal lands (never overheal)
+  for (const m of menders) { m.x = anchor.x; m.y = anchor.y; }
+  victim.x = anchor.x + 20; victim.y = anchor.y; // to the +x of every Mender (under the aim reticle)
+  for (const m of menders) { m.ultCharge = ULT.meterMax; m.ultReadyAtTick = 0; }
+  tick(w, (p) => ({ ...idleCmd(), ult: menders.indexOf(p) !== -1 })); // drop Sanctuary once (burst excluded below)
+  const ticks = Math.round(windowSeconds * TICKS_PER_SECOND);
+  const hp0 = victim.hp;
+  let party = 0;
+  for (let t = 0; t < ticks; t++) {
+    for (const m of menders) m.passiveState = LIFEBLOOM.poolCap; // pin Lifebloom credit full (worst case)
+    const prePartyHp = partyHp(w);
+    // Every Mender holds the pulse (aim +x toward the victim) AND re-drops Sanctuary as it lapses.
+    tick(w, (p) => {
+      const isMender = menders.indexOf(p) !== -1;
+      const wantUlt = isMender && p.ultReadyAtTick <= w.tick && p.ultCharge >= ULT.meterMax;
+      return { ...idleCmd(), aim: 0, pulse: isMender, ult: wantUlt };
+    });
+    // Keep every Mender's meter topped so Sanctuary re-drops (sustained worst case).
+    for (const m of menders) if (m.ultReadyAtTick <= w.tick) m.ultCharge = ULT.meterMax;
+    party += Math.max(0, partyHp(w) - prePartyHp);
+  }
+  const seconds = ticks / TICKS_PER_SECOND;
+  return { targetHps: (victim.hp - hp0) / seconds, partyHps: party / seconds };
+}
+
+function gate7MenderPulseClamp(): void {
+  section("GATE 7 — Mender heal-pulse + Lifebloom + Sanctuary combined ≤ the shared clamp (2 Menders on one ally)");
+  const two = measurePulsePlusPassives(2, 30);
+  check(`2 Menders (pulse + passives) sustain ≤ the per-target clamp (${MENDER_HEAL_CLAMP.perTargetHpPerSec} HP/s) to one ally`,
+    two.targetHps <= MENDER_HEAL_CLAMP.perTargetHpPerSec + 0.05,
+    `realized ${two.targetHps.toFixed(3)} HP/s`);
+  check(`2 Menders (pulse + passives) sustain ≤ the party clamp (${MENDER_HEAL_CLAMP.partyHpPerSec} HP/s)`,
+    two.partyHps <= MENDER_HEAL_CLAMP.partyHpPerSec + 0.05,
+    `realized ${two.partyHps.toFixed(3)} HP/s`);
+  report(`GATE 7 — 2 Menders spamming pulse + passives on one ally: ${two.targetHps.toFixed(3)} HP/s to target (cap ${MENDER_HEAL_CLAMP.perTargetHpPerSec}), ${two.partyHps.toFixed(3)} HP/s party (cap ${MENDER_HEAL_CLAMP.partyHpPerSec})`);
+}
+
+// ---- GATE 8 — Phantom mark + shock/freeze combined vulnerability ≤ BOSS_VULN_CAP on a boss ----
+
+function gate8PhantomMarkBossCap(): void {
+  section("GATE 8 — Phantom mark + shock/freeze combined vulnerability ≤ BOSS_VULN_CAP (1.35×) on a boss");
+  // On a boss the crit channel + the phantom mark SHARE the cap; statuses (shock/freeze) amplify
+  // NOTHING on boss-grade bodies (utility only). Drive real hits into a boss and measure the
+  // realized vulnerability vs a clean baseline — with mark, shock AND freeze all live.
+  const measure = (opts: { mark: boolean; shock: boolean; freeze: boolean; critMult: number }): number => {
+    const w = createWorld(0x1234, 5, { isShared: true, skipLocalPlayer: true }); w.enemies = [];
+    spawnPlayerInWorld(w, "ph"); setPlayerKit(w, "ph", "phantom");
+    const ph = w.players.get("ph")!;
+    const boss = devSpawnEnemy(w, "boss", ph.x + 120, ph.y);
+    const hp0 = boss.hp;
+    if (opts.mark) boss.markT = ticksToSec(PHANTOM_MARK.durationTicks);
+    if (opts.shock) boss.shock = 3;
+    if (opts.freeze) boss.chill = 99; // deep chill => frozen (bosses slow, but the amp is inert on boss anyway)
+    w.bullets.push({ x: boss.x, y: boss.y, vx: 1, vy: 0, radius: 30, life: 0.5, friendly: true, owner: "ph", damage: 10 * opts.critMult, color: "#fff", pierce: 0, hitList: null, isCrit: opts.critMult > 1, critX: opts.critMult } as unknown as Bullet);
+    for (let i = 0; i < 3; i++) tick(w, () => idleCmd());
+    return hp0 - boss.hp;
+  };
+  const base = measure({ mark: false, shock: false, freeze: false, critMult: 1 });
+  const allNoCrit = measure({ mark: true, shock: true, freeze: true, critMult: 1 });
+  const allMaxCrit = measure({ mark: true, shock: true, freeze: true, critMult: 3 });
+  check("mark + shock + freeze (no crit) combined vulnerability ≤ BOSS_VULN_CAP",
+    allNoCrit / base <= BOSS_VULN_CAP + 1e-6,
+    `combined ${(allNoCrit / base).toFixed(3)}× vs cap ${BOSS_VULN_CAP}`);
+  check("mark + shock + freeze + MAX crit combined vulnerability ≤ BOSS_VULN_CAP (never additive)",
+    allMaxCrit / base <= BOSS_VULN_CAP + 1e-6,
+    `combined ${(allMaxCrit / base).toFixed(3)}× vs cap ${BOSS_VULN_CAP}`);
+  report(`GATE 8 — boss vulnerability: mark+shock+freeze no-crit ${(allNoCrit / base).toFixed(3)}×, +max-crit ${(allMaxCrit / base).toFixed(3)}× (cap ${BOSS_VULN_CAP}); statuses amplify nothing on boss, mark shares the crit cap`);
+}
+
 function main(): void {
   gate1OverdriveCeiling();
   gate2BossFloorWithOverdrive();
   gate3MenderFacetank();
   gate4ChargeReweight();
+  gate5SignatureRawCaps();
+  gate6BulwarkRealizedDR();
+  gate7MenderPulseClamp();
+  gate8PhantomMarkBossCap();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll kit-ult balance gates hold.\n");
