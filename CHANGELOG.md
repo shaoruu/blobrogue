@@ -12,7 +12,11 @@ Newest changes first. (Times are Pacific.)
 - Bug fixes in flight: heart double-consume, leaderboard deepest-floor not recording past a point, name change, sentry animation, Umbra art, drag-and-drop precision.
 - Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
 
+## 2026-07-11
+- **Main menu fits on one screen:** the home screen no longer scrolls — Play, Camp, the leaderboard glance, and every destination are visible at once on any window size (the blob stays the centerpiece). Short laptops now compact the hero band instead of pushing Play off-screen.
+
 ## 2026-07-10
+- **🐕 Meet your Camp Doggie + the Amber loop:** A stray pup you rescue from the depths now trots at your side — sits when you're still, follows you into every run. It's the first of a growing pack. Plus Amber is now a currency you KEEP between runs (earned from floors, depth, and first boss kills), spent at the new Amber Camp on companions and upgrades. More camp coming soon.
 - **Cosmetic edge cleanup:** removed stray colored specks that could appear at the edges of the blob when wearing hats/glasses (leftover pixels in the transparent areas of the art).
 - **Kits/classes + ultimates + XP:** pick a class in the Amber Camp lobby — GUNNER (Overdrive: burst fire), MENDER (Sanctuary: healing zone), BULWARK (Aegis: projectile-blocking dome), PHANTOM (Phase: team invuln + speed). Each has a signature ULTIMATE on a server-charged meter (fills from damage/kills/time). Plus an account MASTERY track that unlocks kits as you play, and **HP numbers on the HUD** (not just hearts). Co-op: comps emerge, no forced roles.
 - **Cosmetic hats fixed + head redesign:** hats no longer double-stack on the baked-in cowboy hat — the blob now has a proper bare rounded head, and any hat you equip sits cleanly on top (cowboy hat is now its own equippable). Fixed hats covering the eyes and the head bulging out around narrow hats; all 7 hats (cowboy/top/wizard/chef/beanie/crown/helmet) now sit right.

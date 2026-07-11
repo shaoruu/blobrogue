@@ -26,6 +26,13 @@ export const CHANGELOG: ChangelogSection[] = [
     ],
   },
   {
+    version: "2026-07-11",
+    date: "2026-07-11",
+    entries: [
+      { title: "Main menu fits on one screen", body: "the home screen no longer scrolls — Play, Camp, the leaderboard glance, and every destination are visible at once on any window size (the blob stays the centerpiece). Short laptops now compact the hero band instead of pushing Play off-screen." },
+    ],
+  },
+  {
     version: "2026-07-10",
     date: "2026-07-10",
     entries: [
