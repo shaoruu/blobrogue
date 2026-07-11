@@ -4912,7 +4912,14 @@ export class Game {
   // the authoritative guard/expose flag, so the swap is a hard instant toggle with no tween.
   private compositeBodyOverlay(name: SpriteName, cx: number, cy: number, size: number, facing: number, xf: Xform, extra: number, frameClock: number): void {
     if (this.sprites.sheet(name, "idle") === null) return;
+    // Additive ("lighter") so the glow-only crack asset (dark outline pixels stripped to
+    // transparent) reads as hot cracks lit THROUGH the body, never a flat panel that dims
+    // the boss. AD-confirmed blend for glow overlays.
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
     this.drawChar(name, "idle", cx, cy, size, facing, xf, extra, 1, 0, frameClock);
+    ctx.restore();
   }
 
   // ---- Patch's waystation ----
