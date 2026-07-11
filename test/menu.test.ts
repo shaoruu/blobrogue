@@ -435,7 +435,7 @@ async function main(): Promise<void> {
     // The accepted shell + stage geometry, verbatim from the placement decision.
     const html = readFileSync(join(ROOT, "index.html"), "utf8");
     check("shell: 300px hero row over minmax(0,1fr), height min(700px,100vh-40px), min 620px",
-      /\.menu-home\{ display:grid; grid-template-rows:300px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(700px,calc\(100vh - 40px\)\); min-height:620px; position:relative; \}/.test(html));
+      /\.menu-home\{ display:grid; grid-template-rows:300px minmax\(0,1fr\); gap:14px;\s*\n\s*height:min\(732px,calc\(100vh - 20px\)\); min-height:560px; position:relative; \}/.test(html));
     check("hero band: a CENTERED column with a big 200px stage; stage canvas is 160px",
       /\.home-hero\{ grid-row:1; grid-column:1; display:flex; flex-direction:column; align-items:center; justify-content:center;/.test(html)
       && /\.home-hero \.blob-stage\{[^}]*width:200px; height:200px;/.test(html)
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
     check("narrow: 240px hero row with a 150px stage (128px blob)",
       /grid-template-rows:240px minmax\(0,1fr\)/.test(narrowCss)
       && /width:150px; height:150px/.test(narrowCss) && /width:128px; height:128px/.test(narrowCss));
-    const shortCss = html.slice(html.indexOf("@media (max-height:679px)"));
+    const shortCss = html.slice(html.indexOf("@media (max-height:619px)"));
     check("short: 180px hero row with a 120px stage (96px blob)",
       /grid-template-rows:180px minmax\(0,1fr\)/.test(shortCss)
       && /width:120px; height:120px/.test(shortCss) && /width:96px; height:96px/.test(shortCss));

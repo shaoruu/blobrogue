@@ -628,14 +628,14 @@
          below carries explicit dimensions: the desktop shell is min(820px,94vw), the hero/
          body/foot own fixed heights, and hydration only ever swaps content INSIDE them. */
       .menu{ position:relative; z-index:1; background:#120a24; border:3px solid #05030b; box-shadow:inset 0 0 0 3px #2a2140,0 8px 0 rgba(5,3,11,.5);
-        padding:22px 26px 20px; width:min(840px,94vw); max-width:none; max-height:calc(100vh - 40px); overflow:hidden auto;
+        padding:20px 26px 18px; width:min(840px,94vw); max-width:none; max-height:calc(100vh - 20px); overflow:hidden auto;
         display:flex; flex-direction:column; gap:16px; align-items:stretch; }
       /* CANONICAL HOME GEOMETRY (Ian's pass — the blob is the CENTERED STAR above the
          wordmark): the shell is a grid of a TALL 300px hero row + minmax(0,1fr) body at
          height min(700px,100vh-40px), min-height 620px. The body boxes below stay the
          zero-CLS launchpad boxes. position:relative anchors the CUSTOMIZE corner chip. */
       .menu-home{ display:grid; grid-template-rows:300px minmax(0,1fr); gap:14px;
-        height:min(700px,calc(100vh - 40px)); min-height:620px; position:relative; }
+        height:min(732px,calc(100vh - 20px)); min-height:560px; position:relative; }
       /* --- THE HERO BLOB STAGE (identity showpiece — the menu's centered star) ---
          The hero is a CENTERED column stacked blob -> wordmark -> tagline: the big 200x200
          .blob-stage on top (the star), the logo below it (shrunk so the blob wins), then a
@@ -837,7 +837,17 @@
       /* Short viewports (accepted responsive spec): a compact 180px hero row with a
          120px stage (96px blob) so PLAY + the leaderboard preview stay visible without
          scrolling Play off-screen; the shell follows content and never hides the glance. */
-      @media (max-height:679px){
+      @media (max-height:759px){
+        .menu-home{ height:auto; min-height:0; grid-template-rows:240px minmax(0,1fr); }
+        .home-hero{ gap:6px; }
+        .logo-img{ height:clamp(26px,3.5vh,34px); }
+        .home-hero .blob-stage{ width:150px; height:150px; }
+        .home-hero .blob-stage .blob-preview{ width:128px; height:128px; }
+        .home-hero .blob-stage::after{ bottom:16px; width:70px; height:11px; }
+        .stage-customize{ margin:0 10px 8px 0; }
+        .home-left .lb-preview{ height:140px; }
+      }
+      @media (max-height:619px){
         .menu-home{ height:auto; min-height:0; grid-template-rows:180px minmax(0,1fr); }
         .home-hero{ gap:6px; }
         .logo-img{ height:clamp(26px,3.5vh,32px); }
