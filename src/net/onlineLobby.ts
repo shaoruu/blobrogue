@@ -2,7 +2,7 @@ import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
 import type { PresenceDoc, RoomStatus } from "./api.js";
 import type { Session } from "./session.js";
-import { worldIdForRoomCode } from "./protocol.js";
+import { worldIdForRoomCode } from "./worldId.js";
 import { getSelectedKit } from "./kitSelection.js";
 
 // One room session for AUTHORITATIVE online play — the ONLY multiplayer product path.
