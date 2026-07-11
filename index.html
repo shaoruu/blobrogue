@@ -90,7 +90,12 @@
       .chip .ic{ width:16px; height:16px; }
       .chip .v{ font-family:var(--f-num); font-size:var(--fs-num); line-height:1; margin-top:2px; color:var(--cream); }
       .chip .k{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
-      .chip.floor .v{ color:var(--amber); } .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
+      .chip.coins .v{ color:var(--amber-hi); } .chip.kills .v{ color:#ff8a8a; }
+      /* FLOOR is the number you check most — make it the anchor: bigger value, an amber-lit
+         box, and a brighter label, so "how deep am I?" reads at a glance vs the small chips. */
+      .chip.floor{ background:rgba(255,180,59,.14); box-shadow:inset 0 0 0 2px var(--amber-lo); padding:3px 11px; }
+      .chip.floor .k{ color:var(--amber); }
+      .chip.floor .v{ color:var(--amber); font-size:calc(var(--fs-num) * 1.6); margin-top:1px; text-shadow:0 0 10px rgba(255,180,59,.35); }
       /* Coin lands in the wallet: a transform-only pop (no layout shift). */
       .chip.coins{ transform-origin:left center; will-change:transform; }
       .chip.coins.coin-pop{ animation:coinPop .28s cubic-bezier(.2,1.6,.4,1); }
