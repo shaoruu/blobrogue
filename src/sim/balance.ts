@@ -1057,7 +1057,16 @@ export function refDpsForFloor(floor: number): number {
   if (floor <= 15) return 36;
   if (floor <= 20) return 36;
   if (floor <= 25) return 43;
-  return 46;
+  if (floor <= 30) return 46;
+  // Wave 1 deep bosses (F31+, The Sump). The measured good-gun practical boss output is
+  // ~30 (the whole arsenal tops out near ~42), so the deep anchor is the ACHIEVABLE
+  // good-gun median rather than the F30 placeholder — a 46 anchor sat ABOVE the reachable
+  // ceiling, so a co-op party's R never rose over 1 and it simply out-DPS'd a solo boss
+  // that HP scaling couldn't offset ("two players just spam them"). Anchoring on the
+  // achievable good-gun output is what lets FIX1/FIX2 co-op HP scaling engage; a solo
+  // player still measures R≈1 (its good gun ≈ the anchor, clamped by soloGearCap), so the
+  // solo power fantasy is untouched.
+  return 30;
 }
 
 // The pull's power ratio from per-player expected-DPS contributions (order-independent:
