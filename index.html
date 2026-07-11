@@ -393,6 +393,13 @@
         opacity:0; transition:opacity .3s ease; }
       .objective.show{ opacity:1; }
       .objective.clear{ color:var(--grn); text-shadow:0 2px 0 var(--dun-0),0 0 12px rgba(138,255,192,.35); }
+      /* Floor is the lead token of the objective line (UI designer): FLOOR N bright in cream,
+         a quiet middot, then the state copy. On a cleared floor the whole line greens (above);
+         mid-combat the count stays ink-mute so FLOOR N reads first. */
+      .objective .obj-floor{ color:var(--cream); font-weight:700; }
+      .objective .obj-sep{ color:var(--ink-faint); }
+      .objective .obj-what{ color:var(--ink-mute); }
+      .objective.clear .obj-floor, .objective.clear .obj-what{ color:var(--grn); }
       .waitline{ min-height:12px; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; text-transform:uppercase;
         color:var(--cream); text-shadow:0 2px 0 var(--dun-0),0 0 10px rgba(0,0,0,.6); text-align:center;
         opacity:0; transition:opacity .3s ease; }

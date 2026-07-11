@@ -478,17 +478,17 @@ function hierarchyTests(): void {
       : c.getAttribute("data-combo") !== null ? "combo" : "?").join(",") === "boss,obj,wait,combo");
 
   hud.update(mkState({ enemiesLeft: 3 }));
-  check("fighting floor reads the enemies-left copy", objective.textContent === "3 ENEMIES LEFT" && objective.classList.contains("show"));
+  check("fighting floor leads with the floor then the enemies-left copy", objective.textContent === "FLOOR 2 \u00b7 3 ENEMIES LEFT" && objective.classList.contains("show"));
   hud.update(mkState({ enemiesLeft: 1 }));
-  check("singular enemy copy", objective.textContent === "1 ENEMY LEFT");
+  check("singular enemy copy", objective.textContent === "FLOOR 2 \u00b7 1 ENEMY LEFT");
   hud.update(mkState({ enemiesLeft: 0 }));
-  check("uncleared with an empty board reads INCOMING (never a lying zero)", objective.textContent === "ENEMIES INCOMING\u2026");
+  check("uncleared with an empty board reads INCOMING (never a lying zero)", objective.textContent === "FLOOR 2 \u00b7 ENEMIES INCOMING\u2026");
   hud.update(mkState({ isCleared: true, enemiesLeft: 0 }));
   check("cleared floor flips to FLOOR CLEAR \u00b7 GO DOWN with the clear accent",
-    objective.textContent === "FLOOR CLEAR \u00b7 GO DOWN" && objective.classList.contains("clear"));
+    objective.textContent === "FLOOR 2 \u00b7 CLEAR \u00b7 GO DOWN" && objective.classList.contains("clear"));
   hud.update(mkState({ isCleared: true, enemiesLeft: 0, isParty: true }));
   check("a party's cleared floor reads MEET AT EXIT (the coordination moment)",
-    objective.textContent === "FLOOR CLEAR \u00b7 MEET AT EXIT");
+    objective.textContent === "FLOOR 2 \u00b7 CLEAR \u00b7 MEET AT EXIT");
 
   section("floor-mutator readout: legible, and collapsed off deep floors (no layout shift)");
   const mutators = root.querySelector<HTMLElement>("[data-mutators]")!;
@@ -502,8 +502,8 @@ function hierarchyTests(): void {
   check("clearing the mutators collapses the readout again", mutators.textContent === "" && !mutators.classList.contains("has-mutators"));
 
   hud.update(mkState({ isBossActive: true, bossHpFrac: 0.8, combo: 4, comboMult: 1.5, comboFrac: 0.5 }));
-  check("a boss WINS the lane: bar shown, normal objective hidden",
-    root.querySelector("[data-bossbar]")!.classList.contains("show") && !objective.classList.contains("show"));
+  check("a boss shows the bar + the floor stays readable (FLOOR N, no enemy count)",
+    root.querySelector("[data-bossbar]")!.classList.contains("show") && objective.textContent === "FLOOR 2");
   check("the lane marks boss so the combo yields at 70%", lane.classList.contains("boss"));
 
   section("boss bar label: the tracked boss's authored name (flavor-spec canon)");

@@ -433,7 +433,6 @@ const HUD_MARKUP = `
     <div class="hprow"><div class="hearts" data-hearts></div><span class="hp-num" data-hpnum>0/0</span></div>
     <div class="party" data-party></div>
     <div class="statrow">
-      <span class="chip floor"><span class="k">FL</span><span class="v" data-floor>1</span></span>
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
       <span class="chip coins"><span class="ic" data-ic="coin"></span><span class="v" data-coins>0</span></span>
     </div>
@@ -527,7 +526,6 @@ export class Hud {
   private ultEl!: HTMLElement;
   private ultFillEl!: HTMLElement;
   private ultKEl!: HTMLElement;
-  private floorEl: HTMLElement;
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
   private coinsChipEl: HTMLElement;
@@ -616,7 +614,6 @@ export class Hud {
     this.ultEl = hud.querySelector("[data-ult]")!;
     this.ultFillEl = hud.querySelector("[data-ult-fill]")!;
     this.ultKEl = hud.querySelector("[data-ult-k]")!;
-    this.floorEl = hud.querySelector("[data-floor]")!;
     this.mutatorsEl = hud.querySelector("[data-mutators]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
@@ -1302,7 +1299,6 @@ export class Hud {
     // party/ult as empty/none rather than throwing.
     this.renderParty(s.party ?? []);
     this.renderUlt(s.ult ?? null);
-    this.floorEl.textContent = String(s.floor);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     // The floor-mutator readout: a middot-joined list, updated only when it changes (textContent
@@ -1394,12 +1390,25 @@ export class Hud {
       this.bossFillEl.style.transform = `scaleX(${bf})`;
       this.bossbarEl.classList.toggle("low", bf < 0.25);
     }
-    const objective = s.isBossActive || s.isObjectiveHidden ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
-    if (objective !== this.prevObjective) {
-      this.prevObjective = objective;
-      this.objectiveEl.textContent = objective;
-      this.objectiveEl.classList.toggle("show", objective !== "");
-      this.objectiveEl.classList.toggle("clear", s.isCleared && objective !== "");
+    // The objective line ALWAYS leads with the floor (UI designer: "what floor am I on" is
+    // answered where the eye already goes). During a boss it reads FLOOR N (the boss bar owns
+    // the rest); the dev sandbox hides it. `what` is the state copy (enemy count / cleared).
+    let what = s.isObjectiveHidden ? "" : s.isBossActive ? "" : objectiveCopy(s.isCleared, s.enemiesLeft, s.isParty);
+    // The cleared copy starts with "FLOOR CLEAR ..." which would double the FLOOR N lead token;
+    // drop that leading word so it reads "FLOOR N · CLEAR · GO DOWN".
+    if (what.startsWith("FLOOR ")) what = what.slice("FLOOR ".length);
+    const objKey = s.isObjectiveHidden ? "" : `${s.floor}|${what}|${s.isCleared ? 1 : 0}`;
+    if (objKey !== this.prevObjective) {
+      this.prevObjective = objKey;
+      if (objKey === "") {
+        this.objectiveEl.textContent = "";
+        this.objectiveEl.classList.remove("show", "clear");
+      } else {
+        const floorTok = `<span class="obj-floor">FLOOR ${s.floor}</span>`;
+        this.objectiveEl.innerHTML = what ? `${floorTok}<span class="obj-sep"> \u00b7 </span><span class="obj-what">${what}</span>` : floorTok;
+        this.objectiveEl.classList.add("show");
+        this.objectiveEl.classList.toggle("clear", s.isCleared);
+      }
     }
 
     this.coopEl.textContent = s.coopLabel ?? "";
