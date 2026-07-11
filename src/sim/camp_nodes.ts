@@ -27,6 +27,10 @@ export interface CampNodeDef {
   // node is granted like an achievement (server-side, see camp_nodes rescue helpers), and
   // canBuyNode refuses it. The Kennel adopts/equips it; it is never a shop item.
   rescue?: boolean;
+  // rescue nodes only: the deepest floor a run must reach to earn this one-time rescue. The
+  // server bank (recordRun) grants every rescue node whose milestone a run cleared; the Kennel
+  // reads it to tell the player which floor brings each companion home.
+  rescueFloor?: number;
 }
 
 // The camp hub itself: free-unlocked the first time a player banks any Amber (the loop's
@@ -42,10 +46,32 @@ export const DOGGIE_PET_ID = "doggie";
 // shallow so the pet lands early (the loop's first emotional payoff), and it is one-time.
 export const DOGGIE_RESCUE_FLOOR = 3;
 
+// Pet #2 — the cat. Same RESCUE contract as the doggie, found DEEPER: a run must reach the
+// cat's floor to bring it home. Never bought (canBuyNode refuses it).
+export const CAT_NODE_ID = "pet_cat";
+export const CAT_PET_ID = "cat";
+export const CAT_RESCUE_FLOOR = 7;
+
+// Pet #3 — the baby dragon. RESCUED deeper still (the pack's showpiece companion), never
+// bought. Reaching its floor on any run grants it one time.
+export const DRAGON_NODE_ID = "pet_dragon";
+export const DRAGON_PET_ID = "dragon";
+export const DRAGON_RESCUE_FLOOR = 12;
+
 // Whether a run that reached `deepestFloorThisRun` earns the one-time doggie rescue. Pure so
 // the server bank (recordRun) and any client hint agree.
 export function isDoggieRescuedByRun(deepestFloorThisRun: number): boolean {
   return deepestFloorThisRun >= DOGGIE_RESCUE_FLOOR;
+}
+
+// The rescue-node ids a run that reached `deepestFloorThisRun` earns (deepest floor >= each
+// node's rescueFloor). Pure + data-driven from CAMP_NODES so the server bank grants every
+// companion a deep run cleared with no per-pet branching. A new rescue pet lands here for
+// free the moment its node carries a rescueFloor.
+export function rescueNodesForRun(deepestFloorThisRun: number): string[] {
+  return CAMP_NODES
+    .filter((n) => n.rescue && n.rescueFloor !== undefined && deepestFloorThisRun >= n.rescueFloor)
+    .map((n) => n.id);
 }
 
 export const CAMP_NODES: readonly CampNodeDef[] = [
@@ -56,7 +82,17 @@ export const CAMP_NODES: readonly CampNodeDef[] = [
   {
     id: DOGGIE_NODE_ID, name: "Doggie", category: "companion", cost: 0, prereqs: [],
     desc: "A stray pup rescued from the depths — adopt it at the Kennel and it trots along at your side, into the dungeon and all.",
-    pet: DOGGIE_PET_ID, rescue: true,
+    pet: DOGGIE_PET_ID, rescue: true, rescueFloor: DOGGIE_RESCUE_FLOOR,
+  },
+  {
+    id: CAT_NODE_ID, name: "Cat", category: "companion", cost: 0, prereqs: [],
+    desc: "A grey kitten stranded in the deeper dark — carry it home and it pads along at your side, sitting when you rest.",
+    pet: CAT_PET_ID, rescue: true, rescueFloor: CAT_RESCUE_FLOOR,
+  },
+  {
+    id: DRAGON_NODE_ID, name: "Baby Dragon", category: "companion", cost: 0, prereqs: [],
+    desc: "A little amber dragon curled up in the depths — bring it back and it flutters after you, run after run.",
+    pet: DRAGON_PET_ID, rescue: true, rescueFloor: DRAGON_RESCUE_FLOOR,
   },
   {
     id: "stash_slot_1", name: "Stash Slot", category: "convenience", cost: 25, prereqs: [CAMP_SHELL_ID],
