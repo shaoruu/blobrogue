@@ -150,4 +150,6 @@ export interface SnapshotPublisher {
   publish(room: RoomRuntime): void;                 // per-tick broadcast to all room clients
   sendFull(room: RoomRuntime, conn: Conn): void;    // initial full snapshot on join
   sendOffers(room: RoomRuntime): void;              // resend pending blessing offers (reliable)
+  // Promote this connection's delta baseline to the snapshot it just acknowledged (input.ackSnap).
+  ackSnapshot(conn: Conn, sseq: number): void;
 }

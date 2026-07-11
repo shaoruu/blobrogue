@@ -22,9 +22,11 @@ import {
   effectFromWire,
   jsonCodec, applySelfWire, enemyFromWire, bulletFromWire,
   propFromWire, pickupFromWire, chestFromWire, hazardFromWire, shopFromWire,
+  validateSnap,
   STAGE_B_SEED, STAGE_B_FLOOR, PROTOCOL_VERSION, FIXED_DT, RESUME_GRACE_MS,
-  type RosterWire, type ServerMsg, type WaitWire,
+  type RosterWire, type ServerMsg, type SnapMsg, type WaitWire,
 } from "../net/protocol.js";
+import { applySnapshotDelta, snapshotToWire } from "../net/snapshotDelta.js";
 import { applyPlayerSnapshot } from "../net/playerSnapshot.js";
 import type { Enemy, Bullet, Prop, Pickup, Chest } from "../sim/types.js";
 
@@ -162,7 +164,16 @@ export class WSTransport implements Transport {
   private nextInput: InputCmd | null = null;
   private seq = 0;
 
-  private latestSnap: Extract<ServerMsg, { t: "snap" }> | null = null;
+  private latestSnap: SnapMsg | null = null;
+  // ---- snapshot delta baseline (v24) ----
+  // The last COMPLETE snapshot applied + retained: the baseline a delta reconstructs against,
+  // and the sseq acked back to the server. A `snap` keyframe (re)establishes it; a `snapd`
+  // delta advances it. baselineSseq is the ack the client reports on every input.
+  private baselineSnap: SnapMsg | null = null;
+  private baselineSseq = 0;
+  // Monotonic guard for the delta channel: a stale / duplicate / reordered snapshot sequence is
+  // dropped, never applied.
+  private lastSnapSseq = -1;
   private snapRecvAt = 0;
   private selfServerId: PlayerId | null = null;
   private joinTicket: string | null = null;
@@ -258,6 +269,9 @@ export class WSTransport implements Transport {
     this.nextInput = null;
     this.seq = 0;
     this.latestSnap = null;
+    this.baselineSnap = null;
+    this.baselineSseq = 0;
+    this.lastSnapSseq = -1;
     this.selfServerId = null;
     this.events = [];
     this.smoothX = 0;
@@ -496,7 +510,29 @@ export class WSTransport implements Transport {
       }
       return;
     }
+    if (msg.t === "snapd") {
+      this.ingestDelta(msg);
+      return;
+    }
     this.ingestSnapshot(msg);
+  }
+
+  // Reconstruct a complete snapshot from a delta against the retained baseline, then apply it
+  // through the SAME path a keyframe takes. Three guards keep it safe: a monotonic sseq drop
+  // (stale/out-of-order deltas are never applied), a baseline-id match (a delta is applied ONLY
+  // against the exact snapshot it was diffed from — a gap is dropped, and the server re-sends a
+  // keyframe once it sees the client still acking the old baseline), and full validation of the
+  // reconstructed snapshot (a malformed reconstruction surfaces as a drop, never NaN state).
+  private ingestDelta(d: Extract<ServerMsg, { t: "snapd" }>): void {
+    if (d.q <= this.lastSnapSseq) return;                       // ordering guard
+    if (this.baselineSnap === null || d.b !== this.baselineSseq) return; // missing/gapped baseline
+    let snap: SnapMsg;
+    try {
+      snap = validateSnap(applySnapshotDelta(snapshotToWire(this.baselineSnap), d));
+    } catch {
+      return; // reconstruction/validation failed: keep the baseline, recover on the next frame
+    }
+    this.ingestSnapshot(snap);
   }
 
   // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
@@ -549,6 +585,13 @@ export class WSTransport implements Transport {
     }
     this.lastSnapRev = snap.rev;
     this.lastSnapTick = snap.tick;
+    // The applied snapshot becomes the delta baseline (a keyframe re-anchors it; a
+    // reconstructed delta advances it). We ack this sseq on every input so the server deltas
+    // against exactly what we hold. Setting it here — past the stale/rev guard — means a stale
+    // frame can never regress the baseline.
+    this.baselineSnap = snap;
+    this.baselineSseq = snap.sseq;
+    this.lastSnapSseq = snap.sseq;
     this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl);
     this.latestSnap = snap;
     this.isEverReady = true;
@@ -713,7 +756,7 @@ export class WSTransport implements Transport {
         const stamped: InputCmd = { ...cmd, seq };
         this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
-        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, ackEv: this.lastEventId });
+        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, ackEv: this.lastEventId, ackSnap: this.baselineSseq });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
       } else {
         // Pre-join / mid-resume: predict locally for instant feel; don't send before the

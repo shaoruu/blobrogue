@@ -12,11 +12,19 @@
 // additionally advances its ack to the snapshot's evTo, so filtered-out ids never wedge the
 // stream. Delivery is effectively-once (no missing, no double kill/loot/FX).
 
-import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type RosterWire, type WireEvent } from "../../src/net/protocol.js";
+import { buildSnapshot, eventScope, jsonCodec, INTEREST_EXIT_FACTOR, type Codec, type PlayerIdentity, type RosterWire, type ServerMsg, type SnapMsg, type WireEvent } from "../../src/net/protocol.js";
+import { diffSnapshot, snapshotToWire, type WorldLiveIds } from "../../src/net/snapshotDelta.js";
 import type { ServerConfig } from "./config.js";
 import type { Metrics } from "./metrics.js";
 import type { Conn } from "./connection.js";
 import type { RoomRuntime, SnapshotPublisher } from "./ports.js";
+
+// The client's ack lags the server by ~1-3 ticks in steady state; beyond this many unacked
+// snapshots (a long stall / heavy loss) the accumulated delta stops being worth it and we send
+// a fresh keyframe, which the client acks to re-anchor the baseline. This also bounds the
+// per-connection retained-candidate memory (sentSnaps).
+const MAX_DELTA_LAG = 90;
+const MAX_SENT_RETAINED = MAX_DELTA_LAG + 8;
 
 export interface PublisherDeps {
   config: ServerConfig;
@@ -36,6 +44,9 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
   publish(room: RoomRuntime): void {
     const identities = this.identitiesFor(room);
     const roster = this.rosterFor(room);
+    // Which entity ids still EXIST in the authoritative world this tick — computed once per
+    // room so a removal tombstone can be tagged "left" (filtered out) vs "gone" (despawned).
+    const live = this.worldLiveIds(room);
     for (const conn of room.conns.values()) {
       if (conn.playerId === null || conn.closing) continue;
       const buffered = conn.ws.bufferedAmount;
@@ -53,17 +64,67 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
       // under packet loss the full snapshot can drop, and a client without its current token
       // would come back from the next outage as a stranger (fresh body) — the exact bug class
       // this system exists to kill. Snapshots are per-connection already; ~40 bytes.
-      const msg = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
+      const next = buildSnapshot(room.state, conn.playerId, conn.lastAppliedSeq, events, room.latestEventId(), false, {
         worldId: room.id,
         roster,
         resumeToken: conn.resumeToken ?? undefined,
         interestRadius: this.deps.config.interestRadius,
         view: conn.view,
         identities,
+        sseq: ++conn.snapSseq,
         ...(center !== null ? { viewCenter: center } : {}),
-      });
-      this.sendRaw(conn, this.codec.encodeServer(msg), false);
+      }) as SnapMsg;
+      conn.sentSnaps.set(next.sseq, next);
+      this.pruneSent(conn);
+      this.sendRaw(conn, this.codec.encodeServer(this.frameFor(conn, next, live)), false);
     }
+  }
+
+  // Choose the wire frame for this snapshot: a complete keyframe (t:"snap") when there is no
+  // baseline to diff against (no ack yet), across a world-revision/seed change (a floor build —
+  // a delta across it is meaningless), or when the client has fallen too far behind to keep
+  // deltas worthwhile; otherwise a delta (t:"snapd") against the EXACT snapshot the client last
+  // acknowledged. Never a delta against a baseline the client does not demonstrably hold.
+  private frameFor(conn: Conn, next: SnapMsg, live: WorldLiveIds): ServerMsg {
+    const base = conn.snapBaseline;
+    const gap = next.sseq - conn.ackedSnapSseq;
+    if (base === null || base.rev !== next.rev || base.seed !== next.seed || gap > MAX_DELTA_LAG) return next;
+    return { t: "snapd", ...diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, live) };
+  }
+
+  // Promote the baseline to the snapshot the client just acked (monotonic; a stale/duplicate or
+  // already-pruned ack is ignored — the baseline only ever moves forward to a retained snap).
+  ackSnapshot(conn: Conn, ackSnap: number): void {
+    if (ackSnap <= conn.ackedSnapSseq) return;
+    const snap = conn.sentSnaps.get(ackSnap);
+    if (snap === undefined) return;
+    conn.snapBaseline = snap;
+    conn.ackedSnapSseq = ackSnap;
+    for (const k of conn.sentSnaps.keys()) if (k <= ackSnap) conn.sentSnaps.delete(k);
+  }
+
+  // Bound the retained-candidate map (only ever holds unacked snapshots; the acked baseline is
+  // held separately). Oldest-first eviction — an evicted sseq simply can't be promoted, which
+  // forces the lag-based keyframe path, so correctness is unaffected.
+  private pruneSent(conn: Conn): void {
+    while (conn.sentSnaps.size > MAX_SENT_RETAINED) {
+      const oldest = conn.sentSnaps.keys().next().value;
+      if (oldest === undefined) break;
+      conn.sentSnaps.delete(oldest);
+    }
+  }
+
+  private worldLiveIds(room: RoomRuntime): WorldLiveIds {
+    const st = room.state;
+    return {
+      enemies: new Set(st.enemies.map((e) => e.id)),
+      players: new Set(st.players.keys()),
+      props: new Set(st.props.map((p) => p.id)),
+      pickups: new Set(st.pickups.map((p) => p.id)),
+      chests: new Set(st.chests.map((c) => c.id)),
+      hzds: new Set(st.hazards.map((h) => h.id)),
+      effs: new Set(st.effects.map((e) => e.id)),
+    };
   }
 
   // Where this client's interest view is centered when NOT on their own player: a downed
@@ -157,13 +218,19 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     // shouldn't replay the pre-join event backlog (on a resume that means the outage window's
     // one-shot FX are deliberately skipped, never replayed). Future events flow from here.
     conn.ackedEventId = room.latestEventId();
+    // A bootstrap keyframe carries a fresh sseq and is retained as a candidate so, once acked,
+    // it can anchor the delta baseline. (A resumed connection is a fresh Conn, so its baseline
+    // and sequence start clean — no stale cross-connection delta is ever possible.)
     const msg = buildSnapshot(room.state, conn.playerId!, conn.lastAppliedSeq, [], room.latestEventId(), true, {
       worldId: room.id,
       roster: this.rosterFor(room),
       resumeToken: conn.resumeToken ?? undefined,
       interestRadius: 0,
       identities: this.identitiesFor(room),
-    });
+      sseq: ++conn.snapSseq,
+    }) as SnapMsg;
+    conn.sentSnaps.set(msg.sseq, msg);
+    this.pruneSent(conn);
     this.sendRaw(conn, this.codec.encodeServer(msg), true);
   }
 

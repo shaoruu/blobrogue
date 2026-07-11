@@ -5,7 +5,7 @@
 
 import type { WebSocket } from "ws";
 import type { PlayerId } from "../../src/sim/input.js";
-import type { InterestView } from "../../src/net/protocol.js";
+import type { InterestView, SnapMsg } from "../../src/net/protocol.js";
 import { createInterestView } from "../../src/net/protocol.js";
 import type { KitId } from "../../src/sim/kits.js";
 
@@ -119,6 +119,19 @@ export interface Conn {
   // deterministically closes the socket (no lingering post-game-over connection).
   gameOver: boolean;
 
+  // ---- snapshot delta baseline (v24) ----
+  // Per-connection monotonic snapshot sequence: the id assigned to each snapshot sent to this
+  // client (the ack target + the delta baseline id).
+  snapSseq: number;
+  // The highest sseq the client has acknowledged (via input.ackSnap).
+  ackedSnapSseq: number;
+  // The COMPLETE snapshot the client last acknowledged — the exact baseline the next delta is
+  // diffed against. null until the client acks its first keyframe (until then: send keyframes).
+  snapBaseline: SnapMsg | null;
+  // Sent-but-not-yet-promoted snapshots, keyed by sseq — the promotion candidates an ack
+  // resolves into the new baseline. Bounded; a lagging client falls back to a keyframe.
+  sentSnaps: Map<number, SnapMsg>;
+
   // Per-client interest view (enter/exit hysteresis over stable entity ids) + the derived
   // position events are filtered against.
   view: InterestView;
@@ -151,6 +164,7 @@ export function newConnState(now: number): Pick<Conn,
   | "lastPongAt" | "awaitingPong" | "missedPings" | "nextPingId" | "lastPingSentAt" | "rttMs"
   | "closing" | "pendingOffer" | "offerId" | "offerResendsLeft" | "offerDeadline"
   | "gameOver"
+  | "snapSseq" | "ackedSnapSseq" | "snapBaseline" | "sentSnaps"
   | "view" | "spectateTarget" | "bytesSent" | "droppedSnaps" | "cliRttMs" | "cliJitterMs" | "cliInterpDelayMs"
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
@@ -163,6 +177,7 @@ export function newConnState(now: number): Pick<Conn,
     lastPongAt: now, awaitingPong: false, missedPings: 0, nextPingId: 1, lastPingSentAt: 0, rttMs: 0,
     closing: false, pendingOffer: null, offerId: 0, offerResendsLeft: 0, offerDeadline: 0,
     gameOver: false,
+    snapSseq: 0, ackedSnapSseq: 0, snapBaseline: null, sentSnaps: new Map(),
     view: createInterestView(), spectateTarget: null,
     bytesSent: 0, droppedSnaps: 0,
     cliRttMs: 0, cliJitterMs: 0, cliInterpDelayMs: 0, cliReconciliations: 0, cliCorrectionMaxPx: 0,

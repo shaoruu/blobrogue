@@ -306,6 +306,9 @@ export class MessageRouter {
     // Reliable-event ack (monotonic): advance the client's acked event id so the publisher stops
     // resending delivered events.
     if (msg.ackEv > conn.ackedEventId) conn.ackedEventId = msg.ackEv;
+    // Snapshot ack (v24): promote the delta baseline to the exact snapshot the client retained,
+    // so the next delta is diffed against a baseline the client demonstrably holds.
+    this.ctx.publisher.ackSnapshot(conn, msg.ackSnap);
   }
 
   private onPong(conn: Conn, msg: Extract<ClientMsg, { t: "pong" }>): void {

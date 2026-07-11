@@ -28,6 +28,7 @@ import type { KitId } from "../sim/kits.js";
 import { isKitId } from "../sim/kits.js";
 import { projectPlayer, applyPlayerSnapshot, modsFromWire } from "./playerSnapshot.js";
 import type { AuthoritativePlayerSnapshot } from "./playerSnapshot.js";
+import type { KeyedDelta, RemovalReason, SelfDelta, WireObject, WireValue } from "./snapshotDelta.js";
 
 export { modsFromWire } from "./playerSnapshot.js";
 
@@ -226,7 +227,25 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   dedicated P3 all-slabs debris-wheel signature (was inline-reusing MARROW's "spin"). A
 //   dedicated move so the collapse/debris-wheel VFX + telegraph bind to a real signal. A v22
 //   client rejects a snapshot carrying it (the mv set is a validated closed set).
-export const PROTOCOL_VERSION = 23;
+// v24 (snapshot DELTA wire — bandwidth): the steady-state per-client snapshot grew into its
+//   budget (§4), so the per-tick frame is now DELTA-encoded against the client's last
+//   acknowledged snapshot (only changed scalars/self-fields, and per keyed list only the
+//   added/changed entities + explicit removal tombstones). Three wire changes bump the gate:
+//   - `snap` carries `sseq`, a per-connection monotonic snapshot sequence — the ack target and
+//     the delta baseline id. A `snap` is a complete KEYFRAME (join/resume bootstrap keeps
+//     full:true; a mid-stream keyframe is full:false) and always re-establishes the baseline.
+//   - a NEW server->client message `snapd` carries a delta against a named baseline sseq. The
+//     client reconstructs the complete snapshot, validates it through the SAME exhaustive
+//     snapshot validator, then applies it exactly as before — a stale/out-of-order or
+//     unknown-baseline delta is dropped (a keyframe recovers). Removal tombstones distinguish
+//     "gone" (died/despawned) from "left" (out of interest radius) so interest filtering is
+//     never conflated with death. The reliable event stream (id + evTo) rides every frame
+//     verbatim, so exactly-once delivery holds across a keyframe resync.
+//   - `input` carries `ackSnap`, the highest snapshot sseq the client has applied + retained,
+//     so the server can delta against the EXACT per-connection baseline the client holds and
+//     fall back to a full keyframe on any gap. NOTE: the control plane's synthetic VERIFY join
+//     mirrors this constant (control/src/adapters/httpProbe.ts SYNTHETIC_JOIN_PROTOCOL).
+export const PROTOCOL_VERSION = 24;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -479,7 +498,10 @@ export type ClientMsg =
   // the client has processed) so the server can stop resending delivered events. `act` is the
   // interact intent (the held revive-channel key) — the sim validates proximity/liveness, so
   // the bit alone can never conjure a revive.
-  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; ackEv: number }
+  // `ackSnap` (v24): the highest snapshot sseq this client has applied + retained as its delta
+  // baseline. The server deltas the next snapshot against exactly that baseline (or sends a
+  // full keyframe if it can no longer honor it), so a missed baseline can never be applied.
+  | { t: "input"; seq: number; mx: number; my: number; aim: number; fire: boolean; dash: boolean; act: boolean; ult: boolean; ackEv: number; ackSnap: number }
   | { t: "pong"; id: number }
   // Spectate intent: which teammate a DOWNED player's camera follows. Pure view preference —
   // the server uses it only to center that client's interest view (and positional events)
@@ -527,10 +549,14 @@ export type ClientMsg =
 export type ServerMsg =
   | {
       t: "snap";
+      sseq: number;              // per-connection monotonic snapshot sequence (v24): the ack
+                                 // target + delta baseline id. A `snap` is a COMPLETE keyframe
+                                 // and always (re)establishes the client's delta baseline.
       tick: number;
       rev: number;               // world revision (increments per floor build/run reset)
       ackSeq: number;            // last input seq from THIS client the server CONSUMED
-      full: boolean;             // initial (full) snapshot on join (carries no events)
+      full: boolean;             // bootstrap (join/resume) keyframe: resets offers + the event
+                                 // stream (a mid-stream state keyframe is full:false)
       over: boolean;             // terminal run state (party wiped) — derivable from STATE
       selfId: PlayerId;          // this client's server-assigned id (on every snap so a dropped
                                  // join snapshot never loses identity)
@@ -569,6 +595,23 @@ export type ServerMsg =
       effs: EffectWire[];        // shared weapon effect entities (the effect wave)
       events: WireEvent[];       // reliable, id-tagged events (dedupe + ack) -> client replays juice
     }
+  // Snapshot DELTA (v24): only what CHANGED since the baseline snapshot `b` (the client's last
+  // acknowledged sseq). `sc` = changed top-level scalars; `self` = self change; en/pl/pr/pk/ch/
+  // hz/ef = per keyed-list adds/changes (`u`) + removal tombstones (`r`, tagged gone/left);
+  // `w` = whole-replace small lists (roster/wait/exr/bullets/shop); ev/et = the reliable event
+  // stream (verbatim, so exactly-once holds across a keyframe). The client reconstructs the
+  // complete snapshot against its baseline and validates it through the snapshot validator.
+  | {
+      t: "snapd";
+      q: number;                 // this frame's sseq
+      b: number;                 // the baseline sseq this delta applies to
+      sc: WireObject;            // changed top-level scalars (always carries at least `tick`)
+      self?: SelfDelta;
+      en?: KeyedDelta; pl?: KeyedDelta; pr?: KeyedDelta; pk?: KeyedDelta; ch?: KeyedDelta; hz?: KeyedDelta; ef?: KeyedDelta;
+      w?: WireObject;
+      ev: WireEvent[];
+      et: number;
+    }
   | { t: "ping"; id: number; tick: number; time: number }
   // A server-decided blessing offer for this client (seeded choice set), carrying a monotonic
   // `id` so it is idempotent: the server resends it (bounded) until the choice arrives or the
@@ -576,6 +619,10 @@ export type ServerMsg =
   // client replies with `chooseBlessing {offerId, choiceId}`; choice authority stays server-side.
   | { t: "offer"; id: number; choices: string[] }
   | { t: "error"; code: string; msg: string };
+
+// The complete snapshot message (a keyframe). The delta channel reconstructs one of these
+// against a baseline before applying, so both ends speak the same decoded shape.
+export type SnapMsg = Extract<ServerMsg, { t: "snap" }>;
 
 // ---- Codec seam (JSON now; binary is a later swap) ----
 
@@ -863,7 +910,7 @@ function decodeClientMsg(raw: string): ClientMsg {
     case "input": {
       // seq + ackEv: non-negative safe integers. NO dt — inputs are intent samples; the server
       // tick owns simulation time, and exactKeys rejects a smuggled dt outright.
-      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "ackEv"]);
+      exactKeys(o, ["t", "seq", "mx", "my", "aim", "fire", "dash", "act", "ult", "ackEv", "ackSnap"]);
       return {
         t: "input",
         seq: intOf(o, "seq", 0, Number.MAX_SAFE_INTEGER),
@@ -875,6 +922,7 @@ function decodeClientMsg(raw: string): ClientMsg {
         act: boolOf(o, "act"),
         ult: boolOf(o, "ult"),
         ackEv: intOf(o, "ackEv", 0, Number.MAX_SAFE_INTEGER),
+        ackSnap: intOf(o, "ackSnap", 0, Number.MAX_SAFE_INTEGER),
       };
     }
     case "pong": {
@@ -1208,6 +1256,120 @@ function worldIdOf(o: Record<string, unknown>): string {
   return wid;
 }
 
+// Exhaustive validation of a COMPLETE snapshot object. Shared by the wire decode of a `snap`
+// frame and by the client's delta path (which reconstructs a complete snapshot from a baseline
+// + delta and runs it through here, so a delta ends up as strictly-validated as a keyframe).
+// Reconstructs a fresh canonical object (fixed key order), so the reconstruction's key order or
+// list order can never affect the decoded state.
+export function validateSnap(o: Record<string, unknown>): Extract<ServerMsg, { t: "snap" }> {
+  const exr = arr(o.exr, "exr").map((p) => {
+    if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError("bad exr entry");
+    return p;
+  });
+  return {
+    t: "snap",
+    sseq: intOf(o, "sseq", 0, Number.MAX_SAFE_INTEGER),
+    tick: intOf(o, "tick", 0, Number.MAX_SAFE_INTEGER),
+    rev: intOf(o, "rev", 0, Number.MAX_SAFE_INTEGER),
+    ackSeq: intOf(o, "ackSeq", 0, Number.MAX_SAFE_INTEGER),
+    full: boolOf(o, "full"),
+    over: boolOf(o, "over"),
+    selfId: shortStr(o, "selfId", 64),
+    wid: worldIdOf(o),
+    roster: arr(o.roster, "roster").map(validateRosterWire),
+    wait: arr(o.wait, "wait").map(validateWaitWire),
+    ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
+    seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
+    floor: intOf(o, "floor", 1, 1e6),
+    pcl: intOf(o, "pcl", 1, 4),
+    cleared: boolOf(o, "cleared"),
+    exr,
+    evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
+    self: o.self === null ? null : validateSelfWire(o.self),
+    players: arr(o.players, "players").map(validatePlayerWire),
+    enemies: arr(o.enemies, "enemies").map(validateEnemyWire),
+    bullets: arr(o.bullets, "bullets").map(validateBulletWire),
+    props: arr(o.props, "props").map(validatePropWire),
+    pickups: arr(o.pickups, "pickups").map(validatePickupWire),
+    chests: arr(o.chests, "chests").map(validateChestWire),
+    hzds: arr(o.hzds, "hzds").map(validateHazardWire),
+    shop: o.shop === null ? null : validateShopWire(o.shop),
+    effs: arr(o.effs, "effs").map(validateEffectWire),
+    events: arr(o.events, "events").map(validateWireEvent),
+  };
+}
+
+// A bounded, crash-safe validator for the delta's PARTIAL payload fragments (changed scalars,
+// self patch, per-entity partials). The reconstructed COMPLETE snapshot is validated
+// exhaustively by validateSnap afterward, so this only has to guarantee it decoded plain,
+// finite, non-adversarial JSON (bounded depth, finite numbers, no prototype-polluting keys).
+const MAX_DELTA_DEPTH = 6;
+function safeWireValue(v: unknown, depth: number): WireValue {
+  if (depth > MAX_DELTA_DEPTH) throw new ProtocolError("delta too deep");
+  if (v === null) return null;
+  if (typeof v === "number") { if (!Number.isFinite(v)) throw new ProtocolError("bad delta number"); return v; }
+  if (typeof v === "string") { if (v.length > 256) throw new ProtocolError("bad delta string"); return v; }
+  if (typeof v === "boolean") return v;
+  if (Array.isArray(v)) {
+    if (v.length > 4096) throw new ProtocolError("bad delta array");
+    return v.map((x) => safeWireValue(x, depth + 1));
+  }
+  const rec = obj(v, "delta value");
+  const out: WireObject = {};
+  for (const k of Object.keys(rec)) {
+    if (k === "__proto__" || k === "constructor" || k === "prototype") throw new ProtocolError("bad delta key");
+    out[k] = safeWireValue(rec[k], depth + 1);
+  }
+  return out;
+}
+function safeWireObject(v: unknown): WireObject {
+  const val = safeWireValue(v, 0);
+  if (typeof val !== "object" || val === null || Array.isArray(val)) throw new ProtocolError("bad delta object");
+  return val;
+}
+
+const REMOVAL_REASONS: Record<RemovalReason, true> = { gone: true, left: true };
+function validateKeyedDelta(v: unknown): KeyedDelta {
+  const o = obj(v, "keyed delta");
+  const out: KeyedDelta = {};
+  if (o.u !== undefined) out.u = arr(o.u, "keyed.u").map(safeWireObject);
+  if (o.r !== undefined) {
+    out.r = arr(o.r, "keyed.r").map((pair) => {
+      const p = arr(pair, "keyed.r entry");
+      if (p.length !== 2) throw new ProtocolError("bad keyed.r entry");
+      const id = p[0];
+      if (typeof id !== "number" && typeof id !== "string") throw new ProtocolError("bad keyed.r id");
+      const reason = p[1];
+      if (typeof reason !== "string" || !Object.prototype.hasOwnProperty.call(REMOVAL_REASONS, reason)) throw new ProtocolError("bad keyed.r reason");
+      return [id, reason as RemovalReason];
+    });
+  }
+  return out;
+}
+
+function validateSnapd(o: Record<string, unknown>): Extract<ServerMsg, { t: "snapd" }> {
+  const out: Extract<ServerMsg, { t: "snapd" }> = {
+    t: "snapd",
+    q: intOf(o, "q", 0, Number.MAX_SAFE_INTEGER),
+    b: intOf(o, "b", 0, Number.MAX_SAFE_INTEGER),
+    sc: safeWireObject(o.sc),
+    ev: arr(o.ev, "snapd.ev").map(validateWireEvent),
+    et: intOf(o, "et", 0, Number.MAX_SAFE_INTEGER),
+  };
+  if (o.self !== undefined) {
+    const s = obj(o.self, "snapd.self");
+    if (s.d !== undefined) out.self = { d: true };
+    else if (s.f !== undefined) out.self = { f: validateSelfWire(s.f) };
+    else if (s.p !== undefined) out.self = { p: safeWireObject(s.p) };
+    else throw new ProtocolError("bad snapd.self");
+  }
+  for (const tag of ["en", "pl", "pr", "pk", "ch", "hz", "ef"] as const) {
+    if (o[tag] !== undefined) out[tag] = validateKeyedDelta(o[tag]);
+  }
+  if (o.w !== undefined) out.w = safeWireObject(o.w);
+  return out;
+}
+
 function decodeServerMsg(raw: string): ServerMsg {
   let parsed: unknown;
   try {
@@ -1217,43 +1379,10 @@ function decodeServerMsg(raw: string): ServerMsg {
   }
   const o = obj(parsed, "frame");
   switch (o.t) {
-    case "snap": {
-      const pidList = (k: "exr"): PlayerId[] => arr(o[k], k).map((p) => {
-        if (typeof p !== "string" || p.length < 1 || p.length > 64) throw new ProtocolError(`bad ${k} entry`);
-        return p;
-      });
-      const exr = pidList("exr");
-      return {
-        t: "snap",
-        tick: intOf(o, "tick", 0, Number.MAX_SAFE_INTEGER),
-        rev: intOf(o, "rev", 0, Number.MAX_SAFE_INTEGER),
-        ackSeq: intOf(o, "ackSeq", 0, Number.MAX_SAFE_INTEGER),
-        full: boolOf(o, "full"),
-        over: boolOf(o, "over"),
-        selfId: shortStr(o, "selfId", 64),
-        wid: worldIdOf(o),
-        roster: arr(o.roster, "roster").map(validateRosterWire),
-        wait: arr(o.wait, "wait").map(validateWaitWire),
-        ...(o.tok !== undefined ? { tok: shortStr(o, "tok", 64) } : {}),
-        seed: intOf(o, "seed", -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
-        floor: intOf(o, "floor", 1, 1e6),
-        pcl: intOf(o, "pcl", 1, 4),
-        cleared: boolOf(o, "cleared"),
-        exr,
-        evTo: intOf(o, "evTo", 0, Number.MAX_SAFE_INTEGER),
-        self: o.self === null ? null : validateSelfWire(o.self),
-        players: arr(o.players, "players").map(validatePlayerWire),
-        enemies: arr(o.enemies, "enemies").map(validateEnemyWire),
-        bullets: arr(o.bullets, "bullets").map(validateBulletWire),
-        props: arr(o.props, "props").map(validatePropWire),
-        pickups: arr(o.pickups, "pickups").map(validatePickupWire),
-        chests: arr(o.chests, "chests").map(validateChestWire),
-        hzds: arr(o.hzds, "hzds").map(validateHazardWire),
-        shop: o.shop === null ? null : validateShopWire(o.shop),
-        effs: arr(o.effs, "effs").map(validateEffectWire),
-        events: arr(o.events, "events").map(validateWireEvent),
-      };
-    }
+    case "snap":
+      return validateSnap(o);
+    case "snapd":
+      return validateSnapd(o);
     case "ping":
       return {
         t: "ping",
@@ -1591,6 +1720,9 @@ export interface SnapshotOpts {
   // The authoritative world id this snapshot describes (REQUIRED — the client asserts it
   // against the room it expected to join; see the v4 protocol note).
   worldId: string;
+  // The per-connection monotonic snapshot sequence (v24): the ack target + delta baseline id.
+  // Omitted => 0 (direct test callers that don't exercise the delta channel).
+  sseq?: number;
   // Every seat in this world (verified identities + on/away), independent of interest
   // filtering. Omitted => empty (direct test callers that don't exercise readiness).
   roster?: RosterWire[];
@@ -1691,6 +1823,7 @@ export function buildSnapshot(
 
   return {
     t: "snap",
+    sseq: opts.sseq ?? 0,
     tick: w.tick,
     rev: w.rev,
     ackSeq,

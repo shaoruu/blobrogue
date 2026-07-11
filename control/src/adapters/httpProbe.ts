@@ -62,7 +62,9 @@ import type {
 // v21: EnemyWire grows `brr` (boss transition-beat-live flag) for the boss state/art binding.
 // v22: EnemyWire grows `mfm` (JET mirror-salvo lead Resonance-family index) for the telegraph.
 // v23: the AttackMove set grows "rip" (the Tithe's dedicated P3 debris-wheel signature).
-export const SYNTHETIC_JOIN_PROTOCOL = 23;
+// v24: the snapshot DELTA wire — `snap` carries `sseq`, a new `snapd` delta message carries
+// per-baseline changes, and `input` carries `ackSnap` (the client's retained baseline sseq).
+export const SYNTHETIC_JOIN_PROTOCOL = 24;
 
 export interface HttpProbeConfig {
   baseUrl: string;
