@@ -19,18 +19,24 @@
 // Run: npx tsx test/kitbalance.test.ts
 
 import {
-  L3, forEachLegalBuild, practicalBossDps, measureBossTtk,
+  L3, forEachLegalBuild, practicalBossDps, measureBossTtk, grant,
 } from "./dpsHarness.js";
 import {
   createWorld, spawnPlayerInWorld, setPlayerKit, stepPlayerPhase, stepWorldPhase,
+  devSpawnEnemy, acquireWeaponInWorld,
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import type { InputCmd } from "../src/sim/input.js";
+import { LOCAL_ID } from "../src/sim/input.js";
 import type { SimEvent } from "../src/sim/events.js";
-import type { EnemyKind } from "../src/sim/types.js";
+import type { EnemyKind, WeaponId } from "../src/sim/types.js";
 import type { PlayerMods } from "../src/sim/items.js";
+import { WEAPONS } from "../src/sim/weapons.js";
 import { PU_DPS, refDpsForFloor, BOSS_MIN_LEGAL_TTK } from "../src/sim/balance.js";
-import { OVERDRIVE, MENDER_HEAL_CLAMP, LIFEBLOOM, ULT, TICKS_PER_SECOND } from "../src/sim/kits.js";
+import {
+  OVERDRIVE, MENDER_HEAL_CLAMP, LIFEBLOOM, ULT, TICKS_PER_SECOND,
+  refEncounterHpForFloor, ultChargeFromKill, ultChargeFromDamageDealt, ultShareCapUnits, ultTimeChargePerTick,
+} from "../src/sim/kits.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -278,10 +284,129 @@ function gate3MenderFacetank(): void {
   report(`GATE 3 — saturated party sustain: 2M=${twoParty.realizedPartyHps.toFixed(2)} HP/s, 4M=${fourParty.realizedPartyHps.toFixed(2)} HP/s (clamp ceiling ${MENDER_HEAL_CLAMP.partyHpPerSec}, boss output ${twoParty.bossTotalDps} DPS)`);
 }
 
+// ---- GATE 4 — the Wave 1 charge REWEIGHT: a fill is PLAY-driven, not a silent timer ----
+
+// Play sources are the capped, actively-earned inputs (dmg / kill / taken / heal / dash); the
+// remainder of a fill is the combat-gated time FLOOR. p.ultSources tracks the play sources
+// (time is uncapped and bypasses that bookkeeping), so at any pre-clamp moment
+// timeContribution = ultCharge − sum(play sources).
+function sumPlaySources(src: PlayerSim["ultSources"]): number {
+  return src.dmg + src.kill + src.taken + src.heal + src.dash;
+}
+
+// Conventional sustained-fire projectile guns: the family whose practical-DPS model matches an
+// autofire-at-range sim (excludes melee + the deployable/trap/charge "effect-wave" weapons and
+// the special legendaries, whose DPS is laid down as traps/orbits/beams the autofire probe can't
+// reproduce — a median across THOSE would mismodel the fill rate).
+const CORE_GUNS = new Set<WeaponId>([
+  "pistol", "shotgun", "rapid", "smg", "cannon", "burst", "ricochet", "homing", "tesla",
+  "sawnoff", "railgun", "nailer", "flamer", "mortar",
+]);
+
+// The deterministic MEDIAN conventional-gun build by practical DPS — a faithful, reproducible
+// stand-in for "a median mid-game player." Read from the SAME 100k legal-build stream GATE 1
+// iterates, so a future retune flows straight through.
+function medianConventionalBuild(): { weapon: WeaponId; owned: string[]; dps: number } {
+  const builds: Array<{ dps: number; weapon: WeaponId; owned: string[] }> = [];
+  forEachLegalBuild(({ weapon, owned, mods }) => {
+    if (!CORE_GUNS.has(weapon)) return;
+    builds.push({ dps: practicalBossDps(weapon, mods), weapon, owned });
+  });
+  builds.sort((a, b) => a.dps - b.dps);
+  const m = builds[Math.floor(builds.length / 2)];
+  return { weapon: m.weapon, owned: m.owned, dps: m.dps };
+}
+
+const idle20: InputCmd = { seq: 0, moveX: 0, moveY: 0, aim: 0, firing: false, dash: false, interact: false, ult: false };
+
+// Drive a GUNNER on the median build to a full meter against the given target, measuring what
+// FRACTION of the fill was PLAY (dmg + kill) vs the passive time floor. Runs at the authoritative
+// 20Hz (the tick rate the time floor + combatFillSeconds are authored against). "normal" respawns
+// trash to keep sustained combat (kills + damage); "boss" is a bottomless King dummy (sustained
+// damage, no kills), both always-damageable.
+function measureFillPlayShare(scenario: "normal" | "boss", build: { weapon: WeaponId; owned: string[] }): {
+  playPct: number; fillSeconds: number; kills: number; filled: boolean;
+} {
+  const floor = scenario === "boss" ? 5 : 3;
+  const w = createWorld(0x0175_0B0A, floor, { isSandbox: true });
+  w.isGodMode = true;
+  w.enemies = []; // isolate from ambient floor spawns; we drive the encounter explicitly
+  const p = w.players.get(LOCAL_ID)!;
+  setPlayerKit(w, LOCAL_ID, "gunner");
+  acquireWeaponInWorld(w, LOCAL_ID, build.weapon);
+  grant(w, LOCAL_ID, build.owned);
+  p.invuln = 0;
+
+  const spawnTarget = (): void => {
+    if (scenario === "boss") {
+      const e = devSpawnEnemy(w, "boss", p.x + 150, p.y);
+      e.hp = 1e9; e.maxHp = 1e9; // bottomless: sustained damage, never a kill
+    } else {
+      devSpawnEnemy(w, "slime", p.x + 130, p.y);
+    }
+  };
+  spawnTarget();
+
+  let kills = 0, lastPlaySum = 0, lastCharge = 0;
+  const maxTicks = TICKS_PER_SECOND * 300;
+  let t = 0;
+  while (p.ultCharge < ULT.meterMax && t < maxTicks) {
+    if (scenario === "normal" && !w.enemies.some((e) => !e.dead)) spawnTarget();
+    const target = w.enemies.find((e) => !e.dead);
+    const aim = target ? Math.atan2(target.y - p.y, target.x - p.x) : 0;
+    const ev: SimEvent[] = [];
+    for (const pl of w.players.values()) stepPlayerPhase(w, pl, { ...idle20, firing: pl.id === LOCAL_ID, aim }, FIXED_DT, ev);
+    stepWorldPhase(w, FIXED_DT, ev);
+    w.tick++;
+    for (const e of ev) if (e.t === "enemyKill") kills++;
+    if (p.ultCharge < ULT.meterMax) { lastPlaySum = sumPlaySources(p.ultSources); lastCharge = p.ultCharge; }
+    t++;
+  }
+  return {
+    playPct: lastCharge > 0 ? (lastPlaySum / lastCharge) * 100 : 0,
+    fillSeconds: t / TICKS_PER_SECOND,
+    kills,
+    filled: p.ultCharge >= ULT.meterMax,
+  };
+}
+
+function gate4ChargeReweight(): void {
+  section("GATE 4 — Wave 1 charge reweight: a fill is PLAY-driven (target ~70:30, floor 60:40)");
+  const build = medianConventionalBuild();
+  report(`GATE 4 — median conventional-gun build: ${build.weapon} + [${build.owned.join(",")}] (~${build.dps.toFixed(1)} practical boss DPS)`);
+
+  const normal = measureFillPlayShare("normal", build);
+  const boss = measureFillPlayShare("boss", build);
+  check("normal floor: PLAY contributes >= 60% of a fill (not a silent timer)",
+    normal.filled && normal.playPct >= 60,
+    `play:time = ${normal.playPct.toFixed(0)}:${(100 - normal.playPct).toFixed(0)} over ${normal.fillSeconds.toFixed(1)}s, ${normal.kills} kills`);
+  check("boss-only fight: PLAY contributes >= 60% of a fill",
+    boss.filled && boss.playPct >= 60,
+    `play:time = ${boss.playPct.toFixed(0)}:${(100 - boss.playPct).toFixed(0)} over ${boss.fillSeconds.toFixed(1)}s`);
+  report(`GATE 4 — modeled targets ~64:36 normal / ~67:33 boss; measured ${normal.playPct.toFixed(0)}:${(100 - normal.playPct).toFixed(0)} / ${boss.playPct.toFixed(0)}:${(100 - boss.playPct).toFixed(0)}`);
+  if (normal.playPct < 60 || boss.playPct < 60) {
+    report(`GATE 4 — play:time under 60 at the current combatFillSeconds (${ULT.combatFillSeconds}s); balancer fallback: bump to 130s.`);
+  }
+
+  // Anti-stall net: even a LOW-DPS kit that only lands ~1 kill + 0.5×RefHP of damage over a 100s
+  // sustained boss fight STILL fills the meter (the time floor guarantees ~1 ult by combatFill).
+  // Modeled with the shipped pure functions (the balancer's own model), share-caps respected.
+  const floor = 5;
+  const refHp = refEncounterHpForFloor(floor);
+  const dmgUnits = Math.min(ultChargeFromDamageDealt(0.5 * refHp, refHp), ultShareCapUnits("dmg"));
+  const killUnits = Math.min(ultChargeFromKill(), ultShareCapUnits("kill"));
+  const timeUnits = ultTimeChargePerTick() * TICKS_PER_SECOND * 100; // 100s of combat-gated floor
+  const total = dmgUnits + killUnits + timeUnits;
+  check("anti-stall: a low-DPS 100s boss fight (~1 kill + 0.5xRefHP) still fills the meter",
+    total >= ULT.meterMax,
+    `dmg=${dmgUnits} + kill=${killUnits} + time=${timeUnits} = ${total} vs meterMax ${ULT.meterMax}`);
+}
+
 function main(): void {
   gate1OverdriveCeiling();
   gate2BossFloorWithOverdrive();
   gate3MenderFacetank();
+  gate4ChargeReweight();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll kit-ult balance gates hold.\n");
