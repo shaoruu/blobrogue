@@ -190,7 +190,10 @@ export const ITEMS: readonly ItemDef[] = [
     id: "second_wind", name: "Second Wind",
     descs: ["-35% dash cooldown.", "-45% dash cooldown.", "-50% dash cooldown."],
     glyph: "D", tint: "#5ab6ff", rarity: "common",
-    apply: (m, l) => { m.dashCdMult = lv([0.65, 0.55, 0.50], l); },
+    // dashCdMult takes the LOWER of any contributors (a level lookup, never multiplied
+    // copy-over-copy) so dash blessings compose order-independently. Identity-preserving:
+    // with only Second Wind touching it, min(1, x) = x — the old assignment exactly.
+    apply: (m, l) => { m.dashCdMult = Math.min(m.dashCdMult, lv([0.65, 0.55, 0.50], l)); },
   },
   {
     id: "thorns", name: "Thorns",
@@ -214,7 +217,11 @@ export const ITEMS: readonly ItemDef[] = [
     id: "deadeye", name: "Deadeye",
     descs: ["+25% crit chance for big hits.", "+40% crit chance for bigger hits.", "+50% crit chance for huge hits."],
     glyph: "+", tint: "#ff5a5a", rarity: "rare",
-    apply: (m, l) => { m.critChance = lv([0.25, 0.40, 0.50], l); m.critMult = lv([2.5, 2.75, 3.0], l); },
+    // critChance is ADDITIVE and critMult takes the HIGHER of any contributors, so crit
+    // blessings compose order-independently (Deadeye + Marksman + Executioner stack cleanly).
+    // Identity-preserving: with only Deadeye touching crit, this is byte-for-byte the old
+    // assignment (base critChance 0 + x; max(2, x) = x).
+    apply: (m, l) => { m.critChance += lv([0.25, 0.40, 0.50], l); m.critMult = Math.max(m.critMult, lv([2.5, 2.75, 3.0], l)); },
   },
   {
     id: "vitality", name: "Vitality",
@@ -250,6 +257,88 @@ export const ITEMS: readonly ItemDef[] = [
       const c = lv([0.15, 0.25, 0.32], l);
       m.burnChance += c; m.chillChance += c; m.shockChance += c;
     },
+  },
+  // ---- the content wave: build-defining blessings (existing PlayerMods fields only, so
+  // no wire/protocol change). Each is a distinct BUILD identity with a real tradeoff, never
+  // a flat +X% of an existing stat, and every contribution rides the same raw-cap clamp. ----
+  {
+    // Precision: reach + velocity + crit for the patient shooter, paid in fire rate.
+    id: "marksman", name: "Marksman",
+    descs: ["+35% range, +12% bullet speed, +15% crit — but -12% fire rate.", "+50% range, +18% bullet speed, +23% crit — but -12% fire rate.", "+65% range, +24% bullet speed, +30% crit — but -12% fire rate."],
+    glyph: "L", tint: "#ffd166", rarity: "rare",
+    // Bullet-speed contribution is deliberately modest: the Snapwire's arm-time floor
+    // (test/arsenal envelope) is priced against the best legal bulletSpeedMult, so a big
+    // speed blessing would demand re-pricing an existing weapon. The range (bulletLife)
+    // component carries the reach identity instead.
+    apply: (m, l) => {
+      m.bulletLifeMult += lv([0.35, 0.50, 0.65], l);
+      m.bulletSpeedMult += lv([0.12, 0.18, 0.24], l);
+      m.critChance += lv([0.15, 0.23, 0.30], l);
+      m.fireRateMult -= 0.12;
+    },
+  },
+  {
+    // The walking wall: hearts + retaliation, paid in mobility.
+    id: "juggernaut", name: "Juggernaut",
+    descs: ["+2 hearts and 2 thorns damage — but -15% move speed.", "+2 hearts and 3 thorns damage — but -15% move speed.", "+3 hearts and 4 thorns damage — but -15% move speed."],
+    glyph: "J", tint: "#b06bff", rarity: "rare",
+    apply: (m, l) => { m.maxHpBonus += lv([2, 2, 3], l); m.thorns += lv([2, 3, 4], l); m.moveSpeedMult -= 0.15; },
+  },
+  {
+    // Penetration: bigger, deeper-punching rounds that fly slower.
+    id: "heavy_rounds", name: "Heavy Rounds",
+    descs: ["Bigger rounds punch through +1 enemy, but fly slower.", "Bigger rounds punch through +2 enemies, but fly slower.", "Bigger rounds punch through +3 enemies, but fly slower."],
+    glyph: "=", tint: "#e8e0c8", rarity: "uncommon",
+    apply: (m, l) => { m.bulletSizeMult += 0.6; m.pierce += lv([1, 2, 3], l); m.bulletSpeedMult -= 0.2; },
+  },
+  {
+    // Hit-and-run: tempo + footwork, paid in raw punch.
+    id: "skirmisher", name: "Skirmisher",
+    descs: ["+25% fire rate & +12% move speed — but -15% damage.", "+38% fire rate & +18% move speed — but -15% damage.", "+50% fire rate & +24% move speed — but -15% damage."],
+    glyph: "~", tint: "#7fdd5a", rarity: "uncommon",
+    apply: (m, l) => { m.fireRateMult += lv([0.25, 0.38, 0.50], l); m.moveSpeedMult += lv([0.12, 0.18, 0.24], l); m.damageMult -= 0.15; },
+  },
+  {
+    // Feast or famine: rare, devastating crits (huge multiplier, thin chance).
+    id: "executioner", name: "Executioner",
+    descs: ["+10% crit chance, and crits hit for ×3.2.", "+15% crit chance, and crits hit for ×3.6.", "+20% crit chance, and crits hit for ×4.0."],
+    glyph: "x", tint: "#ff5a5a", rarity: "rare",
+    apply: (m, l) => { m.critChance += lv([0.10, 0.15, 0.20], l); m.critMult = Math.max(m.critMult, lv([3.2, 3.6, 4.0], l)); },
+  },
+  {
+    // All offense: damage + fire rate, paid in hearts (a step past Glass Cannon).
+    id: "overload", name: "Overload",
+    descs: ["+40% damage & +20% fire rate — but -2 hearts.", "+55% damage & +30% fire rate — but -2 hearts.", "+70% damage & +40% fire rate — but -2 hearts."],
+    glyph: "!", tint: "#ff8a3b", rarity: "rare",
+    apply: (m, l) => { m.damageMult += lv([0.40, 0.55, 0.70], l); m.fireRateMult += lv([0.20, 0.30, 0.40], l); m.maxHpBonus -= 2; },
+  },
+  {
+    // Dodge glass: raw mobility + dash uptime, paid in hearts.
+    id: "featherweight", name: "Featherweight",
+    descs: ["+16% move speed & -20% dash cooldown — but -2 hearts.", "+24% move speed & -28% dash cooldown — but -2 hearts.", "+30% move speed & -35% dash cooldown — but -2 hearts."],
+    glyph: "^", tint: "#7fdd5a", rarity: "uncommon",
+    apply: (m, l) => { m.moveSpeedMult += lv([0.16, 0.24, 0.30], l); m.dashCdMult = Math.min(m.dashCdMult, lv([0.80, 0.72, 0.65], l)); m.maxHpBonus -= 2; },
+  },
+  {
+    // Cold shoulder: big, chilling rounds that lock a body down as they land.
+    id: "frostbite", name: "Frostbite",
+    descs: ["Bigger rounds, +20% chance to chill on hit.", "Bigger rounds, +30% chance to chill on hit.", "Bigger rounds, +40% chance to chill on hit."],
+    glyph: "*", tint: "#7fd3ff", rarity: "uncommon",
+    apply: (m, l) => { m.bulletSizeMult += 0.4; m.chillChance += lv([0.20, 0.30, 0.40], l); },
+  },
+  {
+    // Fast hands: a light tempo + crit hybrid for the aggressive opener.
+    id: "quickdraw", name: "Quickdraw",
+    descs: ["+20% fire rate & +10% crit chance.", "+30% fire rate & +15% crit chance.", "+38% fire rate & +20% crit chance."],
+    glyph: "Q", tint: "#ffd166", rarity: "common",
+    apply: (m, l) => { m.fireRateMult += lv([0.20, 0.30, 0.38], l); m.critChance += lv([0.10, 0.15, 0.20], l); },
+  },
+  {
+    // The frontliner: a sturdier, faster body to hold the line.
+    id: "vanguard", name: "Vanguard",
+    descs: ["+1 heart & +12% move speed.", "+2 hearts & +16% move speed.", "+2 hearts & +20% move speed."],
+    glyph: "U", tint: "#ff6a6a", rarity: "common",
+    apply: (m, l) => { m.maxHpBonus += lv([1, 2, 2], l); m.moveSpeedMult += lv([0.12, 0.16, 0.20], l); },
   },
   // ---- the premium CORE INFUSIONS (shop stock only — never in a blessing offer) ----
   // Single-stat bumps toward the existing raw caps: a FASTER route to the cap, never a
