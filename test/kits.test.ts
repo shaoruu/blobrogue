@@ -94,11 +94,11 @@ function chargeFormulaTests(): void {
     const perTick = ultTimeChargePerTick();
     const ticksToFull = ULT.meterMax / perTick;
     const seconds = ticksToFull / 20;
-    return seconds >= 45 && seconds <= 65; // ~55s band
+    return seconds >= 110 && seconds <= 135; // ~120s band (Wave 1 reweight)
   })());
 
-  section("§10 per-source SHARE caps: no single input dominates one fill (damage ≤70%, kills ≤40%)");
-  check("share caps are exposed as tunable fractions", ULT.shareCap.dmg === 0.70 && ULT.shareCap.kill === 0.40);
+  section("§10 per-source SHARE caps: no single input dominates one fill (damage ≤85%, kills ≤55%)");
+  check("share caps are exposed as tunable fractions", ULT.shareCap.dmg === 0.85 && ULT.shareCap.kill === 0.55);
   {
     // A gunner punching a huge dummy: damage charge saturates at its 70% share and stops.
     const w = freshWorld();
@@ -114,7 +114,7 @@ function chargeFormulaTests(): void {
     const enemy = devSpawnEnemy(w, "boss", g.x + 60, g.y);
     enemy.hp = 1e9; enemy.maxHp = 1e9; // an effectively bottomless dummy
     for (let i = 0; i < 300; i++) tick(w, (p) => ({ ...idle(), firing: p.id === "g", aim: 0 }));
-    check("damage source never exceeds its 70% share cap", g.ultSources.dmg <= ultShareCapUnits("dmg"), `dmg=${g.ultSources.dmg} cap=${ultShareCapUnits("dmg")}`);
+    check("damage source never exceeds its 85% share cap", g.ultSources.dmg <= ultShareCapUnits("dmg"), `dmg=${g.ultSources.dmg} cap=${ultShareCapUnits("dmg")}`);
   }
 
   section("§10 time floor is COMBAT-GATED (never trickles in an empty room)");

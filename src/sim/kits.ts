@@ -61,19 +61,25 @@ export const ULT = {
   //   taken (BULWARK): meterMax × (dmgTaken / maxHp) × K_taken
   //   heal  (MENDER):  meterMax × K_heal × hpHealed         (meter fraction per HP healed)
   //   dash  (PHANTOM): meterMax × K_dash                    (flat meter fraction per dash)
-  K_dmg: 0.35,
-  K_kill: 0.015,
+  // Wave 1 charge REWEIGHT (balancer 2026-07-11): shift a fill toward active PLAY vs the passive
+  // time floor (modeled play:time ~44:56 -> ~64:36 normal / ~67:33 boss). K_dmg + K_kill up AND
+  // their share caps up together — at the old caps the dmg contribution just slammed the 0.70 cap
+  // and stopped, so raising K without raising the cap wouldn't shift the ratio. The per-player +
+  // RefEncounterHP normalization is unchanged; K_taken / K_heal / K_dash + their caps hold.
+  K_dmg: 0.60,
+  K_kill: 0.035,
   K_taken: 0.70,
   K_heal: 0.02,
   K_dash: 0.04,
   // Per-source contribution SHARE caps toward ONE meter fill (§10: no single input dominates —
   // AoE-farming trash can't perma-charge while a boss-only fight starves). Fractions of meterMax;
   // "time" is uncapped (it is the floor). A source stops contributing once it hits its share.
-  shareCap: { dmg: 0.70, kill: 0.40, taken: 0.85, heal: 0.70, dash: 0.70, time: 1 } as Record<UltSource, number>,
+  shareCap: { dmg: 0.85, kill: 0.55, taken: 0.85, heal: 0.70, dash: 0.70, time: 1 } as Record<UltSource, number>,
   // Time FLOOR (§10): encounter-relative + combat-gated. Guarantee ~1 ult by ~combatFillSeconds
   // of sustained combat even at low DPS; accrues ONLY while a hostile enemy is alive/aggro
-  // (never in empty rooms). Per-tick grant = meterMax / (combatFillSeconds × TICK_HZ).
-  combatFillSeconds: 55,
+  // (never in empty rooms). Per-tick grant = meterMax / (combatFillSeconds × TICK_HZ). Raised to
+  // 120s (from 55s) so the floor is a genuine anti-stall net, not the primary fill on normal play.
+  combatFillSeconds: 120,
   // 8.0s hard floor between casts (spec §3), in ticks at TICK_HZ 20. Charge KEEPS accruing during
   // the lockout (clamped ≤ meterMax) and never resets on floor descent or weapon swap (§10).
   lockoutTicks: 160,
