@@ -229,7 +229,7 @@ function safetyTests(): void {
   const d = diffSnapshot(snapshotToWire(base), snapshotToWire(next), next.sseq, fullWorld(next));
   check("a delta advertises its baseline sseq so a client can refuse a gap", d.b === base.sseq && d.q === 7);
 
-  check("protocol bumped for the delta wire", PROTOCOL_VERSION === 24);
+  check("protocol version is current (v25: Wave 2 kit signatures on the wire)", PROTOCOL_VERSION === 25);
 }
 
 function main(): void {
