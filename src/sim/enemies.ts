@@ -618,7 +618,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         addTimer: BOSS_ADD_FIRST_AT[kind] ?? 0,
         attackCount: 0, isNextRadial: false, burstParity: 0,
         beatAddIds: [], spinCount: 0,
-        exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1,
+        exposed: 0, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1, mirrorFamily: -1,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
       : null,

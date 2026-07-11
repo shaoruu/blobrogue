@@ -176,6 +176,11 @@ export interface BossState {
   // Fair surprise §1: the add pool's previous draw index (-1 = none yet) — weighted
   // selection never repeats the exact entry twice in a row, so waves can't be rote.
   lastAddPick: number;
+  // JET only: the current MIRROR salvo's lead Resonance-family index (into RESONANCE_FAMILIES),
+  // or -1 when the current commitment isn't a mirror salvo. Rides the wire (EnemyWire.mfm) so the
+  // client draws the copied weapon's SHAPE (fan/lane/ring/parabola/wedge) and its OWN family hue
+  // (the "recognize your gun" read) — the same enum the sim colors the mirrored shards with.
+  mirrorFamily: number;
   // ---- the R framework (party+gear-aware scaling; see balance.ts POWER) ----
   // Seconds spent in the CURRENT phase — the soft-enrage yardstick.
   phaseTime: number;

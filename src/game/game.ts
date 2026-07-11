@@ -11,9 +11,9 @@ import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { DOGGIE_PET_ID } from "../sim/camp_nodes.js";
-import type { EnemyTier, EliteAffix } from "../sim/balance.js";
+import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
 import type { ShopSlot, ShopSlotKind, ShopState, ShopViewer } from "../sim/shop.js";
 import { shopPanelView, shopChipCopy, shopSlotName } from "../ui/shopCopy.js";
@@ -6962,16 +6962,19 @@ export class Game {
 
     if (e.kind === "jet") {
       if (a.move === "mirror") {
-        // A1 MIRROR SALVO — the footprint IS the copied weapon's shape (cone WEDGE / spread
-        // FAN / lob ARC_PARABOLA / lance LANE). The copied family selects the shape (and, per
-        // §R2, would draw in the COPIED weapon's own hue — the "recognize your gun" read); that
-        // enum is not on the wire yet (spec OPEN), so jetMirrorShape returns "cone" today and
-        // the aimed cone in family hue reads "aimed salvo incoming."
-        const shape = this.jetMirrorShape(e);
-        if (shape === "spread") this.tgFan(sx, sy, ang, 5, 0.225, 16, 288, hue, dyn);
-        else if (shape === "lob") this.tgArcParabola(sx, sy, a.markX - cam.x, a.markY - cam.y, hue);
-        else if (shape === "lance") this.tgLane(sx, sy, ang, TG_ARENA_LEN, TILE, hue, dyn);
-        else this.tgWedge(sx, sy, ang, 0.52, 240, hue, dyn);
+        // A1 MIRROR SALVO — the footprint IS the copied weapon's shape, drawn in the copied
+        // weapon's OWN family hue (the "that's my gun" read, §R2 exception), both keyed on the
+        // authoritative mirror-family enum (EnemyWire.mfm). spread->FAN, rapid->dense dash-lane,
+        // lance->LANE, arc->RING_BAND (10 shards), lob->ARC_PARABOLA + bloom, melee->short WEDGE.
+        const fam = this.jetMirrorFamily(e);
+        const mhue = fam ? RESONANCE_TELEGRAPH_COLOR[fam] : hue;
+        if (fam === "spread") this.tgFan(sx, sy, ang, 5, 0.225, 16, 288, mhue, dyn);
+        else if (fam === "rapid") this.tgLane(sx, sy, ang, TG_ARENA_LEN, 52, mhue, dyn); // dense dash-through stream (no standable pocket)
+        else if (fam === "lance") this.tgLane(sx, sy, ang, TG_ARENA_LEN, TILE, mhue, dyn);
+        else if (fam === "arc") this.tgRingBand(sx, sy, 200 - TILE, 200, mhue, {}); // the 10-shard ring
+        else if (fam === "lob") this.tgArcParabola(sx, sy, a.markX - cam.x, a.markY - cam.y, mhue);
+        else if (fam === "melee") this.tgWedge(sx, sy, ang, 0.5, 120, mhue, dyn);
+        else this.tgWedge(sx, sy, ang, 0.52, 240, mhue, dyn); // no family on the wire yet: aimed cone
       } else if (a.move === "tracer") {
         // A2 TRACER SNAP — the lock primitive at the mote's mark.
         this.tgTrackDisc(a.markX - cam.x, a.markY - cam.y, 24, a.isAimLocked, hue, snapFlash);
@@ -7057,11 +7060,12 @@ export class Game {
     if (herder) this.tgMovingCapsule(herder.sx, herder.sy, herder.ang, 240, TILE * 1.5, hue);
   }
 
-  // Jet's mirror-salvo copied SHAPE. The mirror weapon-family enum is not on the wire yet
-  // (spec OPEN), so the copy renders as the aimed cone until it lands; wiring the enum here is
-  // a one-line change that lights up the FAN / ARC_PARABOLA / LANE copies + the copied-hue read.
-  private jetMirrorShape(_e: Enemy): "cone" | "spread" | "lob" | "lance" {
-    return "cone";
+  // Jet's mirror-salvo copied family (authoritative EnemyWire.mfm, restored into
+  // boss.mirrorFamily): the index selects the copied weapon's telegraph shape + its own hue.
+  // null when the enum is out of range (older frame / not a mirror salvo).
+  private jetMirrorFamily(e: Enemy): ResonanceFamily | null {
+    const i = e.boss?.mirrorFamily ?? -1;
+    return i >= 0 && i < RESONANCE_FAMILIES.length ? RESONANCE_FAMILIES[i] : null;
   }
 
   // Quorum's hunt-pair herder (the advancing wall). No distinct hunt move rides the wire yet

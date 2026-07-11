@@ -60,7 +60,8 @@ import type {
 // (tracer/beam/spew/hurl) for the reworked JET/TITHE/QUORUM movesets; no new struct field.
 // v20: two new enemy kinds (tithe_tribute, quorum_splinter) for the 4p surplus content.
 // v21: EnemyWire grows `brr` (boss transition-beat-live flag) for the boss state/art binding.
-export const SYNTHETIC_JOIN_PROTOCOL = 21;
+// v22: EnemyWire grows `mfm` (JET mirror-salvo lead Resonance-family index) for the telegraph.
+export const SYNTHETIC_JOIN_PROTOCOL = 22;
 
 export interface HttpProbeConfig {
   baseUrl: string;

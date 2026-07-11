@@ -1532,6 +1532,20 @@ export function weaponResonanceFamily(id: WeaponId): ResonanceFamily {
   return WEAPON_RESONANCE[id];
 }
 
+// The per-family telegraph + mirrored-shard hue: JET's mirror copies must read as the
+// COPIED weapon ("that's MY gun"), NOT as JET's own cold-indigo band — so each Resonance
+// family gets a distinct off-JET hue (the SHAPE is authored per family in the renderer + the
+// sim's emit; this is the shared color both sides key on). Used sim-side by jetEmitFamily to
+// tint the mirrored shards, and client-side to draw the mirror telegraph in the same hue.
+export const RESONANCE_TELEGRAPH_COLOR: Readonly<Record<ResonanceFamily, string>> = {
+  lance: "#ff5a5f",  // red — the P3 signature beam
+  spread: "#ffb43b", // amber
+  rapid: "#3fbf5f",  // green
+  lob: "#6ff0d8",    // teal
+  arc: "#a24bff",    // purple
+  melee: "#c9c9de",  // bone
+};
+
 export const JET = {
   // Calibrated on EXPOSED time like the deep roster (the spent-recover windows are the
   // only full-damage time). Anchored at F35; rides the clamped §3 curve above F35.
