@@ -7972,8 +7972,17 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   if (!boss) return;
   const a = e.attack;
 
-  // Raise the three husks on the first live tick (works on both the floor-load and dev paths).
-  if (boss.phase < 2 && boss.windowAddIds.length === 0 && e.spawnTimer === 0 && a.move !== "merge") {
+  // Prune broken husks from the shared roster so an emptied roster raises a fresh WAVE.
+  for (let k = boss.windowAddIds.length - 1; k >= 0; k--) {
+    const id = boss.windowAddIds[k];
+    if (!w.enemies.some((o) => !o.dead && o.id === id)) boss.windowAddIds.splice(k, 1);
+  }
+  // Raise a husk WAVE whenever the roster is empty and the pool hasn't hit the merge
+  // threshold: QUORUM is a WAVE fight — break husk after husk toward the merge. The fast
+  // per-husk integrity (huskIntegrityFrac 0.10) is balanced around successive waves, not one
+  // trio; a single trio can't drain the pool to the merge alone, so a fresh wave rises until
+  // the pool crosses the threshold (then the merge beat takes over, phase 2, no more waves).
+  if (boss.phase < 2 && boss.windowAddIds.length === 0 && e.spawnTimer === 0 && a.move !== "merge" && !boss.roar) {
     quorumSpawnHusks(w, e, ev);
   }
 
@@ -8002,24 +8011,30 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     return;
   }
   if (a.cooldown === 0 && e.spawnTimer === 0) { quorumBeginAttack(w, e, ev); return; }
-  // The core drifts with its husks (it has no independent chase — the husks are the pressure).
-  if (boss.phase >= 2 && findTarget(w, e.x, e.y)) {
+  // The core drifts toward the party (slow) so the orbiting husk-triangle follows the fight
+  // rather than sitting still; its husks hold their formation slots around it (updateQuorumHusk).
+  if (findTarget(w, e.x, e.y)) {
     applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
   }
 }
 
-// The husks orbit/lead the core; the core rides their centroid so the shared bodies read as one.
+// Each husk holds an assigned FORMATION SLOT around the core — a readable triangle 120°
+// apart that slowly orbits (with a little per-husk sway). The husk steers toward ITS slot,
+// NOT the player, so the three never free-chase the same target and collapse into one
+// overlapping blob (which looked odd and broke the kill-order read). The tether from the
+// core to each husk stays taut and the trio stays visually distinct and targetable.
 function updateQuorumHusk(w: WorldState, e: Enemy, dt: number): void {
   const core = quorumCoreOf(w, e);
   if (!core) return;
-  if (!findTarget(w, e.x, e.y)) return;
-  const toCore = Math.hypot(core.x - e.x, core.y - e.y);
-  // Leash: hold a loose cluster around the core so the tether stays taut and readable.
-  if (toCore > QUORUM.huskRingDist * 2) {
-    applyChaseStep(w, e, dt, Math.atan2(core.y - e.y, core.x - e.x), e.speed * dt);
-  } else {
-    applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
-  }
+  const i = QUORUM_HUSK_KINDS.indexOf(e.kind);
+  if (i < 0) return;
+  const orbit = w.tick * QUORUM.huskOrbitStep;
+  const slotAngle = orbit + i * ((2 * Math.PI) / QUORUM_HUSK_KINDS.length)
+    + Math.sin(w.tick * QUORUM.huskSwayStep + i * 2.1) * QUORUM.huskSway;
+  const sx = core.x + Math.cos(slotAngle) * QUORUM.huskRingDist;
+  const sy = core.y + Math.sin(slotAngle) * QUORUM.huskRingDist;
+  const d = Math.hypot(sx - e.x, sy - e.y);
+  if (d > 1) applyChaseStep(w, e, dt, Math.atan2(sy - e.y, sx - e.x), Math.min(d, e.speed * dt));
 }
 
 function quorumSpawnHusks(w: WorldState, core: Enemy, ev: SimEvent[]): void {
