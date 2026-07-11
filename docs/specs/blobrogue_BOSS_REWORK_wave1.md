@@ -60,3 +60,11 @@ JET (PHASE_TIME_BASE=16): salvo-pattern count bossAddCapFor(base0) cap2 = 0/2/2/
 TITHE (PHASE_TIME_BASE=16): feed-add chasers bossAddCapFor(base0) cap4 = 0/3/4/4. ⚠ re-arm interval FLAT 3.0 ALL R (perR 0, NEVER shorter timer). slabsFor [_,1,1,2,2], soft-enrage +1 slab next feed. phaseTimerFor(16).
 QUORUM (PHASE_TIME_BASE=14): husk-adds-wave bossAddCapFor(base1) cap5 = 1/4/5/5. wave interval bossAddIntervalFor(base6.0) floor3.0 (generic 0.9 ok) = 6.0/4.38/3.12/3.0. phaseTimerFor(14). merge final window UNGATED by R (no adds).
 READABILITY: surplus = simple chasers on telegraph (active-threat cap only, not ≤2-complex rule); enrage = PATTERN not dmg/HP; ≥0.30s post-lock dodgeable. VERIFY: Jet salvoIntervalPerR 0.12; Tithe re-arm no R scale; 4p add-count hits targets AND HP frac ≤3.1.
+
+## SURPLUS CONTENT (what the 4p surplus spawns — GD, pairs w/ balancer counts):
+- JET: NO new entity — just more salvos (1.8s floor) = more parry windows. Soft-enrage: next phase +1 MIRROR-FLIPPED salvo (opposite safe-pocket, forces re-read). Uses existing mirror pool, zero new art.
+- TITHE: NEW add TRIBUTE — slow amber-glob crawler (cap 0/3/4) shuffles to the feeding slab + reinforces it if it reaches (heals/thickens). Threatens slab-break PROGRESS not player (4p divide-labor). 0.6-0.8s tell. SUPPRESS while GORGE ring active.
+- QUORUM: NEW add SPLINTERS — role-echo shards break off a husk ON DEATH (cap 1/4/5), weak version of parent role (shield-bubble/heal-trickle/slow-pip). Nuking shield husk → splinter wave before pool window (kill-order lesson at small scale). ~1s spawn-grace (not mid tether-snap). Simple chasers at dying husk.
+Implement tribute + splinter as new simple-chaser enemy kinds (deterministic, active-threat cap only, NOT ≤2-complex-mover rule).
+
+## REWORK = 4 pieces + presence, ALL injected to build bc-1fe0ba23: (1) movesets (2) balancer constants (3) overflow-discard clamp @damageEnemy (4) encounterPower wiring + tribute/splinter surplus. + Quorum husk-formation fix + AD presence/aura/scale.
