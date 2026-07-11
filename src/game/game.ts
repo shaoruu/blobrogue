@@ -454,7 +454,10 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
 // then SNAP crisp + flash on the AUTHORITATIVE isAimLocked commit (never an art timer).
 const TG_DANGER_EDGE = "#ff6a3b";   // universal hot danger hatch/edge ("dodge this")
 const TG_FILL_ALPHA = 0.26;          // family-hue fill (§R2 ~0.22-0.30)
-const TG_POCKET_MIN = 64;            // HARD rule: a computed safe pocket never closes below this
+// HARD RENDERER RULE (safe-pocket clamp): every computed safe pocket must stay >= 48px (the
+// body+margin stand-minimum). If one would shrink below at runtime (e.g. a CONVERGE_POCKET
+// closing), clamp it to this 64px floor — a sealed pocket is unfair, so clamp, never close.
+const TG_POCKET_MIN = 64;
 const TG_ARENA_LEN = 1100;           // "full arena length" for beam/lance lanes (covers the view)
 // Family FILL hue per boss (Jet cold-indigo / Tithe amber / Quorum bone-cyan). Value+edge+shape
 // carry the read in 4p chaos, never hue alone; the aura ring (renderBossAura) is the low-sat
@@ -6801,13 +6804,11 @@ export class Game {
     }, hue, o);
   }
 
-  // 3. FAN (N sub-lanes): the spread copy. Safe = the gaps between shards (never painted).
-  private tgFan(sx: number, sy: number, angle: number, count: number, gap: number, shardW: number, range: number, hue: string, o: { locked: boolean; dynamic: boolean; snapFlash?: number }): void {
-    for (let i = 0; i < count; i++) {
-      const a = angle + (i - (count - 1) / 2) * gap;
-      this.tgLane(sx, sy, a, range, shardW, hue, o);
-    }
-  }
+  // 3. FAN (N sub-lanes): the spread SMG-copy — ON HOLD (fairness bug: the specced 5-line/8deg
+  // gaps fall under the 48px stand-minimum). Built once the designer lands corrected geometry
+  // (wider spacing / fewer lines / reclassify); the spread copy falls back to the aimed cone
+  // meanwhile. See the FAN hook in the JET mirror dispatch. Only JET's spread mirror uses it, so
+  // its hold blocks nothing else. [primitive 3 of 12 — the remaining 11 are built below]
 
   // 4. ARC_PARABOLA (dotted): the lobbed-orb copy — dotted arc to the first landing marker.
   private tgArcParabola(sx: number, sy: number, lx: number, ly: number, hue: string): void {
@@ -6969,13 +6970,17 @@ export class Game {
         // lance->LANE, arc->RING_BAND (10 shards), lob->ARC_PARABOLA + bloom, melee->short WEDGE.
         const fam = this.jetMirrorFamily(e);
         const mhue = fam ? RESONANCE_TELEGRAPH_COLOR[fam] : hue;
-        if (fam === "spread") this.tgFan(sx, sy, ang, 5, 0.225, 16, 288, mhue, dyn);
-        else if (fam === "rapid") this.tgLane(sx, sy, ang, TG_ARENA_LEN, 52, mhue, dyn); // dense dash-through stream (no standable pocket)
+        if (fam === "rapid") this.tgLane(sx, sy, ang, TG_ARENA_LEN, 52, mhue, dyn); // dense dash-through stream (no standable pocket)
         else if (fam === "lance") this.tgLane(sx, sy, ang, TG_ARENA_LEN, TILE, mhue, dyn);
         else if (fam === "arc") this.tgRingBand(sx, sy, 200 - TILE, 200, mhue, {}); // the 10-shard ring
         else if (fam === "lob") this.tgArcParabola(sx, sy, a.markX - cam.x, a.markY - cam.y, mhue);
         else if (fam === "melee") this.tgWedge(sx, sy, ang, 0.5, 120, mhue, dyn);
-        else this.tgWedge(sx, sy, ang, 0.52, 240, mhue, dyn); // no family on the wire yet: aimed cone
+        // FAN (the spread SMG-copy) is ON HOLD — as specced (5 lines 8deg apart) its gaps are
+        // ~3-16px, under the 48px stand-minimum ("stand in a gap" is un-standable). Until the
+        // designer lands FAN's final params, the spread copy falls back to the aimed cone (fair,
+        // telegraphed) in the copied hue. HOOK: swap this line for tgFan(sx, sy, ang, count, gap,
+        // shardW, range, mhue, dyn) once the corrected geometry arrives (reconcile with rapid).
+        else this.tgWedge(sx, sy, ang, 0.52, 240, mhue, dyn); // spread(FAN hold) + no-family: aimed cone
       } else if (a.move === "tracer") {
         // A2 TRACER SNAP — the lock primitive at the mote's mark.
         this.tgTrackDisc(a.markX - cam.x, a.markY - cam.y, 24, a.isAimLocked, hue, snapFlash);
@@ -6983,8 +6988,9 @@ export class Game {
         // A3 RECOIL LINE — a fixed capsule bisecting the arena along the recoil axis.
         this.tgLane(sx, sy, ang, 360, TILE, hue, { ...fix, back: 360 });
       } else if (a.move === "beam") {
-        // A4 OVERCLOCK (P2, honest beam) / SIGNATURE (P3 wide corruption corridor).
-        const width = phase >= 3 ? TILE * 2.17 : TILE * 1.42; // corrupt 104px vs overclock 68px
+        // A4 OVERCLOCK (P2, honest beam 72px) / SIGNATURE (P3 wide corruption corridor, ~104px to
+        // cover the wider hitbox). Both DYNAMIC (lock at 60% lead on the real isAimLocked tick).
+        const width = phase >= 3 ? TILE * 2.17 : TILE * 1.5; // corrupt ~104px vs overclock 72px
         this.tgLane(sx, sy, ang, TG_ARENA_LEN, width, hue, dyn);
       }
       return;
@@ -7044,10 +7050,11 @@ export class Game {
       const px = shield ? shield.x - cam.x : sx, py = shield ? shield.y - cam.y : sy;
       this.tgSweepArc(px, py, 200, TILE * 1.5, ang - 1.5 / 2, 1.5, hue, fix);
     } else if (a.move === "volley") {
-      // A3 ROLE VOLLEY — the dmg role's aimed burst lanes + the heal role's knockback ring.
-      for (let i = 0; i < 3; i++) this.tgLane(sx, sy, ang + (i - 1) * 0.08, 320, TILE * 0.75, hue, dyn);
+      // A3 ROLE VOLLEY — the dmg role's aimed burst lanes (48px) + the heal role's knockback
+      // ring (outer 120px, band 48px).
+      for (let i = 0; i < 3; i++) this.tgLane(sx, sy, ang + (i - 1) * 0.08, 320, TILE, hue, dyn);
       const heal = husks.find((h) => h.kind === "quorum_heal");
-      if (heal) this.tgRingBand(heal.x - cam.x, heal.y - cam.y, TILE, 120, hue, { dashed: true });
+      if (heal) this.tgRingBand(heal.x - cam.x, heal.y - cam.y, 120 - TILE, 120, hue, { dashed: true });
     } else if (a.move === "radial") {
       // Radial ring (husk-phase / merge combo).
       const outer = isActive ? 220 : 40 + 180 * wu;
