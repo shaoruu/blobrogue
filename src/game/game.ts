@@ -5550,6 +5550,11 @@ export class Game {
       // so "gold ring = commander" is learnable at a glance.
       const ring = e.tier === "elite" ? AFFIX_RING_COLOR[eliteAffixOf(e.kind)] : TIER_RING_COLOR[e.tier];
       if (ring) this.renderTierRing(sx, sy, drawSize, ring);
+      // A persistent emissive ground-ring beneath each deep boss in its family hue — reads
+      // "setpiece" at a glance and DOUBLES as the guard/expose read (saturated + swelling
+      // while GUARDED, drained + desaturated while EXPOSED). State = the authoritative aux
+      // flag off the wire, never authored client-side.
+      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum") this.renderBossAura(e, sx, sy, drawSize);
 
       // Ghost solidify reads as an opacity ramp; the Choir mid-fade is barely there;
       // everyone else uses the archetype alpha.
@@ -6383,6 +6388,23 @@ export class Game {
       const h0 = husks[i], h1 = husks[(i + 1) % husks.length];
       if (husks.length > 1) draw(h0.x, h0.y, h1.x, h1.y, false);
     }
+    // The shield-husk's guard beams: taut BRIGHT bone-cyan lines to its siblings while it
+    // LIVES (the body is guarded — near-zero damage). The instant the shield husk dies
+    // these beams are gone and the others are damageable — beams present/absent IS the read.
+    const shield = husks.find((h) => h.kind === "quorum_shield") ?? null;
+    if (shield) {
+      const shimmer = 0.6 + 0.4 * Math.sin(this.animClock * 6);
+      for (const h of husks) {
+        if (h.id === shield.id) continue;
+        ctx.globalAlpha = 0.8 * shimmer;
+        ctx.strokeStyle = "#bfeef0";
+        ctx.lineWidth = 3.5;
+        ctx.beginPath();
+        ctx.moveTo(shield.x - cam.x, shield.y - cam.y);
+        ctx.lineTo(h.x - cam.x, h.y - cam.y);
+        ctx.stroke();
+      }
+    }
     ctx.restore();
   }
 
@@ -6420,18 +6442,89 @@ export class Game {
   // remainder) = the body blazes, unload.
   private renderEarnedWindow(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
-    const tint = ENEMY_ARCHETYPES[e.kind].tint;
+    const deep = e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum";
     if (e.aux > 0) {
+      // EXPOSED — the guard is down: a blazing hot core reads "unload now". The deep bosses
+      // crack hot-amber (Tithe's slumped amber sacs run a touch lighter); the earlier
+      // earned-window bosses keep their own family tint.
       const pulse = 0.6 + 0.4 * Math.sin(this.animClock * 9);
-      this.fxLayer("glow_round", tint, sx, sy, size * 1.15 * pulse, size * 1.15 * pulse, 0.5, 0);
+      const hot = deep ? (e.kind === "tithe" ? "#ffcf6a" : "#ffb43b") : ENEMY_ARCHETYPES[e.kind].tint;
+      this.fxLayer("glow_round", hot, sx, sy, size * 1.15 * pulse, size * 1.15 * pulse, 0.5, 0);
       this.fxLayer("core_dot", "#fff3c4", sx, sy, size * 0.42, size * 0.42, 0.75 * pulse, 0);
       return;
     }
+    // GUARDED — near-zero damage to the body. Each deep-boss family wears a distinct
+    // FULL-BRIGHT shield read (value + shape, not hue alone) so it holds in 4p chaos.
+    if (e.kind === "jet") {
+      // A specular shimmer SWEEP across saturated corrupted-amber plates.
+      const sweep = this.animClock * 2.2;
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = "#c78a2a";
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+      ctx.globalAlpha = 0.85;
+      ctx.strokeStyle = "#ffe6a6";
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, sweep, sweep + 0.9); ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    if (e.kind === "tithe") {
+      // A glassy blue-white shield-shimmer DOME — the zero-damage-while-feeding signal.
+      const pulse = 0.5 + 0.5 * Math.sin(this.animClock * 4);
+      ctx.save();
+      ctx.globalAlpha = 0.5 + 0.2 * pulse;
+      ctx.strokeStyle = "#dcebff";
+      ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.arc(sx, sy - size * 0.05, size * 0.56, 0, 6.28); ctx.stroke();
+      ctx.globalAlpha = 0.1 + 0.08 * pulse;
+      ctx.fillStyle = "#bcd8ff";
+      ctx.beginPath(); ctx.arc(sx, sy - size * 0.05, size * 0.56, 0, 6.28); ctx.fill();
+      ctx.restore();
+      return;
+    }
+    if (e.kind === "quorum") {
+      // Merge-form guarded: a taut bone-cyan rim (the pre-merge husk beams carry the read).
+      ctx.save();
+      ctx.globalAlpha = 0.5 + 0.2 * Math.sin(this.animClock * 4);
+      ctx.strokeStyle = "#bfeef0";
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    // The earlier earned-window bosses (weaver/marrow/choir): a thread-dim family rim.
     ctx.save();
     ctx.globalAlpha = 0.4 + 0.12 * Math.sin(this.animClock * 3);
-    ctx.strokeStyle = tint;
+    ctx.strokeStyle = ENEMY_ARCHETYPES[e.kind].tint;
     ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(sx, sy, size * 0.5, 0, 6.28); ctx.stroke();
+    ctx.restore();
+  }
+
+  // A persistent emissive ground-ring beneath a deep boss in its family hue (JET
+  // cold-indigo, TITHE amber, QUORUM bone-white). It reads "setpiece" and DOUBLES as the
+  // guard/expose indicator: saturated + swelling while GUARDED, drained + desaturated
+  // while EXPOSED. The state is the authoritative aux flag (exposed remainder > 0).
+  private renderBossAura(e: Enemy, sx: number, sy: number, size: number) {
+    const hue = e.kind === "jet" ? { guard: "#5b63c8", expose: "#6b7088" }
+      : e.kind === "tithe" ? { guard: "#e0902f", expose: "#8a5a22" }
+      : { guard: "#eef0e2", expose: "#b9bcae" };
+    const exposed = e.aux > 0;
+    const { ctx } = this;
+    const gy = sy + size * 0.32;
+    const color = exposed ? hue.expose : hue.guard;
+    const scale = exposed ? 0.7 : 1;
+    const pulse = 0.5 + 0.5 * Math.sin(this.animClock * (exposed ? 3 : 5));
+    this.fxLayer("glow_round", color, sx, gy, size * 1.5 * scale, size * 0.7 * scale, (exposed ? 0.18 : 0.4) + 0.12 * pulse, 0);
+    ctx.save();
+    ctx.globalAlpha = (exposed ? 0.35 : 0.7) + 0.15 * pulse;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = exposed ? 2 : 3.5;
+    ctx.beginPath();
+    ctx.ellipse(sx, gy, size * 0.6, size * 0.28, 0, 0, 6.28);
+    ctx.stroke();
     ctx.restore();
   }
 
