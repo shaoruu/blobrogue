@@ -59,7 +59,8 @@ import type {
 // v19: the Wave 1 deep-boss rework — the enemy attack-move wire set grew four values
 // (tracer/beam/spew/hurl) for the reworked JET/TITHE/QUORUM movesets; no new struct field.
 // v20: two new enemy kinds (tithe_tribute, quorum_splinter) for the 4p surplus content.
-export const SYNTHETIC_JOIN_PROTOCOL = 20;
+// v21: EnemyWire grows `brr` (boss transition-beat-live flag) for the boss state/art binding.
+export const SYNTHETIC_JOIN_PROTOCOL = 21;
 
 export interface HttpProbeConfig {
   baseUrl: string;
