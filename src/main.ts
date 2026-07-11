@@ -1,6 +1,5 @@
 import { ConvexClient } from "convex/browser";
-import { Game } from "./game/game.js";
-import type { RunResult, ExitReason } from "./game/game.js";
+import type { Game, RunResult, ExitReason } from "./game/game.js";
 import type { ProfileDoc } from "./net/api.js";
 import { CONVEX_URL, resolveGsUrl, defaultGsUrl, devTicketUrl, isExplicitGsOverride } from "./net/config.js";
 import { Session } from "./net/session.js";
@@ -22,6 +21,10 @@ declare global {
 const canvas = document.getElementById("game") as HTMLCanvasElement;
 const minimap = document.getElementById("minimap") as HTMLCanvasElement;
 const overlay = document.getElementById("overlay") as HTMLElement;
+
+// Shown in the title's reserved status line if the (lazily-chunked) engine ever fails to
+// download — a clear, honest dead-end instead of a black canvas or an uncaught error.
+const ENGINE_LOAD_FAILED_NOTE = "Couldn't load the game. Check your connection and try again.";
 
 // Hidden dev route: `?dev=1` (sandbox) / `?dev=sprites` (viewer). Never linked from the
 // menu, so a normal player can't reach it. The whole dev layer is dynamically imported
@@ -95,34 +98,65 @@ async function bootNormal() {
     if (activeOnline) { activeOnline.leave(); activeOnline = null; }
   }
 
-  const game = new Game(
-    canvas, minimap, document.body,
-    (result) => void onGameOver(result),
-    onExit,
-    // Progressive deepest-floor banking on each descend (fire-and-forget); no-ops without a
-    // Convex client. This is what keeps the leaderboard's floor honest when a run ends by a
-    // teammate continuing / a disconnect / a quit instead of a clean full-party wipe.
-    (floor) => session.recordFloorProgress(floor),
-  );
-  // Dev-server-only QA hook (dropped from production builds): lets headless tooling —
-  // screenshot capture, manual floor QA — drive the real game without menu automation.
-  if (import.meta.env.DEV) {
-    window.__blobdev = { game, hideMenu: () => menu.hide() };
+  // The heavy in-run engine (game.ts + the authoritative sim) is its OWN lazily-imported
+  // chunk: the menu's first paint never needs it, so it stays off the critical path and
+  // downloads as a separate file, warmed during idle (below) so PLAY is still instant. We
+  // cache the in-flight PROMISE — not just the instance — so a concurrent warm + a fast
+  // PLAY click can never build two engines; a failed load clears it so PLAY can retry.
+  let gamePromise: Promise<Game | null> | null = null;
+  function ensureGame(): Promise<Game | null> {
+    if (gamePromise) return gamePromise;
+    gamePromise = (async () => {
+      try {
+        const { Game } = await import("./game/game.js");
+        const game = new Game(
+          canvas, minimap, document.body,
+          (result) => void onGameOver(result),
+          onExit,
+          // Progressive deepest-floor banking on each descend (fire-and-forget); no-ops without a
+          // Convex client. This is what keeps the leaderboard's floor honest when a run ends by a
+          // teammate continuing / a disconnect / a quit instead of a clean full-party wipe.
+          (floor) => session.recordFloorProgress(floor),
+        );
+        // Dev-server-only QA hook (dropped from production builds): lets headless tooling —
+        // screenshot capture, manual floor QA — drive the real game without menu automation.
+        if (import.meta.env.DEV) window.__blobdev = { game, hideMenu: () => menu.hide() };
+        return game;
+      } catch (err) {
+        console.error("[boot] the game engine chunk failed to load", err);
+        gamePromise = null;
+        return null;
+      }
+    })();
+    return gamePromise;
+  }
+
+  // Kick off a run once the engine chunk is ready. The menu stays up + interactive while a
+  // cold engine load finishes (never a black canvas), then hides and hands off to game.start.
+  // A load failure degrades to the title with a clear, reserved-line note — never a white
+  // screen or an uncaught error. Guarded so a double-click can't launch two runs.
+  let isLaunchingRun = false;
+  function launchRun(start: (game: Game) => void): void {
+    if (isLaunchingRun || isInRun) return;
+    isLaunchingRun = true;
+    void ensureGame().then((game) => {
+      isLaunchingRun = false;
+      if (!game) { void menu.showTitle(undefined, ENGINE_LOAD_FAILED_NOTE); return; }
+      isInRun = true;
+      menu.hide();
+      start(game);
+    });
   }
 
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
       leaveOnlineIfAny();
-      isInRun = true;
-      menu.hide();
-      game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet });
+      launchRun((game) => game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet }));
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       if (activeOnline && activeOnline !== lobby) activeOnline.leave();
       activeOnline = lobby;
-      isInRun = true;
-      menu.hide();
-      game.start({
+      launchRun((game) => game.start({
         mode: "online",
         online: {
           url: defaultGsUrl(),
@@ -143,7 +177,7 @@ async function bootNormal() {
         selfColorIndex: session.colorIndex,
         selfCosmetics: session.cosmetics,
         selfPet: session.equippedPet,
-      });
+      }));
     },
   });
 
@@ -173,6 +207,13 @@ async function bootNormal() {
   // race instantly; a cold/offline fetch never delays the menu past the cap.
   await Promise.race([fontsReady, new Promise((resolve) => setTimeout(resolve, 250))]);
 
+  // Warm the (separately-chunked) engine during idle — AFTER the title paints — so the
+  // first PLAY is still instant while its ~600 kB never sat on the initial critical path.
+  // requestIdleCallback guarantees this runs post-paint; the download is a parallel request.
+  const warmEngine = () => { void ensureGame(); };
+  if ("requestIdleCallback" in window) window.requestIdleCallback(warmEngine, { timeout: 3000 });
+  else setTimeout(warmEngine, 300);
+
   // Explicit `?gs=<wsUrl>` override: the DIRECT dev/ops join (two-tab local proof, load
   // harness) — no lobby, tickets minted by that server's own /dev-ticket endpoint (dev-auth
   // only, hard-disabled in production). Identity still rides along so names/colors show.
@@ -191,8 +232,7 @@ async function bootNormal() {
       const data = (await res.json()) as { ticket: string };
       return data.ticket;
     };
-    menu.hide();
-    game.start({
+    launchRun((game) => game.start({
       mode: "online",
       // Direct dev join: no room, so no expected world / party gate — the dev world is
       // whatever the dev ticket names.
@@ -201,7 +241,7 @@ async function bootNormal() {
       selfColorIndex: session.colorIndex,
       selfCosmetics: session.cosmetics,
       selfPet: session.equippedPet,
-    });
+    }));
     return;
   }
 
