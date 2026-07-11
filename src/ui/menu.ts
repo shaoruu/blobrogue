@@ -479,12 +479,11 @@ export class Menu {
     return btn;
   }
 
-  // The editable blob name on the own Overview. Guests edit + SAVE anytime — the write
-  // rides the SAME sanitized session.login path the name gate uses (trim/collapse/strip,
-  // cap 20, never empty, never the literal "blob"), so lobby rosters and future
-  // leaderboard rows pick the new name up. Signed-in accounts are named by Google on the
-  // server (ensurePlayer overwrites with the account name), so the field goes READ-ONLY
-  // with honest copy — an editable box that silently reverts would be a lie.
+  // The editable blob name on the own Overview. Everyone edits + SAVEs anytime with the SAME
+  // sanitization (trim/collapse/strip, cap 20, never empty, never the literal "blob"), so
+  // lobby rosters and leaderboard rows pick the new name up. Guests ride the session.login
+  // path; signed-in accounts write the server-authoritative custom-name OVERRIDE, which
+  // login/recordRun never revert — the account's Google name is only the fallback.
   private nameEditor(onSaved: (name: string) => void): { box: HTMLElement; input: HTMLInputElement } {
     const box = el("div", "pc-nameedit");
     box.appendChild(el("label", "col-h", "blob name"));
@@ -494,35 +493,36 @@ export class Menu {
     input.maxLength = 20;
     input.placeholder = "your blob name";
     input.value = this.session.name;
-    const note = el("p", "muted pc-name-note", "");
-    if (this.auth?.isSignedIn ?? false) {
-      input.disabled = true;
-      note.textContent = "named by your Google account";
-      row.appendChild(input);
-    } else {
-      note.textContent = "shows in lobbies & on the leaderboard";
-      const save = el("button", "secondary pc-name-save", "SAVE");
-      save.type = "button";
-      // An emptied/junk input keeps the standing name (typed or generated) — a profile
-      // edit can never blank a name or resurrect the literal "blob".
-      const commit = async () => {
-        const name = resolveNameInput(input.value, this.session.name);
-        input.value = name;
-        save.disabled = true;
-        note.textContent = "saving\u2026";
-        const profile = await this.session.login(name).catch(() => null);
-        save.disabled = false;
-        note.textContent = !this.client
-          ? "saved on this device"
-          : profile !== null
-            ? "saved \u2014 shows in lobbies & future runs"
+    const note = el("p", "muted pc-name-note", "shows in lobbies & on the leaderboard");
+    const isSignedIn = this.auth?.isSignedIn ?? false;
+    const save = el("button", "secondary pc-name-save", "SAVE");
+    save.type = "button";
+    // An emptied/junk input keeps the standing name (typed or generated) — a profile
+    // edit can never blank a name or resurrect the literal "blob".
+    const commit = async () => {
+      const name = resolveNameInput(input.value, this.session.name);
+      input.value = name;
+      save.disabled = true;
+      note.textContent = "saving\u2026";
+      const profile = isSignedIn
+        ? await this.session.setCustomName(name).catch(() => null)
+        : await this.session.login(name).catch(() => null);
+      // Accounts reconcile to the server's authoritative display name; guests keep their
+      // locally-committed value (the guest profile row echoes the shared fixture name).
+      if (isSignedIn && profile) input.value = profile.name;
+      save.disabled = false;
+      note.textContent = !this.client
+        ? "saved on this device"
+        : profile !== null
+          ? "saved \u2014 shows in lobbies & on the leaderboard"
+          : isSignedIn
+            ? "couldn\u2019t save \u2014 check your connection"
             : "saved on this device \u2014 syncs when you're online";
-        onSaved(this.session.name);
-      };
-      save.onclick = () => void commit();
-      input.addEventListener("keydown", (e) => { if (e.key === "Enter") void commit(); });
-      row.append(input, save);
-    }
+      onSaved(this.session.name);
+    };
+    save.onclick = () => void commit();
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") void commit(); });
+    row.append(input, save);
     box.append(row, note);
     return { box, input };
   }
@@ -1108,11 +1108,11 @@ export class Menu {
         card.titleEl.textContent = titleTextOf(profile.cosmetics.title);
         card.setLook(lookOf(this.session.cosmetics, this.session.colorIndex));
         card.setLifetime(profile);
-        // Sync the name editor in place: accounts adopt the server's (Google) name; a
-        // guest's field follows the session unless they're mid-edit right now.
-        if (this.ownNameInput) {
-          if (this.auth?.isSignedIn ?? false) this.ownNameInput.value = profile.name;
-          else if (document.activeElement !== this.ownNameInput) this.ownNameInput.value = this.session.name;
+        // Sync the name editor in place, never over a live edit: accounts adopt the server's
+        // effective display name (their custom name when set, else the Google name); a guest's
+        // field follows the session name.
+        if (this.ownNameInput && document.activeElement !== this.ownNameInput) {
+          this.ownNameInput.value = (this.auth?.isSignedIn ?? false) ? profile.name : this.session.name;
         }
       }
     } catch {
