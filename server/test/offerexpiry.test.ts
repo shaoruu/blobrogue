@@ -203,7 +203,10 @@ async function main(): Promise<void> {
       check("the choosers kept their picks", bots.slice(0, 2).every((b) => (b.transport.getLatestSnapshot()?.self?.items.length ?? 0) === 1));
       check("the sleeper was NOT granted a pick", (bots[2].transport.getLatestSnapshot()?.self?.items.length ?? -1) === 0);
       check("exactly one expiry counted", s.server.health().counters.offersExpired === 1);
-      check("everyone landed on floor 2 together", bots.every((b) => b.transport.getLatestSnapshot()?.floor === 2));
+      // The authoritative descend already happened (checked above via world.state.floor); each
+      // bot's SNAPSHOT floor catches up a tick later, so wait for propagation instead of racing it.
+      const allSnapsOnFloor2 = await waitUntil(() => bots.every((b) => b.transport.getLatestSnapshot()?.floor === 2), 3000);
+      check("everyone landed on floor 2 together", allSnapsOnFloor2);
 
       for (const b of bots) b.stop();
     } finally { await s.close(); }
