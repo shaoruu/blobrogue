@@ -9,8 +9,9 @@
 // Run: npm run test:netcode
 
 import { WSTransport, type SocketLike } from "../src/client/wsTransport.js";
-import { buildSnapshot, jsonCodec, type RosterWire, type ServerMsg, type WireEvent } from "../src/net/protocol.js";
-import { createWorld, spawnPlayerInWorld } from "../src/sim/world.js";
+import { buildSnapshot, jsonCodec, type RosterWire, type ServerMsg, type SnapMsg, type WireEvent } from "../src/net/protocol.js";
+import { diffSnapshot, snapshotToWire, type WorldLiveIds } from "../src/net/snapshotDelta.js";
+import { createWorld, spawnPlayerInWorld, devSpawnEnemy } from "../src/sim/world.js";
 import type { WorldState } from "../src/sim/world.js";
 import { generateDungeon } from "../src/sim/dungeon.js";
 
@@ -293,6 +294,179 @@ async function remoteCombatAudioGateTests(): Promise<void> {
   rig.transport.stop();
 }
 
+// ---- snapshot delta (v24) client-side reconstruction, ordering, and recovery ----
+
+function liveIdsOf(s: SnapMsg): WorldLiveIds {
+  return {
+    enemies: new Set(s.enemies.map((e) => e.id)),
+    players: new Set(s.players.map((p) => p.id)),
+    props: new Set(s.props.map((p) => p.id)),
+    pickups: new Set(s.pickups.map((p) => p.id)),
+    chests: new Set(s.chests.map((c) => c.id)),
+    hzds: new Set(s.hzds.map((h) => h.id)),
+    effs: new Set(s.effs.map((e) => e.id)),
+  };
+}
+
+// A complete keyframe (t:"snap") stamped with an sseq — (re)establishes the client baseline.
+function keyframe(rig: Rig, sseq: number, opts: { full?: boolean; events?: WireEvent[]; evTo?: number; ackSeq?: number } = {}): SnapMsg {
+  return buildSnapshot(rig.world, rig.pid, opts.ackSeq ?? 0, opts.events ?? [], opts.evTo ?? 0, opts.full ?? false, { worldId: "w-test", sseq }) as SnapMsg;
+}
+
+// A delta frame (t:"snapd") diffing the current world against `base` (the baseline the client
+// last acked), stamped with `sseq`.
+function deltaFrame(rig: Rig, base: SnapMsg, sseq: number, opts: { events?: WireEvent[]; evTo?: number; ackSeq?: number } = {}): ServerMsg {
+  const next = keyframe(rig, sseq, opts);
+  return { t: "snapd", ...diffSnapshot(snapshotToWire(base), snapshotToWire(next), sseq, liveIdsOf(next)) };
+}
+
+async function deltaReconstructTests(): Promise<void> {
+  section("snapshot delta: a delta reconstructs against the retained baseline, byte-for-byte");
+  const rig = await makeRig();
+  devSpawnEnemy(rig.world, "slime", 800, 800);
+  devSpawnEnemy(rig.world, "slime", 860, 820);
+  // Keyframe establishes the baseline (sseq 1).
+  const base = keyframe(rig, 1, { full: true });
+  rig.sock.deliver(base);
+  check("ready after keyframe", rig.transport.isReady());
+  check("client acks the keyframe sseq on its next input", true);
+
+  // Move an enemy + self, advance the tick, and deliver ONLY the delta (sseq 2, base 1).
+  const e0 = rig.world.enemies[0];
+  const startX = e0.x;
+  e0.x += 40; e0.y -= 15;
+  rig.world.players.get(rig.pid)!.x += 25;
+  rig.world.tick = 12;
+  const full2 = keyframe(rig, 2); // the authoritative complete state, for comparison only
+  rig.sock.deliver(deltaFrame(rig, base, 2));
+  const got = rig.transport.getLatestSnapshot()!;
+  const gotE0 = got.enemies.find((e) => e.id === e0.id)!;
+  check("delta moved the enemy to authoritative truth", Math.abs(gotE0.x - (startX + 40)) < 1e-9 && gotE0.x !== startX, `x=${gotE0.x}`);
+  check("delta reconstructed the full enemy set (nothing dropped)", got.enemies.length === full2.enemies.length);
+  check("delta reconstructed self position", Math.abs(got.self!.x - full2.self!.x) < 1e-9);
+  check("delta applied advances the client tick", got.tick === 12);
+  rig.transport.stop();
+}
+
+async function deltaOrderingTests(): Promise<void> {
+  section("snapshot delta ordering: a stale / out-of-order delta is DROPPED, never applied");
+  const rig = await makeRig();
+  devSpawnEnemy(rig.world, "slime", 800, 800);
+  const base = keyframe(rig, 1, { full: true });
+  rig.sock.deliver(base);
+
+  const e0 = rig.world.enemies[0];
+  // Fresh delta sseq 5 moves the enemy to X+100.
+  e0.x += 100; rig.world.tick = 20;
+  rig.sock.deliver(deltaFrame(rig, base, 5));
+  const afterFresh = rig.transport.getLatestSnapshot()!.enemies[0].x;
+
+  // A STALE delta sseq 3 (older than 5) against the SAME baseline must be ignored.
+  e0.x -= 100; rig.world.tick = 15;
+  rig.sock.deliver(deltaFrame(rig, base, 3));
+  const afterStale = rig.transport.getLatestSnapshot()!.enemies[0].x;
+  check("stale (lower-sseq) delta did not regress state", Math.abs(afterStale - afterFresh) < 1e-9, `fresh=${afterFresh} stale=${afterStale}`);
+  check("latest tick did not regress", rig.transport.getLatestSnapshot()!.tick === 20);
+  rig.transport.stop();
+}
+
+async function deltaMissedBaselineTests(): Promise<void> {
+  section("snapshot delta: a delta against a baseline the client never had is dropped (gap guard)");
+  const rig = await makeRig();
+  devSpawnEnemy(rig.world, "slime", 800, 800);
+  const base = keyframe(rig, 1, { full: true });
+  rig.sock.deliver(base);
+  const before = rig.transport.getLatestSnapshot()!.enemies[0].x;
+
+  // A delta that claims baseline sseq 7 (the client only holds 1) must NOT be applied — it would
+  // corrupt state by merging onto the wrong base.
+  rig.world.enemies[0].x += 250; rig.world.tick = 30;
+  const orphan = keyframe(rig, 8);
+  const gapped: ServerMsg = { t: "snapd", ...diffSnapshot(snapshotToWire(orphan), snapshotToWire(orphan), 8, liveIdsOf(orphan)), b: 7 };
+  rig.sock.deliver(gapped);
+  check("a delta with an unknown baseline is dropped (state unchanged)", Math.abs(rig.transport.getLatestSnapshot()!.enemies[0].x - before) < 1e-9);
+
+  // Recovery: a fresh keyframe re-establishes the baseline and the client converges.
+  rig.sock.deliver(keyframe(rig, 9));
+  check("a keyframe recovers the client after the gap", Math.abs(rig.transport.getLatestSnapshot()!.enemies[0].x - (before + 250)) < 1e-9);
+  rig.transport.stop();
+}
+
+async function deltaDropKeyframeRecoveryTests(): Promise<void> {
+  section("recovery (a): a DROPPED keyframe — deltas can't apply, a later keyframe reconverges");
+  const rig = await makeRig();
+  devSpawnEnemy(rig.world, "slime", 800, 800);
+  // The bootstrap keyframe (sseq 1) is DROPPED (never delivered). The server, seeing no ack,
+  // keeps trying: first deltas (which the client can't apply — no baseline), then a keyframe.
+  const lost = keyframe(rig, 1, { full: true });
+  rig.world.enemies[0].x += 30; rig.world.tick = 11;
+  rig.sock.deliver(deltaFrame(rig, lost, 2)); // base 1, which the client never received
+  check("client is NOT ready after only an unapplicable delta (keyframe was lost)", !rig.transport.isReady());
+
+  // A fresh full keyframe (the server's fallback) bootstraps the client to authoritative truth.
+  rig.world.enemies[0].x += 30; rig.world.tick = 12;
+  rig.sock.deliver(keyframe(rig, 3, { full: true }));
+  check("ready once a keyframe finally arrives", rig.transport.isReady());
+  check("client converged to full authoritative state", Math.abs(rig.transport.getLatestSnapshot()!.enemies[0].x - rig.world.enemies[0].x) < 1e-9);
+  rig.transport.stop();
+}
+
+async function deltaDropMidStreamRecoveryTests(): Promise<void> {
+  section("recovery (b): a DROPPED mid-stream delta self-heals (next delta diffs the acked base)");
+  const rig = await makeRig();
+  devSpawnEnemy(rig.world, "slime", 800, 800);
+  // Keyframe sseq 1 -> client baseline 1. (In production the client would ack 1; here we model
+  // the server diffing every subsequent delta against the client's last APPLIED baseline.)
+  const s1 = keyframe(rig, 1, { full: true });
+  rig.sock.deliver(s1);
+
+  // Delta sseq 2 (base 1) applied -> baseline advances to 2 (client acks 2).
+  rig.world.enemies[0].x += 20; rig.world.tick = 12;
+  const s2 = keyframe(rig, 2);
+  rig.sock.deliver(deltaFrame(rig, s1, 2));
+  check("delta 2 applied", rig.transport.getLatestSnapshot()!.tick === 12);
+
+  // Delta sseq 3 (base 2) is DROPPED in flight.
+  rig.world.enemies[0].x += 20; rig.world.tick = 13; // (never delivered)
+
+  // The server re-diffs against the last ACKED baseline (2) for the next frame: delta sseq 4,
+  // base 2, carrying ALL changes since 2. The client (still at baseline 2) applies it and
+  // reconverges — the dropped delta 3 never mattered.
+  rig.world.enemies[0].x += 20; rig.world.tick = 14; // total +40 since s2
+  rig.sock.deliver(deltaFrame(rig, s2, 4));
+  const got = rig.transport.getLatestSnapshot()!;
+  check("client reconverged to full authoritative state after the dropped delta", Math.abs(got.enemies[0].x - rig.world.enemies[0].x) < 1e-9, `got=${got.enemies[0].x} truth=${rig.world.enemies[0].x}`);
+  check("client tick jumped straight to the recovered frame", got.tick === 14);
+  rig.transport.stop();
+}
+
+async function deltaEventDedupeTests(): Promise<void> {
+  section("reliable events stay exactly-once ACROSS a keyframe resync (id watermark survives)");
+  const rig = await makeRig();
+  const base = keyframe(rig, 1, { full: true });
+  rig.sock.deliver(base);
+  rig.transport.poll(); // drain bootstrap
+
+  const kill: WireEvent = { id: 1, e: { t: "enemyKill", eid: 9, kind: "slime", tier: "swarm", x: 1, y: 2, combo: 1 } };
+  // The kill rides a DELTA first.
+  rig.world.tick = 12;
+  rig.sock.deliver(deltaFrame(rig, base, 2, { events: [kill], evTo: 1 }));
+  check("event delivered once via delta", rig.transport.poll().events.filter((e) => e.t === "enemyKill").length === 1);
+
+  // A KEYFRAME resync re-carries the SAME event id (as a server that hasn't seen the ack would).
+  // The id watermark must dedupe it — no double-fire across the base reset.
+  rig.world.tick = 13;
+  rig.sock.deliver(keyframe(rig, 3, { events: [kill], evTo: 1 }));
+  check("the same event id does NOT re-fire across a keyframe resync", rig.transport.poll().events.filter((e) => e.t === "enemyKill").length === 0);
+
+  // A NEW event arriving only on a keyframe fires exactly once.
+  const descend: WireEvent = { id: 2, e: { t: "descend", toFloor: 2 } };
+  rig.world.tick = 14;
+  rig.sock.deliver(keyframe(rig, 4, { events: [descend], evTo: 2 }));
+  check("a new event delivered on a keyframe fires once", rig.transport.poll().events.filter((e) => e.t === "descend").length === 1);
+  rig.transport.stop();
+}
+
 async function main(): Promise<void> {
   await staleAndDuplicateTests();
   await ackMonotonicTests();
@@ -301,6 +475,12 @@ async function main(): Promise<void> {
   await offerAndRunOverTests();
   await firstSpawnPlacementTests();
   await worldRebuildTests();
+  await deltaReconstructTests();
+  await deltaOrderingTests();
+  await deltaMissedBaselineTests();
+  await deltaDropKeyframeRecoveryTests();
+  await deltaDropMidStreamRecoveryTests();
+  await deltaEventDedupeTests();
   process.stdout.write(`\n${passed} checks passed, ${failed} failed\n`);
   if (failed > 0) { process.stdout.write(`FAILURES:\n${failures.map((f) => "  - " + f).join("\n")}\n`); process.exit(1); }
   process.stdout.write("\nAll client netcode ordering assertions passed.\n");

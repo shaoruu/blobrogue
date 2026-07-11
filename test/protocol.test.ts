@@ -68,7 +68,7 @@ function clientRoundTripTests(): void {
   section("client messages round-trip losslessly through the strict decoder");
   const msgs: ClientMsg[] = [
     { t: "join", ticket: "v1.abc.def", protocol: PROTOCOL_VERSION },
-    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, ackEv: 17 },
+    { t: "input", seq: 41, mx: -1, my: 0.5, aim: 2.25, fire: true, dash: false, act: true, ult: true, ackEv: 17, ackSnap: 12 },
     { t: "pong", id: 3 },
     { t: "equip", weapon: "shotgun", cseq: 5 },
     { t: "reorder", from: 0, to: 3, cseq: 6 },
@@ -89,7 +89,7 @@ function unknownFieldTests(): void {
   section("security-sensitive client frames REJECT unknown fields (malicious dt)");
   const dtVariants = [0, 1e9, -5, 0.0001];
   for (const dt of dtVariants) {
-    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0, dt });
+    const raw = JSON.stringify({ t: "input", seq: 1, mx: 1, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0, ackSnap: 0, dt });
     let rejected = false;
     try { jsonCodec.decodeClient(raw); } catch (err) { rejected = err instanceof ProtocolError; }
     check(`input carrying dt=${dt} is a protocol error`, rejected);
@@ -262,7 +262,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers v4-v22 + the Wave 1 deep-boss rework (v23: AttackMove grows 'rip', the Tithe's dedicated P3 debris-wheel signature; v22 added mfm, JET's mirror-salvo lead family index)", PROTOCOL_VERSION === 23, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers the snapshot delta wire (v24: snap.sseq + the snapd delta message + input.ackSnap)", PROTOCOL_VERSION === 24, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

@@ -205,9 +205,16 @@ async function main(): Promise<void> {
       const bytesPerClientPerSec = bytesOut / dt / bots.length;
       check("tick p95 < 50ms budget", h.tickMs_p95 < 50, `p95=${h.tickMs_p95}ms max=${h.tickMs_max}ms`);
       check("tick p95 comfortably under target (<10ms) at POC scale", h.tickMs_p95 < 10, `p95=${h.tickMs_p95}ms`);
-      // Budgeted to the balance-reset floor composition: the §4 threat budget spawns ~6-10
-      // floor-1 bodies (was 4), so four clustered clients see more enemies per snapshot.
-      check("avg snapshot < 6KB", avgSnap < 6144, `avg=${avgSnap.toFixed(0)}B/msg, ${(bytesPerClientPerSec / 1024).toFixed(1)}KB/s/client`);
+      // Snapshots are now DELTA-encoded against each client's last acknowledged snapshot (v24):
+      // per-tick frames send only the fields/entities that changed, with periodic full keyframes
+      // for join/resume/gap recovery. Under the same 4-clustered-orbiting-clients scenario that
+      // was tripping the old 6KB cap (measured avg ~6044 B/msg pre-delta), the steady-state
+      // per-client payload measures avg ~700-875 B/msg and delta p95 ~780-940 B (a full keyframe
+      // is ~6KB but rare — join/descent only). The cap below is set from the measured avg peak
+      // (~875 B) with generous headroom; the second assert locks the steady-state delta p95, the
+      // real "wire is tight" signal that the avg (which folds in the join keyframe) can mask.
+      check("avg snapshot < 1.5KB (delta-encoded; was ~6KB)", avgSnap < 1536, `avg=${avgSnap.toFixed(0)}B/msg, ${(bytesPerClientPerSec / 1024).toFixed(1)}KB/s/client`);
+      check("steady-state delta p95 < 1200B", h.snapBytes_p95 < 1200, `p50=${h.snapBytes_p50}B p95=${h.snapBytes_p95}B max=${h.snapBytes_max}B`);
       for (const b of bots) b.stop();
     } finally {
       await s.close();
@@ -228,7 +235,7 @@ async function main(): Promise<void> {
       const startX = start.x;
       // Blast max-magnitude move inputs; the sim normalizes to unit + the server caps total dt.
       for (let i = 1; i <= 30; i++) {
-        cheatWs.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 8, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0 }));
+        cheatWs.send(jsonCodec.encodeClient({ t: "input", seq: i, mx: 8, my: 0, aim: 0, fire: false, dash: false, act: false, ult: false, ackEv: 0, ackSnap: 0 }));
       }
       await sleep(500);
       const moved = Math.abs(world.state.players.get(pid)!.x - startX);
