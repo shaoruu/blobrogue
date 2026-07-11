@@ -370,34 +370,45 @@
         box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--kit,var(--dun-4)) 70%, var(--dun-3)); padding:4px 9px; }
       .kitbadge .ki{ width:20px; height:20px; display:inline-block; background:var(--kit,var(--cream)); }
       .kitbadge .kn{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--kit,var(--cream)); }
+      /* The meter has EXACTLY 3 locked states, all distinguishable in GRAYSCALE (partial-fill vs
+         solid-block vs empty-refill + keycap state) — never by hue alone. */
       .ultmeter{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72);
         box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--kit,var(--dun-3)) 45%, var(--dun-3)); padding:6px 11px; }
-      .ultmeter .ui{ width:16px; height:16px; display:inline-block; background:var(--kit,var(--amber)); flex:none; }
+      .ultmeter .ui{ width:16px; height:16px; display:inline-block; background:var(--kit,var(--amber)); flex:none; opacity:.8; }
       .ultmeter .lbl{ white-space:nowrap; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; }
-      .ultmeter .k{ color:color-mix(in srgb, var(--kit,var(--dun-4)) 50%, var(--dun-4)); }
-      .ultmeter .rdy{ visibility:hidden; color:var(--kit,var(--amber)); }
-      .ultmeter .key{ letter-spacing:1px; padding:2px 4px; }
+      /* (1) CHARGING is the default: NAME dim (--ink-mute), keycap muted (dun-2), NEVER looks ready. */
+      .ultmeter .k{ color:var(--ink-mute); }
+      .ultmeter .rdy{ visibility:hidden; color:var(--amber); }
+      .ultmeter .key.keycap{ letter-spacing:1px; padding:2px 4px; background:var(--dun-2); }
+      .ultmeter .pct{ min-width:24px; text-align:right; font-family:var(--f-num); font-size:var(--fs-xs); line-height:1; color:var(--ink-faint); font-variant-numeric:tabular-nums; }
       .ultmeter .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
+      /* CHARGING fill: left->right in the kit accent at ~55% (translucent color, not element
+         opacity, so the leading-edge flash stays bright). */
       .ultmeter .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--ult-fill,0));
-        background:var(--kit,var(--amber)); box-shadow:0 0 6px var(--kit,var(--amber)); transition:width .1s linear; transform-origin:center; }
-      /* READY: the widget LIFTS to the kit accent, the name reads "<ULT> READY" (bright), the bar
-         is a solid block, and the [F] keycap fills amber with the ONE allowed pulse. */
-      .ultmeter.ready{ box-shadow:inset 0 0 0 2px var(--kit,var(--amber)); }
-      .ultmeter.ready .k{ color:var(--kit,var(--amber)); }
+        background:color-mix(in srgb, var(--kit,var(--amber)) 55%, transparent);
+        box-shadow:0 0 6px color-mix(in srgb, var(--kit,var(--amber)) 45%, transparent); transition:width .1s linear; }
+      /* The 1-frame brighter flash on the fill's LEADING EDGE — exactly where a kill/big-hit mote
+         lands (game.ts flies the mote into this edge, then re-triggers .mote-pulse). */
+      .ultmeter .bar i::after{ content:""; position:absolute; right:0; top:0; bottom:0; width:3px; background:#fff; opacity:0; }
+      .ultmeter .bar i.mote-pulse::after{ animation:ultEdgeFlash .16s ease-out; }
+      /* (2) READY: the LOUD state — widget lifts to full kit accent + amber reinforcement, the bar
+         is a SOLID opaque block (not a fill), NAME brightens to "<ULT> READY" (cream + amber), the
+         [F] keycap fills amber with the ONE allowed pulse (~0.7Hz). Reads via SOLID bar + brighter
+         text + pulsing keycap, NOT hue. */
+      .ultmeter.ready{ box-shadow:inset 0 0 0 2px var(--kit,var(--amber)),0 0 10px color-mix(in srgb, var(--kit,var(--amber)) 40%, transparent); }
+      .ultmeter.ready .k{ color:var(--cream); }
       .ultmeter.ready .rdy{ visibility:visible; }
-      .ultmeter.ready .ui{ background:var(--kit,var(--amber)); }
-      .ultmeter.ready .bar i{ box-shadow:0 0 10px var(--kit,var(--amber)); animation:ultReady .7s ease-in-out infinite alternate; }
-      .ultmeter.ready .key.keycap{ animation:ultKeyPulse .8s ease-in-out infinite alternate; }
-      /* LOCKOUT: the bar drains 1->0 as the 8s cooldown sweeps; muted, never "ready". */
+      .ultmeter.ready .ui{ opacity:1; }
+      .ultmeter.ready .bar i{ background:var(--kit,var(--amber)); box-shadow:0 0 10px var(--kit,var(--amber)); }
+      .ultmeter.ready .key.keycap{ background:var(--amber); color:var(--dun-0); box-shadow:inset 0 0 0 1px var(--amber-hi); animation:ultKeyPulse 1.4s ease-in-out infinite; }
+      /* (3) LOCKOUT: the bar is DARK, REFILLING from 0 as the 8s cooldown elapses; keycap + name
+         stay muted. Unconfusable with ready (empty->refill vs a solid block). */
       .ultmeter.cd .bar i{ background:var(--dun-4); box-shadow:none; }
-      .ultmeter.cd .k{ color:var(--dun-4); }
-      /* A mote landing pings the fill — a transform/brightness flash (never a reflow). */
-      .ultmeter .bar i.mote-pulse{ animation:ultMotePulse .18s ease-out; }
-      @keyframes ultReady{ from{ opacity:.65; } to{ opacity:1; } }
-      @keyframes ultKeyPulse{ from{ box-shadow:inset 0 0 0 1px var(--amber-hi); } to{ box-shadow:inset 0 0 0 1px var(--amber-hi),0 0 8px var(--amber); } }
-      @keyframes ultMotePulse{ 0%{ filter:brightness(2); transform:scaleY(1.3); } 100%{ filter:brightness(1); transform:scaleY(1); } }
+      @keyframes ultEdgeFlash{ 0%{ opacity:.95; } 100%{ opacity:0; } }
+      @keyframes ultKeyPulse{ 0%,100%{ box-shadow:inset 0 0 0 1px var(--amber-hi); } 50%{ box-shadow:inset 0 0 0 1px var(--amber-hi),0 0 9px var(--amber); } }
       @media (prefers-reduced-motion: reduce){
-        .ultmeter.ready .bar i, .ultmeter.ready .key.keycap, .ultmeter .bar i.mote-pulse{ animation:none; }
+        .ultmeter.ready .key.keycap{ animation:none; }
+        .ultmeter .bar i.mote-pulse::after{ animation:none; }
       }
       /* The contextual interact prompt is world-anchored now (a floating [E] chip drawn on the
          canvas over its target — see Game.renderInteractPrompt), so the bottom-left chrome
