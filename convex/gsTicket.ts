@@ -51,6 +51,9 @@ export const mint = action({
       // from the party color at launch and titles stay off the wire, so neither claims.
       if (profile.cosmetics.hat !== null) claims.hat = profile.cosmetics.hat;
       if (profile.cosmetics.face !== null) claims.face = profile.cosmetics.face;
+      // The equipped companion pet rides the same visual-only channel (META spec §3), so
+      // teammates render each other's pets in-world. Ownership was validated at equip time.
+      if (profile.equippedPet !== null) claims.pet = profile.equippedPet;
     }
     // KIT selection (KIT/XP spec §9.5): the account authority validates the requested kit
     // against the account's Mastery-unlocked set and signs BOTH the validated kit and the

@@ -91,12 +91,12 @@ export class WsSnapshotPublisher implements SnapshotPublisher {
     const out = new Map<string, PlayerIdentity>();
     for (const conn of room.conns.values()) {
       if (conn.playerId !== null) {
-        out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex, hat: conn.hat, face: conn.face });
+        out.set(conn.playerId, { name: conn.displayName, colorIndex: conn.colorIndex, hat: conn.hat, face: conn.face, pet: conn.pet });
       }
     }
     for (const seat of room.seats()) {
       if (!out.has(seat.pid)) {
-        out.set(seat.pid, { name: seat.displayName, colorIndex: seat.colorIndex, hat: seat.hat, face: seat.face });
+        out.set(seat.pid, { name: seat.displayName, colorIndex: seat.colorIndex, hat: seat.hat, face: seat.face, pet: seat.pet });
       }
     }
     return out;

@@ -33,6 +33,10 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   // LAYERED_HERO_BASE_WALK_SRC): drawChar infers the frame count/size from the sheet, so the
   // AD's final walk PNG is a drop-in at the registered path with no code change.
   "hero_bald.walk": { src: LAYERED_HERO_BASE_WALK_SRC, fps: 10 },
+  // The companion doggie's trot cycle (META spec §3). A swappable placeholder like the hero
+  // sheets — the AD drops the final walk strip at this path with no code change; a missing
+  // sheet cleanly falls back to the static idle PNG below (drawChar infers frame count/size).
+  "doggie.walk": { src: "/sprites/pets/doggie_walk.png", fps: 9 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
   "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 11 },
@@ -322,6 +326,9 @@ const SOURCES: Record<SpriteName, string> = {
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship
   // as SHEETS hooks — see the registrations below + ART.md "Patch & the waystation".
   patch: "/sprites/patch.png",
+  // The companion doggie idle sprite (META spec §3). Swappable placeholder — the AD drops the
+  // final generated doggie art at this exact path; a still-streaming image renders nothing.
+  doggie: "/sprites/pets/doggie.png",
   heart: "/sprites/heart.png",
   coin: "/sprites/coin.png",
   gun: "/sprites/gun.png",

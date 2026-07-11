@@ -8,6 +8,8 @@ import type { CosmeticLoadout } from "./cosmeticsCore";
 import { foldBestRun, foldFloorProgress, mergeBestRun, syncIdentity, cleanBuild } from "./leaderboard";
 import type { RunBuild } from "./leaderboard";
 import { masteryXpForReachedFloor, masteryLevelForXp } from "./masteryCore";
+import { bankedRunAmber, firstBossAmber, isBossKindId } from "../src/sim/balance.js";
+import { canBuyNode, isPetOwned, CAMP_SHELL_ID, DOGGIE_NODE_ID, isDoggieRescuedByRun } from "../src/sim/camp_nodes.js";
 
 export interface Profile {
   playerId: string;
@@ -20,10 +22,12 @@ export interface Profile {
   deepestFloor: number;
   totalCoins: number;
   gamesPlayed: number;
-  // The persistent currency: banked by the premium economy at run end (amber cache
-  // trickle + mythic windfalls). Nothing spends it yet — the Foundation lands later.
+  // The persistent currency: banked SERVER-SIDE at run end from run PROGRESS (floors, depth,
+  // first-boss) + the premium cache trickle, and spent at the Camp on nodes/pets (buyNode).
   amber: number;
   unlocks: string[];
+  // The equipped cosmetic companion pet id (WAVE 1), or null for none. Visual-only.
+  equippedPet: string | null;
   // Account MASTERY (KIT/XP spec §4): the persistent ACCESS track. masteryXp is the lifetime
   // total; masteryLevel is the derived level the lobby reads to gate kit selection. Never a
   // currency, never spendable.
@@ -52,6 +56,7 @@ function toProfile(doc: Doc<"players">, user?: Doc<"users"> | null): Profile {
     gamesPlayed: doc.gamesPlayed,
     amber: doc.amber ?? 0,
     unlocks: doc.unlocks,
+    equippedPet: doc.equippedPet ?? null,
     masteryXp: doc.masteryXp ?? 0,
     masteryLevel: masteryLevelForXp(doc.masteryXp ?? 0),
     image: user?.image,
@@ -159,6 +164,7 @@ async function absorbGuestRow(
     unlocks: [...new Set([...account.unlocks, ...guest.unlocks])],
     ...(account.colorIndex === undefined && guest.colorIndex !== undefined ? { colorIndex: guest.colorIndex } : {}),
     ...(account.cosmeticLoadout === undefined && guest.cosmeticLoadout !== undefined ? { cosmeticLoadout: guest.cosmeticLoadout } : {}),
+    ...(account.equippedPet === undefined && guest.equippedPet !== undefined ? { equippedPet: guest.equippedPet } : {}),
     // The account row adopts this browser's clientId (when free) so guest play after a
     // sign-out keeps accruing onto the same identity — the first-sign-in semantics.
     ...(account.clientId === undefined ? { clientId: guest.clientId } : {}),
@@ -341,20 +347,52 @@ interface RunArgs {
   floor: number;
   kills: number;
   coins: number;
-  amber: number;
+  // Authoritative run FACTS the Amber bank is computed from (never a client-authored amber
+  // number). floorsCleared is clamped to the deepest floor server-side; bossKills is filtered
+  // to real boss kinds; the two cache flags mirror the premium economy's armed cache/windfall.
+  floorsCleared: number;
+  bossKills: string[];
+  isCacheArmed: boolean;
+  amberWindfall: number;
+  isReturn: boolean;
   durationMs: number;
   build: RunBuild;
 }
 
+// The per-account first-kill flag for a boss kind (colon-namespaced, like discover:melee).
+function bossKillFlag(kind: string): string {
+  return "bosskill:" + kind;
+}
+
+// Defensive per-run bank ceiling: the pure math is deterministic, but this bounds a tampered
+// client that inflates the run facts. A legit deep clear (F100+ plus every first-boss) sits
+// comfortably under it.
+const AMBER_RUN_CAP = 1000;
+
 async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Promise<Doc<"players"> | null> {
+  // SERVER-AUTHORITATIVE Amber (the client never authors the number): the recurring run pool
+  // banked at the outcome fraction, plus one-time first-boss grants at full.
+  const floorsCleared = Math.max(0, Math.min(Math.floor(run.floorsCleared), Math.max(0, Math.floor(run.floor))));
+  const runPool = bankedRunAmber({
+    floorsCleared,
+    deepestFloor: run.floor,
+    unspentCoins: run.coins,
+    isCacheArmed: run.isCacheArmed,
+    windfall: run.amberWindfall,
+  }, run.isReturn);
+  // First-boss: one-time per boss KIND per account, banked at full (exempt from the wipe cut).
+  const newBossKinds = [...new Set(run.bossKills)].filter(
+    (k) => isBossKindId(k) && !doc.unlocks.includes(bossKillFlag(k)),
+  );
+  const bankedAmber = Math.max(0, Math.min(AMBER_RUN_CAP, runPool + firstBossAmber(newBossKinds)));
+  const nextAmber = (doc.amber ?? 0) + bankedAmber;
+
   const totals = {
     totalKills: doc.totalKills + Math.max(0, run.kills),
     totalCoins: doc.totalCoins + Math.max(0, run.coins),
     deepestFloor: Math.max(doc.deepestFloor, run.floor),
     gamesPlayed: doc.gamesPlayed + 1,
-    // The premium economy's trickle is already capped at the sim (≤ +5 cache + windfalls);
-    // the fold re-clamps defensively so a tampered client can't mint meaningful Amber.
-    amber: (doc.amber ?? 0) + Math.max(0, Math.min(50, Math.floor(run.amber))),
+    amber: nextAmber,
     // Account MASTERY XP (KIT/XP spec §4): granted every run from run performance (derived
     // from the deepest floor reached — a cleared floor always pays, win or lose). Access-only:
     // it unlocks kits, never a stat or a spendable balance.
@@ -362,9 +400,18 @@ async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Pro
   };
   // Earned cosmetics unlock off the post-fold all-time stats (the one grant path).
   const earned = earnedCosmeticsFor(totals).filter((id) => !doc.unlocks.includes(id));
+  // Meta unlocks: the per-boss first-kill flags, plus the free Amber Camp shell the first time
+  // this account banks any Amber (the loop's entry point).
+  const metaUnlocks = newBossKinds.map(bossKillFlag);
+  if (nextAmber > 0 && !doc.unlocks.includes(CAMP_SHELL_ID)) metaUnlocks.push(CAMP_SHELL_ID);
+  // The doggie is RESCUED, not bought (studio hard line): a one-time account unlock granted
+  // like an achievement the first time a run reaches the rescue floor — reachable in the first
+  // few runs. The Kennel then adopts/equips it; Amber never buys a pet.
+  if (isDoggieRescuedByRun(run.floor) && !doc.unlocks.includes(DOGGIE_NODE_ID)) metaUnlocks.push(DOGGIE_NODE_ID);
+  const addedUnlocks = [...earned, ...metaUnlocks].filter((id) => !doc.unlocks.includes(id));
   await ctx.db.patch(doc._id, {
     ...totals,
-    ...(earned.length > 0 ? { unlocks: [...doc.unlocks, ...earned] } : {}),
+    ...(addedUnlocks.length > 0 ? { unlocks: [...doc.unlocks, ...addedUnlocks] } : {}),
     lastSeen: Date.now(),
   });
   const updated = await ctx.db.get(doc._id);
@@ -373,16 +420,24 @@ async function foldRun(ctx: MutationCtx, doc: Doc<"players">, run: RunArgs): Pro
 }
 
 // Fold a finished run into the caller's all-time stats + the global leaderboard (called on
-// game over). Signed in: folds into the account row, creating/migrating it if login hadn't
-// yet (so a run is never lost to a startup race). Guest: folds into the existing clientId
-// row, or no-ops if there isn't one — exactly as before. durationMs/build are optional so
-// already-deployed clients keep recording runs.
+// game over). Amber is computed SERVER-SIDE from the run facts here — a client can never mint
+// it. Signed in: folds into the account row, creating/migrating it if login hadn't yet (so a
+// run is never lost to a startup race). Guest: folds into the existing clientId row, or no-ops
+// if there isn't one. Every gameplay-fact arg is optional so an older client still records.
 export const recordRun = mutation({
   args: {
     clientId: v.string(),
     floor: v.number(),
     kills: v.number(),
     coins: v.number(),
+    // The authoritative run facts (see RunArgs). All optional for forward-compat.
+    floorsCleared: v.optional(v.number()),
+    bossKills: v.optional(v.array(v.string())),
+    isCacheArmed: v.optional(v.boolean()),
+    amberWindfall: v.optional(v.number()),
+    outcome: v.optional(v.union(v.literal("death"), v.literal("return"))),
+    // Deprecated: a legacy client-authored amber value. Accepted but IGNORED — Amber is
+    // computed server-side now, so a tampered client can no longer author it.
     amber: v.optional(v.number()),
     durationMs: v.optional(v.number()),
     build: v.optional(v.object({
@@ -390,8 +445,18 @@ export const recordRun = mutation({
       items: v.array(v.object({ id: v.string(), count: v.number() })),
     })),
   },
-  handler: async (ctx, { clientId, floor, kills, coins, amber, durationMs, build }) => {
-    const run: RunArgs = { floor, kills, coins, amber: amber ?? 0, durationMs: durationMs ?? 0, build: cleanBuild(build) };
+  handler: async (ctx, args) => {
+    const { clientId, floor, kills, coins, floorsCleared, bossKills, isCacheArmed, amberWindfall, outcome, durationMs, build } = args;
+    const run: RunArgs = {
+      floor, kills, coins,
+      floorsCleared: floorsCleared ?? 0,
+      bossKills: (bossKills ?? []).slice(0, 16),
+      isCacheArmed: isCacheArmed ?? false,
+      amberWindfall: Math.max(0, Math.floor(amberWindfall ?? 0)),
+      isReturn: outcome === "return",
+      durationMs: durationMs ?? 0,
+      build: cleanBuild(build),
+    };
     const userId = await getAuthUserId(ctx);
     if (userId) {
       const { row, user } = await ensureAccountRow(ctx, userId, clientId, "blob");
@@ -404,3 +469,60 @@ export const recordRun = mutation({
     return updated ? toProfile(updated) : null;
   },
 });
+
+// ---- WAVE 1: the Camp SPEND + pet equip (server-authoritative, reject client-authored amber) ----
+
+// Resolve the caller's stats row (account-first, else guest by clientId) for a write mutation.
+async function resolveWriteRow(ctx: MutationCtx, clientId: string): Promise<Doc<"players"> | null> {
+  const userId = await getAuthUserId(ctx);
+  if (userId) return (await ensureAccountRow(ctx, userId, clientId, "blob")).row;
+  return await findByClientId(ctx, clientId);
+}
+
+// Buy an Amber Camp node. The purchase is validated ENTIRELY server-side against the row's
+// real Amber + owned nodes (canBuyNode): enough Amber, prereqs met, not already owned. On
+// success it deducts the Amber and records the node id in unlocks[]. The client's optimistic
+// UI reconciles from the returned profile; a rejected buy leaves the row untouched.
+export const buyNode = mutation({
+  args: { clientId: v.string(), nodeId: v.string() },
+  handler: async (ctx, { clientId, nodeId }) => {
+    const row = await resolveWriteRow(ctx, clientId);
+    if (!row) return null;
+    const amber = row.amber ?? 0;
+    const check = canBuyNode(nodeId, amber, row.unlocks);
+    if (!check.ok) {
+      const profile = await ensureProfileView(ctx, row);
+      return { ok: false as const, reason: check.reason, profile };
+    }
+    await ctx.db.patch(row._id, {
+      amber: amber - check.cost,
+      unlocks: [...row.unlocks, nodeId],
+      lastSeen: Date.now(),
+    });
+    const updated = (await ctx.db.get(row._id))!;
+    return { ok: true as const, profile: await ensureProfileView(ctx, updated) };
+  },
+});
+
+// Equip (or clear, with null) the active companion pet. Only a pet the player OWNS via an
+// owned companion node may be equipped — a tampered id is rejected and the row is untouched.
+export const equipPet = mutation({
+  args: { clientId: v.string(), petId: v.union(v.string(), v.null()) },
+  handler: async (ctx, { clientId, petId }) => {
+    const row = await resolveWriteRow(ctx, clientId);
+    if (!row) return null;
+    if (petId !== null && !isPetOwned(petId, row.unlocks)) {
+      return { ok: false as const, reason: "unowned" as const, profile: await ensureProfileView(ctx, row) };
+    }
+    await ctx.db.patch(row._id, { equippedPet: petId ?? undefined, lastSeen: Date.now() });
+    const updated = (await ctx.db.get(row._id))!;
+    return { ok: true as const, profile: await ensureProfileView(ctx, updated) };
+  },
+});
+
+// Resolve the profile view for a write row (loading the account user when linked), so buy/
+// equip return the same shape as getProfile/ensurePlayer.
+async function ensureProfileView(ctx: MutationCtx, row: Doc<"players">): Promise<Profile> {
+  const user = row.userId ? await ctx.db.get(row.userId) : null;
+  return toProfile(row, user);
+}

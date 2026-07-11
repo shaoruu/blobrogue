@@ -149,6 +149,7 @@ export class GameWorld implements RoomRuntime {
       colorIndex: conn.colorIndex,
       hat: conn.hat,
       face: conn.face,
+      pet: conn.pet,
       lastAppliedSeq: conn.lastAppliedSeq,
       lastCseq: conn.lastCseq,
       pendingOffer: conn.pendingOffer,

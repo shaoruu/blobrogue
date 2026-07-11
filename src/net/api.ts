@@ -24,8 +24,11 @@ export interface ProfileDoc {
   gamesPlayed: number;
   // The persistent currency (banked by the premium economy's cache/windfall at run end).
   amber: number;
-  // Earned cosmetic/unlock ids (granted by recordRun; starter items are owned implicitly).
+  // Earned cosmetic/unlock ids (recordRun) + owned Amber Camp node ids + boss-kill flags (buyNode
+  // / first-boss grants). Disjoint namespaces; starter cosmetics are owned implicitly.
   unlocks: string[];
+  // The equipped cosmetic COMPANION pet id (WAVE 1, META spec §3), or null for none.
+  equippedPet: string | null;
   // Account MASTERY (KIT/XP spec §4): the persistent ACCESS track (lifetime XP + derived level)
   // the lobby reads to gate kit selection. Optional so an older backend still decodes.
   masteryXp?: number;
@@ -60,6 +63,26 @@ export type RunBuildArg = {
   weapons: string[];
   items: Array<{ id: string; count: number }>;
 };
+
+// recordRun args: the authoritative run FACTS the server banks Amber from (never a client
+// amber number). bossKills are boss kinds defeated this run; outcome drives the bank fraction.
+export type RecordRunArgs = {
+  clientId: string;
+  floor: number;
+  kills: number;
+  coins: number;
+  floorsCleared?: number;
+  bossKills?: string[];
+  isCacheArmed?: boolean;
+  amberWindfall?: number;
+  outcome?: "death" | "return";
+  durationMs?: number;
+  build?: RunBuildArg;
+};
+
+// The buyNode / equipPet result: the (possibly-unchanged) profile plus a success flag and a
+// rejection reason, so the optimistic UI can reconcile and surface a clear note on failure.
+export type CampMutationResult = { ok: boolean; reason?: string; profile: ProfileDoc };
 
 // Explicit per-slot loadout picks for ensurePlayer ("none" clears a slot; absent = keep).
 export type CosmeticsArg = { hat?: string; face?: string; body?: string; title?: string };
@@ -142,10 +165,14 @@ export const api = {
     ensurePlayer: makeFunctionReference<"mutation", { clientId: string; name: string; colorIndex?: number; cosmetics?: CosmeticsArg }, ProfileDoc>("players:ensurePlayer"),
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
-    recordRun: makeFunctionReference<"mutation", { clientId: string; floor: number; kills: number; coins: number; amber?: number; durationMs?: number; build?: RunBuildArg }, ProfileDoc | null>("players:recordRun"),
+    recordRun: makeFunctionReference<"mutation", RecordRunArgs, ProfileDoc | null>("players:recordRun"),
     // Progressive deepest-floor banking (fired on each descend) — raises deepestFloor +
     // charts the floor without the per-run folding recordRun does. Returns nothing.
     recordFloorProgress: makeFunctionReference<"mutation", { clientId: string; floor: number }, null>("players:recordFloorProgress"),
+    // WAVE 1 Amber Camp SPEND (server-authoritative): buy an owned camp node (cost/prereqs/
+    // ownership validated server-side, Amber deducted), and equip/clear the active pet.
+    buyNode: makeFunctionReference<"mutation", { clientId: string; nodeId: string }, CampMutationResult | null>("players:buyNode"),
+    equipPet: makeFunctionReference<"mutation", { clientId: string; petId: string | null }, CampMutationResult | null>("players:equipPet"),
   },
   leaderboard: {
     // The global top-N best runs (deepest floor, kills tie-break), public fields only.

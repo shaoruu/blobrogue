@@ -61,6 +61,7 @@ export interface TicketPayload {
   // never inflate either (both are inside the HMAC signature).
   kt?: string;  // chosen kit id
   ml?: number;  // account mastery level
+  pt?: string;  // cosmetic companion pet id (visual-only; META spec §3)
 }
 
 // Optional claims for a mint (long-form field names of the wire keys above).
@@ -72,6 +73,7 @@ export interface TicketClaims {
   face?: string;
   kit?: string;
   masteryLevel?: number;
+  pet?: string;
 }
 
 export interface AuthResult {
@@ -84,6 +86,7 @@ export interface AuthResult {
   face?: string;        // format-validated cosmetic face id
   kit?: string;         // format-validated chosen kit id (the join gate re-checks the unlock)
   masteryLevel?: number;// account mastery level (drives the server-side kit-unlock gate)
+  pet?: string;         // format-validated cosmetic companion pet id (visual-only)
   reason?: string;
 }
 
@@ -114,7 +117,7 @@ function sign(secret: string, body: string): string {
 
 // Mint a signed ticket valid for `ttlSecs`. Used by tests, the harness, and the local
 // dev-ticket endpoint — mirrors what the production Convex minter does, byte-for-byte
-// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc, kt, ml; see convex/gsTicketCore.ts).
+// (payload keys in the FIXED order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt; see convex/gsTicketCore.ts).
 export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowMs = Date.now(), claims: TicketClaims = {}): string {
   const payload: TicketPayload = { pid: playerId, exp: Math.floor(nowMs / 1000) + ttlSecs };
   if (claims.worldId !== undefined) payload.wld = claims.worldId;
@@ -124,6 +127,7 @@ export function mintTicket(secret: string, playerId: string, ttlSecs = 120, nowM
   if (claims.face !== undefined) payload.fc = claims.face;
   if (claims.kit !== undefined) payload.kt = claims.kit;
   if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
+  if (claims.pet !== undefined) payload.pt = claims.pet;
   const body = "v1." + b64url(Buffer.from(JSON.stringify(payload), "utf8"));
   return body + "." + sign(secret, body);
 }
@@ -200,6 +204,10 @@ export function verifyTicket(cfg: AuthConfig, ticket: string, nowMs = Date.now()
   if (payload.kt !== undefined) {
     if (!isKitId(payload.kt)) return { ok: false, reason: "bad_kit" };
     out.kit = payload.kt;
+  }
+  if (payload.pt !== undefined) {
+    if (typeof payload.pt !== "string" || !COSMETIC_ID_RE.test(payload.pt)) return { ok: false, reason: "bad_cosmetic" };
+    out.pet = payload.pt;
   }
   if (payload.ml !== undefined) {
     if (typeof payload.ml !== "number" || !Number.isInteger(payload.ml) || payload.ml < 1 || payload.ml > 1e6) {

@@ -33,6 +33,7 @@ export interface Seat {
   colorIndex: number | null;
   hat: string | null;
   face: string | null;
+  pet: string | null;
   lastAppliedSeq: number;
   lastCseq: number;
   pendingOffer: string[] | null;

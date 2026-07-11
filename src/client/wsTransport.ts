@@ -879,6 +879,7 @@ export class WSTransport implements Transport {
         colorIndex: p.cl,
         hat: p.ht,
         face: p.fc,
+        pet: p.pt,
         updatedAt: now,
       };
     });

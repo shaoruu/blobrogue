@@ -1,6 +1,6 @@
 import type { ConvexClient } from "convex/browser";
 import { api } from "./api.js";
-import type { ProfileDoc } from "./api.js";
+import type { ProfileDoc, CampMutationResult } from "./api.js";
 import type { RunResult } from "../game/game.js";
 import { bodyItemForPaletteIndex } from "../game/cosmetics.js";
 import type { CosmeticSlot, CosmeticLoadout } from "../game/cosmetics.js";
@@ -256,7 +256,13 @@ export class Session {
         floor: result.floor,
         kills: result.kills,
         coins: result.coins,
-        amber: result.amber,
+        // The authoritative run FACTS — the server banks Amber from these (never a client
+        // amber number). floorsCleared/bossKills come from the sim's own descend/kill events.
+        floorsCleared: result.floorsCleared,
+        bossKills: result.bossKills,
+        isCacheArmed: result.isCacheArmed,
+        amberWindfall: result.amberWindfall,
+        outcome: result.outcome,
         durationMs: Math.round(result.durationMs),
         // The run's final build rides along for the player's leaderboard entry (ids only —
         // display names resolve client-side from the weapon/item catalogs).
@@ -269,5 +275,38 @@ export class Session {
       // Never let a stats-save failure interrupt the play loop.
     }
     return this.profile;
+  }
+
+  // The equipped companion pet id from the profile (WAVE 1), or null. Read at run start so the
+  // client renders the local player's own pet; teammates render it from the wire identity.
+  get equippedPet(): string | null {
+    return this.profile?.equippedPet ?? null;
+  }
+
+  // WAVE 1 Amber Camp SPEND (server-authoritative). Buy a camp node: the server validates
+  // cost/prereqs/ownership and deducts Amber, then this caches the returned profile so the UI
+  // reflects the new balance + unlock. Returns the result (ok + reason) or null on failure.
+  async buyNode(nodeId: string): Promise<CampMutationResult | null> {
+    if (!this.client) return null;
+    try {
+      const res = await this.client.mutation(api.players.buyNode, { clientId: this.clientId, nodeId });
+      if (res) this.profile = res.profile;
+      return res;
+    } catch {
+      return null;
+    }
+  }
+
+  // Equip (or clear with null) the active companion pet. The server validates ownership; this
+  // caches the returned profile so the menu + next run render the equipped pet.
+  async equipPet(petId: string | null): Promise<CampMutationResult | null> {
+    if (!this.client) return null;
+    try {
+      const res = await this.client.mutation(api.players.equipPet, { clientId: this.clientId, petId });
+      if (res) this.profile = res.profile;
+      return res;
+    } catch {
+      return null;
+    }
   }
 }

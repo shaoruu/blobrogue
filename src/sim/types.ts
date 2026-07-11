@@ -658,6 +658,10 @@ export interface RemotePlayer {
   // the sim never interprets them; the renderer maps ids to overlay art). null = none.
   hat: string | null;
   face: string | null;
+  // Equipped cosmetic COMPANION pet id (META spec §3), from the verified ticket identity —
+  // same visual-only channel as hat/face. The sim never interprets it; the client renders a
+  // follower that cannot die, deal damage, block, or be targeted. null = no pet.
+  pet: string | null;
   updatedAt: number;
 }
 
@@ -690,4 +694,7 @@ export type SpriteName =
   | "tithe" | "tithe_slab" | "tithe_slab_cracked"
   | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg"
   | "patch"
+  // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
+  // swappable placeholder asset; the sim never references it (pets are OUT of the sim).
+  | "doggie"
   | "heart" | "coin" | "gun" | "spit";
