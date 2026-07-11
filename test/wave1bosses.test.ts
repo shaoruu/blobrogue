@@ -19,7 +19,7 @@ import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind, WeaponId } from "../src/sim/types.js";
 import {
   JET, TITHE, QUORUM, weaponResonanceFamily, RESONANCE_FAMILIES,
-  EARNED_GUARD_MIN, EARNED_GUARD_MAX, titheSlabHpForFloor,
+  titheSlabHpForFloor,
 } from "../src/sim/balance.js";
 
 const DT = 1 / 60;
@@ -74,8 +74,11 @@ function contractGates(): void {
     ["QUORUM (shared telegraph)", QUORUM.guardMult, QUORUM.volleyWindup, QUORUM.volleyWindup - QUORUM.volleyLock, QUORUM.mergeRecover, QUORUM.windowBankFrac],
   ];
   for (const [name, guard, tell, postLock, recover, bank] of rows) {
-    check(`${name} guard sits inside the 0.20–0.35 fairness band`,
-      guard >= EARNED_GUARD_MIN - 1e-9 && guard <= EARNED_GUARD_MAX + 1e-9, `guard=${guard}`);
+    // Balancer FINAL: the three Wave 1 deep bosses use a HARD guard gate (JET/QUORUM 0.12,
+    // TITHE 0.0 — zero to the body while armored), well below the F15–30 roster's 0.20–0.35
+    // "reduction, never immunity" band. Chip is not a path here: the mechanic IS the fight.
+    check(`${name} uses the deep-boss HARD guard gate (0 ≤ guard ≤ 0.12 — play the mechanic, chip is not a path)`,
+      guard >= 0 - 1e-9 && guard <= 0.12 + 1e-9, `guard=${guard}`);
     check(`${name} tell is ≥0.6s (readable)`, tell >= 0.6 - 1e-9, `tell=${tell}`);
     check(`${name} keeps ≥0.30s post-lock dodge`, postLock >= 0.30 - 1e-9, `postLock=${postLock.toFixed(2)}`);
     check(`${name} recover/window is ≥0.35s`, recover >= 0.35 - 1e-9, `recover=${recover}`);

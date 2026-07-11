@@ -1057,16 +1057,11 @@ export function refDpsForFloor(floor: number): number {
   if (floor <= 15) return 36;
   if (floor <= 20) return 36;
   if (floor <= 25) return 43;
-  if (floor <= 30) return 46;
-  // Wave 1 deep bosses (F31+, The Sump). The measured good-gun practical boss output is
-  // ~30 (the whole arsenal tops out near ~42), so the deep anchor is the ACHIEVABLE
-  // good-gun output rather than the F30 placeholder — a 46 anchor sat ABOVE the reachable
-  // ceiling, so a co-op party's R never rose over 1 and it simply out-DPS'd a solo boss
-  // that HP scaling couldn't offset ("two players just spam them"). Anchoring on the
-  // achievable good-gun output is what lets FIX1/FIX2 co-op HP scaling engage; the anchor
-  // sits at/above the strongest single good gun (~32) so a SOLO player still measures R≈1
-  // (HP change <3%, clamped by soloGearCap) and the solo power fantasy is untouched.
-  return 31;
+  // F30 and the Wave 1 deep bosses (F35 JET / F40 TITHE / F45 QUORUM) hold the finale
+  // anchor of 46 (balancer FINAL). The deep bosses' anti-spam is the HARD guard gate + the
+  // per-window bank, NOT HP scaling — so the anchor stays at the finale band and a co-op
+  // party's surplus routes through the guard/bank/mechanic levers, not fatter HP.
+  return 46;
 }
 
 // The pull's power ratio from per-player expected-DPS contributions (order-independent:
@@ -1552,9 +1547,9 @@ export const JET = {
   // only full-damage time). Anchored at F35; rides the clamped §3 curve above F35.
   baseHp: 760,
   baseHpFloor: 35,
-  guardMult: 0.20,        // GUARDED between salvos (reduction, never immunity — Wave 1 rework: 0.32 → 0.20)
-  spentExpose: 3.2,       // seconds of EXPOSED the "he's spent" recover opens
-  windowBankFrac: 0.22,   // per-window damage bank (0.40 → 0.22: a phase needs ≥2 spent windows)
+  guardMult: 0.12,        // GUARDED between salvos — a near-HARD gate (balancer FINAL: 0.32 → 0.12; chip is not a path, play the mirror windows)
+  spentExpose: 3.2,       // seconds of EXPOSED the "he's spent" recover opens (UNCHANGED — the bank is the lever)
+  windowBankFrac: 0.20,   // per-window damage bank (0.40 → 0.20: a phase needs ≥2 spent windows — balancer tighten)
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // between salvos, per phase
@@ -1635,9 +1630,9 @@ export const TITHE = {
   // gated behind slab-TTK, so the bar is not a sponge — the slab is the pacing.
   baseHp: 940,
   baseHpFloor: 40,
-  guardMult: 0.20,        // GUARDED while armored / re-armoring behind the slab (Wave 1 rework: 0.30 → 0.20)
-  slabExpose: 3.5,        // seconds of EXPOSED opened by breaking the slab in time
-  windowBankFrac: 0.22,   // 0.40 → 0.22: a phase needs ≥2 broken-slab windows
+  guardMult: 0.0,         // ZERO to the body while armored/feeding — a TRUE hard gate (balancer FINAL: 0.30 → 0.0; the ONLY damage path is breaking the slab)
+  slabExpose: 3.5,        // seconds of EXPOSED opened by breaking the slab in time (UNCHANGED — the bank is the lever)
+  windowBankFrac: 0.20,   // 0.40 → 0.20: a phase needs ≥2 broken-slab windows (balancer tighten)
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.2, 2.9, 2.5] as readonly number[],
@@ -1647,8 +1642,8 @@ export const TITHE = {
   buildWindup: 0.8,       // the ooze-rising tell (≥0.6s)
   rearmChannel: 3.0,      // seconds to re-armor — the slab must die inside ~60-70% of this
   slabsFor: [0, 1, 1, 2, 2] as readonly number[],       // slabs per feed by snapshotted players
-  slabThickFor: [0, 1.0, 1.0, 1.25, 1.4] as readonly number[], // co-op = THICKER slabs (HP mult)
-  slabBaseHp: 46,         // slab HP anchor at F40 (per slab); scales on the floor curve
+  slabThickFor: [0, 1.0, 1.6, 2.0, 2.4] as readonly number[], // co-op = THICKER slabs (HP mult — balancer FINAL)
+  slabBaseHp: 84,         // slab HP anchor at F40 (per slab; balancer FINAL 46 → 84); scales on the floor curve
   slabHpFloor: 40,
   slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
   slabOffset: 0.5,        // …offset off the direct axis (rad) so a line-of-sight lane always stays
@@ -1707,14 +1702,21 @@ export function titheSlabHpForFloor(floor: number, players: number): number {
 export const QUORUM = {
   baseHp: 800,            // the SHARED pool (calibrated on exposed time)
   baseHpFloor: 45,
-  guardMult: 0.20,        // pool GUARDED while a higher-priority husk lives / merge-closed (Wave 1 rework: 0.30 → 0.20)
-  windowBankFrac: 0.22,   // 0.40 → 0.22: crossing the merge threshold needs ≥2 windows
+  guardMult: 0.12,        // pool GUARDED (near-HARD gate) on a non-priority husk / merge-closed (balancer FINAL: 0.30 → 0.12; even-nuke can't skip the kill-order)
+  windowBankFrac: 0.20,   // 0.40 → 0.20: crossing the merge threshold needs ≥2 windows (balancer tighten)
   contactDamage: 2,
   entranceGrace: 1.4,
   // Husks: 3 role bodies orbiting the core, sharing the pool.
   huskRingDist: 120,
-  huskIntegrityFrac: 0.20, // each husk's break meter as a fraction of the pool max
-  healRegenPerSec: 10,     // the HEAL husk regenerates the pool while alive (undo lazy chip)
+  // Formation: the three husks hold assigned SLOTS 120° apart around the core (a readable
+  // triangle), the whole trio orbiting slowly with a little per-husk sway — they steer to
+  // their slot, never free-chase the player, so shield/heal/dmg stay visually distinct and
+  // never collapse into one overlapping blob (Ian: "they just snuggle into one stacked boss").
+  huskOrbitStep: 0.006,    // radians/tick the triangle orbits the core (~0.36 rad/s)
+  huskSwayStep: 0.05,      // radians/tick of the per-husk lateral sway
+  huskSway: 0.12,          // sway amplitude (rad) — a little life, never enough to overlap
+  huskIntegrityFrac: 0.10, // each husk's break meter as a fraction of the pool max (balancer FINAL 0.20 → 0.10)
+  healRegenPerSec: 14,     // the HEAL husk regenerates the pool while alive (undo lazy chip — balancer FINAL 10 → 14)
   // The ONE shared telegraph (core-driven): a converging amber ring the lead husk shows.
   attackCd: [0, 2.8, 2.2] as readonly number[], // phase 1 (husks), phase 2 (merged)
   volleyWindup: 0.75,      // the shared tell (≥0.6s)
