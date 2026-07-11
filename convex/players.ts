@@ -200,17 +200,24 @@ async function ensureAccountRow(
     const guest = await findByClientId(ctx, clientId);
     if (guest && guest.userId === undefined && guest._id !== existing._id) {
       const absorbed = await absorbGuestRow(ctx, existing, guest);
-      await ctx.db.patch(absorbed._id, { name: accountName, lastSeen: now });
-      return { row: { ...absorbed, name: accountName, lastSeen: now }, user };
+      // The chosen customName wins; only fall back to the Google name when none is set —
+      // a login/run-save must never revert a deliberately chosen display name.
+      const name = absorbed.customName ?? accountName;
+      await ctx.db.patch(absorbed._id, { name, lastSeen: now });
+      return { row: { ...absorbed, name, lastSeen: now }, user };
     }
-    await ctx.db.patch(existing._id, { name: accountName, lastSeen: now });
-    return { row: { ...existing, name: accountName, lastSeen: now }, user };
+    const name = existing.customName ?? accountName;
+    await ctx.db.patch(existing._id, { name, lastSeen: now });
+    return { row: { ...existing, name, lastSeen: now }, user };
   }
 
   const guest = await findByClientId(ctx, clientId);
   if (guest && guest.userId === undefined) {
-    await ctx.db.patch(guest._id, { userId, name: accountName, lastSeen: now });
-    return { row: { ...guest, userId, name: accountName, lastSeen: now }, user };
+    // A fresh guest->account link: guests never carry a customName, so the account adopts
+    // the Google name (respect any customName defensively, though it should be absent).
+    const name = guest.customName ?? accountName;
+    await ctx.db.patch(guest._id, { userId, name, lastSeen: now });
+    return { row: { ...guest, userId, name, lastSeen: now }, user };
   }
 
   const id = await ctx.db.insert("players", {
@@ -340,6 +347,29 @@ export const currentUser = query({
     const user = await ctx.db.get(userId);
     if (!user) return null;
     return { name: user.name ?? null, email: user.email ?? null, image: user.image ?? null };
+  },
+});
+
+// Set a signed-in account's chosen display name (the override that beats the Google name).
+// Authenticated only: guests keep editing their name through ensurePlayer as before. The
+// name is sanitized the same way every stored name is (trim/collapse/strip control chars,
+// cap 20); an empty or literal-"blob" result is REJECTED — the standing name is kept and the
+// current profile returned unchanged, so a custom name can never be blanked or become "blob".
+// On success both `customName` (the durable override) and `name` (the effective display field
+// every consumer reads) are set, so login/recordRun's ensureAccountRow never reverts it.
+export const setCustomName = mutation({
+  args: { clientId: v.string(), name: v.string() },
+  handler: async (ctx, { clientId, name }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const { row, user } = await ensureAccountRow(ctx, userId, clientId, "blob");
+    const cleaned = cleanName(name);
+    if (cleaned.toLowerCase() === "blob") return toProfile(row, user);
+    await ctx.db.patch(row._id, { customName: cleaned, name: cleaned, lastSeen: Date.now() });
+    const updated = { ...row, customName: cleaned, name: cleaned };
+    // Keep the public leaderboard row's display name in step (no-op when uncharted).
+    await syncIdentity(ctx, updated);
+    return toProfile(updated, user);
   },
 });
 

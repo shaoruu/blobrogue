@@ -166,6 +166,9 @@ export const api = {
     getProfile: makeFunctionReference<"query", { clientId: string }, ProfileDoc | null>("players:getProfile"),
     currentUser: makeFunctionReference<"query", Record<string, never>, CurrentUserDoc | null>("players:currentUser"),
     recordRun: makeFunctionReference<"mutation", RecordRunArgs, ProfileDoc | null>("players:recordRun"),
+    // Set a signed-in account's chosen display-name OVERRIDE (authenticated only). Returns the
+    // updated profile (name reflects the custom name), or the unchanged profile when rejected.
+    setCustomName: makeFunctionReference<"mutation", { clientId: string; name: string }, ProfileDoc | null>("players:setCustomName"),
     // Progressive deepest-floor banking (fired on each descend) — raises deepestFloor +
     // charts the floor without the per-run folding recordRun does. Returns nothing.
     recordFloorProgress: makeFunctionReference<"mutation", { clientId: string; floor: number }, null>("players:recordFloorProgress"),

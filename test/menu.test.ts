@@ -204,6 +204,13 @@ function fakeConvex(opts: FakeOpts = {}, calls: string[] = []): FakeConvex {
         if (opts.join === "error" || opts.join === undefined) return Promise.reject(new Error("boom"));
         return Promise.resolve({ roomId: "room-doc-1", code: opts.join.code, seed: 1, floor: 1, status: opts.join.status });
       }
+      if (name === "players:setCustomName") {
+        // The account custom-name override: the server echoes the sanitized name as the
+        // effective display name (fail mode still models a network failure).
+        mutationCount++;
+        if (opts.persist === "fail") return Promise.reject(new Error("offline"));
+        return Promise.resolve({ ...profile, name: (args ?? {}).name ?? profile.name });
+      }
       // profile writes (players:ensurePlayer): apply the persist mode
       mutationCount++;
       const sent = args ?? {};
@@ -881,7 +888,7 @@ async function main(): Promise<void> {
     check("a failed top-run fetch stays honest in the same box", textOf(broken.overlay).includes("top run unavailable"));
   }
 
-  section("editable username on the Overview card: guests rename anytime, accounts read-only");
+  section("editable username on the Overview card: guests rename anytime, accounts set a custom name");
   {
     const { menu, overlay, session, mutationCalls } = makeMenu();
     await menu.showProfile();
@@ -910,15 +917,26 @@ async function main(): Promise<void> {
     await settle();
     check("the literal 'blob' placeholder can never come back", session.name === "Sir Blobby");
 
-    // Signed-in: the server names accounts from Google (ensurePlayer overwrites), so the
-    // field is READ-ONLY with honest copy — never an edit that silently reverts.
+    // Signed-in: accounts set a custom display-name OVERRIDE (server-authoritative), so the
+    // field is EDITABLE with a SAVE control. The write lands on lobbies + the leaderboard,
+    // and login/recordRun never revert it (the Google name is only the fallback).
     const signed = makeMenu({ auth: fakeAuth(true) });
     await signed.menu.showProfile();
     await settle();
-    const sInput = collect(signed.overlay, (n) => n.tagName === "INPUT")[0];
-    check("signed-in name field is read-only", sInput?.disabled === true);
-    check("no SAVE control for accounts", !buttonsOf(signed.overlay).some((b) => b === "SAVE"));
-    check("honest copy names the source", textOf(signed.overlay).includes("named by your Google account"));
+    const sInput = () => collect(signed.overlay, (n) => n.tagName === "INPUT")[0];
+    const sSave = () => collect(signed.overlay, (n) => n.tagName === "BUTTON" && textOf(n) === "SAVE")[0];
+    check("signed-in name field is editable", sInput()?.disabled !== true);
+    check("accounts get an explicit SAVE control", sSave() !== undefined);
+    check("honest copy names the destination", textOf(signed.overlay).includes("shows in lobbies & on the leaderboard"));
+    const setNameCalls = () => signed.calls.filter((c) => c === "players:setCustomName").length;
+    const sCallsBefore = setNameCalls();
+    sInput()!.value = "  Captain\u200b   Blob  ";
+    sSave()?.onclick?.();
+    await settle();
+    check("saving an account name writes the custom-name override (one setCustomName call)",
+      setNameCalls() === sCallsBefore + 1);
+    check("the account's chosen name commits sanitized", signed.session.name === "Captain Blob", signed.session.name);
+    check("the field shows the committed custom name", sInput()?.value === "Captain Blob");
   }
 
   section("global pixel scrollbar: token-styled, applied everywhere, stable gutters");

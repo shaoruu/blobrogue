@@ -229,6 +229,27 @@ export class Session {
     return this.profile;
   }
 
+  // Set a SIGNED-IN account's chosen display name (server-authoritative override; guests use
+  // login instead). The server sanitizes + validates and returns the effective profile; on
+  // success the returned display name becomes the session name so lobbies, in-run labels, and
+  // the leaderboard all pick it up. Never rejects — resolves null on failure so the UI can note it.
+  async setCustomName(name: string): Promise<ProfileDoc | null> {
+    if (!this.client) return null;
+    try {
+      const profile = await this.client.mutation(api.players.setCustomName, {
+        clientId: this.clientId,
+        name,
+      });
+      if (profile) {
+        this.profile = profile;
+        this.persistName(profile.name);
+      }
+      return profile;
+    } catch {
+      return null;
+    }
+  }
+
   async refreshProfile(): Promise<ProfileDoc | null> {
     if (!this.client) return null;
     this.profile = await this.client.query(api.players.getProfile, { clientId: this.clientId });

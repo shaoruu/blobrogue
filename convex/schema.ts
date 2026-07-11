@@ -25,7 +25,17 @@ export default defineSchema({
     clientId: v.optional(v.string()),
     // Account identity. Set once the row is linked to a signed-in Convex Auth user.
     userId: v.optional(v.id("users")),
+    // The EFFECTIVE display name — what renders in lobbies, in-run labels, and on the
+    // leaderboard. For guests it is the typed/generated name; for accounts it is the
+    // chosen customName when set, else the Google account name. Kept as the single
+    // display field so every consumer (toProfile, foldBestRun, syncIdentity, presence)
+    // reads one place.
     name: v.string(),
+    // A signed-in account's chosen display-name OVERRIDE. Absent = fall back to the Google
+    // account name. Written only by the authenticated setCustomName mutation (sanitized:
+    // trimmed, whitespace-collapsed, capped 20, never empty, never the literal "blob"), so
+    // login/recordRun never revert a name the player deliberately chose. Guests never set it.
+    customName: v.optional(v.string()),
     // The player's PARTY color (index into the client palette): the network identity color
     // for name labels, minimap dots, and lobby roster — deliberately separate from the
     // cosmetic body palette (cosmeticLoadout.body), though the closet keeps them in step
