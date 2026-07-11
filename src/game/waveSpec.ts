@@ -975,6 +975,24 @@ export const WAVE_SOUNDS = {
     stem: "pet/slime_plop", variants: 1, gain: 0.26, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05, spatial: true, cooldownMs: 8000,
   },
+  // Amber Camp UI cues (menu-triggered, non-positional, ui bus). Warm amber materials, not
+  // combat sounds. A camp purchase/denied/panel-open gets a voice so the meta loop reads.
+  "camp.purchase": {
+    stem: "meta/camp_purchase", variants: 2, gain: 0.6, bus: "ui", priority: WAVE_PRIORITY.ui,
+    jitter: 0.03, fallback: { sample: "coin", rate: 0.9 },
+  },
+  "camp.denied": {
+    stem: "meta/camp_denied", variants: 1, gain: 0.4, bus: "ui", priority: WAVE_PRIORITY.ui,
+    jitter: 0, fallback: { sample: "uiClick", rate: 0.9 },
+  },
+  "camp.shopOpen": {
+    stem: "meta/camp_shop_open", variants: 2, gain: 0.45, bus: "ui", priority: WAVE_PRIORITY.ui,
+    jitter: 0.03, fallback: { sample: "uiClick", rate: 1.0 },
+  },
+  "camp.shopClose": {
+    stem: "meta/camp_shop_close", variants: 1, gain: 0.35, bus: "ui", priority: WAVE_PRIORITY.ui,
+    jitter: 0, fallback: { sample: "uiClick", rate: 0.85 },
+  },
   "pet.summon": {
     stem: "pet/summon", variants: 1, gain: 0.38, bus: "pet", priority: WAVE_PRIORITY.pet,
     jitter: 0.05,

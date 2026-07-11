@@ -15,6 +15,8 @@ Newest changes first. (Times are Pacific.)
 - Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
 
 ## 2026-07-11
+- **The Amber Camp has sound:** opening the Camp, buying an upgrade, and the can't-afford nudge now play warm amber cues instead of silence.
+
 - **Every pet has a voice now:** the cat meows and purrs, the baby dragon chirps and rumbles, and the slime squishes along beside you (each warm and cooldown'd so it stays cute, never annoying).
 
 - **The doggie has a voice:** your companion now softly pants as it trots to keep up and gives a content little sigh when it settles beside you (warm, low, and cooldown'd so it never grates).
