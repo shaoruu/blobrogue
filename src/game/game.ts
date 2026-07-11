@@ -7718,6 +7718,31 @@ export class Game {
     return this.world;
   }
 
+  // Read-only access to the loaded sprite registry for the sandbox catalog thumbnails — the
+  // SAME images the world renders from, so a panel thumbnail can never drift from the game.
+  devSprites(): Sprites {
+    return this.sprites;
+  }
+
+  // The sprite an equipped pet renders as (null for an unknown id) — the sandbox resolves a
+  // pet thumbnail through the exact same mapping renderPets uses.
+  devPetSprite(petId: string): SpriteName | null {
+    return petSpriteFor(petId);
+  }
+
+  // Sandbox: dress the local blob in a cosmetic loadout (hat/face/body) so the equipped look
+  // can be reviewed in the dev world. Visual-only — the same field a real equip feeds, picked
+  // up by renderPlayer next frame.
+  devSetCosmetics(loadout: CosmeticLoadout | null): void {
+    this.selfCosmetics = loadout;
+  }
+
+  // Sandbox: equip (or clear) a companion pet so it trots along in the dev world — wires the
+  // SAME selfPet the run start + wire identity feed into renderPets.
+  devSetPet(petId: string | null): void {
+    this.selfPet = petId;
+  }
+
   devSnapshot(): DevSnapshot {
     return {
       fps: this.fps,

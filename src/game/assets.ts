@@ -564,6 +564,20 @@ export class Sprites {
     return resolveClip((clip) => this.sheet(name, clip) !== null, pose);
   }
 
+  // Whether every registered image for this sprite (its static base + all its animation
+  // clips) has SETTLED — finished loading or failed. A still-frame surface (the dev sandbox
+  // thumbnail) repaints only until this flips true, then parks; a failed image counts as
+  // settled so the loop never spins on missing art (it degrades to a blank slot). Mirrors
+  // isBlobReady / isLoadoutArtSettled for the cosmetic compositor.
+  isSpriteSettled(name: SpriteName): boolean {
+    const base = this.images.get(name);
+    if (base && !base.complete) return false;
+    for (const [key, s] of this.sheets) {
+      if (key.startsWith(`${name}.`) && !s.img.complete) return false;
+    }
+    return true;
+  }
+
   // A cached fully-white silhouette of a sprite, used to flash it on hit.
   flashSprite(name: SpriteName): HTMLCanvasElement | null {
     const img = this.images.get(name);
