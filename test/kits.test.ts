@@ -439,7 +439,8 @@ function phantomBossVulnCapTests(): void {
     if (marked) boss.markT = ticksToSec(PHANTOM_MARK.durationTicks);
     // A crit-carrying friendly bullet planted on the boss (critX baked in, as fire() does); a
     // few ticks let it resolve the hit through the ordinary boss-grade strike path.
-    w.bullets.push({ x: boss.x, y: boss.y, vx: 1, vy: 0, radius: 30, life: 0.5, friendly: true, owner: "ph", damage: 10 * critMult, color: "#fff", pierce: 0, hitList: null, isCrit: critMult > 1, critX: critMult } as unknown as Bullet);
+    const shot: Bullet = { ...enemyBullet(boss.x, boss.y), radius: 30, life: 0.5, friendly: true, owner: "ph", damage: 10 * critMult, isCrit: critMult > 1, critX: critMult };
+    w.bullets.push(shot);
     for (let i = 0; i < 3; i++) tick(w, () => idle());
     return hp0 - boss.hp;
   };
