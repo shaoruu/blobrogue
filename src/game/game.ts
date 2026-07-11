@@ -7386,6 +7386,51 @@ export class Game {
         }
         return this.fxLayer("core_dot", "#fff7dd", bx, by, R * 2, R * 2, 1, 0);
       }
+      case "cleaver": {
+        // Spinning saw disc: a heavy core that visibly rotates, over a cold glow (no trail —
+        // it's a slow thrown blade, not a bullet).
+        this.fxLayer("glow_round", color, bx, by, R * 4.5, R * 4.5, 0.4, 0);
+        this.fxLayer("crackle", color, bx, by, R * 3.2, R * 3.2, 0.35, this.animClock * 16);
+        return this.fxLayer("slug", color, bx, by, R * 3.4, R * 3.4, 1, this.animClock * 18);
+      }
+      case "scrapper":
+        // Small fast scrap pellets: a tight core + short streak, low glow (sprayed in pairs).
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.3, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.7, R * 1.8, 0.55, angle);
+        return this.fxLayer("core_dot", color, bx, by, R * 2.8, R * 2.8, 1, 0);
+      case "skipper":
+        // Bouncy buckshot slugs: fat slug head + soft glow, short streak so ricochets read.
+        this.fxLayer("glow_round", color, bx, by, R * 5, R * 5, 0.4, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.45, R * 1.8, 0.45, angle);
+        return this.fxLayer("slug", color, bx, by, R * 3.4, R * 3.4, 1, angle);
+      case "arcbolt":
+        // Electric bolt: crackling arc over a hot core (like tesla but shorter-lived).
+        this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.5, 0);
+        this.fxLayer("crackle", color, bx, by, R * 4.2, R * 4.2, 0.9, this.animClock * 11);
+        return this.fxLayer("core_dot", color, bx, by, R * 2.6, R * 2.6, 1, 0);
+      case "cryobolt":
+        // Frost round: an icy frost mask (falls back to glow) trailing a cold streak + core.
+        this.fxLayer("frost", color, bx, by, R * 5, R * 5, 0.7, angle) || this.fxLayer("glow_round", color, bx, by, R * 6, R * 6, 0.5, 0);
+        this.fxTrail("trail_streak", color, bx, by, trailLen * 0.7, R * 1.8, 0.5, angle);
+        return this.fxLayer("core_dot", "#eafaff", bx, by, R * 2.4, R * 2.4, 1, 0);
+      case "firebomb": {
+        // A lobbed fire shell: smoke off the tail, a fiery puff, warm glow, fat hot slug.
+        this.fxLayer("smoke_puff", "#c9b8a0", bx - Math.cos(angle) * R * 2.2, by - Math.sin(angle) * R * 2.2, R * 4, R * 4, 0.4, 0);
+        this.fxLayer("flame_puff", color, bx, by, R * 4.5, R * 4.5, 0.7, angle) || this.fxLayer("glow_round", color, bx, by, R * 8, R * 8, 0.5, 0);
+        return this.fxLayer("slug", "#ffd08a", bx, by, R * 4, R * 4, 1, angle);
+      }
+      case "tracker":
+        // A heavy seeker: a long comet tail over a strong glow (reads as a homing missile).
+        this.fxLayer("glow_round", color, bx, by, R * 7, R * 7, 0.5, 0);
+        return this.fxTrail("comet_trail", color, bx, by, Math.max(R * 7, trailLen), R * 4, 0.75, angle);
+      case "singularity": {
+        // The void round: a dark-purple swirling core (counter-rotating crackle) with a heavy
+        // glow — reads as a little collapsing gravity well, not a bullet.
+        this.fxLayer("glow_round", color, bx, by, R * 9, R * 9, 0.6, 0);
+        this.fxLayer("crackle", color, bx, by, R * 5, R * 5, 0.5, -this.animClock * 7);
+        this.fxLayer("crackle", "#f0d9ff", bx, by, R * 3.4, R * 3.4, 0.6, this.animClock * 10);
+        return this.fxLayer("core_dot", "#e9d2ff", bx, by, R * 2.2, R * 2.2, 1, 0);
+      }
       default:
         return false;
     }

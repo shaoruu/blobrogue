@@ -31,6 +31,7 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "2026-07-11",
     date: "2026-07-11",
     entries: [
+      { title: "The new guns fire real bullets, not circles", body: "all 8 recent weapons (Cleaver, Scrapper, Skipper, Arcbolt, Cryobolt, Firebomb, Tracker, Singularity) now have proper layered projectile FX matching each weapon (the Singularity's swirling void orb, Firebomb's fiery shell, Arcbolt's electric crackle, etc.) instead of the plain fallback circle." },
       { title: "Smoother co-op netcode", body: "the game now sends only what changed each frame (with periodic full keyframes), cutting per-player network traffic ~90% in busy 4-player fights — more headroom, less lag under load. Reconnects and packet loss recover cleanly." },
       { title: "The Amber Camp has sound", body: "opening the Camp, buying an upgrade, and the can't-afford nudge now play warm amber cues instead of silence." },
       { title: "Every pet has a voice now", body: "the cat meows and purrs, the baby dragon chirps and rumbles, and the slime squishes along beside you (each warm and cooldown'd so it stays cute, never annoying)." },

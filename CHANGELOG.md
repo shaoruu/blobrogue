@@ -15,6 +15,8 @@ Newest changes first. (Times are Pacific.)
 - Double-tap dash + rebindable dash key, shop click-outside-to-close, remaining visual polish (bullet art, thumper scorch), music variety, run persistence on reconnect.
 
 ## 2026-07-11
+- **The new guns fire real bullets, not circles:** all 8 recent weapons (Cleaver, Scrapper, Skipper, Arcbolt, Cryobolt, Firebomb, Tracker, Singularity) now have proper layered projectile FX matching each weapon (the Singularity's swirling void orb, Firebomb's fiery shell, Arcbolt's electric crackle, etc.) instead of the plain fallback circle.
+
 - **Smoother co-op netcode:** the game now sends only what changed each frame (with periodic full keyframes), cutting per-player network traffic ~90% in busy 4-player fights — more headroom, less lag under load. Reconnects and packet loss recover cleanly.
 
 - **The Amber Camp has sound:** opening the Camp, buying an upgrade, and the can't-afford nudge now play warm amber cues instead of silence.
