@@ -537,7 +537,8 @@ function gate8PhantomMarkBossCap(): void {
     if (opts.mark) boss.markT = ticksToSec(PHANTOM_MARK.durationTicks);
     if (opts.shock) boss.shock = 3;
     if (opts.freeze) boss.chill = 99; // deep chill => frozen (bosses slow, but the amp is inert on boss anyway)
-    w.bullets.push({ x: boss.x, y: boss.y, vx: 1, vy: 0, radius: 30, life: 0.5, friendly: true, owner: "ph", damage: 10 * opts.critMult, color: "#fff", pierce: 0, hitList: null, isCrit: opts.critMult > 1, critX: opts.critMult } as unknown as Bullet);
+    const shot: Bullet = { ...enemyBulletAt(boss.x, boss.y), radius: 30, life: 0.5, friendly: true, owner: "ph", damage: 10 * opts.critMult, isCrit: opts.critMult > 1, critX: opts.critMult };
+    w.bullets.push(shot);
     for (let i = 0; i < 3; i++) tick(w, () => idleCmd());
     return hp0 - boss.hp;
   };
