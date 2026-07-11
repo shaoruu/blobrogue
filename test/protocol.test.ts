@@ -262,7 +262,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers v4-v21 + the Wave 1 deep-boss rework (v22: EnemyWire grows mfm, JET's mirror-salvo lead family index; v21 added brr, the boss transition-beat-live flag)", PROTOCOL_VERSION === 22, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers v4-v22 + the Wave 1 deep-boss rework (v23: AttackMove grows 'rip', the Tithe's dedicated P3 debris-wheel signature; v22 added mfm, JET's mirror-salvo lead family index)", PROTOCOL_VERSION === 23, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));

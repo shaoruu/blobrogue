@@ -285,7 +285,7 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   // amber rings ("radial") and bellows ("roar"). Quorum's core drives one shared "radial"
   // telegraph, transitions via "merge". Satellite bodies commit nothing.
   jet: ["mirror", "tracer", "rush", "beam", "roar"],
-  tithe: ["build", "slam", "spew", "hurl", "radial", "spin", "roar"],
+  tithe: ["build", "slam", "spew", "hurl", "radial", "rip", "roar"],
   quorum: ["radial", "beam", "sweep", "volley", "merge"],
   tithe_slab: [],
   quorum_shield: [],

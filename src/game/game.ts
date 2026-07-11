@@ -442,6 +442,7 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   beam: "#d84a8a",    // JET overclock/corruption + Quorum crossfire: hot corridor magenta
   spew: "#ffb43b",    // the Tithe's two-stage arcing pools: amber ooze
   hurl: "#c98b5a",    // the Tithe hurls its slab: heavy amber stone
+  rip: "#ffcf6a",     // the Tithe's P3 rip: the all-slabs debris wheel (bright amber)
 };
 
 // BOSS TELEGRAPH RENDER CONTRACT (docs/specs/blobrogue_TELEGRAPH_RENDER_CONTRACT.md +
@@ -6741,7 +6742,7 @@ export class Game {
   private isBossTelegraphMove(e: Enemy): boolean {
     const m = e.attack.move;
     if (e.kind === "jet") return m === "mirror" || m === "tracer" || m === "rush" || m === "beam";
-    if (e.kind === "tithe") return m === "slam" || m === "spew" || m === "hurl" || m === "radial" || m === "spin" || m === "build";
+    if (e.kind === "tithe") return m === "slam" || m === "spew" || m === "hurl" || m === "radial" || m === "rip" || m === "build";
     if (e.kind === "quorum") return m === "beam" || m === "sweep" || m === "volley" || m === "radial";
     return false;
   }
@@ -7018,8 +7019,8 @@ export class Game {
         // P2 radial ring burst.
         const outer = isActive ? 220 : 40 + 180 * wu;
         this.tgRingBand(sx, sy, Math.max(TILE, outer - TILE), outer, hue, {});
-      } else if (a.move === "spin") {
-        // SIGNATURE — rotating barrage: N spoke lanes with clear wedges between (moving pockets).
+      } else if (a.move === "rip") {
+        // SIGNATURE (P3 rip) — rotating barrage: N spoke lanes with clear wedges between (moving pockets).
         const rot = this.animClock * 1.5;
         for (let i = 0; i < 5; i++) this.tgLane(sx, sy, rot + (i / 5) * 6.28, 240, TILE * 1.5, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
       } else if (a.move === "build") {

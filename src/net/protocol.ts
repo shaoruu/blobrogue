@@ -222,7 +222,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   Resonance-family index (0..5, or -1 when not a mirror salvo). Drives the copied weapon's
 //   telegraph SHAPE (fan/lane/ring/parabola/wedge) and its own family hue (the "that's my gun"
 //   read); the sim tints the mirrored shards with the same enum. A v21 client rejects it.
-export const PROTOCOL_VERSION = 22;
+// v23 (TITHE rip signature): the closed AttackMove set grows one value — "rip", the Tithe's
+//   dedicated P3 all-slabs debris-wheel signature (was inline-reusing MARROW's "spin"). A
+//   dedicated move so the collapse/debris-wheel VFX + telegraph bind to a real signal. A v22
+//   client rejects a snapshot carrying it (the mv set is a validated closed set).
+export const PROTOCOL_VERSION = 23;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -679,8 +683,9 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   decoy: true, blink: true, seam: true, stoke: true, harmonize: true, knell: true,
   build: true, // the worker verb (bailiff divider, mason L-corner, the Tithe's feeding slab)
   mirror: true, merge: true, // Wave 1: JET's corrupted-Resonance salvo, Quorum's fuse-merge
-  // Wave 1 rework — the deep bosses' interleaved pressure moves (v19).
-  tracer: true, beam: true, spew: true, hurl: true,
+  // Wave 1 rework — the deep bosses' interleaved pressure moves (v19) + the Tithe's dedicated
+  // P3 rip signature (v23).
+  tracer: true, beam: true, spew: true, hurl: true, rip: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {
