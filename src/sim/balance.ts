@@ -270,6 +270,90 @@ export function amberForRun(unspentCoins: number, isCacheArmed: boolean, windfal
   return cache + Math.max(0, windfall);
 }
 
+// ---- WAVE 1 meta-progression: the WIDENED Amber earn (META spec §1 / PROGRESSION §4) ----
+// Amber comes from PROGRESS — floors cleared, run depth, first boss kills — NEVER from trash
+// mobs (the anti-grind hard rule). Every function here is PURE and DETERMINISTIC (same input
+// -> same output) so the sim, the client's results-screen display, and the server-authoritative
+// Convex bank all agree on the number. The leftover-coin cache trickle (amberForRun above)
+// rides along inside the run pool as the "cash out your leftover coins" bridge. Amber is the
+// ONE persistent currency: it buys pets/convenience/foundation, NEVER cosmetics (that hard line
+// is the Wardrobe/cosmeticsCore contract).
+export const AMBER_EARN = {
+  // The reliable spine: every cleared floor pays a flat grant (depth = pay).
+  perFloorCleared: 2,
+  // A cumulative, per-run depth bonus keyed on the run's DEEPEST floor — deeper runs pay more.
+  // Summed over every threshold reached (e.g. a floor-12 run banks the F5 + F10 tiers).
+  depthMilestones: [
+    { floor: 5, amber: 3 },
+    { floor: 10, amber: 5 },
+    { floor: 15, amber: 8 },
+    { floor: 20, amber: 12 },
+    { floor: 25, amber: 16 },
+    { floor: 30, amber: 22 },
+  ] as ReadonlyArray<{ floor: number; amber: number }>,
+  // First time an account defeats a given boss: a one-time injection that funds early hub
+  // unlocks. Banked immediately at full (exempt from the wipe cut — it is a first-clear bonus).
+  firstBossKill: 25,
+  // Banking rule (consequence without rage-loss): a return-to-camp banks the whole run pool,
+  // a party wipe banks half of the unbanked pool. First-clear bonuses are always banked full.
+  bankReturnFrac: 1.0,
+  bankDeathFrac: 0.5,
+} as const;
+
+// The boss KINDS that qualify for the one-time first-kill grant (the authored boss roster).
+// A pure string set so the meta layer (client + Convex bank) can validate reported kills
+// WITHOUT importing the combat sim (world.ts isBossKind) — a client can never mint a
+// first-boss grant for a non-boss kind.
+export const BOSS_KINDS = [
+  "boss", "marrow", "weaver", "gilded", "choir", "jet", "tithe", "quorum",
+] as const;
+
+export function isBossKindId(kind: string): boolean {
+  return (BOSS_KINDS as readonly string[]).includes(kind);
+}
+
+// The authoritative run facts the Amber bank is computed from (never a client-authored
+// amber number). floorsCleared/deepestFloor/unspentCoins are sim truth; the two cache flags
+// mirror the premium economy's armed cache + mythic windfall.
+export interface AmberRunInput {
+  floorsCleared: number;
+  deepestFloor: number;
+  unspentCoins: number;
+  isCacheArmed: boolean;
+  windfall: number;
+}
+
+// The cumulative depth bonus for a run that reached `deepestFloor` (0 below the first tier).
+export function depthMilestoneAmber(deepestFloor: number): number {
+  let sum = 0;
+  for (const m of AMBER_EARN.depthMilestones) if (deepestFloor >= m.floor) sum += m.amber;
+  return sum;
+}
+
+// The recurring run POOL (subject to the bank fraction): per-floor grants + the depth bonus +
+// the leftover-coin cache trickle + the mythic windfall. First-boss bonuses are NOT here —
+// they bank immediately at full via firstBossAmber.
+export function amberRunPool(input: AmberRunInput): number {
+  const floors = AMBER_EARN.perFloorCleared * Math.max(0, Math.floor(input.floorsCleared));
+  const depth = depthMilestoneAmber(input.deepestFloor);
+  const cache = amberForRun(input.unspentCoins, input.isCacheArmed, input.windfall);
+  return floors + depth + cache;
+}
+
+// The banked recurring Amber for a run: 100% on a return-to-camp, 50% on a wipe (§1).
+export function bankedRunAmber(input: AmberRunInput, isReturn: boolean): number {
+  const frac = isReturn ? AMBER_EARN.bankReturnFrac : AMBER_EARN.bankDeathFrac;
+  return Math.floor(amberRunPool(input) * frac);
+}
+
+// The one-time first-boss Amber for a set of NEWLY-defeated boss kinds (already filtered by
+// the account's prior first-kills). Pure over the count of qualifying boss kinds.
+export function firstBossAmber(newBossKinds: readonly string[]): number {
+  let n = 0;
+  for (const kind of newBossKinds) if (isBossKindId(kind)) n++;
+  return n * AMBER_EARN.firstBossKill;
+}
+
 // ---- the depth coin taper (the premium ladder's pool calibration) ----
 // The balancer's afford targets (mythic 8-20% for a greedy run, <3% without Greed; a
 // greedy P90 pool below the F20/25 mythic price; a greedy F30 pool of ~700 chasing the
