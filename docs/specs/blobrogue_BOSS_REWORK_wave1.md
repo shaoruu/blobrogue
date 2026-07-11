@@ -53,3 +53,10 @@ PHASE_TIME_BASE (add — currently none, soft-enrage can't fire): JET 16, TITHE 
 - TITHE: NEW feed-add path chasers cap solo0/2p3/4p4 (active-threat cap); slabsFor stays [_,1,1,2,2]; rearmChannel FLAT 3.0 (task scales via slab HP/thick+adds not timer); soft-enrage +1 slab next feed.
 - QUORUM: husk-adds wave on husk break cap solo1/2p4/4p5, interval 6.0→3.0 floor w/R; merge-form continuous final window regardless R.
 POWER scalers unchanged (addCapPerR 1.6 max8, addIntervalPerR 0.9 min3.0, burnFrac 0.55). Order: anti-burst constants stop spam NOW; surplus wiring makes 4p harder-not-spongier. GD owns WHAT adds are (in spec), balancer owns count/cadence.
+
+## BALANCER SURPLUS — FINAL EXACT (supersedes curves above; solo/2p(R2.8)/3p(R4.2)/4p(R6)):
+Shared: addCapPerR 1.6/max8, phaseTimerPerR 0.10, burnFrac 0.55.
+JET (PHASE_TIME_BASE=16): salvo-pattern count bossAddCapFor(base0) cap2 = 0/2/2/2. ⚠ NEW salvoIntervalPerR=0.12 floor1.8 (NOT generic 0.9): P1 3.0→3.0/2.78/2.62/2.40, P2 2.6→2.6/2.38/2.22/2.00, P3 2.2→2.2/1.98/1.82/1.80. enrage phaseTimerFor(16)=16/18.9/21.1/24, burn<0.55×T→+1 inverted salvo.
+TITHE (PHASE_TIME_BASE=16): feed-add chasers bossAddCapFor(base0) cap4 = 0/3/4/4. ⚠ re-arm interval FLAT 3.0 ALL R (perR 0, NEVER shorter timer). slabsFor [_,1,1,2,2], soft-enrage +1 slab next feed. phaseTimerFor(16).
+QUORUM (PHASE_TIME_BASE=14): husk-adds-wave bossAddCapFor(base1) cap5 = 1/4/5/5. wave interval bossAddIntervalFor(base6.0) floor3.0 (generic 0.9 ok) = 6.0/4.38/3.12/3.0. phaseTimerFor(14). merge final window UNGATED by R (no adds).
+READABILITY: surplus = simple chasers on telegraph (active-threat cap only, not ≤2-complex rule); enrage = PATTERN not dmg/HP; ≥0.30s post-lock dodgeable. VERIFY: Jet salvoIntervalPerR 0.12; Tithe re-arm no R scale; 4p add-count hits targets AND HP frac ≤3.1.
