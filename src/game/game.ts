@@ -6822,11 +6822,22 @@ export class Game {
     }, hue, o);
   }
 
-  // 3. FAN (N sub-lanes): the spread SMG-copy — ON HOLD (fairness bug: the specced 5-line/8deg
-  // gaps fall under the 48px stand-minimum). Built once the designer lands corrected geometry
-  // (wider spacing / fewer lines / reclassify); the spread copy falls back to the aimed cone
-  // meanwhile. See the FAN hook in the JET mirror dispatch. Only JET's spread mirror uses it, so
-  // its hold blocks nothing else. [primitive 3 of 12 — the remaining 11 are built below]
+  // 3. FAN (N diverging sub-lanes): the spread SMG-copy. The standable pocket OPENS WITH
+  // DISTANCE — the shards emanate from the boss, so up close (tiles 1-3) the gaps are under the
+  // body (no pocket: a solid dash-through near-cone), and a body-fitting gap opens from ~tile 4,
+  // widening to a comfortable stand by ~tile 6. Never promises a standable gap up close.
+  private tgFan(sx: number, sy: number, angle: number, count: number, gap: number, shardW: number, range: number, hue: string, o: { locked: boolean; dynamic: boolean; snapFlash?: number }): void {
+    const spread = gap * (count - 1);
+    const near = TILE * 3; // tiles 1-3: no standable pocket — one dense dash-through cone
+    this.tgShape(() => {
+      const { ctx } = this;
+      ctx.moveTo(sx, sy);
+      ctx.arc(sx, sy, near, angle - spread / 2 - gap / 2, angle + spread / 2 + gap / 2);
+      ctx.closePath();
+    }, hue, o);
+    // Far field: the shards diverge and the gaps between them (unpainted = safe) open up.
+    for (let i = 0; i < count; i++) this.tgLane(sx, sy, angle + (i - (count - 1) / 2) * gap, range, shardW, hue, o);
+  }
 
   // 4. ARC_PARABOLA (dotted): the lobbed-orb copy — dotted arc to the first landing marker.
   private tgArcParabola(sx: number, sy: number, lx: number, ly: number, hue: string): void {
@@ -6988,17 +6999,13 @@ export class Game {
         // lance->LANE, arc->RING_BAND (10 shards), lob->ARC_PARABOLA + bloom, melee->short WEDGE.
         const fam = this.jetMirrorFamily(e);
         const mhue = fam ? RESONANCE_TELEGRAPH_COLOR[fam] : hue;
-        if (fam === "rapid") this.tgLane(sx, sy, ang, TG_ARENA_LEN, 52, mhue, dyn); // dense dash-through stream (no standable pocket)
+        if (fam === "spread") this.tgFan(sx, sy, ang, 5, 0.225, 16, 288, mhue, dyn); // 5 shards, 12.9deg apart (0.9rad), gap opens tile4+
+        else if (fam === "rapid") this.tgLane(sx, sy, ang, TG_ARENA_LEN, 52, mhue, dyn); // tight aimed stream: one dense dash-through band, no pocket
         else if (fam === "lance") this.tgLane(sx, sy, ang, TG_ARENA_LEN, TILE, mhue, dyn);
         else if (fam === "arc") this.tgRingBand(sx, sy, 200 - TILE, 200, mhue, {}); // the 10-shard ring
-        else if (fam === "lob") this.tgArcParabola(sx, sy, a.markX - cam.x, a.markY - cam.y, mhue);
+        else if (fam === "lob") this.tgArcParabola(sx, sy, a.markX - cam.x, a.markY - cam.y, mhue); // + 1 bloom (tgArcParabola draws the landing disc)
         else if (fam === "melee") this.tgWedge(sx, sy, ang, 0.5, 120, mhue, dyn);
-        // FAN (the spread SMG-copy) is ON HOLD — as specced (5 lines 8deg apart) its gaps are
-        // ~3-16px, under the 48px stand-minimum ("stand in a gap" is un-standable). Until the
-        // designer lands FAN's final params, the spread copy falls back to the aimed cone (fair,
-        // telegraphed) in the copied hue. HOOK: swap this line for tgFan(sx, sy, ang, count, gap,
-        // shardW, range, mhue, dyn) once the corrected geometry arrives (reconcile with rapid).
-        else this.tgWedge(sx, sy, ang, 0.52, 240, mhue, dyn); // spread(FAN hold) + no-family: aimed cone
+        else this.tgWedge(sx, sy, ang, 0.52, 240, mhue, dyn); // no family on the wire: aimed cone
       } else if (a.move === "tracer") {
         // A2 TRACER SNAP — the lock primitive at the mote's mark.
         this.tgTrackDisc(a.markX - cam.x, a.markY - cam.y, 24, a.isAimLocked, hue, snapFlash);
