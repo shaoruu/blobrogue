@@ -111,6 +111,21 @@ function weaponName(id: string): string {
   return (WEAPONS as Record<string, { name: string } | undefined>)[id]?.name ?? id;
 }
 
+// One leaderboard row's cell handles, kept so a hydration fill writes straight into the
+// reserved nodes (never re-queries the tree, never inserts/removes). The compact title
+// glance builds only rank/dot/name/floor; the full board adds the rich stat columns.
+interface LbRow {
+  el: HTMLButtonElement;
+  rank: HTMLElement;
+  dot: HTMLElement;
+  name: HTMLElement;
+  floor: HTMLElement;
+  weapon: HTMLElement | null;
+  kills: HTMLElement | null;
+  coins: HTMLElement | null;
+  time: HTMLElement | null;
+}
+
 // Drives everything shown in #overlay: the title/menu, the settings/leaderboard/profile
 // destinations, the online lobby, and the game-over screen. It is the only place that knows
 // whether multiplayer exists.
@@ -647,59 +662,106 @@ export class Menu {
   // up front — fixed-height skeleton rows that fill in place — so hydration can never move
   // the play buttons or steal focus. Rows are disabled until they hold a real entry.
 
-  private leaderboardRows(count: number): { box: HTMLElement; rows: HTMLButtonElement[] } {
+  // `isRich` adds the full board's stat columns (primary weapon, kills, coins, run time)
+  // between the name and the arrow. The compact glance leaves them off, so its fixed 154px
+  // geometry is untouched.
+  private leaderboardRows(count: number, isRich = false): { box: HTMLElement; rows: LbRow[] } {
     const box = el("div", "lb-rows");
-    const rows: HTMLButtonElement[] = [];
+    const rows: LbRow[] = [];
     for (let i = 0; i < count; i++) {
       const row = el("button", "lb-row");
       row.type = "button";
       row.disabled = true;
-      row.append(
-        el("span", "lb-rank", String(i + 1)),
-        el("span", "lb-dot"),
-        el("span", "lb-name skel", "\u2014"),
-        el("span", "lb-floor", ""),
-        el("span", "lb-arrow", "\u203a"),
-      );
-      rows.push(row);
+      const rank = el("span", "lb-rank", String(i + 1));
+      const dot = el("span", "lb-dot");
+      const name = el("span", "lb-name skel", "\u2014");
+      const floor = el("span", "lb-floor", "");
+      row.append(rank, dot, name);
+      let weapon: HTMLElement | null = null;
+      let kills: HTMLElement | null = null;
+      let coins: HTMLElement | null = null;
+      let time: HTMLElement | null = null;
+      if (isRich) {
+        weapon = el("span", "lb-weapon", "");
+        kills = el("span", "lb-kills", "");
+        coins = el("span", "lb-coins", "");
+        time = el("span", "lb-time", "");
+        row.append(weapon, floor, kills, coins, time);
+      } else {
+        row.append(floor);
+      }
+      row.append(el("span", "lb-arrow", "\u203a"));
       box.appendChild(row);
+      rows.push({ el: row, rank, dot, name, floor, weapon, kills, coins, time });
     }
     return { box, rows };
   }
 
-  private fillLeaderboardRows(rows: HTMLButtonElement[], setNote: (text: string) => void, entries: LeaderboardEntryDoc[] | null, backTo: (rowIndex: number) => void) {
+  // The full board's column header — the same flex column widths as a rich row (a ghost dot
+  // spacer keeps the numeric labels aligned over their values), rendered once above the rows.
+  private leaderboardColHead(): HTMLElement {
+    const head = el("div", "lb-colhead");
+    head.append(
+      el("span", "lb-rank", "#"),
+      el("span", "lb-dot lb-dot-ghost"),
+      el("span", "lb-name", "BLOB"),
+      el("span", "lb-weapon", "WEAPON"),
+      el("span", "lb-floor", "FLOOR"),
+      el("span", "lb-kills", "KILLS"),
+      el("span", "lb-coins", "COINS"),
+      el("span", "lb-time", "TIME"),
+      el("span", "lb-arrow", "\u00a0"),
+    );
+    return head;
+  }
+
+  private fillLeaderboardRows(rows: LbRow[], setNote: (text: string) => void, entries: LeaderboardEntryDoc[] | null, backTo: (rowIndex: number) => void) {
     for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const [rank, dot, name, floor] = Array.from(row.children) as HTMLElement[];
-      name.classList.remove("skel");
+      const r = rows[i];
+      r.name.classList.remove("skel");
       const entry = entries?.[i];
       if (!entry) {
-        rank.textContent = String(i + 1);
-        dot.style.background = "";
-        name.textContent = "\u2014";
-        floor.textContent = "";
-        row.disabled = true;
+        r.rank.textContent = String(i + 1);
+        r.dot.style.background = "";
+        r.name.textContent = "\u2014";
+        r.floor.textContent = "";
+        if (r.weapon) r.weapon.textContent = "";
+        if (r.kills) r.kills.textContent = "";
+        if (r.coins) r.coins.textContent = "";
+        if (r.time) r.time.textContent = "";
+        r.el.disabled = true;
         continue;
       }
-      rank.textContent = String(i + 1);
-      dot.style.background = playerColor(entry.colorIndex ?? 0);
+      r.rank.textContent = String(i + 1);
+      r.dot.style.background = playerColor(entry.colorIndex ?? 0);
       // Safe anonymized fallback: a blank/whitespace name (private or degenerate row)
       // renders as an anonymous blob, never an empty or raw-data label.
       const displayName = entry.name.trim() || "anonymous blob";
-      name.textContent = displayName;
-      floor.textContent = `FL ${entry.floor}`;
-      row.disabled = false;
-      row.setAttribute("aria-label", `${displayName} \u2014 floor ${entry.floor} \u2014 view profile`);
-      row.onclick = () => this.showPlayerProfile(entry, i + 1, () => backTo(i));
+      r.name.textContent = displayName;
+      r.floor.textContent = `FL ${entry.floor}`;
+      const ariaParts = [`floor ${entry.floor}`];
+      if (r.weapon) {
+        const primary = entry.weapons[0];
+        r.weapon.textContent = primary ? weaponName(primary) : "\u2014";
+      }
+      if (r.kills) { r.kills.textContent = String(entry.kills); ariaParts.push(`${entry.kills} kills`); }
+      if (r.coins) { r.coins.textContent = String(entry.coins); ariaParts.push(`${entry.coins} coins`); }
+      if (r.time) {
+        r.time.textContent = entry.durationMs > 0 ? fmtClock(entry.durationMs / 1000) : "\u2014";
+        if (entry.durationMs > 0) ariaParts.push(`${fmtClock(entry.durationMs / 1000)} run`);
+      }
+      r.el.disabled = false;
+      r.el.setAttribute("aria-label", `${displayName} \u2014 ${ariaParts.join(", ")} \u2014 view profile`);
+      r.el.onclick = () => this.showPlayerProfile(entry, i + 1, () => backTo(i));
     }
     if (entries === null) setNote("leaderboard unavailable \u2014 check your connection");
     else if (entries.length === 0) setNote("no runs on the board yet \u2014 yours could be first");
     else setNote("");
     // A pending Back/Escape restore lands on its row the moment the fill enables it.
     const pending = this.pendingLbRowFocus;
-    if (pending !== null && rows[pending] !== undefined && !rows[pending].disabled) {
+    if (pending !== null && rows[pending] !== undefined && !rows[pending].el.disabled) {
       this.pendingLbRowFocus = null;
-      rows[pending].focus();
+      rows[pending].el.focus();
     }
   }
 
@@ -770,11 +832,11 @@ export class Menu {
     if (!this.client) { await this.showTitle(); return; }
     const wrap = el("div", "menu");
     wrap.appendChild(el("h1", "", "LEADERBOARD"));
-    wrap.appendChild(el("p", "", "The deepest runs on record. Pick a blob to see their look and their run's build."));
-    const { box, rows } = this.leaderboardRows(LB_FULL_ROWS);
+    wrap.appendChild(el("p", "", "The deepest runs on record \u2014 floor, kills, coins, run time & weapon. Pick a blob to see their look and their run's build."));
+    const { box, rows } = this.leaderboardRows(LB_FULL_ROWS, true);
     box.classList.add("lb-rows-full");
     const note = el("p", "muted lb-note", "");
-    wrap.append(box, note);
+    wrap.append(this.leaderboardColHead(), box, note);
     const row = el("div", "btnrow");
     const goBack = () => void this.showTitle({ dest: "leaderboard" });
     const back = el("button", "secondary", "back");

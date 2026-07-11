@@ -864,6 +864,21 @@
       .menu p.lb-note{ min-height:30px; font-size:var(--fs-sm); line-height:1.5; margin:0; text-align:left; }
       .lb-rows-full .lb-row{ height:38px; flex:0 0 38px; background:var(--dun-1); box-shadow:inset 0 0 0 1px var(--dun-3); color:var(--cream); }
       .lb-rows-full .lb-floor{ color:var(--amber-hi); }
+      /* --- FULL LEADERBOARD rich stat columns (full board only; the title glance stays a
+         quiet name + floor). The header row and the data rows share these column widths so
+         values line up under their labels; padding/gap match .lb-row exactly. --- */
+      .lb-weapon{ flex:0 0 88px; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+        text-align:right; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:.3px; color:var(--dun-4); }
+      .lb-kills, .lb-coins, .lb-time{ flex:0 0 52px; min-width:0; text-align:right;
+        font-family:var(--f-num); font-size:var(--fs-md); color:var(--ink-mute); }
+      .lb-rows-full .lb-kills{ color:var(--cream); }
+      .lb-rows-full .lb-coins{ color:var(--gold-hi); }
+      .lb-colhead{ display:flex; align-items:center; gap:8px; width:100%; padding:2px 8px 0; height:16px; flex:0 0 16px;
+        font-family:var(--f-ui); font-size:var(--fs-2xs); letter-spacing:1px; color:var(--dun-4); text-transform:uppercase; }
+      .lb-colhead span{ font-family:var(--f-ui); font-size:var(--fs-2xs); color:var(--dun-4); }
+      .lb-colhead .lb-name{ text-align:left; }
+      .lb-colhead .lb-arrow{ color:transparent; }
+      .lb-dot-ghost{ background:transparent; }
 
 
       /* --- reserved identity card (right column): guest CTA and account chip share ONE
@@ -1104,6 +1119,15 @@
          devices (the title glance keeps its fixed 28px rows — its 154px reserve is exact). */
       @media (max-width:680px), (pointer:coarse){
         .lb-rows-full .lb-row{ height:48px; flex:0 0 48px; }
+      }
+      /* Narrow widths: collapse the less-important leaderboard columns (weapon/coins/time)
+         so floor + kills stay readable without crowding — width-only (a wide touchscreen
+         keeps the full set). Header + rows share the classes, so both collapse in step. */
+      @media (max-width:680px){
+        .lb-weapon, .lb-coins, .lb-time{ display:none; }
+      }
+      @media (max-width:440px){
+        .lb-kills{ display:none; }
       }
 
       /* === WHAT'S NEW / CHANGELOG PANEL ===
