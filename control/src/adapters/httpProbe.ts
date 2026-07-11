@@ -56,7 +56,9 @@ import type {
 // (kit/uc/ura/ovt/phs/uiv/pst), the input command grows the `ult` requested bit, the
 // effect-entity kind set grew (sanctuary/aegis), four ult SimEvents joined the wire, and the
 // join ticket carries the validated kit + mastery level claim (kt/ml).
-export const SYNTHETIC_JOIN_PROTOCOL = 18;
+// v19: the Wave 1 deep-boss rework — the enemy attack-move wire set grew four values
+// (tracer/beam/spew/hurl) for the reworked JET/TITHE/QUORUM movesets; no new struct field.
+export const SYNTHETIC_JOIN_PROTOCOL = 19;
 
 export interface HttpProbeConfig {
   baseUrl: string;

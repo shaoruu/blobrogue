@@ -1557,6 +1557,25 @@ export const JET = {
   // P3 room-drain: a scatter of telegraphed charge blooms (the shared walk-dodgeable hazard)
   // laid around the party as the room "drains" — layered on the inverted salvos.
   drainCount: 3, drainSpread: 150,
+  // ---- WAVE 1 REWORK: the interleaved pressure moves (A2–A4 + P3), so JET is never one
+  // spammable salvo. None open the exposed window (that stays the mirror's SPENT recover) —
+  // they are read-the-boss pressure between salvos, each a distinct fair telegraph.
+  // A2 TRACER SNAP (dash-punish): motes lock your position, hover, then SNAP to the mark
+  // after tracerSnapDelay — you must dash LATE, after the snap tell, not on the lock.
+  tracerWindup: 0.7, tracerLock: 0.35, tracerRecover: 0.6,
+  tracerCountFor: [0, 3, 3, 4, 4] as readonly number[], // motes by snapshotted players 1..4
+  tracerSnapDelay: 1.0, tracerSnapSpeed: 540, tracerRadius: 8, tracerDamage: 1, tracerLife: 1.4,
+  // A3 RECOIL LINE (space-cover, P2+): JET recoils along an axis, laying an amber wall of
+  // charge blooms that bisects the arena; the NEXT recoil lays the perpendicular = a cross.
+  recoilWindup: 0.75, recoilDashSpeed: 620, recoilDashDur: 0.34, recoilRecover: 0.6,
+  recoilWallSpan: 320, recoilWallStep: 58, // bloom spacing along the bisecting wall
+  // A4 OVERCLOCK FEINT (P2+): a big beam corridor telegraph; 30% (seeded) FEINTS into a
+  // burst offset to the beam's safe side, so a committed dash into the "safe" gap is punished.
+  beamWindup: 0.8, beamLock: 0.45, beamActive: 0.3, beamRecover: 0.6,
+  beamHalfWidth: 34, beamShards: 9, beamSpeed: 470, beamFeintChance: 0.30, beamFeintOffset: 0.5,
+  // P3 CORRUPTION: the squad's biggest attack mirrored as a WIDE screen beam (longer tell,
+  // wider corridor) — dodge THROUGH the corridor's authored gap to counter.
+  corruptWindup: 0.95, corruptHalfWidth: 52, corruptShards: 15, corruptSpeed: 430, corruptGap: 0.55,
   phaseAt: [0.66, 0.33] as readonly number[],
   phaseFloor: [0.58, 0.25] as readonly number[],
   // Transition beat: a fixed roar (the amber-motif dead note), King/Gilded semantics.
@@ -1612,6 +1631,25 @@ export const TITHE = {
   radialCount: 12,
   globSpeed: 230, globRadius: 8, globDamage: 1, globLife: 2.8,
   shardRadius: 8,
+  // ---- WAVE 1 REWORK: the feeder's interleaved offense (never one spammable ring). The
+  // feed loop stays the window; these are the space-covering pressure between feeds.
+  // A1 GORGE SLAM (space-cover): rears, slams a 360° shockwave RING + debris blooms you
+  // dash THROUGH on i-frames (or stand in a debris-shadow gap). P2 double-pulses.
+  slamWindup: 0.9, slamRecover: 0.7,
+  gorgeRingCount: 14, gorgeSpeed: 250, gorgeDebris: 4, gorgeDebrisDist: 120, gorgePulseGap: 0.45,
+  // A3 SPEW ARC (multi-stage, P2+): amber globs arc into pools (charge blooms), THEN a 2nd
+  // wave fills wave-1's GAPS — read both. Wave 2 is offset from wave 1 by half a step.
+  spewWindup: 0.8, spewRecover: 0.7, spewStageGap: 0.55,
+  spewCount: 5, spewRing: 150,
+  // A4 SLAB HURL (P2+): the feeder throws a plate as a heavy line projectile; committing
+  // to the throw leaves its side unarmored — the hurl's recover is a short exposed window.
+  hurlWindup: 0.8, hurlLock: 0.4, hurlRecover: 0.6, hurlExpose: 2.0,
+  hurlSpeed: 380, hurlRadius: 20, hurlDamage: 2, hurlLife: 2.2,
+  // SIGNATURE (P3): rips its plating into a slow ROTATING BARRAGE wheel, then collapses
+  // into a long exposed window (the memorable moment — a guaranteed P3 window, earned by
+  // surviving the wheel). Fires once per P3 on a fixed cadence.
+  wheelWindup: 0.9, wheelDuration: 2.0, wheelInterval: 0.18, wheelStep: 0.5, wheelSpeed: 230,
+  collapseExpose: 4.5,
   phaseAt: [0.66, 0.33] as readonly number[],
   phaseFloor: [0.58, 0.25] as readonly number[],
   // Transition beat: a feeder bellow (roar semantics), no adds.
@@ -1658,6 +1696,19 @@ export const QUORUM = {
   radialCount: 9,
   globSpeed: 220, globRadius: 8, globDamage: 1, globLife: 2.6,
   shardRadius: 8,
+  // ---- WAVE 1 REWORK: the 3-husk geometry weaponized (never one spammable ring). None
+  // open a window in the husk phase (kill-order IS the mechanic — focus the priority husk);
+  // the merge-form's commitment recovers stay the earned windows.
+  // A1 CROSSFIRE: converging beam CORRIDORS from the husk bearings — pick a pocket or dash
+  // a lane. Lane count rides the live-husk count; shard density rides the 4p surplus.
+  crossWindup: 0.75, crossLock: 0.4, crossActive: 0.3, crossRecover: 0.6,
+  crossHalfWidth: 24, crossShards: 6, crossSpeed: 300, crossLaneSpread: 0.42,
+  // A2 TETHER SNAP (shield husk alive): the shield-tether whips across as a moving WALL —
+  // a dense arc of shards you dash under/over on i-frames.
+  snapWindup: 0.7, snapLock: 0.38, snapRecover: 0.6, snapArc: 1.5, snapShards: 13, snapSpeed: 250,
+  // A3 ROLE VOLLEY (combo): an aimed staggered burst (the dmg role) plus a knockback ring
+  // pulse (the heal role) — read the sequence, not one tell.
+  roleWindup: 0.7, roleLock: 0.4, roleRecover: 0.55, roleBurst: 3, roleGap: 0.13, roleSpeed: 310, rolePulseCount: 8, rolePulseSpeed: 190,
   // Merge: telegraphed 1.2s NON-invuln transition at the threshold.
   mergeThreshold: 0.45,    // pool fraction that triggers the merge beat
   mergeFloor: 0.40,        // the anti-burst floor (queued overflow lands after the merge)

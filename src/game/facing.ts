@@ -77,6 +77,9 @@ export const AIMED_MOVES: Readonly<Record<AttackMove, boolean>> = {
   // Wave 1: JET faces the party as it aims a mirrored salvo; the Quorum merge is a fixed
   // transformation that keeps its facing.
   mirror: true, merge: false,
+  // Wave 1 rework: the tracer snap, corridor beam and slab hurl all aim at the party; the
+  // Tithe's two-stage spew is a lobbed area pattern that keeps its body facing.
+  tracer: true, beam: true, hurl: true, spew: false,
 };
 
 // The renderer-facing pose contract: everything a draw pass (or the AD's sheet set)

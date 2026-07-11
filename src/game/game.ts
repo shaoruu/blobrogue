@@ -437,6 +437,11 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   knell: "#c9b458",   // The Toll's expanding sound ring: bronze
   mirror: "#8a7bd8",  // JET's corrupted-Resonance salvo: cold indigo mirror-light
   merge: "#e8d9b0",   // QUORUM's fuse-merge: pale bone gather
+  // Wave 1 rework — the interleaved pressure moves.
+  tracer: "#b39ddb",  // JET's dash-punish motes: pale indigo lock
+  beam: "#d84a8a",    // JET overclock/corruption + Quorum crossfire: hot corridor magenta
+  spew: "#ffb43b",    // the Tithe's two-stage arcing pools: amber ooze
+  hurl: "#c98b5a",    // the Tithe hurls its slab: heavy amber stone
 };
 
 // The elite affix's ground-ring accent (derived from kind — the affix table is pure sim

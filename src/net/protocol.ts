@@ -196,8 +196,16 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //     wire; clients render the cast off them only.
 //   - kit-select: the chosen kitId + the account Mastery level ride the signed join TICKET claim
 //     (kt/ml), validated server-side against the account's unlocks — never a raw client claim.
-// The equality join gate turns the skew into a clean "update your client".
-export const PROTOCOL_VERSION = 18;
+// v19 (Wave 1 deep-boss rework — docs/specs/blobrogue_BOSS_REWORK_wave1.md): the enemy
+//   attack-state wire (EnemyWire.atk.mv) gains four AttackMove values for the reworked
+//   JET/TITHE/QUORUM movesets — "tracer" (JET's dash-punish snap), "beam" (the corridor
+//   telegraph shared by JET's overclock/corruption and Quorum's crossfire), "spew" (the
+//   Tithe's two-stage arcing pools) and "hurl" (the Tithe's thrown slab). A v18 client
+//   would reject a snapshot carrying any of them (the mv set is a validated closed set).
+//   The guarded/exposed body state continues to ride the existing EnemyWire.aux channel
+//   (exposed-seconds remaining; 0 = guarded), so the client/art reads the guard gate with
+//   no new field. The equality join gate turns the skew into a clean "update your client".
+export const PROTOCOL_VERSION = 19;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -644,6 +652,8 @@ const ATTACK_MOVES: Record<AttackMove, true> = {
   decoy: true, blink: true, seam: true, stoke: true, harmonize: true, knell: true,
   build: true, // the worker verb (bailiff divider, mason L-corner, the Tithe's feeding slab)
   mirror: true, merge: true, // Wave 1: JET's corrupted-Resonance salvo, Quorum's fuse-merge
+  // Wave 1 rework — the deep bosses' interleaved pressure moves (v19).
+  tracer: true, beam: true, spew: true, hurl: true,
 };
 const ENEMY_TIERS: Record<EnemyTier, true> = { swarm: true, standard: true, brute: true, elite: true };
 function inSet<T extends string>(set: Record<T, true>, v: unknown, what: string): T {

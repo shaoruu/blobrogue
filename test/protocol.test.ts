@@ -262,7 +262,7 @@ function serverRoundTripTests(): void {
 // who is actually there (the Sev-0 readout).
 function worldBindingWireTests(): void {
   section("v4: authoritative world id + roster are required, strict, and round-trip");
-  check("protocol version covers v4-v17 + the KIT/CLASS + ULT + account-MASTERY system (v18: SelfWire kit/ult block, the ult input bit, sanctuary/aegis effect kinds, the 4 ult SimEvents, the kit/mastery ticket claim)", PROTOCOL_VERSION === 18, `v=${PROTOCOL_VERSION}`);
+  check("protocol version covers v4-v18 + the Wave 1 deep-boss rework (v19: the enemy attack-move wire set grows tracer/beam/spew/hurl for the reworked JET/TITHE/QUORUM movesets)", PROTOCOL_VERSION === 19, `v=${PROTOCOL_VERSION}`);
   check("room code maps to its world id", worldIdForRoomCode(" abcd ") === "room:ABCD");
   check("room world ids pass the shared charset gate", isValidWorldId(worldIdForRoomCode("ZZZZ")) && isValidWorldId("arena-1"));
   check("junk world ids fail the shared charset gate", !isValidWorldId("room:../../etc") && !isValidWorldId(""));
