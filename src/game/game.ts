@@ -174,8 +174,8 @@ interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing:
 interface PetRenderEntry { petId: string; x: number; y: number; facing: number; anim: Anim; isMoving: boolean; }
 // Companion pet follow tuning (all client-side render feel; nothing gameplay branches on it).
 const PET_SIZE = 34;          // draw size (px) — reads as a small companion beside the ~52px blob
-const PET_REST_OFFSET = 22;   // where the pet settles behind the owner (opposite their facing)
-const PET_STOP_DIST = 8;      // within this of the rest spot it SITS (settles beside you)
+const PET_REST_OFFSET = 40;   // where the pet settles behind the owner (opposite their facing) — clears the ~52px blob so it sits BESIDE, not on top
+const PET_STOP_DIST = 12;     // within this of the rest spot it SITS (settles beside you)
 const PET_FOLLOW_GAIN = 6;    // trot speed scales with distance (a little lag/catch-up)
 const PET_MAX_SPEED = 340;    // px/s cap on the trot (keeps pace with a running blob)
 const PET_WARP_DIST = 380;    // fell way behind (dash/teleport/floor change) -> scamper-warp
