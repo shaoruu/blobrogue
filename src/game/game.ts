@@ -13,6 +13,10 @@ import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL }
 import type { PlayerMods, ItemDef } from "../sim/items.js";
 import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
+import {
+  createPetFollow, stepPetFollow, PET_REST_OFFSET, PET_REST_DROP, PET_MAX_SPEED,
+} from "./petFollow.js";
+import type { PetFollow } from "./petFollow.js";
 import { DOGGIE_PET_ID, CAT_PET_ID, DRAGON_PET_ID, SLIME_PET_ID } from "../sim/camp_nodes.js";
 import type { EnemyTier, EliteAffix, ResonanceFamily } from "../sim/balance.js";
 import { shopViewerOf, shopSlotStatusFor, shopSlotPriceFor, PREMIUM_EVENT_KINDS, SHOP_FOCUS_RANGE } from "../sim/shop.js";
@@ -50,7 +54,7 @@ import type { ProfileStats, HudState } from "./hud.js";
 import type { CoopBridge, LocalPlayerState } from "./coop.js";
 import {
   createAnim, resetAnim, stepAnim, triggerRecoil, triggerFlash, triggerBounce,
-  characterXform, frameIndex, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
+  characterXform, frameIndex, frameCount, CHARACTER_STYLE, BOSS_STYLE, IDENTITY_XFORM,
 } from "./anim.js";
 import type { Anim, Xform, XformStyle } from "./anim.js";
 import { createFacing, computeEnemyPose } from "./facing.js";
@@ -170,17 +174,13 @@ interface Corpse { sprite: SpriteName; x: number; y: number; size: number; facin
 // Per-teammate render bookkeeping: the walk/idle anim plus the dash-FX clocks (edge
 // detection for the takeoff juice, spacing for the afterimage trail and the dust motes).
 interface RemoteAnimEntry { anim: Anim; lastX: number; lastY: number; isDashing: boolean; dashImgCd: number; dashDustCd: number; }
-// A companion pet's client-only render state (META spec §3): a lagged follow position that
-// trails the owner (trots to catch up, sits when settled), a facing toward travel, and an
-// anim clock for the sit/trot cycle. Purely cosmetic — never a sim entity.
-interface PetRenderEntry { petId: string; x: number; y: number; facing: number; anim: Anim; isMoving: boolean; wasMoving: boolean; }
-// Companion pet follow tuning (all client-side render feel; nothing gameplay branches on it).
-const PET_SIZE = 34;          // draw size (px) — reads as a small companion beside the ~52px blob
-const PET_REST_OFFSET = 40;   // where the pet settles behind the owner (opposite their facing) — clears the ~52px blob so it sits BESIDE, not on top
-const PET_STOP_DIST = 12;     // within this of the rest spot it SITS (settles beside you)
-const PET_FOLLOW_GAIN = 6;    // trot speed scales with distance (a little lag/catch-up)
-const PET_MAX_SPEED = 340;    // px/s cap on the trot (keeps pace with a running blob)
-const PET_WARP_DIST = 380;    // fell way behind (dash/teleport/floor change) -> scamper-warp
+// A companion pet's client-only render state (META spec §3): the lagged follow body (a trot
+// velocity that scampers to catch up and coasts to a sit — see petFollow.ts), plus an anim
+// clock for the idle-breathe / run cycle. Purely cosmetic — never a sim entity.
+interface PetRenderEntry { petId: string; follow: PetFollow; anim: Anim; wasMoving: boolean; }
+// Companion pet draw size (px) — a small companion beside the ~52px blob. The FOLLOW tuning
+// (offsets, speeds, warp) lives with the physics in petFollow.ts.
+const PET_SIZE = 34;
 // Per-pet voice: a move cue (while trotting), a settle cue (on stop), and an optional trot
 // loop. The doggie has the richest set (a felt trot loop + pant); the others get a small
 // species move/settle. Cooldowns live in the wave spec, so this only fires on transitions.
@@ -719,6 +719,10 @@ export class Game {
   // player id. Pure cosmetic — never in the sim, never targetable, never a gameplay input.
   private petRenders = new Map<string, PetRenderEntry>();
   private lastPetTs = 0; // performance.now() of the last pet-follow frame (own display-rate dt)
+  // The wall test the client-only pet follow slides against — the SAME solid-tile probe the
+  // player's own movement uses (isWallAt). Bound once so the per-pet per-frame step passes it
+  // with no closure allocation on the hot path.
+  private readonly petWallAt = (x: number, y: number): boolean => this.isWallAt(x, y);
   private online: OnlineOptions | null = null;  // the active online run config (null otherwise)
   // Spectate: the teammate a downed local player's camera follows (null while up / solo).
   // Cycling runs through cycleSpectate so any input source (Q/E, arrows, a controller) shares
@@ -4917,7 +4921,7 @@ export class Game {
     ctx.scale(sSx, sSy);
     if (sheet) {
       const fw = sheet.img.naturalHeight || FRAME;
-      const count = Math.max(1, Math.round(sheet.img.naturalWidth / fw));
+      const count = frameCount(sheet.img.naturalWidth, sheet.img.naturalHeight);
       const i = isHoldFirstFrame ? 0 : frameIndex(count, sheet.fps, frameClock);
       // The tinted sheet is pixel-identical in layout, so the source frame rect still applies.
       const src = tint ? this.sprites.tintedSheetCanvas(name, clip, tint) ?? sheet.img : sheet.img;
@@ -7497,15 +7501,13 @@ export class Game {
       const a = this.hasRenderPrev ? this.renderAlpha : 1;
       const ox = this.renderPrevX + (this.px - this.renderPrevX) * a;
       const oy = this.renderPrevY + (this.py - this.renderPrevY) * a;
-      this.stepPet(LOCAL_ID, this.selfPet, ox, oy, this.facing, this.isPlayerMoving, dt);
+      this.stepPet(LOCAL_ID, this.selfPet, ox, oy, this.facing, dt);
       live.add(LOCAL_ID);
     }
     // Teammates' pets follow their interpolated remote positions (from the verified wire id).
     for (const r of this.remotes()) {
       if (r.pet === null || r.isAbsent) continue;
-      const entry = this.remoteAnims.get(r.playerId);
-      const moving = entry ? entry.anim.move > 0.5 : false;
-      this.stepPet(r.playerId, r.pet, r.x, r.y, r.facing, moving, dt);
+      this.stepPet(r.playerId, r.pet, r.x, r.y, r.facing, dt);
       live.add(r.playerId);
     }
     // Drop pets whose owner left this frame (leaver / no longer equipped).
@@ -7515,44 +7517,42 @@ export class Game {
     for (const pet of this.petRenders.values()) {
       const sprite = petSpriteFor(pet.petId);
       if (sprite === null) continue;
-      const sx = pet.x - cam.x, sy = pet.y - cam.y;
+      const f = pet.follow;
+      const sx = f.x - cam.x, sy = f.y - cam.y;
       const xf = characterXform(pet.anim, CHARACTER_STYLE);
-      // drawChar animates the "walk" sheet when trotting and holds frame 0 (the sit/idle pose)
-      // when settled — the AD drops the real doggie art at the wired path; a missing sheet
-      // falls back to the static idle PNG (and a disc while it streams). Never hand-drawn.
-      this.drawChar(sprite, "walk", sx, sy, PET_SIZE, pet.facing, xf, 1, 1, 0, pet.anim.clock, null, !pet.isMoving);
+      // Two readable states, both drop-in against the AD's N-frame sheets (frame count
+      // inferred, so a 4-frame idle / 6-frame run need no code change):
+      //  RUN  — while trotting: the "walk" strip plays. Missing strip -> the static base PNG
+      //         carries the motion through the procedural squash/lean.
+      //  IDLE — while settled: the "doggie.idle" strip plays a gentle breathe/bob loop.
+      //         Missing strip -> drawChar falls to the static base PNG and the procedural
+      //         idle transform (breathe/bob) animates it, so a sat pet is never a dead frame.
+      // A still-streaming sprite degrades to a tinted disc (never blank, never a crash).
+      const clip = f.isMoving ? "walk" : "idle";
+      this.drawChar(sprite, clip, sx, sy, PET_SIZE, f.facing, xf, 1, 1, 0, pet.anim.clock, null, false);
     }
   }
 
-  // Advance one pet's lagged follow toward its owner: trots in when beyond the settle
-  // distance, sits when it catches up, warps (with a puff) if it falls way behind.
-  private stepPet(ownerId: string, petId: string, ownerX: number, ownerY: number, ownerFacing: number, ownerMoving: boolean, dt: number) {
+  // Advance one pet's lagged follow toward its owner (client-render-only): the trot physics +
+  // wall slide live in the pure petFollow module; this wraps it with the puff on a warp, the
+  // per-species voice, and the idle/run anim clock. Shared by EVERY pet (doggie/cat/dragon/
+  // slime) — nothing here special-cases a species.
+  private stepPet(ownerId: string, petId: string, ownerX: number, ownerY: number, ownerFacing: number, dt: number) {
     let pet = this.petRenders.get(ownerId);
     // The rest spot sits just BEHIND the owner (opposite their facing) so it never blocks them.
     const restX = ownerX - ownerFacing * PET_REST_OFFSET;
-    const restY = ownerY + 6;
+    const restY = ownerY + PET_REST_DROP;
     if (!pet || pet.petId !== petId) {
-      pet = { petId, x: restX, y: restY, facing: ownerFacing, anim: createAnim(), isMoving: false, wasMoving: false };
+      // Spawn AT the owner (a guaranteed-standable point — the owner is there) so a fresh pet
+      // never initializes inside a wall; it then trots out to its rest spot.
+      pet = { petId, follow: createPetFollow(ownerX, ownerY, ownerFacing), anim: createAnim(), wasMoving: false };
       this.petRenders.set(ownerId, pet);
     }
-    const dx = restX - pet.x, dy = restY - pet.y;
-    const dist = Math.hypot(dx, dy);
-    if (dist > PET_WARP_DIST) {
-      // Owner dashed/teleported/changed floor: scamper-warp to the rest spot with a puff.
-      this.spawnPuff(pet.x, pet.y, 4, "#d8c8a0");
-      pet.x = restX; pet.y = restY; pet.isMoving = false;
-    } else if (dist > PET_STOP_DIST) {
-      // Trot toward the owner, speeding up the further behind it is (a little lag/catch-up).
-      const speed = Math.min(PET_MAX_SPEED, PET_FOLLOW_GAIN * dist);
-      const step = Math.min(dist, speed * dt);
-      pet.x += (dx / dist) * step;
-      pet.y += (dy / dist) * step;
-      pet.facing = dx >= 0 ? 1 : -1;
-      pet.isMoving = true;
-    } else {
-      // Settled beside/behind the owner: sit. Face the way the owner faces while idle.
-      pet.isMoving = ownerMoving && dist > PET_STOP_DIST * 0.5;
-      if (!pet.isMoving) pet.facing = ownerFacing;
+    const f = pet.follow;
+    // Slide toward the rest spot against the SAME walls the player collides with; a true warp
+    // (way behind / wedged) puffs.
+    if (stepPetFollow(f, restX, restY, ownerFacing, dt, this.petWallAt)) {
+      this.spawnPuff(f.x, f.y, 4, "#d8c8a0");
     }
     // The companion doggie's voice (local pet only, so remote pets never chorus). The
     // wave-spec cooldowns own the anti-annoyance cadence; here we only fire on real state
@@ -7561,16 +7561,18 @@ export class Game {
     if (ownerId === LOCAL_ID) {
       const voice = PET_VOICES[petId];
       if (voice !== undefined) {
-        if (voice.trot !== undefined) waveAudio.holdLoop(voice.trot, "selfpet", pet.isMoving);
-        if (pet.isMoving) {
-          waveAudio.cueAt(voice.move, pet.x, pet.y); // the move cue's own cooldown gates cadence
+        if (voice.trot !== undefined) waveAudio.holdLoop(voice.trot, "selfpet", f.isMoving);
+        if (f.isMoving) {
+          waveAudio.cueAt(voice.move, f.x, f.y); // the move cue's own cooldown gates cadence
         } else if (pet.wasMoving) {
-          waveAudio.cueAt(voice.settle, pet.x, pet.y); // the cozy stop payoff
+          waveAudio.cueAt(voice.settle, f.x, f.y); // the cozy stop payoff
         }
       }
     }
-    pet.wasMoving = pet.isMoving;
-    stepAnim(pet.anim, dt, pet.isMoving, 0);
+    pet.wasMoving = f.isMoving;
+    // Lean into the trot direction for a touch of scamper; a settled pet just breathes.
+    const lean = f.isMoving ? Math.max(-1, Math.min(1, f.vx / PET_MAX_SPEED)) : 0;
+    stepAnim(pet.anim, dt, f.isMoving, lean);
   }
 
   // The body tint for the local blob, or null for the natural amber sprite (palette slot 0
