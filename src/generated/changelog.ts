@@ -31,6 +31,7 @@ export const CHANGELOG: ChangelogSection[] = [
     version: "2026-07-11",
     date: "2026-07-11",
     entries: [
+      { title: "Your ult finally makes sense", body: "the meter now shows your kit's ult BY NAME (Overdrive / Sanctuary / Aegis / Phase), lights up loud when it's READY, and visibly charges from combat — energy motes fly from enemies you kill and bosses you hit straight into the meter. Charging is now weighted toward playing (kills + damage) instead of a passive timer, and a kit badge shows which class you are." },
       { title: "Pets feel alive now", body: "the companion was redesigned (a chunkier shiba pup that reads cleaner) and it no longer clips through walls — it paths around them with you, lags-then-scampers to keep up, and actually animates (idle breathe + a real trotting run cycle). Same fix applies to all pets." },
       { title: "The new guns fire real bullets, not circles", body: "all 8 recent weapons (Cleaver, Scrapper, Skipper, Arcbolt, Cryobolt, Firebomb, Tracker, Singularity) now have proper layered projectile FX matching each weapon (the Singularity's swirling void orb, Firebomb's fiery shell, Arcbolt's electric crackle, etc.) instead of the plain fallback circle." },
       { title: "Smoother co-op netcode", body: "the game now sends only what changed each frame (with periodic full keyframes), cutting per-player network traffic ~90% in busy 4-player fights — more headroom, less lag under load. Reconnects and packet loss recover cleanly." },
