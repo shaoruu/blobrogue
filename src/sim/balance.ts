@@ -1648,6 +1648,7 @@ export const TITHE = {
   // active-threat cap only. ⚠ rearmChannel stays FLAT 3.0 at ALL R (perR 0 — NEVER a shorter
   // timer): the task scales via slab HP/thickness + these adds. Soft-enrage adds +1 slab.
   feedAddCap: 4,          // hard readability cap on the feed-add count
+  tributeReinforceFrac: 0.35, // a tribute reaching the slab thickens it by this × a fresh slab's HP
   slabBaseHp: 84,         // slab HP anchor at F40 (per slab; balancer FINAL 46 → 84); scales on the floor curve
   slabHpFloor: 40,
   slabRingDist: 130,      // the slab raises between the feeder and the party at this reach
@@ -1730,6 +1731,8 @@ export const QUORUM = {
   huskAddBase: 1,          // bossAddCapFor base for the break-wave count
   huskAddCap: 5,           // hard readability cap on the wave count
   huskAddInterval: 6.0,    // wave cadence base → bossAddIntervalFor (3.0s floor at high R)
+  splinterGrace: 1.0,      // splinter spawn-grace (don't act mid tether-snap)
+  splinterHealPerSec: 4,   // a heal-role splinter trickle-heals the pool (weak vs the heal husk's 14)
   // The ONE shared telegraph (core-driven): a converging amber ring the lead husk shows.
   attackCd: [0, 2.8, 2.2] as readonly number[], // phase 1 (husks), phase 2 (merged)
   volleyWindup: 0.75,      // the shared tell (≥0.6s)

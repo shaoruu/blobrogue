@@ -77,6 +77,7 @@ export const AUDIO_BEHAVIOR: Readonly<Record<EnemyKind, AudioBehavior>> = {
   // (planted mechanic bodies, like the Weaver's knot/sac).
   jet: "boss", tithe: "boss", quorum: "boss",
   tithe_slab: "decoy", quorum_shield: "decoy", quorum_heal: "decoy", quorum_dmg: "decoy",
+  tithe_tribute: "hunt", quorum_splinter: "hunt", // surplus adds: simple chasers
 };
 
 // ---- body materials ----
@@ -121,6 +122,7 @@ export const AUDIO_MATERIAL: Readonly<Record<EnemyKind, AudioMaterial>> = {
   // lattice bank (like the Weaver's knots/sacs).
   jet: "goo", tithe: "gold", quorum: "bone",
   tithe_slab: "chitin", quorum_shield: "chitin", quorum_heal: "chitin", quorum_dmg: "chitin",
+  tithe_tribute: "goo", quorum_splinter: "bone", // surplus adds: amber glob / bone shard
 };
 
 // SAME-MATERIAL fallback law: until a row's generated stem lands, its declared fallback
@@ -283,6 +285,10 @@ export const BESTIARY_CUES: Readonly<Record<EnemyKind, Readonly<Record<string, W
   quorum_shield: { fuse: "weaver.feint", toll: "weaver.feint" },
   quorum_heal: { fuse: "weaver.feint", toll: "weaver.feint" },
   quorum_dmg: { fuse: "weaver.feint", toll: "weaver.feint" },
+  // Surplus adds: simple chasers reuse the hunt-body cues (placeholder until the audio
+  // director's per-boss add stems land).
+  tithe_tribute: { move: "slime.move", commit: "slime.commit" },
+  quorum_splinter: { move: "slime.move", commit: "slime.commit" },
 };
 
 export function bestiaryCue(kind: EnemyKind, hook: string): WaveEventId | null {

@@ -1535,6 +1535,17 @@ export const WAVE_TELLS: Readonly<Record<string, Readonly<Record<string, MoveTel
     knell: { windup: "toll.ringWarn", release: "toll.ring", recover: "toll.recover" },
     volley: { windup: "toll.ringWarn", lock: "toll.lock", recover: "toll.recover" },
   },
+  // Wave 1 deep bosses (placeholder cue banks — the audio director's per-boss stems are a
+  // separate task). Only the shared-grammar moves that the tell contract enumerates need
+  // rows here (rush / sweep / volley); the bosses' bespoke moves (mirror/beam/spew/hurl/spin/
+  // build/radial/merge/roar) ride their own boss cue maps.
+  jet: {
+    rush: { windup: "king.radialWarn", active: "king.radialFire" }, // the recoil-line dash
+  },
+  quorum: {
+    sweep: { windup: "marrow.listenStart", active: "marrow.chargeStart" }, // the tether-snap wall
+    volley: { windup: "marrow.listenStart", lock: "marrow.aimLock", release: "marrow.chargeStart" }, // the role volley
+  },
 };
 
 export const WAVE_BOSS_PHASE: Readonly<Record<string, WaveEventId>> = {

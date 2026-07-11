@@ -189,6 +189,10 @@ SHEETS["quorum.attack"] = { src: "/sprites/quorum_merge.png", fps: 2 };
 registerDirectionalSet("quorum_shield", { walkFps: 6, facings: ["down", "up", "side"] });
 registerDirectionalSet("quorum_heal", { walkFps: 6, facings: ["down", "up", "side"] });
 registerDirectionalSet("quorum_dmg", { walkFps: 6, facings: ["down", "up", "side"] });
+// Wave 1 surplus adds — placeholder art (the tribute reuses the feeder's walk art, the
+// splinter reuses the dmg-husk's; the art director ships dedicated sprites later).
+registerDirectionalSet("tithe_tribute", { walkFps: 8, fileBase: "tithe", facings: ["down", "up", "side"] });
+registerDirectionalSet("quorum_splinter", { walkFps: 8, fileBase: "quorum_dmg", facings: ["down", "up", "side"] });
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -321,6 +325,9 @@ const SOURCES: Record<SpriteName, string> = {
   quorum_shield: "/sprites/quorum_shield_walk_down.png",
   quorum_heal: "/sprites/quorum_heal_walk_down.png",
   quorum_dmg: "/sprites/quorum_dmg_walk_down.png",
+  // Wave 1 surplus adds — placeholder art (reuse the feeder / dmg-husk base sprites).
+  tithe_tribute: "/sprites/tithe_walk_down.png",
+  quorum_splinter: "/sprites/quorum_dmg_walk_down.png",
   // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
   // generated separately via the locked FAL recipe; until patch.png lands the renderer
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship

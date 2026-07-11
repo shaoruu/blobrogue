@@ -335,6 +335,22 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 22, drawSize: 80, alpha: 1, tint: "#e0cdb6", kbResist: 6,
     baseHp: 1, baseSpeed: 56, touchDamage: 1, threat: 0,
   },
+  // The Tithe's TRIBUTE (surplus add): a slow amber-glob crawler that shuffles toward the
+  // feeding slab to REINFORCE it — a task threat, not a body threat (touchDamage 0). A simple
+  // low-HP chaser (never a complex mover). (TODO(art): placeholder slime sprite, amber tint.)
+  tithe_tribute: {
+    kind: "tithe_tribute", sprite: "tithe_tribute", movement: "chase", isPhasing: false,
+    radius: 13, drawSize: 40, alpha: 1, tint: "#e0952a", kbResist: 0.9,
+    baseHp: 5, baseSpeed: 40, touchDamage: 0, threat: 1.0,
+  },
+  // QUORUM's SPLINTER (surplus add): a small role-echo shard that breaks off a dying husk,
+  // carrying a WEAK version of its role (role rides aux: 0 shield / 1 heal / 2 dmg). A simple
+  // low-HP chaser (never a complex mover). (TODO(art): placeholder skeleton sprite.)
+  quorum_splinter: {
+    kind: "quorum_splinter", sprite: "quorum_splinter", movement: "chase", isPhasing: false,
+    radius: 11, drawSize: 34, alpha: 1, tint: "#d8d0be", kbResist: 0.8,
+    baseHp: 4, baseSpeed: 62, touchDamage: 1, threat: 1.0,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
@@ -371,6 +387,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   // Wave 1 deep bosses + their satellite bodies never roll elite (bosses/summon-only).
   jet: "brace", tithe: "brace", tithe_slab: "brace",
   quorum: "brace", quorum_shield: "brace", quorum_heal: "brace", quorum_dmg: "brace",
+  tithe_tribute: "brace", quorum_splinter: "brace", // surplus adds never roll elite
 };
 
 export function eliteAffixOf(kind: EnemyKind): EliteAffix {

@@ -53,7 +53,16 @@ export type EnemyKind =
   //  - quorum_shield/heal/dmg: the three role-husks sharing the core's ONE pool + ONE
   //    telegraph; roles gate kill-order (shield guards, heal regens, dmg attacks).
   | "jet" | "tithe" | "tithe_slab"
-  | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg";
+  | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg"
+  // Wave 1 deep-boss SURPLUS adds (4p difficulty — simple chasers on telegraphs that
+  // threaten the TASK, not just HP; counted vs the active-threat cap, never complex movers):
+  //  - tithe_tribute: a slow amber-glob crawler that shuffles toward the feeding SLAB and
+  //    REINFORCES it (heals/thickens) if it reaches it — intercept it or lose slab-break
+  //    progress (it is not a threat to the player). Off the Tithe's feed-add surplus path.
+  //  - quorum_splinter: a role-echo shard that breaks off a husk WHEN IT DIES, carrying a
+  //    WEAK version of its parent's role (heal-trickle / dmg-pip / shield body) — clear the
+  //    wave (the kill-order lesson at small scale) before the pool window.
+  | "tithe_tribute" | "quorum_splinter";
 
 // Telegraphed-attack state machine. Committed attacks read as
 // CHASE -> WINDUP (telegraph, aim locks partway) -> ACTIVE -> RECOVER -> cooldown.
@@ -700,6 +709,9 @@ export type SpriteName =
   | "jet" | "jet_phase2" | "jet_phase3"
   | "tithe" | "tithe_slab" | "tithe_slab_cracked"
   | "quorum" | "quorum_shield" | "quorum_heal" | "quorum_dmg"
+  // Wave 1 surplus adds (placeholder art: the tribute reuses the feeder walk, the splinter
+  // reuses the dmg-husk walk — the art director ships dedicated sprites later).
+  | "tithe_tribute" | "quorum_splinter"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim).

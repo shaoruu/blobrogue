@@ -205,7 +205,11 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   The guarded/exposed body state continues to ride the existing EnemyWire.aux channel
 //   (exposed-seconds remaining; 0 = guarded), so the client/art reads the guard gate with
 //   no new field. The equality join gate turns the skew into a clean "update your client".
-export const PROTOCOL_VERSION = 19;
+// v20 (Wave 1 deep-boss surplus content): two new enemy kinds ride the wire — tithe_tribute
+//   (the Tithe's slab-reinforcing crawler) and quorum_splinter (Quorum's role-echo shard,
+//   role on EnemyWire.aux: 0 shield / 1 heal / 2 dmg). isEnemyKind keys off ENEMY_ARCHETYPES,
+//   so a v19 client would reject a snapshot carrying either kind.
+export const PROTOCOL_VERSION = 20;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect

@@ -4043,6 +4043,8 @@ function updateEnemyAI(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): voi
     case "quorum_shield": updateQuorumHusk(w, e, dt); return;
     case "quorum_heal": updateQuorumHusk(w, e, dt); return;
     case "quorum_dmg": updateQuorumHusk(w, e, dt); return;
+    case "tithe_tribute": updateTitheTribute(w, e, dt, ev); return;
+    case "quorum_splinter": updateQuorumSplinter(w, e, dt); return;
     default: updateChaser(w, e, dt); return;
   }
 }
@@ -7416,12 +7418,10 @@ function jetRecoverFor(move: AttackMove): number {
     : JET.spentRecover; // mirror (the window) + any fallback
 }
 
-// A simple chaser add drawn from the deep bosses' surplus paths (the Tithe's feed-adds, the
-// Quorum's husk-adds). The game designer owns the creature identity; the balancer owns the
-// per-P counts + cadence. Spawned as an omen-telegraphed ambush (fair: tell + grace +
-// player clearance) exactly like the Weaver/Marrow pool draws, gated by the active-threat cap.
-const TITHE_FEED_ADD: AddPoolEntry = { kind: "slime", tier: "swarm", weight: 1, maxAlive: 0, count: 1 };
-const QUORUM_HUSK_ADD: AddPoolEntry = { kind: "skeleton", tier: "swarm", weight: 1, maxAlive: 0, count: 1 };
+// The Tithe's surplus TRIBUTE add — an omen-telegraphed ambush (fair: 0.7s tell + grace +
+// player clearance) like the Weaver/Marrow pool draws. It crawls to the feeding slab to
+// reinforce it (updateTitheTribute), threatening slab-break PROGRESS, not the player.
+const TITHE_FEED_ADD: AddPoolEntry = { kind: "tithe_tribute", tier: "swarm", weight: 1, maxAlive: 0, count: 1 };
 
 function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
@@ -7547,16 +7547,20 @@ function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   // → 0 solo / 2 at 2p+ (simulCapFor still governs how many render per beat). Counted vs the
   // active-threat budget only, never the ≤2-complex-mover rule (these are shard patterns).
   const surplus = Math.min(bossAddCapFor(0, w.encounterPower), JET.surplusVerbCap);
-  const enrageVerb = boss.enrage === 1 && boss.phase >= 2 ? 1 : 0;
+  // Soft-enrage (party skipped a phase): the phase OPENS with one extra MIRROR-FLIPPED verb —
+  // the safe pocket on the OPPOSITE side, forcing a re-read. Uses the authored mirror pool
+  // (no new entity). Spent after this opening salvo (fires once per enraged phase).
+  const enrageVerb = boss.enrage === 1 ? 1 : 0;
   const total = base + surplus + enrageVerb;
   // P2's "out-of-sync canon": the further verbs enter one canonOffset apart, so the salvo
   // reads as a mirror falling out of time with you rather than a single wall.
   while (boss.spinCount < total && a.time >= boss.spinCount * JET.canonOffset) {
-    const forceInvert = enrageVerb === 1 && boss.spinCount === total - 1; // the enrage verb is inverted
+    const forceInvert = enrageVerb === 1 && boss.spinCount === total - 1; // the enrage verb is mirror-flipped
     jetFireVerb(w, e, boss.spinCount, ev, forceInvert);
     boss.spinCount++;
   }
   if (a.time >= JET.mirrorActive + (total - 1) * JET.canonOffset) {
+    if (boss.enrage === 1) boss.enrage = 0; // the opening mirror-flipped salvo is spent
     enterRecover(e);
     // He is SPENT — the recover is the exposed window (bank-capped like the deep roster).
     openBossWindow(e, JET.spentExpose, ev);
@@ -7873,6 +7877,35 @@ function titheHurl(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   spawnEnemyBullet(w, e.x + Math.cos(aim) * (e.radius + 8), e.y + Math.sin(aim) * (e.radius + 8), aim, TITHE.hurlSpeed, TITHE.hurlRadius, TITHE.hurlDamage, "#c98b5a", TITHE.hurlLife);
   ev.push({ t: "bossVolley", x: e.x, y: e.y });
   ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.85, trauma: 0.08 });
+}
+
+// TRIBUTE (surplus add): a slow amber crawler that shuffles toward the nearest feeding SLAB
+// and REINFORCES it on contact (thickens it, then is consumed) — it threatens slab-break
+// PROGRESS, not the player (touchDamage 0). At 4p the party must divide labor: intercept
+// tributes while others break the slab. If no slab stands it just mills (harmless).
+function updateTitheTribute(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  if (e.spawnTimer > 0) return; // spawn grace: the omen already stood as the tell
+  let slab: Enemy | null = null;
+  let bestD = Infinity;
+  for (const o of w.enemies) {
+    if (o.dead || o.kind !== "tithe_slab") continue;
+    const d = Math.hypot(o.x - e.x, o.y - e.y);
+    if (d < bestD) { bestD = d; slab = o; }
+  }
+  if (!slab) { // nothing to reinforce — drift with the party, harmless
+    if (findTarget(w, e.x, e.y)) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
+    return;
+  }
+  if (bestD <= e.radius + slab.radius + 2) {
+    const boost = titheSlabHpForFloor(w.floor, w.encounterPlayers) * TITHE.tributeReinforceFrac;
+    slab.hp += boost;
+    slab.maxHp = Math.max(slab.maxHp, slab.hp); // thicken (the reinforced slab reads fuller)
+    e.dead = true;
+    ev.push({ t: "puff", x: e.x, y: e.y, n: 5, color: ENEMY_ARCHETYPES.tithe_tribute.tint });
+    ev.push({ t: "cue", name: "enemyHit", x: slab.x, y: slab.y, rate: 0.5, gain: 0.6, trauma: 0.03 });
+    return;
+  }
+  applyChaseStep(w, e, dt, Math.atan2(slab.y - e.y, slab.x - e.x), e.speed * dt);
 }
 
 // The feed channel's chaser adds (balancer FINAL): a per-P cap (solo 0 / 2p 3 / 4p 4) of
@@ -8266,25 +8299,57 @@ function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: 
     // The tether snaps + recoils on a husk's death (the client render reads the missing body).
     ev.push({ t: "puff", x: husk.x, y: husk.y, n: 7, color: ENEMY_ARCHETYPES[husk.kind].tint });
     ev.push({ t: "cue", name: "enemyHit", x: husk.x, y: husk.y, rate: 0.7, gain: 0.7, trauma: 0.06 });
-    // R-framework SURPLUS: a husk break fires a husk-add WAVE (per-P cap, paced by the wave
-    // interval that tightens 6.0s → 3.0s with R). The merge-form (phase 2) raises none.
-    if (boss.phase < 2) quorumHuskAddWave(w, core, ev);
+    // R-framework SURPLUS: a husk break BREAKS OFF a SPLINTER wave carrying its role (per-P
+    // cap, paced by the wave interval that tightens 6.0s → 3.0s with R). The merge-form
+    // (phase 2) breaks off none — its final window is ungated by R.
+    if (boss.phase < 2) quorumSpawnSplinters(w, core, husk, ev);
   }
 }
 
-// The husk-add wave (balancer FINAL): fired on a husk break, capped by snapshotted party
-// size (solo 1 / 2p 4 / 4p 5), paced by bossAddIntervalFor(6.0 → 3.0s floor) off encounterPower,
-// and held under the cap by counting only the live husk-adds (not the husks themselves).
-function quorumHuskAddWave(w: WorldState, core: Enemy, ev: SimEvent[]): void {
+// SPLINTERS (balancer FINAL surplus): a dying husk breaks off small role-echo shards, count =
+// min(bossAddCapFor(1, R), 5) → solo 1 / 2p 4 / 3p 5 / 4p 5, paced by bossAddIntervalFor(6.0 →
+// 3.0s), spawned AT the dying husk with a ~1s grace (so they don't act mid tether-snap). Each
+// carries a WEAK version of its parent's role on aux (0 shield / 1 heal / 2 dmg): the heal
+// shard trickle-heals the pool, the dmg shard pips on contact, the shield shard is a body to
+// clear — the kill-order lesson at small scale (clear the wave before the pool window).
+function quorumSpawnSplinters(w: WorldState, core: Enemy, husk: Enemy, ev: SimEvent[]): void {
   const boss = core.boss!;
   if (boss.addTimer > 0) return; // paced by the wave interval
-  const cap = Math.min(bossAddCapFor(QUORUM.huskAddBase, w.encounterPower), QUORUM.huskAddCap); // 1 solo / 4 2p / 5 3p+ (R-keyed)
+  const cap = Math.min(bossAddCapFor(QUORUM.huskAddBase, w.encounterPower), QUORUM.huskAddCap);
   if (cap <= 0) return;
   boss.addTimer = bossAddIntervalFor(QUORUM.huskAddInterval, w.encounterPower);
-  let live = countLiveAddsOfKind(w, QUORUM_HUSK_ADD.kind) + countPendingOmensOfKind(w, QUORUM_HUSK_ADD.kind, QUORUM_HUSK_ADD.tier);
+  const role = husk.kind === "quorum_shield" ? 0 : husk.kind === "quorum_heal" ? 1 : 2;
+  let live = countLiveAddsOfKind(w, "quorum_splinter");
   for (let i = 0; i < cap && live < cap; i++) {
-    if (queueAmbushWave(w, core, QUORUM.huskRingDist + 40, QUORUM_HUSK_ADD, core.id, ev) > 0) live++;
+    const ang = husk.zig + (i / cap) * Math.PI * 2; // seeded spread off the husk (zig baked at spawn)
+    const x = husk.x + Math.cos(ang) * 26;
+    const y = husk.y + Math.sin(ang) * 26;
+    if (!settleSpawnPoint(w, x, y, ENEMY_ARCHETYPES.quorum_splinter.radius)) continue;
+    const sp = createEnemy("quorum_splinter", settlePoint.x, settlePoint.y, w.floor, w.rng, w.nextEnemyId++, {
+      isSummoned: true, players: w.encounterPlayers,
+    });
+    sp.aux = role;                          // role rides the wire (client renders the shard variant)
+    sp.seq = core.id + 1;                   // link to the core (the heal shard's trickle target)
+    sp.touchDamage = role === 2 ? 1 : 0;    // only the dmg-pip shard contacts; heal/shield are body-clear
+    sp.spawnTimer = QUORUM.splinterGrace;   // ~1s grace: it does not act mid tether-snap
+    w.enemies.push(sp);
+    ev.push({ t: "enemySpawn", eid: sp.id, kind: sp.kind, tier: sp.tier, x: sp.x, y: sp.y });
+    live++;
   }
+}
+
+// A splinter (surplus add): the heal shard trickle-heals the shared pool while it lives (undo
+// the pool progress — clear it, the kill-order lesson at small scale); all shards chase. The
+// spawn grace holds it inert so it never acts inside the husk's tether-snap.
+function updateQuorumSplinter(w: WorldState, e: Enemy, dt: number): void {
+  if (e.spawnTimer > 0) return; // grace
+  if (e.aux === 1) { // heal-role shard: trickle-heal the pool (weak)
+    const core = quorumCoreOf(w, e);
+    if (core && core.boss && core.boss.phase < 2 && !core.boss.roar && core.hp < core.maxHp) {
+      core.hp = Math.min(core.maxHp, core.hp + QUORUM.splinterHealPerSec * dt);
+    }
+  }
+  if (findTarget(w, e.x, e.y)) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
 }
 
 // ---- shared attack helpers ----
