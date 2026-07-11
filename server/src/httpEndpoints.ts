@@ -72,6 +72,8 @@ export function createHttpHandler(deps: HttpDeps): (req: IncomingMessage, res: S
       if (hat !== null && /^[a-z0-9_]{1,24}$/.test(hat)) claims.hat = hat;
       const face = url.searchParams.get("face");
       if (face !== null && /^[a-z0-9_]{1,24}$/.test(face)) claims.face = face;
+      const pet = url.searchParams.get("pet");
+      if (pet !== null && /^[a-z0-9_]{1,24}$/.test(pet)) claims.pet = pet;
       const ticket = deps.config.auth.secret
         ? mintTicket(deps.config.auth.secret, playerId, undefined, undefined, claims)
         : "dev:" + playerId + (claims.worldId !== undefined ? "@" + claims.worldId : "");

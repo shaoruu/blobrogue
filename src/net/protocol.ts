@@ -313,6 +313,7 @@ export interface PlayerWire {
   cl: number | null;
   ht: string | null; // equipped cosmetic hat id (visual-only; null = the classic blob)
   fc: string | null; // equipped cosmetic face id (visual-only)
+  pt: string | null; // equipped cosmetic COMPANION pet id (visual-only; null = no pet)
 }
 
 // One SEAT in this world, as published on every snapshot REGARDLESS of interest filtering:
@@ -970,6 +971,8 @@ function validatePlayerWire(v: unknown): PlayerWire {
   if (o.ht !== undefined && o.ht !== null) ht = shortStr(o, "ht", 24);
   let fc: string | null = null;
   if (o.fc !== undefined && o.fc !== null) fc = shortStr(o, "fc", 24);
+  let pt: string | null = null;
+  if (o.pt !== undefined && o.pt !== null) pt = shortStr(o, "pt", 24);
   return {
     id,
     x: num(o, "x", -POS_LIMIT, POS_LIMIT), y: num(o, "y", -POS_LIMIT, POS_LIMIT),
@@ -984,7 +987,7 @@ function validatePlayerWire(v: unknown): PlayerWire {
     out: boolOf(o, "out"),
     bcl: boolOf(o, "bcl"),
     ab: boolOf(o, "ab"),
-    nm, cl, ht, fc,
+    nm, cl, ht, fc, pt,
   };
 }
 
@@ -1294,6 +1297,8 @@ export interface PlayerIdentity {
   // valid). Body renders from the party color at launch; titles never ride the wire.
   hat?: string | null;
   face?: string | null;
+  // Equipped visual-only companion pet id (META spec §3), same channel as hat/face.
+  pet?: string | null;
 }
 
 export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWire {
@@ -1308,6 +1313,7 @@ export function toPlayerWire(p: PlayerSim, identity?: PlayerIdentity): PlayerWir
     cl: identity?.colorIndex ?? null,
     ht: identity?.hat ?? null,
     fc: identity?.face ?? null,
+    pt: identity?.pet ?? null,
   };
 }
 

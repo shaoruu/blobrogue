@@ -130,6 +130,7 @@ export class MessageRouter {
     conn.colorIndex = auth.colorIndex ?? null;
     conn.hat = auth.hat ?? null;
     conn.face = auth.face ?? null;
+    conn.pet = auth.pet ?? null;
     // SERVER-SIDE kit-unlock gate (spec §9.5): the ticket's chosen kit is re-validated against
     // the account's signed Mastery level. An unlocked kit stands; anything else (a client claim
     // to an unowned kit, or a claim with no mastery proof) downgrades to GUNNER — never trusted.

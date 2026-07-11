@@ -49,6 +49,8 @@ export interface Conn {
   colorIndex: number | null;
   hat: string | null;
   face: string | null;
+  // The equipped visual-only companion pet id (META spec §3), broadcast via PlayerWire.pt.
+  pet: string | null;
   // The VALIDATED kit this player joined with (spec §9.5): the ticket's requested kit re-gated
   // server-side against the account's Mastery level, downgraded to "gunner" on any mismatch —
   // never a raw client claim. Applied to the sim body at spawn (setPlayerKit).
@@ -142,7 +144,7 @@ export function newRateWindows(now: number): RateWindows {
 }
 
 export function newConnState(now: number): Pick<Conn,
-  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "kitId" | "resumeToken"
+  "authed" | "playerId" | "authName" | "worldId" | "displayName" | "colorIndex" | "hat" | "face" | "pet" | "kitId" | "resumeToken"
   | "presentedResumeToken" | "isResumeTokenConfirmed" | "isLeaving" | "malformed"
   | "connectedAt" | "lastInboundAt" | "isSoftAbsent" | "rate"
   | "queue" | "lastAppliedSeq" | "lastInput" | "starveTicks" | "ackedEventId" | "lastCseq"
@@ -153,7 +155,7 @@ export function newConnState(now: number): Pick<Conn,
   | "cliReconciliations" | "cliCorrectionMaxPx"
 > {
   return {
-    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, hat: null, face: null,
+    authed: false, playerId: null, authName: null, worldId: null, displayName: null, colorIndex: null, hat: null, face: null, pet: null,
     kitId: "none",
     resumeToken: null, presentedResumeToken: null, isResumeTokenConfirmed: false, isLeaving: false, malformed: 0,
     connectedAt: now, lastInboundAt: now, isSoftAbsent: false, rate: newRateWindows(now),
