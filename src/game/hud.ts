@@ -74,6 +74,15 @@ export interface HudState {
   // meters. charge is 0..1; isReady lights the "ULT READY" state; cd is the 8s lockout fraction
   // still remaining (0 = no lockout) after a cast. null hides the meter (a neutral-kit player).
   ult: { charge: number; isReady: boolean; cd: number; kit: string; name: string } | null;
+  // Wave 2 per-kit SIGNATURE readouts (null unless the local player is that kit) — every block is
+  // a FIXED-SLOT element so the cluster + health row never reflow. momentum: Gunner 0..max pip row
+  // + the boil-over glow; overshield: Bulwark chip pool drawn on the health bar; pulse: Mender
+  // directed-heal cooldown (cd = fraction remaining, isReady lights the verb).
+  sig: {
+    momentum: { stacks: number; max: number; isOverheat: boolean } | null;
+    overshield: { chips: number; max: number } | null;
+    pulse: { cd: number; isReady: boolean } | null;
+  } | null;
 }
 
 export interface HotbarActions {
@@ -435,7 +444,7 @@ export function buildMoreChip(hiddenCount: number): HTMLElement {
 //   BC  hotbar (weapons + blessing summary)
 const HUD_MARKUP = `
   <div class="hud-corner tl"><div class="statpanel">
-    <div class="hprow"><div class="hearts" data-hearts></div><span class="hp-num" data-hpnum>0/0</span></div>
+    <div class="hprow"><div class="hearts" data-hearts></div><span class="oshield" data-oshield hidden></span><span class="hp-num" data-hpnum>0/0</span></div>
     <div class="party" data-party></div>
     <div class="statrow">
       <span class="chip kills"><span class="ic" data-ic="skull"></span><span class="v" data-kills>0</span></span>
@@ -464,6 +473,8 @@ const HUD_MARKUP = `
     <div class="klcluster" data-klcluster>
       <div class="kitbadge" data-kitbadge hidden><span class="ki" data-kit-icon></span><span class="kn" data-kit-name></span></div>
       <div class="ultmeter" data-ult hidden><span class="ui" data-ult-icon></span><span class="lbl"><span class="k" data-ult-k>ULT</span><span class="rdy" data-ult-rdy> READY</span></span><span class="key keycap" data-ult-key>F</span><span class="bar"><i data-ult-fill style="--ult-fill:0"></i></span><span class="pct" data-ult-pct></span></div>
+      <div class="momentum" data-momentum hidden><span class="k">HEAT</span><span class="pips" data-momentum-pips></span></div>
+      <div class="pulse" data-pulse hidden><span class="k">PULSE</span><span class="key keycap">C</span><span class="bar"><i data-pulse-fill style="--pulse-fill:1"></i></span></div>
       <div class="dash"><span class="k">DASH</span><span class="key keycap">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
     </div>
   </div>
@@ -538,6 +549,15 @@ export class Hud {
   private ultKeyEl!: HTMLElement;
   private ultIconEl!: HTMLElement;
   private ultPctEl!: HTMLElement;
+  // Wave 2 signature readouts (fixed-slot; see renderSig*). Cached once, toggled by class/var.
+  private oshieldEl!: HTMLElement;
+  private momentumEl!: HTMLElement;
+  private momentumPipsEl!: HTMLElement;
+  private pulseEl!: HTMLElement;
+  private pulseFillEl!: HTMLElement;
+  private prevOshieldKey = "";
+  private prevMomentumKey = "";
+  private prevPulseKey = "";
   private klClusterEl!: HTMLElement;
   private kitBadgeEl!: HTMLElement;
   private kitIconEl!: HTMLElement;
@@ -635,6 +655,11 @@ export class Hud {
     this.ultKeyEl = hud.querySelector("[data-ult-key]")!;
     this.ultIconEl = hud.querySelector("[data-ult-icon]")!;
     this.ultPctEl = hud.querySelector("[data-ult-pct]")!;
+    this.oshieldEl = hud.querySelector("[data-oshield]")!;
+    this.momentumEl = hud.querySelector("[data-momentum]")!;
+    this.momentumPipsEl = hud.querySelector("[data-momentum-pips]")!;
+    this.pulseEl = hud.querySelector("[data-pulse]")!;
+    this.pulseFillEl = hud.querySelector("[data-pulse-fill]")!;
     this.klClusterEl = hud.querySelector("[data-klcluster]")!;
     this.kitBadgeEl = hud.querySelector("[data-kitbadge]")!;
     this.kitIconEl = hud.querySelector("[data-kit-icon]")!;
@@ -1329,6 +1354,61 @@ export class Hud {
       : `${Math.round(fill * 100)}%`;
   }
 
+  // Wave 2 per-kit SIGNATURE readouts. Each block is a FIXED-SLOT element toggled by class/CSS
+  // var (never DOM add/remove after first build), so a stack ticking / a chip depleting / the CD
+  // draining never reflows the layout. Only the block for the local player's kit is ever shown.
+  private renderSig(sig: HudState["sig"]): void {
+    // GUNNER OVERHEAT: a 0..max pip row that climbs, glowing during the boil-over burst.
+    const m = sig?.momentum ?? null;
+    if (m === null) {
+      if (!this.momentumEl.hasAttribute("hidden")) this.momentumEl.setAttribute("hidden", "");
+    } else {
+      if (this.momentumPipsEl.childElementCount !== m.max) {
+        this.momentumPipsEl.replaceChildren(...Array.from({ length: m.max }, () => { const i = el("i", ""); i.className = "pip"; return i; }));
+      }
+      const key = `${m.stacks}:${m.isOverheat ? 1 : 0}`;
+      if (key !== this.prevMomentumKey) {
+        this.prevMomentumKey = key;
+        const pips = this.momentumPipsEl.children;
+        for (let i = 0; i < pips.length; i++) pips[i].classList.toggle("on", i < m.stacks);
+        this.momentumEl.classList.toggle("overheat", m.isOverheat);
+      }
+      this.momentumEl.removeAttribute("hidden");
+    }
+    // BULWARK OVERSHIELD: a fixed row of chip glyphs ON the health bar — full chips lit, spent
+    // chips dimmed (you watch them eat hits), never adding/removing DOM.
+    const o = sig?.overshield ?? null;
+    if (o === null) {
+      if (!this.oshieldEl.hasAttribute("hidden")) this.oshieldEl.setAttribute("hidden", "");
+    } else {
+      if (this.oshieldEl.childElementCount !== o.max) {
+        this.oshieldEl.replaceChildren(...Array.from({ length: o.max }, () => { const i = el("i", ""); i.className = "chip"; return i; }));
+      }
+      const key = String(o.chips);
+      if (key !== this.prevOshieldKey) {
+        this.prevOshieldKey = key;
+        const chips = this.oshieldEl.children;
+        for (let i = 0; i < chips.length; i++) chips[i].classList.toggle("on", i < o.chips);
+      }
+      this.oshieldEl.removeAttribute("hidden");
+    }
+    // MENDER HEAL-PULSE: a small cooldown meter (fixed width) that fills to ready and lights the
+    // verb — the felt "clutch save" button beside the passive Lifebloom beam.
+    const pl = sig?.pulse ?? null;
+    if (pl === null) {
+      if (!this.pulseEl.hasAttribute("hidden")) this.pulseEl.setAttribute("hidden", "");
+    } else {
+      const fill = pl.isReady ? 1 : 1 - pl.cd;
+      const key = `${pl.isReady ? 1 : 0}:${Math.round(fill * 100)}`;
+      if (key !== this.prevPulseKey) {
+        this.prevPulseKey = key;
+        this.pulseFillEl.style.setProperty("--pulse-fill", String(fill));
+        this.pulseEl.classList.toggle("ready", pl.isReady);
+      }
+      this.pulseEl.removeAttribute("hidden");
+    }
+  }
+
   // Point a mask-tinted icon element at its white source; the kit accent fills it via CSS
   // background, so ONE white PNG recolors per kit (gunner amber / mender green / bulwark blue /
   // phantom violet).
@@ -1376,6 +1456,7 @@ export class Hud {
     // party/ult as empty/none rather than throwing.
     this.renderParty(s.party ?? []);
     this.renderUlt(s.ult ?? null);
+    this.renderSig(s.sig ?? null);
     this.killsEl.textContent = String(s.kills);
     this.coinsEl.textContent = String(s.coins);
     // The floor-mutator readout: a middot-joined list, updated only when it changes (textContent

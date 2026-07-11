@@ -404,6 +404,28 @@
       /* (3) LOCKOUT: the bar is DARK, REFILLING from 0 as the 8s cooldown elapses; keycap + name
          stay muted. Unconfusable with ready (empty->refill vs a solid block). */
       .ultmeter.cd .bar i{ background:var(--dun-4); box-shadow:none; }
+      /* Wave 2 kit SIGNATURES (fixed-slot, kit-accented; the JS toggles classes/vars only). */
+      /* GUNNER OVERHEAT: a 0->5 heat pip row that climbs, glowing on the boil-over burst. */
+      .momentum{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
+      .momentum .k{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--dun-4); }
+      .momentum .pips{ display:flex; gap:3px; }
+      .momentum .pip{ width:9px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); transition:background .1s linear, box-shadow .1s linear; }
+      .momentum .pip.on{ background:var(--amber); box-shadow:0 0 6px var(--amber); }
+      .momentum.overheat{ box-shadow:inset 0 0 0 2px var(--amber),0 0 10px color-mix(in srgb, var(--amber) 45%, transparent); }
+      .momentum.overheat .pip.on{ background:var(--amber-hi,#ffd479); box-shadow:0 0 9px var(--amber); animation:heatPulse .5s ease-in-out infinite; }
+      @keyframes heatPulse{ 0%,100%{ opacity:1; } 50%{ opacity:.7; } }
+      /* BULWARK OVERSHIELD: chip glyphs ON the health row that deplete before hearts. */
+      .oshield{ display:inline-flex; gap:2px; align-items:center; }
+      .oshield .chip{ width:7px; height:12px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); transition:background .1s linear, box-shadow .1s linear; }
+      .oshield .chip.on{ background:var(--blu); box-shadow:0 0 6px var(--blu); }
+      /* MENDER HEAL-PULSE: a small directed-heal cooldown meter beside the ult meter. */
+      .pulse{ display:flex; align-items:center; gap:8px; background:rgba(5,3,11,.72); box-shadow:inset 0 0 0 2px var(--dun-3); padding:6px 11px; }
+      .pulse .k{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; color:var(--dun-4); }
+      .pulse .key{ letter-spacing:1px; padding:2px 4px; }
+      .pulse .bar{ width:70px; height:9px; background:var(--dun-0); box-shadow:inset 0 0 0 2px var(--dun-3); position:relative; }
+      .pulse .bar i{ position:absolute; top:2px; left:2px; bottom:2px; width:calc((100% - 4px) * var(--pulse-fill,1)); background:var(--grn); box-shadow:0 0 6px var(--grn); transition:width .1s linear; }
+      .pulse.ready{ box-shadow:inset 0 0 0 2px var(--grn); }
+      .pulse.ready .key{ color:var(--grn); box-shadow:inset 0 0 0 1px var(--grn); }
       @keyframes ultEdgeFlash{ 0%{ opacity:.95; } 100%{ opacity:0; } }
       @keyframes ultKeyPulse{ 0%,100%{ box-shadow:inset 0 0 0 1px var(--amber-hi); } 50%{ box-shadow:inset 0 0 0 1px var(--amber-hi),0 0 9px var(--amber); } }
       @media (prefers-reduced-motion: reduce){
