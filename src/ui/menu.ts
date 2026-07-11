@@ -13,7 +13,7 @@ import { itemById } from "../sim/items.js";
 import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js";
 import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
-import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet, DOGGIE_NODE_ID, DOGGIE_PET_ID, DOGGIE_RESCUE_FLOOR } from "../sim/camp_nodes.js";
+import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet } from "../sim/camp_nodes.js";
 import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
@@ -1614,26 +1614,25 @@ export class Menu {
       bal.appendChild(el("span", "camp-amber-lbl", "Amber"));
       body.appendChild(bal);
 
-      // THE KENNEL — adopt + equip the RESCUED doggie (the wave-1 payoff). The pet is earned,
-      // never bought: until it is rescued from the depths, the Kennel just points the way.
-      const isDoggieOwned = isNodeOwned(DOGGIE_NODE_ID, owned);
+      // THE KENNEL — every companion the player has RESCUED, plus locked teasers for the ones
+      // still lost in the depths. Pets are earned, never bought: a locked row just points to
+      // the floor that brings it home. ONE pet rides along at a time (equippedPet) — clicking a
+      // rescued pet makes it the active companion, and an equipped one can be left at camp.
+      const companions = CAMP_NODES.filter((n) => n.category === "companion");
+      const isAnyPetOwned = companions.some((n) => isNodeOwned(n.id, owned));
       const kennel = el("div", "camp-section camp-kennel");
       kennel.appendChild(el("h2", "camp-h", "The Kennel"));
-      if (!isDoggieOwned) {
-        kennel.appendChild(el("p", "muted", `A stray pup is lost somewhere in the depths \u2014 reach floor ${DOGGIE_RESCUE_FLOOR} on a run to bring it home. Pets are rescued, never bought.`));
-      } else {
-        const isEquipped = equippedPet === DOGGIE_PET_ID;
-        kennel.appendChild(el("p", "muted", isEquipped ? "Doggie is at your side \u2014 sits when you rest, trots when you roam." : "Doggie is adopted \u2014 whistle to bring it along."));
-        const equip = el("button", isEquipped ? "camp-node owned" : "camp-node buyable", isEquipped ? "\u2713 Doggie following" : "Adopt \u00b7 bring Doggie along");
-        equip.type = "button";
-        equip.onclick = () => void this.campEquipPet(isEquipped ? null : DOGGIE_PET_ID, note, rebuild);
-        kennel.appendChild(equip);
-        if (isEquipped) {
-          const dismiss = el("button", "secondary camp-dismiss", "leave Doggie at camp");
-          dismiss.type = "button";
-          dismiss.onclick = () => void this.campEquipPet(null, note, rebuild);
-          kennel.appendChild(dismiss);
-        }
+      kennel.appendChild(el("p", "muted", isAnyPetOwned
+        ? "Pick who rides along \u2014 one companion at a time. Pets are rescued from the depths, never bought."
+        : "Your companions are lost somewhere in the depths \u2014 reach their floors on a run to bring them home. Pets are rescued, never bought."));
+      const petGrid = el("div", "camp-grid");
+      for (const node of companions) petGrid.appendChild(this.campPetCard(node, owned, equippedPet, note, rebuild));
+      kennel.appendChild(petGrid);
+      if (equippedPet !== null) {
+        const dismiss = el("button", "secondary camp-dismiss", "leave your companion at camp");
+        dismiss.type = "button";
+        dismiss.onclick = () => void this.campEquipPet(null, note, rebuild);
+        kennel.appendChild(dismiss);
       }
       body.appendChild(kennel);
 
@@ -1671,6 +1670,31 @@ export class Menu {
     // Hydrate the authoritative profile (Amber balance / owned nodes / equipped pet), then
     // repaint in place — a cold open shows the cached profile immediately, zero layout shift.
     void this.hydrateCamp();
+  }
+
+  // A companion pet card in the Kennel: rescued+following / rescued (click to bring along) /
+  // still-lost teaser pointing to its rescue floor. Reuses the camp-card grid styling so the
+  // Kennel reads identically to the Camp Upgrades sinks — no bespoke chrome.
+  private campPetCard(node: CampNodeDef, owned: readonly string[], equippedPet: string | null, note: HTMLElement, rebuild: () => HTMLElement): HTMLElement {
+    const isOwned = isNodeOwned(node.id, owned);
+    const isEquipped = isOwned && node.pet !== undefined && equippedPet === node.pet;
+    const card = el("div", `camp-card ${isEquipped ? "owned" : isOwned ? "buyable" : "locked"}`);
+    card.appendChild(el("span", "camp-card-name", node.name));
+    card.appendChild(el("span", "camp-card-desc", node.desc));
+    if (!isOwned) {
+      card.appendChild(el("span", "camp-card-chip",
+        node.rescueFloor !== undefined ? `reach floor ${node.rescueFloor}` : "rescue to unlock"));
+      return card;
+    }
+    if (isEquipped) {
+      card.appendChild(el("span", "camp-card-chip", "\u2713 following"));
+    } else {
+      const bring = el("button", "camp-node buyable", "bring along");
+      bring.type = "button";
+      bring.onclick = () => void this.campEquipPet(node.pet ?? null, note, rebuild);
+      card.appendChild(bring);
+    }
+    return card;
   }
 
   // A convenience-node purchase card: owned / buyable / can't-afford / locked, one per node.
