@@ -95,7 +95,14 @@ export type AttackMove =
   | "mirror"
   // QUORUM's telegraphed 1.2s NON-invuln transition: the three husks fuse into the
   // merge-form (the shared telegraph the whole fight builds toward).
-  | "merge";
+  | "merge"
+  // Wave 1 rework — the deep bosses' interleaved pressure moves (no lone strafable shots):
+  //  - "tracer": JET's dash-punish motes — they lock, hover, then SNAP to the mark;
+  //  - "beam":   a laser CORRIDOR telegraph (JET's overclock feint + P3 corruption, Quorum
+  //    crossfire) — cover the lane, dodge through the authored gap;
+  //  - "spew":   the Tithe's two-stage arcing-pool barrage (read wave 1, then its gaps);
+  //  - "hurl":   the Tithe throws its own slab as a line projectile (leaving a side open).
+  | "tracer" | "beam" | "spew" | "hurl";
 
 // Grouped so the whole attack subsystem lives in one cohesive place per enemy
 // (allocated once at spawn, never per frame).

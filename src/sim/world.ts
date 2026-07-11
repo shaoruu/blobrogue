@@ -7399,6 +7399,15 @@ function resolveJetMirror(w: WorldState): void {
   w.jetMirror = pool.slice(0, JET.verbMax);
 }
 
+// The JET recover length by move — only the mirror salvo's SPENT recover is the exposed
+// window; the interleaved pressure moves recover on their own shorter beats.
+function jetRecoverFor(move: AttackMove): number {
+  return move === "tracer" ? JET.tracerRecover
+    : move === "beam" ? JET.beamRecover
+    : move === "rush" ? JET.recoilRecover
+    : JET.spentRecover; // mirror (the window) + any fallback
+}
+
 function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
@@ -7409,7 +7418,7 @@ function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (a.phase === "active") { jetActive(w, e, dt, ev); return; }
   if (a.phase === "recover") {
     a.time += dt;
-    if (a.time >= JET.spentRecover) enterIdle(e);
+    if (a.time >= jetRecoverFor(a.move)) enterIdle(e);
     return;
   }
   if (a.cooldown === 0 && e.spawnTimer === 0) { jetBeginAttack(e, ev); return; }
@@ -7418,13 +7427,28 @@ function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
 }
 
+// JET's rotation: the corrupted MIRROR salvo (A1, the window-opener) fires every other
+// commitment; the intervening slots interleave the pressure moves so the fight never
+// decays into one spammable salvo — P1 TRACER SNAP (A2), P2 adds the RECOIL LINE (A3) and
+// the OVERCLOCK FEINT beam (A4), P3 periodically CORRUPTS (a wide screen beam).
 function jetBeginAttack(e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
   boss.spinCount = 0; // verbs emitted this salvo
-  e.attack.cooldown = JET.attackCd[boss.phase];
-  beginWindup(e, "mirror");
-  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
+  const phase = boss.phase;
+  e.attack.cooldown = JET.attackCd[phase];
+  let move: AttackMove;
+  if (boss.attackCount % 2 === 1) {
+    move = "mirror"; // the signature salvo (opens the spent-recover window)
+  } else if (phase === 1) {
+    move = "tracer";
+  } else if (phase >= 3 && boss.attackCount % 4 === 0) {
+    move = "beam"; // P3 corruption cadence (the wide screen beam)
+  } else {
+    move = (["tracer", "rush", "beam"] as const)[((boss.attackCount / 2) | 0) % 3];
+  }
+  beginWindup(e, move);
+  ev.push({ t: "cue", name: move === "mirror" ? "enemyHit" : "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
 }
 
 function jetWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
@@ -7434,6 +7458,28 @@ function jetWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
     a.time += dt;
     a.windup = Math.min(1, a.time / JET.roarDuration);
     if (a.time >= JET.roarDuration) { enterIdle(e); endBossTransition(w, e, ev); }
+    return;
+  }
+  if (a.move === "tracer") {
+    // A2 TRACER SNAP: the motes LOCK your position partway through the tell (markX/markY),
+    // then hover — dodge LATE, off the mark, before they snap in the active beat.
+    if (stepWindupTimer(w, e, dt, JET.tracerWindup, JET.tracerLock, true)) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+    }
+    return;
+  }
+  if (a.move === "rush") {
+    // A3 RECOIL LINE: JET rears, then recoils along an axis laying the amber wall.
+    a.time += dt;
+    a.windup = Math.min(1, a.time / JET.recoilWindup);
+    if (a.time >= JET.recoilWindup) { a.phase = "active"; a.time = 0; a.windup = 0; jetRecoilWall(w, e, ev); }
+    return;
+  }
+  if (a.move === "beam") {
+    // A4 OVERCLOCK FEINT / P3 CORRUPTION: a beam CORRIDOR tell; aim locks partway.
+    if (stepWindupTimer(w, e, dt, e.boss!.phase >= 3 ? JET.corruptWindup : JET.beamWindup, JET.beamLock, true)) {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+    }
     return;
   }
   // The salvo tell: aim locks partway (≥0.30s post-lock dodge). On release, fire the first
@@ -7450,6 +7496,30 @@ function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const a = e.attack;
   const boss = e.boss!;
   a.time += dt;
+  if (a.move === "tracer") {
+    // The motes hover for the snap delay (the "dash late" read), then SNAP to the locked
+    // mark from converging bearings — a player still on the mark is caught.
+    if (a.time >= JET.tracerSnapDelay) {
+      const n = bossAddCapFor(JET.tracerCountFor[w.encounterPlayers] ?? 3, w.encounterPower);
+      const base = Math.atan2(a.markY - e.y, a.markX - e.x);
+      for (let i = 0; i < n; i++) {
+        const off = (i - (n - 1) / 2) * 0.14;
+        spawnEnemyBullet(w, e.x, e.y, base + off, JET.tracerSnapSpeed, JET.tracerRadius, JET.tracerDamage, "#b39ddb", JET.tracerLife);
+      }
+      ev.push({ t: "bossVolley", x: e.x, y: e.y });
+      ev.push({ t: "cue", name: "dash", x: a.markX, y: a.markY, rate: 0.9, gain: 0.8, trauma: 0.05 });
+      enterRecover(e);
+    }
+    return;
+  }
+  if (a.move === "rush") {
+    enterRecover(e); // the wall was laid on release; the recover is the punish beat
+    return;
+  }
+  if (a.move === "beam") {
+    if (a.time >= JET.beamActive) { jetFireBeam(w, e, ev); enterRecover(e); }
+    return;
+  }
   const simul = jetSalvoSize(w, boss.phase);
   // P2's "out-of-sync canon": the further verbs enter one canonOffset apart, so the salvo
   // reads as a mirror falling out of time with you rather than a single wall.
@@ -7458,6 +7528,15 @@ function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
     boss.spinCount++;
   }
   if (a.time >= JET.mirrorActive + (simul - 1) * JET.canonOffset) {
+    // Soft-enrage (the "you skipped the lesson" beat): a burned phase carries the P3
+    // room-drain pattern early — a scatter of walk-dodgeable blooms around the party.
+    if (boss.enrage === 1 && boss.phase < 3 && findTarget(w, e.x, e.y)) {
+      const n = bossAddCapFor(JET.drainCount, w.encounterPower);
+      for (let i = 0; i < n; i++) {
+        const ang = (i / n) * Math.PI * 2;
+        plantAffixCharge(w, w.targetX + Math.cos(ang) * JET.drainSpread, w.targetY + Math.sin(ang) * JET.drainSpread);
+      }
+    }
     enterRecover(e);
     // He is SPENT — the recover is the exposed window (bank-capped like the deep roster).
     openBossWindow(e, JET.spentExpose, ev);
@@ -7489,7 +7568,9 @@ function jetFireVerb(w: WorldState, e: Enemy, index: number, ev: SimEvent[]): vo
   // P3 room-drain: the room's amber "drains" into telegraphed blooms around the party — a
   // walk-dodgeable closing pressure layered on the inverted salvo (the shared charge hazard).
   if (isInverted && index === 0 && findTarget(w, e.x, e.y)) {
-    for (let i = 0; i < JET.drainCount; i++) {
+    // Add-pressure lever: the 4p surplus routes to MORE walk-dodgeable blooms (never HP).
+    const n = bossAddCapFor(JET.drainCount, w.encounterPower);
+    for (let i = 0; i < n; i++) {
       const ox = (w.rng.next() * 2 - 1) * JET.drainSpread;
       const oy = (w.rng.next() * 2 - 1) * JET.drainSpread;
       plantAffixCharge(w, w.targetX + ox, w.targetY + oy);
@@ -7541,6 +7622,50 @@ function jetEmitFamily(w: WorldState, e: Enemy, family: ResonanceFamily, aim: nu
   }
 }
 
+// A3 RECOIL LINE: JET recoils along an axis, laying an amber WALL of walk-dodgeable charge
+// blooms that bisects the arena; alternating axes make the SECOND recoil lay a cross. The
+// wall covers space (you reposition through its gaps), the recover is the punish beat.
+function jetRecoilWall(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const isVertical = (boss.burstParity ^= 1) === 1;
+  // The wall runs through the arena centre on the chosen axis; JET recoils to one end.
+  const cx = e.x, cy = e.y;
+  const half = JET.recoilWallSpan;
+  for (let d = -half; d <= half; d += JET.recoilWallStep) {
+    if (isVertical) plantAffixCharge(w, cx, cy + d);
+    else plantAffixCharge(w, cx + d, cy);
+  }
+  // The recoil dash itself (JET slides to the far side of its own wall).
+  const away = isVertical ? (e.x < 840 ? 0 : Math.PI) : (e.y < 600 ? Math.PI / 2 : -Math.PI / 2);
+  moveEnemyBy(w, e, Math.cos(away) * JET.recoilDashSpeed * JET.recoilDashDur, Math.sin(away) * JET.recoilDashSpeed * JET.recoilDashDur);
+  ev.push({ t: "cue", name: "dash", x: e.x, y: e.y, rate: 0.7, gain: 0.85, trauma: 0.05 });
+}
+
+// A4 OVERCLOCK FEINT (P2) / P3 CORRUPTION: a beam CORRIDOR of fast shards down the locked
+// aim. The feint (30%, seeded) fires the corridor OFFSET to one side, punishing a dash into
+// the telegraphed "safe" gap; P3's corruption is wider with an authored central gap to
+// dodge THROUGH. Covers a whole lane — never a lone strafable shot.
+function jetFireBeam(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const boss = e.boss!;
+  const isCorrupt = boss.phase >= 3;
+  let aim = e.attack.lockedAngle;
+  // The feint: shift the corridor to the side by a fixed offset (seeded, deterministic).
+  if (!isCorrupt && w.rng.next() < JET.beamFeintChance) aim += (boss.burstParity ^= 1) === 1 ? JET.beamFeintOffset : -JET.beamFeintOffset;
+  const half = isCorrupt ? JET.corruptHalfWidth : JET.beamHalfWidth;
+  const count = isCorrupt ? JET.corruptShards : JET.beamShards;
+  const speed = isCorrupt ? JET.corruptSpeed : JET.beamSpeed;
+  const nx = Math.cos(aim + Math.PI / 2), ny = Math.sin(aim + Math.PI / 2); // perpendicular offset
+  for (let i = 0; i < count; i++) {
+    const t = count > 1 ? i / (count - 1) - 0.5 : 0; // -0.5..0.5 across the corridor width
+    // P3 corruption leaves an authored central gap to dodge THROUGH (the counter route).
+    if (isCorrupt && Math.abs(t) < JET.corruptGap / 2) continue;
+    const ox = nx * t * half * 2, oy = ny * t * half * 2;
+    spawnEnemyBullet(w, e.x + ox, e.y + oy, aim, speed, JET.globRadius, JET.globDamage, isCorrupt ? "#d84a8a" : "#8a7bd8", JET.globLife);
+  }
+  ev.push({ t: "bossVolley", x: e.x, y: e.y });
+  ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: isCorrupt ? 0.4 : 0.55, gain: 0.85, trauma: 0.06 });
+}
+
 // ---- §5h THE TITHE (F40): the armored FEEDER + its destructible feeding slab ----
 // GUARDED while armored; it BUILDS a slab and RE-ARMORS behind it. Destroy the slab before
 // the re-armor channel closes → the feeder is EXPOSED. Miss it → re-armored (no window) but it
@@ -7552,10 +7677,10 @@ function updateTithe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
   const a = e.attack;
 
   if (a.phase === "windup") { titheWindup(w, e, dt, ev); return; }
-  if (a.phase === "active") { titheFeedChannel(w, e, dt, ev); return; }
+  if (a.phase === "active") { titheActive(w, e, dt, ev); return; }
   if (a.phase === "recover") {
     a.time += dt;
-    if (a.time >= TITHE.radialRecover) enterIdle(e);
+    if (a.time >= titheRecoverFor(a.move)) enterIdle(e);
     return;
   }
   if (a.cooldown === 0 && e.spawnTimer === 0) { titheBeginAttack(w, e, ev); return; }
@@ -7564,18 +7689,43 @@ function updateTithe(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
   applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
 }
 
+function titheRecoverFor(move: AttackMove): number {
+  return move === "slam" ? TITHE.slamRecover
+    : move === "spew" ? TITHE.spewRecover
+    : move === "hurl" ? TITHE.hurlRecover
+    : TITHE.radialRecover; // radial / build / wheel fallback
+}
+
+// The Tithe's rotation: the FEED loop (build → slab → break-window) stays the primary
+// window mechanic (odd commitments when slabless & unexposed); the even commitments
+// interleave the space-covering pressure — P1 GORGE SLAM (A1), P2 adds the two-stage SPEW
+// (A3), the SLAB HURL (A4) and the heavy ring. P3 opens with the SIGNATURE barrage wheel.
 function titheBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
-  e.attack.cooldown = TITHE.attackCd[boss.phase];
-  // Feed when unexposed and no slab is standing; otherwise pressure with an amber ring.
+  boss.spinCount = 0;
+  const phase = boss.phase;
+  e.attack.cooldown = TITHE.attackCd[phase];
   const isSlabless = countLiveIds(w, boss.windowAddIds) === 0 && boss.windowAddIds.length === 0;
-  if (boss.exposed <= 0 && isSlabless) {
+  // SIGNATURE: once per P3, rip the plating into the rotating barrage wheel (isSurpriseSpent
+  // is the phase's one-shot flag — the Tithe has no add-pool surprise wave, so it is free).
+  if (phase >= 3 && !boss.isSurpriseSpent && boss.exposed <= 0 && isSlabless) {
+    boss.isSurpriseSpent = true;
+    beginWindup(e, "spin");
+    ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 0.5, gain: 0.85, trauma: 0.1 });
+    return;
+  }
+  // Feed (the window) on odd commitments when slabless & unexposed.
+  if (boss.exposed <= 0 && isSlabless && boss.attackCount % 2 === 1) {
     beginWindup(e, "build");
     ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
     return;
   }
-  beginWindup(e, "radial");
+  // Pressure otherwise.
+  const move: AttackMove = phase >= 2
+    ? (["slam", "spew", "hurl", "radial"] as const)[((boss.attackCount / 2) | 0) % 4]
+    : "slam";
+  beginWindup(e, move);
   ev.push({ t: "cue", name: "enemyHit", x: e.x, y: e.y, rate: 0.55, gain: 0.7, trauma: 0 });
 }
 
@@ -7597,14 +7747,111 @@ function titheWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void 
     }
     return;
   }
-  // radial: a heavy amber ring on release, denser (offset second ring) under soft-enrage.
-  a.time += dt;
-  a.windup = Math.min(1, a.time / TITHE.radialWindup);
-  if (a.time >= TITHE.radialWindup) {
-    titheRing(w, e, 0);
-    if (e.boss!.enrage === 1) titheRing(w, e, Math.PI / TITHE.radialCount);
-    enterRecover(e);
+  if (a.move === "hurl") {
+    // A4 SLAB HURL: aim locks partway; the throw fires on release and its recover opens a
+    // short exposed window (the feeder commits its plating and leaves its side open).
+    if (stepWindupTimer(w, e, dt, TITHE.hurlWindup, TITHE.hurlLock, false)) {
+      titheHurl(w, e, ev);
+      enterRecover(e);
+      openBossWindow(e, TITHE.hurlExpose, ev);
+    }
+    return;
   }
+  // slam (gorge) / spew / spin (signature wheel): a fixed rear tell, then the active beat.
+  const windupT = a.move === "slam" ? TITHE.slamWindup : a.move === "spew" ? TITHE.spewWindup
+    : a.move === "spin" ? TITHE.wheelWindup : TITHE.radialWindup;
+  a.time += dt;
+  a.windup = Math.min(1, a.time / windupT);
+  if (a.time >= windupT) {
+    if (a.move === "radial") {
+      titheRing(w, e, 0);
+      if (e.boss!.enrage === 1) titheRing(w, e, Math.PI / TITHE.radialCount);
+      enterRecover(e);
+    } else {
+      a.phase = "active"; a.time = 0; a.windup = 0;
+    }
+  }
+}
+
+// The multi-beat active phase (gorge pulses, two-stage spew, the barrage wheel).
+function titheActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
+  const a = e.attack;
+  const boss = e.boss!;
+  if (a.move === "build") { titheFeedChannel(w, e, dt, ev); return; }
+  a.time += dt;
+  if (a.move === "slam") {
+    // A1 GORGE SLAM: a 360° ring + debris blooms; P2+ DOUBLE-pulses (read both rings).
+    const pulses = boss.phase >= 2 ? 2 : 1;
+    while (boss.spinCount < pulses && a.time >= boss.spinCount * TITHE.gorgePulseGap) {
+      titheGorge(w, e, boss.spinCount, ev);
+      boss.spinCount++;
+    }
+    if (boss.spinCount >= pulses) enterRecover(e);
+    return;
+  }
+  if (a.move === "spew") {
+    // A3 SPEW ARC: wave 1 pools, then wave 2 fills wave 1's GAPS (offset half a step).
+    while (boss.spinCount < 2 && a.time >= boss.spinCount * TITHE.spewStageGap) {
+      titheSpew(w, e, boss.spinCount);
+      boss.spinCount++;
+    }
+    if (boss.spinCount >= 2 && a.time >= TITHE.spewStageGap + 0.1) enterRecover(e);
+    return;
+  }
+  if (a.move === "spin") {
+    // SIGNATURE: a slow rotating barrage wheel, then it COLLAPSES into a long exposed window.
+    while (a.time >= boss.spinCount * TITHE.wheelInterval && a.time <= TITHE.wheelDuration) {
+      const ang = boss.spinCount * TITHE.wheelStep;
+      spawnEnemyBullet(w, e.x, e.y, ang, TITHE.wheelSpeed, TITHE.globRadius, TITHE.globDamage, "#ffb43b", TITHE.globLife);
+      spawnEnemyBullet(w, e.x, e.y, ang + Math.PI, TITHE.wheelSpeed, TITHE.globRadius, TITHE.globDamage, "#ffb43b", TITHE.globLife);
+      boss.spinCount++;
+    }
+    if (a.time >= TITHE.wheelDuration) {
+      enterRecover(e);
+      openBossWindow(e, TITHE.collapseExpose, ev); // the memorable P3 collapse window
+    }
+    return;
+  }
+  enterRecover(e);
+}
+
+// A1 GORGE SLAM pulse: a full ring shockwave + debris blooms ringing the shadow (dash the
+// ring on i-frames, or stand in a debris-shadow gap). Pulse index offsets the ring so a
+// double-pulse reads as two distinct walls.
+function titheGorge(w: WorldState, e: Enemy, pulse: number, ev: SimEvent[]): void {
+  const base = pulse * (Math.PI / TITHE.gorgeRingCount);
+  for (let i = 0; i < TITHE.gorgeRingCount; i++) {
+    spawnEnemyBullet(w, e.x, e.y, base + (i / TITHE.gorgeRingCount) * Math.PI * 2, TITHE.gorgeSpeed, TITHE.globRadius, TITHE.globDamage, "#ffcf6b", TITHE.globLife);
+  }
+  // Debris blooms in the ring's shadow (area-deny), scaled by the 4p surplus.
+  const debris = bossAddCapFor(TITHE.gorgeDebris, w.encounterPower);
+  for (let i = 0; i < debris; i++) {
+    const ang = base + (i / debris) * Math.PI * 2 + 0.3;
+    plantAffixCharge(w, e.x + Math.cos(ang) * TITHE.gorgeDebrisDist, e.y + Math.sin(ang) * TITHE.gorgeDebrisDist);
+  }
+  ev.push({ t: "bossSlam", x: e.x, y: e.y });
+}
+
+// A3 SPEW ARC: a ring of arcing pools (charge blooms) around the party; stage 1 lays the
+// pools, stage 2 fills the GAPS (offset half a step) — read both, not one.
+function titheSpew(w: WorldState, e: Enemy, stage: number): void {
+  if (!findTarget(w, e.x, e.y)) return;
+  const n = TITHE.spewCount;
+  const offset = stage === 1 ? Math.PI / n : 0; // wave 2 fills wave 1's gaps
+  for (let i = 0; i < n; i++) {
+    const ang = offset + (i / n) * Math.PI * 2;
+    plantAffixCharge(w, w.targetX + Math.cos(ang) * TITHE.spewRing, w.targetY + Math.sin(ang) * TITHE.spewRing);
+  }
+}
+
+// A4 SLAB HURL: a heavy line projectile thrown at the locked bearing — a slab-sized round
+// that covers a lane (dodge the line, then punish the unarmored recover window).
+function titheHurl(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  let aim = e.attack.lockedAngle;
+  if (findTarget(w, e.x, e.y)) aim = Math.atan2(w.targetY - e.y, w.targetX - e.x);
+  spawnEnemyBullet(w, e.x + Math.cos(aim) * (e.radius + 8), e.y + Math.sin(aim) * (e.radius + 8), aim, TITHE.hurlSpeed, TITHE.hurlRadius, TITHE.hurlDamage, "#c98b5a", TITHE.hurlLife);
+  ev.push({ t: "bossVolley", x: e.x, y: e.y });
+  ev.push({ t: "cue", name: "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.85, trauma: 0.08 });
 }
 
 // The re-armor channel: break every slab before it elapses to EXPOSE the feeder. Miss it and
@@ -7716,8 +7963,7 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   if (a.phase === "active") { quorumActive(w, e, dt, ev); return; }
   if (a.phase === "recover") {
     a.time += dt;
-    const rec = boss.phase >= 2 ? QUORUM.mergeRecover : QUORUM.volleyRecover;
-    if (a.time >= rec) enterIdle(e);
+    if (a.time >= quorumRecoverFor(a.move, boss.phase)) enterIdle(e);
     return;
   }
   if (a.cooldown === 0 && e.spawnTimer === 0) { quorumBeginAttack(w, e, ev); return; }
@@ -7763,11 +8009,37 @@ function quorumSpawnHusks(w: WorldState, core: Enemy, ev: SimEvent[]): void {
   }
 }
 
+function quorumRecoverFor(move: AttackMove, phase: number): number {
+  if (phase >= 2) return QUORUM.mergeRecover; // every merge-form commitment is the window
+  return move === "beam" ? QUORUM.crossRecover
+    : move === "sweep" ? QUORUM.snapRecover
+    : move === "volley" ? QUORUM.roleRecover
+    : QUORUM.volleyRecover; // radial
+}
+
+// The husk which alive-checks the shield tether (A2 TETHER SNAP is gone once it dies).
+function quorumShieldAlive(w: WorldState, core: Enemy): boolean {
+  return w.enemies.some((o) => !o.dead && o.kind === "quorum_shield" && o.seq === core.id + 1);
+}
+
+// QUORUM's rotation. Husk phase: the 3-husk geometry — CROSSFIRE (A1), ROLE VOLLEY (A3),
+// TETHER SNAP (A2, while the shield husk lives), and the converging ring. Merge-form: the
+// amalgam runs the CROSSFIRE→TETHER-SNAP combo plus the wide ring, each opening its window.
 function quorumBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   const boss = e.boss!;
   boss.attackCount++;
-  e.attack.cooldown = QUORUM.attackCd[boss.phase];
-  beginWindup(e, "radial");
+  boss.spinCount = 0;
+  e.attack.cooldown = QUORUM.attackCd[boss.phase] ?? QUORUM.attackCd[QUORUM.attackCd.length - 1];
+  let move: AttackMove;
+  if (boss.phase >= 2) {
+    move = (["beam", "sweep", "radial"] as const)[boss.attackCount % 3]; // the merge combo
+  } else {
+    const opts: readonly AttackMove[] = quorumShieldAlive(w, e)
+      ? (["beam", "volley", "sweep", "radial"] as const)
+      : (["beam", "volley", "radial"] as const);
+    move = opts[boss.attackCount % opts.length];
+  }
+  beginWindup(e, move);
   // The shared telegraph reads on the "next to act" husk (the lead) — the tether leans to it.
   const lead = quorumLeadHusk(w, e);
   if (lead) { e.attack.markX = lead.x; e.attack.markY = lead.y; }
@@ -7799,15 +8071,21 @@ function quorumWindup(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     }
     return;
   }
-  // The shared radial telegraph. Track the lead husk so the tell + tether follow it.
+  // The shared telegraph. Track the lead husk so the tell + tether follow it.
   const lead = quorumLeadHusk(w, e);
   if (lead) { a.markX = lead.x; a.markY = lead.y; }
-  const windupT = boss.phase >= 2 ? QUORUM.mergeRadialWindup : QUORUM.volleyWindup;
+  const windupT = a.move === "beam" ? QUORUM.crossWindup
+    : a.move === "sweep" ? QUORUM.snapWindup
+    : a.move === "volley" ? QUORUM.roleWindup
+    : boss.phase >= 2 ? QUORUM.mergeRadialWindup : QUORUM.volleyWindup;
+  const lockAt = a.move === "beam" ? QUORUM.crossLock
+    : a.move === "sweep" ? QUORUM.snapLock
+    : a.move === "volley" ? QUORUM.roleLock : QUORUM.volleyLock;
   a.time += dt;
   a.windup = Math.min(1, a.time / windupT);
   if (!a.isAimLocked && findTarget(w, e.x, e.y)) {
     a.lockedAngle = Math.atan2(w.targetY - e.y, w.targetX - e.x);
-    if (a.time >= QUORUM.volleyLock) a.isAimLocked = true;
+    if (a.time >= lockAt) a.isAimLocked = true;
   }
   if (a.time >= windupT) { a.phase = "active"; a.time = 0; a.windup = 0; }
 }
@@ -7816,18 +8094,76 @@ function quorumActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   const a = e.attack;
   const boss = e.boss!;
   a.time += dt;
-  if (boss.phase >= 2) {
-    // Merge-form: the commitment resolves into a wide ring, then the widened recover window.
-    if (a.time >= QUORUM.mergeRadialActive) {
-      quorumRing(w, e, QUORUM.mergeRadialCount, QUORUM.mergeSpeed);
-      enterRecover(e);
-      openBossWindow(e, QUORUM.mergeRecover, ev);
+  // Every merge-form commitment opens the widened recover window (the amalgam's earned
+  // window); the husk-phase commitments never do (kill-order is the husk mechanic).
+  const openWindowOnRecover = (): void => {
+    enterRecover(e);
+    if (boss.phase >= 2) openBossWindow(e, QUORUM.mergeRecover, ev);
+  };
+  if (a.move === "beam") {
+    if (a.time >= QUORUM.crossActive) { quorumCrossfire(w, e, ev); openWindowOnRecover(); }
+    return;
+  }
+  if (a.move === "sweep") {
+    quorumTetherSnap(w, e, ev);
+    openWindowOnRecover();
+    return;
+  }
+  if (a.move === "volley") {
+    // A3 ROLE VOLLEY: the aimed staggered burst, then a knockback ring pulse (the heal role).
+    while (boss.spinCount < QUORUM.roleBurst && a.time >= boss.spinCount * QUORUM.roleGap) {
+      const aim = a.lockedAngle + (boss.spinCount - (QUORUM.roleBurst - 1) / 2) * 0.08;
+      spawnEnemyBullet(w, e.x, e.y, aim, QUORUM.roleSpeed, QUORUM.globRadius, QUORUM.globDamage, "#e8d9b0", QUORUM.globLife);
+      boss.spinCount++;
+    }
+    if (boss.spinCount >= QUORUM.roleBurst && a.time >= QUORUM.roleGap * QUORUM.roleBurst) {
+      quorumRing(w, e, QUORUM.rolePulseCount, QUORUM.rolePulseSpeed); // the heal-role pulse
+      openWindowOnRecover();
     }
     return;
   }
-  // Husk phase: the shared converging ring fires from the core (the husks show the tell).
+  // radial: the converging ring (husk phase) / the wide merge-form ring.
+  if (boss.phase >= 2) {
+    if (a.time >= QUORUM.mergeRadialActive) {
+      quorumRing(w, e, QUORUM.mergeRadialCount, QUORUM.mergeSpeed);
+      // Soft-enrage: a burned husk phase carries an extra offset ring in the merge-form.
+      if (boss.enrage === 1) quorumRing(w, e, QUORUM.mergeRadialCount, QUORUM.mergeSpeed * 0.8);
+      openWindowOnRecover();
+    }
+    return;
+  }
   quorumRing(w, e, QUORUM.radialCount, QUORUM.globSpeed);
   enterRecover(e);
+}
+
+// A1 CROSSFIRE: a converging beam CORRIDOR per LIVE husk (the 3-body geometry), each a wall
+// of shards down an offset lane toward the party — pick a pocket between them or dash a lane.
+// The 4p surplus routes to denser corridors (add-pressure via bossAddCapFor).
+function quorumCrossfire(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const lanes = Math.max(1, e.boss!.windowAddIds.filter((id) => w.enemies.some((o) => !o.dead && o.id === id)).length || 3);
+  const shards = bossAddCapFor(QUORUM.crossShards, w.encounterPower);
+  const aim = e.attack.lockedAngle;
+  const nx = Math.cos(aim + Math.PI / 2), ny = Math.sin(aim + Math.PI / 2);
+  for (let l = 0; l < lanes; l++) {
+    const laneAim = aim + (l - (lanes - 1) / 2) * QUORUM.crossLaneSpread;
+    for (let i = 0; i < shards; i++) {
+      const t = shards > 1 ? i / (shards - 1) - 0.5 : 0;
+      spawnEnemyBullet(w, e.x + nx * t * QUORUM.crossHalfWidth * 2, e.y + ny * t * QUORUM.crossHalfWidth * 2, laneAim, QUORUM.crossSpeed, QUORUM.globRadius, QUORUM.globDamage, "#d84a8a", QUORUM.globLife);
+    }
+  }
+  ev.push({ t: "bossVolley", x: e.x, y: e.y });
+}
+
+// A2 TETHER SNAP: a dense arc of shards whipped across the aim — a moving WALL to dash
+// under/over on i-frames. The arc widens the safe read by leaving its far edges open.
+function quorumTetherSnap(w: WorldState, e: Enemy, ev: SimEvent[]): void {
+  const aim = e.attack.lockedAngle;
+  const n = bossAddCapFor(QUORUM.snapShards, w.encounterPower);
+  for (let i = 0; i < n; i++) {
+    const off = (i / (n - 1) - 0.5) * QUORUM.snapArc;
+    spawnEnemyBullet(w, e.x, e.y, aim + off, QUORUM.snapSpeed, QUORUM.globRadius, QUORUM.globDamage, "#c9b458", QUORUM.globLife);
+  }
+  ev.push({ t: "bossVolley", x: e.x, y: e.y });
 }
 
 function quorumRing(w: WorldState, e: Enemy, count: number, speed: number): void {
