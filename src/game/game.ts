@@ -8042,6 +8042,15 @@ export class Game {
   // slightly on fire by recoil. Weapons without art fall back to the pistol overlay; if
   // even that isn't loaded yet it simply draws nothing. Melee never comes through here —
   // blades have their own aim-tracking, arc-sweeping path (renderHeldMelee).
+  // Per-weapon correction for guns whose ART is drawn on a diagonal (barrel not along +X).
+  // renderHeldWeapon rotates the sprite by (aim - artAngle) so the drawn barrel lands on the
+  // true aim — otherwise a 45deg-authored gun shoots ~45deg off its muzzle. Measured from the
+  // sprite's long axis; horizontally-authored guns (pistol/shotgun/...) need no entry (0).
+  private static readonly HELD_ART_ANGLE: Partial<Record<WeaponId, number>> = {
+    cleaver: -0.382, scrapper: -0.52, skipper: -0.557, arcbolt: -0.621, cryobolt: -0.487,
+    firebomb: -0.10, tracker: -0.632, singularity: -0.653, vortex: -0.775,
+  };
+
   private renderHeldWeapon(cx: number, cy: number, aim: number, weapon: WeaponId, alpha: number, recoil = 0) {
     const img = this.sprites.heldWeapon(weapon) ?? this.sprites.heldWeapon("pistol");
     if (!img) return;
@@ -8051,7 +8060,8 @@ export class Game {
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(cx + Math.cos(aim) * anchor, cy + Math.sin(aim) * anchor);
-    ctx.rotate(aim);
+    // Cancel the sprite's baked-in diagonal so the barrel points at the true aim.
+    ctx.rotate(aim - (Game.HELD_ART_ANGLE[weapon] ?? 0));
     if (Math.abs(aim) > Math.PI / 2) ctx.scale(1, -1);
     ctx.drawImage(img, -d / 2, -d / 2, d, d);
     ctx.restore();
