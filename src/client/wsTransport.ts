@@ -108,6 +108,10 @@ const SMOOTH_MAX_PX = 96;
 const SMOOTH_RETIRE_PER_SEC = 12;
 // Cap the unacked-input ring so a long stall can't grow it without bound.
 const MAX_PENDING = 256;
+// How many recent snapshots to retain as delta baselines. Comfortably exceeds the server's
+// max delta lag (it re-keyframes past that), so a delta's named baseline is always still held
+// even when our ack is in flight or our uplink is quiet.
+const SNAP_BASELINE_RETAIN = 150;
 
 interface PendingInput {
   seq: number;
@@ -165,14 +169,14 @@ export class WSTransport implements Transport {
   private seq = 0;
 
   private latestSnap: SnapMsg | null = null;
-  // ---- snapshot delta baseline (v24) ----
-  // The last COMPLETE snapshot applied + retained: the baseline a delta reconstructs against,
-  // and the sseq acked back to the server. A `snap` keyframe (re)establishes it; a `snapd`
-  // delta advances it. baselineSseq is the ack the client reports on every input.
-  private baselineSnap: SnapMsg | null = null;
-  private baselineSseq = 0;
-  // Monotonic guard for the delta channel: a stale / duplicate / reordered snapshot sequence is
-  // dropped, never applied.
+  // ---- snapshot delta baselines (v24) ----
+  // Recent COMPLETE snapshots retained by sseq. A delta names the EXACT baseline it was diffed
+  // from (its `b`), so we look that snapshot up here and reconstruct against it — never against a
+  // single "current" baseline. This keeps a client whose uplink is quiet (it can't ack, so the
+  // server keeps diffing against an older baseline) fully current: it still holds that baseline.
+  private snapsBySseq = new Map<number, SnapMsg>();
+  // Highest applied sseq: the delta ordering guard (drop q <= this) and the ack we report on
+  // every input (the latest snapshot we hold, so the server can diff against it).
   private lastSnapSseq = -1;
   private snapRecvAt = 0;
   private selfServerId: PlayerId | null = null;
@@ -269,8 +273,7 @@ export class WSTransport implements Transport {
     this.nextInput = null;
     this.seq = 0;
     this.latestSnap = null;
-    this.baselineSnap = null;
-    this.baselineSseq = 0;
+    this.snapsBySseq.clear();
     this.lastSnapSseq = -1;
     this.selfServerId = null;
     this.events = [];
@@ -459,6 +462,11 @@ export class WSTransport implements Transport {
     this.isSnapSeenOnSocket = false;
     this.pending = [];
     this.lastOfferId = 0;
+    // A fresh server-side connection restarts its snapshot sequence at 1, so drop every retained
+    // delta baseline from the previous connection — the next keyframe re-anchors the set, and no
+    // stale cross-connection sseq can ever be mistaken for a baseline.
+    this.snapsBySseq.clear();
+    this.lastSnapSseq = -1;
     if (this.resumeToken !== null) {
       this.sendMsg({ t: "join", ticket: this.joinTicket, protocol: PROTOCOL_VERSION, resume: this.resumeToken });
     } else {
@@ -517,22 +525,31 @@ export class WSTransport implements Transport {
     this.ingestSnapshot(msg);
   }
 
-  // Reconstruct a complete snapshot from a delta against the retained baseline, then apply it
-  // through the SAME path a keyframe takes. Three guards keep it safe: a monotonic sseq drop
-  // (stale/out-of-order deltas are never applied), a baseline-id match (a delta is applied ONLY
-  // against the exact snapshot it was diffed from — a gap is dropped, and the server re-sends a
-  // keyframe once it sees the client still acking the old baseline), and full validation of the
-  // reconstructed snapshot (a malformed reconstruction surfaces as a drop, never NaN state).
+  // Reconstruct a complete snapshot from a delta against the EXACT baseline it names, then apply
+  // it through the SAME path a keyframe takes. Three guards keep it safe: a monotonic sseq drop
+  // (stale/out-of-order deltas are never applied), a baseline lookup by the delta's `b` (if we no
+  // longer hold that snapshot it is a gap — dropped, and a keyframe recovers), and full
+  // validation of the reconstructed snapshot (a malformed reconstruction surfaces as a drop,
+  // never NaN state).
   private ingestDelta(d: Extract<ServerMsg, { t: "snapd" }>): void {
-    if (d.q <= this.lastSnapSseq) return;                       // ordering guard
-    if (this.baselineSnap === null || d.b !== this.baselineSseq) return; // missing/gapped baseline
+    if (d.q <= this.lastSnapSseq) return;          // ordering guard
+    const base = this.snapsBySseq.get(d.b);
+    if (base === undefined) return;                // gap: baseline not held -> keyframe recovers
     let snap: SnapMsg;
     try {
-      snap = validateSnap(applySnapshotDelta(snapshotToWire(this.baselineSnap), d));
+      snap = validateSnap(applySnapshotDelta(snapshotToWire(base), d));
     } catch {
-      return; // reconstruction/validation failed: keep the baseline, recover on the next frame
+      return; // reconstruction/validation failed: keep our baselines, recover on the next frame
     }
     this.ingestSnapshot(snap);
+  }
+
+  // Drop retained baselines older than the retention window (bounded memory). Never touches
+  // entries within the window, so the baseline any in-flight delta names is still present.
+  private pruneSnapBaselines(): void {
+    if (this.snapsBySseq.size <= SNAP_BASELINE_RETAIN) return;
+    const cutoff = this.lastSnapSseq - SNAP_BASELINE_RETAIN;
+    for (const sseq of this.snapsBySseq.keys()) if (sseq < cutoff) this.snapsBySseq.delete(sseq);
   }
 
   // Rebuild the client's predicted + render dungeon geometry to match the authoritative seed +
@@ -585,13 +602,15 @@ export class WSTransport implements Transport {
     }
     this.lastSnapRev = snap.rev;
     this.lastSnapTick = snap.tick;
-    // The applied snapshot becomes the delta baseline (a keyframe re-anchors it; a
-    // reconstructed delta advances it). We ack this sseq on every input so the server deltas
-    // against exactly what we hold. Setting it here — past the stale/rev guard — means a stale
-    // frame can never regress the baseline.
-    this.baselineSnap = snap;
-    this.baselineSseq = snap.sseq;
+    // Retain the applied snapshot as a delta baseline (a bootstrap keyframe re-anchors the whole
+    // set; other keyframes + reconstructed deltas add to it). We ack the latest sseq on every
+    // input so the server can diff against what we hold; the retained window covers the server's
+    // max delta lag so a delta's named baseline is still present even if our ack is in flight.
+    // Setting this past the stale/rev guard means a stale frame can never regress the baseline.
+    if (snap.full) this.snapsBySseq.clear(); // a fresh connection restarts the sequence
+    this.snapsBySseq.set(snap.sseq, snap);
     this.lastSnapSseq = snap.sseq;
+    this.pruneSnapBaselines();
     this.maybeRebuildWorld(snap.seed, snap.floor, snap.pcl);
     this.latestSnap = snap;
     this.isEverReady = true;
@@ -756,7 +775,7 @@ export class WSTransport implements Transport {
         const stamped: InputCmd = { ...cmd, seq };
         this.pending.push({ seq, cmd: stamped, sentAt: this.now() });
         while (this.pending.length > MAX_PENDING) this.pending.shift();
-        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, ackEv: this.lastEventId, ackSnap: this.baselineSseq });
+        this.sendMsg({ t: "input", seq, mx: cmd.moveX, my: cmd.moveY, aim: cmd.aim, fire: cmd.firing, dash: cmd.dash, act: cmd.interact === true, ult: cmd.ult === true, ackEv: this.lastEventId, ackSnap: Math.max(0, this.lastSnapSseq) });
         stepPlayerPhase(this.predState, p, stamped, FIXED_DT, scratch);
       } else {
         // Pre-join / mid-resume: predict locally for instant feel; don't send before the
