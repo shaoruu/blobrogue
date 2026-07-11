@@ -46,3 +46,10 @@ guardMult JET 0.32→0.12, QUORUM 0.30→0.12, TITHE 0.30→0.0 (true hard gate)
 ## QUORUM HUSK-STACK BUG FIX (Ian: "snuggle into one stacked boss, looks odd"): updateQuorumHusk (world.ts ~L7726) — husks free-chase player + only leash past huskRingDist*2 → collapse into one blob (breaks kill-order readability). FIX: each husk holds an assigned FORMATION SLOT (angle = base + i*2π/3 at huskRingDist 120 from core centroid, slot slowly rotates for orbit), steers to its slot not free-chase; stay a readable spread triangle, tether taut, never overlap.
 
 ## ART/PRESENCE (AD): scale JET 76→96, Tithe 96→104(+slab), Quorum core 100→112/husks 80→86. Presence = boss aura ground-ring (family hue, beneath body, doubles as guard/expose tell) + dramatized asymmetric silhouettes (regen gpt-image-2) + phase-visual escalation. Quorum art = 3 DISTINCT gaunt husks + always-visible taut tether.
+
+## BALANCER SURPLUS CURVES (4p fix — wire encounterPower into updateJet/Tithe/Quorum like Weaver/Marrow):
+PHASE_TIME_BASE (add — currently none, soft-enrage can't fire): JET 16, TITHE 16, QUORUM 14.
+- JET: salvo interval −0.15/(R−1) floor 1.8s (more windows); simulVerbs +1 at R≥3.5 P2/P3 but simulCapFor renders 1 at 4p (faster seq, same read); soft-enrage +1 inverted salvo next phase.
+- TITHE: NEW feed-add path chasers cap solo0/2p3/4p4 (active-threat cap); slabsFor stays [_,1,1,2,2]; rearmChannel FLAT 3.0 (task scales via slab HP/thick+adds not timer); soft-enrage +1 slab next feed.
+- QUORUM: husk-adds wave on husk break cap solo1/2p4/4p5, interval 6.0→3.0 floor w/R; merge-form continuous final window regardless R.
+POWER scalers unchanged (addCapPerR 1.6 max8, addIntervalPerR 0.9 min3.0, burnFrac 0.55). Order: anti-burst constants stop spam NOW; surplus wiring makes 4p harder-not-spongier. GD owns WHAT adds are (in spec), balancer owns count/cadence.
