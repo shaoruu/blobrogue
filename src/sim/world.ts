@@ -2241,15 +2241,20 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
     return;
   }
   // Earned windows (deep bosses): GUARDED chips the damage to guardMult; a player-forced
-  // EXPOSED window takes full damage but pays it out of the window's bank — once the
-  // bank is spent the window slams shut early (the final hit's small overkill carries;
-  // the hard phase-skip guard stays the transition floor + queued overflow above).
-  // Released overflow already paid its beat's reduction, so it is never chipped again.
+  // EXPOSED window takes full damage, but the window's APPLIED damage is clamped to what
+  // its bank still holds (bankFrac × maxHp per window). Overflow beyond the bank is
+  // DISCARDED — never carried to HP, never banked forward — so no single damage event can
+  // remove more than the phase chunk (the true anti-one-shot: a stacked burst converts a
+  // window, it can never delete one). The transition floor + queued overflow above is the
+  // second, phase-crossing guard. Released overflow already paid its beat's reduction, so
+  // it is never chipped again.
   const earned = EARNED_WINDOWS[e.kind];
   if (earned !== undefined && !isOverflow) {
     if (boss.exposed > 0) {
-      boss.windowBank -= dmg;
-      if (boss.windowBank <= 0) { boss.exposed = 0; boss.windowBank = 0; }
+      const applied = Math.min(dmg, boss.windowBank);
+      boss.windowBank -= applied;
+      if (boss.windowBank <= 1e-9) { boss.exposed = 0; boss.windowBank = 0; }
+      dmg = applied;
     } else {
       dmg *= earned.guardMult;
     }

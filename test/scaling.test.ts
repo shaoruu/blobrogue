@@ -185,30 +185,38 @@ function measurementGates(): void {
   // strong players measure on their own contributions.
   const three = [high, high, high];
   const withWeak = powerRatioFor([...three, 0], 20);
-  const floorOnly = (3 * high + (POWER.weakFloorFrac * refDpsForFloor(20)) / 4) / refDpsForFloor(20);
+  // FIX1 focus-fire premium rides INSIDE powerRatioFor (partyDps × (1 + focusFire×(P−1))
+  // before the clamp), so the expected floor value carries it too.
+  const rawWeak = 3 * high + (POWER.weakFloorFrac * refDpsForFloor(20)) / 4;
+  const floorOnly = (rawWeak * (1 + POWER.focusFire * 3)) / refDpsForFloor(20);
   check("the weak-player floor holds: a zero-DPS fourth still contributes 0.55×refDPS/P",
     Math.abs(withWeak - Math.min(6, floorOnly)) < 1e-9, `R=${withWeak.toFixed(3)}`);
   check("R is order-independent (the floor applies per contribution, before the sum)",
     powerRatioFor([0, high, high, high], 20) === powerRatioFor([high, high, 0, high], 20));
-  check("headcount is INSIDE R: four naked players still measure R=1 (no separate multiply)",
+  // Headcount rides INSIDE R only as the modest focus-fire premium (FIX1) — never a
+  // separate HP multiply (coopBossHpMult stays off the real bosses): four naked players
+  // measure just (1 + focusFire×3) off their low summed DPS, nowhere near the HP curve.
+  const fourNaked = powerRatioFor([naked, naked, naked, naked], 20);
+  check("headcount is INSIDE R via the focus-fire premium alone (no separate HP multiply)",
     powerRatioFor([naked, naked, naked, naked], 5) >= 1
-    && powerRatioFor([naked, naked, naked, naked], 20) === 1);
+    && Math.abs(fourNaked - Math.min(6, (4 * naked * (1 + POWER.focusFire * 3)) / refDpsForFloor(20))) < 1e-9,
+    `R@20=${fourNaked.toFixed(3)}`);
 }
 
 // ---- 2. effective HP: sublinear, hard-capped ----
 
 function hpGates(): void {
   section("effective HP: HPfrac = 1 + Khp(R−1), clamped ≤2.9 — never a sponge");
-  check("HPfrac table (spec 0.62 measured down to Khp 0.45): R1 1.00 / R2 1.45 / R3 1.90 / R4 2.35 / cap 2.9",
-    Math.abs(bossHpFracFor(1) - 1) < 1e-9 && Math.abs(bossHpFracFor(2) - 1.45) < 1e-9
-    && Math.abs(bossHpFracFor(3) - 1.9) < 1e-9 && Math.abs(bossHpFracFor(4) - 2.35) < 1e-9
-    && bossHpFracFor(6) === 2.9);
+  check("HPfrac table (Wave 1 rework Khp 0.55, cap 3.1): R1 1.00 / R2 1.55 / R3 2.10 / R4 2.65 / cap 3.1",
+    Math.abs(bossHpFracFor(1) - 1) < 1e-9 && Math.abs(bossHpFracFor(2) - 1.55) < 1e-9
+    && Math.abs(bossHpFracFor(3) - 2.1) < 1e-9 && Math.abs(bossHpFracFor(4) - 2.65) < 1e-9
+    && bossHpFracFor(6) === 3.1);
   const base = weaverHpForFloor(20);
   check("the Weaver ladder rides the measured curve on the earned-windows anchor",
-    Math.round((base * bossHpFracFor(2)) / 10) * 10 === 860
-    && Math.round((base * bossHpFracFor(3)) / 10) * 10 === 1120
-    && Math.round((base * bossHpFracFor(4)) / 10) * 10 === 1390
-    && Math.round((base * bossHpFracFor(6)) / 10) * 10 === 1710,
+    Math.round((base * bossHpFracFor(2)) / 10) * 10 === 910
+    && Math.round((base * bossHpFracFor(3)) / 10) * 10 === 1240
+    && Math.round((base * bossHpFracFor(4)) / 10) * 10 === 1560
+    && Math.round((base * bossHpFracFor(6)) / 10) * 10 === 1830,
     `base=${base}`);
 }
 
@@ -357,7 +365,7 @@ function densityGates(): void {
 // ---- 7. the party TTK bands (compact CI matrix) ----
 
 function bandGates(): void {
-  section("party TTK bands: 4-strong P50 30–40s / P10 ≥22s; guards hold; solo unchanged");
+  section("party TTK bands: 4-strong P50 42–58s / P10 ≥22s; guards hold; solo unchanged");
   // "4-strong" = the god-stack (the exact party the rework exists for).
   const four = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];
   const seeds = [0xBA1A4CE, 0xBA1A4CF, 0xBA1A4D0, 0xBA1A4D1, 0xBA1A4D2];
@@ -366,7 +374,11 @@ function bandGates(): void {
   const p50 = quantile(ttks, 0.5);
   const p10 = quantile(ttks, 0.1);
   process.stdout.write(`  info: 4-strong — R=${runs[0].r.toFixed(2)} effHP=${runs[0].effHp} ttks=[${ttks.map((t) => t.toFixed(1)).join(",")}] exposed=${runs[0].exposedSeconds.toFixed(1)}s adds=${runs[0].addsKilled} hits=${runs[0].hitsTaken}\n`);
-  check("a strong 4-stack's P50 sits in the 30–40s band", Number.isFinite(p50) && p50 >= 30 && p50 <= 40,
+  // Wave 1 rework: the anti-burst bankFrac (0.40 → 0.22) makes a bank-bound god-stack
+  // convert ~half a window's worth at a time, so it can no longer delete phases — its P50
+  // lengthens into the deep-roster band (still all active exposed play, never a sponge:
+  // exposed ≈ hits confirm the fight is engaged, not idled).
+  check("a strong 4-stack's P50 sits in the 42–58s band", Number.isFinite(p50) && p50 >= 42 && p50 <= 58,
     `P50=${Number.isFinite(p50) ? p50.toFixed(1) : "unkilled"}s`);
   check("its P10 never dips under 22s (the stack can't one-shot the fight)", p10 >= 22, `P10=${p10.toFixed(1)}s`);
   check("every 4-stack pull measured R>3 and rode the capped HP curve",

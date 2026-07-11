@@ -758,9 +758,10 @@ function gildedTests(): void {
   {
     const { w, boss } = gildedSetup(0x91D3);
     stepFor(w, 0.2);
-    // Drive to P3 through both sanctify beats (the closed plate chips the hit, so it
-    // must be heavy enough to cross 70% at 30% effect).
-    plantBullet(w, boss.x, boss.y, boss.maxHp * 3);
+    // Drive to P3 through both sanctify beats (the closed plate chips the hit, so it must
+    // be heavy enough to cross 70% at the Wave 1 rework's 20% effect and still leave the
+    // Warden alive at P3 — the guarded fraction 0.20×4 = 0.80 lands it at ~20% HP).
+    plantBullet(w, boss.x, boss.y, boss.maxHp * 4);
     stepFor(w, GILDED.sanctifyDuration + 0.2);
     stepFor(w, GILDED.sanctifyDuration + 0.2);
     check("both sanctify beats resolve into phase 3", boss.boss !== null && boss.boss.phase === 3, `phase=${boss.boss?.phase}`);

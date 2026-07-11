@@ -377,11 +377,14 @@ function bankGates(): void {
   step(w);
   check("the bank closes the window early (overkill can't ride a spent window)",
     !isBossExposed(boss) && boss.boss!.windowBank === 0);
-  // 8 full hits spend the 440 bank (the 8th carries 40 overkill), then 4 chip at 30%.
-  const fullHits = Math.ceil((WEAVER.windowBankFrac * boss.maxHp) / 60);
-  const expected = fullHits * 60 + (12 - fullHits) * 60 * WEAVER.guardMult;
+  // The window's applied damage is CLAMPED to its bank (overflow discarded — the true
+  // anti-one-shot): the exposed hits remove exactly the bank, then every hit after the
+  // window slams shut chips at guardMult.
+  const bank = WEAVER.windowBankFrac * boss.maxHp;
+  const exposedHits = Math.ceil(bank / 60);
+  const expected = bank + (12 - exposedHits) * 60 * WEAVER.guardMult;
   const spent = hpAtOpen - boss.hp;
-  check("full damage stopped at the bank (small final-hit overkill carried), the rest chipped",
+  check("the window's applied damage is clamped to the bank (overflow discarded), the rest chipped",
     Math.abs(spent - expected) < 1e-6, `spent=${spent.toFixed(0)} expected=${expected.toFixed(0)}`);
   const hp0 = boss.hp;
   plantBullet(w, boss.x, boss.y, 100);
@@ -394,7 +397,7 @@ function bankGates(): void {
 // ---- 4. phase transitions always play (the anti-burst floor, mid-window included) ----
 
 function transitionGates(): void {
-  section("phase transitions always play: a window's burst still floors + queues at the threshold");
+  section("phase transitions always play: bursts floor + queue at the threshold; a window can't skip a phase");
   const { w, boss } = bossArena(0xEA40, 20, "weaver");
   let knot: Enemy | undefined;
   for (let t = 0; t < 60 * 12 && !knot; t++) {
@@ -404,10 +407,21 @@ function transitionGates(): void {
   plantBullet(w, knot!.x, knot!.y, 500, 12);
   step(w);
   check("window open at full HP band", isBossExposed(boss) && boss.hp > boss.maxHp * 0.9);
+  // A window's burst is CLAMPED to its bank (overflow discarded): even a million-damage hit
+  // removes at most the phase chunk, so no single window can skip the 34%-wide P1 band.
+  const hpBeforeBurst = boss.hp;
+  plantBullet(w, boss.x, boss.y, 1e6, 30);
+  step(w);
+  check("an exposed burst is clamped to the window bank — it can never skip a phase",
+    Math.abs((hpBeforeBurst - boss.hp) - WEAVER.windowBankFrac * boss.maxHp) < 1e-6
+    && boss.hp > WEAVER.phaseAt[0] * boss.maxHp && !isBossExposed(boss),
+    `removed=${(hpBeforeBurst - boss.hp).toFixed(0)} hp=${(boss.hp / boss.maxHp * 100).toFixed(0)}%`);
+  // The transition floor + queued overflow is the second, phase-crossing guard: a guarded
+  // burst that crosses a threshold floors at the phase floor and queues the overflow.
   plantBullet(w, boss.x, boss.y, 1e6, 30);
   const evs = step(w);
   const enter = evs.find((e) => e.t === "bossTransition" && e.entering);
-  check("a million-damage window hit floors at 58% and queues the overflow",
+  check("a guarded million-damage burst floors at 58% and queues the overflow",
     Math.abs(boss.hp - WEAVER.phaseFloor[0] * boss.maxHp) < 1e-6 && enter !== undefined
     && enter.t === "bossTransition" && enter.queued > 0,
     `hp=${(boss.hp / boss.maxHp * 100).toFixed(0)}%`);
