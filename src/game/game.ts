@@ -833,6 +833,11 @@ export class Game {
   // players learn the real juke window. flashUntil is a short wall-clock deadline for the one
   // bright edge-pop the frame it locks.
   private tgLock = new Map<number, { locked: boolean; flashUntil: number }>();
+  // QUORUM P1 tether-REKNIT animation per core id: on each trio RE-FORM the severed body pulls
+  // itself back together — beads sweep INWARD (husk -> core), dim bone-cyan, a light beat that
+  // reads "relentless" not "reset" (the persistent low HP bar is the honest progress cue, so
+  // this stays subordinate to it). `anim` decays 1->0; its speed tightens as the pool nears merge.
+  private quorumReform = new Map<number, { anim: number; lastCount: number; lastClock: number }>();
   // Prism Sentry render state, keyed by the (stable) server effect id. The wire carries no
   // aim/fireCd for a sentry, so the turret's barrel tracks the last-fired direction and the
   // recoil kick is driven off the sentryShot event's timestamp (animClock at fire) — a live,
@@ -6414,9 +6419,37 @@ export class Game {
   private renderQuorumTether(core: Enemy) {
     const husks = this.enemies.filter((o) => !o.dead
       && (o.kind === "quorum_shield" || o.kind === "quorum_heal" || o.kind === "quorum_dmg"));
-    if (husks.length === 0) return;
     const { ctx, renderCam: cam } = this;
     const pool = Math.max(0, Math.min(1, core.hp / core.maxHp));
+    // Tether-REKNIT tracker: catch the trio RE-FORM (count rises to a full trio) even across the
+    // exposed window (this runs every P1 frame, before the empty early-return). The reknit speed
+    // TIGHTENS as the pool nears the 45% merge — the body "struggles to hold itself together".
+    const rk = this.quorumReform.get(core.id) ?? { anim: 0, lastCount: 0, lastClock: this.animClock };
+    const dt = Math.max(0, Math.min(0.1, this.animClock - rk.lastClock));
+    if (husks.length > rk.lastCount && husks.length >= 3) rk.anim = 1;
+    rk.lastCount = husks.length;
+    rk.lastClock = this.animClock;
+    const reknitSpeed = 1 + (1 - pool) * 1.6; // faster/tighter heading into the merge
+    if (rk.anim > 0) rk.anim = Math.max(0, rk.anim - dt * reknitSpeed / 0.35);
+    this.quorumReform.set(core.id, rk);
+    if (husks.length === 0) return; // the core body is shown during the exposed window
+    // The reknit VISUAL: dim bone-cyan beads sweep INWARD (husk -> core) as the severed body
+    // pulls back together — light + subordinate to the HP bar (never a triumphant burst).
+    if (rk.anim > 0) {
+      const f = 1 - rk.anim; // 0 (just re-formed) -> 1 (knit taut)
+      for (const h of husks) {
+        const hx = h.x - cam.x, hy = h.y - cam.y, ccx = core.x - cam.x, ccy = core.y - cam.y;
+        ctx.save();
+        ctx.globalAlpha = 0.4 * rk.anim;
+        ctx.strokeStyle = "#8fd8dc"; // dim (menacing), not the bright shield-beam cyan
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(ccx, ccy); ctx.stroke();
+        ctx.globalAlpha = 0.7 * rk.anim;
+        ctx.fillStyle = "#bfeef0";
+        ctx.beginPath(); ctx.arc(hx + (ccx - hx) * f, hy + (ccy - hy) * f, 2.5, 0, 6.28); ctx.fill();
+        ctx.restore();
+      }
+    }
     const a = core.attack;
     const isCharging = a.phase === "windup" && a.move === "radial";
     // The lead husk (nearest the core's mark point): the tether pulls hardest to it.
