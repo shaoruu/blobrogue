@@ -7,6 +7,7 @@ Newest changes first. (Times are Pacific.)
 
 ## Unreleased (in progress)
 - **Three new companions to rescue:** a grey cat, a baby amber dragon, and a baby slime join the doggie at the Kennel — rescue each from a deeper floor (the slime waits in the deepest dark), then pick which one rides along at your side (one companion at a time).
+- **More guns, more traits:** 8 new weapons — Cleaver (a slow saw disc that shreds a whole line), Scrapper (twin-pellet spray hose), Skipper (buckshot that banks off walls), Arcbolt (short-range shocker that arcs across a pack), Cryobolt (freezes a body solid), Firebomb (a lob that leaves the blast ablaze), Tracker (one heavy seeker that never misses), and the legendary Singularity (collapses the pack onto one point, then a nova detonates on the clump). Plus 10 new blessings — Marksman, Juggernaut, Heavy Rounds, Skirmisher, Executioner, Overload, Featherweight, Frostbite, Quickdraw, and Vanguard — each a distinct build with a real tradeoff.
 - Content push: more bosses ramping toward floor 100 (with giant spectacle set-pieces + anti-repeat affixes), new gun verbs, deeper-floor enemies, and seeded floor mutators/elite affixes for run variety.
 - Kits/classes + XP: pick a class (Gunner/Mender/Bulwark/Phantom) with a signature ultimate; account XP unlocks kits & cosmetics.
 - More cosmetics (a fresh wave of real generated hats + face items, replacing the old placeholder ones), more blessings, HP numbers on the HUD, and interact-with-Patch.
