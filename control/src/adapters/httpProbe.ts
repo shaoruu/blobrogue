@@ -58,7 +58,8 @@ import type {
 // join ticket carries the validated kit + mastery level claim (kt/ml).
 // v19: the Wave 1 deep-boss rework — the enemy attack-move wire set grew four values
 // (tracer/beam/spew/hurl) for the reworked JET/TITHE/QUORUM movesets; no new struct field.
-export const SYNTHETIC_JOIN_PROTOCOL = 19;
+// v20: two new enemy kinds (tithe_tribute, quorum_splinter) for the 4p surplus content.
+export const SYNTHETIC_JOIN_PROTOCOL = 20;
 
 export interface HttpProbeConfig {
   baseUrl: string;

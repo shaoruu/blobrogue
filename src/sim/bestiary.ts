@@ -66,6 +66,7 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   // (never in a common deck), like the Weaver's knots/sacs.
   jet: "boss", tithe: "boss", quorum: "boss",
   tithe_slab: "B", quorum_shield: "B", quorum_heal: "B", quorum_dmg: "B",
+  tithe_tribute: "B", quorum_splinter: "B", // surplus adds: Wave-B summons, never in a common deck
 };
 
 // Topology workers: bodies whose commitment EDITS the room (persistent destructible
@@ -280,13 +281,15 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   // ride one telegraph read) + the roar transition. The Tithe raises slabs ("build"), fires
   // amber rings ("radial") and bellows ("roar"). Quorum's core drives one shared "radial"
   // telegraph, transitions via "merge". Satellite bodies commit nothing.
-  jet: ["mirror", "roar"],
-  tithe: ["build", "radial", "roar"],
-  quorum: ["radial", "merge"],
+  jet: ["mirror", "tracer", "rush", "beam", "roar"],
+  tithe: ["build", "slam", "spew", "hurl", "radial", "spin", "roar"],
+  quorum: ["radial", "beam", "sweep", "volley", "merge"],
   tithe_slab: [],
   quorum_shield: [],
   quorum_heal: [],
   quorum_dmg: [],
+  tithe_tribute: [], // a crawler: its pressure is reaching the slab, not a telegraphed move
+  quorum_splinter: [], // a chaser: no telegraphed move
 };
 
 // ---- the directional-art contract (QA render manifest) ----
@@ -343,6 +346,10 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   quorum_shield: "directional_walk",
   quorum_heal: "directional_walk",
   quorum_dmg: "directional_walk",
+  // Surplus adds: small simple chasers ship a directional walk triplet (no attack strip),
+  // like the other contact bodies (placeholder sprites reused; art director refines).
+  tithe_tribute: "directional_walk",
+  quorum_splinter: "directional_walk",
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----
