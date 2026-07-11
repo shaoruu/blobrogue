@@ -149,13 +149,18 @@ const BOSS_GATE_ROWS: readonly BossGateRow[] = [
   },
   {
     kind: "marrow", floor: 15, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    medianBand: [35, 50], exposedBand: [8, 20], // the light-touch retrofit: crash-gated windows
+    // Wave 1 rework widened the guarded chip (0.35 → 0.20): Marrow is the most chip-reliant
+    // of the roster (~25% exposed), so its wall-clock lengthens most — the fight is now
+    // more crash-window-gated (exposed time preserved, band re-measured).
+    medianBand: [40, 63], exposedBand: [8, 20],
     highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
     forcedEach: MARROW.shieldMinDuration, beatCap: MARROW.shieldDuration,
   },
   {
     kind: "weaver", floor: 20, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), "glass_cannon", "glass_cannon"],
-    medianBand: [38, 55], exposedBand: [20, 30], // the earned-windows flagship gate
+    // Wave 1 rework: guarded chip 0.30 → 0.20 lengthens the wall band slightly; bankFrac
+    // 0.40 → 0.22 closes windows earlier for a bank-bound build (exposed re-measured down).
+    medianBand: [38, 58], exposedBand: [16, 30], // the earned-windows flagship gate
     highRollBuild: [...L3("deadeye"), "glass_cannon", "glass_cannon"], highRollMin: 20,
     forcedEach: WEAVER.moltDuration, beatCap: WEAVER.moltDuration,
   },
@@ -167,7 +172,7 @@ const BOSS_GATE_ROWS: readonly BossGateRow[] = [
   },
   {
     kind: "choir", floor: 30, medianWeapon: "pistol", medianBuild: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    medianBand: [40, 58], exposedBand: [12, 26], // verse-silence windows
+    medianBand: [40, 64], exposedBand: [12, 26], // verse-silence windows (Wave 1 rework: guarded chip 0.30 → 0.20 widened the wall band)
     highRollBuild: [...L3("deadeye"), ...L3("glass_cannon")], highRollMin: 22,
     forcedEach: CHOIR.splitMinDuration, beatCap: CHOIR.splitDuration,
   },
@@ -206,9 +211,9 @@ function bossLadderGates(): void {
   check("every earned window is the authored 3–4s (combined exposure hard-capped)",
     [MARROW.crashExpose, WEAVER.knotBreakExpose, WEAVER.forcedownExpose, WEAVER.overshootExpose, CHOIR.silenceExpose]
       .every((s) => s >= 3 && s <= 4) && EXPOSE_WINDOW_CAP <= 8);
-  check("per-window banks are the ~40% phase chunk on every earned boss",
+  check("per-window banks are the anti-skip phase chunk on every earned boss (Wave 1 rework: 0.40 → 0.22, a phase needs ≥2 windows)",
     [MARROW.windowBankFrac, WEAVER.windowBankFrac, GILDED.windowBankFrac, CHOIR.windowBankFrac]
-      .every((f) => f === 0.40));
+      .every((f) => f === 0.22));
   check("co-op scales the MECHANIC: task counts grow with the snapshotted party",
     WEAVER.knotsFor[1] < WEAVER.knotsFor[4] && WEAVER.sacsFor[1] < WEAVER.sacsFor[4]
     && CHOIR.fragmentsFor[1] < CHOIR.fragmentsFor[4]);
@@ -788,8 +793,8 @@ function coopScalingGates(): void {
   check("a naked duo's F5 boss holds the solo anchor (R=1 — gear, not headcount, scales bosses)",
     duoBoss.hp === 950, `hp=${duoBoss.hp}`);
   const strongPull = createEnemy("boss", 0, 0, 5, rng, 2, { players: 4, power: 4 });
-  check("an R=4 pull rides the measured HPfrac 1+0.45(R−1) — round10(950 × 2.35)",
-    strongPull.hp === Math.round((950 * (1 + 0.45 * 3)) / 10) * 10, `hp=${strongPull.hp}`);
+  check("an R=4 pull rides the measured HPfrac 1+0.55(R−1) — round10(950 × 2.65)",
+    strongPull.hp === Math.round((950 * (1 + 0.55 * 3)) / 10) * 10, `hp=${strongPull.hp}`);
 
   // Snapshot at encounter creation: the floor build carries P; later loads re-snapshot.
   const w = createWorld(0xC0093, 1, { isShared: true, skipLocalPlayer: true });

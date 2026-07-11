@@ -629,7 +629,12 @@ function bossOnceRun(kind: EnemyKind, mode: "burst" | "dot" | "simultaneous"): {
     boss.burnDmg = boss.maxHp * 2; // one 0.25s tick crosses the first threshold outright
     boss.burnOwner = LOCAL_ID;
   } else {
-    for (let i = 0; i < 3; i++) plantShot(w, boss.x, boss.y, 1, 0, boss.maxHp * 0.4, { radius: 4 });
+    // Three same-tick rounds, each individually crossing the FIRST threshold but leaving hp
+    // above the phase floor (so no big queued overflow walks a second beat) — the beat's
+    // shockwave must still eat rounds 2 & 3. The King takes the raw hit; the guarded bosses
+    // (Wave 1 rework guard 0.20) need ~5× raw to land the same ~0.4×maxHp effective removal.
+    const perShot = boss.maxHp * (kind === "boss" ? 0.4 : 2);
+    for (let i = 0; i < 3; i++) plantShot(w, boss.x, boss.y, 1, 0, perShot, { radius: 4 });
   }
   let syncOk = true;
   for (let t = 0; t < Math.round(10 / DT); t++) {

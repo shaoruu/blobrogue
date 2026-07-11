@@ -1023,13 +1023,19 @@ export const POWER = {
   rMax: 6.0,
   weakFloorFrac: 0.55,   // per-player contribution floor: 0.55 × refDPS / P
   soloGearCap: 1.15,     // a solo player's gear never scales R past this
-  // Khp, measured DOWN from the approved spec's opening 0.62 by the spec's own
-  // calibration rule (the 4-strong 30–40s band outranks the constant): at 0.62 the
-  // measured god-stack P50 sits ~5s over the band once add pressure and climb
-  // downtime are real. The remedy ladder only ADDS mechanics when the stack is too
-  // fast — a too-slow stack can only give HP back.
-  hpPerR: 0.45,          // HPfrac = 1 + hpPerR × (R − 1)…
-  hpFracCap: 2.9,        // …clamped: never a sponge
+  // Co-op FOCUS-FIRE premium (Wave 1 boss rework FIX1): a co-op party trains its whole
+  // output on ONE target, so its real burst against a boss exceeds the paper sum of
+  // moving-target sustained DPS. powerRatioFor lifts partyDps by focusFire × (P−1)
+  // BEFORE the [1,6] clamp — a solo pull (P=1) is untouched (the direct fix for "two
+  // players just spam them": the pull now measures the burst they actually bring).
+  focusFire: 0.08,
+  // Khp (Wave 1 boss rework FIX2): raised from 0.45 → 0.55 so co-op effective HP rides
+  // higher on the sub-linear curve (2p good-gun TTK ≈ 0.86 → 0.92 of solo). Solo is
+  // still ~unchanged: soloGearCap pins solo R ≤ 1.15, so its HPfrac only moves
+  // 1.0675 → 1.0825 (~+1.4%, inside the ±3% solo gate). HP alone never closes the gap —
+  // the surplus still routes to MECHANICS via the levers below.
+  hpPerR: 0.55,          // HPfrac = 1 + hpPerR × (R − 1)…
+  hpFracCap: 3.1,        // …clamped: never a sponge
   addCapPerR: 1.6,       // add cap = round(base + addCapPerR × (R − 1))…
   addCapMax: 8,          // …hard-clamped
   addIntervalPerR: 0.9,  // interval = max(min, base − addIntervalPerR × (R − 1))
@@ -1063,6 +1069,10 @@ export function powerRatioFor(contributions: readonly number[], floor: number): 
   const perPlayerFloor = (POWER.weakFloorFrac * ref) / players;
   let partyDps = 0;
   for (const dps of contributions) partyDps += Math.max(dps, perPlayerFloor);
+  // Co-op focus-fire premium (FIX1): a party's real single-target burst outstrips the
+  // paper sum of moving-target sustained DPS. Applied BEFORE the clamp so a legal 2p
+  // burst measures honestly (a solo pull, P=1, multiplies by 1 — unchanged).
+  partyDps *= 1 + POWER.focusFire * (players - 1);
   let r = Math.max(POWER.rMin, Math.min(POWER.rMax, partyDps / ref));
   if (players === 1) r = Math.min(r, POWER.soloGearCap);
   return r;
@@ -1123,9 +1133,9 @@ export const MARROW = {
   baseHp: 730,
   baseHpFloor: 15,
   // Earned windows: guarded chip + the crash-bait window.
-  guardMult: 0.35,      // GUARDED damage multiplier (reduction, never immunity)
+  guardMult: 0.20,      // GUARDED damage multiplier (reduction, never immunity — Wave 1 rework: 0.35 → 0.20)
   crashExpose: 3.5,     // seconds of EXPOSED opened by a baited wall crash
-  windowBankFrac: 0.40, // per-window damage bank (the phase chunk)
+  windowBankFrac: 0.22, // per-window damage bank (the phase chunk — 0.40 → 0.22: a phase needs ≥2 windows)
   // Fair surprise: the cadence add is ONE omen-telegraphed ambush drawn from a curated
   // pool, so the fight never decays into pure charge-lane memorization.
   addPool: [
@@ -1220,9 +1230,9 @@ export const CHOIR = {
   // Choir is GUARDED; killing every one opens the EXPOSED window, and the next verse
   // gathers a few seconds later. More players = a wider verse (more simultaneous
   // fragments), snapshotted at the pull.
-  guardMult: 0.30,
+  guardMult: 0.20,        // Wave 1 rework: 0.30 → 0.20 (reduction, never immunity)
   silenceExpose: 3.5,     // seconds of EXPOSED per fully-silenced verse
-  windowBankFrac: 0.40,
+  windowBankFrac: 0.22,   // 0.40 → 0.22: crossing a phase needs ≥2 silenced verses
   fragmentFirstAt: 3.0,   // first verse gathers shortly after the entrance grace
   fragmentRespawn: 6.0,   // seconds after a window closes before the next verse
   fragmentsFor: [0, 2, 3, 4, 4] as readonly number[], // indexed by snapshotted players 1..4
@@ -1305,11 +1315,11 @@ export const WEAVER = {
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.7, 2.3] as readonly number[],
   // Earned windows.
-  guardMult: 0.30,        // GUARDED damage multiplier (reduction, never immunity)
+  guardMult: 0.20,        // GUARDED damage multiplier (reduction, never immunity — Wave 1 rework: 0.30 → 0.20)
   knotBreakExpose: 3,     // P1: seconds of EXPOSED per broken lattice knot
   forcedownExpose: 4,     // P2: every egg-sac silenced -> she is forced down
   overshootExpose: 3.5,   // P3: a dash into a broken lane overshoots into the wall
-  windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
+  windowBankFrac: 0.22,   // per-window damage bank (0.40 → 0.22: a phase needs ≥2 windows)
   // THE LATTICE: knots anchor the silk lanes, ringed off the Weaver and never inside
   // knotPlayerClear of a standing player (the break forces a reposition). Each knot
   // casts 3 thread-lines; ONE is strung with sticky silk — the lane partition. A knot's
@@ -1424,8 +1434,8 @@ export const GILDED = {
   // shared guarded/exposed plumbing — closed armor = GUARDED (30% chip), and each
   // committed quake/sweep OPENS its recover as the exposed window, bank-capped like
   // every other deep boss so a stacked party can't delete a phase through one opening.
-  armorChip: 0.3,       // GUARDED (closed-plate) damage multiplier — never zero
-  windowBankFrac: 0.40,
+  armorChip: 0.20,      // GUARDED (closed-plate) damage multiplier — never zero (Wave 1 rework: 0.30 → 0.20)
+  windowBankFrac: 0.22, // 0.40 → 0.22: crossing a phase needs ≥2 punished commitments
   // Anvil slam: a marked in-place quake with a directional aftershock line, then the
   // exposed recover — the fight's core loop.
   slamWindup: 0.8,
@@ -1515,9 +1525,9 @@ export const JET = {
   // only full-damage time). Anchored at F35; rides the clamped §3 curve above F35.
   baseHp: 760,
   baseHpFloor: 35,
-  guardMult: 0.32,        // GUARDED between salvos (reduction, never immunity)
+  guardMult: 0.20,        // GUARDED between salvos (reduction, never immunity — Wave 1 rework: 0.32 → 0.20)
   spentExpose: 3.2,       // seconds of EXPOSED the "he's spent" recover opens
-  windowBankFrac: 0.40,   // per-window damage bank (the phase chunk)
+  windowBankFrac: 0.22,   // per-window damage bank (0.40 → 0.22: a phase needs ≥2 spent windows)
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.0, 2.6, 2.2] as readonly number[], // between salvos, per phase
@@ -1579,9 +1589,9 @@ export const TITHE = {
   // gated behind slab-TTK, so the bar is not a sponge — the slab is the pacing.
   baseHp: 940,
   baseHpFloor: 40,
-  guardMult: 0.30,        // GUARDED while armored / re-armoring behind the slab
+  guardMult: 0.20,        // GUARDED while armored / re-armoring behind the slab (Wave 1 rework: 0.30 → 0.20)
   slabExpose: 3.5,        // seconds of EXPOSED opened by breaking the slab in time
-  windowBankFrac: 0.40,
+  windowBankFrac: 0.22,   // 0.40 → 0.22: a phase needs ≥2 broken-slab windows
   contactDamage: 2,
   entranceGrace: 1.2,
   attackCd: [0, 3.2, 2.9, 2.5] as readonly number[],
@@ -1632,8 +1642,8 @@ export function titheSlabHpForFloor(floor: number, players: number): number {
 export const QUORUM = {
   baseHp: 800,            // the SHARED pool (calibrated on exposed time)
   baseHpFloor: 45,
-  guardMult: 0.30,        // pool GUARDED while a higher-priority husk lives / merge-closed
-  windowBankFrac: 0.40,
+  guardMult: 0.20,        // pool GUARDED while a higher-priority husk lives / merge-closed (Wave 1 rework: 0.30 → 0.20)
+  windowBankFrac: 0.22,   // 0.40 → 0.22: crossing the merge threshold needs ≥2 windows
   contactDamage: 2,
   entranceGrace: 1.4,
   // Husks: 3 role bodies orbiting the core, sharing the pool.
