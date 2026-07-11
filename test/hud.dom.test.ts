@@ -731,17 +731,41 @@ function kitHudTests(): void {
   hud.update(mkState({ party: [] }));
   check("solo clears the party panel", root.querySelectorAll("[data-party] .party-row").length === 0);
 
-  section("universal ult meter (separate from combo/Resonance; ready + cooldown states)");
+  section("universal ult meter: NAMED + LOUD ready (separate from combo/Resonance)");
   hud.update(mkState({ ult: null }));
   const ult = root.querySelector("[data-ult]") as HTMLElement;
-  check("a neutral-kit player hides the ult meter", ult.hasAttribute("hidden"));
-  hud.update(mkState({ ult: { charge: 0.5, isReady: false, cd: 0, kit: "gunner" } }));
+  const ultK = root.querySelector("[data-ult-k]") as HTMLElement;
+  const ultRdy = root.querySelector("[data-ult-rdy]") as HTMLElement;
+  const ultKey = root.querySelector("[data-ult-key]") as HTMLElement;
+  const cluster = root.querySelector("[data-klcluster]") as HTMLElement;
+  const kitBadge = root.querySelector("[data-kitbadge]") as HTMLElement;
+  check("a neutral-kit player hides the ult meter AND the kit badge", ult.hasAttribute("hidden") && kitBadge.hasAttribute("hidden"));
+  hud.update(mkState({ ult: { charge: 0.5, isReady: false, cd: 0, kit: "gunner", name: "Overdrive" } }));
   check("a charging meter is visible and not ready", !ult.hasAttribute("hidden") && !ult.classList.contains("ready"));
   check("the fill reflects the charge", (root.querySelector("[data-ult-fill]") as HTMLElement).style.getPropertyValue("--ult-fill") === "0.5");
-  hud.update(mkState({ ult: { charge: 1, isReady: true, cd: 0, kit: "gunner" } }));
-  check("a full meter lights ULT READY", ult.classList.contains("ready") && (root.querySelector("[data-ult-k]") as HTMLElement).textContent === "ULT READY");
-  hud.update(mkState({ ult: { charge: 0, isReady: false, cd: 0.75, kit: "gunner" } }));
-  check("after a cast the 8s cooldown state shows", ult.classList.contains("cd") && !ult.classList.contains("ready"));
+  check("the meter is NAMED by the kit's ult (fixes 'idk what my ult is')", ultK.textContent === "OVERDRIVE");
+  check("the READY suffix is present but hidden while charging (reserved, never a reflow)", !ultRdy.classList.contains("show"));
+  check("the kit BADGE answers 'which class am I' (name + accent)", !kitBadge.hasAttribute("hidden")
+    && (root.querySelector("[data-kit-name]") as HTMLElement).textContent === "GUNNER");
+  check("the cluster carries the kit accent for gunner", cluster.getAttribute("data-kit") === "gunner");
+  hud.update(mkState({ ult: { charge: 1, isReady: true, cd: 0, kit: "gunner", name: "Overdrive" } }));
+  check("a full meter lights the LOUD ready: <ULT> READY, keycap active", ult.classList.contains("ready")
+    && ultK.textContent === "OVERDRIVE" && ultRdy.classList.contains("show") && ultKey.classList.contains("is-active"));
+  check("the full ready line reads 'OVERDRIVE READY'", (ultK.textContent + ultRdy.textContent) === "OVERDRIVE READY");
+  hud.update(mkState({ ult: { charge: 0, isReady: false, cd: 0.75, kit: "gunner", name: "Overdrive" } }));
+  check("after a cast the 8s cooldown state shows, never ready", ult.classList.contains("cd")
+    && !ult.classList.contains("ready") && !ultKey.classList.contains("is-active"));
+  // A different kit reads distinct: name + accent both change (no confusion with the amber gunner).
+  hud.update(mkState({ ult: { charge: 0.3, isReady: false, cd: 0, kit: "mender", name: "Sanctuary" } }));
+  check("switching kits re-names + re-tints the meter (Sanctuary / mender accent)",
+    ultK.textContent === "SANCTUARY" && cluster.getAttribute("data-kit") === "mender"
+    && (root.querySelector("[data-kit-name]") as HTMLElement).textContent === "MENDER");
+  check("pulseUlt is a transform-only ping (re-triggerable, never a layout shift)", (() => {
+    const fill = root.querySelector("[data-ult-fill]") as HTMLElement;
+    fill.classList.remove("mote-pulse");
+    hud.pulseUlt();
+    return fill.classList.contains("mote-pulse");
+  })());
 }
 
 function main(): void {

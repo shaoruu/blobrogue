@@ -37,8 +37,10 @@ import { onlineHudLabel, netDetailsLine, reconnectOverlayCopy, BACK_ONLINE_TOAST
 import type { OnlineExitReason, OnlinePhase } from "../ui/onlineCopy.js";
 import { applyItemToWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, applyMaxHpBonus, loadFloorIntoWorld, descend, devSpawnEnemy, devSpawnProp, devSpawnChest, acquireWeaponInWorld, isFloorCleared, navDebugField, workerBuildSites, nearestShopSlot, isPlayerInCombat, consumeBlessingReroll, setPlayerKit } from "../sim/world.js";
 import type { WorldState, PlayerSim, MeleeSwing, RemoteTarget } from "../sim/world.js";
-import { ULT, isRealKit, canCastUlt } from "../sim/kits.js";
+import { ULT, isRealKit, canCastUlt, KIT_META } from "../sim/kits.js";
 import type { KitId } from "../sim/kits.js";
+import { UltCueTracker } from "./ultCue.js";
+import type { UltMoteSource } from "./ultCue.js";
 import type { SimEvent } from "../sim/events.js";
 import type { InputCmd, PlayerId } from "../sim/input.js";
 import { LOCAL_ID } from "../sim/input.js";
@@ -198,6 +200,24 @@ interface CoinFly { x: number; y: number; t: number; }
 const COIN_FLY_DUR = 0.5;   // seconds for a coin to arc into the wallet
 const COIN_FLY_MAX = 8;     // hard cap on live tokens (a mega-burst never swarms)
 const COIN_FLY_ARC = 46;    // px of upward hump on the arc (reads as a lift-and-scoop)
+// An ult CHARGE MOTE flying from a combat origin (world x,y) into the bottom-left ult meter:
+// t runs 0..1 arcing to the meter's screen anchor, then a soft tick + a fill pulse. size maps
+// off the accrued amount (trash small, elite/boss bigger); auto-collected (the visual IS the
+// reward, never a pickup to walk to).
+interface UltMoteFly { x: number; y: number; t: number; size: number; source: UltMoteSource; }
+const ULT_MOTE_DUR = 0.42;  // seconds for a mote to arc into the meter
+const ULT_MOTE_MAX = 24;    // hard cap on live motes (coalescing already bounds the spawn rate)
+const ULT_MOTE_ARC = 40;    // px of upward hump on the arc
+// The world-anchored "[F] <ULT> READY" nudge shown the FIRST time the ult is castable per run
+// (reuses the interact-prompt chip renderer) so a new player learns what F does. Seconds it
+// lingers over the player before fading.
+const ULT_READY_NUDGE_SECONDS = 2.6;
+// Kit accent hexes, mirroring the CSS --amber/--grn/--blu/--pur tokens (index.html :root): the
+// canvas-drawn charge motes carry the kit's color while the HUD chrome resolves the same accent
+// via --kit, so the two surfaces read as one identity.
+const KIT_ACCENT: Record<Exclude<KitId, "none">, string> = {
+  gunner: "#ffb43b", mender: "#7fdd5a", bulwark: "#5ab6ff", phantom: "#b06bff",
+};
 // World-anchored interact nudge (item 6, UI-designer spec): the floating [E] chip sits just
 // ABOVE the target of the verb, offset by (target half-height + an 18px gap). Per-target so a
 // small floor pickup, a downed blob (+ its revive ring), and a shop pedestal (+ price chip)
@@ -741,6 +761,18 @@ export class Game {
   private worldLabels: WorldLabel[] = []; // floating text popups (visual only; e.g. drop names)
   private coinFlies: CoinFly[] = [];      // coins arcing into the top-left wallet (client juice)
   private coinFlySpawnTick = -1;          // coalesces a same-tick coin burst into one token
+  // The local player's ult "legibility" layer (all client-side, off the already-authoritative
+  // ultCharge — never the sim, never the wire). The tracker derives charge MOTES + the READY /
+  // CAST cues; the motes arc into the bottom-left meter.
+  private ultCue = new UltCueTracker();
+  private ultMotes: UltMoteFly[] = [];
+  // The best local combat origin captured while replaying THIS step's events (a kill/boss hit) —
+  // the point the next mote flies FROM; null falls back to the player's own body (self-sourced
+  // charge: the time-floor trickle, dash, heal, damage-taken).
+  private ultMoteOrigin: { x: number; y: number; source: UltMoteSource } | null = null;
+  private isUltCasting = false;           // the local player's own ult resolved this step
+  private hasShownUltReadyNudge = false;  // the one-time "[F] <ULT> READY" world nudge, per run
+  private ultReadyNudge: { verb: string; t: number } | null = null; // world-anchored, over the player
   // The world-anchored interact nudge, recomputed each tick (item 6): null when no interact
   // is available/in-range. Rendered as a floating [E] chip over the target of the verb.
   private interactPrompt: { x: number; y: number; verb: string; progress: number | null } | null = null;
@@ -1087,6 +1119,7 @@ export class Game {
     this.selfPet = this.mode === "coop" ? null : opts.selfPet ?? null;
     this.runFloorsCleared = 0;
     this.runBossKills.clear();
+    this.hasShownUltReadyNudge = false; // the "[F] <ULT> READY" world nudge shows once per RUN
     this.petRenders.clear();
     this.online = this.mode === "online" ? opts.online ?? null : null;
     this.spectateId = null;
@@ -1220,6 +1253,12 @@ export class Game {
     this.particles = [];
     this.dmgNumbers = [];
     this.worldLabels = [];
+    // The ult legibility layer: drop in-flight motes and re-prime the tracker at the live charge
+    // so a floor load / world rebuild is never read as a burst of combat charge.
+    this.ultMotes = [];
+    this.ultMoteOrigin = null;
+    this.ultReadyNudge = null;
+    this.ultCue.reset(this.p.ultCharge);
     this.remoteTracers = [];
     this.corpses = [];
     this.decals = [];
@@ -1629,6 +1668,7 @@ export class Game {
     this.tickShop(dt);
     this.tickWeaponAudio(dt);
     this.tickCosmetics(dt, cmd);
+    this.tickUltCue(dt);
 
     if (this.coop) this.publishPresence();
     this.updateHud();
@@ -2152,6 +2192,7 @@ export class Game {
       }
       case "enemyHit": {
         triggerFlash(this.animForId(e.eid));
+        this.captureUltMoteOrigin(e.dmgX, e.dmgY, this.isBossEid(e.eid) ? "boss" : "dmg");
         this.spawnDmgNumber(e.dmgX, e.dmgY, e.dmg, { crit: e.crit });
         this.spawnPuff(e.puffX, e.puffY, e.crit ? 9 : 5, e.puffColor);
         if (e.crit) {
@@ -2206,6 +2247,7 @@ export class Game {
       case "enemyKill": {
         const arch = ENEMY_ARCHETYPES[e.kind];
         const big = isBossKind(e.kind);
+        this.captureUltMoteOrigin(e.x, e.y, big ? "boss" : "kill");
         // WAVE 1 amber earn fact: a boss defeat this run (the server grants the one-time
         // first-boss Amber per account; trash mobs never pay — the anti-grind rule).
         if (big) this.runBossKills.add(e.kind);
@@ -2565,11 +2607,13 @@ export class Game {
       // KIT ULTIMATES: the cast moment's juice. The persistent zone/dome ride the effs list
       // (rendered in renderGroundEffects/renderEffectEntities); these are the burst tells.
       case "ultOverdrive":
+        if (this.isSelfPid(e.pid)) this.isUltCasting = true;
         this.spawnPuff(e.x, e.y, 12, "#ffd166");
         this.sfxAt("weapon", e.x, e.y, { rate: 1.25, gain: 0.6 });
         this.addTrauma(0.12);
         break;
       case "ultSanctuary":
+        if (this.isSelfPid(e.pid)) this.isUltCasting = true;
         this.spawnPuff(e.x, e.y, 16, "#7fe6a8");
         for (let i = 0; i < 10; i++) {
           const a = (i / 10) * Math.PI * 2;
@@ -2578,11 +2622,13 @@ export class Game {
         this.sfxAt("heart", e.x, e.y, { rate: 0.9, gain: 0.7 });
         break;
       case "ultAegis":
+        if (this.isSelfPid(e.pid)) this.isUltCasting = true;
         this.spawnPuff(e.x, e.y, 14, "#bcd4ff");
         this.sfxAt("parry", e.x, e.y, { rate: 0.8, gain: 0.7 });
         this.addTrauma(0.1);
         break;
       case "ultPhase":
+        if (this.isSelfPid(e.pid)) this.isUltCasting = true;
         this.spawnPuff(e.x, e.y, 16, "#a8e6ff");
         this.sfxAt("homing", e.x, e.y, { rate: 1.3, gain: 0.6 });
         this.addTrauma(0.14);
@@ -3292,6 +3338,76 @@ export class Game {
     }
   }
 
+  // Remember where THIS step's combat happened, on screen, as the origin the next charge mote
+  // flies FROM (cosmetic — the mote's AMOUNT rides the authoritative ultCharge delta, so it can
+  // never disagree with the meter). Off-screen combat is skipped; the self-source fallback (the
+  // player's body) covers the time-floor / dash / heal / damage-taken trickle.
+  private captureUltMoteOrigin(x: number, y: number, source: UltMoteSource): void {
+    if (!isRealKit(this.p.kitId)) return;
+    if (!this.isNearCamera(x, y)) return;
+    this.ultMoteOrigin = { x, y, source };
+  }
+
+  private isBossEid(eid: number): boolean {
+    const kind = this.world.enemies.find((en) => en.id === eid)?.kind;
+    return kind !== undefined && isBossKind(kind);
+  }
+
+  // Drive the client-side ult legibility layer once per client step: advance the flying motes +
+  // the one-time ready nudge, then feed the tracker the SAME authoritative charge the meter shows
+  // and play back whatever cues it derives (motes / the loud READY / the cast spend).
+  private tickUltCue(dt: number) {
+    this.updateUltMotes(dt);
+    if (this.ultReadyNudge !== null) {
+      this.ultReadyNudge.t += dt;
+      if (this.ultReadyNudge.t >= ULT_READY_NUDGE_SECONDS) this.ultReadyNudge = null;
+    }
+    const isCasting = this.isUltCasting;
+    this.isUltCasting = false;
+    const origin = this.ultMoteOrigin ?? { x: this.px, y: this.py, source: "dmg" as const };
+    this.ultMoteOrigin = null;
+    const ult = this.ultHud();
+    if (ult === null) { this.ultCue.reset(this.p.ultCharge); return; }
+    const cues = this.ultCue.feed({ charge: this.p.ultCharge, isReady: ult.isReady, isCasting, origin, dt });
+    for (const c of cues) {
+      if (c.t === "ultMote") this.spawnUltMote(c.x, c.y, c.amount, c.source);
+      else if (c.t === "ultReady") this.onUltReady(ult.name);
+      // ultCast: the meter emptying + the 8s lockout sweep render straight off HudState.cd, and
+      // the cast BURST rides the authoritative ult* event FX — nothing extra to fire here.
+    }
+  }
+
+  private spawnUltMote(x: number, y: number, amount: number, source: UltMoteSource) {
+    if (this.ultMotes.length >= ULT_MOTE_MAX) return;
+    // size maps off the accrued charge (fixed-point meter units): a trash kill is small, an
+    // elite/boss or a coalesced crowd burst is bigger. Clamped so one huge accrual never balloons.
+    const size = Math.max(2.5, Math.min(6.5, 2.5 + Math.sqrt(Math.max(0, amount)) / 6));
+    this.ultMotes.push({ x, y, t: 0, size, source });
+  }
+
+  private updateUltMotes(dt: number) {
+    if (this.ultMotes.length === 0) return;
+    let landed = false;
+    for (const m of this.ultMotes) { m.t += dt / ULT_MOTE_DUR; if (m.t >= 1) landed = true; }
+    if (landed) {
+      this.ultMotes = this.ultMotes.filter((m) => m.t < 1);
+      this.hud.pulseUlt();                       // the fill pulses as charge lands
+      sfx("uiClick", { gain: 0.16, rate: 1.5 }); // a soft tick (coalesced: one per landing frame)
+    }
+  }
+
+  // The loud READY moment: a soft amber flash (amber is the universal "you can act now"
+  // reinforcement, per the meter contract) + the FIRST-time-per-run world nudge so a new player
+  // learns what F does.
+  private onUltReady(name: string) {
+    sfx("levelup", { gain: 0.5 });
+    this.flashScreen(255, 180, 59, 0.09, 2.2);
+    if (!this.hasShownUltReadyNudge) {
+      this.hasShownUltReadyNudge = true;
+      this.ultReadyNudge = { verb: `${name.toUpperCase()} READY`, t: 0 };
+    }
+  }
+
   private updateParticles(dt: number) {
     for (const p of this.particles) {
       p.x += p.vx * dt; p.y += p.vy * dt;
@@ -3576,6 +3692,7 @@ export class Game {
       isReady: canCastUlt(p.ultCharge, tick, p.ultReadyAtTick),
       cd,
       kit: p.kitId,
+      name: KIT_META[p.kitId].ult,
     };
   }
 
@@ -4145,6 +4262,7 @@ export class Game {
     this.renderDmgNumbers(); // world-space, on top of all entities but under the shake restore
     this.renderWorldLabels();
     this.renderInteractPrompt(); // world-anchored [E] chip over the interact target (item 6)
+    this.renderUltReadyNudge();  // one-time "[F] <ULT> READY" chip over the player
     ctx.restore();
     this.renderBiomeVignette();
     this.screenFlash.render(ctx, canvas.width, canvas.height);
@@ -4153,6 +4271,7 @@ export class Game {
     this.renderSpectateBanner();
     this.renderReticle();
     this.renderCoinFlies();     // coins arcing into the top-left wallet
+    this.renderUltMotes();      // charge motes arcing into the bottom-left ult meter
     this.renderMinimap();
     this.renderReconnectOverlay();
   }
@@ -5467,49 +5586,113 @@ export class Game {
   private renderInteractPrompt() {
     const p = this.interactPrompt;
     if (p === null) return;
-    const { ctx, renderCam: cam } = this;
-    const sx = p.x - cam.x;
+    const sx = p.x - this.renderCam.x;
     // A very subtle idle bob (~0.5px) — no pulse/scale/glow.
     const bob = Math.sin(this.animClock * 2) * 0.5;
-    let sy = p.y - cam.y + bob;
-    if (sy < INTERACT_TOP_CLAMP) sy = INTERACT_TOP_CLAMP; // pin onscreen at the top
+    const sy = p.y - this.renderCam.y + bob;
+    const isProgress = p.progress !== null;
+    // Progress read drops the keycap (it's a status, not a press); otherwise the nudge leads [E].
+    this.drawKeyChip(sx, sy, isProgress ? null : "E", isProgress ? `REVIVING ${Math.round((p.progress ?? 0) * 100)}%` : p.verb);
+  }
+
+  // The shared world-anchored chip: a dark backing + 2px ink outline (legible over any floor /
+  // under an enemy), an optional amber [KEY] keycap (the bright anchor), then the cream LABEL,
+  // centered at (sx, sy) and pinned onscreen at the top. A null key is a status read (no keycap).
+  // Reused by the interact nudge and the one-time ult-ready nudge.
+  private drawKeyChip(sx: number, syIn: number, key: string | null, label: string) {
+    const { ctx } = this;
+    const sy = syIn < INTERACT_TOP_CLAMP ? INTERACT_TOP_CLAMP : syIn;
     ctx.save();
     ctx.font = '700 10px "Silkscreen", monospace';
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
-    const key = INTERACT_KEY_PX;
+    const keyPx = INTERACT_KEY_PX;
     const padX = 5, padY = 4, gap = 5;
-    const isProgress = p.progress !== null;
-    const verb = isProgress ? `REVIVING ${Math.round((p.progress ?? 0) * 100)}%` : p.verb;
-    const verbW = ctx.measureText(verb).width;
-    // Progress read drops the keycap (it's a status, not a press); the nudge leads with [E].
-    const contentW = isProgress ? verbW : key + gap + verbW;
+    const labelW = ctx.measureText(label).width;
+    const contentW = key === null ? labelW : keyPx + gap + labelW;
     const bw = contentW + padX * 2;
-    const bh = key + padY * 2;
+    const bh = keyPx + padY * 2;
     const bx = sx - bw / 2, by = sy - bh / 2;
-    // Pass 1 — backing: dark fill + 2px ink outline (legible over any floor / under an enemy).
     ctx.fillStyle = "rgba(5,3,11,0.82)";
     ctx.fillRect(bx, by, bw, bh);
     ctx.lineWidth = 2;
     ctx.strokeStyle = "#120a24";
     ctx.strokeRect(bx, by, bw, bh);
     let cx = bx + padX;
-    // Pass 2 — the amber [E] keycap (the bright anchor), unless showing progress.
-    if (!isProgress) {
+    if (key !== null) {
       ctx.fillStyle = "#ffb43b";
-      ctx.fillRect(cx, sy - key / 2, key, key);
+      ctx.fillRect(cx, sy - keyPx / 2, keyPx, keyPx);
       ctx.fillStyle = "#120a24";
       ctx.textAlign = "center";
-      ctx.fillText("E", cx + key / 2, sy + 1);
+      ctx.fillText(key, cx + keyPx / 2, sy + 1);
       ctx.textAlign = "left";
-      cx += key + gap;
+      cx += keyPx + gap;
     }
-    // The verb / progress read, cream.
     ctx.fillStyle = "#ffe9b0";
-    ctx.fillText(verb, cx, sy + 1);
+    ctx.fillText(label, cx, sy + 1);
     ctx.restore();
     ctx.textAlign = "left";
     ctx.textBaseline = "alphabetic";
+  }
+
+  // The one-time "[F] <ULT> READY" nudge over the player, the first time the ult is castable per
+  // run (reuses drawKeyChip). Fades in then out over its lifetime so it teaches without nagging.
+  private renderUltReadyNudge() {
+    const n = this.ultReadyNudge;
+    if (n === null) return;
+    const k = n.t / ULT_READY_NUDGE_SECONDS; // 0..1
+    const alpha = k < 0.15 ? k / 0.15 : k > 0.75 ? (1 - k) / 0.25 : 1;
+    const sx = this.px - this.renderCam.x;
+    const sy = this.py - this.renderCam.y - INTERACT_OFFSET_REVIVE;
+    this.ctx.save();
+    this.ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+    this.drawKeyChip(sx, sy, "F", n.verb);
+    this.ctx.restore();
+  }
+
+  // A charge mote's flight target: the bottom-left ult meter's center in canvas pixels, mapped
+  // from the HUD element's live rect through the canvas's own rect/scale (lands correctly at any
+  // UI zoom / window size). Null while the meter is hidden — the caller then drops its motes.
+  private ultMeterAnchorScreen(): { x: number; y: number } | null {
+    const rect = this.hud.ultMeterRect();
+    const cr = this.canvas.getBoundingClientRect();
+    if (rect === null || cr.width === 0 || cr.height === 0) return null;
+    const sx = this.canvas.width / cr.width, sy = this.canvas.height / cr.height;
+    return { x: (rect.left + rect.width / 2 - cr.left) * sx, y: (rect.top + rect.height / 2 - cr.top) * sy };
+  }
+
+  // Charge motes: each orb lifts off its combat origin (world->screen) and eases along an arc
+  // into the ult meter, shrinking as it lands. Additive so it reads as energy, kit-colored so it
+  // matches the meter it feeds.
+  private renderUltMotes() {
+    if (this.ultMotes.length === 0) return;
+    const anchor = this.ultMeterAnchorScreen();
+    if (anchor === null) { this.ultMotes = []; return; } // meter hidden: no target, drop them
+    const { ctx, renderCam: cam } = this;
+    const color = isRealKit(this.p.kitId) ? KIT_ACCENT[this.p.kitId] : "#ffb43b";
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const m of this.ultMotes) {
+      const t = m.t < 0 ? 0 : m.t > 1 ? 1 : m.t;
+      const e = t * t * (3 - 2 * t); // smoothstep ease
+      const startX = m.x - cam.x, startY = m.y - cam.y;
+      const px = startX + (anchor.x - startX) * e;
+      const py = startY + (anchor.y - startY) * e - Math.sin(t * Math.PI) * ULT_MOTE_ARC;
+      const r = m.size * (1 - 0.35 * e); // shrinks into the meter
+      ctx.globalAlpha = 0.85 * (1 - t * 0.15);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, 6.28);
+      ctx.fill();
+      // A bright inner core so the orb reads as energy, not a flat dot.
+      ctx.globalAlpha *= 0.8;
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(px, py, r * 0.4, 0, 6.28);
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   // The wallet coin counter's center in canvas pixels (the coin token's flight target). Reads
