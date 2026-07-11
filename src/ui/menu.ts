@@ -614,6 +614,7 @@ export class Menu {
     av.height = 32;
     const info = el("div", "account-info");
     const name = el("div", "account-name", this.session.name || "signed in");
+    this.accountNameEl = name;
     const sub = el("div", "account-sub", "google account");
     info.append(name, sub);
     box.append(av, info);
@@ -623,13 +624,20 @@ export class Menu {
 
   private async hydrateAccount(av: HTMLImageElement, name: HTMLElement) {
     if (!this.client) return;
+    // The avatar is the Google account image (always correct). The NAME, however, is the
+    // profile's display name (customName ?? Google name) — never the raw auth-user name,
+    // which would clobber a custom name the player set.
     try {
       const user = await this.client.query(api.players.currentUser, {});
-      if (!user) return;
-      if (user.name) name.textContent = user.name;
-      if (user.image) { av.src = user.image; av.classList.add("has-img"); }
+      if (user?.image) { av.src = user.image; av.classList.add("has-img"); }
     } catch {
-      // Backend not ready — keep the placeholder chip, don't crash the menu.
+      // Backend not ready — keep the placeholder avatar, don't crash the menu.
+    }
+    try {
+      const profile = await this.session.refreshProfile();
+      name.textContent = profile?.name || this.session.name;
+    } catch {
+      name.textContent = this.session.name;
     }
   }
 
@@ -1042,6 +1050,7 @@ export class Menu {
   // lifetime from the profile), and unavailable states stay honest.
   private ownCard: ReturnType<Menu["profileCard"]> | null = null;
   private ownNameInput: HTMLInputElement | null = null;
+  private accountNameEl: HTMLElement | null = null;
 
   private buildOwnOverview(wrap: HTMLElement) {
     const card = this.profileCard(
@@ -1052,8 +1061,15 @@ export class Menu {
     this.ownCard = card;
     // The username editor lives ON the card, right under the appearance stage — the
     // owner's identity block (name + look) in one place, above the closet door.
+    // Reset before (re)building: the account chip below only sets this when signed in, so a
+    // stale node from a prior render must never receive the update.
+    this.accountNameEl = null;
     const editor = this.nameEditor((name) => {
-      card.nameEl.textContent = (name.trim() || "blob").toUpperCase();
+      const display = name.trim() || "blob";
+      card.nameEl.textContent = display.toUpperCase();
+      // Reflect the save on the account chip instantly, so the signed-in player sees their
+      // custom name without a reload (the chip renders the name un-cased).
+      if (this.accountNameEl) this.accountNameEl.textContent = display;
     });
     this.ownNameInput = editor.input;
     const customize = el("button", "secondary pc-customize", "CUSTOMIZE BLOB");
