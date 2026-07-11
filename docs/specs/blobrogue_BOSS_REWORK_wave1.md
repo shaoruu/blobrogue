@@ -68,3 +68,9 @@ READABILITY: surplus = simple chasers on telegraph (active-threat cap only, not 
 Implement tribute + splinter as new simple-chaser enemy kinds (deterministic, active-threat cap only, NOT ≤2-complex-mover rule).
 
 ## REWORK = 4 pieces + presence, ALL injected to build bc-1fe0ba23: (1) movesets (2) balancer constants (3) overflow-discard clamp @damageEnemy (4) encounterPower wiring + tribute/splinter surplus. + Quorum husk-formation fix + AD presence/aura/scale.
+
+## BALANCER DELTAS (final corrections, supersede above):
+- TITHE.slabThickFor [0,1.0,1.6,2.0,2.4] → [0,1.0,1.8,2.0,1.9] (2.4 overshot 4p slab-TTK w/ repair-adds; holds 1.6-2.0s P1-4). slabBaseHp 84, rearmChannel FLAT 3.0.
+- NEW Tithe TRIBUTE slab-repair = 6 HP/s each (unintercepted tribute repairs slab; the 4p divide-labor job).
+- NEW JET tracer-mote count = round((R-1)/1.5) cap 3 = solo0/2p1/3p2/4p3 (off encounterPower R).
+Everything else stands: JET salvo cap2 salvoIntervalPerR 0.12 floor1.8; TITHE feed-add cap4 re-arm FLAT 3.0; QUORUM husk-adds cap5 interval 6→3; PHASE_TIME_BASE JET16/TITHE16/QUORUM14 (NEW, required for soft-enrage). Overflow-discard = CONFIRMED BUG (damageEnemy ~L2249-2258, earned-window branch only, leave roar.queued).
