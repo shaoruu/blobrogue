@@ -1450,6 +1450,7 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     accel: wep.accel,
     isPhase: wep.isPhase,
     implode: wep.implode,
+    nova: wep.nova,
     // Frostline painting, mods-mapped here (size -> zone footprint, life -> duration).
     paintSpacing: wep.paint?.spacing,
     paintRadius: wep.paint !== undefined ? wep.paint.radius * p.mods.bulletSizeMult : undefined,
@@ -3204,6 +3205,19 @@ function implodeBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEv
       ownerId: b.owner, fxWeapon: b.fx ?? null,
     }, ev);
     (b.hitList ??= []).push(e);
+  }
+  // The Singularity's SECOND stage: the collapse point births a short-fused friendly nova
+  // blast. It sits stationary for a beat while the implosion knockback clumps the pack, then
+  // detonateBullet resolves it on the clump (a fresh hitList, so the nova is its own hit —
+  // never a double-dip with the implosion above). An ordinary blast bullet: no wire field,
+  // no new client render path, and it culls itself on detonation.
+  if (b.nova !== undefined && b.nova > 0) {
+    w.bullets.push({
+      x, y, vx: 0, vy: 0, radius: 4, life: C.NOVA_FUSE, friendly: true, owner: b.owner,
+      damage: b.damage, color: b.color, pierce: 0, hitList: null, isCrit: b.isCrit,
+      critX: b.critX, bossCoef: b.bossCoef, blast: b.nova, fx: b.fx,
+      burn: b.burn, chill: b.chill, shock: b.shock,
+    });
   }
 }
 

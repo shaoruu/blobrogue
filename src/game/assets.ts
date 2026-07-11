@@ -410,6 +410,17 @@ const HELD_SOURCES: Partial<Record<WeaponId, string>> = {
   midas: "/sprites/held_midas.png",
   phase: "/sprites/held_umbra.png",
   vortex: "/sprites/held_lodestone.png",
+  // Content wave held-sprite hooks — art is generated separately and dropped at these
+  // exact paths. Until each PNG lands, heldWeapon() returns null (image not complete) and
+  // the held-weapon draw path falls back procedurally, exactly like every other weapon.
+  cleaver: "/sprites/held_cleaver.png",
+  scrapper: "/sprites/held_scrapper.png",
+  skipper: "/sprites/held_skipper.png",
+  arcbolt: "/sprites/held_arcbolt.png",
+  cryobolt: "/sprites/held_cryobolt.png",
+  firebomb: "/sprites/held_firebomb.png",
+  tracker: "/sprites/held_tracker.png",
+  singularity: "/sprites/held_singularity.png",
 };
 
 // Floor-pickup art (64px side-profile) per weapon. Mirrors HELD_SOURCES: a weapon
@@ -450,6 +461,16 @@ const PICKUP_SOURCES: Partial<Record<WeaponId, string>> = {
   midas: "/sprites/weapon_midas.png",
   phase: "/sprites/weapon_umbra.png",
   vortex: "/sprites/weapon_lodestone.png",
+  // Content wave pickup/hotbar art hooks (same drop-in contract as the held set; the
+  // pickup renderer and hotbar icons degrade to the generic pixel gun until each lands).
+  cleaver: "/sprites/weapon_cleaver.png",
+  scrapper: "/sprites/weapon_scrapper.png",
+  skipper: "/sprites/weapon_skipper.png",
+  arcbolt: "/sprites/weapon_arcbolt.png",
+  cryobolt: "/sprites/weapon_cryobolt.png",
+  firebomb: "/sprites/weapon_firebomb.png",
+  tracker: "/sprites/weapon_tracker.png",
+  singularity: "/sprites/weapon_singularity.png",
 };
 
 // The weapon's icon art for DOM HUD surfaces (the hotbar): its pickup side profile.

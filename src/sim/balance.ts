@@ -1526,6 +1526,11 @@ export const WEAPON_RESONANCE: Readonly<Record<WeaponId, ResonanceFamily>> = {
   sword: "melee", longsword: "melee", spear: "melee",
   lastlight: "lance", breach: "lob", snapwire: "lob", frostline: "lob", halo: "lob", sentry: "lob", crook: "melee",
   reaper: "arc", swarm: "rapid", midas: "lance", phase: "lance", vortex: "lob",
+  // Content wave archetypes: the Cleaver is a piercing lance, the Scrapper a rapid stream,
+  // the Skipper a bouncing spread, the Arcbolt an arcing lance, the Cryobolt a rapid shard,
+  // the Firebomb a lob, the Tracker an arcing seeker, the Singularity a collapsing lob.
+  cleaver: "lance", scrapper: "rapid", skipper: "spread", arcbolt: "arc",
+  cryobolt: "rapid", firebomb: "lob", tracker: "arc", singularity: "lob",
 };
 
 export function weaponResonanceFamily(id: WeaponId): ResonanceFamily {
@@ -1920,6 +1925,14 @@ export const WEAPON_BOSS_COEF: Readonly<Partial<Record<WeaponId, number>>> = {
   // through-wall pin has zero exposure cost against an arena body.
   midas: 0.58,
   phase: 0.8,
+  // Content wave. The pack/room tools are priced like the other pack weapons so their
+  // multi-body room job never doubles as a boss melt; the Cleaver's deep pierce and the
+  // Singularity's implosion+nova both land their full payload on multiple bodies, so both
+  // are boss-coefficient priced. The single-target Arcbolt/Tracker keep the neutral 1.0.
+  cleaver: 0.6, skipper: 0.55, firebomb: 0.6, singularity: 0.5,
+  // The Arcbolt taxes a pack via shock (amp + arc) — a room verb, priced like the other pack
+  // weapons vs a boss (its shock amplifies nothing on boss-grade bodies).
+  arcbolt: 0.6,
 };
 
 // ---- §6 power budget: raw caps (temporary per-run blessings) ----
