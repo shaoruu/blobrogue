@@ -688,7 +688,33 @@
       .home-left{ display:flex; flex-direction:column; gap:10px; min-width:0; }
       .home-left .btn-quick{ height:82px; flex:0 0 82px; padding:0 22px; }
       .home-left .play-solo{ height:54px; flex:0 0 54px; padding:0 22px; font-size:var(--fs-md); }
+      .home-left .camp-enter{ height:46px; flex:0 0 46px; padding:0 18px; font-size:var(--fs-sm); flex-direction:row; align-items:center; justify-content:flex-start; gap:8px; }
+      .home-left .camp-enter .sub{ font-family:var(--f-ui); font-weight:400; font-size:var(--fs-xs); letter-spacing:.3px; text-transform:none; opacity:.8; text-shadow:none; }
       .home-left .lb-preview{ margin-top:0; }
+
+      /* ---- AMBER CAMP (WAVE 1): balance + the Kennel + convenience sinks ---- */
+      .camp-screen{ width:min(720px,94vw); text-align:center; }
+      .camp-body{ display:flex; flex-direction:column; gap:16px; margin:14px 0 4px; text-align:left; }
+      .camp-balance{ display:flex; align-items:baseline; gap:8px; justify-content:center; padding:10px 0 2px; }
+      .camp-amber-ic{ color:var(--amber); font-size:var(--fs-lg); }
+      .camp-amber-val{ color:var(--amber); font-family:var(--f-title,monospace); font-size:28px; font-variant-numeric:tabular-nums; }
+      .camp-amber-lbl{ color:var(--dun-4); letter-spacing:2px; text-transform:uppercase; font-size:var(--fs-xs); }
+      .camp-section{ border:2px solid var(--dun-3); background:rgba(20,12,36,.5); padding:14px 16px; display:flex; flex-direction:column; gap:10px; }
+      .camp-h{ font-family:var(--f-ui); font-size:var(--fs-sm); letter-spacing:2px; text-transform:uppercase; color:var(--cream); margin:0; }
+      .camp-kennel .muted{ margin:0; }
+      .camp-grid{ display:flex; flex-wrap:wrap; gap:10px; }
+      .camp-card{ flex:1 1 200px; min-width:180px; display:flex; flex-direction:column; gap:6px; padding:12px; border:2px solid var(--dun-3); background:rgba(10,6,20,.6); }
+      .camp-card.owned{ border-color:var(--amber-lo); }
+      .camp-card.poor{ opacity:.75; }
+      .camp-card.locked{ opacity:.5; }
+      .camp-card-name{ font-family:var(--f-ui); font-weight:700; letter-spacing:1px; color:var(--cream); }
+      .camp-card-desc{ font-size:var(--fs-xs); color:var(--dun-4); }
+      .camp-card-chip{ align-self:flex-start; color:var(--amber); font-size:var(--fs-xs); letter-spacing:1px; }
+      .camp-node{ align-self:flex-start; padding:9px 16px; font-size:var(--fs-sm); }
+      .camp-node.buyable{ background:var(--amber); color:#241708; }
+      .camp-node.locked{ background:var(--c,#2a2140); opacity:.6; cursor:default; }
+      .camp-dismiss{ align-self:flex-start; font-size:var(--fs-xs); padding:6px 12px; }
+      .camp-note{ min-height:1.2em; margin:2px 0 0; color:var(--amber-hi); font-size:var(--fs-sm); letter-spacing:.3px; }
       .home-right{ flex:1; display:flex; flex-direction:column; gap:10px; min-width:0; border-left:2px solid var(--dun-3); padding-left:20px; }
       .col-h{ font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:2px; color:var(--dun-4); text-transform:uppercase; text-align:left; }
       .btn-quick{ width:100%; flex-direction:column; gap:5px; padding:17px 22px; font-size:var(--fs-lg); min-width:0; }

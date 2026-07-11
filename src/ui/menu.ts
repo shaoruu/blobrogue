@@ -13,6 +13,8 @@ import { itemById } from "../sim/items.js";
 import { KIT_IDS, KIT_META, kitUnlockLevel, isKitUnlocked } from "../sim/kits.js";
 import { getSelectedKit, setSelectedKit } from "../net/kitSelection.js";
 import { COSMETIC_SLOTS, cosmeticsForSlot, cosmeticById, isCosmeticOwned, bodyPaletteIndex } from "../game/cosmetics.js";
+import { CAMP_NODES, campNodeById, isNodeOwned, prereqsMet, DOGGIE_NODE_ID, DOGGIE_PET_ID } from "../sim/camp_nodes.js";
+import type { CampNodeDef } from "../sim/camp_nodes.js";
 import type { CosmeticSlot, CosmeticDef, CosmeticLoadout } from "../game/cosmetics.js";
 import { hasCosmeticArt } from "../game/cosmeticArt.js";
 import { createBlobPreview, drawBlob, isBlobReady } from "./blobPreview.js";
@@ -51,6 +53,9 @@ export interface GameOverContext {
   // Cosmetic ids this run just earned (unlocks diff before/after recordRun) — celebrated on
   // the results screen and folded into the guest sign-in nudge's pitch.
   newUnlocks?: string[];
+  // The SERVER-authoritative Amber banked this run (the profile's amber delta across
+  // recordRun) — shown as "Banked N Amber". Never a client-computed number.
+  bankedAmber?: number;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text?: string): HTMLElementTagNameMap[K] {
@@ -83,7 +88,7 @@ function fmtClock(seconds: number): string {
 // destination that opened the screen (screens are rebuilt on return, so restore is by NAME,
 // not by node — deterministic even though the original button no longer exists).
 export interface TitleFocus {
-  dest?: "online" | "leaderboard" | "profile" | "settings";
+  dest?: "online" | "leaderboard" | "profile" | "settings" | "camp";
   lbRow?: number;
 }
 
@@ -155,6 +160,7 @@ export class Menu {
   // never moves). The preview handle itself is kept so the idle loop can be paused
   // while the title is hidden (in-run) or covered by the closet overlay.
   private titleStageRefresh: (() => void) | null = null;
+  private campRender: (() => void) | null = null;
   private titleStage: BlobPreview | null = null;
   // The current screen's tab group for controller LB/RB (closet categories, profile views).
   private tabCycle: ((dir: 1 | -1) => void) | null = null;
@@ -197,6 +203,7 @@ export class Menu {
     this.teardownOnlineCount();
     this.identityMount = null;     // the title re-arms it after its own show()
     this.titleStageRefresh = null; // idem
+    this.campRender = null;        // the camp re-arms it after its own show()
     this.titleStage = null;
     this.tabCycle = null;          // screens with tab groups re-arm after their own show()
     this.whatsNewBtn = null;       // idem
@@ -362,6 +369,16 @@ export class Menu {
     const solo = this.soloButton("PLAY SOLO");
     solo.classList.add("play-solo", "secondary");
     left.appendChild(solo);
+    // The Amber Camp: the between-runs place (WAVE 1). Not a play action and not a nav
+    // destination — a quiet secondary door under Play, where earned Amber is spent on pets +
+    // convenience. Coins own the in-run HUD; Amber lives here, never both in one surface.
+    const camp = el("button", "secondary camp-enter");
+    camp.type = "button";
+    camp.appendChild(el("span", "", "\u25c6 CAMP"));
+    camp.appendChild(el("span", "sub", "adopt pets & spend Amber"));
+    camp.addEventListener("click", () => void this.showCamp());
+    focusTargets.set("camp", camp);
+    left.appendChild(camp);
     // The fixed home status line: reserved from first paint; any boot/exit note swaps
     // content inside it, never the layout around it.
     left.appendChild(el("p", "home-status", statusNote));
@@ -1555,6 +1572,167 @@ export class Menu {
     this.tabCycle = controls.cycleTab;
   }
 
+  // ---- AMBER CAMP (WAVE 1): the between-runs place — spend Amber, adopt the doggie -------
+  // Amber is the ONE persistent currency (coins own the in-run HUD; Amber lives ONLY here,
+  // never both in a single surface). Every buy/equip is a SERVER-authoritative Convex mutation
+  // (session.buyNode / session.equipPet) — the client never authors Amber or ownership. The
+  // walkable hub lands in wave 2; wave 1 is this focused panel: balance, the Kennel, sinks.
+  async showCamp() {
+    const wrap = el("div", "menu camp-screen");
+    const goBack = () => void this.showTitle({ dest: "camp" });
+    const note = el("p", "camp-note", "");
+    note.setAttribute("aria-live", "polite");
+
+    const rebuild = () => {
+      const profile = this.session.profile;
+      const amber = profile?.amber ?? 0;
+      const owned = profile?.unlocks ?? [];
+      const equippedPet = profile?.equippedPet ?? null;
+
+      const body = el("div", "camp-body");
+
+      // Amber balance — the whole reason to be here (shown at the Camp, never the in-run HUD).
+      const bal = el("div", "camp-balance");
+      bal.appendChild(el("span", "camp-amber-ic", "\u25c6"));
+      bal.appendChild(el("span", "camp-amber-val", String(amber)));
+      bal.appendChild(el("span", "camp-amber-lbl", "Amber"));
+      body.appendChild(bal);
+
+      // THE KENNEL — adopt + equip the doggie (the wave-1 payoff).
+      const doggie = campNodeById(DOGGIE_NODE_ID)!;
+      const isDoggieOwned = isNodeOwned(DOGGIE_NODE_ID, owned);
+      const kennel = el("div", "camp-section camp-kennel");
+      kennel.appendChild(el("h2", "camp-h", "The Kennel"));
+      if (!isDoggieOwned) {
+        kennel.appendChild(el("p", "muted", "A loyal pup waits to be adopted \u2014 it'll follow you everywhere, even into the dungeon."));
+        kennel.appendChild(this.campBuyButton(doggie, amber, owned, note, rebuild));
+      } else {
+        const isEquipped = equippedPet === DOGGIE_PET_ID;
+        kennel.appendChild(el("p", "muted", isEquipped ? "Doggie is at your side \u2014 sits when you rest, trots when you roam." : "Doggie is adopted \u2014 whistle to bring it along."));
+        const equip = el("button", isEquipped ? "camp-node owned" : "camp-node buyable", isEquipped ? "\u2713 Doggie following" : "Adopt \u00b7 bring Doggie along");
+        equip.type = "button";
+        equip.onclick = () => void this.campEquipPet(isEquipped ? null : DOGGIE_PET_ID, note, rebuild);
+        kennel.appendChild(equip);
+        if (isEquipped) {
+          const dismiss = el("button", "secondary camp-dismiss", "leave Doggie at camp");
+          dismiss.type = "button";
+          dismiss.onclick = () => void this.campEquipPet(null, note, rebuild);
+          kennel.appendChild(dismiss);
+        }
+      }
+      body.appendChild(kennel);
+
+      // CONVENIENCE SINKS — balance-safe Amber sinks (never power, never cosmetics).
+      const sinks = CAMP_NODES.filter((n) => n.category === "convenience");
+      if (sinks.length > 0) {
+        const shop = el("div", "camp-section");
+        shop.appendChild(el("h2", "camp-h", "Camp Upgrades"));
+        const grid = el("div", "camp-grid");
+        for (const node of sinks) grid.appendChild(this.campNodeCard(node, amber, owned, note, rebuild));
+        shop.appendChild(grid);
+        body.appendChild(shop);
+      }
+
+      body.appendChild(note);
+      return body;
+    };
+
+    const render = () => {
+      wrap.replaceChildren();
+      wrap.appendChild(this.closeButton(goBack));
+      wrap.appendChild(el("h1", "", "AMBER CAMP"));
+      wrap.appendChild(el("p", "muted", "Your camp between runs \u2014 spend the Amber your depths earned. Cosmetics stay in the closet; Amber buys companions and comforts."));
+      wrap.appendChild(rebuild());
+      const row = el("div", "btnrow");
+      const back = el("button", "secondary", "back");
+      back.addEventListener("click", goBack);
+      row.appendChild(back);
+      wrap.appendChild(row);
+    };
+    this.campRender = render;
+    render();
+    this.show(wrap);
+    this.bindEscape(goBack);
+    // Hydrate the authoritative profile (Amber balance / owned nodes / equipped pet), then
+    // repaint in place — a cold open shows the cached profile immediately, zero layout shift.
+    void this.hydrateCamp();
+  }
+
+  // A full-width buy button for a headline node (the Kennel doggie), stateful by ownership +
+  // affordability + prereqs. All validation is re-done server-side on click; this is display.
+  private campBuyButton(node: CampNodeDef, amber: number, owned: readonly string[], note: HTMLElement, rebuild: () => HTMLElement): HTMLElement {
+    const locked = !prereqsMet(node, owned);
+    const afford = amber >= node.cost;
+    const btn = el("button", locked || !afford ? "camp-node locked" : "camp-node buyable",
+      locked ? `${node.name} \u2014 locked` : `Adopt ${node.name} \u2014 \u25c6 ${node.cost}`);
+    btn.type = "button";
+    btn.disabled = locked;
+    btn.onclick = () => {
+      if (!afford) { note.textContent = `Not enough Amber \u2014 need \u25c6 ${node.cost}.`; return; }
+      void this.campBuy(node.id, note, rebuild);
+    };
+    return btn;
+  }
+
+  // A convenience-node purchase card: owned / buyable / can't-afford / locked, one per node.
+  private campNodeCard(node: CampNodeDef, amber: number, owned: readonly string[], note: HTMLElement, rebuild: () => HTMLElement): HTMLElement {
+    const isOwned = isNodeOwned(node.id, owned);
+    const locked = !isOwned && !prereqsMet(node, owned);
+    const afford = amber >= node.cost;
+    const card = el("div", `camp-card ${isOwned ? "owned" : locked ? "locked" : afford ? "buyable" : "poor"}`);
+    card.appendChild(el("span", "camp-card-name", node.name));
+    card.appendChild(el("span", "camp-card-desc", node.desc));
+    if (isOwned) {
+      card.appendChild(el("span", "camp-card-chip", "\u2713 owned"));
+    } else {
+      const buy = el("button", afford && !locked ? "camp-node buyable" : "camp-node locked", `\u25c6 ${node.cost}`);
+      buy.type = "button";
+      buy.disabled = locked;
+      buy.onclick = () => {
+        if (!afford) { note.textContent = `Not enough Amber \u2014 need \u25c6 ${node.cost}.`; return; }
+        void this.campBuy(node.id, note, rebuild);
+      };
+      card.appendChild(buy);
+    }
+    return card;
+  }
+
+  private async campBuy(nodeId: string, note: HTMLElement, rebuild: () => HTMLElement) {
+    note.textContent = "";
+    const res = await this.session.buyNode(nodeId);
+    if (res && res.ok) {
+      note.textContent = `Purchased ${campNodeById(nodeId)?.name ?? "node"}.`;
+    } else if (res && !res.ok) {
+      note.textContent = res.reason === "insufficient" ? "Not enough Amber." : "Couldn't buy that right now.";
+    } else {
+      note.textContent = "Couldn't reach the Camp \u2014 try again.";
+    }
+    this.repaintCamp(rebuild);
+  }
+
+  private async campEquipPet(petId: string | null, note: HTMLElement, rebuild: () => HTMLElement) {
+    note.textContent = "";
+    const res = await this.session.equipPet(petId);
+    if (!res || !res.ok) note.textContent = "Couldn't update your companion \u2014 try again.";
+    this.repaintCamp(rebuild);
+  }
+
+  // Repaint just the camp body in place (balance/owned/equip changed), keeping the shell.
+  private repaintCamp(rebuild: () => HTMLElement) {
+    const wrap = this.overlay.querySelector(".camp-screen");
+    const body = wrap?.querySelector(".camp-body");
+    if (body && wrap) wrap.replaceChild(rebuild(), body);
+    else this.campRender?.();
+  }
+
+  private async hydrateCamp() {
+    if (!this.client) return;
+    try {
+      await this.session.login();
+      this.campRender?.();
+    } catch { /* the cached profile stands */ }
+  }
+
   // ---- ONLINE (authoritative server): rooms + quick play -----------------------------
 
   // The ONE-TIME identity gate before a guest's first online start: name + color committed
@@ -2098,8 +2276,9 @@ export class Menu {
     stat("time", result.durationMs / 1000, fmtClock);
     wrap.appendChild(grid);
 
-    if (result.amber > 0) {
-      const amber = el("p", "", `\u25c6 +${result.amber} AMBER banked \u2014 the run's one lasting spark`);
+    const banked = ctx.bankedAmber ?? 0;
+    if (banked > 0) {
+      const amber = el("p", "", `\u25c6 Banked ${banked} Amber \u2014 spend it at the Camp`);
       amber.style.color = "#ffb43b";
       amber.style.letterSpacing = "1px";
       wrap.appendChild(amber);
