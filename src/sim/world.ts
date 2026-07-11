@@ -2250,7 +2250,12 @@ function damageEnemy(w: WorldState, by: PlayerId | null, e: Enemy, dmg: number, 
   // it is never chipped again.
   const earned = EARNED_WINDOWS[e.kind];
   if (earned !== undefined && !isOverflow) {
-    if (boss.exposed > 0) {
+    if (e.kind === "quorum" && boss.phase < 2) {
+      // QUORUM P1 guard is the SHIELD husk, not a timed window: chipped while the shield husk
+      // lives (huskGuardUp), FULL once it dies (the core is persistently EXPOSED, draining
+      // monotonically to the merge — not bank-clamped; the merge-form's P2 guard is the window).
+      if (boss.huskGuardUp) dmg *= earned.guardMult;
+    } else if (boss.exposed > 0) {
       const applied = Math.min(dmg, boss.windowBank);
       boss.windowBank -= applied;
       if (boss.windowBank <= 1e-9) { boss.exposed = 0; boss.windowBank = 0; }
@@ -3905,9 +3910,10 @@ function isUntargetable(e: Enemy): boolean {
       return ((a.move === "pounce" || a.move === "blink") && a.phase === "active")
         || (a.move === "dive" && a.phase === "active");
     case "quorum":
-      // The CORE is hidden behind its husks until the merge: untargetable while a husk
-      // still stands (phase 1) and through the merge beat itself. Shoot the husks.
-      return e.boss !== null && (e.boss.phase < 2 || a.move === "merge");
+      // The CORE is guarded behind the SHIELD husk: untargetable while the shield husk lives
+      // (P1, huskGuardUp) and through the merge beat itself — shoot the husks. Once the shield
+      // husk dies the core is EXPOSED (targetable) and you drain it monotonically to the merge.
+      return e.boss !== null && ((e.boss.phase < 2 && e.boss.huskGuardUp) || a.move === "merge");
     default:
       return false;
   }
@@ -8044,30 +8050,36 @@ function updateQuorum(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
   const a = e.attack;
   if (boss.addTimer > 0) boss.addTimer -= dt; // the husk-add wave interval (surplus lever)
 
-  // Prune broken husks from the shared roster so an emptied roster raises a fresh WAVE.
+  // Prune dead husks from the shared roster (one-way: a broken husk stays broken — the
+  // emptied roster does NOT re-raise; the trio is raised exactly once, below).
   for (let k = boss.windowAddIds.length - 1; k >= 0; k--) {
     const id = boss.windowAddIds[k];
     if (!w.enemies.some((o) => !o.dead && o.id === id)) boss.windowAddIds.splice(k, 1);
   }
-  // Raise a husk WAVE whenever the roster is empty and the pool hasn't hit the merge
-  // threshold: QUORUM is a WAVE fight — break husk after husk toward the merge. The fast
-  // per-husk integrity (huskIntegrityFrac 0.10) is balanced around successive waves, not one
-  // trio; a single trio can't drain the pool to the merge alone, so a fresh wave rises until
-  // the pool crosses the threshold (then the merge beat takes over, phase 2, no more waves).
-  if (boss.phase < 2 && boss.windowAddIds.length === 0 && e.spawnTimer === 0 && a.move !== "merge" && !boss.roar) {
+  // Raise the trio ONCE (ONE-WAY / monotonic kill-order puzzle, per the design owner): raised
+  // on the first opportunity and never again in P1. As each husk dies it stays dead
+  // (3-husk -> shield-dead -> heal-dead -> merge); there is NO respawn / re-gate / rotation.
+  if (boss.phase < 2 && !boss.huskRaised && e.spawnTimer === 0 && a.move !== "merge" && !boss.roar) {
     quorumSpawnHusks(w, e, ev);
+    boss.huskRaised = true;
   }
 
   // The husks share the pool: mirror the core HP onto every live husk (the bar + tether read
   // the ONE pool), and the HEAL husk regenerates the pool while it lives (undo lazy chip).
   const liveHusks: Enemy[] = [];
   let isHealAlive = false;
+  let isShieldAlive = false;
   for (const id of boss.windowAddIds) {
     const h = w.enemies.find((o) => !o.dead && o.id === id);
     if (!h) continue;
     liveHusks.push(h);
     if (h.kind === "quorum_heal") isHealAlive = true;
+    if (h.kind === "quorum_shield") isShieldAlive = true;
   }
+  // The SHIELD husk is the core's guard: while it lives the core is guarded (untargetable +
+  // chipped); the instant it dies the core is EXPOSED for the rest of P1 (monotonic — it never
+  // re-guards). Before the raise the guard is up (the trio is about to rise).
+  if (boss.phase < 2) boss.huskGuardUp = !boss.huskRaised || isShieldAlive;
   if (boss.phase < 2 && isHealAlive && !boss.roar && e.hp < e.maxHp) {
     e.hp = Math.min(e.maxHp, e.hp + QUORUM.healRegenPerSec * dt);
   }
@@ -8330,9 +8342,19 @@ function quorumDamageHusk(w: WorldState, by: PlayerId | null, husk: Enemy, dmg: 
   husk.aux = Math.max(0, Math.min(1, husk.affixState / integrity));
   if (husk.affixState <= 0 && !husk.dead) {
     husk.dead = true;
-    // The tether snaps + recoils on a husk's death (the client render reads the missing body).
-    ev.push({ t: "puff", x: husk.x, y: husk.y, n: 7, color: ENEMY_ARCHETYPES[husk.kind].tint });
-    ev.push({ t: "cue", name: "enemyHit", x: husk.x, y: husk.y, rate: 0.7, gain: 0.7, trauma: 0.06 });
+    if (husk.kind === "quorum_shield" && boss.phase < 2) {
+      // SHIELD DOWN — the one-time TETHER-SNAP beat: the guard beams whip loose (the client
+      // reads the missing shield husk), the core is EXPOSED for the rest of P1, and it lands as
+      // a punchy beat (violent recoil + bone-cyan node flash + real shake — a tier below the
+      // merge, above a standard expose). Fires exactly once (the shield dies once, no respawn).
+      boss.huskGuardUp = false;
+      ev.push({ t: "puff", x: husk.x, y: husk.y, n: 14, color: "#bfeef0" });
+      ev.push({ t: "cue", name: "bossSpawn", x: core.x, y: core.y, rate: 0.5, gain: 0.9, trauma: 0.16 });
+    } else {
+      // The tether snaps + recoils on a husk's death (the client render reads the missing body).
+      ev.push({ t: "puff", x: husk.x, y: husk.y, n: 7, color: ENEMY_ARCHETYPES[husk.kind].tint });
+      ev.push({ t: "cue", name: "enemyHit", x: husk.x, y: husk.y, rate: 0.7, gain: 0.7, trauma: 0.06 });
+    }
     // R-framework SURPLUS: a husk break BREAKS OFF a SPLINTER wave carrying its role (per-P
     // cap, paced by the wave interval that tightens 6.0s → 3.0s with R). The merge-form
     // (phase 2) breaks off none — its final window is ungated by R.

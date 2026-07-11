@@ -1408,6 +1408,9 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // into boss.exposed so the client's guard/expose art reads the SAME flag as the damage
         // gate (isBossExposed). The bank + mechanic id lists are sim-internal and never travel.
         exposed: w.aux, windowBank: 0, windowAddIds: [], laneKnotId: 0, lastAddPick: -1, mirrorFamily: w.mfm,
+        // Husk lifecycle flags are sim-internal spawn/guard bookkeeping (the client reads husk
+        // liveness off the husks' own wires); defaulted on the render-only reconstruction.
+        huskRaised: false, huskGuardUp: true,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
       }
       : null,

@@ -179,6 +179,14 @@ export interface BossState {
   // Fair surprise §1: the add pool's previous draw index (-1 = none yet) — weighted
   // selection never repeats the exact entry twice in a row, so waves can't be rote.
   lastAddPick: number;
+  // QUORUM only, P1 husk lifecycle (ONE-WAY / monotonic): the three husks are raised ONCE and
+  // never respawn — as each dies it stays dead (3-husk -> shield-dead -> heal-dead -> merge).
+  //  - huskRaised: the trio has been raised (gates the single spawn; never re-raise in P1);
+  //  - huskGuardUp: the SHIELD husk still guards the core (its beams ARE the guard). Flips
+  //    permanently false when the shield husk dies — the core is then EXPOSED (targetable +
+  //    full damage) and the fight drains it monotonically to the merge. No "shield came back".
+  huskRaised: boolean;
+  huskGuardUp: boolean;
   // JET only: the current MIRROR salvo's lead Resonance-family index (into RESONANCE_FAMILIES),
   // or -1 when the current commitment isn't a mirror salvo. Rides the wire (EnemyWire.mfm) so the
   // client draws the copied weapon's SHAPE (fan/lane/ring/parabola/wedge) and its OWN family hue

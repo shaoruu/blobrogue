@@ -5550,7 +5550,11 @@ export class Game {
       // beams in renderQuorumTether are the taut-guarded / snapped-exposed read up to the merge.
       if (e.kind === "quorum" && (e.boss?.phase ?? 1) < 2) {
         this.renderQuorumTether(e);
-        continue;
+        // ONE-WAY guard: the core is hidden ONLY while the SHIELD husk lives (it IS the guard).
+        // Once the shield husk dies the tether beams have snapped and the core is EXPOSED — draw
+        // the (now targetable) core body below so the player can see what to shoot.
+        const isShieldAlive = this.enemies.some((o) => !o.dead && o.kind === "quorum_shield");
+        if (isShieldAlive) continue;
       }
       // The Weaver airborne: no body to shoot — just the falling shadow on its landing mark.
       if (e.kind === "weaver" && a.move === "pounce" && a.phase === "active") {
@@ -6462,6 +6466,20 @@ export class Game {
         ctx.lineTo(h.x - cam.x, h.y - cam.y);
         ctx.stroke();
       }
+    }
+    // The HEAL husk feeds the shared pool (healRegenPerSec): a faint pulse travels heal-husk ->
+    // core so "kill the healer or the pool refills" reads at a glance while it lives.
+    const heal = husks.find((h) => h.kind === "quorum_heal") ?? null;
+    if (heal) {
+      const flow = (this.animClock * 0.8) % 1; // a bead traveling toward the core
+      const hx = heal.x - cam.x, hy = heal.y - cam.y, ccx = core.x - cam.x, ccy = core.y - cam.y;
+      ctx.globalAlpha = 0.35 + 0.2 * Math.sin(this.animClock * 5);
+      ctx.strokeStyle = "#d8b6e0"; // the heal husk's family tint
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(ccx, ccy); ctx.stroke();
+      ctx.globalAlpha = 0.8;
+      ctx.fillStyle = "#f0d8f6";
+      ctx.beginPath(); ctx.arc(hx + (ccx - hx) * flow, hy + (ccy - hy) * flow, 3, 0, 6.28); ctx.fill();
     }
     ctx.restore();
   }
