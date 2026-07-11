@@ -33,17 +33,23 @@ export const SHEETS: Partial<Record<string, SheetDef>> = {
   // LAYERED_HERO_BASE_WALK_SRC): drawChar infers the frame count/size from the sheet, so the
   // AD's final walk PNG is a drop-in at the registered path with no code change.
   "hero_bald.walk": { src: LAYERED_HERO_BASE_WALK_SRC, fps: 10 },
-  // The companion doggie's trot cycle (META spec §3). A swappable placeholder like the hero
-  // sheets — the AD drops the final walk strip at this path with no code change; a missing
-  // sheet cleanly falls back to the static idle PNG below (drawChar infers frame count/size).
+  // The companion pets' animation contract (META spec §3 + the pet game-feel pass). Each pet
+  // gets two horizontal N-frame strips, 64px tall, frame count INFERRED from width (never
+  // hardcoded — the AD ships a 4-frame idle and a 6-frame run and both drop in with no code
+  // change): a RUN strip played while trotting, and an IDLE strip (a gentle breathe/bob loop)
+  // played when settled. Both are swappable placeholders like the hero sheets. Graceful
+  // fallback ladder (see game.ts renderPets): a missing RUN strip -> the static base PNG +
+  // procedural squash; a missing IDLE strip -> the static base PNG + a procedural breathe (so
+  // a settled pet is never a dead frame). The slime companion registers under "slime_pet" so
+  // it never collides with the "slime" ENEMY sheets above.
   "doggie.walk": { src: "/sprites/pets/doggie_walk.png", fps: 9 },
-  // The cat + baby dragon + baby slime share the doggie's companion contract: a 4-frame 256x64
-  // walk strip (frame 0 = idle/sit), falling back to the static idle PNG below if a sheet is
-  // missing. The slime companion registers under "slime_pet" so it never collides with the
-  // "slime" ENEMY sheet above.
+  "doggie.idle": { src: "/sprites/pets/doggie_idle.png", fps: 5 },
   "cat.walk": { src: "/sprites/pets/cat_walk.png", fps: 9 },
+  "cat.idle": { src: "/sprites/pets/cat_idle.png", fps: 5 },
   "dragon.walk": { src: "/sprites/pets/dragon_walk.png", fps: 9 },
+  "dragon.idle": { src: "/sprites/pets/dragon_idle.png", fps: 5 },
   "slime_pet.walk": { src: "/sprites/pets/slime_walk.png", fps: 9 },
+  "slime_pet.idle": { src: "/sprites/pets/slime_idle.png", fps: 5 },
   "slime.walk": { src: "/sprites/slime_walk.png", fps: 10 },
   "bat.walk": { src: "/sprites/bat_walk.png", fps: 12 },
   "skeleton.walk": { src: "/sprites/skeleton_walk.png", fps: 11 },
