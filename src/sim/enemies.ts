@@ -295,44 +295,44 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   // (64px body). Casts its frozen archetype MIRROR pool; spent after each salvo (§5g).
   jet: {
     kind: "jet", sprite: "jet", movement: "boss", isPhasing: false,
-    radius: 22, drawSize: 76, alpha: 1, tint: "#7882aa", kbResist: 6,
+    radius: 22, drawSize: 96, alpha: 1, tint: "#7882aa", kbResist: 6, // AD presence bump 76→96
     baseHp: JET.baseHp, baseSpeed: 96, touchDamage: JET.contactDamage, threat: 0,
   },
   // THE TITHE (F40): the low/wide armored feeder — builds a slab and re-armors behind it (§5h).
   tithe: {
     kind: "tithe", sprite: "tithe", movement: "boss", isPhasing: false,
-    radius: 40, drawSize: 96, alpha: 1, tint: "#c77320", kbResist: 9,
+    radius: 40, drawSize: 104, alpha: 1, tint: "#c77320", kbResist: 9, // AD presence bump 96→104
     baseHp: TITHE.baseHp, baseSpeed: 30, touchDamage: TITHE.contactDamage, threat: 0,
   },
   // The Tithe's SEPARATE feeding slab: a stationary 2-state destructible (reads as
   // architecture). Not the feeder — a mechanic body like the Weaver's knot/sac.
   tithe_slab: {
     kind: "tithe_slab", sprite: "tithe_slab", movement: "chase", isPhasing: false,
-    radius: 26, drawSize: 84, alpha: 1, tint: "#c77320", kbResist: 100,
+    radius: 26, drawSize: 91, alpha: 1, tint: "#c77320", kbResist: 100, // scales with the feeder (84→91, ×104/96)
     baseHp: TITHE.slabBaseHp, baseSpeed: 0, touchDamage: 0, threat: 0,
   },
   // QUORUM (F45): the merge-form CORE — untargetable behind its husks until the merge,
   // then the fused body with its own window. Its sprite is the merge-form (§5i).
   quorum: {
     kind: "quorum", sprite: "quorum", movement: "boss", isPhasing: false,
-    radius: 30, drawSize: 100, alpha: 1, tint: "#e8e2d0", kbResist: 8,
+    radius: 30, drawSize: 112, alpha: 1, tint: "#e8e2d0", kbResist: 8, // AD presence bump 100→112
     baseHp: QUORUM.baseHp, baseSpeed: 40, touchDamage: QUORUM.contactDamage, threat: 0,
   },
   // The three role-husks (bone family). They share the core's pool + telegraph; roles
-  // gate kill-order (shield guards, heal regens, dmg attacks). Directional 80px bodies.
+  // gate kill-order (shield guards, heal regens, dmg attacks). Directional 86px bodies (AD 80→86).
   quorum_shield: {
     kind: "quorum_shield", sprite: "quorum_shield", movement: "chase", isPhasing: false,
-    radius: 22, drawSize: 80, alpha: 1, tint: "#cfc8b6", kbResist: 6,
+    radius: 22, drawSize: 86, alpha: 1, tint: "#cfc8b6", kbResist: 6,
     baseHp: 1, baseSpeed: 44, touchDamage: 1, threat: 0,
   },
   quorum_heal: {
     kind: "quorum_heal", sprite: "quorum_heal", movement: "chase", isPhasing: false,
-    radius: 22, drawSize: 80, alpha: 1, tint: "#d8b6e0", kbResist: 6,
+    radius: 22, drawSize: 86, alpha: 1, tint: "#d8b6e0", kbResist: 6,
     baseHp: 1, baseSpeed: 48, touchDamage: 1, threat: 0,
   },
   quorum_dmg: {
     kind: "quorum_dmg", sprite: "quorum_dmg", movement: "chase", isPhasing: false,
-    radius: 22, drawSize: 80, alpha: 1, tint: "#e0cdb6", kbResist: 6,
+    radius: 22, drawSize: 86, alpha: 1, tint: "#e0cdb6", kbResist: 6,
     baseHp: 1, baseSpeed: 56, touchDamage: 1, threat: 0,
   },
   // The Tithe's TRIBUTE (surplus add): a slow amber-glob crawler that shuffles toward the
