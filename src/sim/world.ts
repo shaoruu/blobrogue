@@ -7423,6 +7423,12 @@ function jetRecoverFor(move: AttackMove): number {
 // reinforce it (updateTitheTribute), threatening slab-break PROGRESS, not the player.
 const TITHE_FEED_ADD: AddPoolEntry = { kind: "tithe_tribute", tier: "swarm", weight: 1, maxAlive: 0, count: 1 };
 
+// JET tracer-snap mote count (balancer FINAL): round((R−1)/1.5) capped — 0 solo / 1 2p /
+// 2 3p / 3 4p (a co-op dash-punish; solo JET is mirror-focused, so solo picks a salvo instead).
+function jetTracerMotes(w: WorldState): number {
+  return Math.min(Math.round((w.encounterPower - 1) / JET.tracerMoteDivR), JET.tracerMoteCap);
+}
+
 function updateJet(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   const boss = e.boss;
   if (!boss) return;
@@ -7464,6 +7470,9 @@ function jetBeginAttack(w: WorldState, e: Enemy, ev: SimEvent[]): void {
   } else {
     move = (["tracer", "rush", "beam"] as const)[((boss.attackCount / 2) | 0) % 3];
   }
+  // The tracer-snap is a CO-OP dash-punish (0 motes at solo): solo JET fires the mirror
+  // salvo instead of a no-op tracer beat, so it never stalls into an empty telegraph.
+  if (move === "tracer" && jetTracerMotes(w) <= 0) move = "mirror";
   beginWindup(e, move);
   ev.push({ t: "cue", name: move === "mirror" ? "enemyHit" : "enemyAttack", x: e.x, y: e.y, rate: 0.5, gain: 0.7, trauma: 0 });
 }
@@ -7517,7 +7526,7 @@ function jetActive(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
     // The motes hover for the snap delay (the "dash late" read), then SNAP to the locked
     // mark from converging bearings — a player still on the mark is caught.
     if (a.time >= JET.tracerSnapDelay) {
-      const n = bossAddCapFor(JET.tracerCountFor[w.encounterPlayers] ?? 3, w.encounterPower);
+      const n = jetTracerMotes(w);
       const base = Math.atan2(a.markY - e.y, a.markX - e.x);
       for (let i = 0; i < n; i++) {
         const off = (i - (n - 1) / 2) * 0.14;
@@ -7880,9 +7889,10 @@ function titheHurl(w: WorldState, e: Enemy, ev: SimEvent[]): void {
 }
 
 // TRIBUTE (surplus add): a slow amber crawler that shuffles toward the nearest feeding SLAB
-// and REINFORCES it on contact (thickens it, then is consumed) — it threatens slab-break
-// PROGRESS, not the player (touchDamage 0). At 4p the party must divide labor: intercept
-// tributes while others break the slab. If no slab stands it just mills (harmless).
+// and, once adjacent, REPAIRS it at a steady 6 HP/s (undoing the party's slab-break) for as
+// long as it lives — it threatens slab-break PROGRESS, not the player (touchDamage 0). At 4p
+// the party must divide labor: INTERCEPT (kill) tributes while others break the slab; ignore
+// them and the repair outpaces the break. If no slab stands it just mills (harmless).
 function updateTitheTribute(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void {
   if (e.spawnTimer > 0) return; // spawn grace: the omen already stood as the tell
   let slab: Enemy | null = null;
@@ -7892,17 +7902,16 @@ function updateTitheTribute(w: WorldState, e: Enemy, dt: number, ev: SimEvent[])
     const d = Math.hypot(o.x - e.x, o.y - e.y);
     if (d < bestD) { bestD = d; slab = o; }
   }
-  if (!slab) { // nothing to reinforce — drift with the party, harmless
+  if (!slab) { // nothing to repair — drift with the party, harmless
     if (findTarget(w, e.x, e.y)) applyChaseStep(w, e, dt, chaseAngle(w, e), e.speed * dt);
     return;
   }
   if (bestD <= e.radius + slab.radius + 2) {
-    const boost = titheSlabHpForFloor(w.floor, w.encounterPlayers) * TITHE.tributeReinforceFrac;
-    slab.hp += boost;
-    slab.maxHp = Math.max(slab.maxHp, slab.hp); // thicken (the reinforced slab reads fuller)
-    e.dead = true;
-    ev.push({ t: "puff", x: e.x, y: e.y, n: 5, color: ENEMY_ARCHETYPES.tithe_tribute.tint });
-    ev.push({ t: "cue", name: "enemyHit", x: slab.x, y: slab.y, rate: 0.5, gain: 0.6, trauma: 0.03 });
+    // Parked at the slab: repair it (heal toward its max) at the steady rate while alive.
+    if (slab.hp < slab.maxHp) {
+      slab.hp = Math.min(slab.maxHp, slab.hp + TITHE.tributeRepairPerSec * dt);
+      ev.push({ t: "cue", name: "enemyHit", x: slab.x, y: slab.y, rate: 0.6, gain: 0.4, trauma: 0 });
+    }
     return;
   }
   applyChaseStep(w, e, dt, Math.atan2(slab.y - e.y, slab.x - e.x), e.speed * dt);
