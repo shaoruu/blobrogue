@@ -8150,10 +8150,12 @@ function quorumSpawnHusks(w: WorldState, core: Enemy, ev: SimEvent[]): void {
     boss.windowAddIds.push(husk.id);
     ev.push({ t: "enemySpawn", eid: husk.id, kind: husk.kind, tier: husk.tier, x: husk.x, y: husk.y });
   }
-  // The tether-REFORM beat (the inverse of the SNAP): the guard beams re-establish as the fresh
-  // trio raises — a LIGHT repeatable accent ("shield's back, kill-order reset"), not a screen-punch.
-  ev.push({ t: "puff", x: core.x, y: core.y, n: 6, color: "#bfeef0" });
-  ev.push({ t: "cue", name: "enemyAttack", x: core.x, y: core.y, rate: 0.6, gain: 0.65, trauma: 0.04 });
+  // The tether-REFORM beat (the inverse of the SNAP): the severed shared body REKNITS itself —
+  // relentless/menacing, NOT a triumphant "reset" (the pool HP persists across cycles, so the
+  // low bar is the honest progress read). A LIGHT quiet cue only; the inward-pulling reknit
+  // visual is client-drawn (renderQuorumTether), kept dim + subordinate to the HP bar. The
+  // merge stays the sole big screen-punch.
+  ev.push({ t: "cue", name: "enemyAttack", x: core.x, y: core.y, rate: 0.55, gain: 0.55, trauma: 0.03 });
 }
 
 function quorumRecoverFor(move: AttackMove, phase: number): number {
