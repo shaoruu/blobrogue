@@ -407,8 +407,8 @@ export const WEAPONS: Record<WeaponId, Weapon> = {
   // TAX A MARKED BODY: every round stamps shock (amp + arc) on one target. A precise
   // single-lane shocker — the shock does the work the modest slug can't.
   arcbolt: {
-    id: "arcbolt", name: "Arcbolt", rarity: "rare", fireCd: 0.28, speed: 460, life: 0.5,
-    damage: 2.9, pellets: 1, spread: 0.05, bulletRadius: 5, color: "#7fe9ff", muzzle: 2,
+    id: "arcbolt", name: "Arcbolt", rarity: "rare", fireCd: 0.26, speed: 440, life: 0.48,
+    damage: 2.4, pellets: 1, spread: 0.05, bulletRadius: 5, color: "#7fe9ff", muzzle: 2,
     shock: 2,
     special: "Every round shocks (extra damage, then arcs to a neighbour) — short range.",
   },
