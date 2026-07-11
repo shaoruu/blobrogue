@@ -467,6 +467,13 @@ export function weaponIconSrc(id: WeaponId): string | null {
   return PICKUP_SOURCES[id] ?? null;
 }
 
+// The registered held-overlay source path for a weapon (or null if it has no hook). Mirrors
+// weaponIconSrc: a weapon without an entry falls back procedurally at draw time. Exposed so
+// content tests can assert a new weapon registered its held_<id>.png art hook.
+export function heldWeaponSrc(id: WeaponId): string | null {
+  return HELD_SOURCES[id] ?? null;
+}
+
 export class Sprites {
   private images = new Map<SpriteName, HTMLImageElement>();
   private tintCache = new Map<string, HTMLCanvasElement>();

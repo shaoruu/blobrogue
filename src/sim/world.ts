@@ -3206,16 +3206,18 @@ function implodeBullet(w: WorldState, b: Bullet, x: number, y: number, ev: SimEv
     }, ev);
     (b.hitList ??= []).push(e);
   }
-  // The Singularity's SECOND stage: the collapse point births a short-fused friendly nova
-  // blast. It sits stationary for a beat while the implosion knockback clumps the pack, then
-  // detonateBullet resolves it on the clump (a fresh hitList, so the nova is its own hit —
-  // never a double-dip with the implosion above). An ordinary blast bullet: no wire field,
-  // no new client render path, and it culls itself on detonation.
+  // The Singularity's SECOND stage: the collapse point births a short-fused friendly nova.
+  // It rides the isLob path (like a Breach shell) so it SAILS OVER bodies during its fuse —
+  // detonating only when the fuse expires (updateBullets' end-of-life blast branch), never on
+  // contact with the body already sitting on the point. That fuse is the beat the implosion
+  // knockback uses to clump the pack; the blast then lands on the clump with a fresh hitList
+  // (its own hit, never a double-dip). An ordinary blast bullet otherwise: no wire field, no
+  // new client render path, and it culls itself on detonation.
   if (b.nova !== undefined && b.nova > 0) {
     w.bullets.push({
       x, y, vx: 0, vy: 0, radius: 4, life: C.NOVA_FUSE, friendly: true, owner: b.owner,
       damage: b.damage, color: b.color, pierce: 0, hitList: null, isCrit: b.isCrit,
-      critX: b.critX, bossCoef: b.bossCoef, blast: b.nova, fx: b.fx,
+      critX: b.critX, bossCoef: b.bossCoef, blast: b.nova, isLob: true, fx: b.fx,
       burn: b.burn, chill: b.chill, shock: b.shock,
     });
   }
