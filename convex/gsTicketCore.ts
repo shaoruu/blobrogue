@@ -31,6 +31,7 @@ export interface GsTicketPayload {
   fc?: string;  // cosmetic face id (visual-only)
   kt?: string;  // chosen KIT id (validated at mint against the account's Mastery unlocks)
   ml?: number;  // account MASTERY level (the game server re-gates kt against it)
+  pt?: string;  // cosmetic companion pet id (visual-only; see src/sim/camp_nodes.ts)
 }
 
 // Optional identity/room claims for a mint. Field names are the long-form of the wire keys.
@@ -42,6 +43,7 @@ export interface GsTicketClaims {
   face?: string;
   kit?: string;
   masteryLevel?: number;
+  pet?: string;
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
@@ -70,7 +72,7 @@ function b64urlFromBytes(bytes: Uint8Array): string {
 
 // Mint a signed ticket valid for ttlSecs. Deterministic w.r.t. nowMs so the agreement test can
 // assert byte equality against the server's Node-crypto mint. Claims append in the FIXED key
-// order pid, exp, wld, nm, cl, ht, fc, kt, ml — the byte contract with server/src/auth.ts mintTicket.
+// order pid, exp, wld, nm, cl, ht, fc, kt, ml, pt — the byte contract with server/src/auth.ts mintTicket.
 export async function mintGsTicket(
   secret: string,
   playerId: string,
@@ -86,6 +88,7 @@ export async function mintGsTicket(
   if (claims.face !== undefined) payload.fc = claims.face;
   if (claims.kit !== undefined) payload.kt = claims.kit;
   if (claims.masteryLevel !== undefined) payload.ml = claims.masteryLevel;
+  if (claims.pet !== undefined) payload.pt = claims.pet;
   const enc = new TextEncoder();
   const body = "v1." + b64urlFromBytes(enc.encode(JSON.stringify(payload)));
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

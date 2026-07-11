@@ -56,9 +56,15 @@ export default defineSchema({
     // intact). Granted every run from run performance (floors/bosses/depth). Optional: pre-
     // mastery rows read 0 (account level 1 -> Gunner + Mender unlocked).
     masteryXp: v.optional(v.number()),
-    // Earned cosmetic/unlock ids. Seeded [] since day one; recordRun grants earned
-    // cosmetics into it (see cosmeticsCore.earnedCosmeticsFor).
+    // Earned cosmetic/unlock ids AND owned meta-progression ids (WAVE 1): recordRun grants
+    // earned cosmetics; buyNode grants owned Amber Camp node ids (camp_/pet_/stash_/coin_
+    // prefixes, see src/sim/camp_nodes.ts); first-boss grants add bosskill:<kind> flags. All
+    // disjoint namespaces sharing this one list. Seeded [] since day one.
     unlocks: v.array(v.string()),
+    // The equipped cosmetic COMPANION pet id (WAVE 1, META spec §3), or absent for none. A
+    // pure visual-only companion — it rides the wire like a hat/face label and never enters
+    // the sim. Only a pet the player OWNS (via an owned companion node) is ever written.
+    equippedPet: v.optional(v.string()),
     createdAt: v.number(),
     lastSeen: v.number(),
   })
