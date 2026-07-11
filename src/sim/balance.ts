@@ -1703,7 +1703,7 @@ export const QUORUM = {
   baseHp: 800,            // the SHARED pool (calibrated on exposed time)
   baseHpFloor: 45,
   guardMult: 0.12,        // pool GUARDED (near-HARD gate) on a non-priority husk / merge-closed (balancer FINAL: 0.30 → 0.12; even-nuke can't skip the kill-order)
-  windowBankFrac: 0.20,   // 0.40 → 0.20: crossing the merge threshold needs ≥2 windows (balancer tighten)
+  windowBankFrac: 0.22,   // 0.40 → 0.22: the merge-form's windows already clear ≥2/phase, so it holds the default (only JET/TITHE needed the 0.20 tighten)
   contactDamage: 2,
   entranceGrace: 1.4,
   // Husks: 3 role bodies orbiting the core, sharing the pool.
