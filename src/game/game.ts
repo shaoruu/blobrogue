@@ -444,6 +444,24 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
   hurl: "#c98b5a",    // the Tithe hurls its slab: heavy amber stone
 };
 
+// BOSS TELEGRAPH RENDER CONTRACT (docs/specs/blobrogue_TELEGRAPH_RENDER_CONTRACT.md +
+// _GEOMETRY.md + _PARAM_DEFAULTS.md). The reworked boss attacks decompose into reusable
+// parametric primitives drawn on the GROUND PLANE (under sprites) in a RESERVED register
+// (never bullet/player-FX colors): a family-hue FILL (which boss) + a universal hot danger
+// EDGE (this HURTS). Safe pockets are NEVER painted — clear floor IS the safe read. FIXED
+// tells are crisp from cast; DYNAMIC (aim-locking) tells follow the target with a soft edge,
+// then SNAP crisp + flash on the AUTHORITATIVE isAimLocked commit (never an art timer).
+const TG_DANGER_EDGE = "#ff6a3b";   // universal hot danger hatch/edge ("dodge this")
+const TG_FILL_ALPHA = 0.26;          // family-hue fill (§R2 ~0.22-0.30)
+const TG_POCKET_MIN = 64;            // HARD rule: a computed safe pocket never closes below this
+const TG_ARENA_LEN = 1100;           // "full arena length" for beam/lance lanes (covers the view)
+// Family FILL hue per boss (Jet cold-indigo / Tithe amber / Quorum bone-cyan). Value+edge+shape
+// carry the read in 4p chaos, never hue alone; the aura ring (renderBossAura) is the low-sat
+// ambient twin of these.
+function tgFamilyHue(kind: EnemyKind): string {
+  return kind === "jet" ? "#5b63d6" : kind === "tithe" ? "#e6952f" : "#7fd6da";
+}
+
 // The elite affix's ground-ring accent (derived from kind — the affix table is pure sim
 // data, so the client can color the tell without any extra wire state).
 const AFFIX_RING_COLOR: Record<EliteAffix, string> = {
@@ -806,6 +824,11 @@ export class Game {
   private raf = 0;
   private runStart = 0;
   private animClock = 0; // wall-clock seconds for prop/ambient animation (torch, portal)
+  // Boss telegraph aim-lock flash tracker, keyed by enemy id: the DYNAMIC soft->crisp SNAP
+  // fires on the rising edge of the AUTHORITATIVE isAimLocked commit (never an art timer), so
+  // players learn the real juke window. flashUntil is a short wall-clock deadline for the one
+  // bright edge-pop the frame it locks.
+  private tgLock = new Map<number, { locked: boolean; flashUntil: number }>();
   // Prism Sentry render state, keyed by the (stable) server effect id. The wire carries no
   // aim/fireCd for a sentry, so the turret's barrel tracks the last-fired direction and the
   // recoil kick is driven off the sentryShot event's timestamp (animClock at fire) — a live,
@@ -5546,7 +5569,7 @@ export class Game {
 
       // A worker's build tell previews the EXACT construction footprint (the sim's own
       // site geometry): green rising markers where the divider / L-corner will stand.
-      if (a.move === "build" && isWindup) this.renderBuildFootprint(e);
+      if (a.move === "build" && isWindup && !isBossKind(e.kind)) this.renderBuildFootprint(e);
       // Ground danger marker for the boss hop-slam (drawn under everything).
       if (isHopSlam && (isWindup || a.phase === "active")) this.renderSlamMarker(e);
       // The shrinking safe-ring of the boss arena squeeze.
@@ -5570,6 +5593,11 @@ export class Game {
       // while GUARDED, drained + desaturated while EXPOSED). State = the authoritative aux
       // flag off the wire, never authored client-side.
       if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum") this.renderBossAura(e, sx, sy, drawSize);
+      // The reworked boss attacks' authoritative footprints (reusable parametric primitives),
+      // drawn on the ground plane UNDER the body during their windup + active beats.
+      if (this.isBossTelegraphMove(e) && (isWindup || a.phase === "active")) this.renderBossTelegraph(e, sx, sy);
+      // The shield husk's persistent LOS-blocking barrier (drawn under the body while it lives).
+      if (e.kind === "quorum_shield") this.renderShieldBarrier(e, sx, sy);
 
       // Ghost solidify reads as an opacity ramp; the Choir mid-fade is barely there;
       // everyone else uses the archetype alpha.
@@ -5680,8 +5708,9 @@ export class Game {
       if (e.kind === "ghost" && a.windup > 0.05 && a.windup < 0.98) this.renderGhostShimmer(e, sx, sy);
       // The Choir mid-fade shimmers like its wisp kin (intangible — hold your fire).
       if (e.kind === "choir" && a.move === "fade" && a.phase === "active") this.renderGhostShimmer(e, sx, sy);
-      // Aura + aim line for a charging attack.
-      if (isWindup) this.renderTelegraph(e, sx, sy);
+      // Aura + aim line for a charging attack (the reworked boss moves draw their dedicated
+      // ground-plane footprints above instead, so skip the generic aura for them).
+      if (isWindup && !this.isBossTelegraphMove(e)) this.renderTelegraph(e, sx, sy);
 
       const barW = isBoss ? 64 : 32;
       const barY = sy - drawSize / 2 - 8;
@@ -6703,6 +6732,350 @@ export class Game {
       ctx.setLineDash(AIM_SOLID);
       ctx.restore();
     }
+  }
+
+  // ---- BOSS TELEGRAPH RENDERER (reusable parametric primitives) ----
+  // Which (kind, move) pairs the dedicated boss telegraph owns (so the generic aura is skipped
+  // for them and no footprint is double-drawn). merge = fuse VFX only (no danger footprint);
+  // roar = the transition beat; build = the feed window (its own slab-raise tell).
+  private isBossTelegraphMove(e: Enemy): boolean {
+    const m = e.attack.move;
+    if (e.kind === "jet") return m === "mirror" || m === "tracer" || m === "rush" || m === "beam";
+    if (e.kind === "tithe") return m === "slam" || m === "spew" || m === "hurl" || m === "radial" || m === "spin" || m === "build";
+    if (e.kind === "quorum") return m === "beam" || m === "sweep" || m === "volley" || m === "radial";
+    return false;
+  }
+
+  // One shape, drawn to the contract: family-hue FILL (which boss) + hot danger EDGE (dodge).
+  // A DYNAMIC-and-not-yet-locked tell draws a SOFT dashed edge (juke window open); a FIXED or
+  // LOCKED tell draws a CRISP solid edge; the lock frame adds one bright snap-flash. Lingering
+  // post-fire fill is dimmer. The caller only ever paints the DANGER area — safe pockets stay
+  // clear floor (§R3).
+  private tgShape(pathFn: () => void, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; snapFlash?: number; fillAlpha?: number; dashed?: boolean; fillRule?: CanvasFillRule }): void {
+    const { ctx } = this;
+    const linger = o.linger ?? 1;
+    ctx.save();
+    ctx.beginPath(); pathFn();
+    ctx.globalAlpha = (o.fillAlpha ?? TG_FILL_ALPHA) * linger;
+    ctx.fillStyle = hue;
+    ctx.fill(o.fillRule ?? "nonzero");
+    const soft = (o.dynamic && !o.locked) || (o.dashed ?? false);
+    ctx.globalAlpha = (soft ? 0.5 : 0.9) * linger;
+    ctx.strokeStyle = TG_DANGER_EDGE;
+    ctx.lineWidth = soft ? 2 : 3.5;
+    ctx.setLineDash(soft ? AIM_DASH : AIM_SOLID);
+    ctx.beginPath(); pathFn(); ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    if (o.snapFlash && o.snapFlash > 0) {
+      ctx.globalAlpha = o.snapFlash * 0.9;
+      ctx.strokeStyle = "#fff3c4";
+      ctx.lineWidth = 5;
+      ctx.beginPath(); pathFn(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 1. LANE (capsule): beams, lances, slab lanes, charges, recoil walls, dmg-husk shots.
+  private tgLane(sx: number, sy: number, angle: number, length: number, width: number, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; snapFlash?: number; back?: number; dashed?: boolean }): void {
+    const dx = Math.cos(angle), dy = Math.sin(angle), nx = -dy, ny = dx, hw = width / 2;
+    const back = o.back ?? 0;
+    const x0 = sx - dx * back, y0 = sy - dy * back, x1 = sx + dx * length, y1 = sy + dy * length;
+    this.tgShape(() => {
+      const { ctx } = this;
+      ctx.moveTo(x0 + nx * hw, y0 + ny * hw);
+      ctx.lineTo(x1 + nx * hw, y1 + ny * hw);
+      ctx.lineTo(x1 - nx * hw, y1 - ny * hw);
+      ctx.lineTo(x0 - nx * hw, y0 - ny * hw);
+      ctx.closePath();
+    }, hue, o);
+  }
+
+  // 2. WEDGE (filled cone): the mirrored melee/cone copy. Safe = the flanking arcs (unpainted).
+  private tgWedge(sx: number, sy: number, angle: number, halfAngle: number, range: number, hue: string, o: { locked: boolean; dynamic: boolean; snapFlash?: number }): void {
+    this.tgShape(() => {
+      const { ctx } = this;
+      ctx.moveTo(sx, sy);
+      ctx.arc(sx, sy, range, angle - halfAngle, angle + halfAngle);
+      ctx.closePath();
+    }, hue, o);
+  }
+
+  // 3. FAN (N sub-lanes): the spread copy. Safe = the gaps between shards (never painted).
+  private tgFan(sx: number, sy: number, angle: number, count: number, gap: number, shardW: number, range: number, hue: string, o: { locked: boolean; dynamic: boolean; snapFlash?: number }): void {
+    for (let i = 0; i < count; i++) {
+      const a = angle + (i - (count - 1) / 2) * gap;
+      this.tgLane(sx, sy, a, range, shardW, hue, o);
+    }
+  }
+
+  // 4. ARC_PARABOLA (dotted): the lobbed-orb copy — dotted arc to the first landing marker.
+  private tgArcParabola(sx: number, sy: number, lx: number, ly: number, hue: string): void {
+    const { ctx } = this;
+    const mx = (sx + lx) / 2, my = (sy + ly) / 2 - Math.hypot(lx - sx, ly - sy) * 0.4;
+    ctx.save();
+    ctx.globalAlpha = 0.7;
+    ctx.strokeStyle = hue;
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([4, 7]);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.quadraticCurveTo(mx, my, lx, ly); ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
+    this.tgImpactDiscs([{ x: lx, y: ly }], 36, hue, { locked: true, dynamic: false });
+  }
+
+  // 5. TRACK_DISC (lock-flip): the tracer's homing mote — HOLLOW while tracking, SOLID + a
+  // bright snap-ring the frame it locks. THE lock primitive; the snap = "dash now."
+  private tgTrackDisc(sx: number, sy: number, radius: number, locked: boolean, hue: string, snapFlash: number): void {
+    const { ctx } = this;
+    ctx.save();
+    if (locked) {
+      ctx.globalAlpha = TG_FILL_ALPHA + 0.14;
+      ctx.fillStyle = hue;
+      ctx.beginPath(); ctx.arc(sx, sy, radius, 0, 6.28); ctx.fill();
+    }
+    ctx.globalAlpha = locked ? 0.9 : 0.5;
+    ctx.strokeStyle = TG_DANGER_EDGE;
+    ctx.lineWidth = locked ? 3.5 : 2;
+    ctx.setLineDash(locked ? AIM_SOLID : AIM_DASH);
+    ctx.beginPath(); ctx.arc(sx, sy, radius, 0, 6.28); ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    if (snapFlash > 0) {
+      ctx.globalAlpha = snapFlash * 0.9;
+      ctx.strokeStyle = "#fff3c4";
+      ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.arc(sx, sy, radius * (1 + 0.35 * snapFlash), 0, 6.28); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 6. RING_BAND (annulus): the gorge slam / radial ring / heal knockback. The SAFE center
+  // disc (<= inner r) is never painted, and neither is beyond the outer edge.
+  private tgRingBand(sx: number, sy: number, innerR: number, outerR: number, hue: string, o: { linger?: number; dashed?: boolean }): void {
+    if (outerR <= innerR) return;
+    this.tgShape(() => {
+      const { ctx } = this;
+      ctx.arc(sx, sy, outerR, 0, 6.28);
+      ctx.arc(sx, sy, innerR, 0, 6.28, true);
+    }, hue, { locked: true, dynamic: false, linger: o.linger, dashed: o.dashed, fillRule: "evenodd" });
+  }
+
+  // 7. IMPACT_DISCS (set): debris / spew landing pools. Safe = the gaps between discs.
+  private tgImpactDiscs(centers: Array<{ x: number; y: number }>, radius: number, hue: string, o: { locked: boolean; dynamic: boolean; linger?: number; dashed?: boolean }): void {
+    for (const c of centers) {
+      this.tgShape(() => { this.ctx.arc(c.x, c.y, radius, 0, 6.28); }, hue, o);
+    }
+  }
+
+  // 8. RAMP_FILL (area-denial): the tether-feed zones — a filled circle whose intensity ramps
+  // up over the lead ("getting hot"). Not a burst — the whole disc is denied.
+  private tgRampFill(sx: number, sy: number, radius: number, intensity: number, hue: string): void {
+    this.tgShape(() => { this.ctx.arc(sx, sy, radius, 0, 6.28); }, hue, {
+      locked: true, dynamic: false, fillAlpha: 0.12 + 0.22 * intensity,
+    });
+  }
+
+  // 9. SWEEP_ARC (swept band): the tether-snap wall / Tithe signature spokes. Pivot stays
+  // clear (safe near the anchor). Draws the whole swept region as the danger band.
+  private tgSweepArc(px: number, py: number, radius: number, bandW: number, startAng: number, arcSpan: number, hue: string, o: { locked: boolean; dynamic: boolean; snapFlash?: number }): void {
+    const inner = Math.max(1, radius - bandW / 2), outer = radius + bandW / 2;
+    this.tgShape(() => {
+      const { ctx } = this;
+      ctx.arc(px, py, outer, startAng, startAng + arcSpan);
+      ctx.arc(px, py, inner, startAng + arcSpan, startAng, true);
+      ctx.closePath();
+    }, hue, o);
+  }
+
+  // 10. BARRIER_WALL (solid): the shield husk's LOS blocker. NOT hatched-danger — a SOLID
+  // family-hue wall ("reposition to keep DPS"), no hot edge. Placed state, no lead.
+  private tgBarrierWall(sx: number, sy: number, facing: number, width: number, hue: string): void {
+    const { ctx } = this;
+    const inner = 22, outer = inner + 12, half = (width / 2) / outer;
+    ctx.save();
+    ctx.globalAlpha = 0.55 + 0.12 * Math.sin(this.animClock * 4);
+    ctx.fillStyle = hue;
+    ctx.beginPath();
+    ctx.arc(sx, sy, outer, facing - half, facing + half);
+    ctx.arc(sx, sy, inner, facing + half, facing - half, true);
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 0.9;
+    ctx.strokeStyle = hue;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // 11. CONVERGE_POCKET: the crossfire — N converging lanes + the shrinking SAFE pocket edge
+  // (a hint line, never a fill). The pocket is CLAMPED so it can never seal (hard fairness rule).
+  private tgConvergePocket(origins: Array<{ x: number; y: number }>, target: { x: number; y: number }, width: number, hue: string, o: { locked: boolean; dynamic: boolean; snapFlash?: number }, pocketR: number): void {
+    for (const s of origins) {
+      const ang = Math.atan2(target.y - s.y, target.x - s.x);
+      this.tgLane(s.x, s.y, ang, Math.hypot(target.x - s.x, target.y - s.y) + 40, width, hue, o);
+    }
+    const { ctx } = this;
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = hue;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 6]);
+    ctx.beginPath(); ctx.arc(target.x, target.y, Math.max(TG_POCKET_MIN, pocketR), 0, 6.28); ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
+  }
+
+  // 12. MOVING_CAPSULE: the herder wall that translates toward you — a lane with a leading
+  // motion edge so the push direction reads.
+  private tgMovingCapsule(sx: number, sy: number, angle: number, length: number, width: number, hue: string): void {
+    this.tgLane(sx, sy, angle, length, width, hue, { locked: true, dynamic: false });
+    const { ctx } = this;
+    const dx = Math.cos(angle), dy = Math.sin(angle), hw = width / 2;
+    ctx.save();
+    ctx.globalAlpha = 0.85;
+    ctx.strokeStyle = "#fff3c4";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(sx + dx * length - dy * hw, sy + dy * length + dx * hw);
+    ctx.lineTo(sx + dx * length + dy * hw, sy + dy * length - dx * hw);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The per-attack dispatch: each of the reworked boss attacks binds to its primitive(s) with
+  // the spec geometry, reading ONLY authoritative state (move/phase, lockedAngle, the
+  // isAimLocked commit, markX/markY, boss phase). Drawn on the ground plane under the body.
+  private renderBossTelegraph(e: Enemy, sx: number, sy: number): void {
+    const a = e.attack;
+    const hue = tgFamilyHue(e.kind);
+    const phase = e.boss?.phase ?? 1;
+    const cam = this.renderCam;
+    const isActive = a.phase === "active";
+    const wu = a.windup;
+    // Aim-lock snap bookkeeping (rising edge of the authoritative isAimLocked commit).
+    const st = this.tgLock.get(e.id) ?? { locked: false, flashUntil: 0 };
+    if (a.isAimLocked && !st.locked) st.flashUntil = this.animClock + 0.18;
+    st.locked = a.isAimLocked;
+    this.tgLock.set(e.id, st);
+    const snapFlash = Math.max(0, (st.flashUntil - this.animClock) / 0.18);
+    const dyn = { locked: a.isAimLocked, dynamic: true, snapFlash };
+    const fix = { locked: true, dynamic: false };
+    const ang = a.lockedAngle;
+
+    if (e.kind === "jet") {
+      if (a.move === "mirror") {
+        // A1 MIRROR SALVO — the footprint IS the copied weapon's shape (cone WEDGE / spread
+        // FAN / lob ARC_PARABOLA / lance LANE). The copied family selects the shape (and, per
+        // §R2, would draw in the COPIED weapon's own hue — the "recognize your gun" read); that
+        // enum is not on the wire yet (spec OPEN), so jetMirrorShape returns "cone" today and
+        // the aimed cone in family hue reads "aimed salvo incoming."
+        const shape = this.jetMirrorShape(e);
+        if (shape === "spread") this.tgFan(sx, sy, ang, 5, 0.225, 16, 288, hue, dyn);
+        else if (shape === "lob") this.tgArcParabola(sx, sy, a.markX - cam.x, a.markY - cam.y, hue);
+        else if (shape === "lance") this.tgLane(sx, sy, ang, TG_ARENA_LEN, TILE, hue, dyn);
+        else this.tgWedge(sx, sy, ang, 0.52, 240, hue, dyn);
+      } else if (a.move === "tracer") {
+        // A2 TRACER SNAP — the lock primitive at the mote's mark.
+        this.tgTrackDisc(a.markX - cam.x, a.markY - cam.y, 24, a.isAimLocked, hue, snapFlash);
+      } else if (a.move === "rush") {
+        // A3 RECOIL LINE — a fixed capsule bisecting the arena along the recoil axis.
+        this.tgLane(sx, sy, ang, 360, TILE, hue, { ...fix, back: 360 });
+      } else if (a.move === "beam") {
+        // A4 OVERCLOCK (P2, honest beam) / SIGNATURE (P3 wide corruption corridor).
+        const width = phase >= 3 ? TILE * 2.17 : TILE * 1.42; // corrupt 104px vs overclock 68px
+        this.tgLane(sx, sy, ang, TG_ARENA_LEN, width, hue, dyn);
+      }
+      return;
+    }
+
+    if (e.kind === "tithe") {
+      if (a.move === "slam") {
+        // A1 GORGE SLAM — expanding ring band (safe center + beyond) + debris discs; P2 double.
+        const outer = isActive ? 240 : 60 + 180 * wu;
+        this.tgRingBand(sx, sy, Math.max(TILE, outer - TILE), outer, hue, {});
+        if (phase >= 2) this.tgRingBand(sx, sy, Math.max(TILE, outer * 0.55 - TILE), outer * 0.55, hue, { dashed: true });
+        const debris: Array<{ x: number; y: number }> = [];
+        for (let i = 0; i < 4; i++) { const da = (i / 4) * 6.28 + 0.4; debris.push({ x: sx + Math.cos(da) * 120, y: sy + Math.sin(da) * 120 }); }
+        this.tgImpactDiscs(debris, 36, hue, fix);
+      } else if (a.move === "spew") {
+        // A3 SPEW ARC — wave-1 discs solid + wave-2 discs (in the gaps) dashed-lighter BEFORE
+        // wave-1 lands (the multi-stage read).
+        const w1: Array<{ x: number; y: number }> = [], w2: Array<{ x: number; y: number }> = [];
+        const step = 0.7 / 4;
+        for (let i = 0; i < 5; i++) {
+          const a1 = ang + (i - 2) * step;
+          w1.push({ x: sx + Math.cos(a1) * 150, y: sy + Math.sin(a1) * 150 });
+          const a2 = a1 + step / 2;
+          w2.push({ x: sx + Math.cos(a2) * 175, y: sy + Math.sin(a2) * 175 });
+        }
+        this.tgImpactDiscs(w1, 36, hue, fix);
+        this.tgImpactDiscs(w2, 36, hue, { locked: false, dynamic: false, dashed: true, linger: 0.7 });
+      } else if (a.move === "hurl") {
+        // A4 SLAB HURL — a heavy aimed lane (DYNAMIC lock).
+        this.tgLane(sx, sy, ang, TG_ARENA_LEN, TILE * 1.5, hue, dyn);
+      } else if (a.move === "radial") {
+        // P2 radial ring burst.
+        const outer = isActive ? 220 : 40 + 180 * wu;
+        this.tgRingBand(sx, sy, Math.max(TILE, outer - TILE), outer, hue, {});
+      } else if (a.move === "spin") {
+        // SIGNATURE — rotating barrage: N spoke lanes with clear wedges between (moving pockets).
+        const rot = this.animClock * 1.5;
+        for (let i = 0; i < 5; i++) this.tgLane(sx, sy, rot + (i / 5) * 6.28, 240, TILE * 1.5, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+      } else if (a.move === "build") {
+        // A2 TETHER FEED — the feeding zone as area-denial (RAMP_FILL): a filled disc whose
+        // intensity ramps over the raise ("getting hot"), not a burst.
+        this.tgRampFill(sx, sy, 72, wu, hue);
+      }
+      return;
+    }
+
+    // QUORUM
+    const husks = this.enemies.filter((o) => !o.dead && (o.kind === "quorum_shield" || o.kind === "quorum_heal" || o.kind === "quorum_dmg"));
+    if (a.move === "beam") {
+      // A1 CROSSFIRE — converging lanes from the live husks + the shrinking safe pocket edge.
+      const origins = husks.length > 0 ? husks.map((h) => ({ x: h.x - cam.x, y: h.y - cam.y })) : [{ x: sx, y: sy }];
+      const pocketR = isActive ? TG_POCKET_MIN : 192 - 128 * wu;
+      this.tgConvergePocket(origins, { x: sx, y: sy }, TILE, hue, dyn, pocketR);
+    } else if (a.move === "sweep") {
+      // A2 TETHER SNAP — a swept wall around the anchor (shield husk if alive, else the core).
+      const shield = husks.find((h) => h.kind === "quorum_shield");
+      const px = shield ? shield.x - cam.x : sx, py = shield ? shield.y - cam.y : sy;
+      this.tgSweepArc(px, py, 200, TILE * 1.5, ang - 1.5 / 2, 1.5, hue, fix);
+    } else if (a.move === "volley") {
+      // A3 ROLE VOLLEY — the dmg role's aimed burst lanes + the heal role's knockback ring.
+      for (let i = 0; i < 3; i++) this.tgLane(sx, sy, ang + (i - 1) * 0.08, 320, TILE * 0.75, hue, dyn);
+      const heal = husks.find((h) => h.kind === "quorum_heal");
+      if (heal) this.tgRingBand(heal.x - cam.x, heal.y - cam.y, TILE, 120, hue, { dashed: true });
+    } else if (a.move === "radial") {
+      // Radial ring (husk-phase / merge combo).
+      const outer = isActive ? 220 : 40 + 180 * wu;
+      this.tgRingBand(sx, sy, Math.max(TILE, outer - TILE), outer, hue, {});
+    }
+    // A4 HUNT PAIR — the herder MOVING_CAPSULE (a slow advancing wall) pairs with a charger
+    // LANE. There is no distinct hunt move on the wire yet (spec OPEN — the current sim routes
+    // husk-phase pressure through beam/sweep/volley/radial), so quorumHuntHerder returns null
+    // today; the capsule binds the moment the hunt move crosses the wire.
+    const herder = this.quorumHuntHerder(e);
+    if (herder) this.tgMovingCapsule(herder.sx, herder.sy, herder.ang, 240, TILE * 1.5, hue);
+  }
+
+  // Jet's mirror-salvo copied SHAPE. The mirror weapon-family enum is not on the wire yet
+  // (spec OPEN), so the copy renders as the aimed cone until it lands; wiring the enum here is
+  // a one-line change that lights up the FAN / ARC_PARABOLA / LANE copies + the copied-hue read.
+  private jetMirrorShape(_e: Enemy): "cone" | "spread" | "lob" | "lance" {
+    return "cone";
+  }
+
+  // Quorum's hunt-pair herder (the advancing wall). No distinct hunt move rides the wire yet
+  // (spec OPEN), so this returns null; it binds to the herder husk's advance once it lands.
+  private quorumHuntHerder(_e: Enemy): { sx: number; sy: number; ang: number } | null {
+    return null;
+  }
+
+  // The shield husk's persistent LOS-blocking barrier (BARRIER_WALL): a solid bone-cyan wall
+  // on its OUTWARD face (away from the core it guards) while it lives — "reposition to keep DPS."
+  private renderShieldBarrier(e: Enemy, sx: number, sy: number): void {
+    const core = this.enemies.find((o) => !o.dead && o.kind === "quorum");
+    const facing = core ? Math.atan2(e.y - core.y, e.x - core.x) : e.attack.lockedAngle;
+    this.tgBarrierWall(sx, sy, facing, TILE * 2, tgFamilyHue("quorum"));
   }
 
   // The boss hop-slam's growing footprint: a filled danger disc + bright rim. It tracks
