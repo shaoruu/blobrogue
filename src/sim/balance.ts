@@ -1746,6 +1746,9 @@ export const QUORUM = {
   huskSway: 0.12,          // sway amplitude (rad) — a little life, never enough to overlap
   huskIntegrityFrac: 0.10, // each husk's break meter as a fraction of the pool max (balancer FINAL 0.20 → 0.10)
   healRegenPerSec: 14,     // the HEAL husk regenerates the pool while alive (undo lazy chip — balancer FINAL 10 → 14)
+  huskReformDelay: 1.0,    // P1 LOOP: after the trio is cleared the pool is EXPOSED for this long
+                           // (shoot the core), then the trio RE-FORMS (re-gates) — repeat until merge
+
   // R-framework SURPLUS (balancer FINAL): a husk-adds WAVE fires when a husk breaks, count =
   // min(bossAddCapFor(1, R), huskAddCap) → solo 1 / 2p 4 / 3p 5 / 4p 5 (R-keyed), gated by the
   // active-threat cap and paced by a wave interval that tightens 6.0s → 3.0s with R (the
