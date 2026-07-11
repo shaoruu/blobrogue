@@ -5550,11 +5550,12 @@ export class Game {
       // beams in renderQuorumTether are the taut-guarded / snapped-exposed read up to the merge.
       if (e.kind === "quorum" && (e.boss?.phase ?? 1) < 2) {
         this.renderQuorumTether(e);
-        // ONE-WAY guard: the core is hidden ONLY while the SHIELD husk lives (it IS the guard).
-        // Once the shield husk dies the tether beams have snapped and the core is EXPOSED — draw
-        // the (now targetable) core body below so the player can see what to shoot.
-        const isShieldAlive = this.enemies.some((o) => !o.dead && o.kind === "quorum_shield");
-        if (isShieldAlive) continue;
+        // P1 LOOP guard: the core is hidden while ANY husk stands. When the trio is cleared the
+        // tether beams have snapped and the core is EXPOSED — draw the (now targetable) core body
+        // so the player can shoot it during the window; it re-hides when the trio re-forms.
+        const anyHuskAlive = this.enemies.some((o) => !o.dead
+          && (o.kind === "quorum_shield" || o.kind === "quorum_heal" || o.kind === "quorum_dmg"));
+        if (anyHuskAlive) continue;
       }
       // The Weaver airborne: no body to shoot — just the falling shadow on its landing mark.
       if (e.kind === "weaver" && a.move === "pounce" && a.phase === "active") {
