@@ -5,7 +5,7 @@
 import { Game } from "../game/game.js";
 import type { DevSnapshot } from "../game/game.js";
 import type { EnemyTier } from "../sim/balance.js";
-import type { EnemyKind, PropKind, WeaponId } from "../sim/types.js";
+import type { EnemyKind, PropKind, WeaponId, SpriteName } from "../sim/types.js";
 import type { MutatorId, RollAffixId, BossAffixId } from "../sim/floorRolls.js";
 import { ITEMS } from "../sim/items.js";
 import { KIT_IDS, KIT_META } from "../sim/kits.js";
@@ -13,6 +13,12 @@ import type { KitId } from "../sim/kits.js";
 import { WEAPONS } from "../sim/weapons.js";
 import { weaponDisplayStats } from "../sim/weaponStats.js";
 import { createMods } from "../sim/items.js";
+import { ENEMY_ARCHETYPES } from "../sim/enemies.js";
+import { CAMP_NODES } from "../sim/camp_nodes.js";
+import { COSMETIC_SLOTS, cosmeticsForSlot, bodyPaletteIndex } from "../game/cosmetics.js";
+import type { CosmeticLoadout, CosmeticSlot } from "../game/cosmetics.js";
+import type { BlobLook } from "../ui/blobPreview.js";
+import { spriteThumb, spritePreview, blobThumb, blobPreview, blankThumb, textBadge } from "./thumbs.js";
 import { injectDevStyles } from "./styles.js";
 
 const ENEMY_KINDS: readonly EnemyKind[] = [
@@ -69,6 +75,16 @@ function btn(label: string, onClick: () => void, cls = ""): HTMLButtonElement {
   return b;
 }
 
+// A clickable catalog tile: a thumbnail over a short name. The panel owns the active-state
+// highlight (a group toggles `.on`), so this stays a dumb presentational cell.
+function catalogCell(thumb: HTMLElement, name: string, onClick: () => void): HTMLDivElement {
+  const cell = h("div", "dev-cat-cell");
+  cell.appendChild(thumb);
+  cell.appendChild(h("div", "dev-cat-name", name));
+  cell.addEventListener("click", () => { onClick(); });
+  return cell;
+}
+
 // A collapsible section. The header toggles a body wrapper; callers append their controls
 // to the returned element and they land in the body (an appendChild override keeps every
 // existing `sec.appendChild(...)` call site working unchanged). Starts expanded.
@@ -112,6 +128,9 @@ export function bootSandbox(canvas: HTMLCanvasElement, minimap: HTMLCanvasElemen
 
 function buildPanel(game: Game): void {
   const panel = h("div", "dev-panel");
+  // The game's own loaded sprite registry — catalog thumbnails resolve through it, so a
+  // panel entry shows exactly the frame the world renders (never a stale duplicate load).
+  const sprites = game.devSprites();
 
   const title = h("div", "dev-title", "CREATIVE MODE");
   title.appendChild(h("span", "sub", "sandbox \u00b7 spawn \u00b7 test feel"));
@@ -145,6 +164,7 @@ function buildPanel(game: Game): void {
   const pickedTier = (): EnemyTier => tierSel.value as EnemyTier;
   for (const kind of ENEMY_KINDS) {
     const row = h("div", "dev-row");
+    row.appendChild(spriteThumb(sprites, ENEMY_ARCHETYPES[kind].sprite));
     row.appendChild(h("span", "dev-lbl", kind));
     row.appendChild(btn("1", () => game.devSpawnEnemies(kind, 1, isCursor(), pickedTier()), "mini"));
     row.appendChild(btn("5", () => game.devSpawnEnemies(kind, 5, isCursor(), pickedTier()), "mini"));
@@ -236,9 +256,12 @@ function buildPanel(game: Game): void {
     game.devSetKit(kit);
     for (const [id, b] of kitBtns) b.classList.toggle("on", id === kit);
   };
-  kitRow.appendChild(btn("None", () => selectKit("none"), "mini"));
+  const noneKit = btn("None", () => selectKit("none"), "mini");
+  noneKit.prepend(textBadge("None"));
+  kitRow.appendChild(noneKit);
   for (const kit of KIT_IDS) {
     const b = btn(KIT_META[kit].name, () => selectKit(kit), "mini");
+    b.prepend(textBadge(KIT_META[kit].name));
     b.title = `${KIT_META[kit].role} \u00b7 ${KIT_META[kit].ult} \u2014 ${KIT_META[kit].blurb}`;
     kitBtns.set(kit, b);
     kitRow.appendChild(b);
@@ -250,6 +273,68 @@ function buildPanel(game: Game): void {
   ultRow.appendChild(btn("Cast ult (F)", () => game.devCastUlt(), "mini"));
   kitSec.appendChild(ultRow);
   panel.appendChild(kitSec);
+
+  // ---- cosmetics (dress the blob; the equipped look shows live on your blob in the arena) ----
+  const cosSec = section("Cosmetics");
+  const loadout: CosmeticLoadout = { hat: null, face: null, body: null, title: null };
+  const cosPreview = blobPreview(72);
+  const cosCard = h("div", "dev-preview-card");
+  cosCard.append(cosPreview.el, h("div", "dev-note", "Equipped look \u2014 live on your blob in the dev world."));
+  cosSec.appendChild(cosCard);
+  // A per-slot look isolates the picked item on a neutral body (hat-only / face-only, like the
+  // closet), while the live preview + world blob show the full composited loadout.
+  const lookForSlot = (slot: CosmeticSlot, id: string | null): BlobLook => ({
+    colorIndex: slot === "body" ? bodyPaletteIndex(id, 0) : null,
+    hat: slot === "hat" ? id : null,
+    face: slot === "face" ? id : null,
+  });
+  const currentLook = (): BlobLook => ({ colorIndex: bodyPaletteIndex(loadout.body, 0), hat: loadout.hat, face: loadout.face });
+  const applyCosmetics = () => { game.devSetCosmetics({ ...loadout }); cosPreview.setLook(currentLook()); };
+  for (const slotDef of COSMETIC_SLOTS) {
+    if (slotDef.slot === "title") continue; // titles are text honors, never worn in-world
+    cosSec.appendChild(h("div", "dev-note", `${slotDef.label}:`));
+    const grid = h("div", "dev-cat");
+    const cells = new Map<string | null, HTMLElement>();
+    const highlight = (id: string | null) => { for (const [cid, cell] of cells) cell.classList.toggle("on", cid === id); };
+    const addCell = (id: string | null, name: string, thumb: HTMLElement) => {
+      const cell = catalogCell(thumb, name, () => { loadout[slotDef.slot] = id; highlight(id); applyCosmetics(); });
+      cells.set(id, cell);
+      grid.appendChild(cell);
+    };
+    addCell(null, slotDef.noneLabel, blobThumb(lookForSlot(slotDef.slot, null)));
+    for (const c of cosmeticsForSlot(slotDef.slot)) addCell(c.id, c.name, blobThumb(lookForSlot(slotDef.slot, c.id)));
+    highlight(loadout[slotDef.slot]);
+    cosSec.appendChild(grid);
+  }
+  panel.appendChild(cosSec);
+
+  // ---- pets (equip a companion; it trots along behind you in the dev world) ----
+  const petSec = section("Pets");
+  const petPreview = spritePreview(sprites, 72);
+  const petCard = h("div", "dev-preview-card");
+  petCard.append(petPreview.el, h("div", "dev-note", "Equip a companion \u2014 it follows you in the dev world."));
+  petSec.appendChild(petCard);
+  const petGrid = h("div", "dev-cat");
+  const petCells = new Map<string | null, HTMLElement>();
+  const equipPet = (petId: string | null, sprite: SpriteName | null) => {
+    game.devSetPet(petId);
+    petPreview.setSprite(sprite);
+    for (const [pid, cell] of petCells) cell.classList.toggle("on", pid === petId);
+  };
+  const addPetCell = (petId: string | null, name: string, thumb: HTMLElement, sprite: SpriteName | null) => {
+    const cell = catalogCell(thumb, name, () => equipPet(petId, sprite));
+    petCells.set(petId, cell);
+    petGrid.appendChild(cell);
+  };
+  addPetCell(null, "None", blankThumb(), null);
+  for (const node of CAMP_NODES) {
+    if (node.pet === undefined) continue;
+    const sprite = game.devPetSprite(node.pet);
+    addPetCell(node.pet, node.name, sprite !== null ? spriteThumb(sprites, sprite) : blankThumb(), sprite);
+  }
+  petCells.get(null)?.classList.add("on"); // default: no pet equipped
+  petSec.appendChild(petGrid);
+  panel.appendChild(petSec);
 
   // ---- combo (gate the kill-chain HUD without having to sustain a live chain) ----
   const comboSec = section("Combo");
@@ -304,6 +389,7 @@ function buildPanel(game: Game): void {
       for (const [mid, mb] of mutBtns) mb.classList.toggle("on", activeMutators.indexOf(mid) !== -1);
       syncMutators();
     }, "mini");
+    b.prepend(textBadge(label));
     mutBtns.set(id, b);
     mutRow.appendChild(b);
   }
@@ -324,14 +410,18 @@ function buildPanel(game: Game): void {
   randSec.appendChild(affixKindSel);
   const affixRow = h("div", "dev-row");
   for (const [id, label] of ROLL_AFFIXES) {
-    affixRow.appendChild(btn(label, () => game.devSpawnAffixElite(id, affixKindSel.value as EnemyKind, isCursor()), "mini"));
+    const b = btn(label, () => game.devSpawnAffixElite(id, affixKindSel.value as EnemyKind, isCursor()), "mini");
+    b.prepend(textBadge(label));
+    affixRow.appendChild(b);
   }
   randSec.appendChild(affixRow);
   // Boss affixes: force the affix + spawn a boss to carry the extra telegraphed pattern.
   randSec.appendChild(h("div", "dev-note", "Boss affix (spawns a boss):"));
   const bossAffixRow = h("div", "dev-row");
   for (const [id, label] of BOSS_AFFIXES) {
-    bossAffixRow.appendChild(btn(label, () => game.devForceBossAffix(id, isCursor()), "mini"));
+    const b = btn(label, () => game.devForceBossAffix(id, isCursor()), "mini");
+    b.prepend(textBadge(label));
+    bossAffixRow.appendChild(b);
   }
   randSec.appendChild(bossAffixRow);
   panel.appendChild(randSec);

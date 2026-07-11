@@ -71,6 +71,26 @@ const DEV_CSS = `
   .dev-weapon-type { font-size:8px; color:var(--amber); letter-spacing:1px; }
   .dev-weapon-stats { font-family:var(--f-num),monospace; font-size:14px; line-height:1.05; color:var(--dun-4); }
 
+  /* Catalog thumbnails: a crisp pixel-art frame per spawnable entry. Fixed from creation
+     (canvas width/height attrs drive both backing store + box), so paints never shift layout. */
+  .dev-thumb { display:block; flex:0 0 auto; image-rendering:pixelated;
+    background:rgba(5,3,11,.5); box-shadow:inset 0 0 0 1px var(--dun-3); }
+  /* Abstract-entry fallback badge (kits/mutators/affixes): a 2-letter monogram, no fabricated art. */
+  .dev-badge { display:inline-flex; align-items:center; justify-content:center; vertical-align:middle;
+    min-width:15px; height:13px; margin-right:5px; padding:0 3px; font-size:8px; letter-spacing:0;
+    color:var(--amber-hi); background:rgba(5,3,11,.5); box-shadow:inset 0 0 0 1px var(--dun-2); }
+  /* Cosmetic / pet catalog grid + clickable tiles. */
+  .dev-cat { display:flex; flex-wrap:wrap; gap:5px; }
+  .dev-cat-cell { display:flex; flex-direction:column; align-items:center; gap:3px; width:52px; padding:4px 3px;
+    cursor:pointer; background:rgba(5,3,11,.4); box-shadow:inset 0 0 0 1px var(--dun-2); }
+  .dev-cat-cell:hover { background:var(--dun-2); }
+  .dev-cat-cell.on { box-shadow:inset 0 0 0 2px var(--amber); }
+  .dev-cat-name { max-width:46px; font-size:7px; line-height:1.1; letter-spacing:0; text-align:center;
+    text-transform:uppercase; color:var(--dun-4); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  /* Live equipped-look / pet preview card (mirrors the weapon inspection card's frame). */
+  .dev-preview-card { display:flex; gap:8px; align-items:center; padding:7px;
+    background:rgba(5,3,11,.66); box-shadow:inset 0 0 0 1px var(--dun-3); }
+
   /* --- sprite / animation viewer (?dev=sprites) --- */
   .dev-sprites {
     position: fixed; inset: 0; z-index: 30; overflow-y: auto;
