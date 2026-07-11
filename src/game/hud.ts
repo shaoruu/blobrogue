@@ -68,7 +68,7 @@ export interface HudState {
   // The universal ULT meter (spec §3/§6): a dedicated readout SEPARATE from the combo/Resonance
   // meters. charge is 0..1; isReady lights the "ULT READY" state; cd is the 8s lockout fraction
   // still remaining (0 = no lockout) after a cast. null hides the meter (a neutral-kit player).
-  ult: { charge: number; isReady: boolean; cd: number; kit: string } | null;
+  ult: { charge: number; isReady: boolean; cd: number; kit: string; name: string } | null;
 }
 
 export interface HotbarActions {
@@ -456,8 +456,11 @@ const HUD_MARKUP = `
   </div>
   <div class="hud-corner tr"><div class="minimap"><span class="mm-title">MAP</span></div></div>
   <div class="hud-corner bl">
-    <div class="ultmeter" data-ult hidden><span class="k" data-ult-k>ULT</span><span class="key keycap">F</span><span class="bar"><i data-ult-fill style="--ult-fill:0"></i></span></div>
-    <div class="dash"><span class="k">DASH</span><span class="key keycap">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
+    <div class="klcluster" data-klcluster>
+      <div class="kitbadge" data-kitbadge hidden><span class="ki" data-kit-icon></span><span class="kn" data-kit-name></span></div>
+      <div class="ultmeter" data-ult hidden><span class="ui" data-ult-icon></span><span class="lbl"><span class="k" data-ult-k>ULT</span><span class="rdy" data-ult-rdy> READY</span></span><span class="key keycap" data-ult-key>F</span><span class="bar"><i data-ult-fill style="--ult-fill:0"></i></span></div>
+      <div class="dash"><span class="k">DASH</span><span class="key keycap">SHIFT</span><span class="bar"><i style="--dash-fill:1"></i></span></div>
+    </div>
   </div>
   <div class="hotbar">
     <div class="hb-swap" data-hb-swap></div>
@@ -526,6 +529,14 @@ export class Hud {
   private ultEl!: HTMLElement;
   private ultFillEl!: HTMLElement;
   private ultKEl!: HTMLElement;
+  private ultRdyEl!: HTMLElement;
+  private ultKeyEl!: HTMLElement;
+  private ultIconEl!: HTMLElement;
+  private klClusterEl!: HTMLElement;
+  private kitBadgeEl!: HTMLElement;
+  private kitIconEl!: HTMLElement;
+  private kitNameEl!: HTMLElement;
+  private prevUltKit = "";
   private killsEl: HTMLElement;
   private coinsEl: HTMLElement;
   private coinsChipEl: HTMLElement;
@@ -614,6 +625,13 @@ export class Hud {
     this.ultEl = hud.querySelector("[data-ult]")!;
     this.ultFillEl = hud.querySelector("[data-ult-fill]")!;
     this.ultKEl = hud.querySelector("[data-ult-k]")!;
+    this.ultRdyEl = hud.querySelector("[data-ult-rdy]")!;
+    this.ultKeyEl = hud.querySelector("[data-ult-key]")!;
+    this.ultIconEl = hud.querySelector("[data-ult-icon]")!;
+    this.klClusterEl = hud.querySelector("[data-klcluster]")!;
+    this.kitBadgeEl = hud.querySelector("[data-kitbadge]")!;
+    this.kitIconEl = hud.querySelector("[data-kit-icon]")!;
+    this.kitNameEl = hud.querySelector("[data-kit-name]")!;
     this.mutatorsEl = hud.querySelector("[data-mutators]")!;
     this.killsEl = hud.querySelector("[data-kills]")!;
     this.coinsEl = hud.querySelector("[data-coins]")!;
@@ -1263,8 +1281,23 @@ export class Hud {
   private renderUlt(ult: HudState["ult"]): void {
     if (ult === null) {
       if (!this.ultEl.hasAttribute("hidden")) this.ultEl.setAttribute("hidden", "");
+      if (!this.kitBadgeEl.hasAttribute("hidden")) this.kitBadgeEl.setAttribute("hidden", "");
+      this.klClusterEl.removeAttribute("data-kit");
       this.prevUltKey = "";
+      this.prevUltKit = "";
       return;
+    }
+    // Kit-scoped chrome (accent, NAME, icons, the always-answered class badge) changes only when
+    // the kit does — set once so a normal run never rewrites the mask/text every frame.
+    const kitKey = `${ult.kit}:${ult.name}`;
+    if (kitKey !== this.prevUltKit) {
+      this.prevUltKit = kitKey;
+      this.klClusterEl.setAttribute("data-kit", ult.kit); // CSS resolves --kit -> the kit accent
+      this.setMaskIcon(this.ultIconEl, `/sprites/ui/${ult.name.toLowerCase()}_16.png`);
+      this.ultKEl.textContent = ult.name.toUpperCase();
+      this.setMaskIcon(this.kitIconEl, `/sprites/ui/${ult.kit}_24.png`);
+      this.kitNameEl.textContent = ult.kit.toUpperCase();
+      this.kitBadgeEl.removeAttribute("hidden");
     }
     const fill = ult.isReady ? 1 : Math.max(0, Math.min(1, ult.charge));
     const state = ult.isReady ? "ready" : ult.cd > 0 ? "cd" : "charge";
@@ -1276,7 +1309,36 @@ export class Hud {
     this.ultFillEl.style.setProperty("--ult-fill", String(ult.cd > 0 && !ult.isReady ? ult.cd : fill));
     this.ultEl.classList.toggle("ready", ult.isReady);
     this.ultEl.classList.toggle("cd", ult.cd > 0 && !ult.isReady);
-    this.ultKEl.textContent = ult.isReady ? "ULT READY" : "ULT";
+    // READY is LOUD: the widget lifts to the kit accent, the NAME reads "<ULT> READY" (the " READY"
+    // suffix is always in the DOM, only revealed — never a reflow), and the [F] keycap fills amber.
+    this.ultRdyEl.classList.toggle("show", ult.isReady);
+    this.ultKeyEl.classList.toggle("is-active", ult.isReady);
+  }
+
+  // Point a mask-tinted icon element at its white source; the kit accent fills it via CSS
+  // background, so ONE white PNG recolors per kit (gunner amber / mender green / bulwark blue /
+  // phantom violet).
+  private setMaskIcon(el: HTMLElement, url: string): void {
+    const value = `url("${url}") center / contain no-repeat`;
+    el.style.setProperty("-webkit-mask", value);
+    el.style.setProperty("mask", value);
+  }
+
+  // A mote landing pings the meter fill: a transform/opacity-only accent flash (never a layout
+  // shift), re-triggerable by reflowing the class — so charging visibly reads as "combat charges
+  // this," not a passive timer.
+  pulseUlt(): void {
+    this.ultFillEl.classList.remove("mote-pulse");
+    void this.ultFillEl.offsetWidth; // reflow so a rapid re-ping restarts the animation
+    this.ultFillEl.classList.add("mote-pulse");
+  }
+
+  // The ult meter's live viewport rect — the flight target for a charge mote's arc into the meter
+  // (the game maps it into canvas space). Null before layout exists / while the meter is hidden.
+  ultMeterRect(): DOMRect | null {
+    if (this.ultEl.hasAttribute("hidden")) return null;
+    const r = this.ultEl.getBoundingClientRect();
+    return r.width > 0 || r.height > 0 ? r : null;
   }
 
   update(s: HudState) {
