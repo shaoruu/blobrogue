@@ -605,7 +605,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
     stuckTimer: 0,
     avoidSide: 0,
     avoidTime: 0,
-    burn: 0, burnDmg: 0, chill: 0, shock: 0, statusTick: 0, burnOwner: null,
+    burn: 0, burnDmg: 0, chill: 0, shock: 0, markT: 0, statusTick: 0, burnOwner: null,
     attack: {
       phase: "none", time: 0, move: "none", windup: 0,
       // Bosses wait a beat after their dramatic entrance before the first commitment.

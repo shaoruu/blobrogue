@@ -176,7 +176,7 @@ async function main(): Promise<void> {
       const t0 = Date.now();
       let seq = 1;
       const flood = setInterval(() => {
-        cheat.send(jsonCodec.encodeClient({ t: "input", seq: seq++, mx: 8, my: 8, aim: 0, fire: true, dash: false, act: false, ult: false, ackEv: 0, ackSnap: 0 }));
+        cheat.send(jsonCodec.encodeClient({ t: "input", seq: seq++, mx: 8, my: 8, aim: 0, fire: true, dash: false, act: false, ult: false, pulse: false, ackEv: 0, ackSnap: 0 }));
       }, 20);
       await sleep(1000);
       clearInterval(flood);

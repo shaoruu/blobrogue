@@ -64,7 +64,9 @@ import type {
 // v23: the AttackMove set grows "rip" (the Tithe's dedicated P3 debris-wheel signature).
 // v24: the snapshot DELTA wire — `snap` carries `sseq`, a new `snapd` delta message carries
 // per-baseline changes, and `input` carries `ackSnap` (the client's retained baseline sseq).
-export const SYNTHETIC_JOIN_PROTOCOL = 24;
+// v25: Wave 2 kit signatures — SelfWire grows ovh/osh/pra (Gunner overheat / Bulwark overshield
+// / Mender pulse-CD), `input` grows a `pulse` bit, and EnemyWire grows `mkt` (Phantom mark).
+export const SYNTHETIC_JOIN_PROTOCOL = 25;
 
 export interface HttpProbeConfig {
   baseUrl: string;

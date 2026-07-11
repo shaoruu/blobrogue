@@ -185,6 +185,18 @@ export const MENDER_HEAL_CLAMP = {
   partyHpPerSec: 3.0,     // whole party: combined Mender HoT ≤ this
 } as const;
 
+// MENDER HEAL-PULSE (Wave 2 SIGNATURE): a short-CD DIRECTED active heal — a felt VERB on top of
+// the passive Lifebloom beam. It delivers a `heal`-HP BURST to one AIMED ally instantly (a clutch
+// save, so it bypasses the per-tick rate-clamp-DOWN like Sanctuary's on-cast burst), but it
+// CONSUMES the healed HP against the SAME shared MENDER_HEAL_CLAMP budget — so pulse + Lifebloom +
+// Sanctuary combined can never out-heal the sustained per-target/party ceiling. The cooldownTicks
+// is the primary sustain limiter; overheal is discarded exactly as today.
+export const HEAL_PULSE = {
+  cooldownTicks: 120,   // 6.0s directed-pulse cooldown
+  heal: 2,              // 2 HP instant to one aimed ally
+  range: 260,           // same reach as Lifebloom (the beam you already see)
+} as const;
+
 export const LIFEBLOOM = {
   // Fraction of damage DEALT returned as heal credit to the lowest-HP ally in range (self if
   // none). Credit accumulates in the per-kit passive channel and pays out in WHOLE HP on a
@@ -227,12 +239,43 @@ export const PHASE = {
   allyRadius: 90,       // self + allies within ~90px at cast (spec §2.4)
 } as const;
 
+// PHANTOM MARK (Wave 2 SIGNATURE): the phantom's already-most-felt dash gets a COMBAT HOOK.
+// Dashing THROUGH an enemy MARKS it +vulnMult damage-taken from all sources for durationTicks
+// (non-stacking — a fresh pass REFRESHES the timer), and passing through >= 1 enemy REFUNDS
+// refundFrac of the dash cooldown (mobility/repositioning, not raw DPS). Against BOSS-grade
+// bodies the +15% mark SHARES the BOSS_VULN_CAP with the crit channel (statuses amplify nothing
+// on bosses) — it does NOT add on top; the combined vulnerability is capped at BOSS_VULN_CAP.
+export const PHANTOM_MARK = {
+  durationTicks: 60,     // 3.0s, non-stacking (refreshes)
+  vulnMult: 1.15,        // +15% damage-taken from ALL sources
+  refundFrac: 0.35,      // dashing through >= 1 enemy refunds 35% of the dash cooldown
+} as const;
+
 // GUNNER MOMENTUM (spec §2.1): consecutive hits WITHOUT taking damage ramp a small live bonus,
 // fully decaying on taking ANY damage. Stacks are the per-kit passive channel (integer).
 export const MOMENTUM = {
   maxStacks: 5,          // ramps over ~5 landed hits
   damagePerStack: 0.03,  // +15% damage at max (5 x 3%)
   fireRatePerStack: 0.02,// +10% fire rate at max (5 x 2%)
+} as const;
+
+// GUNNER OVERHEAT (Wave 2 SIGNATURE): the Momentum ramp's threshold PAYOFF. At EXACTLY
+// MOMENTUM.maxStacks the gunner "boils over" — a short burst of +extraFireRate (so +20% fire at
+// the cap, on top of Momentum's +10%) AND +bonusPierce, then the stacks fall to resetStacks (not
+// 0) so it keeps rolling. The burst is a FASTER ROUTE to the raw fire cap in a window, NEVER above
+// it: currentFireRate clamps the combined Momentum+Overheat fire to CAPS.fireRateMult (the ult's
+// Overdrive keeps its own separate expressive ceiling). Softened decay (below) makes the ramp
+// achievable in a boss fight — a graze no longer wipes it.
+export const OVERHEAT = {
+  burstTicks: 60,          // 3.0s boil-over window
+  extraFireRate: 0.10,     // +10% fire on top of Momentum's +10% at cap -> +20% (clamped to the raw cap)
+  bonusPierce: 1,          // +1 pierce for the window (Math.min(4, ...) still governs the total)
+  resetStacks: 3,          // stacks fall to this after a boil-over (keeps rolling, never resets to 0)
+  // SOFTENED DECAY (was: ANY hit wipes ALL stacks). A significant hit (>= 1 heart) loses
+  // significantLoss; sub-heart chip loses chipLoss; a graze no longer wipes the ramp.
+  significantHitHp: 1,
+  significantLoss: 2,
+  chipLoss: 1,
 } as const;
 
 export const HARDENED = {
@@ -243,9 +286,22 @@ export const HARDENED = {
   reduction: 0.15,
 } as const;
 
-// §10: total damage reduction from ALL sources is clamped here — Hardened (0.15) is the only DR
-// today, but any future DR must sum under this ceiling (no stacking past ~25% total DR).
+// §10: total damage reduction from ALL sources is clamped here — Hardened (0.15) + the Wave 2
+// OVERSHIELD's realized ongoing mitigation must SUM under this ceiling (no stacking past ~25%
+// total DR). The kit-balance gate ASSERTS this holds on the MEASURED realized mitigation.
 export const MAX_TOTAL_DR = 0.25;
+
+// BULWARK OVERSHIELD (Wave 2 SIGNATURE): a small regenerating chip-HP pool that absorbs BEFORE
+// hearts — a VISIBLE armor layer on the health bar the tank watches eat hits. It regenerates
+// 1 chip / regenTicks but PAUSES for pauseTicks after taking ANY damage (an out-of-combat/lull
+// buffer, gone under sustained fire — never invuln). Its realized ongoing mitigation stacks with
+// Hardened UNDER MAX_TOTAL_DR (measured ~0.06-0.08 at 1/4s -> total ~0.21-0.23); if a measured
+// uptime pushes the total over the cap, slow regenTicks to 100 (1 chip / 5s).
+export const OVERSHIELD = {
+  maxChips: 3,           // pool of 3 chip HP absorbed before hearts
+  regenTicks: 80,        // 1 chip / 4.0s (out of combat / in a lull)
+  pauseTicks: 60,        // regen PAUSES 3.0s after taking ANY damage
+} as const;
 
 // The MENDER's faster ally revive (spec §2.2): the channel accrues at this multiple while a
 // mender is the reviver.

@@ -32,15 +32,15 @@ import {
 import type { ShotSpec, Weapon } from "./weapons.js";
 import { createMods, recomputeMods, itemLevelsOf, itemById, itemMaxLevel } from "./items.js";
 import {
-  ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, HARDENED, MAX_TOTAL_DR,
-  MENDER_HEAL_CLAMP, MENDER_REVIVE_SPEED, isRealKit, canCastUlt,
+  ULT, OVERDRIVE, SANCTUARY, LIFEBLOOM, AEGIS, PHASE, MOMENTUM, OVERHEAT, HARDENED, OVERSHIELD,
+  MAX_TOTAL_DR, MENDER_HEAL_CLAMP, HEAL_PULSE, PHANTOM_MARK, MENDER_REVIVE_SPEED, isRealKit, canCastUlt,
   ultChargeFromDamageDealt, ultChargeFromDamageTaken, ultChargeFromHealDone, ultChargeFromKill,
   ultChargeFromDash, ultTimeChargePerTick, ultShareCapUnits,
   refEncounterHpForFloor, aegisHpBudgetForFloor,
   KIT_START_WEAPON, ticksToSec, TICKS_PER_SECOND,
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
-import { lowHpFrac, liveDamageMult, liveFireRateMult, expectedBossDps } from "./weaponStats.js";
+import { lowHpFrac, liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult, expectedBossDps } from "./weaponStats.js";
 import type { PlayerMods, ItemDef } from "./items.js";
 import type { SimEvent } from "./events.js";
 import type { InputCmd, PlayerId } from "./input.js";
@@ -224,6 +224,22 @@ export interface PlayerSim {
   // GUNNER OVERDRIVE self-buff seconds (fire-rate boost + temporary pierce). Decays in
   // stepPlayerPhase so prediction applies the buff the server granted (reconciled via SelfWire).
   overdriveT: number;
+  // GUNNER OVERHEAT boil-over seconds (Wave 2 signature): a short +fire-rate + +pierce burst that
+  // fires when Momentum hits max, then rolls on. Decays in stepPlayerPhase like overdriveT (so
+  // prediction applies the burst the server granted) and is read by currentFireRate/resolveShot.
+  overheatT: number;
+  // BULWARK OVERSHIELD chip pool (Wave 2 signature): 0..OVERSHIELD.maxChips of armor that absorbs
+  // BEFORE hearts (drawn on the health bar). Server-owned (mutated in the damage funnel + the
+  // world-phase regen), reconciled + rendered by the local client via SelfWire.
+  overshield: number;
+  // OVERSHIELD regen countdown in TICKS (server-only, integer for crisp determinism): counts down
+  // each world tick; at 0 a chip regens and it resets. Any damage bumps it to OVERSHIELD.pauseTicks
+  // (the out-of-combat buffer — regen never ticks under sustained fire). Off the wire.
+  overshieldRegenT: number;
+  // MENDER HEAL-PULSE cooldown gate (Wave 2 signature): the world tick before which the directed
+  // pulse is refused (mirrors ultReadyAtTick). Server-owned; the client reconciles it for the CD
+  // readout. 0 = ready.
+  pulseReadyAtTick: number;
   // PHASE speed-surge seconds. Kit-AGNOSTIC: a phantom's Phase surges the caster AND affected
   // allies of any kit, so movement keys off this field, never the kit.
   phaseSpeed: number;
@@ -244,6 +260,10 @@ export interface PlayerSim {
   // Re-derived from the consumed input every stepPlayerPhase (like isInteracting) and resolved +
   // cleared in the authoritative updateUlts — never wired, so a client can request, never cast.
   isUltRequested: boolean;
+  // Whether the MENDER heal-pulse was requested THIS tick (the client's pulse input bit). Same
+  // contract as isUltRequested: re-derived from the consumed input, resolved + cleared in the
+  // authoritative updateUlts, never wired — a client can request, the server alone resolves.
+  isPulseRequested: boolean;
 }
 
 // Extra AI target points fed in by the client from co-op presence (Stage A keeps co-op on
@@ -438,12 +458,17 @@ export function createPlayer(id: PlayerId, x: number, y: number): PlayerSim {
     ultCharge: 0,
     ultReadyAtTick: 0,
     overdriveT: 0,
+    overheatT: 0,
+    overshield: 0,
+    overshieldRegenT: 0,
+    pulseReadyAtTick: 0,
     phaseSpeed: 0,
     ultInvuln: 0,
     passiveState: 0,
     ultSources: freshUltSources(),
     ultWasted: 0,
     isUltRequested: false,
+    isPulseRequested: false,
   };
 }
 
@@ -556,12 +581,19 @@ export function setPlayerKit(w: WorldState, pid: PlayerId, kit: KitId): void {
   p.ultCharge = 0;
   p.ultReadyAtTick = 0;
   p.overdriveT = 0;
+  p.overheatT = 0;
+  p.overshieldRegenT = 0;
+  p.pulseReadyAtTick = 0;
   p.phaseSpeed = 0;
   p.ultInvuln = 0;
   p.passiveState = 0;
   p.ultSources = freshUltSources();
   p.ultWasted = 0;
   p.isUltRequested = false;
+  p.isPulseRequested = false;
+  // BULWARK opens with a full OVERSHIELD so the signature is felt in the first 30 seconds; every
+  // other kit carries none (the pool is inert for them).
+  p.overshield = kit === "bulwark" ? OVERSHIELD.maxChips : 0;
   // Hand the kit its signature starting weapon — but only when the player is still on the
   // stock default loadout (never stomp a mid-run pickup / a re-select that kept gear).
   if (isRealKit(kit)) {
@@ -599,7 +631,16 @@ function onKitDamageDealt(w: WorldState, p: PlayerSim | null, dmg: number): void
   if (p === null || !isRealKit(p.kitId) || dmg <= 0) return;
   accrueUlt(p, "dmg", ultChargeFromDamageDealt(dmg, refEncounterHpForFloor(w.floor)));
   if (p.kitId === "gunner") {
-    if (p.passiveState < MOMENTUM.maxStacks) p.passiveState += 1;
+    if (p.passiveState < MOMENTUM.maxStacks) {
+      p.passiveState += 1;
+      // OVERHEAT boil-over: reaching max stacks fires a short +fire/+pierce burst, then the ramp
+      // falls to resetStacks (not 0) so it keeps rolling. overheatT decays in stepPlayerPhase and
+      // is read by currentFireRate/resolveShot (a faster route to the raw fire cap, never above).
+      if (p.passiveState >= MOMENTUM.maxStacks) {
+        p.overheatT = ticksToSec(OVERHEAT.burstTicks);
+        p.passiveState = OVERHEAT.resetStacks;
+      }
+    }
   } else if (p.kitId === "mender") {
     p.passiveState = Math.min(LIFEBLOOM.poolCap, p.passiveState + dmg * LIFEBLOOM.fraction);
   }
@@ -691,8 +732,52 @@ function updateUlts(w: WorldState, ev: SimEvent[]): void {
       const healed = menderHeal(w, p, target, LIFEBLOOM.healPerTick, ev, true); // HoT: rate-clamped
       if (healed > 0) p.passiveState -= healed;
     }
+    // BULWARK OVERSHIELD regen (Wave 2): 1 chip / regenTicks, PAUSED pauseTicks after any damage.
+    // Integer tick countdown for crisp determinism (never accrues while paused / under fire).
+    if (p.kitId === "bulwark") {
+      if (p.overshieldRegenT > 0) p.overshieldRegenT -= 1;
+      else if (p.overshield < OVERSHIELD.maxChips) { p.overshield += 1; p.overshieldRegenT = OVERSHIELD.regenTicks; }
+    }
+    if (p.isPulseRequested) resolveHealPulse(w, p, ev);
     if (p.isUltRequested) resolveUlt(w, p, ev);
   }
+}
+
+// The AIMED ally under a MENDER's reticle within `range`: the living ally whose bearing is closest
+// to the aim (within a ~45° cone), id-tiebroken for determinism; a solo Mender falls back to
+// self. Downed/absent bodies are skipped (the pulse never revives). Pure over positions.
+function aimedAllyInRange(w: WorldState, p: PlayerSim, range: number): PlayerSim | null {
+  let best: PlayerSim | null = null;
+  let bestDelta = Math.PI / 4; // the cone half-angle: nothing outside ~45° of the aim qualifies
+  for (const other of w.players.values()) {
+    if (other === p || other.isDown || other.hp <= 0 || other.isAbsent) continue;
+    const dx = other.x - p.x, dy = other.y - p.y;
+    if (Math.hypot(dx, dy) > range) continue;
+    const delta = Math.abs(Math.atan2(Math.sin(Math.atan2(dy, dx) - p.aimAngle), Math.cos(Math.atan2(dy, dx) - p.aimAngle)));
+    if (delta < bestDelta || (delta === bestDelta && best !== null && other.id < best.id)) { bestDelta = delta; best = other; }
+  }
+  if (best === null && p.hp > 0 && !p.isDown) return p; // solo clutch self-heal
+  return best;
+}
+
+// Validate + resolve the MENDER directed HEAL-PULSE (Wave 2): a `heal`-HP BURST to the aimed ally
+// on a short cooldown. The burst bypasses the per-tick rate-clamp-DOWN (a responsive clutch save)
+// but CONSUMES the healed HP against the shared incoming-heal budget, so pulse + Lifebloom +
+// Sanctuary combined can never out-heal the sustained per-target/party ceiling. Server-owned
+// (world phase only, like the ult) — a client can request, never resolve.
+function resolveHealPulse(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
+  p.isPulseRequested = false;
+  if (p.kitId !== "mender" || w.tick < p.pulseReadyAtTick) return;
+  const target = aimedAllyInRange(w, p, HEAL_PULSE.range);
+  if (target === null) return; // no ally under the reticle: the button is not spent
+  p.pulseReadyAtTick = w.tick + HEAL_PULSE.cooldownTicks;
+  const before = target.hp;
+  target.hp = Math.min(target.maxHp, target.hp + HEAL_PULSE.heal);
+  const healed = target.hp - before; // overheal discarded (never charges, never counts to budget)
+  if (healed <= 0) return;
+  consumeIncomingHeal(w, target, healed); // counts FULLY against the shared per-target/party clamp
+  ev.push({ t: "heal", pid: target.id, x: target.x, y: target.y });
+  accrueUlt(p, "heal", ultChargeFromHealDone(healed));
 }
 
 // §10: is a hostile encounter LIVE (enemies alive/aggro)? Gates the ult time-floor so it never
@@ -1378,16 +1463,19 @@ function settleEnemySpawn(w: WorldState, e: Enemy): void {
 // The live damage/fire-rate multipliers (low-HP berserk/adrenaline scalers, capped) live in
 // weaponStats.ts so the HUD's stat readouts share the EXACT math real shots resolve with.
 function currentDamageMult(p: PlayerSim): number {
-  let m = liveDamageMult(p.mods, lowHpFrac(p.hp, p.maxHp));
-  // GUNNER MOMENTUM: a small live damage ramp per unhit-hit stack (spec §2.1). A fixed constant
-  // per stack, so it can't compound past its authored ceiling.
-  if (p.kitId === "gunner" && p.passiveState > 0) m *= 1 + p.passiveState * MOMENTUM.damagePerStack;
+  const m = liveDamageMult(p.mods, lowHpFrac(p.hp, p.maxHp));
+  // GUNNER MOMENTUM (spec §2.1): a small live damage ramp per unhit-hit stack — a FASTER ROUTE to
+  // the raw damage cap (gunnerDamageMult re-clamps to CAPS.damageMult), never a higher ceiling.
+  if (p.kitId === "gunner") return gunnerDamageMult(m, p.passiveState);
   return m;
 }
 function currentFireRate(p: PlayerSim): number {
   let m = liveFireRateMult(p.mods, lowHpFrac(p.hp, p.maxHp));
   if (p.kitId === "gunner") {
-    if (p.passiveState > 0) m *= 1 + p.passiveState * MOMENTUM.fireRatePerStack; // MOMENTUM
+    // MOMENTUM + the OVERHEAT boil-over burst: both are the SAME clamped route to the raw fire cap
+    // (gunnerFireRateMult re-clamps to CAPS.fireRateMult), so Overheat is a faster route in a
+    // window, NEVER above it.
+    m = gunnerFireRateMult(m, p.passiveState, p.overheatT > 0);
     // OVERDRIVE (§10): a SEPARATE multiplicative layer (never added to the raw fireRateMult cap),
     // and the COMBINED result is clamped to the expressive fire-rate ceiling so a strong build +
     // Overdrive can't blow past the ~7x expressive DPS envelope.
@@ -1434,7 +1522,9 @@ function resolveShot(p: PlayerSim, weapon: WeaponId): ShotSpec {
     radius: wep.bulletRadius * p.mods.bulletSizeMult,
     color: wep.color,
     damage: wep.damage * riskMult * currentDamageMult(p),
-    pierce: Math.min(4, (wep.basePierce ?? 0) + p.mods.pierce + (p.kitId === "gunner" && p.overdriveT > 0 ? OVERDRIVE.bonusPierce : 0)),
+    pierce: Math.min(4, (wep.basePierce ?? 0) + p.mods.pierce
+      + (p.kitId === "gunner" && p.overdriveT > 0 ? OVERDRIVE.bonusPierce : 0)
+      + (p.kitId === "gunner" && p.overheatT > 0 ? OVERHEAT.bonusPierce : 0)),
     critChance: p.mods.critChance,
     critMult: p.mods.critMult,
     fx: wep.id,
@@ -2059,6 +2149,7 @@ function tickStatuses(w: WorldState, e: Enemy, dt: number, ev: SimEvent[]): void
     if (wasFrozen && !isFrozen(e) && !e.dead) ev.push({ t: "freezeBroke", eid: e.id, x: e.x, y: e.y });
   }
   if (e.shock > 0) e.shock = e.shock > dt ? e.shock - dt : 0;
+  if (e.markT > 0) e.markT = e.markT > dt ? e.markT - dt : 0; // PHANTOM dash-through mark decay
   if (e.burn > 0) {
     e.burn = e.burn > dt ? e.burn - dt : 0;
     e.statusTick += dt;
@@ -2365,14 +2456,17 @@ function drawPersistentBossBudget(w: WorldState, e: Enemy, dmg: number): number 
 function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeInfo, ev: SimEvent[]): void {
   const frozen = isFrozen(e);
   const isBossGrade = isBossKind(e.kind) || e.captainPhase !== undefined;
+  // PHANTOM MARK (Wave 2): a dash-through enemy takes +vulnMult from ALL sources (this shared hit
+  // path is every player's shots, so a marked boss is a team focus target). 1 when unmarked.
+  const markMult = e.markT > 0 ? PHANTOM_MARK.vulnMult : 1;
   let dmg: number;
   if (isBossGrade) {
     // The boss vulnerability CHANNEL (balancer remediation): statuses keep their utility
-    // (arc, slow, DoT) but amplify NOTHING here, and the crit multiplier counts at most
-    // BOSS_VULN_CAP — combined vulnerability ≤1.35, non-multiplicative by construction.
+    // (arc, slow, DoT) but amplify NOTHING here, and the crit multiplier AND the phantom mark
+    // SHARE the BOSS_VULN_CAP — combined vulnerability ≤1.35, the mark NEVER adds on top.
     // hit.damage carries the crit multiplier baked in, so it is divided back out before
     // the capped channel applies. The fire-time pellet/weapon coefficient rides on top.
-    dmg = (hit.damage / hit.critX) * Math.min(BOSS_VULN_CAP, hit.critX) * hit.bossCoef;
+    dmg = (hit.damage / hit.critX) * Math.min(BOSS_VULN_CAP, hit.critX * markMult) * hit.bossCoef;
     if (hit.isPersistent) {
       dmg = drawPersistentBossBudget(w, e, dmg);
       // A fully budget-capped hit lands as pressure, not damage: no zero-damage number,
@@ -2380,7 +2474,7 @@ function strikeEnemy(w: WorldState, p: PlayerSim | null, e: Enemy, hit: StrikeIn
       if (dmg <= 0) return;
     }
   } else {
-    dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1);
+    dmg = hit.damage * (e.shock > 0 ? C.SHOCK_DMG_MULT : 1) * (frozen ? C.FROZEN_DMG_MULT : 1) * markMult;
   }
   damageEnemy(w, hit.ownerId, e, dmg, ev);
   // Kit hooks (ult meter charge from damage dealt, GUNNER momentum ramp, MENDER lifebloom
@@ -2610,11 +2704,18 @@ function updatePlayer(w: WorldState, p: PlayerSim, input: InputCmd, dt: number, 
   const dashProfile = floorDashProfile(w.floorDescriptor.mutators);
   const dashBankHeadroom = dashCooldown(p) * dashProfile.cdMult * p.mods.extraDashCharge;
   if (input.dash && p.dashCd <= dashBankHeadroom && p.dashTime <= 0 && (ix || iy)) {
-    p.dashTime = PLAYER.dashActive * dashProfile.activeMult; p.dashCd += dashCooldown(p) * dashProfile.cdMult; p.dashDx = ix; p.dashDy = iy;
+    const dashCdAdded = dashCooldown(p) * dashProfile.cdMult;
+    p.dashTime = PLAYER.dashActive * dashProfile.activeMult; p.dashCd += dashCdAdded; p.dashDx = ix; p.dashDy = iy;
     // The dash iframe is its own window (0.18s, covering the 0.16s active dash + tail):
     // SET, never max'd against post-hit protection, so the two can neither refresh nor
     // extend each other.
     p.dashInvuln = PLAYER.dashIframe;
+    // PHANTOM MARK (Wave 2): resolve the dash-through mark + cooldown refund ONCE at dash start,
+    // swept along the projected dash path — naturally once-per-dash (never a per-tick double
+    // refund), and the mark applies the instant the phantom commits.
+    if (p.kitId === "phantom") {
+      phantomDashMark(w, p, PLAYER.dashSpeed * dashProfile.speedMult * p.dashTime, dashCdAdded);
+    }
     cancelReviveChannelBy(w, p.id); // gate §6: the reviver's dash cancels their channel
     // PHANTOM charges its ult off dashes performed (spec §2.4) — credited AUTHORITATIVELY in
     // updateUlts off this dashStart event, never here (the player phase runs in client
@@ -8984,6 +9085,31 @@ function dashBreakProps(w: WorldState, p: PlayerSim, ev: SimEvent[]): void {
   }
 }
 
+// PHANTOM MARK (Wave 2): mark every enemy whose body the phantom's dash path sweeps through
+// (+vuln for PHANTOM_MARK.durationTicks, non-stacking — a fresh pass REFRESHES), and if it caught
+// at least one, REFUND PHANTOM_MARK.refundFrac of the cooldown just added. Resolved once at dash
+// start along the swept segment (deterministic, once-per-dash). Decoys/mechanic bodies are fair
+// game to mark (harmless — they take no meaningful damage). `refundBase` is the cooldown added.
+function phantomDashMark(w: WorldState, p: PlayerSim, dist: number, refundBase: number): void {
+  const ax = p.x, ay = p.y;
+  const bx = p.x + p.dashDx * dist, by = p.y + p.dashDy * dist;
+  const segLen2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay);
+  const markSec = ticksToSec(PHANTOM_MARK.durationTicks);
+  let caught = false;
+  for (const e of w.enemies) {
+    if (e.dead) continue;
+    // Closest point on the dash segment to the enemy center (t clamped to the segment).
+    let t = segLen2 > 0 ? ((e.x - ax) * (bx - ax) + (e.y - ay) * (by - ay)) / segLen2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const cx = ax + (bx - ax) * t, cy = ay + (by - ay) * t;
+    const rr = p.pr + e.radius;
+    if ((e.x - cx) * (e.x - cx) + (e.y - cy) * (e.y - cy) > rr * rr) continue;
+    e.markT = markSec; // non-stacking: refresh to the full window
+    caught = true;
+  }
+  if (caught) p.dashCd = Math.max(0, p.dashCd - refundBase * PHANTOM_MARK.refundFrac);
+}
+
 
 // `by` is the player who destroyed the prop (bullet owner / melee / dash / chain source), so an
 // explosive barrel credits its kills to the right player. A departed destroyer (undefined)
@@ -9460,6 +9586,9 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
   // MAX_TOTAL_DR. Integer HP is preserved by SOAKING the reduced fraction into the passive
   // channel and negating only WHOLE points, so the realized reduction converges without fractions.
   if (p.kitId === "bulwark" && amount > 0) {
+    // OVERSHIELD regen PAUSES for pauseTicks after taking ANY damage (the buffer is gone under
+    // sustained fire) — set before the soak so even a fully-Hardened-soaked hit holds regen off.
+    p.overshieldRegenT = Math.max(p.overshieldRegenT, OVERSHIELD.pauseTicks);
     const dr = Math.min(HARDENED.reduction, MAX_TOTAL_DR);
     p.passiveState += amount * dr;
     const negate = Math.floor(p.passiveState);
@@ -9468,14 +9597,27 @@ function damagePlayer(w: WorldState, p: PlayerSim, amount: number, ev: SimEvent[
       amount -= applied;
       p.passiveState -= applied;
     }
+    // OVERSHIELD absorbs BEFORE hearts (§10, within MAX_TOTAL_DR): each chip soaks 1 HP. No
+    // post-hit iframe is granted while the shield eats a hit — that is exactly what lets sustained
+    // fire drain the pool (never invuln). A fully-absorbed hit returns below without heart loss.
+    if (p.overshield > 0 && amount > 0) {
+      const absorbed = Math.min(p.overshield, amount);
+      p.overshield -= absorbed;
+      amount -= absorbed;
+    }
   }
   if (amount <= 0) return;
   // The ult meter charges off damage TAKEN for the tank (spec §2.3), normalized by the tank's
   // own maxHp (§10 target-agnostic), off the post-reduction amount.
   if (p.kitId === "bulwark") accrueUlt(p, "taken", ultChargeFromDamageTaken(amount, p.maxHp));
-  // GUNNER MOMENTUM fully decays on taking ANY damage (spec §2.1). Only gunner uses the passive
-  // channel for momentum; the other kits' channel is left untouched.
-  if (p.kitId === "gunner") p.passiveState = 0;
+  // GUNNER MOMENTUM softened decay (Wave 2): a significant hit (>= 1 heart) loses significantLoss
+  // stacks; a sub-heart chip loses chipLoss — a graze no longer WIPES the ramp, so it is
+  // achievable in a boss fight. `amount` here is the post-reduction HP about to land. Only gunner
+  // uses the passive channel for momentum; the other kits' channel is left untouched.
+  if (p.kitId === "gunner" && p.passiveState > 0) {
+    const loss = amount >= OVERHEAT.significantHitHp ? OVERHEAT.significantLoss : OVERHEAT.chipLoss;
+    p.passiveState = Math.max(0, p.passiveState - loss);
+  }
   p.hp -= amount;
   p.invuln = PLAYER.postHitInvuln;
   // Damage to the CHANNELER cancels the revive it was powering (gate §6) — identity-exact:
@@ -9753,9 +9895,12 @@ export function stepPlayerPhase(w: WorldState, p: PlayerSim, input: InputCmd, dt
   // The "ult requested" intent for this tick — consumed + validated in the AUTHORITATIVE
   // updateUlts (world phase), which online prediction never runs, so a client can only ask.
   p.isUltRequested = input.ult === true && !p.isDown && p.hp > 0;
+  // The MENDER heal-pulse intent — same contract as the ult request (resolved in updateUlts).
+  p.isPulseRequested = input.pulse === true && !p.isDown && p.hp > 0;
   // Self-buff ult timers decay per player step (so prediction applies the server-granted buff
   // the server reconciles) alongside the melee-swing timer. Phase invuln is capped at cast.
   if (p.overdriveT > 0) p.overdriveT = p.overdriveT > dt ? p.overdriveT - dt : 0;
+  if (p.overheatT > 0) p.overheatT = p.overheatT > dt ? p.overheatT - dt : 0;
   if (p.phaseSpeed > 0) p.phaseSpeed = p.phaseSpeed > dt ? p.phaseSpeed - dt : 0;
   if (p.ultInvuln > 0) p.ultInvuln = p.ultInvuln > dt ? p.ultInvuln - dt : 0;
   if (!p.isDown) {

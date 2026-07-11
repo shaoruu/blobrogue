@@ -54,6 +54,9 @@ export interface AuthoritativePlayerSnapshot {
   ultCharge: number;
   ultReadyAtTick: number;
   overdriveT: number;
+  overheatT: number;
+  overshield: number;
+  pulseReadyAtTick: number;
   phaseSpeed: number;
   ultInvuln: number;
   passiveState: number;
@@ -76,7 +79,10 @@ type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
 // - isUltRequested:  per-tick input derivative (the ult key) — re-derived from the consumed
 //                  input every stepPlayerPhase (server + prediction), never wired, so a client
 //                  can only REQUEST an ult; the server alone validates + resolves it.
-type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested";
+// - isPulseRequested: per-tick input derivative (the Mender pulse key) — re-derived from the
+//                  consumed input every stepPlayerPhase (server + prediction), never wired, so a
+//                  client can only REQUEST a pulse; the server alone validates + resolves it.
+type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "meleeSwing" | "isInteracting" | "isAbsent" | "isUltRequested" | "isPulseRequested";
 // Server-only revive/down bookkeeping, off the reconcile snapshot entirely:
 // - reviveBy:       the channel's identity (WHO is reviving whom) — prediction has no
 //                   teammates to bind it to; the readouts ride SelfWire.rev / PlayerWire.rv
@@ -85,7 +91,10 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 // - ultSources/ultWasted: §10 server-side charge-accrual bookkeeping (per-source share caps +
 //   the wasted-overcharge tuning stat). The client only ever reconciles the TOTAL meter
 //   (ultCharge), and never accrues locally, so these never cross the wire.
-type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted";
+// - overshieldRegenT: BULWARK overshield regen bookkeeping (the paused-under-fire countdown). The
+//   client only needs the POOL (overshield) to draw the chip layer; the regen clock is pure
+//   server upkeep and never accrues in prediction, so it stays off the wire.
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
@@ -135,6 +144,9 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     ultCharge: p.ultCharge,
     ultReadyAtTick: p.ultReadyAtTick,
     overdriveT: p.overdriveT,
+    overheatT: p.overheatT,
+    overshield: p.overshield,
+    pulseReadyAtTick: p.pulseReadyAtTick,
     phaseSpeed: p.phaseSpeed,
     ultInvuln: p.ultInvuln,
     passiveState: p.passiveState,
@@ -181,6 +193,9 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.ultCharge = s.ultCharge;
   p.ultReadyAtTick = s.ultReadyAtTick;
   p.overdriveT = s.overdriveT;
+  p.overheatT = s.overheatT;
+  p.overshield = s.overshield;
+  p.pulseReadyAtTick = s.pulseReadyAtTick;
   p.phaseSpeed = s.phaseSpeed;
   p.ultInvuln = s.ultInvuln;
   p.passiveState = s.passiveState;
