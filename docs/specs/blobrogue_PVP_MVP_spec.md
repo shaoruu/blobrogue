@@ -83,3 +83,17 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 - COVER: 3 rings, all breakable props (reuse existing destructible prop; clusters since r15), all 4-fold symmetric: (1) CENTER cluster ~4 props (focal point → players converge, destructible so no fortress); (2) MID ring 4-8 small nodes (1-2 props) at mid-radius between spawns, ≥3-tile lanes between (always a sightline through); (3) CORNER blockers if hard corners kept. HARD RULE: no cover lets a player see out while unseeable from a whole half; every piece small+breakable+flankable (approach from ≥2 angles from any point). Breakable → arena DEGRADES over match (cover thins → late-game raw aim = good emergent arc).
 - TEST: assert arena + spawn set invariant under 90° rotation.
 - PENDING: GD may send exact 19×19 tile grid w/ spawn+prop coords → use verbatim if it arrives; else author from topology.
+
+## EXACT ARENA GRID (main-agent authored, verified 4-fold symmetric — use verbatim in buildPvpArena())
+19×19 tiles (0..18), center (9,9). All groups validated invariant under 90° CW rotation rot90(x,y)=(y,18-x).
+- CLIPPED CORNERS (wall cells, cut from each corner): the orbit of {(0,0),(1,0),(0,1),(2,0),(0,2)} → 20 cells:
+  (0,0)(1,0)(2,0)(0,1)(0,2) + 3 rotations. Plus the standard 1-tile border wall on all sides.
+- SPAWN CANDIDATES (8): edge-mid @⅔R = (9,3)(15,9)(9,15)(3,9); diagonal @½R = (5,5)(13,5)(13,13)(5,13).
+  Select N-most-spread by match-start count (2p: opposite edge pair; 4p: all 4 edge-mids; 3/5/6p: max-spread subset). Respawn = farthest-from-living-opponent + not-in-crosshair.
+- COVER (breakable props, 4-fold symmetric):
+  - center cluster: (8,8)(10,8)(8,10)(10,10)  [knot around center, center tile (9,9) open]
+  - mid-ring nodes (cardinal): (9,6)(12,9)(9,12)(6,9)
+  - mid diagonal nodes: (7,7)(11,7)(11,11)(7,11)
+  - corner blockers: (3,3)(15,3)(15,15)(3,15)
+  All lanes between adjacent nodes ≥3 tiles; every cover piece small + breakable + flankable from ≥2 angles.
+- If the GD sends a differing exact grid, prefer the GD's; otherwise this grid is authoritative. Assert arena+spawns invariant under 90° rotation.
