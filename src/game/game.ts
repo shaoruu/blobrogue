@@ -1,4 +1,4 @@
-import type { Dungeon } from "../sim/dungeon.js";
+import type { Dungeon, Room } from "../sim/dungeon.js";
 import { TILE } from "../sim/types.js";
 import type { Enemy, EnemyKind, Bullet, Particle, DmgNumber, Pickup, WeaponId, AttackMove, Prop, PropKind, Chest, Hazard, RemotePlayer, FloorHazard, FloorHazardKind, Effect } from "../sim/types.js";
 import { floorHazardPhaseAt, floorHazardPhaseFrac, RIFT_PULL_RADIUS } from "../sim/hazards.js";
@@ -508,6 +508,23 @@ const TELEGRAPH_COLOR: Record<AttackMove, string> = {
 // tells are crisp from cast; DYNAMIC (aim-locking) tells follow the target with a soft edge,
 // then SNAP crisp + flash on the AUTHORITATIVE isAimLocked commit (never an art timer).
 const TG_DANGER_EDGE = "#ff6a3b";   // universal hot danger hatch/edge ("dodge this")
+// JET surprise-layer palette (AD hard gates — JET_SURPRISE_LAYER_DIRECTION). The echo is
+// player-SHAPED, so the ENTIRE separation from a warm solid teammate rides value + opacity +
+// cold + telegraph (NEVER shape). A teammate averages lum ~0.68 (bright amber, solid, no
+// telegraph); the echo is the opposite on every axis.
+const JET_ECHO_INK = "#0e0b1a";      // near-black echo body (lum ~0.05) — an enormous value gap under a teammate
+const JET_ECHO_RIM = "#2a5fa0";      // thin COLD-blue anti-vanish rim (edge only, never a fill)
+const JET_ECHO_RIM_HOT = "#57b6ff";  // sparse cold hot-points on the rim (never warm)
+const JET_ECHO_SEAM = "#7a3d12";     // DARK dead-amber seams ONLY (lum ~0.28) — NEVER hero-bright amber (that IS a teammate)
+const JET_ECHO_EYE_PIN = "#7fe0ff";  // cold-cyan pinpoint in the hollow void eyes
+const JET_ECHO_TELL = "#57b6ff";     // the 0.7s pre-fire cold hatched danger-edge (a separator no teammate has)
+// Corruption reshape (AD Part 2): the creep RECEDES (recessive cold-blue, low-contrast, within
+// the floor value band — MOOD), but each DRAIN ZONE is the real hazard, so its EDGE reads
+// "don't stand here" — a BRIGHT authored hatched edge in the reserved telegraph register (kept
+// COLD, distinct from the hot attack register, so it reads as JET's persistent corruption).
+const JET_CORRUPT_FILL = "#0b1220";  // recessive cold-blue corruption fill (mood)
+const JET_CORRUPT_EDGE = "#57b6ff";  // bright cold-frost hatched drain-zone edge ("don't stand here")
+const JET_SAFE_AMBER = "122,61,18";  // dead-amber safe-pocket wash (rgb; warmer/lighter, never hero-bright)
 const TG_FILL_ALPHA = 0.26;          // family-hue fill (§R2 ~0.22-0.30)
 // HARD RENDERER RULE (safe-pocket clamp): every computed safe pocket must stay >= 48px (the
 // body+margin stand-minimum). If one would shrink below at runtime (e.g. a CONVERGE_POCKET
@@ -5796,6 +5813,12 @@ export class Game {
       const isHopSlam = e.kind === "boss" && a.move === "hopslam";
       const drawSize = this.enemyDrawSize(e);
 
+      // JET's mirror-image echo owns its entire look (AD hard gates): a near-black, translucent,
+      // cold-rimmed, hollow-eyed, telegraphed reflection. Drawn fully here — skip the generic
+      // body pass so the near-black value + <=40% opacity are guaranteed (never a bright body,
+      // never a floating enemy bar that would read as a monster).
+      if (e.kind === "jet_echo") { this.renderJetEcho(e, sx, sy, drawSize, pose, anim.clock); continue; }
+
       // An underground burrower (tunneling, or armed under its marker — the sim's
       // untargetable window) renders as a traveling mound, never a body: nothing to shoot
       // until it surfaces.
@@ -5963,10 +5986,6 @@ export class Game {
       }
       // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
       if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
-      // JET's mirror-image echo: a COLD jet-black translucent reflection with a cold rim +
-      // dead-amber seams + hollow eyes — legible on a dark floor and NEVER confusable with a
-      // warm, solid, player-colored teammate (the CD readability gate).
-      if (e.kind === "jet_echo") this.renderJetEcho(e, sx, sy, drawSize, anim.clock);
       // The Weaver's lattice: every knot casts its three thread-lines (the blink lanes,
       // crossing AT the shootable node) and glows as the mechanic target it is.
       if (e.kind === "knot") this.renderKnotLattice(e, sx, sy, drawSize, anim.clock);
@@ -6018,6 +6037,10 @@ export class Game {
   private renderHazards() {
     if (this.hazards.length === 0) return;
     const { ctx, renderCam: cam } = this;
+    // AD Part 2: as JET's corruption creeps in, the SAFE POCKET (the uncorrupted interior) is
+    // washed a touch warmer/lighter in DEAD-amber (never hero-bright) so the eye finds it as the
+    // arena darkens — it is what the player hunts. Drawn UNDER the drain patches.
+    this.renderCorruptSafePocket();
     // The Weaver's committed lane flares through its whole dash tell: silk near the
     // locked thread (her position to the exit mark) burns bright — the read.
     const dasher = this.enemies.find((e) => e.kind === "weaver" && e.attack.move === "rush" && e.attack.phase === "windup");
@@ -6060,29 +6083,22 @@ export class Game {
         continue;
       }
       if (h.kind === "corrupt") {
-        // JET's corruption drain (§5g B3): a cold black-resin patch — MOOD in the fill, but its
-        // DANGER reads FIRST off a BRIGHT authored edge (dead-amber crack-line + cold-frost rim)
-        // so "don't stand here" is legible even as the floor goes cold-dark (the dark-on-dark
-        // gate: the danger cue always wins over the corruption creep).
-        ctx.globalAlpha = 0.34 * fade;
-        ctx.fillStyle = "#0b1220"; // cold near-black resin (never violet)
+        // AD Part 2: the corruption RECEDES — a recessive, low-contrast, desaturated cold-blue
+        // fill that sits WITHIN the floor value band (mood, never a danger signal, never
+        // competing with bullets/telegraphs/enemies). The DRAIN ZONE is the actual hazard, so
+        // its EDGE reads FIRST: a BRIGHT authored hatched danger-edge in the reserved telegraph
+        // register, kept COLD (distinct from the hot attack register) so it reads as JET's
+        // persistent corruption. Dark-on-dark gate: the bright edge always wins over the creep.
+        ctx.globalAlpha = 0.20 * fade; // recessive fill (mood)
+        ctx.fillStyle = JET_CORRUPT_FILL;
         ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
-        // Cold-frost rim (bright, always visible on a dark floor).
-        ctx.globalAlpha = 0.7 * fade;
-        ctx.strokeStyle = "#7fd4ff";
+        const blink = 0.75 + 0.25 * Math.sin(this.animClock * 5 + h.id * 1.3);
+        ctx.globalAlpha = (0.7 + 0.2 * blink) * fade;
+        ctx.strokeStyle = JET_CORRUPT_EDGE;
         ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]); // hatched danger-edge (the reserved register language)
         ctx.beginPath(); ctx.arc(sx, sy, h.radius - 1, 0, 6.28); ctx.stroke();
-        // Dead-amber crack-lines radiating from the core (the authored "corruption" edge tell).
-        ctx.globalAlpha = 0.6 * fade;
-        ctx.strokeStyle = "#c9962e";
-        ctx.lineWidth = 1.5;
-        for (let i = 0; i < 4; i++) {
-          const ang = (i / 4) * 6.28 + h.id * 0.9;
-          ctx.beginPath();
-          ctx.moveTo(sx + Math.cos(ang) * h.radius * 0.3, sy + Math.sin(ang) * h.radius * 0.3);
-          ctx.lineTo(sx + Math.cos(ang) * h.radius, sy + Math.sin(ang) * h.radius);
-          ctx.stroke();
-        }
+        ctx.setLineDash([]);
         continue;
       }
       if (h.kind === "charge") {
@@ -7484,25 +7500,46 @@ export class Game {
     ctx.restore();
   }
 
-  // JET's MIRROR-IMAGE ECHO (§5g B2): the CD readability gate made concrete. A reflection is
-  // COLD (jet-black + a cold-blue rim + dead-amber seams) + TRANSLUCENT + HOLLOW-EYED — the exact
-  // opposite of a real teammate (WARM amber, player color, SOLID, real eyes), so it can never be
-  // mistaken for one, even on a cold-dark corrupted floor. The body sprite already drew at the
-  // archetype's low alpha; this overlay adds the cold rim, the dead-amber seams, and the void eyes.
-  private renderJetEcho(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+  // JET's MIRROR-IMAGE ECHO — the AD's make-or-break readability gate, built to the exact
+  // quantified spec (JET_SURPRISE_LAYER_DIRECTION). The echo is player-SHAPED, so shape can NEVER
+  // separate it from a teammate — the ENTIRE tell rides value + opacity + cold + telegraph:
+  //  - BODY: a NEAR-BLACK (JET_ECHO_INK, lum ~0.05) tinted silhouette at <=40% opacity (floor
+  //    shows through) — an enormous value gap under a teammate's bright ~0.68 solid body. Never
+  //    brightened toward the teammate range.
+  //  - RIM: a THIN cold-blue edge (never a fill) with sparse cold hot-points (anti-vanish).
+  //  - SEAMS: DARK dead-amber ONLY — never hero-bright amber (bright amber IS a teammate).
+  //  - EYES: hollow voids with a cold-cyan pinpoint.
+  //  - TELEGRAPH: the 0.7s pre-fire cold hatched danger-edge (a separator no teammate has).
+  // Drawn fully here (the caller skips the generic body pass) so the value/opacity are guaranteed.
+  private renderJetEcho(e: Enemy, sx: number, sy: number, size: number, pose: EnemyPose, clock: number) {
     const { ctx } = this;
+    const a = e.attack;
+    const fade = e.aux > 0 ? Math.min(1, e.aux / 0.6) : 1; // dissolves to resin flecks as its life ends
+    // The 0.7s pre-fire telegraph FIRST (under the body) — a cold hatched danger-edge.
+    if (a.phase === "windup") this.renderJetEchoTelegraph(e, sx, sy);
+    // BODY — near-black tinted silhouette (the exact player pose) at <=40% opacity.
+    const choice = this.sprites.selectClip("jet_echo", pose);
+    const facing = choice.isMirrored ? -1 : 1;
+    const xf = characterXform(this.animForEnemy(e), CHARACTER_STYLE);
+    this.drawChar("jet_echo", choice.clip, sx, sy, size, facing, xf, 1, 0.38 * fade, 0, clock, JET_ECHO_INK, choice.isHoldFirstFrame);
     const r = size * 0.32;
-    const fade = e.aux > 0 ? Math.min(1, e.aux / 0.6) : 1; // dissolving flecks-out as its life ends
     const pulse = 0.6 + 0.4 * Math.sin(clock * 6 + e.id);
     ctx.save();
-    // Cold rim — the primary "this is a reflection, not a warm body" read.
-    ctx.globalAlpha = 0.85 * fade;
-    ctx.strokeStyle = "#7fd4ff";
-    ctx.lineWidth = 2;
+    // RIM — a THIN cold-blue edge (never a fill).
+    ctx.globalAlpha = 0.8 * fade;
+    ctx.strokeStyle = JET_ECHO_RIM;
+    ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(sx, sy, r * 1.02, 0, 6.28); ctx.stroke();
-    // Dead-amber seams (cold, hollowed amber — never the warm player amber).
-    ctx.globalAlpha = 0.5 * fade * pulse;
-    ctx.strokeStyle = "#c9962e";
+    // Sparse cold hot-points on the rim (anti-vanish, never warm).
+    ctx.globalAlpha = (0.4 + 0.4 * pulse) * fade;
+    ctx.fillStyle = JET_ECHO_RIM_HOT;
+    for (let i = 0; i < 3; i++) {
+      const ang = clock * 0.6 + (i / 3) * 6.28;
+      ctx.beginPath(); ctx.arc(sx + Math.cos(ang) * r * 1.02, sy + Math.sin(ang) * r * 1.02, 1.3, 0, 6.28); ctx.fill();
+    }
+    // SEAMS — DARK dead-amber only (never hero-bright amber).
+    ctx.globalAlpha = 0.55 * fade;
+    ctx.strokeStyle = JET_ECHO_SEAM;
     ctx.lineWidth = 1.5;
     for (let i = 0; i < 3; i++) {
       const ang = (i / 3) * 6.28 + 0.5;
@@ -7511,11 +7548,82 @@ export class Game {
       ctx.lineTo(sx + Math.cos(ang) * r * 0.9, sy + Math.sin(ang) * r * 0.9);
       ctx.stroke();
     }
-    // Hollow eyes — two cold voids where a real player has none.
-    ctx.globalAlpha = 0.8 * fade;
-    ctx.fillStyle = "#04070c";
-    ctx.beginPath(); ctx.arc(sx - r * 0.28, sy - r * 0.1, r * 0.14, 0, 6.28); ctx.fill();
-    ctx.beginPath(); ctx.arc(sx + r * 0.28, sy - r * 0.1, r * 0.14, 0, 6.28); ctx.fill();
+    // EYES — hollow voids, each with a cold-cyan pinpoint.
+    for (const ex of [-0.28, 0.28]) {
+      ctx.globalAlpha = 0.85 * fade;
+      ctx.fillStyle = "#04070c";
+      ctx.beginPath(); ctx.arc(sx + r * ex, sy - r * 0.1, r * 0.15, 0, 6.28); ctx.fill();
+      ctx.globalAlpha = (0.6 + 0.4 * pulse) * fade;
+      ctx.fillStyle = JET_ECHO_EYE_PIN;
+      ctx.beginPath(); ctx.arc(sx + r * ex, sy - r * 0.1, 1.2, 0, 6.28); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // The echo's 0.7s pre-fire in the reserved enemy-telegraph register — a COLD hatched
+  // danger-edge (no teammate has a telegraph, so it is another separator): the salvo bearing as
+  // a cold aim lane + a hatched cold rim that tightens as the shot nears.
+  private renderJetEchoTelegraph(e: Enemy, sx: number, sy: number) {
+    const { ctx } = this;
+    const a = e.attack;
+    const w = a.windup;
+    const size = this.enemyDrawSize(e);
+    ctx.save();
+    ctx.globalAlpha = (a.isAimLocked ? 0.85 : 0.4) * (0.55 + 0.45 * w);
+    ctx.strokeStyle = JET_ECHO_TELL;
+    ctx.lineWidth = a.isAimLocked ? 3 : 1.5;
+    ctx.setLineDash(a.isAimLocked ? AIM_SOLID : AIM_DASH);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx + Math.cos(a.lockedAngle) * 220, sy + Math.sin(a.lockedAngle) * 220);
+    ctx.stroke();
+    const r = size * (0.55 + 0.3 * w);
+    ctx.globalAlpha = 0.4 + 0.45 * w;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 5]); // hatched cold danger-edge
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, 6.28); ctx.stroke();
+    ctx.setLineDash(AIM_SOLID);
+    ctx.restore();
+  }
+
+  // The boss arena room a body sits in (mirrors the sim's jetArenaRoom): the last room on a
+  // boss floor, else the room whose tile-rect holds the body. Used for the safe-pocket wash.
+  private arenaRoomFor(e: Enemy | undefined): Room | null {
+    const d = this.dungeon;
+    if (e) {
+      const tx = Math.floor(e.x / TILE), ty = Math.floor(e.y / TILE);
+      for (const room of d.rooms) {
+        if (tx >= room.x && tx < room.x + room.w && ty >= room.y && ty < room.y + room.h) return room;
+      }
+    }
+    return d.rooms.length > 0 ? d.rooms[d.rooms.length - 1] : null;
+  }
+
+  // AD Part 2 safe-pocket read: as the drain zones close in, wash the uncorrupted interior a
+  // touch warmer/lighter in DEAD-amber (never hero-bright) so the eye finds it. Data-driven —
+  // the pocket radius is the distance from the arena center to the nearest drain zone, so it
+  // shrinks exactly as the corruption creeps in (P2 -> P3).
+  private renderCorruptSafePocket() {
+    let hasCorrupt = false;
+    for (const h of this.hazards) { if (h.kind === "corrupt") { hasCorrupt = true; break; } }
+    if (!hasCorrupt) return;
+    const room = this.arenaRoomFor(this.enemies.find((e) => e.kind === "jet"));
+    if (!room) return;
+    const cx = (room.cx + 0.5) * TILE, cy = (room.cy + 0.5) * TILE;
+    let safeR = Infinity;
+    for (const h of this.hazards) {
+      if (h.kind !== "corrupt") continue;
+      safeR = Math.min(safeR, Math.hypot(h.x - cx, h.y - cy) - h.radius);
+    }
+    if (!isFinite(safeR) || safeR < TILE) return;
+    const { ctx, renderCam: cam } = this;
+    const psx = cx - cam.x, psy = cy - cam.y;
+    ctx.save();
+    const g = ctx.createRadialGradient(psx, psy, safeR * 0.3, psx, psy, safeR);
+    g.addColorStop(0, `rgba(${JET_SAFE_AMBER},0.10)`);
+    g.addColorStop(1, `rgba(${JET_SAFE_AMBER},0)`);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(psx, psy, safeR, 0, 6.28); ctx.fill();
     ctx.restore();
   }
 

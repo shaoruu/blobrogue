@@ -358,7 +358,11 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   // hollow-eyed with a cold rim + dead-amber seams so it never reads as a warm teammate.
   jet_echo: {
     kind: "jet_echo", sprite: "jet_echo", movement: "drift", isPhasing: false,
-    radius: 26, drawSize: 60, alpha: 0.6, tint: "#3a4a6a", kbResist: 6,
+    // AD hard gates (JET_SURPRISE_LAYER_DIRECTION): the echo body is NEAR-BLACK (lum ~0.05,
+    // an enormous value gap under a teammate's ~0.68) and TRANSLUCENT (<=40%, floor shows
+    // through) — never brightened toward the teammate range. tint feeds the near-black body
+    // fill + resin flecks; the client renders rim/seams/eyes/telegraph on top.
+    radius: 26, drawSize: 60, alpha: 0.38, tint: "#0e0b1a", kbResist: 6,
     baseHp: 6, baseSpeed: 0, touchDamage: 0, threat: 1.5,
   },
 };
