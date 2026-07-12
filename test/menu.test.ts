@@ -39,6 +39,7 @@ import { getFunctionName } from "convex/server";
 import { worldIdForRoomCode } from "../src/net/protocol.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { itemById } from "../src/sim/items.js";
+import { getSelectedKit, setSelectedKit } from "../src/net/kitSelection.js";
 import { NUDGE_DISMISSED_AT_KEY, NUDGE_SHOWN_AT_KEY } from "../src/ui/signinNudge.js";
 import { padActions } from "../src/ui/menuGamepad.js";
 import { CHANGELOG, LATEST_VERSION } from "../src/generated/changelog.js";
@@ -399,6 +400,32 @@ async function main(): Promise<void> {
     check("the fixed home-status line exists (reserved, empty)", byClass(overlay, "home-status").length === 1 && textOf(byClass(overlay, "home-status")[0]) === "");
     check("no home footer", byClass(overlay, "foot").length === 0);
     check("no Controls DESTINATION (the settings card may describe controls)", !buttonsOf(overlay).some((b) => /^controls\b/i.test(b.trim())));
+  }
+
+  section("solo kit discoverability: a glanceable + changeable kit chip on the title");
+  {
+    localStorage.removeItem("blobrogue.selectedKit"); // a brand-new player who never opened the picker
+    const { menu, overlay } = makeMenu();
+    await menu.showTitle();
+    const chip = () => byClass(overlay, "kit-chip")[0];
+    check("the title carries a kit chip next to PLAY SOLO", chip() !== undefined);
+    check("the chip names the DEFAULTED kit (Gunner) so solo isn't silently kitless", textOf(chip()).includes("GUNNER"));
+    check("the chip carries the kit accent for glanceability", chip()?.getAttribute?.("data-kit") === "gunner");
+    check("the chip is a real button (keyboard + click reachable)", chip()?.tagName === "BUTTON");
+    // Changing the pick (what the chip's picker does) persists via localStorage — GUESTS included,
+    // no auth gate — and the title re-reads it into the chip on the next render.
+    setSelectedKit("mender"); // Mender unlocks at account LV1, so a fresh guest can actually pick it
+    check("the pick persists for guests (plain localStorage, no account)", getSelectedKit() === "mender");
+    await menu.showTitle();
+    check("the chip reflects the changed kit on re-render", textOf(chip()).includes("MENDER") && chip()?.getAttribute?.("data-kit") === "mender");
+    // The chip's door: the standalone picker reuses the SAME kit cards as the lobby, on its own
+    // screen (discoverable + changeable, never a blocking modal).
+    await menu.showKitPicker();
+    const cards = byClass(overlay, "kit-card");
+    check("the kit picker screen renders all four kit cards", cards.length === 4, `cards=${cards.length}`);
+    check("the picker marks the current selection", cards.some((c) => (c.className ?? "").includes("sel") && textOf(c).includes("Mender")));
+    check("the picker offers a back door to the title", buttonsOf(overlay).some((b) => /back/i.test(b)));
+    localStorage.removeItem("blobrogue.selectedKit"); // restore the fresh-player default for later sections
   }
 
   section("the hero blob stage: identity showpiece in the raised hero band");

@@ -341,6 +341,7 @@ export class Menu {
       // ONLINE PLAY UNAVAILABLE note here).
       const left = el("div", "home-left");
       left.appendChild(this.soloButton("\u25be  PLAY"));
+      left.appendChild(this.kitChip());
       left.appendChild(el("p", "muted", "multiplayer offline \u2014 no server configured for this build"));
       left.appendChild(el("p", "home-status", statusNote));
       // Offline nav: the same uniform .dest stack (no LEADERBOARD — it needs the backend).
@@ -379,6 +380,7 @@ export class Menu {
     const solo = this.soloButton("PLAY SOLO");
     solo.classList.add("play-solo", "secondary");
     left.appendChild(solo);
+    left.appendChild(this.kitChip());
     // The Amber Camp: the between-runs place (WAVE 1). Not a play action and not a nav
     // destination — a quiet secondary door under Play, where earned Amber is spent on pets +
     // convenience. Coins own the in-run HUD; Amber lives here, never both in one surface.
@@ -682,6 +684,47 @@ export class Menu {
     const btn = el("button", "", label);
     btn.addEventListener("click", () => this.doSolo());
     return btn;
+  }
+
+  // Solo kit DISCOVERABILITY (never a blocking modal): a glanceable + changeable chip under the
+  // PLAY SOLO action. Solo defaults to getSelectedKit() (gunner) silently, but a brand-new player
+  // must still SEE they have a kit and can change it — the chip names the current kit (accent dot
+  // + name) and opens the existing picker. Fixed geometry, so the title never shifts.
+  private kitChip(): HTMLButtonElement {
+    const kit = getSelectedKit();
+    const meta = kit === "none" ? null : KIT_META[kit];
+    const btn = el("button", "kit-chip");
+    btn.type = "button";
+    if (meta) btn.setAttribute("data-kit", kit);
+    btn.appendChild(el("span", "kc-dot"));
+    btn.appendChild(el("span", "kc-label", "KIT"));
+    btn.appendChild(el("span", "kc-kit", (meta ? meta.name : "none").toUpperCase()));
+    btn.appendChild(el("span", "kc-go", "CHANGE \u25b8"));
+    btn.setAttribute("aria-label", `Kit: ${meta ? meta.name : "none"}. Change kit for solo runs.`);
+    btn.addEventListener("click", () => void this.showKitPicker());
+    return btn;
+  }
+
+  // The standalone kit picker reached from the title's kit chip — the SAME cards the lobby uses
+  // (getSelectedKit/setSelectedKit + account-gated unlocks), just on its own screen so the pick is
+  // discoverable/changeable for solo without a blocking modal. Back returns to the title, which
+  // re-reads the selection into the chip.
+  async showKitPicker() {
+    const wrap = el("div", "menu kit-picker-screen");
+    wrap.appendChild(el("h1", "", "CHOOSE YOUR KIT"));
+    wrap.appendChild(el("p", "muted", "your pick sticks for every solo run \u2014 change it anytime"));
+    const mount = el("div", "kit-picker-mount");
+    const rebuild = () => mount.replaceChildren(this.kitSelectPanel(this.session.profile, rebuild));
+    rebuild();
+    wrap.appendChild(mount);
+    const row = el("div", "btnrow");
+    const goBack = () => void this.showTitle();
+    const back = el("button", "secondary", "back");
+    back.addEventListener("click", goBack);
+    row.appendChild(back);
+    wrap.appendChild(row);
+    this.show(wrap);
+    this.bindEscape(goBack);
   }
 
   private doSolo() {
