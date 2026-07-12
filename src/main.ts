@@ -10,6 +10,7 @@ import { bindUiScale } from "./ui/settings.js";
 import { exitNoteFor, INVITE_INVALID_NOTE, INVITE_OFFLINE_NOTE } from "./ui/onlineCopy.js";
 import { parseInviteCode, hasInviteIntent, stripInviteFromLocation } from "./net/inviteLink.js";
 import type { OnlineLobby } from "./net/onlineLobby.js";
+import { getSelectedKit } from "./net/kitSelection.js";
 
 declare global {
   interface Window {
@@ -151,7 +152,7 @@ async function bootNormal() {
   const menu = new Menu(overlay, session, client, auth, {
     startSolo(profile: ProfileDoc | null) {
       leaveOnlineIfAny();
-      launchRun((game) => game.start({ mode: "solo", coop: null, profile, selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet }));
+      launchRun((game) => game.start({ mode: "solo", coop: null, profile, kit: getSelectedKit(), selfColorIndex: session.colorIndex, selfCosmetics: session.cosmetics, selfPet: session.equippedPet }));
     },
     startOnline(lobby: OnlineLobby, profile: ProfileDoc | null, isPartyStart: boolean) {
       if (activeOnline && activeOnline !== lobby) activeOnline.leave();
