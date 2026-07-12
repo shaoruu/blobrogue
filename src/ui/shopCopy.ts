@@ -237,11 +237,11 @@ export function shopPanelView(shop: ShopState, slot: ShopSlot, viewer: ShopViewe
   } else if (slot.kind === "revive_token") {
     lines.push("A LETHAL HIT STANDS YOU BACK UP INSTEAD");
     lines.push("ONE BANKED AT A TIME \u00b7 NEVER STOPS A WIPE");
-    icon = { kind: "text", text: "\u271a", tint: "#ff6a6a" };
+    icon = { kind: "text", text: "\u271a", tint: "var(--red)" };
   } else if (slot.kind === "extra_slot") {
     lines.push("+1 HOTBAR SLOT \u00b7 THIS RUN ONLY \u00b7 CAP 1");
     lines.push(`YOU: ${viewer.ownedWeapons.length}/${weaponCapOf(viewer)} SLOTS`);
-    icon = { kind: "text", text: "\u25a3", tint: "#e8e0c8" };
+    icon = { kind: "text", text: "\u25a3", tint: "var(--bone)" };
   } else if (slot.kind === "reroll_all") {
     lines.push("RESTOCKS EVERY UNBOUGHT STATION");
     lines.push("YOUR NEXT BLESSING OFFER REROLLS TOO");
@@ -249,11 +249,11 @@ export function shopPanelView(shop: ShopState, slot: ShopSlot, viewer: ShopViewe
   } else if (slot.kind === "amber_cache") {
     lines.push("RUN END: UNSPENT COINS \u2192 AMBER");
     lines.push(`+${PREMIUM.amberPerHundredCoins} AMBER PER 100 \u00b7 MAX +${PREMIUM.amberRunCap}`);
-    icon = { kind: "text", text: "\u25c6", tint: "#ffb43b" };
+    icon = { kind: "text", text: "\u25c6", tint: "var(--amber)" };
   } else if (slot.kind === "prospector") {
     lines.push(`COINS \u00d7${PREMIUM.prospectorMult} FOR THE REST OF THIS FLOOR`);
     lines.push("DRINK EARLY \u2014 IT DIES AT THE STAIRS");
-    icon = { kind: "text", text: "\u2697", tint: "#ffd166" };
+    icon = { kind: "text", text: "\u2697", tint: "var(--amber-hi)" };
   } else if (slot.kind === "artifact" && slot.weapon !== null) {
     tag = "ARTIFACT";
     weaponLines(slot.weapon);

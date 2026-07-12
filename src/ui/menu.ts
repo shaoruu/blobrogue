@@ -2237,13 +2237,13 @@ export class Menu {
     if (lobby.status === "playing") {
       const isConnected = p.gsWorldId === lobby.expectedWorldId();
       label = isConnected ? "CONNECTED TO WORLD" : "CONNECTING\u2026";
-      color = isConnected ? "#7CFC98" : "#ffb43b";
+      color = isConnected ? "var(--ok)" : "var(--amber)";
     } else if (p.isHost) {
       label = "HOST";
-      color = "#8f87a8";
+      color = "var(--ink-mute)";
     } else {
       label = p.isReady ? READY_LABEL : NOT_READY_LABEL;
-      color = p.isReady ? "#7CFC98" : "#ffb43b";
+      color = p.isReady ? "var(--ok)" : "var(--amber)";
     }
     const chip = el("span", "member-status", `${label}${ping}`);
     chip.style.marginLeft = "auto";
@@ -2358,13 +2358,13 @@ export class Menu {
     const banked = ctx.bankedAmber ?? 0;
     if (banked > 0) {
       const amber = el("p", "", `\u25c6 Banked ${banked} Amber \u2014 spend it at the Camp`);
-      amber.style.color = "#ffb43b";
+      amber.style.color = "var(--amber)";
       amber.style.letterSpacing = "1px";
       wrap.appendChild(amber);
     }
     if (ctx.isNewBest) {
       const best = el("p", "", "\u2605 NEW BEST \u2014 your deepest run yet");
-      best.style.color = "#ffb43b";
+      best.style.color = "var(--amber)";
       best.style.fontWeight = "700";
       best.style.letterSpacing = "1px";
       wrap.appendChild(best);
