@@ -62,7 +62,6 @@ function stepN(w: WorldState, n: number, inputs: Map<string, InputCmd>): void {
 // Step n ticks, collecting every SimEvent emitted (for the reliable pvp events).
 function stepCollect(w: WorldState, n: number, inputs: Map<string, InputCmd>): SimEvent[] {
   const out: SimEvent[] = [];
-  for (const p of inputs.keys()) void p; // (inputs are re-sent each tick)
   for (let i = 0; i < n; i++) for (const e of stepWorld(w, inputs, DT)) out.push(e);
   return out;
 }

@@ -1299,6 +1299,10 @@ async function main(): Promise<void> {
     check("CREATE ROOM present", buttons.some((b) => b.includes("CREATE ROOM")));
     check("JOIN CODE present", buttons.some((b) => b.includes("JOIN CODE")));
     check("no classic co-op on the online home", !/classic/i.test(textOf(overlay)));
+    // The match-mode toggle: CO-OP (team dungeon) vs ARENA (pvp deathmatch). QUICK PLAY / CREATE
+    // ROOM carry the picked mode (the click/selection behavior is covered by onlinelobby.test.ts).
+    check("CO-OP mode toggle present on the online home", buttons.some((b) => b.trim() === "CO-OP"));
+    check("ARENA (pvp) mode toggle present on the online home", buttons.some((b) => b.trim() === "ARENA"));
   }
 
   section("the one-time name gate: a guest's FIRST online start sets name+color in one place");

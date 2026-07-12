@@ -10,6 +10,9 @@ export type RoomStatus = "lobby" | "playing" | "ended";
 // Which multiplayer flow a room belongs to: classic peer-synced co-op, or a lobby for the
 // authoritative game server (the room code maps to a distinct server world).
 export type RoomKind = "coop" | "online";
+// The MATCH mode of an authoritative (kind "online") room: the co-op dungeon or the PVP arena
+// deathmatch. Selects which authoritative world id the join ticket binds (the pvp: prefix).
+export type RoomMode = "coop" | "pvp";
 
 export interface ProfileDoc {
   playerId: string;
@@ -118,6 +121,8 @@ export interface RoomDoc {
   seed: number;
   floor: number;
   status: RoomStatus;
+  // The room's match mode (authoritative rooms only); older backends omit it → "coop".
+  mode?: RoomMode;
 }
 
 export interface PresenceDoc {
@@ -196,9 +201,9 @@ export const api = {
     mint: makeFunctionReference<"action", { clientId: string; roomCode?: string; kit?: string }, { ticket: string; playerId: string }>("gsTicket:mint"),
   },
   rooms: {
-    create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number }>("rooms:create"),
-    quickPlay: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; joined?: boolean }>("rooms:quickPlay"),
-    join: makeFunctionReference<"mutation", { code: string; playerId: string; kind?: RoomKind; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus }>("rooms:join"),
+    create: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; mode?: RoomMode }>("rooms:create"),
+    quickPlay: makeFunctionReference<"mutation", { playerId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode; joined?: boolean }>("rooms:quickPlay"),
+    join: makeFunctionReference<"mutation", { code: string; playerId: string; kind?: RoomKind; mode?: RoomMode; colorIndex?: number }, { roomId: string; code: string; seed: number; floor: number; status: RoomStatus; mode?: RoomMode }>("rooms:join"),
     get: makeFunctionReference<"query", { roomId: string }, RoomDoc | null>("rooms:get"),
     start: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:start"),
     reopen: makeFunctionReference<"mutation", { roomId: string; playerId: string }, null>("rooms:reopen"),

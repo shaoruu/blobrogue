@@ -1055,10 +1055,12 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   const pvp = isPvp(w);
   const isBare = w.isSandbox || pvp;
   if (pvp) {
+    // A floor build IS a fresh arena, so it is a fresh MATCH (cleared scoreboard, lobby phase).
+    // pvp never descends mid-match, so this only runs at world create + on a room reset/rematch,
+    // where a clean slate is exactly right.
     const arena = buildPvpArena();
     w.dungeon = arena.dungeon;
-    if (w.match === null) w.match = createMatchState(arena.spawns);
-    else w.match.spawns = arena.spawns;
+    w.match = createMatchState(arena.spawns);
   } else {
     w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
     w.match = null;

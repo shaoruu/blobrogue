@@ -22,6 +22,15 @@ function kindOf(room: Doc<"rooms">): RoomKind {
   return room.kind ?? "coop";
 }
 
+// The MATCH mode of an online room (co-op dungeon vs pvp arena). Optional/defaulted so every
+// pre-existing room reads "coop" — it only selects which authoritative world id the ticket binds.
+const modeArg = v.optional(v.union(v.literal("coop"), v.literal("pvp")));
+type RoomMode = "coop" | "pvp";
+
+function modeOf(room: Doc<"rooms">): RoomMode {
+  return room.mode ?? "coop";
+}
+
 function randomCode(): string {
   let out = "";
   for (let i = 0; i < CODE_LEN; i++) out += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
@@ -76,19 +85,19 @@ async function ensurePresence(
 // Host a new room. Returns a short code to share with friends. Online rooms use the caller's
 // chosen blob color for their roster dot (classic co-op keeps the assigned palette slot).
 export const create = mutation({
-  args: { playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()) },
-  handler: async (ctx, { playerId, kind, colorIndex }) => {
+  args: { playerId: v.id("players"), kind: kindArg, mode: modeArg, colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { playerId, kind, mode, colorIndex }) => {
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const code = await uniqueCode(ctx);
     const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
     const now = Date.now();
     const roomId = await ctx.db.insert("rooms", {
-      code, kind: kind ?? "coop", hostPlayerId: playerId, seed, floor: 1,
+      code, kind: kind ?? "coop", mode: mode ?? "coop", hostPlayerId: playerId, seed, floor: 1,
       status: "lobby", isPublic: false, createdAt: now, lastActivity: now,
     });
     await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
-    return { roomId, code, seed, floor: 1 };
+    return { roomId, code, seed, floor: 1, mode: mode ?? "coop" };
   },
 });
 
@@ -119,7 +128,9 @@ export const join = mutation({
     const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
     await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
     await ctx.db.patch(room._id, { lastActivity: Date.now() });
-    return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status };
+    // The room dictates its own match mode; the joiner adopts it (drives the client's world-id
+    // expectation + which ticket world the mint binds).
+    return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status, mode: modeOf(room) };
   },
 });
 
@@ -129,11 +140,12 @@ export const join = mutation({
 // rooms are born "playing" — the authoritative world runs on demand, so there is no host gate
 // and players drop in/out of the public pool freely.
 export const quickPlay = mutation({
-  args: { playerId: v.id("players"), kind: kindArg, colorIndex: v.optional(v.number()) },
-  handler: async (ctx, { playerId, kind, colorIndex }) => {
+  args: { playerId: v.id("players"), kind: kindArg, mode: modeArg, colorIndex: v.optional(v.number()) },
+  handler: async (ctx, { playerId, kind, mode, colorIndex }) => {
     const player = await ctx.db.get(playerId);
     if (!player) throw new Error("unknown player");
     const wantKind: RoomKind = kind ?? "coop";
+    const wantMode: RoomMode = mode ?? "coop";
     const now = Date.now();
 
     // Look for public rooms still going (lobby or playing), freshest first.
@@ -146,6 +158,7 @@ export const quickPlay = mutation({
     for (const room of candidates) {
       if (room.status === "ended") continue;
       if (kindOf(room) !== wantKind) continue;
+      if (modeOf(room) !== wantMode) continue; // a pvp quick-play only pools with pvp rooms
       if (now - room.lastActivity > QUICKPLAY_STALE_MS) continue;
       const players = await ctx.db
         .query("presence")
@@ -156,7 +169,7 @@ export const quickPlay = mutation({
       const color = colorIndex ?? await smallestFreeColor(ctx, room._id);
       await ensurePresence(ctx, room._id, playerId, player.name, room.floor, color);
       await ctx.db.patch(room._id, { lastActivity: now });
-      return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status, joined: true };
+      return { roomId: room._id, code: room.code, seed: room.seed, floor: room.floor, status: room.status, mode: modeOf(room), joined: true };
     }
 
     // None available — create a fresh public room and wait for others to drop in.
@@ -164,11 +177,11 @@ export const quickPlay = mutation({
     const seed = (Math.floor(Math.random() * 0xffffffff) | 0);
     const status = wantKind === "online" ? ("playing" as const) : ("lobby" as const);
     const roomId = await ctx.db.insert("rooms", {
-      code, kind: wantKind, hostPlayerId: playerId, seed, floor: 1,
+      code, kind: wantKind, mode: wantMode, hostPlayerId: playerId, seed, floor: 1,
       status, isPublic: true, createdAt: now, lastActivity: now,
     });
     await ensurePresence(ctx, roomId, playerId, player.name, 1, colorIndex ?? 0);
-    return { roomId, code, seed, floor: 1, status, joined: false };
+    return { roomId, code, seed, floor: 1, status, mode: wantMode, joined: false };
   },
 });
 
@@ -184,6 +197,7 @@ export const get = query({
       seed: room.seed,
       floor: room.floor,
       status: room.status,
+      mode: modeOf(room),
     };
   },
 });
@@ -198,12 +212,13 @@ export const membership = query({
       .query("rooms")
       .withIndex("by_code", (q) => q.eq("code", code.trim().toUpperCase()))
       .unique();
-    if (!room || kindOf(room) !== "online" || room.status === "ended") return { isMember: false };
+    if (!room || kindOf(room) !== "online" || room.status === "ended") return { isMember: false, mode: "coop" as RoomMode };
     const row = await ctx.db
       .query("presence")
       .withIndex("by_room_player", (q) => q.eq("roomId", room._id).eq("playerId", playerId))
       .unique();
-    return { isMember: row !== null };
+    // The room's mode rides back so the ticket mint binds the matching authoritative world id.
+    return { isMember: row !== null, mode: modeOf(room) };
   },
 });
 

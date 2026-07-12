@@ -47,9 +47,16 @@ export interface GsTicketClaims {
 }
 
 // The single room-code -> authoritative-world-id mapping. Convex mints with it; the game
-// server just binds whatever verified world id the ticket carries.
+// server just binds whatever verified world id the ticket carries. (Mirror of src/net/worldId.ts,
+// kept import-free so this module bundles cleanly into the Convex runtime.)
 export function worldIdForRoomCode(code: string): string {
   return "room:" + code.trim().toUpperCase();
+}
+
+// The PVP variant: a pvp room's world id carries the "pvp:" prefix so the game server's room
+// factory spins the world up in deathmatch mode. Byte-agreement with src/net/worldId.ts.
+export function pvpWorldIdForRoomCode(code: string): string {
+  return "pvp:room:" + code.trim().toUpperCase();
 }
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

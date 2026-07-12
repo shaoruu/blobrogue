@@ -7,7 +7,7 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { jsonCodec, TICK_HZ, FIXED_DT, ProtocolError } from "../../src/net/protocol.js";
+import { jsonCodec, TICK_HZ, FIXED_DT, ProtocolError, isPvpWorldId } from "../../src/net/protocol.js";
 import type { ServerConfig } from "./config.js";
 import { createLogger, type Logger } from "./logger.js";
 import { GameWorld } from "./world.js";
@@ -69,7 +69,10 @@ export class GameServer {
     this.log = deps.logger ?? createLogger({ app: "blobrogue-gs" });
     this.clock = deps.clock ?? systemClock;
     this.trustedProxies = parseCidrList(cfg.trustedProxies);
-    this.sessions = deps.sessions ?? new WorldRegistry((id) => new GameWorld(id, undefined, cfg.arena), this.log);
+    // The room factory picks the world MODE from the world IDENTITY: a pvp world id (minted only
+    // for a pvp room) spins up a deathmatch world, everything else stays co-op. The mode is part
+    // of the id, so every joiner of the same room lands in the same kind of world.
+    this.sessions = deps.sessions ?? new WorldRegistry((id) => new GameWorld(id, undefined, cfg.arena, isPvpWorldId(id) ? "pvp" : "coop"), this.log);
     this.publisher = deps.publisher ?? new WsSnapshotPublisher({
       config: cfg,
       metrics: this.metrics,

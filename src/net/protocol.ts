@@ -297,7 +297,7 @@ export const RESUME_GRACE_MS = 90000;
 // can map room codes -> worlds without pulling protocol.ts's wire code (and the whole sim)
 // onto the menu's critical path. Re-exported here so every existing consumer of protocol.js
 // (client, server ticket verifier, tests) is unaffected.
-export { isValidWorldId, worldIdForRoomCode } from "./worldId.js";
+export { isValidWorldId, worldIdForRoomCode, pvpWorldIdForRoomCode, isPvpWorldId, PVP_WORLD_PREFIX } from "./worldId.js";
 
 // Base client interpolation delay (ms) for remote entities. The server uses this as the
 // lag-comp rewind default until the client reports its ACTUAL adaptive delay via `stat.dly`

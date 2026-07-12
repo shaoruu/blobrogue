@@ -1,7 +1,7 @@
 import type { ConvexClient } from "convex/browser";
 import type { Session } from "../net/session.js";
 import type { AuthClient } from "../net/auth.js";
-import type { ProfileDoc, LeaderboardEntryDoc } from "../net/api.js";
+import type { ProfileDoc, LeaderboardEntryDoc, RoomMode } from "../net/api.js";
 import { api } from "../net/api.js";
 import { OnlineLobby } from "../net/onlineLobby.js";
 import type { LobbyPlayer } from "../net/onlineLobby.js";
@@ -162,6 +162,9 @@ export class Menu {
   private lbCache: LeaderboardEntryDoc[] | null = null;
   // The per-session latch of the post-run sign-in nudge (never nag twice in one sitting).
   private isNudgeShownThisSession = false;
+  // The selected online match mode (co-op dungeon vs pvp arena), toggled on the online home and
+  // carried into QUICK PLAY / CREATE ROOM. Join adopts whatever the room was created as.
+  private onlineMode: RoomMode = "coop";
   // The title's live identity region: auth settling (an OAuth exchange finishing after the
   // shell painted) re-renders CONTENT inside this reserved box — never the shell around it.
   private identityMount: HTMLElement | null = null;
@@ -1929,10 +1932,26 @@ export class Menu {
     wrap.appendChild(el("h1", "", "PLAY ONLINE"));
     wrap.appendChild(el("p", "", "Server-run worlds. Drop into the public pool, or make a room and share its code."));
 
-    const colA = el("div", "col-actions");
+    // Match-mode toggle: CO-OP (team dungeon) vs ARENA (free-for-all pvp deathmatch). QUICK PLAY
+    // + CREATE ROOM carry this mode; JOIN CODE adopts whatever the room was created as.
     const quick = el("button", "btn-quick primary");
     quick.appendChild(el("span", "", "\u25b6 QUICK PLAY"));
-    quick.appendChild(el("span", "sub", "drop into an open public room"));
+    const quickSub = el("span", "sub", "drop into an open public room");
+    quick.appendChild(quickSub);
+    const modeRow = el("div", "actrow mode-toggle");
+    const coopBtn = el("button", "secondary", "CO-OP");
+    const pvpBtn = el("button", "secondary", "ARENA");
+    const syncMode = (): void => {
+      coopBtn.classList.toggle("sel", this.onlineMode === "coop");
+      pvpBtn.classList.toggle("sel", this.onlineMode === "pvp");
+      quickSub.textContent = this.onlineMode === "pvp" ? "drop into an open arena deathmatch" : "drop into an open public room";
+    };
+    coopBtn.addEventListener("click", () => { this.onlineMode = "coop"; syncMode(); });
+    pvpBtn.addEventListener("click", () => { this.onlineMode = "pvp"; syncMode(); });
+    modeRow.append(coopBtn, pvpBtn);
+    wrap.appendChild(modeRow);
+
+    const colA = el("div", "col-actions");
     colA.appendChild(quick);
     const actrow = el("div", "actrow");
     const create = el("button", "secondary", "CREATE ROOM");
@@ -1940,6 +1959,7 @@ export class Menu {
     actrow.append(create, join);
     colA.appendChild(actrow);
     wrap.appendChild(colA);
+    syncMode();
 
     // Status/failure line with reserved height: retries and errors swap text inside the
     // same box, so the back button below never moves. The compact TRY AGAIN affordance
@@ -1961,7 +1981,7 @@ export class Menu {
     row.appendChild(back);
     wrap.appendChild(row);
 
-    const buttons = [quick, create, join];
+    const buttons = [quick, create, join, coopBtn, pvpBtn];
     const setBusy = (isBusy: boolean, text: string) => {
       buttons.forEach((b) => (b.disabled = isBusy));
       status.textContent = text;
@@ -2034,7 +2054,7 @@ export class Menu {
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.quickPlay();
+      await lobby.quickPlay(this.onlineMode);
       // The public pool has no start gate: the room is live, drop straight in.
       this.launchOnline(lobby, profile, false);
     } catch (err) {
@@ -2048,7 +2068,7 @@ export class Menu {
     try {
       const profile = await this.session.login();
       const lobby = new OnlineLobby(this.client, this.session);
-      await lobby.create();
+      await lobby.create(this.onlineMode);
       this.showOnlineLobby(lobby, profile);
     } catch (err) {
       setBusy(false, this.cleanErr(err instanceof Error ? err.message : "could not create room"));

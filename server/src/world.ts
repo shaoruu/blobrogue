@@ -9,8 +9,9 @@
 // the fixed step, so a client can neither buy extra time (no client dt) nor gain advantage by its
 // frame rate (fixed-cadence consumption).
 
-import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy } from "../../src/sim/world.js";
+import { createWorld, stepPlayerPhase, stepWorldPhase, spawnPlayerInWorld, removePlayerFromWorld, setPlayerAbsence, setPlayerKit, switchWeaponInWorld, reorderWeaponsInWorld, dropWeaponInWorld, swapWeaponInWorld, buyFromShopInWorld, chooseBlessingInWorld, dismissBlessingOfferInWorld, consumeBlessingReroll, resetRunInWorld, devSpawnEnemy, isPvp } from "../../src/sim/world.js";
 import type { KitId } from "../../src/sim/kits.js";
+import type { WorldMode } from "../../src/sim/pvp.js";
 import type { WorldState } from "../../src/sim/world.js";
 import type { SimEvent } from "../../src/sim/events.js";
 import type { InputCmd, PlayerId } from "../../src/sim/input.js";
@@ -76,14 +77,15 @@ export class GameWorld implements RoomRuntime {
   // Dedicated RNG for blessing offers, kept OUT of the sim RNG stream (deterministic, no perturb).
   private offerRng: Rng;
 
-  constructor(id: string, seed: number = randomSeed(), arena = false) {
+  constructor(id: string, seed: number = randomSeed(), arena = false, mode: WorldMode = "coop") {
     this.id = id;
     // Production: a REAL generated dungeon (isShared) with a FRESH random run seed — the server
     // alone owns the seed; clients rebuild geometry from the snapshot's authoritative seed/floor.
     // Measurement (arena=true): an OPEN sandbox arena so the load harness can move a probe in a
     // straight monotonic line — same stepWorld, tick, and netcode, only different geometry.
-    // Arena seeds a few enemies for bandwidth realism.
-    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena });
+    // PVP (mode="pvp"): the fixed symmetric deathmatch arena + the frag-limit respawn match (no
+    // waves, no descend); the sim owns arena/spawns/win-rule, the server just runs the same tick.
+    this.state = createWorld(seed, 1, { isShared: true, skipLocalPlayer: true, isSandbox: arena, mode });
     this.offerRng = new Rng(seed ^ 0x0ffe4);
     if (arena) this.seedArenaEnemies();
   }
@@ -117,8 +119,10 @@ export class GameWorld implements RoomRuntime {
   addPlayer(pid: PlayerId, kit: KitId = "none"): void {
     spawnPlayerInWorld(this.state, pid);
     // Apply the VALIDATED kit (spec §9.5): the stat lean + starting weapon land through the one
-    // recompute path. "none" leaves the neutral baseline untouched.
-    if (kit !== "none") setPlayerKit(this.state, pid, kit);
+    // recompute path. "none" leaves the neutral baseline untouched. In pvp the loadout is FORCED
+    // symmetric (spawnPlayerInWorld already set the neutral kit + fixed HP pool), so the chosen
+    // kit is intentionally ignored — everyone plays identical.
+    if (kit !== "none" && !isPvp(this.state)) setPlayerKit(this.state, pid, kit);
   }
 
   removePlayer(pid: PlayerId): void {

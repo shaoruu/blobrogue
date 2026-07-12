@@ -21,7 +21,7 @@ import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
-import { mintGsTicket, worldIdForRoomCode, type GsTicketClaims } from "./gsTicketCore";
+import { mintGsTicket, worldIdForRoomCode, pvpWorldIdForRoomCode, type GsTicketClaims } from "./gsTicketCore";
 import { isKitUnlocked, masteryLevelForXp, type KitId } from "./masteryCore";
 
 const TICKET_TTL_SECS = 120;
@@ -67,9 +67,12 @@ export const mint = action({
       if (!profile) throw new Error("join the room before requesting a room ticket");
       // Profile serializes the players-row id as a string; narrow it back for the query arg.
       const memberId = profile.playerId as Id<"players">;
-      const { isMember } = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
+      const { isMember, mode } = await ctx.runQuery(api.rooms.membership, { code: roomCode, playerId: memberId });
       if (!isMember) throw new Error("you are not in that room");
-      claims.worldId = worldIdForRoomCode(roomCode);
+      // The ROOM's mode selects the authoritative world id: a pvp room binds the pvp-prefixed
+      // world so the game server's factory spins it up in deathmatch mode. Every member of the
+      // same room resolves the same id, so friends land together.
+      claims.worldId = mode === "pvp" ? pvpWorldIdForRoomCode(roomCode) : worldIdForRoomCode(roomCode);
     }
 
     const ticket = await mintGsTicket(secret, playerId, TICKET_TTL_SECS, Date.now(), claims);
