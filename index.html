@@ -36,6 +36,13 @@
         --focus-ring:3px solid var(--cream);
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
+      /* The HTML `hidden` attribute must ALWAYS win: any element with an authored `display:`
+         silently defeats the UA-level [hidden] rule, so a toggle that (correctly) flips the
+         attribute would still paint. This one global reset kills that whole class of bug — every
+         genuinely-hidden element disappears — so no per-element patch is ever needed. `!important`
+         is correct here: nothing legitimately wants a hidden element to render (a real show/hide
+         flips the attribute, never leans on display). */
+      [hidden] { display: none !important; }
       html, body { height: 100%; background: #0e0b1a; overflow: hidden; font-family: 'Silkscreen', 'Press Start 2P', monospace; }
       #app { display: flex; align-items: center; justify-content: center; height: 100%; }
       canvas { image-rendering: pixelated; background: #14101f; touch-action: none; }
@@ -611,6 +618,22 @@
       .kit-blurb { font-size: var(--fs-2xs); color: var(--ink-mute); line-height: 1.3; }
       .kit-lock { font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--amber); margin-top: 4px; min-height: 12px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+      /* Solo kit chip (title): glanceable current kit + a door to the picker. Fixed geometry,
+         kit-accented (--kit); one source of truth with the in-run kit cluster's accent set. */
+      .kit-chip[data-kit="gunner"]{ --kit:var(--amber); }
+      .kit-chip[data-kit="mender"]{ --kit:var(--grn); }
+      .kit-chip[data-kit="bulwark"]{ --kit:var(--blu); }
+      .kit-chip[data-kit="phantom"]{ --kit:var(--pur); }
+      .kit-chip{ display:flex; align-items:center; gap:9px; padding:0 14px; background:var(--dun-0);
+        box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--kit,var(--dun-3)) 55%, var(--dun-3));
+        color:var(--cream); cursor:pointer; font-family:var(--f-ui); font-size:var(--fs-xs); letter-spacing:1px; }
+      .kit-chip:hover{ box-shadow:inset 0 0 0 2px var(--kit,var(--dun-4)); }
+      .kit-chip .kc-dot{ width:12px; height:12px; flex:none; background:var(--kit,var(--cream)); }
+      .kit-chip .kc-label{ color:var(--ink-mute); }
+      .kit-chip .kc-kit{ color:var(--kit,var(--cream)); }
+      .kit-chip .kc-go{ margin-left:auto; color:var(--ink-faint); }
+      .home-left .kit-chip{ height:38px; flex:0 0 38px; }
+      .kit-picker-mount{ max-width:520px; }
 
       /* --- The one-time online name gate + the lobby's YOU confirmation --- */
       .name-gate { max-width: 380px; }

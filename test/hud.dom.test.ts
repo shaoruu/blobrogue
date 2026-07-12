@@ -10,6 +10,9 @@
 // Run: npm run test:hud
 
 import { JSDOM, VirtualConsole } from "jsdom";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 // jsdom lacks a canvas backend; a silent virtual console swallows its "getContext not
 // implemented" notices (pxIcon already tolerates a null context).
@@ -775,10 +778,63 @@ function kitHudTests(): void {
   })());
 }
 
+// The neutral-kit HIDE PATH: a kit="none" / ult===null player must show NO kit/ult/signature
+// chrome — never a nameless "ULT" + fallback accent. Two independent halves must both hold:
+//   (1) the HUD JS SETS the `hidden` attribute on every kit/sig element (and clears data-kit), and
+//   (2) index.html has a CSS rule that makes that `hidden` attribute actually hide the element.
+// Half (2) is the real bug: the chrome carries an explicit `display`, which OVERRIDES the UA
+// [hidden]{display:none} (author origin beats UA regardless of specificity), so without a
+// companion author `[hidden]` rule the element paints anyway. jsdom cannot reproduce the
+// browser's origin cascade (it reports display:none either way), so this half is guarded by
+// asserting the rule's PRESENCE + specificity in the shipped stylesheet.
+function kitChromeHideTests(): void {
+  section("neutral-kit hide path: the JS hides the whole kit/ult/signature cluster");
+  const root = document.createElement("div");
+  const hud = new Hud(root);
+  hud.update(mkState({ ult: null, sig: null }));
+  const ult = root.querySelector("[data-ult]") as HTMLElement;
+  const kitBadge = root.querySelector("[data-kitbadge]") as HTMLElement;
+  const momentum = root.querySelector("[data-momentum]") as HTMLElement;
+  const oshield = root.querySelector("[data-oshield]") as HTMLElement;
+  const pulse = root.querySelector("[data-pulse]") as HTMLElement;
+  const cluster = root.querySelector("[data-klcluster]") as HTMLElement;
+  const dash = root.querySelector(".dash") as HTMLElement;
+  check("ult meter is hidden", ult.hasAttribute("hidden"));
+  check("kit badge is hidden", kitBadge.hasAttribute("hidden"));
+  check("HEAT (momentum) signature is hidden", momentum.hasAttribute("hidden"));
+  check("overshield signature is hidden", oshield.hasAttribute("hidden"));
+  check("PULSE signature is hidden", pulse.hasAttribute("hidden"));
+  check("no kit accent is set on the cluster", !cluster.hasAttribute("data-kit"));
+  check("the always-on DASH meter stays present and NOT hidden", dash !== null && !dash.hasAttribute("hidden"));
+  // A real kit lights the chrome back up (the attribute is cleared) — the fix stays correct once
+  // solo gets a kit, and only the neutral state is stripped.
+  hud.update(mkState({ ult: { charge: 0.4, isReady: false, cd: 0, kit: "gunner", name: "Overdrive" }, sig: { momentum: { stacks: 2, max: 5, isOverheat: false }, overshield: null, pulse: null } }));
+  check("a real kit un-hides the ult meter + kit badge + its signature", !ult.hasAttribute("hidden") && !kitBadge.hasAttribute("hidden") && !momentum.hasAttribute("hidden"));
+
+  section("neutral-kit hide path: index.html makes [hidden] actually hide the chrome");
+  const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
+  const css = html.replace(/\s+/g, " ");
+  // ONE global reset kills the whole class of bug: any authored `display:` defeats the UA
+  // [hidden] rule, so a bare, high-specificity-proof `[hidden]{display:none !important}` is what
+  // guarantees the (correctly attribute-toggled) chrome actually disappears — no per-element
+  // patch needed, and no future toggled element re-opens the landmine.
+  // A BARE `[hidden]` selector (not a compound like `.ultmeter[hidden]`): the char before it must
+  // not continue a selector token (alnum / . / # / - / _ / ] / )).
+  check("a single global [hidden]{display:none !important} reset ships in the CSS",
+    /[^A-Za-z0-9_.#\]\)-]\s*\[hidden\]\s*\{[^}]*display\s*:\s*none\s*!important/.test(css));
+  // The kit/ult/signature chrome carries an explicit `display` (the exact trap), so the global
+  // rule must not be undone by a later, more-specific author rule re-showing them while hidden.
+  for (const cls of ["ultmeter", "kitbadge", "momentum", "pulse", "oshield"]) {
+    const reShow = new RegExp(`\\.${cls}\\[hidden\\][^{]*\\{[^}]*display\\s*:\\s*(?!none)`);
+    check(`no author rule re-shows .${cls} while it carries [hidden]`, !reShow.test(css));
+  }
+}
+
 function main(): void {
   weaponSlotTests();
   weaponTooltipTests();
   kitHudTests();
+  kitChromeHideTests();
   buffChipTests();
   buffOverflowTests();
   blessingCardTests();

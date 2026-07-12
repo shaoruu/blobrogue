@@ -140,6 +140,12 @@ export interface StartOptions {
   coop?: CoopBridge | null;
   online?: OnlineOptions | null;
   profile?: ProfileStats | null;
+  // The player's chosen KIT for this run (KIT/XP spec §5). Solo + classic co-op run the
+  // in-process sim as the authority, so the kit is applied locally at start through the same
+  // authoritative mutator the server uses on join. Online ignores this: the SERVER assigns the
+  // ticket-verified kit. Omitted / undefined leaves the neutral "none" baseline (dev sandbox,
+  // harness, existing goldens) untouched.
+  kit?: KitId;
   // The player's chosen blob tint (client palette index). Applies to solo + online; classic
   // co-op keeps its room-assigned colors. null/0 renders the natural amber sprite.
   selfColorIndex?: number | null;
@@ -1154,6 +1160,13 @@ export class Game {
       this.transport.start(this.seed, floor, { isSandbox: this.isSandbox, isCoop: this.coop !== null });
     }
     this.world = this.transport.poll().state;
+    // Solo / classic co-op: assign the chosen kit to the local player NOW, through the same
+    // authoritative sim mutator the server runs on join — otherwise the player spawns on the
+    // neutral baseline (no stat lean, no starting weapon, no ult meter / signature / kit chrome).
+    // The kit rides the persistent LOCAL_ID player, so it survives floor descents and run resets
+    // (a fresh run re-enters start() and re-applies). Online is untouched: the server owns kit
+    // assignment via the verified ticket, and the local pre-join world is a throwaway placeholder.
+    if (this.mode !== "online" && opts.kit) setPlayerKit(this.world, LOCAL_ID, opts.kit);
     this.inputSeq = 0;
     this.blessingRng = new Rng(this.seed ^ 0x0b1e55);
     this.ownedItemDefs = [];
