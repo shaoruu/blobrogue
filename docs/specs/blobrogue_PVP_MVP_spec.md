@@ -35,7 +35,7 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 4. MATCH STATE MACHINE (pure sim, tick-based): phases lobby → countdown → live → round-over → match-over.
    MVP (LOCKED — GD pushed off last-standing to kill spectator dead-time): FRAG-LIMIT RESPAWN DEATHMATCH.
    Players RESPAWN ~PVP.respawnDelaySec (2.5s) after death (NOT eliminated); respawn at farthest-from-opponents
-   spawn (id-sorted) with 2.0s/first-shot protection. Match ends at PVP.fragLimit frags (default 10) OR
+   spawn (id-sorted) with 2.0s/first-shot protection. Match ends at PVP.fragLimit frags (SCALED by match-start player count: clamp(round(6+playerCount),8,16) → 2p:8,4p:10,6p:12) OR
    PVP.matchTimeSec cap (default 300s) → most frags wins (id-sorted tiebreak). Phases: lobby→countdown→live→
    match-over (NO per-round loop). checkStrandedWipe fully BYPASSED in pvp (no wipe; dead respawn). Fun at 2 (duel-to-N).
    POST-MVP: round-hybrid short rounds + sudden-death arena-shrink (deferred — not built now).
@@ -44,7 +44,7 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
 
 ## PVP DAMAGE MODEL (BALANCER — LOCKED numbers, all in one named PVP config block)
 - FIXED PVP HP = 100 (PVP.maxHp). NOT the PvE 6-pool (too coarse/swingy). PvP-only; PvE HP untouched. UI: map 100→3-heart bar (33/heart) or a PVP health bar.
-- Global PVP.dmgMult = 2.0, applied to player-vs-player hits ONLY (PvE damage 100% untouched). Median gun ~4.0s TTK vs 100 HP. Target TTK 4.0s (3-5s band).
+- Global PVP.dmgMult = 1.78 (was 2.0; bumped for FFA respawn third-party reset beat), player-vs-player hits ONLY (PvE untouched). Median gun ~4.5s TTK vs 100 HP. Target TTK 4.5s (ship-gate band 3.5-5.5s per-weapon 1v1 median).
 - Per-weapon outlier overrides (stack on the 2.0): PVP.weaponMult = { sawnoff 0.45, flamer 0.45, burst 0.72, spear 0.85, beam 0.85 } — dmg*2.0*(weaponMult[id]??1). Map ids to real weapons.ts ids; skip any that don't exist. Everything else rides flat 2.0. (ricochet/tesla/thumper come in slow ~5.8-6.7s — fine, leave.)
 - HARD PER-HIT CAP: PVP.perHitCapFrac = 0.35 — no single hit/trigger removes >35% of maxHP (≤35). Anti-one-shot backstop; keep even after per-weapon tuning.
 - ULTS: PVP.ultsEnabled = false — blanket-disable ALL kit ultimates for MVP (each degenerate in a duel: Mender heal=stalemate, Bulwark shield=flat EHP win, Phantom dash=infinite disengage, Gunner overheat=least bad, re-add FIRST in v2 tuned). Kit passive stat lean stays (symmetric). Blessings off (symmetric kit).
