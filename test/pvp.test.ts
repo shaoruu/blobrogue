@@ -7,7 +7,7 @@
 //   - SPAWNS: id-sorted spread placement + break-on-fire spawn i-frames.
 //   - MATCH: the tick-based FRAG-LIMIT RESPAWN state machine (lobby->countdown->live->over),
 //     deterministic + reconnect-stable winner, respawn (never elimination).
-// Plus the balancer numbers (fixed 100 HP, global 2.0x + per-weapon outliers, 35% per-hit cap,
+// Plus the balancer numbers (fixed 100 HP, global 1.78x + per-weapon outliers, 35% per-hit cap,
 // per-weapon TTK band) and the NO-SNOWBALL guard (ults off, zero in-match power gain).
 //
 // Run: npm run test:pvp
@@ -17,9 +17,10 @@ import {
 } from "../src/sim/world.js";
 import type { WorldState, PlayerSim } from "../src/sim/world.js";
 import {
-  PVP, buildPvpArena, pvpHitDamage, pvpPerHitCap, farthestSpawnIndex, arePvpFoes,
+  PVP, buildPvpArena, pvpArenaRot90, pvpHitDamage, pvpPerHitCap, pvpFragLimit, farthestSpawnIndex, arePvpFoes,
   pvpRespawnDelayTicks, pvpCountdownTicks,
 } from "../src/sim/pvp.js";
+import type { Vec2 } from "../src/sim/types.js";
 import { WEAPONS } from "../src/sim/weapons.js";
 import { ULT } from "../src/sim/kits.js";
 import { TILE } from "../src/sim/types.js";
@@ -70,11 +71,12 @@ function snapOf(w: WorldState, selfPid: string): Extract<ServerMsg, { t: "snap" 
   return buildSnapshot(w, selfPid, 0, [], 0, true, { worldId: "arena-1", sseq: 1 }) as Extract<ServerMsg, { t: "snap" }>;
 }
 
-// Face `from` at `to` and drop them next to each other on a clear row, protection cleared.
+// Drop two players next to each other on a CLEAR horizontal lane of the 19x19 arena (row 4 has
+// no cover props), protection cleared, `a` facing `b` (straight right). Returns the aim angle.
 function faceOff(a: PlayerSim, b: PlayerSim, gap: number): number {
-  a.x = 500; a.y = 400; a.invuln = 0;
-  b.x = 500 + gap; b.y = 400; b.invuln = 0;
-  return 0; // aim angle from a toward b (straight right)
+  a.x = 300; a.y = 216; a.invuln = 0; // tile (6,4)
+  b.x = 300 + gap; b.y = 216; b.invuln = 0;
+  return 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -99,15 +101,18 @@ section("mode discriminant + fixed-HP loadout");
 section("damage model (balancer numbers)");
 {
   check("fixed maxHp = 100", PVP.maxHp === 100);
-  check("global dmgMult = 2.0", PVP.dmgMult === 2.0);
+  check("global dmgMult = 1.78", PVP.dmgMult === 1.78);
   check("per-hit cap = 35% of maxHp = 35", pvpPerHitCap() === 35);
   check("ults disabled flag", PVP.ultsEnabled === false);
   check("spawn iframe = 2.0s", PVP.spawnIframeSec === 2.0);
-  // pistol: 2 base * 2.0 = 4/shot (no outlier entry).
-  check("pistol hit = base*2.0", pvpHitDamage("pistol", WEAPONS.pistol.damage) === 4);
-  // outliers stack ON TOP of the global 2.0.
-  check("sawnoff outlier 0.45 stacks on 2.0", Math.abs(pvpHitDamage("sawnoff", WEAPONS.sawnoff.damage) - WEAPONS.sawnoff.damage * 2.0 * 0.45) < 1e-9);
-  check("spear outlier 0.85 stacks on 2.0", Math.abs(pvpHitDamage("spear", WEAPONS.spear.damage) - WEAPONS.spear.damage * 2.0 * 0.85) < 1e-9);
+  // pistol: 2 base * 1.78 (no outlier entry).
+  check("pistol hit = base*dmgMult", Math.abs(pvpHitDamage("pistol", WEAPONS.pistol.damage) - WEAPONS.pistol.damage * PVP.dmgMult) < 1e-9);
+  // outliers stack ON TOP of the global scalar.
+  check("sawnoff outlier 0.45 stacks on the scalar", Math.abs(pvpHitDamage("sawnoff", WEAPONS.sawnoff.damage) - WEAPONS.sawnoff.damage * PVP.dmgMult * 0.45) < 1e-9);
+  check("spear outlier 0.85 stacks on the scalar", Math.abs(pvpHitDamage("spear", WEAPONS.spear.damage) - WEAPONS.spear.damage * PVP.dmgMult * 0.85) < 1e-9);
+  // Frag limit scales with the match-start player count: clamp(round(6+count), 8, 16).
+  check("fragLimit scales 2p->8, 4p->10, 6p->12", pvpFragLimit(2) === 8 && pvpFragLimit(4) === 10 && pvpFragLimit(6) === 12);
+  check("fragLimit clamps to [8,16]", pvpFragLimit(1) === 8 && pvpFragLimit(20) === 16);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -176,22 +181,34 @@ section("ult meter does not charge in pvp");
 }
 
 // ---------------------------------------------------------------------------------------------
-section("SPAWNS: symmetric arena + spread + break-on-fire protection");
+section("SPAWNS: symmetric 19x19 arena + spread + break-on-fire protection");
 {
-  const { spawns } = buildPvpArena();
-  check("arena has spawns for a full FFA lobby", spawns.length >= 6, `${spawns.length}`);
-  // Point symmetry (180deg): every spawn's reflection through the arena center is also a spawn.
-  const arenaW = 40, arenaH = 30;
-  const key = (x: number, y: number) => `${Math.round(x)},${Math.round(y)}`;
-  const set = new Set(spawns.map((s) => key(s.x, s.y)));
-  let symmetric = true;
-  for (const s of spawns) {
-    const rx = (arenaW - 1) * TILE + TILE - s.x; // reflect tile-center x
-    const ry = (arenaH - 1) * TILE + TILE - s.y;
-    if (!set.has(key(rx, ry))) symmetric = false;
+  const { dungeon, spawns, cover } = buildPvpArena();
+  check("arena is the authoritative 19x19 square", dungeon.w === 19 && dungeon.h === 19);
+  check("arena has 8 spawn candidates (full FFA)", spawns.length === 8, `${spawns.length}`);
+  check("arena has 16 breakable cover pieces", cover.length === 16, `${cover.length}`);
+  check("spawns are all distinct (maximally spread)", new Set(spawns.map((s) => `${s.x},${s.y}`)).size === spawns.length);
+
+  // 4-fold rotational symmetry (provably fair): the wall grid, the spawn set, and the cover set
+  // are each invariant under a 90 degree rotation.
+  const key = (p: Vec2) => `${Math.round(p.x)},${Math.round(p.y)}`;
+  const spawnSet = new Set(spawns.map(key));
+  const coverSet = new Set(cover.map(key));
+  const spawnsSymmetric = spawns.every((s) => spawnSet.has(key(pvpArenaRot90(s))));
+  const coverSymmetric = cover.every((c) => coverSet.has(key(pvpArenaRot90(c))));
+  check("spawns are invariant under 90 rotation", spawnsSymmetric);
+  check("cover is invariant under 90 rotation", coverSymmetric);
+  let wallsSymmetric = true;
+  for (let ty = 0; ty < dungeon.h; ty++) {
+    for (let tx = 0; tx < dungeon.w; tx++) {
+      const wall = dungeon.tiles[ty * dungeon.w + tx] === 1;
+      const rot = pvpArenaRot90({ x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 });
+      const rtx = Math.floor(rot.x / TILE), rty = Math.floor(rot.y / TILE);
+      if ((dungeon.tiles[rty * dungeon.w + rtx] === 1) !== wall) wallsSymmetric = false;
+    }
   }
-  check("spawns are point-symmetric (fair mirror arena)", symmetric);
-  check("spawns are all distinct (maximally spread)", set.size === spawns.length);
+  check("walls are invariant under 90 rotation (clipped corners + border)", wallsSymmetric);
+  check("arena center is open", dungeon.tiles[9 * dungeon.w + 9] === 0);
 
   // Break-on-fire: a respawn-protected player who fires drops protection immediately.
   const w = pvpWorld(5, ["p1", "p2"]);
@@ -233,10 +250,11 @@ section("MATCH STATE MACHINE (frag-limit respawn, tick-based)");
   stepN(solo, 50, new Map());
   check("1 player stays in lobby", solo.match!.phase === "lobby");
 
-  // Frag limit ends the match; winner = the player who reached it.
+  // Frag limit (scaled by player count) is resolved at the whistle and ends the match.
   const fw = pvpWorld(9, ["p1", "p2"]);
   advanceToLive(fw);
-  fw.match!.scores.set("p1", PVP.fragLimit);
+  check("2p frag limit resolved to 8 at the whistle", fw.match!.fragLimit === pvpFragLimit(2) && fw.match!.fragLimit === 8);
+  fw.match!.scores.set("p1", fw.match!.fragLimit);
   stepN(fw, 1, new Map());
   check("frag limit ends the match", fw.match!.phase === "over");
   check("winner is the frag leader", fw.match!.winner === "p1");
@@ -290,15 +308,15 @@ section("ANTI-ONE-SHOT: the per-tick cap holds");
   }
   check("no single tick removes more than the per-hit cap", worstDrop <= pvpPerHitCap() + 1e-9, `worst=${worstDrop.toFixed(2)}`);
 
-  // Two railguns landing the SAME tick (44 raw) clamp to exactly the cap (35). The shooters sit
-  // ABOVE and BELOW the target (perpendicular converging fire) so neither round passes through
-  // the other shooter first.
+  // Two railguns landing the SAME tick clamp to exactly the cap (35). The shooters sit ABOVE and
+  // BELOW the target (perpendicular converging fire) on a clear column so neither round passes
+  // through the other shooter first. railgun pvp = 11*1.78 ~= 19.6 each; two = ~39 -> capped 35.
   const w2 = pvpWorld(13, ["p1", "p2", "p3"]);
   advanceToLive(w2);
   const a = w2.players.get("p1")!; const b = w2.players.get("p2")!; const target = w2.players.get("p3")!;
-  target.x = 800; target.y = 400; target.invuln = 0;
-  a.x = 800; a.y = 340; a.invuln = 0; a.weapon = "railgun"; a.ownedWeapons = ["railgun"]; // above, fires down
-  b.x = 800; b.y = 460; b.invuln = 0; b.weapon = "railgun"; b.ownedWeapons = ["railgun"]; // below, fires up
+  target.x = 648; target.y = 216; target.invuln = 0; // tile (13,4), clear column
+  a.x = 648; a.y = 140; a.invuln = 0; a.weapon = "railgun"; a.ownedWeapons = ["railgun"]; // above, fires down
+  b.x = 648; b.y = 300; b.invuln = 0; b.weapon = "railgun"; b.ownedWeapons = ["railgun"]; // below, fires up
   const before = target.hp;
   stepN(w2, 1, new Map([["p1", inp({ firing: true, aim: Math.PI / 2 })], ["p2", inp({ firing: true, aim: -Math.PI / 2 })]]));
   const drop = before - target.hp;
@@ -316,7 +334,7 @@ section("PER-WEAPON TTK band (1v1 median 3-5s across the arsenal)");
     const perTrigger = Math.min(pvpPerHitCap(), wep.pellets * pvpHitDamage(id, wep.damage));
     const dps = perTrigger / wep.fireCd;
     const ttk = PVP.maxHp / dps;
-    check(`TTK(${id}) in 3-5s band`, ttk >= 3.0 && ttk <= 5.0, `${ttk.toFixed(2)}s`);
+    check(`TTK(${id}) in 3.5-5.5s band`, ttk >= 3.5 && ttk <= 5.5, `${ttk.toFixed(2)}s`);
   }
 }
 
@@ -337,7 +355,7 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
     advanceToLive(w);
     // Deterministic ring: each shoots the next, all at close range.
     const ps = ["p1", "p2", "p3"].map((id) => w.players.get(id)!);
-    ps[0].x = 400; ps[0].y = 400; ps[1].x = 460; ps[1].y = 400; ps[2].x = 520; ps[2].y = 400;
+    ps[0].x = 300; ps[0].y = 216; ps[1].x = 360; ps[1].y = 216; ps[2].x = 420; ps[2].y = 216; // clear row 4
     for (const p of ps) { p.invuln = 0; p.weapon = "smg"; p.ownedWeapons = ["smg"]; }
     const inputs = new Map([
       ["p1", inp({ firing: true, aim: 0 })],
@@ -425,7 +443,7 @@ section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliabl
 
   const mw = pvpWorld(32, ["p1", "p2"]);
   advanceToLive(mw);
-  mw.match!.scores.set("p1", PVP.fragLimit);
+  mw.match!.scores.set("p1", mw.match!.fragLimit);
   const over = stepCollect(mw, 1, new Map()).filter((e) => e.t === "pvpMatchOver");
   check("pvpMatchOver event fires with the winner", over.length === 1 && over[0].t === "pvpMatchOver" && over[0].winner === "p1");
 }

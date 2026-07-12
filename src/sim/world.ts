@@ -16,7 +16,7 @@ import type { NavRuntime } from "./nav.js";
 import { TILE } from "./types.js";
 import type {
   Enemy, EnemyKind, BossState, Bullet, Pickup, Prop, Chest, Hazard, FloorHazard, WeaponId, WeaponRarity, AttackMove, TileKind, PropKind,
-  MysteryTwist,
+  MysteryTwist, Vec2,
   Effect, ZoneEffect, WireEffect, OrbitEffect, SentryEffect, TetherEffect, SanctuaryEffect, AegisEffect,
 } from "./types.js";
 import { placeFloorHazards, isFloorHazardDamaging, floorHazardPhaseAt, FLOOR_HAZARD_DAMAGE, RIFT_PULL_RADIUS, RIFT_PULL_SPEED } from "./hazards.js";
@@ -41,8 +41,8 @@ import {
 } from "./kits.js";
 import type { KitId, UltSource } from "./kits.js";
 import {
-  PVP, buildPvpArena, createMatchState, pvpHitDamage, pvpPerHitCap, arePvpFoes, farthestSpawnIndex,
-  pvpRespawnDelayTicks, pvpCountdownTicks, pvpMatchTimeTicks,
+  PVP, buildPvpArena, createMatchState, pvpHitDamage, pvpPerHitCap, arePvpFoes, farthestSpawnIndex, pvpRespawnIndex,
+  pvpRespawnDelayTicks, pvpCountdownTicks, pvpMatchTimeTicks, pvpFragLimit,
 } from "./pvp.js";
 import type { WorldMode, MatchState } from "./pvp.js";
 import { lowHpFrac, liveDamageMult, liveFireRateMult, gunnerDamageMult, gunnerFireRateMult, expectedBossDps } from "./weaponStats.js";
@@ -633,12 +633,14 @@ function initPvpPlayer(w: WorldState, p: PlayerSim): void {
 function pvpPlaceOnSpawn(w: WorldState, p: PlayerSim): void {
   const spawns = w.match?.spawns ?? [];
   if (spawns.length > 0) {
-    const occupied: Array<{ x: number; y: number }> = [];
+    // Anti-camp: farthest from any living opponent AND out of their crosshairs (never respawn in
+    // someone's line of fire). Deterministic (position + authoritative aim, id-sorted tiebreak).
+    const opponents: Array<{ x: number; y: number; aim: number }> = [];
     for (const o of w.players.values()) {
       if (o.id === p.id || o.hp <= 0 || o.respawnT > 0) continue;
-      occupied.push({ x: o.x, y: o.y });
+      opponents.push({ x: o.x, y: o.y, aim: o.aimAngle });
     }
-    const idx = farthestSpawnIndex(spawns, occupied);
+    const idx = pvpRespawnIndex(spawns, opponents);
     p.x = spawns[idx].x;
     p.y = spawns[idx].y;
   }
@@ -1054,6 +1056,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // win rule, never the movement/collision engine.
   const pvp = isPvp(w);
   const isBare = w.isSandbox || pvp;
+  let pvpCover: Vec2[] = [];
   if (pvp) {
     // A floor build IS a fresh arena, so it is a fresh MATCH (cleared scoreboard, lobby phase).
     // pvp never descends mid-match, so this only runs at world create + on a room reset/rematch,
@@ -1061,6 +1064,7 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
     const arena = buildPvpArena();
     w.dungeon = arena.dungeon;
     w.match = createMatchState(arena.spawns);
+    pvpCover = arena.cover;
   } else {
     w.dungeon = w.isSandbox ? buildArena() : generateDungeon(w.seed, floor);
     w.match = null;
@@ -1096,7 +1100,12 @@ export function loadFloorIntoWorld(w: WorldState, floor: number, playerCountAtLo
   // Obstacles land BEFORE enemies: spawn settling needs the floor's real prop/chest
   // footprint, and the obstacle revision must already name this floor's layout. The
   // ordering is free — every placement draws from its own seeded stream.
-  w.props = isBare ? [] : placeProps(w);
+  // pvp cover is BREAKABLE PROPS (degrading-cover arc): the arena's symmetric prop set replaces
+  // the seeded PvE props. They block movement + bullets and break like any destructible, all via
+  // the shared systems (moveCircle / updateProps) — no pvp-specific collision code.
+  w.props = pvp
+    ? pvpCover.map((c) => ({ id: w.nextPropId++, kind: "crate" as PropKind, x: c.x, y: c.y, radius: C.PROP_RADIUS, hp: C.PROP_HP.crate, dead: false }))
+    : (isBare ? [] : placeProps(w));
   w.chests = isBare ? [] : placeChests(w);
   if (!isBare) stockWeaponChests(w);
   // Patch's shop: built off the generator's dedicated shop room. Layout/prices are pure
@@ -10421,6 +10430,10 @@ function damagePlayerPvp(w: WorldState, p: PlayerSim, amount: number, ev: SimEve
 function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
   const m = w.match;
   if (m === null || m.phase !== "live") return;
+  // Victims are scanned in ID-SORTED order (never Map iteration order), so which foe an
+  // overlapping round hits — and the per-tick cap + kill attribution when multiple sources
+  // land the same tick — is byte-identical across servers.
+  const victimIds = [...w.players.keys()].sort();
 
   // Owned bullets vs foe players. A departed owner's round keeps flying but cannot be a pvp hit
   // (we can't know its team/owner to test "non-owner foe"), so it simply fizzles — no free frags.
@@ -10432,8 +10445,9 @@ function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
     const shooter = w.players.get(owner);
     const shooterTeam = shooter ? shooter.team : 0;
     const rewind = fireTimeRewind(w, b.bornTick, b.lagRewind);
-    for (const victim of w.players.values()) {
-      if (victim.id === owner) continue;
+    for (const vid of victimIds) {
+      const victim = w.players.get(vid);
+      if (victim === undefined || vid === owner) continue;
       if (victim.hp <= 0 || victim.respawnT > 0) continue;   // dead / awaiting respawn
       if (isProtected(victim)) continue;                     // spawn iframes / dash iframes
       if (!arePvpFoes(shooterTeam, owner, victim.team, victim.id)) continue;
@@ -10448,13 +10462,15 @@ function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
 
   // Owned melee swings vs foe players. One hit per foe per swing (hitPids), over the swing's
   // multi-tick duration, both actors evaluated at the swing's fire-time pose (lag-comp).
-  for (const attacker of w.players.values()) {
-    const swing = attacker.meleeSwing;
-    if (!swing || swing.timer <= 0) continue;
+  for (const aid of victimIds) {
+    const attacker = w.players.get(aid);
+    const swing = attacker?.meleeSwing;
+    if (attacker === undefined || !swing || swing.timer <= 0) continue;
     const rewind = fireTimeRewind(w, swing.bornTick, swing.lagRewind);
     const [sx, sy] = swingPose(w, attacker, swing);
-    for (const victim of w.players.values()) {
-      if (victim.id === attacker.id) continue;
+    for (const vid of victimIds) {
+      const victim = w.players.get(vid);
+      if (victim === undefined || vid === attacker.id) continue;
       if (victim.hp <= 0 || victim.respawnT > 0 || isProtected(victim)) continue;
       if (!arePvpFoes(attacker.team, attacker.id, victim.team, victim.id)) continue;
       if (swing.hitPids && swing.hitPids.indexOf(victim.id) !== -1) continue;
@@ -10555,12 +10571,13 @@ function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
       if (w.tick >= m.phaseEndTick) {
         m.phase = "live";
         m.phaseEndTick = w.tick + pvpMatchTimeTicks();
+        m.fragLimit = pvpFragLimit(w.players.size); // scaled by the match-start player count
         pvpAssignSpreadSpawns(w); // fresh id-sorted spread + protection at the whistle
       }
       break;
     case "live": {
       const leader = pvpTopScorer(w);
-      if (leader !== null && (m.scores.get(leader) ?? 0) >= PVP.fragLimit) { pvpEndMatch(w, leader, ev); break; }
+      if (leader !== null && (m.scores.get(leader) ?? 0) >= m.fragLimit) { pvpEndMatch(w, leader, ev); break; }
       if (w.tick >= m.phaseEndTick) pvpEndMatch(w, pvpTopScorer(w), ev); // time cap -> highest frags
       break;
     }
@@ -10829,12 +10846,13 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
   updateBullets(w, dt, ev);
   updateEffects(w, dt, ev);
   updateEnemies(w, dt, ev);
-  // The mode-gated DAMAGE-TARGETING concern: owned rounds/swings hit non-owner foe players. Runs
-  // after bullets move (swept segments stamped) and after recordHistory (rewind samples ready).
-  if (pvp) resolvePvpHits(w, ev);
   updateGauntlet(w, dt, ev);
   updateHazards(w, dt, ev);
   updateProps(w, dt, ev);
+  // The mode-gated DAMAGE-TARGETING concern: owned rounds/swings hit non-owner foe players. Runs
+  // AFTER updateProps so breakable cover consumes a round before it can reach a player behind it
+  // (real LOS cover), and after recordHistory (fire-time rewind samples ready).
+  if (pvp) resolvePvpHits(w, ev);
   updateChests(w, dt, ev);
   updateFloorHazards(w, dt, ev);
   updatePickups(w, dt, ev);
