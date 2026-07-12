@@ -613,15 +613,15 @@
          unlock threshold (the visible-but-locked aspiration pattern). */
       .kit-select { margin: 6px 0; }
       .kit-select-title { font-family: var(--f-ui); font-size: var(--fs-xs); letter-spacing: 2px; color: var(--amber); margin-bottom: 6px; }
-      .kit-grid { display: grid; grid-template-columns: repeat(2, minmax(150px, 1fr)); gap: 8px; }
-      .kit-card { text-align: left; padding: 8px 10px; background: var(--dun-0); box-shadow: inset 0 0 0 2px var(--dun-3); color: var(--cream); cursor: pointer; font-family: var(--f-ui); }
+      .kit-grid { display: grid; grid-template-columns: repeat(2, minmax(240px, 1fr)); gap: 12px; }
+      .kit-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 5px; text-align: left; padding: 14px 16px; min-width: 0; min-height: 132px; background: var(--dun-0); box-shadow: inset 0 0 0 2px var(--dun-3); color: var(--cream); cursor: pointer; font-family: var(--f-ui); text-transform: none; letter-spacing: 0; line-height: 1.2; }
       .kit-card:hover { box-shadow: inset 0 0 0 2px var(--dun-4); }
       .kit-card.sel { box-shadow: inset 0 0 0 2px var(--amber); background: rgba(255,180,60,.08); }
       .kit-card.locked { opacity: .5; cursor: not-allowed; }
-      .kit-name { font-family: var(--f-logo); font-size: var(--fs-md); letter-spacing: 1px; color: var(--cream); }
+      .kit-name { width: 100%; font-family: var(--f-ui); font-size: var(--fs-md); letter-spacing: 1px; color: var(--cream); white-space: nowrap; }
       .kit-role { font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--blu); text-transform: uppercase; margin-bottom: 3px; }
-      .kit-blurb { font-size: var(--fs-2xs); color: var(--ink-mute); line-height: 1.3; }
-      .kit-lock { font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--amber); margin-top: 4px; min-height: 12px; }
+      .kit-blurb { width: 100%; font-size: var(--fs-2xs); color: var(--ink-mute); line-height: 1.35; }
+      .kit-lock { width: 100%; font-size: var(--fs-2xs); letter-spacing: 1px; color: var(--amber); margin-top: auto; min-height: 12px; }
       .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
       /* Solo kit chip (title): glanceable current kit + a door to the picker. Fixed geometry,
          kit-accented (--kit); one source of truth with the in-run kit cluster's accent set. */
@@ -638,7 +638,7 @@
       .kit-chip .kc-kit{ color:var(--kit,var(--cream)); }
       .kit-chip .kc-go{ margin-left:auto; color:var(--ink-faint); }
       .home-left .kit-chip{ height:38px; flex:0 0 38px; }
-      .kit-picker-mount{ max-width:520px; }
+      .kit-picker-mount{ width:100%; max-width:620px; margin:0 auto; }
 
       /* --- The one-time online name gate + the lobby's YOU confirmation --- */
       .name-gate { max-width: 380px; }
