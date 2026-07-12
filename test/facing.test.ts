@@ -142,6 +142,44 @@ function poseTests(): void {
     check("a locked seam never flip-flickers under sub-deadzone velocity noise",
       flips === 0 && f.facing === "side" && f.isMirrored, `flips=${flips}`);
   }
+  section("smoothed facing: a phasing drifter holds steady as it passes through its target");
+  {
+    // The ghost bug: a phasing body drifts THROUGH the player instead of colliding, so
+    // once it overlaps, its heading snaps target-ward → past → back every frame — the
+    // observed velocity reverses at FULL speed (well above the deadzone), and the L/R
+    // mirror flips every frame (flicker / "half frames face opposite"). The deadzone gates
+    // on magnitude, not sign, so it cannot catch this on the raw signal.
+    const raw = createFacing();
+    const smoothed = createFacing();
+    const ghost = createEnemy("ghost", 500, 500, 1, new Rng(3), 0);
+    let rawFlips = 0, smoothFlips = 0;
+    let prevRaw = raw.isMirrored, prevSmooth = smoothed.isMirrored;
+    for (let i = 0; i < 120; i++) {
+      const vx = (i % 2 === 0 ? 1 : -1) * 60; // ±full-speed reversal each frame (the phase-through)
+      const rawPose = computeEnemyPose(ghost, raw, vx, 8, true, false);
+      const smoothPose = computeEnemyPose(ghost, smoothed, vx, 8, true, true);
+      if (i > 0 && rawPose.isMirrored !== prevRaw) rawFlips++;
+      if (i > 0 && smoothPose.isMirrored !== prevSmooth) smoothFlips++;
+      prevRaw = rawPose.isMirrored; prevSmooth = smoothPose.isMirrored;
+    }
+    check("WITHOUT smoothing the phase-through oscillation flip-flickers the mirror (the bug)",
+      rawFlips > 40, `rawFlips=${rawFlips}`);
+    check("WITH smoothing the ghost holds a steady facing through the wobble (the fix)",
+      smoothFlips === 0, `smoothFlips=${smoothFlips}`);
+  }
+  {
+    // The fix must not freeze facing: a smoothed drifter still turns to its GENUINE travel
+    // direction — it only ignores the sign-reversing wobble, never a sustained heading.
+    const f = createFacing();
+    const ghost = createEnemy("ghost", 500, 500, 1, new Rng(4), 0);
+    for (let i = 0; i < 30; i++) computeEnemyPose(ghost, f, 90, 0, true, true); // sustained travel RIGHT
+    check("a smoothed drifter faces its sustained rightward travel", f.facing === "side" && !f.isMirrored);
+    for (let i = 0; i < 30; i++) computeEnemyPose(ghost, f, -90, 0, true, true); // then sustained LEFT
+    check("…and turns to face a sustained leftward travel (facing never frozen)",
+      f.facing === "side" && f.isMirrored);
+    for (let i = 0; i < 30; i++) computeEnemyPose(ghost, f, 0, -90, true, true); // then straight UP
+    check("…and up when it commits upward", f.facing === "up");
+  }
 }
 
 function ladderTests(): void {
