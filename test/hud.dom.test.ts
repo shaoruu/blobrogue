@@ -814,12 +814,19 @@ function kitChromeHideTests(): void {
   section("neutral-kit hide path: index.html makes [hidden] actually hide the chrome");
   const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "index.html"), "utf8");
   const css = html.replace(/\s+/g, " ");
-  // Each element that carries an explicit `display` AND is toggled via the `hidden` attribute must
-  // have a companion `<cls>[hidden]{...display:none...}` author rule (out-specifies the plain
-  // class, so `hidden` wins). Without it the neutral player paints a nameless "ULT".
+  // ONE global reset kills the whole class of bug: any authored `display:` defeats the UA
+  // [hidden] rule, so a bare, high-specificity-proof `[hidden]{display:none !important}` is what
+  // guarantees the (correctly attribute-toggled) chrome actually disappears — no per-element
+  // patch needed, and no future toggled element re-opens the landmine.
+  // A BARE `[hidden]` selector (not a compound like `.ultmeter[hidden]`): the char before it must
+  // not continue a selector token (alnum / . / # / - / _ / ] / )).
+  check("a single global [hidden]{display:none !important} reset ships in the CSS",
+    /[^A-Za-z0-9_.#\]\)-]\s*\[hidden\]\s*\{[^}]*display\s*:\s*none\s*!important/.test(css));
+  // The kit/ult/signature chrome carries an explicit `display` (the exact trap), so the global
+  // rule must not be undone by a later, more-specific author rule re-showing them while hidden.
   for (const cls of ["ultmeter", "kitbadge", "momentum", "pulse", "oshield"]) {
-    const rule = new RegExp(`\\.${cls}\\[hidden\\][^{]*\\{[^}]*display\\s*:\\s*none`);
-    check(`.${cls}[hidden] resolves to display:none in the shipped CSS`, rule.test(css));
+    const reShow = new RegExp(`\\.${cls}\\[hidden\\][^{]*\\{[^}]*display\\s*:\\s*(?!none)`);
+    check(`no author rule re-shows .${cls} while it carries [hidden]`, !reShow.test(css));
   }
 }
 
