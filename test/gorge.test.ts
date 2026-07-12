@@ -24,8 +24,7 @@ import { LOCAL_ID } from "../src/sim/input.js";
 import type { Bullet, Enemy, EnemyKind, Prop } from "../src/sim/types.js";
 import { TILE } from "../src/sim/types.js";
 import {
-  GORGE, gorgeHpForFloor, gorgeSeamCountFor,
-  jetHpForFloor, titheHpForFloor, quorumHpForFloor,
+  GORGE, gorgeHpForFloor, gorgeSeamCountFor, gorgeShellFracFor,
 } from "../src/sim/balance.js";
 import { bossKindForFloor, GORGE_FLOOR, isBossKind, ENEMY_ARCHETYPES } from "../src/sim/enemies.js";
 
@@ -151,38 +150,41 @@ function stationaryGates(): void {
 // ---- 3. GIANT HP calibration HARD RULE ----
 
 function calibrationGates(): void {
-  section("GIANT calibration: per-shell FRACTIONS, total ~1.4-1.6x via PHASE COUNT, never ~4x one pool");
-  const frac = GORGE.shellFrac;
-  const sum = frac.reduce((a, b) => a + b, 0);
-  check("the per-shell fractions sum to 1.0 (the whole pool split across 3 shells)", Math.abs(sum - 1) < 1e-9,
-    `sum=${sum.toFixed(4)}`);
-  check("there are exactly 3 shells (rind / chitin / core)", frac.length === 3);
+  section("GIANT calibration (balancer F50 anchors): back-loaded per-shell HP, PER-PHASE banking, never a 4x pool");
+  const shellHp = GORGE.shellHp;
+  const total = shellHp.reduce((a, b) => a + b, 0);
+  check("there are exactly 3 shells (rind / chitin / core)", shellHp.length === 3);
+  check("the per-shell HP is the balancer's F50 anchor [260, 290, 380]",
+    shellHp[0] === 260 && shellHp[1] === 290 && shellHp[2] === 380, `shellHp=[${shellHp.join(",")}]`);
+  check("the total giant budget is 930 at F50 (gorgeHpForFloor sums the per-shell anchors)",
+    gorgeHpForFloor(50) === 930, `total=${gorgeHpForFloor(50)}`);
+  // BACK-LOADED: the fight escalates INTO its hardest/longest phase (the core reveal). Never
+  // front-loaded (which would make the giant easiest exactly when its scariest form appears).
+  check("the pool is BACK-LOADED — core is the heaviest phase (rind < chitin < core)",
+    shellHp[2] > shellHp[1] && shellHp[1] > shellHp[0], `${shellHp[0]} < ${shellHp[1]} < ${shellHp[2]}`);
+  // The GIANT calibration HARD RULE: ~1.5x a standard deep boss via PHASE COUNT, NEVER a ~4x pool
+  // (a naive one-pool 4x giant would be ~2360 — the sponge this structure avoids).
+  check("the total is ~1.5x a standard boss, NOT a ~4x single-pool sponge (well under ~2360)",
+    total >= 800 && total <= 1100, `total=${total}`);
   check("NO single shell is ~a full pool (each is a FRACTION — never 4x on one pool)",
-    frac.every((f) => f < 0.5), `frac=[${frac.join(",")}]`);
-  // phaseAt = the cumulative-from-full complement of shellFrac (a shell sloughs when its chunk is spent).
-  const expectPhaseAt = [1 - frac[0], 1 - frac[0] - frac[1]];
-  check("phaseAt matches the cumulative complement of shellFrac (thresholds in lockstep with the split)",
-    Math.abs(GORGE.phaseAt[0] - expectPhaseAt[0]) < 1e-9 && Math.abs(GORGE.phaseAt[1] - expectPhaseAt[1]) < 1e-9,
-    `phaseAt=[${GORGE.phaseAt.join(",")}] vs [${expectPhaseAt.map((x) => x.toFixed(2)).join(",")}]`);
+    shellHp.every((h) => h < total * 0.5), `max=${Math.max(...shellHp)} total=${total}`);
+  // phaseAt = the cumulative-from-full complement of shellHp (a shell sloughs when its chunk spent).
+  const expectPhaseAt = [(total - shellHp[0]) / total, (total - shellHp[0] - shellHp[1]) / total];
+  check("phaseAt matches the cumulative complement of shellHp (thresholds in lockstep with the split)",
+    Math.abs(GORGE.phaseAt[0] - expectPhaseAt[0]) < 5e-4 && Math.abs(GORGE.phaseAt[1] - expectPhaseAt[1]) < 5e-4,
+    `phaseAt=[${GORGE.phaseAt.join(",")}] vs [${expectPhaseAt.map((x) => x.toFixed(4)).join(",")}]`);
   check("phase floors sit under each threshold (anti-burst overflow lands after the crack-off)",
     GORGE.phaseFloor[0] < GORGE.phaseAt[0] && GORGE.phaseFloor[1] < GORGE.phaseAt[1]);
 
-  // Total TTK ∝ total HP under the same window mechanics: assert the giant pool is ~1.4-1.6x a
-  // standard deep boss at F50 (never ~4x), achieved by the 3-shell structure — NOT one fat pool.
-  const std = (jetHpForFloor(50) + titheHpForFloor(50) + quorumHpForFloor(50)) / 3;
-  const giant = gorgeHpForFloor(50);
-  const ratio = giant / std;
-  check("the total pool is ~1.4-1.6x a standard deep boss at F50 (via PHASE COUNT, never 4x)",
-    ratio >= 1.35 && ratio <= 1.65, `ratio=${ratio.toFixed(2)} (giant=${giant} std=${std.toFixed(0)})`);
-  // Each shell's HP chunk is a fraction of a standard boss (a third-to-half of a normal boss's pool).
-  const perShell = frac.map((f) => giant * f);
-  check("each shell's HP chunk is a fraction of a standard boss (~a third-to-half, never a full boss)",
-    perShell.every((h) => h < std && h > std * 0.25), `perShell=[${perShell.map((h) => h.toFixed(0)).join(",")}] std=${std.toFixed(0)}`);
-
-  // A shell chunk needs >=2 peel windows (the anti-burst bankFrac): each window removes at most
-  // bankFrac x maxHp, and a shell is >= 1.5x that — so no burst can one-window a shell.
-  check("a shell chunk needs >=2 peel windows (bankFrac anti-burst holds)",
-    frac.every((f) => f >= GORGE.windowBankFrac * 1.5), `bank=${GORGE.windowBankFrac} minFrac=${Math.min(...frac)}`);
+  // PER-PHASE anti-burst: a single window caps at 0.22 × the CURRENT shell's HP (~57 / 64 / 84),
+  // so each phase needs ~5 windows and no phase can be one-burst even at high roll — the K=3
+  // structure enforces the anti-burst without a fat pool.
+  const banks = [1, 2, 3].map((ph) => GORGE.windowBankFrac * gorgeShellFracFor(ph) * total);
+  check("per-phase window bank is 0.22 × each shell's HP (~57 / 64 / 84 for rind/chitin/core)",
+    Math.abs(banks[0] - 57.2) < 1 && Math.abs(banks[1] - 63.8) < 1 && Math.abs(banks[2] - 83.6) < 1,
+    `banks=[${banks.map((b) => b.toFixed(0)).join(",")}]`);
+  check("each phase needs ~5 earned windows to clear (never one-burst, incl. a 4-stack)",
+    shellHp.every((h, i) => h / banks[i] >= 4), `windows/phase=[${shellHp.map((h, i) => (h / banks[i]).toFixed(1)).join(",")}]`);
 
   // Co-op scales the TASK (more seams), not the HP: seam count grows with players, per shell.
   check("weak-point count scales with the party (co-op = more seams = the TASK scales, not HP)",
@@ -222,8 +224,11 @@ function guardGates(): void {
   check("during the EXPOSED window the body takes damage (the peel is the only damage path)",
     boss.hp < hpBefore, `hp ${boss.hp}/${hpBefore}`);
   const removed = hpBefore - boss.hp;
-  check("a single burst can NEVER remove more than one window bank (the anti-burst clamp)",
-    removed <= GORGE.windowBankFrac * boss.maxHp + 1e-6, `removed=${removed.toFixed(0)} bank=${(GORGE.windowBankFrac * boss.maxHp).toFixed(0)}`);
+  // The PER-PHASE anti-burst: a single window caps at 0.22 × the CURRENT shell's HP chunk (not the
+  // whole pool), so even an arbitrarily large burst removes at most one shell-phase's bank.
+  const phaseBank = GORGE.windowBankFrac * gorgeShellFracFor(boss.boss!.phase) * boss.maxHp;
+  check("a single burst can NEVER remove more than one PER-PHASE window bank (0.22 × the shell's HP)",
+    removed <= phaseBank + 1e-6, `removed=${removed.toFixed(0)} phaseBank=${phaseBank.toFixed(0)} (phase ${boss.boss!.phase})`);
 }
 
 // ---- the peeler driver: destroy seams (open windows) + burst the bared body ----
@@ -279,8 +284,8 @@ function peelPhaseGates(): void {
     r.phasesSeen.includes(1) && r.phasesSeen.includes(2) && r.phasesSeen.includes(3),
     `phases=${r.phasesSeen.join(",")}`);
   check("the shell sprite advanced to phase 3 (the core reveal)", r.spritePhaseMax >= 3);
-  check("crossing the shells took >=5 peel windows total (the anti-burst — never one-burst a phase)",
-    r.peelWindows >= 5, `windows=${r.peelWindows}`);
+  check("the PER-PHASE bank forces ~5 windows/phase (>=10 total — no phase one-burst, incl. a 4-stack)",
+    r.peelWindows >= 10, `windows=${r.peelWindows}`);
   check("the peel PUNCTUATES (crack beats fired on the weak-point clears)", r.crackBeats >= 3, `cracks=${r.crackBeats}`);
 
   // FAIL LOUD: a bot that CANNOT open windows (never peels) can NEVER kill the giant — the shell

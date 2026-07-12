@@ -1876,30 +1876,36 @@ export function quorumHpForFloor(floor: number): number {
 // A colossal ~192px STATIONARY front-facing set-piece PINNED to floor 50 (never in the seeded
 // deep rotation). It does not chase; its whole threat is SPACE-CONTROL (rings / zones / spokes)
 // plus a MULTI-PHASE SHELL-PEEL task. Calibrated on EXPOSED time like the deep roster, but as a
-// K=3 GIANT: each shell's HP is a FRACTION of a standard deep boss, so the TOTAL is ~1.4-1.6x a
-// standard boss via PHASE COUNT — NEVER ~4x HP on one pool (the GIANT calibration HARD RULE).
-// The peel VERB is destroying the shell's telegraphed tectonic WEAK-POINTS (gorge_seam); clearing
-// a whole exposed set routes through the SHIPPED earned-window plumbing (openBossWindow → guard
-// chip + per-window bank + calibration + determinism), and the body's HP chunk then bleeds down
-// across the exposed windows until the layer SLOUGHS at the phase transition (the punctuated
-// crack-off that swaps the sprite rind → chitin → core and drops the shell as debris cover).
+// K=3 GIANT: each shell's HP is a FRACTION of a standard deep boss, so the TOTAL is ~1.5x a
+// standard boss via PHASE COUNT — NEVER ~4x HP on one pool (the GIANT calibration HARD RULE; a
+// naive one-pool 4x giant would be ~2360, the sponge this structure avoids). The peel VERB is
+// destroying the shell's telegraphed tectonic WEAK-POINTS (gorge_seam); clearing a whole exposed
+// set routes through the SHIPPED earned-window plumbing (openBossWindow → guard chip + PER-PHASE
+// bank + calibration + determinism), and the body's HP chunk bleeds down across the exposed
+// windows until the layer SLOUGHS at the phase transition (the punctuated crack-off that swaps
+// the sprite rind → chitin → core and drops the shell as debris cover).
 export const GORGE = {
-  // The TOTAL pool at F50 ≈ 1.5x a standard deep boss (avg jet/tithe/quorum @F50 ≈ 833) — SPLIT
-  // per-shell below (shellFrac), NEVER one 4x pool. baseHpFloor 50 = its fixed set-piece floor.
-  baseHp: 1250,
+  // PER-SHELL HP at F50 (the balancer's anchor), BACK-LOADED so the fight escalates INTO its
+  // hardest/longest phase — the core reveal (never front-loaded, which would make the giant
+  // easiest exactly when its scariest form appears). NAMED per-shell (rind/chitin/core), each
+  // riding the §3 curve; total 930 = 1.5x a standard deep boss (~620) delivered across 3 GATED
+  // phases (~9.2s / 10.2s / 13.5s exposed). NOT a single magic number — gorgeHpForFloor sums these.
+  shellHp: [260, 290, 380] as readonly number[], // rind / chitin / core (F50)
   baseHpFloor: 50,
-  // PER-SHELL HP fractions of the giant pool (the NAMED split the balancer tunes — never a magic
-  // number). rind / chitin / core, each ~a third-to-half of a standard boss's exposed-TTK. Σ = 1.
-  shellFrac: [0.34, 0.33, 0.33] as readonly number[],
-  // The shell SLOUGHS (phase transition) when its HP chunk is spent: phaseAt[k] = 1 - Σ shellFrac[0..k]
-  // (kept in lockstep with shellFrac — gorge.test.ts asserts the two agree). phaseFloor = the
-  // anti-burst floor (queued overflow lands after the crack-off), ~0.08 under each threshold.
-  phaseAt: [0.66, 0.33] as readonly number[],
-  phaseFloor: [0.58, 0.25] as readonly number[],
+  // The shell SLOUGHS (phase transition) when its HP chunk is spent: phaseAt[k] = the cumulative-
+  // from-full complement of shellHp = [1 - 260/930, 1 - 550/930] = [0.720, 0.409]. Kept in lockstep
+  // with shellHp (gorge.test.ts asserts the two agree). phaseFloor = the anti-burst floor (queued
+  // overflow lands after the crack-off), ~0.08 under each threshold.
+  phaseAt: [0.7204, 0.4086] as readonly number[],
+  phaseFloor: [0.64, 0.33] as readonly number[],
   // GUARDED behind the shell: ZERO body damage while sealed (a TRUE hard gate like the Tithe —
   // the ONLY damage path is peeling, i.e. the earned window). The shell IS the wall.
   guardMult: 0.0,
-  windowBankFrac: 0.20, // per-peel window bank: a shell chunk needs >=2 peels (the anti-burst)
+  // PER-PHASE anti-burst: a single earned window caps at 0.22 × the CURRENT SHELL's HP chunk
+  // (~57 / 64 / 84 for rind/chitin/core), so each phase needs ~5 earned windows to clear and NO
+  // phase can be one-burst even by a high-roll 4-stack — the phase-count structure enforces the
+  // anti-burst without a fat pool (openBossWindow banks off the phase HP for gorge, not the pool).
+  windowBankFrac: 0.22,
   peelExpose: 3.2,      // seconds of EXPOSED a full weak-point-set clear opens on the bared material
   contactDamage: 2,
   entranceGrace: 1.4,
@@ -1954,7 +1960,19 @@ export const GORGE = {
 } as const;
 
 export function gorgeHpForFloor(floor: number): number {
-  return anchoredBossHp(GORGE.baseHp, GORGE.baseHpFloor, floor);
+  // Sum the per-shell anchored HP (the balancer's back-loaded split — NOT one magic number); each
+  // shell rides the §3 curve independently, anchored at F50 (260 + 290 + 380 = 930 at F50).
+  let hp = 0;
+  for (const shell of GORGE.shellHp) hp += anchoredBossHp(shell, GORGE.baseHpFloor, floor);
+  return hp;
+}
+
+// The fraction of the giant's pool held by shell `phase` (1..3) — drives the PER-PHASE window
+// bank (0.22 × this shell's HP chunk), so each phase self-gates against a one-burst regardless of
+// the pool size (~5 windows/phase even for a high-roll 4-stack). Back-loaded: rind < chitin < core.
+export function gorgeShellFracFor(phase: number): number {
+  const total = GORGE.shellHp.reduce((a, b) => a + b, 0);
+  return GORGE.shellHp[Math.max(0, Math.min(GORGE.shellHp.length - 1, phase - 1))] / total;
 }
 
 // One weak-point's HP at a floor (the peel-task pacing — a mechanic body scaled on the §3 curve

@@ -132,11 +132,12 @@ const WINDOW_OPENERS: Readonly<Partial<Record<EnemyKind, WindowOpener>>> = {
     return quorumPriorityHusk(w, boss.id) ?? boss;
   },
   // Gorge (F50 giant): guardMult 0.0 — the body is pointless while shelled; the ONLY damage path
-  // is PEELING (destroy the tectonic weak-points → openBossWindow). Target the seams in SPAWN
-  // order (which is arc order — the sim juts them across the shell arc from one end to the other),
-  // so a competent player sweeps the arc one direction instead of zig-zagging; the shared driver
-  // bursts the body during the exposed window. A bot that can't reach the seams never opens a
-  // window → FAILS LOUD via the (A) playability gate below.
+  // is PEELING (destroy the tectonic weak-points → openBossWindow). This is the PER-PHASE opener:
+  // the seams belong to whichever shell is current, so targeting the live seams peels rind → then
+  // chitin → then core as the fight escalates. Target them in SPAWN order (= arc order — the sim
+  // juts them across the shell arc from one end to the other), so a competent player sweeps the
+  // arc one direction instead of zig-zagging; the shared driver bursts the body during the exposed
+  // window. A bot that can't reach the seams never opens a window → FAILS LOUD via the (A) gate.
   gorge: (w, boss) => w.enemies.find((e) => !e.dead && e.kind === "gorge_seam") ?? boss,
   // Marrow/Gilded/Jet/King: no not-exposed body — the driver just fires the boss (Marrow's
   // crash is baited by botMoveFor; Gilded/Jet windows ride their own commitment-recover cadence;
@@ -609,14 +610,15 @@ const BOSS_BANDS: Readonly<Record<string, BossBand>> = {
     // band is the primary TTK gate; exposed is a secondary sanity check. Do NOT "fix" the low
     // exposed by widening it to the roster's [12,26] — that would defeat the gate.
     soloWall: [36, 54], exposed: [5, 14], minLegal: 22, party4: [26, 40], calibrated: true, calibrated4: true },
-  // GORGE (F50 GIANT #1): a K=3 shell-peel giant, PROVISIONAL bands (measured + surfaced, never
-  // failed red) until the balancer calibrates its per-shell fractions + peel pace on build. The
-  // HARD gates STILL apply: (A) the bot MUST open windows + kill it (peeling the tectonic seams —
-  // else it never dies = FAIL LOUD), and (C) the 4-strong P10 must stay >= min-legal (a stack
-  // can't one-burst the giant — the per-window bank + 3-phase structure hold it). The exposed
-  // tally is the sum of the peel windows.
+  // GORGE (F50 GIANT #1): a K=3 shell-peel giant, PROVISIONAL bands from the balancer (measured +
+  // surfaced, never failed red — hardens when the harness bot measures it). The HARD gates STILL
+  // apply: (A) the bot MUST open windows + kill it (peeling the tectonic seams — else it never
+  // dies = FAIL LOUD), and (C) the 4-strong P10 must stay >= min-legal (a stack can't one-burst
+  // the giant — the PER-PHASE window bank (0.22 × each shell's HP) + 3-phase structure hold it: a
+  // 4-stack still needs ~5 windows/phase). The exposed tally is the sum of the peel windows. The
+  // WINDOW_OPENERS.gorge opener peels whatever shell is current (rind → chitin → core).
   gorge: { floor: 50, weapon: "pistol", build: [...L3("hair_trigger"), ...L3("glass_cannon")],
-    soloWall: [24, 80], exposed: [6, 40], minLegal: 22, party4: [24, 80], calibrated: false, calibrated4: false },
+    soloWall: [56, 78], exposed: [26, 40], minLegal: 22, party4: [40, 58], calibrated: false, calibrated4: false },
 };
 
 const GOD_PARTY: readonly Loadout[] = [BUILDS.god, BUILDS.god, BUILDS.god, BUILDS.god];

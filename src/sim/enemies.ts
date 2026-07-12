@@ -373,7 +373,9 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   gorge: {
     kind: "gorge", sprite: "gorge", movement: "boss", isPhasing: false,
     radius: 60, drawSize: 192, alpha: 1, tint: "#ffb43b", kbResist: 200,
-    baseHp: GORGE.baseHp, baseSpeed: 0, touchDamage: GORGE.contactDamage, threat: 0,
+    // Nominal — the real per-floor pool is gorgeHpForFloor (the back-loaded per-shell sum); a boss's
+    // HP is set from enemyHpForFloor × the R curve in createEnemy, never from this archetype base.
+    baseHp: gorgeHpForFloor(GORGE.baseHpFloor), baseSpeed: 0, touchDamage: GORGE.contactDamage, threat: 0,
   },
   // The GORGE's tectonic WEAK-POINT: a destructible mechanic body that juts out of the current
   // shell (a "seam"/node). Stationary, harmless (touchDamage 0), no loot/combo (a decoy kind) —

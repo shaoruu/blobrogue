@@ -48,7 +48,7 @@ import { LOCAL_ID, IDLE_INPUT } from "./input.js";
 import * as C from "./constants.js";
 import {
   PLAYER, SUSTAIN, SHOP, REVIVE, FANG_PROC_COOLDOWN, BOSS, MARROW, CHOIR, WEAVER, GILDED,
-  JET, TITHE, QUORUM, GORGE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
+  JET, TITHE, QUORUM, GORGE, jetSimulCapFor, titheSlabHpForFloor, gorgeSeamHpForFloor, gorgeSeamCountFor, gorgeShellFracFor, weaponResonanceFamily, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR,
   GAUNTLET, gauntletCaptainHp, TIERS, coopBossHpMult, EXPOSE_WINDOW_CAP,
   activeThreatCap, clampPlayers, coopThreatMult, coopHeartRateMult,
   REINFORCE_STAGGER, BIOME_PRESSURE, BRUTE_HEAVY_DAMAGE, ELITE_BRACE, BOSS_VULN_CAP,
@@ -2308,7 +2308,15 @@ function openBossWindow(e: Enemy, seconds: number, ev: SimEvent[]): void {
   const boss = e.boss;
   const def = EARNED_WINDOWS[e.kind];
   if (!boss || !def) return;
-  if (boss.exposed <= 0) boss.windowBank = def.bankFrac * e.maxHp;
+  // GORGE banks PER PHASE: a window caps at bankFrac × the CURRENT SHELL's HP chunk (not the whole
+  // pool), so every one of its 3 phases needs ~5 windows and no phase can be one-burst regardless
+  // of the pool size — the K=3 structure enforces the anti-burst without a fat pool. Every other
+  // boss banks off the whole maxHp (the shipped single-pool contract).
+  if (boss.exposed <= 0) {
+    boss.windowBank = e.kind === "gorge"
+      ? def.bankFrac * gorgeShellFracFor(boss.phase) * e.maxHp
+      : def.bankFrac * e.maxHp;
+  }
   boss.exposed = Math.min(boss.exposed + seconds, EXPOSE_WINDOW_CAP);
   ev.push({ t: "flash", eid: e.id });
   ev.push({ t: "cue", name: "bossSpawn", x: e.x, y: e.y, rate: 1.5, gain: 0.6, trauma: 0.05 });
