@@ -36,15 +36,15 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
    MVP: FFA last-blob-standing round; best-of-N rounds (N configurable, MVP N=3) [GD? bo3 vs frag-limit].
    Round ends when ≤1 player alive; match ends when a player wins ceil(N/2) rounds. Short reset between rounds.
 
-## PVP DAMAGE MODEL (BALANCER OWNS — defaults pending exact numbers)
-- PvE weapon damage would near-instantly delete a player. Apply a GLOBAL PVP damage scalar to player-vs-player
-  hits ONLY (PvE damage untouched). [BAL?] target TTK ~3-5s between even players → a single global scalar for MVP;
-  per-weapon overrides later. Leave the scalar a NAMED constant (e.g. PVP.dmgScale) so balancer tunes one number.
-- Player HP: [BAL?] reuse PvE pool + scale incoming, OR fixed PVP HP for clean math. Leave named.
-- KITS/ULTS: everyone gets a symmetric starting kit for a fair MVP [GD?/BAL? which kit, or free pick].
-  Ultimates: [GD?/BAL?] blanket-disable for MVP vs keep+tune (Mender self-heal / Bulwark shield / Phantom dash
-  / Gunner overheat may be degenerate in a duel). Default lean: keep spawn-iframes + ult-invuln if ults on;
-  disable blessing-pick immunity and long absent-immunity mid-round.
+## PVP DAMAGE MODEL (BALANCER — LOCKED numbers, all in one named PVP config block)
+- FIXED PVP HP = 100 (PVP.maxHp). NOT the PvE 6-pool (too coarse/swingy). PvP-only; PvE HP untouched. UI: map 100→3-heart bar (33/heart) or a PVP health bar.
+- Global PVP.dmgMult = 2.0, applied to player-vs-player hits ONLY (PvE damage 100% untouched). Median gun ~4.0s TTK vs 100 HP. Target TTK 4.0s (3-5s band).
+- Per-weapon outlier overrides (stack on the 2.0): PVP.weaponMult = { sawnoff 0.45, flamer 0.45, burst 0.72, spear 0.85, beam 0.85 } — dmg*2.0*(weaponMult[id]??1). Map ids to real weapons.ts ids; skip any that don't exist. Everything else rides flat 2.0. (ricochet/tesla/thumper come in slow ~5.8-6.7s — fine, leave.)
+- HARD PER-HIT CAP: PVP.perHitCapFrac = 0.35 — no single hit/trigger removes >35% of maxHP (≤35). Anti-one-shot backstop; keep even after per-weapon tuning.
+- ULTS: PVP.ultsEnabled = false — blanket-disable ALL kit ultimates for MVP (each degenerate in a duel: Mender heal=stalemate, Bulwark shield=flat EHP win, Phantom dash=infinite disengage, Gunner overheat=least bad, re-add FIRST in v2 tuned). Kit passive stat lean stays (symmetric). Blessings off (symmetric kit).
+- Loadout: everyone same symmetric starting kit + weapon (neutral all-rounder). Blessings do not apply.
+- SPAWN PROTECTION: PVP.spawnIframeSec = 2.0 (not 1.5 — 1.5 is only ~37% of a 4s TTK). Ends at 2.0s OR first OUTGOING attack, whichever first (no shoot-from-invuln). Plus max-distance FFA spawn selection (anti-camp beyond iframes).
+- SHIP GATE (as test assertions): per-weapon 1v1 median TTK 3-5s; ZERO hits >35% HP (assert worst-case point-blank sawnoff clamps to 35); no infinite sustain/disengage (ults off).
 
 ## STAGING (TD)
 - P1 (sim, no wire): mode discriminant + damagePlayer(by) + owned-round-hits-player resolve + pure match state
