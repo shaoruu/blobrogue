@@ -7528,15 +7528,27 @@ export class Game {
         ctx.fillStyle = b.color;
         ctx.beginPath(); ctx.arc(bx, by, b.radius, 0, 6.28); ctx.fill();
       } else {
-        // Enemy fire: a soft danger halo behind a bright hot core, in its own hue.
-        ctx.globalAlpha = 0.32;
-        ctx.fillStyle = b.color;
-        ctx.beginPath(); ctx.arc(bx, by, b.radius * 1.9, 0, 6.28); ctx.fill();
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = b.color;
-        ctx.beginPath(); ctx.arc(bx, by, b.radius, 0, 6.28); ctx.fill();
-        ctx.fillStyle = "#fff6f0";
-        ctx.beginPath(); ctx.arc(bx, by, b.radius * 0.42, 0, 6.28); ctx.fill();
+        // Enemy fire: a uniform ROUND hot-orb (NEVER streaked — round is the enemy signifier
+        // vs the player's streaky bullets; the fastest "mine vs theirs" read at 4p). Three
+        // layers, preserving the readability structure: soft hue danger-halo -> saturated hue
+        // mid (at the TRUE b.radius = the real hitbox) -> a white-hot CORE (the "dodge this"
+        // signal). Uses the shipped glow primitives; falls back to flat circles until they load.
+        // Glow alpha is capped so 10+ overlapping orbs stay countable, never a white-out soup.
+        const R = b.radius;
+        // Halo: soft, translucent, clearly bigger-but-softer so it never reads as a bigger hitbox.
+        if (!this.fxLayer("glow_round", b.color, bx, by, R * 5.2, R * 5.2, 0.3, 0)) {
+          ctx.globalAlpha = 0.32; ctx.fillStyle = b.color;
+          ctx.beginPath(); ctx.arc(bx, by, R * 1.9, 0, 6.28); ctx.fill(); ctx.globalAlpha = 1;
+        }
+        // Saturated mid at the TRUE radius (the collision size players dodge).
+        ctx.globalAlpha = 1; ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(bx, by, R, 0, 6.28); ctx.fill();
+        // White-hot core (THE incoming-threat signal — stays near-white, never tinted). A
+        // 1px dark inner rim keeps it separable on the brightest biome (Emberreach) too.
+        if (!this.fxLayer("core_dot", "#fff6f0", bx, by, R * 1.3, R * 1.3, 1, 0)) {
+          ctx.fillStyle = "#fff6f0";
+          ctx.beginPath(); ctx.arc(bx, by, R * 0.42, 0, 6.28); ctx.fill();
+        }
       }
     }
     ctx.globalAlpha = 1;
