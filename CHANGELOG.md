@@ -6,6 +6,7 @@ Newest changes first. (Times are Pacific.)
 ---
 
 ## Unreleased (in progress)
+- **Design-system tokenization:** swapped raw hex colors in the run-stats panel, roster, results screen, and shop icon tints over to the existing `:root` tokens (identical render), and added one affirmative-state token `--ok` for "connected / ready / at-exit" states.
 - **Less HUD clutter for Gunners:** the HEAT pip row no longer sits empty when you're cold — it appears the moment heat starts building (or the boil-over kicks in) and tucks away at zero, so an idle Gunner isn't staring at a blank readout. Your dash meter stays put.
 - **Kits now work in SOLO:** playing solo (and classic co-op) finally spawns you as your chosen class — you get its stat lean, starting weapon, passives, and a live ult meter with the right badge and signature row — instead of the kitless neutral blob with a pistol. Your Amber Camp pick now applies everywhere, not just online. A kit chip on the title names your current class and opens the picker, so you always know (and can change) what you're playing. Also fixed a HUD bug where a kitless player still showed a nameless "ULT" widget.
 - **Three new companions to rescue:** a grey cat, a baby amber dragon, and a baby slime join the doggie at the Kennel — rescue each from a deeper floor (the slime waits in the deepest dark), then pick which one rides along at your side (one companion at a time).
