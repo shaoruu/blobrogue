@@ -24,6 +24,10 @@ import { WEAPONS } from "../src/sim/weapons.js";
 import { ULT } from "../src/sim/kits.js";
 import { TILE } from "../src/sim/types.js";
 import type { InputCmd } from "../src/sim/input.js";
+import type { SimEvent } from "../src/sim/events.js";
+import { buildSnapshot, jsonCodec, PROTOCOL_VERSION } from "../src/net/protocol.js";
+import type { ServerMsg } from "../src/net/protocol.js";
+import { diffSnapshot, applySnapshotDelta, snapshotToWire } from "../src/net/snapshotDelta.js";
 
 let passed = 0, failed = 0;
 const failures: string[] = [];
@@ -53,6 +57,18 @@ function advanceToLive(w: WorldState, inputs: Map<string, InputCmd> = new Map())
 
 function stepN(w: WorldState, n: number, inputs: Map<string, InputCmd>): void {
   for (let i = 0; i < n; i++) stepWorld(w, inputs, DT);
+}
+
+// Step n ticks, collecting every SimEvent emitted (for the reliable pvp events).
+function stepCollect(w: WorldState, n: number, inputs: Map<string, InputCmd>): SimEvent[] {
+  const out: SimEvent[] = [];
+  for (const p of inputs.keys()) void p; // (inputs are re-sent each tick)
+  for (let i = 0; i < n; i++) for (const e of stepWorld(w, inputs, DT)) out.push(e);
+  return out;
+}
+
+function snapOf(w: WorldState, selfPid: string): Extract<ServerMsg, { t: "snap" }> {
+  return buildSnapshot(w, selfPid, 0, [], 0, true, { worldId: "arena-1", sseq: 1 }) as Extract<ServerMsg, { t: "snap" }>;
 }
 
 // Face `from` at `to` and drop them next to each other on a clear row, protection cleared.
@@ -353,6 +369,67 @@ section("DETERMINISM: identical inputs -> byte-identical, and reconnect-stable s
   check("an absent body cannot be farmed for frags", (w.match!.scores.get("p1") ?? 0) === scoreBefore);
   setPlayerAbsence(w, "p2", false);
   check("frags survive the reconnect (PlayerId-keyed scoreboard)", (w.match!.scores.get("p1") ?? 0) === scoreBefore);
+}
+
+// ---------------------------------------------------------------------------------------------
+section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliable events");
+{
+  check("PROTOCOL_VERSION bumped to 28", PROTOCOL_VERSION === 28);
+
+  // A pvp snapshot round-trips the match block, per-player team, and the local respawn field.
+  const w = pvpWorld(30, ["p1", "p2"]);
+  advanceToLive(w);
+  w.match!.scores.set("p1", 4);
+  w.match!.scores.set("p2", 2);
+  const raw = jsonCodec.encodeServer(snapOf(w, "p1"));
+  const dec = jsonCodec.decodeServer(raw);
+  if (dec.t !== "snap") { check("snapshot decodes as a snap", false); }
+  else {
+    check("co-op-shaped wire carries a non-null match block in pvp", dec.match !== null);
+    check("match phase rides the wire", dec.match!.ph === "live");
+    check("match phase-timer rides as an absolute end tick", dec.match!.end > w.tick);
+    const s1 = dec.match!.sc.find((s) => s.id === "p1");
+    check("per-player frags ride the wire", (s1?.f ?? -1) === 4);
+    check("per-player alive rides the wire", s1?.a === true);
+    check("other player's FFA team rides PlayerWire.tm", dec.players.find((p) => p.id === "p2")?.tm === 0);
+    check("local respawn countdown rides SelfWire.rsp", dec.self !== null && dec.self.rsp === 0);
+  }
+
+  // A co-op snapshot carries a null match block (mode selects meaning; no leak).
+  const coop = createWorld(30, 1, { isShared: true, skipLocalPlayer: true });
+  spawnPlayerInWorld(coop, "c1"); spawnPlayerInWorld(coop, "c2");
+  const cdec = jsonCodec.decodeServer(jsonCodec.encodeServer(snapOf(coop, "c1")));
+  check("co-op snapshot has a null match block", cdec.t === "snap" && cdec.match === null);
+
+  // Delta round-trip: a kill changes the scoreboard; the delta reconstructs it exactly.
+  const base = snapOf(w, "p1");
+  w.match!.scores.set("p1", 5);
+  const next = snapOf(w, "p1");
+  const live = { enemies: new Set<number>(), players: new Set(["p1", "p2"]), props: new Set<number>(), pickups: new Set<number>(), chests: new Set<number>(), hzds: new Set<number>(), effs: new Set<number>() };
+  const delta = diffSnapshot(snapshotToWire(base), snapshotToWire(next), 2, live);
+  check("the match block delta-encodes as one whole object", delta.w !== undefined && "match" in delta.w);
+  const rebuilt = applySnapshotDelta(snapshotToWire(base), delta);
+  const rdec = jsonCodec.decodeServer(jsonCodec.encodeServer({ ...(rebuilt as unknown as Extract<ServerMsg, { t: "snap" }>), t: "snap" }));
+  check("delta-reconstructed match matches source", rdec.t === "snap" && rdec.match!.sc.find((s) => s.id === "p1")?.f === 5);
+
+  // Reliable elimination + match-over events fire from the sim.
+  const kw = pvpWorld(31, ["p1", "p2"]);
+  advanceToLive(kw);
+  const shooter = kw.players.get("p1")!; const victim = kw.players.get("p2")!;
+  const aim = faceOff(shooter, victim, 40);
+  shooter.weapon = "railgun"; shooter.ownedWeapons = ["railgun"];
+  const inputs = new Map([["p1", inp({ firing: true, aim })]]);
+  let kills: SimEvent[] = [];
+  let guard = 0;
+  while (kills.length === 0 && guard++ < 400) kills = stepCollect(kw, 1, inputs).filter((e) => e.t === "pvpKill");
+  const kill = kills[0];
+  check("pvpKill event fires with attribution", kill !== undefined && kill.t === "pvpKill" && kill.by === "p1" && kill.victim === "p2");
+
+  const mw = pvpWorld(32, ["p1", "p2"]);
+  advanceToLive(mw);
+  mw.match!.scores.set("p1", PVP.fragLimit);
+  const over = stepCollect(mw, 1, new Map()).filter((e) => e.t === "pvpMatchOver");
+  check("pvpMatchOver event fires with the winner", over.length === 1 && over[0].t === "pvpMatchOver" && over[0].winner === "p1");
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -10405,6 +10405,8 @@ function damagePlayerPvp(w: WorldState, p: PlayerSim, amount: number, ev: SimEve
     // Frag credit flows through `by` (bullet.owner / melee owner). No credit for a suicide or
     // an unattributed death (there are none in the MVP arena), so nobody snowballs off self-kills.
     if (by !== null && by !== p.id) m.scores.set(by, (m.scores.get(by) ?? 0) + 1);
+    // Reliable, id-tagged elimination event — a dropped snapshot never loses a kill.
+    ev.push({ t: "pvpKill", by: by ?? "", victim: p.id, x: p.x, y: p.y });
   }
 }
 
@@ -10478,12 +10480,13 @@ function pvpTopScorer(w: WorldState): PlayerId | null {
   return best;
 }
 
-function pvpEndMatch(w: WorldState, winner: PlayerId | null): void {
+function pvpEndMatch(w: WorldState, winner: PlayerId | null, ev: SimEvent[]): void {
   const m = w.match;
-  if (m === null) return;
+  if (m === null || m.phase === "over") return;
   m.phase = "over";
   m.winner = winner;
   m.phaseEndTick = 0;
+  ev.push({ t: "pvpMatchOver", winner: winner ?? "" });
 }
 
 // Place every present player on a maximally-spread arena spawn in ID-SORTED order (deterministic:
@@ -10525,7 +10528,7 @@ function pvpRespawn(w: WorldState, p: PlayerSim): void {
 // counted in TICKS off w.tick — no rounds, no last-standing, no wipe. A death respawns after a
 // delay; the match ends when a player reaches the frag limit OR the time cap expires (highest
 // frags wins, id-sorted tiebreak). This REPLACES the co-op wipe/descend loop in pvp.
-function stepPvpMatch(w: WorldState): void {
+function stepPvpMatch(w: WorldState, ev: SimEvent[]): void {
   const m = w.match;
   if (m === null) return;
   // Respawn timers tick only during live play.
@@ -10555,8 +10558,8 @@ function stepPvpMatch(w: WorldState): void {
       break;
     case "live": {
       const leader = pvpTopScorer(w);
-      if (leader !== null && (m.scores.get(leader) ?? 0) >= PVP.fragLimit) { pvpEndMatch(w, leader); break; }
-      if (w.tick >= m.phaseEndTick) pvpEndMatch(w, pvpTopScorer(w)); // time cap -> highest frags
+      if (leader !== null && (m.scores.get(leader) ?? 0) >= PVP.fragLimit) { pvpEndMatch(w, leader, ev); break; }
+      if (w.tick >= m.phaseEndTick) pvpEndMatch(w, pvpTopScorer(w), ev); // time cap -> highest frags
       break;
     }
     case "over":
@@ -10837,7 +10840,7 @@ export function stepWorldPhase(w: WorldState, dt: number, ev: SimEvent[]): void 
     // The deathmatch replaces the whole co-op end-of-run loop: NO ult accrual/firing (ults off +
     // no-snowball), NO revives, NO all-down wipe, NO blessing gate, NO floor descend. Just the
     // frag-limit respawn match machine.
-    stepPvpMatch(w);
+    stepPvpMatch(w, ev);
   } else {
     updateUlts(w, ev);
     updateRevives(w, dt, ev);

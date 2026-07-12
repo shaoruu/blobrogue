@@ -60,6 +60,9 @@ export interface AuthoritativePlayerSnapshot {
   phaseSpeed: number;
   ultInvuln: number;
   passiveState: number;
+  // pvp respawn countdown (ticks; 0 = alive). Server-owned + reconciled so client prediction
+  // gates movement/shooting on the local player's dead-awaiting-respawn state. Always 0 in co-op.
+  respawnT: number;
 }
 
 type ServerOwnedField = keyof AuthoritativePlayerSnapshot;
@@ -96,10 +99,7 @@ type ClientOwnedField = "id" | "pr" | "aimAngle" | "shotSeq" | "rewindTicks" | "
 //   server upkeep and never accrues in prediction, so it stays off the wire.
 // - team:      pvp FFA team id — always 0 for the local player (self) in the FFA MVP, so it need
 //              not ride SelfWire; other players' teams ride PlayerWire.tm (built in toPlayerWire).
-// - respawnT:  pvp respawn countdown — reconciled to OTHER players via the wire, but the server
-//              owns the local respawn timing; prediction reads it off the authoritative snapshot
-//              (P2 wires it) rather than accruing it, so it stays off the self-reconcile here.
-type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team" | "respawnT";
+type ServerOnlyField = "reviveBy" | "downsThisFloor" | "ultSources" | "ultWasted" | "overshieldRegenT" | "team";
 
 // Compile-time exhaustiveness: every PlayerSim key must be classified exactly once. The
 // MustBeNever constraint fails to instantiate for any non-empty type, so adding a PlayerSim
@@ -155,6 +155,7 @@ export function projectPlayer(p: PlayerSim): AuthoritativePlayerSnapshot {
     phaseSpeed: p.phaseSpeed,
     ultInvuln: p.ultInvuln,
     passiveState: p.passiveState,
+    respawnT: p.respawnT,
   };
 }
 
@@ -204,6 +205,7 @@ export function applyPlayerSnapshot(p: PlayerSim, s: AuthoritativePlayerSnapshot
   p.phaseSpeed = s.phaseSpeed;
   p.ultInvuln = s.ultInvuln;
   p.passiveState = s.passiveState;
+  p.respawnT = s.respawnT;
 }
 
 // Reconstruct a full PlayerMods from a received mods value (a JSON-parse boundary: the input is

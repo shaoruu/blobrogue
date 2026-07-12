@@ -143,6 +143,12 @@ export type SimEvent =
   | { t: "descend"; toFloor: number }
   | { t: "reachExit"; toFloor: number } // co-op: client requests a shared-floor descend
   | { t: "gameOver"; pid: PlayerId }
+  // PVP (frag-limit deathmatch): a reliable, id-tagged elimination — `by` is the killer
+  // (bullet.owner / melee owner; "" = unattributed), `victim` the fragged player. Reliable so a
+  // dropped snapshot never loses a kill (the scoreboard rides the match block; this is the juice).
+  | { t: "pvpKill"; by: PlayerId; victim: PlayerId; x: number; y: number }
+  // PVP: the match resolved — `winner` is the frag leader (id-sorted tiebreak; "" = no winner).
+  | { t: "pvpMatchOver"; winner: PlayerId }
   // generic atoms (residual one-off FX)
   | { t: "flash"; eid: number }
   | { t: "puff"; x: number; y: number; n: number; color: string }
