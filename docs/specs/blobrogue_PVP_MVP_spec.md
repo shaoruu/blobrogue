@@ -97,3 +97,10 @@ existing twin-stick movement / shooting / authoritative netcode / kits. NOT a fo
   - corner blockers: (3,3)(15,3)(15,15)(3,15)
   All lanes between adjacent nodes ≥3 tiles; every cover piece small + breakable + flankable from ≥2 angles.
 - If the GD sends a differing exact grid, prefer the GD's; otherwise this grid is authoritative. Assert arena+spawns invariant under 90° rotation.
+
+## DETERMINISM EDGE-CASES (TD P1 gate — decided)
+- SELF-DAMAGE: MVP is SELF-IMMUNE. Single canDamage rule: hit resolves only when target.id !== attackerOwner (future: different team). Own mortar/AoE/detonate/implode/reflect/barrel/chain/orbit deal 0 to self, everywhere, deterministically — no per-site drift. (Self-damage-as-risk = post-MVP.)
+- MULTI-SOURCE SAME-TICK: 2+ owned sources hitting one player same tick resolve in stable sort order (attacker id, then stable source/bullet id) — NOT Map/insertion order. Byte-identical across servers; decides 35% cap application + kill attribution (`by`) deterministically. Test: replay byte-identical.
+- IFRAME: cannot fire while iframed; iframe ends on first outgoing shot (or 2.0s, whichever first) — kills iframe-peek/shoot-from-invuln.
+- TD P1 gate lines: co-op goldens zero-diff, no-fork (mode gates ≤4 concerns), no client-side damage/kill prediction, canDamage completeness (no owned-damage site bypasses it), respawn is a SEPARATE lifecycle path (does not reuse/perturb co-op down/revive/endRun; checkStrandedWipe byte-UNCHANGED, bypassed not rewired), determinism (id-sorted win/spawn/tie, tick timers).
+- PARKED (non-blocking): environmental-hazard kill attribution in a pvp arena (suicide vs no-credit) — MVP arena has no hazards; define IF hazards ever added.
