@@ -804,12 +804,13 @@ export type SpriteName =
   // JET's mirror-image echo reuses JET's own hero-derived walk sheets (drawn COLD +
   // translucent + hollow-eyed client-side so it never reads as a warm teammate).
   | "jet_echo"
-  // GORGE (F50 GIANT): the AD-LOCKED committed art — three single-frame SHELL states the
-  // client swaps off boss.phase (rind → chitin → core), a 96% shared silhouette peeling open.
-  // core is the ONE bright warm amber on an enemy (rendered with an additive glow, phase 3
-  // only). The weak-points (gorge_seam) render procedurally (a glowing amber crack-node), so
-  // they need no sprite of their own.
-  | "gorge_shell_rind" | "gorge_shell_chitin" | "gorge_shell_core"
+  // GORGE (F50 GIANT): the AD-LOCKED committed art — three single-frame SHELL states the client
+  // swaps off boss.phase. "gorge" is the base/idle body (the rind, P1); "gorge_shell_chitin"/
+  // "gorge_shell_core" are the P2/P3 escalation swaps (like JET's jet_phase2/3), a 96% shared
+  // silhouette peeling open. core is the ONE bright warm amber on an enemy (additive glow, P3
+  // only). "gorge_seam" is the tectonic weak-point's small crack-chunk (the molten core material
+  // showing through the shell), drawn small + additively lit as a peel target.
+  | "gorge" | "gorge_shell_chitin" | "gorge_shell_core" | "gorge_seam"
   | "patch"
   // Client-side cosmetic companion pets (META spec §3). A pure render key mapping to a
   // swappable placeholder asset; the sim never references it (pets are OUT of the sim). The

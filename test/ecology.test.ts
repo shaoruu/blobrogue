@@ -157,6 +157,8 @@ function twoWaveGates(): void {
     tithe_tribute: 40, quorum_splinter: 45,
     // JET's mirror echo first appears on JET's floor (F35).
     jet_echo: 35,
+    // The GORGE giant's tectonic weak-point first appears on the F50 giant floor.
+    gorge_seam: 50,
   };
   check("every synthesized verb was TAUGHT first (source intro <= B first floor)",
     bKinds.every((k) => (WAVE_B_SYNTHESIS[k] ?? []).every((src) =>

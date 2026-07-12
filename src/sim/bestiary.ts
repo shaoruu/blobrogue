@@ -100,6 +100,7 @@ export const WAVE_B_SYNTHESIS: Readonly<Partial<Record<EnemyKind, readonly Enemy
   tithe_tribute: ["slime"],            // the chase verb, aimed at the slab it reinforces
   quorum_splinter: ["skeleton"],       // the aggressor-chaser verb, a role-echo shard
   jet_echo: ["spitter"],               // the ranged warn/lock/fire verb, turned into your own reflection
+  gorge_seam: ["caskbellows"],         // the locked-lane shoot-this-target lesson, made a tectonic weak-point (like the knot/sac)
 };
 
 // Biome specialists (the capacity envelope's third bucket): archetypes whose identity

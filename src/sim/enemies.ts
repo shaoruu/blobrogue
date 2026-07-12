@@ -371,17 +371,16 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
   // during exposed windows (the 192px draw is the half-sunk shell around it). baseHp = the giant
   // pool (gorgeHpForFloor); threat 0 (a boss). tint = warm amber (the core reveal's material).
   gorge: {
-    kind: "gorge", sprite: "gorge_shell_rind", movement: "boss", isPhasing: false,
+    kind: "gorge", sprite: "gorge", movement: "boss", isPhasing: false,
     radius: 60, drawSize: 192, alpha: 1, tint: "#ffb43b", kbResist: 200,
     baseHp: GORGE.baseHp, baseSpeed: 0, touchDamage: GORGE.contactDamage, threat: 0,
   },
   // The GORGE's tectonic WEAK-POINT: a destructible mechanic body that juts out of the current
   // shell (a "seam"/node). Stationary, harmless (touchDamage 0), no loot/combo (a decoy kind) —
-  // it exists purely as a counterplay target, like the Weaver's knot / the Tithe's slab.
-  // Rendered PROCEDURALLY (a glowing amber crack-node), so its `sprite` is a nominal placeholder
-  // the renderer never draws (a gorge_seam branch draws the node + continues before the sprite).
+  // it exists purely as a counterplay target, like the Weaver's knot / the Tithe's slab. Drawn
+  // small (a chunk of the molten core material showing through the crack) + additively lit.
   gorge_seam: {
-    kind: "gorge_seam", sprite: "gorge_shell_core", movement: "drift", isPhasing: false,
+    kind: "gorge_seam", sprite: "gorge_seam", movement: "drift", isPhasing: false,
     radius: 13, drawSize: 34, alpha: 1, tint: "#ffcf6b", kbResist: 100,
     baseHp: GORGE.seamHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
   },

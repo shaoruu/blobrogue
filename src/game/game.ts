@@ -5849,13 +5849,6 @@ export class Game {
         this.renderChoirSplit(e, sx, sy, drawSize, anim.clock);
         continue;
       }
-      // The GORGE giant's tectonic WEAK-POINT (seam): a glowing amber crack-node that juts out
-      // of the shell — rendered procedurally (no sprite of its own), so it never draws the
-      // nominal placeholder sprite. Its HP bar reads the peel progress.
-      if (e.kind === "gorge_seam") {
-        this.renderGorgeSeam(e, sx, sy, drawSize, anim.clock, anim.flash);
-        continue;
-      }
       // QUORUM: the shared-HP CORE is hidden behind its husks until the merge — draw the
       // code-drawn amber tether that links the husks (the shared-HP tell) and skip the body.
       // Once merged (phase 2) the fused merge-form draws normally below.
@@ -5942,9 +5935,9 @@ export class Game {
         spriteName = ph >= 3 ? "jet_phase3" : ph === 2 ? "jet_phase2" : "jet";
       } else if (e.kind === "gorge") {
         // The GIANT swaps its whole SHELL by fight phase (the peel reads on the body):
-        // P1 rind (dim/cold) → P2 chitin (cracked, hot edges) → P3 core (molten amber reveal).
+        // P1 "gorge" (rind, dim/cold) → P2 chitin (cracked, hot edges) → P3 core (molten reveal).
         const ph = e.boss?.phase ?? 1;
-        spriteName = ph >= 3 ? "gorge_shell_core" : ph === 2 ? "gorge_shell_chitin" : "gorge_shell_rind";
+        spriteName = ph >= 3 ? "gorge_shell_core" : ph === 2 ? "gorge_shell_chitin" : "gorge";
       } else if (e.kind === "tithe_slab" && e.hp <= e.maxHp * 0.5) {
         spriteName = "tithe_slab_cracked";
       } else if (e.kind === "tithe" && this.isEnemyExposed(e) && this.sprites.sheet("tithe_exposed", "idle") !== null) {
@@ -6020,6 +6013,14 @@ export class Game {
       if (e.kind === "sinderling" && e.aux === 1) {
         const emberPulse = 0.6 + 0.4 * Math.sin(anim.clock * 9);
         this.fxLayer("glow_round", "#ff8a3b", sx, sy, drawSize * 1.1 * emberPulse, drawSize * 1.1 * emberPulse, 0.4, 0);
+      }
+      // The GORGE's tectonic WEAK-POINT (seam): a hot amber crack-node — the molten core material
+      // showing through the shell. An additive glow over the small chunk reads "shoot me to peel";
+      // the hit flash brightens it, and the normal floating bar (below) reads the peel progress.
+      if (e.kind === "gorge_seam") {
+        const seamPulse = 0.6 + 0.4 * Math.sin(anim.clock * 7 + e.id);
+        this.fxLayer("glow_round", "#ffb43b", sx, sy, drawSize * (0.95 + 0.25 * seamPulse), drawSize * (0.95 + 0.25 * seamPulse), 0.5 + 0.4 * anim.flash, 0);
+        this.fxLayer("core_dot", "#ffe6a6", sx, sy, drawSize * 0.5, drawSize * 0.5, 0.85 * seamPulse, 0);
       }
       // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
       if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
@@ -6898,29 +6899,6 @@ export class Game {
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(sx, sy, size * 0.42 + 2 * pulse, 0, 6.28); ctx.stroke();
     ctx.restore();
-  }
-
-  // The GORGE giant's tectonic WEAK-POINT (seam): a glowing amber crack-node jutting out of the
-  // shell (rendered procedurally — no sprite). An additive warm-amber glow + a hot core dot read
-  // "shoot me to peel the shell"; the flash brightens on a hit; a thin bar reads peel progress.
-  private renderGorgeSeam(e: Enemy, sx: number, sy: number, size: number, clock: number, flash: number) {
-    const { ctx } = this;
-    const pulse = 0.6 + 0.4 * Math.sin(clock * 7 + e.id);
-    const glow = Math.min(1, 0.5 + flash);
-    this.fxLayer("glow_round", "#ffb43b", sx, sy, size * (0.9 + 0.2 * pulse), size * (0.9 + 0.2 * pulse), 0.5 * glow, 0);
-    this.fxLayer("core_dot", "#ffe6a6", sx, sy, size * 0.5, size * 0.5, 0.85 * pulse, 0);
-    // A cracked amber rim (the jutting seam), brightening on a hit.
-    ctx.save();
-    ctx.globalAlpha = 0.6 + 0.4 * flash;
-    ctx.strokeStyle = "#ffcf6b";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(sx, sy, size * 0.36 + 1.5 * pulse, 0, 6.28); ctx.stroke();
-    ctx.restore();
-    // Peel-progress bar (destroy it to help crack the shell).
-    const barW = 22, barY = sy - size * 0.5 - 6;
-    const frac = Math.max(0, e.hp / e.maxHp);
-    ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 3);
-    ctx.fillStyle = "#ffcf6b"; ctx.fillRect(sx - barW / 2, barY, barW * frac, 3);
   }
 
   // The earned-window read (Weaver/MARROW/Choir): GUARDED = a dim thread rim (your
