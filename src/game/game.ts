@@ -5963,6 +5963,10 @@ export class Game {
       }
       // Decoys wear their fuse: the echo fades out, the knell blinks faster as it arms.
       if (e.kind === "echo" || e.kind === "knell") this.renderDecoyFuse(e, sx, sy, drawSize, anim.clock);
+      // JET's mirror-image echo: a COLD jet-black translucent reflection with a cold rim +
+      // dead-amber seams + hollow eyes — legible on a dark floor and NEVER confusable with a
+      // warm, solid, player-colored teammate (the CD readability gate).
+      if (e.kind === "jet_echo") this.renderJetEcho(e, sx, sy, drawSize, anim.clock);
       // The Weaver's lattice: every knot casts its three thread-lines (the blink lanes,
       // crossing AT the shootable node) and glows as the mechanic target it is.
       if (e.kind === "knot") this.renderKnotLattice(e, sx, sy, drawSize, anim.clock);
@@ -6053,6 +6057,32 @@ export class Game {
         ctx.globalAlpha = 0.5 * fade * flicker;
         ctx.fillStyle = "#ffd27a";
         ctx.beginPath(); ctx.arc(sx, sy, h.radius * 0.4, 0, 6.28); ctx.fill();
+        continue;
+      }
+      if (h.kind === "corrupt") {
+        // JET's corruption drain (§5g B3): a cold black-resin patch — MOOD in the fill, but its
+        // DANGER reads FIRST off a BRIGHT authored edge (dead-amber crack-line + cold-frost rim)
+        // so "don't stand here" is legible even as the floor goes cold-dark (the dark-on-dark
+        // gate: the danger cue always wins over the corruption creep).
+        ctx.globalAlpha = 0.34 * fade;
+        ctx.fillStyle = "#0b1220"; // cold near-black resin (never violet)
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius, 0, 6.28); ctx.fill();
+        // Cold-frost rim (bright, always visible on a dark floor).
+        ctx.globalAlpha = 0.7 * fade;
+        ctx.strokeStyle = "#7fd4ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(sx, sy, h.radius - 1, 0, 6.28); ctx.stroke();
+        // Dead-amber crack-lines radiating from the core (the authored "corruption" edge tell).
+        ctx.globalAlpha = 0.6 * fade;
+        ctx.strokeStyle = "#c9962e";
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 4; i++) {
+          const ang = (i / 4) * 6.28 + h.id * 0.9;
+          ctx.beginPath();
+          ctx.moveTo(sx + Math.cos(ang) * h.radius * 0.3, sy + Math.sin(ang) * h.radius * 0.3);
+          ctx.lineTo(sx + Math.cos(ang) * h.radius, sy + Math.sin(ang) * h.radius);
+          ctx.stroke();
+        }
         continue;
       }
       if (h.kind === "charge") {
@@ -7451,6 +7481,41 @@ export class Game {
       ctx.globalAlpha = 0.5 * e.attack.windup * (0.5 + 0.5 * Math.sin(clock * 9 + i));
       ctx.fillRect(sx + Math.cos(ang) * rad - 1, sy + Math.sin(ang) * rad - 1, 2, 2);
     }
+    ctx.restore();
+  }
+
+  // JET's MIRROR-IMAGE ECHO (§5g B2): the CD readability gate made concrete. A reflection is
+  // COLD (jet-black + a cold-blue rim + dead-amber seams) + TRANSLUCENT + HOLLOW-EYED — the exact
+  // opposite of a real teammate (WARM amber, player color, SOLID, real eyes), so it can never be
+  // mistaken for one, even on a cold-dark corrupted floor. The body sprite already drew at the
+  // archetype's low alpha; this overlay adds the cold rim, the dead-amber seams, and the void eyes.
+  private renderJetEcho(e: Enemy, sx: number, sy: number, size: number, clock: number) {
+    const { ctx } = this;
+    const r = size * 0.32;
+    const fade = e.aux > 0 ? Math.min(1, e.aux / 0.6) : 1; // dissolving flecks-out as its life ends
+    const pulse = 0.6 + 0.4 * Math.sin(clock * 6 + e.id);
+    ctx.save();
+    // Cold rim — the primary "this is a reflection, not a warm body" read.
+    ctx.globalAlpha = 0.85 * fade;
+    ctx.strokeStyle = "#7fd4ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, r * 1.02, 0, 6.28); ctx.stroke();
+    // Dead-amber seams (cold, hollowed amber — never the warm player amber).
+    ctx.globalAlpha = 0.5 * fade * pulse;
+    ctx.strokeStyle = "#c9962e";
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 3; i++) {
+      const ang = (i / 3) * 6.28 + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(sx + Math.cos(ang) * r * 0.2, sy + Math.sin(ang) * r * 0.2);
+      ctx.lineTo(sx + Math.cos(ang) * r * 0.9, sy + Math.sin(ang) * r * 0.9);
+      ctx.stroke();
+    }
+    // Hollow eyes — two cold voids where a real player has none.
+    ctx.globalAlpha = 0.8 * fade;
+    ctx.fillStyle = "#04070c";
+    ctx.beginPath(); ctx.arc(sx - r * 0.28, sy - r * 0.1, r * 0.14, 0, 6.28); ctx.fill();
+    ctx.beginPath(); ctx.arc(sx + r * 0.28, sy - r * 0.1, r * 0.14, 0, 6.28); ctx.fill();
     ctx.restore();
   }
 
