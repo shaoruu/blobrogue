@@ -10568,13 +10568,17 @@ function resolvePvpHits(w: WorldState, ev: SimEvent[]): void {
   // hit-tests inside the tick that spawned it — same contract as the enemy cascade).
   const shardSpawns: Bullet[] = [];
 
-  // Owned bullets vs foe players. A departed owner's round keeps flying but cannot be a pvp hit
-  // (we can't know its team/owner to test "non-owner foe"), so it simply fizzles — no free frags.
-  for (const b of w.bullets) {
-    if (!b.friendly || b.life <= 0) continue;
-    if (b.isLob) continue; // artillery (Breach) detonates on its arc, never on contact (AoE below)
+  // Owned bullets vs foe players, resolved in a CANONICAL order — attacker id, then each
+  // attacker's own creation order (preserved by a STABLE sort) — NOT w.bullets/Map iteration
+  // order. A reconnect reorders the players map (and thus bullet-creation order), so without this
+  // the SAME-TICK damage order — which decides the 35% cap application and which source lands the
+  // killing blow (`by`) — could differ between two servers on identical inputs. A departed owner's
+  // round keeps flying but can't be a pvp hit (unknown team), so it fizzles — no free frags.
+  const ownedBullets = w.bullets.filter((b) => b.friendly && b.life > 0 && !b.isLob && b.owner !== null);
+  ownedBullets.sort((x, y) => (x.owner! < y.owner! ? -1 : x.owner! > y.owner! ? 1 : 0));
+  for (const b of ownedBullets) {
     const owner = b.owner;
-    if (owner === null) continue;
+    if (owner === null || b.life <= 0) continue;
     const rewind = fireTimeRewind(w, b.bornTick, b.lagRewind);
     for (const vid of victimIds) {
       const victim = w.players.get(vid);

@@ -471,6 +471,63 @@ section("CAN-DAMAGE COMPLETENESS: AoE / chain / homing / deployables all hit foe
 }
 
 // ---------------------------------------------------------------------------------------------
+section("DETERMINISM EDGE-CASES: self-immune, same-tick order-stable, no shoot-from-iframe");
+{
+  // SELF-IMMUNE: a player's OWN AoE deals 0 to themselves (decided once in canDamage), but the
+  // same blast still hits a foe standing in it — proving the rule is self-scoped, not inert.
+  {
+    const w = pvpWorld(51, ["p1", "p2"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const foe = w.players.get("p2")!;
+    s.x = 120; s.y = 216; s.invuln = 0; s.weapon = "mortar"; s.ownedWeapons = ["mortar"];
+    foe.x = 120; foe.y = 240; foe.invuln = 0; // adjacent — both stand in the self-blast
+    stepN(w, 12, new Map([["p1", inp({ firing: true, aim: Math.PI })]])); // mortar into the near wall
+    check("own AoE is self-immune (mortar blast deals 0 to its owner)", s.hp === PVP.maxHp, `self=${s.hp}`);
+    check("the same blast DOES hit a foe (self-scoped, not inert)", foe.hp < PVP.maxHp, `foe=${foe.hp}`);
+  }
+
+  // SAME-TICK ORDER-STABILITY: two sources finish a low-HP foe on the same tick. The frag is
+  // credited deterministically (id-sorted resolve), INDEPENDENT of the players-map/add order (a
+  // reconnect reorders the map). Same winner whether players were added forward or reversed.
+  {
+    const sameTickWinner = (addOrder: string[]): string | null => {
+      const w = pvpWorld(50, addOrder);
+      advanceToLive(w);
+      const a = w.players.get("p1")!; const b = w.players.get("p3")!; const target = w.players.get("p2")!;
+      target.x = 648; target.y = 216; target.invuln = 0; target.hp = 10; // this tick is lethal
+      a.x = 648; a.y = 140; a.invuln = 0; a.weapon = "railgun"; a.ownedWeapons = ["railgun"];
+      b.x = 648; b.y = 300; b.invuln = 0; b.weapon = "railgun"; b.ownedWeapons = ["railgun"];
+      stepN(w, 1, new Map([["p1", inp({ firing: true, aim: Math.PI / 2 })], ["p3", inp({ firing: true, aim: -Math.PI / 2 })]]));
+      if ((w.match!.scores.get("p1") ?? 0) === 1) return "p1";
+      if ((w.match!.scores.get("p3") ?? 0) === 1) return "p3";
+      return null;
+    };
+    const forward = sameTickWinner(["p1", "p2", "p3"]);
+    const reversed = sameTickWinner(["p3", "p2", "p1"]);
+    check("same-tick kill credits the id-sorted source (p1)", forward === "p1", `forward=${forward}`);
+    check("same-tick attribution is map/add-order independent (reconnect-stable)", forward === reversed, `forward=${forward} reversed=${reversed}`);
+  }
+
+  // NO SHOOT-FROM-IFRAME: spawn protection blocks INCOMING fire while active, then drops the
+  // instant the protected player fires — so they can never peek-shoot from invuln.
+  {
+    const w = pvpWorld(52, ["p1", "p2"]);
+    advanceToLive(w);
+    const s = w.players.get("p1")!; const foe = w.players.get("p2")!;
+    s.x = 300; s.y = 216; s.weapon = "pistol"; s.ownedWeapons = ["pistol"];
+    s.invuln = PVP.spawnIframeSec; // freshly respawned, protected
+    foe.x = 360; foe.y = 216; foe.invuln = 0; foe.weapon = "pistol"; foe.ownedWeapons = ["pistol"];
+    stepN(w, 6, new Map([["p2", inp({ firing: true, aim: Math.PI })]])); // foe fires; s idle + protected
+    check("iframed player takes no incoming damage while protected", s.hp === PVP.maxHp && s.invuln > 0, `hp=${s.hp} inv=${s.invuln.toFixed(2)}`);
+    stepN(w, 1, new Map([["p1", inp({ firing: true, aim: 0 })], ["p2", inp({ firing: true, aim: Math.PI })]]));
+    check("firing drops the iframe the instant the shot goes out", s.invuln === 0);
+    const before = s.hp;
+    stepN(w, 8, new Map([["p2", inp({ firing: true, aim: Math.PI })]]));
+    check("after firing, the player is immediately vulnerable (no shoot-from-invuln)", s.hp < before, `hp=${s.hp}`);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 section("P2 WIRE: protocol v28, match block + team + respawn round-trip, reliable events");
 {
   check("PROTOCOL_VERSION bumped to 28", PROTOCOL_VERSION === 28);
