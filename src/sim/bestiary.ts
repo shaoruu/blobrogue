@@ -68,6 +68,9 @@ export const ENEMY_WAVE: Readonly<Record<EnemyKind, EnemyWave>> = {
   tithe_slab: "B", quorum_shield: "B", quorum_heal: "B", quorum_dmg: "B",
   tithe_tribute: "B", quorum_splinter: "B", // surplus adds: Wave-B summons, never in a common deck
   jet_echo: "B", // JET's mirror echo: a Wave-B summon (never in a common deck)
+  // GORGE (F50 giant) is boss-grade; its tectonic weak-point is a Wave-B mechanic body (a
+  // summon, never in a common deck — like the Weaver's knot).
+  gorge: "boss", gorge_seam: "B",
 };
 
 // Topology workers: bodies whose commitment EDITS the room (persistent destructible
@@ -296,6 +299,12 @@ export const ENEMY_MOVESET: Readonly<Record<EnemyKind, readonly AttackMove[]>> =
   tithe_tribute: [], // a crawler: its pressure is reaching the slab, not a telegraphed move
   quorum_splinter: [], // a chaser: no telegraphed move
   jet_echo: ["mirror"], // the reflection fires ONE mirrored-school salvo on its own tell
+  // GORGE (F50 giant): the shell-peel giant reuses shared grammar — "slam" the P1 shockwave ring,
+  // "spew" the P2 slag zones, "sweep" the P3 rotating spokes, "roar" the shell crack-off
+  // transition. The tectonic weak-points expose in a PARALLEL loop (harmless peel targets, not a
+  // telegraphed danger-move), so they add no move here; its weak-point body commits nothing.
+  gorge: ["slam", "spew", "sweep", "roar"],
+  gorge_seam: [],
 };
 
 // ---- the directional-art contract (QA render manifest) ----
@@ -357,6 +366,12 @@ export const SPRITE_CONTRACT: Readonly<Record<EnemyKind, SpriteContract>> = {
   tithe_tribute: "directional_walk",
   quorum_splinter: "directional_walk",
   jet_echo: "directional_walk", // reuses JET's hero-derived walk triplet (drawn cold + translucent)
+  // GORGE (F50 giant): a single front-facing SHELL sprite per state (no orientations — a
+  // stationary set-piece), the client swapping rind/chitin/core off boss.phase — the "mass"
+  // (idle-only) contract. Its weak-point renders procedurally (a glowing crack-node), so it takes
+  // the decoy (idle-loop) contract like the other mechanic bodies.
+  gorge: "mass",
+  gorge_seam: "decoy",
 };
 
 // ---- band helpers (the 5-floor intro-cadence unit) ----

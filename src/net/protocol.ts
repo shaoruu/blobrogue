@@ -267,7 +267,18 @@ export const FIXED_DT = 1 / TICK_HZ; // 50ms authoritative step
 //   - a NEW dynamic HazardKind `corrupt` rides `hzds` (JET's per-phase arena-corruption drain
 //     zone — the "The Light Goes Out" reshape creeping in from the edges). A v25 client rejects
 //     a snapshot carrying it (HAZARD_KINDS is a validated closed set).
-export const PROTOCOL_VERSION = 26;
+// v27 (GORGE F50 GIANT encounter — the AD-locked shell-peel giant): two closed-set widenings, no
+//   new EnemyWire field.
+//   - TWO new enemy kinds ride the wire: `gorge` (the F50 giant boss) and `gorge_seam` (its
+//     tectonic weak-point — the peel-verb mechanic body). isEnemyKind keys off ENEMY_ARCHETYPES,
+//     so a v26 client rejects a snapshot carrying either.
+//   - a NEW PropKind `gorge_debris` rides `props` (the giant's sloughed shell cover). PROP_KINDS
+//     is a validated closed set, so a v26 client rejects it.
+//   - the giant needs NO new EnemyWire field: its SHELL PHASE (rind/chitin/core) already rides
+//     `bph` (boss.phase — the client swaps the shell sprite off it, exactly like JET's phase
+//     bodies), and its GUARDED/EXPOSED state already rides `aux` (the exposed remainder, restored
+//     into boss.exposed — the same flag the damage gate reads). Compact by construction.
+export const PROTOCOL_VERSION = 27;
 
 // How long the server reserves a disconnected player's body (their seat) before the
 // authoritative leave lifecycle applies. 90s per the studio balance gate's reconnect
@@ -737,6 +748,7 @@ function kitOf(o: Record<string, unknown>, k: string): KitId {
 const PROP_KINDS: Record<PropKind, true> = {
   crate: true, pot: true, barrel: true, barrel_explosive: true, brazier: true,
   root_wall: true, silt_mound: true, clinker_brick: true, // worker constructions (ecology gate)
+  gorge_debris: true, // the GORGE giant's sloughed shell cover (F50)
 };
 const PICKUP_KINDS: Record<PickupKind, true> = { heart: true, coin: true, weapon: true };
 const SHOP_SLOT_KINDS: Record<ShopSlotKind, true> = {
@@ -1581,6 +1593,9 @@ export function enemyFromWire(w: EnemyWire, x: number, y: number): Enemy {
         // liveness off the husks' own wires); defaulted on the render-only reconstruction.
         huskRaised: false, huskGuardUp: true, huskReformTimer: 0,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
+        // GORGE shell-peel scratch is sim-internal (the client reads the shell phase off bph and
+        // the exposed remainder off aux); defaulted on the render-only reconstruction.
+        seamLife: 0,
       }
       : null,
   };

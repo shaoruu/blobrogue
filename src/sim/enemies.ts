@@ -5,11 +5,11 @@ import { Rng } from "./rng.js";
 import { biomeIndexForFloor } from "./biomes.js";
 import {
   TIERS, BIOME_PRESSURE, BOSS, MARROW, CHOIR, WEAVER, GILDED, GAUNTLET,
-  JET, TITHE, QUORUM,
+  JET, TITHE, QUORUM, GORGE,
   MINIBOSS, ELITE_BULWARK, ELITE_COST_CAP, ENVELOPE, LIVE_CAPS, activeMoverCapFor,
   floorHpMult, floorSpeedMult, floorThreat, activeThreatCap, roundHalfToEven,
   bossHpForFloor, marrowHpForFloor, choirHpForFloor, weaverHpForFloor, gildedHpForFloor,
-  jetHpForFloor, titheHpForFloor, quorumHpForFloor,
+  jetHpForFloor, titheHpForFloor, quorumHpForFloor, gorgeHpForFloor,
   captainHpForFloor, bossHpFracFor,
   coopMobHpMult, coopBossHpMult, coopThreatMult, coopKbResistMult,
   MAX_COMPLEX_PER_ROOM, BRUTE_ELITE_COMBO_FLOOR,
@@ -365,6 +365,26 @@ export const ENEMY_ARCHETYPES: Record<EnemyKind, EnemyArchetype> = {
     radius: 26, drawSize: 60, alpha: 0.38, tint: "#0e0b1a", kbResist: 6,
     baseHp: 6, baseSpeed: 0, touchDamage: 0, threat: 1.5,
   },
+  // GORGE (F50 GIANT #1): a colossal ~192px (3× hero) half-sunk STATIONARY set-piece — baseSpeed
+  // 0 (it never chases), effectively immovable (kbResist huge). Its sprite is the current SHELL
+  // state (the client swaps rind → chitin → core off boss.phase). radius ~60 = the hittable core
+  // during exposed windows (the 192px draw is the half-sunk shell around it). baseHp = the giant
+  // pool (gorgeHpForFloor); threat 0 (a boss). tint = warm amber (the core reveal's material).
+  gorge: {
+    kind: "gorge", sprite: "gorge_shell_rind", movement: "boss", isPhasing: false,
+    radius: 60, drawSize: 192, alpha: 1, tint: "#ffb43b", kbResist: 200,
+    baseHp: GORGE.baseHp, baseSpeed: 0, touchDamage: GORGE.contactDamage, threat: 0,
+  },
+  // The GORGE's tectonic WEAK-POINT: a destructible mechanic body that juts out of the current
+  // shell (a "seam"/node). Stationary, harmless (touchDamage 0), no loot/combo (a decoy kind) —
+  // it exists purely as a counterplay target, like the Weaver's knot / the Tithe's slab.
+  // Rendered PROCEDURALLY (a glowing amber crack-node), so its `sprite` is a nominal placeholder
+  // the renderer never draws (a gorge_seam branch draws the node + continues before the sprite).
+  gorge_seam: {
+    kind: "gorge_seam", sprite: "gorge_shell_core", movement: "drift", isPhasing: false,
+    radius: 13, drawSize: 34, alpha: 1, tint: "#ffcf6b", kbResist: 100,
+    baseHp: GORGE.seamHp, baseSpeed: 0, touchDamage: 0, threat: 0.25,
+  },
 };
 
 // Which archetypes each tier may inhabit: swarms are small fast bodies, brutes are the
@@ -403,6 +423,7 @@ export const ELITE_AFFIXES: Readonly<Record<EnemyKind, EliteAffix>> = {
   quorum: "brace", quorum_shield: "brace", quorum_heal: "brace", quorum_dmg: "brace",
   tithe_tribute: "brace", quorum_splinter: "brace", // surplus adds never roll elite
   jet_echo: "brace", // JET's mirror echo is a summon-only reflection, never an elite roll
+  gorge: "brace", gorge_seam: "brace", // the giant + its weak-points never roll elite
 };
 
 export function eliteAffixOf(kind: EnemyKind): EliteAffix {
@@ -417,7 +438,7 @@ export function isBossFloor(floor: number): boolean {
 // Only the three FIGHT bodies are boss kinds (chest drop, danger-end, HP scaling, the
 // HUD bar). The Tithe's slab and the Quorum husks are satellite/mechanic bodies, never
 // boss kinds themselves.
-const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum"];
+const BOSS_KINDS: readonly EnemyKind[] = ["boss", "marrow", "choir", "weaver", "gilded", "jet", "tithe", "quorum", "gorge"];
 
 export function isBossKind(kind: EnemyKind): boolean {
   return BOSS_KINDS.indexOf(kind) !== -1;
@@ -436,6 +457,7 @@ const BOSS_DISPLAY_NAME: Readonly<Partial<Record<EnemyKind, string>>> = {
   jet: "JET",
   tithe: "The Tithe",
   quorum: "Quorum",
+  gorge: "The Gorge",
 };
 
 export function bossDisplayName(kind: EnemyKind): string {
@@ -462,6 +484,9 @@ const DEEP_BOSS_ROSTER: readonly EnemyKind[] =
 export const BOSS_KIN: Readonly<Partial<Record<EnemyKind, EnemyKind>>> = {
   boss: "slime", marrow: "skeleton", choir: "ghost", weaver: "bat", gilded: "shielder",
   jet: "ghost", tithe: "skeleton", quorum: "skeleton",
+  // The GORGE giant summons NO adds itself (its threat is space-control patterns, not chasing);
+  // this kin is only the approach-room escort the floor scatters (the Sump hoard).
+  gorge: "skeleton",
 };
 
 // The F10 Arena Gauntlet floor (curriculum §2): sequential authored minibosses instead of
@@ -508,10 +533,20 @@ export function minibossHpForFloor(kind: EnemyKind, floor: number): number {
 // gauntlet), then the seeded deep rotation with no immediate repeats (its first pick also
 // never repeats the F30 Choir finale).
 export function bossKindForFloor(seed: number, floor: number): EnemyKind | null {
+  // F50 is the GORGE GIANT — a FIXED set-piece (the Sump cap), NOT part of the seeded deep
+  // rotation. The special-case is a pure early return, so it never touches the RNG: the seeded
+  // ladder below (F55+) is byte-identical to before this override — deepBossIndex still walks
+  // from the F45 Quorum finale, so F55's "no immediate repeats" reads exactly as it always did
+  // (F55 trivially never repeats the gorge, which the rotation can't pick).
+  if (floor === GORGE_FLOOR) return "gorge";
   const ladder = Math.floor(floor / BOSS_EVERY);
   if (ladder <= AUTHORED_BOSS_LADDER.length) return AUTHORED_BOSS_LADDER[Math.max(1, ladder) - 1];
   return DEEP_BOSS_ROSTER[deepBossIndex(seed, ladder - AUTHORED_BOSS_LADDER.length - 1)];
 }
+
+// The floor the GORGE giant caps (the Sump). Kept as a named constant so the F75 Pale Throne /
+// F100 Unmaker giants (which inherit this LOCKED template) slot in the same way.
+export const GORGE_FLOOR = 50;
 
 // Walk the seeded ladder from the top so "no immediate repeats" is well-defined and
 // deterministic at any depth (each step rerolls, shifting off the previous pick). Step 0
@@ -539,6 +574,7 @@ export function enemyHpForFloor(kind: EnemyKind, floor: number): number {
     case "jet": return jetHpForFloor(floor);
     case "tithe": return titheHpForFloor(floor);
     case "quorum": return quorumHpForFloor(floor);
+    case "gorge": return gorgeHpForFloor(floor);
     default: return roundHalfToEven(ENEMY_ARCHETYPES[kind].baseHp * floorHpMult(floor));
   }
 }
@@ -638,6 +674,7 @@ export function createEnemy(kind: EnemyKind, x: number, y: number, floor: number
         mirrorLastFamily: -1,
         huskRaised: false, huskGuardUp: true, huskReformTimer: 0,
         phaseTime: 0, enrage: 0, isSurpriseSpent: false, affixCd: 0,
+        seamLife: 0,
       }
       : null,
   };
@@ -647,6 +684,7 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.entranceGrace, marrow: MARROW.entranceGrace, choir: CHOIR.entranceGrace,
   weaver: WEAVER.entranceGrace, gilded: GILDED.entranceGrace,
   jet: JET.entranceGrace, tithe: TITHE.entranceGrace, quorum: QUORUM.entranceGrace,
+  gorge: GORGE.entranceGrace,
 };
 
 // The summoner bosses run a cadence add drip; the Choir's timer paces its earned-window
@@ -655,6 +693,9 @@ const BOSS_ENTRANCE_GRACE: Readonly<Partial<Record<EnemyKind, number>>> = {
 const BOSS_ADD_FIRST_AT: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: BOSS.addFirstAt, marrow: MARROW.addFirstAt, choir: CHOIR.fragmentFirstAt,
   jet: JET.echoFirstAt, // JET's first mirror-echo cadence beat after the pull settles
+  // GORGE runs no add drip — it reuses the generic addTimer as its WEAK-POINT exposure cadence,
+  // so this is when the first tectonic seams jut out after the pull settles.
+  gorge: GORGE.seamFirstAt,
 };
 
 // The per-floor enemy pool is now Gate 1's biome-selective encounter deck (roster.ts): a
@@ -1114,8 +1155,14 @@ export function spawnFloorEnemies(dungeon: Dungeon, seed: number, floor: number,
     const bossKind = bossKindForFloor(seed, floor) ?? "boss";
     const minionKind: EnemyKind = BOSS_KIN[bossKind] ?? "slime";
     const bossRoom = roomCount - 1;
+    // pointInRoom is called unconditionally (it advances the seeded RNG the same way for every
+    // boss). The GORGE giant is a STATIONARY set-piece that must anchor at the arena CENTER so
+    // its radial rings/spokes have symmetric dodge space on every side (a wall-hugged giant would
+    // be unfair); every other boss uses the sampled interior point.
     const b = pointInRoom(rng, dungeon, bossRoom);
-    active.push(createEnemy(bossKind, b.x, b.y, floor, rng, active.length, { players, power }));
+    const room = dungeon.rooms[bossRoom];
+    const spawn = bossKind === "gorge" ? { x: (room.cx + 0.5) * TILE, y: (room.cy + 0.5) * TILE } : b;
+    active.push(createEnemy(bossKind, spawn.x, spawn.y, floor, rng, active.length, { players, power }));
     const minions = 2 + Math.floor(floor / BOSS_EVERY);
     for (let i = 0; i < minions; i++) {
       const roomIndex = 1 + rng.int(0, roomCount - 2);

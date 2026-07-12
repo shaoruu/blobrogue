@@ -11,7 +11,7 @@ import { WEAPONS, WEAPON_RARITY_COLOR, MYSTERY_COLOR } from "../sim/weapons.js";
 import { weaponDisplayStats, lowHpFrac } from "../sim/weaponStats.js";
 import { rollItemChoicesWith, itemById, itemDesc, itemLevelsOf, MAX_ITEM_LEVEL } from "../sim/items.js";
 import type { PlayerMods, ItemDef } from "../sim/items.js";
-import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
+import { PLAYER, REVIVE, BOSS, MARROW, WEAVER, GILDED, GORGE, TIERS, ELITE_BULWARK, MARSHAL, ROLL_AFFIX, RESONANCE_FAMILIES, RESONANCE_TELEGRAPH_COLOR } from "../sim/balance.js";
 import { petSpriteFor } from "./pets.js";
 import {
   createPetFollow, stepPetFollow, PET_REST_OFFSET, PET_REST_DROP, PET_MAX_SPEED,
@@ -535,7 +535,7 @@ const TG_ARENA_LEN = 1100;           // "full arena length" for beam/lance lanes
 // carry the read in 4p chaos, never hue alone; the aura ring (renderBossAura) is the low-sat
 // ambient twin of these.
 function tgFamilyHue(kind: EnemyKind): string {
-  return kind === "jet" ? "#5b63d6" : kind === "tithe" ? "#e6952f" : "#7fd6da";
+  return kind === "jet" ? "#5b63d6" : kind === "tithe" ? "#e6952f" : kind === "gorge" ? "#d9822c" : "#7fd6da";
 }
 
 // The elite affix's ground-ring accent (derived from kind — the affix table is pure sim
@@ -608,16 +608,20 @@ const PROP_INTACT_IMG: Record<PropKind, PropSpriteName> = {
   crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
   barrel_explosive: "barrel_explosive", brazier: "brazier",
   root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
+  // The GORGE giant's shell debris reuses the silt-mound rubble art (a Sump chunk), amber-tinted.
+  gorge_debris: "silt_mound_break",
 };
 // Break sheet per destructible kind (frames 1-2 = breaking). Brazier never breaks.
 const PROP_BREAK_SHEET: Record<PropKind, PropSpriteName | null> = {
   crate: "crate_break", pot: "pot_break", barrel: "barrel_break",
   barrel_explosive: "barrel_explosive_break", brazier: null,
   root_wall: "root_wall_break", silt_mound: "silt_mound_break", clinker_brick: "clinker_brick_break",
+  gorge_debris: "silt_mound_break",
 };
 const PROP_TINT: Record<PropKind, string> = {
   crate: "#c9a06a", pot: "#8fb8d6", barrel: "#b07a3c", barrel_explosive: "#ff8a3b", brazier: "#ffb43b",
   root_wall: "#86c06c", silt_mound: "#b8a888", clinker_brick: "#c9743f",
+  gorge_debris: "#c77320", // warm amber slag (the giant's material — not the bright core amber)
 };
 // Patch's station art hooks per slot kind (assets.ts PROP_SOURCES); flat primitives
 // stand in until the approved PNGs land.
@@ -5845,6 +5849,13 @@ export class Game {
         this.renderChoirSplit(e, sx, sy, drawSize, anim.clock);
         continue;
       }
+      // The GORGE giant's tectonic WEAK-POINT (seam): a glowing amber crack-node that juts out
+      // of the shell — rendered procedurally (no sprite of its own), so it never draws the
+      // nominal placeholder sprite. Its HP bar reads the peel progress.
+      if (e.kind === "gorge_seam") {
+        this.renderGorgeSeam(e, sx, sy, drawSize, anim.clock, anim.flash);
+        continue;
+      }
       // QUORUM: the shared-HP CORE is hidden behind its husks until the merge — draw the
       // code-drawn amber tether that links the husks (the shared-HP tell) and skip the body.
       // Once merged (phase 2) the fused merge-form draws normally below.
@@ -5906,7 +5917,7 @@ export class Game {
       // "setpiece" at a glance and DOUBLES as the guard/expose read (saturated + swelling
       // while GUARDED, drained + desaturated while EXPOSED). State = the authoritative aux
       // flag off the wire, never authored client-side.
-      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum") this.renderBossAura(e, sx, sy, drawSize);
+      if (e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "gorge") this.renderBossAura(e, sx, sy, drawSize);
       // The reworked boss attacks' authoritative footprints (reusable parametric primitives),
       // drawn on the ground plane UNDER the body during their windup + active beats.
       if (this.isBossTelegraphMove(e) && (isWindup || a.phase === "active")) this.renderBossTelegraph(e, sx, sy);
@@ -5929,6 +5940,11 @@ export class Game {
       if (e.kind === "jet") {
         const ph = e.boss?.phase ?? 1;
         spriteName = ph >= 3 ? "jet_phase3" : ph === 2 ? "jet_phase2" : "jet";
+      } else if (e.kind === "gorge") {
+        // The GIANT swaps its whole SHELL by fight phase (the peel reads on the body):
+        // P1 rind (dim/cold) → P2 chitin (cracked, hot edges) → P3 core (molten amber reveal).
+        const ph = e.boss?.phase ?? 1;
+        spriteName = ph >= 3 ? "gorge_shell_core" : ph === 2 ? "gorge_shell_chitin" : "gorge_shell_rind";
       } else if (e.kind === "tithe_slab" && e.hp <= e.maxHp * 0.5) {
         spriteName = "tithe_slab_cracked";
       } else if (e.kind === "tithe" && this.isEnemyExposed(e) && this.sprites.sheet("tithe_exposed", "idle") !== null) {
@@ -5957,6 +5973,8 @@ export class Game {
       if (e.kind === "choir" && isWindup && a.move === "fade") extra = 1 + a.windup * 0.12;
       if (e.kind === "gilded" && isWindup && (a.move === "sweep" || a.move === "roar")) extra = 1 + a.windup * 0.14;
       if (e.kind === "weaver" && isWindup && a.move === "pounce") { xf.sy -= 0.22 * a.windup; xf.sx += 0.14 * a.windup; }
+      // The GIANT rumbles (a subtle tectonic swell) as its shell winds up to crack/slam/sweep.
+      if (e.kind === "gorge" && isWindup && a.move !== "none") extra = 1 + a.windup * 0.06;
       // A white pulse on the sprite intensifies as the windup nears release.
       const pulse = 0.55 + 0.45 * Math.sin(anim.clock * 13);
       const telegraphFlash = isWindup ? a.windup * pulse * 0.85 : 0;
@@ -5967,6 +5985,14 @@ export class Game {
       // exposed window reads on frame one). The composite draws nothing until its PNG lands
       // (the procedural expose glow below carries the read meanwhile).
       if (e.kind === "jet" && this.isEnemyExposed(e)) this.compositeBodyOverlay("jet_expose", sx, sy, drawSize, facing, xf, extra, anim.clock);
+
+      // GORGE: the molten CORE (phase 3 only) is the ONE bright warm amber on an enemy — an
+      // additive warm glow blooms over the bared core (the dim rind/chitin shells stay cold).
+      if (e.kind === "gorge" && (e.boss?.phase ?? 1) >= 3) {
+        const corePulse = 0.6 + 0.4 * Math.sin(anim.clock * 6);
+        this.fxLayer("glow_round", "#ffb43b", sx, sy, drawSize * 0.72 * corePulse, drawSize * 0.72 * corePulse, 0.5, 0);
+        this.fxLayer("core_dot", "#ffd166", sx, sy, drawSize * 0.3, drawSize * 0.3, 0.72 * corePulse, 0);
+      }
 
       // Elemental status overlays (burn ember glow / chill frost / freeze crust / shock crackle).
       if (e.burn > 0 || e.chill > 0 || e.shock > 0) this.renderEnemyStatus(e, sx, sy, drawSize);
@@ -6014,7 +6040,7 @@ export class Game {
       // blazing core through the EXPOSED window (aux = the authoritative remainder —
       // the Warden's plate below renders its own gold flavor of the same read).
       if (e.kind === "weaver" || e.kind === "marrow" || e.kind === "choir"
-        || e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum") {
+        || e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "gorge") {
         this.renderEarnedWindow(e, sx, sy, drawSize);
       }
       // The fragment's tether: the authoritative source id rides aux; the line IS the lane.
@@ -6874,6 +6900,29 @@ export class Game {
     ctx.restore();
   }
 
+  // The GORGE giant's tectonic WEAK-POINT (seam): a glowing amber crack-node jutting out of the
+  // shell (rendered procedurally — no sprite). An additive warm-amber glow + a hot core dot read
+  // "shoot me to peel the shell"; the flash brightens on a hit; a thin bar reads peel progress.
+  private renderGorgeSeam(e: Enemy, sx: number, sy: number, size: number, clock: number, flash: number) {
+    const { ctx } = this;
+    const pulse = 0.6 + 0.4 * Math.sin(clock * 7 + e.id);
+    const glow = Math.min(1, 0.5 + flash);
+    this.fxLayer("glow_round", "#ffb43b", sx, sy, size * (0.9 + 0.2 * pulse), size * (0.9 + 0.2 * pulse), 0.5 * glow, 0);
+    this.fxLayer("core_dot", "#ffe6a6", sx, sy, size * 0.5, size * 0.5, 0.85 * pulse, 0);
+    // A cracked amber rim (the jutting seam), brightening on a hit.
+    ctx.save();
+    ctx.globalAlpha = 0.6 + 0.4 * flash;
+    ctx.strokeStyle = "#ffcf6b";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, size * 0.36 + 1.5 * pulse, 0, 6.28); ctx.stroke();
+    ctx.restore();
+    // Peel-progress bar (destroy it to help crack the shell).
+    const barW = 22, barY = sy - size * 0.5 - 6;
+    const frac = Math.max(0, e.hp / e.maxHp);
+    ctx.fillStyle = "#000"; ctx.fillRect(sx - barW / 2, barY, barW, 3);
+    ctx.fillStyle = "#ffcf6b"; ctx.fillRect(sx - barW / 2, barY, barW * frac, 3);
+  }
+
   // The earned-window read (Weaver/MARROW/Choir): GUARDED = a dim thread rim (your
   // shots are chipping — force the window instead); EXPOSED (aux carries the sim's
   // remainder) = the body blazes, unload.
@@ -6887,7 +6936,7 @@ export class Game {
 
   private renderEarnedWindow(e: Enemy, sx: number, sy: number, size: number) {
     const { ctx } = this;
-    const deep = e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum";
+    const deep = e.kind === "jet" || e.kind === "tithe" || e.kind === "quorum" || e.kind === "gorge";
     if (this.isEnemyExposed(e)) {
       // EXPOSED — the guard is down: a blazing hot core reads "unload now". The deep bosses
       // crack hot-amber (Tithe's slumped amber sacs run a touch lighter); the earlier
@@ -6939,6 +6988,18 @@ export class Game {
       ctx.restore();
       return;
     }
+    if (e.kind === "gorge") {
+      // GUARDED behind the shell: a dim, cold slate-stone rim (the sealed crust — the ONLY way
+      // through is peeling the weak-points). Deliberately NOT bright amber, so the P3 core glow
+      // stays the ONE bright warm amber on the enemy.
+      ctx.save();
+      ctx.globalAlpha = 0.4 + 0.12 * Math.sin(this.animClock * 3);
+      ctx.strokeStyle = "#6b6152";
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(sx, sy, size * 0.42, 0, 6.28); ctx.stroke();
+      ctx.restore();
+      return;
+    }
     // The earlier earned-window bosses (weaver/marrow/choir): a thread-dim family rim.
     ctx.save();
     ctx.globalAlpha = 0.4 + 0.12 * Math.sin(this.animClock * 3);
@@ -6955,6 +7016,8 @@ export class Game {
   private renderBossAura(e: Enemy, sx: number, sy: number, size: number) {
     const hue = e.kind === "jet" ? { guard: "#5b63c8", expose: "#6b7088" }
       : e.kind === "tithe" ? { guard: "#e0902f", expose: "#8a5a22" }
+      // GORGE: a dim warm-slag ground-ring (the sealed shell), draining as the peel window opens.
+      : e.kind === "gorge" ? { guard: "#b06a28", expose: "#7a5228" }
       : { guard: "#eef0e2", expose: "#b9bcae" };
     const exposed = this.isEnemyExposed(e);
     const { ctx } = this;
@@ -7126,6 +7189,9 @@ export class Game {
     if (e.kind === "jet") return m === "mirror" || m === "tracer" || m === "rush" || m === "beam";
     if (e.kind === "tithe") return m === "slam" || m === "spew" || m === "hurl" || m === "radial" || m === "rip" || m === "build";
     if (e.kind === "quorum") return m === "beam" || m === "sweep" || m === "volley" || m === "radial";
+    // GORGE: the P1 ring (slam), P2 slag zones (spew) and P3 rotating spokes (sweep) each own a
+    // dedicated ground footprint (the roar crack-off is the transition beat, not a danger move).
+    if (e.kind === "gorge") return m === "slam" || m === "spew" || m === "sweep";
     return false;
   }
 
@@ -7419,6 +7485,29 @@ export class Game {
         // A2 TETHER FEED — the feeding zone as area-denial (RAMP_FILL): a filled disc whose
         // intensity ramps over the raise ("getting hot"), not a burst.
         this.tgRampFill(sx, sy, 72, wu, hue);
+      }
+      return;
+    }
+
+    if (e.kind === "gorge") {
+      if (a.move === "slam") {
+        // P1 RADIAL — the expanding shockwave RING band (the live bullets carry the authored gap
+        // the player slots into; the debris blooms near it ride their own charge-hazard fuse).
+        const outer = isActive ? 240 : 60 + 180 * wu;
+        this.tgRingBand(sx, sy, Math.max(TILE, outer - TILE), outer, hue, {});
+      } else if (a.move === "spew") {
+        // P2 ZONING — a "charging area-denial" ramp on the giant; the persistent slag pools
+        // themselves (planted CLEAR of every player, then visible cinder) carry the exact
+        // footprint, forming the shrinking safe area.
+        this.tgRampFill(sx, sy, 90, wu, hue);
+      } else if (a.move === "sweep") {
+        // P3 CONVERGENT — rotating spoke lanes with the moving safe wedge between them (the live
+        // bullets carry the exact rotating gap; the telegraph reads "rotating spokes incoming").
+        const rot = this.animClock * 0.9;
+        const shown = Math.max(1, GORGE.spokeCount - GORGE.spokeGap);
+        for (let i = 0; i < shown; i++) {
+          this.tgLane(sx, sy, rot + (i / GORGE.spokeCount) * 6.28, 240, TILE, hue, isActive ? fix : { locked: false, dynamic: false, dashed: true });
+        }
       }
       return;
     }

@@ -218,6 +218,13 @@ registerDirectionalSet("quorum_splinter", { walkFps: 8, fileBase: "quorum_dmg", 
 // JET's mirror echo reuses JET's own hero-derived walk sheets; the renderer draws it COLD +
 // translucent + hollow-eyed (renderJetEcho) so a reflection never reads as a warm teammate.
 registerDirectionalSet("jet_echo", { walkFps: 8, fileBase: "jet", facings: ["down", "up", "side"] });
+// GORGE (F50 GIANT — AD-LOCKED committed art, wire never regenerate): three single-frame SHELL
+// states the renderer swaps off boss.phase (rind → chitin → core), a 96% shared silhouette
+// peeling open. The core state is the ONE bright warm amber on an enemy (rendered with an
+// additive glow, phase 3 only). No orientations — a stationary front-facing set-piece.
+SHEETS["gorge_shell_rind.idle"] = { src: "/sprites/gorge_shell_rind.png", fps: 2 };
+SHEETS["gorge_shell_chitin.idle"] = { src: "/sprites/gorge_shell_chitin.png", fps: 2 };
+SHEETS["gorge_shell_core.idle"] = { src: "/sprites/gorge_shell_core.png", fps: 2 };
 
 // Tintable bullet-FX primitives (public/sprites/fx). Authored pure white with all
 // intensity in the alpha channel so a single source-in fill recolors them and they
@@ -357,6 +364,11 @@ const SOURCES: Record<SpriteName, string> = {
   quorum_splinter: "/sprites/quorum_dmg_walk_down.png",
   // JET's mirror echo reuses JET's hero-derived down sprite (drawn cold + translucent).
   jet_echo: "/sprites/jet_walk_down.png",
+  // GORGE (F50 GIANT — AD-LOCKED committed art): the three shell states the renderer swaps off
+  // boss.phase. The base SOURCES entry is the idle frame (the SHEETS `.idle` hooks drive the draw).
+  gorge_shell_rind: "/sprites/gorge_shell_rind.png",
+  gorge_shell_chitin: "/sprites/gorge_shell_chitin.png",
+  gorge_shell_core: "/sprites/gorge_shell_core.png",
   // PATCH — the Dealer NPC (studio coherence gate: warm amber salvage-hauler). ART GATE:
   // generated separately via the locked FAL recipe; until patch.png lands the renderer
   // shows the flagged placeholder silhouette (never procedural character art). Poses ship
