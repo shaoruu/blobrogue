@@ -365,6 +365,12 @@
       .klcluster[data-kit="mender"]{ --kit:var(--grn); }
       .klcluster[data-kit="bulwark"]{ --kit:var(--blu); }
       .klcluster[data-kit="phantom"]{ --kit:var(--pur); }
+      /* The kit/ult/signature chrome carries an explicit display, which OVERRIDES the UA
+         [hidden]{display:none} — so the HTML `hidden` attribute the HUD sets for a neutral/absent
+         kit (kit="none", ult===null) would paint anyway (a nameless "ULT" + fallback accent).
+         These attribute selectors out-specify the plain-class display, so `hidden` truly hides —
+         only hearts, the objective banner, the always-on DASH meter, and the hotbar remain. */
+      .kitbadge[hidden], .ultmeter[hidden], .momentum[hidden], .pulse[hidden], .oshield[hidden]{ display:none; }
       /* KIT badge: "which class am I", docked with the meters, kit-accent keyline + tinted icon. */
       .kitbadge{ display:flex; align-items:center; gap:7px; background:rgba(5,3,11,.72);
         box-shadow:inset 0 0 0 2px color-mix(in srgb, var(--kit,var(--dun-4)) 70%, var(--dun-3)); padding:4px 9px; }
