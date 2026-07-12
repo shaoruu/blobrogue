@@ -1898,6 +1898,11 @@ export const BOSS_MIN_LEGAL_TTK: Readonly<Partial<Record<EnemyKind, number>>> = 
 // Per-boss practical-DPS ceilings from the balancer (HP / (minTtk − forced downtime)).
 export const BOSS_DPS_CEILING: Readonly<Partial<Record<EnemyKind, number>>> = {
   boss: 53, marrow: 68, weaver: 87, gilded: 65, choir: 65,
+  // Wave-1 deep bosses (F35/40/45): PROVISIONAL backstop ceilings from the balancer — a
+  // pure 100k-build expectedBossDps sweep tops out at 47.9 practical DPS, so 55 is a safe
+  // "nothing may exceed this" guard (non-breaking today, catches any future build spike).
+  // TIGHTEN to the measured design value when the multi-boss harness lands its per-boss bot.
+  jet: 55, tithe: 55, quorum: 55,
 };
 
 // ---- the balancer envelope's canonical unit ----
