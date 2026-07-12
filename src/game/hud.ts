@@ -1358,9 +1358,12 @@ export class Hud {
   // var (never DOM add/remove after first build), so a stack ticking / a chip depleting / the CD
   // draining never reflows the layout. Only the block for the local player's kit is ever shown.
   private renderSig(sig: HudState["sig"]): void {
-    // GUNNER OVERHEAT: a 0..max pip row that climbs, glowing during the boil-over burst.
+    // GUNNER OVERHEAT: a 0..max pip row that climbs, glowing during the boil-over burst. An idle
+    // gunner sitting at 0 stacks earns NO row — an empty readout is clutter, so the row appears
+    // only once heat is building (stacks > 0) or the boil-over burst is live. Hiding it collapses
+    // space ABOVE the bottom-anchored DASH, so DASH never moves.
     const m = sig?.momentum ?? null;
-    if (m === null) {
+    if (m === null || (m.stacks === 0 && !m.isOverheat)) {
       if (!this.momentumEl.hasAttribute("hidden")) this.momentumEl.setAttribute("hidden", "");
     } else {
       if (this.momentumPipsEl.childElementCount !== m.max) {
