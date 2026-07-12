@@ -1692,7 +1692,7 @@ export class Hud {
     const line = (label: string, value: string) => {
       const row = el("div", "display:flex;justify-content:space-between;gap:24px;");
       row.appendChild(el("span", "color:var(--ink-mute);", label));
-      row.appendChild(el("span", "color:#ffe6b0;", value));
+      row.appendChild(el("span", "color:var(--cream);", value));
       return row;
     };
     this.statsBody.replaceChildren();
@@ -1715,7 +1715,7 @@ export class Hud {
         icon.style.color = it.tint;
         const text = el("div", "display:flex;flex-direction:column;gap:1px;");
         text.append(
-          el("span", "color:#ffe6b0;", it.name),
+          el("span", "color:var(--cream);", it.name),
           el("span", "color:var(--ink-mute);font-size:var(--fs-md);", it.desc),
         );
         row.append(icon, text);
@@ -1724,7 +1724,7 @@ export class Hud {
     }
     if (d.roster && d.roster.length) {
       this.statsBody.appendChild(el("div", "height:1px;background:rgba(255,180,59,0.2);margin:8px 0;"));
-      this.statsBody.appendChild(el("div", "color:#5ad1ff;font-size:var(--fs-sm);letter-spacing:1px;", "PARTY"));
+      this.statsBody.appendChild(el("div", "color:var(--blu);font-size:var(--fs-sm);letter-spacing:1px;", "PARTY"));
       for (const r of d.roster) {
         const row = el("div", "display:flex;align-items:center;gap:8px;");
         row.appendChild(el("span", `width:10px;height:10px;border-radius:50%;background:${r.color};display:inline-block;`));
@@ -1733,7 +1733,7 @@ export class Hud {
         // OUT (down limit spent) outranks plain down: the party's move is the stairs.
         const state = r.isReconnecting ? " \u2014 reconnecting\u2026" : r.isOut ? " \u2014 out (down limit)" : r.isDown ? " \u2014 down" : r.isAtExit ? " \u2014 at the stairs" : "";
         const label = `${r.name}${r.isYou ? " (you)" : ""}${state}`;
-        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "#ff6a6a" : r.isAtExit ? "#8affc0" : "#ffe6b0"};`, label));
+        row.appendChild(el("span", `color:${r.isReconnecting ? "var(--ink-mute)" : r.isDown || r.isOut ? "var(--red)" : r.isAtExit ? "var(--ok)" : "var(--cream)"};`, label));
         this.statsBody.appendChild(row);
       }
     }
