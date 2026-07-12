@@ -111,7 +111,7 @@ section("damage model (balancer numbers)");
   check("sawnoff outlier 0.45 stacks on the scalar", Math.abs(pvpHitDamage("sawnoff", WEAPONS.sawnoff.damage) - WEAPONS.sawnoff.damage * PVP.dmgMult * 0.45) < 1e-9);
   check("spear outlier 0.85 stacks on the scalar", Math.abs(pvpHitDamage("spear", WEAPONS.spear.damage) - WEAPONS.spear.damage * PVP.dmgMult * 0.85) < 1e-9);
   // Frag limit scales with the match-start player count: clamp(round(6+count), 8, 16).
-  check("fragLimit scales 2p->8, 4p->10, 6p->12", pvpFragLimit(2) === 8 && pvpFragLimit(4) === 10 && pvpFragLimit(6) === 12);
+  check("fragLimit scales 2->8,3->9,4->10,5->11,6->12", pvpFragLimit(2) === 8 && pvpFragLimit(3) === 9 && pvpFragLimit(4) === 10 && pvpFragLimit(5) === 11 && pvpFragLimit(6) === 12);
   check("fragLimit clamps to [8,16]", pvpFragLimit(1) === 8 && pvpFragLimit(20) === 16);
 }
 
